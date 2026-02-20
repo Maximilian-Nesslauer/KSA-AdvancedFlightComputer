@@ -10,7 +10,11 @@ public class Mod
 {
     private static Harmony? _harmony;
 
+#if DEBUG
     public static bool DebugMode = true;
+#else
+    public static bool DebugMode = false;
+#endif
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
