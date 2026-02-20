@@ -12,7 +12,7 @@ Validated against KSA build version 2026.2.30.3638.
 
 Enables the Transfer Planner to target objects on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS, etc.).
 
-Note: At the extreme dV required for insterstellar objects, the impulsive burn approximation breaks down
+Note: At the extreme dV required for interstellar objects, the impulsive burn approximation breaks down
 and the patched-conic trajectory diverges ~0.7 AU from the Lambert prediction.
 Mid-course corrections will be needed in practice.
 

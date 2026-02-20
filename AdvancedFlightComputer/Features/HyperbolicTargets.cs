@@ -301,37 +301,44 @@ static class HyperbolicTargets
             if (transferInfo.Target.Orbit.Eccentricity < 1.0)
                 return true;
 
-            double3 dv = selectedEntry.TransferData.TransferDvVlf;
-            FlightPlan flightPlan = FlightPlan.CreateUninitialized(transferInfo.Vehicle.Hash);
-
-            if (OrbitalTransfers.BuildFlightPlan(ref flightPlan, transferInfo,
-                    selectedEntry.TransferData.Start, dv,
-                    out var closestPoint, out var _))
+            try
             {
-                selectedEntry.FlightPlan = flightPlan;
-                selectedEntry.TransferData.Point = closestPoint;
+                double3 dv = selectedEntry.TransferData.TransferDvVlf;
+                FlightPlan flightPlan = FlightPlan.CreateUninitialized(transferInfo.Vehicle.Hash);
 
-                // Compute actual closest approach on the patched conic trajectory
-                double patchedConicDist = FindPatchedConicClosestApproach(
-                    flightPlan, transferInfo.Target,
-                    selectedEntry.TransferData.Transit.Seconds());
-                selectedEntry.TransferData.ClosestApproachDistance = patchedConicDist;
-                __result = true;
-
-                if (Mod.DebugMode)
+                if (OrbitalTransfers.BuildFlightPlan(ref flightPlan, transferInfo,
+                        selectedEntry.TransferData.Start, dv,
+                        out var closestPoint, out var _))
                 {
-                    DefaultCategory.Log.Debug(
-                        $"[AFC] RefineBurnTask: hyperbolic target, " +
-                        $"Lambert dV={dv.Length():F1} m/s, " +
-                        $"patched conic miss={patchedConicDist / 1000:F0} km");
-                }
-            }
-            else
-            {
-                __result = false;
-            }
+                    selectedEntry.FlightPlan = flightPlan;
+                    selectedEntry.TransferData.Point = closestPoint;
 
-            return false;
+                    double patchedConicDist = FindPatchedConicClosestApproach(
+                        flightPlan, transferInfo.Target,
+                        selectedEntry.TransferData.Transit.Seconds());
+                    selectedEntry.TransferData.ClosestApproachDistance = patchedConicDist;
+                    __result = true;
+
+                    if (Mod.DebugMode)
+                    {
+                        DefaultCategory.Log.Debug(
+                            $"[AFC] RefineBurnTask: hyperbolic target, " +
+                            $"Lambert dV={dv.Length():F1} m/s, " +
+                            $"patched conic miss={patchedConicDist / 1000:F0} km");
+                    }
+                }
+                else
+                {
+                    __result = false;
+                }
+
+                return false;
+            }
+            catch (Exception ex)
+            {
+                DefaultCategory.Log.Warning($"[AFC] TryFindIntercept prefix: {ex.Message}");
+                return true;
+            }
         }
 
         /// <summary>
@@ -396,36 +403,49 @@ static class HyperbolicTargets
                 && patch.EndTransition != PatchTransition.Final;
             if (hasValidBounds) return true;
 
-            var orb2ParentCce = o.GetOrb2ParentCce();
-            var points = MemoryOwner<OrbitPointCce>.Allocate(OrbitPointCount);
-
-            double asymptote = Math.Acos(-1.0 / o.Eccentricity) * AsymptoteMargin;
-            double startTa = -asymptote;
-            double endTa = asymptote;
-
-            if (patch != null
-                && patch.StartTrueAnomaly.IsNotNegativePi()
-                && patch.StartTrueAnomaly.IsNotZero())
+            try
             {
-                startTa = patch.StartTrueAnomaly.Value();
-            }
+                var orb2ParentCce = o.GetOrb2ParentCce();
+                var points = MemoryOwner<OrbitPointCce>.Allocate(OrbitPointCount);
 
-            double step = (endTa - startTa) / (OrbitPointCount - 1);
-            for (int i = 0; i < OrbitPointCount; i++)
-            {
-                var ta = new TrueAnomaly(startTa + i * step);
-                EccentricAnomaly ea = o.GetEccentricAnomaly(ta);
-                if (double.IsFinite(ea.Value()))
+                double asymptote = Math.Acos(-1.0 / o.Eccentricity) * AsymptoteMargin;
+                double startTa = -asymptote;
+                double endTa = asymptote;
+
+                if (patch != null
+                    && patch.StartTrueAnomaly.IsNotNegativePi()
+                    && patch.StartTrueAnomaly.IsNotZero())
                 {
-                    SimTime timeFromPe = o.GetTimeFromPeTo(ea);
-                    SimTime remaining = o.GetRemainingTimeTo(ea);
-                    double3 posCce = o.GetPositionOrb(ea).Transform(orb2ParentCce);
-                    points.Span[i] = new OrbitPointCce(posCce, timeFromPe, remaining, ta);
+                    startTa = patch.StartTrueAnomaly.Value();
                 }
-            }
 
-            __result = points;
-            return false;
+                double step = (endTa - startTa) / (OrbitPointCount - 1);
+                for (int i = 0; i < OrbitPointCount; i++)
+                {
+                    var ta = new TrueAnomaly(startTa + i * step);
+                    EccentricAnomaly ea = o.GetEccentricAnomaly(ta);
+                    if (double.IsFinite(ea.Value()))
+                    {
+                        SimTime timeFromPe = o.GetTimeFromPeTo(ea);
+                        SimTime remaining = o.GetRemainingTimeTo(ea);
+                        double3 posCce = o.GetPositionOrb(ea).Transform(orb2ParentCce);
+                        points.Span[i] = new OrbitPointCce(posCce, timeFromPe, remaining, ta);
+                    }
+                    else
+                    {
+                        // Repeat last valid point to avoid default-zero gaps
+                        if (i > 0) points.Span[i] = points.Span[i - 1];
+                    }
+                }
+
+                __result = points;
+                return false;
+            }
+            catch (Exception ex)
+            {
+                DefaultCategory.Log.Warning($"[AFC] ClipPointGeneration prefix: {ex.Message}");
+                return true;
+            }
         }
     }
 
@@ -441,7 +461,7 @@ static class HyperbolicTargets
     {
         static void Postfix(bool __result)
         {
-            if (!__result) return;
+            if (!__result || !Mod.DebugMode) return;
 
             try
             {
@@ -451,8 +471,6 @@ static class HyperbolicTargets
                 var data = entry.TransferData;
                 var patches = entry.FlightPlan.Patches;
                 double dvMag = data.TransferDvVlf.Length();
-
-                if (!Mod.DebugMode) return;
 
                 DefaultCategory.Log.Info(
                     $"[AFC] Transfer: dV={dvMag:F1} m/s, {patches.Count} patches, " +
