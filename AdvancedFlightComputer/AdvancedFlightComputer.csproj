@@ -37,7 +37,7 @@
     </None>
   </ItemGroup>
 
-  <Target Name="CopyToMods" AfterTargets="Build">
+  <Target Name="CopyToMods" AfterTargets="Build" Condition="'$(Configuration)' == 'Debug'">
     <PropertyGroup>
       <ModDir>..\..\Kitten Space Agency\Content\AdvancedFlightComputer\</ModDir>
     </PropertyGroup>
