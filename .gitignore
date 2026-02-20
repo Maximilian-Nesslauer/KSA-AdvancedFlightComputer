@@ -15,6 +15,9 @@ packages/
 *.exe
 *.pdb
 
+## IDE
+Properties/launchSettings.json
+
 ## OS
 Thumbs.db
 Desktop.ini

@@ -1,9 +1,0 @@
-{
-  "profiles": {
-    "StarMap": {
-      "commandName": "Executable",
-      "executablePath": "F:\\Coding\\KSA Modding\\StarMap\\StarMap.exe",
-      "workingDirectory": "F:\\Coding\\KSA Modding\\StarMap"
-    }
-  }
-}
