@@ -16,6 +16,20 @@ public class Mod
     public static bool DebugMode = false;
 #endif
 
+    /// <summary>
+    /// Runs during Mod.PrepareSystems(), BEFORE the game processes Gauges.xml.
+    /// Injects our custom enum into the gauge button lookup so that
+    /// BurnControlPatch.xml can resolve Action="AfcAutoStage" during OnDataLoad.
+    /// </summary>
+    [StarMapImmediateLoad]
+    public void OnImmediateLoad(KSA.Mod mod)
+    {
+        if (DebugMode)
+            DefaultCategory.Log.Debug("[AFC] ImmediateLoad: ensuring enum injection...");
+
+        AutoStage.InjectEnumLookup();
+    }
+
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
     {
@@ -35,6 +49,7 @@ public class Mod
     {
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
+        AutoStage.Enabled = false;
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }
