@@ -47,4 +47,19 @@
     <Copy SourceFiles="HyperbolicBodies.xml" DestinationFolder="$(ModDir)" />
   </Target>
 
+  <Target Name="PackageRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <ReleaseDir>$(OutputPath)release\$(AssemblyName)\</ReleaseDir>
+      <ZipPath>$(OutputPath)$(AssemblyName).zip</ZipPath>
+    </PropertyGroup>
+    <RemoveDir Directories="$(OutputPath)release" />
+    <MakeDir Directories="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="HyperbolicBodies.xml" DestinationFolder="$(ReleaseDir)" />
+    <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />
+    <RemoveDir Directories="$(OutputPath)release" />
+    <Message Importance="high" Text="Release packaged: $(ZipPath)" />
+  </Target>
+
 </Project>
