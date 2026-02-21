@@ -1,4 +1,5 @@
 using AdvancedFlightComputer.Features;
+using AdvancedFlightComputer.Staging;
 using Brutal.Logging;
 using HarmonyLib;
 using StarMap.API;
@@ -51,6 +52,7 @@ public class Mod
         _harmony = null;
         AutoStage.Enabled = false;
         Patch_AutoStageExecution.Reset();
+        StageAnalyzerDebug.Reset();
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }
