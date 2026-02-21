@@ -1,2 +1,2 @@
 name = "AdvancedFlightComputer"
-patches = [ "HyperbolicBodies.xml" ]
+patches = [ "Patches/HyperbolicBodies.xml", "Patches/BurnControlPatch.xml" ]

@@ -32,6 +32,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PatchFile Include="Patches\*.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <None Update="mod.toml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>
@@ -41,10 +45,10 @@
     <PropertyGroup>
       <ModDir>..\..\Kitten Space Agency\Content\AdvancedFlightComputer\</ModDir>
     </PropertyGroup>
-    <MakeDir Directories="$(ModDir)" />
+    <MakeDir Directories="$(ModDir)Patches\" />
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
-    <Copy SourceFiles="HyperbolicBodies.xml" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="@(PatchFile)" DestinationFolder="$(ModDir)Patches\" />
   </Target>
 
   <Target Name="PackageRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
@@ -53,10 +57,10 @@
       <ZipPath>$(OutputPath)$(AssemblyName).zip</ZipPath>
     </PropertyGroup>
     <RemoveDir Directories="$(OutputPath)release" />
-    <MakeDir Directories="$(ReleaseDir)" />
+    <MakeDir Directories="$(ReleaseDir)Patches\" />
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
-    <Copy SourceFiles="HyperbolicBodies.xml" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="@(PatchFile)" DestinationFolder="$(ReleaseDir)Patches\" />
     <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />
     <RemoveDir Directories="$(OutputPath)release" />
     <Message Importance="high" Text="Release packaged: $(ZipPath)" />
