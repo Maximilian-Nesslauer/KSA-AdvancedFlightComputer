@@ -4,11 +4,11 @@ Improved orbital maneuver planning and execution for [Kitten Space Agency](https
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.2.30.3638.
+Validated against KSA build version 2026.2.32.3646.
 
 ## Features
 
-### Hyperbolic Targets (done)
+### Hyperbolic Targets
 
 Enables the Transfer Planner to target objects on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS, etc.).
 
@@ -16,9 +16,17 @@ Note: At the extreme dV required for interstellar objects, the impulsive burn ap
 and the patched-conic trajectory diverges ~0.7 AU from the Lambert prediction.
 Mid-course corrections will be needed in practice.
 
-### BetterBurnTime (planned)
+### Auto-Staging
 
-Enhanced burn information display with time-to-ignition countdown, per-stage delta-V breakdown, multi-stage burn prediction, and fuel warnings.
+Adds an AUTOSTAGE toggle button to the BurnControl gauge panel. When enabled during an auto-burn, automatically activates the next stage if engines run out of propellant instead of aborting the burn. Handles cascading stages (decoupler + engine) and includes a grace period for engine state propagation.
+
+### Stage Info Display
+
+Extends the Staging window with per-stage information:
+
+- Fuel progress bar with percentage on each stage header
+- Delta V, TWR, Burn Time, and ISP (visible when a stage is expanded)
+- Total Delta V and Burn Time in a footer below the stage list
 
 ### Oberth Maneuver / Multi Pass Burns (planned)
 
