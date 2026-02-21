@@ -50,6 +50,7 @@ public class Mod
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
         AutoStage.Enabled = false;
+        Patch_AutoStageExecution.Reset();
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }
