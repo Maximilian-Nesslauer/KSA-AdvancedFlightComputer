@@ -16,7 +16,7 @@ packages/
 *.pdb
 
 ## IDE
-Properties/launchSettings.json
+**/Properties/launchSettings.json
 
 ## OS
 Thumbs.db

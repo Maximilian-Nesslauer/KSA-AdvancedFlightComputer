@@ -29,6 +29,10 @@
       <HintPath>..\..\Kitten Space Agency\CommunityToolkit.HighPerformance.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Brutal.ImGui">
+      <HintPath>..\..\Kitten Space Agency\Brutal.ImGui.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

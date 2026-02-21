@@ -1,4 +1,5 @@
 using AdvancedFlightComputer.Features;
+using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using HarmonyLib;
 using StarMap.API;
@@ -41,6 +42,7 @@ public class Mod
 
         _harmony = new Harmony("com.maxi.advancedflightcomputer");
         _harmony.PatchAll(typeof(Mod).Assembly);
+        BetterBurnTime.ApplyPatches(_harmony);
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
 
@@ -51,6 +53,8 @@ public class Mod
         _harmony = null;
         AutoStage.Enabled = false;
         Patch_AutoStageExecution.Reset();
+        StageAnalyzerDebug.Reset();
+        BetterBurnTime.Reset();
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }
