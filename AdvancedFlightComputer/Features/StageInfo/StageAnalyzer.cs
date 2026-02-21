@@ -4,7 +4,7 @@ using Brutal.Logging;
 using CommunityToolkit.HighPerformance.Buffers;
 using KSA;
 
-namespace AdvancedFlightComputer.Staging;
+namespace AdvancedFlightComputer.Features.StageInfo;
 
 public record struct StageBurnInfo
 {

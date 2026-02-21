@@ -1,5 +1,5 @@
 using AdvancedFlightComputer.Features;
-using AdvancedFlightComputer.Staging;
+using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using HarmonyLib;
 using StarMap.API;

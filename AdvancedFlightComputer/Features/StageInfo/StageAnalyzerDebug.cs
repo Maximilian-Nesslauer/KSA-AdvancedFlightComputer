@@ -2,7 +2,7 @@ using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 
-namespace AdvancedFlightComputer.Staging;
+namespace AdvancedFlightComputer.Features.StageInfo;
 
 /// <summary>
 /// Debug hook that runs StageAnalyzer after each staging event and logs the results.
