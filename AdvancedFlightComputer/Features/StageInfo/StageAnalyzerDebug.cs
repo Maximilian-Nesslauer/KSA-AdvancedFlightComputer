@@ -29,11 +29,11 @@ static class StageAnalyzerDebug
     {
         static void Postfix(Vehicle vehicle)
         {
-            if (vehicle != Program.ControlledVehicle)
-                return;
+            if (!Mod.DebugMode) return;
+            if (vehicle != Program.ControlledVehicle) return;
 
             DefaultCategory.Log.Info("[AFC] Staging event detected, running StageAnalyzer...");
-            StageAnalyzer.Analyze(vehicle, log: Mod.DebugMode);
+            StageAnalyzer.Analyze(vehicle, log: true);
         }
     }
 
@@ -46,8 +46,8 @@ static class StageAnalyzerDebug
     {
         static void Postfix(Vehicle __instance)
         {
-            if (__instance != Program.ControlledVehicle)
-                return;
+            if (!Mod.DebugMode) return;
+            if (__instance != Program.ControlledVehicle) return;
 
             string vehicleId = __instance.Id;
             if (vehicleId == _lastVehicleId)
@@ -56,7 +56,7 @@ static class StageAnalyzerDebug
             _lastVehicleId = vehicleId;
 
             DefaultCategory.Log.Info($"[AFC] Vehicle '{vehicleId}' detected, running initial StageAnalyzer...");
-            StageAnalyzer.Analyze(__instance, log: Mod.DebugMode);
+            StageAnalyzer.Analyze(__instance, log: true);
         }
     }
 }

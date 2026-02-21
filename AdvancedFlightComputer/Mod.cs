@@ -42,6 +42,7 @@ public class Mod
 
         _harmony = new Harmony("com.maxi.advancedflightcomputer");
         _harmony.PatchAll(typeof(Mod).Assembly);
+        BetterBurnTime.ApplyPatches(_harmony);
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
 
@@ -53,6 +54,7 @@ public class Mod
         AutoStage.Enabled = false;
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
+        BetterBurnTime.Reset();
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }

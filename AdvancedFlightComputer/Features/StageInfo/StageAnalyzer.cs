@@ -18,6 +18,8 @@ public record struct StageBurnInfo
     public float StartMass;
     public float EndMass;
     public float FuelMass;
+    public float MaxFuelMass;
+    public float FuelFraction;
     public float MassFlowRate;
     public float Twr;
     public float JettisonedMass;
@@ -155,7 +157,8 @@ public static class StageAnalyzer
             // Step 4: Compute fuel from each engine's SameStage tank list.
             // Reads live MoleState.Mass, so values reflect any cross-stage
             // consumption by currently burning engines.
-            float fuelMass = ComputeStageFuel(
+            // Also computes max fuel mass (tank capacity) for fuel fraction display.
+            var (fuelMass, maxFuelMass) = ComputeStageFuel(
                 stageEngines, fuelClaimedTankIds, moleStates, log);
 
             float maxFuel = currentMass - MinDryMass;
@@ -179,6 +182,8 @@ public static class StageAnalyzer
                 ? totalThrust / (startMass * surfaceGravity)
                 : 0f;
 
+            float fuelFraction = maxFuelMass > 0f ? fuelMass / maxFuelMass : 0f;
+
             var info = new StageBurnInfo
             {
                 StageNumber = stage.StageNumber,
@@ -191,6 +196,8 @@ public static class StageAnalyzer
                 StartMass = startMass,
                 EndMass = endMass,
                 FuelMass = fuelMass,
+                MaxFuelMass = maxFuelMass,
+                FuelFraction = fuelFraction,
                 MassFlowRate = totalFlowRate,
                 Twr = twr,
                 JettisonedMass = jettisonedMass,
@@ -297,17 +304,22 @@ public static class StageAnalyzer
     /// game's ResourceManager and contains only tanks whose Part.Stage matches
     /// the engine's Part.Stage.
     ///
+    /// Returns (currentFuel, maxFuel) where maxFuel is the mass when all tanks
+    /// are full, derived from each tank's FilledFraction. Used for the fuel
+    /// fraction progress bar in the staging panel.
+    ///
     /// Tank IDs are added to fuelClaimedTankIds so jettison mass calculations
     /// can treat them as empty (fuel consumed before decoupler fires).
     /// The set also prevents double-counting if multiple engines share tanks.
     /// </summary>
-    private static float ComputeStageFuel(
+    private static (float current, float max) ComputeStageFuel(
         List<EngineController> engines,
         HashSet<ulong> fuelClaimedTankIds,
         ReadOnlySpan<MoleState> moleStates,
         bool log)
     {
-        float totalFuel = 0f;
+        float totalCurrent = 0f;
+        float totalMax = 0f;
 
         foreach (EngineController engine in engines)
         {
@@ -321,31 +333,39 @@ public static class StageAnalyzer
                     continue;
                 }
 
-                totalFuel += WalkSameStage(
+                var (current, max) = WalkSameStage(
                     core.ResourceManager, fuelClaimedTankIds, moleStates, log);
+                totalCurrent += current;
+                totalMax += max;
             }
         }
 
-        return totalFuel;
+        return (totalCurrent, totalMax);
     }
 
     /// <summary>
     /// Walks a ResourceManager's FurtherestToNearestNodeSameStage tank list
-    /// and sums the current propellant mass. Only counts each tank once
-    /// (dedup via fuelClaimedTankIds).
+    /// and sums the current and maximum propellant mass. Only counts each tank
+    /// once (dedup via fuelClaimedTankIds).
+    ///
+    /// Max mass is derived from current mass and FilledFraction:
+    ///   maxMass = currentMass / filledFraction
+    /// This correctly accounts for substance density without needing to look
+    /// up individual mole properties.
     /// </summary>
-    private static float WalkSameStage(
+    private static (float current, float max) WalkSameStage(
         ResourceManager resourceManager,
         HashSet<ulong> fuelClaimedTankIds,
         ReadOnlySpan<MoleState> moleStates,
         bool log)
     {
-        float fuel = 0f;
+        float current = 0f;
+        float max = 0f;
         MemoryOwner<ArrayPoolResult<Tank>> nodes =
             resourceManager.FurtherestToNearestNodeSameStage;
 
         if (nodes.Length == 0)
-            return 0f;
+            return (0f, 0f);
 
         Span<ArrayPoolResult<Tank>> nodeSpan = nodes.Span;
         for (int i = 0; i < nodeSpan.Length; i++)
@@ -359,19 +379,24 @@ public static class StageAnalyzer
                     continue;
 
                 float mass = tank.ComputeSubstanceMass(moleStates);
-                fuel += mass;
+                float filledFraction = tank.FilledFraction(moleStates);
+                float maxMass = filledFraction > 0.001f ? mass / filledFraction : 0f;
+
+                current += mass;
+                max += maxMass;
 
                 if (log && mass > 0.01f)
                 {
                     DefaultCategory.Log.Debug(
                         $"[AFC]       Tank '{tank.InstanceId}' on " +
                         $"'{tank.Parent.FullPart.DisplayName}' " +
-                        $"(stage {tank.Parent.FullPart.Stage}): {mass:F2} kg");
+                        $"(stage {tank.Parent.FullPart.Stage}): " +
+                        $"{mass:F2}/{maxMass:F2} kg ({filledFraction:P0})");
                 }
             }
         }
 
-        return fuel;
+        return (current, max);
     }
 
     #endregion
