@@ -28,10 +28,41 @@ static class BetterBurnTime
 
     private static VehicleBurnAnalysis? _cachedAnalysis;
     private static Dictionary<int, StageBurnInfo>? _stageInfoLookup;
+    private static BurnAnalysis? _cachedBurnAnalysis;
+    private static Dictionary<int, BurnStageAllocation>? _burnAllocationLookup;
     private static string? _lastVehicleId;
     private static int _framesSinceUpdate;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    private static readonly ImColor8 ColorInsufficient = new ImColor8(255, 60, 60, 255);
+
+    /// <summary>
+    /// Returns a gradient color based on how much of a stage's dV the burn
+    /// consumes. ratio=0 (green) -> 0.5 (yellow) -> 1.0 (red).
+    /// </summary>
+    private static ImColor8 GetBurnGradientColor(float ratio)
+    {
+        ratio = Math.Clamp(ratio, 0f, 1f);
+        byte r, g, b;
+        if (ratio <= 0.5f)
+        {
+            // Green (80,220,80) -> Yellow (255,220,0)
+            float t = ratio * 2f;
+            r = (byte)(80 + 175 * t);
+            g = 220;
+            b = (byte)(80 - 80 * t);
+        }
+        else
+        {
+            // Yellow (255,220,0) -> Red (255,60,60)
+            float t = (ratio - 0.5f) * 2f;
+            r = 255;
+            g = (byte)(220 - 160 * t);
+            b = (byte)(60 * t);
+        }
+        return new ImColor8(r, g, b, 255);
+    }
 
     private static MethodInfo? _drawThruster;
     private static MethodInfo? _drawEngine;
@@ -88,6 +119,8 @@ static class BetterBurnTime
     {
         _cachedAnalysis = null;
         _stageInfoLookup = null;
+        _cachedBurnAnalysis = null;
+        _burnAllocationLookup = null;
         _lastVehicleId = null;
         _framesSinceUpdate = 0;
     }
@@ -114,6 +147,33 @@ static class BetterBurnTime
         _stageInfoLookup = new Dictionary<int, StageBurnInfo>();
         foreach (var stage in _cachedAnalysis.Value.Stages)
             _stageInfoLookup[stage.StageNumber] = stage;
+
+        UpdateBurnAnalysisCache(vehicle);
+    }
+
+    private static void UpdateBurnAnalysisCache(Vehicle vehicle)
+    {
+        BurnTarget? burn = vehicle.FlightComputer.Burn;
+        if (burn == null || _cachedAnalysis == null)
+        {
+            _cachedBurnAnalysis = null;
+            _burnAllocationLookup = null;
+            return;
+        }
+
+        float requiredDv = burn.DeltaVToGoCci.Length();
+        if (requiredDv <= 0f)
+        {
+            _cachedBurnAnalysis = null;
+            _burnAllocationLookup = null;
+            return;
+        }
+
+        _cachedBurnAnalysis = StageAnalyzer.AnalyzeBurn(_cachedAnalysis.Value, requiredDv);
+
+        _burnAllocationLookup = new Dictionary<int, BurnStageAllocation>();
+        foreach (var alloc in _cachedBurnAnalysis.Value.StageAllocations)
+            _burnAllocationLookup[alloc.StageNumber] = alloc;
     }
 
     #endregion
@@ -269,38 +329,70 @@ static class BetterBurnTime
         ImGui.Indent();
         ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
 
-        string[] segments =
-        [
-            string.Format(Inv, "Delta V: {0:N0} m/s", info.DeltaV),
-            string.Format(Inv, "TWR: {0:F2}", info.Twr),
-            string.Format(Inv, "Burn Time: {0}", FormatBurnTime(info.BurnTime)),
-            string.Format(Inv, "ISP: {0:F0}s", info.Isp)
-        ];
-
         float spacing = ImGui.GetStyle().ItemSpacing.X;
         float availWidth = ImGui.GetContentRegionAvail().X;
         float lineX = 0f;
 
-        for (int i = 0; i < segments.Length; i++)
+        string dvText = string.Format(Inv, "Delta V: {0:N0} m/s", info.DeltaV);
+        string twrText = string.Format(Inv, "TWR: {0:F2}", info.Twr);
+        string burnTimeText = string.Format(Inv, "Burn Time: {0}", FormatBurnTime(info.BurnTime));
+        string ispText = string.Format(Inv, "ISP: {0:F0}s", info.Isp);
+
+        // When a burn is planned and this stage is involved, color the Delta V
+        // text and show how much dV the burn needs from this stage.
+        BurnStageAllocation? alloc = null;
+        if (_burnAllocationLookup != null
+            && _burnAllocationLookup.TryGetValue(stageNumber, out var a))
+            alloc = a;
+
+        if (alloc != null)
         {
-            float2 textSize = ImGui.CalcTextSize(segments[i]);
-            float blockWidth = textSize.X + (i < segments.Length - 1 ? spacing * 2f : 0f);
+            float ratio = alloc.Value.StageTotalDv > 0f
+                ? alloc.Value.AllocatedDv / alloc.Value.StageTotalDv
+                : 1f;
+            ImColor8 burnColor = GetBurnGradientColor(ratio);
 
-            if (i > 0 && lineX + textSize.X <= availWidth)
-            {
-                ImGui.SameLine(0f, spacing * 2f);
-            }
-            else if (i > 0)
-            {
-                lineX = 0f;
-            }
+            DrawInfoSegmentColored(dvText, burnColor, ref lineX, availWidth, spacing);
 
-            ImGui.Text(segments[i]);
-            lineX += blockWidth;
+            string needsText = string.Format(Inv, "needs {0:N0} m/s", alloc.Value.AllocatedDv);
+            DrawInfoSegmentColored(needsText, burnColor, ref lineX, availWidth, spacing);
         }
+        else
+        {
+            DrawInfoSegment(dvText, ref lineX, availWidth, spacing, isFirst: true);
+        }
+
+        DrawInfoSegment(twrText, ref lineX, availWidth, spacing, isFirst: false);
+        DrawInfoSegment(burnTimeText, ref lineX, availWidth, spacing, isFirst: false);
+        DrawInfoSegment(ispText, ref lineX, availWidth, spacing, isFirst: false);
 
         ImGui.PopStyleColor();
         ImGui.Unindent();
+    }
+
+    private static void DrawInfoSegment(string text, ref float lineX,
+        float availWidth, float spacing, bool isFirst)
+    {
+        DrawInfoSegmentColored(text, null, ref lineX, availWidth, spacing, isFirst);
+    }
+
+    private static void DrawInfoSegmentColored(string text, ImColor8? color,
+        ref float lineX, float availWidth, float spacing, bool isFirst = false)
+    {
+        float2 textSize = ImGui.CalcTextSize(text);
+
+        if (lineX > 0f && lineX + textSize.X <= availWidth)
+            ImGui.SameLine(0f, spacing * 2f);
+        else if (lineX > 0f)
+            lineX = 0f;
+
+        if (color != null)
+            ImGui.PushStyleColor(ImGuiCol.Text, color.Value);
+        ImGui.Text(text);
+        if (color != null)
+            ImGui.PopStyleColor();
+
+        lineX += textSize.X + spacing * 2f;
     }
 
     private static void DrawTotalFooter()
@@ -310,10 +402,54 @@ static class BetterBurnTime
         if (analysis.Stages.Count == 0) return;
 
         ImGui.Separator();
-        string totalText = string.Format(Inv,
-            "Total Delta V: {0:N0} m/s  Burn Time: {1}",
-            analysis.TotalDeltaV, FormatBurnTime(analysis.TotalBurnTime));
-        ImGui.Text(totalText);
+
+        if (_cachedBurnAnalysis != null)
+        {
+            var burn = _cachedBurnAnalysis.Value;
+            string totalText = string.Format(Inv,
+                "Total Delta V: {0:N0} m/s", analysis.TotalDeltaV);
+            ImGui.Text(totalText);
+            ImGui.SameLine();
+            ImGui.Text("|");
+            ImGui.SameLine();
+
+            if (burn.IsSufficient)
+            {
+                string burnText = string.Format(Inv,
+                    "Burn: {0:N0} m/s  Burn Time: {1}",
+                    burn.RequiredDv, FormatBurnTime(burn.TotalBurnTime));
+                ImGui.Text(burnText);
+            }
+            else
+            {
+                string burnText = string.Format(Inv,
+                    "Burn: {0:N0} m/s  INSUFFICIENT", burn.RequiredDv);
+                ImGui.PushStyleColor(ImGuiCol.Text, ColorInsufficient);
+                ImGui.Text(burnText);
+                ImGui.PopStyleColor();
+            }
+        }
+        else
+        {
+            string totalText = string.Format(Inv,
+                "Total Delta V: {0:N0} m/s  Burn Time: {1}",
+                analysis.TotalDeltaV, FormatBurnTime(analysis.TotalBurnTime));
+            ImGui.Text(totalText);
+        }
+    }
+
+    #endregion
+
+    #region Corrected Burn Duration
+
+    /// <summary>
+    /// Returns the cached multi-stage burn time, or null if no burn analysis
+    /// is available. Used by Patch_CorrectedBurnDuration to override the
+    /// single-stage BurnDuration computed by the game's UpdateBurnTarget.
+    /// </summary>
+    internal static float? GetCorrectedBurnDuration()
+    {
+        return _cachedBurnAnalysis?.TotalBurnTime;
     }
 
     #endregion
@@ -336,4 +472,38 @@ static class BetterBurnTime
     }
 
     #endregion
+}
+
+/// <summary>
+/// Overrides BurnDuration and IgnitionTime with multi-stage values after the
+/// background job's FlightComputer copy is applied on the main thread.
+///
+/// The game's UpdateBurnTarget (worker thread) computes a single-stage
+/// BurnDuration using only the currently active engines. This postfix
+/// replaces it with the multi-stage burn time from our StageAnalyzer,
+/// which accounts for all future stages.
+///
+/// This corrects the BURN TIME and START BURN IN gauge rollers, which
+/// read from FlightComputer.Burn on the main thread during the render pass.
+///
+/// The worker thread's ignition decision uses its own freshly-computed
+/// single-stage value (slightly off for multi-stage burns). This is
+/// acceptable because auto-staging handles burn continuation.
+/// </summary>
+[HarmonyPatch(typeof(Vehicle), "UpdateFromTaskResults")]
+static class Patch_CorrectedBurnDuration
+{
+    static void Postfix(Vehicle __instance)
+    {
+        if (__instance != Program.ControlledVehicle) return;
+
+        FlightComputer fc = __instance.FlightComputer;
+        if (fc.Burn == null) return;
+
+        float? corrected = BetterBurnTime.GetCorrectedBurnDuration();
+        if (corrected == null || corrected.Value <= 0f) return;
+
+        fc.Burn.BurnDuration = corrected.Value;
+        fc.Burn.IgnitionTime = fc.Burn.ImpulsiveInstant - 0.5 * (double)fc.Burn.BurnDuration;
+    }
 }

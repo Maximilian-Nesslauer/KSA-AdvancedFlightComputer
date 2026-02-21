@@ -33,6 +33,22 @@ public record struct VehicleBurnAnalysis
     public float TotalBurnTime;
 }
 
+public record struct BurnStageAllocation
+{
+    public int StageNumber;
+    public float AllocatedDv;
+    public float StageTotalDv;
+}
+
+public record struct BurnAnalysis
+{
+    public float RequiredDv;
+    public float AvailableDv;
+    public float TotalBurnTime;
+    public bool IsSufficient;
+    public List<BurnStageAllocation> StageAllocations;
+}
+
 public static class StageAnalyzer
 {
     private const float MinMassFlowRate = 1e-6f;
@@ -295,6 +311,79 @@ public static class StageAnalyzer
 
         return result;
     }
+
+    #region Burn Analysis
+
+    /// <summary>
+    /// Allocates a required dV across stages in firing order and computes the
+    /// multi-stage burn time. Pure function operating on pre-computed StageBurnInfo
+    /// data - no vehicle/part access needed.
+    ///
+    /// Stages are walked in firing order (highest stage number first, matching
+    /// the order in VehicleBurnAnalysis.Stages). For each stage, either the full
+    /// stage dV is consumed or just the portion needed to reach the required dV.
+    ///
+    /// For partially consumed stages, the burn time is computed via inverse
+    /// Tsiolkovsky: the fuel mass needed for the partial dV determines the time.
+    /// </summary>
+    public static BurnAnalysis AnalyzeBurn(VehicleBurnAnalysis analysis, float requiredDv)
+    {
+        var result = new BurnAnalysis
+        {
+            RequiredDv = requiredDv,
+            AvailableDv = analysis.TotalDeltaV,
+            TotalBurnTime = 0f,
+            IsSufficient = analysis.TotalDeltaV >= requiredDv,
+            StageAllocations = new List<BurnStageAllocation>()
+        };
+
+        float dvRemaining = requiredDv;
+
+        foreach (StageBurnInfo stage in analysis.Stages)
+        {
+            if (dvRemaining <= 0f)
+                break;
+
+            if (stage.DeltaV <= 0f || stage.EngineCount == 0)
+                continue;
+
+            bool fullyConsumed = dvRemaining >= stage.DeltaV;
+            float allocatedDv = fullyConsumed ? stage.DeltaV : dvRemaining;
+
+            float burnTime;
+            if (fullyConsumed)
+            {
+                burnTime = stage.BurnTime;
+            }
+            else
+            {
+                // Inverse Tsiolkovsky for partial burn:
+                // allocatedDv = Ve * ln(startMass / endMass)
+                // endMass = startMass * exp(-allocatedDv / Ve)
+                // fuelNeeded = startMass - endMass
+                // burnTime = fuelNeeded / flowRate
+                float endMass = stage.StartMass * MathF.Exp(-allocatedDv / stage.ExhaustVelocity);
+                float fuelNeeded = stage.StartMass - endMass;
+                burnTime = (stage.MassFlowRate > MinMassFlowRate)
+                    ? fuelNeeded / stage.MassFlowRate
+                    : 0f;
+            }
+
+            result.StageAllocations.Add(new BurnStageAllocation
+            {
+                StageNumber = stage.StageNumber,
+                AllocatedDv = allocatedDv,
+                StageTotalDv = stage.DeltaV
+            });
+
+            result.TotalBurnTime += burnTime;
+            dvRemaining -= allocatedDv;
+        }
+
+        return result;
+    }
+
+    #endregion
 
     #region Fuel Calculation
 

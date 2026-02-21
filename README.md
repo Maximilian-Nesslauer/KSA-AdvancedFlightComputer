@@ -28,6 +28,14 @@ Extends the Staging window with per-stage information:
 - Delta V, TWR, Burn Time, and ISP (visible when a stage is expanded)
 - Total Delta V and Burn Time in a footer below the stage list
 
+### Burn-Stage Analysis
+
+When a burn is planned, the Staging window shows burn-aware information:
+
+- Per-stage burn allocation with color-coded gradient (green = barely used, yellow = half consumed, red = fully consumed)
+- "INSUFFICIENT" warning when planned Delta V exceeds available Delta V
+- Corrected multi-stage burn duration on the BURN TIME and START BURN IN gauge rollers (the game only computes single-stage burn time)
+
 ### Oberth Maneuver / Multi Pass Burns (planned)
 
 Automatically split large burns into multiple periapsis passes when burn duration is a significant fraction of the orbital period, preserving the Oberth effect.
