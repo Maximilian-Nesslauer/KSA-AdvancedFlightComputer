@@ -1,7 +1,9 @@
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features;
 using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using HarmonyLib;
+using KSA;
 using StarMap.API;
 
 namespace AdvancedFlightComputer;
@@ -10,6 +12,8 @@ namespace AdvancedFlightComputer;
 public class Mod
 {
     private static Harmony? _harmony;
+
+    private const string TestedGameVersion = "v2026.2.35.3667";
 
 #if DEBUG
     public static bool DebugMode = true;
@@ -34,15 +38,30 @@ public class Mod
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
     {
-        if (!HyperbolicTargets.ValidateReflectionTargets())
-        {
-            DefaultCategory.Log.Error("[AFC] Skipping patches - reflection targets missing (game version changed?).");
-            return;
-        }
+        string gameVersion = VersionInfo.Current.VersionString;
+        DefaultCategory.Log.Info($"[AFC] Game version: {gameVersion}");
+        if (gameVersion != TestedGameVersion)
+            DefaultCategory.Log.Warning(
+                $"[AFC] Tested against {TestedGameVersion}, current is {gameVersion}. " +
+                "Some features may not work correctly.");
 
         _harmony = new Harmony("com.maxi.advancedflightcomputer");
-        _harmony.PatchAll(typeof(Mod).Assembly);
-        BetterBurnTime.ApplyPatches(_harmony);
+
+        if (GameReflection.ValidateHyperbolicTargets())
+            HyperbolicTargets.ApplyPatches(_harmony);
+        else
+            DefaultCategory.Log.Warning("[AFC] HyperbolicTargets disabled - reflection targets not found.");
+
+        if (GameReflection.ValidateAutoStage())
+            AutoStage.ApplyPatches(_harmony);
+        else
+            DefaultCategory.Log.Warning("[AFC] AutoStage disabled - reflection targets not found.");
+
+        if (GameReflection.ValidateStageInfo())
+            BetterBurnTime.ApplyPatches(_harmony);
+        else
+            DefaultCategory.Log.Warning("[AFC] StageInfo disabled - reflection targets not found.");
+
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
 
@@ -55,6 +74,7 @@ public class Mod
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
         BetterBurnTime.Reset();
+        LogHelper.Reset();
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }

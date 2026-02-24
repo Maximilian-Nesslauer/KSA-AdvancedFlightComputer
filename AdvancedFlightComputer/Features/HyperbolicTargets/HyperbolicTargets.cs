@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
 using CommunityToolkit.HighPerformance.Buffers;
@@ -36,50 +37,22 @@ static class HyperbolicTargets
     /// <summary>Max transfer ToF as fraction of Hohmann estimate.</summary>
     private const double MaxTofRatio = 4.0;
 
-    private static readonly FieldInfo? f_sourceBody =
-        AccessTools.Field(typeof(TransferPlanner), "_sourceBody");
-    private static readonly FieldInfo? f_transferInfo =
-        AccessTools.Field(typeof(TransferPlanner), "_transferInfo");
-    private static readonly FieldInfo? f_selectedMinTime =
-        AccessTools.Field(typeof(TransferPlanner), "_selectedMinTime");
-    private static readonly FieldInfo? f_selectedMaxTime =
-        AccessTools.Field(typeof(TransferPlanner), "_selectedMaxTime");
-    private static readonly FieldInfo? f_selectedTimeUnit =
-        AccessTools.Field(typeof(TransferPlanner), "_selectedTimeUnit");
-    private static readonly FieldInfo? f_timeUnits =
-        AccessTools.Field(typeof(TransferPlanner), "_timeUnits");
-    private static readonly FieldInfo? f_selectedEntry =
-        AccessTools.Field(typeof(TransferPlanner), "_selectedEntry");
-
     /// <summary>
-    /// Checks that all reflection targets resolve. Returns false if any are
-    /// null (game version changed and renamed a field). Called from Mod.cs
-    /// before PatchAll - if this fails, patches are not applied.
+    /// Applies all HyperbolicTargets Harmony patches. Called from Mod.cs
+    /// after GameReflection.ValidateHyperbolicTargets() passes.
     /// </summary>
-    public static bool ValidateReflectionTargets()
+    public static void ApplyPatches(Harmony harmony)
     {
-        var fields = new (string name, FieldInfo? field)[]
-        {
-            ("_sourceBody",       f_sourceBody),
-            ("_transferInfo",     f_transferInfo),
-            ("_selectedMinTime",  f_selectedMinTime),
-            ("_selectedMaxTime",  f_selectedMaxTime),
-            ("_selectedTimeUnit", f_selectedTimeUnit),
-            ("_timeUnits",        f_timeUnits),
-            ("_selectedEntry",    f_selectedEntry),
-        };
+        harmony.CreateClassProcessor(typeof(Patch_GetPlanetList)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_HohmannFlight)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_SetTransferInfo)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_AlignmentTime)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_TryFindIntercept)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_ClipPointGeneration)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_DiagnosticLog)).Patch();
 
-        bool allOk = true;
-        foreach (var (name, field) in fields)
-        {
-            if (field == null)
-            {
-                DefaultCategory.Log.Error(
-                    $"[AFC] TransferPlanner.{name} not found - game version may have changed.");
-                allOk = false;
-            }
-        }
-        return allOk;
+        if (Mod.DebugMode)
+            DefaultCategory.Log.Debug("[AFC] HyperbolicTargets: all patches applied.");
     }
 
     /// <summary>
@@ -113,7 +86,7 @@ static class HyperbolicTargets
 
             try
             {
-                var sourceBody = (TransferObject)f_sourceBody!.GetValue(null)!;
+                var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!.GetValue(null)!;
                 if (sourceBody.Body is not Vehicle source) return;
 
                 var star = GetParentStar(source);
@@ -135,7 +108,7 @@ static class HyperbolicTargets
 
                     if (celestial.SphereOfInfluence <= 0.0 || double.IsNaN(celestial.SphereOfInfluence))
                     {
-                        DefaultCategory.Log.Warning(
+                        LogHelper.WarnOnce($"soi-missing-{celestial.Id}",
                             $"[AFC] {celestial.Id} has no SOI, XML patch may be missing");
                         continue;
                     }
@@ -202,7 +175,8 @@ static class HyperbolicTargets
         {
             try
             {
-                var info = f_transferInfo!.GetValue(null) as OrbitalTransfers.TransferInfo;
+                var info = GameReflection.TransferPlanner_transferInfo!.GetValue(null)
+                    as OrbitalTransfers.TransferInfo;
                 if (info?.Target?.Orbit == null) return;
                 if (info.Target.Orbit.Eccentricity < 1.0) return;
 
@@ -213,12 +187,15 @@ static class HyperbolicTargets
                 info.MinTransferTimeOfFlight = hohmann * MinTofRatio;
                 info.MaxTransferTimeOfFlight = hohmann * MaxTofRatio;
 
-                f_selectedMinTime!.SetValue(null, new SimTime(info.MinTransferTimeOfFlight.Seconds()));
-                f_selectedMaxTime!.SetValue(null, new SimTime(info.MaxTransferTimeOfFlight.Seconds()));
+                GameReflection.TransferPlanner_selectedMinTime!
+                    .SetValue(null, new SimTime(info.MinTransferTimeOfFlight.Seconds()));
+                GameReflection.TransferPlanner_selectedMaxTime!
+                    .SetValue(null, new SimTime(info.MaxTransferTimeOfFlight.Seconds()));
 
                 // Pick a time unit where the Hohmann ToF displays readably
                 // (whole-number part <= 3 digits, e.g. "183 days" not "4392 hours").
-                var timeUnits = f_timeUnits!.GetValue(null) as List<TimeObject>;
+                var timeUnits = GameReflection.TransferPlanner_timeUnits!.GetValue(null)
+                    as List<TimeObject>;
                 if (timeUnits == null) return;
 
                 foreach (var unit in timeUnits)
@@ -230,7 +207,7 @@ static class HyperbolicTargets
                     if (wholeDigits < 0) wholeDigits = formatted.Length;
                     if (wholeDigits <= 3)
                     {
-                        f_selectedTimeUnit!.SetValue(null, unit);
+                        GameReflection.TransferPlanner_selectedTimeUnit!.SetValue(null, unit);
                         break;
                     }
                 }
@@ -465,7 +442,8 @@ static class HyperbolicTargets
 
             try
             {
-                var entry = f_selectedEntry!.GetValue(null) as OrbitalTransfers.PorkChopEntry;
+                var entry = GameReflection.TransferPlanner_selectedEntry!.GetValue(null)
+                    as OrbitalTransfers.PorkChopEntry;
                 if (entry?.FlightPlan == null) return;
 
                 var data = entry.TransferData;

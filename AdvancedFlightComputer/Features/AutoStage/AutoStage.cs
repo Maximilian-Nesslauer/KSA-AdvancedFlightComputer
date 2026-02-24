@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -25,9 +26,6 @@ static class AutoStage
     /// <summary>Whether auto-staging is currently enabled by the user.</summary>
     public static bool Enabled;
 
-    private static readonly FieldInfo? f_enumLookup =
-        AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumLookup");
-
     /// <summary>
     /// Injects AfcAutoStage into the gauge button enum lookup dictionary.
     /// Called from [StarMapImmediateLoad] to ensure the enum is available
@@ -36,14 +34,14 @@ static class AutoStage
     /// </summary>
     public static bool InjectEnumLookup()
     {
-        if (f_enumLookup == null)
+        if (GameReflection.GaugeButton_enumLookup == null)
         {
             DefaultCategory.Log.Error(
                 "[AFC] GaugeButtonFlightComputer._enumLookup field not found - game version changed?");
             return false;
         }
 
-        if (f_enumLookup.GetValue(null) is not Dictionary<string, Type> dict)
+        if (GameReflection.GaugeButton_enumLookup.GetValue(null) is not Dictionary<string, Type> dict)
         {
             DefaultCategory.Log.Error("[AFC] _enumLookup is null or unexpected type.");
             return false;
@@ -71,6 +69,21 @@ static class AutoStage
                 return method;
         }
         return null;
+    }
+
+    /// <summary>
+    /// Applies all AutoStage Harmony patches. Called from Mod.cs
+    /// after GameReflection.ValidateAutoStage() passes.
+    /// </summary>
+    public static void ApplyPatches(Harmony harmony)
+    {
+        harmony.CreateClassProcessor(typeof(Patch_Vehicle_ToggleEnum)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_Vehicle_IsSet)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_Vehicle_IsFlightComputerDisabled)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_AutoStageExecution)).Patch();
+
+        if (Mod.DebugMode)
+            DefaultCategory.Log.Debug("[AFC] AutoStage: all patches applied.");
     }
 }
 

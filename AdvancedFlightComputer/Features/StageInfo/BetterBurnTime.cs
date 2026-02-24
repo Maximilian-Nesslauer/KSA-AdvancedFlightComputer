@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -69,48 +70,30 @@ static class BetterBurnTime
     private static MethodInfo? _drawDecoupler;
 
     /// <summary>
-    /// Sets up the manual Harmony patch on StagingWindow.DrawContent and caches
-    /// reflection handles for the private DrawComponent&lt;T&gt; method.
-    /// Called from Mod.OnFullyLoaded after PatchAll.
+    /// Applies all StageInfo Harmony patches. Called from Mod.cs after
+    /// GameReflection.ValidateStageInfo() passes. Includes:
+    /// - StagingWindow.DrawContent replacement (manual patch)
+    /// - Corrected burn duration postfix
+    /// - StageAnalyzerDebug patches (debug-only analysis logging)
     /// </summary>
     public static bool ApplyPatches(Harmony harmony)
     {
-        var windowType = typeof(Staging).GetNestedType("StagingWindow",
-            BindingFlags.NonPublic);
-        if (windowType == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AFC] BetterBurnTime: StagingWindow type not found - game version changed?");
-            return false;
-        }
+        _drawThruster = GameReflection.StagingWindow_DrawComponentOpen!
+            .MakeGenericMethod(typeof(ThrusterController));
+        _drawEngine = GameReflection.StagingWindow_DrawComponentOpen!
+            .MakeGenericMethod(typeof(EngineController));
+        _drawDecoupler = GameReflection.StagingWindow_DrawComponentOpen!
+            .MakeGenericMethod(typeof(Decoupler));
 
-        var drawContent = windowType.GetMethod("DrawContent",
-            BindingFlags.Public | BindingFlags.Instance);
-        if (drawContent == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AFC] BetterBurnTime: DrawContent method not found - game version changed?");
-            return false;
-        }
-
-        var drawComponentOpen = windowType.GetMethod("DrawComponent",
-            BindingFlags.NonPublic | BindingFlags.Instance);
-        if (drawComponentOpen == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AFC] BetterBurnTime: DrawComponent method not found - game version changed?");
-            return false;
-        }
-
-        _drawThruster = drawComponentOpen.MakeGenericMethod(typeof(ThrusterController));
-        _drawEngine = drawComponentOpen.MakeGenericMethod(typeof(EngineController));
-        _drawDecoupler = drawComponentOpen.MakeGenericMethod(typeof(Decoupler));
-
-        harmony.Patch(drawContent,
+        harmony.Patch(GameReflection.StagingWindow_DrawContent!,
             prefix: new HarmonyMethod(typeof(BetterBurnTime), nameof(DrawContentPrefix)));
 
+        harmony.CreateClassProcessor(typeof(Patch_CorrectedBurnDuration)).Patch();
+        harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_AnalyzeAfterStaging)).Patch();
+        harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_InitialAnalysis)).Patch();
+
         if (Mod.DebugMode)
-            DefaultCategory.Log.Debug("[AFC] BetterBurnTime: patched StagingWindow.DrawContent");
+            DefaultCategory.Log.Debug("[AFC] StageInfo: all patches applied.");
 
         return true;
     }
