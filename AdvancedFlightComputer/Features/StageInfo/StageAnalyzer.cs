@@ -267,7 +267,7 @@ public static class StageAnalyzer
         ReadOnlySpan<Part> parts = stage.Parts;
         for (int pi = 0; pi < parts.Length; pi++)
         {
-            Span<EngineController> engines = parts[pi].Components.Get<EngineController>();
+            Span<EngineController> engines = parts[pi].Modules.Get<EngineController>();
             for (int ei = 0; ei < engines.Length; ei++)
             {
                 if (engines[ei].IsActive)
@@ -289,7 +289,7 @@ public static class StageAnalyzer
 
         for (int pi = 0; pi < parts.Length; pi++)
         {
-            Span<EngineController> engines = parts[pi].Components.Get<EngineController>();
+            Span<EngineController> engines = parts[pi].Modules.Get<EngineController>();
             for (int ei = 0; ei < engines.Length; ei++)
             {
                 EngineController engine = engines[ei];
@@ -513,7 +513,7 @@ public static class StageAnalyzer
         for (int pi = 0; pi < parts.Length; pi++)
         {
             Part part = parts[pi];
-            if (!part.Components.HasAny<Decoupler>())
+            if (!part.Modules.HasAny<Decoupler>())
                 continue;
 
             float subtreeMass = CollectSubtreeMass(
@@ -566,17 +566,17 @@ public static class StageAnalyzer
         ReadOnlySpan<MoleState> moleStates,
         HashSet<ulong> fuelClaimedTankIds)
     {
-        float mass = SumComponentMass(part.Components, moleStates, fuelClaimedTankIds);
+        float mass = SumComponentMass(part.Modules, moleStates, fuelClaimedTankIds);
 
         ReadOnlySpan<Part> subParts = part.SubParts;
         for (int i = 0; i < subParts.Length; i++)
-            mass += SumComponentMass(subParts[i].Components, moleStates, fuelClaimedTankIds);
+            mass += SumComponentMass(subParts[i].Modules, moleStates, fuelClaimedTankIds);
 
         return mass;
     }
 
     private static float SumComponentMass(
-        PartComponentList components,
+        ModuleList components,
         ReadOnlySpan<MoleState> moleStates,
         HashSet<ulong> fuelClaimedTankIds)
     {
