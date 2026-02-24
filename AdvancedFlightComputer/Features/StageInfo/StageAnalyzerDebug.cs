@@ -25,7 +25,7 @@ static class StageAnalyzerDebug
     /// Runs after ActivateNextStage to re-analyze the vehicle post-staging.
     /// </summary>
     [HarmonyPatch(typeof(StageList), nameof(StageList.ActivateNextStage))]
-    static class Patch_AnalyzeAfterStaging
+    internal static class Patch_AnalyzeAfterStaging
     {
         static void Postfix(Vehicle vehicle)
         {
@@ -42,7 +42,7 @@ static class StageAnalyzerDebug
     /// load or vehicle switch. Only triggers once per vehicle to avoid spam.
     /// </summary>
     [HarmonyPatch(typeof(Vehicle), "UpdateFromTaskResults")]
-    static class Patch_InitialAnalysis
+    internal static class Patch_InitialAnalysis
     {
         static void Postfix(Vehicle __instance)
         {

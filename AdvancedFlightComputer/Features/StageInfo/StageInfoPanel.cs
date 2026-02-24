@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -22,7 +23,7 @@ namespace AdvancedFlightComputer.Features.StageInfo;
 /// Analysis results are cached and refreshed periodically (~0.5s) to avoid
 /// running StageAnalyzer every frame.
 /// </summary>
-static class BetterBurnTime
+static class StageInfoPanel
 {
     private const int UpdateIntervalFrames = 30;
 
@@ -69,48 +70,30 @@ static class BetterBurnTime
     private static MethodInfo? _drawDecoupler;
 
     /// <summary>
-    /// Sets up the manual Harmony patch on StagingWindow.DrawContent and caches
-    /// reflection handles for the private DrawComponent&lt;T&gt; method.
-    /// Called from Mod.OnFullyLoaded after PatchAll.
+    /// Applies all StageInfo Harmony patches. Called from Mod.cs after
+    /// GameReflection.ValidateStageInfo() passes. Includes:
+    /// - StagingWindow.DrawContent replacement (manual patch)
+    /// - Corrected burn duration postfix
+    /// - StageAnalyzerDebug patches (debug-only analysis logging)
     /// </summary>
     public static bool ApplyPatches(Harmony harmony)
     {
-        var windowType = typeof(Staging).GetNestedType("StagingWindow",
-            BindingFlags.NonPublic);
-        if (windowType == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AFC] BetterBurnTime: StagingWindow type not found - game version changed?");
-            return false;
-        }
+        _drawThruster = GameReflection.StagingWindow_DrawComponentOpen!
+            .MakeGenericMethod(typeof(ThrusterController));
+        _drawEngine = GameReflection.StagingWindow_DrawComponentOpen!
+            .MakeGenericMethod(typeof(EngineController));
+        _drawDecoupler = GameReflection.StagingWindow_DrawComponentOpen!
+            .MakeGenericMethod(typeof(Decoupler));
 
-        var drawContent = windowType.GetMethod("DrawContent",
-            BindingFlags.Public | BindingFlags.Instance);
-        if (drawContent == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AFC] BetterBurnTime: DrawContent method not found - game version changed?");
-            return false;
-        }
+        harmony.Patch(GameReflection.StagingWindow_DrawContent!,
+            prefix: new HarmonyMethod(typeof(StageInfoPanel), nameof(DrawContentPrefix)));
 
-        var drawComponentOpen = windowType.GetMethod("DrawComponent",
-            BindingFlags.NonPublic | BindingFlags.Instance);
-        if (drawComponentOpen == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AFC] BetterBurnTime: DrawComponent method not found - game version changed?");
-            return false;
-        }
-
-        _drawThruster = drawComponentOpen.MakeGenericMethod(typeof(ThrusterController));
-        _drawEngine = drawComponentOpen.MakeGenericMethod(typeof(EngineController));
-        _drawDecoupler = drawComponentOpen.MakeGenericMethod(typeof(Decoupler));
-
-        harmony.Patch(drawContent,
-            prefix: new HarmonyMethod(typeof(BetterBurnTime), nameof(DrawContentPrefix)));
+        harmony.CreateClassProcessor(typeof(Patch_CorrectedBurnDuration)).Patch();
+        harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_AnalyzeAfterStaging)).Patch();
+        harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_InitialAnalysis)).Patch();
 
         if (Mod.DebugMode)
-            DefaultCategory.Log.Debug("[AFC] BetterBurnTime: patched StagingWindow.DrawContent");
+            DefaultCategory.Log.Debug("[AFC] StageInfo: all patches applied.");
 
         return true;
     }
@@ -472,38 +455,4 @@ static class BetterBurnTime
     }
 
     #endregion
-}
-
-/// <summary>
-/// Overrides BurnDuration and IgnitionTime with multi-stage values after the
-/// background job's FlightComputer copy is applied on the main thread.
-///
-/// The game's UpdateBurnTarget (worker thread) computes a single-stage
-/// BurnDuration using only the currently active engines. This postfix
-/// replaces it with the multi-stage burn time from our StageAnalyzer,
-/// which accounts for all future stages.
-///
-/// This corrects the BURN TIME and START BURN IN gauge rollers, which
-/// read from FlightComputer.Burn on the main thread during the render pass.
-///
-/// The worker thread's ignition decision uses its own freshly-computed
-/// single-stage value (slightly off for multi-stage burns). This is
-/// acceptable because auto-staging handles burn continuation.
-/// </summary>
-[HarmonyPatch(typeof(Vehicle), "UpdateFromTaskResults")]
-static class Patch_CorrectedBurnDuration
-{
-    static void Postfix(Vehicle __instance)
-    {
-        if (__instance != Program.ControlledVehicle) return;
-
-        FlightComputer fc = __instance.FlightComputer;
-        if (fc.Burn == null) return;
-
-        float? corrected = BetterBurnTime.GetCorrectedBurnDuration();
-        if (corrected == null || corrected.Value <= 0f) return;
-
-        fc.Burn.BurnDuration = corrected.Value;
-        fc.Burn.IgnitionTime = fc.Burn.ImpulsiveInstant - 0.5 * (double)fc.Burn.BurnDuration;
-    }
 }

@@ -1,2 +1,9 @@
 name = "AdvancedFlightComputer"
 patches = [ "Patches/HyperbolicBodies.xml", "Patches/BurnControlPatch.xml" ]
+
+[StarMap]
+EntryAssembly = "AdvancedFlightComputer"
+
+[[StarMap.ModDependencies]]
+ModId = "KittenExtensions"
+Optional = true
