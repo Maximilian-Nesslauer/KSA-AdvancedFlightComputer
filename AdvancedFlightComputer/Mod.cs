@@ -59,7 +59,7 @@ public class Mod
             DefaultCategory.Log.Warning("[AFC] AutoStage disabled - reflection targets not found.");
 
         if (GameReflection.ValidateStageInfo())
-            BetterBurnTime.ApplyPatches(_harmony);
+            StageInfoPanel.ApplyPatches(_harmony);
         else
             DefaultCategory.Log.Warning("[AFC] StageInfo disabled - reflection targets not found.");
 
@@ -74,7 +74,7 @@ public class Mod
         AutoStage.Enabled = false;
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
-        BetterBurnTime.Reset();
+        StageInfoPanel.Reset();
         LogHelper.Reset();
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
