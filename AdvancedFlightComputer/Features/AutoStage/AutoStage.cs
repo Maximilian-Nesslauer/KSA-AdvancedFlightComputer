@@ -192,9 +192,9 @@ static class Patch_Vehicle_IsFlightComputerDisabled
 ///   Frame N:   Staging happens here. PrepareWorker snapshots the new engine
 ///              states (IsActive=true, IsPropellantAvailable=false).
 ///   N -> N+1 job: UpdateBurnTarget reads IsPropellantAvailable=false, sets
-///              BurnMode=Manual. Then UpdatePartComponents/Rocket.UpdateRockets
+///              BurnMode=Manual. Then UpdateModules/Rocket.UpdateRockets
 ///              checks propellant and sets IsPropellantAvailable=true in the
-///              state buffer. (ComputeControl runs before UpdatePartComponents.)
+///              state buffer. (ComputeControl runs before UpdateModules.)
 ///   Frame N+1: ApplyResults writes BurnMode=Manual AND the updated engine
 ///              states (IsPropellantAvailable=true) back to the Vehicle.
 ///              Grace forces BurnMode=Auto. PrepareWorker now snapshots
