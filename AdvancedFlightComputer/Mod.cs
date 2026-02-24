@@ -1,5 +1,5 @@
 using AdvancedFlightComputer.Core;
-using AdvancedFlightComputer.Features;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
