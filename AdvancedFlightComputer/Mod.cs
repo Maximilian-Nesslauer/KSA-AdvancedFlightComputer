@@ -1,5 +1,6 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features;
+using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using HarmonyLib;
