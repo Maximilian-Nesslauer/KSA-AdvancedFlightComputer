@@ -1,4 +1,5 @@
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -56,7 +57,7 @@ static class Patch_TryFindIntercept
                 selectedEntry.TransferData.ClosestApproachDistance = patchedConicDist;
                 __result = true;
 
-                if (Mod.DebugMode)
+                if (DebugConfig.HyperbolicTargets)
                 {
                     DefaultCategory.Log.Debug(
                         $"[AFC] RefineBurnTask: hyperbolic target, " +

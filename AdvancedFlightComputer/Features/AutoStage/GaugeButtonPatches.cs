@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -21,7 +22,7 @@ static class Patch_Vehicle_ToggleEnum
 
         AutoStage.Enabled = !AutoStage.Enabled;
 
-        if (Mod.DebugMode)
+        if (DebugConfig.AutoStage)
         {
             DefaultCategory.Log.Debug($"[AFC] AutoStage.Enabled = {AutoStage.Enabled}");
         }

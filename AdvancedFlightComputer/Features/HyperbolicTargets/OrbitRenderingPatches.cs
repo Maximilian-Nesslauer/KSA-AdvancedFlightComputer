@@ -1,4 +1,6 @@
 using System;
+using System.Diagnostics;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
 using CommunityToolkit.HighPerformance.Buffers;
@@ -24,6 +26,9 @@ static class Patch_ClipPointGeneration
     static bool Prefix(PatchedConic? patch, Orbit o,
         ref MemoryOwner<OrbitPointCce> __result)
     {
+#if DEBUG
+        long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
+#endif
         if (o.IsBound()) return true;
 
         // Only intervene when the original would fall back to -Pi..+Pi.
@@ -69,6 +74,10 @@ static class Patch_ClipPointGeneration
             }
 
             __result = points;
+#if DEBUG
+            if (DebugConfig.Performance)
+                PerfTracker.Record("ClipPointGeneration.Prefix", Stopwatch.GetTimestamp() - perfStart);
+#endif
             return false;
         }
         catch (Exception ex)

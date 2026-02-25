@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -45,7 +46,7 @@ static class HyperbolicTargets
         harmony.CreateClassProcessor(typeof(Patch_ClipPointGeneration)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_DiagnosticLog)).Patch();
 
-        if (Mod.DebugMode)
+        if (DebugConfig.HyperbolicTargets)
             DefaultCategory.Log.Debug("[AFC] HyperbolicTargets: all patches applied.");
     }
 

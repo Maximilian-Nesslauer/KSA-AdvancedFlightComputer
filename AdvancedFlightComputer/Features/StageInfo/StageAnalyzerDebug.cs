@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -29,7 +30,7 @@ static class StageAnalyzerDebug
     {
         static void Postfix(Vehicle vehicle)
         {
-            if (!Mod.DebugMode) return;
+            if (!DebugConfig.StageInfo) return;
             if (vehicle != Program.ControlledVehicle) return;
 
             DefaultCategory.Log.Info("[AFC] Staging event detected, running StageAnalyzer...");
@@ -46,7 +47,7 @@ static class StageAnalyzerDebug
     {
         static void Postfix(Vehicle __instance)
         {
-            if (!Mod.DebugMode) return;
+            if (!DebugConfig.StageInfo) return;
             if (__instance != Program.ControlledVehicle) return;
 
             string vehicleId = __instance.Id;

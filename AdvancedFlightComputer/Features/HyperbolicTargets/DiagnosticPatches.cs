@@ -14,7 +14,7 @@ static class Patch_DiagnosticLog
 {
     static void Postfix(bool __result)
     {
-        if (!__result || !Mod.DebugMode) return;
+        if (!__result || !DebugConfig.HyperbolicTargets) return;
 
         try
         {

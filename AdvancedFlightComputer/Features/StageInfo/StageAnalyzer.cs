@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using CommunityToolkit.HighPerformance.Buffers;
 using KSA;
@@ -100,6 +102,9 @@ public static class StageAnalyzer
     /// </summary>
     public static VehicleBurnAnalysis Analyze(Vehicle vehicle, bool log = false)
     {
+#if DEBUG
+        long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
+#endif
         _pooledStages.Clear();
         _pooledJettisonedPartIds.Clear();
         _pooledFuelClaimedTankIds.Clear();
@@ -266,6 +271,10 @@ public static class StageAnalyzer
                 $"total dV={result.TotalDeltaV:F1} m/s, total burn={result.TotalBurnTime:F1} s");
         }
 
+#if DEBUG
+        if (DebugConfig.Performance)
+            PerfTracker.Record("StageAnalyzer.Analyze", Stopwatch.GetTimestamp() - perfStart);
+#endif
         return result;
     }
 

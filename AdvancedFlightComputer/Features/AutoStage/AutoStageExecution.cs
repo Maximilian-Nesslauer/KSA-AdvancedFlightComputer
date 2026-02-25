@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -61,6 +63,9 @@ static class Patch_AutoStageExecution
 
     static void Postfix(Vehicle __instance, FlightComputerBurnMode __state)
     {
+#if DEBUG
+        long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
+#endif
         if (__instance != Program.ControlledVehicle) return;
 
         if (!AutoStage.Enabled)
@@ -106,7 +111,7 @@ static class Patch_AutoStageExecution
 
             if (hasNextEngineStage)
             {
-                if (Mod.DebugMode)
+                if (DebugConfig.AutoStage)
                 {
                     DefaultCategory.Log.Debug(
                         $"[AFC] Auto-staging: dV remaining = {fc.Burn.DeltaVToGoCci.Length():F1} m/s");
@@ -117,5 +122,10 @@ static class Patch_AutoStageExecution
                 _graceFrames = 3; // see class doc comment for timing analysis
             }
         }
+
+#if DEBUG
+        if (DebugConfig.Performance)
+            PerfTracker.Record("AutoStageExecution.Postfix", Stopwatch.GetTimestamp() - perfStart);
+#endif
     }
 }
