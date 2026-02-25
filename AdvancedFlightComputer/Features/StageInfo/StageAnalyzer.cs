@@ -54,6 +54,30 @@ public static class StageAnalyzer
     private const float MinMassFlowRate = 1e-6f;
     private const float MinDryMass = 1f;
 
+    #region Pooled Collections
+
+    private static readonly List<StageBurnInfo> _pooledStages = new();
+    private static readonly HashSet<ulong> _pooledJettisonedPartIds = new();
+    private static readonly HashSet<ulong> _pooledFuelClaimedTankIds = new();
+    private static readonly List<Stage> _pooledSortedStages = new();
+    private static readonly List<EngineController> _pooledEngines = new();
+    private static readonly List<BurnStageAllocation> _pooledAllocations = new();
+
+    private static readonly Comparison<Stage> StageDescending =
+        static (a, b) => b.StageNumber.CompareTo(a.StageNumber);
+
+    public static void ResetPools()
+    {
+        _pooledStages.Clear();
+        _pooledJettisonedPartIds.Clear();
+        _pooledFuelClaimedTankIds.Clear();
+        _pooledSortedStages.Clear();
+        _pooledEngines.Clear();
+        _pooledAllocations.Clear();
+    }
+
+    #endregion
+
     /// <summary>
     /// Analyzes all stages of a vehicle and computes per-stage dV, burn time,
     /// TWR, and fuel mass. Includes the currently active (burning) stage.
@@ -70,12 +94,19 @@ public static class StageAnalyzer
     /// reflects cross-stage fuel consumption: if an engine's FlowRule is set
     /// to a non-SameStage variant, it drains tanks in other stages, and those
     /// stages' dV will decrease in real-time even though they aren't firing.
+    ///
+    /// Uses pooled static collections to avoid GC pressure when called every
+    /// frame. Safe because all callers run on the main thread.
     /// </summary>
     public static VehicleBurnAnalysis Analyze(Vehicle vehicle, bool log = false)
     {
+        _pooledStages.Clear();
+        _pooledJettisonedPartIds.Clear();
+        _pooledFuelClaimedTankIds.Clear();
+
         var result = new VehicleBurnAnalysis
         {
-            Stages = new List<StageBurnInfo>(),
+            Stages = _pooledStages,
             TotalDeltaV = 0f,
             TotalBurnTime = 0f
         };
@@ -96,21 +127,11 @@ public static class StageAnalyzer
                 $"stages={stages.Length}, surfaceG={surfaceGravity:F3} m/s^2");
         }
 
-        // Part IDs of parts that will be physically separated by decouplers
-        // in earlier (higher-numbered) stages. Used to prevent double-counting
-        // in jettison subtree walks.
-        var jettisonedPartIds = new HashSet<ulong>();
+        SortStagesDescending(stages);
 
-        // Tank IDs whose propellant has been attributed to an earlier stage's
-        // engines. When computing jettison mass, claimed tanks are treated as
-        // empty (their fuel was consumed before the decoupler fires).
-        var fuelClaimedTankIds = new HashSet<ulong>();
-
-        var stagesByNumber = SortStagesDescending(stages);
-
-        for (int si = 0; si < stagesByNumber.Count; si++)
+        for (int si = 0; si < _pooledSortedStages.Count; si++)
         {
-            Stage stage = stagesByNumber[si];
+            Stage stage = _pooledSortedStages[si];
             bool isActiveStage = false;
 
             if (stage.Activated)
@@ -129,7 +150,7 @@ public static class StageAnalyzer
             // Tanks in fuelClaimedTankIds are treated as empty because an earlier
             // stage's engines will have consumed their propellant by now.
             float jettisonedMass = ComputeJettisonedMass(
-                stage, moleStates, jettisonedPartIds, fuelClaimedTankIds, log);
+                stage, moleStates, _pooledJettisonedPartIds, _pooledFuelClaimedTankIds, log);
             currentMass -= jettisonedMass;
 
             if (log && jettisonedMass > 0f)
@@ -140,9 +161,9 @@ public static class StageAnalyzer
             }
 
             // Step 2: Find engines
-            var stageEngines = CollectEngines(stage, isActiveStage, log);
+            CollectEngines(stage, isActiveStage, log);
 
-            if (stageEngines.Count == 0)
+            if (_pooledEngines.Count == 0)
             {
                 if (log)
                     DefaultCategory.Log.Debug(
@@ -153,7 +174,7 @@ public static class StageAnalyzer
             // Step 3: Aggregate thrust and mass flow rate
             float totalThrust = 0f;
             float totalFlowRate = 0f;
-            foreach (EngineController engine in stageEngines)
+            foreach (EngineController engine in _pooledEngines)
             {
                 totalThrust += engine.VacuumData.ThrustMax.Length();
                 totalFlowRate += engine.VacuumData.MassFlowRateMax;
@@ -175,7 +196,7 @@ public static class StageAnalyzer
             // consumption by currently burning engines.
             // Also computes max fuel mass (tank capacity) for fuel fraction display.
             var (fuelMass, maxFuelMass) = ComputeStageFuel(
-                stageEngines, fuelClaimedTankIds, moleStates, log);
+                _pooledEngines, _pooledFuelClaimedTankIds, moleStates, log);
 
             float maxFuel = currentMass - MinDryMass;
             if (fuelMass > maxFuel)
@@ -217,7 +238,7 @@ public static class StageAnalyzer
                 MassFlowRate = totalFlowRate,
                 Twr = twr,
                 JettisonedMass = jettisonedMass,
-                EngineCount = stageEngines.Count
+                EngineCount = _pooledEngines.Count
             };
 
             result.Stages.Add(info);
@@ -232,7 +253,7 @@ public static class StageAnalyzer
                     $"dV={dv:F1} m/s, burn={burnTime:F1} s, TWR={twr:F2}, " +
                     $"thrust={totalThrust:F0} N, Ve={ve:F1} m/s, Isp={isp:F1} s, " +
                     $"fuel={fuelMass:F1} kg, mass={startMass:F1}->{endMass:F1} kg, " +
-                    $"engines={stageEngines.Count}");
+                    $"engines={_pooledEngines.Count}");
             }
 
             currentMass = endMass;
@@ -248,13 +269,12 @@ public static class StageAnalyzer
         return result;
     }
 
-    private static List<Stage> SortStagesDescending(ReadOnlySpan<Stage> stages)
+    private static void SortStagesDescending(ReadOnlySpan<Stage> stages)
     {
-        var list = new List<Stage>(stages.Length);
+        _pooledSortedStages.Clear();
         for (int i = 0; i < stages.Length; i++)
-            list.Add(stages[i]);
-        list.Sort((a, b) => b.StageNumber.CompareTo(a.StageNumber));
-        return list;
+            _pooledSortedStages.Add(stages[i]);
+        _pooledSortedStages.Sort(StageDescending);
     }
 
     /// <summary>
@@ -278,13 +298,13 @@ public static class StageAnalyzer
     }
 
     /// <summary>
-    /// Collects engine controllers for a stage.
+    /// Populates _pooledEngines with engine controllers for a stage.
     /// For the active stage: only engines with IsActive=true.
     /// For future stages: all engines (they will activate when the stage fires).
     /// </summary>
-    private static List<EngineController> CollectEngines(Stage stage, bool isActiveStage, bool log)
+    private static void CollectEngines(Stage stage, bool isActiveStage, bool log)
     {
-        var result = new List<EngineController>();
+        _pooledEngines.Clear();
         ReadOnlySpan<Part> parts = stage.Parts;
 
         for (int pi = 0; pi < parts.Length; pi++)
@@ -295,7 +315,7 @@ public static class StageAnalyzer
                 EngineController engine = engines[ei];
                 if (isActiveStage && !engine.IsActive)
                     continue;
-                result.Add(engine);
+                _pooledEngines.Add(engine);
 
                 if (log)
                 {
@@ -308,8 +328,6 @@ public static class StageAnalyzer
                 }
             }
         }
-
-        return result;
     }
 
     #region Burn Analysis
@@ -328,13 +346,15 @@ public static class StageAnalyzer
     /// </summary>
     public static BurnAnalysis AnalyzeBurn(VehicleBurnAnalysis analysis, float requiredDv)
     {
+        _pooledAllocations.Clear();
+
         var result = new BurnAnalysis
         {
             RequiredDv = requiredDv,
             AvailableDv = analysis.TotalDeltaV,
             TotalBurnTime = 0f,
             IsSufficient = analysis.TotalDeltaV >= requiredDv,
-            StageAllocations = new List<BurnStageAllocation>()
+            StageAllocations = _pooledAllocations
         };
 
         float dvRemaining = requiredDv;

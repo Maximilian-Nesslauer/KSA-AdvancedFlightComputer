@@ -20,19 +20,16 @@ namespace AdvancedFlightComputer.Features.StageInfo;
 /// the original rendering and adds our data inline (progress bar on the stage
 /// header line, info text when expanded).
 ///
-/// Analysis results are cached and refreshed periodically (~0.5s) to avoid
-/// running StageAnalyzer every frame.
+/// Analysis runs every frame using pooled collections in StageAnalyzer to
+/// avoid GC pressure from per-frame allocations.
 /// </summary>
 static class StageInfoPanel
 {
-    private const int UpdateIntervalFrames = 30;
-
     private static VehicleBurnAnalysis? _cachedAnalysis;
-    private static Dictionary<int, StageBurnInfo>? _stageInfoLookup;
+    private static readonly Dictionary<int, StageBurnInfo> _stageInfoLookup = new();
     private static BurnAnalysis? _cachedBurnAnalysis;
-    private static Dictionary<int, BurnStageAllocation>? _burnAllocationLookup;
+    private static readonly Dictionary<int, BurnStageAllocation> _burnAllocationLookup = new();
     private static string? _lastVehicleId;
-    private static int _framesSinceUpdate;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -101,33 +98,20 @@ static class StageInfoPanel
     public static void Reset()
     {
         _cachedAnalysis = null;
-        _stageInfoLookup = null;
+        _stageInfoLookup.Clear();
         _cachedBurnAnalysis = null;
-        _burnAllocationLookup = null;
+        _burnAllocationLookup.Clear();
         _lastVehicleId = null;
-        _framesSinceUpdate = 0;
     }
 
     #region Cache Management
 
     private static void UpdateCache(Vehicle vehicle)
     {
-        string vehicleId = vehicle.Id;
-
-        if (vehicleId != _lastVehicleId)
-        {
-            _lastVehicleId = vehicleId;
-            _framesSinceUpdate = UpdateIntervalFrames;
-        }
-
-        _framesSinceUpdate++;
-        if (_framesSinceUpdate < UpdateIntervalFrames)
-            return;
-
-        _framesSinceUpdate = 0;
+        _lastVehicleId = vehicle.Id;
         _cachedAnalysis = StageAnalyzer.Analyze(vehicle);
 
-        _stageInfoLookup = new Dictionary<int, StageBurnInfo>();
+        _stageInfoLookup.Clear();
         foreach (var stage in _cachedAnalysis.Value.Stages)
             _stageInfoLookup[stage.StageNumber] = stage;
 
@@ -140,7 +124,7 @@ static class StageInfoPanel
         if (burn == null || _cachedAnalysis == null)
         {
             _cachedBurnAnalysis = null;
-            _burnAllocationLookup = null;
+            _burnAllocationLookup.Clear();
             return;
         }
 
@@ -148,13 +132,13 @@ static class StageInfoPanel
         if (requiredDv <= 0f)
         {
             _cachedBurnAnalysis = null;
-            _burnAllocationLookup = null;
+            _burnAllocationLookup.Clear();
             return;
         }
 
         _cachedBurnAnalysis = StageAnalyzer.AnalyzeBurn(_cachedAnalysis.Value, requiredDv);
 
-        _burnAllocationLookup = new Dictionary<int, BurnStageAllocation>();
+        _burnAllocationLookup.Clear();
         foreach (var alloc in _cachedBurnAnalysis.Value.StageAllocations)
             _burnAllocationLookup[alloc.StageNumber] = alloc;
     }
@@ -277,7 +261,6 @@ static class StageInfoPanel
 
     private static void DrawStageProgressBar(int stageNumber)
     {
-        if (_stageInfoLookup == null) return;
         if (!_stageInfoLookup.TryGetValue(stageNumber, out var info)) return;
         if (info.EngineCount == 0) return;
 
@@ -297,13 +280,12 @@ static class StageInfoPanel
             new float2?(new float2(barWidth, barHeight)), ""u8);
         ImGui.SameLine();
         ImGui.SetCursorPosY(cursor.Y);
-        string pctText = string.Format(Inv, "{0}% fuel", (int)(info.FuelFraction * 100f));
+        string pctText = string.Format(Inv, "{0}% fuel", (int)MathF.Round(info.FuelFraction * 100f));
         ImGui.Text(pctText);
     }
 
     private static void DrawStageInfoLine(int stageNumber)
     {
-        if (_stageInfoLookup == null) return;
         if (!_stageInfoLookup.TryGetValue(stageNumber, out var info)) return;
         if (info.EngineCount == 0) return;
 
@@ -324,8 +306,7 @@ static class StageInfoPanel
         // When a burn is planned and this stage is involved, color the Delta V
         // text and show how much dV the burn needs from this stage.
         BurnStageAllocation? alloc = null;
-        if (_burnAllocationLookup != null
-            && _burnAllocationLookup.TryGetValue(stageNumber, out var a))
+        if (_burnAllocationLookup.TryGetValue(stageNumber, out var a))
             alloc = a;
 
         if (alloc != null)

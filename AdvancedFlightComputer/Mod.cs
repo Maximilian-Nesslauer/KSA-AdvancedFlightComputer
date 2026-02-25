@@ -75,6 +75,7 @@ public class Mod
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
         StageInfoPanel.Reset();
+        StageAnalyzer.ResetPools();
         LogHelper.Reset();
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
