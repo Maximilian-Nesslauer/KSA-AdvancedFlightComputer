@@ -70,7 +70,8 @@ public class Mod
         AutoStage.Enabled = false;
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
-        StageInfoPanel.Reset();
+        StageAnalysisCache.Reset();
+        CorrectedBurnState.Clear();
         StageAnalyzer.ResetPools();
         LogHelper.Reset();
 #if DEBUG

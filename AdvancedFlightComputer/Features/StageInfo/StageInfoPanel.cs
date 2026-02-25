@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
@@ -16,22 +15,12 @@ namespace AdvancedFlightComputer.Features.StageInfo;
 /// Extends the Staging window with per-stage Delta V, TWR, burn time, ISP,
 /// and a fuel progress bar. Also shows total Delta V in a footer.
 ///
+/// Pure rendering code - reads all analysis data from StageAnalysisCache.
 /// Since StagingWindow is a private nested class of Staging, we use manual
-/// Harmony patching to replace its DrawContent method. The Prefix re-implements
-/// the original rendering and adds our data inline (progress bar on the stage
-/// header line, info text when expanded).
-///
-/// Analysis runs every frame using pooled collections in StageAnalyzer to
-/// avoid GC pressure from per-frame allocations.
+/// Harmony patching to replace its DrawContent method.
 /// </summary>
 static class StageInfoPanel
 {
-    private static VehicleBurnAnalysis? _cachedAnalysis;
-    private static readonly Dictionary<int, StageBurnInfo> _stageInfoLookup = new();
-    private static BurnAnalysis? _cachedBurnAnalysis;
-    private static readonly Dictionary<int, BurnStageAllocation> _burnAllocationLookup = new();
-    private static string? _lastVehicleId;
-
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
     private static readonly ImColor8 ColorInsufficient = new ImColor8(255, 60, 60, 255);
@@ -71,6 +60,7 @@ static class StageInfoPanel
     /// Applies all StageInfo Harmony patches. Called from Mod.cs after
     /// GameReflection.ValidateStageInfo() passes. Includes:
     /// - StagingWindow.DrawContent replacement (manual patch)
+    /// - Worker-thread ignition timing fix (manual patch)
     /// - Corrected burn duration postfix
     /// - StageAnalyzerDebug patches (debug-only analysis logging)
     /// </summary>
@@ -86,6 +76,18 @@ static class StageInfoPanel
         harmony.Patch(GameReflection.StagingWindow_DrawContent!,
             prefix: new HarmonyMethod(typeof(StageInfoPanel), nameof(DrawContentPrefix)));
 
+        if (GameReflection.FlightComputer_UpdateBurnTarget != null)
+        {
+            harmony.Patch(GameReflection.FlightComputer_UpdateBurnTarget,
+                postfix: new HarmonyMethod(typeof(Patch_WorkerIgnitionTiming),
+                    nameof(Patch_WorkerIgnitionTiming.Postfix)));
+        }
+        else
+        {
+            DefaultCategory.Log.Warning(
+                "[AFC] FlightComputer.UpdateBurnTarget not found - worker ignition timing fix disabled.");
+        }
+
         harmony.CreateClassProcessor(typeof(Patch_CorrectedBurnDuration)).Patch();
         harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_AnalyzeAfterStaging)).Patch();
         harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_InitialAnalysis)).Patch();
@@ -96,62 +98,12 @@ static class StageInfoPanel
         return true;
     }
 
-    public static void Reset()
-    {
-        _cachedAnalysis = null;
-        _stageInfoLookup.Clear();
-        _cachedBurnAnalysis = null;
-        _burnAllocationLookup.Clear();
-        _lastVehicleId = null;
-    }
-
-    #region Cache Management
-
-    private static void UpdateCache(Vehicle vehicle)
-    {
-        _lastVehicleId = vehicle.Id;
-        _cachedAnalysis = StageAnalyzer.Analyze(vehicle);
-
-        _stageInfoLookup.Clear();
-        foreach (var stage in _cachedAnalysis.Value.Stages)
-            _stageInfoLookup[stage.StageNumber] = stage;
-
-        UpdateBurnAnalysisCache(vehicle);
-    }
-
-    private static void UpdateBurnAnalysisCache(Vehicle vehicle)
-    {
-        BurnTarget? burn = vehicle.FlightComputer.Burn;
-        if (burn == null || _cachedAnalysis == null)
-        {
-            _cachedBurnAnalysis = null;
-            _burnAllocationLookup.Clear();
-            return;
-        }
-
-        float requiredDv = burn.DeltaVToGoCci.Length();
-        if (requiredDv <= 0f)
-        {
-            _cachedBurnAnalysis = null;
-            _burnAllocationLookup.Clear();
-            return;
-        }
-
-        _cachedBurnAnalysis = StageAnalyzer.AnalyzeBurn(_cachedAnalysis.Value, requiredDv);
-
-        _burnAllocationLookup.Clear();
-        foreach (var alloc in _cachedBurnAnalysis.Value.StageAllocations)
-            _burnAllocationLookup[alloc.StageNumber] = alloc;
-    }
-
-    #endregion
-
     #region DrawContent Replacement
 
     /// <summary>
     /// Replaces StagingWindow.DrawContent. Re-implements the original stage tree
     /// rendering and adds per-stage info (progress bar, Delta V, TWR, burn time,
-    /// ISP) plus a total footer.
+    /// ISP) plus a total footer. Reads all data from StageAnalysisCache.
     /// </summary>
     static bool DrawContentPrefix(object __instance, Viewport viewport)
     {
@@ -162,7 +114,7 @@ static class StageInfoPanel
         if (vehicle == null)
             return false;
 
-        UpdateCache(vehicle);
+        StageAnalysisCache.MarkPanelActive();
 
         float footerHeight = ImGui.GetTextLineHeightWithSpacing() + 4f;
         float tableHeight = ImGui.GetContentRegionAvail().Y - footerHeight;
@@ -269,7 +221,7 @@ static class StageInfoPanel
 
     private static void DrawStageProgressBar(int stageNumber)
     {
-        if (!_stageInfoLookup.TryGetValue(stageNumber, out var info)) return;
+        if (!StageAnalysisCache.TryGetStageInfo(stageNumber, out var info)) return;
         if (info.EngineCount == 0) return;
 
         ImGui.SameLine();
@@ -294,7 +246,7 @@ static class StageInfoPanel
 
     private static void DrawStageInfoLine(int stageNumber)
     {
-        if (!_stageInfoLookup.TryGetValue(stageNumber, out var info)) return;
+        if (!StageAnalysisCache.TryGetStageInfo(stageNumber, out var info)) return;
         if (info.EngineCount == 0) return;
 
         ImGui.TableNextRow();
@@ -311,10 +263,8 @@ static class StageInfoPanel
         string burnTimeText = string.Format(Inv, "Burn Time: {0}", FormatBurnTime(info.BurnTime));
         string ispText = string.Format(Inv, "ISP: {0:F0}s", info.Isp);
 
-        // When a burn is planned and this stage is involved, color the Delta V
-        // text and show how much dV the burn needs from this stage.
         BurnStageAllocation? alloc = null;
-        if (_burnAllocationLookup.TryGetValue(stageNumber, out var a))
+        if (StageAnalysisCache.TryGetBurnAllocation(stageNumber, out var a))
             alloc = a;
 
         if (alloc != null)
@@ -369,17 +319,19 @@ static class StageInfoPanel
 
     private static void DrawTotalFooter()
     {
-        if (_cachedAnalysis == null) return;
-        var analysis = _cachedAnalysis.Value;
-        if (analysis.Stages.Count == 0) return;
+        var analysis = StageAnalysisCache.Analysis;
+        if (analysis == null) return;
+        var stages = analysis.Value;
+        if (stages.Stages.Count == 0) return;
 
         ImGui.Separator();
 
-        if (_cachedBurnAnalysis != null)
+        var burnAnalysis = StageAnalysisCache.BurnAnalysis;
+        if (burnAnalysis != null)
         {
-            var burn = _cachedBurnAnalysis.Value;
+            var burn = burnAnalysis.Value;
             string totalText = string.Format(Inv,
-                "Total Delta V: {0:N0} m/s", analysis.TotalDeltaV);
+                "Total Delta V: {0:N0} m/s", stages.TotalDeltaV);
             ImGui.Text(totalText);
             ImGui.SameLine();
             ImGui.Text("|");
@@ -405,23 +357,9 @@ static class StageInfoPanel
         {
             string totalText = string.Format(Inv,
                 "Total Delta V: {0:N0} m/s  Burn Time: {1}",
-                analysis.TotalDeltaV, FormatBurnTime(analysis.TotalBurnTime));
+                stages.TotalDeltaV, FormatBurnTime(stages.TotalBurnTime));
             ImGui.Text(totalText);
         }
-    }
-
-    #endregion
-
-    #region Corrected Burn Duration
-
-    /// <summary>
-    /// Returns the cached multi-stage burn time, or null if no burn analysis
-    /// is available. Used by Patch_CorrectedBurnDuration to override the
-    /// single-stage BurnDuration computed by the game's UpdateBurnTarget.
-    /// </summary>
-    internal static float? GetCorrectedBurnDuration()
-    {
-        return _cachedBurnAnalysis?.TotalBurnTime;
     }
 
     #endregion

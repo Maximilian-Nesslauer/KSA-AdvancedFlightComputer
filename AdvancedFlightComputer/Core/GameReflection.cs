@@ -50,6 +50,9 @@ static class GameReflection
     public static readonly MethodInfo? StagingWindow_DrawComponentOpen =
         StagingWindowType?.GetMethod("DrawComponent", BindingFlags.NonPublic | BindingFlags.Instance);
 
+    public static readonly MethodInfo? FlightComputer_UpdateBurnTarget =
+        AccessTools.Method(typeof(FlightComputer), "UpdateBurnTarget");
+
     #endregion
 
     #region Validation
