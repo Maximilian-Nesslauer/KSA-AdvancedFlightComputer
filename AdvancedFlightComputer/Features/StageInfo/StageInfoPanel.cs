@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
@@ -89,7 +90,7 @@ static class StageInfoPanel
         harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_AnalyzeAfterStaging)).Patch();
         harmony.CreateClassProcessor(typeof(StageAnalyzerDebug.Patch_InitialAnalysis)).Patch();
 
-        if (Mod.DebugMode)
+        if (DebugConfig.StageInfo)
             DefaultCategory.Log.Debug("[AFC] StageInfo: all patches applied.");
 
         return true;
@@ -154,6 +155,9 @@ static class StageInfoPanel
     /// </summary>
     static bool DrawContentPrefix(object __instance, Viewport viewport)
     {
+#if DEBUG
+        long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
+#endif
         Vehicle? vehicle = Program.ControlledVehicle;
         if (vehicle == null)
             return false;
@@ -243,6 +247,10 @@ static class StageInfoPanel
 
         DrawTotalFooter();
 
+#if DEBUG
+        if (DebugConfig.Performance)
+            PerfTracker.Record("DrawContentPrefix", Stopwatch.GetTimestamp() - perfStart);
+#endif
         return false;
     }
 

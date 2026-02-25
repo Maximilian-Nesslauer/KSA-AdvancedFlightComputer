@@ -16,11 +16,7 @@ public class Mod
 
     private const string TestedGameVersion = "v2026.2.35.3667";
 
-#if DEBUG
-    public static bool DebugMode = true;
-#else
-    public static bool DebugMode = false;
-#endif
+    public static bool DebugMode => DebugConfig.Any;
 
     /// <summary>
     /// Runs during Mod.PrepareSystems(), BEFORE the game processes Gauges.xml.
@@ -30,7 +26,7 @@ public class Mod
     [StarMapImmediateLoad]
     public void OnImmediateLoad(KSA.Mod mod)
     {
-        if (DebugMode)
+        if (DebugConfig.AutoStage)
             DefaultCategory.Log.Debug("[AFC] ImmediateLoad: ensuring enum injection...");
 
         AutoStage.InjectEnumLookup();
@@ -77,6 +73,9 @@ public class Mod
         StageInfoPanel.Reset();
         StageAnalyzer.ResetPools();
         LogHelper.Reset();
+#if DEBUG
+        PerfTracker.Reset();
+#endif
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }

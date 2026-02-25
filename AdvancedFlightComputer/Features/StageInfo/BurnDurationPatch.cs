@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using AdvancedFlightComputer.Core;
 using HarmonyLib;
 using KSA;
 
@@ -24,6 +26,9 @@ static class Patch_CorrectedBurnDuration
 {
     static void Postfix(Vehicle __instance)
     {
+#if DEBUG
+        long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
+#endif
         if (__instance != Program.ControlledVehicle) return;
 
         FlightComputer fc = __instance.FlightComputer;
@@ -34,5 +39,10 @@ static class Patch_CorrectedBurnDuration
 
         fc.Burn.BurnDuration = corrected.Value;
         fc.Burn.IgnitionTime = fc.Burn.ImpulsiveInstant - 0.5 * (double)fc.Burn.BurnDuration;
+
+#if DEBUG
+        if (DebugConfig.Performance)
+            PerfTracker.Record("CorrectedBurnDuration.Postfix", Stopwatch.GetTimestamp() - perfStart);
+#endif
     }
 }

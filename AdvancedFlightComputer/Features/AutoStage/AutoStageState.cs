@@ -48,7 +48,7 @@ static class AutoStage
 
         dict["AfcAutoStage"] = typeof(AfcAutoStage);
 
-        if (Mod.DebugMode)
+        if (DebugConfig.AutoStage)
         {
             DefaultCategory.Log.Debug(
                 $"[AFC] Injected AfcAutoStage into _enumLookup ({dict.Count} entries total).");
@@ -81,7 +81,7 @@ static class AutoStage
         harmony.CreateClassProcessor(typeof(Patch_Vehicle_IsFlightComputerDisabled)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_AutoStageExecution)).Patch();
 
-        if (Mod.DebugMode)
+        if (DebugConfig.AutoStage)
             DefaultCategory.Log.Debug("[AFC] AutoStage: all patches applied.");
     }
 }
