@@ -71,6 +71,7 @@ public class Mod
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
         StageAnalysisCache.Reset();
+        StageInfoSettings.Reset();
         CorrectedBurnState.Clear();
         StageAnalyzer.ResetPools();
         LogHelper.Reset();

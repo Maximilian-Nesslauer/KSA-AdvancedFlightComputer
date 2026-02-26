@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using AdvancedFlightComputer.Core;
 using Brutal.Logging;
+using Brutal.Numerics;
 using CommunityToolkit.HighPerformance.Buffers;
 using KSA;
 
@@ -100,7 +101,8 @@ public static class StageAnalyzer
     /// Uses pooled static collections to avoid GC pressure when called every
     /// frame. Safe because all callers run on the main thread.
     /// </summary>
-    public static VehicleBurnAnalysis Analyze(Vehicle vehicle, bool log = false)
+    public static VehicleBurnAnalysis Analyze(Vehicle vehicle,
+        float ambientPressure = 0f, float? surfaceGravityOverride = null, bool log = false)
     {
 #if DEBUG
         long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
@@ -120,16 +122,25 @@ public static class StageAnalyzer
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
         float currentMass = vehicle.TotalMass;
 
-        double parentMass = vehicle.Parent?.Mass ?? 0.0;
-        double parentRadius = vehicle.Parent?.MeanRadius ?? 1.0;
-        float surfaceGravity = (float)(Constants.GRAVITATIONAL_CONSTANT * parentMass / (parentRadius * parentRadius));
+        float surfaceGravity;
+        if (surfaceGravityOverride.HasValue)
+        {
+            surfaceGravity = surfaceGravityOverride.Value;
+        }
+        else
+        {
+            double parentMass = vehicle.Parent?.Mass ?? 0.0;
+            double parentRadius = vehicle.Parent?.MeanRadius ?? 1.0;
+            surfaceGravity = (float)(Constants.GRAVITATIONAL_CONSTANT * parentMass / (parentRadius * parentRadius));
+        }
 
         if (log)
         {
             DefaultCategory.Log.Debug(
                 $"[AFC] StageAnalyzer: vehicle={vehicle.Id}, totalMass={currentMass:F1} kg, " +
                 $"inertMass={vehicle.InertMass:F1} kg, propellant={vehicle.PropellantMass:F1} kg, " +
-                $"stages={stages.Length}, surfaceG={surfaceGravity:F3} m/s^2");
+                $"stages={stages.Length}, surfaceG={surfaceGravity:F3} m/s^2, " +
+                $"ambientPressure={ambientPressure:F0} Pa");
         }
 
         SortStagesDescending(stages);
@@ -179,10 +190,23 @@ public static class StageAnalyzer
             // Step 3: Aggregate thrust and mass flow rate
             float totalThrust = 0f;
             float totalFlowRate = 0f;
-            foreach (EngineController engine in _pooledEngines)
+            if (ambientPressure > 0f)
             {
-                totalThrust += engine.VacuumData.ThrustMax.Length();
-                totalFlowRate += engine.VacuumData.MassFlowRateMax;
+                foreach (EngineController engine in _pooledEngines)
+                {
+                    var data = RocketControllerData.ComputeFromCores(
+                        engine.Cores.AsSpan(), float3.Zero, ambientPressure);
+                    totalThrust += data.ThrustMax.Length();
+                    totalFlowRate += data.MassFlowRateMax;
+                }
+            }
+            else
+            {
+                foreach (EngineController engine in _pooledEngines)
+                {
+                    totalThrust += engine.VacuumData.ThrustMax.Length();
+                    totalFlowRate += engine.VacuumData.MassFlowRateMax;
+                }
             }
 
             if (totalFlowRate < MinMassFlowRate)

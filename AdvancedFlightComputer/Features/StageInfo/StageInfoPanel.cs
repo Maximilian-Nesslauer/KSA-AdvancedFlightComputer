@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Reflection;
@@ -14,6 +15,7 @@ namespace AdvancedFlightComputer.Features.StageInfo;
 /// <summary>
 /// Extends the Staging window with per-stage Delta V, TWR, burn time, ISP,
 /// and a fuel progress bar. Also shows total Delta V in a footer.
+/// Supports atmospheric thrust display via configurable display modes.
 ///
 /// Pure rendering code - reads all analysis data from StageAnalysisCache.
 /// Since StagingWindow is a private nested class of Staging, we use manual
@@ -55,6 +57,9 @@ static class StageInfoPanel
     private static MethodInfo? _drawThruster;
     private static MethodInfo? _drawEngine;
     private static MethodInfo? _drawDecoupler;
+
+    private static readonly string[] ModeLabels = { "Auto", "VAC", "ASL", "VAC + ASL", "Planning" };
+    private static bool _initialSizeApplied;
 
     /// <summary>
     /// Applies all StageInfo Harmony patches. Called from Mod.cs after
@@ -114,9 +119,20 @@ static class StageInfoPanel
         if (vehicle == null)
             return false;
 
+        if (!_initialSizeApplied)
+        {
+            _initialSizeApplied = true;
+            float2 screen = ImGui.GetMainViewport().Size;
+            ImGui.SetWindowSize(new float2(screen.X * 0.11f, screen.Y * 0.225f));
+        }
+
         StageAnalysisCache.MarkPanelActive();
 
-        float footerHeight = ImGui.GetTextLineHeightWithSpacing() + 4f;
+        DrawModeSelector();
+
+        bool hasSecondary = StageAnalysisCache.SecondaryAnalysis != null;
+        float footerLines = hasSecondary ? 2f : 1f;
+        float footerHeight = ImGui.GetTextLineHeightWithSpacing() * footerLines + 4f;
         float tableHeight = ImGui.GetContentRegionAvail().Y - footerHeight;
         if (tableHeight < 50f)
             tableHeight = 50f;
@@ -217,6 +233,64 @@ static class StageInfoPanel
 
     #endregion
 
+    #region Mode Selector
+
+    private static void DrawModeSelector()
+    {
+        ImGui.PushItemWidth(110f);
+
+        string currentLabel = ModeLabels[(int)StageInfoSettings.Mode];
+
+        if (ImGui.BeginCombo("##StageInfoMode"u8, currentLabel))
+        {
+            for (int i = 0; i < ModeLabels.Length; i++)
+            {
+                bool isSelected = (int)StageInfoSettings.Mode == i;
+                if (ImGui.Selectable(ModeLabels[i], isSelected))
+                    StageInfoSettings.Mode = (StageDisplayMode)i;
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.PopItemWidth();
+
+        if (StageInfoSettings.Mode == StageDisplayMode.Planning)
+        {
+            ImGui.SameLine();
+            DrawBodySelector();
+        }
+    }
+
+    private static void DrawBodySelector()
+    {
+        List<Astronomical> bodies = StageInfoSettings.GetCelestialBodies();
+        if (bodies.Count == 0)
+        {
+            ImGui.Text("(no bodies)");
+            return;
+        }
+
+        if (StageInfoSettings.SelectedBodyId == null)
+            StageInfoSettings.SelectedBodyId = bodies[0].Id;
+
+        string currentName = StageInfoSettings.SelectedBodyId;
+
+        ImGui.PushItemWidth(140f);
+        if (ImGui.BeginCombo("##PlanningBody"u8, currentName))
+        {
+            for (int i = 0; i < bodies.Count; i++)
+            {
+                string bodyId = bodies[i].Id;
+                bool isSelected = bodyId == StageInfoSettings.SelectedBodyId;
+                if (ImGui.Selectable(bodyId, isSelected))
+                    StageInfoSettings.SelectedBodyId = bodyId;
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.PopItemWidth();
+    }
+
+    #endregion
+
     #region Stage Info Rendering
 
     private static void DrawStageProgressBar(int stageNumber)
@@ -249,40 +323,78 @@ static class StageInfoPanel
         if (!StageAnalysisCache.TryGetStageInfo(stageNumber, out var info)) return;
         if (info.EngineCount == 0) return;
 
+        string primaryLabel = StageAnalysisCache.PrimaryLabel;
+        BurnStageAllocation? primaryAlloc = null;
+        if (StageAnalysisCache.TryGetBurnAllocation(stageNumber, out var pa))
+            primaryAlloc = pa;
+
+        bool hasSecondary = StageAnalysisCache.TryGetSecondaryStageInfo(stageNumber, out var secondaryInfo)
+            && secondaryInfo.EngineCount > 0;
+
+        bool primaryDimmed = hasSecondary && !StageAnalysisCache.IsPrimaryCurrentCondition;
+        DrawSingleStageInfoLine(info, primaryLabel, primaryAlloc, primaryDimmed);
+
+        if (hasSecondary)
+        {
+            string secondaryLabel = StageAnalysisCache.SecondaryLabel ?? "";
+            BurnStageAllocation? secondaryAlloc = null;
+            if (StageAnalysisCache.TryGetSecondaryBurnAllocation(stageNumber, out var sa))
+                secondaryAlloc = sa;
+
+            bool secondaryDimmed = StageAnalysisCache.IsPrimaryCurrentCondition;
+            DrawSingleStageInfoLine(secondaryInfo, secondaryLabel, secondaryAlloc, secondaryDimmed);
+        }
+    }
+
+    private static void DrawSingleStageInfoLine(StageBurnInfo info, string label,
+        BurnStageAllocation? alloc, bool isDimmed)
+    {
         ImGui.TableNextRow();
         ImGui.TableNextColumn();
         ImGui.Indent();
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
+
+        if (isDimmed)
+        {
+            var dimColor = ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled);
+            dimColor.W *= 0.6f;
+            ImGui.PushStyleColor(ImGuiCol.Text, dimColor);
+        }
+        else
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
+        }
 
         float spacing = ImGui.GetStyle().ItemSpacing.X;
         float availWidth = ImGui.GetContentRegionAvail().X;
         float lineX = 0f;
-
-        string dvText = string.Format(Inv, "Delta V: {0:N0} m/s", info.DeltaV);
-        string twrText = string.Format(Inv, "TWR: {0:F2}", info.Twr);
-        string burnTimeText = string.Format(Inv, "Burn Time: {0}", FormatBurnTime(info.BurnTime));
-        string ispText = string.Format(Inv, "ISP: {0:F0}s", info.Isp);
-
-        BurnStageAllocation? alloc = null;
-        if (StageAnalysisCache.TryGetBurnAllocation(stageNumber, out var a))
-            alloc = a;
 
         if (alloc != null)
         {
             float ratio = alloc.Value.StageTotalDv > 0f
                 ? alloc.Value.AllocatedDv / alloc.Value.StageTotalDv
                 : 1f;
-            ImColor8 burnColor = GetBurnGradientColor(ratio);
+            ImColor8 burnColor = isDimmed
+                ? new ImColor8(180, 180, 180, 160)
+                : GetBurnGradientColor(ratio);
 
-            DrawInfoSegmentColored(dvText, burnColor, ref lineX, availWidth, spacing);
-
-            string needsText = string.Format(Inv, "needs {0:N0} m/s", alloc.Value.AllocatedDv);
-            DrawInfoSegmentColored(needsText, burnColor, ref lineX, availWidth, spacing);
+            string allocText = string.IsNullOrEmpty(label)
+                ? string.Format(Inv, "Burn allocated {0:N0} / {1:N0} m/s stage deltaV",
+                    alloc.Value.AllocatedDv, info.DeltaV)
+                : string.Format(Inv, "{0} Burn allocated {1:N0} / {2:N0} m/s stage deltaV",
+                    label, alloc.Value.AllocatedDv, info.DeltaV);
+            DrawInfoSegmentColored(allocText, burnColor, ref lineX, availWidth, spacing);
         }
         else
         {
+            string dvText = string.IsNullOrEmpty(label)
+                ? string.Format(Inv, "Delta V: {0:N0} m/s", info.DeltaV)
+                : string.Format(Inv, "{0} Delta V: {1:N0} m/s", label, info.DeltaV);
             DrawInfoSegment(dvText, ref lineX, availWidth, spacing, isFirst: true);
         }
+
+        string twrText = string.Format(Inv, "TWR: {0:F2}", info.Twr);
+        string burnTimeText = string.Format(Inv, "Burn: {0}", FormatBurnTime(info.BurnTime));
+        string ispText = string.Format(Inv, "ISP: {0:F0}s", info.Isp);
 
         DrawInfoSegment(twrText, ref lineX, availWidth, spacing, isFirst: false);
         DrawInfoSegment(burnTimeText, ref lineX, availWidth, spacing, isFirst: false);
@@ -326,12 +438,40 @@ static class StageInfoPanel
 
         ImGui.Separator();
 
-        var burnAnalysis = StageAnalysisCache.BurnAnalysis;
+        string primaryLabel = StageAnalysisCache.PrimaryLabel;
+        bool hasSecondary = StageAnalysisCache.SecondaryAnalysis != null;
+        bool primaryDimmed = hasSecondary && !StageAnalysisCache.IsPrimaryCurrentCondition;
+
+        DrawTotalLine(stages, StageAnalysisCache.BurnAnalysis, primaryLabel, primaryDimmed);
+
+        if (hasSecondary)
+        {
+            var secondary = StageAnalysisCache.SecondaryAnalysis!.Value;
+            string secondaryLabel = StageAnalysisCache.SecondaryLabel ?? "";
+            bool secondaryDimmed = StageAnalysisCache.IsPrimaryCurrentCondition;
+
+            DrawTotalLine(secondary, StageAnalysisCache.SecondaryBurnAnalysis,
+                secondaryLabel, secondaryDimmed);
+        }
+    }
+
+    private static void DrawTotalLine(VehicleBurnAnalysis stages, BurnAnalysis? burnAnalysis,
+        string label, bool isDimmed)
+    {
+        if (isDimmed)
+        {
+            var dimColor = ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled);
+            dimColor.W *= 0.6f;
+            ImGui.PushStyleColor(ImGuiCol.Text, dimColor);
+        }
+
+        string prefix = string.IsNullOrEmpty(label) ? "" : label + " ";
+
         if (burnAnalysis != null)
         {
             var burn = burnAnalysis.Value;
             string totalText = string.Format(Inv,
-                "Total Delta V: {0:N0} m/s", stages.TotalDeltaV);
+                "{0}Total Delta V: {1:N0} m/s", prefix, stages.TotalDeltaV);
             ImGui.Text(totalText);
             ImGui.SameLine();
             ImGui.Text("|");
@@ -356,10 +496,13 @@ static class StageInfoPanel
         else
         {
             string totalText = string.Format(Inv,
-                "Total Delta V: {0:N0} m/s  Burn Time: {1}",
-                stages.TotalDeltaV, FormatBurnTime(stages.TotalBurnTime));
+                "{0}Total Delta V: {1:N0} m/s  Burn Time: {2}",
+                prefix, stages.TotalDeltaV, FormatBurnTime(stages.TotalBurnTime));
             ImGui.Text(totalText);
         }
+
+        if (isDimmed)
+            ImGui.PopStyleColor();
     }
 
     #endregion
