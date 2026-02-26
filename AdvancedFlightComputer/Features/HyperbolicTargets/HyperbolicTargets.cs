@@ -13,19 +13,10 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 /// assumes targets have a finite Period, positive SMA, and meaningful SOI.
 /// HyperbolicBodies.xml injects Mass and SOI via KittenExtensions. The
 /// Harmony patches here fix everything else: target filtering, time-of-flight
-/// estimation, departure alignment, encounter detection, and orbit rendering.
+/// estimation, departure alignment, and encounter detection.
 /// </summary>
 static class HyperbolicTargets
 {
-    /// <summary>
-    /// Margin from the exact asymptote angle (acos(-1/e)) to avoid
-    /// non-finite positions at the mathematical limit.
-    /// </summary>
-    internal const double AsymptoteMargin = 0.999;
-
-    /// <summary>Number of points generated for orbit rendering lines.</summary>
-    internal const int OrbitPointCount = 2000;
-
     /// <summary>Min transfer ToF as fraction of Hohmann estimate.</summary>
     internal const double MinTofRatio = 0.3;
 
@@ -43,7 +34,6 @@ static class HyperbolicTargets
         harmony.CreateClassProcessor(typeof(Patch_SetTransferInfo)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_AlignmentTime)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_TryFindIntercept)).Patch();
-        harmony.CreateClassProcessor(typeof(Patch_ClipPointGeneration)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_DiagnosticLog)).Patch();
 
         if (DebugConfig.HyperbolicTargets)
