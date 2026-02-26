@@ -61,8 +61,8 @@ static class Patch_Vehicle_IsSet
 }
 
 /// <summary>
-/// Disables (grays out) the AUTOSTAGE button when no burn is planned,
-/// matching the behavior of the AUTO/WARP/DELETE burn buttons.
+/// Disables (grays out) the AUTOSTAGE button when there are no remaining
+/// stages with engines to activate.
 /// Vehicle.IsFlightComputerDisabled&lt;T&gt; returns false for unrecognized
 /// enum types (never disabled), so without this patch the button stays
 /// active even when there is nothing to auto-stage for.
@@ -83,8 +83,7 @@ static class Patch_Vehicle_IsFlightComputerDisabled
     {
         if (value is not AfcAutoStage) return true;
 
-        __result = __instance.FlightComputer.Burn == null
-                || __instance.FlightComputer.Burn.BurnDuration <= 0f;
+        __result = !AutoStage.HasNextEngineStage(__instance);
         return false;
     }
 }
