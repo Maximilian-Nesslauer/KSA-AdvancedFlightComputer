@@ -17,13 +17,52 @@ public enum AfcAutoStage { Enabled }
 
 /// <summary>
 /// Adds an AUTOSTAGE toggle button to the BurnControl gauge panel.
-/// When enabled, automatically activates the next stage if engines
-/// run out of propellant during an auto-burn.
+/// When enabled, automatically activates the next stage whenever active
+/// engines lose propellant - during auto-burns, manual burns, or
+/// unpowered ascent without a maneuver node.
 /// </summary>
 static class AutoStage
 {
     /// <summary>Whether auto-staging is currently enabled by the user.</summary>
     public static bool Enabled;
+
+    /// <summary>
+    /// Checks whether any active engine on the vehicle has propellant available.
+    /// Uses ResourceManager.ResourceAvailable - the same check the game performs
+    /// in Rocket.UpdateRockets to set IsPropellantAvailable on engine states.
+    /// </summary>
+    public static bool HasActiveEngineWithPropellant(Vehicle vehicle)
+    {
+        ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
+        foreach (Stage stage in vehicle.Parts.StageList.Stages)
+        {
+            ReadOnlySpan<Part> parts = stage.Parts;
+            for (int i = 0; i < parts.Length; i++)
+            {
+                Span<EngineController> engines = parts[i].Modules.Get<EngineController>();
+                for (int j = 0; j < engines.Length; j++)
+                {
+                    if (!engines[j].IsActive) continue;
+                    foreach (RocketCore core in engines[j].Cores)
+                        if (core.ResourceManager != null
+                            && core.ResourceManager.ResourceAvailable(moleStates))
+                            return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Checks whether the vehicle has an unactivated stage containing engines.
+    /// </summary>
+    public static bool HasNextEngineStage(Vehicle vehicle)
+    {
+        foreach (Stage stage in vehicle.Parts.StageList.Stages)
+            if (!stage.Activated && stage.ContainsEngine)
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// Injects AfcAutoStage into the gauge button enum lookup dictionary.

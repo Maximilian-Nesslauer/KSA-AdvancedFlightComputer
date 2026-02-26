@@ -8,13 +8,14 @@ using KSA;
 namespace AdvancedFlightComputer.Features.AutoStage;
 
 /// <summary>
-/// Detects propellant depletion during auto-burns and triggers staging.
+/// Detects propellant depletion and triggers staging. Works during auto-burns,
+/// manual burns, and even without a planned burn (e.g. manual ascent).
 ///
-/// FlightComputer.UpdateBurnTarget (background thread) checks whether any
-/// active engine has propellant. When none do, it sets BurnMode = Manual,
-/// aborting the burn. We detect that Auto-to-Manual transition when the
-/// background job results are applied back on the main thread, and call
-/// ActivateNextStage to continue the burn with the next stage's engines.
+/// Detection: The Prefix captures whether any active engine has propellant
+/// (via ResourceManager.ResourceAvailable, the same check the game uses in
+/// Rocket.UpdateRockets). The Postfix checks again after UpdateFromTaskResults
+/// has applied the background job's state updates. A transition from "has
+/// propellant" to "no propellant" triggers ActivateNextStage.
 ///
 /// Hook point: Vehicle.UpdateFromTaskResults runs on the main thread after
 /// the VehicleUpdateTask job completes. This is safe because:
@@ -25,13 +26,10 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 ///   mid-iteration (InvalidOperationException)
 /// - Cannot use UpdateBurnTarget: it runs on the background worker thread
 ///
-/// Prefix captures the BurnMode before the FC copy overwrites it, giving
-/// us a clean transition detection without stale static state.
-///
-/// After staging, a grace period maintains BurnMode = Auto while
+/// After staging, a grace period prevents re-triggering while
 /// Rocket.UpdateRockets propagates IsPropellantAvailable to the newly
-/// activated engines. Without this, the next frame's background job would
-/// see engines without propellant and set BurnMode = Manual again.
+/// activated engines. For auto-burns, the grace period also maintains
+/// BurnMode = Auto so the flight computer continues the burn.
 ///
 /// Why 3 frames (1 needed, 2 margin):
 ///   Frame N:   Staging happens here. PrepareWorker snapshots the new engine
@@ -42,8 +40,8 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 ///              state buffer. (ComputeControl runs before UpdateModules.)
 ///   Frame N+1: ApplyResults writes BurnMode=Manual AND the updated engine
 ///              states (IsPropellantAvailable=true) back to the Vehicle.
-///              Grace forces BurnMode=Auto. PrepareWorker now snapshots
-///              BurnMode=Auto + IsPropellantAvailable=true.
+///              Grace forces BurnMode=Auto (if auto-burn). PrepareWorker
+///              now snapshots BurnMode=Auto + IsPropellantAvailable=true.
 ///   N+1 -> N+2 job: Propellant check passes. Burn continues normally.
 /// </summary>
 [HarmonyPatch(typeof(Vehicle), "UpdateFromTaskResults")]
@@ -51,17 +49,35 @@ static class Patch_AutoStageExecution
 {
     private static int _graceFrames;
 
+    /// <summary>
+    /// The BurnMode that was active when staging was triggered.
+    /// Used during grace to decide whether to force BurnMode=Auto
+    /// (only for auto-burns; manual burns keep Manual).
+    /// </summary>
+    private static FlightComputerBurnMode _triggeredMode;
+
     internal static void Reset()
     {
         _graceFrames = 0;
+        _triggeredMode = FlightComputerBurnMode.Manual;
     }
 
-    static void Prefix(Vehicle __instance, out FlightComputerBurnMode __state)
+    static void Prefix(Vehicle __instance,
+        out (FlightComputerBurnMode burnMode, bool hadPropellant) __state)
     {
-        __state = __instance.FlightComputer.BurnMode;
+        if (__instance != Program.ControlledVehicle)
+        {
+            __state = default;
+            return;
+        }
+        __state = (
+            __instance.FlightComputer.BurnMode,
+            AutoStage.HasActiveEngineWithPropellant(__instance)
+        );
     }
 
-    static void Postfix(Vehicle __instance, FlightComputerBurnMode __state)
+    static void Postfix(Vehicle __instance,
+        (FlightComputerBurnMode burnMode, bool hadPropellant) __state)
     {
 #if DEBUG
         long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
@@ -75,57 +91,89 @@ static class Patch_AutoStageExecution
         }
 
         FlightComputer fc = __instance.FlightComputer;
-
-        if (fc.Burn == null)
-        {
-            _graceFrames = 0;
-            return;
-        }
-
-        bool burnIncomplete = float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci) > 0f;
+        bool hasPropellant = AutoStage.HasActiveEngineWithPropellant(__instance);
 
         if (_graceFrames > 0)
         {
             _graceFrames--;
-            if (burnIncomplete && fc.BurnMode == FlightComputerBurnMode.Manual)
+
+            // For auto-burns, maintain BurnMode=Auto during grace so the
+            // background thread doesn't abort the burn before new engines
+            // have their propellant state propagated.
+            if (_triggeredMode == FlightComputerBurnMode.Auto
+                && fc.Burn != null
+                && IsBurnIncomplete(fc)
+                && fc.BurnMode == FlightComputerBurnMode.Manual)
+            {
                 fc.BurnMode = FlightComputerBurnMode.Auto;
-            return;
+            }
+
+            // On grace expiry, cascade if still no propellant.
+            // Uses _triggeredMode (not __state.burnMode) because during grace
+            // the background thread keeps setting BurnMode=Manual, so the
+            // Prefix always captures Manual. The original trigger mode is what
+            // matters for cascading.
+            if (_graceFrames == 0
+                && !hasPropellant
+                && !IsBurnComplete(fc)
+                && AutoStage.HasNextEngineStage(__instance))
+            {
+                ExecuteStaging(__instance, fc, _triggeredMode);
+            }
         }
-
-        // __state = BurnMode before the background job's FC copy was applied.
-        // fc.BurnMode = BurnMode from the background job (after UpdateBurnTarget).
-        // Auto -> Manual with remaining dV means propellant depletion, not completion.
-        if (__state == FlightComputerBurnMode.Auto
-            && fc.BurnMode == FlightComputerBurnMode.Manual
-            && burnIncomplete)
+        else if (__state.hadPropellant && !hasPropellant
+            && !IsBurnComplete(fc)
+            && AutoStage.HasNextEngineStage(__instance))
         {
-            bool hasNextEngineStage = false;
-            foreach (Stage stage in __instance.Parts.StageList.Stages)
-            {
-                if (!stage.Activated && stage.ContainsEngine)
-                {
-                    hasNextEngineStage = true;
-                    break;
-                }
-            }
-
-            if (hasNextEngineStage)
-            {
-                if (DebugConfig.AutoStage)
-                {
-                    DefaultCategory.Log.Debug(
-                        $"[AFC] Auto-staging: dV remaining = {fc.Burn.DeltaVToGoCci.Length():F1} m/s");
-                }
-
-                __instance.Parts.StageList.ActivateNextStage(__instance);
-                fc.BurnMode = FlightComputerBurnMode.Auto;
-                _graceFrames = 3; // see class doc comment for timing analysis
-            }
+            // Propellant transition: had propellant before the update, lost it after.
+            ExecuteStaging(__instance, fc, __state.burnMode);
         }
 
 #if DEBUG
         if (DebugConfig.Performance)
             PerfTracker.Record("AutoStageExecution.Postfix", Stopwatch.GetTimestamp() - perfStart);
 #endif
+    }
+
+    /// <summary>
+    /// Returns true if a burn is planned and has been completed (remaining dV
+    /// has reversed direction relative to target dV). A completed burn should
+    /// not trigger staging even if propellant is depleted.
+    /// Returns false if no burn is planned (staging is always allowed).
+    /// </summary>
+    private static bool IsBurnComplete(FlightComputer fc)
+    {
+        return fc.Burn != null
+            && float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci) <= 0f;
+    }
+
+    /// <summary>
+    /// Returns true if a burn is planned and still has remaining dV.
+    /// </summary>
+    private static bool IsBurnIncomplete(FlightComputer fc)
+    {
+        return fc.Burn != null
+            && float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci) > 0f;
+    }
+
+    private static void ExecuteStaging(Vehicle vehicle, FlightComputer fc,
+        FlightComputerBurnMode originalBurnMode)
+    {
+        if (DebugConfig.AutoStage)
+        {
+            string dvInfo = fc.Burn != null
+                ? $"dV remaining = {fc.Burn.DeltaVToGoCci.Length():F1} m/s"
+                : "no burn planned";
+            DefaultCategory.Log.Debug(
+                $"[AFC] Auto-staging ({originalBurnMode} mode): {dvInfo}");
+        }
+
+        vehicle.Parts.StageList.ActivateNextStage(vehicle);
+
+        _triggeredMode = originalBurnMode;
+        if (originalBurnMode == FlightComputerBurnMode.Auto && fc.Burn != null)
+            fc.BurnMode = FlightComputerBurnMode.Auto;
+
+        _graceFrames = 3; // see class doc comment for timing analysis
     }
 }
