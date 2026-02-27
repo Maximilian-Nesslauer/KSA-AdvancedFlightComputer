@@ -6,15 +6,16 @@ using KSA;
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
 /// <summary>
-/// Adds maneuver quick-tools (Set Periapsis, Set Apoapsis, Match Inclination)
-/// to the stock Transfer Planner dropdown. Each tool computes a single burn
-/// via vis-viva or plane-change math and creates a standard maneuver node.
+/// Adds maneuver quick-tools (Set Periapsis, Set Apoapsis, Match Inclination,
+/// Set Inclination) to the stock Transfer Planner dropdown. Each tool computes
+/// a single burn via vis-viva or plane-change math and creates a maneuver node.
 /// </summary>
 static class ManeuverTools
 {
     internal const string KeySetPeriapsis = "AFC Set Periapsis";
     internal const string KeySetApoapsis = "AFC Set Apoapsis";
     internal const string KeyMatchInclination = "AFC Match Inclination";
+    internal const string KeySetInclination = "AFC Set Inclination";
 
     /// <summary>
     /// Adds our plan types to the stock TransferPlanner dropdown.
@@ -31,10 +32,11 @@ static class ManeuverTools
         types.Add(new TransferType(KeySetPeriapsis, "Set Periapsis"));
         types.Add(new TransferType(KeySetApoapsis, "Set Apoapsis"));
         types.Add(new TransferType(KeyMatchInclination, "Match Inclination"));
+        types.Add(new TransferType(KeySetInclination, "Set Inclination"));
 
         if (DebugConfig.ManeuverTools)
             DefaultCategory.Log.Debug(
-                $"[AFC] ManeuverTools: injected 3 transfer types ({types.Count} total).");
+                $"[AFC] ManeuverTools: injected 4 transfer types ({types.Count} total).");
     }
 
     /// <summary>
@@ -44,7 +46,8 @@ static class ManeuverTools
     {
         return key == KeySetPeriapsis
             || key == KeySetApoapsis
-            || key == KeyMatchInclination;
+            || key == KeyMatchInclination
+            || key == KeySetInclination;
     }
 
     /// <summary>

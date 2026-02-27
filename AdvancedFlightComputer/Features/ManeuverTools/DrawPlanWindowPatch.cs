@@ -111,12 +111,15 @@ static class Patch_DrawPlanWindow
             ImGui.Spacing();
             DrawCreateButton(source, result.Value);
 
-            ImGui.Separator();
-            ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
-            ImGuiHelper.DrawCheckbox("Preview Orbit"u8, ref _showOrbitPreview, isChanged: false);
-            ImGuiHelper.DrawCheckbox("Preview Flight Plan"u8, ref _showFlightPlanPreview,
-                isChanged: false);
-            ImGuiHelper.EndColumns();
+            if (_ourBurn == null)
+            {
+                ImGui.Separator();
+                ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
+                ImGuiHelper.DrawCheckbox("Preview Orbit"u8, ref _showOrbitPreview, isChanged: false);
+                ImGuiHelper.DrawCheckbox("Preview Flight Plan"u8, ref _showFlightPlanPreview,
+                    isChanged: false);
+                ImGuiHelper.EndColumns();
+            }
         }
         else
         {
@@ -261,7 +264,7 @@ static class Patch_DrawPlanWindow
     /// </summary>
     internal static void RenderOrbitPreview(Viewport inViewport)
     {
-        if (!_showOrbitPreview || _lastEntry == null || _lastSource == null)
+        if (!_showOrbitPreview || _ourBurn != null || _lastEntry == null || _lastSource == null)
             return;
 
         FlightPlan fp = _lastEntry.FlightPlan;
@@ -306,6 +309,13 @@ static class Patch_DrawPlanWindow
             if (targetOrbit == null) return null;
             return OrbitManeuvers.ComputeMatchInclination(
                 orbit, targetOrbit, ManeuverToolsWindow.UseDescendingNode, now);
+        }
+
+        if (key == ManeuverTools.KeySetInclination)
+        {
+            return OrbitManeuvers.ComputeSetInclination(
+                orbit, ManeuverToolsWindow.TargetInclinationRad,
+                ManeuverToolsWindow.UseDescendingNode, now);
         }
 
         return null;

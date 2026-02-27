@@ -119,6 +119,79 @@ static class OrbitManeuvers
         return (entry, info);
     }
 
+    /// <summary>
+    /// Computes a plane-change burn at the ascending or descending node (relative
+    /// to the parent body's equatorial plane) to set the orbit's inclination to
+    /// a specific angle. Preserves orbital speed and LAN.
+    /// </summary>
+    public static ManeuverResult? ComputeSetInclination(
+        Orbit orbit, double targetInclinationRad, bool useDescendingNode, SimTime now)
+    {
+        targetInclinationRad = Math.Clamp(targetInclinationRad, 0.0, Math.PI);
+
+        double currentInc = orbit.Inclination;
+        double incDiff = Math.Abs(targetInclinationRad - currentInc);
+        if (incDiff < 0.001)
+            return null;
+
+        double3 vehicleNormal = orbit.GetOrbitNormalCci();
+        double3 equatorialNormal = new double3(0, 0, 1);
+
+        // AN/DN relative to equatorial plane
+        double3 nodeDir = double3.Cross(equatorialNormal, vehicleNormal).NormalizeOrZero();
+        if (nodeDir.LengthSquared() < 1e-12)
+            nodeDir = new double3(1, 0, 0); // fallback for equatorial orbits
+
+        TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
+        TrueAnomaly nodeTa = useDescendingNode
+            ? new TrueAnomaly((anTa.Value() + Math.PI) % (Math.PI * 2.0))
+            : anTa;
+
+        SimTime nodeTime = orbit.TimeOfTrueAnomaly(nodeTa, now);
+        StateVectors sv = orbit.GetStateVectorsAt(nodeTime);
+
+        // Target normal: same LAN, new inclination
+        double lan = orbit.LongitudeOfAscendingNode;
+        double3 targetNormal = new double3(
+            Math.Sin(targetInclinationRad) * Math.Sin(lan),
+            -Math.Sin(targetInclinationRad) * Math.Cos(lan),
+            Math.Cos(targetInclinationRad));
+
+        double3 rotAxis = double3.Cross(vehicleNormal, targetNormal).NormalizeOrZero();
+        if (rotAxis.LengthSquared() < 1e-12)
+            return null;
+
+        double rotAngle = MathEx.Angle(vehicleNormal, targetNormal).Value();
+        doubleQuat planeChange = QuaternionEx.AngleAxis(rotAngle, rotAxis);
+        double3 targetVel = sv.VelocityCci.Transform(planeChange);
+        double3 dvCci = targetVel - sv.VelocityCci;
+
+        double3 dvVlf = CciToVlf(dvCci, orbit, nodeTime);
+        return new ManeuverResult(dvCci, dvVlf, nodeTime);
+    }
+
+    /// <summary>
+    /// Computes AN/DN true anomalies and times relative to the equatorial plane.
+    /// Used by the UI to display both node options for Set Inclination.
+    /// </summary>
+    public static (TrueAnomaly anTa, TrueAnomaly dnTa, SimTime anTime, SimTime dnTime)
+        GetEquatorialNodes(Orbit orbit, SimTime now)
+    {
+        double3 vehicleNormal = orbit.GetOrbitNormalCci();
+        double3 equatorialNormal = new double3(0, 0, 1);
+        double3 nodeDir = double3.Cross(equatorialNormal, vehicleNormal).NormalizeOrZero();
+
+        if (nodeDir.LengthSquared() < 1e-12)
+            nodeDir = new double3(1, 0, 0);
+
+        TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
+        TrueAnomaly dnTa = new TrueAnomaly((anTa.Value() + Math.PI) % (Math.PI * 2.0));
+        SimTime anTime = orbit.TimeOfTrueAnomaly(anTa, now);
+        SimTime dnTime = orbit.TimeOfTrueAnomaly(dnTa, now);
+
+        return (anTa, dnTa, anTime, dnTime);
+    }
+
     #region Helpers
 
     /// <summary>

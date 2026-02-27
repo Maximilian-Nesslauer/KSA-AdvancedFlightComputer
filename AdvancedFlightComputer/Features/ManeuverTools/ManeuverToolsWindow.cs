@@ -12,10 +12,10 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// Transfer Planning window by DrawPlanWindowPatch.
 ///
 /// - Set Periapsis / Set Apoapsis: altitude input, current orbit info, post-burn orbit
-/// - Match Inclination: target dropdown, Set Target, AN/DN radio buttons with tooltips
+/// - Match Inclination: target matching with AN/DN selection
+/// - Set Inclination: arbitrary angle with AN/DN relative to equatorial plane
 ///
-/// Static state (TargetAltitude, UseDescendingNode) is read by DrawPlanWindowPatch
-/// to compute the maneuver in the same frame.
+/// Static state is read by DrawPlanWindowPatch to compute the maneuver in the same frame.
 /// </summary>
 static class ManeuverToolsWindow
 {
@@ -25,17 +25,21 @@ static class ManeuverToolsWindow
 
     public static double TargetAltitude;
     public static bool UseDescendingNode;
+    public static double TargetInclinationRad;
 
     #endregion
 
     #region Internal State
 
     private static double _inputAltitudeKm;
+    private static double _inputInclinationDeg;
     private static bool _defaultsInitialized;
+    private static bool _nodeDefaultInitialized;
     private static string? _lastSourceId;
 
     private static TransferObject _selectedTarget;
     private static List<TransferObject>? _targetList;
+    private static int _lastObjectCount;
     private static bool _setTarget;
 
     #endregion
@@ -46,15 +50,18 @@ static class ManeuverToolsWindow
         {
             _lastSourceId = source.Id;
             _defaultsInitialized = false;
+            _nodeDefaultInitialized = false;
             _targetList = null;
         }
 
         if (typeKey == ManeuverTools.KeySetPeriapsis)
-            DrawSetPeriapsis(source);
+            DrawSetApse(source, isSetPeriapsis: true);
         else if (typeKey == ManeuverTools.KeySetApoapsis)
-            DrawSetApoapsis(source);
+            DrawSetApse(source, isSetPeriapsis: false);
         else if (typeKey == ManeuverTools.KeyMatchInclination)
             DrawMatchInclination(source);
+        else if (typeKey == ManeuverTools.KeySetInclination)
+            DrawSetInclination(source);
     }
 
     public static Orbit? GetSelectedTargetOrbit()
@@ -65,12 +72,14 @@ static class ManeuverToolsWindow
     public static void OnTypeChanged()
     {
         _defaultsInitialized = false;
+        _nodeDefaultInitialized = false;
         _targetList = null;
     }
 
     public static void OnSourceChanged()
     {
         _defaultsInitialized = false;
+        _nodeDefaultInitialized = false;
         _targetList = null;
     }
 
@@ -78,17 +87,21 @@ static class ManeuverToolsWindow
     {
         TargetAltitude = 0.0;
         UseDescendingNode = false;
+        TargetInclinationRad = 0.0;
         _inputAltitudeKm = 0.0;
+        _inputInclinationDeg = 0.0;
         _defaultsInitialized = false;
+        _nodeDefaultInitialized = false;
         _lastSourceId = null;
         _selectedTarget = default;
         _targetList = null;
+        _lastObjectCount = 0;
         _setTarget = false;
     }
 
-    #region Set Periapsis
+    #region Set Periapsis / Set Apoapsis
 
-    private static void DrawSetPeriapsis(Vehicle source)
+    private static void DrawSetApse(Vehicle source, bool isSetPeriapsis)
     {
         Orbit orbit = source.Orbit;
         double parentRadius = source.Parent?.MeanRadius ?? 0.0;
@@ -97,7 +110,7 @@ static class ManeuverToolsWindow
 
         if (!_defaultsInitialized)
         {
-            _inputAltitudeKm = currentPeAlt / 1000.0;
+            _inputAltitudeKm = (isSetPeriapsis ? currentPeAlt : currentApAlt) / 1000.0;
             _defaultsInitialized = true;
         }
 
@@ -107,71 +120,44 @@ static class ManeuverToolsWindow
             return;
         }
 
-        DrawAltitudeInput("Target Periapsis (km):");
+        string inputLabel = isSetPeriapsis ? "Target Periapsis (km):" : "Target Apoapsis (km):";
+        DrawAltitudeInput(inputLabel);
         TargetAltitude = _inputAltitudeKm * 1000.0;
+
+        string burnLocation = isSetPeriapsis ? "Apoapsis" : "Periapsis";
 
         ImGui.Spacing();
         ImGuiHelper.DrawTextWidget("Current Periapsis:"u8, FormatDistance(currentPeAlt));
         ImGuiHelper.DrawTextWidget("Current Apoapsis:"u8, FormatDistance(currentApAlt));
-        ImGuiHelper.DrawTextWidget("Burn Location:"u8, "Apoapsis");
+        ImGuiHelper.DrawTextWidget("Burn Location:"u8, burnLocation);
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Burns at apoapsis change the periapsis on the opposite\nside of the orbit. This is the most fuel-efficient point\nto lower or raise your periapsis."u8);
+        {
+            if (isSetPeriapsis)
+                ImGui.SetTooltip("Burns at apoapsis change the periapsis on the opposite\nside of the orbit. This is the most fuel-efficient point\nto lower or raise your periapsis."u8);
+            else
+                ImGui.SetTooltip("Burns at periapsis change the apoapsis on the opposite\nside of the orbit. This is the most fuel-efficient point\nto lower or raise your apoapsis."u8);
+        }
 
-        if (_inputAltitudeKm >= currentApAlt / 1000.0 - 1.0)
+        bool invalid = isSetPeriapsis
+            ? _inputAltitudeKm >= currentApAlt / 1000.0 - 1.0
+            : _inputAltitudeKm <= currentPeAlt / 1000.0 + 1.0;
+
+        if (invalid)
         {
             ImGui.Spacing();
             ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-            ImGui.Text("Target must be below current apoapsis."u8);
+            ImGui.Text(isSetPeriapsis
+                ? "Target must be below current apoapsis."u8
+                : "Target must be above current periapsis."u8);
             ImGui.PopStyleColor();
             return;
         }
 
-        DrawPostBurnOrbitInfo(orbit.Apoapsis, TargetAltitude + parentRadius, orbit.Mu, parentRadius);
-    }
-
-    #endregion
-
-    #region Set Apoapsis
-
-    private static void DrawSetApoapsis(Vehicle source)
-    {
-        Orbit orbit = source.Orbit;
-        double parentRadius = source.Parent?.MeanRadius ?? 0.0;
-        double currentPeAlt = Math.Max(0.0, orbit.Periapsis - parentRadius);
-        double currentApAlt = Math.Max(0.0, orbit.Apoapsis - parentRadius);
-
-        if (!_defaultsInitialized)
-        {
-            _inputAltitudeKm = currentApAlt / 1000.0;
-            _defaultsInitialized = true;
-        }
-
-        if (orbit.Eccentricity >= 1.0)
-        {
-            ImGui.Text("Requires a bound (elliptical) orbit."u8);
-            return;
-        }
-
-        DrawAltitudeInput("Target Apoapsis (km):");
-        TargetAltitude = _inputAltitudeKm * 1000.0;
-
-        ImGui.Spacing();
-        ImGuiHelper.DrawTextWidget("Current Periapsis:"u8, FormatDistance(currentPeAlt));
-        ImGuiHelper.DrawTextWidget("Current Apoapsis:"u8, FormatDistance(currentApAlt));
-        ImGuiHelper.DrawTextWidget("Burn Location:"u8, "Periapsis");
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("Burns at periapsis change the apoapsis on the opposite\nside of the orbit. This is the most fuel-efficient point\nto lower or raise your apoapsis."u8);
-
-        if (_inputAltitudeKm <= currentPeAlt / 1000.0 + 1.0)
-        {
-            ImGui.Spacing();
-            ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-            ImGui.Text("Target must be above current periapsis."u8);
-            ImGui.PopStyleColor();
-            return;
-        }
-
-        DrawPostBurnOrbitInfo(TargetAltitude + parentRadius, orbit.Periapsis, orbit.Mu, parentRadius);
+        double newRadius = TargetAltitude + parentRadius;
+        if (isSetPeriapsis)
+            DrawPostBurnOrbitInfo(orbit.Apoapsis, newRadius, orbit.Mu, parentRadius);
+        else
+            DrawPostBurnOrbitInfo(newRadius, orbit.Periapsis, orbit.Mu, parentRadius);
     }
 
     #endregion
@@ -185,7 +171,7 @@ static class ManeuverToolsWindow
 
         DrawTargetSelector(source);
 
-        Orbit? targetOrbit = GetSelectedTargetOrbit();
+        Orbit? targetOrbit = (_selectedTarget.Body as IOrbiter)?.Orbit;
         if (targetOrbit == null)
         {
             ImGui.Text("Select a target body."u8);
@@ -226,23 +212,79 @@ static class ManeuverToolsWindow
         TrueAnomaly dnTa = orbit.GetDescendingNode(targetOrbit);
         SimTime anTime = orbit.TimeOfTrueAnomaly(anTa, now);
         SimTime dnTime = orbit.TimeOfTrueAnomaly(dnTa, now);
-        double timeToAn = anTime.Seconds() - now.Seconds();
-        double timeToDn = dnTime.Seconds() - now.Seconds();
-
-        double speedAtAn = orbit.GetStateVectorsAt(anTime).VelocityCci.Length();
-        double speedAtDn = orbit.GetStateVectorsAt(dnTime).VelocityCci.Length();
 
         var anResult = OrbitManeuvers.ComputeMatchInclination(orbit, targetOrbit, false, now);
         var dnResult = OrbitManeuvers.ComputeMatchInclination(orbit, targetOrbit, true, now);
-        double dvAn = anResult?.DvCci.Length() ?? 0.0;
-        double dvDn = dnResult?.DvCci.Length() ?? 0.0;
+
+        DrawNodeSelection(orbit, anTime, dnTime, anResult, dnResult);
+    }
+
+    #endregion
+
+    #region Set Inclination
+
+    private static void DrawSetInclination(Vehicle source)
+    {
+        Orbit orbit = source.Orbit;
+        SimTime now = Universe.GetElapsedSimTime();
+        double currentIncDeg = orbit.Inclination * (180.0 / Math.PI);
 
         if (!_defaultsInitialized)
         {
-            // Default to whichever node costs less dV (plane changes at higher
-            // altitude are cheaper because orbital speed is lower there)
-            UseDescendingNode = dvDn < dvAn;
+            _inputInclinationDeg = currentIncDeg;
             _defaultsInitialized = true;
+        }
+
+        ImGui.Text("Target Inclination (deg):");
+        ImGui.SameLine(220f);
+        ImGui.PushItemWidth(-1f);
+        ImGui.InputDouble("##incInput"u8, ref _inputInclinationDeg, 1.0, 10.0,
+            default(ImString), ImGuiInputTextFlags.CharsDecimal);
+        _inputInclinationDeg = Math.Clamp(_inputInclinationDeg, 0.0, 180.0);
+        ImGui.PopItemWidth();
+        TargetInclinationRad = _inputInclinationDeg * (Math.PI / 180.0);
+
+        ImGui.Spacing();
+        ImGuiHelper.DrawTextWidget("Current Inclination:"u8,
+            string.Format(Inv, "{0:F2} deg", currentIncDeg));
+
+        double incDiff = Math.Abs(_inputInclinationDeg - currentIncDeg);
+        if (incDiff < 0.06)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(80, 220, 80, 255));
+            ImGui.Text("Already at target inclination."u8);
+            ImGui.PopStyleColor();
+            return;
+        }
+
+        var (_, _, anTime, dnTime) = OrbitManeuvers.GetEquatorialNodes(orbit, now);
+
+        var anResult = OrbitManeuvers.ComputeSetInclination(orbit, TargetInclinationRad, false, now);
+        var dnResult = OrbitManeuvers.ComputeSetInclination(orbit, TargetInclinationRad, true, now);
+
+        DrawNodeSelection(orbit, anTime, dnTime, anResult, dnResult);
+    }
+
+    /// <summary>
+    /// Draws the AN/DN radio buttons with time, dV, and speed info.
+    /// Shared between Match Target and Set Angle modes.
+    /// </summary>
+    private static void DrawNodeSelection(Orbit orbit,
+        SimTime anTime, SimTime dnTime,
+        OrbitManeuvers.ManeuverResult? anResult, OrbitManeuvers.ManeuverResult? dnResult)
+    {
+        SimTime now = Universe.GetElapsedSimTime();
+        double timeToAn = anTime.Seconds() - now.Seconds();
+        double timeToDn = dnTime.Seconds() - now.Seconds();
+        double speedAtAn = orbit.GetStateVectorsAt(anTime).VelocityCci.Length();
+        double speedAtDn = orbit.GetStateVectorsAt(dnTime).VelocityCci.Length();
+        double dvAn = anResult?.DvCci.Length() ?? 0.0;
+        double dvDn = dnResult?.DvCci.Length() ?? 0.0;
+
+        if (!_nodeDefaultInitialized)
+        {
+            UseDescendingNode = dvDn < dvAn;
+            _nodeDefaultInitialized = true;
         }
 
         ImGui.Spacing();
@@ -251,7 +293,7 @@ static class ManeuverToolsWindow
         if (ImGui.RadioButton("Ascending Node"u8, useAn))
             UseDescendingNode = false;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The point where your orbit crosses upward through the target's\norbital plane. A normal burn here aligns your orbital plane\nwith the target. Lower speed at the node means cheaper dV."u8);
+            ImGui.SetTooltip("The point where your orbit crosses upward through the reference\nplane. A normal burn here changes your orbital inclination.\nLower speed at the node means cheaper dV."u8);
         ImGui.Indent();
         ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatTimeSpan(timeToAn));
         ImGuiHelper.DrawTextWidget("Required Delta V:"u8, string.Format(Inv, "{0:F1} m/s", dvAn));
@@ -264,7 +306,7 @@ static class ManeuverToolsWindow
         if (ImGui.RadioButton("Descending Node"u8, useDn))
             UseDescendingNode = true;
         if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The point where your orbit crosses downward through the target's\norbital plane. Same plane change as ascending node but at the\nopposite side of the orbit. May cost less dV if speed is lower here."u8);
+            ImGui.SetTooltip("The point where your orbit crosses downward through the reference\nplane. Same plane change but at the opposite side of the orbit.\nMay cost less dV if speed is lower here."u8);
         ImGui.Indent();
         ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatTimeSpan(timeToDn));
         ImGuiHelper.DrawTextWidget("Required Delta V:"u8, string.Format(Inv, "{0:F1} m/s", dvDn));
@@ -274,7 +316,12 @@ static class ManeuverToolsWindow
 
     private static void DrawTargetSelector(Vehicle source)
     {
-        _targetList ??= BuildTargetList(source);
+        int currentCount = Universe.CurrentSystem?.All.GetList().Count ?? 0;
+        if (_targetList == null || currentCount != _lastObjectCount)
+        {
+            _targetList = BuildTargetList(source);
+            _lastObjectCount = currentCount;
+        }
 
         if (_targetList.Count == 0)
         {
@@ -322,10 +369,6 @@ static class ManeuverToolsWindow
 
     #region Post-Burn Orbit Info
 
-    /// <summary>
-    /// Shows the resulting orbital parameters after the burn.
-    /// Used by Set Pe/Ap to display new orbit characteristics.
-    /// </summary>
     private static void DrawPostBurnOrbitInfo(double apRadius, double peRadius, double mu,
         double parentRadius)
     {
