@@ -55,6 +55,25 @@ static class GameReflection
 
     #endregion
 
+    #region ManeuverTools
+
+    public static readonly FieldInfo? TransferPlanner_transferType =
+        AccessTools.Field(typeof(TransferPlanner), "_transferType");
+    public static readonly FieldInfo? TransferPlanner_transferCalculated =
+        AccessTools.Field(typeof(TransferPlanner), "_transferCalculated");
+    public static readonly FieldInfo? TransferPlanner_transferBeingCalculated =
+        AccessTools.Field(typeof(TransferPlanner), "_transferBeingCalculated");
+    public static readonly FieldInfo? TransferPlanner_transferBurn =
+        AccessTools.Field(typeof(TransferPlanner), "_transferBurn");
+    public static readonly FieldInfo? TransferPlanner_correctionTime =
+        AccessTools.Field(typeof(TransferPlanner), "_correctionTime");
+    public static readonly FieldInfo? TransferPlanner_showPlanWindow =
+        AccessTools.Field(typeof(TransferPlanner), "_showPlanWindow");
+    public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
+        AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo");
+
+    #endregion
+
     #region Validation
 
     public static bool ValidateHyperbolicTargets()
@@ -90,6 +109,24 @@ static class GameReflection
             ("StagingWindow.DrawComponent", StagingWindow_DrawComponentOpen),
         };
         return ValidateTargets("StageInfo", targets);
+    }
+
+    public static bool ValidateManeuverTools()
+    {
+        var targets = new (string name, object? target)[]
+        {
+            ("TransferPlanner._sourceBody",              TransferPlanner_sourceBody),
+            ("TransferPlanner._transferInfo",             TransferPlanner_transferInfo),
+            ("TransferPlanner._selectedEntry",            TransferPlanner_selectedEntry),
+            ("TransferPlanner._transferType",             TransferPlanner_transferType),
+            ("TransferPlanner._transferCalculated",       TransferPlanner_transferCalculated),
+            ("TransferPlanner._transferBeingCalculated",  TransferPlanner_transferBeingCalculated),
+            ("TransferPlanner._transferBurn",             TransferPlanner_transferBurn),
+            ("TransferPlanner._correctionTime",           TransferPlanner_correctionTime),
+            ("TransferPlanner._showPlanWindow",           TransferPlanner_showPlanWindow),
+            ("TransferPlanner.SetTransferInfo",          TransferPlanner_SetTransferInfo),
+        };
+        return ValidateTargets("ManeuverTools", targets);
     }
 
     private static bool ValidateTargets(string feature, (string name, object? target)[] targets)
