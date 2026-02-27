@@ -1,6 +1,7 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using HarmonyLib;
@@ -59,6 +60,14 @@ public class Mod
         else
             DefaultCategory.Log.Warning("[AFC] StageInfo disabled - reflection targets not found.");
 
+        if (GameReflection.ValidateManeuverTools())
+        {
+            ManeuverTools.InjectTransferTypes();
+            ManeuverTools.ApplyPatches(_harmony);
+        }
+        else
+            DefaultCategory.Log.Warning("[AFC] ManeuverTools disabled - reflection targets not found.");
+
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
 
@@ -74,6 +83,8 @@ public class Mod
         StageInfoSettings.Reset();
         CorrectedBurnState.Clear();
         StageAnalyzer.ResetPools();
+        ManeuverToolsWindow.Reset();
+        Patch_DrawPlanWindow.Reset();
         LogHelper.Reset();
 #if DEBUG
         PerfTracker.Reset();
