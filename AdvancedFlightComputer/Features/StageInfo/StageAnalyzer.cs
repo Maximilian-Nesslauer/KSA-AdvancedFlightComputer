@@ -503,16 +503,19 @@ public static class StageAnalyzer
     {
         float current = 0f;
         float max = 0f;
-        MemoryOwner<ArrayPoolResult<Tank>> nodes =
+        MemoryOwner<MemoryOwner<Tank>>? nodes =
             resourceManager.FurtherestToNearestNodeSameStage;
 
-        if (nodes.Length == 0)
+        if (nodes == null || nodes.Length == 0)
             return (0f, 0f);
 
-        Span<ArrayPoolResult<Tank>> nodeSpan = nodes.Span;
+        Span<MemoryOwner<Tank>> nodeSpan = nodes.Span;
         for (int i = 0; i < nodeSpan.Length; i++)
         {
-            Span<Tank> tanks = nodeSpan[i].AsSpan();
+            if (nodeSpan[i].Length == 0)
+                continue;
+
+            Span<Tank> tanks = nodeSpan[i].Span;
             for (int j = 0; j < tanks.Length; j++)
             {
                 Tank tank = tanks[j];
