@@ -4,7 +4,7 @@ Improved orbital maneuver planning and execution for [Kitten Space Agency](https
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.2.32.3646.
+Validated against KSA build version 2026.2.38.3713.
 
 ## Features
 
@@ -36,6 +36,10 @@ When a burn is planned, the Staging window shows burn-aware information:
 - "INSUFFICIENT" warning when planned Delta V exceeds available Delta V
 - Corrected multi-stage burn duration on the BURN TIME and START BURN IN gauge rollers (the game only computes single-stage burn time)
 
+### Finite Burn Correction (planned)
+
+Compensate for finite burn losses by iteratively correcting the planned Delta V. Long burns (ion engines, weak upper stages) lose efficiency because the spacecraft drifts off the optimal trajectory during the burn. The mod simulates the actual burn with numerical integration and adjusts the maneuver node accordingly.
+
 ### Oberth Maneuver / Multi Pass Burns (planned)
 
 Automatically split large burns into multiple periapsis passes when burn duration is a significant fraction of the orbital period, preserving the Oberth effect.
@@ -44,8 +48,8 @@ Automatically split large burns into multiple periapsis passes when burn duratio
 
 1. Install the following dependencies: [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions](https://github.com/tsholmes/KittenExtensions).
 2. Download the latest release from the [Releases](https://github.com/Maximilian-Nesslauer/KSA-AdvancedFlightComputer/releases) tab.
-3. Extract into `Kitten Space Agency\Content\AdvancedFlightComputer\`.
-4. Add to `Kitten Space Agency\Content\manifest.toml`:
+3. Extract into `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\`.
+4. The game auto-discovers new mods and prompts you to enable them. Alternatively, add to `Documents\My Games\Kitten Space Agency\manifest.toml`:
 
 ```toml
 [[mods]]
