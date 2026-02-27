@@ -18,7 +18,7 @@ Mid-course corrections will be needed in practice.
 
 ### Auto-Staging
 
-Adds an AUTOSTAGE toggle button to the BurnControl gauge panel. When enabled during an auto-burn, automatically activates the next stage if engines run out of propellant instead of aborting the burn. Handles cascading stages (decoupler + engine) and includes a grace period for engine state propagation.
+Adds an AUTOSTAGE toggle button to the BurnControl gauge panel. When enabled, automatically activates the next stage whenever engines run out of propellant. Works during auto-burns (continues the burn instead of aborting) and also manual burns.
 
 ### Stage Info Display
 
@@ -27,6 +27,7 @@ Extends the Staging window with per-stage information:
 - Fuel progress bar with percentage on each stage header
 - Delta V, TWR, Burn Time, and ISP (visible when a stage is expanded)
 - Total Delta V and Burn Time in a footer below the stage list
+- Display mode selector: Auto (uses current atmospheric conditions), VAC, ASL, VAC + ASL (dual display), and Planning (choose any celestial body for surface gravity and atmospheric pressure)
 
 ### Burn-Stage Analysis
 
