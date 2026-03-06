@@ -30,6 +30,9 @@ static class Patch_DrawPlanWindow
     private static bool _showFlightPlanPreview;
     private static bool _showOrbitPreview;
 
+    private static List<TransferObject>? _vehicleList;
+    private static int _lastVehicleCount;
+
     static bool Prefix(Viewport inViewport)
     {
         try
@@ -128,6 +131,9 @@ static class Patch_DrawPlanWindow
 
         ImGui.End();
 
+        if (_showOrbitPreview && _lastEntry != null && _lastSource != null)
+            DrawOrbitMarkers(inViewport);
+
         if (_showFlightPlanPreview && _lastEntry != null)
             DrawFlightPlanWindow(inViewport);
     }
@@ -156,9 +162,15 @@ static class Patch_DrawPlanWindow
     private static Vehicle? DrawSourceDropdown()
     {
         var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!.GetValue(null)!;
-        var vehicleList = new List<TransferObject>();
-        foreach (Vehicle v in Universe.CurrentSystem!.Vehicles.GetList())
-            vehicleList.Add(new TransferObject(v));
+        int currentCount = Universe.CurrentSystem!.Vehicles.GetList().Count;
+        if (_vehicleList == null || currentCount != _lastVehicleCount)
+        {
+            _vehicleList = new List<TransferObject>();
+            foreach (Vehicle v in Universe.CurrentSystem.Vehicles.GetList())
+                _vehicleList.Add(new TransferObject(v));
+            _lastVehicleCount = currentCount;
+        }
+        var vehicleList = _vehicleList;
 
         if (ImGui.IsWindowAppearing() || sourceBody.GetKey() == "N/A")
         {
@@ -258,6 +270,20 @@ static class Patch_DrawPlanWindow
     #region Visual Orbit Preview
 
     /// <summary>
+    /// Renders encounter, escape, impact, closest approach, and Ap/Pe markers
+    /// on the preview orbit. Called from the ImGui pass (after the main window)
+    /// using the background draw list.
+    /// </summary>
+    private static void DrawOrbitMarkers(Viewport inViewport)
+    {
+        var uiContext = new Astronomical.UiContext(
+            inViewport, _lastSource!, Color.Green,
+            TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0),
+            ManeuverToolsWindow.GetSelectedTargetOrbiter());
+        _lastEntry!.FlightPlan.DrawUi(inViewport, uiContext);
+    }
+
+    /// <summary>
     /// Renders the post-burn orbit in the 3D view. Called from
     /// Patch_OnPreRender when our type is active and preview is enabled.
     /// Follows the same pattern as stock DrawSelectedTransfer.
@@ -351,6 +377,8 @@ static class Patch_DrawPlanWindow
         _lastSource = null;
         _showFlightPlanPreview = false;
         _showOrbitPreview = false;
+        _vehicleList = null;
+        _lastVehicleCount = 0;
     }
 
     #endregion

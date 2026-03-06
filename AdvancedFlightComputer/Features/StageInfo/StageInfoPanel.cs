@@ -510,19 +510,7 @@ static class StageInfoPanel
     #region Formatting
 
     private static string FormatBurnTime(float seconds)
-    {
-        if (seconds < 60f)
-            return $"{seconds:F0}s";
-        if (seconds < 3600f)
-        {
-            int m = (int)(seconds / 60f);
-            int s = (int)(seconds % 60f);
-            return s > 0 ? $"{m}m {s}s" : $"{m}m";
-        }
-        int h = (int)(seconds / 3600f);
-        int min = (int)((seconds % 3600f) / 60f);
-        return min > 0 ? $"{h}h {min}m" : $"{h}h";
-    }
+        => Core.FormatHelper.FormatDuration(seconds);
 
     #endregion
 }
