@@ -13,15 +13,20 @@ static class DebugConfig
     public static bool AutoStage = true;
     public static bool StageInfo = true;
     public static bool ManeuverTools = true;
+    public static bool OberthMultiPass = true;
+    public static bool AutoRemoveBurn = true;
     public static bool Performance = true;
 #else
     public static bool HyperbolicTargets = false;
     public static bool AutoStage = false;
     public static bool StageInfo = false;
     public static bool ManeuverTools = false;
+    public static bool OberthMultiPass = false;
+    public static bool AutoRemoveBurn = false;
     public static bool Performance = false;
 #endif
 
     public static bool Any =>
-        HyperbolicTargets || AutoStage || StageInfo || ManeuverTools || Performance;
+        HyperbolicTargets || AutoStage || StageInfo || ManeuverTools
+        || OberthMultiPass || AutoRemoveBurn || Performance;
 }

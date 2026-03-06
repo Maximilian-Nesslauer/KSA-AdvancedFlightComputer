@@ -74,6 +74,13 @@ static class GameReflection
 
     #endregion
 
+    #region AutoRemoveBurn
+
+    public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
+        AccessTools.Method(typeof(Vehicle), "UpdateFromTaskResults");
+
+    #endregion
+
     #region Validation
 
     public static bool ValidateHyperbolicTargets()
@@ -109,6 +116,15 @@ static class GameReflection
             ("StagingWindow.DrawComponent", StagingWindow_DrawComponentOpen),
         };
         return ValidateTargets("StageInfo", targets);
+    }
+
+    public static bool ValidateAutoRemoveBurn()
+    {
+        var targets = new (string name, object? target)[]
+        {
+            ("Vehicle.UpdateFromTaskResults", Vehicle_UpdateFromTaskResults),
+        };
+        return ValidateTargets("AutoRemoveBurn", targets);
     }
 
     public static bool ValidateManeuverTools()

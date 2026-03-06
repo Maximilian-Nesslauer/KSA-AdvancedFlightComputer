@@ -59,7 +59,8 @@ static class OrbitManeuvers
     /// velocity vector into the target's orbital plane.
     /// </summary>
     public static ManeuverResult? ComputeMatchInclination(
-        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now)
+        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now,
+        double fraction = 1.0)
     {
         double relInc = vehicleOrbit.GetRelativeInclination(targetOrbit).Value();
         if (relInc < 0.001)
@@ -82,7 +83,7 @@ static class OrbitManeuvers
         if (rotAxis.LengthSquared() < 1e-12)
             return null;
 
-        doubleQuat planeChange = QuaternionEx.AngleAxis(relInc, rotAxis);
+        doubleQuat planeChange = QuaternionEx.AngleAxis(relInc * fraction, rotAxis);
         double3 targetVel = sv.VelocityCci.Transform(planeChange);
         double3 dvCci = targetVel - sv.VelocityCci;
 

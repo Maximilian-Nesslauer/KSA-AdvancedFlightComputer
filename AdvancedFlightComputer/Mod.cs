@@ -1,7 +1,9 @@
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoRemoveBurn;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.OberthMultiPass;
 using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using HarmonyLib;
@@ -60,6 +62,11 @@ public class Mod
         else
             DefaultCategory.Log.Warning("[AFC] StageInfo disabled - reflection targets not found.");
 
+        if (GameReflection.ValidateAutoRemoveBurn())
+            AutoRemoveBurn.ApplyPatches(_harmony);
+        else
+            DefaultCategory.Log.Warning("[AFC] AutoRemoveBurn disabled - reflection targets not found.");
+
         if (GameReflection.ValidateManeuverTools())
         {
             ManeuverTools.InjectTransferTypes();
@@ -77,6 +84,8 @@ public class Mod
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
         AutoStage.Enabled = false;
+        AutoRemoveBurn.Enabled = false;
+        MultiPassState.Reset();
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
         StageAnalysisCache.Reset();
