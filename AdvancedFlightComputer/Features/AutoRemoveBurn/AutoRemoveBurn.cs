@@ -1,5 +1,6 @@
 using System;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.OberthMultiPass;
 using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -45,6 +46,8 @@ static class Patch_AutoRemoveBurn
         {
             if (!AutoRemoveBurn.Enabled)
                 return;
+            if (__instance != Program.ControlledVehicle)
+                return;
 
             var fc = __instance.FlightComputer;
             if (fc == null)
@@ -71,7 +74,32 @@ static class Patch_AutoRemoveBurn
 
             fc.RemoveBurnAt(0);
 
-            // TODO Phase 2b: MultiPassPlanner.HandlePassCompletion()
+            if (MultiPassState.HasActiveSplit && MultiPassState.PassBurns != null)
+            {
+                // Verify the removed burn was actually one of our pass burns. Pass burns are
+                // sorted by time, so if PassBurns[0] is no longer in the plan, it was the one
+                // completed. If it is still present, a non-multi-pass burn was removed instead
+                // (e.g., the user had a manually created burn scheduled before our passes).
+                bool firstPassBurnRemoved = !fc.BurnPlan.TryGetBurn(MultiPassState.PassBurns[0]);
+                if (!firstPassBurnRemoved)
+                {
+                    if (DebugConfig.AutoRemoveBurn)
+                        DefaultCategory.Log.Debug(
+                            "[AFC] AutoRemoveBurn: removed burn was not a multi-pass burn, skipping correction.");
+                }
+                else if (fc.BurnPlan.HasActiveBurns)
+                {
+                    MultiPassPlanner.HandlePassCompletion(__instance);
+                    fc.BurnMode = FlightComputerBurnMode.Auto;
+                }
+                else
+                {
+                    MultiPassState.ValidateState();
+                    if (DebugConfig.AutoRemoveBurn)
+                        DefaultCategory.Log.Debug(
+                            "[AFC] AutoRemoveBurn: last multi-pass burn done, state reset.");
+                }
+            }
         }
         catch (Exception ex)
         {

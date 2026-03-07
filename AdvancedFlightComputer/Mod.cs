@@ -71,6 +71,7 @@ public class Mod
         {
             ManeuverTools.InjectTransferTypes();
             ManeuverTools.ApplyPatches(_harmony);
+            OberthMultiPass.ApplyPatches(_harmony);
         }
         else
             DefaultCategory.Log.Warning("[AFC] ManeuverTools disabled - reflection targets not found.");
@@ -86,6 +87,7 @@ public class Mod
         AutoStage.Enabled = false;
         AutoRemoveBurn.Enabled = false;
         MultiPassState.Reset();
+        OberthUI.Reset();
         Patch_AutoStageExecution.Reset();
         StageAnalyzerDebug.Reset();
         StageAnalysisCache.Reset();

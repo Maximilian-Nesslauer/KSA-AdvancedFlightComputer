@@ -45,7 +45,7 @@ static class OberthAssessment
         double burnRatio = burnDuration / period;
         double threshold = debugThreshold ? DebugThreshold : DefaultThreshold;
         bool exceeds = burnRatio > threshold;
-        int suggested = exceeds ? SuggestPassCount(burnRatio) : MinPasses;
+        int suggested = exceeds ? SuggestPassCount(burnRatio, threshold) : MinPasses;
         double savings = EstimateSavings(orbit, burnDvMagnitude, suggested, burnDuration);
 
         return new OberthAssessmentResult(burnDuration, period, burnRatio, exceeds, suggested, savings);
@@ -72,9 +72,9 @@ static class OberthAssessment
     /// Suggests a pass count based on how much the burn ratio exceeds the threshold.
     /// ceil(burnRatio / threshold), clamped to [2, MaxPasses].
     /// </summary>
-    public static int SuggestPassCount(double burnRatio)
+    public static int SuggestPassCount(double burnRatio, double threshold = DefaultThreshold)
     {
-        int passes = (int)Math.Ceiling(burnRatio / DefaultThreshold);
+        int passes = (int)Math.Ceiling(burnRatio / threshold);
         return Math.Clamp(passes, 2, MaxPasses);
     }
 }

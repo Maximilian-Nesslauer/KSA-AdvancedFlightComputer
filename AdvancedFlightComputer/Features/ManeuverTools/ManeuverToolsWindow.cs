@@ -398,7 +398,7 @@ static class ManeuverToolsWindow
         ImGui.SameLine(220f);
         ImGui.PushItemWidth(-1f);
         ImGui.InputDouble("##altInput"u8, ref _inputAltitudeKm, 10.0, 100.0,
-            default(ImString), ImGuiInputTextFlags.CharsDecimal);
+            "%.1f"u8, ImGuiInputTextFlags.CharsDecimal);
         if (_inputAltitudeKm < 0.0)
             _inputAltitudeKm = 0.0;
         ImGui.PopItemWidth();

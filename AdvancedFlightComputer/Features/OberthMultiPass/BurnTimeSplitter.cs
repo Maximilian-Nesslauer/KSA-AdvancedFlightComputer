@@ -1,47 +1,61 @@
 using System;
 using System.Collections.Generic;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.StageInfo;
+using Brutal.Logging;
 
 namespace AdvancedFlightComputer.Features.OberthMultiPass;
+
+enum SplitMode { BurnTime, EqualDv }
 
 record struct PassAllocation(double DvCapacity, double EstimatedBurnTime);
 
 /// <summary>
-/// Converts a total dV magnitude into per-pass capacity allocations based on
-/// equal burn time, with full multi-stage simulation inline.
+/// Converts a total dV magnitude into per-pass capacity allocations.
 ///
-/// Splits totalDv across passCount passes so each pass burns for an equal
-/// fraction of total engine firing time. High-TWR stages contribute more dV
-/// per second than low-TWR stages, so early passes may carry more dV. This
-/// keeps burn arcs uniform across all passes (optimal for Oberth).
+/// BurnTime mode: splits totalDv so each pass burns for an equal fraction of
+/// total engine firing time, accounting for multi-stage rockets. High-TWR
+/// stages contribute more dV per second, so early passes may carry more dV.
+/// Keeps burn arcs uniform across all passes (optimal for Oberth).
+///
+/// EqualDv mode: simple equal split (totalDv / passCount per pass).
 /// </summary>
 static class BurnTimeSplitter
 {
     public static List<PassAllocation> ComputeAllocations(
-        double totalDv, int passCount, VehicleBurnAnalysis analysis)
+        double totalDv, int passCount, VehicleBurnAnalysis analysis,
+        SplitMode mode = SplitMode.BurnTime)
     {
         passCount = Math.Clamp(passCount, 1, 10);
         var result = new List<PassAllocation>(passCount);
 
-        // Collect eligible stages and sum total burn time
+        // Compute burn time for the REQUESTED dV only.
+
         var stages = analysis.Stages;
+        BurnAnalysis maneuverBurn = StageAnalyzer.AnalyzeBurn(analysis, (float)totalDv);
+        double totalBurnTime = maneuverBurn.TotalBurnTime;
+
+        if (!maneuverBurn.IsSufficient && DebugConfig.OberthMultiPass)
+            DefaultCategory.Log.Debug(
+                $"[AFC] BurnTimeSplitter: vehicle cannot deliver {totalDv:F1} m/s " +
+                $"(available: {analysis.TotalDeltaV:F1} m/s), normalization will inflate allocations.");
+
         int eligibleCount = 0;
-        double totalBurnTime = 0.0;
         for (int i = 0; i < stages.Count; i++)
         {
             if (stages[i].EngineCount > 0 && stages[i].DeltaV > 0f)
-            {
-                totalBurnTime += stages[i].BurnTime;
                 eligibleCount++;
-            }
         }
 
-        // If no usable engine data, fall back to equal dV split with zero time
-        if (totalBurnTime <= 0.0 || eligibleCount == 0)
+        // EqualDv mode or no usable engine data: simple equal split
+        if (mode == SplitMode.EqualDv || totalBurnTime <= 0.0 || eligibleCount == 0)
         {
             double dvPerPass = totalDv / passCount;
+            float burnTimePerPass = 0.0f;
+            if (mode == SplitMode.EqualDv && eligibleCount > 0)
+                burnTimePerPass = StageAnalyzer.AnalyzeBurn(analysis, (float)dvPerPass).TotalBurnTime;
             for (int i = 0; i < passCount; i++)
-                result.Add(new PassAllocation(dvPerPass, 0.0));
+                result.Add(new PassAllocation(dvPerPass, burnTimePerPass));
             return result;
         }
 
@@ -85,8 +99,15 @@ static class BurnTimeSplitter
                 double startM = stageStartMass[s];
                 double endM = startM - fuelBurned;
 
-                if (endM > 0.0)
-                    passCapacity += stageExhaustVelocity[s] * Math.Log(startM / endM);
+                if (endM <= 0.0)
+                {
+                    // Stage data inconsistent (fuelBurned > startMass). Skip to avoid NaN from Log.
+                    remainingPassTime -= burnableTime;
+                    stageBurnTimeRemaining[s] = 0.0;
+                    continue;
+                }
+
+                passCapacity += stageExhaustVelocity[s] * Math.Log(startM / endM);
 
                 remainingPassTime -= burnableTime;
                 stageStartMass[s] -= fuelBurned;
@@ -102,6 +123,16 @@ static class BurnTimeSplitter
             actualBurnTime -= remainingPassTime;
 
             result.Add(new PassAllocation(passCapacity, actualBurnTime));
+        }
+        double totalCap = 0.0;
+        for (int i = 0; i < result.Count; i++)
+            totalCap += result[i].DvCapacity;
+
+        if (totalCap > 0.001)
+        {
+            double scale = totalDv / totalCap;
+            for (int i = 0; i < result.Count; i++)
+                result[i] = new PassAllocation(result[i].DvCapacity * scale, result[i].EstimatedBurnTime * scale);
         }
 
         return result;

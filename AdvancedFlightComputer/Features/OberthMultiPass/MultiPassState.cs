@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
 
@@ -15,6 +17,13 @@ delegate OrbitManeuvers.ManeuverResult? GoalFunc(Orbit orbit, SimTime afterTime,
 
 record struct PassResult(SimTime BurnTime, double3 DvVlf, double EstimatedBurnTime, FlightPlan PreviewFP);
 
+record struct GoalFuncSet(
+    GoalFunc? PreviewGoal,
+    GoalFunc? CorrectionGoal,
+    double3 DvDirection,
+    TrueAnomaly BurnTa,
+    Func<Orbit, double>? TotalAngleFunc);
+
 /// <summary>
 /// Pure state container for OberthMultiPass.
 /// </summary>
@@ -25,6 +34,7 @@ static class MultiPassState
     public static List<PassResult>? PreviewPasses;
     public static Vehicle? PreviewSource;
     public static bool ShowOrbitPreview;
+    public static bool PreviewFailed;          // true when preview was attempted but produced < 2 passes
     public static GoalFunc? PreviewGoal;       // null = apse burn (equal-VLF path)
     public static double3 PreviewDvDirection;  // unit vector for apse burns, e.g. (1,0,0) prograde
 
@@ -34,11 +44,20 @@ static class MultiPassState
 
     public static Vehicle? Vehicle;
     public static List<Burn>? PassBurns;
+    // The single burn recreated by RemoveAllBurns (BackToSingle). Must be removed
+    // before CreateBurns adds pass burns, otherwise CalculateNewFlightPlans chains
+    // pass flight plans from the post-singleBurn orbit instead of the actual orbit.
+    public static Burn? RestoredSingleBurn;
     public static double3 OriginalDvVlf;
     public static SimTime OriginalBurnTime;
     public static int OriginalPassCount;
     public static int SelectedPassIndex;
     public static double[]? OriginalDvCapacities;
+    public static double[]? PlannedBurnTimes;  // EstimatedBurnTime per pass from BurnTimeSplitter, for burn time display
+    public static double3 ActiveDvDirection;   // persists after ClearPreview; used by HandlePassCompletion
+    public static TrueAnomaly ActiveBurnTa;    // persists after ClearPreview; used by HandlePassCompletion
+    // True for apse burns (Set Ap/Pe), false for goal-based burns (plane changes).
+    public static bool IsApseBurn;
 
     #endregion
 
@@ -79,11 +98,28 @@ static class MultiPassState
 
         if (PassBurns.Count == 0)
         {
+            if (DebugConfig.OberthMultiPass)
+                DefaultCategory.Log.Debug(
+                    "[AFC] MultiPassState.ValidateState: all burns gone, resetting state.");
             Reset();
             return;
         }
 
         SelectedPassIndex = Math.Clamp(SelectedPassIndex, 0, PassBurns.Count - 1);
+    }
+
+    /// <summary>
+    /// Extracts dV capacities from the current preview passes. Returns null if no
+    /// preview exists. Used when transitioning from preview to active split or when
+    /// recomputing corrected passes.
+    /// </summary>
+    public static double[]? ExtractPreviewDvCapacities()
+    {
+        if (PreviewPasses == null) return null;
+        var caps = new double[PreviewPasses.Count];
+        for (int i = 0; i < caps.Length; i++)
+            caps[i] = PreviewPasses[i].DvVlf.Length();
+        return caps;
     }
 
     /// <summary>
@@ -94,6 +130,7 @@ static class MultiPassState
         PreviewPasses = null;
         PreviewSource = null;
         ShowOrbitPreview = false;
+        PreviewFailed = false;
         PreviewGoal = null;
         PreviewDvDirection = default;
     }
@@ -107,11 +144,16 @@ static class MultiPassState
         ClearPreview();
         Vehicle = null;
         PassBurns = null;
+        RestoredSingleBurn = null;
         OriginalDvVlf = default;
         OriginalBurnTime = default;
         OriginalPassCount = 0;
         SelectedPassIndex = 0;
         OriginalDvCapacities = null;
+        PlannedBurnTimes = null;
+        ActiveDvDirection = default;
+        ActiveBurnTa = TrueAnomaly.NaN;
+        IsApseBurn = false;
         CorrectionGoal = null;
     }
 }

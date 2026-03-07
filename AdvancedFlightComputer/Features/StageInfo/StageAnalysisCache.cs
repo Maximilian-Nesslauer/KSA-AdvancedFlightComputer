@@ -61,6 +61,9 @@ static class StageAnalysisCache
     /// </summary>
     private static bool _panelNeedsData;
 
+    internal static readonly VehicleBurnAnalysis Empty =
+        new() { Stages = new List<StageBurnInfo>() };
+
     #region Public API
 
     /// <summary>

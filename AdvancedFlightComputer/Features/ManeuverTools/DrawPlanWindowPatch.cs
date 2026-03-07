@@ -1,7 +1,7 @@
 using System;
-using System.Collections.Generic;
 using System.Globalization;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.OberthMultiPass;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -108,10 +108,12 @@ static class Patch_DrawPlanWindow
             ImGui.Separator();
             DrawManeuverInfo(result.Value);
 
-            ImGui.Spacing();
-            DrawCreateButton(source, result.Value);
+            OberthManeuverIntegration.DrawOberthSection(source, result.Value, transferType.GetKey());
 
-            if (_ourBurn == null)
+            ImGui.Spacing();
+            DrawCreateButton(source, result.Value, transferType.GetKey());
+
+            if (_ourBurn == null && !MultiPassState.HasActiveSplit && !MultiPassState.HasPreview)
             {
                 ImGui.Separator();
                 ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
@@ -124,9 +126,24 @@ static class Patch_DrawPlanWindow
         else
         {
             _lastEntry = null;
+            if (MultiPassState.HasPreview)
+                MultiPassState.ClearPreview();
         }
 
         ImGui.End();
+
+        if (_showOrbitPreview && _ourBurn == null && _lastEntry != null
+                && _lastSource != null && !MultiPassState.HasPreview
+                && !MultiPassState.HasActiveSplit)
+        {
+            var uiCtx = new Astronomical.UiContext(
+                inViewport, _lastSource, Color.Green,
+                TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0), null);
+            _lastEntry.FlightPlan.DrawUi(inViewport, uiCtx);
+        }
+
+        if (MultiPassState.HasPreview || MultiPassState.HasActiveSplit)
+            MultiPassRenderer.RenderPreviewMarkers(inViewport);
 
         if (_showFlightPlanPreview && _lastEntry != null)
             DrawFlightPlanWindow(inViewport);
@@ -143,6 +160,7 @@ static class Patch_DrawPlanWindow
             GameReflection.TransferPlanner_transferType!.SetValue(null, transferType);
             GameReflection.TransferPlanner_transferCalculated!.SetValue(null, false);
             ManeuverToolsWindow.OnTypeChanged();
+            OberthUI.OnTypeChanged();
 
             if (!ManeuverTools.IsOurType(transferType.GetKey()))
             {
@@ -176,6 +194,9 @@ static class Patch_DrawPlanWindow
             GameReflection.TransferPlanner_sourceBody!.SetValue(null, sourceBody);
         }
 
+        if (MultiPassState.HasActiveSplit)
+            ImGui.BeginDisabled();
+
         TransferObject prev = sourceBody;
         if (ImGuiHelper.DrawCombo("Source:"u8, ref sourceBody, vehicleList)
             && sourceBody.GetKey() != prev.GetKey())
@@ -183,6 +204,9 @@ static class Patch_DrawPlanWindow
             GameReflection.TransferPlanner_sourceBody!.SetValue(null, sourceBody);
             ManeuverToolsWindow.OnSourceChanged();
         }
+
+        if (MultiPassState.HasActiveSplit)
+            ImGui.EndDisabled();
 
         return sourceBody.Body as Vehicle;
     }
@@ -221,8 +245,14 @@ static class Patch_DrawPlanWindow
         ImGui.End();
     }
 
-    private static void DrawCreateButton(Vehicle source, OrbitManeuvers.ManeuverResult maneuver)
+    private static void DrawCreateButton(
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey)
     {
+        // When an active multi-pass split exists, the pass list + Back to Single
+        // are already shown in DrawOberthSection. Just suppress the Create button.
+        if (MultiPassState.HasActiveSplit)
+            return;
+
         if (_ourBurn != null)
         {
             if (_ourBurn.Time < Universe.GetElapsedSimTime())
@@ -241,14 +271,21 @@ static class Patch_DrawPlanWindow
         if (ImGuiHelper.DrawButton("Create"u8, KSAColor.DarkGrey,
                 KSAColor.Xkcd.DustyBlue, Color.Green))
         {
-            PatchedConic? patch = source.FlightPlan.TryFindPatch(maneuver.BurnTime);
-            if (patch != null)
+            if (OberthUI.CurrentPassCount > 1)
             {
-                OrbitPointCce point = patch.Orbit.GetPointAt(maneuver.BurnTime);
-                _ourBurn = Burn.Create(point, maneuver.BurnTime.Seconds(),
-                    maneuver.DvVlf, patch, source);
-                source.FlightComputer.AddBurn(_ourBurn);
-                _ourBurn.IsGizmoActive = false;
+                OberthManeuverIntegration.CreateMultiPassBurns(source, maneuver, typeKey);
+            }
+            else
+            {
+                PatchedConic? patch = source.FlightPlan.TryFindPatch(maneuver.BurnTime);
+                if (patch != null)
+                {
+                    OrbitPointCce point = patch.Orbit.GetPointAt(maneuver.BurnTime);
+                    _ourBurn = Burn.Create(point, maneuver.BurnTime.Seconds(),
+                        maneuver.DvVlf, patch, source);
+                    source.FlightComputer.AddBurn(_ourBurn);
+                    _ourBurn.IsGizmoActive = false;
+                }
             }
         }
     }
@@ -265,6 +302,8 @@ static class Patch_DrawPlanWindow
     internal static void RenderOrbitPreview(Viewport inViewport)
     {
         if (!_showOrbitPreview || _ourBurn != null || _lastEntry == null || _lastSource == null)
+            return;
+        if (MultiPassState.HasPreview || MultiPassState.HasActiveSplit)
             return;
 
         FlightPlan fp = _lastEntry.FlightPlan;
@@ -342,6 +381,9 @@ static class Patch_DrawPlanWindow
         _ourBurn = null;
         _lastEntry = null;
         _lastSource = null;
+        OberthUI.OnTypeChanged();
+        // Invalidate so reopening with the same inputs forces a fresh preview recompute.
+        OberthManeuverIntegration.InvalidatePreviewHash();
     }
 
     internal static void Reset()
@@ -351,6 +393,9 @@ static class Patch_DrawPlanWindow
         _lastSource = null;
         _showFlightPlanPreview = false;
         _showOrbitPreview = false;
+        OberthManeuverIntegration.Reset();
+        MultiPassState.Reset();
+        OberthUI.Reset();
     }
 
     #endregion
