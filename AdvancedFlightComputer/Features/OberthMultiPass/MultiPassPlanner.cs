@@ -6,7 +6,6 @@ using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using Brutal.Numerics;
-using CommunityToolkit.HighPerformance.Buffers;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.OberthMultiPass;
@@ -630,7 +629,10 @@ static class MultiPassPlanner
         if (!CreateBurns(vehicle, remaining.Value.DvVlf, remaining.Value.BurnTime,
                 corrGoal, freshCaps, burnTa, totalAngleFunc))
         {
-            // Old burns were already removed.
+            // Old burns are already gone (removed above). CreateBurns rolled back
+            // any partial burns it added, so the plan is empty. Reset is correct
+            // here: snapshot.Restore() alone would not help because PassBurns still
+            // references burns that no longer exist in the plan.
             DefaultCategory.Log.Warning(
                 "[AFC] MultiPassPlanner.HandlePassCompletion: failed to create corrected burns, resetting state.");
             MultiPassState.Reset();

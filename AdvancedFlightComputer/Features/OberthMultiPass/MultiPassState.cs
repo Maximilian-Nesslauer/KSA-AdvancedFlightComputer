@@ -98,11 +98,21 @@ static class MultiPassState
             return;
         }
 
+        bool anyRemoved = false;
         for (int i = PassBurns.Count - 1; i >= 0; i--)
         {
             if (!Vehicle.FlightComputer.BurnPlan.TryGetBurn(PassBurns[i]))
+            {
                 PassBurns.RemoveAt(i);
+                anyRemoved = true;
+            }
         }
+
+        // PlannedBurnTimes is indexed by the original pass order. After any burn is
+        // removed, the index mapping is broken. Clear it so the UI falls back to
+        // AnalyzeBurn for all remaining passes.
+        if (anyRemoved)
+            PlannedBurnTimes = null;
 
         if (PassBurns.Count == 0)
         {
