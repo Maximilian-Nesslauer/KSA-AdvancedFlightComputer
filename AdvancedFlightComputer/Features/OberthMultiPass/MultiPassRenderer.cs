@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -14,6 +15,8 @@ namespace AdvancedFlightComputer.Features.OberthMultiPass;
 /// </summary>
 static class MultiPassRenderer
 {
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
     /// <summary>
     /// Renders preview orbit lines in the 3D view. Called from
     /// Patch_OberthPreviewRender.Postfix (OnPreRender, Vulkan only, no ImGui).
@@ -64,16 +67,19 @@ static class MultiPassRenderer
         }
 #if DEBUG
         if (DebugConfig.Performance)
-            PerfTracker.Record("MultiPassPlanner.RenderPreviewLines",
+            PerfTracker.Record("MultiPassRenderer.RenderPreviewLines",
                 Stopwatch.GetTimestamp() - perfStart);
 #endif
     }
 
     /// <summary>
-    /// Renders "Pass N Ap/Pe" markers on orbits. Called during the ImGui pass
-    /// from Patch_DrawPlanWindow (after ImGui.End). Draws directly via
+    /// Renders Ap/Pe and SOI transition markers on orbits. Called during the
+    /// ImGui pass from Patch_DrawPlanWindow (after ImGui.End). Draws directly via
     /// ImGuiHelper.DrawTextOnScreen, bypassing PatchedConic.DrawUi which has
     /// internal conditions that fail for multi-pass burn FlightPlans.
+    ///
+    /// First and last passes show full labels. Intermediate passes show an inverted
+    /// triangle with labels appearing on hover.
     /// </summary>
     internal static void RenderPreviewMarkers(Viewport inViewport)
     {
@@ -85,7 +91,7 @@ static class MultiPassRenderer
             {
                 FlightPlan previewFp = MultiPassState.PreviewPasses[i].PreviewFP;
                 if (previewFp.Patches.Count == 0) continue;
-                DrawOrbitMarkers(inViewport, previewFp.Patches[0].Orbit, i, i == count - 1);
+                DrawOrbitMarkers(inViewport, previewFp, i, i == 0 || i == count - 1);
             }
         }
 
@@ -97,22 +103,23 @@ static class MultiPassRenderer
             {
                 FlightPlan fp = MultiPassState.PassBurns[i].FlightPlan;
                 if (fp.Patches.Count > 0)
-                    DrawOrbitMarkers(inViewport, fp.Patches[0].Orbit, i, i == count - 1);
+                    DrawOrbitMarkers(inViewport, fp, i, i == 0 || i == count - 1);
             }
         }
     }
 
     /// <summary>
-    /// Sets orbit line color on all patches in a FlightPlan.
-    /// Last pass gets full brightness, intermediate passes get a single
-    /// dimming step.
-    /// Called from MultiPassPlanner during preview computation.
+    /// Sets orbit line color on all patches in a FlightPlan. Earlier passes are
+    /// progressively dimmer; the last pass gets full brightness.
     /// </summary>
     internal static void SetPassColors(FlightPlan fp, int passIndex, int totalPasses)
     {
         byte4 color = BurnPlan.BurnPatchColor;
-        if (passIndex < totalPasses - 1)
-            color = color.Darken(0.6f);
+        if (totalPasses > 1 && passIndex < totalPasses - 1)
+        {
+            float brightness = 0.4f + 0.6f * ((float)passIndex / (totalPasses - 1));
+            color = color.Darken(brightness);
+        }
         foreach (PatchedConic patch in fp.Patches)
             patch.Orbit.OrbitLineColor = color;
     }
@@ -131,74 +138,169 @@ static class MultiPassRenderer
             drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN);
     }
 
-    private static void DrawOrbitMarkers(Viewport inViewport, Orbit orbit, int passIndex,
-        bool isLastPass)
+    /// <summary>
+    /// Draws Ap/Pe markers from the first patch and SOI transition (escape, encounter,
+    /// impact) markers from all patches of the given FlightPlan.
+    /// showFull: true for first and last pass (full labels), false for intermediate (triangle + hover).
+    /// </summary>
+    private static void DrawOrbitMarkers(Viewport inViewport, FlightPlan fp,
+        int passIndex, bool showFull)
     {
-        if (!orbit.IsBound()) return;
+        Orbit firstOrbit = fp.Patches[0].Orbit;
 
         Camera camera = inViewport.GetCamera();
         float2 vpPos = inViewport.Position;
-
         ImDrawListPtr drawList = ImGui.GetBackgroundDrawList();
-        byte4 color = orbit.OrbitLineColor;
-        doubleQuat orb2Cce = orbit.GetOrb2ParentCce();
-        double parentRadius = orbit.Parent.MeanRadius;
+        byte4 color = firstOrbit.OrbitLineColor;
         float2 mousePos = ImGui.GetIO().MousePos;
 
-        double3 apCce = orbit.GetApoapsisPositionOrb().Transform(orb2Cce);
-        double3 apEcl = orbit.Parent.GetPositionEclFromCce(apCce);
-        float2 apScreen = vpPos + camera.EgoToScreen(camera.EclToEgo(apEcl));
+        // Ap/Pe markers from the first post-burn orbit.
+        if (firstOrbit.IsBound())
+        {
+            doubleQuat orb2Cce = firstOrbit.GetOrb2ParentCce();
+            double parentRadius = firstOrbit.Parent.MeanRadius;
 
-        if (!float.IsNaN(apScreen.X) && !float.IsNaN(apScreen.Y))
-            DrawMarkerAtPoint(drawList, apScreen, mousePos, color, passIndex, "Ap",
-                orbit.Apoapsis - parentRadius, isLastPass);
+            double3 apCce = firstOrbit.GetApoapsisPositionOrb().Transform(orb2Cce);
+            double3 apEcl = firstOrbit.Parent.GetPositionEclFromCce(apCce);
+            float2 apScreen = vpPos + camera.EgoToScreen(camera.EclToEgo(apEcl));
 
-        double3 peCce = orbit.GetPeriapsisPositionOrb().Transform(orb2Cce);
-        double3 peEcl = orbit.Parent.GetPositionEclFromCce(peCce);
-        float2 peScreen = vpPos + camera.EgoToScreen(camera.EclToEgo(peEcl));
+            if (!float.IsNaN(apScreen.X) && !float.IsNaN(apScreen.Y))
+                DrawMarkerAtPoint(drawList, apScreen, mousePos, color,
+                    $"Pass {passIndex + 1} Ap",
+                    DistanceReference.ToNearest(firstOrbit.Apoapsis - parentRadius).ToString(),
+                    showFull);
 
-        if (!float.IsNaN(peScreen.X) && !float.IsNaN(peScreen.Y))
-            DrawMarkerAtPoint(drawList, peScreen, mousePos, color, passIndex, "Pe",
-                orbit.Periapsis - parentRadius, isLastPass);
+            double3 peCce = firstOrbit.GetPeriapsisPositionOrb().Transform(orb2Cce);
+            double3 peEcl = firstOrbit.Parent.GetPositionEclFromCce(peCce);
+            float2 peScreen = vpPos + camera.EgoToScreen(camera.EclToEgo(peEcl));
+
+            if (!float.IsNaN(peScreen.X) && !float.IsNaN(peScreen.Y))
+                DrawMarkerAtPoint(drawList, peScreen, mousePos, color,
+                    $"Pass {passIndex + 1} Pe",
+                    DistanceReference.ToNearest(firstOrbit.Periapsis - parentRadius).ToString(),
+                    showFull);
+        }
+
+        // Per-patch markers: SOI transitions, AN/DN relative to target, closest approach.
+        foreach (PatchedConic patch in fp.Patches)
+        {
+            Orbit o = patch.Orbit;
+            if (o.Parent == null) continue;
+
+            doubleQuat patchOrb2Cce = o.GetOrb2ParentCce();
+
+            // SOI transition markers (escape, encounter, impact) at patch end.
+            PatchTransition t = patch.EndTransition;
+            if (t == PatchTransition.Escape || t == PatchTransition.Encounter
+                || t == PatchTransition.Impact)
+            {
+                double3 posCce = o.GetPositionOrb(patch.EndTrueAnomaly).Transform(patchOrb2Cce);
+                double3 posEcl = o.Parent.GetPositionEclFromCce(posCce);
+                float2 tScreen = vpPos + camera.EgoToScreen(camera.EclToEgo(posEcl));
+
+                if (!float.IsNaN(tScreen.X) && !float.IsNaN(tScreen.Y))
+                {
+                    string tLabel = t switch
+                    {
+                        PatchTransition.Escape    => $"Pass {passIndex + 1} Exit SOI",
+                        PatchTransition.Encounter => $"Pass {passIndex + 1} Enter SOI",
+                        PatchTransition.Impact    => $"Pass {passIndex + 1} Impact",
+                        _                         => string.Empty
+                    };
+                    if (tLabel.Length > 0)
+                        DrawMarkerAtPoint(drawList, tScreen, mousePos, color, tLabel, null, showFull);
+                }
+            }
+
+            // AN/DN markers relative to target.
+            if (patch.TargetData.HasValue)
+            {
+                TargetData td = patch.TargetData.Value;
+                string relIncStr = string.Format(Inv, "{0:F2} deg", td.RelativeInclination);
+
+                if (PatchedConic.TrueAnomalyInPatch(td.AnTrueAnomaly,
+                        patch.StartTrueAnomaly, patch.EndTrueAnomaly))
+                {
+                    double3 anCce = o.GetPositionOrb(td.AnTrueAnomaly).Transform(patchOrb2Cce);
+                    float2 anScreen = vpPos + camera.EgoToScreen(
+                        camera.EclToEgo(o.Parent.GetPositionEclFromCce(anCce)));
+                    if (!float.IsNaN(anScreen.X) && !float.IsNaN(anScreen.Y))
+                        DrawMarkerAtPoint(drawList, anScreen, mousePos, color,
+                            $"Pass {passIndex + 1} AN", relIncStr, showFull);
+                }
+
+                if (PatchedConic.TrueAnomalyInPatch(td.DnTrueAnomaly,
+                        patch.StartTrueAnomaly, patch.EndTrueAnomaly))
+                {
+                    double3 dnCce = o.GetPositionOrb(td.DnTrueAnomaly).Transform(patchOrb2Cce);
+                    float2 dnScreen = vpPos + camera.EgoToScreen(
+                        camera.EclToEgo(o.Parent.GetPositionEclFromCce(dnCce)));
+                    if (!float.IsNaN(dnScreen.X) && !float.IsNaN(dnScreen.Y))
+                        DrawMarkerAtPoint(drawList, dnScreen, mousePos, color,
+                            $"Pass {passIndex + 1} DN", relIncStr, showFull);
+                }
+            }
+
+            // Closest approach markers.
+            foreach (Encounter enc in patch.ClosestApproaches)
+            {
+                if (!PatchedConic.TrueAnomalyInPatch(enc.TaMainOrbit,
+                        patch.StartTrueAnomaly, patch.EndTrueAnomaly))
+                    continue;
+
+                double3 encCce = o.GetPositionOrb(enc.TaMainOrbit).Transform(patchOrb2Cce);
+                float2 encScreen = vpPos + camera.EgoToScreen(
+                    camera.EclToEgo(o.Parent.GetPositionEclFromCce(encCce)));
+                if (float.IsNaN(encScreen.X) || float.IsNaN(encScreen.Y)) continue;
+
+                string distStr = DistanceReference.ToNearest(enc.ClosestDistance).ToString();
+                DrawMarkerAtPoint(drawList, encScreen, mousePos, color,
+                    $"Pass {passIndex + 1} Closest", distStr, showFull);
+            }
+        }
     }
 
+    /// <summary>
+    /// Draws a single orbit marker at a screen position.
+    /// showFull = true: draws the label text directly (and hoverExtra below on hover).
+    /// showFull = false: draws an inverted triangle; label + hoverExtra appear on hover.
+    /// </summary>
     private static void DrawMarkerAtPoint(ImDrawListPtr drawList, float2 screen, float2 mousePos,
-        byte4 color, int passIndex, string apseName, double altitudeMeters, bool isLastPass)
+        byte4 color, string label, string? hoverExtra, bool showFull)
     {
-        if (isLastPass)
+        bool hovered = Math.Abs(screen.X - mousePos.X) < 80f
+            && Math.Abs(screen.Y - mousePos.Y) < 80f;
+
+        if (showFull)
         {
-            string label = $"Pass {passIndex + 1} {apseName}";
             ImGuiHelper.DrawTextOnScreen(drawList, screen, label, color);
 
-            if (Math.Abs(screen.X - mousePos.X) < 80f
-                && Math.Abs(screen.Y - mousePos.Y) < 80f)
+            if (hovered && hoverExtra != null)
             {
                 float2 below = screen;
                 below.Y += 15f;
-                string alt = DistanceReference.ToNearest(altitudeMeters).ToString();
-                ImGuiHelper.DrawTextOnScreen(drawList, below, alt, color);
+                ImGuiHelper.DrawTextOnScreen(drawList, below, hoverExtra, color);
             }
             return;
         }
 
-        // Intermediate passes: inverted triangle marker, text on hover.
+        // Intermediate passes: inverted triangle, text on hover.
         float s = 6f;
         float2 p1 = new float2(screen.X - s, screen.Y - s);
         float2 p2 = new float2(screen.X + s, screen.Y - s);
         float2 p3 = new float2(screen.X, screen.Y + s);
         drawList.AddTriangleFilled(p1, p2, p3, color);
 
-        if (Math.Abs(screen.X - mousePos.X) < 80f
-            && Math.Abs(screen.Y - mousePos.Y) < 80f)
+        if (hovered)
         {
-            float2 textPos = screen;
-            textPos.Y += s + 4f;
-            string label = $"Pass {passIndex + 1} {apseName}";
+            float2 textPos = new float2(screen.X, screen.Y + s + 4f);
             ImGuiHelper.DrawTextOnScreen(drawList, textPos, label, color);
 
-            textPos.Y += 15f;
-            string alt = DistanceReference.ToNearest(altitudeMeters).ToString();
-            ImGuiHelper.DrawTextOnScreen(drawList, textPos, alt, color);
+            if (hoverExtra != null)
+            {
+                textPos.Y += 15f;
+                ImGuiHelper.DrawTextOnScreen(drawList, textPos, hoverExtra, color);
+            }
         }
     }
 }

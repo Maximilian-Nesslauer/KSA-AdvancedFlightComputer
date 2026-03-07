@@ -44,14 +44,18 @@ static class MultiPassState
 
     public static Vehicle? Vehicle;
     public static List<Burn>? PassBurns;
-    // The single burn recreated by RemoveAllBurns (BackToSingle). Must be removed
-    // before CreateBurns adds pass burns, otherwise CalculateNewFlightPlans chains
-    // pass flight plans from the post-singleBurn orbit instead of the actual orbit.
+    // The single burn recreated by RemoveAllBurns (BackToSingle).
+    // Lifecycle: set in RemoveAllBurns -> consumed+cleared in CreateBurns -> cleared in Reset.
+    // Must be removed before CreateBurns adds pass burns, otherwise CalculateNewFlightPlans
+    // chains pass flight plans from the post-singleBurn orbit instead of the actual orbit.
+    // If the user manually deletes it before clicking Create, TryGetBurn returns false and
+    // the stale reference is harmlessly cleared.
     public static Burn? RestoredSingleBurn;
     public static double3 OriginalDvVlf;
     public static SimTime OriginalBurnTime;
     public static int OriginalPassCount;
     public static int SelectedPassIndex;
+    // Phase 2.5: used for per-pass dV reset across correction cycles.
     public static double[]? OriginalDvCapacities;
     public static double[]? PlannedBurnTimes;  // EstimatedBurnTime per pass from BurnTimeSplitter, for burn time display
     public static double3 ActiveDvDirection;   // persists after ClearPreview; used by HandlePassCompletion
@@ -64,6 +68,10 @@ static class MultiPassState
     #region Correction state
 
     public static GoalFunc? CorrectionGoal;  // null = generic (dV redistribution)
+    // Provides the exact geometric remaining angle for plane-change corrections.
+    // Stored at CreateBurns time so HandlePassCompletion uses the precise formula
+    // rather than the dV-inversion fallback in ComputeGoalPreview.
+    public static Func<Orbit, double>? TotalAngleFunc;
 
     #endregion
 
@@ -155,5 +163,6 @@ static class MultiPassState
         ActiveBurnTa = TrueAnomaly.NaN;
         IsApseBurn = false;
         CorrectionGoal = null;
+        TotalAngleFunc = null;
     }
 }

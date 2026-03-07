@@ -70,15 +70,17 @@ static class OberthManeuverIntegration
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey)
     {
         int targetOrbitHash = ManeuverToolsWindow.GetSelectedTargetOrbit()?.GetHashCode() ?? 0;
-        int hash = HashCode.Combine(
-            typeKey,
-            OberthUI.CurrentPassCount,
-            (int)OberthUI.CurrentSplitMode,
-            ManeuverToolsWindow.TargetAltitude.GetHashCode(),
-            ManeuverToolsWindow.TargetInclinationRad.GetHashCode(),
-            ManeuverToolsWindow.UseDescendingNode,
-            targetOrbitHash,
-            source.Id);
+        var hc = new HashCode();
+        hc.Add(typeKey);
+        hc.Add(OberthUI.CurrentPassCount);
+        hc.Add((int)OberthUI.CurrentSplitMode);
+        hc.Add(ManeuverToolsWindow.TargetAltitude);
+        hc.Add(ManeuverToolsWindow.TargetInclinationRad);
+        hc.Add(ManeuverToolsWindow.UseDescendingNode);
+        hc.Add(targetOrbitHash);
+        hc.Add(source.Id);
+        hc.Add(StageAnalysisCache.Analysis != null ? StageAnalysisCache.AnalysisVersion : -1);
+        int hash = hc.ToHashCode();
 
         if (hash == _previewInputHash)
             return;
@@ -131,7 +133,7 @@ static class OberthManeuverIntegration
 
             if (!ok)
             {
-                if (DebugConfig.ManeuverTools)
+                if (DebugConfig.OberthMultiPass)
                     DefaultCategory.Log.Debug(
                         "[AFC] OberthManeuverIntegration: multi-pass preview failed.");
                 return;
@@ -140,7 +142,8 @@ static class OberthManeuverIntegration
 
         MultiPassPlanner.CreateBurns(
             source, maneuver.DvVlf, maneuver.BurnTime, gfs.CorrectionGoal,
-            MultiPassState.ExtractPreviewDvCapacities(), gfs.BurnTa);
+            MultiPassState.ExtractPreviewDvCapacities(), gfs.BurnTa,
+            gfs.TotalAngleFunc);
     }
 
     #endregion

@@ -132,7 +132,7 @@ static class BurnTimeSplitter
         {
             double scale = totalDv / totalCap;
             for (int i = 0; i < result.Count; i++)
-                result[i] = new PassAllocation(result[i].DvCapacity * scale, result[i].EstimatedBurnTime * scale);
+                result[i] = new PassAllocation(result[i].DvCapacity * scale, result[i].EstimatedBurnTime);
         }
 
         return result;

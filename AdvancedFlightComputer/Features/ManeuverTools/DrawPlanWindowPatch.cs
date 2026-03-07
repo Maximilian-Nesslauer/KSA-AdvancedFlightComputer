@@ -113,7 +113,7 @@ static class Patch_DrawPlanWindow
             ImGui.Spacing();
             DrawCreateButton(source, result.Value, transferType.GetKey());
 
-            if (_ourBurn == null && !MultiPassState.HasActiveSplit && !MultiPassState.HasPreview)
+            if (_ourBurn == null && !MultiPassState.HasActiveSplit)
             {
                 ImGui.Separator();
                 ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
@@ -121,6 +121,9 @@ static class Patch_DrawPlanWindow
                 ImGuiHelper.DrawCheckbox("Preview Flight Plan"u8, ref _showFlightPlanPreview,
                     isChanged: false);
                 ImGuiHelper.EndColumns();
+                // Sync the preview-orbit checkbox to the multi-pass ShowOrbitPreview flag.
+                if (MultiPassState.HasPreview)
+                    MultiPassState.ShowOrbitPreview = _showOrbitPreview;
             }
         }
         else

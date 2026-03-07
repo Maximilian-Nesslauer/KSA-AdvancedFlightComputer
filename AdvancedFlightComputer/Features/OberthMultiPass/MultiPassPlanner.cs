@@ -67,7 +67,8 @@ static class MultiPassPlanner
     /// </summary>
     public static bool ComputeApseBurnPreview(
         Vehicle source, List<PassAllocation> allocations,
-        TrueAnomaly burnTa, double3 dvDirection)
+        TrueAnomaly burnTa, double3 dvDirection,
+        bool allowSinglePass = false)
     {
         SimTime now = Universe.GetElapsedSimTime();
         // Add 1s so TimeOfTrueAnomaly always returns the NEXT occurrence of burnTa,
@@ -141,7 +142,8 @@ static class MultiPassPlanner
             }
         }
 
-        if (results.Count < 2)
+        int minPasses = allowSinglePass ? 1 : 2;
+        if (results.Count < minPasses)
         {
             if (DebugConfig.OberthMultiPass)
                 DefaultCategory.Log.Debug(
@@ -171,11 +173,13 @@ static class MultiPassPlanner
     public static bool ComputeGoalPreview(
         Vehicle source, List<PassAllocation> allocations,
         GoalFunc previewGoal, SimTime now,
-        Func<Orbit, double>? totalAngleFunc = null)
+        Func<Orbit, double>? totalAngleFunc = null,
+        bool allowSinglePass = false)
     {
         Orbit currentOrbit = source.Orbit;
         var results = new List<PassResult>(allocations.Count);
         PatchedConic? prevBurnPatch = null;
+        bool escapeWarning = false;
 
         for (int i = 0; i < allocations.Count; i++)
         {
@@ -273,6 +277,7 @@ static class MultiPassPlanner
                 if (DebugConfig.OberthMultiPass)
                     DefaultCategory.Log.Debug($"[AFC] MultiPassPlanner: goal preview pass {i} - post-burn orbit unbound.");
                 results.Add(new PassResult(burnTime, result.Value.DvVlf, allocations[i].EstimatedBurnTime, fp));
+                escapeWarning = true;
                 break;
             }
 
@@ -313,11 +318,12 @@ static class MultiPassPlanner
             }
         }
 
-        if (results.Count < 2)
+        int minPasses = allowSinglePass ? 1 : 2;
+        if (results.Count < minPasses)
         {
             if (DebugConfig.OberthMultiPass)
                 DefaultCategory.Log.Debug(
-                    $"[AFC] MultiPassPlanner: goal preview failed - only {results.Count} passes computed.");
+                    $"[AFC] MultiPassPlanner: goal preview failed - only {results.Count} passes computed. Escape: {escapeWarning}");
             MultiPassState.PreviewFailed = true;
             return false;
         }
@@ -331,7 +337,7 @@ static class MultiPassPlanner
 
         if (DebugConfig.OberthMultiPass)
             DefaultCategory.Log.Debug(
-                $"[AFC] MultiPassPlanner: goal preview computed {results.Count} passes.");
+                $"[AFC] MultiPassPlanner: goal preview computed {results.Count} passes. Escape warning: {escapeWarning}");
 
         return true;
     }
@@ -348,6 +354,10 @@ static class MultiPassPlanner
         PatchedConic burnPatch = fp.CalculateBurnPatch(prePatch, timeSincePe, dvVlf, burnTime);
         fp.Patches.Add(burnPatch);
         fp.ComputeCompleteTrajectory(5, 8);
+        // Populate TargetData and ClosestApproaches on all patches so the renderer
+        // can show AN/DN and closest approach markers for the preview orbits.
+        if (source.Target != null)
+            fp.CalculateTargetNodes(source.Target);
         return (fp, burnPatch);
     }
 
@@ -366,7 +376,8 @@ static class MultiPassPlanner
         SimTime originalBurnTime,
         GoalFunc? correctionGoal,
         double[]? originalDvCapacities,
-        TrueAnomaly activeBurnTa)
+        TrueAnomaly activeBurnTa,
+        Func<Orbit, double>? totalAngleFunc = null)
     {
         if (MultiPassState.PreviewPasses == null)
         {
@@ -443,6 +454,7 @@ static class MultiPassPlanner
         MultiPassState.OriginalDvCapacities = originalDvCapacities;
         MultiPassState.PlannedBurnTimes = plannedTimes;
         MultiPassState.CorrectionGoal = correctionGoal;
+        MultiPassState.TotalAngleFunc = totalAngleFunc;
         MultiPassState.SelectedPassIndex = 0;
         // Save ActiveDvDirection and ActiveBurnTa BEFORE ClearPreview(),
         // which wipes PreviewDvDirection.
@@ -564,14 +576,6 @@ static class MultiPassPlanner
             return;
         }
 
-        // Single remaining pass: correct the burn directly without the multi-pass
-        // preview pipeline (which requires >= 2 passes).
-        if (remainingPasses == 1)
-        {
-            CorrectLastPass(vehicle, fc, remaining.Value);
-            return;
-        }
-
         VehicleBurnAnalysis analysis = StageAnalysisCache.Analysis ?? StageAnalysisCache.Empty;
         List<PassAllocation> allocations = BurnTimeSplitter.ComputeAllocations(
             remaining.Value.DvCci.Length(), remainingPasses, analysis);
@@ -579,21 +583,28 @@ static class MultiPassPlanner
         // Preserve state before CreateBurns can overwrite it.
         GoalFunc corrGoal = MultiPassState.CorrectionGoal;
         TrueAnomaly burnTa = MultiPassState.ActiveBurnTa;
+        Func<Orbit, double>? totalAngleFunc = MultiPassState.TotalAngleFunc;
         var snapshot = OriginalBurnSnapshot.Capture();
 
         // 1. Compute corrected preview first, before touching the BurnPlan.
         // For apse burns, derive the current correction direction from the CorrectionGoal
         // result rather than the stored ActiveDvDirection. After an imprecise burn, the
         // direction can flip (e.g., over-burned Set Apoapsis now needs retrograde correction).
+        // allowSinglePass: when only 1 pass remains we still need the preview pipeline
+        // to produce a FlightPlan (for orbit chaining), so bypass the >= 2 guard.
         bool previewOk;
         if (MultiPassState.IsApseBurn)
         {
             double3 correctedDir = remaining.Value.DvVlf.NormalizeOrZero();
-            previewOk = ComputeApseBurnPreview(vehicle, allocations, burnTa, correctedDir);
+            previewOk = ComputeApseBurnPreview(vehicle, allocations, burnTa, correctedDir,
+                allowSinglePass: remainingPasses == 1);
         }
         else
         {
-            previewOk = ComputeGoalPreview(vehicle, allocations, corrGoal, nowPlus);
+            // Pass TotalAngleFunc so correction uses the exact geometric angle rather than
+            // the dV-inversion fallback.
+            previewOk = ComputeGoalPreview(vehicle, allocations, corrGoal, nowPlus,
+                totalAngleFunc, allowSinglePass: remainingPasses == 1);
         }
 
         // 2. If preview failed, leave remaining burns in BurnPlan unchanged so they
@@ -616,7 +627,8 @@ static class MultiPassPlanner
         // 4. Extract dV capacities from the corrected preview.
         double[]? freshCaps = MultiPassState.ExtractPreviewDvCapacities();
 
-        if (!CreateBurns(vehicle, remaining.Value.DvVlf, remaining.Value.BurnTime, corrGoal, freshCaps, burnTa))
+        if (!CreateBurns(vehicle, remaining.Value.DvVlf, remaining.Value.BurnTime,
+                corrGoal, freshCaps, burnTa, totalAngleFunc))
         {
             // Old burns were already removed.
             DefaultCategory.Log.Warning(
@@ -630,51 +642,6 @@ static class MultiPassPlanner
         if (DebugConfig.OberthMultiPass)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPassPlanner.HandlePassCompletion: recreated {remainingPasses} corrected burns.");
-    }
-
-    /// <summary>
-    /// Corrects the single remaining pass by removing the old burn and creating
-    /// a new one with the corrected dV from the CorrectionGoal. Bypasses the
-    /// multi-pass preview pipeline which requires >= 2 passes.
-    /// </summary>
-    private static void CorrectLastPass(
-        Vehicle vehicle, FlightComputer fc, OrbitManeuvers.ManeuverResult remaining)
-    {
-        var burnsToRemove = new List<Burn>(MultiPassState.PassBurns!);
-        // Capture original state before modifying PassBurns and related fields.
-        // ActiveDvDirection and ActiveBurnTa are intentionally NOT in the snapshot:
-        // they retain the original values from CreateBurns and remain valid for
-        // determining apse-vs-goal path in any subsequent HandlePassCompletion calls.
-        var snapshot = OriginalBurnSnapshot.Capture();
-
-        foreach (Burn b in burnsToRemove)
-            fc.RemoveBurn(b);
-
-        RebuildFlightPlans(vehicle, fc);
-
-        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(remaining.BurnTime);
-        if (patch == null)
-        {
-            DefaultCategory.Log.Warning(
-                "[AFC] MultiPassPlanner.CorrectLastPass: patch not found for corrected burn.");
-            MultiPassState.Reset();
-            return;
-        }
-
-        OrbitPointCce point = patch.Orbit.GetPointAt(remaining.BurnTime);
-        Burn burn = Burn.Create(point, remaining.BurnTime.Seconds(), remaining.DvVlf, patch, vehicle);
-        burn.IsGizmoActive = false;
-        fc.AddBurn(burn);
-        RebuildFlightPlans(vehicle, fc);
-
-        MultiPassState.PassBurns = new List<Burn> { burn };
-        MultiPassState.SelectedPassIndex = 0;
-        MultiPassState.PlannedBurnTimes = null; // single corrected pass, estimate not available
-        snapshot.Restore();
-
-        if (DebugConfig.OberthMultiPass)
-            DefaultCategory.Log.Debug(
-                $"[AFC] MultiPassPlanner.CorrectLastPass: corrected last burn, dV={remaining.DvCci.Length():F1} m/s.");
     }
 
     /// <summary>

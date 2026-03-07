@@ -67,6 +67,13 @@ static class StageAnalysisCache
     #region Public API
 
     /// <summary>
+    /// Increments each time RunPrimaryAnalysis produces new data. Used by
+    /// OberthManeuverIntegration as a stable hash component so the multi-pass
+    /// preview recomputes exactly once when the analysis changes.
+    /// </summary>
+    public static int AnalysisVersion { get; private set; }
+
+    /// <summary>
     /// Signals that the staging panel needs analysis data next frame.
     /// Called from StageInfoPanel.DrawContentPrefix every rendered frame.
     /// </summary>
@@ -168,6 +175,12 @@ static class StageAnalysisCache
             ambientPressure: env.PrimaryPressure,
             surfaceGravityOverride: env.PrimarySurfaceGravity);
 
+        // Only increment the version when the analysis data actually changes, not
+        // every frame the analysis runs (staging panel open -> runs every frame).
+        bool changed = _cachedAnalysis == null
+            || _cachedAnalysis.Value.TotalDeltaV != result.TotalDeltaV
+            || _cachedAnalysis.Value.TotalBurnTime != result.TotalBurnTime;
+
         _cachedPrimaryStages.Clear();
         _cachedPrimaryStages.AddRange(result.Stages);
 
@@ -177,6 +190,7 @@ static class StageAnalysisCache
             TotalDeltaV = result.TotalDeltaV,
             TotalBurnTime = result.TotalBurnTime
         };
+        if (changed) AnalysisVersion++;
 
         _stageInfoLookup.Clear();
         foreach (var stage in _cachedPrimaryStages)

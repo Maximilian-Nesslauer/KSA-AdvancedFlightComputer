@@ -12,6 +12,7 @@ static class OberthMultiPass
     {
         harmony.CreateClassProcessor(typeof(Patch_OberthPreviewRender)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_BurnPlanAddLineInstances)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_FlightPlanDrawUi)).Patch();
 
         if (DebugConfig.OberthMultiPass)
             DefaultCategory.Log.Debug("[AFC] OberthMultiPass: patches applied.");
@@ -45,5 +46,29 @@ static class Patch_BurnPlanAddLineInstances
     static bool Prefix()
     {
         return !MultiPassState.HasActiveSplit;
+    }
+}
+
+/// <summary>
+/// Suppresses stock FlightPlan.DrawUi (Ap/Pe, closest approach, AN/DN, SOI
+/// markers) for multi-pass split burns. MultiPassRenderer.RenderPreviewMarkers
+/// renders correctly decluttered markers instead.
+/// Non-split burns are unaffected so their markers still render normally.
+/// Note: Burn.DrawUi (gizmo icon) is a separate call in BurnPlan.DrawUi and
+/// is intentionally not suppressed here.
+/// </summary>
+[HarmonyPatch(typeof(FlightPlan), "DrawUi")]
+static class Patch_FlightPlanDrawUi
+{
+    static bool Prefix(FlightPlan __instance)
+    {
+        if (!MultiPassState.HasActiveSplit || MultiPassState.PassBurns == null)
+            return true;
+        foreach (Burn b in MultiPassState.PassBurns)
+        {
+            if (b.FlightPlan == __instance)
+                return false;
+        }
+        return true;
     }
 }
