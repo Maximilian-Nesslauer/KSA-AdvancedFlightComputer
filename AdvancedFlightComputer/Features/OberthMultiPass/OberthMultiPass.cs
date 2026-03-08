@@ -1,6 +1,7 @@
 using System;
 using AdvancedFlightComputer.Core;
 using Brutal.Logging;
+using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
 
@@ -13,6 +14,7 @@ static class OberthMultiPass
         harmony.CreateClassProcessor(typeof(Patch_OberthPreviewRender)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_BurnPlanAddLineInstances)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_FlightPlanDrawUi)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_BurnUpdateGizmos)).Patch();
 
         if (DebugConfig.OberthMultiPass)
             DefaultCategory.Log.Debug("[AFC] OberthMultiPass: patches applied.");
@@ -70,5 +72,27 @@ static class Patch_FlightPlanDrawUi
                 return false;
         }
         return true;
+    }
+}
+
+/// <summary>
+/// Hides gizmo spheres and drag handles for non-selected multi-pass burns.
+/// All passes at the same true anomaly overlap, making it easy to grab the
+/// wrong one. Only the radio-selected pass renders its gizmo. Non-multi-pass
+/// burns are unaffected.
+/// </summary>
+[HarmonyPatch(typeof(Burn), nameof(Burn.UpdateGizmos))]
+static class Patch_BurnUpdateGizmos
+{
+    static bool Prefix(Burn __instance)
+    {
+        if (!MultiPassState.HasActiveSplit || MultiPassState.PassBurns == null)
+            return true;
+
+        int idx = MultiPassState.PassBurns.IndexOf(__instance);
+        if (idx < 0)
+            return true;
+
+        return idx == MultiPassState.SelectedPassIndex;
     }
 }
