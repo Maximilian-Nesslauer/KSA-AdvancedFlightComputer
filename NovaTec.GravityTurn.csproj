@@ -1,0 +1,81 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>NovaTec.GravityTurnMod</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <None Remove="Brutal.Render.Common.dll" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="mod.toml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+	<ItemGroup Condition="'$(Configuration)' != 'Debug'">
+		<PackageReference Include="StarMap.API" Version="0.2.1" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <PackageReference Include="StarMap.API" Version="0.2.4" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Reference Include="0Harmony">
+	    <HintPath>..\Import\0Harmony.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Core.Common">
+	    <HintPath>..\Import\Brutal.Core.Common.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Core.Maths">
+	    <HintPath>..\Import\Brutal.Core.Maths.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Core.Numerics">
+	    <HintPath>..\Import\Brutal.Core.Numerics.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Core.Strings">
+	    <HintPath>..\Import\Brutal.Core.Strings.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Glfw">
+	    <HintPath>..\Import\Brutal.Glfw.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.ImGui">
+	    <HintPath>..\Import\Brutal.ImGui.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.ImGui.Abstractions">
+	    <HintPath>..\Import\Brutal.ImGui.Abstractions.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.ImGui.Extensions">
+	    <HintPath>..\Import\Brutal.ImGui.Extensions.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Render.Common">
+	    <HintPath>..\Import\Brutal.Render.Common.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Vulkan">
+	    <HintPath>..\Import\Brutal.Vulkan.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Brutal.Vulkan.Abstractions">
+	    <HintPath>..\Import\Brutal.Vulkan.Abstractions.dll</HintPath>
+	  </Reference>
+	  <Reference Include="KSA">
+	    <HintPath>..\Import\KSA.dll</HintPath>
+	  </Reference>
+	  <Reference Include="Planet.Render.Core">
+	    <HintPath>..\Import\Planet.Render.Core.dll</HintPath>
+	  </Reference>
+	  <Reference Include="StarMap.API">
+	    <HintPath>..\Import\StarMap.API.dll</HintPath>
+	  </Reference>
+	</ItemGroup>
+
+	<Target Name="PostBuild" AfterTargets="PostBuildEvent">
+	  <Exec Command="call deploy.bat" />
+	</Target>
+
+</Project>
