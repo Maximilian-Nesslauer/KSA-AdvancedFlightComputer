@@ -40,7 +40,7 @@ namespace NovaTec.GravityTurnMod
         public int TimeToApoapsisTarget { get; set; } = 90;
         public double TargetAltitude { get; set; } = 280.0;
         public double TargetInclination { get; set; } = 0.0;
-        public bool UseWarp { get; set; } = true;
+        public bool UseWarp { get; set; } = false;
 
         public double DeltaVUsed { get { return _DeltaVUsed; } }
         public enum PhaseEnum
@@ -86,10 +86,10 @@ namespace NovaTec.GravityTurnMod
             vehicle.FlightComputer.RateHold(VehicleReferenceFrame.EnuBody); // rate control rel to surface
             vehicle.FlightComputer.RollMode = FlightComputerRollMode.Up;
 
-            Console.WriteLine("Active stage: " + vehicle.Parts.StageList.ActiveStage);
-            if (vehicle.Parts.StageList.ActiveStage <= 0)
+            Console.WriteLine("Active Sequence: " + vehicle.Parts.SequenceList.ActiveSequence);
+            if (vehicle.Parts.SequenceList.ActiveSequence <= 0)
             {
-                NextStage();
+                NextStequence();
             }
             
             // Ignite engines
@@ -188,7 +188,7 @@ namespace NovaTec.GravityTurnMod
             if (UseWarp)
                 Universe.SetSimulationSpeed(4.0);
 
-            if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Forward)
+            //if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Forward)
                 vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Forward);
             LastTransitionTime = Universe.GetElapsedSimTime();
             Phase = PhaseEnum.Hold;
@@ -207,7 +207,7 @@ namespace NovaTec.GravityTurnMod
 
 
             // needs staging?
-            if (vehicle.Parts.StageList.ActiveStage > 0 && !GetStageHasFuel())
+            if (vehicle.Parts.SequenceList.ActiveSequence > 0 && !GetSequenceHasFuel())
             {
                 StartPhaseStage(vehicle);
                 return;
@@ -294,13 +294,13 @@ namespace NovaTec.GravityTurnMod
 
             ThrottleUp();
             // Wait for staging to settle wobble...
-            if (vehicle.Parts.StageList.ActiveStage > 0 && !GetStageHasFuel() && diff.Seconds() > 0.5)
+            if (vehicle.Parts.SequenceList.ActiveSequence > 0 && !GetSequenceHasFuel() && diff.Seconds() > 0.5)
             {
                 LastTransitionTime = Universe.GetElapsedSimTime();
-                Stage stage = NextStage();
+                NextStequence();
             }
             // Wait for ignition to get clear of previous stage
-            else if (GetStageHasFuel() && diff.Seconds() > 1.0)
+            else if (GetSequenceHasFuel() && diff.Seconds() > 1.0)
             {
                 TimeToApoapsisTarget = (int)GetApoapsisTime();
                 StartPhaseHold(vehicle); // back to hold mode
@@ -447,7 +447,8 @@ namespace NovaTec.GravityTurnMod
 
         public void CalculateStats()
         {
-            if (ControlledVehicle == null || GetCurrentStage() == null || !GetCurrentStage().ContainsEngine || ControlledVehicle.NavBallData.DeltaVInVacuum <= 0)
+            // TODO: fix ContainsEngine
+            if (ControlledVehicle == null || GetCurrentSequence() == null || /*!GetCurrentSequence().ContainsEngine ||*/ ControlledVehicle.NavBallData.DeltaVInVacuum <= 0)
                 return;
 
             if (DeltaVAtLast < ControlledVehicle.NavBallData.DeltaVInVacuum)
@@ -457,49 +458,49 @@ namespace NovaTec.GravityTurnMod
             _DeltaVUsed += DeltaVAtLast - ControlledVehicle.NavBallData.DeltaVInVacuum;
             DeltaVAtLast = ControlledVehicle.NavBallData.DeltaVInVacuum;
         }
-        public Stage GetCurrentStage()
+        public Sequence GetCurrentSequence()
         {
             Vehicle vehicle = Program.ControlledVehicle;
-            Stage stage = null;
+            Sequence sequence = null;
 
-            if (vehicle.Parts.StageList.ActiveStage > 0)
+            if (vehicle.Parts.SequenceList.ActiveSequence > 0)
             {
-                stage = vehicle.Parts.StageList.Stages[vehicle.Parts.StageList.ActiveStage - 1];
+                sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             }
-            return stage;
+            return sequence;
         }
-        public Stage NextStage()
+        public Sequence NextStequence()
         {
             Vehicle vehicle = Program.ControlledVehicle;
-            Stage stage = null;
+            Sequence sequence = null;
 
             //Console.WriteLine("Stages: " + vehicle.Parts.StageList.Stages.Length);
-            if (vehicle.Parts.StageList.ActiveStage < 0)
+            if (vehicle.Parts.SequenceList.ActiveSequence <= 0)
             {
-                stage = vehicle.Parts.StageList.Stages[vehicle.Parts.StageList.Stages.Length - 1];
-                vehicle.Parts.StageList.SetActiveStage(stage.StageNumber);
+                sequence = vehicle.Parts.SequenceList.Sequences[0];
+                vehicle.Parts.SequenceList.SetActiveSequence(sequence.Number);
             }
-            else if (vehicle.Parts.StageList.ActiveStage > 0)
+            else if (vehicle.Parts.SequenceList.ActiveSequence > 0)
             {
                 vehicle.SetEnum(VehicleEngine.MainShutdown);
-                vehicle.Parts.StageList.ActivateNextStage(vehicle);
+                vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
             }
-            if (vehicle.Parts.StageList.ActiveStage > 0)
+            if (vehicle.Parts.SequenceList.ActiveSequence > 0)
             {
-                stage = vehicle.Parts.StageList.Stages[vehicle.Parts.StageList.Stages.Length - 1];
-                Console.WriteLine("Activated stage: " + vehicle.Parts.StageList.ActiveStage);
-                if (stage.ContainsEngine)
+                Console.WriteLine("Activated sequence: " + vehicle.Parts.SequenceList.ActiveSequence);
+
+                if (GetEngineControllers().Count > 0 )
                     vehicle.SetEnum(VehicleEngine.MainIgnite);
             }
 
-            return stage;
+            return sequence;
         }
 
-        public float GetFuelInStage()
+        public float GetFuelInSequence()
         {
             Vehicle vehicle = Program.ControlledVehicle;
-            Stage stage = vehicle.Parts.StageList.Stages[vehicle.Parts.StageList.ActiveStage - 1];
-            foreach (Part p in stage.Parts)
+            Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
+            foreach (Part p in sequence.Parts)
             {
                 Span<Tank> tanks = p.SubtreeModules.Get<Tank>();
                 if (tanks.Length > 0)
@@ -515,11 +516,11 @@ namespace NovaTec.GravityTurnMod
         public ArrayList GetEngineControllers()
         {
             Vehicle vehicle = Program.ControlledVehicle;
-            if (vehicle == null || vehicle.Parts.StageList.ActiveStage < 1) return null;
+            if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return null;
 
-            Stage stage = vehicle.Parts.StageList.Stages[vehicle.Parts.StageList.ActiveStage - 1];
+            Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             ArrayList engines = new ArrayList();
-            foreach (Part p in stage.Parts)
+            foreach (Part p in sequence.Parts)
             {
                 engines.AddRange(p.SubtreeModules.Get<EngineController>().ToArray());
             }
@@ -528,11 +529,11 @@ namespace NovaTec.GravityTurnMod
         public ArrayList GetFuelTanks()
         {
             Vehicle vehicle = Program.ControlledVehicle;
-            if (vehicle == null || vehicle.Parts.StageList.ActiveStage < 1) return null;
+            if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return null;
 
-            Stage stage = vehicle.Parts.StageList.Stages[vehicle.Parts.StageList.ActiveStage - 1];
+            Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             ArrayList tanks = new ArrayList();
-            foreach (Part p in stage.Parts)
+            foreach (Part p in sequence.Parts)
             {
                 tanks.AddRange(p.SubtreeModules.Get<Tank>().ToArray());
             }
@@ -541,10 +542,10 @@ namespace NovaTec.GravityTurnMod
         public Tank GetFuelTank()
         {
             Vehicle vehicle = Program.ControlledVehicle;
-            if (vehicle == null || vehicle.Parts.StageList.ActiveStage < 1) return null;
+            if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return null;
 
-            Stage stage = vehicle.Parts.StageList.Stages[vehicle.Parts.StageList.ActiveStage - 1];
-            foreach (Part p in stage.Parts)
+            Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
+            foreach (Part p in sequence.Parts)
             {
                 Span<Tank> tanks = p.SubtreeModules.Get<Tank>();
                 if (tanks.Length > 0)
@@ -556,10 +557,11 @@ namespace NovaTec.GravityTurnMod
             }
             return null;
         }
-        public bool GetStageHasFuel()
+        public bool GetSequenceHasFuel()
         {
             Vehicle vehicle = Program.ControlledVehicle;
-            if (vehicle == null || vehicle.Parts.StageList.ActiveStage < 1) return false;
+            if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return false;
+
             bool hasFuel = false;
             ArrayList engines = GetEngineControllers();
             if (engines != null)

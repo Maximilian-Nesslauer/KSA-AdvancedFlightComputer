@@ -83,7 +83,7 @@ namespace NovaTec.GravityTurnMod
                     }
                     if (ImGui.MenuItem("Stage"))
                     {
-                        Controller.NextStage();
+                        Controller.NextStequence();
                     }
                     if (ImGui.MenuItem("Throttle DOWN") && vehicle.UpdateTask != null)
                     {
@@ -205,7 +205,7 @@ namespace NovaTec.GravityTurnMod
                 
                 ImGui.Separator();
                 ImGui.Text("Burn dV:              " + Controller.DeltaVUsed.ToString("n0") + "m/s");
-                //ImGui.Text(String.Format("ActiveStage:          {0} of {1} / {2}", vehicle.Parts.StageList.ActiveStage, vehicle.Parts.StageList.Count, vehicle.Parts.StageList.Stages.Length));
+                ImGui.Text(String.Format("ActiveStage:          {0} of {1} / {2}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count, vehicle.Parts.SequenceList.Sequences.Length));
                 //ImGui.Text("Throttle:             " + vehicle.GetManualThrottle() * 100);
                 //ImGui.Text("Atmosphere:          " + (Controller.GetAtmosphereHeight()/1000).ToString("n1") + "km");
                 ImGui.Text("Roll:                 " + Controller.GetRoll() + "°");
@@ -245,7 +245,7 @@ namespace NovaTec.GravityTurnMod
                         }
                     }
                 }
-                //ImGui.Text("hasFuel: " + Controller.GetStageHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
+                //ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
                 //ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);
 
 
