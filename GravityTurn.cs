@@ -205,7 +205,7 @@ namespace NovaTec.GravityTurnMod
                 
                 ImGui.Separator();
                 ImGui.Text("Burn dV:              " + Controller.DeltaVUsed.ToString("n0") + "m/s");
-                ImGui.Text(String.Format("ActiveStage:          {0} of {1} / {2}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count, vehicle.Parts.SequenceList.Sequences.Length));
+                ImGui.Text(String.Format("Stage Sequence:       {0} of {1}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count));
                 //ImGui.Text("Throttle:             " + vehicle.GetManualThrottle() * 100);
                 //ImGui.Text("Atmosphere:          " + (Controller.GetAtmosphereHeight()/1000).ToString("n1") + "km");
                 ImGui.Text("Roll:                 " + Controller.GetRoll() + "°");
@@ -228,6 +228,7 @@ namespace NovaTec.GravityTurnMod
                 ArrayList tanks = Controller.GetFuelTanks();
                 if (tanks != null)
                 {
+                    ImGui.Text("Fuel: " + tanks.Count);
                     ReadOnlySpan<MoleState> states = vehicle.Parts.Moles.States;
                     foreach (Tank t in tanks)
                     {

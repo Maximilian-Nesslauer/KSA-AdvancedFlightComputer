@@ -34,13 +34,13 @@ namespace NovaTec.GravityTurnMod
         public double TargetAltitude { get; set; } = 280.0;
         */
         public double InitialPitch { get; set; } = 12.0;
-        public double InitialSpeed { get; set; } = 80.0;
-        public int TimeToApoapsisStart { get; set; } = 90;
-        public int TimeToApoapsisEnd { get; set; } = 90;
-        public int TimeToApoapsisTarget { get; set; } = 90;
+        public double InitialSpeed { get; set; } = 70.0;
+        public int TimeToApoapsisStart { get; set; } = 80;
+        public int TimeToApoapsisEnd { get; set; } = 80;
+        public int TimeToApoapsisTarget { get; set; } = 80;
         public double TargetAltitude { get; set; } = 280.0;
         public double TargetInclination { get; set; } = 0.0;
-        public bool UseWarp { get; set; } = false;
+        public bool UseWarp { get; set; } = true;
 
         public double DeltaVUsed { get { return _DeltaVUsed; } }
         public enum PhaseEnum
@@ -125,11 +125,11 @@ namespace NovaTec.GravityTurnMod
             // hack to simulate lower TWR engines
             if (GetAltitude() < GetAtmosphereHeight())
             {
-                if (vehicle.NavBallData.ThrustWeightRatio > this.DeltaVUsed / 500 + 1.7)
+                if (vehicle.NavBallData.ThrustWeightRatio > this.DeltaVUsed / 600 + 1.75)
                 {
                     ThrottleDown();
                 }
-                else if (vehicle.NavBallData.ThrustWeightRatio < this.DeltaVUsed / 500 + 1.6 && GetApoapsisTime() < TimeToApoapsisStart)
+                else if (vehicle.NavBallData.ThrustWeightRatio < this.DeltaVUsed / 600 + 1.65 && GetApoapsisTime() < TimeToApoapsisStart)
                 {
                     ThrottleUp();
                 }
@@ -228,40 +228,53 @@ namespace NovaTec.GravityTurnMod
                 didReachTargetApoapsis = true;
                 ThrottleDown();
             }
-            if (GetApoapsisTime() < TimeToApoapsisTarget-1 && GetApoapsisTime() > TimeToApoapsisStart && diff < 0)
-            {
-                double pitch = (double)Program.AttitudePitch.Current;
-                if (fwdPitch.IsNearlyZero())
-                    fwdPitch = pitch + (TimeToApoapsisTarget - GetApoapsisTime()) / 2;
-                //double3 target = new double3(Math.PI / 2 * 0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 45, 0);
-                double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
-                vehicle.FlightComputer.CustomAttitudeTarget = target;
-                vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
-                ThrottleUp();
-            }
+
             if (GetApoapsisTime() > TimeToApoapsisTarget + 5 && diff > 0)
                 TimeToApoapsisTarget = (int)GetApoapsisTime();
             if (GetApoapsisTime() < TimeToApoapsisTarget)
                 ThrottleUp();
 
-
-
-            // if tta is decreasing with full throttle then pitch up
-            if (GetApoapsisTime() < TimeToApoapsisStart - 1 && vehicle.GetManualThrottle() >= 1 && diff < 0)
+            if (GetCurrentSequence().Number > 1)
             {
-                double pitch = (double)Program.AttitudePitch.Current;
-                if (fwdPitch.IsNearlyZero())
-                    fwdPitch = pitch + (TimeToApoapsisStart - GetApoapsisTime())/2;
-                //double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 20, 0);
-                double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
-                vehicle.FlightComputer.CustomAttitudeTarget = target;
-                vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
-            }
-            else if (GetApoapsisTime() > (TimeToApoapsisTarget + TimeToApoapsisTarget)/2 && diff > 0)
-            {
-                fwdPitch = 0;
-                if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Forward)
-                    vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Forward);
+                if (GetApoapsisTime() < TimeToApoapsisTarget - 1 && GetApoapsisTime() > TimeToApoapsisStart && diff < 0)
+                {
+                    double pitch = (double)Program.AttitudePitch.Current;
+                    if (fwdPitch.IsNearlyZero() && (TimeToApoapsisTarget - GetApoapsisTime()) / 2 < 0)
+                        fwdPitch = pitch + (TimeToApoapsisTarget - GetApoapsisTime()) / 2;
+                    //double3 target = new double3(Math.PI / 2 * 0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 45, 0);
+                    double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
+                    vehicle.FlightComputer.CustomAttitudeTarget = target;
+                    vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
+                    ThrottleUp();
+                }
+
+                // if tta is decreasing with full throttle then pitch up
+                if (GetApoapsisTime() < TimeToApoapsisStart - 1 && vehicle.GetManualThrottle() >= 1 && diff < 0)
+                {
+                    double pitch = (double)Program.AttitudePitch.Current;
+                    if (fwdPitch.IsNearlyZero() && (TimeToApoapsisStart - GetApoapsisTime()) > 0)
+                        fwdPitch = pitch - (TimeToApoapsisStart - GetApoapsisTime()) / 3;
+                    //double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 20, 0);
+                    double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
+                    vehicle.FlightComputer.CustomAttitudeTarget = target;
+                    vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
+                }
+                else if (GetApoapsisTime() < TimeToApoapsisStart - 1 && vehicle.GetManualThrottle() >= 1 && diff > 0)
+                {
+                    double pitch = (double)Program.AttitudePitch.Current;
+                    if (fwdPitch.IsNearlyZero() && (TimeToApoapsisStart - GetApoapsisTime()) > 0)
+                        fwdPitch = pitch - (TimeToApoapsisStart - GetApoapsisTime()) / 3;
+                    //double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 20, 0);
+                    double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
+                    vehicle.FlightComputer.CustomAttitudeTarget = target;
+                    vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
+                }
+                else if (GetApoapsisTime() > (TimeToApoapsisTarget + TimeToApoapsisTarget) / 2 && diff > 0)
+                {
+                    fwdPitch = 0;
+                    if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Forward)
+                        vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Forward);
+                }
             }
 
             // transition to coast if AP target altitude is reached.
@@ -302,7 +315,8 @@ namespace NovaTec.GravityTurnMod
             // Wait for ignition to get clear of previous stage
             else if (GetSequenceHasFuel() && diff.Seconds() > 1.0)
             {
-                TimeToApoapsisTarget = (int)GetApoapsisTime();
+                if ((int)GetApoapsisTime() > TimeToApoapsisStart)
+                    TimeToApoapsisTarget = (int)GetApoapsisTime();
                 StartPhaseHold(vehicle); // back to hold mode
             }
 
