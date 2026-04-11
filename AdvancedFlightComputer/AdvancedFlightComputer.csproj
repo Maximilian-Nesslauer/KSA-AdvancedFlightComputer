@@ -14,23 +14,23 @@
 
   <ItemGroup>
     <Reference Include="KSA">
-      <HintPath>..\..\Kitten Space Agency\KSA.dll</HintPath>
+      <HintPath>..\..\..\refs\game\KSA.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Core.Numerics">
-      <HintPath>..\..\Kitten Space Agency\Brutal.Core.Numerics.dll</HintPath>
+      <HintPath>..\..\..\refs\game\Brutal.Core.Numerics.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Core.Logging">
-      <HintPath>..\..\Kitten Space Agency\Brutal.Core.Logging.dll</HintPath>
+      <HintPath>..\..\..\refs\game\Brutal.Core.Logging.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="CommunityToolkit.HighPerformance">
-      <HintPath>..\..\Kitten Space Agency\CommunityToolkit.HighPerformance.dll</HintPath>
+      <HintPath>..\..\..\refs\game\CommunityToolkit.HighPerformance.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.ImGui">
-      <HintPath>..\..\Kitten Space Agency\Brutal.ImGui.dll</HintPath>
+      <HintPath>..\..\..\refs\game\Brutal.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -47,7 +47,7 @@
 
   <Target Name="CopyToMods" AfterTargets="Build">
     <PropertyGroup>
-      <ModDir>..\..\Kitten Space Agency\Content\AdvancedFlightComputer\</ModDir>
+      <ModDir>..\..\..\refs\game\Content\AdvancedFlightComputer\</ModDir>
     </PropertyGroup>
     <MakeDir Directories="$(ModDir)Patches\" />
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
