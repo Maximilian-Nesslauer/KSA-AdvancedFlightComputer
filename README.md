@@ -16,10 +16,6 @@ Note: At the extreme dV required for interstellar objects, the impulsive burn ap
 and the patched-conic trajectory diverges ~0.7 AU from the Lambert prediction.
 Mid-course corrections will be needed in practice.
 
-### Auto-Staging
-
-Adds an AUTOSTAGE toggle button to the BurnControl gauge panel. When enabled, automatically activates the next stage whenever engines run out of propellant. Works during auto-burns (continues the burn instead of aborting) and also manual burns.
-
 ### Stage Info Display
 
 Extends the Staging window with per-stage information:

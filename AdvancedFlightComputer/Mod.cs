@@ -1,6 +1,5 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoRemoveBurn;
-using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.OberthMultiPass;
@@ -21,20 +20,6 @@ public class Mod
 
     public static bool DebugMode => DebugConfig.Any;
 
-    /// <summary>
-    /// Runs during Mod.PrepareSystems(), BEFORE the game processes Gauges.xml.
-    /// Injects our custom enum into the gauge button lookup so that
-    /// BurnControlPatch.xml can resolve Action="AfcAutoStage" during OnDataLoad.
-    /// </summary>
-    [StarMapImmediateLoad]
-    public void OnImmediateLoad(KSA.Mod mod)
-    {
-        if (DebugConfig.AutoStage)
-            DefaultCategory.Log.Debug("[AFC] ImmediateLoad: ensuring enum injection...");
-
-        AutoStage.InjectEnumLookup();
-    }
-
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
     {
@@ -51,11 +36,6 @@ public class Mod
             HyperbolicTargets.ApplyPatches(_harmony);
         else
             DefaultCategory.Log.Warning("[AFC] HyperbolicTargets disabled - reflection targets not found.");
-
-        if (GameReflection.ValidateAutoStage())
-            AutoStage.ApplyPatches(_harmony);
-        else
-            DefaultCategory.Log.Warning("[AFC] AutoStage disabled - reflection targets not found.");
 
         if (GameReflection.ValidateStageInfo())
             StageInfoPanel.ApplyPatches(_harmony);
@@ -84,11 +64,11 @@ public class Mod
     {
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
-        AutoStage.Enabled = false;
         AutoRemoveBurn.Enabled = false;
         MultiPassState.Reset();
         OberthUI.Reset();
-        Patch_AutoStageExecution.Reset();
+        Patch_StockPlanWindow.Reset();
+        OberthStockIntegration.Reset();
         StageAnalyzerDebug.Reset();
         StageAnalysisCache.Reset();
         StageInfoSettings.Reset();

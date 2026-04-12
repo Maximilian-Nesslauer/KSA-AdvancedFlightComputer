@@ -32,13 +32,6 @@ static class GameReflection
 
     #endregion
 
-    #region AutoStage
-
-    public static readonly FieldInfo? GaugeButton_enumLookup =
-        AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumLookup");
-
-    #endregion
-
     #region StageInfo
 
     public static readonly Type? StagingWindowType =
@@ -71,6 +64,8 @@ static class GameReflection
         AccessTools.Field(typeof(TransferPlanner), "_showPlanWindow");
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo");
+    public static readonly FieldInfo? TransferPlanner_displaySelectedTransfer =
+        AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
 
     #endregion
 
@@ -96,15 +91,6 @@ static class GameReflection
             ("TransferPlanner._selectedEntry",     TransferPlanner_selectedEntry),
         };
         return ValidateTargets("HyperbolicTargets", targets);
-    }
-
-    public static bool ValidateAutoStage()
-    {
-        var targets = new (string name, object? target)[]
-        {
-            ("GaugeButtonFlightComputer._enumLookup", GaugeButton_enumLookup),
-        };
-        return ValidateTargets("AutoStage", targets);
     }
 
     public static bool ValidateStageInfo()
@@ -141,6 +127,7 @@ static class GameReflection
             ("TransferPlanner._correctionTime",           TransferPlanner_correctionTime),
             ("TransferPlanner._showPlanWindow",           TransferPlanner_showPlanWindow),
             ("TransferPlanner.SetTransferInfo",          TransferPlanner_SetTransferInfo),
+            ("TransferPlanner._displaySelectedTransfer", TransferPlanner_displaySelectedTransfer),
         };
         return ValidateTargets("ManeuverTools", targets);
     }

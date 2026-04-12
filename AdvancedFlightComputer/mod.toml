@@ -1,5 +1,5 @@
 name = "AdvancedFlightComputer"
-patches = [ "Patches/HyperbolicBodies.xml", "Patches/BurnControlPatch.xml" ]
+patches = [ "Patches/HyperbolicBodies.xml" ]
 
 [StarMap]
 EntryAssembly = "AdvancedFlightComputer"
