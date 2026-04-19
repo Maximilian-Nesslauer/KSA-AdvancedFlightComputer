@@ -1,10 +1,10 @@
 # AdvancedFlightComputer [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+> **Status: outdated.** Last validated against KSA v2026.2.38.3713. The current codebase does not build against recent game versions due to several game updates. I will update / fix AFC once i have more time. The Stage Info portion of this mod has moved to its own [StageInfo mod](https://github.com/Maximilian-Nesslauer/KSA-StageInfo) and is actively maintained there.
+
 Improved orbital maneuver planning and execution for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency).
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
-
-Validated against KSA build version 2026.2.38.3713.
 
 ## Features
 
@@ -18,20 +18,7 @@ Mid-course corrections will be needed in practice.
 
 ### Stage Info Display
 
-Extends the Staging window with per-stage information:
-
-- Fuel progress bar with percentage on each stage header
-- Delta V, TWR, Burn Time, and ISP (visible when a stage is expanded)
-- Total Delta V and Burn Time in a footer below the stage list
-- Display mode selector: Auto (uses current atmospheric conditions), VAC, ASL, VAC + ASL (dual display), and Planning (choose any celestial body for surface gravity and atmospheric pressure)
-
-### Burn-Stage Analysis
-
-When a burn is planned, the Staging window shows burn-aware information:
-
-- Per-stage burn allocation with color-coded gradient (green = barely used, yellow = half consumed, red = fully consumed)
-- "INSUFFICIENT" warning when planned Delta V exceeds available Delta V
-- Corrected multi-stage burn duration on the BURN TIME and START BURN IN gauge rollers (the game only computes single-stage burn time)
+Moved to its own mod: [StageInfo](https://github.com/Maximilian-Nesslauer/KSA-StageInfo).
 
 ### Finite Burn Correction (planned)
 
