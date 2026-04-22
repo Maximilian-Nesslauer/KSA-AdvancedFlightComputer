@@ -32,29 +32,6 @@ static class GameReflection
 
     #endregion
 
-    #region AutoStage
-
-    public static readonly FieldInfo? GaugeButton_enumLookup =
-        AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumLookup");
-
-    #endregion
-
-    #region StageInfo
-
-    public static readonly Type? StagingWindowType =
-        typeof(Staging).GetNestedType("StagingWindow", BindingFlags.NonPublic);
-
-    public static readonly MethodInfo? StagingWindow_DrawContent =
-        StagingWindowType?.GetMethod("DrawContent", BindingFlags.Public | BindingFlags.Instance);
-
-    public static readonly MethodInfo? StagingWindow_DrawComponentOpen =
-        StagingWindowType?.GetMethod("DrawComponent", BindingFlags.NonPublic | BindingFlags.Instance);
-
-    public static readonly MethodInfo? FlightComputer_UpdateBurnTarget =
-        AccessTools.Method(typeof(FlightComputer), "UpdateBurnTarget");
-
-    #endregion
-
     #region ManeuverTools
 
     public static readonly FieldInfo? TransferPlanner_transferType =
@@ -89,26 +66,6 @@ static class GameReflection
             ("TransferPlanner._selectedEntry",     TransferPlanner_selectedEntry),
         };
         return ValidateTargets("HyperbolicTargets", targets);
-    }
-
-    public static bool ValidateAutoStage()
-    {
-        var targets = new (string name, object? target)[]
-        {
-            ("GaugeButtonFlightComputer._enumLookup", GaugeButton_enumLookup),
-        };
-        return ValidateTargets("AutoStage", targets);
-    }
-
-    public static bool ValidateStageInfo()
-    {
-        var targets = new (string name, object? target)[]
-        {
-            ("Staging.StagingWindow",       StagingWindowType),
-            ("StagingWindow.DrawContent",   StagingWindow_DrawContent),
-            ("StagingWindow.DrawComponent", StagingWindow_DrawComponentOpen),
-        };
-        return ValidateTargets("StageInfo", targets);
     }
 
     public static bool ValidateManeuverTools()
