@@ -162,11 +162,11 @@ static class Patch_DrawPlanWindow
     private static Vehicle? DrawSourceDropdown()
     {
         var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!.GetValue(null)!;
-        int currentCount = Universe.CurrentSystem!.Vehicles.GetList().Count;
+        int currentCount = Universe.CurrentSystem!.CountOf<Vehicle>();
         if (_vehicleList == null || currentCount != _lastVehicleCount)
         {
             _vehicleList = new List<TransferObject>();
-            foreach (Vehicle v in Universe.CurrentSystem.Vehicles.GetList())
+            foreach (Vehicle v in Universe.CurrentSystem.All.OfType<Vehicle>())
                 _vehicleList.Add(new TransferObject(v));
             _lastVehicleCount = currentCount;
         }
@@ -341,7 +341,8 @@ static class Patch_DrawPlanWindow
         {
             return OrbitManeuvers.ComputeSetInclination(
                 orbit, ManeuverToolsWindow.TargetInclinationRad,
-                ManeuverToolsWindow.UseDescendingNode, now);
+                ManeuverToolsWindow.UseDescendingNode, now,
+                ManeuverToolsWindow.InclinationRef);
         }
 
         return null;
