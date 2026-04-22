@@ -26,8 +26,12 @@ static class ManeuverToolsWindow
     public static double TargetAltitude;
     public static bool UseDescendingNode;
     public static double TargetInclinationRad;
+    public static OrbitManeuvers.InclinationReference InclinationRef =
+        OrbitManeuvers.InclinationReference.Equatorial;
 
     #endregion
+
+    private static readonly string[] InclinationRefLabels = { "Ecliptic", "Equatorial" };
 
     #region Internal State
 
@@ -232,7 +236,32 @@ static class ManeuverToolsWindow
     {
         Orbit orbit = source.Orbit;
         SimTime now = Universe.GetElapsedSimTime();
-        double currentIncDeg = orbit.Inclination * (180.0 / Math.PI);
+
+        ImGui.Text("Reference Plane:");
+        ImGui.SameLine(220f);
+        ImGui.PushItemWidth(-1f);
+        int refIdx = (int)InclinationRef;
+        if (ImGui.BeginCombo("##incRef"u8, InclinationRefLabels[refIdx]))
+        {
+            for (int i = 0; i < InclinationRefLabels.Length; i++)
+            {
+                bool isSelected = i == refIdx;
+                if (ImGui.Selectable(InclinationRefLabels[i], isSelected))
+                {
+                    var newRef = (OrbitManeuvers.InclinationReference)i;
+                    if (newRef != InclinationRef)
+                    {
+                        InclinationRef = newRef;
+                        _defaultsInitialized = false;
+                    }
+                }
+            }
+            ImGui.EndCombo();
+        }
+        ImGui.PopItemWidth();
+
+        double currentIncDeg = OrbitManeuvers.GetInclinationAgainst(orbit, InclinationRef)
+            * (180.0 / Math.PI);
 
         if (!_defaultsInitialized)
         {
@@ -240,11 +269,11 @@ static class ManeuverToolsWindow
             _defaultsInitialized = true;
         }
 
-        ImGui.Text("Target Inclination (deg):");
+        ImGui.Text("Target Inclination:");
         ImGui.SameLine(220f);
         ImGui.PushItemWidth(-1f);
         ImGui.InputDouble("##incInput"u8, ref _inputInclinationDeg, 1.0, 10.0,
-            default(ImString), ImGuiInputTextFlags.CharsDecimal);
+            "%.2f"u8, ImGuiInputTextFlags.CharsDecimal);
         _inputInclinationDeg = Math.Clamp(_inputInclinationDeg, 0.0, 180.0);
         ImGui.PopItemWidth();
         TargetInclinationRad = _inputInclinationDeg * (Math.PI / 180.0);
@@ -262,10 +291,12 @@ static class ManeuverToolsWindow
             return;
         }
 
-        var (_, _, anTime, dnTime) = OrbitManeuvers.GetEquatorialNodes(orbit, now);
+        var (_, _, anTime, dnTime) = OrbitManeuvers.GetReferenceNodes(orbit, now, InclinationRef);
 
-        var anResult = OrbitManeuvers.ComputeSetInclination(orbit, TargetInclinationRad, false, now);
-        var dnResult = OrbitManeuvers.ComputeSetInclination(orbit, TargetInclinationRad, true, now);
+        var anResult = OrbitManeuvers.ComputeSetInclination(
+            orbit, TargetInclinationRad, false, now, InclinationRef);
+        var dnResult = OrbitManeuvers.ComputeSetInclination(
+            orbit, TargetInclinationRad, true, now, InclinationRef);
 
         DrawNodeSelection(orbit, anTime, dnTime, anResult, dnResult);
     }
@@ -321,7 +352,7 @@ static class ManeuverToolsWindow
 
     private static void DrawTargetSelector(Vehicle source)
     {
-        int currentCount = Universe.CurrentSystem?.All.GetList().Count ?? 0;
+        int currentCount = Universe.CurrentSystem?.All.Count ?? 0;
         if (_targetList == null || currentCount != _lastObjectCount)
         {
             _targetList = BuildTargetList(source);
@@ -354,7 +385,7 @@ static class ManeuverToolsWindow
         if (parent == null || Universe.CurrentSystem == null)
             return list;
 
-        foreach (Astronomical astro in Universe.CurrentSystem.All.GetList())
+        foreach (Astronomical astro in Universe.CurrentSystem.All.AsSpan())
         {
             if (astro == source) continue;
             if (astro is StellarBody) continue;
@@ -403,7 +434,7 @@ static class ManeuverToolsWindow
         ImGui.SameLine(220f);
         ImGui.PushItemWidth(-1f);
         ImGui.InputDouble("##altInput"u8, ref _inputAltitudeKm, 10.0, 100.0,
-            default(ImString), ImGuiInputTextFlags.CharsDecimal);
+            "%.2f"u8, ImGuiInputTextFlags.CharsDecimal);
         if (_inputAltitudeKm < 0.0)
             _inputAltitudeKm = 0.0;
         ImGui.PopItemWidth();

@@ -14,6 +14,34 @@ static class OrbitManeuvers
     public record struct ManeuverResult(double3 DvCci, double3 DvVlf, SimTime BurnTime);
 
     /// <summary>
+    /// Reference plane for inclination measurement.
+    /// </summary>
+    public enum InclinationReference { Ecliptic, Equatorial }
+
+    /// <summary>
+    /// Returns the reference plane normal in the CCI frame for the given orbit.
+    /// CCI Z-axis is the ecliptic normal in KSA; the equatorial normal is the
+    /// parent body's rotation axis (CCE Z-axis transformed to CCI).
+    /// </summary>
+    public static double3 GetReferenceNormalCci(Orbit orbit, InclinationReference reference)
+    {
+        if (reference == InclinationReference.Ecliptic)
+            return double3.UnitZ;
+        return double3.UnitZ.Transform(orbit.Parent.GetCce2Cci());
+    }
+
+    /// <summary>
+    /// Returns the orbit's inclination relative to the chosen reference plane.
+    /// For Ecliptic this equals Orbit.Inclination.
+    /// </summary>
+    public static double GetInclinationAgainst(Orbit orbit, InclinationReference reference)
+    {
+        double3 referenceNormal = GetReferenceNormalCci(orbit, reference);
+        double3 orbitNormal = orbit.GetOrbitNormalCci();
+        return MathEx.SafeAcos(double3.Dot(referenceNormal, orbitNormal));
+    }
+
+    /// <summary>
     /// Computes a prograde/retrograde burn at the next apoapsis to set periapsis
     /// to a target altitude above the parent body's surface.
     /// </summary>
@@ -121,26 +149,26 @@ static class OrbitManeuvers
 
     /// <summary>
     /// Computes a plane-change burn at the ascending or descending node (relative
-    /// to the parent body's equatorial plane) to set the orbit's inclination to
-    /// a specific angle. Preserves orbital speed and LAN.
+    /// to the chosen reference plane) to set the orbit's inclination to a specific
+    /// angle. Preserves orbital speed.
     /// </summary>
     public static ManeuverResult? ComputeSetInclination(
-        Orbit orbit, double targetInclinationRad, bool useDescendingNode, SimTime now)
+        Orbit orbit, double targetInclinationRad, bool useDescendingNode, SimTime now,
+        InclinationReference reference)
     {
         targetInclinationRad = Math.Clamp(targetInclinationRad, 0.0, Math.PI);
 
-        double currentInc = orbit.Inclination;
+        double currentInc = GetInclinationAgainst(orbit, reference);
         double incDiff = Math.Abs(targetInclinationRad - currentInc);
         if (incDiff < 0.001)
             return null;
 
         double3 vehicleNormal = orbit.GetOrbitNormalCci();
-        double3 equatorialNormal = new double3(0, 0, 1);
+        double3 referenceNormal = GetReferenceNormalCci(orbit, reference);
 
-        // AN/DN relative to equatorial plane
-        double3 nodeDir = double3.Cross(equatorialNormal, vehicleNormal).NormalizeOrZero();
+        double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
         if (nodeDir.LengthSquared() < 1e-12)
-            nodeDir = new double3(1, 0, 0); // fallback for equatorial orbits
+            nodeDir = new double3(1, 0, 0); // fallback for coplanar orbits
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
         TrueAnomaly nodeTa = useDescendingNode
@@ -150,12 +178,11 @@ static class OrbitManeuvers
         SimTime nodeTime = orbit.TimeOfTrueAnomaly(nodeTa, now);
         StateVectors sv = orbit.GetStateVectorsAt(nodeTime);
 
-        // Target normal: same LAN, new inclination
-        double lan = orbit.LongitudeOfAscendingNode;
-        double3 targetNormal = new double3(
-            Math.Sin(targetInclinationRad) * Math.Sin(lan),
-            -Math.Sin(targetInclinationRad) * Math.Cos(lan),
-            Math.Cos(targetInclinationRad));
+        // Target normal: rotate reference normal around the node line by target
+        // inclination. This preserves the AN/DN line and sets the inclination
+        // relative to the reference plane directly.
+        doubleQuat tilt = QuaternionEx.AngleAxis(targetInclinationRad, nodeDir);
+        double3 targetNormal = referenceNormal.Transform(tilt);
 
         double3 rotAxis = double3.Cross(vehicleNormal, targetNormal).NormalizeOrZero();
         if (rotAxis.LengthSquared() < 1e-12)
@@ -171,15 +198,15 @@ static class OrbitManeuvers
     }
 
     /// <summary>
-    /// Computes AN/DN true anomalies and times relative to the equatorial plane.
-    /// Used by the UI to display both node options for Set Inclination.
+    /// Computes AN/DN true anomalies and times relative to the chosen reference
+    /// plane. Used by the UI to display both node options for Set Inclination.
     /// </summary>
     public static (TrueAnomaly anTa, TrueAnomaly dnTa, SimTime anTime, SimTime dnTime)
-        GetEquatorialNodes(Orbit orbit, SimTime now)
+        GetReferenceNodes(Orbit orbit, SimTime now, InclinationReference reference)
     {
         double3 vehicleNormal = orbit.GetOrbitNormalCci();
-        double3 equatorialNormal = new double3(0, 0, 1);
-        double3 nodeDir = double3.Cross(equatorialNormal, vehicleNormal).NormalizeOrZero();
+        double3 referenceNormal = GetReferenceNormalCci(orbit, reference);
+        double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
 
         if (nodeDir.LengthSquared() < 1e-12)
             nodeDir = new double3(1, 0, 0);
