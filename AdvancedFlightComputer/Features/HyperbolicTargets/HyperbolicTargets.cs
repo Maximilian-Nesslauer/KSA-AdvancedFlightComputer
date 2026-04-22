@@ -29,7 +29,7 @@ static class HyperbolicTargets
     /// </summary>
     public static void ApplyPatches(Harmony harmony)
     {
-        harmony.CreateClassProcessor(typeof(Patch_GetPlanetList)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_PopulateWithPlanets)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_HohmannFlight)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_SetTransferInfo)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_AlignmentTime)).Patch();

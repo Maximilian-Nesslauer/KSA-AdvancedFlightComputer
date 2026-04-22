@@ -8,13 +8,15 @@ using KSA;
 namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 
 /// <summary>
-/// The original GetPlanetList filters out eccentricity >= 1. We let it
-/// run for bound bodies, then append hyperbolic ones it skipped.
+/// PopulateWithPlanets filters out eccentricity >= 1. We let the stock logic
+/// run, then append hyperbolic bodies into the span.
 /// </summary>
-[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.GetPlanetList))]
-static class Patch_GetPlanetList
+[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.PopulateWithPlanets),
+    new Type[] { typeof(Span<TransferObject>), typeof(int), typeof(bool) },
+    new ArgumentType[] { ArgumentType.Normal, ArgumentType.Ref, ArgumentType.Normal })]
+static class Patch_PopulateWithPlanets
 {
-    static void Postfix(bool getAll, ref List<TransferObject> __result)
+    static void Postfix(Span<TransferObject> list, ref int count, bool getAll)
     {
         if (getAll) return;
 
@@ -27,17 +29,20 @@ static class Patch_GetPlanetList
             if (star == null) return;
 
             var existingIds = new HashSet<string>();
-            foreach (var entry in __result)
-                if (entry.Body != null)
-                    existingIds.Add(entry.Body.Id);
-
-            foreach (Astronomical astro in Universe.CurrentSystem!.All.GetList())
+            for (int i = 0; i < count; i++)
             {
-                if (astro is not Celestial celestial) continue;
-                if (astro is StellarBody) continue;
-                if (celestial.Orbit == null || celestial.Orbit.Eccentricity < 1.0) continue;
-                if (existingIds.Contains(celestial.Id)) continue;
+                Astronomical? body = list[i].Body;
+                if (body != null)
+                    existingIds.Add(body.Id);
+            }
 
+            ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
+            for (int i = 0; i < all.Length; i++)
+            {
+                if (all[i] is not Celestial celestial) continue;
+                if (celestial.Orbit == null || celestial.Orbit.Eccentricity < 1.0) continue;
+                if (celestial.Id == source.Id || celestial.Id == source.Parent?.Id) continue;
+                if (existingIds.Contains(celestial.Id)) continue;
                 if (celestial.Parent != star) continue;
 
                 if (celestial.SphereOfInfluence <= 0.0 || double.IsNaN(celestial.SphereOfInfluence))
@@ -47,12 +52,13 @@ static class Patch_GetPlanetList
                     continue;
                 }
 
-                __result.Add(new TransferObject(celestial));
+                if (count >= list.Length) break;
+                list[count++] = new TransferObject(celestial);
             }
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] GetPlanetList postfix: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] PopulateWithPlanets postfix: {ex.Message}");
         }
     }
 }
@@ -132,12 +138,11 @@ static class Patch_SetTransferInfo
                 as List<TimeObject>;
             if (timeUnits == null) return;
 
+            Span<char> buf = stackalloc char[64];
             foreach (var unit in timeUnits)
             {
-                string formatted = TimeSpanReference
-                    .FromSeconds(hohmann.Seconds())
-                    .ToNearest(unit.Unit);
-                int wholeDigits = formatted.IndexOfAny(['.', ' ']);
+                Span<char> formatted = TimeSpanReference.ToNearest(unit.Unit, hohmann.Seconds(), buf);
+                int wholeDigits = formatted.IndexOfAny('.', ' ');
                 if (wholeDigits < 0) wholeDigits = formatted.Length;
                 if (wholeDigits <= 3)
                 {
