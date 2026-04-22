@@ -1,8 +1,6 @@
 using AdvancedFlightComputer.Core;
-using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
-using AdvancedFlightComputer.Features.StageInfo;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -15,23 +13,9 @@ public class Mod
 {
     private static Harmony? _harmony;
 
-    private const string TestedGameVersion = "v2026.2.38.3713";
+    private const string TestedGameVersion = "v2026.4.16.4170";
 
     public static bool DebugMode => DebugConfig.Any;
-
-    /// <summary>
-    /// Runs during Mod.PrepareSystems(), BEFORE the game processes Gauges.xml.
-    /// Injects our custom enum into the gauge button lookup so that
-    /// BurnControlPatch.xml can resolve Action="AfcAutoStage" during OnDataLoad.
-    /// </summary>
-    [StarMapImmediateLoad]
-    public void OnImmediateLoad(KSA.Mod mod)
-    {
-        if (DebugConfig.AutoStage)
-            DefaultCategory.Log.Debug("[AFC] ImmediateLoad: ensuring enum injection...");
-
-        AutoStage.InjectEnumLookup();
-    }
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
@@ -50,16 +34,6 @@ public class Mod
         else
             DefaultCategory.Log.Warning("[AFC] HyperbolicTargets disabled - reflection targets not found.");
 
-        if (GameReflection.ValidateAutoStage())
-            AutoStage.ApplyPatches(_harmony);
-        else
-            DefaultCategory.Log.Warning("[AFC] AutoStage disabled - reflection targets not found.");
-
-        if (GameReflection.ValidateStageInfo())
-            StageInfoPanel.ApplyPatches(_harmony);
-        else
-            DefaultCategory.Log.Warning("[AFC] StageInfo disabled - reflection targets not found.");
-
         if (GameReflection.ValidateManeuverTools())
         {
             ManeuverTools.InjectTransferTypes();
@@ -76,13 +50,6 @@ public class Mod
     {
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
-        AutoStage.Enabled = false;
-        Patch_AutoStageExecution.Reset();
-        StageAnalyzerDebug.Reset();
-        StageAnalysisCache.Reset();
-        StageInfoSettings.Reset();
-        CorrectedBurnState.Clear();
-        StageAnalyzer.ResetPools();
         ManeuverToolsWindow.Reset();
         Patch_DrawPlanWindow.Reset();
         LogHelper.Reset();
