@@ -1,33 +1,20 @@
 <Patch>
   <!--
-    Adds Mass and SphereOfInfluence to hyperbolic interstellar objects.
-
-    Mass: Estimated from MeanRadius assuming 1000 kg/m^3 density (rocky/icy mix).
-    The exact value barely matters - at 50+ km/s flyby velocity, gravitational
-    deflection is negligible regardless.
-
-    SphereOfInfluence: Artificial detection radius. The Hill sphere formula
-    (0.9431 * SMA * (m/M)^0.4) produces negative values for hyperbolic orbits
-    because SMA is negative. Setting SOI explicitly bypasses that formula entirely.
-    50,000 km is large enough for the game's encounter detection to work reliably
-    during the RefineBurnTask +/-5% dV sweep.
+    Interstellar comets need Mass and SphereOfInfluence to be targetable
+    by the Transfer Planner.
   -->
 
-  <!-- Oumuamua: r=100m, mass ~ 4.19 Gg (defined in SolSystem.xml) -->
-  <Copy Path="//Comet[@Id='Oumuamua']" Pos="Append">
+  <Copy Path="//InterstellarComet[@Id='Oumuamua']" Pos="Append">
     <Mass Gg="4.19" />
     <SphereOfInfluence Km="50000" />
   </Copy>
 
-  <!-- 2I/Borisov: r=500m, mass ~ 524 Gg (defined in Astronomicals.xml) -->
-  <Copy Path="//Comet[@Id='Borisov']" Pos="Append">
+  <Copy Path="//InterstellarComet[@Id='Borisov']" Pos="Append">
     <Mass Gg="524" />
     <SphereOfInfluence Km="50000" />
   </Copy>
 
-  <!-- 3I/ATLAS: r=500m, mass ~ 524 Gg (defined in Astronomicals.xml) -->
-  <Copy Path="//Comet[@Id='3I_ATLAS']" Pos="Append">
-    <Mass Gg="524" />
+  <Copy Path="//InterstellarComet[@Id='3I_ATLAS']" Pos="Append">
     <SphereOfInfluence Km="50000" />
   </Copy>
 </Patch>
