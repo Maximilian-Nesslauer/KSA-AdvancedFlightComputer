@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
@@ -20,9 +19,17 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// Returns false (skip original) for our types, true for stock types.
 /// </summary>
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
-static class Patch_DrawPlanWindow
+internal static class Patch_DrawPlanWindow
 {
-    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+    // Window placement, kept to match stock TransferPlanner.cs:181-182, 1012-1013.
+    private const float MainWindowOffsetX = 440f;
+    private const float MainWindowOffsetY = 50f;
+    private const float MainWindowWidth = 400f;
+    private const float MainWindowHeight = 600f;
+    private const float FlightPlanWindowOffsetX = 620f;
+    private const float FlightPlanWindowOffsetY = 40f;
+    private const float FlightPlanWindowWidth = 460f;
+    private const float FlightPlanWindowHeight = 620f;
 
     private static Burn? _ourBurn;
     private static OrbitalTransfers.PorkChopEntry? _lastEntry;
@@ -61,9 +68,9 @@ static class Patch_DrawPlanWindow
         CleanupStaleBurn();
 
         ImGui.SetNextWindowPos(
-            inViewport.Position + new float2(inViewport.Size.X - 440, 50f),
+            inViewport.Position + new float2(inViewport.Size.X - MainWindowOffsetX, MainWindowOffsetY),
             ImGuiCond.Appearing, (float2?)null);
-        ImGui.SetNextWindowSize(new float2(400f, 600f), ImGuiCond.Appearing);
+        ImGui.SetNextWindowSize(new float2(MainWindowWidth, MainWindowHeight), ImGuiCond.Appearing);
 
         bool pOpen = (bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!;
         if (!ImGui.Begin("Transfer Planning"u8, ref pOpen,
@@ -209,7 +216,8 @@ static class Patch_DrawPlanWindow
         double timeToNode = maneuver.BurnTime.Seconds() - Universe.GetElapsedSimTime().Seconds();
 
         ImGuiHelper.DrawTextWidget("Required Delta V:"u8,
-            string.Format(Inv, "{0:F1} m/s", dvMag));
+            string.Format(System.Globalization.CultureInfo.InvariantCulture,
+                "{0:F1} m/s", dvMag));
 
         if (timeToNode > 0)
         {
@@ -221,9 +229,10 @@ static class Patch_DrawPlanWindow
     private static void DrawFlightPlanWindow(Viewport inViewport)
     {
         ImGui.SetNextWindowPos(
-            inViewport.Position + new float2(620f, 40f),
+            inViewport.Position + new float2(FlightPlanWindowOffsetX, FlightPlanWindowOffsetY),
             ImGuiCond.Appearing, (float2?)null);
-        ImGui.SetNextWindowSize(new float2(460f, 620f), ImGuiCond.Appearing);
+        ImGui.SetNextWindowSize(new float2(FlightPlanWindowWidth, FlightPlanWindowHeight),
+            ImGuiCond.Appearing);
 
         if (ImGui.Begin("Maneuver Flight Plan"u8, ref _showFlightPlanPreview,
                 ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing))
@@ -259,8 +268,17 @@ static class Patch_DrawPlanWindow
                 OrbitPointCce point = patch.Orbit.GetPointAt(maneuver.BurnTime);
                 _ourBurn = Burn.Create(point, maneuver.BurnTime.Seconds(),
                     maneuver.DvVlf, patch, source);
-                source.FlightComputer.AddBurn(_ourBurn);
                 _ourBurn.IsGizmoActive = false;
+
+                // Stock pattern (TransferPlanner.cs:438-444): the actual
+                // BurnPlan mutation runs at the next frame boundary so it
+                // is sequenced with deletes/updates.
+                InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
+                {
+                    Burn = _ourBurn,
+                    FlightComputer = source.FlightComputer,
+                    AddBurn = true,
+                });
             }
         }
     }
@@ -362,10 +380,10 @@ static class Patch_DrawPlanWindow
 
     private static void HandleWindowClose()
     {
-        GameReflection.TransferPlanner_showPlanWindow!.SetValue(null, false);
-        GameReflection.TransferPlanner_transferCalculated!.SetValue(null, false);
-        GameReflection.TransferPlanner_selectedEntry!.SetValue(null, null);
-        GameReflection.TransferPlanner_transferBurn!.SetValue(null, null);
+        // Use the public setter so stock state (_transferBurn, _correctionBurn,
+        // _selectedEntry, _lambertPatch, _transferCalculated) is cleared too;
+        // setting only _showPlanWindow via reflection would leak that state.
+        TransferPlanner.ShowPlanWindow = false;
         _ourBurn = null;
         _lastEntry = null;
         _lastSource = null;
@@ -383,24 +401,4 @@ static class Patch_DrawPlanWindow
     }
 
     #endregion
-}
-
-/// <summary>
-/// Postfix on TransferPlanner.OnPreRender to render the visual orbit preview
-/// in the 3D view when one of our plan types is active.
-/// </summary>
-[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender))]
-static class Patch_OnPreRender
-{
-    static void Postfix(Viewport inViewport)
-    {
-        try
-        {
-            Patch_DrawPlanWindow.RenderOrbitPreview(inViewport);
-        }
-        catch (Exception ex)
-        {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools OnPreRender: {ex.Message}");
-        }
-    }
 }

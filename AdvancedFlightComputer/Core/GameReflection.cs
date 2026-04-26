@@ -1,3 +1,4 @@
+using System;
 using System.Reflection;
 using Brutal.Logging;
 using HarmonyLib;
@@ -7,11 +8,14 @@ namespace AdvancedFlightComputer.Core;
 
 /// <summary>
 /// Centralized registry of all reflection targets for game internals.
-/// Fields are resolved once at assembly load time. Per-feature validation
-/// methods check that all targets for a feature resolved successfully,
-/// enabling graceful per-feature degradation when game versions change.
+/// Resolved once at assembly load. Per-feature validation methods check
+/// that all targets for a feature resolved successfully so each feature
+/// can degrade independently across game versions.
+///
+/// Method lookups pin the parameter list to keep us bound to the intended
+/// overload if the game introduces a new same-named method.
 /// </summary>
-static class GameReflection
+internal static class GameReflection
 {
     #region HyperbolicTargets
 
@@ -47,7 +51,7 @@ static class GameReflection
     public static readonly FieldInfo? TransferPlanner_showPlanWindow =
         AccessTools.Field(typeof(TransferPlanner), "_showPlanWindow");
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
-        AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo");
+        AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
     #endregion
 

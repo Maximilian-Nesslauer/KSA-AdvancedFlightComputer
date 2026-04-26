@@ -3,16 +3,20 @@ using Brutal.Logging;
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// Utility for log deduplication. Prevents repeated warnings from spamming
-/// the console by tracking which messages have already been logged.
+/// Log deduplication for warnings that would otherwise spam the console.
+///
+/// Keys are kept for the lifetime of the mod, so a warning fires at most
+/// once per session even if the underlying state recovers and degrades
+/// again. Reset() clears the set on mod unload so reloading sees fresh
+/// warnings.
 /// </summary>
-static class LogHelper
+internal static class LogHelper
 {
     private static readonly HashSet<string> _loggedWarnings = new();
 
     /// <summary>
-    /// Logs a warning only on its first occurrence. Subsequent calls with the
-    /// same key are silently ignored until Reset() is called.
+    /// Logs a warning only on its first occurrence for a given key.
+    /// Subsequent calls with the same key are silently dropped.
     /// </summary>
     public static void WarnOnce(string key, string message)
     {
@@ -20,9 +24,5 @@ static class LogHelper
             DefaultCategory.Log.Warning(message);
     }
 
-    /// <summary>
-    /// Clears all tracked warnings. Called on mod unload so warnings
-    /// re-fire after a reload.
-    /// </summary>
     public static void Reset() => _loggedWarnings.Clear();
 }

@@ -14,7 +14,7 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.PopulateWithPlanets),
     new Type[] { typeof(Span<TransferObject>), typeof(int), typeof(bool) },
     new ArgumentType[] { ArgumentType.Normal, ArgumentType.Ref, ArgumentType.Normal })]
-static class Patch_PopulateWithPlanets
+internal static class Patch_PopulateWithPlanets
 {
     static void Postfix(Span<TransferObject> list, ref int count, bool getAll)
     {
@@ -28,21 +28,12 @@ static class Patch_PopulateWithPlanets
             var star = HyperbolicTargets.GetParentStar(source);
             if (star == null) return;
 
-            var existingIds = new HashSet<string>();
-            for (int i = 0; i < count; i++)
-            {
-                Astronomical? body = list[i].Body;
-                if (body != null)
-                    existingIds.Add(body.Id);
-            }
-
             ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
             for (int i = 0; i < all.Length; i++)
             {
                 if (all[i] is not Celestial celestial) continue;
                 if (celestial.Orbit == null || celestial.Orbit.Eccentricity < 1.0) continue;
                 if (celestial.Id == source.Id || celestial.Id == source.Parent?.Id) continue;
-                if (existingIds.Contains(celestial.Id)) continue;
                 if (celestial.Parent != star) continue;
 
                 if (celestial.SphereOfInfluence <= 0.0 || double.IsNaN(celestial.SphereOfInfluence))
@@ -70,7 +61,7 @@ static class Patch_PopulateWithPlanets
 /// distance from its parent as the "destination radius".
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.HohmannFlight))]
-static class Patch_HohmannFlight
+internal static class Patch_HohmannFlight
 {
     static bool Prefix(Orbit origin, Orbit destination, ref SimTime __result)
     {
@@ -106,10 +97,12 @@ static class Patch_HohmannFlight
 /// <summary>
 /// SetTransferInfo derives Min/MaxTransferTimeOfFlight from the target's
 /// orbital Period, which is NaN for unbound orbits. We replace the NaN
-/// values with ratios of our Hohmann estimate.
+/// values with ratios of our Hohmann estimate; stock's own time-unit
+/// auto-pick already runs against the patched (finite) Hohmann ToF, so
+/// no extra unit selection is needed here.
 /// </summary>
-[HarmonyPatch(typeof(TransferPlanner), "SetTransferInfo")]
-static class Patch_SetTransferInfo
+[HarmonyPatch(typeof(TransferPlanner), "SetTransferInfo", new Type[0])]
+internal static class Patch_SetTransferInfo
 {
     static void Postfix()
     {
@@ -131,25 +124,6 @@ static class Patch_SetTransferInfo
                 .SetValue(null, new SimTime(info.MinTransferTimeOfFlight.Seconds()));
             GameReflection.TransferPlanner_selectedMaxTime!
                 .SetValue(null, new SimTime(info.MaxTransferTimeOfFlight.Seconds()));
-
-            // Pick a time unit where the Hohmann ToF displays readably
-            // (whole-number part <= 3 digits, e.g. "183 days" not "4392 hours").
-            var timeUnits = GameReflection.TransferPlanner_timeUnits!.GetValue(null)
-                as List<TimeObject>;
-            if (timeUnits == null) return;
-
-            Span<char> buf = stackalloc char[64];
-            foreach (var unit in timeUnits)
-            {
-                Span<char> formatted = TimeSpanReference.ToNearest(unit.Unit, hohmann.Seconds(), buf);
-                int wholeDigits = formatted.IndexOfAny('.', ' ');
-                if (wholeDigits < 0) wholeDigits = formatted.Length;
-                if (wholeDigits <= 3)
-                {
-                    GameReflection.TransferPlanner_selectedTimeUnit!.SetValue(null, unit);
-                    break;
-                }
-            }
         }
         catch (Exception ex)
         {
@@ -160,10 +134,12 @@ static class Patch_SetTransferInfo
 
 /// <summary>
 /// AlignmentTime uses synodic period (infinite for hyperbolic targets).
-/// We return periapsis_time - hohmann_tof as the departure window start.
+/// For a hyperbolic flyby the cheapest intercept is near the target's
+/// periapsis (closest to the Sun, slowest, longest dwell in the inner
+/// system), so we depart roughly hohmann_tof before that.
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.AlignmentTime))]
-static class Patch_AlignmentTime
+internal static class Patch_AlignmentTime
 {
     static bool Prefix(OrbitalTransfers.TransferInfo transferInfo,
                        SimTime startTime,

@@ -9,13 +9,12 @@ using StarMap.API;
 namespace AdvancedFlightComputer;
 
 [StarMapMod]
-public class Mod
+public sealed class Mod
 {
     private static Harmony? _harmony;
+    private static bool _maneuverTypesInjected;
 
     private const string TestedGameVersion = "v2026.4.17.4184";
-
-    public static bool DebugMode => DebugConfig.Any;
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
@@ -37,6 +36,7 @@ public class Mod
         if (GameReflection.ValidateManeuverTools())
         {
             ManeuverTools.InjectTransferTypes();
+            _maneuverTypesInjected = true;
             ManeuverTools.ApplyPatches(_harmony);
         }
         else
@@ -50,6 +50,13 @@ public class Mod
     {
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
+
+        if (_maneuverTypesInjected)
+        {
+            ManeuverTools.RemoveTransferTypes();
+            _maneuverTypesInjected = false;
+        }
+
         ManeuverToolsWindow.Reset();
         Patch_DrawPlanWindow.Reset();
         LogHelper.Reset();

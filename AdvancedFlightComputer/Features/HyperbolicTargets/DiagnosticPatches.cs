@@ -1,3 +1,4 @@
+#if DEBUG
 using System;
 using AdvancedFlightComputer.Core;
 using Brutal.Logging;
@@ -7,10 +8,13 @@ using KSA;
 namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 
 /// <summary>
-/// Logs transfer data when a porkchop entry is selected (debug only).
+/// Logs transfer data when a porkchop entry is selected. Debug-only:
+/// the patch isn't even installed in Release, so the runtime check on
+/// DebugConfig.HyperbolicTargets is a per-feature mute toggle, not a
+/// build-mode toggle.
 /// </summary>
-[HarmonyPatch(typeof(TransferPlanner), "SetSelectedTransfer")]
-static class Patch_DiagnosticLog
+[HarmonyPatch(typeof(TransferPlanner), "SetSelectedTransfer", new Type[0])]
+internal static class Patch_DiagnosticLog
 {
     static void Postfix(bool __result)
     {
@@ -45,6 +49,8 @@ static class Patch_DiagnosticLog
 
                 if (o.Eccentricity >= 1.0)
                 {
+                    // Asymptote half-angle: for a hyperbolic orbit with e>1,
+                    // the trajectory approaches +/-acos(-1/e) from the focal axis.
                     double asymDeg = Math.Acos(-1.0 / o.Eccentricity) * (180.0 / Math.PI);
                     DefaultCategory.Log.Debug(
                         $"[AFC]       asymptote=+/-{asymDeg:F1}deg " +
@@ -58,3 +64,4 @@ static class Patch_DiagnosticLog
         }
     }
 }
+#endif

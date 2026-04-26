@@ -22,7 +22,7 @@ namespace AdvancedFlightComputer.Core;
 /// #endif
 /// </code>
 /// </summary>
-static class PerfTracker
+internal static class PerfTracker
 {
     private const double ReportIntervalSeconds = 5.0;
 

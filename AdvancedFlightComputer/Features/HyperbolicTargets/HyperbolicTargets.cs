@@ -15,7 +15,7 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 /// Harmony patches here fix everything else: target filtering, time-of-flight
 /// estimation, departure alignment, and encounter detection.
 /// </summary>
-static class HyperbolicTargets
+internal static class HyperbolicTargets
 {
     /// <summary>Min transfer ToF as fraction of Hohmann estimate.</summary>
     internal const double MinTofRatio = 0.3;
@@ -34,7 +34,9 @@ static class HyperbolicTargets
         harmony.CreateClassProcessor(typeof(Patch_SetTransferInfo)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_AlignmentTime)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_TryFindIntercept)).Patch();
+#if DEBUG
         harmony.CreateClassProcessor(typeof(Patch_DiagnosticLog)).Patch();
+#endif
 
         if (DebugConfig.HyperbolicTargets)
             DefaultCategory.Log.Debug("[AFC] HyperbolicTargets: all patches applied.");

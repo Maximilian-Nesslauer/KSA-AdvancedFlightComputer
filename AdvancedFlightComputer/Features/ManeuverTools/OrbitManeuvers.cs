@@ -6,16 +6,14 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 
 /// <summary>
 /// Pure dV calculations for maneuver planning. All methods are stateless
-/// and return nullable results to signal invalid inputs (e.g. hyperbolic
-/// orbit for apse maneuvers, coplanar orbits for inclination matching).
+/// and return nullable results to signal invalid inputs (hyperbolic orbit
+/// for any tool, coplanar orbits for inclination matching, etc.).
 /// </summary>
-static class OrbitManeuvers
+internal static class OrbitManeuvers
 {
     public record struct ManeuverResult(double3 DvCci, double3 DvVlf, SimTime BurnTime);
 
-    /// <summary>
-    /// Reference plane for inclination measurement.
-    /// </summary>
+    /// <summary>Reference plane for inclination measurement.</summary>
     public enum InclinationReference { Ecliptic, Equatorial }
 
     /// <summary>
@@ -89,6 +87,11 @@ static class OrbitManeuvers
     public static ManeuverResult? ComputeMatchInclination(
         Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now)
     {
+        // GetNextPeriapsisTime / TimeOfTrueAnomaly behaviour for hyperbolic
+        // vehicles is past-times-not-corrected, so the burn would be in the past.
+        if (vehicleOrbit.Eccentricity >= 1.0)
+            return null;
+
         double relInc = vehicleOrbit.GetRelativeInclination(targetOrbit).Value();
         if (relInc < 0.001)
             return null;
@@ -96,9 +99,6 @@ static class OrbitManeuvers
         TrueAnomaly nodeTa = useDescendingNode
             ? vehicleOrbit.GetDescendingNode(targetOrbit)
             : vehicleOrbit.GetAscendingNode(targetOrbit);
-
-        if (nodeTa == TrueAnomaly.NaN)
-            return null;
 
         SimTime nodeTime = vehicleOrbit.TimeOfTrueAnomaly(nodeTa, now);
         StateVectors sv = vehicleOrbit.GetStateVectorsAt(nodeTime);
@@ -120,7 +120,7 @@ static class OrbitManeuvers
 
     /// <summary>
     /// Builds a PorkChopEntry + TransferInfo for use with the stock Create button.
-    /// Follows the exact same pattern as stock Circularize (TransferPlanner.cs:389-412).
+    /// Follows the exact same pattern as stock Circularize (TransferPlanner.cs:402-417).
     /// </summary>
     public static (OrbitalTransfers.PorkChopEntry entry, OrbitalTransfers.TransferInfo info)
         BuildTransferEntry(Vehicle source, ManeuverResult maneuver)
@@ -156,6 +156,9 @@ static class OrbitManeuvers
         Orbit orbit, double targetInclinationRad, bool useDescendingNode, SimTime now,
         InclinationReference reference)
     {
+        if (orbit.Eccentricity >= 1.0)
+            return null;
+
         targetInclinationRad = Math.Clamp(targetInclinationRad, 0.0, Math.PI);
 
         double currentInc = GetInclinationAgainst(orbit, reference);
@@ -244,13 +247,13 @@ static class OrbitManeuvers
     }
 
     /// <summary>
-    /// Converts a dV vector from CCI frame to VLF frame, using the same
-    /// transformation as stock Circularize (TransferPlanner.cs:394-396).
+    /// Converts a dV vector from CCI frame to VLF frame (same transform stock
+    /// Circularize uses, TransferPlanner.cs:403-405).
     /// </summary>
     private static double3 CciToVlf(double3 dvCci, Orbit orbit, SimTime time)
     {
-        doubleQuat vlf2Cci = orbit.GetStateVectorsAt(time).GetVlf2ParentCci().OrIdentity();
-        return dvCci.Transform(vlf2Cci.Inverse());
+        doubleQuat parentCci2Vlf = orbit.GetStateVectorsAt(time).GetVlf2ParentCci().OrIdentity().Inverse();
+        return dvCci.Transform(parentCci2Vlf);
     }
 
     #endregion

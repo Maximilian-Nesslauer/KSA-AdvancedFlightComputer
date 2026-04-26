@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// Set Inclination) to the stock Transfer Planner dropdown. Each tool computes
 /// a single burn via vis-viva or plane-change math and creates a maneuver node.
 /// </summary>
-static class ManeuverTools
+internal static class ManeuverTools
 {
     internal const string KeySetPeriapsis = "AFC Set Periapsis";
     internal const string KeySetApoapsis = "AFC Set Apoapsis";
@@ -20,7 +20,7 @@ static class ManeuverTools
     /// <summary>
     /// Adds our plan types to the stock TransferPlanner dropdown.
     /// Called from Mod.OnFullyLoaded before patches are applied.
-    /// Idempotent - checks for existing entries before adding.
+    /// Idempotent, checks for existing entries before adding.
     /// </summary>
     public static void InjectTransferTypes()
     {
@@ -37,6 +37,16 @@ static class ManeuverTools
         if (DebugConfig.ManeuverTools)
             DefaultCategory.Log.Debug(
                 $"[AFC] ManeuverTools: injected 4 transfer types ({types.Count} total).");
+    }
+
+    /// <summary>
+    /// Removes our plan types from the stock dropdown so the planner UI
+    /// returns to a clean state on mod unload.
+    /// </summary>
+    public static void RemoveTransferTypes()
+    {
+        var types = TransferPlanner.TransferTypes;
+        types.RemoveAll(t => IsOurType(t.GetKey()));
     }
 
     /// <summary>

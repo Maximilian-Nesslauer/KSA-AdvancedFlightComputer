@@ -6,7 +6,7 @@ namespace AdvancedFlightComputer.Core;
 /// noise while debugging a specific feature. In Release builds everything
 /// is off and the JIT eliminates dead branches.
 /// </summary>
-static class DebugConfig
+internal static class DebugConfig
 {
 #if DEBUG
     public static bool HyperbolicTargets = true;

@@ -17,7 +17,7 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 ///
 /// Static state is read by DrawPlanWindowPatch to compute the maneuver in the same frame.
 /// </summary>
-static class ManeuverToolsWindow
+internal static class ManeuverToolsWindow
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -42,8 +42,10 @@ static class ManeuverToolsWindow
     private static string? _lastSourceId;
 
     private static TransferObject _selectedTarget;
+    private static bool _hasSelectedTarget;
     private static List<TransferObject>? _targetList;
     private static int _lastObjectCount;
+    private static string? _lastTargetParentId;
     private static bool _setTarget;
 
     #endregion
@@ -53,9 +55,7 @@ static class ManeuverToolsWindow
         if (_lastSourceId != source.Id)
         {
             _lastSourceId = source.Id;
-            _defaultsInitialized = false;
-            _nodeDefaultInitialized = false;
-            _targetList = null;
+            ResetForContextChange();
         }
 
         if (typeKey == ManeuverTools.KeySetPeriapsis)
@@ -69,27 +69,20 @@ static class ManeuverToolsWindow
     }
 
     public static Orbit? GetSelectedTargetOrbit()
-    {
-        return (_selectedTarget.Body as IOrbiter)?.Orbit;
-    }
+        => _hasSelectedTarget ? (_selectedTarget.Body as IOrbiter)?.Orbit : null;
 
     public static IOrbiter? GetSelectedTargetOrbiter()
-    {
-        return _selectedTarget.Body as IOrbiter;
-    }
+        => _hasSelectedTarget ? _selectedTarget.Body as IOrbiter : null;
 
-    public static void OnTypeChanged()
+    public static void OnTypeChanged() => ResetForContextChange();
+    public static void OnSourceChanged() => ResetForContextChange();
+
+    private static void ResetForContextChange()
     {
         _defaultsInitialized = false;
         _nodeDefaultInitialized = false;
         _targetList = null;
-    }
-
-    public static void OnSourceChanged()
-    {
-        _defaultsInitialized = false;
-        _nodeDefaultInitialized = false;
-        _targetList = null;
+        _lastTargetParentId = null;
     }
 
     public static void Reset()
@@ -103,8 +96,10 @@ static class ManeuverToolsWindow
         _nodeDefaultInitialized = false;
         _lastSourceId = null;
         _selectedTarget = default;
+        _hasSelectedTarget = false;
         _targetList = null;
         _lastObjectCount = 0;
+        _lastTargetParentId = null;
         _setTarget = false;
     }
 
@@ -178,16 +173,22 @@ static class ManeuverToolsWindow
         Orbit orbit = source.Orbit;
         SimTime now = Universe.GetElapsedSimTime();
 
+        if (orbit.Eccentricity >= 1.0)
+        {
+            ImGui.Text("Requires a bound (elliptical) orbit."u8);
+            return;
+        }
+
         DrawTargetSelector(source);
 
-        Orbit? targetOrbit = (_selectedTarget.Body as IOrbiter)?.Orbit;
+        Orbit? targetOrbit = GetSelectedTargetOrbit();
         if (targetOrbit == null)
         {
             ImGui.Text("Select a target body."u8);
             return;
         }
 
-        IOrbiter? targetOrbiter = _selectedTarget.Body as IOrbiter;
+        IOrbiter? targetOrbiter = GetSelectedTargetOrbiter();
 
         ImGui.Spacing();
         ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
@@ -195,12 +196,7 @@ static class ManeuverToolsWindow
         if (ImGuiHelper.DrawCheckbox("Set Target"u8, ref _setTarget, isChanged: false))
         {
             if (_setTarget != prevSetTarget)
-            {
-                if (_setTarget && targetOrbiter != null)
-                    Universe.SetTarget(source, targetOrbiter);
-                else
-                    Universe.UnsetTarget(source);
-            }
+                QueueTargetChange(source, _setTarget ? targetOrbiter : null);
         }
         ImGuiHelper.EndColumns();
 
@@ -237,7 +233,13 @@ static class ManeuverToolsWindow
         Orbit orbit = source.Orbit;
         SimTime now = Universe.GetElapsedSimTime();
 
-        ImGui.Text("Reference Plane:");
+        if (orbit.Eccentricity >= 1.0)
+        {
+            ImGui.Text("Requires a bound (elliptical) orbit."u8);
+            return;
+        }
+
+        ImGui.Text("Reference Plane:"u8);
         ImGui.SameLine(220f);
         ImGui.PushItemWidth(-1f);
         int refIdx = (int)InclinationRef;
@@ -269,7 +271,7 @@ static class ManeuverToolsWindow
             _defaultsInitialized = true;
         }
 
-        ImGui.Text("Target Inclination:");
+        ImGui.Text("Target Inclination:"u8);
         ImGui.SameLine(220f);
         ImGui.PushItemWidth(-1f);
         ImGui.InputDouble("##incInput"u8, ref _inputInclinationDeg, 1.0, 10.0,
@@ -353,10 +355,18 @@ static class ManeuverToolsWindow
     private static void DrawTargetSelector(Vehicle source)
     {
         int currentCount = Universe.CurrentSystem?.All.Count ?? 0;
-        if (_targetList == null || currentCount != _lastObjectCount)
+        string? parentId = source.Parent?.Id;
+        bool parentChanged = parentId != _lastTargetParentId;
+        if (_targetList == null || currentCount != _lastObjectCount || parentChanged)
         {
             _targetList = BuildTargetList(source);
             _lastObjectCount = currentCount;
+            _lastTargetParentId = parentId;
+            // After SOI transition the previous selection is in a different
+            // context, so re-pick from the fresh list. Keep the selection on
+            // pure count changes (a vehicle was added or destroyed).
+            if (parentChanged)
+                _hasSelectedTarget = false;
         }
 
         if (_targetList.Count == 0)
@@ -365,16 +375,20 @@ static class ManeuverToolsWindow
             return;
         }
 
-        if (_selectedTarget.GetKey() == "N/A" && _targetList.Count > 0)
+        if (!_hasSelectedTarget)
+        {
             _selectedTarget = _targetList[0];
+            _hasSelectedTarget = true;
+        }
 
         TransferObject prevTarget = _selectedTarget;
         if (ImGuiHelper.DrawCombo("Target:"u8, ref _selectedTarget, _targetList)
             && _selectedTarget.GetKey() != prevTarget.GetKey())
         {
             _defaultsInitialized = false;
+            _hasSelectedTarget = true;
             if (_setTarget && _selectedTarget.Body is IOrbiter newOrbiter)
-                Universe.SetTarget(source, newOrbiter);
+                QueueTargetChange(source, newOrbiter);
         }
     }
 
@@ -399,6 +413,17 @@ static class ManeuverToolsWindow
         }
 
         return list;
+    }
+
+    private static void QueueTargetChange(Vehicle source, IOrbiter? target)
+    {
+        // Stock pattern (TransferPlanner.cs:301-306): mutations from the
+        // ImGui pass go through the queue, applied at frame boundary.
+        InputEvents.ChangeTargetBuffer.Add(new InputEvents.ChangeTargetData
+        {
+            Vehicle = source,
+            Target = target,
+        });
     }
 
     #endregion
