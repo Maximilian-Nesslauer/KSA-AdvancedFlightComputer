@@ -48,7 +48,12 @@ Required only to build the mod from source. Targets **.NET 10**.
 
 - Known conflicts: none
 
+## Community
+
+Thread on the KSA forums: https://forums.ahwoo.com/threads/advanced-flight-computer.783/
+
 ## Check out my other mods
 
 - [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) - automatic staging during auto-burns and manual flight, with configurable ignition delays ([forum thread](https://forums.ahwoo.com/threads/autostage.891/))
 - [StageInfo](https://github.com/Maximilian-Nesslauer/KSA-StageInfo) - per-sequence dV, TWR, burn time, and ISP in the stage info panel ([forum thread](https://forums.ahwoo.com/threads/stageinfo.905/))
+- [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) - automatically remove finished auto-burns from the burn plan ([forum thread](https://forums.ahwoo.com/threads/autoremovefinishedburns.928/))
