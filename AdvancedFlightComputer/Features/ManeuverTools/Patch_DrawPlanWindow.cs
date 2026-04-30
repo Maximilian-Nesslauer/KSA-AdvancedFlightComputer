@@ -276,6 +276,12 @@ internal static class Patch_DrawPlanWindow
                     maneuver.DvVlf, patch, source);
                 _ourBurn.IsGizmoActive = false;
 
+                // Hide our preview now that a real burn exists. The game's own
+                // flight-plan rendering takes over for the scheduled trajectory,
+                // and once the burn starts our cached entry is stale anyway.
+                _showOrbitPreview = false;
+                _showFlightPlanPreview = false;
+
                 // Stock pattern from DrawPlanWindow's Create button: enqueue,
                 // the actual BurnPlan mutation runs at the next frame boundary
                 // so it is sequenced with deletes/updates.
