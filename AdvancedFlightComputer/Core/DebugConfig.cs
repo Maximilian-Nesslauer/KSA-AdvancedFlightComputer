@@ -10,18 +10,13 @@ internal static class DebugConfig
 {
 #if DEBUG
     public static bool HyperbolicTargets = true;
-    public static bool AutoStage = true;
-    public static bool StageInfo = true;
     public static bool ManeuverTools = true;
     public static bool Performance = true;
 #else
     public static bool HyperbolicTargets = false;
-    public static bool AutoStage = false;
-    public static bool StageInfo = false;
     public static bool ManeuverTools = false;
     public static bool Performance = false;
 #endif
 
-    public static bool Any =>
-        HyperbolicTargets || AutoStage || StageInfo || ManeuverTools || Performance;
+    public static bool Any => HyperbolicTargets || ManeuverTools || Performance;
 }

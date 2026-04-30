@@ -55,6 +55,8 @@ internal static class HyperbolicTargets
                 return star;
             current = (current as Celestial)?.Parent;
         }
+        LogHelper.WarnOnce($"no-parent-star-{source.Id}",
+            $"[AFC] No parent star found for vehicle {source.Id}; HyperbolicTargets disabled for this vehicle.");
         return null;
     }
 }

@@ -7,8 +7,10 @@ namespace AdvancedFlightComputer.Core;
 
 /// <summary>
 /// Lightweight per-method Stopwatch accumulator for debug builds.
-/// Tracks call count, total/min/max elapsed ticks and reports a
-/// summary to the log every <see cref="ReportIntervalSeconds"/> seconds.
+/// Tracks call count, total/min/max elapsed ticks and reports a summary
+/// to the log every <see cref="ReportIntervalSeconds"/> seconds. Counters
+/// are zeroed after each report, so reported avg/min/max are per-window,
+/// not cumulative across the session.
 ///
 /// Usage in measured methods:
 /// <code>

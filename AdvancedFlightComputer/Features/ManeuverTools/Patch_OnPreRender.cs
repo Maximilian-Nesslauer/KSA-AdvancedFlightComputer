@@ -1,4 +1,5 @@
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
@@ -17,6 +18,10 @@ internal static class Patch_OnPreRender
     {
         try
         {
+            var transferType = (TransferType)GameReflection.TransferPlanner_transferType!.GetValue(null)!;
+            if (!ManeuverTools.IsOurType(transferType.GetKey()))
+                return;
+
             Patch_DrawPlanWindow.RenderOrbitPreview(inViewport);
         }
         catch (Exception ex)

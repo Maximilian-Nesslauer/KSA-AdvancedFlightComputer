@@ -55,10 +55,10 @@ internal static class Patch_PopulateWithPlanets
 }
 
 /// <summary>
-/// HohmannFlight uses (Apoapsis + Periapsis) / 2 as transfer SMA, but
-/// hyperbolic orbits have negative Apoapsis (from negative SMA), producing
-/// NaN via sqrt of a negative number. We substitute the target's current
-/// distance from its parent as the "destination radius".
+/// HohmannFlight derives the transfer ellipse SMA from (Apoapsis + Periapsis) / 2.
+/// For unbound orbits OrbitData sets Apoapsis to NaN, the NaN propagates through
+/// the sqrt, and the time-of-flight estimate becomes NaN. We substitute Periapsis
+/// for both ends so the porkchop search has a stable, time-invariant baseline.
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.HohmannFlight))]
 internal static class Patch_HohmannFlight
@@ -71,18 +71,7 @@ internal static class Patch_HohmannFlight
         double r1 = origin.Eccentricity < 1.0
             ? origin.SemiMajorAxis
             : origin.Periapsis;
-
-        double r2;
-        if (destination.Eccentricity >= 1.0)
-        {
-            var now = Universe.GetElapsedSimTime();
-            double currentDist = destination.GetStateVectorsAt(now).PositionCci.Length();
-            r2 = Math.Max(currentDist, destination.Periapsis);
-        }
-        else
-        {
-            r2 = destination.Periapsis;
-        }
+        double r2 = destination.Periapsis;
 
         double transferSma = (r1 + r2) * 0.5;
         if (transferSma <= 0.0)
@@ -151,6 +140,14 @@ internal static class Patch_AlignmentTime
         SimTime tPeri = transferInfo.Target.Orbit.TimeAtPeriapsis;
         SimTime hohmannToF = transferInfo.HohmannTimeOfFlight;
         SimTime ideal = new SimTime(tPeri.Seconds() - hohmannToF.Seconds());
+
+        if (ideal < startTime)
+        {
+            string targetId = (transferInfo.Target as Astronomical)?.Id ?? "?";
+            LogHelper.WarnOnce($"alignment-past-{targetId}",
+                $"[AFC] {targetId} is past periapsis (peri at sim t={tPeri.Seconds():F0}s, " +
+                $"hohmann ToF {hohmannToF.Seconds():F0}s); alignment time clamped to startTime.");
+        }
 
         __result = SimTime.Max(ideal, startTime);
         return false;

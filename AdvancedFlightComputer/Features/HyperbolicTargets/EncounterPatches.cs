@@ -1,5 +1,4 @@
 using System;
-using System.Threading;
 using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -16,13 +15,12 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 /// The game's RefineBurnTask sweeps dV +/-5% and probes each trajectory
 /// for SOI intercepts via OrbitalTransfers.InterceptsBody, which calls
 /// PatchedConic.TryFindClosestEncounter. Encounters are populated by
-/// FindClosestApproaches (PatchedConic.cs:397), and that function gates
-/// on `Math.Min(..., secondBody.Orbit.Period)`. Period is NaN for
-/// hyperbolic targets, the gate is `!num2.IsFinite() return;`, so no
-/// encounter is ever found. Even with a finite gate, the patched-conic
-/// trajectory diverges ~0.3 AU from the Lambert solution at arrival
-/// because the impulsive approximation breaks down at extreme dV
-/// (~26 km/s).
+/// PatchedConic.FindClosestApproaches, and that function gates on
+/// `Math.Min(..., secondBody.Orbit.Period)`. Period is NaN for hyperbolic
+/// targets, the gate is `!num2.IsFinite() return;`, so no encounter is
+/// ever found. Even with a finite gate, the patched-conic trajectory
+/// diverges ~0.3 AU from the Lambert solution at arrival because the
+/// impulsive approximation breaks down at extreme dV (~26 km/s).
 ///
 /// Instead we build the flight plan with the Lambert-optimal dV directly
 /// and sweep the trajectory in two passes (coarse then refined) for an
@@ -60,9 +58,10 @@ internal static class Patch_TryFindIntercept
                 selectedEntry.TransferData.ClosestApproachDistance = patchedConicDist;
                 __result = true;
 
-                // Volatile read: TryFindIntercept runs on the ThreadPool
-                // (RefineBurnTask.Run -> ThreadPool.QueueUserWorkItem).
-                if (Volatile.Read(ref DebugConfig.HyperbolicTargets))
+                // bool reads are atomic in the CLR memory model, and this flag is
+                // only flipped at startup, so a plain read is sufficient even on
+                // the ThreadPool thread RefineBurnTask runs us on.
+                if (DebugConfig.HyperbolicTargets)
                 {
                     DefaultCategory.Log.Debug(
                         $"[AFC] RefineBurnTask: hyperbolic target, " +

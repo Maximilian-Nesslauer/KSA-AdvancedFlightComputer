@@ -4,11 +4,8 @@ namespace AdvancedFlightComputer.Core;
 
 /// <summary>
 /// Log deduplication for warnings that would otherwise spam the console.
-///
-/// Keys are kept for the lifetime of the mod, so a warning fires at most
-/// once per session even if the underlying state recovers and degrades
-/// again. Reset() clears the set on mod unload so reloading sees fresh
-/// warnings.
+/// A given key fires once per mod load; Reset() drops the set on unload
+/// so a re-loaded mod sees fresh warnings.
 /// </summary>
 internal static class LogHelper
 {

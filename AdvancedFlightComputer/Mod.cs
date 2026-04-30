@@ -23,8 +23,7 @@ public sealed class Mod
         DefaultCategory.Log.Info($"[AFC] Game version: {gameVersion}");
         if (gameVersion != TestedGameVersion)
             DefaultCategory.Log.Warning(
-                $"[AFC] Tested against {TestedGameVersion}, current is {gameVersion}. " +
-                "Some features may not work correctly.");
+                $"[AFC] Tested against {TestedGameVersion}, current is {gameVersion}. Some features may not work correctly.");
 
         _harmony = new Harmony("com.maxi.advancedflightcomputer");
 

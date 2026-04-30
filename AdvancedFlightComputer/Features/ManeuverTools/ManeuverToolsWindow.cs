@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
@@ -33,6 +34,9 @@ internal static class ManeuverToolsWindow
 
     private static readonly string[] InclinationRefLabels = { "Ecliptic", "Equatorial" };
 
+    /// <summary>Min separation in km between target apsis input and the opposite apsis.</summary>
+    private const double MinApseSeparationKm = 1.0;
+
     #region Internal State
 
     private static double _inputAltitudeKm;
@@ -43,8 +47,7 @@ internal static class ManeuverToolsWindow
 
     private static TransferObject _selectedTarget;
     private static bool _hasSelectedTarget;
-    private static List<TransferObject>? _targetList;
-    private static int _lastObjectCount;
+    private static readonly List<TransferObject> _targetListBuffer = new();
     private static string? _lastTargetParentId;
     private static bool _setTarget;
 
@@ -81,7 +84,6 @@ internal static class ManeuverToolsWindow
     {
         _defaultsInitialized = false;
         _nodeDefaultInitialized = false;
-        _targetList = null;
         _lastTargetParentId = null;
     }
 
@@ -97,8 +99,7 @@ internal static class ManeuverToolsWindow
         _lastSourceId = null;
         _selectedTarget = default;
         _hasSelectedTarget = false;
-        _targetList = null;
-        _lastObjectCount = 0;
+        _targetListBuffer.Clear();
         _lastTargetParentId = null;
         _setTarget = false;
     }
@@ -143,8 +144,8 @@ internal static class ManeuverToolsWindow
         }
 
         bool invalid = isSetPeriapsis
-            ? _inputAltitudeKm >= currentApAlt / 1000.0 - 1.0
-            : _inputAltitudeKm <= currentPeAlt / 1000.0 + 1.0;
+            ? _inputAltitudeKm >= currentApAlt / 1000.0 - MinApseSeparationKm
+            : _inputAltitudeKm <= currentPeAlt / 1000.0 + MinApseSeparationKm;
 
         if (invalid)
         {
@@ -158,6 +159,19 @@ internal static class ManeuverToolsWindow
         }
 
         double newRadius = TargetAltitude + parentRadius;
+
+        if (!isSetPeriapsis)
+        {
+            double parentSoi = source.Parent?.SphereOfInfluence ?? 0.0;
+            if (parentSoi > 0.0 && newRadius > parentSoi)
+            {
+                ImGui.Spacing();
+                ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
+                ImGui.Text("Target apoapsis is above SOI; vehicle will escape after the burn."u8);
+                ImGui.PopStyleColor();
+            }
+        }
+
         if (isSetPeriapsis)
             DrawPostBurnOrbitInfo(orbit.Apoapsis, newRadius, orbit.Mu, parentRadius);
         else
@@ -333,7 +347,7 @@ internal static class ManeuverToolsWindow
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("The point where your orbit crosses upward through the reference\nplane. A normal burn here changes your orbital inclination.\nLower speed at the node means cheaper dV."u8);
         ImGui.Indent();
-        ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatTimeSpan(timeToAn));
+        ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatHelper.FormatDuration(timeToAn));
         ImGuiHelper.DrawTextWidget("Required Delta V:"u8, string.Format(Inv, "{0:F1} m/s", dvAn));
         ImGuiHelper.DrawTextWidget("Speed at Node:"u8, string.Format(Inv, "{0:F1} m/s", speedAtAn));
         ImGui.Unindent();
@@ -346,7 +360,7 @@ internal static class ManeuverToolsWindow
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip("The point where your orbit crosses downward through the reference\nplane. Same plane change but at the opposite side of the orbit.\nMay cost less dV if speed is lower here."u8);
         ImGui.Indent();
-        ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatTimeSpan(timeToDn));
+        ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatHelper.FormatDuration(timeToDn));
         ImGuiHelper.DrawTextWidget("Required Delta V:"u8, string.Format(Inv, "{0:F1} m/s", dvDn));
         ImGuiHelper.DrawTextWidget("Speed at Node:"u8, string.Format(Inv, "{0:F1} m/s", speedAtDn));
         ImGui.Unindent();
@@ -354,22 +368,21 @@ internal static class ManeuverToolsWindow
 
     private static void DrawTargetSelector(Vehicle source)
     {
-        int currentCount = Universe.CurrentSystem?.All.Count ?? 0;
         string? parentId = source.Parent?.Id;
-        bool parentChanged = parentId != _lastTargetParentId;
-        if (_targetList == null || currentCount != _lastObjectCount || parentChanged)
+        if (parentId != _lastTargetParentId)
         {
-            _targetList = BuildTargetList(source);
-            _lastObjectCount = currentCount;
-            _lastTargetParentId = parentId;
             // After SOI transition the previous selection is in a different
-            // context, so re-pick from the fresh list. Keep the selection on
-            // pure count changes (a vehicle was added or destroyed).
-            if (parentChanged)
-                _hasSelectedTarget = false;
+            // context, so re-pick from the fresh list.
+            _lastTargetParentId = parentId;
+            _hasSelectedTarget = false;
         }
 
-        if (_targetList.Count == 0)
+        // Rebuild every frame: TransferObject._index aliases LookupCollection
+        // slots, and Deregister swap-removes, so a stale list can resolve to
+        // the wrong body when vehicles are added/destroyed.
+        BuildTargetList(source, _targetListBuffer);
+
+        if (_targetListBuffer.Count == 0)
         {
             ImGui.Text("No targets available in current SOI."u8);
             return;
@@ -377,12 +390,12 @@ internal static class ManeuverToolsWindow
 
         if (!_hasSelectedTarget)
         {
-            _selectedTarget = _targetList[0];
+            _selectedTarget = _targetListBuffer[0];
             _hasSelectedTarget = true;
         }
 
         TransferObject prevTarget = _selectedTarget;
-        if (ImGuiHelper.DrawCombo("Target:"u8, ref _selectedTarget, _targetList)
+        if (ImGuiHelper.DrawCombo("Target:"u8, ref _selectedTarget, _targetListBuffer)
             && _selectedTarget.GetKey() != prevTarget.GetKey())
         {
             _defaultsInitialized = false;
@@ -392,33 +405,35 @@ internal static class ManeuverToolsWindow
         }
     }
 
-    private static List<TransferObject> BuildTargetList(Vehicle source)
+    private static void BuildTargetList(Vehicle source, List<TransferObject> list)
     {
-        var list = new List<TransferObject>();
+        list.Clear();
         IParentBody? parent = source.Parent;
         if (parent == null || Universe.CurrentSystem == null)
-            return list;
+            return;
 
-        foreach (Astronomical astro in Universe.CurrentSystem.All.AsSpan())
+        // Vehicles: match stock's filter (only the ones in the current frame).
+        foreach (Vehicle v in Program.VehiclesInFrame)
         {
-            if (astro == source) continue;
-            if (astro is StellarBody) continue;
-            if ((astro as IOrbiter)?.Orbit == null) continue;
-
-            if ((astro is Celestial celestial && celestial.Parent?.Id == parent.Id)
-                || (astro is Vehicle vehicle && vehicle.Parent?.Id == parent.Id))
-            {
-                list.Add(new TransferObject(astro));
-            }
+            if (v == source) continue;
+            if (v.Parent?.Id == parent.Id)
+                list.Add(new TransferObject(v));
         }
 
-        return list;
+        // Celestials: full registry, since they don't move in/out of frame.
+        foreach (Astronomical astro in Universe.CurrentSystem.All.AsSpan())
+        {
+            if (astro is not Celestial celestial) continue;
+            if (celestial.Orbit == null) continue;
+            if (celestial.Parent?.Id == parent.Id)
+                list.Add(new TransferObject(astro));
+        }
     }
 
     private static void QueueTargetChange(Vehicle source, IOrbiter? target)
     {
-        // Stock pattern (TransferPlanner.cs:301-306): mutations from the
-        // ImGui pass go through the queue, applied at frame boundary.
+        // Stock pattern from DrawPlanWindow's "Set Target" checkbox: mutations
+        // from the ImGui pass go through the queue, applied at frame boundary.
         InputEvents.ChangeTargetBuffer.Add(new InputEvents.ChangeTargetData
         {
             Vehicle = source,
@@ -445,7 +460,7 @@ internal static class ManeuverToolsWindow
         ImGuiHelper.DrawTextWidget("  Periapsis:"u8, FormatDistance(peRadius - parentRadius));
         ImGuiHelper.DrawTextWidget("  Apoapsis:"u8, FormatDistance(apRadius - parentRadius));
         ImGuiHelper.DrawTextWidget("  Eccentricity:"u8, string.Format(Inv, "{0:F4}", ecc));
-        ImGuiHelper.DrawTextWidget("  Period:"u8, FormatTimeSpan(period));
+        ImGuiHelper.DrawTextWidget("  Period:"u8, FormatHelper.FormatDuration(period));
         ImGui.PopStyleColor();
     }
 
@@ -481,9 +496,6 @@ internal static class ManeuverToolsWindow
             return string.Format(Inv, "{0:F1} km", meters / 1000.0);
         return string.Format(Inv, "{0:F0} m", meters);
     }
-
-    internal static string FormatTimeSpan(double seconds)
-        => Core.FormatHelper.FormatDuration(seconds);
 
     #endregion
 }

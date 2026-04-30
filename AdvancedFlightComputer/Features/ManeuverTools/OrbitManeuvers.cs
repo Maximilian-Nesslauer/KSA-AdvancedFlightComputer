@@ -120,7 +120,9 @@ internal static class OrbitManeuvers
 
     /// <summary>
     /// Builds a PorkChopEntry + TransferInfo for use with the stock Create button.
-    /// Follows the exact same pattern as stock Circularize (TransferPlanner.cs:402-417).
+    /// Follows the same pattern as stock's Circularize branch in
+    /// TransferPlanner.DrawPlanWindow (TransferData with Start/Point/Dv plus a
+    /// 1x1 PorkChopData and a freshly-built FlightPlan).
     /// </summary>
     public static (OrbitalTransfers.PorkChopEntry entry, OrbitalTransfers.TransferInfo info)
         BuildTransferEntry(Vehicle source, ManeuverResult maneuver)
@@ -171,7 +173,10 @@ internal static class OrbitManeuvers
 
         double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
         if (nodeDir.LengthSquared() < 1e-12)
-            nodeDir = new double3(1, 0, 0); // fallback for coplanar orbits
+            // Vehicle is coplanar with the reference plane: every point on the
+            // orbit is a valid node, the AN line is undefined. Pick CCI +X so
+            // the new orbit's AN ends up at a stable, repeatable direction.
+            nodeDir = new double3(1, 0, 0);
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
         TrueAnomaly nodeTa = useDescendingNode
@@ -212,6 +217,9 @@ internal static class OrbitManeuvers
         double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
 
         if (nodeDir.LengthSquared() < 1e-12)
+            // Coplanar with the reference plane: AN is undefined. Match the
+            // CCI +X convention used in ComputeSetInclination so the UI and
+            // the actual burn agree on which point counts as the node.
             nodeDir = new double3(1, 0, 0);
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
@@ -226,19 +234,19 @@ internal static class OrbitManeuvers
 
     /// <summary>
     /// Generic apse burn: given the burn radius and the opposite apse radius,
-    /// compute the dV needed to create an orbit passing through both.
+    /// compute the dV needed to create an orbit passing through both. Caller
+    /// must pass burnTime equal to the apsis-time matching burnRadius (so the
+    /// vis-viva radius and the actual position radius agree).
     /// </summary>
     private static ManeuverResult? ComputeApseBurn(
         Orbit orbit, SimTime burnTime, double burnRadius, double oppositeRadius)
     {
-        StateVectors sv = orbit.GetStateVectorsAt(burnTime);
-        double r = sv.PositionCci.Length();
         double newSma = (burnRadius + oppositeRadius) / 2.0;
-
         if (newSma <= 0.0)
             return null;
 
-        double vNew = Math.Sqrt(orbit.Mu * (2.0 / r - 1.0 / newSma));
+        StateVectors sv = orbit.GetStateVectorsAt(burnTime);
+        double vNew = Math.Sqrt(orbit.Mu * (2.0 / burnRadius - 1.0 / newSma));
         double3 vDir = sv.VelocityCci.NormalizeOrZero();
         double3 dvCci = vDir * vNew - sv.VelocityCci;
 
@@ -248,7 +256,7 @@ internal static class OrbitManeuvers
 
     /// <summary>
     /// Converts a dV vector from CCI frame to VLF frame (same transform stock
-    /// Circularize uses, TransferPlanner.cs:403-405).
+    /// Circularize uses to populate TransferData.TransferDvVlf).
     /// </summary>
     private static double3 CciToVlf(double3 dvCci, Orbit orbit, SimTime time)
     {

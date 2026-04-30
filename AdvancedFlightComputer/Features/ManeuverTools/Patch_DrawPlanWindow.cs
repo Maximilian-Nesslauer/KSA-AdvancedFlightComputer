@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
@@ -21,7 +20,8 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
 internal static class Patch_DrawPlanWindow
 {
-    // Window placement, kept to match stock TransferPlanner.cs:181-182, 1012-1013.
+    // Window placement, kept to match stock TransferPlanner.DrawPlanWindow and
+    // DrawSelectedTransferFlightPlan window-position constants.
     private const float MainWindowOffsetX = 440f;
     private const float MainWindowOffsetY = 50f;
     private const float MainWindowWidth = 400f;
@@ -37,30 +37,38 @@ internal static class Patch_DrawPlanWindow
     private static bool _showFlightPlanPreview;
     private static bool _showOrbitPreview;
 
-    private static List<TransferObject>? _vehicleList;
-    private static int _lastVehicleCount;
-
     static bool Prefix(Viewport inViewport)
     {
+        TransferType transferType;
         try
         {
-            var transferType = (TransferType)GameReflection.TransferPlanner_transferType!.GetValue(null)!;
-            if (!ManeuverTools.IsOurType(transferType.GetKey()))
-            {
-                _ourBurn = null;
-                _lastEntry = null;
-                _lastSource = null;
-                return true;
-            }
+            transferType = (TransferType)GameReflection.TransferPlanner_transferType!.GetValue(null)!;
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix (type lookup): {ex.Message}");
+            return true;
+        }
 
+        if (!ManeuverTools.IsOurType(transferType.GetKey()))
+        {
+            _ourBurn = null;
+            _lastEntry = null;
+            _lastSource = null;
+            return true;
+        }
+
+        try
+        {
             DrawWindow(inViewport, transferType);
-            return false;
         }
         catch (Exception ex)
         {
             DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix: {ex.Message}");
-            return true;
+            // ImGui state may be partially set; do not let stock also Begin the
+            // same window this frame, that produces ID-stack conflicts.
         }
+        return false;
     }
 
     private static void DrawWindow(Viewport inViewport, TransferType transferType)
@@ -73,70 +81,66 @@ internal static class Patch_DrawPlanWindow
         ImGui.SetNextWindowSize(new float2(MainWindowWidth, MainWindowHeight), ImGuiCond.Appearing);
 
         bool pOpen = (bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!;
-        if (!ImGui.Begin("Transfer Planning"u8, ref pOpen,
-                ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse
-                | ImGuiWindowFlags.NoSavedSettings))
+        bool windowOpen = ImGui.Begin("Transfer Planning"u8, ref pOpen,
+            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings);
+        try
         {
-            if (!pOpen) HandleWindowClose();
-            ImGui.End();
-            return;
-        }
-        if (!pOpen)
-        {
-            HandleWindowClose();
-            ImGui.End();
-            return;
-        }
-        GameReflection.TransferPlanner_showPlanWindow!.SetValue(null, true);
+            if (!pOpen)
+            {
+                HandleWindowClose();
+                return;
+            }
+            if (!windowOpen)
+                return;
 
-        if (!DrawPlanTypeDropdown(ref transferType))
-        {
-            ImGui.End();
-            return;
-        }
+            GameReflection.TransferPlanner_showPlanWindow!.SetValue(null, true);
 
-        ImGui.Text(""u8);
+            if (!DrawPlanTypeDropdown(ref transferType))
+                return;
 
-        Vehicle? source = DrawSourceDropdown();
-        if (source?.Orbit == null)
-        {
-            ImGui.End();
-            return;
-        }
-        _lastSource = source;
+            ImGui.Text(""u8);
 
-        ImGui.Separator();
-
-        ManeuverToolsWindow.DrawInline(transferType.GetKey(), source);
-
-        var result = ComputeManeuver(transferType.GetKey(), source);
-        if (result != null)
-        {
-            var (entry, _) = OrbitManeuvers.BuildTransferEntry(source, result.Value);
-            _lastEntry = entry;
+            Vehicle? source = DrawSourceDropdown();
+            if (source?.Orbit == null)
+                return;
+            _lastSource = source;
 
             ImGui.Separator();
-            DrawManeuverInfo(result.Value);
 
-            ImGui.Spacing();
-            DrawCreateButton(source, result.Value);
+            ManeuverToolsWindow.DrawInline(transferType.GetKey(), source);
 
-            if (_ourBurn == null)
+            var result = ComputeManeuver(transferType.GetKey(), source);
+            if (result != null)
             {
+                var (entry, _) = OrbitManeuvers.BuildTransferEntry(source, result.Value);
+                _lastEntry = entry;
+
                 ImGui.Separator();
-                ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
-                ImGuiHelper.DrawCheckbox("Preview Orbit"u8, ref _showOrbitPreview, isChanged: false);
-                ImGuiHelper.DrawCheckbox("Preview Flight Plan"u8, ref _showFlightPlanPreview,
-                    isChanged: false);
-                ImGuiHelper.EndColumns();
+                DrawManeuverInfo(result.Value);
+
+                ImGui.Spacing();
+                DrawCreateButton(source, result.Value);
+
+                if (_ourBurn == null)
+                {
+                    ImGui.Separator();
+                    ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
+                    ImGuiHelper.DrawCheckbox("Preview Orbit"u8, ref _showOrbitPreview, isChanged: false);
+                    ImGuiHelper.DrawCheckbox("Preview Flight Plan"u8, ref _showFlightPlanPreview,
+                        isChanged: false);
+                    ImGuiHelper.EndColumns();
+                }
+            }
+            else
+            {
+                _lastEntry = null;
             }
         }
-        else
+        finally
         {
-            _lastEntry = null;
+            // ImGui requires End() for every Begin(), regardless of return value.
+            ImGui.End();
         }
-
-        ImGui.End();
 
         if (_showOrbitPreview && _lastEntry != null && _lastSource != null)
             DrawOrbitMarkers(inViewport);
@@ -169,34 +173,36 @@ internal static class Patch_DrawPlanWindow
     private static Vehicle? DrawSourceDropdown()
     {
         var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!.GetValue(null)!;
-        int currentCount = Universe.CurrentSystem!.CountOf<Vehicle>();
-        if (_vehicleList == null || currentCount != _lastVehicleCount)
-        {
-            _vehicleList = new List<TransferObject>();
-            foreach (Vehicle v in Universe.CurrentSystem.All.OfType<Vehicle>())
-                _vehicleList.Add(new TransferObject(v));
-            _lastVehicleCount = currentCount;
-        }
-        var vehicleList = _vehicleList;
+
+        // Rebuild every frame from VehiclesInFrame to match stock and avoid
+        // TransferObject._index aliasing after a vehicle is destroyed.
+        ReadOnlySpan<Vehicle> vehiclesInFrame = Program.VehiclesInFrame;
+        Span<TransferObject> list = stackalloc TransferObject[vehiclesInFrame.Length];
+        for (int i = 0; i < vehiclesInFrame.Length; i++)
+            list[i] = new TransferObject(vehiclesInFrame[i]);
 
         if (ImGui.IsWindowAppearing() || sourceBody.GetKey() == "N/A")
         {
+            sourceBody = default;
             if (Program.ControlledVehicle != null)
             {
-                int idx = vehicleList.FindIndex(v => v.GetKey() == Program.ControlledVehicle.Id);
-                if (idx > -1)
-                    sourceBody = vehicleList[idx];
+                for (int i = 0; i < list.Length; i++)
+                {
+                    if (list[i].GetKey() == Program.ControlledVehicle.Id)
+                    {
+                        sourceBody = list[i];
+                        break;
+                    }
+                }
             }
-            else if (vehicleList.Count > 0)
-                sourceBody = vehicleList[0];
-            else
-                sourceBody = default;
+            if (sourceBody.GetKey() == "N/A" && list.Length > 0)
+                sourceBody = list[0];
 
             GameReflection.TransferPlanner_sourceBody!.SetValue(null, sourceBody);
         }
 
         TransferObject prev = sourceBody;
-        if (ImGuiHelper.DrawCombo("Source:"u8, ref sourceBody, vehicleList)
+        if (ImGuiHelper.DrawCombo("Source:"u8, ref sourceBody, list)
             && sourceBody.GetKey() != prev.GetKey())
         {
             GameReflection.TransferPlanner_sourceBody!.SetValue(null, sourceBody);
@@ -222,7 +228,7 @@ internal static class Patch_DrawPlanWindow
         if (timeToNode > 0)
         {
             ImGuiHelper.DrawTextWidget("Time to Burn:"u8,
-                ManeuverToolsWindow.FormatTimeSpan(timeToNode));
+                FormatHelper.FormatDuration(timeToNode));
         }
     }
 
@@ -270,9 +276,9 @@ internal static class Patch_DrawPlanWindow
                     maneuver.DvVlf, patch, source);
                 _ourBurn.IsGizmoActive = false;
 
-                // Stock pattern (TransferPlanner.cs:438-444): the actual
-                // BurnPlan mutation runs at the next frame boundary so it
-                // is sequenced with deletes/updates.
+                // Stock pattern from DrawPlanWindow's Create button: enqueue,
+                // the actual BurnPlan mutation runs at the next frame boundary
+                // so it is sequenced with deletes/updates.
                 InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
                 {
                     Burn = _ourBurn,
@@ -304,7 +310,7 @@ internal static class Patch_DrawPlanWindow
     /// <summary>
     /// Renders the post-burn orbit in the 3D view. Called from
     /// Patch_OnPreRender when our type is active and preview is enabled.
-    /// Follows the same pattern as stock DrawSelectedTransfer.
+    /// Mirrors stock's DrawSelectedTransfer rendering path.
     /// </summary>
     internal static void RenderOrbitPreview(Viewport inViewport)
     {
@@ -370,8 +376,7 @@ internal static class Patch_DrawPlanWindow
     {
         if (_ourBurn == null) return;
 
-        Vehicle? source = (_ourBurn.Vehicle != null
-            && _ourBurn.Vehicle.FlightComputer.BurnPlan.TryGetBurn(_ourBurn))
+        Vehicle? source = _ourBurn.Vehicle.FlightComputer.BurnPlan.TryGetBurn(_ourBurn)
             ? _ourBurn.Vehicle : null;
 
         if (source == null)
@@ -396,8 +401,6 @@ internal static class Patch_DrawPlanWindow
         _lastSource = null;
         _showFlightPlanPreview = false;
         _showOrbitPreview = false;
-        _vehicleList = null;
-        _lastVehicleCount = 0;
     }
 
     #endregion
