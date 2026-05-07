@@ -1,0 +1,151 @@
+name: Publish to SpaceDock
+
+# Triggered when a GitHub release is published. Pulls the release zip,
+# logs in to SpaceDock with the configured credentials, and uploads the
+# new version via /api/mod/<id>/update.
+#
+# Required repo settings (Settings -> Secrets and variables -> Actions):
+#   secrets:
+#     SPACEDOCK_USERNAME    SpaceDock account username
+#     SPACEDOCK_PASSWORD    Dedicated SpaceDock password (do not reuse)
+#   variables:
+#     SPACEDOCK_MOD_ID      Numeric mod id from spacedock.info/mod/<id>/...
+#     KSA_GAME_VERSION      Compatible KSA build, e.g. 2026.5.5.4304
+#
+# The release tag (e.g. v0.3.2) is uploaded as version 0.3.2 (the leading
+# 'v' is stripped). Each release must contain exactly one .zip asset.
+# The release body is sent as the SpaceDock changelog.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to (re)upload, e.g. v0.3.2"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spacedock-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Resolve release tag
+        id: tag
+        env:
+          EVENT_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${EVENT_TAG:-$INPUT_TAG}"
+          if [ -z "$tag" ]; then
+            echo "::error::No tag available from event or workflow_dispatch input"
+            exit 1
+          fi
+          version="${tag#v}"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Resolved tag=$tag version=$version"
+
+      - name: Validate config
+        env:
+          MOD_ID: ${{ vars.SPACEDOCK_MOD_ID }}
+          GAME_VERSION: ${{ vars.KSA_GAME_VERSION }}
+          SD_USER: ${{ secrets.SPACEDOCK_USERNAME }}
+          SD_PASS: ${{ secrets.SPACEDOCK_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for var in MOD_ID GAME_VERSION SD_USER SD_PASS; do
+            if [ -z "${!var}" ]; then
+              echo "::error::Required setting $var is empty"
+              missing=1
+            fi
+          done
+          test $missing -eq 0
+
+      - name: Download release zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          gh release download "$TAG" --pattern '*.zip' --dir artifact
+          count=$(find artifact -maxdepth 1 -name '*.zip' | wc -l)
+          if [ "$count" -ne 1 ]; then
+            echo "::error::Expected exactly 1 zip in release $TAG, found $count"
+            ls -la artifact || true
+            exit 1
+          fi
+          mv artifact/*.zip mod.zip
+          ls -la mod.zip
+
+      - name: Fetch release changelog
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release view "$TAG" --json body -q .body > changelog.md
+          if [ ! -s changelog.md ]; then
+            echo "Release body is empty, using fallback"
+            printf 'Release %s' "$TAG" > changelog.md
+          fi
+          echo "Changelog length: $(wc -c < changelog.md) bytes"
+
+      - name: Login to SpaceDock
+        env:
+          SD_USER: ${{ secrets.SPACEDOCK_USERNAME }}
+          SD_PASS: ${{ secrets.SPACEDOCK_PASSWORD }}
+          UA: spacedock-publish/1.0 (+https://github.com/${{ github.repository }})
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error --fail-with-body \
+            --user-agent "$UA" \
+            --cookie-jar cookies.txt \
+            --form-string "username=$SD_USER" \
+            --form-string "password=$SD_PASS" \
+            https://spacedock.info/api/login)
+          echo "Login response: $response"
+          if printf '%s' "$response" | grep -Eq '"error"[[:space:]]*:[[:space:]]*true'; then
+            echo "::error::SpaceDock login failed"
+            exit 1
+          fi
+
+      - name: Upload new version to SpaceDock
+        env:
+          MOD_ID: ${{ vars.SPACEDOCK_MOD_ID }}
+          GAME_VERSION: ${{ vars.KSA_GAME_VERSION }}
+          VERSION: ${{ steps.tag.outputs.version }}
+          UA: spacedock-publish/1.0 (+https://github.com/${{ github.repository }})
+        run: |
+          set -euo pipefail
+          response=$(curl --silent --show-error --fail-with-body \
+            --user-agent "$UA" \
+            --cookie cookies.txt \
+            --form-string "version=$VERSION" \
+            --form-string "game-version=$GAME_VERSION" \
+            --form-string "notify-followers=yes" \
+            --form "changelog=<changelog.md" \
+            --form "zipball=@mod.zip" \
+            "https://spacedock.info/api/mod/$MOD_ID/update")
+          echo "Upload response: $response"
+          if printf '%s' "$response" | grep -Eq '"error"[[:space:]]*:[[:space:]]*true'; then
+            echo "::error::SpaceDock upload failed"
+            exit 1
+          fi
+          echo "Successfully uploaded version $VERSION to SpaceDock mod $MOD_ID"
+
+      - name: Cleanup credentials
+        if: always()
+        run: rm -f cookies.txt
