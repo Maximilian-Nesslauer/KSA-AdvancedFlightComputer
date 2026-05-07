@@ -10,11 +10,13 @@ name: Publish to SpaceDock
 #     SPACEDOCK_PASSWORD    Dedicated SpaceDock password (do not reuse)
 #   variables:
 #     SPACEDOCK_MOD_ID      Numeric mod id from spacedock.info/mod/<id>/...
-#     KSA_GAME_VERSION      Compatible KSA build, e.g. 2026.5.5.4304
 #
 # The release tag (e.g. v0.3.2) is uploaded as version 0.3.2 (the leading
-# 'v' is stripped). Each release must contain exactly one .zip asset.
-# The release body is sent as the SpaceDock changelog.
+# 'v' is stripped). The compatible KSA build is read from the
+# `TestedGameVersion` constant in any Mod.cs in the repo, so bumping the
+# game version in code is enough; no repo variable to maintain.
+# Each release must contain exactly one .zip asset. The release body is
+# sent as the SpaceDock changelog.
 
 on:
   release:
@@ -57,19 +59,45 @@ jobs:
       - name: Validate config
         env:
           MOD_ID: ${{ vars.SPACEDOCK_MOD_ID }}
-          GAME_VERSION: ${{ vars.KSA_GAME_VERSION }}
           SD_USER: ${{ secrets.SPACEDOCK_USERNAME }}
           SD_PASS: ${{ secrets.SPACEDOCK_PASSWORD }}
         run: |
           set -euo pipefail
           missing=0
-          for var in MOD_ID GAME_VERSION SD_USER SD_PASS; do
+          for var in MOD_ID SD_USER SD_PASS; do
             if [ -z "${!var}" ]; then
               echo "::error::Required setting $var is empty"
               missing=1
             fi
           done
           test $missing -eq 0
+
+      - name: Checkout source at tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+
+      - name: Extract tested game version from Mod.cs
+        id: gamever
+        run: |
+          set -euo pipefail
+          # Find the first Mod.cs that defines TestedGameVersion. The
+          # project folder is normally <ModName>/Mod.cs from repo root.
+          line=$(grep -rEh --include='Mod.cs' \
+                   'private +const +string +TestedGameVersion *= *"' \
+                   . | head -1 || true)
+          if [ -z "$line" ]; then
+            echo "::error::Could not find TestedGameVersion in any Mod.cs"
+            exit 1
+          fi
+          # Strip everything except the quoted value, then strip leading 'v'
+          version=$(printf '%s' "$line" | sed -E 's/.*"v?([^"]+)".*/\1/')
+          if [ -z "$version" ]; then
+            echo "::error::Failed to parse game version from line: $line"
+            exit 1
+          fi
+          echo "game_version=$version" >> "$GITHUB_OUTPUT"
+          echo "Extracted tested game version: $version"
 
       - name: Download release zip
         env:
@@ -125,7 +153,7 @@ jobs:
       - name: Upload new version to SpaceDock
         env:
           MOD_ID: ${{ vars.SPACEDOCK_MOD_ID }}
-          GAME_VERSION: ${{ vars.KSA_GAME_VERSION }}
+          GAME_VERSION: ${{ steps.gamever.outputs.game_version }}
           VERSION: ${{ steps.tag.outputs.version }}
           UA: spacedock-publish/1.0 (+https://github.com/${{ github.repository }})
         run: |
@@ -144,7 +172,7 @@ jobs:
             echo "::error::SpaceDock upload failed"
             exit 1
           fi
-          echo "Successfully uploaded version $VERSION to SpaceDock mod $MOD_ID"
+          echo "Successfully uploaded version $VERSION (KSA $GAME_VERSION) to SpaceDock mod $MOD_ID"
 
       - name: Cleanup credentials
         if: always()
