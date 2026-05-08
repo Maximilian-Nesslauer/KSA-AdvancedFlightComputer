@@ -6,7 +6,7 @@ Adds set periapsis / set apoapsis / match inclination / set inclination quick-to
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.5.5.4304.
+Validated against KSA build version 2026.5.6.4337.
 
 ## Features
 
