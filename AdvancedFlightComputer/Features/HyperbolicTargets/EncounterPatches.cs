@@ -15,12 +15,13 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 /// The game's RefineBurnTask sweeps dV +/-5% and probes each trajectory
 /// for SOI intercepts via OrbitalTransfers.InterceptsBody, which calls
 /// PatchedConic.TryFindClosestEncounter. Encounters are populated by
-/// PatchedConic.FindClosestApproaches, and that function gates on
-/// `Math.Min(..., secondBody.Orbit.Period)`. Period is NaN for hyperbolic
-/// targets, the gate is `!num2.IsFinite() return;`, so no encounter is
-/// ever found. Even with a finite gate, the patched-conic trajectory
-/// diverges ~0.3 AU from the Lambert solution at arrival because the
-/// impulsive approximation breaks down at extreme dV (~26 km/s).
+/// PatchedConic.FindClosestApproaches; for a hyperbolic target on a
+/// heliocentric patch with finite EndTime its time-window gate
+/// multiplies in secondBody.Orbit.Period (NaN), hits the
+/// `!num2.IsFinite() return;` early-out, and no encounter is found.
+/// Even with a finite gate the patched-conic trajectory diverges
+/// ~0.3 AU from the Lambert solution because the impulsive
+/// approximation breaks down at extreme dV (~26 km/s).
 ///
 /// Instead we build the flight plan with the Lambert-optimal dV directly
 /// and sweep the trajectory in two passes (coarse then refined) for an
