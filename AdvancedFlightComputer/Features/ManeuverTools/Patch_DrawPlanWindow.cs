@@ -112,8 +112,7 @@ internal static class Patch_DrawPlanWindow
             var result = ComputeManeuver(transferType.GetKey(), source);
             if (result != null)
             {
-                var (entry, _) = OrbitManeuvers.BuildTransferEntry(source, result.Value);
-                _lastEntry = entry;
+                _lastEntry = BuildTransferEntry(source, result.Value);
 
                 ImGui.Separator();
                 DrawManeuverInfo(result.Value);
@@ -293,6 +292,32 @@ internal static class Patch_DrawPlanWindow
                 });
             }
         }
+    }
+
+    /// <summary>
+    /// Builds a PorkChopEntry for <paramref name="maneuver"/> so the
+    /// flight-plan preview / orbit-marker rendering pipelines (which
+    /// expect a PorkChopEntry like the stock Hohmann path produces)
+    /// can run unchanged.
+    /// </summary>
+    private static OrbitalTransfers.PorkChopEntry BuildTransferEntry(
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver)
+    {
+        var transferData = new OrbitalTransfers.TransferData
+        {
+            Start = maneuver.BurnTime,
+            Point = source.Orbit.GetPointAt(maneuver.BurnTime),
+            DeltaVelocityCci = maneuver.DvCci,
+            TransferDvVlf = maneuver.DvVlf
+        };
+
+        FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
+        var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false);
+        OrbitalTransfers.BuildFlightPlan(
+            ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,
+            out _, out _);
+
+        return new OrbitalTransfers.PorkChopEntry(transferData, flightPlan);
     }
 
     #endregion

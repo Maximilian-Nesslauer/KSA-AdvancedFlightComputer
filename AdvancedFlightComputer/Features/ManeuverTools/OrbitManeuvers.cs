@@ -119,37 +119,6 @@ internal static class OrbitManeuvers
     }
 
     /// <summary>
-    /// Builds a PorkChopEntry + TransferInfo for use with the stock Create button.
-    /// Follows the same pattern as stock's Circularize branch in
-    /// TransferPlanner.DrawPlanWindow (TransferData with Start/Point/Dv plus a
-    /// 1x1 PorkChopData and a freshly-built FlightPlan).
-    /// </summary>
-    public static (OrbitalTransfers.PorkChopEntry entry, OrbitalTransfers.TransferInfo info)
-        BuildTransferEntry(Vehicle source, ManeuverResult maneuver)
-    {
-        var transferData = new OrbitalTransfers.TransferData
-        {
-            Start = maneuver.BurnTime,
-            Point = source.Orbit.GetPointAt(maneuver.BurnTime),
-            DeltaVelocityCci = maneuver.DvCci,
-            TransferDvVlf = maneuver.DvVlf
-        };
-
-        var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false);
-        info.PorkChopData = new OrbitalTransfers.PorkChopEntry[1, 1];
-
-        FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
-        OrbitalTransfers.BuildFlightPlan(
-            ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,
-            out _, out _);
-
-        var entry = new OrbitalTransfers.PorkChopEntry(transferData, flightPlan);
-        info.PorkChopData[0, 0] = entry;
-
-        return (entry, info);
-    }
-
-    /// <summary>
     /// Computes a plane-change burn at the ascending or descending node (relative
     /// to the chosen reference plane) to set the orbit's inclination to a specific
     /// angle. Preserves orbital speed.
