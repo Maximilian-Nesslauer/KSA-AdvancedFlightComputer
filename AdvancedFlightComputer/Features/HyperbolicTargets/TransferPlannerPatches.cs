@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
 using Brutal.Logging;
+using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
 
@@ -126,10 +127,19 @@ internal static class Patch_SetTransferInfo
 /// For a hyperbolic flyby the cheapest intercept is near the target's
 /// periapsis (closest to the Sun, slowest, longest dwell in the inner
 /// system), so we depart roughly hohmann_tof before that.
+///
+/// When the ideal departure is already in the past, we emit a one-shot
+/// alert so the user understands why the porkchop window is degenerate.
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.AlignmentTime))]
 internal static class Patch_AlignmentTime
 {
+    /// <summary>Targets we've already alerted about this session, so
+    /// the per-frame alignment redraw does not spam the screen.</summary>
+    private static readonly HashSet<string> _alertedTargets = new();
+
+    public static void Reset() => _alertedTargets.Clear();
+
     static bool Prefix(OrbitalTransfers.TransferInfo transferInfo,
                        SimTime startTime,
                        ref SimTime __result)
@@ -147,6 +157,11 @@ internal static class Patch_AlignmentTime
             LogHelper.WarnOnce($"alignment-past-{targetId}",
                 $"[AFC] {targetId} is past periapsis (peri at sim t={tPeri.Seconds():F0}s, " +
                 $"hohmann ToF {hohmannToF.Seconds():F0}s); alignment time clamped to startTime.");
+
+            if (_alertedTargets.Add(targetId))
+                TimedAlert.Create(
+                    $"{targetId} has passed periapsis - departure window already open. Transfer uses next available alignment.",
+                    Color.Yellow, 6.0);
         }
 
         __result = SimTime.Max(ideal, startTime);

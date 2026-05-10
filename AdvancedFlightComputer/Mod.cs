@@ -58,6 +58,7 @@ public sealed class Mod
 
         ManeuverToolsWindow.Reset();
         Patch_DrawPlanWindow.Reset();
+        Patch_AlignmentTime.Reset();
         LogHelper.Reset();
 #if DEBUG
         PerfTracker.Reset();
