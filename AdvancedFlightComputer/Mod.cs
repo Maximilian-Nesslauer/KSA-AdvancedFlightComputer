@@ -1,6 +1,7 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -37,6 +38,7 @@ public sealed class Mod
             ManeuverTools.InjectTransferTypes();
             _maneuverTypesInjected = true;
             ManeuverTools.ApplyPatches(_harmony);
+            MultiPassUI.Enabled = true;
         }
         else
             DefaultCategory.Log.Warning("[AFC] ManeuverTools disabled - reflection targets not found.");
@@ -59,6 +61,9 @@ public sealed class Mod
         ManeuverToolsWindow.Reset();
         Patch_DrawPlanWindow.Reset();
         Patch_AlignmentTime.Reset();
+        MultiPassUI.Enabled = false;
+        MultiPassUI.Reset();
+        MultiPassPreviewCache.Reset();
         LogHelper.Reset();
 #if DEBUG
         PerfTracker.Reset();

@@ -1,5 +1,6 @@
 using System;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -117,6 +118,8 @@ internal static class Patch_DrawPlanWindow
                 ImGui.Separator();
                 DrawManeuverInfo(result.Value);
 
+                MultiPassUI.Draw(source, result.Value, transferType.GetKey());
+
                 ImGui.Spacing();
                 DrawCreateButton(source, result.Value);
 
@@ -141,10 +144,16 @@ internal static class Patch_DrawPlanWindow
             ImGui.End();
         }
 
-        if (_showOrbitPreview && _lastEntry != null && _lastSource != null)
-            DrawOrbitMarkers(inViewport);
+        // Multi-pass walks its own pass array; single-burn uses _lastEntry.
+        if (_showOrbitPreview && _lastSource != null)
+        {
+            if (MultiPassUI.HasMultiPassPreview)
+                MultiPassUI.RenderMarkers(inViewport, _lastSource);
+            else if (_lastEntry != null)
+                DrawOrbitMarkers(inViewport);
+        }
 
-        if (_showFlightPlanPreview && _lastEntry != null)
+        if (_showFlightPlanPreview)
             DrawFlightPlanWindow(inViewport);
     }
 
@@ -233,6 +242,13 @@ internal static class Patch_DrawPlanWindow
 
     private static void DrawFlightPlanWindow(Viewport inViewport)
     {
+        // Multi-pass shows the final-pass trajectory (the "end up here"
+        // orbit); single-burn shows the lone computed entry.
+        FlightPlan? fp = MultiPassUI.HasMultiPassPreview
+            ? MultiPassUI.LastPassFlightPlan
+            : _lastEntry?.FlightPlan;
+        if (fp == null) return;
+
         ImGui.SetNextWindowPos(
             inViewport.Position + new float2(FlightPlanWindowOffsetX, FlightPlanWindowOffsetY),
             ImGuiCond.Appearing, (float2?)null);
@@ -242,7 +258,7 @@ internal static class Patch_DrawPlanWindow
         if (ImGui.Begin("Maneuver Flight Plan"u8, ref _showFlightPlanPreview,
                 ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing))
         {
-            _lastEntry!.FlightPlan.DrawPatchInfo();
+            fp.DrawPatchInfo();
         }
         ImGui.End();
     }
@@ -339,14 +355,22 @@ internal static class Patch_DrawPlanWindow
     }
 
     /// <summary>
-    /// Renders the post-burn orbit in the 3D view. Called from
-    /// Patch_OnPreRender when our type is active and preview is enabled.
-    /// Mirrors stock's DrawSelectedTransfer rendering path.
+    /// Renders the post-burn orbit (single-burn or multi-pass) in the
+    /// 3D view. Called from Patch_OnPreRender; gated on the
+    /// "Preview Orbit" checkbox.
     /// </summary>
     internal static void RenderOrbitPreview(Viewport inViewport)
     {
-        if (!_showOrbitPreview || _ourBurn != null || _lastEntry == null || _lastSource == null)
+        if (_ourBurn != null || _lastSource == null) return;
+        if (!_showOrbitPreview) return;
+
+        if (MultiPassUI.HasMultiPassPreview)
+        {
+            MultiPassUI.Render(inViewport, _lastSource);
             return;
+        }
+
+        if (_lastEntry == null) return;
 
         FlightPlan fp = _lastEntry.FlightPlan;
         if (fp.Patches.Count == 0)
