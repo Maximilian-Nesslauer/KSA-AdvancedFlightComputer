@@ -1,0 +1,138 @@
+using System;
+using AdvancedFlightComputer.Core;
+using Brutal.Logging;
+using HarmonyLib;
+using KSA;
+
+namespace AdvancedFlightComputer.Features.MultiPass;
+
+/// <summary>
+/// Tracks the active KSA save game so MultiPassRegistry can scope its
+/// entries by save id. Two Harmony patches:
+/// <list type="bullet">
+/// <item><c>UncompressedSave.Load</c> Postfix: capture the loaded
+/// save id and refresh the registry from disk so in-memory state
+/// matches whatever was persisted for that save.</item>
+/// <item><c>UncompressedSave.Write</c> Postfix: rekey transient
+/// entries to the just-saved save id and flush the registry to disk.
+/// This is the one auto-save point - mid-execution mutations are
+/// in-memory only.</item>
+/// </list>
+/// </summary>
+internal static class SaveLoadObserver
+{
+    /// <summary>Save id of the most recently loaded / written save.
+    /// Empty in the default starting situation (no save loaded yet).</summary>
+    public static string CurrentSaveId { get; private set; } = string.Empty;
+
+    /// <summary>True after at least one save load or write this
+    /// session - unambiguous signal that the world was (re)loaded.</summary>
+    public static bool HasLoadedSave { get; private set; }
+
+    public static void Reset()
+    {
+        CurrentSaveId = string.Empty;
+        HasLoadedSave = false;
+    }
+
+    public static void ApplyPatches(Harmony harmony)
+    {
+        harmony.CreateClassProcessor(typeof(LoadPatch)).Patch();
+        harmony.CreateClassProcessor(typeof(WritePatch)).Patch();
+
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug("[AFC] SaveLoadObserver: patches applied.");
+    }
+
+    [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Load))]
+    private static class LoadPatch
+    {
+        static void Postfix(UncompressedSave __instance)
+        {
+            try
+            {
+                CurrentSaveId = __instance.Id ?? string.Empty;
+                HasLoadedSave = true;
+
+                // Drop the per-frame preview cache: its inputs (vehicle
+                // id, mass, engine signature) can match a same-named
+                // vehicle in the just-loaded save and return a stale
+                // SequenceBurnState / PassPreviewResult from the
+                // previous world.
+                MultiPassPreviewCache.Reset();
+
+                // Refresh registry from disk so in-memory exec state
+                // matches whatever was persisted for the just-loaded
+                // save (handles "reload to revert" mid-game).
+                MultiPassRegistry.Load();
+
+                if (DebugConfig.MultiPass)
+                {
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] SaveLoadObserver.LoadPatch: loaded save '{CurrentSaveId}', " +
+                        $"registry has {MultiPassRegistry.Count} total entries " +
+                        $"({MultiPassRegistry.CountForCurrentSave} for this save).");
+                    MultiPassDebug.LogRegistry(
+                        "SaveLoadObserver.LoadPatch (post-load)", MultiPassRegistry.Snapshot);
+
+                    // Dump the BurnPlan of the controlled vehicle so
+                    // we can see whether the burn we expect to reattach
+                    // to is actually present.
+                    Vehicle? controlled = Program.ControlledVehicle;
+                    if (controlled != null)
+                        MultiPassDebug.LogBurnPlan(
+                            $"SaveLoadObserver.LoadPatch vehicle='{controlled.Id}'",
+                            controlled.FlightComputer.BurnPlan);
+                }
+            }
+            catch (Exception ex)
+            {
+                DefaultCategory.Log.Warning(
+                    $"[AFC] SaveLoadObserver Load Postfix: {ex.Message}");
+            }
+        }
+    }
+
+    [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Write))]
+    private static class WritePatch
+    {
+        static void Postfix(UncompressedSave __instance)
+        {
+            try
+            {
+                string newSaveId = __instance.Id ?? string.Empty;
+
+                if (DebugConfig.MultiPass)
+                {
+                    MultiPassDebug.LogRegistry(
+                        $"SaveLoadObserver.WritePatch (pre-rekey, target save='{newSaveId}')",
+                        MultiPassRegistry.Snapshot);
+
+                    Vehicle? controlled = Program.ControlledVehicle;
+                    if (controlled != null)
+                        MultiPassDebug.LogBurnPlan(
+                            $"SaveLoadObserver.WritePatch vehicle='{controlled.Id}' (pre-save)",
+                            controlled.FlightComputer.BurnPlan);
+                }
+
+                // Rekey before Save() so the promoted entries hit disk.
+                MultiPassRegistry.RekeyTransientsTo(newSaveId);
+
+                CurrentSaveId = newSaveId;
+                HasLoadedSave = true;
+
+                MultiPassRegistry.Save();
+
+                if (DebugConfig.MultiPass)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] SaveLoadObserver.WritePatch: wrote save '{CurrentSaveId}', " +
+                        $"persisted registry alongside.");
+            }
+            catch (Exception ex)
+            {
+                DefaultCategory.Log.Warning(
+                    $"[AFC] SaveLoadObserver Write Postfix: {ex.Message}");
+            }
+        }
+    }
+}

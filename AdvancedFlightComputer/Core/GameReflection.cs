@@ -55,6 +55,37 @@ internal static class GameReflection
 
     #endregion
 
+    #region MultiPass
+
+    // Pinned to the (SimStep, ref VehicleUpdateData, ReadOnlySpan<Vehicle>)
+    // overload so a future overload addition does not silently misbind.
+    public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateFromTaskResults),
+            new Type[]
+            {
+                typeof(SimStep),
+                typeof(VehicleUpdateData).MakeByRefType(),
+                typeof(ReadOnlySpan<Vehicle>),
+            });
+
+    // UncompressedSave is the concrete path that calls Universe.DeserializeSave;
+    // VehicleSave.Load is per-vehicle, not world-state. We use UncompressedSave.Id
+    // as the save-game discriminator for registry scoping.
+    public static readonly MethodInfo? UncompressedSave_Load =
+        AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Load),
+            Type.EmptyTypes);
+    public static readonly MethodInfo? UncompressedSave_Write =
+        AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Write),
+            Type.EmptyTypes);
+
+    // Drop registry entries when their vehicle is destroyed; otherwise
+    // a recycled vehicle id could pick up an orphaned execution.
+    public static readonly MethodInfo? Vehicle_Dispose =
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose),
+            Type.EmptyTypes);
+
+    #endregion
+
     #region Validation
 
     public static bool ValidateHyperbolicTargets()
@@ -88,6 +119,22 @@ internal static class GameReflection
             ("TransferPlanner.SetTransferInfo",          TransferPlanner_SetTransferInfo),
         };
         return ValidateTargets("ManeuverTools", targets);
+    }
+
+    /// <summary>Separate from ManeuverTools so a missing
+    /// UpdateFromTaskResults disables only multi-pass execution, leaving
+    /// the maneuver quick-tools functional. Without UncompressedSave
+    /// hooks we cannot scope registry entries to a save game.</summary>
+    public static bool ValidateMultiPass()
+    {
+        var targets = new (string name, object? target)[]
+        {
+            ("Vehicle.UpdateFromTaskResults", Vehicle_UpdateFromTaskResults),
+            ("UncompressedSave.Load",         UncompressedSave_Load),
+            ("UncompressedSave.Write",        UncompressedSave_Write),
+            ("Vehicle.Dispose",               Vehicle_Dispose),
+        };
+        return ValidateTargets("MultiPass", targets);
     }
 
     private static bool ValidateTargets(string feature, (string name, object? target)[] targets)
