@@ -110,22 +110,14 @@ internal static class MultiPassUI
         MultiPassRenderer.RenderPassOrbits(viewport, source, MultiPassPreviewCache.PreviewPasses);
     }
 
-    /// <summary>Per-pass Ap/Pe/AN/DN/encounter markers via stock
-    /// FlightPlan.DrawUi. ImGui-phase counterpart of <see cref="Render"/>.</summary>
+    /// <summary>Per-pass Ap/Pe/AN/DN/SOI/closest markers with first /
+    /// final / intermediate styling. ImGui-phase counterpart of
+    /// <see cref="Render"/>.</summary>
     public static void RenderMarkers(Viewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
         if (source == null || source.Id != MultiPassPreviewCache.PreviewSourceId) return;
-
-        PassPreview[] passes = MultiPassPreviewCache.PreviewPasses;
-        for (int i = 0; i < passes.Length; i++)
-        {
-            var uiContext = new Astronomical.UiContext(
-                viewport, source, Color.Green,
-                TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0),
-                ManeuverToolsWindow.GetSelectedTargetOrbiter());
-            passes[i].FlightPlan.DrawUi(viewport, uiContext);
-        }
+        MultiPassMarkers.Draw(viewport, source, MultiPassPreviewCache.PreviewPasses);
     }
 
     /// <summary>Final-pass FlightPlan; what "Preview Flight Plan"
