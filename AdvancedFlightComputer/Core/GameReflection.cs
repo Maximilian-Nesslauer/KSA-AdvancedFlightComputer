@@ -57,14 +57,12 @@ internal static class GameReflection
 
     #region MultiPass
 
-    // Pinned to the (SimStep, ref VehicleUpdateData, ReadOnlySpan<Vehicle>)
-    // overload so a future overload addition does not silently misbind.
     public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateFromTaskResults),
             new Type[]
             {
-                typeof(SimStep),
                 typeof(VehicleUpdateData).MakeByRefType(),
+                typeof(Vehicle),
                 typeof(ReadOnlySpan<Vehicle>),
             });
 
