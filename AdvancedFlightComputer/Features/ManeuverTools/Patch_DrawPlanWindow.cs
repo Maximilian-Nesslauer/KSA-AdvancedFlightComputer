@@ -55,7 +55,7 @@ internal static class Patch_DrawPlanWindow
             return true;
         }
 
-        if (!ManeuverTools.IsOurType(transferType.GetKey()))
+        if (!ManeuverTools.IsHandledType(transferType.GetKey()))
         {
             _ourBurn = null;
             _lastEntry = null;
@@ -180,7 +180,7 @@ internal static class Patch_DrawPlanWindow
             GameReflection.TransferPlanner_transferCalculated!.SetValue(null, false);
             ManeuverToolsWindow.OnTypeChanged();
 
-            if (!ManeuverTools.IsOurType(transferType.GetKey()))
+            if (!ManeuverTools.IsHandledType(transferType.GetKey()))
             {
                 GameReflection.TransferPlanner_SetTransferInfo!.Invoke(null, null);
                 return false;
@@ -432,6 +432,12 @@ internal static class Patch_DrawPlanWindow
                 ManeuverToolsWindow.UseDescendingNode, now,
                 ManeuverToolsWindow.InclinationRef);
         }
+
+        if (key == ManeuverTools.KeyStockCircularizeApoapsis)
+            return OrbitManeuvers.ComputeCircularize(orbit, useApoapsis: true, now);
+
+        if (key == ManeuverTools.KeyStockCircularizePeriapsis)
+            return OrbitManeuvers.ComputeCircularize(orbit, useApoapsis: false, now);
 
         return null;
     }

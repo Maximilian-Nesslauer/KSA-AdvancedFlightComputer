@@ -206,6 +206,13 @@ internal static class MultiPassPreviewCache
                 ManeuverToolsWindow.InclinationRef,
                 ManeuverToolsWindow.UseDescendingNode, allocations, now);
         }
+        // Circularize at the chosen apse is mechanically an apse burn: a
+        // tangential kick that leaves the burn-radius apse invariant and
+        // moves the opposite apse toward it. burnTa matches the burn point.
+        if (typeKey == KeyStockCircularizeApoapsis)
+            return ApseBurnPlanner.Plan(source, maneuver.DvVlf, new TrueAnomaly(Math.PI), allocations, now);
+        if (typeKey == KeyStockCircularizePeriapsis)
+            return ApseBurnPlanner.Plan(source, maneuver.DvVlf, TrueAnomaly.Zero, allocations, now);
         return new PassPreviewResult(System.Array.Empty<PassPreview>(), Failed: true,
             $"no planner for typeKey '{typeKey}'");
     }

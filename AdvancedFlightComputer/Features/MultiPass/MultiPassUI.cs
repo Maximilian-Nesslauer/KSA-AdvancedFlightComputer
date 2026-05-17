@@ -44,14 +44,16 @@ internal static class MultiPassUI
     public static bool HasMultiPassPreview =>
         Enabled && _passCount > 1 && MultiPassPreviewCache.HasPreview;
 
-    /// <summary>All four maneuver types AFC injects support multi-pass.
-    /// Stock types and any future AFC types that don't fit the
-    /// apse / plane-change pattern are not gated by this predicate.</summary>
+    /// <summary>Types that the multi-pass pipeline can plan and execute:
+    /// the four AFC-injected quick-tools plus the two stock circularize
+    /// entries AFC claims via Patch_DrawPlanWindow.</summary>
     public static bool IsMultiPassSupportedType(string typeKey) =>
         typeKey == KeySetApoapsis
         || typeKey == KeySetPeriapsis
         || typeKey == KeyMatchInclination
-        || typeKey == KeySetInclination;
+        || typeKey == KeySetInclination
+        || typeKey == KeyStockCircularizeApoapsis
+        || typeKey == KeyStockCircularizePeriapsis;
 
     /// <summary>Multi-pass selected and preview is usable.</summary>
     public static bool IsArmed(string typeKey) =>

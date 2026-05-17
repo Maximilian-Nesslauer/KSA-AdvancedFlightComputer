@@ -80,6 +80,36 @@ internal static class OrbitManeuvers
     }
 
     /// <summary>
+    /// Computes a tangential burn at the next apoapsis (useApoapsis = true) or
+    /// periapsis (false) that circularizes the orbit at the burn radius.
+    /// Delegates to stock <see cref="OrbitalTransfers.DvCciToCircularize"/> so the
+    /// math tracks any future tweak to KSA's circularization formula. Returns
+    /// null if the orbit is unbound or already nearly circular (mirrors the
+    /// 0.001 tolerance <see cref="MultiPass.CircularizeIntent"/> uses for
+    /// IsSatisfied so the UI's "already circular" message and the missing
+    /// Create button line up).
+    /// </summary>
+    public static ManeuverResult? ComputeCircularize(
+        Orbit orbit, bool useApoapsis, SimTime now)
+    {
+        if (orbit.Eccentricity >= 1.0)
+            return null;
+        if (orbit.Eccentricity < 0.001)
+            return null;
+
+        SimTime burnTime = useApoapsis
+            ? orbit.GetNextApoapsisTime(now)
+            : orbit.GetNextPeriapsisTime(now);
+
+        double3 dvCci = OrbitalTransfers.DvCciToCircularize(orbit, burnTime);
+        if (dvCci.LengthSquared() < 1e-12)
+            return null;
+
+        double3 dvVlf = CciToVlf(dvCci, orbit, burnTime);
+        return new ManeuverResult(dvCci, dvVlf, burnTime);
+    }
+
+    /// <summary>
     /// Computes a plane-change burn at the ascending or descending node to match
     /// a target orbit's inclination. Preserves orbital speed, only rotates the
     /// velocity vector into the target's orbital plane. <paramref name="fraction"/>

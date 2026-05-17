@@ -146,6 +146,17 @@ internal static class MultiPassController
             };
         }
 
+        if (typeKey == ManeuverTools.ManeuverTools.KeyStockCircularizeApoapsis
+            || typeKey == ManeuverTools.ManeuverTools.KeyStockCircularizePeriapsis)
+        {
+            bool isAtApoapsis = typeKey == ManeuverTools.ManeuverTools.KeyStockCircularizeApoapsis;
+            return new CircularizeIntent
+            {
+                IsAtApoapsis = isAtApoapsis,
+                ParentId = parentId,
+            };
+        }
+
         return null;
     }
 }

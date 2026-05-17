@@ -27,6 +27,8 @@ internal static class MultiPassRegistry
         [ApseIntent.SetPeriapsisKind] = block => ApseIntent.FromToml(block, isSetApoapsis: false),
         [MatchInclinationIntent.MatchInclinationKind] = MatchInclinationIntent.FromToml,
         [SetInclinationIntent.SetInclinationKind] = SetInclinationIntent.FromToml,
+        [CircularizeIntent.CircularizeApoapsisKind] = block => CircularizeIntent.FromToml(block, isAtApoapsis: true),
+        [CircularizeIntent.CircularizePeriapsisKind] = block => CircularizeIntent.FromToml(block, isAtApoapsis: false),
     };
 
     private static readonly Dictionary<(string SaveId, string VehicleId), MultiPassExecution>
