@@ -131,8 +131,11 @@ internal static class Patch_DrawPlanWindow
                 ImGui.Spacing();
                 DrawCreateButton(source, result.Value, transferType.GetKey());
 
-                // Active execution: the live BurnPlan already shows the queued pass.
-                if (_ourBurn == null && !MultiPassRegistry.Has(source.Id))
+                // Hidden only when a single-burn maneuver node has been
+                // created (stock then owns the rendering); during active
+                // multi-pass execution the checkboxes stay visible so
+                // the user can toggle the future-passes overlay.
+                if (_ourBurn == null)
                 {
                     ImGui.Separator();
                     ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
@@ -153,9 +156,7 @@ internal static class Patch_DrawPlanWindow
             ImGui.End();
         }
 
-        bool multiPassActive = _lastSource != null && MultiPassRegistry.Has(_lastSource.Id);
-
-        if (_showOrbitPreview && _lastSource != null && !multiPassActive)
+        if (_showOrbitPreview && _lastSource != null)
         {
             if (MultiPassUI.HasMultiPassPreview)
                 MultiPassUI.RenderMarkers(inViewport, _lastSource);
@@ -163,7 +164,7 @@ internal static class Patch_DrawPlanWindow
                 DrawOrbitMarkers(inViewport);
         }
 
-        if (_showFlightPlanPreview && !multiPassActive)
+        if (_showFlightPlanPreview)
             DrawFlightPlanWindow(inViewport);
     }
 
@@ -305,15 +306,9 @@ internal static class Patch_DrawPlanWindow
                 KSAColor.Xkcd.DustyBlue, Color.Green))
         {
             if (MultiPassUI.IsArmed(typeKey))
-            {
                 MultiPassController.Start(source, typeKey);
-                _showOrbitPreview = false;
-                _showFlightPlanPreview = false;
-            }
             else
-            {
                 CreateSingleBurn(source, maneuver);
-            }
         }
 
         if (blockedByFailedPreview)
@@ -328,8 +323,6 @@ internal static class Patch_DrawPlanWindow
         if (burn == null) return;
 
         _ourBurn = burn;
-        _showOrbitPreview = false;
-        _showFlightPlanPreview = false;
     }
 
     /// <summary>
@@ -379,8 +372,6 @@ internal static class Patch_DrawPlanWindow
     {
         if (_ourBurn != null || _lastSource == null) return;
         if (!_showOrbitPreview) return;
-        // Active execution: stock renders the live BurnPlan, no overlay needed.
-        if (MultiPassRegistry.Has(_lastSource.Id)) return;
 
         if (MultiPassUI.HasMultiPassPreview)
         {
@@ -470,6 +461,16 @@ internal static class Patch_DrawPlanWindow
         _lastSource = null;
         _showFlightPlanPreview = false;
         _showOrbitPreview = false;
+    }
+
+    /// <summary>Called from PassCompletionPatch when a multi-pass execution
+    /// finishes all passes cleanly (not on user cancel). Auto-disables the
+    /// preview toggles since the goal orbit has been reached and the
+    /// overlay is no longer informative.</summary>
+    internal static void OnMultiPassCompleted()
+    {
+        _showOrbitPreview = false;
+        _showFlightPlanPreview = false;
     }
 
     #endregion

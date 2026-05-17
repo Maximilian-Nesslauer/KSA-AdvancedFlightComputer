@@ -17,21 +17,32 @@ internal static class MultiPassMarkers
 
     private const float HoverRadiusPx = 100f;
 
-    public static void Draw(Viewport viewport, Vehicle source, PassPreview[] passes)
+    /// <summary>When <paramref name="skipFirst"/> is true, passes[0] is
+    /// omitted; the first shown pass starts as Triangle (stock owns the
+    /// "next" position). <paramref name="firstPassDisplayNumber"/> is
+    /// the 1-based pass number for passes[0] so hover labels read
+    /// e.g. "Ap Pass 4" mid-execution instead of restarting at 1.</summary>
+    public static void Draw(
+        Viewport viewport, Vehicle source, PassPreview[] passes,
+        int firstPassDisplayNumber = 1, bool skipFirst = false)
     {
-        if (passes.Length == 0) return;
+        int start = skipFirst ? 1 : 0;
+        int shown = passes.Length - start;
+        if (shown <= 0) return;
 
         Camera camera = viewport.GetCamera();
         float2 vpPos = viewport.Position;
         ImDrawListPtr drawList = ImGui.GetBackgroundDrawList();
         float2 mousePos = ImGui.GetIO().MousePos;
 
-        for (int i = 0; i < passes.Length; i++)
+        for (int i = start; i < passes.Length; i++)
         {
-            MarkerMode mode = (i == 0) ? MarkerMode.Full
-                : (i == passes.Length - 1) ? MarkerMode.FinalFull
+            int rel = i - start;
+            MarkerMode mode = (rel == shown - 1) ? MarkerMode.FinalFull
+                : (rel == 0 && !skipFirst) ? MarkerMode.Full
                 : MarkerMode.Triangle;
-            DrawPass(passes[i], mode, i + 1, drawList, camera, vpPos, mousePos);
+            int passNumber = firstPassDisplayNumber + i;
+            DrawPass(passes[i], mode, passNumber, drawList, camera, vpPos, mousePos);
         }
     }
 

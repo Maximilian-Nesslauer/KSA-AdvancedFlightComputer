@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -274,6 +275,7 @@ internal static class PassCompletionPatch
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicleId} multi-pass complete ({exec.PassCountTotal} passes)");
         CancelExecution(vehicleId, reason: null);
+        Patch_DrawPlanWindow.OnMultiPassCompleted();
     }
 
     private static void CancelExecution(string vehicleId, string? reason)

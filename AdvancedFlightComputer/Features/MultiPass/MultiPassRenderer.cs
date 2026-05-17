@@ -7,16 +7,23 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// are dimmer; the final pass keeps full BurnPatchColor.</summary>
 internal static class MultiPassRenderer
 {
+    /// <summary>When <paramref name="skipFirst"/> is true, passes[0] is
+    /// omitted - used during active execution where stock already
+    /// renders the queued burn's post-burn orbit.</summary>
     public static void RenderPassOrbits(
-        Viewport viewport, Vehicle source, PassPreview[] passes)
+        Viewport viewport, Vehicle source, PassPreview[] passes, bool skipFirst = false)
     {
-        for (int i = 0; i < passes.Length; i++)
+        int start = skipFirst ? 1 : 0;
+        int shown = passes.Length - start;
+        if (shown <= 0) return;
+
+        for (int i = start; i < passes.Length; i++)
         {
             FlightPlan fp = passes[i].FlightPlan;
             if (fp.Patches.Count == 0)
                 continue;
 
-            ApplyPassColor(fp, i, passes.Length);
+            ApplyPassColor(fp, i - start, shown);
             EnsurePatchPointsCached(fp);
 
             // isActive=true matches stock's selected-porkchop rendering;
@@ -27,15 +34,15 @@ internal static class MultiPassRenderer
         }
     }
 
-    // 40-100% brightness ramp; final pass at full BurnPatchColor.
+    // 40-100% brightness ramp; final shown pass at full BurnPatchColor.
     // Skip Darken at the final pass: it is NOT identity at factor=1.0
     // (HSL roundtrip with sat/lightness floor at 0.1).
-    private static void ApplyPassColor(FlightPlan fp, int passIndex, int totalPasses)
+    private static void ApplyPassColor(FlightPlan fp, int shownIndex, int shownCount)
     {
         byte4 color = BurnPlan.BurnPatchColor;
-        if (totalPasses > 1 && passIndex < totalPasses - 1)
+        if (shownCount > 1 && shownIndex < shownCount - 1)
         {
-            float brightness = 0.4f + 0.6f * passIndex / (totalPasses - 1);
+            float brightness = 0.4f + 0.6f * shownIndex / (shownCount - 1);
             color = color.Darken(brightness);
         }
         foreach (PatchedConic patch in fp.Patches)

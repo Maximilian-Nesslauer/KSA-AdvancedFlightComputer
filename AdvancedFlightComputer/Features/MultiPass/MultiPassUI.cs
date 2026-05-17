@@ -138,7 +138,12 @@ internal static class MultiPassUI
     {
         if (!HasMultiPassPreview) return;
         if (source == null || source.Id != MultiPassPreviewCache.PreviewSourceId) return;
-        MultiPassRenderer.RenderPassOrbits(viewport, source, MultiPassPreviewCache.PreviewPasses);
+
+        // Active execution: stock renders the queued burn's orbit, so we
+        // skip passes[0] and draw only the future-passes overlay.
+        bool skipFirst = MultiPassRegistry.Has(source.Id);
+        MultiPassRenderer.RenderPassOrbits(
+            viewport, source, MultiPassPreviewCache.PreviewPasses, skipFirst);
     }
 
     /// <summary>Per-pass Ap/Pe/AN/DN/SOI/closest markers with first /
@@ -148,7 +153,17 @@ internal static class MultiPassUI
     {
         if (!HasMultiPassPreview) return;
         if (source == null || source.Id != MultiPassPreviewCache.PreviewSourceId) return;
-        MultiPassMarkers.Draw(viewport, source, MultiPassPreviewCache.PreviewPasses);
+
+        int firstPassDisplayNumber = 1;
+        bool skipFirst = false;
+        if (MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
+        {
+            firstPassDisplayNumber = exec.PassIndex + 1;
+            skipFirst = true;
+        }
+        MultiPassMarkers.Draw(viewport, source,
+            MultiPassPreviewCache.PreviewPasses,
+            firstPassDisplayNumber, skipFirst);
     }
 
     /// <summary>Final-pass FlightPlan; what "Preview Flight Plan"
