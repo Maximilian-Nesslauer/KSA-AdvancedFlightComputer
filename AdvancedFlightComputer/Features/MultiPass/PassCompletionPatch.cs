@@ -168,6 +168,21 @@ internal static class PassCompletionPatch
         {
             exec.AwaitingMaterialization = false;
             exec.AwaitingMaterializationTicks = 0;
+
+            // Carry the user's Auto over from the prior pass: stock's
+            // LoadBurn (just ran via BurnUpdateBuffer.ApplyAll) reset
+            // BurnMode to Manual; flip it back so the queued pass fires
+            // without a manual re-toggle.
+            if (exec.ReengageAutoOnNextBurn)
+            {
+                fc.BurnMode = FlightComputerBurnMode.Auto;
+                exec.ReengageAutoOnNextBurn = false;
+                if (DebugConfig.MultiPass)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] MultiPass: vehicle={vehicleId} re-engaged Auto " +
+                        $"for pass {exec.PassIndex + 1}/{exec.PassCountTotal}");
+            }
+
             return MaterializationResult.Proceed;
         }
 
@@ -249,6 +264,13 @@ internal static class PassCompletionPatch
         exec.ClearCurrentBurn();
         exec.ConsecutiveScheduleFailures = 0;
         exec.PassIndex++;
+
+        // DetectCompletion required prevMode == Auto, so the user had
+        // Auto on when this pass finished. Carry the intent forward to
+        // the next queued burn; final-pass completions skip the flag
+        // (Auto stays off naturally, no more passes to fire).
+        if (exec.PassIndex < exec.PassCountTotal)
+            exec.ReengageAutoOnNextBurn = true;
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(

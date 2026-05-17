@@ -67,6 +67,12 @@ internal sealed class MultiPassExecution
     /// looping silently.</summary>
     public int ConsecutiveScheduleFailures { get; set; }
 
+    /// <summary>True between passes: the prior pass completed in Auto
+    /// and another pass is queued. The postfix re-engages BurnMode=Auto
+    /// once the queued burn materialises in the BurnPlan so the user
+    /// does not have to toggle Auto between every pass.</summary>
+    public bool ReengageAutoOnNextBurn { get; set; }
+
     #endregion
 
     public void AssignCurrentBurn(Burn burn)
