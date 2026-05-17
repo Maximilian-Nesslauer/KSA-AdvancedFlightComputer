@@ -80,6 +80,16 @@ internal static class MultiPassUI
         }
 
         SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
+
+        // Active execution: pass count and split mode are locked at Start
+        // time, and only the still-pending passes are meaningful to split
+        // the remaining dV across.
+        if (MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
+        {
+            DrawActive(source, typeKey, state, exec);
+            return;
+        }
+
         double totalDv = maneuver.DvCci.Length();
         double totalBurnTime = EstimateBurnTime(totalDv, state);
 
@@ -97,10 +107,31 @@ internal static class MultiPassUI
                 source, maneuver, typeKey, _passCount, _splitMode, state, totalDv);
             DrawPreviewFailureIfApplicable();
             DrawInsufficientFuelIfApplicable(totalDv, state);
-            DrawPassList();
+            DrawPassList(firstPassDisplayNumber: 1);
         }
         else
             MultiPassPreviewCache.ClearPreview();
+    }
+
+    private static void DrawActive(
+        Vehicle source, string typeKey,
+        SequenceBurnState state, MultiPassExecution exec)
+    {
+        int remaining = exec.PassCountTotal - exec.PassIndex;
+        if (remaining <= 0) return;
+
+        // Re-derive the maneuver from the locked intent (not from the
+        // user-editable ManeuverToolsWindow.TargetAltitude): the displayed
+        // pass list must match what the execution is actually targeting.
+        OrbitManeuvers.ManeuverResult? lockedManeuver = exec.Intent.ComputeManeuver(source);
+        if (lockedManeuver == null) return;
+
+        double totalDv = lockedManeuver.Value.DvCci.Length();
+        MultiPassPreviewCache.UpdatePreviewIfStale(
+            source, lockedManeuver.Value, typeKey, remaining, exec.Mode, state, totalDv);
+        DrawPreviewFailureIfApplicable();
+        DrawInsufficientFuelIfApplicable(totalDv, state);
+        DrawPassList(firstPassDisplayNumber: exec.PassIndex + 1);
     }
 
     public static void Render(Viewport viewport, Vehicle source)
@@ -167,7 +198,7 @@ internal static class MultiPassUI
         }
     }
 
-    private static void DrawPassList()
+    private static void DrawPassList(int firstPassDisplayNumber)
     {
         if (!MultiPassPreviewCache.HasPreview) return;
 
@@ -180,9 +211,10 @@ internal static class MultiPassUI
         {
             double dv = passes[i].DvVlf.Length();
             double t = passes[i].EstimatedBurnTimeSec;
+            int n = firstPassDisplayNumber + i;
             string line = t > 0.5
-                ? string.Format(Inv, "Pass {0}: {1:F0} m/s, {2:F0}s", i + 1, dv, t)
-                : string.Format(Inv, "Pass {0}: {1:F0} m/s", i + 1, dv);
+                ? string.Format(Inv, "Pass {0}: {1:F0} m/s, {2:F0}s", n, dv, t)
+                : string.Format(Inv, "Pass {0}: {1:F0} m/s", n, dv);
             ImGui.Text(line);
         }
         ImGui.PopStyleColor();

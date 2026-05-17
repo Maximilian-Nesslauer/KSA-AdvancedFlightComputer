@@ -88,7 +88,7 @@ internal static class SaveLoadObserver
             catch (Exception ex)
             {
                 DefaultCategory.Log.Warning(
-                    $"[AFC] SaveLoadObserver Load Postfix: {ex.Message}");
+                    $"[AFC] SaveLoadObserver Load Postfix: {ex}");
             }
         }
     }
@@ -131,7 +131,7 @@ internal static class SaveLoadObserver
             catch (Exception ex)
             {
                 DefaultCategory.Log.Warning(
-                    $"[AFC] SaveLoadObserver Write Postfix: {ex.Message}");
+                    $"[AFC] SaveLoadObserver Write Postfix: {ex}");
             }
         }
     }

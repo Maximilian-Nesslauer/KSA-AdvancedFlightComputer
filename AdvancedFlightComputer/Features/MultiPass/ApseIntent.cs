@@ -30,6 +30,20 @@ internal sealed class ApseIntent : IManeuverIntent
 
     public string Kind => IsSetApoapsis ? SetApoapsisKind : SetPeriapsisKind;
 
+    public OrbitManeuvers.ManeuverResult? ComputeManeuver(Vehicle vehicle)
+    {
+        if (vehicle?.Orbit?.Parent == null) return null;
+        if (vehicle.Orbit.Parent.Id != ParentId) return null;
+
+        double parentRadius = vehicle.Orbit.Parent.MeanRadius;
+        double targetAltitude = TargetRadiusMeters - parentRadius;
+        SimTime now = Universe.GetElapsedSimTime();
+
+        return IsSetApoapsis
+            ? OrbitManeuvers.ComputeSetApoapsis(vehicle.Orbit, targetAltitude, parentRadius, now)
+            : OrbitManeuvers.ComputeSetPeriapsis(vehicle.Orbit, targetAltitude, parentRadius, now);
+    }
+
     public PassPlanResult RecomputePass(
         Vehicle vehicle, int passIndex, int passCountTotal, SplitMode mode)
     {
@@ -39,13 +53,7 @@ internal sealed class ApseIntent : IManeuverIntent
             return PassPlanResult.Failure(
                 $"parent changed: was {ParentId}, now {vehicle.Orbit.Parent.Id}");
 
-        double parentRadius = vehicle.Orbit.Parent.MeanRadius;
-        double targetAltitude = TargetRadiusMeters - parentRadius;
-        SimTime now = Universe.GetElapsedSimTime();
-
-        OrbitManeuvers.ManeuverResult? maneuver = IsSetApoapsis
-            ? OrbitManeuvers.ComputeSetApoapsis(vehicle.Orbit, targetAltitude, parentRadius, now)
-            : OrbitManeuvers.ComputeSetPeriapsis(vehicle.Orbit, targetAltitude, parentRadius, now);
+        OrbitManeuvers.ManeuverResult? maneuver = ComputeManeuver(vehicle);
         if (maneuver == null)
             return PassPlanResult.Failure(IsSetApoapsis
                 ? "target apoapsis not reachable from current orbit"
@@ -55,6 +63,7 @@ internal sealed class ApseIntent : IManeuverIntent
         if (remainingCount <= 0)
             return PassPlanResult.Failure($"passIndex {passIndex} >= total {passCountTotal}");
 
+        SimTime now = Universe.GetElapsedSimTime();
         SequenceBurnState state = SequenceBurnState.Analyze(vehicle);
         PassAllocation[] allocations = Splitter.Allocate(
             maneuver.Value.DvCci.Length(), remainingCount, mode, state);

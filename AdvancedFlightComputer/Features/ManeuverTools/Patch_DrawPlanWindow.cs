@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
@@ -32,6 +33,9 @@ internal static class Patch_DrawPlanWindow
     private const float FlightPlanWindowWidth = 460f;
     private const float FlightPlanWindowHeight = 620f;
 
+    private static readonly ImColor8 StatusGrey = new(120, 120, 120, 255);
+    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
     private static Burn? _ourBurn;
     private static OrbitalTransfers.PorkChopEntry? _lastEntry;
     private static Vehicle? _lastSource;
@@ -47,7 +51,7 @@ internal static class Patch_DrawPlanWindow
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix (type lookup): {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix (type lookup): {ex}");
             return true;
         }
 
@@ -59,13 +63,17 @@ internal static class Patch_DrawPlanWindow
             return true;
         }
 
+#if DEBUG
+        using var _perf = new PerfTracker.Scope("Patch_DrawPlanWindow.Prefix");
+#endif
+
         try
         {
             DrawWindow(inViewport, transferType);
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix: {ex}");
             // ImGui state may be partially set; do not let stock also Begin the
             // same window this frame, that produces ID-stack conflicts.
         }
@@ -121,9 +129,10 @@ internal static class Patch_DrawPlanWindow
                 MultiPassUI.Draw(source, result.Value, transferType.GetKey());
 
                 ImGui.Spacing();
-                DrawCreateButton(source, result.Value);
+                DrawCreateButton(source, result.Value, transferType.GetKey());
 
-                if (_ourBurn == null)
+                // Active execution: the live BurnPlan already shows the queued pass.
+                if (_ourBurn == null && !MultiPassRegistry.Has(source.Id))
                 {
                     ImGui.Separator();
                     ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
@@ -144,8 +153,9 @@ internal static class Patch_DrawPlanWindow
             ImGui.End();
         }
 
-        // Multi-pass walks its own pass array; single-burn uses _lastEntry.
-        if (_showOrbitPreview && _lastSource != null)
+        bool multiPassActive = _lastSource != null && MultiPassRegistry.Has(_lastSource.Id);
+
+        if (_showOrbitPreview && _lastSource != null && !multiPassActive)
         {
             if (MultiPassUI.HasMultiPassPreview)
                 MultiPassUI.RenderMarkers(inViewport, _lastSource);
@@ -153,7 +163,7 @@ internal static class Patch_DrawPlanWindow
                 DrawOrbitMarkers(inViewport);
         }
 
-        if (_showFlightPlanPreview)
+        if (_showFlightPlanPreview && !multiPassActive)
             DrawFlightPlanWindow(inViewport);
     }
 
@@ -230,8 +240,7 @@ internal static class Patch_DrawPlanWindow
         double timeToNode = maneuver.BurnTime.Seconds() - Universe.GetElapsedSimTime().Seconds();
 
         ImGuiHelper.DrawTextWidget("Required Delta V:"u8,
-            string.Format(System.Globalization.CultureInfo.InvariantCulture,
-                "{0:F1} m/s", dvMag));
+            string.Format(Inv, "{0:F1} m/s", dvMag));
 
         if (timeToNode > 0)
         {
@@ -242,8 +251,7 @@ internal static class Patch_DrawPlanWindow
 
     private static void DrawFlightPlanWindow(Viewport inViewport)
     {
-        // Multi-pass shows the final-pass trajectory (the "end up here"
-        // orbit); single-burn shows the lone computed entry.
+        // Multi-pass: show the final-pass trajectory.
         FlightPlan? fp = MultiPassUI.HasMultiPassPreview
             ? MultiPassUI.LastPassFlightPlan
             : _lastEntry?.FlightPlan;
@@ -263,8 +271,15 @@ internal static class Patch_DrawPlanWindow
         ImGui.End();
     }
 
-    private static void DrawCreateButton(Vehicle source, OrbitManeuvers.ManeuverResult maneuver)
+    private static void DrawCreateButton(
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey)
     {
+        if (MultiPassRegistry.Has(source.Id))
+        {
+            MultiPassController.DrawStatus(source);
+            return;
+        }
+
         if (_ourBurn != null)
         {
             if (_ourBurn.Time < Universe.GetElapsedSimTime())
@@ -273,41 +288,48 @@ internal static class Patch_DrawPlanWindow
             }
             else
             {
-                ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(120, 120, 120, 255));
+                ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
                 ImGui.Text("Maneuver node created."u8);
                 ImGui.PopStyleColor();
                 return;
             }
         }
 
+        // Multi-pass selected but preview failed: disable Create rather
+        // than silently fall back to a full-dV single burn.
+        bool blockedByFailedPreview = MultiPassUI.WantsMultiPassButCannot(typeKey);
+        if (blockedByFailedPreview)
+            ImGui.BeginDisabled();
+
         if (ImGuiHelper.DrawButton("Create"u8, KSAColor.DarkGrey,
                 KSAColor.Xkcd.DustyBlue, Color.Green))
         {
-            PatchedConic? patch = source.FlightPlan.TryFindPatch(maneuver.BurnTime);
-            if (patch != null)
+            if (MultiPassUI.IsArmed(typeKey))
             {
-                OrbitPointCce point = patch.Orbit.GetPointAt(maneuver.BurnTime);
-                _ourBurn = Burn.Create(point, maneuver.BurnTime.Seconds(),
-                    maneuver.DvVlf, patch, source);
-                _ourBurn.IsGizmoActive = false;
-
-                // Hide our preview now that a real burn exists. The game's own
-                // flight-plan rendering takes over for the scheduled trajectory,
-                // and once the burn starts our cached entry is stale anyway.
+                MultiPassController.Start(source, typeKey);
                 _showOrbitPreview = false;
                 _showFlightPlanPreview = false;
-
-                // Stock pattern from DrawPlanWindow's Create button: enqueue,
-                // the actual BurnPlan mutation runs at the next frame boundary
-                // so it is sequenced with deletes/updates.
-                InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
-                {
-                    Burn = _ourBurn,
-                    FlightComputer = source.FlightComputer,
-                    AddBurn = true,
-                });
+            }
+            else
+            {
+                CreateSingleBurn(source, maneuver);
             }
         }
+
+        if (blockedByFailedPreview)
+            ImGui.EndDisabled();
+    }
+
+    private static void CreateSingleBurn(Vehicle source, OrbitManeuvers.ManeuverResult maneuver)
+    {
+        // Routed through MultiPassCommitter so single-burn and the first
+        // multi-pass pass take the same Burn.Create -> buffer-Add path.
+        Burn? burn = MultiPassCommitter.QueueAddBurn(source, maneuver.BurnTime, maneuver.DvVlf);
+        if (burn == null) return;
+
+        _ourBurn = burn;
+        _showOrbitPreview = false;
+        _showFlightPlanPreview = false;
     }
 
     /// <summary>
@@ -340,11 +362,8 @@ internal static class Patch_DrawPlanWindow
 
     #region Visual Orbit Preview
 
-    /// <summary>
-    /// Renders encounter, escape, impact, closest approach, and Ap/Pe markers
-    /// on the preview orbit. Called from the ImGui pass (after the main window)
-    /// using the background draw list.
-    /// </summary>
+    /// <summary>Background-drawlist markers (encounter, escape, impact,
+    /// closest approach, Ap/Pe) for the preview orbit.</summary>
     private static void DrawOrbitMarkers(Viewport inViewport)
     {
         var uiContext = new Astronomical.UiContext(
@@ -354,15 +373,14 @@ internal static class Patch_DrawPlanWindow
         _lastEntry!.FlightPlan.DrawUi(inViewport, uiContext);
     }
 
-    /// <summary>
-    /// Renders the post-burn orbit (single-burn or multi-pass) in the
-    /// 3D view. Called from Patch_OnPreRender; gated on the
-    /// "Preview Orbit" checkbox.
-    /// </summary>
+    /// <summary>3D-view post-burn orbit (single-burn or multi-pass), drawn
+    /// from Patch_OnPreRender when "Preview Orbit" is on.</summary>
     internal static void RenderOrbitPreview(Viewport inViewport)
     {
         if (_ourBurn != null || _lastSource == null) return;
         if (!_showOrbitPreview) return;
+        // Active execution: stock renders the live BurnPlan, no overlay needed.
+        if (MultiPassRegistry.Has(_lastSource.Id)) return;
 
         if (MultiPassUI.HasMultiPassPreview)
         {
@@ -430,11 +448,7 @@ internal static class Patch_DrawPlanWindow
     private static void CleanupStaleBurn()
     {
         if (_ourBurn == null) return;
-
-        Vehicle? source = _ourBurn.Vehicle.FlightComputer.BurnPlan.TryGetBurn(_ourBurn)
-            ? _ourBurn.Vehicle : null;
-
-        if (source == null)
+        if (!_ourBurn.Vehicle.FlightComputer.BurnPlan.TryGetBurn(_ourBurn))
             _ourBurn = null;
     }
 

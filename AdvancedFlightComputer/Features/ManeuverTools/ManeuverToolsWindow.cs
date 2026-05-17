@@ -167,7 +167,7 @@ internal static class ManeuverToolsWindow
             {
                 ImGui.Spacing();
                 ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-                ImGui.Text("Target apoapsis is above SOI; vehicle will escape after the burn."u8);
+                ImGui.TextWrapped("Target apoapsis is above SOI; vehicle will escape after the burn.");
                 ImGui.PopStyleColor();
             }
         }

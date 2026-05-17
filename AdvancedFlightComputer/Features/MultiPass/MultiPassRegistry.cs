@@ -155,7 +155,7 @@ internal static class MultiPassRegistry
         catch (Exception ex)
         {
             DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: failed to load {_configPath}: {ex.Message}");
+                $"[AFC] MultiPassRegistry: failed to load {_configPath}: {ex}");
             _byKey.Clear();
         }
     }
@@ -231,7 +231,7 @@ internal static class MultiPassRegistry
         catch (Exception ex)
         {
             DefaultCategory.Log.Error(
-                $"[AFC] MultiPassRegistry: failed to save {_configPath}: {ex.Message}");
+                $"[AFC] MultiPassRegistry: failed to save {_configPath}: {ex}");
 
             // Best-effort cleanup of the half-written temp file.
             try

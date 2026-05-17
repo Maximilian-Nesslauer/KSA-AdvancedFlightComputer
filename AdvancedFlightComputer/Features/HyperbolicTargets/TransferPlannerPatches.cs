@@ -50,7 +50,7 @@ internal static class Patch_PopulateWithPlanets
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] PopulateWithPlanets postfix: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] PopulateWithPlanets postfix: {ex}");
         }
     }
 }
@@ -117,7 +117,7 @@ internal static class Patch_SetTransferInfo
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] SetTransferInfo postfix: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] SetTransferInfo postfix: {ex}");
         }
     }
 }

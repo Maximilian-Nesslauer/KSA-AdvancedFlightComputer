@@ -38,7 +38,22 @@ public sealed class Mod
             ManeuverTools.InjectTransferTypes();
             _maneuverTypesInjected = true;
             ManeuverTools.ApplyPatches(_harmony);
-            MultiPassUI.Enabled = true;
+
+            // Without PassCompletionPatch an execution started from the UI
+            // has no way to advance to pass 2; gate MultiPassUI.Enabled
+            // inside the validation block so it stays hidden if patching
+            // is impossible.
+            if (GameReflection.ValidateMultiPass())
+            {
+                MultiPassRegistry.Init();
+                _harmony.CreateClassProcessor(typeof(PassCompletionPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(VehicleDisposePatch)).Patch();
+                SaveLoadObserver.ApplyPatches(_harmony);
+                MultiPassUI.Enabled = true;
+            }
+            else
+                DefaultCategory.Log.Warning(
+                    "[AFC] MultiPass disabled - reflection targets not found.");
         }
         else
             DefaultCategory.Log.Warning("[AFC] ManeuverTools disabled - reflection targets not found.");
@@ -58,16 +73,23 @@ public sealed class Mod
             _maneuverTypesInjected = false;
         }
 
-        ManeuverToolsWindow.Reset();
+        // No MultiPassRegistry.Save() here: persistence is driven by
+        // UncompressedSave.Write events so a quit without KSA-saving
+        // intentionally drops in-memory mutations.
         Patch_DrawPlanWindow.Reset();
-        Patch_AlignmentTime.Reset();
         MultiPassUI.Enabled = false;
         MultiPassUI.Reset();
         MultiPassPreviewCache.Reset();
+        MultiPassRegistry.Reset();
+        PassCompletionPatch.Reset();
+        SaveLoadObserver.Reset();
+        ManeuverToolsWindow.Reset();
+        Patch_AlignmentTime.Reset();
         LogHelper.Reset();
 #if DEBUG
         PerfTracker.Reset();
 #endif
+
         DefaultCategory.Log.Info("[AFC] Unloaded.");
     }
 }

@@ -134,6 +134,15 @@ internal static class MultiPassPreviewCache
         if (_hasPreviewKey && _cachedPreview != null && key == _cachedPreviewKey)
             return;
 
+        // Mid-burn state is intrinsically unstable (orbit + mass drift
+        // every physics tick). Freeze the cache while engines fire; the
+        // Auto -> Manual transition at burn end naturally invalidates the
+        // key for the next frame. Allow the initial build so a user who
+        // opens the window mid-burn still sees a (slightly stale) preview.
+        if (_hasPreviewKey && _cachedPreview != null
+            && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
+            return;
+
         // Cache miss path: times Splitter + ApseBurnPlanner together.
 #if DEBUG
         using var _perf = new PerfTracker.Scope("MultiPassPreviewCache.Plan");

@@ -26,7 +26,7 @@ internal static class Patch_OnPreRender
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools OnPreRender: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] ManeuverTools OnPreRender: {ex}");
         }
     }
 }

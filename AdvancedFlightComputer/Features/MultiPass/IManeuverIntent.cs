@@ -1,4 +1,5 @@
 using System.IO;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
@@ -16,6 +17,11 @@ internal interface IManeuverIntent
     /// <summary>Discriminator for TOML serialization (e.g. "set-ap").
     /// Stable across versions or saved games fail to deserialize.</summary>
     string Kind { get; }
+
+    /// <summary>Maneuver from <paramref name="vehicle"/>'s current orbit
+    /// toward this intent's locked goal. Independent of any live UI
+    /// input. Null when the goal is unreachable from the current state.</summary>
+    OrbitManeuvers.ManeuverResult? ComputeManeuver(Vehicle vehicle);
 
     PassPlanResult RecomputePass(
         Vehicle vehicle, int passIndex, int passCountTotal, SplitMode mode);

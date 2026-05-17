@@ -79,7 +79,7 @@ internal static class Patch_TryFindIntercept
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] TryFindIntercept prefix: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] TryFindIntercept prefix: {ex}");
             return true;
         }
     }

@@ -35,7 +35,7 @@ internal static class VehicleDisposePatch
         catch (Exception ex)
         {
             DefaultCategory.Log.Warning(
-                $"[AFC] VehicleDisposePatch: {ex.Message}");
+                $"[AFC] VehicleDisposePatch: {ex}");
         }
     }
 }

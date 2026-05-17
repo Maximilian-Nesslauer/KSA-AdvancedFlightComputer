@@ -60,7 +60,7 @@ internal static class Patch_DiagnosticLog
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] DiagnosticLog: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] DiagnosticLog: {ex}");
         }
     }
 }
