@@ -79,7 +79,10 @@ internal static class MultiPassPreviewCache
 
     /// <summary>Cache key. Quantized in <see cref="From"/> so per-frame
     /// drift on continuous fields does not bust the cache. BurnTime is
-    /// intentionally absent (advances every frame).</summary>
+    /// intentionally absent (advances every frame). Intent-side fields
+    /// (UseDescendingNode etc.) are included because UI toggles for
+    /// plane-change types can leave the dV bucket unchanged - e.g.
+    /// AN vs DN on a near-circular orbit has identical speed.</summary>
     private readonly record struct PreviewKey(
         string TypeKey,
         string VehicleId,
@@ -87,18 +90,30 @@ internal static class MultiPassPreviewCache
         SplitMode Mode,
         long DvBucket,
         long SmaBucket,
-        long MassBucket)
+        long MassBucket,
+        bool UseDescendingNode,
+        long TargetIncMilliRad,
+        OrbitManeuvers.InclinationReference Reference,
+        string TargetId)
     {
         public static PreviewKey From(
             Vehicle source, string typeKey, int passCount,
-            SplitMode mode, double totalDv) => new(
+            SplitMode mode, double totalDv)
+        {
+            IOrbiter? target = ManeuverToolsWindow.GetSelectedTargetOrbiter();
+            return new(
                 typeKey,
                 source.Id,
                 passCount,
                 mode,
                 (long)totalDv,
                 (long)(source.Orbit.SemiMajorAxis / SmaQuantumM),
-                (long)(source.TotalMass / MassQuantumKg));
+                (long)(source.TotalMass / MassQuantumKg),
+                ManeuverToolsWindow.UseDescendingNode,
+                (long)(ManeuverToolsWindow.TargetInclinationRad * 1000.0),
+                ManeuverToolsWindow.InclinationRef,
+                target?.Id ?? string.Empty);
+        }
     }
 
     private static PassPreviewResult? _cachedPreview;
@@ -143,25 +158,56 @@ internal static class MultiPassPreviewCache
             && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
             return;
 
-        // Cache miss path: times Splitter + ApseBurnPlanner together.
+        // Cache miss path: times Splitter + per-type planner together.
 #if DEBUG
         using var _perf = new PerfTracker.Scope("MultiPassPreviewCache.Plan");
 #endif
 
-        TrueAnomaly burnTa = typeKey == KeySetApoapsis
-            ? TrueAnomaly.Zero
-            : new TrueAnomaly(Math.PI);
-
         PassAllocation[] allocations = Splitter.Allocate(totalDv, passCount, splitMode, state);
-        PassPreviewResult result = ApseBurnPlanner.Plan(
-            source, maneuver.DvVlf, burnTa, allocations,
-            Universe.GetElapsedSimTime());
+        PassPreviewResult result = PlanForType(
+            source, maneuver, typeKey, allocations, Universe.GetElapsedSimTime());
 
         _cachedPreview = result;
         _cachedAllocations = allocations;
         _cachedAllocationsSum = Splitter.SumDvCapacityMs(allocations);
         _cachedPreviewKey = key;
         _hasPreviewKey = true;
+    }
+
+    /// <summary>Per-type planner dispatch for the preview chain. Apse
+    /// types feed ApseBurnPlanner; inclination types route to the
+    /// PlaneChangeBurnPlanner so the per-pass node, rotation axis and
+    /// dV->angle math match what execution will actually do. Without
+    /// this dispatch, plane-change previews would walk through
+    /// ApseBurnPlanner and re-apply the full single-burn dV direction
+    /// at each apoapsis - dropping SMA every pass because the original
+    /// vector carries a retrograde component.</summary>
+    private static PassPreviewResult PlanForType(
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
+        PassAllocation[] allocations, SimTime now)
+    {
+        if (typeKey == KeySetApoapsis)
+            return ApseBurnPlanner.Plan(source, maneuver.DvVlf, TrueAnomaly.Zero, allocations, now);
+        if (typeKey == KeySetPeriapsis)
+            return ApseBurnPlanner.Plan(source, maneuver.DvVlf, new TrueAnomaly(Math.PI), allocations, now);
+        if (typeKey == KeyMatchInclination)
+        {
+            Orbit? target = ManeuverToolsWindow.GetSelectedTargetOrbit();
+            if (target == null)
+                return new PassPreviewResult(System.Array.Empty<PassPreview>(), Failed: true,
+                    "no target selected");
+            return PlaneChangeBurnPlanner.PlanForMatch(
+                source, target, ManeuverToolsWindow.UseDescendingNode, allocations, now);
+        }
+        if (typeKey == KeySetInclination)
+        {
+            return PlaneChangeBurnPlanner.PlanForSet(
+                source, ManeuverToolsWindow.TargetInclinationRad,
+                ManeuverToolsWindow.InclinationRef,
+                ManeuverToolsWindow.UseDescendingNode, allocations, now);
+        }
+        return new PassPreviewResult(System.Array.Empty<PassPreview>(), Failed: true,
+            $"no planner for typeKey '{typeKey}'");
     }
 
     public static void ClearPreview()

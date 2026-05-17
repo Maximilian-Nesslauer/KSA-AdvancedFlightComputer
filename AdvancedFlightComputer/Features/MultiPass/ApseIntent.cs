@@ -30,6 +30,16 @@ internal sealed class ApseIntent : IManeuverIntent
 
     public string Kind => IsSetApoapsis ? SetApoapsisKind : SetPeriapsisKind;
 
+    public bool IsSatisfied(Vehicle vehicle)
+    {
+        if (vehicle?.Orbit?.Parent == null) return false;
+        if (vehicle.Orbit.Parent.Id != ParentId) return false;
+        double currentRadius = IsSetApoapsis ? vehicle.Orbit.Apoapsis : vehicle.Orbit.Periapsis;
+        // 1m tolerance: vis-viva precision on the relevant apsis is well
+        // below that for any practical orbit.
+        return Math.Abs(currentRadius - TargetRadiusMeters) < 1.0;
+    }
+
     public OrbitManeuvers.ManeuverResult? ComputeManeuver(Vehicle vehicle)
     {
         if (vehicle?.Orbit?.Parent == null) return null;

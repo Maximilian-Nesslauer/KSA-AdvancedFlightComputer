@@ -107,16 +107,45 @@ internal static class MultiPassController
 
     private static IManeuverIntent? BuildIntent(Vehicle source, string typeKey)
     {
-        bool isSetApoapsis = typeKey == ManeuverTools.ManeuverTools.KeySetApoapsis;
-        bool isSetPeriapsis = typeKey == ManeuverTools.ManeuverTools.KeySetPeriapsis;
-        if (!isSetApoapsis && !isSetPeriapsis) return null;
+        if (source.Orbit?.Parent == null) return null;
+        string parentId = source.Orbit.Parent.Id;
 
-        double parentRadius = source.Orbit!.Parent!.MeanRadius;
-        return new ApseIntent
+        if (typeKey == ManeuverTools.ManeuverTools.KeySetApoapsis
+            || typeKey == ManeuverTools.ManeuverTools.KeySetPeriapsis)
         {
-            IsSetApoapsis = isSetApoapsis,
-            TargetRadiusMeters = ManeuverToolsWindow.TargetAltitude + parentRadius,
-            ParentId = source.Orbit.Parent.Id,
-        };
+            bool isSetApoapsis = typeKey == ManeuverTools.ManeuverTools.KeySetApoapsis;
+            double parentRadius = source.Orbit.Parent.MeanRadius;
+            return new ApseIntent
+            {
+                IsSetApoapsis = isSetApoapsis,
+                TargetRadiusMeters = ManeuverToolsWindow.TargetAltitude + parentRadius,
+                ParentId = parentId,
+            };
+        }
+
+        if (typeKey == ManeuverTools.ManeuverTools.KeyMatchInclination)
+        {
+            IOrbiter? target = ManeuverToolsWindow.GetSelectedTargetOrbiter();
+            if (target == null) return null;
+            return new MatchInclinationIntent
+            {
+                TargetId = target.Id,
+                UseDescendingNode = ManeuverToolsWindow.UseDescendingNode,
+                ParentId = parentId,
+            };
+        }
+
+        if (typeKey == ManeuverTools.ManeuverTools.KeySetInclination)
+        {
+            return new SetInclinationIntent
+            {
+                TargetInclinationRad = ManeuverToolsWindow.TargetInclinationRad,
+                Reference = ManeuverToolsWindow.InclinationRef,
+                UseDescendingNode = ManeuverToolsWindow.UseDescendingNode,
+                ParentId = parentId,
+            };
+        }
+
+        return null;
     }
 }

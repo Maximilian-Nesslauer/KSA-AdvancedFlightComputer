@@ -82,10 +82,13 @@ internal static class OrbitManeuvers
     /// <summary>
     /// Computes a plane-change burn at the ascending or descending node to match
     /// a target orbit's inclination. Preserves orbital speed, only rotates the
-    /// velocity vector into the target's orbital plane.
+    /// velocity vector into the target's orbital plane. <paramref name="fraction"/>
+    /// scales the rotation angle for multi-pass partial plane changes (1.0 =
+    /// full match, 0.5 = halve the relative inclination).
     /// </summary>
     public static ManeuverResult? ComputeMatchInclination(
-        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now)
+        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now,
+        double fraction = 1.0)
     {
         // GetNextPeriapsisTime / TimeOfTrueAnomaly behaviour for hyperbolic
         // vehicles is past-times-not-corrected, so the burn would be in the past.
@@ -110,7 +113,7 @@ internal static class OrbitManeuvers
         if (rotAxis.LengthSquared() < 1e-12)
             return null;
 
-        doubleQuat planeChange = QuaternionEx.AngleAxis(relInc, rotAxis);
+        doubleQuat planeChange = QuaternionEx.AngleAxis(relInc * fraction, rotAxis);
         double3 targetVel = sv.VelocityCci.Transform(planeChange);
         double3 dvCci = targetVel - sv.VelocityCci;
 
@@ -121,11 +124,13 @@ internal static class OrbitManeuvers
     /// <summary>
     /// Computes a plane-change burn at the ascending or descending node (relative
     /// to the chosen reference plane) to set the orbit's inclination to a specific
-    /// angle. Preserves orbital speed.
+    /// angle. Preserves orbital speed. <paramref name="fraction"/> scales the
+    /// rotation angle for multi-pass partial plane changes (1.0 = full set,
+    /// 0.5 = halve the remaining inclination delta).
     /// </summary>
     public static ManeuverResult? ComputeSetInclination(
         Orbit orbit, double targetInclinationRad, bool useDescendingNode, SimTime now,
-        InclinationReference reference)
+        InclinationReference reference, double fraction = 1.0)
     {
         if (orbit.Eccentricity >= 1.0)
             return null;
@@ -166,7 +171,7 @@ internal static class OrbitManeuvers
             return null;
 
         double rotAngle = MathEx.Angle(vehicleNormal, targetNormal).Value();
-        doubleQuat planeChange = QuaternionEx.AngleAxis(rotAngle, rotAxis);
+        doubleQuat planeChange = QuaternionEx.AngleAxis(rotAngle * fraction, rotAxis);
         double3 targetVel = sv.VelocityCci.Transform(planeChange);
         double3 dvCci = targetVel - sv.VelocityCci;
 

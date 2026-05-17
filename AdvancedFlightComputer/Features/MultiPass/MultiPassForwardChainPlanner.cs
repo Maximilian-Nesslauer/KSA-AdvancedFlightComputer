@@ -1,4 +1,7 @@
 using System.Collections.Generic;
+using System.Globalization;
+using AdvancedFlightComputer.Core;
+using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
 
@@ -104,6 +107,25 @@ internal static class MultiPassForwardChainPlanner
                 DvVlf: step.Value.DvVlf,
                 EstimatedBurnTimeSec: allocations[i].EstimatedBurnTimeSec,
                 FlightPlan: fp));
+
+            // Pre / post orbit diagnostic: plane-change should leave SMA
+            // and eccentricity nearly unchanged; apse burns should swing
+            // one apsis substantially. Useful to spot dv-direction bugs.
+            if (DebugConfig.MultiPass)
+            {
+                Orbit pre = currentOrbit;
+                Orbit post = burnPatch.Orbit;
+                DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
+                    "[AFC] ForwardChain pass {0}: burnTime={1:F1}s |dvVlf|={2:F3}m/s " +
+                    "pre[SMA={3:F0} e={4:F6} Pe={5:F0} Ap={6:F0}] -> " +
+                    "post[SMA={7:F0} e={8:F6} Pe={9:F0} Ap={10:F0}] " +
+                    "delta[SMA={11:+0;-0;0}m e={12:+0.000000;-0.000000;0}]",
+                    i, step.Value.BurnTime.Seconds(), step.Value.DvVlf.Length(),
+                    pre.SemiMajorAxis, pre.Eccentricity, pre.Periapsis, pre.Apoapsis,
+                    post.SemiMajorAxis, post.Eccentricity, post.Periapsis, post.Apoapsis,
+                    post.SemiMajorAxis - pre.SemiMajorAxis,
+                    post.Eccentricity - pre.Eccentricity));
+            }
 
             if (!burnPatch.Orbit.IsBound())
                 return new PassPreviewResult(results.ToArray(), Failed: true,

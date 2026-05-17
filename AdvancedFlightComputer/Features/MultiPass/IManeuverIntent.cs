@@ -23,6 +23,14 @@ internal interface IManeuverIntent
     /// input. Null when the goal is unreachable from the current state.</summary>
     OrbitManeuvers.ManeuverResult? ComputeManeuver(Vehicle vehicle);
 
+    /// <summary>True when the goal is already met. Distinguishes
+    /// "rotated to within tolerance" from "cannot make progress" so the
+    /// postfix can complete the execution instead of warning-cancelling
+    /// on RecomputePass failures during the converging tail of a
+    /// multi-pass plan (common when the splitter over-allocates dV per
+    /// pass relative to the asymptotically-shrinking remaining angle).</summary>
+    bool IsSatisfied(Vehicle vehicle);
+
     PassPlanResult RecomputePass(
         Vehicle vehicle, int passIndex, int passCountTotal, SplitMode mode);
 

@@ -44,14 +44,20 @@ internal static class MultiPassUI
     public static bool HasMultiPassPreview =>
         Enabled && _passCount > 1 && MultiPassPreviewCache.HasPreview;
 
-    public static bool IsApseBurnType(string typeKey) =>
-        typeKey == KeySetApoapsis || typeKey == KeySetPeriapsis;
+    /// <summary>All four maneuver types AFC injects support multi-pass.
+    /// Stock types and any future AFC types that don't fit the
+    /// apse / plane-change pattern are not gated by this predicate.</summary>
+    public static bool IsMultiPassSupportedType(string typeKey) =>
+        typeKey == KeySetApoapsis
+        || typeKey == KeySetPeriapsis
+        || typeKey == KeyMatchInclination
+        || typeKey == KeySetInclination;
 
     /// <summary>Multi-pass selected and preview is usable.</summary>
     public static bool IsArmed(string typeKey) =>
         Enabled
         && _passCount > 1
-        && IsApseBurnType(typeKey)
+        && IsMultiPassSupportedType(typeKey)
         && MultiPassPreviewCache.HasPreview;
 
     /// <summary>Multi-pass selected but planner could not produce a
@@ -59,13 +65,13 @@ internal static class MultiPassUI
     public static bool WantsMultiPassButCannot(string typeKey) =>
         Enabled
         && _passCount > 1
-        && IsApseBurnType(typeKey)
+        && IsMultiPassSupportedType(typeKey)
         && !MultiPassPreviewCache.HasPreview;
 
     public static void Draw(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey)
     {
-        if (!Enabled || source == null || !IsApseBurnType(typeKey))
+        if (!Enabled || source == null || !IsMultiPassSupportedType(typeKey))
             return;
 
         // Reset on plan-type / source change so the cache does not

@@ -319,6 +319,21 @@ internal static class PassCompletionPatch
         string? failure = MultiPassCommitter.TryCommitNext(vehicle, exec);
         if (failure != null)
         {
+            // Distinguish "intent already satisfied" (early convergence
+            // due to the splitter over-allocating dV per pass) from a
+            // genuine planning failure. The former is success-as-
+            // completion, not a 5-strikes-and-cancel scenario.
+            if (exec.Intent.IsSatisfied(vehicle))
+            {
+                if (DebugConfig.MultiPass)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] MultiPass: vehicle={vehicle.Id} intent already " +
+                        $"satisfied at pass {exec.PassIndex + 1}/{exec.PassCountTotal} " +
+                        $"(planner: {failure}); completing execution early.");
+                CompleteExecution(vehicle.Id, exec);
+                return true;
+            }
+
             exec.ConsecutiveScheduleFailures++;
             if (DebugConfig.MultiPass)
                 DefaultCategory.Log.Debug(
