@@ -169,6 +169,14 @@ internal static class PassCompletionPatch
             exec.AwaitingMaterialization = false;
             exec.AwaitingMaterializationTicks = 0;
 
+            // Re-sync stock _transferBurn now that the new pass burn is
+            // actually in the plan; the sync in TryScheduleNext fires
+            // before ApplyInputEvents, so stock's line-172 auto-clear
+            // (which checks plan.TryGetBurn) may have wiped _transferBurn
+            // in between. This second sync closes that window.
+            if (exec.Intent is HohmannTransferIntent)
+                KeepStockTransferBurnInSync(exec.CurrentBurn);
+
             // Carry the user's Auto over from the prior pass: stock's
             // LoadBurn (just ran via BurnUpdateBuffer.ApplyAll) reset
             // BurnMode to Manual; flip it back so the queued pass fires
@@ -356,7 +364,36 @@ internal static class PassCompletionPatch
         if (DebugConfig.MultiPass && exec.CurrentBurn != null)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicle.Id} scheduled pass {exec.PassIndex + 1}/{exec.PassCountTotal} dV={exec.CurrentBurn.DeltaVVlf.Length():F1} m/s at t={exec.CurrentBurn.Time.Seconds():F0}s");
+
+        // For Hohmann executions, keep stock TransferPlanner._transferBurn
+        // pointing to the current pass burn so stock's Create-button guard
+        // (if (_transferBurn == null && ...)) blocks re-clicks while
+        // multi-pass is active. Without this, our interceptor would fire
+        // on a re-click and return the live burn, which would then be
+        // double-added to BurnPlan and lead to a use-after-Dispose when
+        // the duplicate is later removed.
+        if (exec.Intent is HohmannTransferIntent && exec.CurrentBurn != null)
+            KeepStockTransferBurnInSync(exec.CurrentBurn);
+
         return true;
+    }
+
+    /// <summary>Reflection setter so the stock TransferPlanner._transferBurn
+    /// field tracks our current pass during a Hohmann multi-pass.
+    /// Stock's line-172 auto-clear (when the burn leaves the plan) will
+    /// reset it next frame if our burn happens to be missing, which is
+    /// the desired behaviour at multi-pass completion.</summary>
+    private static void KeepStockTransferBurnInSync(Burn currentBurn)
+    {
+        try
+        {
+            GameReflection.TransferPlanner_transferBurn?.SetValue(null, currentBurn);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning(
+                $"[AFC] PassCompletionPatch: failed to sync _transferBurn: {ex.Message}");
+        }
     }
 
     #endregion

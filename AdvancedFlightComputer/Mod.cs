@@ -67,6 +67,17 @@ public sealed class Mod
                 else
                     DefaultCategory.Log.Warning(
                         "[AFC] HohmannMultiPass disabled - DrawCorrectionTransfer anchor not found.");
+
+                // Second transpiler: intercepts the stock Create button's
+                // Burn.Create call so a single button click routes to
+                // multi-pass when armed for N>1 or falls through to a
+                // single burn otherwise. Without this the inline UI
+                // would need its own Create button.
+                if (Patch_DrawPlanWindow_CreateInterceptor.IsAnchorPresent)
+                    _harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow_CreateInterceptor)).Patch();
+                else
+                    DefaultCategory.Log.Warning(
+                        "[AFC] HohmannCreateInterceptor disabled - Burn.Create anchor not found.");
             }
             else
                 DefaultCategory.Log.Warning(

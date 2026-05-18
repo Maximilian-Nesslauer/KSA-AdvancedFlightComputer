@@ -223,12 +223,18 @@ internal static class HohmannMultiPassUI
         {
             ImGui.Spacing();
             ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-            ImGui.TextWrapped("N = 1: use stock Create button (single Hohmann burn).");
+            ImGui.TextWrapped("N = 1: stock Create button does a single Hohmann burn.");
             ImGui.PopStyleColor();
         }
-
-        ImGui.Spacing();
-        DrawCreateButton(source, entry, info);
+        else if (_passCount > 1)
+        {
+            ImGui.Spacing();
+            ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
+            ImGui.TextWrapped(string.Format(Inv,
+                "Click the stock Create button to start the {0}-pass execution.",
+                _passCount));
+            ImGui.PopStyleColor();
+        }
     }
 
     /// <summary>"This multi-pass occupies X parking periods of warning
@@ -447,56 +453,43 @@ internal static class HohmannMultiPassUI
 
     #endregion
 
-    #region Create button
+    #region Interceptor handoff
 
-    private static void DrawCreateButton(
-        Vehicle source, OrbitalTransfers.PorkChopEntry entry,
-        OrbitalTransfers.TransferInfo info)
+    /// <summary>True when the user has selected N>1 but the preview
+    /// failed (so the interceptor will fall through to a single burn).
+    /// Lets the interceptor surface an alert instead of silently giving
+    /// the user something different from what they asked for.</summary>
+    public static bool WantedMultiPassButPreviewFailed() =>
+        Enabled && _passCount > 1 && _hasCachedPreview && _cachedPreview.Failed;
+
+    /// <summary>
+    /// True when the inline UI is armed for a Hohmann multi-pass on
+    /// <paramref name="vehicle"/>: pass count > 1, a valid cached preview,
+    /// and stock state (transfer type / selected porkchop entry / source
+    /// vehicle) matches. Used by <see cref="HohmannCreateInterceptor"/>
+    /// to decide whether stock's Create button should fire multi-pass
+    /// or fall through to a single burn.
+    /// </summary>
+    public static bool TryGetArmedState(
+        Vehicle vehicle, out int passCount, out HohmannTransferIntent? intent)
     {
-        if (_passCount <= 1)
-            return;
+        passCount = 0;
+        intent = null;
+        if (!Enabled) return false;
+        if (_passCount <= 1) return false;
+        if (!_hasCachedPreview || _cachedPreview.Failed) return false;
 
-        bool disabled = _hasCachedPreview && _cachedPreview.Failed;
-        if (disabled) ImGui.BeginDisabled();
+        if (!ShouldDraw(out Vehicle? uiSource,
+                out OrbitalTransfers.PorkChopEntry? entry,
+                out OrbitalTransfers.TransferInfo? info))
+            return false;
+        if (uiSource == null || uiSource.Id != vehicle.Id) return false;
 
-        if (ImGuiHelper.DrawButton("Create Multi-Pass"u8,
-                KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Green))
-        {
-            CreateMultiPass(source, entry, info);
-        }
+        intent = BuildIntent(uiSource, entry!, info!);
+        if (intent == null) return false;
 
-        if (disabled) ImGui.EndDisabled();
-    }
-
-    private static void CreateMultiPass(
-        Vehicle source, OrbitalTransfers.PorkChopEntry entry,
-        OrbitalTransfers.TransferInfo info)
-    {
-        var intent = BuildIntent(source, entry, info);
-        if (intent == null)
-        {
-            TimedAlert.Create("Multi-pass: could not build intent", Color.Red, 4.0);
-            return;
-        }
-
-        // If stock has already created its own single-burn _transferBurn,
-        // queue it for delete so we don't end up with two parallel burns.
-        Burn? stockBurn = GameReflection.TransferPlanner_transferBurn!.GetValue(null) as Burn;
-        if (stockBurn != null && source.FlightComputer.BurnPlan.TryGetBurn(stockBurn))
-        {
-            InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
-            {
-                Burn = stockBurn,
-                FlightComputer = source.FlightComputer,
-                DeleteBurn = true,
-            });
-        }
-
-        // SplitMode is irrelevant for Hohmann (per-pass dV is determined by
-        // the K-integer sequence in the planner) but the registry / intent
-        // contract requires one. Use EqualBurnTime as a stable default for
-        // serialization compatibility.
-        MultiPassController.StartWith(source, intent, _passCount, SplitMode.EqualBurnTime);
+        passCount = _passCount;
+        return true;
     }
 
     #endregion
