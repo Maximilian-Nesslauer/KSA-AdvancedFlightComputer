@@ -110,9 +110,10 @@ internal static class MultiPassController
                 DeleteBurn = true,
             });
         }
-        DefaultCategory.Log.Info(
-            $"[AFC] MultiPass: vehicle={source.Id} user cancelled at pass " +
-            $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(
+                $"[AFC] MultiPass: vehicle={source.Id} user cancelled at pass " +
+                $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
 
         PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
         MultiPassRegistry.Remove(source.Id);

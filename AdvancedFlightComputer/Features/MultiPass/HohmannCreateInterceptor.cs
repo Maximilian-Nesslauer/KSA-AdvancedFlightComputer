@@ -128,10 +128,11 @@ internal static class HohmannCreateInterceptor
         exec.AssignCurrentBurn(burn);
         MultiPassRegistry.Add(exec);
 
-        DefaultCategory.Log.Info(
-            $"[AFC] HohmannCreateInterceptor: started {passCount}-pass execution " +
-            $"for vehicle={vehicle.Id}, pass 0 t={preview.BurnTime.Seconds():F0}s " +
-            $"dv={preview.DvVlf.Length():F1}m/s.");
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(
+                $"[AFC] HohmannCreateInterceptor: started {passCount}-pass execution " +
+                $"for vehicle={vehicle.Id}, pass 0 t={preview.BurnTime.Seconds():F0}s " +
+                $"dv={preview.DvVlf.Length():F1}m/s.");
         return burn;
     }
 }

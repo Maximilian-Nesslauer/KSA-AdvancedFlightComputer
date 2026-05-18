@@ -63,9 +63,6 @@ internal static class HohmannMultiPassUI
     private static string? _lastSourceId;
     private static string? _lastTargetId;
 
-    private static bool _firstDrawLogged;
-    private static bool _firstShouldDrawFalseLogged;
-
     /// <summary>
     /// Inline-drawn into stock's "Transfer Planning" window by the
     /// transpiler in Patch_DrawPlanWindow_HohmannMultiPass. We're already
@@ -74,37 +71,23 @@ internal static class HohmannMultiPassUI
     /// </summary>
     public static void DrawInline()
     {
-        if (!_firstDrawLogged)
-        {
-            DefaultCategory.Log.Info(
-                $"[AFC] HohmannMultiPassUI.DrawInline: first call (Enabled={Enabled}).");
-            _firstDrawLogged = true;
-        }
         if (!Enabled) return;
         if (!ShouldDraw(out Vehicle? source, out OrbitalTransfers.PorkChopEntry? entry,
                        out OrbitalTransfers.TransferInfo? info))
-        {
-            if (!_firstShouldDrawFalseLogged && DebugConfig.MultiPass)
-            {
-                DefaultCategory.Log.Debug(
-                    "[AFC] HohmannMultiPassUI.DrawInline: ShouldDraw returned false " +
-                    "(transferType / showWindow / selectedEntry / sourceBody check).");
-                _firstShouldDrawFalseLogged = true;
-            }
             return;
-        }
 
         // Reset on source / target change so a stale preview from another
         // run doesn't render against the new geometry.
         string targetId = (info!.Target as Astronomical)?.Id ?? string.Empty;
         if (_lastSourceId != source!.Id || _lastTargetId != targetId)
         {
-            DefaultCategory.Log.Info(string.Format(Inv,
-                "[AFC] HohmannMultiPassUI: source/target change reset " +
-                "(was source='{0}' target='{1}', now source='{2}' target='{3}'); " +
-                "_passCount {4} -> 1",
-                _lastSourceId ?? "-", _lastTargetId ?? "-",
-                source.Id, targetId, _passCount));
+            if (DebugConfig.MultiPass)
+                DefaultCategory.Log.Debug(string.Format(Inv,
+                    "[AFC] HohmannMultiPassUI: source/target change reset " +
+                    "(was source='{0}' target='{1}', now source='{2}' target='{3}'); " +
+                    "_passCount {4} -> 1",
+                    _lastSourceId ?? "-", _lastTargetId ?? "-",
+                    source.Id, targetId, _passCount));
             _lastSourceId = source.Id;
             _lastTargetId = targetId;
             _passCount = 1;
@@ -133,8 +116,6 @@ internal static class HohmannMultiPassUI
         _autoClampedFromN = 0;
         _lastSourceId = null;
         _lastTargetId = null;
-        _firstDrawLogged = false;
-        _firstShouldDrawFalseLogged = false;
     }
 
     /// <summary>Whether the in-stock-window Hohmann state currently
@@ -293,9 +274,10 @@ internal static class HohmannMultiPassUI
                 DeleteBurn = true,
             });
         }
-        DefaultCategory.Log.Info(
-            $"[AFC] HohmannMultiPass: vehicle={source.Id} user cancelled at pass " +
-            $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(
+                $"[AFC] HohmannMultiPass: vehicle={source.Id} user cancelled at pass " +
+                $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
         PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
         MultiPassRegistry.Remove(source.Id);
     }
@@ -318,8 +300,9 @@ internal static class HohmannMultiPassUI
                 _passCount--;
                 _hasCachedPreview = false;
                 _autoClampedFromN = 0;
-                DefaultCategory.Log.Info(
-                    $"[AFC] HohmannMultiPassUI: < clicked, _passCount {before} -> {_passCount}.");
+                if (DebugConfig.MultiPass)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] HohmannMultiPassUI: < clicked, _passCount {before} -> {_passCount}.");
             }
         }
         ImGui.SameLine();
@@ -333,8 +316,9 @@ internal static class HohmannMultiPassUI
                 _passCount++;
                 _hasCachedPreview = false;
                 _autoClampedFromN = 0;
-                DefaultCategory.Log.Info(
-                    $"[AFC] HohmannMultiPassUI: > clicked, _passCount {before} -> {_passCount}.");
+                if (DebugConfig.MultiPass)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] HohmannMultiPassUI: > clicked, _passCount {before} -> {_passCount}.");
             }
         }
     }
@@ -358,24 +342,26 @@ internal static class HohmannMultiPassUI
         int requestedN = _passCount;
         SimTime now = Universe.GetElapsedSimTime();
 
-        DefaultCategory.Log.Info(string.Format(Inv,
-            "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: vehicle='{0}' target='{1}' " +
-            "requestedN={2} isCrossParent={3} vInf={4:F1}m/s apoTarget={5:F0}m " +
-            "T_final={6:F0}s now={7:F0}s T_park={8:F1}s",
-            source.Id, (info.Target as Astronomical)?.Id ?? "?",
-            requestedN, input.IsCrossParent,
-            input.VInfMs, input.ApoTargetRadiusMeters,
-            input.TFinal.Seconds(), now.Seconds(),
-            source.Orbit?.Period ?? 0.0));
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(string.Format(Inv,
+                "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: vehicle='{0}' target='{1}' " +
+                "requestedN={2} isCrossParent={3} vInf={4:F1}m/s apoTarget={5:F0}m " +
+                "T_final={6:F0}s now={7:F0}s T_park={8:F1}s",
+                source.Id, (info.Target as Astronomical)?.Id ?? "?",
+                requestedN, input.IsCrossParent,
+                input.VInfMs, input.ApoTargetRadiusMeters,
+                input.TFinal.Seconds(), now.Seconds(),
+                source.Orbit?.Period ?? 0.0));
 
         double parkingPeriodSec = source.Orbit?.Period ?? 0.0;
         int clampedN = HohmannMultiPassPlanner.LargestFeasibleN(
             source, input, state, parkingPeriodSec, now, requestedN);
 
-        DefaultCategory.Log.Info(string.Format(Inv,
-            "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: LargestFeasibleN " +
-            "requested={0} -> clamped={1}",
-            requestedN, clampedN));
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(string.Format(Inv,
+                "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: LargestFeasibleN " +
+                "requested={0} -> clamped={1}",
+                requestedN, clampedN));
 
         if (clampedN < requestedN)
         {
@@ -385,10 +371,11 @@ internal static class HohmannMultiPassUI
             // buttons explicitly reset _autoClampedFromN, which is the
             // only way back to "no clamp warning".
             _autoClampedFromN = Math.Max(_autoClampedFromN, requestedN);
-            DefaultCategory.Log.Info(string.Format(Inv,
-                "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: AUTO-CLAMP " +
-                "_passCount {0} -> {1}, _autoClampedFromN={2}",
-                _passCount, clampedN, _autoClampedFromN));
+            if (DebugConfig.MultiPass)
+                DefaultCategory.Log.Debug(string.Format(Inv,
+                    "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: AUTO-CLAMP " +
+                    "_passCount {0} -> {1}, _autoClampedFromN={2}",
+                    _passCount, clampedN, _autoClampedFromN));
             _passCount = clampedN;
         }
 
@@ -398,11 +385,12 @@ internal static class HohmannMultiPassUI
         _cachedKey = key;
         _hasCachedPreview = true;
 
-        DefaultCategory.Log.Info(string.Format(Inv,
-            "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: Plan -> failed={0} " +
-            "reason='{1}' previewPasses={2} _passCount(final)={3}",
-            _cachedPreview.Failed, _cachedPreview.FailureReason ?? "-",
-            _cachedPreview.Passes.Length, _passCount));
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(string.Format(Inv,
+                "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: Plan -> failed={0} " +
+                "reason='{1}' previewPasses={2} _passCount(final)={3}",
+                _cachedPreview.Failed, _cachedPreview.FailureReason ?? "-",
+                _cachedPreview.Passes.Length, _passCount));
     }
 
     private static void DrawPreviewFailureIfApplicable()

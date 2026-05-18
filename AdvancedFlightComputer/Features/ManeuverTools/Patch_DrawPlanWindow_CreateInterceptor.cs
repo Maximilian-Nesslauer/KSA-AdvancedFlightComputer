@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection.Emit;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -43,9 +44,6 @@ internal static class Patch_DrawPlanWindow_CreateInterceptor
     [HarmonyTranspiler]
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
-        DefaultCategory.Log.Info(
-            "[AFC] HohmannCreateInterceptor transpiler: starting IL rewrite of DrawPlanWindow.");
-
         var anchor = AccessTools.Method(typeof(Burn), nameof(Burn.Create), BurnCreateSig);
         var replacement = AccessTools.Method(typeof(HohmannCreateInterceptor),
             nameof(HohmannCreateInterceptor.CreateMaybeMultiPass));
@@ -82,9 +80,12 @@ internal static class Patch_DrawPlanWindow_CreateInterceptor
         }
 
         if (replaced)
-            DefaultCategory.Log.Info(
-                $"[AFC] HohmannCreateInterceptor transpiler: replaced Burn.Create " +
-                $"in DrawPlanWindow ({callsToAnchor} call site(s) found).");
+        {
+            if (DebugConfig.MultiPass)
+                DefaultCategory.Log.Debug(
+                    $"[AFC] HohmannCreateInterceptor transpiler: replaced Burn.Create " +
+                    $"in DrawPlanWindow ({callsToAnchor} call site(s) found).");
+        }
         else
             DefaultCategory.Log.Warning(
                 "[AFC] HohmannCreateInterceptor transpiler: no Burn.Create call " +

@@ -247,14 +247,15 @@ internal static class HohmannMultiPassPlanner
             prePatch = burnPatch;
         }
 
-        DefaultCategory.Log.Info(string.Format(CultureInfo.InvariantCulture,
-            "[AFC] HohmannMultiPassPlanner.Plan: total={0} startIdx={1} remaining={2} " +
-            "K_total={3} T_park={4:F1}s T_final={5:F0}s T_0={6:F0}s span={7:F0}s " +
-            "vpTarget={8:F1}m/s dV[{9}]m/s",
-            totalPassCount, startPassIndex, remainingCount, kTotal, tPark,
-            input.TFinal.Seconds(), times[0].Seconds(),
-            input.TFinal.Seconds() - times[0].Seconds(), vpTarget,
-            FormatDvSeq(dvSeq)));
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
+                "[AFC] HohmannMultiPassPlanner.Plan: total={0} startIdx={1} remaining={2} " +
+                "K_total={3} T_park={4:F1}s T_final={5:F0}s T_0={6:F0}s span={7:F0}s " +
+                "vpTarget={8:F1}m/s dV[{9}]m/s",
+                totalPassCount, startPassIndex, remainingCount, kTotal, tPark,
+                input.TFinal.Seconds(), times[0].Seconds(),
+                input.TFinal.Seconds() - times[0].Seconds(), vpTarget,
+                FormatDvSeq(dvSeq)));
 
         return new PassPreviewResult(previews.ToArray(), Failed: false, FailureReason: null);
     }

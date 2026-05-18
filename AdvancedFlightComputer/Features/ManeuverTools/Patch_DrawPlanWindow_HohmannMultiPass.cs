@@ -40,9 +40,6 @@ internal static class Patch_DrawPlanWindow_HohmannMultiPass
     [HarmonyTranspiler]
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
-        DefaultCategory.Log.Info(
-            "[AFC] HohmannMultiPass transpiler: starting IL rewrite of DrawPlanWindow.");
-
         var anchor = AccessTools.Method(typeof(TransferPlanner),
             "DrawCorrectionTransfer", System.Type.EmptyTypes);
         var injectTarget = AccessTools.Method(typeof(HohmannMultiPassUI),
@@ -91,10 +88,13 @@ internal static class Patch_DrawPlanWindow_HohmannMultiPass
         }
 
         if (injected)
-            DefaultCategory.Log.Info(
-                $"[AFC] HohmannMultiPass transpiler: injected DrawInline before " +
-                $"DrawCorrectionTransfer ({totalIns} IL instructions scanned, " +
-                $"{callsToAnchor} anchor call(s) found).");
+        {
+            if (DebugConfig.MultiPass)
+                DefaultCategory.Log.Debug(
+                    $"[AFC] HohmannMultiPass transpiler: injected DrawInline before " +
+                    $"DrawCorrectionTransfer ({totalIns} IL instructions scanned, " +
+                    $"{callsToAnchor} anchor call(s) found).");
+        }
         else
             DefaultCategory.Log.Warning(
                 $"[AFC] HohmannMultiPass transpiler: no call to DrawCorrectionTransfer " +
