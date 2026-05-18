@@ -50,6 +50,23 @@ public sealed class Mod
                 _harmony.CreateClassProcessor(typeof(VehicleDisposePatch)).Patch();
                 SaveLoadObserver.ApplyPatches(_harmony);
                 MultiPassUI.Enabled = true;
+
+                // Hohmann multi-pass needs the transpiler to inject the
+                // inline UI into stock's DrawPlanWindow. Without the
+                // anchor we'd patch but never draw, so gate both the
+                // patch application and the UI flag on it.
+                if (Patch_DrawPlanWindow_HohmannMultiPass.IsAnchorPresent)
+                {
+                    // DefaultCategory.Log.Info(
+                    //     "[AFC] HohmannMultiPass: anchor found, applying transpiler patch.");
+                    _harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow_HohmannMultiPass)).Patch();
+                    HohmannMultiPassUI.Enabled = true;
+                    // DefaultCategory.Log.Info(
+                    //     $"[AFC] HohmannMultiPass: patch applied, UI enabled (Enabled={HohmannMultiPassUI.Enabled}).");
+                }
+                else
+                    DefaultCategory.Log.Warning(
+                        "[AFC] HohmannMultiPass disabled - DrawCorrectionTransfer anchor not found.");
             }
             else
                 DefaultCategory.Log.Warning(
@@ -79,6 +96,8 @@ public sealed class Mod
         Patch_DrawPlanWindow.Reset();
         MultiPassUI.Enabled = false;
         MultiPassUI.Reset();
+        HohmannMultiPassUI.Enabled = false;
+        HohmannMultiPassUI.Reset();
         MultiPassPreviewCache.Reset();
         MultiPassRegistry.Reset();
         PassCompletionPatch.Reset();

@@ -34,27 +34,40 @@ internal static class MultiPassController
         IManeuverIntent? intent = BuildIntent(source, typeKey);
         if (intent == null) return;
 
+        StartWith(source, intent, MultiPassUI.PassCount, MultiPassUI.CurrentSplitMode);
+    }
+
+    /// <summary>
+    /// Overload that takes a pre-built intent and explicit (passCount,
+    /// mode). Used by the Hohmann pipeline where the intent is built from
+    /// the stock porkchop entry, not from <see cref="MultiPassUI"/>
+    /// global state. Same execution-start semantics otherwise.
+    /// </summary>
+    internal static void StartWith(
+        Vehicle source, IManeuverIntent intent, int passCount, SplitMode mode)
+    {
+        if (source.Orbit?.Parent == null) return;
+
         var exec = new MultiPassExecution
         {
             SaveId = SaveLoadObserver.CurrentSaveId,
             VehicleId = source.Id,
             Intent = intent,
-            Mode = MultiPassUI.CurrentSplitMode,
-            PassCountTotal = MultiPassUI.PassCount,
+            Mode = mode,
+            PassCountTotal = passCount,
             PassIndex = 0,
         };
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(
-                $"[AFC] MultiPassController.Start: vehicle='{source.Id}' kind='{intent.Kind}' " +
-                $"passes={MultiPassUI.PassCount} mode={MultiPassUI.CurrentSplitMode} " +
-                $"saveId='{exec.SaveId}'");
+                $"[AFC] MultiPassController.StartWith: vehicle='{source.Id}' kind='{intent.Kind}' " +
+                $"passes={passCount} mode={mode} saveId='{exec.SaveId}'");
 
         string? failure = MultiPassCommitter.TryCommitNext(source, exec);
         if (failure != null)
         {
             DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassController.Start: vehicle={source.Id} pass 0 could not be committed ({failure}); aborting.");
+                $"[AFC] MultiPassController.StartWith: vehicle={source.Id} pass 0 could not be committed ({failure}); aborting.");
             TimedAlert.Create($"Multi-pass failed: {failure}", Color.Red, 4.0);
             return;
         }
