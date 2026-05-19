@@ -62,6 +62,21 @@ internal static class PassCompletionPatch
 
         FlightComputer fc = __instance.FlightComputer;
 
+        // Hohmann piggybacks on stock's Transfer Planning window: once a
+        // pass ignites, stock's DrawPlanWindow auto-clears
+        // _transferCalculated in the "_transferBurn.Time < now" branch,
+        // which wipes the entire selected-entry block - hiding our
+        // inline UI, the 3D overlay gate, and stock's own
+        // DrawSelectedTransferUi call. We re-set it every physics tick
+        // so by the time the next OnPreRender / DrawPlanWindow runs it
+        // is true again. Scoped to "plan window is actually on this
+        // vehicle's Hohmann transfer" so a user who dropdowns to a
+        // different source/type doesn't get their stock UI pinned by
+        // some other vehicle's still-running exec.
+        if (exec.Intent is HohmannTransferIntent
+            && IsPlanWindowOnVehicleHohmann(__instance))
+            KeepStockTransferCalculatedInSync();
+
         // Mutations here are in-memory only; SaveLoadObserver flushes
         // the registry to disk on KSA save events.
         try
@@ -314,6 +329,10 @@ internal static class PassCompletionPatch
             DefaultCategory.Log.Debug($"[AFC] MultiPass: vehicle={vehicleId} {reason}");
         MultiPassRegistry.Remove(vehicleId);
         _lastBurnMode.Remove(vehicleId);
+        // Clear the Hohmann inline-UI cache so a stale preview chain
+        // doesn't outlive the registry entry; harmless no-op when the
+        // ended exec was a different intent kind.
+        HohmannMultiPassUI.OnExecutionEnded(vehicleId);
     }
 
     /// <summary>
@@ -393,6 +412,53 @@ internal static class PassCompletionPatch
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] PassCompletionPatch: failed to sync _transferBurn: {ex.Message}");
+        }
+    }
+
+    /// <summary>True when the stock Transfer Planning window is open
+    /// AND showing Hohmann AND the source vehicle matches
+    /// <paramref name="execVehicle"/>. The <see cref="KeepStockTransferCalculatedInSync"/>
+    /// sync targets a process-global static; without this scope check
+    /// a vehicle's still-running exec would pin the flag for unrelated
+    /// vehicles / transfer types the user is meanwhile inspecting,
+    /// breaking stock's source-change / type-change resets.</summary>
+    private static bool IsPlanWindowOnVehicleHohmann(Vehicle execVehicle)
+    {
+        try
+        {
+            if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
+                return false;
+            var transferType = (TransferType?)GameReflection.TransferPlanner_transferType?
+                .GetValue(null);
+            if (transferType == null || transferType.Value.GetKey() != "Hohmann")
+                return false;
+            var sourceBody = (TransferObject?)GameReflection.TransferPlanner_sourceBody?
+                .GetValue(null);
+            return sourceBody?.Body is Vehicle v && v.Id == execVehicle.Id;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    /// <summary>Suppresses stock's "burn fired, drop UI" auto-clear of
+    /// <c>_transferCalculated</c>. Without this, every pass ignition
+    /// flips the flag false and hides our inline section + 3D overlay
+    /// until the user manually clicks Re-Calculate. Caller must verify
+    /// the plan window scope via <see cref="IsPlanWindowOnVehicleHohmann"/>;
+    /// the field is process-global and pinning it for the wrong scope
+    /// stomps stock's normal source/type-change resets.</summary>
+    private static void KeepStockTransferCalculatedInSync()
+    {
+        try
+        {
+            GameReflection.TransferPlanner_transferCalculated?.SetValue(null, true);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning(
+                $"[AFC] PassCompletionPatch: failed to sync _transferCalculated: {ex.Message}");
         }
     }
 

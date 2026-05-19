@@ -45,6 +45,8 @@ internal static class HohmannMultiPassUI
     // T_final / dV magnitude does not bust the cache. SplitMode is gone
     // for Hohmann: per-pass dV is determined entirely by the K-integer
     // sequence in HohmannMultiPassPlanner, not by user split-mode choice.
+    // StartPassIndex distinguishes init-phase (always 0) from active-exec
+    // (= exec.PassIndex), so a pass completion naturally busts the cache.
     private readonly record struct PreviewKey(
         string SourceId,
         string TargetId,
@@ -54,6 +56,7 @@ internal static class HohmannMultiPassUI
         long ApoTargetBucket,
         bool IsCrossParent,
         int PassCount,
+        int StartPassIndex,
         long MassBucket);
 
     private static PreviewKey _cachedKey;
@@ -72,6 +75,13 @@ internal static class HohmannMultiPassUI
     public static void DrawInline()
     {
         if (!Enabled) return;
+
+        // Active-exec fast path: covers window-close/reopen during a
+        // multi-pass run, where stock clears _selectedEntry and ShouldDraw
+        // would early-return. Status + Cancel must still appear so the
+        // user can see the run progress and cancel without re-Calculating.
+        if (TryDrawActiveFastPath()) return;
+
         if (!ShouldDraw(out Vehicle? source, out OrbitalTransfers.PorkChopEntry? entry,
                        out OrbitalTransfers.TransferInfo? info))
             return;
@@ -107,6 +117,37 @@ internal static class HohmannMultiPassUI
         }
     }
 
+    /// <summary>Returns true if active Hohmann exec was detected and the
+    /// status / Cancel section was drawn. Resolves source via stock's
+    /// <c>_sourceBody</c> only - independent of <c>_selectedEntry</c> -
+    /// so the active-pass UI survives a Transfer Planning window close
+    /// followed by a reopen (which clears _selectedEntry).</summary>
+    private static bool TryDrawActiveFastPath()
+    {
+        if (!(bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!)
+            return false;
+        var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
+            .GetValue(null)!;
+        if (transferType.GetKey() != "Hohmann") return false;
+
+        var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!
+            .GetValue(null)!;
+        if (sourceBody.Body is not Vehicle source) return false;
+        if (!MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
+            return false;
+        if (exec.Intent is not HohmannTransferIntent) return false;
+
+        ImGui.Separator();
+        try { DrawActive(source, exec); }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning(
+                $"[AFC] HohmannMultiPassUI.DrawInline (active fast path): {ex}");
+        }
+        ImGui.Separator();
+        return true;
+    }
+
     public static void Reset()
     {
         _passCount = 1;
@@ -116,6 +157,91 @@ internal static class HohmannMultiPassUI
         _autoClampedFromN = 0;
         _lastSourceId = null;
         _lastTargetId = null;
+    }
+
+    /// <summary>Drops the cached preview when a Hohmann multi-pass exec
+    /// ends on <paramref name="vehicleId"/>. Without this the cache
+    /// outlives the registry entry: HasMultiPassPreview's PassCount > 1
+    /// clause then keeps the OnPreRender overlay alive against whatever
+    /// orbit the vehicle is on post-exec, until the init-flow's
+    /// UpdatePreviewIfStale happens to bust the key.</summary>
+    public static void OnExecutionEnded(string vehicleId)
+    {
+        if (!_hasCachedPreview) return;
+        if (_cachedKey.SourceId != vehicleId) return;
+        _hasCachedPreview = false;
+        _cachedPreview = default;
+        _cachedKey = default;
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(
+                $"[AFC] HohmannMultiPassUI.OnExecutionEnded: vehicle='{vehicleId}' " +
+                "cleared cached preview.");
+    }
+
+    /// <summary>True when a successful multi-pass plan is cached and
+    /// either the user picked N>1 in the init UI or the cached plan
+    /// came from an active-exec recompute. The "same vehicle" check is
+    /// enforced downstream in <see cref="RenderOrbits"/> /
+    /// <see cref="RenderMarkers"/> via the cache's SourceId, so a stale
+    /// cache for a vehicle that is no longer the source still returns
+    /// true here but is filtered out at render time.</summary>
+    public static bool HasMultiPassPreview
+    {
+        get
+        {
+            if (!Enabled || !_hasCachedPreview || _cachedPreview.Failed) return false;
+            if (_cachedPreview.Passes.Length == 0) return false;
+            // _cachedKey.PassCount > 1 covers the source-switch case during
+            // active execution: switching the dropdown to another vehicle
+            // and back resets _passCount to 1, but DrawActive rebuilds the
+            // cache with PassCount = exec.PassCountTotal. Without this
+            // clause the overlay would silently stop rendering after a
+            // dropdown round-trip while the multi-pass is still running.
+            return _passCount > 1 || _cachedKey.StartPassIndex > 0
+                   || _cachedKey.PassCount > 1;
+        }
+    }
+
+    /// <summary>3D orbit lines for the cached multi-pass preview. During
+    /// active execution the first cached pass is the queued one and
+    /// stock renders it via BurnPlan, so we skipFirst to avoid drawing
+    /// it twice. skipLast is always true: stock's selected-entry overlay
+    /// owns the final-pass Lambert trajectory; rendering ours on top
+    /// produced a visible double-line with slight discrepancies.</summary>
+    public static void RenderOrbits(Viewport viewport, Vehicle source)
+    {
+        if (!HasMultiPassPreview) return;
+        if (source.Id != _cachedKey.SourceId) return;
+
+        bool skipFirst = MultiPassRegistry.Has(source.Id);
+        MultiPassRenderer.RenderPassOrbits(
+            viewport, source, _cachedPreview.Passes,
+            skipFirst, skipLast: true);
+    }
+
+    /// <summary>Per-pass Ap/Pe/AN/DN/SOI/closest markers. ImGui-phase
+    /// counterpart of <see cref="RenderOrbits"/>. firstPassDisplayNumber
+    /// equals <c>exec.PassIndex + 1</c> during execution so labels reflect
+    /// the absolute pass number in the original N-pass sequence
+    /// (e.g. after pass 1 completes, the intermediate triangle still
+    /// reads "Ap Pass 3" rather than restarting at 1). skipLast=true
+    /// matches <see cref="RenderOrbits"/>; stock's <c>FlightPlan.DrawUi</c>
+    /// labels the final pass (e.g. "Escape 0").</summary>
+    public static void RenderMarkers(Viewport viewport, Vehicle source)
+    {
+        if (!HasMultiPassPreview) return;
+        if (source.Id != _cachedKey.SourceId) return;
+
+        int firstPassDisplayNumber = 1;
+        bool skipFirst = false;
+        if (MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
+        {
+            firstPassDisplayNumber = exec.PassIndex + 1;
+            skipFirst = true;
+        }
+        MultiPassMarkers.Draw(viewport, source,
+            _cachedPreview.Passes, firstPassDisplayNumber,
+            skipFirst, skipLast: true);
     }
 
     /// <summary>Whether the in-stock-window Hohmann state currently
@@ -246,10 +372,67 @@ internal static class HohmannMultiPassUI
             exec.PassIndex + 1, exec.PassCountTotal));
         ImGui.PopStyleColor();
 
+        // Refresh preview from the locked intent state so the 3D overlay
+        // reflects the chained orbit (post-prior-passes) rather than the
+        // parking-orbit shape it had at init time. Cache key includes
+        // exec.PassIndex so cache busts on pass completion.
+        if (exec.Intent is HohmannTransferIntent intent)
+            UpdatePreviewForActiveExec(source, exec, intent);
+
+        // Surface mid-exec planner failures (e.g. live-state drift makes
+        // v_p_target unreachable) so the user understands why the orbit
+        // overlay disappeared instead of seeing it silently vanish.
+        DrawPreviewFailureIfApplicable();
+
         ImGui.Spacing();
         if (ImGuiHelper.DrawButton("Cancel remaining passes"u8,
                 KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Red))
             CancelExecution(source, exec);
+    }
+
+    private static void UpdatePreviewForActiveExec(
+        Vehicle source, MultiPassExecution exec, HohmannTransferIntent intent)
+    {
+        if (Universe.CurrentSystem == null) return;
+        if (!Universe.CurrentSystem.All.TryGet(intent.TargetId, out Astronomical? targetA))
+            return;
+        if (targetA is not IOrbiter target) return;
+
+        var input = new HohmannMultiPassPlanner.HohmannPlanInput(
+            Target: target,
+            TFinal: new SimTime(intent.TFinalSec),
+            DFinalVlf: intent.DFinalVlf,
+            IsCrossParent: intent.IsCrossParent,
+            VInfMs: intent.VInfMs,
+            ApoTargetRadiusMeters: intent.ApoTargetRadiusMeters);
+
+        var key = BuildKey(source, input,
+            passCount: exec.PassCountTotal,
+            startPassIndex: exec.PassIndex);
+        if (_hasCachedPreview && key == _cachedKey) return;
+
+        // Freeze during Auto burn so the per-tick mass drift does not
+        // recompute every physics tick; Auto -> Manual on pass completion
+        // naturally invalidates the key on the next frame.
+        if (_hasCachedPreview
+            && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
+            return;
+
+        SimTime now = Universe.GetElapsedSimTime();
+        SequenceBurnState state = SequenceBurnState.Analyze(source);
+        _cachedPreview = HohmannMultiPassPlanner.Plan(
+            source, input, exec.PassCountTotal, exec.PassIndex,
+            intent.ParkingPeriodSec, state, now);
+        _cachedKey = key;
+        _hasCachedPreview = true;
+
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(string.Format(Inv,
+                "[AFC] HohmannMultiPassUI.UpdatePreviewForActiveExec: vehicle='{0}' " +
+                "passIndex={1}/{2} -> failed={3} reason='{4}' previewPasses={5}",
+                source.Id, exec.PassIndex, exec.PassCountTotal,
+                _cachedPreview.Failed, _cachedPreview.FailureReason ?? "-",
+                _cachedPreview.Passes.Length));
     }
 
     private static void DrawBlockedByOtherExecution(MultiPassExecution exec)
@@ -280,6 +463,7 @@ internal static class HohmannMultiPassUI
                 $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
         PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
         MultiPassRegistry.Remove(source.Id);
+        OnExecutionEnded(source.Id);
     }
 
     #endregion
@@ -328,7 +512,8 @@ internal static class HohmannMultiPassUI
         OrbitalTransfers.TransferInfo info)
     {
         var input = BuildPlanInput(source, entry, info);
-        var key = BuildKey(source, input);
+        var key = BuildKey(source, input,
+            passCount: _passCount, startPassIndex: 0);
         if (_hasCachedPreview && key == _cachedKey) return;
 
         // Freeze the cache during an Auto burn so a mid-burn-mass drift
@@ -556,7 +741,8 @@ internal static class HohmannMultiPassUI
     }
 
     private static PreviewKey BuildKey(
-        Vehicle source, HohmannMultiPassPlanner.HohmannPlanInput input)
+        Vehicle source, HohmannMultiPassPlanner.HohmannPlanInput input,
+        int passCount, int startPassIndex)
     {
         return new PreviewKey(
             SourceId: source.Id,
@@ -566,7 +752,8 @@ internal static class HohmannMultiPassUI
             VInfBucket: (long)input.VInfMs,
             ApoTargetBucket: (long)(input.ApoTargetRadiusMeters / 1000.0),
             IsCrossParent: input.IsCrossParent,
-            PassCount: _passCount,
+            PassCount: passCount,
+            StartPassIndex: startPassIndex,
             MassBucket: (long)(source.TotalMass / 100.0));
     }
 

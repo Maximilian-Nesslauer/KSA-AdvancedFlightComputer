@@ -53,6 +53,13 @@ internal static class GameReflection
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
+    // "Preview Selected Transfer" checkbox in stock's plan window. Gates
+    // OnPreRender's DrawSelectedTransfer call. Our Hohmann multi-pass
+    // overlay piggybacks on the same toggle so the user only manages one
+    // preview switch for both stock single-burn and multi-pass.
+    public static readonly FieldInfo? TransferPlanner_displaySelectedTransfer =
+        AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
+
     #endregion
 
     #region MultiPass
@@ -114,7 +121,8 @@ internal static class GameReflection
             ("TransferPlanner._transferBurn",             TransferPlanner_transferBurn),
             ("TransferPlanner._correctionTime",           TransferPlanner_correctionTime),
             ("TransferPlanner._showPlanWindow",           TransferPlanner_showPlanWindow),
-            ("TransferPlanner.SetTransferInfo",          TransferPlanner_SetTransferInfo),
+            ("TransferPlanner.SetTransferInfo",            TransferPlanner_SetTransferInfo),
+            ("TransferPlanner._displaySelectedTransfer",   TransferPlanner_displaySelectedTransfer),
         };
         return ValidateTargets("ManeuverTools", targets);
     }

@@ -9,21 +9,31 @@ internal static class MultiPassRenderer
 {
     /// <summary>When <paramref name="skipFirst"/> is true, passes[0] is
     /// omitted - used during active execution where stock already
-    /// renders the queued burn's post-burn orbit.</summary>
+    /// renders the queued burn's post-burn orbit. When <paramref name="skipLast"/>
+    /// is true, the last pass is omitted - used for Hohmann where stock
+    /// already renders the selected-entry's flight plan (= final pass
+    /// trajectory). The dim ramp keeps the unrendered last pass's slot
+    /// so intermediate brightness still slopes correctly.</summary>
     public static void RenderPassOrbits(
-        Viewport viewport, Vehicle source, PassPreview[] passes, bool skipFirst = false)
+        Viewport viewport, Vehicle source, PassPreview[] passes,
+        bool skipFirst = false, bool skipLast = false)
     {
         int start = skipFirst ? 1 : 0;
-        int shown = passes.Length - start;
-        if (shown <= 0) return;
+        int end = passes.Length - (skipLast ? 1 : 0);
+        if (end - start <= 0) return;
 
-        for (int i = start; i < passes.Length; i++)
+        // rampCount includes the skipped-last slot so intermediate passes
+        // get the same brightness they would in the full ramp; without
+        // this the second-to-last pass would jump to full BurnPatchColor.
+        int rampCount = passes.Length - start;
+
+        for (int i = start; i < end; i++)
         {
             FlightPlan fp = passes[i].FlightPlan;
             if (fp.Patches.Count == 0)
                 continue;
 
-            ApplyPassColor(fp, i - start, shown);
+            ApplyPassColor(fp, i - start, rampCount);
             EnsurePatchPointsCached(fp);
 
             // isActive=true matches stock's selected-porkchop rendering;

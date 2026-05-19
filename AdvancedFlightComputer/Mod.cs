@@ -78,6 +78,20 @@ public sealed class Mod
                 else
                     DefaultCategory.Log.Warning(
                         "[AFC] HohmannCreateInterceptor disabled - Burn.Create anchor not found.");
+
+                // 3D orbit-line overlay for the multi-pass preview, gated
+                // on stock's "Preview Selected Transfer" checkbox.
+                _harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_OnPreRender_Hohmann)).Patch();
+
+                // Per-pass marker overlay (Ap / Pe / AN / DN / SOI / closest).
+                // Anchored on private DrawSelectedTransferUi so the gate
+                // is inherited from stock; IsAnchorPresent guards a
+                // future stock rename.
+                if (Patch_TransferPlanner_DrawSelectedTransferUi_Hohmann.IsAnchorPresent)
+                    _harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Hohmann)).Patch();
+                else
+                    DefaultCategory.Log.Warning(
+                        "[AFC] Hohmann marker overlay disabled - DrawSelectedTransferUi anchor not found.");
             }
             else
                 DefaultCategory.Log.Warning(
