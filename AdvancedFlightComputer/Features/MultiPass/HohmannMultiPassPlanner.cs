@@ -128,11 +128,10 @@ internal static class HohmannMultiPassPlanner
         // single-burn; for "last remaining pass of an N>1 plan" it
         // converges to whatever brings live v_p to v_p_target.
         if (remainingCount == 1)
-            return PlanSinglePass(source, input, now);
+            return PlanSinglePass(source, input, now, parkingPeriodSec);
 
-        double3 dFinalDir = input.DFinalVlf.NormalizeOrZero();
-        if (dFinalDir.LengthSquared() < 0.5)
-            return Fail($"vehicle '{source.Id}': stock Hohmann dV direction is zero");
+        if (input.DFinalVlf.LengthSquared() < 1.0)
+            return Fail($"vehicle '{source.Id}': stock Hohmann dV is zero");
 
         // K sub-sequence: slice of the original K_k = k+2 starting at
         // startPassIndex. For initial plan (start=0, total=N): K=(2,3,...,N).
@@ -196,10 +195,29 @@ internal static class HohmannMultiPassPlanner
                 "K sequence over-pumped for the chosen passCount",
                 source.Id, vpTarget, vpBefore[remainingCount - 1]));
 
+        // Reconstruct parking-orbit periapsis velocity so the final pass
+        // can be expressed as the vector (LambertPost - chained) rather
+        // than a scalar magnitude in the Lambert direction. Scalar form
+        // collapses Lambert's off-axis (Y/Z) components by the ratio
+        // (vpTarget - vpChained) / |LambertDv| - for N=5 Earth->Mars at
+        // PassIndex=N-1 that ratio is ~1%, leaving the actual queued
+        // escape burn with a 99%-incorrect inclination component and a
+        // visibly wrong post-burn asymptote. Pure-prograde Lambert (Y/Z
+        // = 0) trivially gives the same answer either way.
+        double aParking = Math.Pow(
+            Math.Pow(tPark / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
+        double vpParking = Math.Sqrt(mu * (2.0 / rp - 1.0 / aParking));
+        double3 lambertPostVlf = new(
+            vpParking + input.DFinalVlf.X,
+            input.DFinalVlf.Y,
+            input.DFinalVlf.Z);
+        double3 finalDvVlf =
+            lambertPostVlf - new double3(vpBefore[remainingCount - 1], 0.0, 0.0);
+
         var dvSeq = new double[remainingCount];
         for (int k = 0; k < remainingCount - 1; k++)
             dvSeq[k] = vpBefore[k + 1] - vpBefore[k];
-        dvSeq[remainingCount - 1] = vpTarget - vpBefore[remainingCount - 1];
+        dvSeq[remainingCount - 1] = finalDvVlf.Length();
 
         // Per-pass burn time estimate via multi-stage Tsiolkovsky drain.
         double[] burnTimes = EstimateBurnTimes(dvSeq, vehicleState);
@@ -217,10 +235,11 @@ internal static class HohmannMultiPassPlanner
         for (int k = 0; k < remainingCount; k++)
         {
             // Prior passes: pure prograde at periapsis. Final pass:
-            // stock direction (preserves asymptote) scaled to residual dV.
+            // (LambertPost - chained) vector so the post-burn asymptote
+            // matches Lambert's intended target across all inclinations.
             double3 dvVlf = k < remainingCount - 1
                 ? new double3(dvSeq[k], 0.0, 0.0)
-                : dFinalDir * dvSeq[k];
+                : finalDvVlf;
 
             var (fp, burnPatch) = BuildPassFlightPlan(
                 source, prePatch, times[k], dvVlf, input.Target);
@@ -416,12 +435,17 @@ internal static class HohmannMultiPassPlanner
         return burnTimes;
     }
 
-    /// <summary>Single pass = the stock final-pass case with the residual
-    /// dV computed from the live orbit state. For N=1 from the UI, the
-    /// vehicle is still in the parking orbit so residual = full stock
-    /// |D_final| and the result is identical to the stock single burn.</summary>
+    /// <summary>Single pass = the stock final-pass case. dV is the vector
+    /// difference between Lambert's intended post-burn velocity (computed
+    /// from the original parking orbit periapsis velocity + Lambert dV)
+    /// and the vehicle's live tangential velocity at this position - so
+    /// for N=1 from the UI the result matches stock single-burn exactly,
+    /// and for active-exec PassIndex=N-1 the off-axis (inclination)
+    /// components of Lambert are preserved instead of collapsing to the
+    /// scaled-residual that the previous scalar formulation produced.</summary>
     private static PassPreviewResult PlanSinglePass(
-        Vehicle source, HohmannPlanInput input, SimTime now)
+        Vehicle source, HohmannPlanInput input, SimTime now,
+        double parkingPeriodSec)
     {
         PatchedConic? prePatch = source.FlightPlan.TryFindPatch(input.TFinal);
         if (prePatch == null || prePatch.PrimaryBody == null)
@@ -437,19 +461,32 @@ internal static class HohmannMultiPassPlanner
         if (!(rpLive > 0.0))
             return Fail($"vehicle '{source.Id}': degenerate position at T_final");
 
-        double vpTarget = ComputeVpTarget(input, mu, rpLive);
-        double dvFinalMag = vpTarget - vpLive;
+        if (input.DFinalVlf.LengthSquared() < 1.0)
+            return Fail($"vehicle '{source.Id}': stock Hohmann dV is zero");
+
+        // Reconstruct parking-orbit periapsis velocity at this radius
+        // from the locked parking period. K-integer scheduling guarantees
+        // rpLive == parking-orbit periapsis, so a_parking + r_p give a
+        // unique v_p_parking via vis-viva.
+        double aParking = Math.Pow(
+            Math.Pow(parkingPeriodSec / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
+        double vpParking = Math.Sqrt(mu * (2.0 / rpLive - 1.0 / aParking));
+
+        // LambertPost = the velocity Lambert intended at this position
+        // (= parking tangential plus locked Lambert dV vector). The dV
+        // we actually need at the live state is LambertPost - liveVel.
+        double3 lambertPostVlf = new(
+            vpParking + input.DFinalVlf.X,
+            input.DFinalVlf.Y,
+            input.DFinalVlf.Z);
+        double3 dvVlf = lambertPostVlf - new double3(vpLive, 0.0, 0.0);
+        double dvFinalMag = dvVlf.Length();
         if (!(dvFinalMag > 0.0))
             return Fail(string.Format(CultureInfo.InvariantCulture,
                 "vehicle '{0}': residual dV at T_final is non-positive ({1:F2}m/s); " +
-                "priors already over-shot v_p_target",
+                "priors already over-shot Lambert target",
                 source.Id, dvFinalMag));
 
-        double3 dvFinalDir = input.DFinalVlf.NormalizeOrZero();
-        if (dvFinalDir.LengthSquared() < 0.5)
-            return Fail($"vehicle '{source.Id}': stock Hohmann dV direction is zero");
-
-        double3 dvVlf = dvFinalDir * dvFinalMag;
         var (fp, _) = BuildPassFlightPlan(
             source, prePatch, input.TFinal, dvVlf, input.Target);
         var single = new PassPreview(
