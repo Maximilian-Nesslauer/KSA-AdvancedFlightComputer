@@ -532,7 +532,27 @@ internal static class HohmannMultiPassUI
         OrbitalTransfers.TransferInfo info)
     {
         SimTime now = Universe.GetElapsedSimTime();
-        double parkingPeriodSec = source.Orbit?.Period ?? 0.0;
+        double parkingPeriodSec = source.Orbit?.Period ?? double.NaN;
+
+        // Vehicle is no longer in a bound orbit (e.g. just completed a
+        // multi-pass to Mars and is now hyperbolic; Orbit.Period returns
+        // NaN). Force N=1 and bail before LargestFeasibleN runs probes
+        // that would all fail with "parkingPeriodSec NaN" - those produce
+        // confusing log spam plus an auto-clamp banner that misleads the
+        // user about why multi-pass isn't available.
+        if (!(parkingPeriodSec > 0.0))
+        {
+            if (_passCount > 1)
+            {
+                _passCount = 1;
+                _autoClampedFromN = 0;
+            }
+            _lastShiftKShift = 0;
+            _hasCachedPreview = false;
+            _cachedPreview = default;
+            _cachedKey = default;
+            return;
+        }
 
         var raw = BuildBasePlanInput(source, entry, info);
         var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
