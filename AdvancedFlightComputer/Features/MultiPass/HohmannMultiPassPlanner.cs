@@ -15,7 +15,7 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// intermediate orbit's period is forced to be an integer multiple of the
 /// parking orbit period so that every chained burn lands at the SAME CCI
 /// position as the stock Lambert burn point at T_final - preserving the
-/// asymptote direction exactly.
+/// departure phasing exactly.
 ///
 /// Algorithm:
 ///   1. Pick K sequence: minimum monotonic increasing integers starting at
@@ -24,17 +24,23 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 ///      times[k+1] = times[k] + K_k * T_park. By parking-orbit periodicity,
 ///      vehicle on parking orbit at times[0] is at the same CCI direction
 ///      as at T_final.
-///   3. Each prior pass fires prograde at periapsis of its chained orbit.
-///      Because T_post_k = K_k * T_park exactly, the chained orbit's
-///      periapsis returns to the same CCI direction every K_k parking
-///      periods - so pass k+1 lands at the same CCI direction as pass k.
+///   3. Each pass adds two components in its LOCAL VLF at periapsis:
+///      a K-prograde X kick that sets |v_post_k| to the K-scheduled speed,
+///      and a Y kick that rotates the orbital plane by theta_k around the
+///      periapsis radial. Because dV.Z = 0 for priors, periapsis CCI
+///      position is preserved across the chain and the K-integer property
+///      holds regardless of theta_k.
 ///   4. Final pass at T_final, vehicle still at the locked CCI direction.
-///      Stock D_finalVlf direction is preserved because the VLF basis at
-///      this periapsis is identical to the parking-orbit VLF basis at
-///      T_final (both have tangential velocity at the same position).
-///   5. Per-pass dV is COMPUTED from the K-sequence via vis-viva, not
-///      free-allocated by a splitter. SplitMode is therefore irrelevant
-///      for Hohmann; the only user choice is N.
+///      The radial D.Z component of the Lambert dV (typically ~0 for
+///      tangential Hohmann porkchop optima) is added on the final pass
+///      only, so the priors' K-chain stays planar.
+///   5. theta_k is allocated proportional to delta_R_k / (v_pre_k *
+///      v_post_k), the Lagrange-optimal weighting that minimises total
+///      extra dV from rotating the orbital plane. Deterministic from
+///      locked inputs so recompute mid-execution stays consistent.
+///   6. Per-pass dV magnitudes are COMPUTED from the K-sequence + theta_k
+///      via vis-viva, not free-allocated by a splitter. SplitMode is
+///      therefore irrelevant for Hohmann; the only user choice is N.
 ///
 /// Same-parent vs cross-parent: identical scheduling logic. The only
 /// difference is in <see cref="ComputeVpTarget"/>: cross-parent uses
@@ -130,15 +136,66 @@ internal static class HohmannMultiPassPlanner
 
         int remainingCount = totalPassCount - startPassIndex;
 
-        // remaining=1: just the final pass at T_final with residual dV
-        // from the live orbit state. For initial N=1 it equals stock
-        // single-burn; for "last remaining pass of an N>1 plan" it
-        // converges to whatever brings live v_p to v_p_target.
-        if (remainingCount == 1)
-            return PlanSinglePass(source, input, now, parkingPeriodSec);
-
         if (input.DFinalVlf.LengthSquared() < 1.0)
             return Fail($"vehicle '{source.Id}': stock Hohmann dV is zero");
+
+        // Plane-change distribution: each pass carries both K-prograde dV
+        // (vPost*cos(theta_k) - vPre, along local-X) and an in-plane Y
+        // component (vPost*sin(theta_k)) that rotates the orbital plane
+        // by theta_k around the periapsis radial. The Y component
+        // preserves the K-integer property (periapsis CCI position
+        // unchanged because dV.Z = 0; post-burn |v| still equals K-target
+        // because |vPost*(cos,sin,0)| = vPost) while spreading the
+        // Lambert plane change across passes. Extra cost per pass is
+        // v_pre*v_post*theta_k^2 / (2*delta_R_k); the sum is minimised
+        // by allocating theta_k proportional to delta_R_k/(v_pre*v_post)
+        // (Lagrange-optimal, see AllocatePlaneChangeLagrange).
+        double vpTarget = ComputeVpTarget(input, mu, rp);
+        if (!(vpTarget > 0.0))
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': vpTarget non-positive ({1:F2}m/s)",
+                source.Id, vpTarget));
+
+        // vTargetXy is the in-plane component of the Lambert target speed;
+        // D.Z (radial-out) is preserved separately on the final pass. For
+        // tangential Hohmann porkchop optima D.Z is ~0 and vTargetXy ==
+        // vpTarget. Guard against |D.Z| >= vpTarget (numerical noise) by
+        // clamping the radicand to >= 0.
+        double dz = input.DFinalVlf.Z;
+        double vTargetXy = Math.Sqrt(Math.Max(0.0, vpTarget * vpTarget - dz * dz));
+
+        // Parking-orbit periapsis speed: the K-prograde reference for the
+        // original (startPassIndex=0) chain. Locked via tPark, independent
+        // of live drift, so thetaTotal and the per-pass allocation are
+        // identical across initial plan and every recompute.
+        double aParking = Math.Pow(
+            Math.Pow(tPark / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
+        double vpParking = Math.Sqrt(mu * (2.0 / rp - 1.0 / aParking));
+
+        // Total plane rotation in the X-Y tangent plane. atan2 handles
+        // sign; for tangential Hohmann (D.Y == 0) thetaTotal collapses to
+        // 0 and all theta_k go to 0, reproducing pure-prograde priors.
+        double thetaTotal = Math.Atan2(input.DFinalVlf.Y, vpParking + input.DFinalVlf.X);
+
+        // Allocate theta_k over the FULL original N-pass plan; slice into
+        // [startPassIndex..] for the current call. Using the locked initial
+        // K-chain (not the live chain) keeps allocation deterministic
+        // across recomputes: the same theta_k is planned for absolute pass k
+        // whether we hit it on the initial plan or after k-1 priors.
+        var (dvSeqInitial, vPreInitial, vPostInitial) = ComputeInitialKChain(
+            mu, rp, tPark, totalPassCount, vTargetXy);
+        double[] thetaKInitial = AllocatePlaneChangeLagrange(
+            thetaTotal, dvSeqInitial, vPreInitial, vPostInitial);
+
+        // remaining=1: just the final pass at T_final with residual dV
+        // from the live orbit state. For initial N=1 it equals stock
+        // single-burn (theta_k = thetaTotal, identical algebra). For
+        // "last remaining pass of an N>1 plan" the planned final-pass
+        // theta_k = thetaKInitial[N-1] rotates the remaining share.
+        if (remainingCount == 1)
+            return PlanSinglePass(
+                source, input, now,
+                vTargetXy, thetaKInitial[startPassIndex]);
 
         // K sub-sequence: slice of the original K_k = k+2 starting at
         // startPassIndex. For initial plan (start=0, total=N): K=(2,3,...,N).
@@ -152,9 +209,9 @@ internal static class HohmannMultiPassPlanner
         // startPassIndex fires K_total parking periods before T_final;
         // intermediate passes step forward by K_k parking periods. Because
         // tPark is the locked original parking period (and the chained
-        // orbit at this point has periapsis at the locked CCI direction
-        // because prior passes were prograde-at-periapsis), vehicle ends
-        // up at chained-periapsis at every scheduled time.
+        // orbit's periapsis stays at the locked CCI position even after a
+        // Y-component burn, because dV.Z = 0), the vehicle ends up at
+        // chained-periapsis at every scheduled time.
         var times = new SimTime[remainingCount];
         times[0] = new SimTime(input.TFinal.Seconds() - kTotal * tPark);
         for (int k = 1; k < remainingCount; k++)
@@ -169,10 +226,11 @@ internal static class HohmannMultiPassPlanner
                 now.Seconds() + EarliestPassMarginSec - times[0].Seconds(),
                 kTotal, kTotal * tPark));
 
-        // Compute per-pass SMA / v_p / dV analytically. The chain starts
-        // from the live current orbit (parking for initial, chained for
-        // recompute). K-integer schedule enforces the impulsive-prograde-
-        // at-periapsis limit so the chain is exact.
+        // Compute per-pass SMA / v_p analytically. The chain starts from
+        // the live current orbit (parking for initial, chained for
+        // recompute). K-integer schedule enforces |v_post_k| = vp(K_k);
+        // direction (theta_k rotation in the tangent plane) is the free
+        // parameter, planned by the Lagrange allocator below.
         double[] aBefore = new double[remainingCount];   // SMA before each remaining pass
         double[] vpBefore = new double[remainingCount];  // periapsis speed before each remaining pass
         aBefore[0] = currentOrbit.SemiMajorAxis;
@@ -192,46 +250,50 @@ internal static class HohmannMultiPassPlanner
             vpBefore[k + 1] = Math.Sqrt(mu * (2.0 / rp - 1.0 / aPost));
         }
 
-        // Per-pass dV: priors raise v_p step by step; final pass closes
-        // the gap to v_p_target. For recompute starting mid-chain, the
-        // dV adapts to the live state (vpBefore[0] = chained orbit's v_p).
-        double vpTarget = ComputeVpTarget(input, mu, rp);
-        if (!(vpTarget > vpBefore[remainingCount - 1]))
+        if (!(vTargetXy > vpBefore[remainingCount - 1]))
             return Fail(string.Format(CultureInfo.InvariantCulture,
-                "vehicle '{0}': v_p target {1:F1}m/s <= pre-final v_p {2:F1}m/s; " +
+                "vehicle '{0}': vTargetXy {1:F1}m/s <= pre-final v_p {2:F1}m/s; " +
                 "K sequence over-pumped for the chosen passCount",
-                source.Id, vpTarget, vpBefore[remainingCount - 1]));
+                source.Id, vTargetXy, vpBefore[remainingCount - 1]));
 
-        // Reconstruct parking-orbit periapsis velocity so the final pass
-        // can be expressed as the vector (LambertPost - chained) rather
-        // than a scalar magnitude in the Lambert direction. Scalar form
-        // collapses Lambert's off-axis (Y/Z) components by the ratio
-        // (vpTarget - vpChained) / |LambertDv| - for N=5 Earth->Mars at
-        // PassIndex=N-1 that ratio is ~1%, leaving the actual queued
-        // escape burn with a 99%-incorrect inclination component and a
-        // visibly wrong post-burn asymptote. Pure-prograde Lambert (Y/Z
-        // = 0) trivially gives the same answer either way.
-        double aParking = Math.Pow(
-            Math.Pow(tPark / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
-        double vpParking = Math.Sqrt(mu * (2.0 / rp - 1.0 / aParking));
-        double3 lambertPostVlf = new(
-            vpParking + input.DFinalVlf.X,
-            input.DFinalVlf.Y,
-            input.DFinalVlf.Z);
-        double3 finalDvVlf =
-            lambertPostVlf - new double3(vpBefore[remainingCount - 1], 0.0, 0.0);
-
-        var dvSeq = new double[remainingCount];
-        for (int k = 0; k < remainingCount - 1; k++)
-            dvSeq[k] = vpBefore[k + 1] - vpBefore[k];
-        dvSeq[remainingCount - 1] = finalDvVlf.Length();
+        // Per-pass dV in LOCAL VLF:
+        //   priors: (vPost*cos(theta_k) - vPre, vPost*sin(theta_k), 0)
+        //   final:  same X/Y plus D.Z to preserve any radial Lambert
+        //           residual (numerical noise in tangential Hohmann, but
+        //           still applied at the final pass to keep the planar
+        //           K-chain invariant clean for the priors).
+        // For the final pass, vPost is vTargetXy (the in-plane component
+        // of the Lambert post-burn speed); D.Z carries the remaining
+        // radial-out velocity, giving total post-burn |v| = vpTarget.
+        // For stock Sol (theta_k ~ 0.01rad) dvX stays positive. Custom
+        // systems with very large theta could push dvX negative on early
+        // passes, which is mildly retrograde along the old local-X; the
+        // chain still works because |v_post| = vPost is theta-independent.
+        var dvVlfSeq = new double3[remainingCount];
+        var dvMagSeq = new double[remainingCount];
+        for (int k = 0; k < remainingCount; k++)
+        {
+            double vPre = vpBefore[k];
+            double vPost = (k < remainingCount - 1)
+                ? vpBefore[k + 1]
+                : vTargetXy;
+            double thetaK = thetaKInitial[startPassIndex + k];
+            double dvX = vPost * Math.Cos(thetaK) - vPre;
+            double dvY = vPost * Math.Sin(thetaK);
+            double dvZ = (k == remainingCount - 1) ? dz : 0.0;
+            dvVlfSeq[k] = new double3(dvX, dvY, dvZ);
+            dvMagSeq[k] = dvVlfSeq[k].Length();
+        }
 
         // Per-pass burn time estimate via multi-stage Tsiolkovsky drain.
-        double[] burnTimes = EstimateBurnTimes(dvSeq, vehicleState);
+        // Uses full per-pass |dV| (X+Y+Z), so the plane-change extra cost
+        // shows up in the time budget the same way the magnitude does.
+        double[] burnTimes = EstimateBurnTimes(dvMagSeq, vehicleState);
 
         // Forward-chain flight plans for the preview. The K-scheduled
         // times mean each chained orbit's periapsis lands at times[k+1]
-        // by construction.
+        // by construction; the Y-component rotation does not affect this
+        // because periapsis position stays fixed when dV.Z = 0.
         var previews = new List<PassPreview>(remainingCount);
         PatchedConic? prePatch = source.FlightPlan.TryFindPatch(times[0]);
         if (prePatch == null || prePatch.PrimaryBody == null)
@@ -241,12 +303,7 @@ internal static class HohmannMultiPassPlanner
 
         for (int k = 0; k < remainingCount; k++)
         {
-            // Prior passes: pure prograde at periapsis. Final pass:
-            // (LambertPost - chained) vector so the post-burn asymptote
-            // matches Lambert's intended target across all inclinations.
-            double3 dvVlf = k < remainingCount - 1
-                ? new double3(dvSeq[k], 0.0, 0.0)
-                : finalDvVlf;
+            double3 dvVlf = dvVlfSeq[k];
 
             var (fp, burnPatch) = BuildPassFlightPlan(
                 source, prePatch, times[k], dvVlf, input.Target);
@@ -277,11 +334,13 @@ internal static class HohmannMultiPassPlanner
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] HohmannMultiPassPlanner.Plan: total={0} startIdx={1} remaining={2} " +
                 "K_total={3} T_park={4:F1}s T_final={5:F0}s T_0={6:F0}s span={7:F0}s " +
-                "vpTarget={8:F1}m/s dV[{9}]m/s",
+                "vpTarget={8:F1}m/s vTargetXy={9:F1}m/s thetaTotal={10:F4}rad " +
+                "thetaK[{11}]rad dV[{12}]m/s",
                 totalPassCount, startPassIndex, remainingCount, kTotal, tPark,
                 input.TFinal.Seconds(), times[0].Seconds(),
-                input.TFinal.Seconds() - times[0].Seconds(), vpTarget,
-                FormatDvSeq(dvSeq)));
+                input.TFinal.Seconds() - times[0].Seconds(), vpTarget, vTargetXy,
+                thetaTotal, FormatThetaSlice(thetaKInitial, startPassIndex, remainingCount),
+                FormatDvSeq(dvMagSeq)));
 
         return new PassPreviewResult(previews.ToArray(), Failed: false, FailureReason: null);
     }
@@ -514,6 +573,91 @@ internal static class HohmannMultiPassPlanner
         return k;
     }
 
+    /// <summary>Per-pass K-prograde data for the original N-pass plan
+    /// starting from a parking orbit of period <paramref name="tPark"/> at
+    /// periapsis radius <paramref name="rp"/>. Returns dvSeq (delta_R per
+    /// pass), vPre (pre-burn periapsis speed), and vPost (post-burn
+    /// periapsis speed). Last entry is the final pass closing from K=N to
+    /// <paramref name="vTargetXy"/> (the in-plane magnitude of the Lambert
+    /// target). Independent of live drift, so the allocation is identical
+    /// at initial plan and every recompute. Consumed by
+    /// <see cref="AllocatePlaneChangeLagrange"/>.</summary>
+    private static (double[] dvSeq, double[] vPre, double[] vPost) ComputeInitialKChain(
+        double mu, double rp, double tPark, int totalPassCount, double vTargetXy)
+    {
+        var dvSeq = new double[totalPassCount];
+        var vPre = new double[totalPassCount];
+        var vPost = new double[totalPassCount];
+        double aParking = Math.Pow(
+            Math.Pow(tPark / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
+        double vpPrev = Math.Sqrt(mu * (2.0 / rp - 1.0 / aParking));
+        for (int k = 0; k < totalPassCount - 1; k++)
+        {
+            int kIdx = k + 2;
+            double tPostK = kIdx * tPark;
+            double aPost = Math.Pow(
+                Math.Pow(tPostK / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
+            double vpPostK = Math.Sqrt(mu * (2.0 / rp - 1.0 / aPost));
+            vPre[k] = vpPrev;
+            vPost[k] = vpPostK;
+            dvSeq[k] = vpPostK - vpPrev;
+            vpPrev = vpPostK;
+        }
+        vPre[totalPassCount - 1] = vpPrev;
+        vPost[totalPassCount - 1] = vTargetXy;
+        dvSeq[totalPassCount - 1] = vTargetXy - vpPrev;
+        return (dvSeq, vPre, vPost);
+    }
+
+    /// <summary>Lagrange-optimal plane-change allocation: distributes
+    /// <paramref name="thetaTotal"/> across N passes proportional to
+    /// `delta_R / (v_pre * v_post)`. This minimises the total extra dV
+    /// cost from rotating the orbital plane, given the cost-per-pass
+    /// formula `v_pre * v_post * theta_k^2 / (2 * delta_R_k)` (Lagrange
+    /// multiplier on the sum_k theta_k = thetaTotal constraint).
+    ///
+    /// Versus the simpler "proportional to delta_R" weighting, this
+    /// shifts rotation toward passes with smaller v_pre*v_post (typically
+    /// pass 0, which kicks from parking-speed) and away from the final
+    /// pass (highest v_pre*v_post). For stock-Sol targets with small
+    /// plane changes (Mars 0.1deg) the difference is sub-m/s; for high-
+    /// theta cases (Jupiter 9.6deg, custom systems) it saves ~10-20 m/s
+    /// AND makes the first prior pass's plane rotation more visible in
+    /// the 3D preview. Last pass absorbs floating-point residual so the
+    /// sum exactly matches <paramref name="thetaTotal"/>.</summary>
+    private static double[] AllocatePlaneChangeLagrange(
+        double thetaTotal, double[] dvSeq, double[] vPre, double[] vPost)
+    {
+        var thetaK = new double[dvSeq.Length];
+        var weights = new double[dvSeq.Length];
+        double sumWeight = 0.0;
+        for (int i = 0; i < dvSeq.Length; i++)
+        {
+            double denom = vPre[i] * vPost[i];
+            weights[i] = (denom > 0.0) ? Math.Abs(dvSeq[i]) / denom : 0.0;
+            sumWeight += weights[i];
+        }
+
+        if (!(sumWeight > 0.0))
+        {
+            // Degenerate: equal split. Hit only if all per-pass weights are
+            // zero, which would also fail downstream vis-viva checks; we
+            // still return a finite allocation so the caller's loop runs.
+            double per = thetaTotal / dvSeq.Length;
+            for (int i = 0; i < dvSeq.Length; i++) thetaK[i] = per;
+            return thetaK;
+        }
+
+        double acc = 0.0;
+        for (int i = 0; i < dvSeq.Length - 1; i++)
+        {
+            thetaK[i] = thetaTotal * weights[i] / sumWeight;
+            acc += thetaK[i];
+        }
+        thetaK[dvSeq.Length - 1] = thetaTotal - acc;
+        return thetaK;
+    }
+
     /// <summary>Target periapsis speed after the final pass.
     /// Cross-parent: derived from v_inf at parking r_p (gives a hyperbolic
     /// orbit with the right asymptote magnitude).
@@ -611,17 +755,26 @@ internal static class HohmannMultiPassPlanner
         return burnTimes;
     }
 
-    /// <summary>Single pass = the stock final-pass case. dV is the vector
-    /// difference between Lambert's intended post-burn velocity (computed
-    /// from the original parking orbit periapsis velocity + Lambert dV)
-    /// and the vehicle's live tangential velocity at this position - so
-    /// for N=1 from the UI the result matches stock single-burn exactly,
-    /// and for active-exec PassIndex=N-1 the off-axis (inclination)
-    /// components of Lambert are preserved instead of collapsing to the
-    /// scaled-residual that the previous scalar formulation produced.</summary>
+    /// <summary>Single-pass case: the only remaining pass closes from the
+    /// live orbit to the Lambert target. dV in LIVE-VLF:
+    ///   dV = (vTargetXy*cos(theta) - vLive, vTargetXy*sin(theta), D.Z)
+    /// For N=1 initial plan (startPassIndex=0, theta = thetaTotal), the
+    /// algebra collapses to (D.X, D.Y, D.Z) when vLive == vpParking,
+    /// matching the stock single-burn dV up to Lambert's internal
+    /// numerical roundoff. For the last remaining pass of an N>1 plan,
+    /// theta is the final pass's share of the Lagrange allocation -
+    /// any prior plane rotation done by earlier passes is implicit in
+    /// the live orbit's plane.
+    ///
+    /// Assumes T_final lands at a periapsis of the live orbit (rpLive
+    /// = parking r_p). The current call paths satisfy this: K-integer
+    /// scheduling places times[N-1] = T_final at the chained orbit's
+    /// periapsis, and N=1 hits T_final at parking periapsis. A direct
+    /// non-periapsis caller would under-/over-burn by (vpParking - vpLive)
+    /// because the in-plane vTargetXy formula assumes apse geometry.</summary>
     private static PassPreviewResult PlanSinglePass(
         Vehicle source, HohmannPlanInput input, SimTime now,
-        double parkingPeriodSec)
+        double vTargetXy, double theta)
     {
         PatchedConic? prePatch = source.FlightPlan.TryFindPatch(input.TFinal);
         if (prePatch == null || prePatch.PrimaryBody == null)
@@ -630,32 +783,22 @@ internal static class HohmannMultiPassPlanner
                 source.Id, input.TFinal.Seconds()));
 
         Orbit o = prePatch.Orbit;
-        double mu = o.Mu;
         StateVectors svAt = o.GetStateVectorsAt(input.TFinal);
         double vpLive = svAt.VelocityCci.Length();
         double rpLive = svAt.PositionCci.Length();
         if (!(rpLive > 0.0))
             return Fail($"vehicle '{source.Id}': degenerate position at T_final");
 
-        if (input.DFinalVlf.LengthSquared() < 1.0)
-            return Fail($"vehicle '{source.Id}': stock Hohmann dV is zero");
-
-        // Reconstruct parking-orbit periapsis velocity at this radius
-        // from the locked parking period. K-integer scheduling guarantees
-        // rpLive == parking-orbit periapsis, so a_parking + r_p give a
-        // unique v_p_parking via vis-viva.
-        double aParking = Math.Pow(
-            Math.Pow(parkingPeriodSec / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
-        double vpParking = Math.Sqrt(mu * (2.0 / rpLive - 1.0 / aParking));
-
-        // LambertPost = the velocity Lambert intended at this position
-        // (= parking tangential plus locked Lambert dV vector). The dV
-        // we actually need at the live state is LambertPost - liveVel.
-        double3 lambertPostVlf = new(
-            vpParking + input.DFinalVlf.X,
-            input.DFinalVlf.Y,
-            input.DFinalVlf.Z);
-        double3 dvVlf = lambertPostVlf - new double3(vpLive, 0.0, 0.0);
+        // dV in LIVE-VLF. LIVE-VLF X is along live velocity (which has
+        // magnitude vpLive); the target post-burn velocity has in-plane
+        // magnitude vTargetXy at angle theta from LIVE-X. D.Z is preserved
+        // in LIVE-VLF Z because the periapsis radial axis is the same in
+        // PARKING-VLF and LIVE-VLF (rotations between them are around Z,
+        // which leaves Z components invariant).
+        double dvX = vTargetXy * Math.Cos(theta) - vpLive;
+        double dvY = vTargetXy * Math.Sin(theta);
+        double dvZ = input.DFinalVlf.Z;
+        double3 dvVlf = new(dvX, dvY, dvZ);
         double dvFinalMag = dvVlf.Length();
         if (!(dvFinalMag > 0.0))
             return Fail(string.Format(CultureInfo.InvariantCulture,
@@ -683,6 +826,17 @@ internal static class HohmannMultiPassPlanner
         {
             if (i > 0) sb.Append(", ");
             sb.AppendFormat(CultureInfo.InvariantCulture, "{0:F1}", dvSeq[i]);
+        }
+        return sb.ToString();
+    }
+
+    private static string FormatThetaSlice(double[] thetaK, int start, int count)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < count; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            sb.AppendFormat(CultureInfo.InvariantCulture, "{0:F5}", thetaK[start + i]);
         }
         return sb.ToString();
     }
