@@ -63,6 +63,11 @@ internal static class HohmannMultiPassUI
     private static bool _hasCachedPreview;
     private static PassPreviewResult _cachedPreview;
     private static int _autoClampedFromN;     // 0 = no clamp; >0 = user asked for this, got LargestFeasibleN
+    // K_shift applied to fit the K-schedule for same-parent moon transfers
+    // (LEO -> Luna, etc.). 0 = no shift applied (porkchop entry's TFinal was
+    // already feasible). Surfaced in the UI so the user understands why
+    // the multi-pass extends past the porkchop-selected cell.
+    private static int _lastShiftKShift;
     private static string? _lastSourceId;
     private static string? _lastTargetId;
 
@@ -103,6 +108,7 @@ internal static class HohmannMultiPassUI
             _passCount = 1;
             _hasCachedPreview = false;
             _autoClampedFromN = 0;
+            _lastShiftKShift = 0;
         }
 
         try
@@ -155,8 +161,10 @@ internal static class HohmannMultiPassUI
         _cachedPreview = default;
         _cachedKey = default;
         _autoClampedFromN = 0;
+        _lastShiftKShift = 0;
         _lastSourceId = null;
         _lastTargetId = null;
+        HohmannMultiPassPlanner.ResetShiftCache();
     }
 
     /// <summary>Drops the cached preview when a Hohmann multi-pass exec
@@ -346,7 +354,11 @@ internal static class HohmannMultiPassUI
 
     /// <summary>"This multi-pass occupies X parking periods of warning
     /// time" - helps the user understand that picking N=4 isn't free,
-    /// they're committing to a longer departure window.</summary>
+    /// they're committing to a longer departure window. When the porkchop
+    /// entry's start was too early to fit the K-schedule (same-parent
+    /// moons) and we auto-shifted T_final forward, a second line surfaces
+    /// the shift so the user understands why the final burn happens past
+    /// the selected porkchop cell.</summary>
     private static void DrawSpanInfo(Vehicle source)
     {
         if (source.Orbit == null) return;
@@ -359,6 +371,14 @@ internal static class HohmannMultiPassUI
         ImGui.TextWrapped(string.Format(Inv,
             "Span: {0:F0} parking periods (~{1})",
             spanSec / tPark, FormatHelper.FormatDuration(spanSec)));
+        if (_lastShiftKShift > 0)
+        {
+            double shiftSec = _lastShiftKShift * tPark;
+            ImGui.TextWrapped(string.Format(Inv,
+                "Final burn pushed {0} parking period(s) (~{1}) later so the " +
+                "multi-pass schedule fits; transfer re-planned at the later time.",
+                _lastShiftKShift, FormatHelper.FormatDuration(shiftSec)));
+        }
         ImGui.PopStyleColor();
     }
 
@@ -511,10 +531,22 @@ internal static class HohmannMultiPassUI
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info)
     {
-        var input = BuildPlanInput(source, entry, info);
-        var key = BuildKey(source, input,
+        SimTime now = Universe.GetElapsedSimTime();
+        double parkingPeriodSec = source.Orbit?.Period ?? 0.0;
+
+        var raw = BuildBasePlanInput(source, entry, info);
+        var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
+            raw, source, info, _passCount, parkingPeriodSec, now);
+
+        var key = BuildKey(source, shift.Input,
             passCount: _passCount, startPassIndex: 0);
-        if (_hasCachedPreview && key == _cachedKey) return;
+        if (_hasCachedPreview && key == _cachedKey)
+        {
+            // PrepareShiftedInput's own cache made the call cheap, but the
+            // planner-cache hit means we also avoid the Plan call below.
+            _lastShiftKShift = shift.KShift;
+            return;
+        }
 
         // Freeze the cache during an Auto burn so a mid-burn-mass drift
         // doesn't recompute every physics tick; the Auto -> Manual
@@ -525,22 +557,22 @@ internal static class HohmannMultiPassUI
 
         SequenceBurnState state = SequenceBurnState.Analyze(source);
         int requestedN = _passCount;
-        SimTime now = Universe.GetElapsedSimTime();
+        _lastShiftKShift = shift.KShift;
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: vehicle='{0}' target='{1}' " +
                 "requestedN={2} isCrossParent={3} vInf={4:F1}m/s apoTarget={5:F0}m " +
-                "T_final={6:F0}s now={7:F0}s T_park={8:F1}s",
+                "T_final={6:F0}s rawTFinal={7:F0}s K_shift={8} now={9:F0}s T_park={10:F1}s",
                 source.Id, (info.Target as Astronomical)?.Id ?? "?",
-                requestedN, input.IsCrossParent,
-                input.VInfMs, input.ApoTargetRadiusMeters,
-                input.TFinal.Seconds(), now.Seconds(),
-                source.Orbit?.Period ?? 0.0));
+                requestedN, shift.Input.IsCrossParent,
+                shift.Input.VInfMs, shift.Input.ApoTargetRadiusMeters,
+                shift.Input.TFinal.Seconds(), raw.TFinal.Seconds(),
+                shift.KShift, now.Seconds(),
+                parkingPeriodSec));
 
-        double parkingPeriodSec = source.Orbit?.Period ?? 0.0;
         int clampedN = HohmannMultiPassPlanner.LargestFeasibleN(
-            source, input, state, parkingPeriodSec, now, requestedN);
+            source, shift.Input, state, parkingPeriodSec, now, requestedN);
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
@@ -548,6 +580,7 @@ internal static class HohmannMultiPassUI
                 "requested={0} -> clamped={1}",
                 requestedN, clampedN));
 
+        var planInput = shift.Input;
         if (clampedN < requestedN)
         {
             // _autoClampedFromN is sticky: clearing it here would reset
@@ -562,10 +595,24 @@ internal static class HohmannMultiPassUI
                     "_passCount {0} -> {1}, _autoClampedFromN={2}",
                     _passCount, clampedN, _autoClampedFromN));
             _passCount = clampedN;
+            // Re-shift for the clamped passCount: a smaller N has a smaller
+            // K_total, so the required shift shrinks. Without this we'd
+            // over-shift the final plan by the difference between requestedN's
+            // K_total and clampedN's K_total parking periods - feasible but
+            // unnecessarily late.
+            shift = HohmannMultiPassPlanner.PrepareShiftedInput(
+                raw, source, info, _passCount, parkingPeriodSec, now);
+            planInput = shift.Input;
+            _lastShiftKShift = shift.KShift;
+            // BuildKey depends on planInput.TFinal (bucketed); recompute so
+            // the cached key matches the actual input we're planning with,
+            // otherwise the next frame would bust the cache on a phantom delta.
+            key = BuildKey(source, planInput,
+                passCount: _passCount, startPassIndex: 0);
         }
 
         _cachedPreview = HohmannMultiPassPlanner.Plan(
-            source, input, _passCount, startPassIndex: 0,
+            source, planInput, _passCount, startPassIndex: 0,
             parkingPeriodSec, state, now);
         _cachedKey = key;
         _hasCachedPreview = true;
@@ -573,9 +620,9 @@ internal static class HohmannMultiPassUI
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: Plan -> failed={0} " +
-                "reason='{1}' previewPasses={2} _passCount(final)={3}",
+                "reason='{1}' previewPasses={2} _passCount(final)={3} K_shift(final)={4}",
                 _cachedPreview.Failed, _cachedPreview.FailureReason ?? "-",
-                _cachedPreview.Passes.Length, _passCount));
+                _cachedPreview.Passes.Length, _passCount, _lastShiftKShift));
     }
 
     private static void DrawPreviewFailureIfApplicable()
@@ -658,7 +705,8 @@ internal static class HohmannMultiPassUI
             return false;
         if (uiSource == null || uiSource.Id != vehicle.Id) return false;
 
-        intent = BuildIntent(uiSource, entry!, info!);
+        SimTime now = Universe.GetElapsedSimTime();
+        intent = BuildIntent(uiSource, entry!, info!, _passCount, now);
         if (intent == null) return false;
 
         passCount = _passCount;
@@ -669,11 +717,26 @@ internal static class HohmannMultiPassUI
 
     #region Helpers
 
-    private static HohmannMultiPassPlanner.HohmannPlanInput BuildPlanInput(
+    /// <summary>Reads the raw HohmannPlanInput off a stock porkchop entry,
+    /// no multi-pass feasibility shift applied. For N=1 this is the only
+    /// thing we need; for N >= 2 the result is then passed through
+    /// <see cref="HohmannMultiPassPlanner.PrepareShiftedInput"/>.</summary>
+    private static HohmannMultiPassPlanner.HohmannPlanInput BuildBasePlanInput(
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info)
     {
-        bool isCrossParent = !OrbitalTransfers.SameSoiTransfer(info);
+        // Cross-parent = vehicle's parent body differs from target's parent
+        // body. Examples: LEO -> Mars (Earth vs Sun), Mars-orbit -> Phobos
+        // is SAME (both Mars). We cannot use OrbitalTransfers.SameSoiTransfer
+        // here: stock's TransferTask.Run rewrites info.Source to info.Vehicle
+        // for same-SOI transfers, and re-calling SameSoiTransfer on the
+        // post-rewrite info returns false for both Luna and Mars cases. The
+        // direct parent-id compare is unambiguous and stable.
+        string? targetParentId = info.Target?.Parent?.Id;
+        string? sourceParentId = source.Orbit?.Parent?.Id;
+        bool isCrossParent = sourceParentId == null
+            || targetParentId == null
+            || sourceParentId != targetParentId;
         double vInfMs = 0.0;
         double apoTargetRadiusM = 0.0;
 
@@ -694,7 +757,7 @@ internal static class HohmannMultiPassUI
             // the planner's "non-positive vpTarget" check then surfaces
             // the issue instead of silently passing NaN through.
             FlightPlan? fp = entry.FlightPlan;
-            if (fp != null && fp.Patches.Count > 0)
+            if (fp != null && fp.Patches.Count > 0 && source.Orbit != null)
             {
                 double apo = fp.Patches[0].Orbit.Apoapsis;
                 if (double.IsFinite(apo) && apo > source.Orbit.Periapsis)
@@ -703,7 +766,7 @@ internal static class HohmannMultiPassUI
         }
 
         return new HohmannMultiPassPlanner.HohmannPlanInput(
-            Target: info.Target,
+            Target: info.Target!,
             TFinal: entry.TransferData.Start,
             DFinalVlf: entry.TransferData.TransferDvVlf,
             IsCrossParent: isCrossParent,
@@ -711,9 +774,11 @@ internal static class HohmannMultiPassUI
             ApoTargetRadiusMeters: apoTargetRadiusM);
     }
 
+
     private static HohmannTransferIntent? BuildIntent(
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
-        OrbitalTransfers.TransferInfo info)
+        OrbitalTransfers.TransferInfo info,
+        int passCount, SimTime now)
     {
         if (source.Orbit?.Parent == null) return null;
         string targetId = (info.Target as Astronomical)?.Id ?? string.Empty;
@@ -726,13 +791,23 @@ internal static class HohmannMultiPassUI
         double parkingPeriod = source.Orbit.Period;
         if (!(parkingPeriod > 0.0)) return null;
 
-        var input = BuildPlanInput(source, entry, info);
+        // Build raw then apply the same multi-pass feasibility shift that
+        // UpdatePreviewIfStale uses for the preview. T_final / DFinalVlf
+        // must be read from the shifted input (NOT entry directly) so the
+        // intent locks in the shifted geometry, otherwise RecomputePass
+        // would use the un-shifted T_final and the K-schedule fails on
+        // the first pass.
+        var raw = BuildBasePlanInput(source, entry, info);
+        var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
+            raw, source, info, passCount, parkingPeriod, now);
+        var input = shift.Input;
+
         return new HohmannTransferIntent
         {
             TargetId = targetId,
             ParentId = source.Orbit.Parent.Id,
-            TFinalSec = entry.TransferData.Start.Seconds(),
-            DFinalVlf = entry.TransferData.TransferDvVlf,
+            TFinalSec = input.TFinal.Seconds(),
+            DFinalVlf = input.DFinalVlf,
             IsCrossParent = input.IsCrossParent,
             VInfMs = input.VInfMs,
             ApoTargetRadiusMeters = input.ApoTargetRadiusMeters,

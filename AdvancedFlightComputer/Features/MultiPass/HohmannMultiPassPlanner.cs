@@ -59,6 +59,13 @@ internal static class HohmannMultiPassPlanner
     // user a few seconds to actually warp / engage Auto.
     private const double EarliestPassMarginSec = 30.0;
 
+    /// <summary>K_total = sum(2 + 3 + ... + N) = N*(N+1)/2 - 1, the integer
+    /// number of parking periods spanned by the N-pass K-schedule. Shared by
+    /// Plan, GetSpanSeconds, and PrepareShiftedInput so all three sides
+    /// agree on the time-budget formula.</summary>
+    private static int GetKTotal(int passCount) =>
+        passCount <= 1 ? 0 : passCount * (passCount + 1) / 2 - 1;
+
     /// <summary>Locked inputs from the stock-Lambert porkchop entry that
     /// the planner needs to schedule a multi-pass chain.
     ///
@@ -309,20 +316,189 @@ internal static class HohmannMultiPassPlanner
     /// takes X parking periods of warning time".</summary>
     public static double GetSpanSeconds(double parkingPeriodSec, int passCount)
     {
-        if (passCount <= 1) return 0.0;
-        int[] kSeq = BuildKSequence(passCount);
-        int kTotal = 0;
-        for (int i = 0; i < kSeq.Length; i++) kTotal += kSeq[i];
-        return kTotal * parkingPeriodSec;
+        return GetKTotal(passCount) * parkingPeriodSec;
     }
 
-    #region Internal helpers
+    /// <summary>Outcome of <see cref="PrepareShiftedInput"/>:
+    /// (possibly-shifted) <see cref="HohmannPlanInput"/> plus the integer
+    /// number of parking periods T_final was pushed by.</summary>
+    internal readonly record struct ShiftResult(HohmannPlanInput Input, int KShift);
 
-    /// <summary>K sequence for a full N-pass plan: (2, 3, ..., N). K_k is
-    /// the integer number of parking periods between pass k and pass k+1
-    /// (equals T_post_k / T_park).</summary>
-    private static int[] BuildKSequence(int passCount)
-        => BuildKSubSequence(passCount, 0);
+    /// <summary>
+    /// Same-parent moon transfers (LEO -> Luna, low-Mars -> Phobos, ...) have
+    /// a stock porkchop start axis that spans only ~1 parking period from
+    /// `now`, because the synodic period of parking orbit vs moon is
+    /// dominated by the parking orbit's period. Multi-pass with N >= 2 needs
+    /// `T_final - now >= K_total * tPark + margin`, which the porkchop cannot
+    /// offer.
+    ///
+    /// Fix: shift `T_final` forward by integer multiples of `tPark` until the
+    /// K-schedule fits, then re-solve Lambert at the shifted time. The shift
+    /// is integer parking periods so vehicle CCI position at the shifted
+    /// T_final equals its CCI at the original porkchop pick (the K-integer
+    /// property the planner relies on). Only target position changes (Luna
+    /// drifts ~1.6 deg per shifted parking period for LEO); the re-Lambert
+    /// absorbs that. A mini-scan over transit finds the lowest-dV candidate
+    /// at the shifted geometry.
+    ///
+    /// Cross-parent transfers (LEO -> Mars) typically don't need the shift
+    /// because their synodic period spans many parking periods anyway; the
+    /// early-return on `raw.TFinal &gt;= earliestAllowed` keeps Mars
+    /// untouched.
+    ///
+    /// Results are cached by (vehicle id, target id, raw T_final bucket,
+    /// passCount, parking-period bucket, computed kShift). The 64-Lambert
+    /// scan only runs on cache miss; while kShift stays in the same bucket
+    /// (~one parking period of sim time at 1x), the cached result is reused.
+    /// </summary>
+    internal static ShiftResult PrepareShiftedInput(
+        HohmannPlanInput raw, Vehicle source, OrbitalTransfers.TransferInfo info,
+        int passCount, double parkingPeriodSec, SimTime now)
+    {
+        if (passCount <= 1 || !(parkingPeriodSec > 0.0))
+            return new ShiftResult(raw, 0);
+
+        int kTotal = GetKTotal(passCount);
+        double rawTFinalSec = raw.TFinal.Seconds();
+        double earliestAllowedSec = now.Seconds()
+            + kTotal * parkingPeriodSec
+            + EarliestPassMarginSec;
+        if (rawTFinalSec >= earliestAllowedSec)
+            return new ShiftResult(raw, 0);
+
+        int kShift = (int)Math.Ceiling(
+            (earliestAllowedSec - rawTFinalSec) / parkingPeriodSec);
+        if (kShift <= 0)
+            return new ShiftResult(raw, 0);
+
+        var key = new ShiftCacheKey(
+            VehicleId: source.Id,
+            TargetId: (info.Target as Astronomical)?.Id ?? string.Empty,
+            RawTFinalBucketSec: (long)rawTFinalSec,
+            PassCount: passCount,
+            ParkingPeriodBucketSec: (long)Math.Round(parkingPeriodSec),
+            KShift: kShift);
+        if (_hasShiftCache && key == _shiftCacheKey)
+            return new ShiftResult(_shiftCacheInput, kShift);
+
+        SimTime shiftedStart = new SimTime(rawTFinalSec + kShift * parkingPeriodSec);
+
+        // Floor on min transit: defensive against an uninitialised
+        // TransferInfo where MinTransferTimeOfFlight is 0 (would feed
+        // SolveLambert a meaningless geometry). 60s is well below any
+        // realistic moon / planet transit.
+        double minTransitSec = Math.Max(60.0, info.MinTransferTimeOfFlight.Seconds());
+        double maxTransitSec = Math.Max(
+            minTransitSec + 1.0, info.MaxTransferTimeOfFlight.Seconds());
+
+        const int TransitScanSteps = 64;
+        double bestDvLen = double.MaxValue;
+        OrbitalTransfers.TransferData? bestTd = null;
+
+        for (int i = 0; i < TransitScanSteps; i++)
+        {
+            double frac = (double)i / (TransitScanSteps - 1);
+            double transitSec = minTransitSec + frac * (maxTransitSec - minTransitSec);
+            var candidate = new OrbitalTransfers.TransferData
+            {
+                Start = shiftedStart,
+                Transit = new SimTime(transitSec),
+                ClosestApproachDistance = double.MaxValue,
+            };
+            if (!OrbitalTransfers.SolveLambert(info, ref candidate)) continue;
+
+            double dvLen = candidate.TransferDvVlf.Length();
+            if (!double.IsFinite(dvLen) || dvLen <= 0.0) continue;
+            if (dvLen >= bestDvLen) continue;
+
+            bestDvLen = dvLen;
+            bestTd = candidate;
+        }
+
+        if (bestTd == null)
+            return new ShiftResult(raw, 0);
+
+        // Cross-parent FinalizeLambert nudges Start by sub-parking-period
+        // amounts to align the hyperbolic burn TA. The 0.5s threshold is
+        // floating-point noise tolerance, NOT a fraction of tPark; if the
+        // post-Lambert Start is more than ~noise below the requirement we
+        // abandon the shift and let the planner's standard "needs K_total
+        // parking periods" failure surface.
+        const double LambertStartDriftToleranceSec = 0.5;
+        if (bestTd.Start.Seconds() + LambertStartDriftToleranceSec < earliestAllowedSec)
+            return new ShiftResult(raw, 0);
+
+        // Same-parent: stock's entry.FlightPlan.Patches[0].Orbit.Apoapsis is
+        // the un-shifted target. BuildFlightPlan at the shifted Start + new
+        // dV gives the actual post-burn apoapsis to track.
+        double apoTargetRadiusM = 0.0;
+        if (!raw.IsCrossParent)
+        {
+            var fp = FlightPlan.CreateUninitialized(source.Hash);
+            OrbitalTransfers.BuildFlightPlan(
+                ref fp, info, bestTd.Start, bestTd.TransferDvVlf, out _, out _);
+            if (fp.Patches.Count > 0)
+            {
+                double apo = fp.Patches[0].Orbit.Apoapsis;
+                if (double.IsFinite(apo) && apo > source.Orbit.Periapsis)
+                    apoTargetRadiusM = apo;
+            }
+        }
+
+        double vInfMs = raw.IsCrossParent
+            ? bestTd.EjectionVelocityCci.Length()
+            : 0.0;
+
+        var shifted = raw with
+        {
+            TFinal = bestTd.Start,
+            DFinalVlf = bestTd.TransferDvVlf,
+            VInfMs = vInfMs,
+            ApoTargetRadiusMeters = apoTargetRadiusM,
+        };
+
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
+                "[AFC] HohmannMultiPassPlanner.PrepareShiftedInput: vehicle='{0}' " +
+                "target='{1}' passCount={2} K_total={3} K_shift={4} " +
+                "rawTFinal={5:F0}s shiftedTFinal={6:F0}s rawDv={7:F1}m/s " +
+                "shiftedDv={8:F1}m/s shiftedTransit={9:F0}s apoTarget={10:F0}m " +
+                "vInf={11:F1}m/s isCrossParent={12}",
+                source.Id, key.TargetId, passCount, kTotal, kShift,
+                rawTFinalSec, bestTd.Start.Seconds(),
+                raw.DFinalVlf.Length(), bestDvLen,
+                bestTd.Transit.Seconds(), apoTargetRadiusM, vInfMs,
+                raw.IsCrossParent));
+
+        _shiftCacheKey = key;
+        _shiftCacheInput = shifted;
+        _hasShiftCache = true;
+        return new ShiftResult(shifted, kShift);
+    }
+
+    /// <summary>Drops the shift-input cache. Call from the UI's Reset and
+    /// from Mod.Unload so a fresh session does not see stale entries
+    /// (different save, recycled vehicle ids, etc.).</summary>
+    public static void ResetShiftCache()
+    {
+        _hasShiftCache = false;
+        _shiftCacheInput = default;
+        _shiftCacheKey = default;
+    }
+
+    private readonly record struct ShiftCacheKey(
+        string VehicleId,
+        string TargetId,
+        long RawTFinalBucketSec,
+        int PassCount,
+        long ParkingPeriodBucketSec,
+        int KShift);
+
+    private static ShiftCacheKey _shiftCacheKey;
+    private static HohmannPlanInput _shiftCacheInput;
+    private static bool _hasShiftCache;
+
+    #region Internal helpers
 
     /// <summary>K sub-sequence for the remaining passes of an N-pass plan
     /// starting at <paramref name="startPassIndex"/>: K_k = startPassIndex

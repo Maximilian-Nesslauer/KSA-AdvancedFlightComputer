@@ -60,6 +60,10 @@ internal static class SaveLoadObserver
                 // SequenceBurnState / PassPreviewResult from the
                 // previous world.
                 MultiPassPreviewCache.Reset();
+                // Same reasoning for the Hohmann shift cache: keyed on
+                // vehicle / target id, would otherwise survive a save
+                // load with a same-id vehicle in a different geometry.
+                HohmannMultiPassPlanner.ResetShiftCache();
 
                 // Refresh registry from disk so in-memory exec state
                 // matches whatever was persisted for the just-loaded
