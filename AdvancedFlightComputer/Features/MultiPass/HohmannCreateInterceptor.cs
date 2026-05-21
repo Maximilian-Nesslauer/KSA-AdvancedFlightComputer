@@ -56,7 +56,8 @@ internal static class HohmannCreateInterceptor
             // case gets a TimedAlert below so we don't silently give the
             // user something different from what they asked for.
             if (!HohmannMultiPassUI.TryGetArmedState(vehicle,
-                    out int passCount, out HohmannTransferIntent? intent))
+                    out int passCount, out HohmannTransferIntent? intent,
+                    out SplitMode mode))
             {
                 if (HohmannMultiPassUI.WantedMultiPassButPreviewFailed())
                     TimedAlert.Create(
@@ -65,7 +66,7 @@ internal static class HohmannCreateInterceptor
                 return Burn.Create(point, time, deltaVVlf, patch, vehicle);
             }
 
-            Burn? multiPassBurn = TryStartMultiPass(vehicle, intent!, passCount);
+            Burn? multiPassBurn = TryStartMultiPass(vehicle, intent!, passCount, mode);
             if (multiPassBurn == null)
             {
                 TimedAlert.Create(
@@ -86,22 +87,22 @@ internal static class HohmannCreateInterceptor
     }
 
     private static Burn? TryStartMultiPass(
-        Vehicle vehicle, HohmannTransferIntent intent, int passCount)
+        Vehicle vehicle, HohmannTransferIntent intent, int passCount, SplitMode mode)
     {
         var exec = new MultiPassExecution
         {
             SaveId = SaveLoadObserver.CurrentSaveId,
             VehicleId = vehicle.Id,
             Intent = intent,
-            // SplitMode is ignored by HohmannTransferIntent.RecomputePass
-            // (per-pass dV is derived from the K-sequence). EqualBurnTime
-            // is the stable serialization default; see HohmannMultiPassUI.
-            Mode = SplitMode.EqualBurnTime,
+            // SplitMode drives the real-K schedule via Splitter.Allocate;
+            // EqualBurnTime is the literature-standard default for
+            // finite-burn loss across N periapsis kicks.
+            Mode = mode,
             PassCountTotal = passCount,
             PassIndex = 0,
         };
 
-        var plan = intent.RecomputePass(vehicle, 0, passCount, SplitMode.EqualBurnTime);
+        var plan = intent.RecomputePass(vehicle, 0, passCount, mode);
         if (plan.Pass == null)
         {
             DefaultCategory.Log.Warning(

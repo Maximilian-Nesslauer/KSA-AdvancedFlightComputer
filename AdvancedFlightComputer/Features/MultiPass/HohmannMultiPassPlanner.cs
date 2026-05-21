@@ -9,38 +9,41 @@ using KSA;
 namespace AdvancedFlightComputer.Features.MultiPass;
 
 /// <summary>
-/// K-integer-multiple multi-pass planner for stock Hohmann / interplanetary
-/// transfer departures. Implements gravhoek's "schedule passes in previous
-/// orbits, handle phasing of intermediate orbits" hint properly: each
-/// intermediate orbit's period is forced to be an integer multiple of the
-/// parking orbit period so that every chained burn lands at the SAME CCI
-/// position as the stock Lambert burn point at T_final - preserving the
-/// departure phasing exactly.
+/// Real-K multi-pass planner for stock Hohmann / interplanetary transfer
+/// departures. Schedules N burns at the SAME CCI direction P (the Lambert
+/// burn point) so each chained orbit's periapsis stays at P and the
+/// vehicle returns to P at every scheduled firing time.
+///
+/// Phasing constraint (the only structural requirement):
+///   sum(K_i) is an integer
+/// where K_k = post-burn-k chained-orbit-period / T_park (real, &gt; 1
+/// for prograde burns). Individual K_k need NOT be integer; only the sum
+/// must be, so that vehicle in parking orbit at times[0] is at the same
+/// CCI direction P as vehicle in parking orbit at T_final (parking-orbit
+/// periodicity).
 ///
 /// Algorithm:
-///   1. Pick K sequence: minimum monotonic increasing integers starting at
-///      2, i.e. K = (2, 3, ..., N) for N passes. K_total = N(N+1)/2 - 1.
-///   2. Schedule: times[0] = T_final - K_total * T_park, then
-///      times[k+1] = times[k] + K_k * T_park. By parking-orbit periodicity,
-///      vehicle on parking orbit at times[0] is at the same CCI direction
-///      as at T_final.
-///   3. Each pass adds two components in its LOCAL VLF at periapsis:
-///      a K-prograde X kick that sets |v_post_k| to the K-scheduled speed,
-///      and a Y kick that rotates the orbital plane by theta_k around the
-///      periapsis radial. Because dV.Z = 0 for priors, periapsis CCI
-///      position is preserved across the chain and the K-integer property
-///      holds regardless of theta_k.
-///   4. Final pass at T_final, vehicle still at the locked CCI direction.
-///      The radial D.Z component of the Lambert dV (typically ~0 for
-///      tangential Hohmann porkchop optima) is added on the final pass
-///      only, so the priors' K-chain stays planar.
-///   5. theta_k is allocated proportional to delta_R_k / (v_pre_k *
-///      v_post_k), the Lagrange-optimal weighting that minimises total
-///      extra dV from rotating the orbital plane. Deterministic from
-///      locked inputs so recompute mid-execution stays consistent.
-///   6. Per-pass dV magnitudes are COMPUTED from the K-sequence + theta_k
-///      via vis-viva, not free-allocated by a splitter. SplitMode is
-///      therefore irrelevant for Hohmann; the only user choice is N.
+///   1. <see cref="Splitter.Allocate"/> splits total dV across N passes
+///      per the user's <see cref="SplitMode"/> (EqualBurnTime default
+///      keeps finite-burn arc length uniform; EqualDv is the simpler
+///      uniform-magnitude alternative).
+///   2. Cumulative per-pass dV -&gt; v_p target sequence -&gt; real K
+///      schedule via vis-viva.
+///   3. Initial plan (startPassIndex=0): round sum(K) to the nearest
+///      integer M, adjust the LAST prior K to absorb the rounding
+///      residual, schedule times[0] = T_final - M * T_park.
+///   4. Recompute (startPassIndex&gt;0): times[0] = vehicle's next
+///      chained-periapsis time (physical, computed from vehicle.Orbit);
+///      target sum = (T_final - times[0]) / T_park (real); adjust last
+///      prior K to match.
+///   5. Each pass adds two LOCAL-VLF components at periapsis: an X kick
+///      sets |v_post_k| to the K-scheduled speed; a Y kick rotates the
+///      plane by theta_k around the periapsis radial. dV.Z = 0 for
+///      priors, so periapsis CCI position is preserved.
+///   6. theta_k is Lagrange-optimal: proportional to delta_R_k /
+///      (v_pre_k * v_post_k), minimising the total plane-change dV cost.
+///   7. Final pass at T_final adds the radial D.Z residual of the
+///      Lambert dV.
 ///
 /// Same-parent vs cross-parent: identical scheduling logic. The only
 /// difference is in <see cref="ComputeVpTarget"/>: cross-parent uses
@@ -65,12 +68,13 @@ internal static class HohmannMultiPassPlanner
     // user a few seconds to actually warp / engage Auto.
     private const double EarliestPassMarginSec = 30.0;
 
-    /// <summary>K_total = sum(2 + 3 + ... + N) = N*(N+1)/2 - 1, the integer
-    /// number of parking periods spanned by the N-pass K-schedule. Shared by
-    /// Plan, GetSpanSeconds, and PrepareShiftedInput so all three sides
-    /// agree on the time-budget formula.</summary>
-    private static int GetKTotal(int passCount) =>
-        passCount <= 1 ? 0 : passCount * (passCount + 1) / 2 - 1;
+    // Lower bound on K_0 (the first prior's post-burn period multiple).
+    // K = 1 exactly is a zero-dV burn (post = parking). The 0.01 margin
+    // keeps the chained orbit a meaningfully separate orbit from parking,
+    // so the planner doesn't propose burns that contribute essentially
+    // nothing to the chain (which would also break the GetTimeSincePeriapsis
+    // logic on the near-circular result).
+    private const double KFloor = 1.01;
 
     /// <summary>Locked inputs from the stock-Lambert porkchop entry that
     /// the planner needs to schedule a multi-pass chain.
@@ -108,53 +112,43 @@ internal static class HohmannMultiPassPlanner
         int startPassIndex,
         double parkingPeriodSec,
         SequenceBurnState vehicleState,
-        SimTime now)
+        SimTime now,
+        SplitMode mode)
     {
         if (source?.Orbit?.Parent == null)
-            return Fail($"vehicle '{source?.Id ?? "?"}' has no orbit parent");
+            return Fail($"vehicle '{source?.Id ?? "?"}' has no orbit parent", PassPlanFailure.Other);
         if (totalPassCount < 1)
-            return Fail($"vehicle '{source.Id}': totalPassCount {totalPassCount} < 1");
+            return Fail($"vehicle '{source.Id}': totalPassCount {totalPassCount} < 1", PassPlanFailure.Other);
         if (startPassIndex < 0 || startPassIndex >= totalPassCount)
-            return Fail($"vehicle '{source.Id}': startPassIndex {startPassIndex} out of range [0,{totalPassCount})");
+            return Fail($"vehicle '{source.Id}': startPassIndex {startPassIndex} out of range [0,{totalPassCount})", PassPlanFailure.Other);
         if (!(parkingPeriodSec > 0.0))
-            return Fail($"vehicle '{source.Id}': parkingPeriodSec {parkingPeriodSec} must be positive");
+            return Fail($"vehicle '{source.Id}': parkingPeriodSec {parkingPeriodSec} must be positive", PassPlanFailure.Other);
 
         Orbit currentOrbit = source.Orbit;
         if (!currentOrbit.IsBound())
-            return Fail($"vehicle '{source.Id}': current orbit is unbound");
+            return Fail($"vehicle '{source.Id}': current orbit is unbound", PassPlanFailure.Other);
 
         double mu = currentOrbit.Mu;
         double rp = currentOrbit.Periapsis;
         if (!(rp > 0.0))
-            return Fail($"vehicle '{source.Id}': current orbit has non-positive periapsis");
+            return Fail($"vehicle '{source.Id}': current orbit has non-positive periapsis", PassPlanFailure.Other);
 
         double tPark = parkingPeriodSec;
 
         double soiLimit = currentOrbit.Parent.SphereOfInfluence * SoiEnvelopeFraction;
         if (!(soiLimit > 0.0))
-            return Fail($"vehicle '{source.Id}': parent '{currentOrbit.Parent.Id}' has no SOI");
+            return Fail($"vehicle '{source.Id}': parent '{currentOrbit.Parent.Id}' has no SOI", PassPlanFailure.Other);
 
         int remainingCount = totalPassCount - startPassIndex;
 
         if (input.DFinalVlf.LengthSquared() < 1.0)
-            return Fail($"vehicle '{source.Id}': stock Hohmann dV is zero");
+            return Fail($"vehicle '{source.Id}': stock Hohmann dV is zero", PassPlanFailure.Other);
 
-        // Plane-change distribution: each pass carries both K-prograde dV
-        // (vPost*cos(theta_k) - vPre, along local-X) and an in-plane Y
-        // component (vPost*sin(theta_k)) that rotates the orbital plane
-        // by theta_k around the periapsis radial. The Y component
-        // preserves the K-integer property (periapsis CCI position
-        // unchanged because dV.Z = 0; post-burn |v| still equals K-target
-        // because |vPost*(cos,sin,0)| = vPost) while spreading the
-        // Lambert plane change across passes. Extra cost per pass is
-        // v_pre*v_post*theta_k^2 / (2*delta_R_k); the sum is minimised
-        // by allocating theta_k proportional to delta_R_k/(v_pre*v_post)
-        // (Lagrange-optimal, see AllocatePlaneChangeLagrange).
         double vpTarget = ComputeVpTarget(input, mu, rp);
         if (!(vpTarget > 0.0))
             return Fail(string.Format(CultureInfo.InvariantCulture,
                 "vehicle '{0}': vpTarget non-positive ({1:F2}m/s)",
-                source.Id, vpTarget));
+                source.Id, vpTarget), PassPlanFailure.Other);
 
         // vTargetXy is the in-plane component of the Lambert target speed;
         // D.Z (radial-out) is preserved separately on the final pass. For
@@ -164,97 +158,188 @@ internal static class HohmannMultiPassPlanner
         double dz = input.DFinalVlf.Z;
         double vTargetXy = Math.Sqrt(Math.Max(0.0, vpTarget * vpTarget - dz * dz));
 
-        // Parking-orbit periapsis speed: the K-prograde reference for the
-        // original (startPassIndex=0) chain. Locked via tPark, independent
-        // of live drift, so thetaTotal and the per-pass allocation are
-        // identical across initial plan and every recompute.
-        double aParking = Math.Pow(
+        // Parking-orbit reference SMA, locked via tPark. Used both as the
+        // K-reference (a_chained = aPark * K^(2/3)) and to define
+        // vpParking for the absolute thetaTotal computation.
+        double aPark = Math.Pow(
             Math.Pow(tPark / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
-        double vpParking = Math.Sqrt(mu * (2.0 / rp - 1.0 / aParking));
+        double vpParking = Math.Sqrt(mu * (2.0 / rp - 1.0 / aPark));
 
         // Total plane rotation in the X-Y tangent plane. atan2 handles
         // sign; for tangential Hohmann (D.Y == 0) thetaTotal collapses to
         // 0 and all theta_k go to 0, reproducing pure-prograde priors.
         double thetaTotal = Math.Atan2(input.DFinalVlf.Y, vpParking + input.DFinalVlf.X);
 
-        // Allocate theta_k over the FULL original N-pass plan; slice into
-        // [startPassIndex..] for the current call. Using the locked initial
-        // K-chain (not the live chain) keeps allocation deterministic
-        // across recomputes: the same theta_k is planned for absolute pass k
-        // whether we hit it on the initial plan or after k-1 priors.
-        var (dvSeqInitial, vPreInitial, vPostInitial) = ComputeInitialKChain(
-            mu, rp, tPark, totalPassCount, vTargetXy);
-        double[] thetaKInitial = AllocatePlaneChangeLagrange(
-            thetaTotal, dvSeqInitial, vPreInitial, vPostInitial);
+        // Live periapsis speed: pre-burn-0 speed for the K-schedule. At
+        // initial plan it equals vpParking; at recompute it's the chained
+        // orbit's periapsis speed (= post-previous-pass v_p).
+        double vpLive = Math.Sqrt(mu * (2.0 / rp - 1.0 / currentOrbit.SemiMajorAxis));
 
-        // remaining=1: just the final pass at T_final with residual dV
-        // from the live orbit state. For initial N=1 it equals stock
-        // single-burn (theta_k = thetaTotal, identical algebra). For
-        // "last remaining pass of an N>1 plan" the planned final-pass
-        // theta_k = thetaKInitial[N-1] rotates the remaining share.
+        // State-independent per-pass theta schedule for the full N. Uses
+        // an equal-vp-step reference dvSeq so the allocation is purely
+        // orbital-mechanics-driven and stable across initial plan vs
+        // recompute. The actual K-schedule (SplitMode-driven) may differ,
+        // but theta_k for absolute pass k stays the same value whether we
+        // hit it on the initial plan or after k-1 priors. Without this,
+        // each recompute would re-distribute the FULL thetaTotal across
+        // only the remaining passes, double-counting the rotation that
+        // priors already applied (sub-degree for Mars, visible for higher-
+        // inclination targets).
+        double[] thetaKAbsolute = AllocateAbsoluteThetaSchedule(
+            thetaTotal, vpParking, vTargetXy, totalPassCount);
+
+        // remainingCount == 1: just the final pass with residual dV from
+        // the live orbit state. Two cases:
+        //   * Initial N=1 (startPassIndex == 0): vehicle in parking orbit
+        //     at T_final, fire at T_final exactly. dV equals stock single
+        //     burn (matches Lambert closure).
+        //   * Mid-exec last pass (startPassIndex > 0): vehicle in the
+        //     post-pass-(N-2) chained orbit. Finite-burn drift in priors
+        //     has shifted vehicle's actual next-periapsis time relative
+        //     to the locked input.TFinal (observed: ~9000s drift for N=6
+        //     LEO -> Mars). Firing at input.TFinal would put vehicle off
+        //     periapsis (vpLive != v_p of the chained orbit), inflating
+        //     the dV by ~14x (530 m/s planned -> 7600 m/s actual) and
+        //     pointing the burn in the wrong CCI direction (because the
+        //     LIVE-VLF axes are rotated from the chained-periapsis axes).
+        //     Use vehicle's ACTUAL next-periapsis time instead.
         if (remainingCount == 1)
-            return PlanSinglePass(
-                source, input, now,
-                vTargetXy, thetaKInitial[startPassIndex]);
+        {
+            SimTime burnTime = (startPassIndex == 0)
+                ? input.TFinal
+                : ComputeNextPeriapsis(currentOrbit, now);
+            return PlanSinglePass(source, input, now,
+                burnTime, vTargetXy, thetaKAbsolute[startPassIndex]);
+        }
 
-        // K sub-sequence: slice of the original K_k = k+2 starting at
-        // startPassIndex. For initial plan (start=0, total=N): K=(2,3,...,N).
-        // For recompute at start=1 in N=3 plan: K=(3,) for the only
-        // remaining prior pass (final pass at T_final is the last entry).
-        int[] kSeq = BuildKSubSequence(totalPassCount, startPassIndex);
-        int kTotal = 0;
-        for (int i = 0; i < kSeq.Length; i++) kTotal += kSeq[i];
+        int priors = remainingCount - 1;
 
-        // Schedule anchored to the FINAL pass landing at T_final. Pass
-        // startPassIndex fires K_total parking periods before T_final;
-        // intermediate passes step forward by K_k parking periods. Because
-        // tPark is the locked original parking period (and the chained
-        // orbit's periapsis stays at the locked CCI position even after a
-        // Y-component burn, because dV.Z = 0), the vehicle ends up at
-        // chained-periapsis at every scheduled time.
+        // K-schedule (real per pass, integer sum at initial plan / time-
+        // budget-locked at recompute). Uses Splitter.Allocate to pick
+        // per-pass dV per the user's SplitMode, then maps cumulative dV
+        // to v_p targets to real K via vis-viva. Auto-caps each prior at
+        // 0.999 * v_p_at_SOI_envelope so the chain stays bound even for
+        // high-energy departures (Uranus, Saturn) where EqualBurnTime /
+        // EqualDv allocation would otherwise push priors past escape;
+        // final pass absorbs the lost dV.
+        var schedule = BuildRealKSchedule(
+            mu, rp, aPark, soiLimit, vpLive, vTargetXy,
+            remainingCount, mode, vehicleState);
+        if (schedule.K == null)
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': K-schedule build failed; priors degenerate under cap " +
+                "(transfer too high-energy for this N)",
+                source.Id), PassPlanFailure.ParabolicVp);
+
+        double[] kSeq = schedule.K!;
+        double[] vPre = schedule.VPre!;
+        double[] vPost = schedule.VPost!;
+
+        // Compute target sum + first-pass time. Initial plan rounds the
+        // K-sum to integer so vehicle in parking orbit at times[0] is at
+        // the same CCI direction as at T_final (parking-orbit periodicity).
+        // Recompute reads the vehicle's next chained-periapsis time from
+        // live state; target sum is whatever (T_final - times[0]) / T_park
+        // works out to, real value.
+        double targetSumPeriods;
+        double timesZeroSec;
+        if (startPassIndex == 0)
+        {
+            double sumRaw = 0.0;
+            for (int i = 0; i < priors; i++) sumRaw += kSeq[i];
+            targetSumPeriods = Math.Round(sumRaw);
+            timesZeroSec = input.TFinal.Seconds() - targetSumPeriods * tPark;
+        }
+        else
+        {
+            SimTime nextPe = ComputeNextPeriapsis(currentOrbit, now);
+            timesZeroSec = nextPe.Seconds();
+            targetSumPeriods = (input.TFinal.Seconds() - timesZeroSec) / tPark;
+        }
+
+        // Pre-adjustment K-sequence from BuildRealKSchedule is guaranteed
+        // monotonic (cumulative v_p increases monotonically with each
+        // prior, and K(v_p) is monotonic). The only way the sequence
+        // breaks monotonicity is the integer-sum rounding adjustment
+        // applied to kSeq[priors-1] below, which we explicitly check
+        // post-adjustment.
+        if (!(kSeq[0] > KFloor))
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': K_0 = {1:F3} below floor {2:F2}; " +
+                "first pass would be essentially a zero-dV burn (reduce N)",
+                source.Id, kSeq[0], KFloor), PassPlanFailure.KFloor);
+
+        // Apply target-sum adjustment to the LAST prior K. Recompute
+        // vPost / dvSeq / vPre[priors] / dvSeq[priors] downstream of the
+        // adjustment so the per-pass dV reflects the integer (or budget-
+        // locked) chain length, not the raw splitter-derived sum.
+        double sumK = 0.0;
+        for (int i = 0; i < priors; i++) sumK += kSeq[i];
+        double adjustment = targetSumPeriods - sumK;
+        kSeq[priors - 1] += adjustment;
+        if (!(kSeq[priors - 1] > KFloor))
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': last prior K = {1:F3} after integer-sum rounding " +
+                "(adjustment {2:F3}), below floor {3:F2}; reduce N",
+                source.Id, kSeq[priors - 1], adjustment, KFloor),
+                PassPlanFailure.KFloor);
+        if (priors >= 2 && !(kSeq[priors - 1] > kSeq[priors - 2]))
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': integer-sum rounding made K[{1}] = {2:F3} <= K[{3}] = {4:F3} " +
+                "(adjustment {5:F3}); reduce N",
+                source.Id, priors - 1, kSeq[priors - 1], priors - 2, kSeq[priors - 2], adjustment),
+                PassPlanFailure.NonMonotonicK);
+        double aLast = aPark * Math.Pow(kSeq[priors - 1], 2.0 / 3.0);
+        double vpLast = Math.Sqrt(mu * (2.0 / rp - 1.0 / aLast));
+        vPost[priors - 1] = vpLast;
+        vPre[priors] = vpLast;
+
+        // SOI / final-pass-dV validation. The schedule cap (0.999 of
+        // v_p_at_SOI_envelope) is conservative; this check is defensive
+        // against numerical edges (e.g. integer-sum rounding nudging the
+        // last K above what the cap allowed in the loop).
+        double apoLast = 2.0 * aLast - rp;
+        if (apoLast > soiLimit)
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': last prior apoapsis {1:F0}m exceeds SOI limit " +
+                "{2:F0}m (K={3:F1}); reduce N",
+                source.Id, apoLast, soiLimit, kSeq[priors - 1]),
+                PassPlanFailure.SoiCeiling);
+        if (!(vTargetXy > vpLast))
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': vTargetXy {1:F1}m/s <= pre-final v_p {2:F1}m/s; " +
+                "priors over-pumped the chain (likely target's vTargetXy below cap)",
+                source.Id, vTargetXy, vpLast),
+                PassPlanFailure.ParabolicVp);
+
+        if (timesZeroSec < now.Seconds() + EarliestPassMarginSec)
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': first pass would fire {1:F0}s before now+margin " +
+                "(needs ~{2:F1} parking periods = {3:F0}s of warning time); " +
+                "pick later porkchop entry",
+                source.Id,
+                now.Seconds() + EarliestPassMarginSec - timesZeroSec,
+                targetSumPeriods, targetSumPeriods * tPark),
+                PassPlanFailure.TimeBudget);
+
+        // Schedule per-pass firing times. Each subsequent pass fires K_k
+        // parking periods after the previous: vehicle returns to chained
+        // periapsis after one full chained-orbit period (= K_k * T_park).
         var times = new SimTime[remainingCount];
-        times[0] = new SimTime(input.TFinal.Seconds() - kTotal * tPark);
+        times[0] = new SimTime(timesZeroSec);
         for (int k = 1; k < remainingCount; k++)
             times[k] = new SimTime(times[k - 1].Seconds() + kSeq[k - 1] * tPark);
 
-        if (times[0].Seconds() < now.Seconds() + EarliestPassMarginSec)
-            return Fail(string.Format(CultureInfo.InvariantCulture,
-                "vehicle '{0}': first pass would fire {1:F0}s before now+margin " +
-                "(needs K_total={2} parking periods = {3:F0}s of warning time); " +
-                "reduce passes or pick later porkchop entry",
-                source.Id,
-                now.Seconds() + EarliestPassMarginSec - times[0].Seconds(),
-                kTotal, kTotal * tPark));
-
-        // Compute per-pass SMA / v_p analytically. The chain starts from
-        // the live current orbit (parking for initial, chained for
-        // recompute). K-integer schedule enforces |v_post_k| = vp(K_k);
-        // direction (theta_k rotation in the tangent plane) is the free
-        // parameter, planned by the Lagrange allocator below.
-        double[] aBefore = new double[remainingCount];   // SMA before each remaining pass
-        double[] vpBefore = new double[remainingCount];  // periapsis speed before each remaining pass
-        aBefore[0] = currentOrbit.SemiMajorAxis;
-        vpBefore[0] = Math.Sqrt(mu * (2.0 / rp - 1.0 / aBefore[0]));
-
-        for (int k = 0; k < remainingCount - 1; k++)
-        {
-            double tPostK = kSeq[k] * tPark;
-            double aPost = Math.Pow(Math.Pow(tPostK / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
-            double apoPost = 2.0 * aPost - rp;
-            if (apoPost > soiLimit)
-                return Fail(string.Format(CultureInfo.InvariantCulture,
-                    "vehicle '{0}': pass {1} apoapsis {2:F0}m would exceed SOI limit " +
-                    "{3:F0}m (K={4}); reduce passes",
-                    source.Id, startPassIndex + k, apoPost, soiLimit, kSeq[k]));
-            aBefore[k + 1] = aPost;
-            vpBefore[k + 1] = Math.Sqrt(mu * (2.0 / rp - 1.0 / aPost));
-        }
-
-        if (!(vTargetXy > vpBefore[remainingCount - 1]))
-            return Fail(string.Format(CultureInfo.InvariantCulture,
-                "vehicle '{0}': vTargetXy {1:F1}m/s <= pre-final v_p {2:F1}m/s; " +
-                "K sequence over-pumped for the chosen passCount",
-                source.Id, vTargetXy, vpBefore[remainingCount - 1]));
+        // Slice the absolute theta schedule for the current call. theta_k
+        // for absolute pass k stays stable across recomputes (see
+        // AllocateAbsoluteThetaSchedule above), so the sum across the
+        // sliced remaining passes equals (thetaTotal - sum of priors that
+        // already executed their planned theta share). This avoids the
+        // "re-allocate full thetaTotal across only the remaining N-k
+        // passes" pitfall, which would over-rotate the orbital plane.
+        double[] thetaK = new double[remainingCount];
+        for (int i = 0; i < remainingCount; i++)
+            thetaK[i] = thetaKAbsolute[startPassIndex + i];
 
         // Per-pass dV in LOCAL VLF:
         //   priors: (vPost*cos(theta_k) - vPre, vPost*sin(theta_k), 0)
@@ -265,22 +350,16 @@ internal static class HohmannMultiPassPlanner
         // For the final pass, vPost is vTargetXy (the in-plane component
         // of the Lambert post-burn speed); D.Z carries the remaining
         // radial-out velocity, giving total post-burn |v| = vpTarget.
-        // For stock Sol (theta_k ~ 0.01rad) dvX stays positive. Custom
-        // systems with very large theta could push dvX negative on early
-        // passes, which is mildly retrograde along the old local-X; the
-        // chain still works because |v_post| = vPost is theta-independent.
         var dvVlfSeq = new double3[remainingCount];
         var dvMagSeq = new double[remainingCount];
         for (int k = 0; k < remainingCount; k++)
         {
-            double vPre = vpBefore[k];
-            double vPost = (k < remainingCount - 1)
-                ? vpBefore[k + 1]
-                : vTargetXy;
-            double thetaK = thetaKInitial[startPassIndex + k];
-            double dvX = vPost * Math.Cos(thetaK) - vPre;
-            double dvY = vPost * Math.Sin(thetaK);
-            double dvZ = (k == remainingCount - 1) ? dz : 0.0;
+            double vP = vPre[k];
+            double vPo = (k < priors) ? vPost[k] : vTargetXy;
+            double th = thetaK[k];
+            double dvX = vPo * Math.Cos(th) - vP;
+            double dvY = vPo * Math.Sin(th);
+            double dvZ = (k == priors) ? dz : 0.0;
             dvVlfSeq[k] = new double3(dvX, dvY, dvZ);
             dvMagSeq[k] = dvVlfSeq[k].Length();
         }
@@ -299,7 +378,7 @@ internal static class HohmannMultiPassPlanner
         if (prePatch == null || prePatch.PrimaryBody == null)
             return Fail(string.Format(CultureInfo.InvariantCulture,
                 "vehicle '{0}': no current-orbit patch at t={1:F0}s",
-                source.Id, times[0].Seconds()));
+                source.Id, times[0].Seconds()), PassPlanFailure.Other);
 
         for (int k = 0; k < remainingCount; k++)
         {
@@ -315,7 +394,8 @@ internal static class HohmannMultiPassPlanner
 
             if (!burnPatch.Orbit.IsBound() && k < remainingCount - 1)
                 return new PassPreviewResult(previews.ToArray(), Failed: true,
-                    FailureReason: $"vehicle '{source.Id}': pass {startPassIndex + k} produced an unbound orbit");
+                    FailureReason: $"vehicle '{source.Id}': pass {startPassIndex + k} produced an unbound orbit",
+                    FailureKind: PassPlanFailure.ParabolicVp);
 
             // Inter-pass sanity: chained orbit must reach the next pass
             // time without escaping / encountering / impacting.
@@ -324,7 +404,8 @@ internal static class HohmannMultiPassPlanner
                 string? interFail = CheckInterPass(fp, times[k + 1], k + 1);
                 if (interFail != null)
                     return new PassPreviewResult(previews.ToArray(),
-                        Failed: true, FailureReason: $"vehicle '{source.Id}': {interFail}");
+                        Failed: true, FailureReason: $"vehicle '{source.Id}': {interFail}",
+                        FailureKind: PassPlanFailure.Other);
             }
 
             prePatch = burnPatch;
@@ -333,14 +414,13 @@ internal static class HohmannMultiPassPlanner
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] HohmannMultiPassPlanner.Plan: total={0} startIdx={1} remaining={2} " +
-                "K_total={3} T_park={4:F1}s T_final={5:F0}s T_0={6:F0}s span={7:F0}s " +
-                "vpTarget={8:F1}m/s vTargetXy={9:F1}m/s thetaTotal={10:F4}rad " +
-                "thetaK[{11}]rad dV[{12}]m/s",
-                totalPassCount, startPassIndex, remainingCount, kTotal, tPark,
+                "mode={3} sumK={4:F2} T_park={5:F1}s T_final={6:F0}s T_0={7:F0}s span={8:F0}s " +
+                "vpTarget={9:F1}m/s vTargetXy={10:F1}m/s thetaTotal={11:F4}rad " +
+                "K[{12}] thetaK[{13}]rad dV[{14}]m/s",
+                totalPassCount, startPassIndex, remainingCount, mode, targetSumPeriods, tPark,
                 input.TFinal.Seconds(), times[0].Seconds(),
                 input.TFinal.Seconds() - times[0].Seconds(), vpTarget, vTargetXy,
-                thetaTotal, FormatThetaSlice(thetaKInitial, startPassIndex, remainingCount),
-                FormatDvSeq(dvMagSeq)));
+                thetaTotal, FormatKSeq(kSeq), FormatThetaSeq(thetaK), FormatDvSeq(dvMagSeq)));
 
         return new PassPreviewResult(previews.ToArray(), Failed: false, FailureReason: null);
     }
@@ -348,34 +428,38 @@ internal static class HohmannMultiPassPlanner
     /// <summary>Largest N that fits the SOI envelope and time budget for
     /// the initial plan (startPassIndex=0). Probes from
     /// <paramref name="requestedN"/> downward; returns 1 if no multi-pass
-    /// N is feasible. Used by the UI to auto-clamp.</summary>
+    /// N is feasible. The probe's first failure reason + classifier (at
+    /// requestedN) are returned so the UI's auto-clamp banner can give
+    /// context-appropriate advice (different for SOI ceiling vs time
+    /// budget vs cumulative-dV-past-escape).</summary>
     public static int LargestFeasibleN(
         Vehicle source, HohmannPlanInput input, SequenceBurnState state,
-        double parkingPeriodSec, SimTime now, int requestedN)
+        double parkingPeriodSec, SimTime now, int requestedN, SplitMode mode,
+        out string? firstFailureReason, out PassPlanFailure firstFailureKind)
     {
+        firstFailureReason = null;
+        firstFailureKind = PassPlanFailure.None;
         int n = Math.Clamp(requestedN, 1, Splitter.MaxPasses);
         while (n > 1)
         {
-            var probe = Plan(source, input, n, 0, parkingPeriodSec, state, now);
+            var probe = Plan(source, input, n, 0, parkingPeriodSec, state, now, mode);
 
             if (DebugConfig.MultiPass)
                 DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
-                    "[AFC] HohmannMultiPassPlanner.LargestFeasibleN: probe N={0} -> " +
-                    "failed={1} reason='{2}' passes={3}",
-                    n, probe.Failed, probe.FailureReason ?? "-", probe.Passes.Length));
+                    "[AFC] HohmannMultiPassPlanner.LargestFeasibleN: probe N={0} mode={1} -> " +
+                    "failed={2} kind={3} reason='{4}' passes={5}",
+                    n, mode, probe.Failed, probe.FailureKind, probe.FailureReason ?? "-",
+                    probe.Passes.Length));
 
+            if (firstFailureReason == null && probe.Failed)
+            {
+                firstFailureReason = probe.FailureReason;
+                firstFailureKind = probe.FailureKind;
+            }
             if (!probe.Failed) return n;
             n--;
         }
         return 1;
-    }
-
-    /// <summary>Total elapsed sim time the multi-pass schedule occupies
-    /// (T_final - times[0]). Used by the UI to show "this multi-pass
-    /// takes X parking periods of warning time".</summary>
-    public static double GetSpanSeconds(double parkingPeriodSec, int passCount)
-    {
-        return GetKTotal(passCount) * parkingPeriodSec;
     }
 
     /// <summary>Outcome of <see cref="PrepareShiftedInput"/>:
@@ -412,12 +496,19 @@ internal static class HohmannMultiPassPlanner
     /// </summary>
     internal static ShiftResult PrepareShiftedInput(
         HohmannPlanInput raw, Vehicle source, OrbitalTransfers.TransferInfo info,
-        int passCount, double parkingPeriodSec, SimTime now)
+        int passCount, double parkingPeriodSec, SimTime now,
+        SplitMode mode, SequenceBurnState state)
     {
         if (passCount <= 1 || !(parkingPeriodSec > 0.0))
             return new ShiftResult(raw, 0);
 
-        int kTotal = GetKTotal(passCount);
+        int kTotal = EstimateRequiredKTotal(
+            raw, source, passCount, mode, state, parkingPeriodSec);
+        if (kTotal <= 0)
+            // Infeasible split (priors push past parabolic) or N=1: planner
+            // will surface a more descriptive error; no shift needed.
+            return new ShiftResult(raw, 0);
+
         double rawTFinalSec = raw.TFinal.Seconds();
         double earliestAllowedSec = now.Seconds()
             + kTotal * parkingPeriodSec
@@ -559,54 +650,210 @@ internal static class HohmannMultiPassPlanner
 
     #region Internal helpers
 
-    /// <summary>K sub-sequence for the remaining passes of an N-pass plan
-    /// starting at <paramref name="startPassIndex"/>: K_k = startPassIndex
-    /// + k + 2 for k = 0..N-startPassIndex-2. This preserves the original
-    /// schedule when called from RecomputePass mid-execution.</summary>
-    private static int[] BuildKSubSequence(int totalPassCount, int startPassIndex)
+    /// <summary>Real-K schedule for the remaining passes. Uses
+    /// <see cref="Splitter.Allocate"/> with <paramref name="mode"/> to
+    /// split totalDv = vTargetXy - vpLive across <paramref name="remainingCount"/>
+    /// passes, then converts cumulative dV to v_p targets via vis-viva,
+    /// then to K via Kepler. K array covers the priors only
+    /// (length = remainingCount - 1); vPre/vPost/dvSeq cover ALL remaining
+    /// passes (length = remainingCount). The last entry of vPre/vPost/
+    /// dvSeq is the final pass (vPost = vTargetXy).
+    ///
+    /// The returned K-sum is the RAW splitter-derived sum (real). The
+    /// caller is expected to adjust K[priors-1] to enforce either
+    /// integer-sum (initial plan) or time-budget-locked sum (recompute);
+    /// vPost / dvSeq are then recomputed downstream of that adjustment.
+    ///
+    /// Returns K = null when a per-pass dV target pushes v_p past
+    /// parabolic, which means the split is infeasible for this passCount
+    /// (caller fails and the UI auto-clamps via LargestFeasibleN).</summary>
+    private readonly struct RealKScheduleResult
     {
-        int remaining = totalPassCount - startPassIndex;
-        int n = remaining - 1;
-        if (n <= 0) return Array.Empty<int>();
-        var k = new int[n];
-        for (int i = 0; i < n; i++) k[i] = startPassIndex + i + 2;
-        return k;
+        public double[]? K { get; init; }
+        public double[]? VPre { get; init; }
+        public double[]? VPost { get; init; }
     }
 
-    /// <summary>Per-pass K-prograde data for the original N-pass plan
-    /// starting from a parking orbit of period <paramref name="tPark"/> at
-    /// periapsis radius <paramref name="rp"/>. Returns dvSeq (delta_R per
-    /// pass), vPre (pre-burn periapsis speed), and vPost (post-burn
-    /// periapsis speed). Last entry is the final pass closing from K=N to
-    /// <paramref name="vTargetXy"/> (the in-plane magnitude of the Lambert
-    /// target). Independent of live drift, so the allocation is identical
-    /// at initial plan and every recompute. Consumed by
-    /// <see cref="AllocatePlaneChangeLagrange"/>.</summary>
-    private static (double[] dvSeq, double[] vPre, double[] vPost) ComputeInitialKChain(
-        double mu, double rp, double tPark, int totalPassCount, double vTargetXy)
+    private static RealKScheduleResult BuildRealKSchedule(
+        double mu, double rp, double aPark, double soiLimit,
+        double vpLive, double vTargetXy,
+        int remainingCount, SplitMode mode, SequenceBurnState state)
+    {
+        int priors = remainingCount - 1;
+        if (priors < 1) return default;
+
+        double totalDv = vTargetXy - vpLive;
+        if (!(totalDv > 0.0)) return default;
+
+        PassAllocation[] alloc = Splitter.Allocate(totalDv, remainingCount, mode, state);
+
+        var K = new double[priors];
+        var vPre = new double[remainingCount];
+        var vPost = new double[remainingCount];
+
+        // Per-prior v_p cap from the parent-SOI envelope: chained orbit
+        // apoapsis must stay below 0.95 * SOI, which directly bounds v_p
+        // at periapsis. Tiny 0.001 margin absorbs numerical noise so the
+        // separate apo-vs-soiLimit check downstream doesn't fire on the
+        // capped-just-at-limit case.
+        //
+        // vp_at_SOI_envelope is always strictly below vp_escape (the
+        // escape limit corresponds to a -> infinity, but soiLimit is
+        // finite), so this cap is equivalent to "stay bound" too.
+        //
+        // Whichever SplitMode is active still drives the per-pass
+        // allocation; the cap only clips priors that would otherwise
+        // exceed vp_max, and the final pass absorbs the residual. For
+        // Mars-like targets where vTargetXy stays below the cap, the cap
+        // never binds and the SplitMode's per-pass allocation is
+        // delivered as-is.
+        double aMaxBySoi = (rp + soiLimit) / 2.0;
+        double vpMaxPrior = (aMaxBySoi > rp)
+            ? Math.Sqrt(Math.Max(0.0, mu * (2.0 / rp - 1.0 / aMaxBySoi))) * 0.999
+            : 0.0;
+
+        double vpCum = vpLive;
+        bool reachedCap = false;
+        for (int k = 0; k < priors; k++)
+        {
+            vPre[k] = vpCum;
+            double targetVp = vpCum + alloc[k].DvCapacityMs;
+            if (targetVp > vpMaxPrior)
+            {
+                if (reachedCap)
+                    // Previous prior already saturated; this pass would
+                    // contribute zero/negative dV and break K-monotonicity.
+                    // Fail so LargestFeasibleN clamps N down to the
+                    // largest where each prior carries meaningful dV.
+                    return default;
+                if (vpMaxPrior <= vpCum)
+                    // First pass already starts above cap (live v_p too
+                    // high). Mid-execution edge: prior passes saturated
+                    // the chain before recompute. Infeasible.
+                    return default;
+                targetVp = vpMaxPrior;
+                reachedCap = true;
+            }
+            if (!(targetVp > vPre[k]))
+                // Splitter gave a non-positive prior dV (fuel-short or
+                // mode glitch). Treat as infeasible at this N.
+                return default;
+            vpCum = targetVp;
+            double term = 2.0 / rp - vpCum * vpCum / mu;
+            if (!(term > 0.0))
+                // Bound-orbit invariant violated despite cap (numerical
+                // edge). Defensive.
+                return default;
+            double aPost = 1.0 / term;
+            K[k] = Math.Pow(aPost / aPark, 1.5);
+            vPost[k] = vpCum;
+        }
+        vPre[priors] = vpCum;
+        vPost[priors] = vTargetXy;
+
+        return new RealKScheduleResult { K = K, VPre = vPre, VPost = vPost };
+    }
+
+    /// <summary>Integer round of the K-schedule sum for the given
+    /// passCount / mode / state, matching the value the planner uses
+    /// at initial plan to set times[0]. Used by PrepareShiftedInput
+    /// to size the same-parent moon shift.
+    ///
+    /// Returns 0 for passCount &lt;= 1, and -1 when the split is
+    /// infeasible (priors push past parabolic before reaching the
+    /// target).</summary>
+    internal static int EstimateRequiredKTotal(
+        HohmannPlanInput raw, Vehicle source, int passCount,
+        SplitMode mode, SequenceBurnState state, double parkingPeriodSec)
+    {
+        if (passCount <= 1) return 0;
+        Orbit o = source.Orbit;
+        if (o?.Parent == null) return 0;
+        double mu = o.Mu;
+        double rp = o.Periapsis;
+        if (!(rp > 0.0) || !(parkingPeriodSec > 0.0)) return 0;
+
+        double soiLimit = o.Parent.SphereOfInfluence * SoiEnvelopeFraction;
+        if (!(soiLimit > 0.0)) return -1;
+
+        double vpTarget = ComputeVpTarget(raw, mu, rp);
+        if (!(vpTarget > 0.0)) return -1;
+
+        double dz = raw.DFinalVlf.Z;
+        double vTargetXy = Math.Sqrt(Math.Max(0.0, vpTarget * vpTarget - dz * dz));
+        double vpLive = Math.Sqrt(mu * (2.0 / rp - 1.0 / o.SemiMajorAxis));
+        double aPark = Math.Pow(
+            Math.Pow(parkingPeriodSec / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
+
+        var schedule = BuildRealKSchedule(
+            mu, rp, aPark, soiLimit, vpLive, vTargetXy, passCount, mode, state);
+        if (schedule.K == null) return -1;
+
+        double sumK = 0.0;
+        for (int i = 0; i < schedule.K.Length; i++) sumK += schedule.K[i];
+        return (int)Math.Round(sumK);
+    }
+
+    /// <summary>Time of the next periapsis after <paramref name="now"/>
+    /// in the given orbit. Used by Plan() at recompute time to anchor
+    /// times[0] to the vehicle's actual next chained-periapsis epoch
+    /// (rather than re-deriving from T_final and an assumed integer K).
+    ///
+    /// For a circular parking orbit GetTimeSincePeriapsisThisOrbit is
+    /// well-defined too (stock convention), but the recompute path is
+    /// hit only after pass 0 has fired, so the orbit here is the
+    /// elliptical chained orbit with a well-defined periapsis.</summary>
+    private static SimTime ComputeNextPeriapsis(Orbit orbit, SimTime now)
+    {
+        double period = orbit.Period;
+        if (!(period > 0.0)) return now;
+        SimTime sincePe = orbit.GetTimeSincePeriapsisThisOrbit(now);
+        double secSincePe = sincePe.Seconds();
+        if (secSincePe < 0.0) secSincePe += period;
+        double secToNextPe = period - secSincePe;
+        if (secToNextPe <= 0.0) secToNextPe += period;
+        return new SimTime(now.Seconds() + secToNextPe);
+    }
+
+    /// <summary>Per-pass theta schedule for the FULL N-pass plan, against
+    /// a stable state-independent equal-vp-step reference dvSeq. The
+    /// resulting thetaK[k] is the planned plane-rotation share for
+    /// ABSOLUTE pass k regardless of when the planner is called (initial
+    /// vs recompute). Caller slices [startPassIndex..startPassIndex+remaining]
+    /// for the current call so the remaining passes pick up exactly the
+    /// residual rotation thetaTotal - sum(priors already done their share).
+    ///
+    /// Why equal-vp-step and not the SplitMode-driven K-schedule's dvSeq:
+    /// the SplitMode allocation depends on vehicle mass (for
+    /// EqualBurnTime), which drifts across recomputes as fuel is burned.
+    /// Allocating theta_k against that moving target would shift theta_k
+    /// for absolute pass k between recomputes - breaking the "sliced
+    /// schedule sums to remaining theta budget" invariant the slice
+    /// relies on. Equal-vp-step is purely orbital mechanics, identical
+    /// across calls.
+    ///
+    /// The Lagrange optimality is slightly off (the reference dvSeq
+    /// doesn't match the actual scheduled dvSeq exactly), but for the
+    /// stock Sol thetaTotal range (Mars 0.002 rad, Jupiter 0.17 rad) the
+    /// extra cost is sub-m/s; the alternative (persisting per-pass
+    /// thetaK in the intent) would require new TOML fields and reload
+    /// migration logic.</summary>
+    private static double[] AllocateAbsoluteThetaSchedule(
+        double thetaTotal, double vpParking, double vTargetXy, int totalPassCount)
     {
         var dvSeq = new double[totalPassCount];
         var vPre = new double[totalPassCount];
         var vPost = new double[totalPassCount];
-        double aParking = Math.Pow(
-            Math.Pow(tPark / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
-        double vpPrev = Math.Sqrt(mu * (2.0 / rp - 1.0 / aParking));
-        for (int k = 0; k < totalPassCount - 1; k++)
+        double stepDv = (vTargetXy - vpParking) / totalPassCount;
+        double vp = vpParking;
+        for (int i = 0; i < totalPassCount; i++)
         {
-            int kIdx = k + 2;
-            double tPostK = kIdx * tPark;
-            double aPost = Math.Pow(
-                Math.Pow(tPostK / (2.0 * Math.PI), 2.0) * mu, 1.0 / 3.0);
-            double vpPostK = Math.Sqrt(mu * (2.0 / rp - 1.0 / aPost));
-            vPre[k] = vpPrev;
-            vPost[k] = vpPostK;
-            dvSeq[k] = vpPostK - vpPrev;
-            vpPrev = vpPostK;
+            vPre[i] = vp;
+            vp += stepDv;
+            vPost[i] = vp;
+            dvSeq[i] = stepDv;
         }
-        vPre[totalPassCount - 1] = vpPrev;
-        vPost[totalPassCount - 1] = vTargetXy;
-        dvSeq[totalPassCount - 1] = vTargetXy - vpPrev;
-        return (dvSeq, vPre, vPost);
+        return AllocatePlaneChangeLagrange(thetaTotal, dvSeq, vPre, vPost);
     }
 
     /// <summary>Lagrange-optimal plane-change allocation: distributes
@@ -761,33 +1008,32 @@ internal static class HohmannMultiPassPlanner
     /// For N=1 initial plan (startPassIndex=0, theta = thetaTotal), the
     /// algebra collapses to (D.X, D.Y, D.Z) when vLive == vpParking,
     /// matching the stock single-burn dV up to Lambert's internal
-    /// numerical roundoff. For the last remaining pass of an N>1 plan,
-    /// theta is the final pass's share of the Lagrange allocation -
-    /// any prior plane rotation done by earlier passes is implicit in
-    /// the live orbit's plane.
+    /// numerical roundoff.
     ///
-    /// Assumes T_final lands at a periapsis of the live orbit (rpLive
-    /// = parking r_p). The current call paths satisfy this: K-integer
-    /// scheduling places times[N-1] = T_final at the chained orbit's
-    /// periapsis, and N=1 hits T_final at parking periapsis. A direct
-    /// non-periapsis caller would under-/over-burn by (vpParking - vpLive)
-    /// because the in-plane vTargetXy formula assumes apse geometry.</summary>
+    /// <paramref name="burnTime"/> must land at a periapsis of the live
+    /// orbit so vpLive == v_p (the apse-geometry assumption baked into
+    /// vTargetXy). For initial N=1 the caller passes <c>input.TFinal</c>
+    /// (vehicle in parking orbit at the locked Lambert burn point). For
+    /// mid-exec last pass the caller passes <c>ComputeNextPeriapsis</c>
+    /// of the chained orbit, which may drift seconds-to-hours away from
+    /// <c>input.TFinal</c> due to finite-burn losses on prior passes.</summary>
     private static PassPreviewResult PlanSinglePass(
         Vehicle source, HohmannPlanInput input, SimTime now,
-        double vTargetXy, double theta)
+        SimTime burnTime, double vTargetXy, double theta)
     {
-        PatchedConic? prePatch = source.FlightPlan.TryFindPatch(input.TFinal);
+        PatchedConic? prePatch = source.FlightPlan.TryFindPatch(burnTime);
         if (prePatch == null || prePatch.PrimaryBody == null)
             return Fail(string.Format(CultureInfo.InvariantCulture,
-                "vehicle '{0}': no parking patch at t={1:F0}s",
-                source.Id, input.TFinal.Seconds()));
+                "vehicle '{0}': no patch at burn time t={1:F0}s",
+                source.Id, burnTime.Seconds()), PassPlanFailure.Other);
 
         Orbit o = prePatch.Orbit;
-        StateVectors svAt = o.GetStateVectorsAt(input.TFinal);
+        StateVectors svAt = o.GetStateVectorsAt(burnTime);
         double vpLive = svAt.VelocityCci.Length();
         double rpLive = svAt.PositionCci.Length();
         if (!(rpLive > 0.0))
-            return Fail($"vehicle '{source.Id}': degenerate position at T_final");
+            return Fail($"vehicle '{source.Id}': degenerate position at burn time",
+                PassPlanFailure.Other);
 
         // dV in LIVE-VLF. LIVE-VLF X is along live velocity (which has
         // magnitude vpLive); the target post-burn velocity has in-plane
@@ -802,22 +1048,33 @@ internal static class HohmannMultiPassPlanner
         double dvFinalMag = dvVlf.Length();
         if (!(dvFinalMag > 0.0))
             return Fail(string.Format(CultureInfo.InvariantCulture,
-                "vehicle '{0}': residual dV at T_final is non-positive ({1:F2}m/s); " +
+                "vehicle '{0}': residual dV at burn time is non-positive ({1:F2}m/s); " +
                 "priors already over-shot Lambert target",
-                source.Id, dvFinalMag));
+                source.Id, dvFinalMag), PassPlanFailure.ParabolicVp);
+
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
+                "[AFC] HohmannMultiPassPlanner.PlanSinglePass: vehicle='{0}' " +
+                "burnTime={1:F0}s (input.TFinal={2:F0}s, drift={3:F0}s) " +
+                "vpLive={4:F1}m/s vTargetXy={5:F1}m/s theta={6:F5}rad " +
+                "dV=({7:F1},{8:F1},{9:F1})m/s |dV|={10:F1}m/s",
+                source.Id, burnTime.Seconds(), input.TFinal.Seconds(),
+                burnTime.Seconds() - input.TFinal.Seconds(),
+                vpLive, vTargetXy, theta, dvX, dvY, dvZ, dvFinalMag));
 
         var (fp, _) = BuildPassFlightPlan(
-            source, prePatch, input.TFinal, dvVlf, input.Target);
+            source, prePatch, burnTime, dvVlf, input.Target);
         var single = new PassPreview(
-            BurnTime: input.TFinal,
+            BurnTime: burnTime,
             DvVlf: dvVlf,
             EstimatedBurnTimeSec: 0.0,
             FlightPlan: fp);
         return new PassPreviewResult(new[] { single }, Failed: false, FailureReason: null);
     }
 
-    private static PassPreviewResult Fail(string reason) =>
-        new(Array.Empty<PassPreview>(), Failed: true, FailureReason: reason);
+    private static PassPreviewResult Fail(string reason, PassPlanFailure kind) =>
+        new(Array.Empty<PassPreview>(), Failed: true, FailureReason: reason,
+            FailureKind: kind);
 
     private static string FormatDvSeq(double[] dvSeq)
     {
@@ -830,13 +1087,24 @@ internal static class HohmannMultiPassPlanner
         return sb.ToString();
     }
 
-    private static string FormatThetaSlice(double[] thetaK, int start, int count)
+    private static string FormatThetaSeq(double[] thetaK)
     {
         var sb = new System.Text.StringBuilder();
-        for (int i = 0; i < count; i++)
+        for (int i = 0; i < thetaK.Length; i++)
         {
             if (i > 0) sb.Append(", ");
-            sb.AppendFormat(CultureInfo.InvariantCulture, "{0:F5}", thetaK[start + i]);
+            sb.AppendFormat(CultureInfo.InvariantCulture, "{0:F5}", thetaK[i]);
+        }
+        return sb.ToString();
+    }
+
+    private static string FormatKSeq(double[] kSeq)
+    {
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < kSeq.Length; i++)
+        {
+            if (i > 0) sb.Append(", ");
+            sb.AppendFormat(CultureInfo.InvariantCulture, "{0:F2}", kSeq[i]);
         }
         return sb.ToString();
     }

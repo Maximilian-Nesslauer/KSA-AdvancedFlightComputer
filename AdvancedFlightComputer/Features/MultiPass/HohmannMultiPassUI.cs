@@ -40,13 +40,17 @@ internal static class HohmannMultiPassUI
     public static bool Enabled { get; set; }
 
     private static int _passCount = 1;
+    // EqualBurnTime is the literature-standard default for finite-burn
+    // loss across N periapsis kicks (equal arc length per pass).
+    // EqualDv is the simpler "uniform per-pass dV" alternative.
+    private static SplitMode _splitMode = SplitMode.EqualBurnTime;
 
     // Cache key components - quantized so per-frame floating drift on
-    // T_final / dV magnitude does not bust the cache. SplitMode is gone
-    // for Hohmann: per-pass dV is determined entirely by the K-integer
-    // sequence in HohmannMultiPassPlanner, not by user split-mode choice.
-    // StartPassIndex distinguishes init-phase (always 0) from active-exec
-    // (= exec.PassIndex), so a pass completion naturally busts the cache.
+    // T_final / dV magnitude does not bust the cache. SplitMode now
+    // affects per-pass dV (real-K schedule via Splitter.Allocate); cache
+    // busts on mode toggle. StartPassIndex distinguishes init-phase
+    // (always 0) from active-exec (= exec.PassIndex), so a pass completion
+    // naturally busts the cache.
     private readonly record struct PreviewKey(
         string SourceId,
         string TargetId,
@@ -56,6 +60,7 @@ internal static class HohmannMultiPassUI
         long ApoTargetBucket,
         bool IsCrossParent,
         int PassCount,
+        SplitMode Mode,
         int StartPassIndex,
         long MassBucket);
 
@@ -63,6 +68,12 @@ internal static class HohmannMultiPassUI
     private static bool _hasCachedPreview;
     private static PassPreviewResult _cachedPreview;
     private static int _autoClampedFromN;     // 0 = no clamp; >0 = user asked for this, got LargestFeasibleN
+    // Failure reason + classifier at the requested N, captured during the
+    // clamp probe. _autoClampKind drives the banner's advice switch
+    // (PassPlanFailure is stable across reason-text edits); _autoClampReason
+    // is shown to the user in debug builds for diagnostics only.
+    private static string? _autoClampReason;
+    private static PassPlanFailure _autoClampKind;
     // K_shift applied to fit the K-schedule for same-parent moon transfers
     // (LEO -> Luna, etc.). 0 = no shift applied (porkchop entry's TFinal was
     // already feasible). Surfaced in the UI so the user understands why
@@ -106,8 +117,11 @@ internal static class HohmannMultiPassUI
             _lastSourceId = source.Id;
             _lastTargetId = targetId;
             _passCount = 1;
+            _splitMode = SplitMode.EqualBurnTime;
             _hasCachedPreview = false;
             _autoClampedFromN = 0;
+            _autoClampReason = null;
+            _autoClampKind = PassPlanFailure.None;
             _lastShiftKShift = 0;
         }
 
@@ -157,10 +171,13 @@ internal static class HohmannMultiPassUI
     public static void Reset()
     {
         _passCount = 1;
+        _splitMode = SplitMode.EqualBurnTime;
         _hasCachedPreview = false;
         _cachedPreview = default;
         _cachedKey = default;
         _autoClampedFromN = 0;
+        _autoClampReason = null;
+        _autoClampKind = PassPlanFailure.None;
         _lastShiftKShift = 0;
         _lastSourceId = null;
         _lastTargetId = null;
@@ -322,6 +339,7 @@ internal static class HohmannMultiPassUI
 
         if (_passCount > 1)
         {
+            DrawSplitModeRadio();
             UpdatePreviewIfStale(source, entry, info);
             DrawSpanInfo(source);
             DrawPreviewFailureIfApplicable();
@@ -358,14 +376,22 @@ internal static class HohmannMultiPassUI
     /// entry's start was too early to fit the K-schedule (same-parent
     /// moons) and we auto-shifted T_final forward, a second line surfaces
     /// the shift so the user understands why the final burn happens past
-    /// the selected porkchop cell.</summary>
+    /// the selected porkchop cell.
+    ///
+    /// Span is read from the cached preview's actual first/last burn
+    /// times so it matches the SplitMode-derived real-K schedule rather
+    /// than a closed-form integer estimate.</summary>
     private static void DrawSpanInfo(Vehicle source)
     {
         if (source.Orbit == null) return;
         double tPark = source.Orbit.Period;
         if (!(tPark > 0.0)) return;
-        double spanSec = HohmannMultiPassPlanner.GetSpanSeconds(tPark, _passCount);
-        if (spanSec <= 0.0) return;
+        if (!_hasCachedPreview || _cachedPreview.Failed
+            || _cachedPreview.Passes.Length < 2) return;
+        var passes = _cachedPreview.Passes;
+        double spanSec = passes[passes.Length - 1].BurnTime.Seconds()
+                         - passes[0].BurnTime.Seconds();
+        if (!(spanSec > 0.0)) return;
 
         ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
         ImGui.TextWrapped(string.Format(Inv,
@@ -380,6 +406,48 @@ internal static class HohmannMultiPassUI
                 _lastShiftKShift, FormatHelper.FormatDuration(shiftSec)));
         }
         ImGui.PopStyleColor();
+    }
+
+    /// <summary>SplitMode selector. EqualBurnTime is the literature-standard
+    /// default for finite-burn loss (each pass burns the engines for the
+    /// same duration); EqualDv is the simpler "uniform per-pass dV"
+    /// alternative. Drawn only when N &gt;= 2; mode change busts cached
+    /// preview.</summary>
+    private static void DrawSplitModeRadio()
+    {
+        ImGui.Spacing();
+        bool isBurnTime = _splitMode == SplitMode.EqualBurnTime;
+        if (ImGui.RadioButton("Equal Burn Time"u8, isBurnTime) && !isBurnTime)
+        {
+            _splitMode = SplitMode.EqualBurnTime;
+            _hasCachedPreview = false;
+            _autoClampedFromN = 0;
+            _autoClampReason = null;
+            _autoClampKind = PassPlanFailure.None;
+            if (DebugConfig.MultiPass)
+                DefaultCategory.Log.Debug(
+                    "[AFC] HohmannMultiPassUI: split mode -> EqualBurnTime");
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "Each pass fires the engines for the same duration.\nEqualises finite-burn arc length across passes\n(literature-standard default for finite-burn loss)."u8);
+
+        ImGui.SameLine();
+        bool isEqualDv = _splitMode == SplitMode.EqualDv;
+        if (ImGui.RadioButton("Equal Delta-V"u8, isEqualDv) && !isEqualDv)
+        {
+            _splitMode = SplitMode.EqualDv;
+            _hasCachedPreview = false;
+            _autoClampedFromN = 0;
+            _autoClampReason = null;
+            _autoClampKind = PassPlanFailure.None;
+            if (DebugConfig.MultiPass)
+                DefaultCategory.Log.Debug(
+                    "[AFC] HohmannMultiPassUI: split mode -> EqualDv");
+        }
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(
+                "Each pass delivers the same delta-v magnitude.\nSimpler to reason about but slightly less efficient\nfor finite burns than Equal Burn Time."u8);
     }
 
     #region Active execution
@@ -428,6 +496,7 @@ internal static class HohmannMultiPassUI
 
         var key = BuildKey(source, input,
             passCount: exec.PassCountTotal,
+            mode: exec.Mode,
             startPassIndex: exec.PassIndex);
         if (_hasCachedPreview && key == _cachedKey) return;
 
@@ -442,7 +511,7 @@ internal static class HohmannMultiPassUI
         SequenceBurnState state = SequenceBurnState.Analyze(source);
         _cachedPreview = HohmannMultiPassPlanner.Plan(
             source, input, exec.PassCountTotal, exec.PassIndex,
-            intent.ParkingPeriodSec, state, now);
+            intent.ParkingPeriodSec, state, now, exec.Mode);
         _cachedKey = key;
         _hasCachedPreview = true;
 
@@ -504,6 +573,8 @@ internal static class HohmannMultiPassUI
                 _passCount--;
                 _hasCachedPreview = false;
                 _autoClampedFromN = 0;
+                _autoClampReason = null;
+                _autoClampKind = PassPlanFailure.None;
                 if (DebugConfig.MultiPass)
                     DefaultCategory.Log.Debug(
                         $"[AFC] HohmannMultiPassUI: < clicked, _passCount {before} -> {_passCount}.");
@@ -520,6 +591,8 @@ internal static class HohmannMultiPassUI
                 _passCount++;
                 _hasCachedPreview = false;
                 _autoClampedFromN = 0;
+                _autoClampReason = null;
+                _autoClampKind = PassPlanFailure.None;
                 if (DebugConfig.MultiPass)
                     DefaultCategory.Log.Debug(
                         $"[AFC] HohmannMultiPassUI: > clicked, _passCount {before} -> {_passCount}.");
@@ -546,6 +619,8 @@ internal static class HohmannMultiPassUI
             {
                 _passCount = 1;
                 _autoClampedFromN = 0;
+                _autoClampReason = null;
+                _autoClampKind = PassPlanFailure.None;
             }
             _lastShiftKShift = 0;
             _hasCachedPreview = false;
@@ -555,11 +630,12 @@ internal static class HohmannMultiPassUI
         }
 
         var raw = BuildBasePlanInput(source, entry, info);
+        SequenceBurnState state = SequenceBurnState.Analyze(source);
         var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
-            raw, source, info, _passCount, parkingPeriodSec, now);
+            raw, source, info, _passCount, parkingPeriodSec, now, _splitMode, state);
 
         var key = BuildKey(source, shift.Input,
-            passCount: _passCount, startPassIndex: 0);
+            passCount: _passCount, mode: _splitMode, startPassIndex: 0);
         if (_hasCachedPreview && key == _cachedKey)
         {
             // PrepareShiftedInput's own cache made the call cheap, but the
@@ -575,7 +651,6 @@ internal static class HohmannMultiPassUI
             && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
             return;
 
-        SequenceBurnState state = SequenceBurnState.Analyze(source);
         int requestedN = _passCount;
         _lastShiftKShift = shift.KShift;
 
@@ -592,13 +667,14 @@ internal static class HohmannMultiPassUI
                 parkingPeriodSec));
 
         int clampedN = HohmannMultiPassPlanner.LargestFeasibleN(
-            source, shift.Input, state, parkingPeriodSec, now, requestedN);
+            source, shift.Input, state, parkingPeriodSec, now, requestedN, _splitMode,
+            out string? clampReason, out PassPlanFailure clampKind);
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: LargestFeasibleN " +
-                "requested={0} -> clamped={1}",
-                requestedN, clampedN));
+                "requested={0} -> clamped={1} mode={2} kind={3} reason='{4}'",
+                requestedN, clampedN, _splitMode, clampKind, clampReason ?? "-"));
 
         var planInput = shift.Input;
         if (clampedN < requestedN)
@@ -609,6 +685,8 @@ internal static class HohmannMultiPassUI
             // buttons explicitly reset _autoClampedFromN, which is the
             // only way back to "no clamp warning".
             _autoClampedFromN = Math.Max(_autoClampedFromN, requestedN);
+            _autoClampReason = clampReason;
+            _autoClampKind = clampKind;
             if (DebugConfig.MultiPass)
                 DefaultCategory.Log.Debug(string.Format(Inv,
                     "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: AUTO-CLAMP " +
@@ -621,19 +699,19 @@ internal static class HohmannMultiPassUI
             // K_total and clampedN's K_total parking periods - feasible but
             // unnecessarily late.
             shift = HohmannMultiPassPlanner.PrepareShiftedInput(
-                raw, source, info, _passCount, parkingPeriodSec, now);
+                raw, source, info, _passCount, parkingPeriodSec, now, _splitMode, state);
             planInput = shift.Input;
             _lastShiftKShift = shift.KShift;
             // BuildKey depends on planInput.TFinal (bucketed); recompute so
             // the cached key matches the actual input we're planning with,
             // otherwise the next frame would bust the cache on a phantom delta.
             key = BuildKey(source, planInput,
-                passCount: _passCount, startPassIndex: 0);
+                passCount: _passCount, mode: _splitMode, startPassIndex: 0);
         }
 
         _cachedPreview = HohmannMultiPassPlanner.Plan(
             source, planInput, _passCount, startPassIndex: 0,
-            parkingPeriodSec, state, now);
+            parkingPeriodSec, state, now, _splitMode);
         _cachedKey = key;
         _hasCachedPreview = true;
 
@@ -661,12 +739,46 @@ internal static class HohmannMultiPassUI
         if (_autoClampedFromN <= _passCount) return;
         ImGui.Spacing();
         ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
+
+        // PassPlanFailure-based advice. Driven by the planner's classifier
+        // (PassPlanFailure) instead of substring-matching the human-
+        // readable reason; that way reason-text edits don't silently
+        // break the advice routing. Mode-aware: only suggest the OTHER
+        // SplitMode (suggesting the user's current mode is a no-op).
+        SplitMode otherMode = _splitMode == SplitMode.EqualBurnTime
+            ? SplitMode.EqualDv
+            : SplitMode.EqualBurnTime;
+        string otherModeLabel = otherMode == SplitMode.EqualBurnTime
+            ? "Equal Burn Time"
+            : "Equal Delta-V";
+
+        string advice = _autoClampKind switch
+        {
+            PassPlanFailure.TimeBudget =>
+                "Pick a later porkchop entry (arrow buttons / further right) "
+                + "to gain time budget.",
+            PassPlanFailure.SoiCeiling =>
+                "More passes would push the intermediate orbit past the parent "
+                + $"SOI envelope. Reduce passes, or try {otherModeLabel} for "
+                + "tighter K.",
+            PassPlanFailure.ParabolicVp =>
+                "Even with priors auto-capped at escape velocity the transfer "
+                + $"is too high-energy for this N. Reduce passes, or try {otherModeLabel}.",
+            PassPlanFailure.NonMonotonicK =>
+                "Integer-sum rounding artifact at this N; reduce passes by one "
+                + "(N-1 typically works).",
+            PassPlanFailure.KFloor =>
+                "Per-pass dV too small to be meaningful at this N; reduce passes.",
+            _ =>
+                $"Reduce passes, try {otherModeLabel}, or pick a later porkchop entry.",
+        };
+
         ImGui.TextWrapped(string.Format(Inv,
-            "[!] {0} pass(es) requested, only {1} feasible at this departure time.\n" +
-            "Multi-pass needs ~{0} parking-orbit periods of warning time before " +
-            "the final burn; pick a later porkchop entry (arrow buttons / click " +
-            "further right on the porkchop) to gain time budget.",
-            _autoClampedFromN, _passCount));
+            "[!] {0} pass(es) requested, only {1} feasible at this departure entry.\n{2}",
+            _autoClampedFromN, _passCount, advice));
+        if (DebugConfig.MultiPass && _autoClampReason != null)
+            ImGui.TextWrapped(string.Format(Inv,
+                "Debug: kind={0}, reason: {1}", _autoClampKind, _autoClampReason));
         ImGui.PopStyleColor();
     }
 
@@ -711,10 +823,12 @@ internal static class HohmannMultiPassUI
     /// or fall through to a single burn.
     /// </summary>
     public static bool TryGetArmedState(
-        Vehicle vehicle, out int passCount, out HohmannTransferIntent? intent)
+        Vehicle vehicle, out int passCount, out HohmannTransferIntent? intent,
+        out SplitMode mode)
     {
         passCount = 0;
         intent = null;
+        mode = SplitMode.EqualBurnTime;
         if (!Enabled) return false;
         if (_passCount <= 1) return false;
         if (!_hasCachedPreview || _cachedPreview.Failed) return false;
@@ -730,6 +844,7 @@ internal static class HohmannMultiPassUI
         if (intent == null) return false;
 
         passCount = _passCount;
+        mode = _splitMode;
         return true;
     }
 
@@ -816,10 +931,14 @@ internal static class HohmannMultiPassUI
         // must be read from the shifted input (NOT entry directly) so the
         // intent locks in the shifted geometry, otherwise RecomputePass
         // would use the un-shifted T_final and the K-schedule fails on
-        // the first pass.
+        // the first pass. Mode-aware: the K-total required for the shift
+        // depends on SplitMode (EqualBurnTime needs more parking periods
+        // than EqualDv for the same N), so the intent must use the same
+        // mode the user picked.
         var raw = BuildBasePlanInput(source, entry, info);
+        SequenceBurnState state = SequenceBurnState.Analyze(source);
         var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
-            raw, source, info, passCount, parkingPeriod, now);
+            raw, source, info, passCount, parkingPeriod, now, _splitMode, state);
         var input = shift.Input;
 
         return new HohmannTransferIntent
@@ -837,7 +956,7 @@ internal static class HohmannMultiPassUI
 
     private static PreviewKey BuildKey(
         Vehicle source, HohmannMultiPassPlanner.HohmannPlanInput input,
-        int passCount, int startPassIndex)
+        int passCount, SplitMode mode, int startPassIndex)
     {
         return new PreviewKey(
             SourceId: source.Id,
@@ -848,6 +967,7 @@ internal static class HohmannMultiPassUI
             ApoTargetBucket: (long)(input.ApoTargetRadiusMeters / 1000.0),
             IsCrossParent: input.IsCrossParent,
             PassCount: passCount,
+            Mode: mode,
             StartPassIndex: startPassIndex,
             MassBucket: (long)(source.TotalMass / 100.0));
     }

@@ -145,12 +145,17 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
 
         // Critical: pass the LOCKED parking period (not vehicle.Orbit.Period
         // which is the chained orbit at this point) so the K-schedule
-        // remains anchored to the original orbital geometry. The
-        // startPassIndex slice (passIndex into the original K-sequence)
-        // ensures we use K_k = passIndex+k+2, matching the prior plan.
+        // remains anchored to the original parking-orbit geometry. The
+        // planner re-derives the real-K schedule for the remaining passes
+        // each call, anchoring times[0] to the vehicle's next chained
+        // periapsis time (computed from live state). SplitMode comes from
+        // MultiPassExecution.Mode (locked at intent creation): the planner
+        // re-applies the same allocation policy to the live remaining dV
+        // and current fuel state each recompute - so the policy is
+        // consistent but per-pass dV evolves as fuel drains.
         var result = HohmannMultiPassPlanner.Plan(
             vehicle, input, passCountTotal, passIndex,
-            ParkingPeriodSec, state, now);
+            ParkingPeriodSec, state, now, mode);
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
