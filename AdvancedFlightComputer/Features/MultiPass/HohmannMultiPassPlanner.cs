@@ -411,18 +411,28 @@ internal static class HohmannMultiPassPlanner
             prePatch = burnPatch;
         }
 
+        // Final-pass impact / unintended-SOI advisory. Soft warning - the
+        // plan is still usable, but stock's porkchop filter would have
+        // rejected this geometry, so the user should see it. CheckInterPass
+        // above already hard-failed if a PRIOR pass hits these conditions;
+        // here we cover the gap for the FINAL pass's chained flight plan.
+        string? finalAdvisory = CheckFinalPassAdvisory(
+            previews[remainingCount - 1].FlightPlan, source, input.Target);
+
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] HohmannMultiPassPlanner.Plan: total={0} startIdx={1} remaining={2} " +
                 "mode={3} sumK={4:F2} T_park={5:F1}s T_final={6:F0}s T_0={7:F0}s span={8:F0}s " +
                 "vpTarget={9:F1}m/s vTargetXy={10:F1}m/s thetaTotal={11:F4}rad " +
-                "K[{12}] thetaK[{13}]rad dV[{14}]m/s",
+                "K[{12}] thetaK[{13}]rad dV[{14}]m/s advisory='{15}'",
                 totalPassCount, startPassIndex, remainingCount, mode, targetSumPeriods, tPark,
                 input.TFinal.Seconds(), times[0].Seconds(),
                 input.TFinal.Seconds() - times[0].Seconds(), vpTarget, vTargetXy,
-                thetaTotal, FormatKSeq(kSeq), FormatThetaSeq(thetaK), FormatDvSeq(dvMagSeq)));
+                thetaTotal, FormatKSeq(kSeq), FormatThetaSeq(thetaK), FormatDvSeq(dvMagSeq),
+                finalAdvisory ?? "-"));
 
-        return new PassPreviewResult(previews.ToArray(), Failed: false, FailureReason: null);
+        return new PassPreviewResult(previews.ToArray(), Failed: false,
+            FailureReason: null, Advisory: finalAdvisory);
     }
 
     /// <summary>Largest N that fits the SOI envelope and time budget for
@@ -464,8 +474,16 @@ internal static class HohmannMultiPassPlanner
 
     /// <summary>Outcome of <see cref="PrepareShiftedInput"/>:
     /// (possibly-shifted) <see cref="HohmannPlanInput"/> plus the integer
-    /// number of parking periods T_final was pushed by.</summary>
-    internal readonly record struct ShiftResult(HohmannPlanInput Input, int KShift);
+    /// number of parking periods T_final was pushed by.
+    ///
+    /// <see cref="ScanAdvisory"/> is non-null when the shifted-Lambert mini-
+    /// scan found no candidate that passes stock's Impacts / BadEncounter
+    /// filter; we then fall back to the cheapest dirty candidate so the
+    /// preview is still drawn, and the advisory surfaces what the dirty
+    /// trajectory does. Null when (a) no shift was needed, or (b) the best
+    /// candidate is clean.</summary>
+    internal readonly record struct ShiftResult(
+        HohmannPlanInput Input, int KShift, string? ScanAdvisory = null);
 
     /// <summary>
     /// Same-parent moon transfers (LEO -> Luna, low-Mars -> Phobos, ...) have
@@ -529,7 +547,7 @@ internal static class HohmannMultiPassPlanner
             ParkingPeriodBucketSec: (long)Math.Round(parkingPeriodSec),
             KShift: kShift);
         if (_hasShiftCache && key == _shiftCacheKey)
-            return new ShiftResult(_shiftCacheInput, kShift);
+            return new ShiftResult(_shiftCacheInput, kShift, _shiftCacheAdvisory);
 
         SimTime shiftedStart = new SimTime(rawTFinalSec + kShift * parkingPeriodSec);
 
@@ -541,9 +559,17 @@ internal static class HohmannMultiPassPlanner
         double maxTransitSec = Math.Max(
             minTransitSec + 1.0, info.MaxTransferTimeOfFlight.Seconds());
 
+        // Scan candidates and apply stock's filter (Impacts / BadEncounter).
+        // We track two bests: the cheapest CLEAN candidate (preferred) and
+        // the cheapest dirty fallback. Pruning skips the expensive
+        // BuildFlightPlan classification when the Lambert dV alone can't
+        // improve either best.
         const int TransitScanSteps = 64;
-        double bestDvLen = double.MaxValue;
-        OrbitalTransfers.TransferData? bestTd = null;
+        double bestCleanDv = double.MaxValue;
+        double bestDirtyDv = double.MaxValue;
+        OrbitalTransfers.TransferData? bestCleanTd = null;
+        OrbitalTransfers.TransferData? bestDirtyTd = null;
+        string? bestDirtyAdvisory = null;
 
         for (int i = 0; i < TransitScanSteps; i++)
         {
@@ -559,14 +585,59 @@ internal static class HohmannMultiPassPlanner
 
             double dvLen = candidate.TransferDvVlf.Length();
             if (!double.IsFinite(dvLen) || dvLen <= 0.0) continue;
-            if (dvLen >= bestDvLen) continue;
+            // Lambert dV can't improve either best: skip BuildFlightPlan.
+            if (dvLen >= bestCleanDv && dvLen >= bestDirtyDv) continue;
 
-            bestDvLen = dvLen;
-            bestTd = candidate;
+            var probeFp = FlightPlan.CreateUninitialized(source.Hash);
+            if (!OrbitalTransfers.BuildFlightPlan(
+                    ref probeFp, info, candidate.Start, candidate.TransferDvVlf,
+                    out _, out _))
+                continue;
+
+            // Replicates stock TransferTask.WorkerTask.CalculateAutomaticTransfer:
+            // patches that end in Impact on a body other than the target before
+            // the planned arrival mark the candidate as impacting; patches with
+            // a PrimaryBody outside the {Source, Source.Parent, Target} tuple
+            // mark a bad encounter.
+            SimTime arrival = candidate.Start + candidate.Transit;
+            string? dirtyReason = ClassifyScanCandidate(probeFp, info, arrival);
+            bool clean = dirtyReason == null;
+
+            if (clean)
+            {
+                if (dvLen < bestCleanDv)
+                {
+                    bestCleanDv = dvLen;
+                    bestCleanTd = candidate;
+                }
+            }
+            else if (dvLen < bestDirtyDv)
+            {
+                bestDirtyDv = dvLen;
+                bestDirtyTd = candidate;
+                bestDirtyAdvisory = dirtyReason;
+            }
         }
 
-        if (bestTd == null)
+        OrbitalTransfers.TransferData bestTd;
+        double bestDvLen;
+        string? scanAdvisory;
+        if (bestCleanTd != null)
+        {
+            bestTd = bestCleanTd;
+            bestDvLen = bestCleanDv;
+            scanAdvisory = null;
+        }
+        else if (bestDirtyTd != null)
+        {
+            bestTd = bestDirtyTd;
+            bestDvLen = bestDirtyDv;
+            scanAdvisory = bestDirtyAdvisory;
+        }
+        else
+        {
             return new ShiftResult(raw, 0);
+        }
 
         // Cross-parent FinalizeLambert nudges Start by sub-parking-period
         // amounts to align the hyperbolic burn TA. The 0.5s threshold is
@@ -613,17 +684,18 @@ internal static class HohmannMultiPassPlanner
                 "target='{1}' passCount={2} K_total={3} K_shift={4} " +
                 "rawTFinal={5:F0}s shiftedTFinal={6:F0}s rawDv={7:F1}m/s " +
                 "shiftedDv={8:F1}m/s shiftedTransit={9:F0}s apoTarget={10:F0}m " +
-                "vInf={11:F1}m/s isCrossParent={12}",
+                "vInf={11:F1}m/s isCrossParent={12} scanAdvisory='{13}'",
                 source.Id, key.TargetId, passCount, kTotal, kShift,
                 rawTFinalSec, bestTd.Start.Seconds(),
                 raw.DFinalVlf.Length(), bestDvLen,
                 bestTd.Transit.Seconds(), apoTargetRadiusM, vInfMs,
-                raw.IsCrossParent));
+                raw.IsCrossParent, scanAdvisory ?? "-"));
 
         _shiftCacheKey = key;
         _shiftCacheInput = shifted;
+        _shiftCacheAdvisory = scanAdvisory;
         _hasShiftCache = true;
-        return new ShiftResult(shifted, kShift);
+        return new ShiftResult(shifted, kShift, scanAdvisory);
     }
 
     /// <summary>Drops the shift-input cache. Call from the UI's Reset and
@@ -634,8 +706,13 @@ internal static class HohmannMultiPassPlanner
         _hasShiftCache = false;
         _shiftCacheInput = default;
         _shiftCacheKey = default;
+        _shiftCacheAdvisory = null;
     }
 
+    // SplitMode is not a field on the key on purpose: it affects K_total
+    // (via EstimateRequiredKTotal), and K_total feeds K_shift directly.
+    // Same K_shift across two modes => same shifted geometry => same
+    // scan result and advisory. So mode is captured transitively.
     private readonly record struct ShiftCacheKey(
         string VehicleId,
         string TargetId,
@@ -646,6 +723,7 @@ internal static class HohmannMultiPassPlanner
 
     private static ShiftCacheKey _shiftCacheKey;
     private static HohmannPlanInput _shiftCacheInput;
+    private static string? _shiftCacheAdvisory;
     private static bool _hasShiftCache;
 
     #region Internal helpers
@@ -954,6 +1032,81 @@ internal static class HohmannMultiPassPlanner
         return null;
     }
 
+    /// <summary>Stock's per-candidate filter from
+    /// <c>TransferTask.WorkerTask.CalculateAutomaticTransfer</c>. Returns
+    /// a human-readable advisory string when the flight plan would have
+    /// been rejected by stock's Impacts / BadEncounter filter, null when
+    /// it's clean. Used by <see cref="PrepareShiftedInput"/> to prefer
+    /// clean candidates over impacting ones.
+    ///
+    /// <paramref name="arrival"/> is the candidate's Lambert arrival time
+    /// (Start + Transit); stock only treats Impact as disqualifying when
+    /// the impact happens BEFORE arrival, so a "captured by Luna at the end"
+    /// patch labelled Impact (because we don't model atmospheric capture)
+    /// doesn't trip the filter.</summary>
+    private static string? ClassifyScanCandidate(
+        FlightPlan fp, OrbitalTransfers.TransferInfo info, SimTime arrival)
+    {
+        string targetId = info.Target?.Id ?? string.Empty;
+        string targetParentId = info.Target?.Parent?.Id ?? string.Empty;
+        string sourceId = info.Source?.Id ?? string.Empty;
+        string sourceParentId = info.Source?.Parent?.Id ?? string.Empty;
+
+        foreach (PatchedConic patch in fp.Patches)
+        {
+            if (patch.EndTransition == PatchTransition.Impact
+                && patch.Orbit.Parent?.Id != targetId
+                && patch.EndTime < arrival)
+            {
+                string body = patch.Orbit.Parent?.Id ?? "parent body";
+                return $"Departure trajectory impacts {body} before arrival";
+            }
+            string pbId = patch.PrimaryBody?.Id ?? string.Empty;
+            if (pbId == targetParentId) continue;
+            if (pbId != sourceId && pbId != sourceParentId && pbId != targetId)
+                return $"Departure trajectory crosses unintended SOI of '{pbId}'";
+        }
+        return null;
+    }
+
+    /// <summary>Post-plan advisory: walks the FINAL pass's flight plan for
+    /// the same Impact / unintended-SOI conditions stock's porkchop filter
+    /// uses. Unlike <see cref="CheckInterPass"/> (which hard-fails the plan
+    /// for problems BETWEEN priors), this runs on the final-burn FP and
+    /// only generates an advisory string; the caller flags it on
+    /// <see cref="PassPreviewResult.Advisory"/> without setting Failed.
+    /// Returns null when the final pass is clean.
+    ///
+    /// Accepts the parking parent, the target, and the target's parent as
+    /// legitimate PrimaryBody values. For same-parent transfers
+    /// (target.Parent == parking parent) the target-parent entry is
+    /// redundant with the parking-parent entry but harmless; for cross-
+    /// parent (e.g. Earth -> Mars via Sun) the target-parent entry is what
+    /// admits the cruise patch.</summary>
+    private static string? CheckFinalPassAdvisory(
+        FlightPlan finalFp, Vehicle source, IOrbiter target)
+    {
+        string parkingParentId = source.Orbit.Parent.Id;
+        string targetId = target?.Id ?? string.Empty;
+        string targetParentId = target?.Parent?.Id ?? string.Empty;
+
+        foreach (PatchedConic patch in finalFp.Patches)
+        {
+            if (patch.EndTransition == PatchTransition.Impact
+                && patch.Orbit.Parent?.Id != targetId)
+            {
+                string body = patch.Orbit.Parent?.Id ?? "parent body";
+                return $"Final-pass trajectory impacts {body}";
+            }
+            string pbId = patch.PrimaryBody?.Id ?? string.Empty;
+            if (pbId == parkingParentId) continue;
+            if (pbId == targetId) continue;
+            if (pbId == targetParentId) continue;
+            return $"Final-pass trajectory crosses unintended SOI of '{pbId}'";
+        }
+        return null;
+    }
+
     /// <summary>Per-pass burn time via multi-stage Tsiolkovsky drain.
     /// Walks the dV sequence in firing order; later passes see the
     /// vehicle drained by earlier passes. Returns 0s entries when the
@@ -1069,7 +1222,9 @@ internal static class HohmannMultiPassPlanner
             DvVlf: dvVlf,
             EstimatedBurnTimeSec: 0.0,
             FlightPlan: fp);
-        return new PassPreviewResult(new[] { single }, Failed: false, FailureReason: null);
+        string? finalAdvisory = CheckFinalPassAdvisory(fp, source, input.Target);
+        return new PassPreviewResult(new[] { single }, Failed: false,
+            FailureReason: null, Advisory: finalAdvisory);
     }
 
     private static PassPreviewResult Fail(string reason, PassPlanFailure kind) =>

@@ -343,6 +343,7 @@ internal static class HohmannMultiPassUI
             UpdatePreviewIfStale(source, entry, info);
             DrawSpanInfo(source);
             DrawPreviewFailureIfApplicable();
+            DrawAdvisoryIfApplicable();
             DrawPassList();
         }
 
@@ -471,6 +472,7 @@ internal static class HohmannMultiPassUI
         // v_p_target unreachable) so the user understands why the orbit
         // overlay disappeared instead of seeing it silently vanish.
         DrawPreviewFailureIfApplicable();
+        DrawAdvisoryIfApplicable();
 
         ImGui.Spacing();
         if (ImGuiHelper.DrawButton("Cancel remaining passes"u8,
@@ -509,6 +511,10 @@ internal static class HohmannMultiPassUI
 
         SimTime now = Universe.GetElapsedSimTime();
         SequenceBurnState state = SequenceBurnState.Analyze(source);
+        // No PrepareShiftedInput / ScanAdvisory merge here: the shift was
+        // applied at intent creation and the input's TFinal is locked.
+        // Plan's own CheckFinalPassAdvisory still surfaces a live final-pass
+        // impact on _cachedPreview.Advisory.
         _cachedPreview = HohmannMultiPassPlanner.Plan(
             source, input, exec.PassCountTotal, exec.PassIndex,
             intent.ParkingPeriodSec, state, now, exec.Mode);
@@ -518,9 +524,10 @@ internal static class HohmannMultiPassUI
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannMultiPassUI.UpdatePreviewForActiveExec: vehicle='{0}' " +
-                "passIndex={1}/{2} -> failed={3} reason='{4}' previewPasses={5}",
+                "passIndex={1}/{2} -> failed={3} reason='{4}' advisory='{5}' previewPasses={6}",
                 source.Id, exec.PassIndex, exec.PassCountTotal,
                 _cachedPreview.Failed, _cachedPreview.FailureReason ?? "-",
+                _cachedPreview.Advisory ?? "-",
                 _cachedPreview.Passes.Length));
     }
 
@@ -712,14 +719,23 @@ internal static class HohmannMultiPassUI
         _cachedPreview = HohmannMultiPassPlanner.Plan(
             source, planInput, _passCount, startPassIndex: 0,
             parkingPeriodSec, state, now, _splitMode);
+        // Merge the shifted-Lambert scan's advisory into the Plan result.
+        // Plan's own advisory (chained final-pass FP) is more accurate than
+        // the scan signal (single-burn FP at shifted geometry), so prefer it
+        // when both fire; only surface the scan-only signal when Plan came
+        // back clean.
+        if (shift.ScanAdvisory != null && _cachedPreview.Advisory == null)
+            _cachedPreview = _cachedPreview with { Advisory = shift.ScanAdvisory };
         _cachedKey = key;
         _hasCachedPreview = true;
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: Plan -> failed={0} " +
-                "reason='{1}' previewPasses={2} _passCount(final)={3} K_shift(final)={4}",
+                "reason='{1}' advisory='{2}' previewPasses={3} _passCount(final)={4} " +
+                "K_shift(final)={5}",
                 _cachedPreview.Failed, _cachedPreview.FailureReason ?? "-",
+                _cachedPreview.Advisory ?? "-",
                 _cachedPreview.Passes.Length, _passCount, _lastShiftKShift));
     }
 
@@ -731,6 +747,23 @@ internal static class HohmannMultiPassUI
         ImGui.TextWrapped(string.Format(Inv,
             "[!] Multi-pass preview incomplete: {0}.",
             _cachedPreview.FailureReason ?? "unknown reason"));
+        ImGui.PopStyleColor();
+    }
+
+    /// <summary>Soft warning when the final-pass FP (or the shifted-Lambert
+    /// scan it was built from) intersects the parent body or crosses an
+    /// unintended SOI. Stock's porkchop reject filter would have hidden
+    /// this entry; we surface it instead of refusing to plan, so the user
+    /// can inspect the previewed trajectory and decide whether to commit.
+    /// Amber, less severe than the orange failure banner.</summary>
+    private static void DrawAdvisoryIfApplicable()
+    {
+        if (!_hasCachedPreview || _cachedPreview.Failed) return;
+        if (_cachedPreview.Advisory == null) return;
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
+        ImGui.TextWrapped(string.Format(Inv,
+            "[!] {0}", _cachedPreview.Advisory));
         ImGui.PopStyleColor();
     }
 
