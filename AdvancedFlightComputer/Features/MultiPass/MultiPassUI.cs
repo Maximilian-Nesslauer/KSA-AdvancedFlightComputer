@@ -24,8 +24,8 @@ internal static class MultiPassUI
     // Burn-time / period above which we advise splitting.
     private const double SuggestThreshold = 0.15;
 
-    // Per-pass arc-fraction cap. Suggested N = ceil(burnRatio / cap).
-    private const double SuggestPerPassCap = 0.10;
+    private const double SuggestPerPassLossCeiling = 0.005;   // 0.5% per-pass fractional finite-burn loss
+    private const double SuggestMarginalSavingCeiling = 0.001; // 0.1% of total dV gained per added pass
 
     private const int SuggestMinN = 2;
     private const int SuggestMaxN = 8;
@@ -316,16 +316,10 @@ internal static class MultiPassUI
         double burnRatio = totalBurnTime / period;
         if (burnRatio <= SuggestThreshold) return;
 
-        int suggestedN = Math.Clamp(
-            (int)Math.Ceiling(burnRatio / SuggestPerPassCap),
-            SuggestMinN, SuggestMaxN);
-
-        // Closed-form finite-burn loss (Robbins / sinc approximation):
-        //   dV_loss / D ~= (pi * burnRatio)^2 / 6
-        // Splitting into N reduces the loss by a factor of 1/N^2.
-        double singlePassLoss = totalDv * Math.Pow(Math.PI * burnRatio, 2.0) / 6.0;
-        double splitLoss = singlePassLoss / (suggestedN * suggestedN);
-        double estimatedSavings = Math.Max(0.0, singlePassLoss - splitLoss);
+        int suggestedN = ComputeSuggestedPassCount(burnRatio);
+        double singlePassLoss = totalDv * FiniteBurnLossFraction(burnRatio);
+        double splitLoss = totalDv * FiniteBurnLossFraction(burnRatio / suggestedN);
+        double estimatedSavings = singlePassLoss - splitLoss;
 
         ImGui.Spacing();
         ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
@@ -334,6 +328,40 @@ internal static class MultiPassUI
             "Splitting across {2} passes saves ~{3:F0} m/s.",
             totalBurnTime, burnRatio * 100.0, suggestedN, estimatedSavings));
         ImGui.PopStyleColor();
+    }
+
+    // Smallest N where per-pass loss is below the ceiling AND one more
+    // split would save under 0.1% of total dV. Hard-capped at
+    // SuggestMaxN to bound real-time wait; for very long burns this
+    // may return SuggestMaxN with per-pass loss still above the
+    // ceiling.
+    private static int ComputeSuggestedPassCount(double burnRatio)
+    {
+        double lossN = FiniteBurnLossFraction(burnRatio / SuggestMinN);
+        for (int n = SuggestMinN; n < SuggestMaxN; n++)
+        {
+            double lossNext = FiniteBurnLossFraction(burnRatio / (n + 1));
+            if (lossN <= SuggestPerPassLossCeiling
+                && lossN - lossNext <= SuggestMarginalSavingCeiling)
+                return n;
+            lossN = lossNext;
+        }
+        return SuggestMaxN;
+    }
+
+    // Constant-inertial-attitude steering loss as a fraction of command
+    // dV: loss = 1 - sin(phi)/phi where phi = pi * burnRatio is half the
+    // orbital angle swept during the burn (radians). Saturates at 1.0
+    // when burnRatio -> 1 (the burn covers a full orbit and constant-
+    // inertial thrust averages to zero); clamped past that point where
+    // the sinc approximation starts to oscillate. Reduces to phi^2/6
+    // for small phi.
+    private static double FiniteBurnLossFraction(double burnRatio)
+    {
+        if (burnRatio <= 0.0) return 0.0;
+        if (burnRatio >= 1.0) return 1.0;
+        double phi = Math.PI * burnRatio;
+        return 1.0 - Math.Sin(phi) / phi;
     }
 
     #endregion
