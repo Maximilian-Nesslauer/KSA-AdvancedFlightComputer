@@ -345,6 +345,10 @@ internal static class HohmannMultiPassUI
             DrawPreviewFailureIfApplicable();
             DrawAdvisoryIfApplicable();
             DrawPassList();
+            if (_hasCachedPreview && !_cachedPreview.Failed)
+                DrawTotalsAndSavings(source, _cachedPreview.Passes,
+                    entry.TransferData.TransferDvVlf.Length(),
+                    source.Orbit?.Period ?? 0.0);
         }
 
         // Auto-clamp banner stays visible AFTER the clamp drops _passCount
@@ -834,6 +838,91 @@ internal static class HohmannMultiPassUI
             ImGui.Text(line);
         }
         ImGui.PopStyleColor();
+    }
+
+    /// <summary>One line under the per-pass list - "Total: X m/s |
+    /// Lambert: Y m/s" - plus an optional Robbins savings estimate
+    /// when the comparison is meaningful. The total can exceed Lambert
+    /// when the planner caps priors at the SOI envelope: extra dV gets
+    /// dumped into a "fast escape but capped" intermediate orbit, the
+    /// final pass adds the hyperbolic excess on top, and the trade is
+    /// smaller finite-burn loss at the final pass. We surface that as
+    /// a neutral comparison instead of framing it as "savings". The
+    /// savings line itself goes via <see cref="TryFormatRobbinsSavings"/>,
+    /// which gates on shift-state and fuel-state to avoid printing a
+    /// misleading number.</summary>
+    private static void DrawTotalsAndSavings(
+        Vehicle source, PassPreview[] passes, double lambertDv, double tPark)
+    {
+        if (passes.Length == 0 || !(lambertDv > 0.0)) return;
+
+        double sumDv = 0.0;
+        for (int i = 0; i < passes.Length; i++)
+            sumDv += passes[i].DvVlf.Length();
+
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
+        ImGui.Text(string.Format(Inv,
+            "Total: {0:F0} m/s | Lambert: {1:F0} m/s", sumDv, lambertDv));
+        string? savingsLine = TryFormatRobbinsSavings(source, passes, lambertDv, tPark);
+        if (savingsLine != null) ImGui.Text(savingsLine);
+        ImGui.PopStyleColor();
+    }
+
+    /// <summary>Returns the formatted savings line, or null when the
+    /// comparison is not meaningful for the current state.
+    ///
+    /// Skipped when <c>_lastShiftKShift &gt; 0</c>: PrepareShiftedInput
+    /// re-solved Lambert at shifted geometry for same-parent moon
+    /// transfers, so the multi-pass total is against a different transit
+    /// than the user would have flown with stock's N=1 click. The
+    /// outer "Total | Lambert" line is still meaningful as "what stock
+    /// would burn vs what multi-pass burns" but the per-pass loss diff
+    /// then conflates Oberth savings with geometry-change costs and
+    /// stops being a clean savings claim.
+    ///
+    /// Approximation note: <paramref name="tPark"/> is used as the
+    /// equivalent period for every pass. Chained orbits for pass k &gt; 0
+    /// have larger SMA but the same periapsis, so omega_periapsis_k
+    /// &gt; omega_park and the true equivalent period is shorter than
+    /// tPark. Using tPark uniformly slightly over-reports savings for
+    /// chained passes; the "~" prefix is the user-facing acknowledgment.
+    /// Exposing v_peri_k per pass for an accurate fix is overkill for
+    /// a UI helper.</summary>
+    private static string? TryFormatRobbinsSavings(
+        Vehicle source, PassPreview[] passes, double lambertDv, double tPark)
+    {
+        if (_lastShiftKShift > 0) return null;
+        if (!(tPark > 0.0)) return null;
+
+        SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
+        if (!state.HasUsableEngines) return null;
+
+        // SplitMode irrelevant at passCount = 1 (Splitter collapses to a
+        // single fuel-drain walk). EqualDv is the codebase convention for
+        // "doesn't care" - matches MultiPassUI.EstimateBurnTime.
+        PassAllocation[] singleAlloc = Splitter.Allocate(
+            lambertDv, 1, SplitMode.EqualDv, state);
+        double singleBurnTime = singleAlloc.Length > 0
+            ? singleAlloc[0].EstimatedBurnTimeSec : 0.0;
+        if (!(singleBurnTime > 0.0)) return null;
+
+        double singleLoss = lambertDv
+            * MultiPassLoss.FiniteBurnLossFraction(singleBurnTime / tPark);
+        double splitLoss = 0.0;
+        for (int i = 0; i < passes.Length; i++)
+        {
+            double dv = passes[i].DvVlf.Length();
+            double bt = passes[i].EstimatedBurnTimeSec;
+            if (bt > 0.0)
+                splitLoss += dv
+                    * MultiPassLoss.FiniteBurnLossFraction(bt / tPark);
+        }
+        double savings = singleLoss - splitLoss;
+        if (savings < 1.0) return null;
+
+        return string.Format(Inv,
+            "Robbins savings estimate vs single burn: ~{0:F0} m/s", savings);
     }
 
     #endregion

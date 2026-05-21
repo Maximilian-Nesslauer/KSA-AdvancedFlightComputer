@@ -116,6 +116,8 @@ internal static class MultiPassUI
             DrawPreviewFailureIfApplicable();
             DrawInsufficientFuelIfApplicable(totalDv, state);
             DrawPassList(firstPassDisplayNumber: 1);
+            DrawSavingsLine(totalDv, totalBurnTime, source.Orbit?.Period ?? 0.0,
+                MultiPassPreviewCache.PreviewPasses);
         }
         else
             MultiPassPreviewCache.ClearPreview();
@@ -140,6 +142,8 @@ internal static class MultiPassUI
         DrawPreviewFailureIfApplicable();
         DrawInsufficientFuelIfApplicable(totalDv, state);
         DrawPassList(firstPassDisplayNumber: exec.PassIndex + 1);
+        DrawSavingsLine(totalDv, EstimateBurnTime(totalDv, state),
+            source.Orbit?.Period ?? 0.0, MultiPassPreviewCache.PreviewPasses);
     }
 
     public static void Render(Viewport viewport, Vehicle source)
@@ -317,8 +321,8 @@ internal static class MultiPassUI
         if (burnRatio <= SuggestThreshold) return;
 
         int suggestedN = ComputeSuggestedPassCount(burnRatio);
-        double singlePassLoss = totalDv * FiniteBurnLossFraction(burnRatio);
-        double splitLoss = totalDv * FiniteBurnLossFraction(burnRatio / suggestedN);
+        double singlePassLoss = totalDv * MultiPassLoss.FiniteBurnLossFraction(burnRatio);
+        double splitLoss = totalDv * MultiPassLoss.FiniteBurnLossFraction(burnRatio / suggestedN);
         double estimatedSavings = singlePassLoss - splitLoss;
 
         ImGui.Spacing();
@@ -337,10 +341,10 @@ internal static class MultiPassUI
     // ceiling.
     private static int ComputeSuggestedPassCount(double burnRatio)
     {
-        double lossN = FiniteBurnLossFraction(burnRatio / SuggestMinN);
+        double lossN = MultiPassLoss.FiniteBurnLossFraction(burnRatio / SuggestMinN);
         for (int n = SuggestMinN; n < SuggestMaxN; n++)
         {
-            double lossNext = FiniteBurnLossFraction(burnRatio / (n + 1));
+            double lossNext = MultiPassLoss.FiniteBurnLossFraction(burnRatio / (n + 1));
             if (lossN <= SuggestPerPassLossCeiling
                 && lossN - lossNext <= SuggestMarginalSavingCeiling)
                 return n;
@@ -349,19 +353,34 @@ internal static class MultiPassUI
         return SuggestMaxN;
     }
 
-    // Constant-inertial-attitude steering loss as a fraction of command
-    // dV: loss = 1 - sin(phi)/phi where phi = pi * burnRatio is half the
-    // orbital angle swept during the burn (radians). Saturates at 1.0
-    // when burnRatio -> 1 (the burn covers a full orbit and constant-
-    // inertial thrust averages to zero); clamped past that point where
-    // the sinc approximation starts to oscillate. Reduces to phi^2/6
-    // for small phi.
-    private static double FiniteBurnLossFraction(double burnRatio)
+    // Loss-frame cumulative savings: sums per-pass dv * FBL(burnTime/period)
+    // against the equivalent single-burn loss. Per-pass burn time and dV
+    // come from the cached preview so EqualDv vs EqualBurnTime splits both
+    // get accurate per-pass loss (not just the EqualBurnTime simplification).
+    // Hidden when savings < 1 m/s: signals to the user that the chosen N
+    // does not buy meaningful Oberth improvement (e.g. overkill N).
+    private static void DrawSavingsLine(
+        double totalDv, double singleBurnTime, double period, PassPreview[] passes)
     {
-        if (burnRatio <= 0.0) return 0.0;
-        if (burnRatio >= 1.0) return 1.0;
-        double phi = Math.PI * burnRatio;
-        return 1.0 - Math.Sin(phi) / phi;
+        if (passes.Length == 0) return;
+        if (!(period > 0.0) || !(singleBurnTime > 0.0) || !(totalDv > 0.0)) return;
+
+        double singleLoss = totalDv * MultiPassLoss.FiniteBurnLossFraction(singleBurnTime / period);
+        double splitLoss = 0.0;
+        for (int i = 0; i < passes.Length; i++)
+        {
+            double dv = passes[i].DvVlf.Length();
+            double bt = passes[i].EstimatedBurnTimeSec;
+            if (bt > 0.0)
+                splitLoss += dv * MultiPassLoss.FiniteBurnLossFraction(bt / period);
+        }
+        double savings = singleLoss - splitLoss;
+        if (savings < 1.0) return;
+
+        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
+        ImGui.Text(string.Format(Inv,
+            "Total savings vs single burn: ~{0:F0} m/s", savings));
+        ImGui.PopStyleColor();
     }
 
     #endregion
