@@ -33,6 +33,10 @@
       <HintPath>..\..\..\refs\game\Brutal.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="BepuUtilities">
+      <HintPath>..\..\..\refs\game\BepuUtilities.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>
