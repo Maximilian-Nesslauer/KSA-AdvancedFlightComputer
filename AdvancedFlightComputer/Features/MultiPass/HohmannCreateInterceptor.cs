@@ -15,9 +15,53 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// Lets users click ONE Create button - stock's "Create" - and get
 /// either single-burn or multi-pass based on the pass count selector.
 /// No separate "Create Multi-Pass" button needed.
+///
+/// Also exposes <see cref="ShouldAllowCreateClick"/>, a click-time gate
+/// injected one IL slot after the stock "Create" <c>DrawButton</c> call.
+/// It absorbs the click while a multi-pass exec is already running for
+/// the source vehicle, closing the post-load sync gap (stock's
+/// <c>_transferBurn == null</c> guard would otherwise enter the
+/// Burn.Create branch and queue a duplicate burn alongside the
+/// reattached active-pass burn).
 /// </summary>
 internal static class HohmannCreateInterceptor
 {
+    private const string ActiveExecAlert =
+        "Multi-pass already running for this vehicle. " +
+        "Cancel it from the inline section before starting a new one.";
+
+    /// <summary>
+    /// Click gate for the stock "Create" button. See the file-level
+    /// summary for the sync-gap rationale and the injection site.
+    /// </summary>
+    public static bool ShouldAllowCreateClick(bool wasClicked)
+    {
+        // Fast-path: ImGui's DrawButton returns true only on the frame
+        // of an actual click, so 99.9% of frames bail here without
+        // paying the reflection or registry lookup.
+        if (!wasClicked) return false;
+        try
+        {
+            if (GameReflection.TransferPlanner_Source == null) return true; // gate unwired; let stock proceed
+            if (GameReflection.TransferPlanner_Source.Invoke(null, null) is not Vehicle source) return true;
+            if (!MultiPassRegistry.Has(source.Id)) return true;
+
+            TimedAlert.Create(ActiveExecAlert, Color.Yellow, 5.0);
+            DefaultCategory.Log.Warning(
+                $"[AFC] HohmannCreateInterceptor: Create click absorbed for " +
+                $"vehicle={source.Id} (active multi-pass exec running; cancel it first).");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Fail-open: never break stock's UI on our reflection or
+            // registry error. Worst case is the pre-gate behavior.
+            DefaultCategory.Log.Warning(
+                $"[AFC] HohmannCreateInterceptor.ShouldAllowCreateClick: {ex}; allowing click.");
+            return true;
+        }
+    }
+
     /// <summary>
     /// Drop-in replacement for <see cref="Burn.Create(OrbitPointCce, double, double3, PatchedConic, Vehicle)"/>.
     /// Same signature so the transpiler can swap the call instruction
@@ -29,24 +73,30 @@ internal static class HohmannCreateInterceptor
     {
         try
         {
-            // Active execution already exists for this vehicle. Stock's
-            // Create-button guard `if (_transferBurn == null)` normally
-            // blocks re-clicks - PassCompletionPatch keeps _transferBurn
-            // pointing to the current pass burn for exactly this reason -
-            // so this branch is a safety net for the narrow window after
-            // a save load (before ReconcileAfterLoad runs) or any other
-            // case where the sync slipped. Surface an alert and don't
-            // start a new exec; the existing one continues.
+            // Defense-in-depth fallback. The primary protection is the
+            // click-time gate ShouldAllowCreateClick injected at the
+            // "Create" DrawButton site, which absorbs the click before
+            // it ever reaches Burn.Create. Reaching this branch means
+            // the gate let the click through; that happens in three
+            // cases:
+            //   1. The transpiler couldn't find the DrawButton anchor
+            //      (warned at patch time).
+            //   2. GameReflection.TransferPlanner_Source resolved null
+            //      (warned by ValidateMultiPass at load).
+            //   3. The gate's Invoke threw and it failed open.
+            // In all three the click is unguarded by us, so stock
+            // queues a fresh Burn from Burn.Create. This is the pre-
+            // gate regression (mod-only - duplicate burn alongside the
+            // reattached pass burn, no use-after-Dispose since the two
+            // are distinct Burn references). We surface the alert plus
+            // a warning so the broken-gate condition is visible.
             if (MultiPassRegistry.Has(vehicle.Id))
             {
-                TimedAlert.Create(
-                    "Multi-pass already running for this vehicle. " +
-                    "Cancel it from the inline section before starting a new one.",
-                    Color.Yellow, 5.0);
+                TimedAlert.Create(ActiveExecAlert, Color.Yellow, 5.0);
                 DefaultCategory.Log.Warning(
                     $"[AFC] HohmannCreateInterceptor: re-click for vehicle={vehicle.Id} " +
-                    "with active exec (sync gap?); falling back to stock single burn. " +
-                    "User should cancel the active multi-pass first.");
+                    "with active exec reached Burn.Create swap (click gate not active); " +
+                    "falling back to stock single burn. Duplicate burn may queue.");
                 return Burn.Create(point, time, deltaVVlf, patch, vehicle);
             }
 
