@@ -520,6 +520,21 @@ internal static class HohmannMultiPassPlanner
         if (passCount <= 1 || !(parkingPeriodSec > 0.0))
             return new ShiftResult(raw, 0);
 
+        // Cross-parent FinalizeLambert (hyperbolic-escape branch, taken
+        // when transferInfo.Source != Vehicle) nudges Start by
+        // timeFromPeTo2 - timeFromPeTo to align the optimized burn TA with
+        // vehicle position. Both are in [0, tPark), so the nudge magnitude
+        // is bounded by tPark and breaks the K-integer invariant the shift
+        // trick relies on. Same-parent (LEO -> Luna) is unaffected because
+        // stock's TransferTask.Run sets Source = Vehicle for SameSoi
+        // transfers before workers run, taking FinalizeLambert's no-nudge
+        // branch. The porkchop's T_final is far enough out that kShift
+        // would be 0 in normal cross-parent flows anyway; this gate makes
+        // that explicit so a future shorter-T_final pick doesn't silently
+        // fall through the Lambert scan with no valid candidate.
+        if (raw.IsCrossParent)
+            return new ShiftResult(raw, 0);
+
         int kTotal = EstimateRequiredKTotal(
             raw, source, passCount, mode, state, parkingPeriodSec);
         if (kTotal <= 0)
@@ -638,16 +653,6 @@ internal static class HohmannMultiPassPlanner
         {
             return new ShiftResult(raw, 0);
         }
-
-        // Cross-parent FinalizeLambert nudges Start by sub-parking-period
-        // amounts to align the hyperbolic burn TA. The 0.5s threshold is
-        // floating-point noise tolerance, NOT a fraction of tPark; if the
-        // post-Lambert Start is more than ~noise below the requirement we
-        // abandon the shift and let the planner's standard "needs K_total
-        // parking periods" failure surface.
-        const double LambertStartDriftToleranceSec = 0.5;
-        if (bestTd.Start.Seconds() + LambertStartDriftToleranceSec < earliestAllowedSec)
-            return new ShiftResult(raw, 0);
 
         // Same-parent: stock's entry.FlightPlan.Patches[0].Orbit.Apoapsis is
         // the un-shifted target. BuildFlightPlan at the shifted Start + new
