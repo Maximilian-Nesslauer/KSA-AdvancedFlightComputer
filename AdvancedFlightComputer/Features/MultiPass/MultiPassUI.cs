@@ -76,6 +76,29 @@ internal static class MultiPassUI
         if (!Enabled || source == null || !IsMultiPassSupportedType(typeKey))
             return;
 
+        MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec);
+
+        // User switched the Plan Type dropdown while a multi-pass is
+        // still running on this vehicle, to a different handled type
+        // than the running exec. Refuse to render: without this gate,
+        // DrawActive would feed the exec's locked dV magnitude into the
+        // new typeKey's planner (e.g. apse dV redistributed across
+        // plane-change nodes) and show a misleading pass list.
+        // DrawCreateButton already blocks the actual Start in this
+        // state, so this is purely a UI-correctness gate.
+        //
+        // Placed before the cache-reset block on purpose: the reset
+        // sets _passCount=1 and ClearPreview, but HasMultiPassPreview
+        // gates the 3D overlay and flight-plan preview on _passCount>1.
+        // Gating first keeps both alive across the blocked frame so the
+        // user sees the running exec's actual markers instead of a one-
+        // frame blink to the new-typeKey's single-burn preview.
+        if (exec != null && exec.Intent.TypeKey != typeKey)
+        {
+            DrawBlockedByOtherExecution(exec);
+            return;
+        }
+
         // Reset on plan-type / source change so the cache does not
         // briefly render against the wrong vehicle.
         if (_lastTypeKey != typeKey || _lastSourceId != source.Id)
@@ -92,7 +115,7 @@ internal static class MultiPassUI
         // Active execution: pass count and split mode are locked at Start
         // time, and only the still-pending passes are meaningful to split
         // the remaining dV across.
-        if (MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
+        if (exec != null)
         {
             DrawActive(source, typeKey, state, exec);
             return;
@@ -144,6 +167,35 @@ internal static class MultiPassUI
         DrawPassList(firstPassDisplayNumber: exec.PassIndex + 1);
         DrawSavingsLine(totalDv, EstimateBurnTime(totalDv, state),
             source.Orbit?.Period ?? 0.0, MultiPassPreviewCache.PreviewPasses);
+    }
+
+    // Looks the display name up in TransferPlanner.TransferTypes rather
+    // than relying on the "AFC " prefix as a strip target: keeps the
+    // banner in sync with whatever the dropdown actually renders, with
+    // no implicit dependency on the AFC-side naming convention. Pass
+    // count + Cancel button are intentionally omitted - the
+    // immediately-following MultiPassController.DrawStatus call in
+    // Patch_DrawPlanWindow.DrawCreateButton renders both already.
+    private static void DrawBlockedByOtherExecution(MultiPassExecution exec)
+    {
+        string typeKey = exec.Intent.TypeKey;
+        string label = typeKey;
+        foreach (TransferType t in TransferPlanner.TransferTypes)
+        {
+            if (t.GetKey() == typeKey)
+            {
+                label = t.GetName();
+                break;
+            }
+        }
+
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
+        ImGui.TextWrapped(string.Format(Inv,
+            "Vehicle is running a \"{0}\" multi-pass. " +
+            "Switch the Plan Type back to \"{0}\" to view its passes.",
+            label));
+        ImGui.PopStyleColor();
     }
 
     public static void Render(Viewport viewport, Vehicle source)

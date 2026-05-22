@@ -18,6 +18,14 @@ internal interface IManeuverIntent
     /// Stable across versions or saved games fail to deserialize.</summary>
     string Kind { get; }
 
+    /// <summary>The TransferPlanner plan-type key this intent corresponds
+    /// to (e.g. <see cref="ManeuverTools.ManeuverTools.KeySetApoapsis"/>).
+    /// Used by MultiPassUI to detect when the user has switched the Plan
+    /// Type dropdown to a different type while another exec is still
+    /// running, so the inline UI can refuse to render the wrong
+    /// planner's preview against the exec's locked maneuver.</summary>
+    string TypeKey { get; }
+
     /// <summary>Maneuver from <paramref name="vehicle"/>'s current orbit
     /// toward this intent's locked goal. Independent of any live UI
     /// input. Null when the goal is unreachable from the current state.</summary>

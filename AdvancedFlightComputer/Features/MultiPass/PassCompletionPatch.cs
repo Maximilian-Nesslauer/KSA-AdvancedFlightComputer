@@ -430,7 +430,7 @@ internal static class PassCompletionPatch
                 return false;
             var transferType = (TransferType?)GameReflection.TransferPlanner_transferType?
                 .GetValue(null);
-            if (transferType == null || transferType.Value.GetKey() != "Hohmann")
+            if (transferType == null || transferType.Value.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann)
                 return false;
             var sourceBody = (TransferObject?)GameReflection.TransferPlanner_sourceBody?
                 .GetValue(null);

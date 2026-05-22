@@ -71,6 +71,11 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
 
     public string Kind => HohmannTransferKind;
 
+    // Shown verbatim by MultiPassUI.DrawBlockedByOtherExecution when the
+    // user opens an AFC-handled plan type while a Hohmann exec is still
+    // running on this vehicle.
+    public string TypeKey => ManeuverTools.ManeuverTools.KeyStockHohmann;
+
     public bool IsSatisfied(Vehicle vehicle)
     {
         // Live periapsis speed already meets / exceeds v_p_target: priors

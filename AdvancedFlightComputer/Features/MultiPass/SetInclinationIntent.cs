@@ -27,6 +27,8 @@ internal sealed class SetInclinationIntent : IManeuverIntent
 
     public string Kind => SetInclinationKind;
 
+    public string TypeKey => ManeuverTools.ManeuverTools.KeySetInclination;
+
     public bool IsSatisfied(Vehicle vehicle)
     {
         if (vehicle?.Orbit?.Parent == null) return false;

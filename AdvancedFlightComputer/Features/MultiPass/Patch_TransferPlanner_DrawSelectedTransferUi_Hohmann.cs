@@ -1,5 +1,6 @@
 using System;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
@@ -41,7 +42,7 @@ internal static class Patch_TransferPlanner_DrawSelectedTransferUi_Hohmann
             // against future stock types that we do not claim.
             var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
                 .GetValue(null)!;
-            if (transferType.GetKey() != "Hohmann") return;
+            if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return;
 
             var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!
                 .GetValue(null)!;

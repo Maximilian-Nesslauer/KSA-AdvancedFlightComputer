@@ -27,6 +27,8 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
 
     public string Kind => MatchInclinationKind;
 
+    public string TypeKey => ManeuverTools.ManeuverTools.KeyMatchInclination;
+
     public bool IsSatisfied(Vehicle vehicle)
     {
         if (vehicle?.Orbit?.Parent == null) return false;

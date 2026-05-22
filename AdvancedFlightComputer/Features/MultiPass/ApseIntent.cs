@@ -30,6 +30,10 @@ internal sealed class ApseIntent : IManeuverIntent
 
     public string Kind => IsSetApoapsis ? SetApoapsisKind : SetPeriapsisKind;
 
+    public string TypeKey => IsSetApoapsis
+        ? ManeuverTools.ManeuverTools.KeySetApoapsis
+        : ManeuverTools.ManeuverTools.KeySetPeriapsis;
+
     public bool IsSatisfied(Vehicle vehicle)
     {
         if (vehicle?.Orbit?.Parent == null) return false;

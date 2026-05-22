@@ -148,7 +148,7 @@ internal static class HohmannMultiPassUI
             return false;
         var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
             .GetValue(null)!;
-        if (transferType.GetKey() != "Hohmann") return false;
+        if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
 
         var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!
             .GetValue(null)!;
@@ -284,7 +284,7 @@ internal static class HohmannMultiPassUI
         {
             var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
                 .GetValue(null)!;
-            if (transferType.GetKey() != "Hohmann") return false;
+            if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
 
             if (!(bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!)
                 return false;

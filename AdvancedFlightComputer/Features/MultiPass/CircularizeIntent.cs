@@ -33,6 +33,10 @@ internal sealed class CircularizeIntent : IManeuverIntent
 
     public string Kind => IsAtApoapsis ? CircularizeApoapsisKind : CircularizePeriapsisKind;
 
+    public string TypeKey => IsAtApoapsis
+        ? ManeuverTools.ManeuverTools.KeyStockCircularizeApoapsis
+        : ManeuverTools.ManeuverTools.KeyStockCircularizePeriapsis;
+
     public bool IsSatisfied(Vehicle vehicle)
     {
         if (vehicle?.Orbit?.Parent == null) return false;

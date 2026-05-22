@@ -22,6 +22,12 @@ internal static class ManeuverTools
     internal const string KeyStockCircularizeApoapsis = "Circularize Apoapsis";
     internal const string KeyStockCircularizePeriapsis = "Circularize Periapsis";
 
+    // Stock Hohmann key. AFC does not take over its plan window; the
+    // constant exists so Hohmann-related guards (HohmannMultiPassUI,
+    // Patch_TransferPlanner_*, HohmannTransferIntent.TypeKey) share one
+    // string instead of duplicating the literal.
+    internal const string KeyStockHohmann = "Hohmann";
+
     /// <summary>
     /// Adds our plan types to the stock TransferPlanner dropdown.
     /// Called from Mod.OnFullyLoaded before patches are applied.
