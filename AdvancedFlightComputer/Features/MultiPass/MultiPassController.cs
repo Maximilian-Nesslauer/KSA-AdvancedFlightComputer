@@ -115,8 +115,8 @@ internal static class MultiPassController
                 $"[AFC] MultiPass: vehicle={source.Id} user cancelled at pass " +
                 $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
 
-        PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
         MultiPassRegistry.Remove(source.Id);
+        PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
     }
 
     private static IManeuverIntent? BuildIntent(Vehicle source, string typeKey)

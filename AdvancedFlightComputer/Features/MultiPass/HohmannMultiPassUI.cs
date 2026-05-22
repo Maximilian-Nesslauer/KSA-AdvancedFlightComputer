@@ -561,8 +561,8 @@ internal static class HohmannMultiPassUI
             DefaultCategory.Log.Debug(
                 $"[AFC] HohmannMultiPass: vehicle={source.Id} user cancelled at pass " +
                 $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
-        PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
         MultiPassRegistry.Remove(source.Id);
+        PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
         OnExecutionEnded(source.Id);
     }
 
