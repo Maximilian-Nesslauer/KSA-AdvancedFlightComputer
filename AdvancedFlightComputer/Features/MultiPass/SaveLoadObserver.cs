@@ -64,6 +64,8 @@ internal static class SaveLoadObserver
                 // vehicle / target id, would otherwise survive a save
                 // load with a same-id vehicle in a different geometry.
                 HohmannMultiPassPlanner.ResetShiftCache();
+                MultiPassUI.Reset();
+                HohmannMultiPassUI.Reset();
 
                 // Refresh registry from disk so in-memory exec state
                 // matches whatever was persisted for the just-loaded
