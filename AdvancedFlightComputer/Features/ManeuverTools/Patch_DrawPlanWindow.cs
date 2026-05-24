@@ -344,6 +344,10 @@ internal static class Patch_DrawPlanWindow
 
         FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
         var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false);
+        // BuildFlightPlan forwards info.Target as encounterFilter, which restricts
+        // SOI-encounter detection to that one body. Apse / inclination maneuvers
+        // have no target, so null it to detect all high-SOI siblings.
+        info.Target = null!;
         OrbitalTransfers.BuildFlightPlan(
             ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,
             out _, out _);
