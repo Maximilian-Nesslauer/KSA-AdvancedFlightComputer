@@ -573,6 +573,12 @@ internal static class HohmannMultiPassUI
         if (exec.Intent is HohmannTransferIntent intent)
             UpdatePreviewForActiveExec(source, exec, intent);
 
+        // List remaining passes with planned dV / burn time. Cache
+        // built from Plan(startPassIndex=exec.PassIndex), so passes[0]
+        // is the currently queued pass; firstPassDisplayNumber maps
+        // index 0 to the absolute pass number (PassIndex+1).
+        DrawPassList(firstPassDisplayNumber: exec.PassIndex + 1);
+
         // Surface mid-exec planner failures (e.g. live-state drift makes
         // v_p_target unreachable) so the user understands why the orbit
         // overlay disappeared instead of seeing it silently vanish.
@@ -994,7 +1000,7 @@ internal static class HohmannMultiPassUI
         ImGui.PopStyleColor();
     }
 
-    private static void DrawPassList()
+    private static void DrawPassList(int firstPassDisplayNumber = 1)
     {
         if (!_hasCachedPreview) return;
         PassPreview[] passes = _cachedPreview.Passes;
@@ -1006,10 +1012,11 @@ internal static class HohmannMultiPassUI
         {
             double dv = passes[i].DvVlf.Length();
             double t = passes[i].EstimatedBurnTimeSec;
+            int n = firstPassDisplayNumber + i;
             string suffix = i == passes.Length - 1 ? " (final)" : "";
             string line = t > 0.5
-                ? string.Format(Inv, "Pass {0}: {1:F0} m/s, {2:F0}s{3}", i + 1, dv, t, suffix)
-                : string.Format(Inv, "Pass {0}: {1:F0} m/s{2}", i + 1, dv, suffix);
+                ? string.Format(Inv, "Pass {0}: {1:F0} m/s, {2:F0}s{3}", n, dv, t, suffix)
+                : string.Format(Inv, "Pass {0}: {1:F0} m/s{2}", n, dv, suffix);
             ImGui.Text(line);
         }
         ImGui.PopStyleColor();
