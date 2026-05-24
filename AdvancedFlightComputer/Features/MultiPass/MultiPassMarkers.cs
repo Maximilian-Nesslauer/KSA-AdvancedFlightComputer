@@ -25,11 +25,6 @@ internal static class MultiPassMarkers
     // dot anchor like a single-line render would.
     private const string PreFinalRaiseApLabel = "Pre-SOI-\nescape AP";
 
-    // Roughly matches ImGui's default text line height in this build; keeps
-    // the multi-line layout legible without taking a hard dependency on
-    // ImGui.GetTextLineHeight() at marker-draw time.
-    private const float TextLineHeightPx = 15f;
-
     private const float HoverRadiusPx = 100f;
 
     /// <summary>When <paramref name="skipFirst"/> is true, passes[0] is
@@ -246,7 +241,7 @@ internal static class MultiPassMarkers
                 ImGuiHelper.DrawTextOnScreen(drawList, textPos, hoverLabel, color);
                 if (hoverExtra != null)
                 {
-                    textPos.Y += 15f;
+                    textPos.Y += ImGui.GetTextLineHeight();
                     ImGuiHelper.DrawTextOnScreen(drawList, textPos, hoverExtra, color);
                 }
             }
@@ -259,7 +254,7 @@ internal static class MultiPassMarkers
         if (hovered && hoverExtra != null)
         {
             float2 below = screen;
-            below.Y += lineCount * TextLineHeightPx;
+            below.Y += lineCount * ImGui.GetTextLineHeight();
             DrawLabel(drawList, below, color, hoverExtra);
         }
     }
@@ -284,12 +279,13 @@ internal static class MultiPassMarkers
         }
 
         string[] lines = text.Split('\n');
+        float lineHeight = ImGui.GetTextLineHeight();
         for (int i = 0; i < lines.Length; i++)
         {
             float lineWidth = ImGui.CalcTextSize(lines[i]).X;
             var pos = new float2(
                 anchor.X - lineWidth * 0.5f,
-                anchor.Y + i * TextLineHeightPx);
+                anchor.Y + i * lineHeight);
             ImGuiHelper.DrawTextOnScreen(drawList, pos, lines[i], color);
         }
         return lines.Length;

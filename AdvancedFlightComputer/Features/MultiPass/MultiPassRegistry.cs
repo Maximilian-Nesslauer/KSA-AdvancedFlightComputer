@@ -20,8 +20,8 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// </summary>
 internal static class MultiPassRegistry
 {
-    private static readonly Dictionary<string, Func<IReadOnlyDictionary<string, string>, IManeuverIntent?>>
-        IntentDeserializers = new()
+    private static readonly IReadOnlyDictionary<string, Func<IReadOnlyDictionary<string, string>, IManeuverIntent?>>
+        IntentDeserializers = new Dictionary<string, Func<IReadOnlyDictionary<string, string>, IManeuverIntent?>>()
     {
         [ApseIntent.SetApoapsisKind] = block => ApseIntent.FromToml(block, isSetApoapsis: true),
         [ApseIntent.SetPeriapsisKind] = block => ApseIntent.FromToml(block, isSetApoapsis: false),
