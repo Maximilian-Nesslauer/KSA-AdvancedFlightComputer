@@ -150,10 +150,11 @@ internal static class MultiPassPreviewCache
             return;
 
         // Mid-burn state is intrinsically unstable (orbit + mass drift
-        // every physics tick). Freeze the cache while engines fire; the
-        // Auto -> Manual transition at burn end naturally invalidates the
-        // key for the next frame. Allow the initial build so a user who
-        // opens the window mid-burn still sees a (slightly stale) preview.
+        // every physics tick). Freeze the cache while engines fire.
+        // Pass completion feeds a lower passCount (remaining = total -
+        // PassIndex), busting the key; mode transitions alone do not
+        // change the key. Allow the initial build so a user who opens
+        // the window mid-burn still sees a (slightly stale) preview.
         if (_hasPreviewKey && _cachedPreview != null
             && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
             return;

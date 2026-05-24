@@ -519,9 +519,11 @@ internal static class HohmannMultiPassUI
             startPassIndex: exec.PassIndex);
         if (_hasCachedPreview && key == _cachedKey) return;
 
-        // Freeze during Auto burn so the per-tick mass drift does not
-        // recompute every physics tick; Auto -> Manual on pass completion
-        // naturally invalidates the key on the next frame.
+        // Freeze during Auto burn so per-tick mass drift does not
+        // recompute every physics tick. Pass completion increments
+        // exec.PassIndex (part of the cache key via StartPassIndex),
+        // busting the cache on the next frame. Mode transitions alone
+        // do not change the key.
         if (_hasCachedPreview
             && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
             return;
@@ -674,9 +676,10 @@ internal static class HohmannMultiPassUI
             return;
         }
 
-        // Freeze the cache during an Auto burn so a mid-burn-mass drift
-        // doesn't recompute every physics tick; the Auto -> Manual
-        // transition will naturally bust the cache on the next frame.
+        // Freeze the cache during an Auto burn so mid-burn mass drift
+        // does not recompute every physics tick. Accumulated drift in
+        // quantized key fields (MassBucket etc.) busts the cache once
+        // the freeze lifts; the mode transition itself is not in the key.
         if (_hasCachedPreview
             && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
             return;
