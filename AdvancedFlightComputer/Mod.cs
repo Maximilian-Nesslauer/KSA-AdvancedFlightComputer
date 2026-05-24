@@ -59,6 +59,22 @@ public sealed class Mod
                 {
                     _harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow_HohmannMultiPass)).Patch();
                     HohmannMultiPassUI.Enabled = true;
+
+                    // Fallback DrawInline injection at the outermost
+                    // ImGui.End() in DrawPlanWindow. Fires regardless of
+                    // stock's _transferCalculated state so the active-
+                    // exec status + Cancel button stay reachable after
+                    // F4 close + reopen (where the primary injection
+                    // above would be gated out). DrawInline self-dedups
+                    // per ImGui frame so the normal-flow render does not
+                    // double up. Nested under the primary anchor check
+                    // because without DrawInline being enabled the
+                    // fallback would modify IL for no rendered effect.
+                    if (Patch_DrawPlanWindow_HohmannFallback.IsAnchorPresent)
+                        _harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow_HohmannFallback)).Patch();
+                    else
+                        DefaultCategory.Log.Warning(
+                            "[AFC] HohmannFallback disabled - ImGui.End anchor not found.");
                 }
                 else
                     DefaultCategory.Log.Warning(
@@ -80,14 +96,11 @@ public sealed class Mod
                 _harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_OnPreRender_Hohmann)).Patch();
 
                 // Per-pass marker overlay (Ap / Pe / AN / DN / SOI / closest).
-                // Anchored on private DrawSelectedTransferUi so the gate
-                // is inherited from stock; IsAnchorPresent guards a
-                // future stock rename.
-                if (Patch_TransferPlanner_DrawSelectedTransferUi_Hohmann.IsAnchorPresent)
-                    _harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Hohmann)).Patch();
-                else
-                    DefaultCategory.Log.Warning(
-                        "[AFC] Hohmann marker overlay disabled - DrawSelectedTransferUi anchor not found.");
+                // Postfix on DrawPlanWindow so the markers keep rendering
+                // after F4 close + reopen (where the older anchor on
+                // private DrawSelectedTransferUi would not fire because
+                // _transferCalculated is false).
+                _harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers)).Patch();
             }
             else
                 DefaultCategory.Log.Warning(

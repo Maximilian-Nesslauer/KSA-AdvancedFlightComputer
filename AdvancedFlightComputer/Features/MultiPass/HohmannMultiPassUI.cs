@@ -36,6 +36,7 @@ internal static class HohmannMultiPassUI
     private static readonly ImColor8 StatusGrey = new(120, 120, 120, 255);
     private static readonly ImColor8 ColorAmber = new(255, 200, 60, 255);
     private static readonly ImColor8 ColorOrange = new(255, 150, 50, 255);
+    private static readonly float[] SingleColumnWidths = new float[] { 0.9f };
 
     public static bool Enabled { get; set; }
 
@@ -84,15 +85,26 @@ internal static class HohmannMultiPassUI
     private static string? _lastSourceId;
     private static string? _lastTargetId;
 
+    // Per-frame dedup: two transpiler injections call DrawInline in
+    // the same frame (see the DrawInline doc). First caller claims
+    // the frame via ImGui.GetFrameCount, second short-circuits.
+    private static int _lastFrameDrawn = -1;
+
     /// <summary>
-    /// Inline-drawn into stock's "Transfer Planning" window by the
-    /// transpiler in Patch_DrawPlanWindow_HohmannMultiPass. We're already
-    /// inside stock's Begin/End so no window-management here - just draw
-    /// the section content.
+    /// Inline-drawn into stock's "Transfer Planning" window by two
+    /// transpilers (<see cref="ManeuverTools.Patch_DrawPlanWindow_HohmannMultiPass"/>
+    /// and <see cref="Patch_DrawPlanWindow_HohmannFallback"/>). Both call
+    /// sites land inside stock's outer Begin/End scope, so no window
+    /// management here - just draw the section content. Per-frame dedup
+    /// via <see cref="_lastFrameDrawn"/> keeps a single call wherever it
+    /// fires first.
     /// </summary>
     public static void DrawInline()
     {
         if (!Enabled) return;
+        int frame = ImGui.GetFrameCount();
+        if (frame == _lastFrameDrawn) return;
+        _lastFrameDrawn = frame;
 
         // Active-exec fast path: covers window-close/reopen during a
         // multi-pass run, where stock clears _selectedEntry and ShouldDraw
@@ -187,6 +199,7 @@ internal static class HohmannMultiPassUI
         _lastShiftKShift = 0;
         _lastSourceId = null;
         _lastTargetId = null;
+        _lastFrameDrawn = -1;
         HohmannMultiPassPlanner.ResetShiftCache();
     }
 
@@ -238,18 +251,22 @@ internal static class HohmannMultiPassUI
     /// <summary>3D orbit lines for the cached multi-pass preview. During
     /// active execution the first cached pass is the queued one and
     /// stock renders it via BurnPlan, so we skipFirst to avoid drawing
-    /// it twice. skipLast is always true: stock's selected-entry overlay
-    /// owns the final-pass Lambert trajectory; rendering ours on top
-    /// produced a visible double-line with slight discrepancies.</summary>
+    /// it twice. skipLast tracks whether stock's selected-entry overlay
+    /// will own the final-pass Lambert trajectory: that overlay is
+    /// gated on <c>_transferCalculated</c>, which is false after F4
+    /// close+reopen of the plan window; in that state we must draw the
+    /// final pass ourselves or it disappears entirely (visible at low
+    /// N=2,3 where skipFirst already eats the queued pass).</summary>
     public static void RenderOrbits(Viewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
         if (source.Id != _cachedKey.SourceId) return;
 
         bool skipFirst = MultiPassRegistry.Has(source.Id);
+        bool stockOwnsFinal = StockSelectedTransferOverlayActive();
         MultiPassRenderer.RenderPassOrbits(
             viewport, source, _cachedPreview.Passes,
-            skipFirst, skipLast: true);
+            skipFirst, skipLast: stockOwnsFinal);
     }
 
     /// <summary>Per-pass Ap/Pe/AN/DN/SOI/closest markers. ImGui-phase
@@ -257,9 +274,10 @@ internal static class HohmannMultiPassUI
     /// equals <c>exec.PassIndex + 1</c> during execution so labels reflect
     /// the absolute pass number in the original N-pass sequence
     /// (e.g. after pass 1 completes, the intermediate triangle still
-    /// reads "Ap Pass 3" rather than restarting at 1). skipLast=true
-    /// matches <see cref="RenderOrbits"/>; stock's <c>FlightPlan.DrawUi</c>
-    /// labels the final pass (e.g. "Escape 0").</summary>
+    /// reads "Ap Pass 3" rather than restarting at 1). skipLast tracks
+    /// stock's selected-transfer-marker availability (gated on
+    /// <c>_transferCalculated</c>) for the same reason as
+    /// <see cref="RenderOrbits"/>.</summary>
     public static void RenderMarkers(Viewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
@@ -272,9 +290,71 @@ internal static class HohmannMultiPassUI
             firstPassDisplayNumber = exec.PassIndex + 1;
             skipFirst = true;
         }
+        bool stockOwnsFinal = StockSelectedTransferOverlayActive();
         MultiPassMarkers.Draw(viewport, source,
             _cachedPreview.Passes, firstPassDisplayNumber,
-            skipFirst, skipLast: true);
+            skipFirst, skipLast: stockOwnsFinal);
+    }
+
+    /// <summary>True iff stock's selected-transfer overlay (3D lines
+    /// + markers via <c>DrawSelectedTransfer</c> /
+    /// <c>DrawSelectedTransferUi</c>) is going to render the final
+    /// pass for us this frame. Drives the skipLast decision in
+    /// <see cref="RenderOrbits"/> and <see cref="RenderMarkers"/>.
+    /// Mirrors stock's own gate
+    /// <c>ShowPlanWindow &amp;&amp; _displaySelectedTransfer
+    /// &amp;&amp; _transferCalculated</c> from
+    /// <see cref="TransferPlanner.OnPreRender"/>; the _displaySelected
+    /// check is redundant with our render-path gating but explicit
+    /// here so the helper is self-contained.</summary>
+    private static bool StockSelectedTransferOverlayActive()
+    {
+        if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
+            return false;
+        if (!(bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false))
+            return false;
+        if (!(bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false))
+            return false;
+        return true;
+    }
+
+    /// <summary>Shared gate for the 3D orbit overlay and the per-pass
+    /// marker overlay (both <see cref="Patch_TransferPlanner_OnPreRender_Hohmann"/>
+    /// and <see cref="Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers"/>).
+    ///
+    /// An active multi-pass exec is authoritative: we render based
+    /// on the cached preview regardless of stock's
+    /// <c>_transferCalculated</c> flag, because F4 close+reopen
+    /// clears the flag while the exec stays alive. Without an
+    /// active exec we require <c>_transferCalculated</c> so we do
+    /// not paint stale init-cache orbits after the user changes
+    /// source / destination / type (all of which stock clears the
+    /// flag for, but none of which invalidate our preview
+    /// cache).</summary>
+    public static bool ShouldRenderOverlay(out Vehicle? source)
+    {
+        source = null;
+        if (!HasMultiPassPreview) return false;
+
+        if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
+            return false;
+        if (!(bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false))
+            return false;
+
+        var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
+            .GetValue(null)!;
+        if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
+
+        var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!
+            .GetValue(null)!;
+        source = sourceBody.Body as Vehicle;
+        if (source == null) return false;
+
+        if (!MultiPassRegistry.Has(source.Id)
+            && !(bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false))
+            return false;
+
+        return true;
     }
 
     /// <summary>Whether the in-stock-window Hohmann state currently
@@ -295,6 +375,14 @@ internal static class HohmannMultiPassUI
             if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
 
             if (!(bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!)
+                return false;
+
+            // Gates out stale _selectedEntry that stock keeps across
+            // source/destination changes (only nulls it on full window
+            // close via ShowPlanWindow.set(false)). Without this check
+            // we'd render with the previous target's entry data
+            // against the new target's transferInfo.
+            if (!(bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false))
                 return false;
 
             entry = GameReflection.TransferPlanner_selectedEntry!.GetValue(null)
@@ -491,10 +579,43 @@ internal static class HohmannMultiPassUI
         DrawPreviewFailureIfApplicable();
         DrawAdvisoryIfApplicable();
 
+        // Mirror stock's "Preview Selected Transfer" checkbox here
+        // when stock's own copy is hidden (i.e., _transferCalculated
+        // is false after F4 close+reopen). Without this the user has
+        // no way to re-enable the 3D overlay without re-running
+        // Calculate. Skipped when stock's checkbox is accessible to
+        // avoid two coupled checkboxes that show the same state.
+        bool stockCheckboxAccessible =
+            (bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false);
+        if (!stockCheckboxAccessible)
+            DrawInlinePreviewToggle();
+
         ImGui.Spacing();
         if (ImGuiHelper.DrawButton("Cancel remaining passes"u8,
                 KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Red))
             CancelExecution(source, exec);
+    }
+
+    /// <summary>Reads + writes stock's <c>_displaySelectedTransfer</c>
+    /// field via reflection so toggling our copy stays in sync with
+    /// any future user interaction with stock's own checkbox (when
+    /// stock's section is visible again). Drawn only when stock's
+    /// section is hidden; see the caller in <see cref="DrawActive"/>.
+    /// Wrapped in BeginColumns / EndColumns because
+    /// <see cref="ImGuiHelper.DrawCheckbox"/> needs that for the label
+    /// to render inline with the box; without columns the label drops
+    /// onto a second line.</summary>
+    private static void DrawInlinePreviewToggle()
+    {
+        ImGui.Spacing();
+        bool preview =
+            (bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false);
+        bool previous = preview;
+        ImGuiHelper.BeginColumns(2, SingleColumnWidths);
+        ImGuiHelper.DrawCheckbox("Preview Selected Transfer"u8, ref preview, isChanged: false);
+        ImGuiHelper.EndColumns();
+        if (preview != previous)
+            GameReflection.TransferPlanner_displaySelectedTransfer?.SetValue(null, preview);
     }
 
     private static void UpdatePreviewForActiveExec(

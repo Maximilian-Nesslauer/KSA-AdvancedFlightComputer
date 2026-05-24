@@ -73,6 +73,16 @@ internal sealed class MultiPassExecution
     /// does not have to toggle Auto between every pass.</summary>
     public bool ReengageAutoOnNextBurn { get; set; }
 
+    /// <summary>True once <see cref="FlightComputer.BurnMode"/> was
+    /// observed as <c>Auto</c> while the current pass burn was loaded.
+    /// PassCompletionPatch sets this each tick the engine is firing
+    /// under Auto control; DetectImplicitCompletion uses it to
+    /// distinguish "burn fired and was cleaned up naturally" (e.g.,
+    /// AutoRemoveFinishedBurns mod racing with our Auto->Manual
+    /// detection) from "burn deleted externally before firing".
+    /// Cleared on each new pass via AssignCurrentBurn.</summary>
+    public bool BurnAutoEngagedThisPass { get; set; }
+
     #endregion
 
     public void AssignCurrentBurn(Burn burn)
@@ -82,6 +92,7 @@ internal sealed class MultiPassExecution
         CurrentBurnDvMagnitudeMs = burn.DeltaVVlf.Length();
         AwaitingMaterialization = true;
         AwaitingMaterializationTicks = 0;
+        BurnAutoEngagedThisPass = false;
     }
 
     public void ClearCurrentBurn()
@@ -91,6 +102,7 @@ internal sealed class MultiPassExecution
         CurrentBurnDvMagnitudeMs = null;
         AwaitingMaterialization = false;
         AwaitingMaterializationTicks = 0;
+        BurnAutoEngagedThisPass = false;
     }
 
     /// <summary>
