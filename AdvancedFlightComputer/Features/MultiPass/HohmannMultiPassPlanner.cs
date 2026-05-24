@@ -452,7 +452,17 @@ internal static class HohmannMultiPassPlanner
     /// N is feasible. The probe's first failure reason + classifier (at
     /// requestedN) are returned so the UI's auto-clamp banner can give
     /// context-appropriate advice (different for SOI ceiling vs time
-    /// budget vs cumulative-dV-past-escape).</summary>
+    /// budget vs cumulative-dV-past-escape).
+    ///
+    /// Cost: O(requestedN) probes, each calling Plan which builds up to
+    /// N flight plans, so worst case is O(N^2) FP builds. In practice
+    /// most failures (SoiCeiling, ParabolicVp, KFloor, NonMonotonicK,
+    /// TimeBudget) exit Plan before reaching the FP loop, making those
+    /// probes near-free. Reaching the expensive FP loop requires passing
+    /// all validation gates, which is rare at high N. Binary search is not
+    /// applicable because feasibility is non-monotonic: a specific N can
+    /// fail (e.g. integer-sum rounding breaks K monotonicity) while N+1
+    /// succeeds, so there is no threshold to bisect on.</summary>
     public static int LargestFeasibleN(
         Vehicle source, HohmannPlanInput input, SequenceBurnState state,
         double parkingPeriodSec, SimTime now, int requestedN, SplitMode mode,
