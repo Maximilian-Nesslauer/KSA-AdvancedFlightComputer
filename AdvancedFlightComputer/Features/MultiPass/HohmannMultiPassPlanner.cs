@@ -226,10 +226,15 @@ internal static class HohmannMultiPassPlanner
             mu, rp, aPark, soiLimit, vpLive, vTargetXy,
             remainingCount, mode, vehicleState);
         if (schedule.K == null)
+        {
+            PassPlanFailure kind = schedule.Failure ?? PassPlanFailure.ParabolicVp;
+            string detail = kind == PassPlanFailure.FuelShort
+                ? "vehicle has insufficient fuel for this N"
+                : "priors degenerate under cap (transfer too high-energy for this N)";
             return Fail(string.Format(CultureInfo.InvariantCulture,
-                "vehicle '{0}': K-schedule build failed; priors degenerate under cap " +
-                "(transfer too high-energy for this N)",
-                source.Id), PassPlanFailure.ParabolicVp);
+                "vehicle '{0}': K-schedule build failed; {1}",
+                source.Id, detail), kind);
+        }
 
         double[] kSeq = schedule.K!;
         double[] vPre = schedule.VPre!;
@@ -755,6 +760,7 @@ internal static class HohmannMultiPassPlanner
         public double[]? K { get; init; }
         public double[]? VPre { get; init; }
         public double[]? VPost { get; init; }
+        public PassPlanFailure? Failure { get; init; }
     }
 
     private static RealKScheduleResult BuildRealKSchedule(
@@ -818,9 +824,7 @@ internal static class HohmannMultiPassPlanner
                 reachedCap = true;
             }
             if (!(targetVp > vPre[k]))
-                // Splitter gave a non-positive prior dV (fuel-short or
-                // mode glitch). Treat as infeasible at this N.
-                return default;
+                return new RealKScheduleResult { Failure = PassPlanFailure.FuelShort };
             vpCum = targetVp;
             double term = 2.0 / rp - vpCum * vpCum / mu;
             if (!(term > 0.0))

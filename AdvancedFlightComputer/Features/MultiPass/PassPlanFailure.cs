@@ -41,6 +41,11 @@ internal enum PassPlanFailure
     /// this N. User fix: reduce passes.</summary>
     KFloor,
 
+    /// <summary>Splitter allocation for one or more passes returned zero
+    /// dV capacity because the vehicle is fuel-short. User fix: add fuel
+    /// or pick a lower-energy transfer.</summary>
+    FuelShort,
+
     /// <summary>Generic / unclassified planner failure. Banner uses the
     /// fallback advice.</summary>
     Other,

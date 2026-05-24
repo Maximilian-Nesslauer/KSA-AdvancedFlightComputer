@@ -79,6 +79,8 @@ internal static class HohmannMultiPassUI
     // already feasible). Surfaced in the UI so the user understands why
     // the multi-pass extends past the porkchop-selected cell.
     private static int _lastShiftKShift;
+    private static double _cachedFuelSum = double.NaN;
+    private static double _cachedFuelTotalDv = double.NaN;
     private static string? _lastSourceId;
     private static string? _lastTargetId;
 
@@ -119,6 +121,8 @@ internal static class HohmannMultiPassUI
             _passCount = 1;
             _splitMode = SplitMode.EqualBurnTime;
             _hasCachedPreview = false;
+            _cachedFuelSum = double.NaN;
+            _cachedFuelTotalDv = double.NaN;
             _autoClampedFromN = 0;
             _autoClampReason = null;
             _autoClampKind = PassPlanFailure.None;
@@ -175,6 +179,8 @@ internal static class HohmannMultiPassUI
         _hasCachedPreview = false;
         _cachedPreview = default;
         _cachedKey = default;
+        _cachedFuelSum = double.NaN;
+        _cachedFuelTotalDv = double.NaN;
         _autoClampedFromN = 0;
         _autoClampReason = null;
         _autoClampKind = PassPlanFailure.None;
@@ -197,6 +203,8 @@ internal static class HohmannMultiPassUI
         _hasCachedPreview = false;
         _cachedPreview = default;
         _cachedKey = default;
+        _cachedFuelSum = double.NaN;
+        _cachedFuelTotalDv = double.NaN;
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(
                 $"[AFC] HohmannMultiPassUI.OnExecutionEnded: vehicle='{vehicleId}' " +
@@ -343,6 +351,7 @@ internal static class HohmannMultiPassUI
             UpdatePreviewIfStale(source, entry, info);
             DrawSpanInfo(source);
             DrawPreviewFailureIfApplicable();
+            DrawInsufficientFuelIfApplicable();
             DrawAdvisoryIfApplicable();
             DrawPassList();
             if (_hasCachedPreview && !_cachedPreview.Failed)
@@ -426,6 +435,8 @@ internal static class HohmannMultiPassUI
         {
             _splitMode = SplitMode.EqualBurnTime;
             _hasCachedPreview = false;
+            _cachedFuelSum = double.NaN;
+            _cachedFuelTotalDv = double.NaN;
             _autoClampedFromN = 0;
             _autoClampReason = null;
             _autoClampKind = PassPlanFailure.None;
@@ -443,6 +454,8 @@ internal static class HohmannMultiPassUI
         {
             _splitMode = SplitMode.EqualDv;
             _hasCachedPreview = false;
+            _cachedFuelSum = double.NaN;
+            _cachedFuelTotalDv = double.NaN;
             _autoClampedFromN = 0;
             _autoClampReason = null;
             _autoClampKind = PassPlanFailure.None;
@@ -583,6 +596,8 @@ internal static class HohmannMultiPassUI
                 int before = _passCount;
                 _passCount--;
                 _hasCachedPreview = false;
+                _cachedFuelSum = double.NaN;
+                _cachedFuelTotalDv = double.NaN;
                 _autoClampedFromN = 0;
                 _autoClampReason = null;
                 _autoClampKind = PassPlanFailure.None;
@@ -601,6 +616,8 @@ internal static class HohmannMultiPassUI
                 int before = _passCount;
                 _passCount++;
                 _hasCachedPreview = false;
+                _cachedFuelSum = double.NaN;
+                _cachedFuelTotalDv = double.NaN;
                 _autoClampedFromN = 0;
                 _autoClampReason = null;
                 _autoClampKind = PassPlanFailure.None;
@@ -635,6 +652,8 @@ internal static class HohmannMultiPassUI
             }
             _lastShiftKShift = 0;
             _hasCachedPreview = false;
+            _cachedFuelSum = double.NaN;
+            _cachedFuelTotalDv = double.NaN;
             _cachedPreview = default;
             _cachedKey = default;
             return;
@@ -733,6 +752,19 @@ internal static class HohmannMultiPassUI
         _cachedKey = key;
         _hasCachedPreview = true;
 
+        double fuelCheckDv = planInput.DFinalVlf.Length();
+        if (fuelCheckDv > 0.0 && state.HasUsableEngines)
+        {
+            _cachedFuelSum = Splitter.SumDvCapacityMs(
+                Splitter.Allocate(fuelCheckDv, _passCount, _splitMode, state));
+            _cachedFuelTotalDv = fuelCheckDv;
+        }
+        else
+        {
+            _cachedFuelSum = double.NaN;
+            _cachedFuelTotalDv = double.NaN;
+        }
+
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannMultiPassUI.UpdatePreviewIfStale: Plan -> failed={0} " +
@@ -771,6 +803,22 @@ internal static class HohmannMultiPassUI
         ImGui.PopStyleColor();
     }
 
+    private static void DrawInsufficientFuelIfApplicable()
+    {
+        if (_hasCachedPreview && _cachedPreview.Failed) return;
+        if (double.IsNaN(_cachedFuelSum) || double.IsNaN(_cachedFuelTotalDv)) return;
+        if (!(_cachedFuelTotalDv > 0.0)) return;
+        if (_cachedFuelSum >= _cachedFuelTotalDv * 0.995) return;
+
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, ColorOrange);
+        ImGui.TextWrapped(string.Format(Inv,
+            "[!] Vehicle can only deliver ~{0:F0} m/s of the {1:F0} m/s required.\n" +
+            "Multi-pass will run out of fuel before the departure is reached.",
+            _cachedFuelSum, _cachedFuelTotalDv));
+        ImGui.PopStyleColor();
+    }
+
     private static void DrawAutoClampIfApplicable()
     {
         if (_autoClampedFromN <= _passCount) return;
@@ -806,6 +854,9 @@ internal static class HohmannMultiPassUI
                 + "(N-1 typically works).",
             PassPlanFailure.KFloor =>
                 "Per-pass dV too small to be meaningful at this N; reduce passes.",
+            PassPlanFailure.FuelShort =>
+                "Vehicle has insufficient fuel for this transfer (reducing "
+                + "passes will not help). Add fuel or pick a lower-energy departure.",
             _ =>
                 $"Reduce passes, try {otherModeLabel}, or pick a later porkchop entry.",
         };
