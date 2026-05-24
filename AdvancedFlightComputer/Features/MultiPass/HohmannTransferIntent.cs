@@ -62,11 +62,14 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
     public required double ApoTargetRadiusMeters { get; init; }
 
     /// <summary>Original parking orbit period locked at intent creation.
-    /// Critical: the K-integer scheduling uses this fixed value as the
-    /// "anchor period" for all passes. Reading <c>vehicle.Orbit.Period</c>
-    /// at recompute time would give the chained orbit's period, breaking
-    /// the chain alignment and causing subsequent passes to fire at
-    /// apoapsis instead of periapsis.</summary>
+    /// Critical: the integer-K-sum scheduling uses this fixed value as the
+    /// "anchor period" for all passes. Per-pass K values are real, only
+    /// the sum is rounded to an integer at initial-plan time so that the
+    /// vehicle at pass-0 firing and at T_final share the same parking-orbit
+    /// CCI direction. Reading <c>vehicle.Orbit.Period</c> at recompute time
+    /// would give the chained orbit's period, breaking the chain alignment
+    /// and causing subsequent passes to fire at apoapsis instead of
+    /// periapsis.</summary>
     public required double ParkingPeriodSec { get; init; }
 
     public string Kind => HohmannTransferKind;
