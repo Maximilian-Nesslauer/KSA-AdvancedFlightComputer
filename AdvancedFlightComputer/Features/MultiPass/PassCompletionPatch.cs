@@ -295,6 +295,17 @@ internal static class PassCompletionPatch
         if (exec.PassIndex < exec.PassCountTotal)
             exec.ReengageAutoOnNextBurn = true;
 
+        // At the last-pass transition for Hohmann, stock's BurnPlan
+        // already renders the queued final-burn orbit, and stock's
+        // "Preview Selected Transfer" overlay would draw the same
+        // Lambert trajectory on top of it. Auto-disable the overlay so
+        // the user does not see two coincident lines for one upcoming
+        // burn. One-shot per completion event; the user can re-enable
+        // the checkbox to inspect stock's Lambert reference.
+        if (exec.Intent is HohmannTransferIntent
+            && exec.PassIndex == exec.PassCountTotal - 1)
+            DisableStockHohmannOrbitPreview();
+
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicleId} pass {exec.PassIndex}/{exec.PassCountTotal} completed");
@@ -459,6 +470,28 @@ internal static class PassCompletionPatch
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] PassCompletionPatch: failed to sync _transferCalculated: {ex.Message}");
+        }
+    }
+
+    /// <summary>Flips stock's <c>_displaySelectedTransfer</c> to false
+    /// so the "Preview Selected Transfer" overlay stops rendering. Used
+    /// at the second-to-last pass completion of a Hohmann multi-pass:
+    /// past that point stock's BurnPlan already renders the queued
+    /// final-burn orbit, and the overlay would otherwise draw the same
+    /// Lambert trajectory on top of it. The field is process-global, so
+    /// a checkbox the user had enabled for a different vehicle would
+    /// also flip off, but that case is uncommon and easy to recover
+    /// from (re-click the checkbox).</summary>
+    private static void DisableStockHohmannOrbitPreview()
+    {
+        try
+        {
+            GameReflection.TransferPlanner_displaySelectedTransfer?.SetValue(null, false);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning(
+                $"[AFC] PassCompletionPatch: failed to disable _displaySelectedTransfer: {ex.Message}");
         }
     }
 
