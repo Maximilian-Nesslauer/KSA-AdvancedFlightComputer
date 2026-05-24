@@ -25,14 +25,9 @@ internal static class SaveLoadObserver
     /// Empty in the default starting situation (no save loaded yet).</summary>
     public static string CurrentSaveId { get; private set; } = string.Empty;
 
-    /// <summary>True after at least one save load or write this
-    /// session - unambiguous signal that the world was (re)loaded.</summary>
-    public static bool HasLoadedSave { get; private set; }
-
     public static void Reset()
     {
         CurrentSaveId = string.Empty;
-        HasLoadedSave = false;
     }
 
     public static void ApplyPatches(Harmony harmony)
@@ -52,7 +47,6 @@ internal static class SaveLoadObserver
             try
             {
                 CurrentSaveId = __instance.Id ?? string.Empty;
-                HasLoadedSave = true;
 
                 // Drop the per-frame preview cache: its inputs (vehicle
                 // id, mass, engine signature) can match a same-named
@@ -125,7 +119,6 @@ internal static class SaveLoadObserver
                 MultiPassRegistry.RekeyTransientsTo(newSaveId);
 
                 CurrentSaveId = newSaveId;
-                HasLoadedSave = true;
 
                 MultiPassRegistry.Save();
 
