@@ -207,7 +207,7 @@ internal static class HohmannMultiPassPlanner
         {
             SimTime burnTime = (startPassIndex == 0)
                 ? input.TFinal
-                : ComputeNextPeriapsis(currentOrbit, now);
+                : currentOrbit.GetNextPeriapsisTime(now);
             return PlanSinglePass(source, input, now,
                 burnTime, vTargetXy, thetaKAbsolute[startPassIndex]);
         }
@@ -252,7 +252,7 @@ internal static class HohmannMultiPassPlanner
         }
         else
         {
-            SimTime nextPe = ComputeNextPeriapsis(currentOrbit, now);
+            SimTime nextPe = currentOrbit.GetNextPeriapsisTime(now);
             timesZeroSec = nextPe.Seconds();
             targetSumPeriods = (input.TFinal.Seconds() - timesZeroSec) / tPark;
         }
@@ -877,27 +877,6 @@ internal static class HohmannMultiPassPlanner
         return (int)Math.Round(sumK);
     }
 
-    /// <summary>Time of the next periapsis after <paramref name="now"/>
-    /// in the given orbit. Used by Plan() at recompute time to anchor
-    /// times[0] to the vehicle's actual next chained-periapsis epoch
-    /// (rather than re-deriving from T_final and an assumed integer K).
-    ///
-    /// For a circular parking orbit GetTimeSincePeriapsisThisOrbit is
-    /// well-defined too (stock convention), but the recompute path is
-    /// hit only after pass 0 has fired, so the orbit here is the
-    /// elliptical chained orbit with a well-defined periapsis.</summary>
-    private static SimTime ComputeNextPeriapsis(Orbit orbit, SimTime now)
-    {
-        double period = orbit.Period;
-        if (!(period > 0.0)) return now;
-        SimTime sincePe = orbit.GetTimeSincePeriapsisThisOrbit(now);
-        double secSincePe = sincePe.Seconds();
-        if (secSincePe < 0.0) secSincePe += period;
-        double secToNextPe = period - secSincePe;
-        if (secToNextPe <= 0.0) secToNextPe += period;
-        return new SimTime(now.Seconds() + secToNextPe);
-    }
-
     /// <summary>Per-pass theta schedule for the FULL N-pass plan, against
     /// a stable state-independent equal-vp-step reference dvSeq. The
     /// resulting thetaK[k] is the planned plane-rotation share for
@@ -1172,7 +1151,7 @@ internal static class HohmannMultiPassPlanner
     /// orbit so vpLive == v_p (the apse-geometry assumption baked into
     /// vTargetXy). For initial N=1 the caller passes <c>input.TFinal</c>
     /// (vehicle in parking orbit at the locked Lambert burn point). For
-    /// mid-exec last pass the caller passes <c>ComputeNextPeriapsis</c>
+    /// mid-exec last pass the caller passes <c>currentOrbit.GetNextPeriapsisTime(now)</c>
     /// of the chained orbit, which may drift seconds-to-hours away from
     /// <c>input.TFinal</c> due to finite-burn losses on prior passes.</summary>
     private static PassPreviewResult PlanSinglePass(
