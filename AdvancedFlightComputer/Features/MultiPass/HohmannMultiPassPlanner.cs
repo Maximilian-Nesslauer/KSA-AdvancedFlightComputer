@@ -168,6 +168,12 @@ internal static class HohmannMultiPassPlanner
         double dz = input.DFinalVlf.Z;
         double vTargetXy = Math.Sqrt(Math.Max(0.0, vpTarget * vpTarget - dz * dz));
 
+        if (!(vTargetXy > 0.0))
+            return Fail(string.Format(CultureInfo.InvariantCulture,
+                "vehicle '{0}': Lambert tangential component degenerate " +
+                "(|D.Z|={1:F1} >= vpTarget={2:F1}); porkchop entry has near-purely-radial dV",
+                source.Id, Math.Abs(dz), vpTarget), PassPlanFailure.Other);
+
         // Parking-orbit reference SMA, locked via tPark. Used both as the
         // K-reference (a_chained = aPark * K^(2/3)) and to define
         // vpParking for the absolute thetaTotal computation.
