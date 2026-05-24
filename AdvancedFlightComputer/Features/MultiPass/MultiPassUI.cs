@@ -417,6 +417,11 @@ internal static class MultiPassUI
         if (passes.Length == 0) return;
         if (!(period > 0.0) || !(singleBurnTime > 0.0) || !(totalDv > 0.0)) return;
 
+        // When fuel-short, singleLoss uses totalDv (unreachable) while
+        // splitLoss uses the fuel-limited per-pass dV, inflating savings.
+        double allocSum = MultiPassPreviewCache.CachedAllocationsSum;
+        if (!double.IsNaN(allocSum) && allocSum < totalDv * 0.995) return;
+
         double singleLoss = totalDv * MultiPassLoss.FiniteBurnLossFraction(singleBurnTime / period);
         double splitLoss = 0.0;
         for (int i = 0; i < passes.Length; i++)

@@ -949,6 +949,12 @@ internal static class HohmannMultiPassUI
         if (_lastShiftKShift > 0) return null;
         if (!(tPark > 0.0)) return null;
 
+        // When fuel-short, singleLoss uses lambertDv (unreachable) while
+        // splitLoss uses the fuel-limited per-pass dV, inflating savings.
+        if (!double.IsNaN(_cachedFuelSum) && !double.IsNaN(_cachedFuelTotalDv)
+            && _cachedFuelTotalDv > 0.0 && _cachedFuelSum < _cachedFuelTotalDv * 0.995)
+            return null;
+
         SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
         if (!state.HasUsableEngines) return null;
 
