@@ -57,12 +57,8 @@ public sealed class Mod
                 // patch application and the UI flag on it.
                 if (Patch_DrawPlanWindow_HohmannMultiPass.IsAnchorPresent)
                 {
-                    // DefaultCategory.Log.Info(
-                    //     "[AFC] HohmannMultiPass: anchor found, applying transpiler patch.");
                     _harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow_HohmannMultiPass)).Patch();
                     HohmannMultiPassUI.Enabled = true;
-                    // DefaultCategory.Log.Info(
-                    //     $"[AFC] HohmannMultiPass: patch applied, UI enabled (Enabled={HohmannMultiPassUI.Enabled}).");
                 }
                 else
                     DefaultCategory.Log.Warning(
