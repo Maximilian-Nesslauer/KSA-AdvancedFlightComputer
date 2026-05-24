@@ -76,6 +76,12 @@ internal static class HohmannMultiPassPlanner
     // logic on the near-circular result).
     private const double KFloor = 1.01;
 
+    // 64 steps over [minTransit, maxTransit] gives sub-1% transit resolution
+    // for typical Earth-Luna and Earth-Mars windows. Lambert dV minima are
+    // smooth enough that finer scans rarely shift the picked candidate;
+    // coarser (32) would risk aliasing in long-window targets.
+    private const int TransitScanSteps = 64;
+
     /// <summary>Locked inputs from the stock-Lambert porkchop entry that
     /// the planner needs to schedule a multi-pass chain.
     ///
@@ -584,7 +590,6 @@ internal static class HohmannMultiPassPlanner
         // the cheapest dirty fallback. Pruning skips the expensive
         // BuildFlightPlan classification when the Lambert dV alone can't
         // improve either best.
-        const int TransitScanSteps = 64;
         double bestCleanDv = double.MaxValue;
         double bestDirtyDv = double.MaxValue;
         OrbitalTransfers.TransferData? bestCleanTd = null;
