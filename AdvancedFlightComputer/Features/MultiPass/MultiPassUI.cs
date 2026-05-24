@@ -47,7 +47,7 @@ internal static class MultiPassUI
     /// <summary>Types that the multi-pass pipeline can plan and execute:
     /// the four AFC-injected quick-tools plus the two stock circularize
     /// entries AFC claims via Patch_DrawPlanWindow.</summary>
-    public static bool IsMultiPassSupportedType(string typeKey) =>
+    private static bool IsMultiPassSupportedType(string typeKey) =>
         typeKey == KeySetApoapsis
         || typeKey == KeySetPeriapsis
         || typeKey == KeyMatchInclination
