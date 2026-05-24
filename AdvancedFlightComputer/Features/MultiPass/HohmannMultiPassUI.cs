@@ -1062,7 +1062,7 @@ internal static class HohmannMultiPassUI
             // immediate post-burn ellipse around the same parent. NaN
             // when the stock entry's first patch is hyperbolic (rare for
             // same-SOI but possible with high-energy porkchop picks);
-            // the planner's "non-positive vpTarget" check then surfaces
+            // the planner's "unbound transfer orbit" check then surfaces
             // the issue instead of silently passing NaN through.
             FlightPlan? fp = entry.FlightPlan;
             if (fp != null && fp.Patches.Count > 0 && source.Orbit != null)

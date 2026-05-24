@@ -150,6 +150,10 @@ internal static class HohmannMultiPassPlanner
         if (input.DFinalVlf.LengthSquared() < 1.0)
             return Fail($"vehicle '{source.Id}': stock Hohmann dV is zero", PassPlanFailure.Other);
 
+        if (!input.IsCrossParent && !(input.ApoTargetRadiusMeters > 0.0))
+            return Fail($"vehicle '{source.Id}': stock Hohmann produced an unbound transfer orbit, multi-pass not applicable",
+                PassPlanFailure.Other);
+
         double vpTarget = ComputeVpTarget(input, mu, rp);
         if (!(vpTarget > 0.0))
             return Fail(string.Format(CultureInfo.InvariantCulture,
