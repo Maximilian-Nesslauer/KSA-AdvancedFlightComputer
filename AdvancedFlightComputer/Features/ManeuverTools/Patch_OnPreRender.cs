@@ -19,14 +19,14 @@ internal static class Patch_OnPreRender
         try
         {
             var transferType = (TransferType)GameReflection.TransferPlanner_transferType!.GetValue(null)!;
-            if (!ManeuverTools.IsOurType(transferType.GetKey()))
+            if (!ManeuverTools.IsHandledType(transferType.GetKey()))
                 return;
 
             Patch_DrawPlanWindow.RenderOrbitPreview(inViewport);
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools OnPreRender: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] ManeuverTools OnPreRender: {ex}");
         }
     }
 }

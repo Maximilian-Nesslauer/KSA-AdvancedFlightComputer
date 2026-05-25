@@ -1,0 +1,207 @@
+using System;
+using System.Collections.Generic;
+using System.Reflection.Emit;
+using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.MultiPass;
+using Brutal.ImGuiApi;
+using Brutal.Logging;
+using Brutal.Numerics;
+using HarmonyLib;
+using KSA;
+
+namespace AdvancedFlightComputer.Features.ManeuverTools;
+
+/// <summary>
+/// Second IL transpiler on <see cref="TransferPlanner.DrawPlanWindow"/>.
+/// Two related injections at the stock "Create" button site
+/// (line ~435-451 in KSA 2026.5.11.4462):
+///
+/// 1. Swaps the <see cref="Burn.Create"/> call (line ~443) for our
+///    wrapper <see cref="HohmannCreateInterceptor.CreateMaybeMultiPass"/>,
+///    so a single button click routes to multi-pass when armed for N>1
+///    or falls through to a single burn otherwise.
+/// 2. Inserts a call to <see cref="HohmannCreateInterceptor.ShouldAllowCreateClick"/>
+///    immediately after the <see cref="ImGuiHelper.DrawButton"/> call
+///    that drives the same button (the nearest preceding DrawButton in
+///    the IL before the Burn.Create call). Same stack effect (consumes
+///    one bool, returns one bool); the gate absorbs the click when a
+///    multi-pass exec is already in <see cref="MultiPassRegistry"/>,
+///    keeping the sync-gap window after a save load from queueing a
+///    duplicate burn (no dedup exists at BurnUpdateBuffer, FlightComputer.AddBurn,
+///    or BurnPlan.AddBurnFromFlightComputerOnly).
+///
+/// Co-exists with <see cref="Patch_DrawPlanWindow_HohmannMultiPass"/>:
+/// that one injects DrawInline before DrawCorrectionTransfer (different
+/// IL site), this one rewrites a call and inserts a gate (also different
+/// sites).
+///
+/// DrawPlanWindow has exactly one Burn.Create call site (line ~443).
+/// The other Burn.Create at line ~904 lives in the separate
+/// DrawCorrectionTransfer method body and is NOT touched by this
+/// transpiler. The DrawButton anchor is located by walking back from
+/// the Burn.Create site, so multiple DrawButton calls earlier in the
+/// method (Calculate, Re-Calculate) are not affected.
+/// </summary>
+[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
+internal static class Patch_DrawPlanWindow_CreateInterceptor
+{
+    private static readonly Type[] BurnCreateSig = new[]
+    {
+        typeof(OrbitPointCce), typeof(double), typeof(double3),
+        typeof(PatchedConic), typeof(Vehicle),
+    };
+
+    private static readonly Type[] DrawButtonSig = new[]
+    {
+        typeof(ImString), typeof(byte4?), typeof(byte4?), typeof(byte4?),
+    };
+
+    // Sanity ceiling for the IL gap between the located DrawButton and
+    // Burn.Create. KSA 2026.5.11.4462 produces ~35-40 instructions in
+    // that span; 80 leaves room for moderate stock-side IL changes but
+    // catches a wholesale refactor where the walk-back can no longer be
+    // trusted to point at the "Create" button. The walk-back stops at
+    // the first DrawButton, so the failure mode this guards is "stock
+    // bloated the Create block enough that our anchor is meaningless"
+    // - it does NOT catch "stock inserted an unrelated DrawButton
+    // BETWEEN Create and Burn.Create" (that case still slips through
+    // with a small gap; semantic detection would need to inspect the
+    // UTF-8 literal of DrawButton's first argument, which is not
+    // tractable from CodeInstruction operands).
+    private const int MaxIlGapDrawButtonToBurnCreate = 80;
+
+    /// <summary>Returns true if the stock <see cref="Burn.Create"/>
+    /// overload we anchor on exists. Mod.cs uses this to decide whether
+    /// to apply the transpiler. The DrawButton anchor is checked
+    /// inside the transpiler and degrades to "swap only, no gate" if
+    /// missing, so it is not required for patch-apply eligibility.</summary>
+    public static bool IsAnchorPresent =>
+        AccessTools.Method(typeof(Burn), nameof(Burn.Create), BurnCreateSig) != null;
+
+    [HarmonyTranspiler]
+    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
+    {
+        var burnCreateAnchor = AccessTools.Method(typeof(Burn), nameof(Burn.Create), BurnCreateSig);
+        var burnCreateReplacement = AccessTools.Method(typeof(HohmannCreateInterceptor),
+            nameof(HohmannCreateInterceptor.CreateMaybeMultiPass));
+        var drawButtonAnchor = AccessTools.Method(typeof(ImGuiHelper),
+            nameof(ImGuiHelper.DrawButton), DrawButtonSig);
+        var clickGate = AccessTools.Method(typeof(HohmannCreateInterceptor),
+            nameof(HohmannCreateInterceptor.ShouldAllowCreateClick));
+
+        if (burnCreateAnchor == null)
+        {
+            DefaultCategory.Log.Warning(
+                "[AFC] HohmannCreateInterceptor transpiler: stock Burn.Create " +
+                "overload not found; leaving DrawPlanWindow unmodified.");
+            foreach (var ins in instructions) yield return ins;
+            yield break;
+        }
+
+        var list = new List<CodeInstruction>(instructions);
+
+        // First pass: locate the Burn.Create call site (swap target and
+        // anchor for the preceding DrawButton walk-back).
+        int burnCreateIdx = -1;
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (list[i].Calls(burnCreateAnchor)) { burnCreateIdx = i; break; }
+        }
+
+        // Walk back from Burn.Create to find the nearest preceding
+        // DrawButton call. By stock IL layout that is the "Create"
+        // button itself; earlier DrawButton calls (Calculate,
+        // Re-Calculate) live higher up in the method. `gateForInjection`
+        // captures the (non-null) clickGate reference only along the
+        // path where we found a candidate, so the use site below needs
+        // no `null!` to satisfy the nullable analyzer.
+        int drawButtonIdx = -1;
+        System.Reflection.MethodInfo? gateForInjection = null;
+        if (drawButtonAnchor != null && clickGate != null && burnCreateIdx >= 0)
+        {
+            for (int i = burnCreateIdx - 1; i >= 0; i--)
+            {
+                if (list[i].Calls(drawButtonAnchor))
+                {
+                    drawButtonIdx = i;
+                    gateForInjection = clickGate;
+                    break;
+                }
+            }
+        }
+
+        // Sanity check (see MaxIlGapDrawButtonToBurnCreate comment): if
+        // the gap is suspiciously large the walk-back probably anchors
+        // on a button unrelated to "Create". Skip the gate rather than
+        // absorb clicks on an unknown widget.
+        int gapTooLarge = 0;
+        if (drawButtonIdx >= 0 && burnCreateIdx - drawButtonIdx > MaxIlGapDrawButtonToBurnCreate)
+        {
+            gapTooLarge = burnCreateIdx - drawButtonIdx;
+            drawButtonIdx = -1;
+            gateForInjection = null;
+        }
+
+        bool burnCreateReplaced = false;
+        bool gateInjected = false;
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            if (i == burnCreateIdx && !burnCreateReplaced)
+            {
+                // Carry labels AND exception block markers from the
+                // original call so branches still target our
+                // replacement and a (future) surrounding try/catch
+                // doesn't lose its block boundary on the rewrite.
+                var swap = new CodeInstruction(OpCodes.Call, burnCreateReplacement);
+                swap.labels.AddRange(list[i].labels);
+                swap.blocks.AddRange(list[i].blocks);
+                yield return swap;
+                burnCreateReplaced = true;
+                continue;
+            }
+
+            yield return list[i];
+
+            if (i == drawButtonIdx && !gateInjected && gateForInjection != null)
+            {
+                // Stack after DrawButton: [bool clicked]. The gate's
+                // signature is (bool) -> bool, so we just append a
+                // call; the existing brfalse that gates the inner
+                // block now reads our (possibly absorbed) result.
+                yield return new CodeInstruction(OpCodes.Call, gateForInjection);
+                gateInjected = true;
+            }
+        }
+
+        if (!burnCreateReplaced)
+            DefaultCategory.Log.Warning(
+                "[AFC] HohmannCreateInterceptor transpiler: no Burn.Create call " +
+                "found in DrawPlanWindow; create-button interception inactive.");
+        else if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(
+                "[AFC] HohmannCreateInterceptor transpiler: replaced Burn.Create " +
+                "in DrawPlanWindow.");
+
+        if (!gateInjected)
+        {
+            if (gapTooLarge > 0)
+                DefaultCategory.Log.Warning(
+                    $"[AFC] HohmannCreateInterceptor transpiler: nearest DrawButton is " +
+                    $"{gapTooLarge} IL instructions before Burn.Create (threshold " +
+                    $"{MaxIlGapDrawButtonToBurnCreate}); stock layout likely refactored, " +
+                    "skipping click gate (legacy registry-has fallback in " +
+                    "CreateMaybeMultiPass still active, duplicate burn possible).");
+            else
+                DefaultCategory.Log.Warning(
+                    "[AFC] HohmannCreateInterceptor transpiler: no preceding DrawButton " +
+                    "call found near Burn.Create; click gate inactive (sync-gap duplicate-" +
+                    "burn protection falls back to legacy registry-has branch in " +
+                    "CreateMaybeMultiPass, which still queues a duplicate burn).");
+        }
+        else if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(
+                "[AFC] HohmannCreateInterceptor transpiler: click gate injected after " +
+                "DrawButton (sync-gap duplicate-burn protection active).");
+    }
+}

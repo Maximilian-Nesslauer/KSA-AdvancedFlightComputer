@@ -7,20 +7,14 @@ namespace AdvancedFlightComputer.Core;
 
 /// <summary>
 /// Lightweight per-method Stopwatch accumulator for debug builds.
-/// Tracks call count, total/min/max elapsed ticks and reports a summary
-/// to the log every <see cref="ReportIntervalSeconds"/> seconds. Counters
-/// are zeroed after each report, so reported avg/min/max are per-window,
-/// not cumulative across the session.
+/// Tracks call count and total/min/max elapsed ticks; reports a per-
+/// window summary every <see cref="ReportIntervalSeconds"/> seconds and
+/// then resets the counters.
 ///
-/// Usage in measured methods:
+/// Call site:
 /// <code>
 /// #if DEBUG
-/// long perfStart = DebugConfig.Performance ? Stopwatch.GetTimestamp() : 0;
-/// #endif
-/// // ... work ...
-/// #if DEBUG
-/// if (DebugConfig.Performance)
-///     PerfTracker.Record("MethodName", Stopwatch.GetTimestamp() - perfStart);
+/// using var _ = new PerfTracker.Scope("MethodName");
 /// #endif
 /// </code>
 /// </summary>
@@ -38,6 +32,27 @@ internal static class PerfTracker
         public long TotalTicks;
         public long MinTicks;
         public long MaxTicks;
+    }
+
+    /// <summary>Stack-allocated scope: ctor takes the start timestamp
+    /// (or -1 if <see cref="DebugConfig.Performance"/> is off, making
+    /// Dispose a no-op).</summary>
+    internal readonly ref struct Scope
+    {
+        private readonly string _name;
+        private readonly long _start;
+
+        public Scope(string name)
+        {
+            _name = name;
+            _start = DebugConfig.Performance ? Stopwatch.GetTimestamp() : -1;
+        }
+
+        public void Dispose()
+        {
+            if (_start < 0) return;
+            Record(_name, Stopwatch.GetTimestamp() - _start);
+        }
     }
 
     public static void Record(string name, long elapsedTicks)

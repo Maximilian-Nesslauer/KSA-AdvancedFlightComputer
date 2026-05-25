@@ -17,6 +17,17 @@ internal static class ManeuverTools
     internal const string KeyMatchInclination = "AFC Match Inclination";
     internal const string KeySetInclination = "AFC Set Inclination";
 
+    // Stock-injected keys we claim via Patch_DrawPlanWindow so we can wrap them
+    // in our multi-pass pipeline. Match TransferPlanner.TransferTypes verbatim.
+    internal const string KeyStockCircularizeApoapsis = "Circularize Apoapsis";
+    internal const string KeyStockCircularizePeriapsis = "Circularize Periapsis";
+
+    // Stock Hohmann key. AFC does not take over its plan window; the
+    // constant exists so Hohmann-related guards (HohmannMultiPassUI,
+    // Patch_TransferPlanner_*, HohmannTransferIntent.TypeKey) share one
+    // string instead of duplicating the literal.
+    internal const string KeyStockHohmann = "Hohmann";
+
     /// <summary>
     /// Adds our plan types to the stock TransferPlanner dropdown.
     /// Called from Mod.OnFullyLoaded before patches are applied.
@@ -50,7 +61,9 @@ internal static class ManeuverTools
     }
 
     /// <summary>
-    /// Returns true if the given transfer type key is one of ours.
+    /// Returns true if the given transfer type key is one we injected. Used by
+    /// <see cref="RemoveTransferTypes"/> to scope removal to AFC entries; stock
+    /// keys we claim (see <see cref="IsCircularizeType"/>) must not be removed.
     /// </summary>
     internal static bool IsOurType(string key)
     {
@@ -58,6 +71,25 @@ internal static class ManeuverTools
             || key == KeySetApoapsis
             || key == KeyMatchInclination
             || key == KeySetInclination;
+    }
+
+    /// <summary>Stock circularize keys whose plan-window UI AFC takes over.</summary>
+    internal static bool IsCircularizeType(string key)
+    {
+        return key == KeyStockCircularizeApoapsis
+            || key == KeyStockCircularizePeriapsis;
+    }
+
+    /// <summary>
+    /// True when AFC owns the Transfer Planning window for this plan type:
+    /// the four AFC-injected quick-tools plus the two stock circularize
+    /// entries we claim via Patch_DrawPlanWindow. The takeover swaps in our
+    /// window layout for everyone, single-burn included; multi-pass is one
+    /// extra capability that rides on top.
+    /// </summary>
+    internal static bool IsHandledType(string key)
+    {
+        return IsOurType(key) || IsCircularizeType(key);
     }
 
     /// <summary>

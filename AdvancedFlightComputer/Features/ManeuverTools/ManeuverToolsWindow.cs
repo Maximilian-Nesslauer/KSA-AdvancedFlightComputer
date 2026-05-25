@@ -69,6 +69,10 @@ internal static class ManeuverToolsWindow
             DrawMatchInclination(source);
         else if (typeKey == ManeuverTools.KeySetInclination)
             DrawSetInclination(source);
+        else if (typeKey == ManeuverTools.KeyStockCircularizeApoapsis)
+            DrawCircularize(source, useApoapsis: true);
+        else if (typeKey == ManeuverTools.KeyStockCircularizePeriapsis)
+            DrawCircularize(source, useApoapsis: false);
     }
 
     public static Orbit? GetSelectedTargetOrbit()
@@ -167,7 +171,7 @@ internal static class ManeuverToolsWindow
             {
                 ImGui.Spacing();
                 ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-                ImGui.Text("Target apoapsis is above SOI; vehicle will escape after the burn."u8);
+                ImGui.TextWrapped("Target apoapsis is above SOI; vehicle will escape after the burn.");
                 ImGui.PopStyleColor();
             }
         }
@@ -176,6 +180,53 @@ internal static class ManeuverToolsWindow
             DrawPostBurnOrbitInfo(orbit.Apoapsis, newRadius, orbit.Mu, parentRadius);
         else
             DrawPostBurnOrbitInfo(newRadius, orbit.Periapsis, orbit.Mu, parentRadius);
+    }
+
+    #endregion
+
+    #region Circularize
+
+    private static void DrawCircularize(Vehicle source, bool useApoapsis)
+    {
+        Orbit orbit = source.Orbit;
+
+        if (orbit.Eccentricity >= 1.0)
+        {
+            ImGui.Text("Requires a bound (elliptical) orbit."u8);
+            return;
+        }
+
+        double parentRadius = source.Parent?.MeanRadius ?? 0.0;
+        double currentPeAlt = Math.Max(0.0, orbit.Periapsis - parentRadius);
+        double currentApAlt = Math.Max(0.0, orbit.Apoapsis - parentRadius);
+        double targetRadius = useApoapsis ? orbit.Apoapsis : orbit.Periapsis;
+        double targetAlt = Math.Max(0.0, targetRadius - parentRadius);
+
+        string burnLocation = useApoapsis ? "Apoapsis" : "Periapsis";
+
+        ImGui.Spacing();
+        ImGuiHelper.DrawTextWidget("Current Periapsis:"u8, FormatDistance(currentPeAlt));
+        ImGuiHelper.DrawTextWidget("Current Apoapsis:"u8, FormatDistance(currentApAlt));
+        ImGuiHelper.DrawTextWidget("Burn Location:"u8, burnLocation);
+        if (ImGui.IsItemHovered())
+        {
+            if (useApoapsis)
+                ImGui.SetTooltip("Burns at apoapsis raise the periapsis to the apoapsis radius,\nproducing a circular orbit at the current apoapsis altitude."u8);
+            else
+                ImGui.SetTooltip("Burns at periapsis lower the apoapsis to the periapsis radius,\nproducing a circular orbit at the current periapsis altitude."u8);
+        }
+        ImGuiHelper.DrawTextWidget("Target Altitude:"u8, FormatDistance(targetAlt));
+
+        if (orbit.Eccentricity < 0.001)
+        {
+            ImGui.Spacing();
+            ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(80, 220, 80, 255));
+            ImGui.Text("Orbit is already nearly circular."u8);
+            ImGui.PopStyleColor();
+            return;
+        }
+
+        DrawPostBurnOrbitInfo(targetRadius, targetRadius, orbit.Mu, parentRadius);
     }
 
     #endregion

@@ -80,12 +80,45 @@ internal static class OrbitManeuvers
     }
 
     /// <summary>
+    /// Computes a tangential burn at the next apoapsis (useApoapsis = true) or
+    /// periapsis (false) that circularizes the orbit at the burn radius.
+    /// Delegates to stock <see cref="OrbitalTransfers.DvCciToCircularize"/> so the
+    /// math tracks any future tweak to KSA's circularization formula. Returns
+    /// null if the orbit is unbound or already nearly circular (mirrors the
+    /// 0.001 tolerance <see cref="MultiPass.CircularizeIntent"/> uses for
+    /// IsSatisfied so the UI's "already circular" message and the missing
+    /// Create button line up).
+    /// </summary>
+    public static ManeuverResult? ComputeCircularize(
+        Orbit orbit, bool useApoapsis, SimTime now)
+    {
+        if (orbit.Eccentricity >= 1.0)
+            return null;
+        if (orbit.Eccentricity < 0.001)
+            return null;
+
+        SimTime burnTime = useApoapsis
+            ? orbit.GetNextApoapsisTime(now)
+            : orbit.GetNextPeriapsisTime(now);
+
+        double3 dvCci = OrbitalTransfers.DvCciToCircularize(orbit, burnTime);
+        if (dvCci.LengthSquared() < 1e-12)
+            return null;
+
+        double3 dvVlf = CciToVlf(dvCci, orbit, burnTime);
+        return new ManeuverResult(dvCci, dvVlf, burnTime);
+    }
+
+    /// <summary>
     /// Computes a plane-change burn at the ascending or descending node to match
     /// a target orbit's inclination. Preserves orbital speed, only rotates the
-    /// velocity vector into the target's orbital plane.
+    /// velocity vector into the target's orbital plane. <paramref name="fraction"/>
+    /// scales the rotation angle for multi-pass partial plane changes (1.0 =
+    /// full match, 0.5 = halve the relative inclination).
     /// </summary>
     public static ManeuverResult? ComputeMatchInclination(
-        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now)
+        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now,
+        double fraction = 1.0)
     {
         // GetNextPeriapsisTime / TimeOfTrueAnomaly behaviour for hyperbolic
         // vehicles is past-times-not-corrected, so the burn would be in the past.
@@ -110,7 +143,7 @@ internal static class OrbitManeuvers
         if (rotAxis.LengthSquared() < 1e-12)
             return null;
 
-        doubleQuat planeChange = QuaternionEx.AngleAxis(relInc, rotAxis);
+        doubleQuat planeChange = QuaternionEx.AngleAxis(relInc * fraction, rotAxis);
         double3 targetVel = sv.VelocityCci.Transform(planeChange);
         double3 dvCci = targetVel - sv.VelocityCci;
 
@@ -119,44 +152,15 @@ internal static class OrbitManeuvers
     }
 
     /// <summary>
-    /// Builds a PorkChopEntry + TransferInfo for use with the stock Create button.
-    /// Follows the same pattern as stock's Circularize branch in
-    /// TransferPlanner.DrawPlanWindow (TransferData with Start/Point/Dv plus a
-    /// 1x1 PorkChopData and a freshly-built FlightPlan).
-    /// </summary>
-    public static (OrbitalTransfers.PorkChopEntry entry, OrbitalTransfers.TransferInfo info)
-        BuildTransferEntry(Vehicle source, ManeuverResult maneuver)
-    {
-        var transferData = new OrbitalTransfers.TransferData
-        {
-            Start = maneuver.BurnTime,
-            Point = source.Orbit.GetPointAt(maneuver.BurnTime),
-            DeltaVelocityCci = maneuver.DvCci,
-            TransferDvVlf = maneuver.DvVlf
-        };
-
-        var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false);
-        info.PorkChopData = new OrbitalTransfers.PorkChopEntry[1, 1];
-
-        FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
-        OrbitalTransfers.BuildFlightPlan(
-            ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,
-            out _, out _);
-
-        var entry = new OrbitalTransfers.PorkChopEntry(transferData, flightPlan);
-        info.PorkChopData[0, 0] = entry;
-
-        return (entry, info);
-    }
-
-    /// <summary>
     /// Computes a plane-change burn at the ascending or descending node (relative
     /// to the chosen reference plane) to set the orbit's inclination to a specific
-    /// angle. Preserves orbital speed.
+    /// angle. Preserves orbital speed. <paramref name="fraction"/> scales the
+    /// rotation angle for multi-pass partial plane changes (1.0 = full set,
+    /// 0.5 = halve the remaining inclination delta).
     /// </summary>
     public static ManeuverResult? ComputeSetInclination(
         Orbit orbit, double targetInclinationRad, bool useDescendingNode, SimTime now,
-        InclinationReference reference)
+        InclinationReference reference, double fraction = 1.0)
     {
         if (orbit.Eccentricity >= 1.0)
             return null;
@@ -197,7 +201,7 @@ internal static class OrbitManeuvers
             return null;
 
         double rotAngle = MathEx.Angle(vehicleNormal, targetNormal).Value();
-        doubleQuat planeChange = QuaternionEx.AngleAxis(rotAngle, rotAxis);
+        doubleQuat planeChange = QuaternionEx.AngleAxis(rotAngle * fraction, rotAxis);
         double3 targetVel = sv.VelocityCci.Transform(planeChange);
         double3 dvCci = targetVel - sv.VelocityCci;
 

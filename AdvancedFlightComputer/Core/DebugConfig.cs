@@ -11,12 +11,14 @@ internal static class DebugConfig
 #if DEBUG
     public static bool HyperbolicTargets = true;
     public static bool ManeuverTools = true;
+    public static bool MultiPass = true;
     public static bool Performance = true;
 #else
     public static bool HyperbolicTargets = false;
     public static bool ManeuverTools = false;
+    public static bool MultiPass = false;
     public static bool Performance = false;
 #endif
 
-    public static bool Any => HyperbolicTargets || ManeuverTools || Performance;
+    public static bool Any => HyperbolicTargets || ManeuverTools || MultiPass || Performance;
 }
