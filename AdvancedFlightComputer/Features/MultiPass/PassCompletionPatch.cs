@@ -32,9 +32,12 @@ internal static class PassCompletionPatch
     // completion on someone else's burn finishing.
     private const double BurnIdentityToleranceSec = 0.5;
 
-    // Keyed by vehicle id (string) not FlightComputer reference because
-    // UpdateFromTaskResults can swap FlightComputer in-place; a ref-keyed
-    // entry would lose its prevMode reading on the swap tick.
+    // Keyed by vehicle id (string), the stable per-vehicle key that also
+    // matches MultiPassRegistry's scoping. UpdateFromTaskResults overwrites
+    // FlightComputer.BurnMode every tick via CopyFrom (into the existing
+    // instance, not a swap), and the FlightComputer instance itself is replaced
+    // on save load (Vehicle.DeserializeSave news up a fresh one), so a
+    // reference-keyed entry would be the fragile choice.
     private static readonly Dictionary<string, FlightComputerBurnMode> _lastBurnMode = new();
 
     public static void Reset() => _lastBurnMode.Clear();
@@ -86,6 +89,11 @@ internal static class PassCompletionPatch
                 return;
 
             UpdateBurnModeTracking(__instance.Id, fc, out var prevMode, out var hadPrev);
+
+            // Engine running under Auto clears a prior stall hint, so a user
+            // who re-engages Auto and then stalls again gets re-alerted.
+            if (fc.BurnMode == FlightComputerBurnMode.Auto)
+                exec.StallHintShown = false;
 
             // Track Auto engagement for this pass: any tick where the
             // FlightComputer is in Auto AND its loaded BurnTarget
@@ -148,6 +156,13 @@ internal static class PassCompletionPatch
                     "pending burn was deleted externally; cancelling");
                 return;
             }
+
+            // Engine stopped mid-pass with dV still owed (out of fuel, or the
+            // user disengaged Auto): the burn neither completed nor left the
+            // plan, so without a nudge the exec would sit on this pass. One-shot
+            // hint; state stays intact so the user can re-engage Auto or cancel.
+            if (!didCommit && exec.CurrentBurn != null)
+                MaybeAlertStalledPass(__instance.Id, exec, fc);
 
             if (exec.CurrentBurn == null && exec.PassIndex >= exec.PassCountTotal)
             {
@@ -419,6 +434,52 @@ internal static class PassCompletionPatch
                 $"{Universe.GetElapsedSimTime().Seconds():F1}s " +
                 $"(autoEngaged={exec.BurnAutoEngagedThisPass}); treating as user delete.");
         return fired;
+    }
+
+    /// <summary>Surfaces a one-shot hint when a pass burn fired but the engine
+    /// stopped with dV still owed (out of fuel, or the user toggled Auto off).
+    /// The burn neither completed (dot &lt;= 0) nor left the plan, so the exec
+    /// would otherwise stall on this pass forever. We do NOT auto-cancel: the
+    /// same Auto-&gt;Manual-with-dV-remaining signature also occurs when the user
+    /// intentionally pauses a burn, so the safe move is to inform and leave the
+    /// re-engage / cancel decision to the player.
+    /// <see cref="MultiPassExecution.StallHintShown"/> dedups so the hint fires
+    /// once per stall, re-arming when Auto is observed engaged again.</summary>
+    private static void MaybeAlertStalledPass(
+        string vehicleId, MultiPassExecution exec, FlightComputer fc)
+    {
+        if (exec.StallHintShown) return;
+        if (exec.AwaitingMaterialization) return;
+        if (exec.CurrentBurn == null) return;
+        // Engine must have actually engaged for this pass; otherwise the burn
+        // is just queued-and-waiting, not stalled.
+        if (!exec.BurnAutoEngagedThisPass) return;
+        // Still firing under Auto: not stalled.
+        if (fc.BurnMode != FlightComputerBurnMode.Manual) return;
+        // Burn gone from the plan is the completion / external-delete paths' job.
+        if (!fc.BurnPlan.TryGetBurn(exec.CurrentBurn)) return;
+        // Only alert once the burn's scheduled instant has arrived. This gate
+        // is load-bearing, NOT redundant with BurnAutoEngagedThisPass: that
+        // flag goes true during the pre-ignition Auto phase (the engine engages
+        // to align / warp toward the burn before firing - FlightComputer holds
+        // throttle while IgnitionTime - now > 0), so it does NOT imply the burn
+        // fired. Without this check, disengaging Auto while still coasting
+        // toward the burn would trip a false "stopped with dV remaining" alert.
+        // Compares against the impulsive instant, not ignition time, so a stall
+        // in the first half of a long burn is reported up to 0.5*BurnDuration
+        // late - acceptable for a hint.
+        if (Universe.GetElapsedSimTime() < exec.CurrentBurn.Time) return;
+
+        exec.StallHintShown = true;
+        DefaultCategory.Log.Warning(
+            $"[AFC] MultiPass: vehicle={vehicleId} pass {exec.PassIndex + 1}/" +
+            $"{exec.PassCountTotal} engine stopped with dV remaining (out of fuel " +
+            "or Auto disengaged); execution paused until Auto is re-engaged or the " +
+            "plan is cancelled.");
+        TimedAlert.Create(
+            $"Multi-pass pass {exec.PassIndex + 1}/{exec.PassCountTotal} stopped with " +
+            "dV remaining. Re-engage Auto to continue, or cancel the remaining passes.",
+            Color.Yellow, 6.0);
     }
 
     private static void CompleteExecution(string vehicleId, MultiPassExecution exec)

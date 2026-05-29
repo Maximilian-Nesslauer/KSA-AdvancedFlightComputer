@@ -83,6 +83,12 @@ internal sealed class MultiPassExecution
     /// Cleared on each new pass via AssignCurrentBurn.</summary>
     public bool BurnAutoEngagedThisPass { get; set; }
 
+    /// <summary>One-shot guard for the stalled-pass hint (engine stopped
+    /// mid-pass with dV remaining). Set when the hint fires; cleared on each
+    /// new pass and whenever Auto is observed re-engaged, so a re-engage-then-
+    /// stall-again cycle re-alerts the player.</summary>
+    public bool StallHintShown { get; set; }
+
     #endregion
 
     public void AssignCurrentBurn(Burn burn)
@@ -93,6 +99,7 @@ internal sealed class MultiPassExecution
         AwaitingMaterialization = true;
         AwaitingMaterializationTicks = 0;
         BurnAutoEngagedThisPass = false;
+        StallHintShown = false;
     }
 
     public void ClearCurrentBurn()
@@ -103,6 +110,7 @@ internal sealed class MultiPassExecution
         AwaitingMaterialization = false;
         AwaitingMaterializationTicks = 0;
         BurnAutoEngagedThisPass = false;
+        StallHintShown = false;
     }
 
     /// <summary>

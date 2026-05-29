@@ -38,11 +38,16 @@ internal static class Patch_TryFindIntercept
         ref OrbitalTransfers.PorkChopEntry selectedEntry,
         ref bool __result)
     {
-        if (transferInfo.Target.Orbit.Eccentricity < 1.0)
-            return true;
-
         try
         {
+            // Bound targets (or any with no resolvable orbit) fall through to
+            // the stock dV sweep. The guard lives inside the try so a null
+            // Target / Orbit degrades to "run original" instead of throwing on
+            // the ThreadPool thread RefineBurnTask runs us on.
+            if (transferInfo.Target?.Orbit == null
+                || transferInfo.Target.Orbit.Eccentricity < 1.0)
+                return true;
+
             double3 dv = selectedEntry.TransferData.TransferDvVlf;
             FlightPlan flightPlan = FlightPlan.CreateUninitialized(transferInfo.Vehicle.Hash);
 

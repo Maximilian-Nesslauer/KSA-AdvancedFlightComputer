@@ -29,6 +29,15 @@ internal static class Patch_PopulateWithPlanets
             var star = HyperbolicTargets.GetParentStar(source);
             if (star == null) return;
 
+            // Only offer hyperbolic targets when the source frame is
+            // heliocentric: the vehicle orbits the star directly, or a planet
+            // that orbits the star. From a moon orbit stock shows only sibling
+            // bodies, so a heliocentric comet target there would just produce a
+            // nonsensical plan.
+            IParentBody? sourceParent = source.Parent;
+            if (sourceParent != star && (sourceParent as Celestial)?.Parent != star)
+                return;
+
             ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
             for (int i = 0; i < all.Length; i++)
             {
