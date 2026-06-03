@@ -20,8 +20,8 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// the mode without flipping the dot-product sign.
 /// </summary>
 [HarmonyPatch(typeof(Vehicle), nameof(Vehicle.UpdateFromTaskResults),
-    new[] { typeof(VehicleUpdateData), typeof(Vehicle), typeof(ReadOnlySpan<Vehicle>) },
-    new[] { ArgumentType.Ref, ArgumentType.Normal, ArgumentType.Normal })]
+    new[] { typeof(VehicleUpdateData), typeof(BubbleOrigin), typeof(Vehicle), typeof(ReadOnlySpan<Vehicle>) },
+    new[] { ArgumentType.Ref, ArgumentType.Ref, ArgumentType.Normal, ArgumentType.Normal })]
 internal static class PassCompletionPatch
 {
     private const int MaxAwaitingMaterializationTicks = 4;

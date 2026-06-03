@@ -69,6 +69,7 @@ internal static class GameReflection
             new Type[]
             {
                 typeof(VehicleUpdateData).MakeByRefType(),
+                typeof(BubbleOrigin).MakeByRefType(),
                 typeof(Vehicle),
                 typeof(ReadOnlySpan<Vehicle>),
             });
