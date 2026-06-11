@@ -93,5 +93,6 @@ Thread on the KSA forums: https://forums.ahwoo.com/threads/advanced-flight-compu
 ## Check out my other mods
 
 - [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) - automatic staging during auto-burns and manual flight, with configurable ignition delays ([forum thread](https://forums.ahwoo.com/threads/autostage.891/))
+- [MeasureTools](https://github.com/Maximilian-Nesslauer/KSA-MeasureTools) - click-to-measure ruler, protractor, and surface measuring in the map view ([forum thread](https://forums.ahwoo.com/threads/measuretools.992/))
 - [StageInfo](https://github.com/Maximilian-Nesslauer/KSA-StageInfo) - per-sequence dV, TWR, burn time, and ISP in the stage info panel ([forum thread](https://forums.ahwoo.com/threads/stageinfo.905/))
 - [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) - automatically remove finished auto-burns from the burn plan ([forum thread](https://forums.ahwoo.com/threads/autoremovefinishedburns.928/))
