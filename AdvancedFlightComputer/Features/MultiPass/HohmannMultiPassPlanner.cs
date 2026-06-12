@@ -1024,7 +1024,7 @@ internal static class HohmannMultiPassPlanner
         // target-aware: encounter detection populates ClosestApproaches
         // with the destination body so the preview shows how close the
         // departure actually gets to (e.g.) Mars.
-        fp.ComputeCompleteTrajectory(FlightPlanPatchLimit, FlightPlanPolynomialOrder, target);
+        fp.ComputeCompleteTrajectory(out _, FlightPlanPatchLimit, FlightPlanPolynomialOrder, target);
         if (source.Target != null)
             fp.CalculateTargetNodes(source.Target);
         return (fp, burnPatch);

@@ -153,7 +153,7 @@ internal static class MultiPassForwardChainPlanner
         FlightPlan fp = FlightPlan.CreateUninitialized(source.Hash);
         PatchedConic burnPatch = fp.CalculateBurnPatch(prePatch, timeSincePe, dvVlf, burnTime);
         fp.Patches.Add(burnPatch);
-        fp.ComputeCompleteTrajectory(FlightPlanPatchLimit, FlightPlanPolynomialOrder);
+        fp.ComputeCompleteTrajectory(out _, FlightPlanPatchLimit, FlightPlanPolynomialOrder);
         if (source.Target != null)
             fp.CalculateTargetNodes(source.Target);
         return (fp, burnPatch);
