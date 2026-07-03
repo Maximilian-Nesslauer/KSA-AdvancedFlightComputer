@@ -284,24 +284,24 @@ public static partial class PoweredGuidanceWindow
             dl.AddText(pad + new float2(8f, -6f), padCol, "PAD");
         }
 
-        // --- Live vehicle state: reference point (legs), velocity, plan deviation ---
-        double3 legs = GfoldRefPos(orbit);
-        double3 vSrf = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), legs);
-        OvLine(dl, legs, legs + vSrf * 1.5, velCol, 2.0f); // velocity vector (~1.5 s lookahead)
-        if (TryProjectCci(legs, out float2 lp))
+        // --- Live vehicle state: CoM (the flown reference), velocity, plan deviation ---
+        double3 com = orbit.StateVectors.PositionCci;
+        double3 vSrf = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), com);
+        OvLine(dl, com, com + vSrf * 1.5, velCol, 2.0f); // velocity vector (~1.5 s lookahead)
+        if (TryProjectCci(com, out float2 lp))
         {
             dl.AddCircleFilled(lp, 5f, liveCol);
-            dl.AddText(lp + new float2(8f, -6f), liveCol, "LEGS");
+            dl.AddText(lp + new float2(8f, -6f), liveCol, "CG");
         }
 
-        // Deviation: current reference point vs. where the plan says it should be now.
+        // Deviation: current CoM vs. where the plan says it should be now.
         double elapsed = now - _gfoldPlanStart;
         double sf = Math.Clamp(elapsed / plan.Dt, 0.0, n - 1);
         int s0 = Math.Clamp((int)Math.Floor(sf), 0, n - 2);
         double sfrac = Math.Clamp(sf - s0, 0.0, 1.0);
         double3 refLocal = Lerp(Node(plan.Position, s0), Node(plan.Position, s0 + 1), sfrac);
-        OvLine(dl, legs, PlanCci(f, refLocal), devCol, 1.5f);
-        double devM = (refLocal - f.PointToLocal(legs)).Length();
+        OvLine(dl, com, PlanCci(f, refLocal), devCol, 1.5f);
+        double devM = (refLocal - f.PointToLocal(com)).Length();
 
         // --- Numeric HUD (top-right) ---
         double tgo = _gfoldArrivalTime - now;
@@ -310,7 +310,7 @@ public static partial class PoweredGuidanceWindow
             $"G-FOLD   {_gfoldStatus}",
             $"phase    {_landingPhase}",
             $"tgo     {tgo,6:F1} s   tf {plan.TimeOfFlight,5:F1} s",
-            $"alt(legs){_gfoldAltM,7:F0} m",
+            $"alt     {_gfoldAltM,7:F0} m",
             $"speed   {_gfoldSpeedMs,6:F1} / {_gfoldVMaxMs,5:F0} m/s",
             $"throttle{_gfoldThrottle * 100,5:F0} %",
             $"fuel    {vehicle.PropellantMass,7:F0} kg",
