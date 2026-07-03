@@ -14,7 +14,7 @@ using KSA;
 // on top of terrain rather than being occluded by it — fine for a debug view.
 public static partial class PoweredGuidanceWindow
 {
-    private static bool _showGfoldOverlay = true;
+    private static bool _showGfoldOverlay;
     private static bool _retargetArmed;
     private static bool _landingTabActive;   // set while the Landing tab is the open tab
 

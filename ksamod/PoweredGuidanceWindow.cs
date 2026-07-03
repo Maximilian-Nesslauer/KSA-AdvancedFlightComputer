@@ -9,8 +9,6 @@ using KSA;
 // world-space overlay in PoweredGuidanceOverlay.cs.
 public static partial class PoweredGuidanceWindow
 {
-    private static bool _showParams;
-
     public static void Draw(Viewport viewport)
     {
         ImGui.Begin("Powered Guidance", ImGuiWindowFlags.AlwaysAutoResize);
@@ -48,9 +46,6 @@ public static partial class PoweredGuidanceWindow
             ImGui.EndTabBar();
         }
 
-        if (ImGui.Button(_showParams ? "Close params" : "Adjust params..."))
-            _showParams = !_showParams;
-
         // Any warp the mod wants needs the user's OK first.
         DrawWarpPrompt();
 
@@ -67,8 +62,11 @@ public static partial class PoweredGuidanceWindow
 
         ImGui.End();
 
-        // Secondary windows: the tuning-parameter panel and the G-FOLD debug plots.
-        DrawParamsWindow();
+        // Per-domain tuning popups (each no-ops unless opened from its tab) and the
+        // G-FOLD debug plots.
+        DrawAscentParamsWindow();
+        DrawGfoldParamsWindow();
+        DrawTermParamsWindow();
         DrawGfoldDebugWindow();
 
         // World-space G-FOLD debug overlay (its own full-screen window, drawn after
@@ -183,24 +181,4 @@ public static partial class PoweredGuidanceWindow
         }
     }
 
-    // Ascent-profile tuning, out of the main panel. (Landing and G-FOLD tuning
-    // live on their own sub-tabs under Landing.)
-    private static void DrawParamsWindow()
-    {
-        if (!_showParams)
-            return;
-
-        ImGui.Begin("Adjust params", ImGuiWindowFlags.AlwaysAutoResize);
-
-        ImGui.SeparatorText("Ascent profile");
-        ImGui.InputDouble("Turn start alt (km)", ref _turnStartAltKm);
-        ImGui.InputDouble("Turn rate (deg/s)", ref _turnRateDegS);
-        ImGui.Checkbox("G-limit", ref _gLimitEnabled);
-        ImGui.SameLine();
-        ImGui.InputDouble("Max accel (g)", ref _gLimitG);
-
-        if (ImGui.Button("Close"))
-            _showParams = false;
-        ImGui.End();
-    }
 }
