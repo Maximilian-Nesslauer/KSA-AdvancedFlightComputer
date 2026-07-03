@@ -157,6 +157,10 @@ public static partial class PoweredGuidanceWindow
     // trajectory only — the tracker still uses the full 0-100% throttle range.
     private static double _gfoldThrottleMin = 0.05;
     private static double _gfoldThrottleMax = 0.90;
+    // Thrust-slew smoothing weight: penalizes rapid changes in the commanded thrust
+    // vector so the plan is gentler on the gimballed autopilot. 0 = off; a little goes
+    // a long way (trades a little fuel for a much smoother command).
+    private static double _gfoldSlewReg = 0.05;
     // Distance from the vehicle CoM/origin down to the landing legs. The G-FOLD
     // reference point is shifted by this much along the anti-pointing axis (see
     // GfoldRefPos) so the solve plans for the legs touching down, not the CoM.
@@ -664,6 +668,7 @@ public static partial class PoweredGuidanceWindow
             ImGui.InputDouble("Max speed (m/s)", ref _gfoldVMaxMs);
             ImGui.InputDouble("Solver min thrust (frac)", ref _gfoldThrottleMin);
             ImGui.InputDouble("Solver max thrust (frac)", ref _gfoldThrottleMax);
+            ImGui.InputDouble("Thrust smoothing (0=off)", ref _gfoldSlewReg);
             ImGui.InputDouble("Re-solve interval (s)", ref _gfoldIntervalS);
             ImGui.InputInt("Nodes", ref _gfoldNodes);
             ImGui.Checkbox("Vertical descent phase", ref _gfoldUseVerticalPhase);
@@ -1135,14 +1140,16 @@ public static partial class PoweredGuidanceWindow
             {
                 double remaining = _gfoldArrivalTime - now;
                 GfoldTrajectory t = GfoldPlanner.SolveMinFuel(
-                    p, remaining, _gfoldNodes, [GfoldTargetAltM, 0.0, 0.0], options: GfoldOptions.Descent);
+                    p, remaining, _gfoldNodes, [GfoldTargetAltM, 0.0, 0.0],
+                    options: GfoldOptions.Descent with { SlewReg = _gfoldSlewReg });
                 if (t.Status is EcosStatus.Optimal or EcosStatus.OptimalInaccurate)
                     traj = t;
             }
             if (traj == null)
             {
                 GfoldPlanner.SearchResult best = GfoldPlanner.SearchMinFuel(
-                    p, _gfoldNodes, tfLo: GfoldMinTf, tfHi: 120.0, options: GfoldOptions.Descent);
+                    p, _gfoldNodes, tfLo: GfoldMinTf, tfHi: 120.0,
+                    options: GfoldOptions.Descent with { SlewReg = _gfoldSlewReg });
                 if (best == null)
                 {
                     FailGfold($"G-FOLD unreachable: alt {_gfoldAltM:F0} m, {_gfoldSpeedMs:F0} m/s, " +
