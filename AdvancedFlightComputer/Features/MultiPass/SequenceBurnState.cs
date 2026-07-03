@@ -151,12 +151,11 @@ internal sealed class SequenceBurnState
                 if (rm?.FurtherestToNearestNodeSameStage == null)
                     continue;
 
-                Span<CommunityToolkit.HighPerformance.Buffers.MemoryOwner<Tank>> nodeSpan =
-                    rm.FurtherestToNearestNodeSameStage.Span;
+                Span<Tank[]> nodeSpan = rm.FurtherestToNearestNodeSameStage;
                 for (int i = 0; i < nodeSpan.Length; i++)
                 {
                     if (nodeSpan[i].Length == 0) continue;
-                    Span<Tank> tanks = nodeSpan[i].Span;
+                    Span<Tank> tanks = nodeSpan[i];
                     for (int j = 0; j < tanks.Length; j++)
                     {
                         // First-claim-wins across the whole walk.
