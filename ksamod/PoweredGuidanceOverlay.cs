@@ -160,7 +160,7 @@ public static partial class PoweredGuidanceWindow
         _siteLatDeg = latDeg;
         _siteLonDeg = lonDeg;
         _landingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";
-        if (_landingPhase == LandingPhase.GfoldDescent || _landingPhase == LandingPhase.VerticalDescent)
+        if (_landingPhase == LandingPhase.GfoldDescent)
         {
             _gfoldForceSearch = true;
             _gfoldLastSolveTime = double.NegativeInfinity;
@@ -183,9 +183,7 @@ public static partial class PoweredGuidanceWindow
             return;
 
         GfoldTrajectory plan = _gfoldPlan;
-        bool active = _landingPhase == LandingPhase.GfoldDescent
-                   || _landingPhase == LandingPhase.VerticalDescent;
-        if (plan == null || !active)
+        if (plan == null || _landingPhase != LandingPhase.GfoldDescent)
             return;
         if (!SetupProjection(parent))
             return;
