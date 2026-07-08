@@ -6,6 +6,7 @@ using KSA;
 using RenderCore.Input;
 using StarMap.API;
 using System.Collections;
+using static Brutal.Strings.Utf8;
 
 namespace NovaTec.GravityTurnMod
 {
@@ -34,7 +35,7 @@ namespace NovaTec.GravityTurnMod
                 Y = (MathEx.ToCompassAngle(angles.Y) * (180.0 / Math.PI)) % 360,
                 Z = (MathEx.ToCompassAngle(angles.Z) * (180.0 / Math.PI)) % 360
             };
-            return String.Format("X: {0,6:N}, {1,6:N}, {2,6:N}", degrees.X, degrees.Y, degrees.Z);
+            return String.Format("X: {0,6:N}, >: {1,6:N}, Z: {2,6:N}", degrees.X, degrees.Y, degrees.Z);
         }
 
         [StarMapAfterGui]
@@ -66,15 +67,21 @@ namespace NovaTec.GravityTurnMod
             }
 
             ImGui.Begin("Gravityturn", flags);
-            ImGui.SetWindowSize("Gravityturn", new Brutal.Numerics.float2(600, 550));
+            ImGui.SetWindowSize("Gravityturn", new Brutal.Numerics.float2(600, 600));
 
             if (ImGui.BeginMenuBar())
             {
                 if (ImGui.BeginMenu("Control"))
                 {
+                    if (ImGui.MenuItem("Launch"))
+                    {
+                        Controller.Launch(vehicle);
+                        Controller.Phase = GravityController.PhaseEnum.Landed;
+                    }
                     if (ImGui.MenuItem("Pitch over"))
                     {
                         Controller.StartPhasePitch(vehicle);
+                        Controller.Phase = GravityController.PhaseEnum.Landed;
                     }
                     if (ImGui.MenuItem("Stability Assist"))
                     {
@@ -85,17 +92,27 @@ namespace NovaTec.GravityTurnMod
                     {
                         Controller.NextStequence();
                     }
+                    if (ImGui.MenuItem("Throttle UP") && vehicle.UpdateTask != null)
+                    {
+                        Controller.ThrottleUp();
+                        //vehicle.ProcessInput(InputAction.MainEngineThrottleUp, GlfwKeyAction.Press, 0);
+                        //Controller.RunWorker();
+                        //vehicle.ProcessInput(InputAction.MainEngineThrottleUp, GlfwKeyAction.Release, 0);
+                        //Controller.RunWorker();
+                    }
                     if (ImGui.MenuItem("Throttle DOWN") && vehicle.UpdateTask != null)
                     {
-                        vehicle.OnKey(new GlfwKeyEvent(Program.GetWindow(), GlfwKeyAction.Press, GlfwKey.Down, 0));
-                        vehicle.PrepareWorker(vehicle.UpdateTask);
-                        vehicle.UpdateTask.ApplyResultsToVehicles();
-                        vehicle.OnKey(new GlfwKeyEvent(Program.GetWindow(), GlfwKeyAction.Release, GlfwKey.Down, 0));
+                        Controller.ThrottleDown();
+                        //vehicle.ProcessInput(InputAction.MainEngineThrottleDown, GlfwKeyAction.Press, 0);
+                        //Controller.RunWorker();
+                        //vehicle.ProcessInput(InputAction.MainEngineThrottleDown, GlfwKeyAction.Release, 0);
+                        //Controller.RunWorker();
                     }
 
                     if (ImGui.MenuItem("HOLD Forward/Prograde"))
                     {
                         Controller.StartPhaseHold(vehicle);
+                        Controller.Phase = GravityController.PhaseEnum.Idle;
                     }
                     if (ImGui.MenuItem("Circularize"))
                     {
@@ -126,6 +143,18 @@ namespace NovaTec.GravityTurnMod
                 float y = ImGui.GetCursorPosY();
 
                 // setup input parameters
+
+                ImGui.Text("Target altitude");
+                ImGui.SameLine();
+                ImGui.SetCursorPosX(x + width * 0.45f + ImGui.GetStyle().ItemInnerSpacing.X);
+                ImGui.SetNextItemWidth(width * 0.2f);
+                int talt = (int)Controller.TargetAltitude;
+                ImGui.InputInt("km", flags: ImGuiInputTextFlags.CharsDecimal, v: ref talt);
+                if (talt != Controller.TargetAltitude)
+                {
+                    Controller.TargetAltitude = talt;
+                }
+
                 ImGui.Text("Pitch speed");
                 ImGui.SameLine();
                 ImGui.SetCursorPosX(x + width * 0.45f + ImGui.GetStyle().ItemInnerSpacing.X);
@@ -155,16 +184,27 @@ namespace NovaTec.GravityTurnMod
                     Controller.TimeToApoapsisStart = ttas;
                     Controller.TimeToApoapsisEnd = ttas;
                 }
-
+                
                 ImGui.Text("Use time warp:");
                 ImGui.SameLine();
                 ImGui.SetCursorPosX(x + width * 0.45f + ImGui.GetStyle().ItemInnerSpacing.X);
                 ImGui.SetNextItemWidth(width * 0.2f);
                 bool uw = Controller.UseWarp;
-                ImGui.Checkbox("", ref uw);
+                ImGui.Checkbox("##tw", ref uw);
                 if (uw != Controller.UseWarp)
                 {
                     Controller.UseWarp = uw;    
+                }
+
+                ImGui.Text("Auto stage:");
+                ImGui.SameLine();
+                ImGui.SetCursorPosX(x + width * 0.45f + ImGui.GetStyle().ItemInnerSpacing.X);
+                ImGui.SetNextItemWidth(width * 0.2f);
+                bool ast = Controller.AutoStage;
+                ImGui.Checkbox("##as", ref ast);
+                if (ast != Controller.AutoStage)
+                {
+                    Controller.AutoStage = ast;
                 }
 
                 bool isCoasting = vehicle.Situation == Situation.Maneuvering && Controller.Phase == GravityController.PhaseEnum.Idle
@@ -194,7 +234,7 @@ namespace NovaTec.GravityTurnMod
 
                 double hoa = Controller.GetApoapsisAltitude();
                 ImGui.TextColored(new float4(1, 0.5f, 0, 1), "Telemetry:");
-                ImGui.Text("Phase: " + Controller.Phase.ToString() + ", " + vehicle.Situation.ToString() + ", " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
+                ImGui.TextColored(new float4(0.2f, 1, 0.2f, 1), "Phase: " + Controller.Phase.ToString() + ", " + vehicle.Situation.ToString() + ", " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
                 ImGui.Text("Target time to AP:    " + Controller.TimeToApoapsisTarget.ToString("n1") + "s");
                 ImGui.Text("Actual time to AP:    " + Controller.GetApoapsisTime().ToString("n1") + "s (" + (hoa / 1000).ToString("n1") + "km)");
                 ImGui.Separator();
@@ -208,11 +248,13 @@ namespace NovaTec.GravityTurnMod
                 ImGui.Text(String.Format("Stage Sequence:       {0} of {1}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count));
                 //ImGui.Text("Throttle:             " + vehicle.GetManualThrottle() * 100);
                 //ImGui.Text("Atmosphere:          " + (Controller.GetAtmosphereHeight()/1000).ToString("n1") + "km");
-                ImGui.Text("Roll:                 " + Controller.GetRoll() + "°");
+                //ImGui.Text("Roll:                 " + Controller.GetRoll() + "°");
+                ImGui.Text("Target:               " + vehicle.FlightComputer.AttitudeTrackTarget.ToString() + ", " + vehicle.FlightComputer.AttitudeFrame.ToString());
+                
 
 
                 ImGui.Separator();
-
+/*
                 doubleQuat p = vehicle.GetBody2Cci();
                 VehicleReferenceFrameEx.GetEclBody2Cci(p);
                 doubleQuat b = VehicleReferenceFrameEx.GetEclBody2Cci(p);
@@ -222,30 +264,13 @@ namespace NovaTec.GravityTurnMod
                 a.Y -= 90;
 
                 double3 fc = Controller.GetSurfaceVector();
-                //ImGui.Text("vector:      " + CoordToString(fc));
+*/
+                //ImGui.Text("vector:      " + CoordToString(vehicle.GetVelocityCce().Normalized()) );
                 //ImGui.Text("target:      " + CoordToString(vehicle.FlightComputer.CustomAttitudeTarget));
+                //Controller.GetFuelTank();
+                //ReadOnlySpan<MoleState> moleStates = Controller.GetCurrentSequence().Parts. .Moles.States;
 
-                ArrayList tanks = Controller.GetFuelTanks();
-                if (tanks != null)
-                {
-                    ImGui.Text("Fuel: " + tanks.Count);
-                    ReadOnlySpan<MoleState> states = vehicle.Parts.Moles.States;
-                    foreach (Tank t in tanks)
-                    {
-                        foreach (Mole m in t.Moles)
-                        {
-                            if (t.Moles.Count > 0 && !t.Moles[0].Liquid.Name.Contains("MMH"))
-                            {
-                                ImGui.Text("Fuel: ");
-                                ImGui.SameLine();
-                                ImGui.SetCursorPosX(width * 0.40f);
-                                ImGui.ProgressBar(t.FilledFraction(states), new float2(width * 0.60f - ImGui.GetStyle().ItemInnerSpacing.X * 3, 24),
-                                    (t.FilledFraction(states) * 100).ToString("n0") + "%");
-                                break;
-                            }
-                        }
-                    }
-                }
+                ImGui.Text("Pitching up:          " + Controller.PitchesUp + ", " + Program.AttitudePitch.Current);
                 //ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
                 //ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);
 
