@@ -51,12 +51,6 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// </summary>
 internal static class HohmannMultiPassPlanner
 {
-    // Stock OrbitalTransfers.BuildFlightPlan uses 5 patches; we bump to 8
-    // so a chained pre-final orbit with a near-SOI apoapsis still has
-    // enough patch headroom for the post-burn hyperbolic escape + any
-    // sibling-body close-approach detection.
-    private const int FlightPlanPatchLimit = 8;
-    private const int FlightPlanPolynomialOrder = 8;
 
     // Leaves a 5% gap to parent SOI so a chained intermediate orbit that
     // brushes against SOI in a noisy patched-conic propagation does not
@@ -405,7 +399,7 @@ internal static class HohmannMultiPassPlanner
         {
             double3 dvVlf = dvVlfSeq[k];
 
-            var (fp, burnPatch) = BuildPassFlightPlan(
+            var (fp, burnPatch) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
                 source, prePatch, times[k], dvVlf, input.Target);
             previews.Add(new PassPreview(
                 BurnTime: times[k],
@@ -634,10 +628,18 @@ internal static class HohmannMultiPassPlanner
             if (dvLen >= bestCleanDv && dvLen >= bestDirtyDv) continue;
 
             var probeFp = FlightPlan.CreateUninitialized(source.Hash);
+            probeFp.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
             if (!OrbitalTransfers.BuildFlightPlan(
                     ref probeFp, info, candidate.Start, candidate.TransferDvVlf,
                     out _, out _))
                 continue;
+            // BuildFlightPlan leaves the terrain-impact search incremental and nothing
+            // ever advances a detached probe plan's frontier, so finish the search here
+            // or the classifier below can miss an Impact patch. 5/8 match the limits
+            // BuildFlightPlan itself computed the plan with.
+            if (probeFp.ImpactSearchUnresolved)
+                probeFp.ComputeCompleteTrajectory(out _, 5, 8, info.Target,
+                    resolveImpactsCompletely: true);
 
             // Replicates stock TransferTask.WorkerTask.CalculateAutomaticTransfer:
             // patches that end in Impact on a body other than the target before
@@ -1013,23 +1015,6 @@ internal static class HohmannMultiPassPlanner
         return Math.Sqrt(mu * term);
     }
 
-    private static (FlightPlan fp, PatchedConic burnPatch) BuildPassFlightPlan(
-        Vehicle source, PatchedConic prePatch,
-        SimTime burnTime, double3 dvVlf, IOrbiter target)
-    {
-        SimTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(burnTime);
-        FlightPlan fp = FlightPlan.CreateUninitialized(source.Hash);
-        PatchedConic burnPatch = fp.CalculateBurnPatch(prePatch, timeSincePe, dvVlf, burnTime);
-        fp.Patches.Add(burnPatch);
-        // target-aware: encounter detection populates ClosestApproaches
-        // with the destination body so the preview shows how close the
-        // departure actually gets to (e.g.) Mars.
-        fp.ComputeCompleteTrajectory(out _, FlightPlanPatchLimit, FlightPlanPolynomialOrder, target);
-        if (source.Target != null)
-            fp.CalculateTargetNodes(source.Target);
-        return (fp, burnPatch);
-    }
-
     private static string? CheckInterPass(FlightPlan priorFp, SimTime nextTime, int passIndex)
     {
         foreach (PatchedConic p in priorFp.Patches)
@@ -1228,7 +1213,7 @@ internal static class HohmannMultiPassPlanner
                 burnTime.Seconds() - input.TFinal.Seconds(),
                 vpLive, vTargetXy, theta, dvX, dvY, dvZ, dvFinalMag));
 
-        var (fp, _) = BuildPassFlightPlan(
+        var (fp, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
             source, prePatch, burnTime, dvVlf, input.Target);
         var single = new PassPreview(
             BurnTime: burnTime,

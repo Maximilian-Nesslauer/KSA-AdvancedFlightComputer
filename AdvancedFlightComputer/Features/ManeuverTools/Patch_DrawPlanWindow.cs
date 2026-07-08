@@ -343,6 +343,9 @@ internal static class Patch_DrawPlanWindow
         };
 
         FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
+        // Committed burns get this margin stamped by Burn.Create, so the preview's
+        // impact test agrees with what the created burn's plan will compute.
+        flightPlan.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
         var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false);
         // BuildFlightPlan forwards info.Target as encounterFilter, which restricts
         // SOI-encounter detection to that one body. Apse / inclination maneuvers
@@ -351,6 +354,13 @@ internal static class Patch_DrawPlanWindow
         OrbitalTransfers.BuildFlightPlan(
             ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,
             out _, out _);
+        // BuildFlightPlan leaves the terrain-impact search incremental and nothing
+        // ever advances a detached preview plan's frontier, so finish the search here
+        // or the preview can omit an impact the created burn's plan will find. 5/8
+        // match the limits BuildFlightPlan itself computed the plan with.
+        if (flightPlan.ImpactSearchUnresolved)
+            flightPlan.ComputeCompleteTrajectory(out _, 5, 8, null,
+                resolveImpactsCompletely: true);
 
         return new OrbitalTransfers.PorkChopEntry(transferData, flightPlan);
     }

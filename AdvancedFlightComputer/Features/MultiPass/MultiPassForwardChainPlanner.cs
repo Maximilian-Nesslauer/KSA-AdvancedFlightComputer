@@ -34,7 +34,7 @@ internal delegate PassStep? PassStepFactory(
 /// over the maneuver type: caller supplies a <see cref="PassStepFactory"/>
 /// that knows how to compute <c>(burnTime, dvVlf)</c> for one pass; the
 /// helper handles patch chaining, unbound-orbit detection and SOI
-/// Escape / Encounter checks between successive passes.
+/// Escape / Encounter / terrain Impact checks between successive passes.
 /// </summary>
 internal static class MultiPassForwardChainPlanner
 {
@@ -73,7 +73,8 @@ internal static class MultiPassForwardChainPlanner
 
             // SOI Escape / Encounter on the previous pass's flight plan
             // before this pass's burn time would invalidate the chained
-            // TimeOfTrueAnomaly: the reference frame has flipped.
+            // TimeOfTrueAnomaly: the reference frame has flipped. An Impact
+            // before it means the vehicle never coasts to the next burn.
             if (i > 0 && lastFp != null)
             {
                 foreach (PatchedConic p in lastFp.Patches)
@@ -85,6 +86,9 @@ internal static class MultiPassForwardChainPlanner
                     if (p.EndTransition == PatchTransition.Encounter)
                         return new PassPreviewResult(results.ToArray(), Failed: true,
                             $"pass {i - 1} encounters another body before next pass");
+                    if (p.EndTransition == PatchTransition.Impact)
+                        return new PassPreviewResult(results.ToArray(), Failed: true,
+                            $"pass {i - 1} impacts the parent body before next pass");
                 }
             }
 
@@ -145,15 +149,28 @@ internal static class MultiPassForwardChainPlanner
 
     /// <summary>One pass's flight plan: a burn patch plus SOI
     /// propagation. Caller chains pass i+1 off the returned
-    /// <paramref name="burnPatch"/>.</summary>
-    private static (FlightPlan fp, PatchedConic burnPatch) BuildPassFlightPlan(
-        Vehicle source, PatchedConic prePatch, SimTime burnTime, double3 dvVlf)
+    /// <paramref name="burnPatch"/>. <paramref name="encounterFilter"/>
+    /// restricts SOI-encounter detection to that one body and populates
+    /// ClosestApproaches with it, so a targeted preview shows how close
+    /// the departure actually gets to (e.g.) Mars; null detects all
+    /// high-SOI siblings. Shared with <see cref="HohmannMultiPassPlanner"/>.</summary>
+    internal static (FlightPlan fp, PatchedConic burnPatch) BuildPassFlightPlan(
+        Vehicle source, PatchedConic prePatch, SimTime burnTime, double3 dvVlf,
+        IOrbiter? encounterFilter = null)
     {
         SimTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(burnTime);
         FlightPlan fp = FlightPlan.CreateUninitialized(source.Hash);
+        // The game stamps every vehicle-installed plan with the bounding radius, so
+        // the preview's impact test matches what the committed burn will compute.
+        fp.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
         PatchedConic burnPatch = fp.CalculateBurnPatch(prePatch, timeSincePe, dvVlf, burnTime);
         fp.Patches.Add(burnPatch);
-        fp.ComputeCompleteTrajectory(out _, FlightPlanPatchLimit, FlightPlanPolynomialOrder);
+        // resolveImpactsCompletely: the terrain-impact search is incremental by default
+        // and nothing ever advances a detached preview plan's frontier, so an unresolved
+        // patch would keep EndTransition == Final and the Impact checks the planners
+        // run between passes would never fire.
+        fp.ComputeCompleteTrajectory(out _, FlightPlanPatchLimit, FlightPlanPolynomialOrder,
+            encounterFilter, resolveImpactsCompletely: true);
         if (source.Target != null)
             fp.CalculateTargetNodes(source.Target);
         return (fp, burnPatch);
