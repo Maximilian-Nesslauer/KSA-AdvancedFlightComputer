@@ -25,9 +25,19 @@ internal static class SaveLoadObserver
     /// Empty in the default starting situation (no save loaded yet).</summary>
     public static string CurrentSaveId { get; private set; } = string.Empty;
 
+    /// <summary>Raised after a save was loaded / written and the MultiPass
+    /// registry work is done. Other features (RcsTranslation) hang their
+    /// save-scoped registries here so the UncompressedSave methods carry
+    /// exactly one patch pair regardless of how many features are enabled.
+    /// The write event receives the just-written save id.</summary>
+    public static event Action? SaveLoaded;
+    public static event Action<string>? SaveWritten;
+
     public static void Reset()
     {
         CurrentSaveId = string.Empty;
+        SaveLoaded = null;
+        SaveWritten = null;
     }
 
     public static void ApplyPatches(Harmony harmony)
@@ -65,6 +75,8 @@ internal static class SaveLoadObserver
                 // matches whatever was persisted for the just-loaded
                 // save (handles "reload to revert" mid-game).
                 MultiPassRegistry.Load();
+
+                SaveLoaded?.Invoke();
 
                 if (DebugConfig.MultiPass)
                 {
@@ -121,6 +133,8 @@ internal static class SaveLoadObserver
                 CurrentSaveId = newSaveId;
 
                 MultiPassRegistry.Save();
+
+                SaveWritten?.Invoke(newSaveId);
 
                 if (DebugConfig.MultiPass)
                     DefaultCategory.Log.Debug(

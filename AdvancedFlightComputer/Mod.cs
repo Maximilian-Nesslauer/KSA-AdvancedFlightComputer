@@ -2,6 +2,7 @@ using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.RcsTranslation;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -27,6 +28,7 @@ public sealed class Mod
                 $"[AFC] Tested against {TestedGameVersion}, current is {gameVersion}. Some features may not work correctly.");
 
         _harmony = new Harmony("com.maxi.advancedflightcomputer");
+        bool saveObserverApplied = false;
 
         if (GameReflection.ValidateHyperbolicTargets())
             HyperbolicTargets.ApplyPatches(_harmony);
@@ -49,6 +51,7 @@ public sealed class Mod
                 _harmony.CreateClassProcessor(typeof(PassCompletionPatch)).Patch();
                 _harmony.CreateClassProcessor(typeof(VehicleDisposePatch)).Patch();
                 SaveLoadObserver.ApplyPatches(_harmony);
+                saveObserverApplied = true;
                 MultiPassUI.Enabled = true;
 
                 // Hohmann multi-pass needs the transpiler to inject the
@@ -109,6 +112,40 @@ public sealed class Mod
         else
             DefaultCategory.Log.Warning("[AFC] ManeuverTools disabled - reflection targets not found.");
 
+        // Independent of ManeuverTools: RCS translation only needs the
+        // shared save/tick hooks plus the gauge button internals. The patch
+        // block is guarded because several targets are attribute-bound
+        // (ComputeControl, SetEnum, the gauge methods) and outside the
+        // reflection validation; a game-side rename must degrade this
+        // feature with a warning, not abort the remaining mod load.
+        if (GameReflection.ValidateRcsTranslation())
+        {
+            try
+            {
+                _harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsDriverPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsVehicleDisposePatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsGaugePatches.IsDisabledPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsGaugePatches.PackDataPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsGaugePatches.HoveredPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsBurnWindowUi)).Patch();
+
+                RcsExecRegistry.Init();
+                if (!saveObserverApplied)
+                    SaveLoadObserver.ApplyPatches(_harmony);
+                SaveLoadObserver.SaveLoaded += OnRcsSaveLoaded;
+                SaveLoadObserver.SaveWritten += OnRcsSaveWritten;
+            }
+            catch (Exception ex)
+            {
+                DefaultCategory.Log.Warning(
+                    $"[AFC] RcsTranslation disabled - patching failed (game version may have changed): {ex}");
+            }
+        }
+        else
+            DefaultCategory.Log.Warning("[AFC] RcsTranslation disabled - reflection targets not found.");
+
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
 
@@ -127,6 +164,8 @@ public sealed class Mod
         // No MultiPassRegistry.Save() here: persistence is driven by
         // UncompressedSave.Write events so a quit without KSA-saving
         // intentionally drops in-memory mutations.
+        RcsExecRegistry.Reset();
+        RcsCommandChannel.Reset();
         Patch_DrawPlanWindow.Reset();
         MultiPassUI.Enabled = false;
         MultiPassUI.Reset();
@@ -144,5 +183,17 @@ public sealed class Mod
 #endif
 
         DefaultCategory.Log.Info("[AFC] Unloaded.");
+    }
+
+    private static void OnRcsSaveLoaded()
+    {
+        RcsCommandChannel.Reset();
+        RcsExecRegistry.Load();
+    }
+
+    private static void OnRcsSaveWritten(string newSaveId)
+    {
+        RcsExecRegistry.RekeyTransientsTo(newSaveId);
+        RcsExecRegistry.Save();
     }
 }

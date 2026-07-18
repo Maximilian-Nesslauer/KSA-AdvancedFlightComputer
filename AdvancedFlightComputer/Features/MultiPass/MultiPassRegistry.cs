@@ -44,6 +44,12 @@ internal static class MultiPassRegistry
         _modDir = Path.Combine(userDocs, "My Games", "Kitten Space Agency",
             "mods", "AdvancedFlightComputer");
         _configPath = Path.Combine(_modDir, "multipass.toml");
+
+        // The game never runs UncompressedSave.Load for the default starting
+        // universe, so without this eager load a session that starts fresh
+        // and then saves would rewrite the file from an empty registry and
+        // wipe every other save's persisted entries.
+        Load();
     }
 
     /// <summary>Total entries across all saves (diagnostics only).</summary>

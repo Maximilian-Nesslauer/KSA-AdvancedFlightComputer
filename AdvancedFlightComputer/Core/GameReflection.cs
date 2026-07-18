@@ -101,6 +101,21 @@ internal static class GameReflection
 
     #endregion
 
+    #region RcsTranslation
+
+    // The gauge button stores its bound enum privately; the RCS gauge
+    // patches need it to recognize the BurnMode/Auto button instance.
+    public static readonly FieldInfo? GaugeButtonFlightComputer_enumValue =
+        AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumValue");
+
+    // Private tooltip hook for the Auto button; replaced with the RCS
+    // explanation when a burn resolves to RCS execution.
+    public static readonly MethodInfo? Vehicle_Hovered_BurnMode =
+        AccessTools.Method(typeof(Vehicle), "Hovered",
+            new Type[] { typeof(FlightComputerBurnMode) });
+
+    #endregion
+
     #region Validation
 
     public static bool ValidateHyperbolicTargets()
@@ -152,6 +167,23 @@ internal static class GameReflection
             ("TransferPlanner.Source",        TransferPlanner_Source),
         };
         return ValidateTargets("MultiPass", targets);
+    }
+
+    /// <summary>Shares the save/load and per-tick hooks with MultiPass on
+    /// purpose: both features scope their registries by save id and drive
+    /// their state machines from Vehicle.UpdateFromTaskResults.</summary>
+    public static bool ValidateRcsTranslation()
+    {
+        var targets = new (string name, object? target)[]
+        {
+            ("Vehicle.UpdateFromTaskResults",              Vehicle_UpdateFromTaskResults),
+            ("UncompressedSave.Load",                      UncompressedSave_Load),
+            ("UncompressedSave.Write",                     UncompressedSave_Write),
+            ("Vehicle.Dispose",                            Vehicle_Dispose),
+            ("GaugeButtonFlightComputer._enumValue",       GaugeButtonFlightComputer_enumValue),
+            ("Vehicle.Hovered(FlightComputerBurnMode)",    Vehicle_Hovered_BurnMode),
+        };
+        return ValidateTargets("RcsTranslation", targets);
     }
 
     private static bool ValidateTargets(string feature, (string name, object? target)[] targets)

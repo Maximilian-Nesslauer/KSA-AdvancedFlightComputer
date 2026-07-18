@@ -49,6 +49,15 @@ Multi-pass works best together with [AutoStage](https://github.com/Maximilian-Ne
 - Same-parent transfers (e.g., LEO to Luna) shift the final burn forward by a few parking periods to fit the K-schedule. The shift is shown in the plan window.
 - Very high-energy departures from small SOIs (e.g., low Mars orbit to Saturn) may auto-clamp to fewer passes because intermediate orbits would escape the SOI.
 
+### RCS Translation Burns
+
+Execute a planned burn with RCS thrusters only, no main engine. Useful for small correction burns (rotating the whole vehicle for the main engine can cost more than just translating) and for vehicles without an active main engine like small probes.
+
+- The stock **Auto** burn button is still the single trigger: it executes the next burn with its resolved method. A burn resolves to the main engine when an active, fueled engine exists, otherwise to RCS; a per-burn override is available in the burn editor window ("Execution: Default | Engine | RCS").
+- Two attitude strategies, selectable per burn: **Hold** (keep the current attitude, fire the axis mix that points at the burn vector) and **Align** (rotate the strongest thruster axis onto the burn vector first). **Auto** (default) compares propellant estimates for both, including the slew cost, and picks the cheaper one. The estimates derive from the bang-off-bang slew cost model standard in the attitude control literature.
+- Execution is closed-loop against the game's own delta-V accounting: pulses shrink as the remaining delta-V approaches zero, and the burn stops inside the thrusters' minimum impulse of the target. The engine autopilot is suppressed for the whole run, so a misclick can never ignite the main engine on an RCS-armed burn.
+- Burns themselves stay in the stock save format; removing the mod keeps every planned burn. The RCS arming metadata lives in `mods/AdvancedFlightComputer/rcs-exec.toml` next to the mod and survives save/load, including mid-burn.
+
 ### Hyperbolic Targets
 
 The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod lets it target interstellar comets (Oumuamua, 2I/Borisov, 3I/ATLAS) by patching the planner's time-of-flight and alignment math to handle unbound orbits.
@@ -89,6 +98,8 @@ Required only to build the mod from source. Targets **.NET 10**.
 - `afc-set-periapsis` / `afc-set-apoapsis` assert that a computed apse burn reaches the requested altitude and leaves the opposite apse untouched, and that impossible requests yield no maneuver.
 - `afc-circularize` asserts circularization at both apses and the "nothing to do" contract for circular and unbound orbits.
 - `afc-set-inclination` / `afc-match-inclination` assert node burns against the ecliptic and equatorial references, partial-fraction burns, and the coplanar and hyperbolic edge cases.
+- `afc-rcs-allocator` asserts the RCS translation allocation math: per-axis pulse shaping (control-period cap, minimum-impulse floor), per-thruster group pulses, and the Hold-strategy performance model.
+- `afc-rcs-translation` flies a full RCS translation burn on the live simulation: a planned burn armed for RCS must reach its delta-V target within the minimum-impulse bound, consume thruster propellant, and never command a main engine. Needs a vehicle save with RCS thrusters (set via `KSA_HEADLESS_VEHICLE`, default "Test Vehicle 1"); without one the test skips.
 
 The oracle is always the game's own orbit propagation, never a re-derivation of the math under test.
 

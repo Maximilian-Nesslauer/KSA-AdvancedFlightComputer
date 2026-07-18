@@ -33,6 +33,14 @@
       <HintPath>..\..\..\refs\game\Brutal.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Brutal.Core.Strings">
+      <HintPath>..\..\..\refs\game\Brutal.Core.Strings.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Localization">
+      <HintPath>..\..\..\refs\game\Brutal.Localization.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="BepuUtilities">
       <HintPath>..\..\..\refs\game\BepuUtilities.dll</HintPath>
       <Private>false</Private>

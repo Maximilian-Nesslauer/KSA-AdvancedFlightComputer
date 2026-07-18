@@ -9,6 +9,10 @@
 
   <ItemGroup>
     <PackageReference Include="StarMap.API" Version="0.3.6" />
+    <!-- Compile-only: the RCS tests apply the mod's Harmony patch classes
+         themselves (the harness manifest does not run Mod.OnFullyLoaded).
+         The runtime assembly resolves from StarMap's load context. -->
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" ExcludeAssets="runtime" />
   </ItemGroup>
 
   <!--
