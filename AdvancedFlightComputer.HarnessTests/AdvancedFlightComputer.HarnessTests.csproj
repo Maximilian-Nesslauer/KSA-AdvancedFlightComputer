@@ -1,0 +1,60 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="StarMap.API" Version="0.3.6" />
+  </ItemGroup>
+
+  <!--
+    HeadlessHarness consumer carrying the AdvancedFlightComputer test suite. Game DLLs, the
+    harness, and the mod under test all resolve at runtime (StarMap's load context plus the
+    harness's mods-folder resolution), so every reference is Private=false and nothing is copied
+    into the output. The HeadlessHarness HintPath expects its repo checked out as a sibling of this
+    one and follows $(Configuration), so build the harness in the same configuration; adjust the
+    path to your local clone.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\AdvancedFlightComputer\AdvancedFlightComputer.csproj">
+      <Private>false</Private>
+    </ProjectReference>
+    <Reference Include="HeadlessHarness">
+      <HintPath>..\..\HeadlessHarness\HeadlessHarness\bin\$(Configuration)\net10.0\HeadlessHarness.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="KSA">
+      <HintPath>..\..\..\refs\game\KSA.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Numerics">
+      <HintPath>..\..\..\refs\game\Brutal.Core.Numerics.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Overload resolution on KSA's frame-transform extensions pulls in BepuUtilities types. -->
+    <Reference Include="BepuUtilities">
+      <HintPath>..\..\..\refs\game\BepuUtilities.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="mod.toml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <Target Name="CopyToMods" AfterTargets="Build">
+    <PropertyGroup>
+      <ModDir>$(USERPROFILE)\Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer.HarnessTests\</ModDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
+  </Target>
+
+</Project>

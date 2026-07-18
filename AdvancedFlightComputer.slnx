@@ -1,3 +1,4 @@
 <Solution>
   <Project Path="AdvancedFlightComputer/AdvancedFlightComputer.csproj" />
+  <Project Path="AdvancedFlightComputer.HarnessTests/AdvancedFlightComputer.HarnessTests.csproj" />
 </Solution>

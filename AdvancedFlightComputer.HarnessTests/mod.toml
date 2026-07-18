@@ -1,0 +1,15 @@
+name = "AdvancedFlightComputer.HarnessTests"
+
+[StarMap]
+EntryAssembly = "AdvancedFlightComputer.HarnessTests"
+
+# The HeadlessHarness dependency marks this folder as a harness consumer, so the harness loads this
+# assembly and discovers its IHarnessTest classes during a headless run. AdvancedFlightComputer is
+# the mod under test.
+[[StarMap.ModDependencies]]
+ModId = "HeadlessHarness"
+Optional = false
+
+[[StarMap.ModDependencies]]
+ModId = "AdvancedFlightComputer"
+Optional = false

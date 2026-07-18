@@ -43,6 +43,11 @@
     <PatchFile Include="Patches\*.xml" />
   </ItemGroup>
 
+  <!-- The headless test mod asserts against internal feature code (OrbitManeuvers). -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="AdvancedFlightComputer.HarnessTests" />
+  </ItemGroup>
+
   <ItemGroup>
     <None Update="mod.toml">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
