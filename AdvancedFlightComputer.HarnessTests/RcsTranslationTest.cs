@@ -28,6 +28,9 @@ public sealed class RcsTranslationTest : IHarnessTest
 
     public string Name => "afc-rcs-translation";
 
+    private Vehicle? _completedVehicle;
+    private Burn? _completedBurn;
+
     public int Run(HeadlessSession session)
     {
         string saveId = Environment.GetEnvironmentVariable(TestSupport.VehicleEnvVar) ?? DefaultSave;
@@ -58,13 +61,20 @@ public sealed class RcsTranslationTest : IHarnessTest
         }
 
         bool ok;
+        Action<Vehicle, Burn> onCompleted = (v, b) =>
+        {
+            _completedVehicle = v;
+            _completedBurn = b;
+        };
         try
         {
             VehicleUpdateTask._forceOffRails = true;
+            RcsBurnCompletions.Completed += onCompleted;
             ok = Fly(vehicle, driver);
         }
         finally
         {
+            RcsBurnCompletions.Completed -= onCompleted;
             VehicleUpdateTask._forceOffRails = false;
             RcsExecRegistry.Reset();
             RcsCommandChannel.Reset();
@@ -207,6 +217,12 @@ public sealed class RcsTranslationTest : IHarnessTest
             bool massOk = burned > 0.0;
             HarnessLog.Line($"[{Name}] TEST propellant: {burned * 1000.0:F1}g consumed => {TestSupport.Verdict(massOk)}");
             ok &= massOk;
+
+            bool eventOk = ReferenceEquals(_completedVehicle, vehicle)
+                && ReferenceEquals(_completedBurn, burn);
+            HarnessLog.Line($"[{Name}] TEST completion event: vehicle and burn delivered => " +
+                            $"{TestSupport.Verdict(eventOk)}");
+            ok &= eventOk;
         }
         return ok;
     }

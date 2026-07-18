@@ -58,6 +58,7 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 - Execution is closed-loop against the game's own delta-V accounting: pulses shrink as the remaining delta-V approaches zero, and the burn stops inside the thrusters' minimum impulse of the target. The engine autopilot is suppressed for the whole run, so a misclick can never ignite the main engine on an RCS-armed burn.
 - Burns themselves stay in the stock save format; removing the mod keeps every planned burn. The RCS arming metadata lives in `mods/AdvancedFlightComputer/rcs-exec.toml` next to the mod and survives save/load, including mid-burn.
 - The burn editor warns when a burn resolves to RCS but no thruster can translate (no propellant, none active) and when the estimated propellant exceeds what the thrusters can actually reach.
+- Completed RCS burns raise a public event (`RcsBurnCompletions.Completed`) other mods can consume; [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) uses it to clean up finished RCS burns the same way it cleans up engine auto-burns.
 
 ### Hyperbolic Targets
 

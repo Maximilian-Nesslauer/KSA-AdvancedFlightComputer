@@ -577,6 +577,7 @@ internal static class RcsExecutor
     {
         double burnTime = exec.ActiveBurnTimeSec ?? 0.0;
         double burnDv = exec.ActiveBurnDvMs ?? 0.0;
+        Burn? completedBurn = exec.ActiveBurn;
         if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
             fc.SetNullRot(VehicleReferenceFrame.BurnBody);
         exec.ClearActive();
@@ -588,6 +589,11 @@ internal static class RcsExecutor
         DefaultCategory.Log.Info(
             $"[AFC] RCS burn complete: vehicle='{vehicle.Id}' " +
             $"accumulated={accumMs:F3}m/s of {burnDv:F2}m/s, residual={residualMs:F3}m/s");
+
+        // Raised last: a subscriber may remove the burn from the plan
+        // (AutoRemoveFinishedBurns), which must not race our own cleanup.
+        if (completedBurn != null)
+            RcsBurnCompletions.Raise(vehicle, completedBurn);
     }
 
     /// <summary>True when the worker's per-axis suppression would command
