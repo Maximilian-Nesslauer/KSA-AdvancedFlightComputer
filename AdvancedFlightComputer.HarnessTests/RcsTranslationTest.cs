@@ -195,9 +195,9 @@ public sealed class RcsTranslationTest : IHarnessTest
             }
             double tol = 1.5 * impulseFloor / vehicle.TotalMass + ResidualMarginMs;
             bool residualOk = residual <= tol;
-            // Overshoot flips the to-go vector against the target; the dot
-            // check distinguishes "stopped just past the target" (fine,
-            // within tolerance) from a runaway.
+            // The executor already stopped at or just past the target (its
+            // completion check flips on the to-go/target dot product), so a
+            // plain magnitude tolerance on the remainder suffices here.
             HarnessLog.Line($"[{Name}] TEST residual: {residual:F4}m/s (tol {tol:F4}) " +
                             $"accum={bt.DeltaVAccumCci.Length():F4}m/s target={BurnDvMs:F2}m/s => " +
                             $"{TestSupport.Verdict(residualOk)}");

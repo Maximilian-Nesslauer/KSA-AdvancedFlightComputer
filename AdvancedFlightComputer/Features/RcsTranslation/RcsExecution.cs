@@ -147,4 +147,23 @@ internal struct RcsEstimates
     public double AlignSlewDurationSec;
     public int AlignAxis;
     public bool AlignFeasible;
+
+    public readonly double AlignTotalPropellantKg => AlignPropellantKg + AlignSlewPropellantKg;
+
+    /// <summary>Propellant the given attitude selection would consume; Auto
+    /// takes the cheaper feasible strategy, zero when nothing is feasible.
+    /// Shared by the sufficiency warning in the burn editor and the
+    /// activation-time alert so the two cannot drift.</summary>
+    public readonly double RequiredPropellantKg(RcsAttitudeStrategy attitude) => attitude switch
+    {
+        RcsAttitudeStrategy.Hold => HoldFeasible ? HoldPropellantKg : 0.0,
+        RcsAttitudeStrategy.Align => AlignFeasible ? AlignTotalPropellantKg : 0.0,
+        _ => (HoldFeasible, AlignFeasible) switch
+        {
+            (true, true) => Math.Min(HoldPropellantKg, AlignTotalPropellantKg),
+            (true, false) => HoldPropellantKg,
+            (false, true) => AlignTotalPropellantKg,
+            _ => 0.0,
+        },
+    };
 }

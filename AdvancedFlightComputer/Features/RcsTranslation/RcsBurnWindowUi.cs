@@ -1,5 +1,6 @@
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
+using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
 
@@ -57,7 +58,7 @@ internal static class RcsBurnWindowUi
             string modeLabel = mode == RcsExecutionMode.Default
                 ? $"Default ({resolved})##rcsmode{timeSec:R}"
                 : $"{mode}##rcsmode{timeSec:R}";
-            if (ImGui.Button(modeLabel, (Brutal.Numerics.float2?)null) && !isActiveBurn)
+            if (ImGui.Button(modeLabel, (float2?)null) && !isActiveBurn)
             {
                 RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
                 RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
@@ -74,7 +75,7 @@ internal static class RcsBurnWindowUi
                 RcsAttitudeStrategy attitude = options?.Attitude ?? RcsAttitudeStrategy.Auto;
                 ImGui.Text("Attitude"u8);
                 ImGui.SameLine(120f);
-                if (ImGui.Button($"{attitude}##rcsatt{timeSec:R}", (Brutal.Numerics.float2?)null)
+                if (ImGui.Button($"{attitude}##rcsatt{timeSec:R}", (float2?)null)
                     && !isActiveBurn)
                 {
                     RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
@@ -90,11 +91,13 @@ internal static class RcsBurnWindowUi
         }
 
         if (resolved == RcsExecutionMode.Rcs || isActiveBurn)
-            DrawEstimatesAndStatus(burn, vehicle, flightComputer, exec, isActiveBurn);
+            DrawEstimatesAndStatus(burn, vehicle, flightComputer, exec,
+                options?.Attitude ?? RcsAttitudeStrategy.Auto, isActiveBurn);
     }
 
     private static void DrawEstimatesAndStatus(
-        Burn burn, Vehicle vehicle, FlightComputer flightComputer, RcsExecution? exec, bool isActiveBurn)
+        Burn burn, Vehicle vehicle, FlightComputer flightComputer, RcsExecution? exec,
+        RcsAttitudeStrategy attitude, bool isActiveBurn)
     {
         if (isActiveBurn && exec != null)
         {
@@ -118,8 +121,18 @@ internal static class RcsBurnWindowUi
             ImGuiHelper.DrawTextWidget("RCS status"u8, $"{phase} ({strategy})");
             if (bt != null)
                 ImGuiHelper.DrawTextWidget("To go"u8, $"{bt.DeltaVToGoCci.Length():F2} m/s");
-            if (ImGui.Button("Cancel RCS burn"u8, (Brutal.Numerics.float2?)null))
+            if (ImGui.Button("Cancel RCS burn"u8, (float2?)null))
                 RcsExecutor.Cancel(vehicle, exec, "user request");
+            return;
+        }
+
+        // Guard warnings come before the estimate gating: a vehicle with no
+        // usable translation has no estimates to show, and silence here is
+        // exactly the confusion the warning exists to prevent.
+        RcsCapabilitySnapshot cap = RcsExecutor.ProbeCached(vehicle);
+        if (!cap.HasAnyTranslation)
+        {
+            DrawWarning("RCS unavailable: no active thruster with propellant can translate");
             return;
         }
 
@@ -130,7 +143,8 @@ internal static class RcsBurnWindowUi
             return;
         BurnTarget? loaded = flightComputer.Burn;
         if (loaded == null
-            || Math.Abs(loaded.ImpulsiveInstant.Seconds() - burn.Time.Seconds()) > 0.5)
+            || Math.Abs(loaded.ImpulsiveInstant.Seconds() - burn.Time.Seconds())
+               > RcsExecutor.BurnIdentityToleranceSec)
             return;
         ref readonly RcsEstimates est = ref exec.Estimates;
         if (est.HoldFeasible)
@@ -138,7 +152,19 @@ internal static class RcsBurnWindowUi
                 $"{est.HoldPropellantKg:F1} kg, {est.HoldDurationSec:F0} s");
         if (est.AlignFeasible)
             ImGuiHelper.DrawTextWidget("Align est."u8,
-                $"{est.AlignPropellantKg + est.AlignSlewPropellantKg:F1} kg, " +
+                $"{est.AlignTotalPropellantKg:F1} kg, " +
                 $"{est.AlignDurationSec:F0} s ({RcsExecutor.AxisName(est.AlignAxis)})");
+
+        double neededKg = est.RequiredPropellantKg(attitude);
+        double availableKg = RcsExecutor.AvailablePropellantCached(vehicle);
+        if (neededKg > availableKg)
+            DrawWarning($"Propellant short: needs ~{neededKg:F0} kg, {availableKg:F0} kg available");
+    }
+
+    private static void DrawWarning(string text)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, Color.Red.AsByte4);
+        ImGui.Text(text);
+        ImGui.PopStyleColor(1);
     }
 }

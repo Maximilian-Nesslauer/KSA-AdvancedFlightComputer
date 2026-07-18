@@ -25,7 +25,14 @@ internal static class RcsExecutor
 
     private const double CapabilityRefreshSec = 1.0;
     private const double EstimateRefreshSec = 1.0;
-    private const double BurnIdentityToleranceSec = 0.5;
+
+    /// <summary>Matches the loaded BurnTarget to a plan burn by impulse
+    /// time; also gates the burn editor's estimate display.</summary>
+    internal const double BurnIdentityToleranceSec = 0.5;
+
+    /// <summary>Smallest to-go reduction that counts as progress for the
+    /// no-progress watchdog.</summary>
+    private const float ProgressEpsilonMs = 0.001f;
 
     /// <summary>Align must beat Hold by this factor before Auto picks it;
     /// absorbs the roughness of the slew propellant estimate.</summary>
@@ -37,10 +44,11 @@ internal static class RcsExecutor
     /// then zeroes every pulse and nothing would ever terminate).</summary>
     private const double NoProgressTimeoutSec = 15.0;
 
-    /// <summary>Real-time TTL for the gauge-path resolution cache; the
-    /// gauge queries per rendered frame and a full thruster probe per frame
-    /// is waste (stock's equivalent checks read one cached global bool).</summary>
-    private const long GaugeVerdictTtlMs = 250;
+    /// <summary>Real-time TTL for the UI-path cache (gauge verdict,
+    /// capability, available propellant); the gauge and the burn editor
+    /// query per rendered frame and a full thruster/tank walk per frame is
+    /// waste (stock's equivalent checks read one cached global bool).</summary>
+    private const long UiCacheTtlMs = 250;
 
     /// <summary>Rough share of the transverse rotation groups' combined
     /// mass flow that fires during a slew (one side of one axis at a time).
@@ -87,22 +95,55 @@ internal static class RcsExecutor
         return capability.HasAnyTranslation;
     }
 
-    private static string _gaugeVerdictVehicleId = string.Empty;
-    private static long _gaugeVerdictAtMs = long.MinValue;
-    private static bool _gaugeVerdict;
+    private static string _uiCacheVehicleId = string.Empty;
+    private static long _uiCacheAtMs = long.MinValue;
+    private static bool _uiVerdict;
+    private static RcsCapabilitySnapshot _uiCapability;
+    private static double _uiAvailableKg;
 
-    /// <summary>Time-throttled variant for the gauge patches, which ask per
-    /// rendered frame. Single-entry cache: the gauge only ever asks about
-    /// the controlled vehicle.</summary>
-    public static bool WouldExecuteRcsCached(Vehicle vehicle)
+    /// <summary>Single-entry time-throttled cache for the per-frame UI
+    /// paths (gauge button, burn editor); they only ever ask about the
+    /// controlled vehicle.</summary>
+    private static void RefreshUiCache(Vehicle vehicle)
     {
         long now = Environment.TickCount64;
-        if (vehicle.Id == _gaugeVerdictVehicleId && now - _gaugeVerdictAtMs < GaugeVerdictTtlMs)
-            return _gaugeVerdict;
-        _gaugeVerdict = WouldExecuteRcs(vehicle);
-        _gaugeVerdictVehicleId = vehicle.Id;
-        _gaugeVerdictAtMs = now;
-        return _gaugeVerdict;
+        if (vehicle.Id == _uiCacheVehicleId && now - _uiCacheAtMs < UiCacheTtlMs)
+            return;
+        _uiVerdict = WouldExecuteRcs(vehicle, out _uiCapability);
+        // The verdict path only probes once resolution passes; the burn
+        // editor warnings need real capability either way.
+        if (!_uiVerdict)
+            _uiCapability = RcsCapability.Probe(vehicle);
+        _uiAvailableKg = RcsPropellant.AvailableKg(vehicle);
+        _uiCacheVehicleId = vehicle.Id;
+        _uiCacheAtMs = now;
+    }
+
+    public static bool WouldExecuteRcsCached(Vehicle vehicle)
+    {
+        RefreshUiCache(vehicle);
+        return _uiVerdict;
+    }
+
+    public static RcsCapabilitySnapshot ProbeCached(Vehicle vehicle)
+    {
+        RefreshUiCache(vehicle);
+        return _uiCapability;
+    }
+
+    public static double AvailablePropellantCached(Vehicle vehicle)
+    {
+        RefreshUiCache(vehicle);
+        return _uiAvailableKg;
+    }
+
+    public static void ResetUiCache()
+    {
+        _uiCacheVehicleId = string.Empty;
+        _uiCacheAtMs = long.MinValue;
+        _uiVerdict = false;
+        _uiCapability = default;
+        _uiAvailableKg = 0.0;
     }
 
     public static bool IsActive(Vehicle vehicle)
@@ -202,6 +243,13 @@ internal static class RcsExecutor
                 return;
             }
         }
+
+        // Warn-only sufficiency check: the user may refill mid-burn or
+        // accept a partial burn, so an underfueled activation proceeds.
+        double neededKg = exec.Estimates.RequiredPropellantKg(strategy);
+        double availableKg = RcsPropellant.AvailableKg(vehicle);
+        if (neededKg > availableKg)
+            Alert($"RCS burn may run out of propellant: needs ~{neededKg:F0} kg, {availableKg:F0} kg available.");
 
         exec.ActiveBurn = burn;
         exec.ActiveBurnTimeSec = timeSec;
@@ -343,7 +391,7 @@ internal static class RcsExecutor
         double3 euler = VehicleReferenceFrame.BurnBody.QuaternionToEulerAngles(body2Frame);
 
         // Guard against a gimbal-degenerate euler decomposition (the Custom
-        // path round-trips through roll-yaw-pitch angles). The decompiled
+        // path round-trips through roll-yaw-pitch angles). The game's euler
         // conversion handles the +-90 deg cases exactly, so this is not
         // expected to trip; it exists so a game-side change fails loud.
         doubleQuat roundTrip = VehicleReferenceFrame.BurnBody.EulerAnglesToQuaternion(euler);
@@ -471,8 +519,11 @@ internal static class RcsExecutor
 
         float3 togo = bt.DeltaVToGoCci;
         float togoMs = togo.Length();
+        float3 impulseBody = float3.Pack(
+            double3.Unpack(togo).Transform(vehicle.GetBody2Cci().Inverse()))
+            * fc.TotalMassPropsBody.Mass;
         if (float3.Dot(togo, bt.DeltaVTargetCci) <= 0f
-            || IsBelowImpulseFloor(togoMs, fc.TotalMassPropsBody.Mass, in exec.Capability))
+            || IsBelowImpulseFloor(impulseBody, in exec.Capability))
         {
             Complete(vehicle, fc, exec, togoMs);
             return;
@@ -482,7 +533,7 @@ internal static class RcsExecutor
         // to-go has not moved. Covers directions the current layout cannot
         // serve (all pulses suppressed) without any propellant drain to
         // trigger the capability stall above.
-        if (togoMs < exec.WatchdogTogoMs - 0.001f)
+        if (togoMs < exec.WatchdogTogoMs - ProgressEpsilonMs)
         {
             exec.WatchdogTogoMs = togoMs;
             exec.WatchdogAtSec = nowSec;
@@ -539,15 +590,25 @@ internal static class RcsExecutor
             $"accumulated={accumMs:F3}m/s of {burnDv:F2}m/s, residual={residualMs:F3}m/s");
     }
 
-    /// <summary>The remaining impulse cannot be delivered by any usable axis
-    /// without overshooting its minimum pulse; stop and report the residual.</summary>
-    private static bool IsBelowImpulseFloor(float togoMs, float mass, in RcsCapabilitySnapshot cap)
+    /// <summary>True when the worker's per-axis suppression would command
+    /// nothing for this body-frame residual impulse: every signed-axis
+    /// component is below its own group's minimum-impulse floor (or has no
+    /// usable group). Must mirror RcsComputeControlPatch.ShapeAxis exactly,
+    /// component-wise - comparing the residual's magnitude against the
+    /// floors instead deadlocks a burn whose remainder sits just under a
+    /// strong axis's floor while a weak axis's floor is smaller.</summary>
+    internal static bool IsBelowImpulseFloor(float3 impulseBody, in RcsCapabilitySnapshot cap)
     {
-        float impulse = togoMs * mass;
+        Span<float> components = stackalloc float[6]
+        {
+            Math.Max(impulseBody.X, 0f), Math.Max(-impulseBody.X, 0f),
+            Math.Max(impulseBody.Y, 0f), Math.Max(-impulseBody.Y, 0f),
+            Math.Max(impulseBody.Z, 0f), Math.Max(-impulseBody.Z, 0f),
+        };
         for (int i = 0; i < 6; i++)
         {
             RcsAxisGroup g = cap.Get(i);
-            if (g.IsUsable && impulse >= MinImpulseSuppressionFactor * g.MinImpulseNs)
+            if (g.IsUsable && components[i] >= MinImpulseSuppressionFactor * g.MinImpulseNs)
                 return false;
         }
         return true;
@@ -642,7 +703,7 @@ internal static class RcsExecutor
         // vector; axis groups fire in the ratio of its components. The net
         // force is limited by the weakest required axis, propellant follows
         // the duty-cycled mass flows.
-        double3 uBody = double3.Unpack(bt.DeltaVToGoCci)
+        double3 uBody = double3.Unpack(togo)
             .Transform(vehicle.GetBody2Cci().Inverse()).NormalizeOrZero();
         est.HoldFeasible = TryHoldPerformance(in cap, uBody, out double holdForce, out double holdMassFlow);
         if (est.HoldFeasible && holdForce > 0.0)

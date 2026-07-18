@@ -19,6 +19,7 @@ public sealed class RcsAllocatorTest : IHarnessTest
         ok &= CheckShapeAxis();
         ok &= CheckMaxAxisPulse();
         ok &= CheckHoldPerformance();
+        ok &= CheckCompletionFloor();
         HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
         return ok ? 0 : 1;
     }
@@ -92,6 +93,38 @@ public sealed class RcsAllocatorTest : IHarnessTest
         feasible = RcsExecutor.TryHoldPerformance(
             in oneSided, new double3(-1.0, 0.0, 0.0), out _, out _);
         ok &= Check("missing group infeasible", !feasible);
+        return ok;
+    }
+
+    // The completion floor must mirror the worker's per-axis suppression:
+    // when ShapeAxis would command nothing on any axis, the executor must
+    // complete the burn instead of waiting forever. The mixed-floor case is
+    // the regression from the first ingame stall: a residual just under the
+    // strong axis's floor whose magnitude still exceeded a weak axis's
+    // floor deadlocked the old magnitude-based check.
+    private bool CheckCompletionFloor()
+    {
+        bool ok = true;
+        RcsCapabilitySnapshot cap = default;
+        cap.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 10f });
+        cap.Set(2, new RcsAxisGroup { ForceN = 2f, MassFlowKgS = 0.01f, MinImpulseNs = 0.2f });
+        cap.HasAnyTranslation = true;
+
+        // X component under the X floor (5), Y component under the Y floor
+        // (0.1), but |impulse| = ~4.9 above the Y floor: worker fires
+        // nothing, so the floor must report complete.
+        ok &= Check("mixed floors complete", RcsExecutor.IsBelowImpulseFloor(
+            new float3(4.9f, 0.05f, 0f), in cap));
+        // X component above its floor: the worker still fires, not complete.
+        ok &= Check("strong axis still firing", !RcsExecutor.IsBelowImpulseFloor(
+            new float3(6f, 0f, 0f), in cap));
+        // Weak axis alone above its own floor: still firing.
+        ok &= Check("weak axis still firing", !RcsExecutor.IsBelowImpulseFloor(
+            new float3(0f, 0.15f, 0f), in cap));
+        // Residual along a direction with no group at all: nothing can
+        // fire, so the burn completes with that residual reported.
+        ok &= Check("missing group completes", RcsExecutor.IsBelowImpulseFloor(
+            new float3(-6f, 0f, 0f), in cap));
         return ok;
     }
 

@@ -166,6 +166,7 @@ public sealed class Mod
         // intentionally drops in-memory mutations.
         RcsExecRegistry.Reset();
         RcsCommandChannel.Reset();
+        RcsExecutor.ResetUiCache();
         Patch_DrawPlanWindow.Reset();
         MultiPassUI.Enabled = false;
         MultiPassUI.Reset();
