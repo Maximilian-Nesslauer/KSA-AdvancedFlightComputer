@@ -87,6 +87,19 @@ internal static class RcsBurnWindowUi
                         _ => RcsAttitudeStrategy.Auto,
                     };
                 }
+
+                RcsAllocator allocator = options?.Allocator ?? RcsAllocator.Groups;
+                ImGui.Text("Allocator"u8);
+                ImGui.SameLine(120f);
+                if (ImGui.Button($"{allocator}##rcsalloc{timeSec:R}", (float2?)null)
+                    && !isActiveBurn)
+                {
+                    RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
+                    RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
+                    o.Allocator = o.Allocator == RcsAllocator.Groups
+                        ? RcsAllocator.Lp
+                        : RcsAllocator.Groups;
+                }
             }
         }
 
@@ -118,7 +131,10 @@ internal static class RcsBurnWindowUi
             string strategy = exec.ResolvedStrategy == RcsAttitudeStrategy.Align
                 ? $"Align {RcsExecutor.AxisName(exec.ResolvedAxis)}"
                 : "Hold";
-            ImGuiHelper.DrawTextWidget("RCS status"u8, $"{phase} ({strategy})");
+            string allocator = exec.ResolvedAllocator == RcsAllocator.Lp
+                ? (exec.LpSecondsPerImpulse != null ? "LP" : "LP->Groups")
+                : "Groups";
+            ImGuiHelper.DrawTextWidget("RCS status"u8, $"{phase} ({strategy}, {allocator})");
             if (bt != null)
                 ImGuiHelper.DrawTextWidget("To go"u8, $"{bt.DeltaVToGoCci.Length():F2} m/s");
             if (ImGui.Button("Cancel RCS burn"u8, (float2?)null))

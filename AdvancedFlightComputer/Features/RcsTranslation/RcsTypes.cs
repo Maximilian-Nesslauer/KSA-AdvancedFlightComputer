@@ -22,6 +22,19 @@ internal enum RcsAttitudeStrategy
     Align,
 }
 
+/// <summary>How the demanded impulse is turned into thruster pulses.</summary>
+internal enum RcsAllocator
+{
+    /// <summary>Stock-consistent signed-axis groups; residual torque is
+    /// corrected by the attitude hold.</summary>
+    Groups,
+
+    /// <summary>Fuel-optimal LP over the raw per-thruster wrenches with the
+    /// zero-net-torque constraint folded in. Falls back to Groups when the
+    /// constraint set is infeasible for the current layout.</summary>
+    Lp,
+}
+
 /// <summary>Per-burn RCS configuration, keyed by burn identity (time + dV magnitude)
 /// because stock burns carry no stable id across save/load.</summary>
 internal sealed class RcsBurnOptions
@@ -33,6 +46,7 @@ internal sealed class RcsBurnOptions
     public required double BurnDvMs { get; set; }
     public RcsExecutionMode Mode { get; set; } = RcsExecutionMode.Default;
     public RcsAttitudeStrategy Attitude { get; set; } = RcsAttitudeStrategy.Auto;
+    public RcsAllocator Allocator { get; set; } = RcsAllocator.Groups;
 
     public bool Matches(double timeSec, double dvMs)
         => Math.Abs(BurnTimeSec - timeSec) < TimeMatchToleranceSec

@@ -41,8 +41,16 @@ internal static class RcsExecutor
     /// <summary>Firing with no measurable to-go reduction for this long
     /// cancels with a stall alert. Catches layouts whose axes cannot serve
     /// the demanded direction at the current attitude (the axis suppression
-    /// then zeroes every pulse and nothing would ever terminate).</summary>
+    /// then zeroes every pulse and nothing would ever terminate). Only
+    /// counts while firing is eligible: align slews and the pre-ignition
+    /// coast rebase the clock.</summary>
     private const double NoProgressTimeoutSec = 15.0;
+
+    /// <summary>Continuous-slew bound for Align: past this the vehicle is
+    /// judged unable to settle into the burn attitude and the burn cancels
+    /// with an attitude message (never a thruster-coverage one). Generous
+    /// on purpose - ingame slews estimate up to ~35 seconds.</summary>
+    private const double AlignTimeoutSec = 120.0;
 
     /// <summary>Real-time TTL for the UI-path cache (gauge verdict,
     /// capability, available propellant); the gauge and the burn editor
@@ -182,8 +190,11 @@ internal static class RcsExecutor
         if (mode == FlightComputerBurnMode.Auto)
         {
             // A half-activated execution must never fall through to the
-            // stock engine autopilot: on failure, roll back and swallow the
-            // click instead of returning true with exec.IsActive set.
+            // stock engine autopilot: on failure the click is swallowed
+            // with BurnMode still Manual, the mod-side state cleared, and
+            // the navball frame restored. An attitude hold Activate already
+            // engaged stays engaged - whether the user wanted stabilization
+            // beforehand is unknowable here, and holding is the safe side.
             try
             {
                 Activate(vehicle);
@@ -195,6 +206,7 @@ internal static class RcsExecutor
                 if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? failed))
                     failed.ClearActive();
                 RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
+                vehicle.SetNavBallFrame(vehicle.VehicleRegion.GetVehicleReferenceFrame());
             }
             return false;
         }
@@ -244,9 +256,19 @@ internal static class RcsExecutor
             }
         }
 
+        // The LP solves before the sufficiency check so the warning uses
+        // the pattern's real cost; a zero-torque pattern can need
+        // considerably more than the axis-group estimate.
+        exec.ResolvedAllocator = options.Allocator;
+        if (exec.ResolvedAllocator == RcsAllocator.Lp)
+            EnsureLpSolution(vehicle, fc, exec, ImpulseBodyFromTogo(vehicle, fc, fc.Burn),
+                Universe.GetElapsedSimTime().Seconds());
+
         // Warn-only sufficiency check: the user may refill mid-burn or
         // accept a partial burn, so an underfueled activation proceeds.
-        double neededKg = exec.Estimates.RequiredPropellantKg(strategy);
+        double neededKg = exec.LpSecondsPerImpulse != null
+            ? exec.LpCostPerImpulse * fc.TotalMassPropsBody.Mass * dvMs
+            : exec.Estimates.RequiredPropellantKg(strategy);
         double availableKg = RcsPropellant.AvailableKg(vehicle);
         if (neededKg > availableKg)
             Alert($"RCS burn may run out of propellant: needs ~{neededKg:F0} kg, {availableKg:F0} kg available.");
@@ -290,7 +312,8 @@ internal static class RcsExecutor
         PublishCommand(vehicle, exec);
         DefaultCategory.Log.Info(
             $"[AFC] RCS burn engaged: vehicle='{vehicle.Id}' dv={dvMs:F2}m/s " +
-            $"strategy={strategy}{(axis >= 0 ? $" axis={AxisName(axis)}" : string.Empty)}");
+            $"strategy={strategy}{(axis >= 0 ? $" axis={AxisName(axis)}" : string.Empty)} " +
+            $"allocator={exec.ResolvedAllocator}");
         if (DebugConfig.RcsTranslation)
         {
             ref readonly RcsEstimates est = ref exec.Estimates;
@@ -407,6 +430,13 @@ internal static class RcsExecutor
         return true;
     }
 
+    /// <summary>Remaining delta-V as a body-frame impulse (CCI to BODY,
+    /// scaled by total mass). The worker computes the same quantity from
+    /// its navigation snapshot; these are the main-thread sites.</summary>
+    private static float3 ImpulseBodyFromTogo(Vehicle vehicle, FlightComputer fc, BurnTarget bt)
+        => float3.Pack(double3.Unpack(bt.DeltaVToGoCci).Transform(vehicle.GetBody2Cci().Inverse()))
+           * fc.TotalMassPropsBody.Mass;
+
     private static doubleQuat ShortestArc(double3 from, double3 to)
     {
         double d = double3.Dot(from, to);
@@ -519,38 +549,78 @@ internal static class RcsExecutor
 
         float3 togo = bt.DeltaVToGoCci;
         float togoMs = togo.Length();
-        float3 impulseBody = float3.Pack(
-            double3.Unpack(togo).Transform(vehicle.GetBody2Cci().Inverse()))
-            * fc.TotalMassPropsBody.Mass;
-        if (float3.Dot(togo, bt.DeltaVTargetCci) <= 0f
-            || IsBelowImpulseFloor(impulseBody, in exec.Capability))
+        float3 impulseBody = ImpulseBodyFromTogo(vehicle, fc, bt);
+
+        // The worker's firing eligibility, mirrored here: an Align burn
+        // deliberately fires nothing while pitch/yaw error is outside the
+        // align gate, and nothing fires before ignition. Every time-based
+        // decision below must distinguish "legitimately not firing yet"
+        // from "firing but going nowhere". Both sides share
+        // OutsideAlignGate so they cannot disagree.
+        bool slewing = exec.ResolvedStrategy == RcsAttitudeStrategy.Align
+            && OutsideAlignGate(fc);
+        bool firingEligible = !slewing && nowSec >= bt.IgnitionTime.Seconds();
+
+        // Solving during the slew is waste: the direction in the body frame
+        // rotates every tick (churning the simplex and its logs) and the
+        // worker cannot fire the pattern anyway.
+        if (exec.ResolvedAllocator == RcsAllocator.Lp && !slewing)
+            EnsureLpSolution(vehicle, fc, exec, impulseBody, nowSec);
+
+        // The completion floor must match whichever allocation the worker
+        // actually runs: LP pattern floors when a solution is published,
+        // the per-axis group floors otherwise (including LP fallback). It
+        // is only meaningful while firing is eligible - during a slew the
+        // rotating body direction can make a stale LP projection dip below
+        // the floors and would falsely complete a burn that never fired.
+        bool belowFloor = firingEligible
+            && (exec.LpSecondsPerImpulse != null
+                ? IsBelowLpFloor(impulseBody, fc, exec)
+                : IsBelowImpulseFloor(impulseBody, in exec.Capability));
+        if (float3.Dot(togo, bt.DeltaVTargetCci) <= 0f || belowFloor)
         {
             Complete(vehicle, fc, exec, togoMs);
             return;
         }
 
-        // No-progress watchdog: firing was due (past ignition) but the
-        // to-go has not moved. Covers directions the current layout cannot
-        // serve (all pulses suppressed) without any propellant drain to
-        // trigger the capability stall above.
-        if (togoMs < exec.WatchdogTogoMs - ProgressEpsilonMs)
+        // No-progress watchdog: firing was eligible but the to-go has not
+        // moved. Covers directions the current layout cannot serve (all
+        // pulses suppressed) without any propellant drain to trigger the
+        // capability stall above. While not yet eligible the clock rebases
+        // every tick, so an align slew or a pre-ignition coast never counts
+        // as "no progress".
+        if (!firingEligible || togoMs < exec.WatchdogTogoMs - ProgressEpsilonMs)
         {
             exec.WatchdogTogoMs = togoMs;
             exec.WatchdogAtSec = nowSec;
         }
-        else if (nowSec >= bt.IgnitionTime.Seconds()
-                 && exec.WatchdogAtSec > 0.0
-                 && nowSec - exec.WatchdogAtSec > NoProgressTimeoutSec)
+        else if (nowSec - exec.WatchdogAtSec > NoProgressTimeoutSec)
         {
             Alert($"RCS burn stalled: no progress on '{vehicle.Id}' " +
                   $"({togoMs:F2}m/s to go). Check thruster coverage for the burn direction.");
             Cancel(vehicle, exec, "no progress");
             return;
         }
-        if (exec.WatchdogAtSec <= 0.0)
+
+        // Terminal bound for the slew itself: a vehicle that cannot settle
+        // into the deadband (marginal torque authority, oscillation) must
+        // not hang armed forever, and the message must not blame thruster
+        // coverage.
+        if (slewing)
         {
-            exec.WatchdogTogoMs = togoMs;
-            exec.WatchdogAtSec = nowSec;
+            if (exec.SlewingSinceSec <= 0.0)
+                exec.SlewingSinceSec = nowSec;
+            else if (nowSec - exec.SlewingSinceSec > AlignTimeoutSec)
+            {
+                Alert($"RCS burn cancelled: '{vehicle.Id}' cannot reach the burn attitude " +
+                      $"(still slewing after {AlignTimeoutSec:F0}s).");
+                Cancel(vehicle, exec, "cannot reach burn attitude");
+                return;
+            }
+        }
+        else
+        {
+            exec.SlewingSinceSec = 0.0;
         }
 
         if (nowSec - exec.EstimatesComputedAtSec > EstimateRefreshSec)
@@ -567,7 +637,27 @@ internal static class RcsExecutor
             exec.FiringLogged = true;
             DefaultCategory.Log.Debug(
                 $"[AFC] RCS firing window entered: vehicle='{vehicle.Id}' " +
-                $"togo={togoMs:F2}m/s duration est={bt.BurnDuration:F1}s");
+                $"togo={togoMs:F2}m/s duration est={bt.BurnDuration:F1}s " +
+                $"allocator={exec.ResolvedAllocator}");
+            if (exec.LpSecondsPerImpulse == null)
+            {
+                // Group mode fires per signed axis; the split shows which
+                // groups carry the burn and at what force.
+                ref readonly RcsCapabilitySnapshot cap = ref exec.Capability;
+                DefaultCategory.Log.Debug(
+                    $"[AFC]   axis impulse split: X={impulseBody.X / 1000f:F1}kNs " +
+                    $"(F {(impulseBody.X >= 0f ? cap.Ax0.ForceN : cap.Ax1.ForceN) / 1000f:F1}kN), " +
+                    $"Y={impulseBody.Y / 1000f:F1}kNs " +
+                    $"(F {(impulseBody.Y >= 0f ? cap.Ax2.ForceN : cap.Ax3.ForceN) / 1000f:F1}kN), " +
+                    $"Z={impulseBody.Z / 1000f:F1}kNs " +
+                    $"(F {(impulseBody.Z >= 0f ? cap.Ax4.ForceN : cap.Ax5.ForceN) / 1000f:F1}kN)");
+            }
+            else
+            {
+                DefaultCategory.Log.Debug(
+                    $"[AFC]   LP pattern throughput ~{exec.LpImpulseCapNs / MaxPulseSec / 1000f:F1}kN " +
+                    $"({exec.LpCostPerImpulse * 1e6:F1}mg per Ns)");
+            }
         }
 
         PublishCommand(vehicle, exec);
@@ -596,6 +686,25 @@ internal static class RcsExecutor
             RcsBurnCompletions.Raise(vehicle, completedBurn);
     }
 
+    /// <summary>True while the pitch/yaw error is outside the Align firing
+    /// gate. Deliberately wider than the stock burn gate's plain
+    /// AngleDeadband: the stock phase plane
+    /// (FlightComputer.ComputeRcsTrackAxis) stops actively correcting
+    /// inside its 0.5 * AngleDeadband + AngleTurnaround corridor and lets
+    /// the vehicle coast through zero at a sub-deadband rate, so any gate
+    /// tighter than that corridor can wait minutes on pure drift. Stock
+    /// never faces this because engine burns hand pitch/yaw to TVC, which
+    /// bypasses the RCS angle gate entirely. Misalignment inside the
+    /// corridor is a small cosine thrust loss the closed loop absorbs.
+    /// Shared by the worker's RequireAttitude gate and the driver's
+    /// slewing mirror so the two cannot drift apart.</summary>
+    internal static bool OutsideAlignGate(FlightComputer fc)
+    {
+        float gateY = Math.Max(fc.AngleDeadband, 0.5f * fc.AngleDeadband + fc.AngleTurnaround.Y);
+        float gateZ = Math.Max(fc.AngleDeadband, 0.5f * fc.AngleDeadband + fc.AngleTurnaround.Z);
+        return Math.Abs(fc.ErrorAngles.Y) > gateY || Math.Abs(fc.ErrorAngles.Z) > gateZ;
+    }
+
     /// <summary>True when the worker's per-axis suppression would command
     /// nothing for this body-frame residual impulse: every signed-axis
     /// component is below its own group's minimum-impulse floor (or has no
@@ -619,6 +728,169 @@ internal static class RcsExecutor
         }
         return true;
     }
+
+    #region LP allocation
+
+    /// <summary>Keeps the LP solution fresh for the current burn direction:
+    /// rebuilds the wrench table at the capability cadence or when the
+    /// FlightComputer replaced its VehicleConfig (staging can swap the
+    /// thruster list without changing its count, so identity is the
+    /// trigger), and re-solves at the estimate cadence or when the demanded
+    /// direction drifted more than ~2.5 degrees. On an infeasible
+    /// constraint set the solution is dropped and the worker falls back to
+    /// the axis-group path; the cadence still applies so a persistently
+    /// infeasible layout is retried, not re-solved every tick.</summary>
+    private static void EnsureLpSolution(
+        Vehicle vehicle, FlightComputer fc, RcsExecution exec, float3 impulseBody, double nowSec)
+    {
+        List<ThrusterController> thrusters = fc.VehicleConfig.Thrusters;
+        exec.Wrench ??= new RcsWrenchTable();
+        if (nowSec - exec.WrenchBuiltAtSec > CapabilityRefreshSec
+            || !exec.Wrench.Matches(thrusters))
+        {
+            exec.Wrench.Build(vehicle, fc);
+            exec.WrenchBuiltAtSec = nowSec;
+            exec.LpSolvedAtSec = double.NegativeInfinity;
+        }
+
+        float3 dir = impulseBody.NormalizeOrZero();
+        if (dir.IsExactlyZero())
+            return;
+        // LpDirBody records the last ATTEMPTED direction (also on failure),
+        // so an infeasible layout honors the cadence instead of re-running
+        // the simplex every driver tick.
+        bool drifted = float3.Dot(dir, exec.LpDirBody) < 0.999f;
+        if (!drifted && nowSec - exec.LpSolvedAtSec <= EstimateRefreshSec)
+            return;
+        exec.LpSolvedAtSec = nowSec;
+        exec.LpDirBody = dir;
+
+        RcsWrenchTable w = exec.Wrench;
+        if (w.UsableCount == 0)
+        {
+            DropLpSolution(exec, "no usable thrusters");
+            return;
+        }
+
+        double[] columns = new double[w.UsableCount * 6];
+        double[] cost = new double[w.UsableCount];
+        int[] map = new int[w.UsableCount];
+        int k = 0;
+        for (int i = 0; i < w.Count; i++)
+        {
+            if (!w.Usable[i])
+                continue;
+            columns[k * 6 + 0] = w.ForceBody[i].X;
+            columns[k * 6 + 1] = w.ForceBody[i].Y;
+            columns[k * 6 + 2] = w.ForceBody[i].Z;
+            columns[k * 6 + 3] = w.TorqueBody[i].X;
+            columns[k * 6 + 4] = w.TorqueBody[i].Y;
+            columns[k * 6 + 5] = w.TorqueBody[i].Z;
+            cost[k] = w.MassFlow[i];
+            map[k] = i;
+            k++;
+        }
+        double[] rhs = { dir.X, dir.Y, dir.Z, 0.0, 0.0, 0.0 };
+
+        double[]? x = RcsLpSolver.Solve(6, w.UsableCount, columns, cost, rhs);
+        if (x == null)
+        {
+            DropLpSolution(exec,
+                "the zero-torque force constraint is infeasible for this layout/direction");
+            return;
+        }
+
+        float[] full = new float[thrusters.Count];
+        float maxX = 0f;
+        double costPerImpulse = 0.0;
+        int support = 0;
+        for (int j = 0; j < w.UsableCount; j++)
+        {
+            float xi = (float)x[j];
+            if (xi <= 0f)
+                continue;
+            full[map[j]] = xi;
+            maxX = Math.Max(maxX, xi);
+            costPerImpulse += cost[j] * x[j];
+            support++;
+        }
+        if (maxX <= 0f)
+        {
+            DropLpSolution(exec, "the solver returned an empty firing pattern");
+            return;
+        }
+
+        exec.LpSecondsPerImpulse = full;
+        exec.LpImpulseCapNs = MaxPulseSec / maxX;
+        exec.LpCostPerImpulse = costPerImpulse;
+
+        // Log the pattern only when its support set changes: cadence
+        // re-solves with an unchanged set differ just in the last digits
+        // and would flood the log over a long burn.
+        if (DebugConfig.RcsTranslation)
+        {
+            int signature = support;
+            for (int i = 0; i < full.Length; i++)
+            {
+                if (full[i] > 0f)
+                    signature = signature * 31 + i;
+            }
+            if (signature != exec.LpLoggedSupportSignature)
+            {
+                exec.LpLoggedSupportSignature = signature;
+                DefaultCategory.Log.Debug(
+                    $"[AFC] RCS LP solved: vehicle='{vehicle.Id}' {support}/{w.UsableCount} thrusters, " +
+                    $"{costPerImpulse * 1e6:F2}mg per Ns, cap {exec.LpImpulseCapNs:F0}Ns/tick");
+                for (int i = 0; i < full.Length; i++)
+                {
+                    if (full[i] <= 0f)
+                        continue;
+                    float3 f = w.ForceBody[i];
+                    DefaultCategory.Log.Debug(
+                        $"[AFC]   LP thruster {i}: duty={full[i] / maxX * 100f:F0}% " +
+                        $"F=({f.X / 1000f:F1},{f.Y / 1000f:F1},{f.Z / 1000f:F1})kN " +
+                        $"|tau|={w.TorqueBody[i].Length() / 1000f:F1}kNm");
+                }
+            }
+        }
+    }
+
+    private static void DropLpSolution(RcsExecution exec, string reason)
+    {
+        exec.LpSecondsPerImpulse = null;
+        exec.LpCostPerImpulse = 0.0;
+        if (!exec.LpFallbackLogged)
+        {
+            exec.LpFallbackLogged = true;
+            DefaultCategory.Log.Warning(
+                $"[AFC] RCS LP allocator falling back to axis groups: {reason}.");
+        }
+    }
+
+    /// <summary>LP-mode completion floor: the pattern scales linearly with
+    /// the demanded impulse, so once every participating thruster's pulse
+    /// would fall below its own minimum-pulse floor the worker fires
+    /// nothing and the burn is as done as this pattern can make it.</summary>
+    private static bool IsBelowLpFloor(float3 impulseBody, FlightComputer fc, RcsExecution exec)
+    {
+        float[] x = exec.LpSecondsPerImpulse!;
+        List<ThrusterController> thrusters = fc.VehicleConfig.Thrusters;
+        if (x.Length != thrusters.Count)
+            return false;
+        float j = float3.Dot(impulseBody, exec.LpDirBody);
+        if (j <= 0f)
+            return false;
+        for (int i = 0; i < x.Length; i++)
+        {
+            if (x[i] <= 0f)
+                continue;
+            if (x[i] * j >= MinImpulseSuppressionFactor * thrusters[i].MinimumPulseTime)
+                return false;
+        }
+        return true;
+    }
+
+    #endregion
 
     private static void EnsureAlignAttitude(FlightComputer fc, RcsExecution exec)
     {
@@ -663,10 +935,24 @@ internal static class RcsExecutor
 
         bool align = exec.ResolvedStrategy == RcsAttitudeStrategy.Align;
         double duration = 0.0;
-        if (exec.Estimates.Valid)
+        if (exec.LpSecondsPerImpulse != null && exec.LpImpulseCapNs > 0f)
+        {
+            // The LP pattern's throughput is capped by its busiest thruster
+            // (a sparse vertex fires far fewer jets than the axis groups),
+            // so the group-model estimate would badly understate the burn
+            // time the countdown and warp mark show.
+            double totalImpulse = bt.DeltaVTargetCci.Length() * fc.TotalMassPropsBody.Mass;
+            duration = totalImpulse * MaxPulseSec / exec.LpImpulseCapNs;
+        }
+        else if (exec.Estimates.Valid)
+        {
             duration = align ? exec.Estimates.AlignDurationSec : exec.Estimates.HoldDurationSec;
-        // Ignition stays impulse-centred; the align slew happens before it
-        // because the attitude command engages at activation.
+        }
+        // Ignition stays impulse-centred and deliberately carries no slew
+        // lead: past ignition the worker still waits on the attitude gate,
+        // and the driver's watchdog rebases while slewing. Folding the
+        // (rough) slew estimate into the warp-to-burn mark is a separate
+        // UX decision, not needed for correctness.
         double ignition = bt.ImpulsiveInstant.Seconds() - 0.5 * duration;
 
         ref readonly RcsCapabilitySnapshot cap = ref exec.Capability;
@@ -674,13 +960,15 @@ internal static class RcsExecutor
         {
             Active = true,
             IgnitionTimeSec = ignition,
-            BurnDurationSec = (float)duration,
             RequireAttitude = align,
             MaxPulseSec = MaxPulseSec,
             AxisForcePos = new float3(cap.Ax0.ForceN, cap.Ax2.ForceN, cap.Ax4.ForceN),
             AxisForceNeg = new float3(cap.Ax1.ForceN, cap.Ax3.ForceN, cap.Ax5.ForceN),
             AxisMinImpulsePos = new float3(cap.Ax0.MinImpulseNs, cap.Ax2.MinImpulseNs, cap.Ax4.MinImpulseNs),
             AxisMinImpulseNeg = new float3(cap.Ax1.MinImpulseNs, cap.Ax3.MinImpulseNs, cap.Ax5.MinImpulseNs),
+            LpSecondsPerImpulse = exec.LpSecondsPerImpulse,
+            LpDirBody = exec.LpDirBody,
+            LpImpulseCapNs = exec.LpImpulseCapNs,
         });
     }
 

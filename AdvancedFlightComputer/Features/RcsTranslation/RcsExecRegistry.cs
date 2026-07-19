@@ -149,12 +149,14 @@ internal static class RcsExecRegistry
                             "burn_dv_ms = {0:R}", o.BurnDvMs));
                         writer.WriteLine($"mode = \"{o.Mode}\"");
                         writer.WriteLine($"attitude = \"{o.Attitude}\"");
+                        writer.WriteLine($"allocator = \"{o.Allocator}\"");
                         if (active)
                         {
                             writer.WriteLine("active = true");
                             writer.WriteLine($"resolved_strategy = \"{exec.ResolvedStrategy}\"");
                             writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
                                 "resolved_axis = {0}", exec.ResolvedAxis));
+                            writer.WriteLine($"resolved_allocator = \"{exec.ResolvedAllocator}\"");
                         }
                         writer.WriteLine();
                     }
@@ -252,6 +254,9 @@ internal static class RcsExecRegistry
         RcsAttitudeStrategy attitude = RcsAttitudeStrategy.Auto;
         if (block.TryGetValue("attitude", out string? attStr))
             Enum.TryParse(attStr, out attitude);
+        RcsAllocator allocator = RcsAllocator.Groups;
+        if (block.TryGetValue("allocator", out string? allocStr))
+            Enum.TryParse(allocStr, out allocator);
 
         if (!_byKey.TryGetValue((saveId, vehicleId), out RcsExecution? exec))
         {
@@ -264,6 +269,7 @@ internal static class RcsExecRegistry
             BurnDvMs = dvMs,
             Mode = mode,
             Attitude = attitude,
+            Allocator = allocator,
         });
 
         if (block.TryGetValue("active", out string? activeStr)
@@ -277,6 +283,9 @@ internal static class RcsExecRegistry
             if (block.TryGetValue("resolved_axis", out string? axisStr)
                 && int.TryParse(axisStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int axis))
                 exec.ResolvedAxis = axis;
+            if (block.TryGetValue("resolved_allocator", out string? resAllocStr)
+                && Enum.TryParse(resAllocStr, out RcsAllocator resolvedAllocator))
+                exec.ResolvedAllocator = resolvedAllocator;
         }
     }
 

@@ -59,6 +59,7 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 - Burns themselves stay in the stock save format; removing the mod keeps every planned burn. The RCS arming metadata lives in `mods/AdvancedFlightComputer/rcs-exec.toml` next to the mod and survives save/load, including mid-burn.
 - The burn editor warns when a burn resolves to RCS but no thruster can translate (no propellant, none active) and when the estimated propellant exceeds what the thrusters can actually reach.
 - Completed RCS burns raise a public event (`RcsBurnCompletions.Completed`) other mods can consume; [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) uses it to clean up finished RCS burns the same way it cleans up engine auto-burns.
+- An optional **LP allocator** (per-burn "Allocator: Groups | Lp" selector, default Groups) solves the classic fuel-optimal jet-select linear program over the raw per-thruster wrenches with zero net torque folded into the constraints (the Bergmann/Draper formulation, flown on ATV and Orion). It exploits off-axis thrusters the stock grouping ignores and produces torque-free firing patterns; note that exact torque nulling can cost more propellant than groups-plus-attitude-hold on well-balanced layouts, which is why it is opt-in. Infeasible layouts fall back to the group allocator automatically.
 
 ### Hyperbolic Targets
 
@@ -102,6 +103,8 @@ Required only to build the mod from source. Targets **.NET 10**.
 - `afc-set-inclination` / `afc-match-inclination` assert node burns against the ecliptic and equatorial references, partial-fraction burns, and the coplanar and hyperbolic edge cases.
 - `afc-rcs-allocator` asserts the RCS translation allocation math: per-axis pulse shaping (control-period cap, minimum-impulse floor), per-thruster group pulses, and the Hold-strategy performance model.
 - `afc-rcs-translation` flies a full RCS translation burn on the live simulation: a planned burn armed for RCS must reach its delta-V target within the minimum-impulse bound, consume thruster propellant, and never command a main engine. Needs a vehicle save with RCS thrusters (set via `KSA_HEADLESS_VEHICLE`, default "Test Vehicle 1"); without one the test skips.
+- `afc-rcs-lp-solver` asserts the LP allocator's simplex on hand-checkable problems: cost optimality, zero-torque constraint satisfaction, support selection, and clean infeasibility.
+- `afc-rcs-lp` flies the same burn with both allocators on one vehicle (A/B), asserts both complete with quiet engines, and logs the propellant comparison.
 
 The oracle is always the game's own orbit propagation, never a re-derivation of the math under test.
 

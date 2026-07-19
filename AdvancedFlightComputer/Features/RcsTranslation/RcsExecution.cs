@@ -1,3 +1,4 @@
+using Brutal.Numerics;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
@@ -33,6 +34,8 @@ internal sealed class RcsExecution
     /// the burn vector; -1 for Hold.</summary>
     public int ResolvedAxis { get; set; } = -1;
 
+    public RcsAllocator ResolvedAllocator { get; set; } = RcsAllocator.Groups;
+
     #endregion
 
     #region Transient state
@@ -56,8 +59,39 @@ internal sealed class RcsExecution
     public float WatchdogTogoMs = float.PositiveInfinity;
     public double WatchdogAtSec;
 
+    /// <summary>Start of the current continuous Align slew, zero while not
+    /// slewing; feeds the cannot-reach-attitude bound.</summary>
+    public double SlewingSinceSec;
+
     /// <summary>One-shot guard for the ignition-crossing debug log.</summary>
     public bool FiringLogged;
+
+    #region LP allocator state (transient, ResolvedAllocator == Lp only)
+
+    public RcsWrenchTable? Wrench;
+    public double WrenchBuiltAtSec = double.NegativeInfinity;
+
+    /// <summary>Seconds of firing per newton-second of net impulse along
+    /// <see cref="LpDirBody"/>, index-aligned with the wrench table (and
+    /// with VehicleConfig.Thrusters). Null while no valid solution exists.</summary>
+    public float[]? LpSecondsPerImpulse;
+    public float3 LpDirBody;
+    public float LpImpulseCapNs;
+    public double LpSolvedAtSec = double.NegativeInfinity;
+
+    /// <summary>Propellant per newton-second of net impulse for the current
+    /// solution; feeds the LP-honest sufficiency numbers.</summary>
+    public double LpCostPerImpulse;
+
+    /// <summary>Signature of the last logged firing pattern (support
+    /// indices), so the solve log fires on pattern changes instead of
+    /// every cadence re-solve.</summary>
+    public int LpLoggedSupportSignature;
+
+    /// <summary>One-shot guard for the LP-infeasible fallback warning.</summary>
+    public bool LpFallbackLogged;
+
+    #endregion
 
     public bool IsActive => ActiveBurnTimeSec.HasValue;
 
@@ -99,7 +133,18 @@ internal sealed class RcsExecution
         StallAlerted = false;
         WatchdogTogoMs = float.PositiveInfinity;
         WatchdogAtSec = 0.0;
+        SlewingSinceSec = 0.0;
         FiringLogged = false;
+        ResolvedAllocator = RcsAllocator.Groups;
+        Wrench = null;
+        WrenchBuiltAtSec = double.NegativeInfinity;
+        LpSecondsPerImpulse = null;
+        LpDirBody = default;
+        LpImpulseCapNs = 0f;
+        LpSolvedAtSec = double.NegativeInfinity;
+        LpCostPerImpulse = 0.0;
+        LpLoggedSupportSignature = 0;
+        LpFallbackLogged = false;
     }
 
     /// <summary>Drops per-burn options whose burn no longer exists in the

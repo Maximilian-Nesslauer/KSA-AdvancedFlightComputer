@@ -18,15 +18,11 @@ internal sealed class RcsWorkerCommand
 
     public double IgnitionTimeSec { get; init; }
 
-    /// <summary>RCS burn duration estimate, mirrored into the shared
-    /// BurnTarget so the stock countdown / warp-to-burn UI shows RCS timing
-    /// instead of the engine-based numbers stock recomputes each tick.</summary>
-    public float BurnDurationSec { get; init; }
-
     /// <summary>Fire only when the pitch/yaw error angles are inside the
-    /// deadband (Align strategy). Roll about the aligned axis does not move
-    /// the thrust vector, the same reason stock's burn gate ignores it.
-    /// Hold fires through any attitude.</summary>
+    /// align gate (Align strategy; see RcsExecutor.OutsideAlignGate). Roll
+    /// about the aligned axis does not move the thrust vector, the same
+    /// reason stock's burn gate ignores it. Hold fires through any
+    /// attitude.</summary>
     public bool RequireAttitude { get; init; }
 
     /// <summary>Upper bound on a single commanded pulse, seconds. Keeps the
@@ -41,6 +37,18 @@ internal sealed class RcsWorkerCommand
     public float3 AxisForceNeg { get; init; }
     public float3 AxisMinImpulsePos { get; init; }
     public float3 AxisMinImpulseNeg { get; init; }
+
+    /// <summary>LP allocation: seconds of firing per newton-second of net
+    /// impulse along <see cref="LpDirBody"/>, index-aligned with
+    /// VehicleConfig.Thrusters. Null runs the axis-group path. The worker
+    /// verifies the length against the live thruster list because staging
+    /// can swap VehicleConfig between driver ticks.</summary>
+    public float[]? LpSecondsPerImpulse { get; init; }
+    public float3 LpDirBody { get; init; }
+
+    /// <summary>Impulse ceiling per control period so no single pulse in
+    /// the LP pattern exceeds <see cref="MaxPulseSec"/>.</summary>
+    public float LpImpulseCapNs { get; init; }
 }
 
 /// <summary>
