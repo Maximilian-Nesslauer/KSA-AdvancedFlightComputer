@@ -201,6 +201,9 @@ internal static class RcsExecutor
             }
             catch (Exception ex)
             {
+                // On-screen like the refusal paths inside Activate; a
+                // log-only failure would read as the click doing nothing.
+                Alert($"RCS burn could not engage on '{vehicle.Id}' (internal error, see log).");
                 DefaultCategory.Log.Warning(
                     $"[AFC] RCS activation failed for vehicle='{vehicle.Id}': {ex}");
                 if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? failed))
@@ -280,6 +283,8 @@ internal static class RcsExecutor
         exec.ResolvedAxis = axis;
         exec.StallAlerted = false;
 
+        exec.BaselineFuel(fc, exec.CapabilityProbedAtSec);
+
         // BurnMode stays Manual the whole time so the stock engine path never
         // engages; the gauge button reads as ON through the PackData patch.
         fc.BurnMode = FlightComputerBurnMode.Manual;
@@ -328,6 +333,7 @@ internal static class RcsExecutor
 
     public static void Cancel(Vehicle vehicle, RcsExecution exec, string reason)
     {
+        RcsFuelSummary fuel = ComputeFuelSummary(vehicle.FlightComputer, exec);
         // Align commanded the attitude tracker; hand the attitude back the
         // same way a completed burn does. Hold never touched it.
         if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
@@ -335,6 +341,7 @@ internal static class RcsExecutor
         exec.ClearActive();
         RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
         DefaultCategory.Log.Info($"[AFC] RCS burn cancelled ({reason}): vehicle='{vehicle.Id}'");
+        LogFuel(vehicle, in fuel);
     }
 
     private static void LogResolutionDebug(Vehicle vehicle)
@@ -505,12 +512,20 @@ internal static class RcsExecutor
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] RCS burn for vehicle='{vehicle.Id}' not found after load, cancelling.");
+            // No summary is computed on this path; drop the previous
+            // execution's numbers so LastFuel reads as "no data".
+            exec.LastFuel = default;
             exec.ClearActive();
             return;
         }
         exec.ActiveBurn = burn;
         if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
             CommandAlignAttitude(fc, exec.ResolvedAxis);
+
+        // Fuel telemetry restarts at the load; the completion line then
+        // covers the post-load remainder of the burn.
+        exec.BaselineFuel(fc, Universe.GetElapsedSimTime().Seconds());
+
         DefaultCategory.Log.Info(
             $"[AFC] RCS burn reattached after load: vehicle='{vehicle.Id}' t={burn.Time.Seconds():F1}s");
     }
@@ -566,6 +581,8 @@ internal static class RcsExecutor
         // worker cannot fire the pattern anyway.
         if (exec.ResolvedAllocator == RcsAllocator.Lp && !slewing)
             EnsureLpSolution(vehicle, fc, exec, impulseBody, nowSec);
+
+        AccumulateFuel(exec, fc, bt, impulseBody, slewing, firingEligible);
 
         // The completion floor must match whichever allocation the worker
         // actually runs: LP pattern floors when a solution is published,
@@ -668,6 +685,7 @@ internal static class RcsExecutor
         double burnTime = exec.ActiveBurnTimeSec ?? 0.0;
         double burnDv = exec.ActiveBurnDvMs ?? 0.0;
         Burn? completedBurn = exec.ActiveBurn;
+        RcsFuelSummary fuel = ComputeFuelSummary(fc, exec);
         if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
             fc.SetNullRot(VehicleReferenceFrame.BurnBody);
         exec.ClearActive();
@@ -679,6 +697,7 @@ internal static class RcsExecutor
         DefaultCategory.Log.Info(
             $"[AFC] RCS burn complete: vehicle='{vehicle.Id}' " +
             $"accumulated={accumMs:F3}m/s of {burnDv:F2}m/s, residual={residualMs:F3}m/s");
+        LogFuel(vehicle, in fuel);
 
         // Raised last: a subscriber may remove the burn from the plan
         // (AutoRemoveFinishedBurns), which must not race our own cleanup.
@@ -728,6 +747,143 @@ internal static class RcsExecutor
         }
         return true;
     }
+
+    #region Fuel telemetry
+
+    /// <summary>Per-driver-tick fuel bookkeeping. The slew bucket takes the
+    /// measured mass delta while the Align slew holds firing back (all
+    /// attitude by construction); the translation bucket attributes the
+    /// delta-V the game accounted this tick at the active allocator's model
+    /// cost. An exact physical split does not exist (one thruster pulse can
+    /// serve translation and attitude at once, and RocketCore.UpdateState
+    /// REPLACES a re-commanded pulse's remaining time, so summing worker
+    /// commands would overcount overlapped pulses); the unattributed
+    /// remainder is reported as attitude.</summary>
+    private static void AccumulateFuel(
+        RcsExecution exec, FlightComputer fc, BurnTarget bt,
+        float3 impulseBody, bool slewing, bool firingEligible)
+    {
+        if (exec.StartMassKg <= 0.0)
+            return;
+        double massNow = fc.TotalMassPropsBody.Mass;
+        if (slewing)
+            exec.SlewPropellantKg += Math.Max(0.0, exec.LastTickMassKg - massNow);
+        exec.LastTickMassKg = massNow;
+
+        float3 accumNow = bt.DeltaVAccumCci;
+        if (firingEligible)
+        {
+            double deliveredNs = massNow * (accumNow - exec.LastAccumCci).Length();
+            if (deliveredNs > 0.0)
+            {
+                double costPerNs = exec.LpSecondsPerImpulse != null
+                    ? exec.LpCostPerImpulse
+                    : GroupCostPerNs(in exec.Capability,
+                        double3.Unpack(impulseBody).NormalizeOrZero());
+                exec.TranslationPropellantKg += deliveredNs * costPerNs;
+            }
+        }
+        // Advanced every tick so attitude-driven delta-V outside the firing
+        // window is never attributed to translation later.
+        exec.LastAccumCci = accumNow;
+    }
+
+    /// <summary>Model cost of group-allocated translation along
+    /// <paramref name="uBody"/>, kg per newton-second of net impulse: each
+    /// demanded signed axis contributes its direction weight times the
+    /// group's massflow per force (the L1 penalty falls out of the weights
+    /// summing above 1 for off-axis directions). Unusable axes are skipped,
+    /// matching the worker's suppression of those components.</summary>
+    private static double GroupCostPerNs(in RcsCapabilitySnapshot cap, double3 uBody)
+    {
+        Span<double> weight = stackalloc double[6]
+        {
+            Math.Max(uBody.X, 0.0), Math.Max(-uBody.X, 0.0),
+            Math.Max(uBody.Y, 0.0), Math.Max(-uBody.Y, 0.0),
+            Math.Max(uBody.Z, 0.0), Math.Max(-uBody.Z, 0.0),
+        };
+        double cost = 0.0;
+        for (int i = 0; i < 6; i++)
+        {
+            // Negligible off-axis components, same threshold as
+            // TryHoldPerformance's feasibility walk.
+            if (weight[i] < 1e-4)
+                continue;
+            RcsAxisGroup g = cap.Get(i);
+            if (g.IsUsable)
+                cost += weight[i] * g.MassFlowKgS / g.ForceN;
+        }
+        return cost;
+    }
+
+    /// <summary>Snapshot the breakdown before ClearActive wipes the
+    /// accumulators; also stores it as <see cref="RcsExecution.LastFuel"/>.
+    /// Invalid (and later unlogged) when no baseline exists, e.g. an
+    /// execution cancelled right after a save load reattach failure.</summary>
+    private static RcsFuelSummary ComputeFuelSummary(FlightComputer fc, RcsExecution exec)
+    {
+        if (exec.StartMassKg <= 0.0)
+        {
+            // Overwrite here too, so LastFuel always reflects the most
+            // recent finish and a baseline-less one reads as "no data"
+            // instead of the previous execution's numbers.
+            exec.LastFuel = default;
+            return default;
+        }
+        double totalKg = exec.StartMassKg - fc.TotalMassPropsBody.Mass;
+
+        double dvMs = 0.0;
+        double veMs = 0.0;
+        double angleDeg = 0.0;
+        BurnTarget? bt = fc.Burn;
+        // The loaded BurnTarget can already belong to a different burn on
+        // the cancel paths (plan reordered/deleted); its delta-V numbers
+        // would be someone else's.
+        bool btMatches = bt != null && exec.ActiveBurnTimeSec.HasValue
+            && Math.Abs(bt.ImpulsiveInstant.Seconds() - exec.ActiveBurnTimeSec.Value)
+               <= BurnIdentityToleranceSec;
+        if (btMatches)
+        {
+            double3 accum = double3.Unpack(bt!.DeltaVAccumCci);
+            double3 target = double3.Unpack(bt.DeltaVTargetCci);
+            // The ve pairs this window's delta-V with this window's
+            // propellant; after a mid-burn save load both restart at the
+            // baseline, while the angle stays a whole-burn statement.
+            dvMs = (accum - double3.Unpack(exec.StartAccumCci)).Length();
+            if (totalKg > 1e-9 && dvMs > 0.0)
+                veMs = exec.StartMassKg * dvMs / totalKg;
+            if (!accum.IsNearlyZero() && !target.IsNearlyZero())
+                angleDeg = MathEx.SafeAcos(double3.Dot(accum.Normalized(), target.Normalized()))
+                    * (180.0 / Math.PI);
+        }
+
+        RcsFuelSummary fuel = new()
+        {
+            Valid = true,
+            TotalKg = totalKg,
+            TranslationKg = exec.TranslationPropellantKg,
+            SlewKg = exec.SlewPropellantKg,
+            AttitudeKg = totalKg - exec.TranslationPropellantKg - exec.SlewPropellantKg,
+            EffectiveVeMs = veMs,
+            DvAngleDeg = angleDeg,
+            ElapsedSec = Universe.GetElapsedSimTime().Seconds() - exec.EngagedAtSec,
+        };
+        exec.LastFuel = fuel;
+        return fuel;
+    }
+
+    private static void LogFuel(Vehicle vehicle, in RcsFuelSummary fuel)
+    {
+        if (!fuel.Valid)
+            return;
+        DefaultCategory.Log.Info(
+            $"[AFC] RCS burn fuel: vehicle='{vehicle.Id}' total={fuel.TotalKg:F1}kg " +
+            $"(translation {fuel.TranslationKg:F1}kg, slew {fuel.SlewKg:F1}kg, " +
+            $"attitude {fuel.AttitudeKg:F1}kg), ve_eff={fuel.EffectiveVeMs:F0}m/s, " +
+            $"dv angle={fuel.DvAngleDeg:F2}deg, elapsed={fuel.ElapsedSec:F1}s");
+    }
+
+    #endregion
 
     #region LP allocation
 

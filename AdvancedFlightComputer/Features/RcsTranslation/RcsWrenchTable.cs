@@ -60,40 +60,57 @@ internal sealed class RcsWrenchTable
         for (int i = 0; i < Count; i++)
         {
             ThrusterController thruster = thrusters[i];
-            float3 force = float3.Zero;
-            float3 torque = float3.Zero;
-            double massFlow = 0.0;
-            bool usable = false;
-
-            if (thruster.IsActive)
-            {
-                foreach (RocketCore core in thruster.Cores)
-                {
-                    if (!coreStates[core.StatesIdx].IsPropellantAvailable)
-                        continue;
-                    RocketCoreConditions combustion = core.ComputeConditions(1f);
-                    foreach (RocketNozzle nozzle in core.Rocket.Nozzles)
-                    {
-                        float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);
-                        floatQuat rotation = floatQuat.Pack(nozzle.Parent.Asmb2VehicleAsmb);
-                        float thrust = nozzle.ComputePerformance(in combustion, ambientPressure).GetTotalThrust();
-                        float3 f = thrust * (-nozzle.ExhaustDirectionAsmb).Transform(rotation);
-                        float3 r = nozzle.LocationAsmb.Transform(matrix) - com;
-                        force += f;
-                        torque += float3.Cross(r, f);
-                    }
-                    massFlow += core.MaxConsumptionRate;
-                    usable = true;
-                }
-            }
+            ComputeLive(thruster, coreStates, com, ambientPressure,
+                out float3 force, out float3 torque, out float massFlow);
 
             ForceBody[i] = force;
             TorqueBody[i] = torque;
             MassFlow[i] = massFlow;
             Modules[i] = thruster;
-            Usable[i] = usable && massFlow > 0.0 && !force.IsExactlyZero();
+            Usable[i] = massFlow > 0f && !force.IsExactlyZero();
             if (Usable[i])
                 UsableCount++;
+        }
+    }
+
+    /// <summary>Live wrench and mass flow of one thruster from nozzle
+    /// performance at the current ambient pressure. Thrust and flow come
+    /// from the SAME performance evaluation, matching the physics exactly
+    /// (ActiveNozzle applies Performance.TotalThrust and consumes
+    /// Performance.MassFlowRate through one ComputeThrustMod). The cached
+    /// state values are not a substitute: the game's thruster cache
+    /// revalidates only on 0.1 percent mass or 100 Pa pressure drift
+    /// (ThrusterControllerGlobalState.IsCacheValid), so IntendedForce can
+    /// carry spawn-time conditions through a whole burn while a fresh
+    /// MaxConsumptionRate does not, and force over flow then misstates the
+    /// real exhaust velocity.</summary>
+    public static void ComputeLive(
+        ThrusterController thruster, ReadOnlySpan<RocketCoreState> coreStates,
+        float3 com, float ambientPressure,
+        out float3 force, out float3 torque, out float massFlow)
+    {
+        force = float3.Zero;
+        torque = float3.Zero;
+        massFlow = 0f;
+        if (!thruster.IsActive)
+            return;
+        foreach (RocketCore core in thruster.Cores)
+        {
+            if (!coreStates[core.StatesIdx].IsPropellantAvailable)
+                continue;
+            // Full-throttle probe; thruster pulses always command throttle 1.
+            RocketCoreConditions combustion = core.ComputeConditions(1f);
+            foreach (RocketNozzle nozzle in core.Rocket.Nozzles)
+            {
+                float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);
+                floatQuat rotation = floatQuat.Pack(nozzle.Parent.Asmb2VehicleAsmb);
+                NozzlePerformance perf = nozzle.ComputePerformance(in combustion, ambientPressure);
+                float3 f = perf.GetTotalThrust() * (-nozzle.ExhaustDirectionAsmb).Transform(rotation);
+                float3 r = nozzle.LocationAsmb.Transform(matrix) - com;
+                force += f;
+                torque += float3.Cross(r, f);
+                massFlow += perf.MassFlowRate;
+            }
         }
     }
 }

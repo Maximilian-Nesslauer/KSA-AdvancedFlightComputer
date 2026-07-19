@@ -66,6 +66,60 @@ internal sealed class RcsExecution
     /// <summary>One-shot guard for the ignition-crossing debug log.</summary>
     public bool FiringLogged;
 
+    #region Fuel telemetry (accumulated by the driver, reported at Complete/Cancel)
+
+    /// <summary>Vehicle mass when the execution engaged (or re-baselined
+    /// after a save load), kg. Zero means no baseline exists and the fuel
+    /// line is skipped.</summary>
+    public double StartMassKg;
+
+    /// <summary>Mass at the previous driver tick; feeds the slew bucket.</summary>
+    public double LastTickMassKg;
+
+    /// <summary>Propellant spent while the Align slew held firing back, kg
+    /// (mass delta over slewing ticks, which is all attitude by construction).</summary>
+    public double SlewPropellantKg;
+
+    /// <summary>Model-attributed translation propellant, kg: delivered
+    /// delta-V (game accounting) times the active allocator's cost per
+    /// newton-second. The gap to the total is attitude hold plus pulse
+    /// quantization plus model error.</summary>
+    public double TranslationPropellantKg;
+
+    /// <summary>DeltaVAccumCci at the previous driver tick, so each tick
+    /// attributes only its own delivered delta-V.</summary>
+    public float3 LastAccumCci;
+
+    /// <summary>DeltaVAccumCci at the baseline. Nonzero when a mid-burn
+    /// save load re-baselined the telemetry: the effective-ve number must
+    /// pair the post-load delta-V with the post-load propellant, not the
+    /// whole burn's delta-V.</summary>
+    public float3 StartAccumCci;
+
+    /// <summary>Sim time of the baseline; feeds the fuel line's elapsed.</summary>
+    public double EngagedAtSec;
+
+    /// <summary>Breakdown of the last finished execution (completed or
+    /// cancelled); survives ClearActive so consumers can read it after
+    /// the execution ends.</summary>
+    public RcsFuelSummary LastFuel;
+
+    /// <summary>(Re)starts the fuel accumulators from the current state.
+    /// Called at activation and after a save-load reattach, so the fuel
+    /// line always covers exactly the window this process observed.</summary>
+    public void BaselineFuel(FlightComputer fc, double engagedAtSec)
+    {
+        StartMassKg = fc.TotalMassPropsBody.Mass;
+        LastTickMassKg = StartMassKg;
+        SlewPropellantKg = 0.0;
+        TranslationPropellantKg = 0.0;
+        StartAccumCci = fc.Burn?.DeltaVAccumCci ?? default;
+        LastAccumCci = StartAccumCci;
+        EngagedAtSec = engagedAtSec;
+    }
+
+    #endregion
+
     #region LP allocator state (transient, ResolvedAllocator == Lp only)
 
     public RcsWrenchTable? Wrench;
@@ -135,6 +189,13 @@ internal sealed class RcsExecution
         WatchdogAtSec = 0.0;
         SlewingSinceSec = 0.0;
         FiringLogged = false;
+        StartMassKg = 0.0;
+        LastTickMassKg = 0.0;
+        SlewPropellantKg = 0.0;
+        TranslationPropellantKg = 0.0;
+        LastAccumCci = default;
+        StartAccumCci = default;
+        EngagedAtSec = 0.0;
         ResolvedAllocator = RcsAllocator.Groups;
         Wrench = null;
         WrenchBuiltAtSec = double.NegativeInfinity;
@@ -174,6 +235,34 @@ internal sealed class RcsExecution
         }
         return null;
     }
+}
+
+/// <summary>Fuel breakdown of one finished execution. Translation is
+/// model-attributed (delivered delta-V times the allocator's cost model),
+/// so Attitude also absorbs pulse quantization and model error; Slew is
+/// the measured mass delta while the Align slew held firing back. A
+/// NEGATIVE Attitude means the tank yielded less mass than the applied
+/// flow: ResourceManager.MassChange withdraws per reactant and quietly
+/// under-delivers when a mix component is missing (dev-save territory),
+/// while the nozzle keeps firing at full thrust.</summary>
+internal struct RcsFuelSummary
+{
+    public bool Valid;
+    public double TotalKg;
+    public double TranslationKg;
+    public double SlewKg;
+    public double AttitudeKg;
+
+    /// <summary>Overall economy: start mass times accumulated delta-V over
+    /// total propellant, m/s. A first-order proxy, not the rocket-equation
+    /// Ve. Zero when no matching burn was loaded.</summary>
+    public double EffectiveVeMs;
+
+    /// <summary>Angle between the accumulated and the target delta-V
+    /// vectors, degrees: did the burn push in the right direction.</summary>
+    public double DvAngleDeg;
+
+    public double ElapsedSec;
 }
 
 /// <summary>Propellant/duration estimates for the two attitude strategies,

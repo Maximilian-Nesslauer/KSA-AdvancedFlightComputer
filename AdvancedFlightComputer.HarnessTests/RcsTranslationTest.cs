@@ -235,6 +235,19 @@ public sealed class RcsTranslationTest : IHarnessTest
                                 $"residual={residual:F4}m/s completedEvent={viaEvent} => " +
                                 $"{TestSupport.Verdict(deliveredOk)}");
                 ok &= deliveredOk;
+
+                if (viaEvent)
+                {
+                    // The 90-degree offset guarantees a real slew, so the
+                    // telemetry's slew bucket must have caught propellant.
+                    RcsFuelSummary fuel = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? done)
+                        ? done.LastFuel : default;
+                    bool slewFuelOk = fuel.Valid && fuel.SlewKg > 0.0
+                        && fuel.TotalKg >= fuel.SlewKg;
+                    HarnessLog.Line($"[{Name}] TEST align fuel: total={fuel.TotalKg * 1000.0:F1}g " +
+                                    $"slew {fuel.SlewKg * 1000.0:F1}g => {TestSupport.Verdict(slewFuelOk)}");
+                    ok &= slewFuelOk;
+                }
             }
         }
         CleanupBurns(fc);
@@ -337,6 +350,7 @@ public sealed class RcsTranslationTest : IHarnessTest
 
         bool completed = false;
         bool enginesQuiet = true;
+        bool firingSampled = false;
         int steps = (int)(timeoutSec / StepSec);
         for (int i = 0; i < steps; i++)
         {
@@ -350,6 +364,18 @@ public sealed class RcsTranslationTest : IHarnessTest
             {
                 completed = true;
                 break;
+            }
+            // One live-performance sample while thrusters actually fire:
+            // the capability probe evaluates nozzle performance at probe
+            // conditions, and this line is the ground truth to hold the
+            // model against when the fuel numbers disagree. Comparable at
+            // vacuum only: the sampled Performance.TotalThrust is the
+            // flow-separation-clamped effective thrust, the model's
+            // GetTotalThrust is unclamped; they match at ambient ~0.
+            if (!firingSampled && driver.Elapsed.Seconds() > bt.IgnitionTime.Seconds() + 0.2)
+            {
+                firingSampled = true;
+                SampleFiringNozzles(vehicle);
             }
         }
 
@@ -396,10 +422,68 @@ public sealed class RcsTranslationTest : IHarnessTest
                             $"{TestSupport.Verdict(eventOk)}");
             ok &= eventOk;
 
+            // Fuel telemetry: recorded, total consistent with the test's own
+            // mass delta, delivered delta-V pointing at the target, and the
+            // translation attribution equal to the group cost model applied
+            // to the burn (single-axis burn, so the model reduces to the
+            // best group's flow per force). Deliberately NOT translation
+            // versus total: dev saves can carry partially present reactant
+            // mixes, where ResourceManager.MassChange withdraws only the
+            // available reactants' share while the nozzle keeps firing at
+            // full thrust, so the tank delta is no upper bound for the
+            // modeled cost (observed 74.25 kg drained for a 101 kg burn on
+            // Test Vehicle 1; the fuel line's negative attitude bucket is
+            // how that surfaces).
+            RcsFuelSummary fuel = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? done)
+                ? done.LastFuel : default;
+            RcsAxisGroup bestGroup = cap.Get(bestAxis);
+            double modelKg = m0 * BurnDvMs * (bestGroup.MassFlowKgS / bestGroup.ForceN);
+            bool fuelOk = fuel.Valid
+                && fuel.TotalKg > 0.0
+                && fuel.TranslationKg >= modelKg * 0.9                      // attribution matches model
+                && fuel.TranslationKg <= modelKg * 1.15                     // closed-loop wiggle margin
+                && Math.Abs(fuel.TotalKg - burned) <= 0.1 * burned + 0.005  // 10% + 5 g mass agreement
+                && fuel.DvAngleDeg < 5.0;                                   // pointing gate
+            HarnessLog.Line($"[{Name}] TEST fuel telemetry: total={fuel.TotalKg * 1000.0:F1}g " +
+                            $"(translation {fuel.TranslationKg * 1000.0:F1}g, " +
+                            $"slew {fuel.SlewKg * 1000.0:F1}g, " +
+                            $"attitude {fuel.AttitudeKg * 1000.0:F1}g) " +
+                            $"model={modelKg * 1000.0:F1}g " +
+                            $"ve_eff={fuel.EffectiveVeMs:F0}m/s " +
+                            $"dv angle={fuel.DvAngleDeg:F2}deg => {TestSupport.Verdict(fuelOk)}");
+            ok &= fuelOk;
+
             ok &= RcsOrbitCheck.Assert(Name, "orbit", vehicle.Orbit, predicted,
                 initialSma, initialEcc);
         }
         return ok;
+    }
+
+    private void SampleFiringNozzles(Vehicle vehicle)
+    {
+        if (!ModuleStateful<RocketNozzle, RocketNozzleState, EmptyStruct, RocketNozzleFxState>
+                .TryGetFrom(vehicle.Parts.States, out var stateList))
+            return;
+        float thrustN = 0f;
+        float thrustXN = 0f;
+        float flowKgS = 0f;
+        int firing = 0;
+        var enumerator = new ModuleStateful<RocketNozzle, RocketNozzleState, EmptyStruct, RocketNozzleFxState>
+            .StateList.ModuleAndStateEnumerator(stateList);
+        while (enumerator.MoveNext())
+        {
+            ref readonly RocketNozzleState state = ref enumerator.Current.State;
+            if (state.Throttle <= 0f || state.Performance.MassFlowRate <= 0f)
+                continue;
+            firing++;
+            float f = state.Performance.TotalThrust;
+            thrustN += f;
+            thrustXN += f * state.ThrustDirectionVehicleAsmb.X;
+            flowKgS += state.Performance.MassFlowRate;
+        }
+        HarnessLog.Line($"[{Name}] firing sample: {firing} nozzle(s), thrust={thrustN:F0}N " +
+                        $"(X {thrustXN:F0}N), flow={flowKgS * 1000.0:F0}g/s, " +
+                        $"ve={(flowKgS > 0f ? thrustN / flowKgS : 0f):F0}m/s");
     }
 
     private static bool AnyEngineCommanded(Vehicle vehicle)

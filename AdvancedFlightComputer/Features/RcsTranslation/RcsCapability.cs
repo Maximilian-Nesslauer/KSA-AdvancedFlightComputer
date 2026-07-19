@@ -90,6 +90,14 @@ internal static class RcsCapability
     /// is safe even while solver jobs are in flight: workers stage their
     /// writes into a separate new-state buffer that is applied back on the
     /// main thread.
+    ///
+    /// Membership comes from the cached state (IsPropellantAvailable and
+    /// the IntendedForce/IntendedTorque signs are exactly what the worker
+    /// and the stock attitude control fire by), but magnitudes are
+    /// recomputed live via RcsWrenchTable.ComputeLive: the game's thruster
+    /// cache revalidates only on 0.1 percent mass or 100 Pa pressure drift,
+    /// so a cached IntendedForce can carry a different vintage than a fresh
+    /// mass-flow read and misstate force per flow.
     /// </summary>
     public static RcsCapabilitySnapshot Probe(Vehicle vehicle)
     {
@@ -97,6 +105,10 @@ internal static class RcsCapability
         if (!ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
                 .TryGetFrom(vehicle.Parts.States, out var stateList))
             return snap;
+
+        ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
+        float3 com = vehicle.TotalMassPropsAsmb.Offset;
+        float ambientPressure = vehicle.PhysicsEnvironment.AtmosphericPressure;
 
         var enumerator = new ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
             .StateList.ModuleAndStateEnumerator(stateList);
@@ -108,16 +120,17 @@ internal static class RcsCapability
             if (!thruster.IsActive || !state.IsPropellantAvailable)
                 continue;
 
-            float massFlow = 0f;
-            foreach (RocketCore core in thruster.Cores)
-                massFlow += core.MaxConsumptionRate;
+            RcsWrenchTable.ComputeLive(thruster, coreStates, com, ambientPressure,
+                out float3 force, out _, out float massFlow);
+            if (massFlow <= 0f)
+                continue;
 
-            AccumulateAxis(ref snap, 0, state.IntendedForce.X, massFlow, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 1, state.IntendedForce.X, massFlow, thruster.MinimumPulseTime, positive: false);
-            AccumulateAxis(ref snap, 2, state.IntendedForce.Y, massFlow, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 3, state.IntendedForce.Y, massFlow, thruster.MinimumPulseTime, positive: false);
-            AccumulateAxis(ref snap, 4, state.IntendedForce.Z, massFlow, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 5, state.IntendedForce.Z, massFlow, thruster.MinimumPulseTime, positive: false);
+            AccumulateAxis(ref snap, 0, state.IntendedForce.X, force.X, massFlow, thruster.MinimumPulseTime, positive: true);
+            AccumulateAxis(ref snap, 1, state.IntendedForce.X, force.X, massFlow, thruster.MinimumPulseTime, positive: false);
+            AccumulateAxis(ref snap, 2, state.IntendedForce.Y, force.Y, massFlow, thruster.MinimumPulseTime, positive: true);
+            AccumulateAxis(ref snap, 3, state.IntendedForce.Y, force.Y, massFlow, thruster.MinimumPulseTime, positive: false);
+            AccumulateAxis(ref snap, 4, state.IntendedForce.Z, force.Z, massFlow, thruster.MinimumPulseTime, positive: true);
+            AccumulateAxis(ref snap, 5, state.IntendedForce.Z, force.Z, massFlow, thruster.MinimumPulseTime, positive: false);
 
             if (!state.IntendedTorque.X.IsExactlyZero())
                 snap.RotationMassFlowKgS.X += massFlow;
@@ -138,12 +151,19 @@ internal static class RcsCapability
         return snap;
     }
 
+    /// <summary>Adds one thruster to a signed-axis group. The cached
+    /// intendedForce component gates membership (matching the worker's
+    /// MaxAxisPulse selection); the live component supplies the magnitude.
+    /// Both must agree in sign, else the thruster is skipped for the axis.</summary>
     private static void AccumulateAxis(
-        ref RcsCapabilitySnapshot snap, int idx, float axisForce, float massFlow, float minPulse, bool positive)
+        ref RcsCapabilitySnapshot snap, int idx, float intendedForce, float liveForce,
+        float massFlow, float minPulse, bool positive)
     {
-        if (positive ? axisForce <= 0f : axisForce >= 0f)
+        if (positive ? intendedForce <= 0f : intendedForce >= 0f)
             return;
-        float f = Math.Abs(axisForce);
+        if (positive ? liveForce <= 0f : liveForce >= 0f)
+            return;
+        float f = Math.Abs(liveForce);
         RcsAxisGroup g = snap.Get(idx);
         g.ForceN += f;
         g.MassFlowKgS += massFlow;
