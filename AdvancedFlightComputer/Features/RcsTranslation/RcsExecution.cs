@@ -36,6 +36,14 @@ internal sealed class RcsExecution
 
     public RcsAllocator ResolvedAllocator { get; set; } = RcsAllocator.Groups;
 
+    /// <summary>True once the Align tracker has been commanded. Deliberately
+    /// deferred until the ignition lead window opens; before that the coast
+    /// keeps whatever attitude the user had. Persisted because the game
+    /// round-trips the attitude tracker through its save: after a mid-align
+    /// load the restored tracker is still driving the burn attitude, and
+    /// the handback on Cancel/Complete must know that.</summary>
+    public bool AlignCommanded { get; set; }
+
     #endregion
 
     #region Transient state
@@ -80,6 +88,10 @@ internal sealed class RcsExecution
     /// (mass delta over slewing ticks, which is all attitude by construction).</summary>
     public double SlewPropellantKg;
 
+    /// <summary>Propellant spent before the firing window opened while not
+    /// slewing, kg: the attitude/rate hold cost of the pre-ignition coast.</summary>
+    public double CoastPropellantKg;
+
     /// <summary>Model-attributed translation propellant, kg: delivered
     /// delta-V (game accounting) times the active allocator's cost per
     /// newton-second. The gap to the total is attitude hold plus pulse
@@ -112,6 +124,7 @@ internal sealed class RcsExecution
         StartMassKg = fc.TotalMassPropsBody.Mass;
         LastTickMassKg = StartMassKg;
         SlewPropellantKg = 0.0;
+        CoastPropellantKg = 0.0;
         TranslationPropellantKg = 0.0;
         StartAccumCci = fc.Burn?.DeltaVAccumCci ?? default;
         LastAccumCci = StartAccumCci;
@@ -189,9 +202,11 @@ internal sealed class RcsExecution
         WatchdogAtSec = 0.0;
         SlewingSinceSec = 0.0;
         FiringLogged = false;
+        AlignCommanded = false;
         StartMassKg = 0.0;
         LastTickMassKg = 0.0;
         SlewPropellantKg = 0.0;
+        CoastPropellantKg = 0.0;
         TranslationPropellantKg = 0.0;
         LastAccumCci = default;
         StartAccumCci = default;
@@ -240,17 +255,20 @@ internal sealed class RcsExecution
 /// <summary>Fuel breakdown of one finished execution. Translation is
 /// model-attributed (delivered delta-V times the allocator's cost model),
 /// so Attitude also absorbs pulse quantization and model error; Slew is
-/// the measured mass delta while the Align slew held firing back. A
-/// NEGATIVE Attitude means the tank yielded less mass than the applied
-/// flow: ResourceManager.MassChange withdraws per reactant and quietly
-/// under-delivers when a mix component is missing (dev-save territory),
-/// while the nozzle keeps firing at full thrust.</summary>
+/// the measured mass delta while the Align slew held firing back, Coast
+/// the measured mass delta before the firing window opened (attitude and
+/// rate hold through the wait). A NEGATIVE Attitude means the tank
+/// yielded less mass than the applied flow: ResourceManager.MassChange
+/// withdraws per reactant and quietly under-delivers when a mix component
+/// is missing (dev-save territory), while the nozzle keeps firing at full
+/// thrust.</summary>
 internal struct RcsFuelSummary
 {
     public bool Valid;
     public double TotalKg;
     public double TranslationKg;
     public double SlewKg;
+    public double CoastKg;
     public double AttitudeKg;
 
     /// <summary>Overall economy: start mass times accumulated delta-V over

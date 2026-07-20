@@ -88,6 +88,7 @@ public sealed class RcsTranslationTest : IHarnessTest
             RcsBurnCompletions.Completed += onCompleted;
             ok = Fly(vehicle, driver);
             ok &= FlyAlignScenario(vehicle, driver);
+            ok &= FlyDeferredAlignCheck(vehicle, driver);
         }
         finally
         {
@@ -250,6 +251,110 @@ public sealed class RcsTranslationTest : IHarnessTest
                 }
             }
         }
+        CleanupBurns(fc);
+        return ok;
+    }
+
+    // The align tracker must stay idle through the coast and only be
+    // commanded inside the ignition lead window (deferring it is what keeps
+    // a long warped wait from burning the tank on attitude hold). Observes
+    // the tracker directly, then cancels; full align completion is covered
+    // by FlyAlignScenario.
+    private bool FlyDeferredAlignCheck(Vehicle vehicle, SimDriver driver)
+    {
+        const double DeferredLeadSec = 150.0;
+        FlightComputer fc = vehicle.FlightComputer;
+        CleanupBurns(fc);
+        vehicle.RefillConsumables();
+        fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
+        fc.SetNullRot(VehicleReferenceFrame.EclBody);
+        driver.Step(StepSec, 10);
+
+        RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
+        int bestAxis = cap.BestAxis();
+        double burnTimeSec = driver.Elapsed.Seconds() + DeferredLeadSec;
+        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(new SimTime(burnTimeSec));
+        if (patch == null)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (deferred align): no flight-plan patch at the burn time.");
+            return false;
+        }
+        double3 axisBody = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(bestAxis));
+        double3 dvDirCci = axisBody.Transform(vehicle.GetBody2Cci());
+        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(new SimTime(burnTimeSec));
+        doubleQuat vlf2Cci = burnSv.GetVlf2ParentCci().OrIdentity();
+        double3 dvVlf = (dvDirCci * BurnDvMs).Transform(vlf2Cci.Inverse());
+        OrbitPointCce point = patch.Orbit.GetPointAt(new SimTime(burnTimeSec));
+        Burn burn = Burn.Create(point, burnTimeSec, dvVlf, patch, vehicle);
+        fc.AddBurn(burn);
+
+        RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
+        RcsBurnOptions options = exec.GetOrCreateOptions(burn.Time.Seconds(), burn.DeltaVVlf.Length());
+        options.Mode = RcsExecutionMode.Rcs;
+        options.Attitude = RcsAttitudeStrategy.Align;
+        vehicle.SetEnum(FlightComputerBurnMode.Auto);
+        if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (deferred align): SetEnum(Auto) did not engage the executor.");
+            CleanupBurns(fc);
+            return false;
+        }
+        if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
+        {
+            HarnessLog.Line($"[{Name}] SKIP (deferred align): resolved to {exec.ResolvedStrategy} on this save.");
+            RcsExecutor.Cancel(vehicle, exec, "test cleanup");
+            CleanupBurns(fc);
+            return true;
+        }
+        // A slew estimate so long that the lead window is already open at
+        // engage makes deferral unobservable; that is a save property, not
+        // a bug.
+        double leadSec = RcsExecutor.AlignLeadFactor * exec.Estimates.AlignSlewDurationSec
+            + RcsExecutor.AlignLeadMarginSec;
+        if (leadSec >= DeferredLeadSec - 10.0)
+        {
+            HarnessLog.Line($"[{Name}] SKIP (deferred align): slew estimate " +
+                            $"{exec.Estimates.AlignSlewDurationSec:F0}s leaves no coast to observe.");
+            RcsExecutor.Cancel(vehicle, exec, "test cleanup");
+            CleanupBurns(fc);
+            return true;
+        }
+
+        double engageSec = driver.Elapsed.Seconds();
+        driver.Step(StepSec, 40);
+        bool idleDuringCoast = fc.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.None;
+
+        bool commanded = false;
+        double commandedElapsed = 0.0;
+        int steps = (int)(DeferredLeadSec / StepSec);
+        for (int i = 0; i < steps; i++)
+        {
+            driver.Step(StepSec);
+            if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
+                break;
+            if (fc.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.None)
+            {
+                commanded = true;
+                commandedElapsed = driver.Elapsed.Seconds() - engageSec;
+                break;
+            }
+        }
+
+        // Commanded well after engage (the deferral) but still before
+        // ignition (the lead window).
+        bool ok = idleDuringCoast && commanded
+            && commandedElapsed > 20.0
+            && engageSec + commandedElapsed < burnTimeSec;
+        HarnessLog.Line($"[{Name}] TEST deferred align: idle during coast={idleDuringCoast} " +
+                        $"commanded at T+{commandedElapsed:F0}s of {DeferredLeadSec:F0}s lead " +
+                        $"(window opens ~T+{DeferredLeadSec - leadSec:F0}s) => {TestSupport.Verdict(ok)}");
+
+        if (RcsExecRegistry.TryGet(vehicle.Id, out exec!) && exec.IsActive)
+            RcsExecutor.Cancel(vehicle, exec, "test cleanup");
+        RcsFuelSummary fuel = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? done)
+            ? done.LastFuel : default;
+        HarnessLog.Line($"[{Name}] deferred align fuel: total={fuel.TotalKg * 1000.0:F1}g " +
+                        $"coast {fuel.CoastKg * 1000.0:F1}g slew {fuel.SlewKg * 1000.0:F1}g");
         CleanupBurns(fc);
         return ok;
     }
@@ -447,6 +552,7 @@ public sealed class RcsTranslationTest : IHarnessTest
             HarnessLog.Line($"[{Name}] TEST fuel telemetry: total={fuel.TotalKg * 1000.0:F1}g " +
                             $"(translation {fuel.TranslationKg * 1000.0:F1}g, " +
                             $"slew {fuel.SlewKg * 1000.0:F1}g, " +
+                            $"coast {fuel.CoastKg * 1000.0:F1}g, " +
                             $"attitude {fuel.AttitudeKg * 1000.0:F1}g) " +
                             $"model={modelKg * 1000.0:F1}g " +
                             $"ve_eff={fuel.EffectiveVeMs:F0}m/s " +

@@ -157,6 +157,7 @@ internal static class RcsExecRegistry
                             writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
                                 "resolved_axis = {0}", exec.ResolvedAxis));
                             writer.WriteLine($"resolved_allocator = \"{exec.ResolvedAllocator}\"");
+                            writer.WriteLine($"align_commanded = {(exec.AlignCommanded ? "true" : "false")}");
                         }
                         writer.WriteLine();
                     }
@@ -286,6 +287,9 @@ internal static class RcsExecRegistry
             if (block.TryGetValue("resolved_allocator", out string? resAllocStr)
                 && Enum.TryParse(resAllocStr, out RcsAllocator resolvedAllocator))
                 exec.ResolvedAllocator = resolvedAllocator;
+            if (block.TryGetValue("align_commanded", out string? alignStr)
+                && bool.TryParse(alignStr, out bool alignCommanded))
+                exec.AlignCommanded = alignCommanded;
         }
     }
 

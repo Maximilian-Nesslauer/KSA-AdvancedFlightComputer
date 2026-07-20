@@ -52,6 +52,16 @@ internal static class RcsExecutor
     /// on purpose - ingame slews estimate up to ~35 seconds.</summary>
     private const double AlignTimeoutSec = 120.0;
 
+    /// <summary>The Align tracker is commanded only this close to the burn:
+    /// the slew duration estimate scaled by the factor, plus a fixed settle
+    /// margin. Any earlier just pays the attitude hold's deadband limit
+    /// cycle through the whole coast (a warped multi-hour wait can burn
+    /// tonnes on thirsty layouts); any later merely shifts the burn a bit
+    /// past its impulse center, which the closed loop absorbs. Internal so
+    /// the harness single-sources the window formula.</summary>
+    internal const double AlignLeadFactor = 2.0;
+    internal const double AlignLeadMarginSec = 15.0;
+
     /// <summary>Real-time TTL for the UI-path cache (gauge verdict,
     /// capability, available propellant); the gauge and the burn editor
     /// query per rendered frame and a full thruster/tank walk per frame is
@@ -300,19 +310,18 @@ internal static class RcsExecutor
                 DefaultCategory.Log.Debug(
                     $"[AFC] RCS: engaged rate hold for vehicle='{vehicle.Id}' (attitude was Manual).");
         }
-        if (strategy == RcsAttitudeStrategy.Align && !CommandAlignAttitude(fc, axis))
+        // The Align tracker is commanded only once the ignition lead window
+        // opens (EnsureAlignCommanded, called here and per driver tick);
+        // until then the coast keeps whatever attitude the user had, so a
+        // long wait does not pay the tracking limit cycle.
+        if (!EnsureAlignCommanded(fc, exec, exec.CapabilityProbedAtSec))
         {
-            strategy = RcsAttitudeStrategy.Hold;
-            axis = -1;
-            exec.ResolvedStrategy = strategy;
-            exec.ResolvedAxis = axis;
-            if (!exec.Estimates.HoldFeasible)
-            {
-                Alert($"RCS burn not engaged: cannot align or hold for the burn direction on '{vehicle.Id}'.");
-                exec.ClearActive();
-                return;
-            }
+            Alert($"RCS burn not engaged: cannot align or hold for the burn direction on '{vehicle.Id}'.");
+            exec.ClearActive();
+            return;
         }
+        strategy = exec.ResolvedStrategy;
+        axis = exec.ResolvedAxis;
 
         PublishCommand(vehicle, exec);
         DefaultCategory.Log.Info(
@@ -334,9 +343,10 @@ internal static class RcsExecutor
     public static void Cancel(Vehicle vehicle, RcsExecution exec, string reason)
     {
         RcsFuelSummary fuel = ComputeFuelSummary(vehicle.FlightComputer, exec);
-        // Align commanded the attitude tracker; hand the attitude back the
-        // same way a completed burn does. Hold never touched it.
-        if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
+        // Hand the attitude back only when Align actually commanded the
+        // tracker; a deferred align cancelled during the coast never
+        // touched it (and Hold never does).
+        if (exec.AlignCommanded)
             vehicle.FlightComputer.SetNullRot(VehicleReferenceFrame.BurnBody);
         exec.ClearActive();
         RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
@@ -519,8 +529,10 @@ internal static class RcsExecutor
             return;
         }
         exec.ActiveBurn = burn;
-        if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
-            CommandAlignAttitude(fc, exec.ResolvedAxis);
+        // The Align tracker is not re-commanded here: the next driver tick
+        // commands it once the lead window is open (immediately for a
+        // resume near or past ignition), keeping the deferral for loads
+        // that land in the coast.
 
         // Fuel telemetry restarts at the load; the completion line then
         // covers the post-load remainder of the burn.
@@ -562,6 +574,13 @@ internal static class RcsExecutor
             return;
         }
 
+        if (!EnsureAlignCommanded(fc, exec, nowSec))
+        {
+            Alert($"RCS burn cancelled: cannot align or hold for the burn direction on '{vehicle.Id}'.");
+            Cancel(vehicle, exec, "cannot align or hold");
+            return;
+        }
+
         float3 togo = bt.DeltaVToGoCci;
         float togoMs = togo.Length();
         float3 impulseBody = ImpulseBodyFromTogo(vehicle, fc, bt);
@@ -571,8 +590,11 @@ internal static class RcsExecutor
         // align gate, and nothing fires before ignition. Every time-based
         // decision below must distinguish "legitimately not firing yet"
         // from "firing but going nowhere". Both sides share
-        // OutsideAlignGate so they cannot disagree.
+        // OutsideAlignGate so they cannot disagree. Before the tracker is
+        // commanded the error angles are relative to the user's own
+        // attitude target, so they do not count as slewing.
         bool slewing = exec.ResolvedStrategy == RcsAttitudeStrategy.Align
+            && exec.AlignCommanded
             && OutsideAlignGate(fc);
         bool firingEligible = !slewing && nowSec >= bt.IgnitionTime.Seconds();
 
@@ -645,8 +667,6 @@ internal static class RcsExecutor
             exec.Estimates = ComputeEstimates(vehicle, bt, in exec.Capability);
             exec.EstimatesComputedAtSec = nowSec;
         }
-        if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
-            EnsureAlignAttitude(fc, exec);
 
         if (DebugConfig.RcsTranslation && !exec.FiringLogged
             && nowSec >= bt.IgnitionTime.Seconds())
@@ -686,7 +706,7 @@ internal static class RcsExecutor
         double burnDv = exec.ActiveBurnDvMs ?? 0.0;
         Burn? completedBurn = exec.ActiveBurn;
         RcsFuelSummary fuel = ComputeFuelSummary(fc, exec);
-        if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align)
+        if (exec.AlignCommanded)
             fc.SetNullRot(VehicleReferenceFrame.BurnBody);
         exec.ClearActive();
         RcsBurnOptions? options = exec.FindOptions(burnTime, burnDv);
@@ -751,7 +771,8 @@ internal static class RcsExecutor
     #region Fuel telemetry
 
     /// <summary>Per-driver-tick fuel bookkeeping. The slew bucket takes the
-    /// measured mass delta while the Align slew holds firing back (all
+    /// measured mass delta while the Align slew holds firing back, the
+    /// coast bucket the delta before the firing window opens (both all
     /// attitude by construction); the translation bucket attributes the
     /// delta-V the game accounted this tick at the active allocator's model
     /// cost. An exact physical split does not exist (one thruster pulse can
@@ -766,8 +787,11 @@ internal static class RcsExecutor
         if (exec.StartMassKg <= 0.0)
             return;
         double massNow = fc.TotalMassPropsBody.Mass;
+        double burnedTick = Math.Max(0.0, exec.LastTickMassKg - massNow);
         if (slewing)
-            exec.SlewPropellantKg += Math.Max(0.0, exec.LastTickMassKg - massNow);
+            exec.SlewPropellantKg += burnedTick;
+        else if (!firingEligible)
+            exec.CoastPropellantKg += burnedTick;
         exec.LastTickMassKg = massNow;
 
         float3 accumNow = bt.DeltaVAccumCci;
@@ -863,7 +887,9 @@ internal static class RcsExecutor
             TotalKg = totalKg,
             TranslationKg = exec.TranslationPropellantKg,
             SlewKg = exec.SlewPropellantKg,
-            AttitudeKg = totalKg - exec.TranslationPropellantKg - exec.SlewPropellantKg,
+            CoastKg = exec.CoastPropellantKg,
+            AttitudeKg = totalKg - exec.TranslationPropellantKg
+                - exec.SlewPropellantKg - exec.CoastPropellantKg,
             EffectiveVeMs = veMs,
             DvAngleDeg = angleDeg,
             ElapsedSec = Universe.GetElapsedSimTime().Seconds() - exec.EngagedAtSec,
@@ -879,7 +905,8 @@ internal static class RcsExecutor
         DefaultCategory.Log.Info(
             $"[AFC] RCS burn fuel: vehicle='{vehicle.Id}' total={fuel.TotalKg:F1}kg " +
             $"(translation {fuel.TranslationKg:F1}kg, slew {fuel.SlewKg:F1}kg, " +
-            $"attitude {fuel.AttitudeKg:F1}kg), ve_eff={fuel.EffectiveVeMs:F0}m/s, " +
+            $"coast {fuel.CoastKg:F1}kg, attitude {fuel.AttitudeKg:F1}kg), " +
+            $"ve_eff={fuel.EffectiveVeMs:F0}m/s, " +
             $"dv angle={fuel.DvAngleDeg:F2}deg, elapsed={fuel.ElapsedSec:F1}s");
     }
 
@@ -1048,15 +1075,49 @@ internal static class RcsExecutor
 
     #endregion
 
-    private static void EnsureAlignAttitude(FlightComputer fc, RcsExecution exec)
+    /// <summary>Anchored on ImpulsiveInstant, not IgnitionTime: at
+    /// activation (before the worker mirrors the RCS timing) IgnitionTime
+    /// still carries stock UpdateBurnTarget's Manual-mode value, which for
+    /// a vehicle with active engines divides the engine burn duration by
+    /// the clamped manual throttle and can sit wildly early, silently
+    /// defeating the deferral. ImpulsiveInstant is the finite primitive
+    /// the RCS timing itself is derived from; the settle margin covers the
+    /// half-duration offset to the real firing start.</summary>
+    private static bool AlignCommandDue(RcsExecution exec, BurnTarget bt, double nowSec)
+        => nowSec >= bt.ImpulsiveInstant.Seconds()
+           - (AlignLeadFactor * exec.Estimates.AlignSlewDurationSec + AlignLeadMarginSec);
+
+    /// <summary>Commands the Align tracker once the ignition lead window
+    /// opens, and re-commands it if something else took the tracker over
+    /// afterwards. On a failed command the execution degrades to Hold;
+    /// returns false when Hold cannot serve the burn direction either and
+    /// the caller must abort.</summary>
+    private static bool EnsureAlignCommanded(FlightComputer fc, RcsExecution exec, double nowSec)
     {
-        bool tracking = fc.AttitudeMode == FlightComputerAttitudeMode.Auto
-            && fc.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.None;
-        if (!tracking && !CommandAlignAttitude(fc, exec.ResolvedAxis))
+        if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
+            return true;
+        BurnTarget? bt = fc.Burn;
+        if (!exec.AlignCommanded)
         {
-            exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
-            exec.ResolvedAxis = -1;
+            if (bt == null || !AlignCommandDue(exec, bt, nowSec))
+                return true;
+            if (CommandAlignAttitude(fc, exec.ResolvedAxis))
+            {
+                exec.AlignCommanded = true;
+                return true;
+            }
         }
+        else
+        {
+            bool tracking = fc.AttitudeMode == FlightComputerAttitudeMode.Auto
+                && fc.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.None;
+            if (tracking || CommandAlignAttitude(fc, exec.ResolvedAxis))
+                return true;
+        }
+        exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
+        exec.ResolvedAxis = -1;
+        exec.AlignCommanded = false;
+        return exec.Estimates.HoldFeasible;
     }
 
     private static void Alert(string message)
