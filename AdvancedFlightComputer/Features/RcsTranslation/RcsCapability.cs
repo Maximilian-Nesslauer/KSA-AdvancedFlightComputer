@@ -31,9 +31,15 @@ internal struct RcsCapabilitySnapshot
     public RcsAxisGroup Ax0, Ax1, Ax2, Ax3, Ax4, Ax5;
 
     /// <summary>Per rotation axis (roll, pitch, yaw): combined mass flow of the
-    /// thrusters that produce torque about it, both signs. Used only for the
-    /// slew-cost estimate.</summary>
+    /// thrusters that produce torque about it, both signs. Feeds the
+    /// slew-cost estimate and, together with RotationTorqueNm, the LP's
+    /// torque-slack price.</summary>
     public float3 RotationMassFlowKgS;
+
+    /// <summary>Per rotation axis: combined live torque magnitude of the
+    /// same thrusters, N m. Flow over torque is what the attitude hold
+    /// pays per newton-meter-second of residual angular impulse.</summary>
+    public float3 RotationTorqueNm;
 
     public RcsAxisGroup Get(int idx) => idx switch
     {
@@ -95,7 +101,7 @@ internal static class RcsCapability
     /// the IntendedForce/IntendedTorque signs are exactly what the worker
     /// and the stock attitude control fire by), but magnitudes are
     /// recomputed live via RcsWrenchTable.ComputeLive: the game's thruster
-    /// cache revalidates only on 0.1 percent mass or 100 Pa pressure drift,
+    /// cache revalidates only on 0.1 percent mass, CoM, or 100 Pa pressure drift,
     /// so a cached IntendedForce can carry a different vintage than a fresh
     /// mass-flow read and misstate force per flow.
     /// </summary>
@@ -121,7 +127,7 @@ internal static class RcsCapability
                 continue;
 
             RcsWrenchTable.ComputeLive(thruster, coreStates, com, ambientPressure,
-                out float3 force, out _, out float massFlow);
+                out float3 force, out float3 torque, out float massFlow);
             if (massFlow <= 0f)
                 continue;
 
@@ -133,11 +139,20 @@ internal static class RcsCapability
             AccumulateAxis(ref snap, 5, state.IntendedForce.Z, force.Z, massFlow, thruster.MinimumPulseTime, positive: false);
 
             if (!state.IntendedTorque.X.IsExactlyZero())
+            {
                 snap.RotationMassFlowKgS.X += massFlow;
+                snap.RotationTorqueNm.X += Math.Abs(torque.X);
+            }
             if (!state.IntendedTorque.Y.IsExactlyZero())
+            {
                 snap.RotationMassFlowKgS.Y += massFlow;
+                snap.RotationTorqueNm.Y += Math.Abs(torque.Y);
+            }
             if (!state.IntendedTorque.Z.IsExactlyZero())
+            {
                 snap.RotationMassFlowKgS.Z += massFlow;
+                snap.RotationTorqueNm.Z += Math.Abs(torque.Z);
+            }
         }
 
         for (int i = 0; i < 6; i++)

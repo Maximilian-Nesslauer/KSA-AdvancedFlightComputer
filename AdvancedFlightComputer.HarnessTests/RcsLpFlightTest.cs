@@ -23,15 +23,19 @@ public sealed class RcsLpFlightTest : IHarnessTest
     private const double StepSec = 0.05;
     private const double ResidualMarginMs = 0.05;
 
-    /// <summary>Runaway guard only. The LP can legitimately spend more
-    /// than groups on torque-coupled layouts: it pays for exact zero net
-    /// torque with opposed thrust the group path leaves to the attitude
-    /// hold (measured +49% on the default test vehicle). Its win case is
-    /// layouts where the groups fight the attitude instead. Anything past
-    /// this factor is a double-delivery style defect, not physics.</summary>
+    /// <summary>Runaway guard only. On the dev save "Test Vehicle 1" the
+    /// LP reads ~+40% over groups, but that gap is a tank artifact, not
+    /// allocator waste: the groups pattern drains a partially present
+    /// reactant mix (ResourceManager.MassChange under-withdraws while
+    /// thrust stays full), the LP support draws from fully stocked mixes
+    /// and pays the real model price. Anything past this factor is a
+    /// double-delivery style defect, not physics.</summary>
     private const double LpRegressionFactor = 3.0;
 
     public string Name => "afc-rcs-lp";
+
+    private double _lastSlackCostPerImpulse;
+    private float3 _lastResidualTorque;
 
     public int Run(HeadlessSession session)
     {
@@ -124,6 +128,9 @@ public sealed class RcsLpFlightTest : IHarnessTest
             HarnessLog.Line($"[{Name}] TEST A/B propellant: groups={groupsPropellantKg * 1000.0:F1}g " +
                             $"lp={lpPropellantKg * 1000.0:F1}g " +
                             $"({(lpPropellantKg - groupsPropellantKg) / Math.Max(groupsPropellantKg, 1e-9) * 100.0:+0.0;-0.0}%)");
+            HarnessLog.Line($"[{Name}] lp slack: {_lastSlackCostPerImpulse * 1e6:F2}mg/Ns, " +
+                            $"residual tau=({_lastResidualTorque.X:F2},{_lastResidualTorque.Y:F2}," +
+                            $"{_lastResidualTorque.Z:F2})Nms/Ns");
             bool bounded = lpPropellantKg <= groupsPropellantKg * LpRegressionFactor;
             if (!bounded)
                 HarnessLog.Line($"[{Name}] TEST A/B propellant: LP exceeded the regression bound " +
@@ -144,6 +151,8 @@ public sealed class RcsLpFlightTest : IHarnessTest
     {
         propellantKg = 0.0;
         lpSolutionUsed = false;
+        _lastSlackCostPerImpulse = 0.0;
+        _lastResidualTorque = default;
         FlightComputer fc = vehicle.FlightComputer;
         string label = allocator.ToString().ToLowerInvariant();
 
@@ -191,6 +200,8 @@ public sealed class RcsLpFlightTest : IHarnessTest
         }
 
         double expectedDuration = vehicle.TotalMass * BurnDvMs / cap.Get(bestAxis).ForceN;
+        // 4x duration slack for min-pulse round-up and trim, plus a flat
+        // 60 s pad for the pre-ignition coast wobble.
         int steps = (int)((BurnLeadSec + expectedDuration * 4.0 + 60.0) / StepSec);
         double m0 = vehicle.TotalMass;
         bool completed = false;
@@ -207,7 +218,12 @@ public sealed class RcsLpFlightTest : IHarnessTest
             }
             if (RcsExecRegistry.TryGet(vehicle.Id, out exec!) && exec.IsActive)
             {
-                lpSolutionUsed |= exec.LpSecondsPerImpulse != null;
+                if (exec.LpSecondsPerImpulse != null)
+                {
+                    lpSolutionUsed = true;
+                    _lastSlackCostPerImpulse = exec.LpSlackCostPerImpulse;
+                    _lastResidualTorque = exec.LpResidualTorquePerNs;
+                }
                 if (driver.Elapsed.Seconds() >= bt.IgnitionTime.Seconds())
                 {
                     if (durationAtFiringStart < 0f)

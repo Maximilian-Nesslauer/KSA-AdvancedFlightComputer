@@ -79,7 +79,7 @@ internal sealed class RcsWrenchTable
     /// (ActiveNozzle applies Performance.TotalThrust and consumes
     /// Performance.MassFlowRate through one ComputeThrustMod). The cached
     /// state values are not a substitute: the game's thruster cache
-    /// revalidates only on 0.1 percent mass or 100 Pa pressure drift
+    /// revalidates only on 0.1 percent mass, CoM, or 100 Pa pressure drift
     /// (ThrusterControllerGlobalState.IsCacheValid), so IntendedForce can
     /// carry spawn-time conditions through a whole burn while a fresh
     /// MaxConsumptionRate does not, and force over flow then misstates the

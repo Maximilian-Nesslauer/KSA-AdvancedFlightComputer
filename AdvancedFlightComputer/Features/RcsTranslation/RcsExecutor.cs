@@ -279,8 +279,10 @@ internal static class RcsExecutor
 
         // Warn-only sufficiency check: the user may refill mid-burn or
         // accept a partial burn, so an underfueled activation proceeds.
+        // The slack price stands in for the attitude hold's counter-pulses.
         double neededKg = exec.LpSecondsPerImpulse != null
-            ? exec.LpCostPerImpulse * fc.TotalMassPropsBody.Mass * dvMs
+            ? (exec.LpCostPerImpulse + exec.LpSlackCostPerImpulse)
+              * fc.TotalMassPropsBody.Mass * dvMs
             : exec.Estimates.RequiredPropellantKg(strategy);
         double availableKg = RcsPropellant.AvailableKg(vehicle);
         if (neededKg > availableKg)
@@ -914,6 +916,38 @@ internal static class RcsExecutor
 
     #region LP allocation
 
+    /// <summary>Torque slack in the LP is priced at the rotation groups'
+    /// mass flow per torque times this factor. 1.0 is the ideal linear
+    /// price of a perfectly sized counter-pulse; the phase plane's
+    /// quantization overshoot argues higher, the deadband's free
+    /// absorption of small residuals argues lower. Anything much above 1
+    /// prices the slack right back at the in-pattern counter-burns it is
+    /// meant to replace (the marginal counter-burn IS a rotation thruster,
+    /// so both sides quote the same flow-per-torque). Calibratable against
+    /// the fuel line's attitude bucket.</summary>
+    private const double TorqueSlackPriceFactor = 1.0;
+
+    /// <summary>Below this rotation authority an axis gets no slack: the
+    /// price would explode and the attitude hold could not absorb the
+    /// residual anyway.</summary>
+    private const float MinSlackTorqueNm = 1f;
+
+    private static double SlackPrice(float rotFlowKgS, float rotTorqueNm)
+        => rotTorqueNm > MinSlackTorqueNm && rotFlowKgS > 0f
+            ? TorqueSlackPriceFactor * rotFlowKgS / rotTorqueNm
+            : 0.0;
+
+    /// <summary>Pattern members below this share of the busiest thruster
+    /// are dropped after the solve. Degenerate vertices park thrusters in
+    /// the basis at near-zero level; they contribute nothing measurable,
+    /// but fire visible cosmetic puffs whenever a large per-tick impulse
+    /// lifts their pulse over the minimum-pulse floor. Their epsilon of
+    /// force and torque goes to the closed loop and the priced-in attitude
+    /// hold instead. The simplex itself cannot remove them: swapping a
+    /// zero-level basic for a slack column changes the cost by zero, which
+    /// is never a strictly improving pivot.</summary>
+    private const float LpDutyFloor = 0.01f;
+
     /// <summary>Keeps the LP solution fresh for the current burn direction:
     /// rebuilds the wrench table at the capability cadence or when the
     /// FlightComputer replaced its VehicleConfig (staging can swap the
@@ -934,6 +968,11 @@ internal static class RcsExecutor
             exec.Wrench.Build(vehicle, fc);
             exec.WrenchBuiltAtSec = nowSec;
             exec.LpSolvedAtSec = double.NegativeInfinity;
+            // The slack price reads the capability snapshot; refreshing it
+            // on the same trigger keeps both halves of one solve describing
+            // the same vehicle configuration across a staging swap.
+            exec.Capability = RcsCapability.Probe(vehicle);
+            exec.CapabilityProbedAtSec = nowSec;
         }
 
         float3 dir = impulseBody.NormalizeOrZero();
@@ -955,8 +994,30 @@ internal static class RcsExecutor
             return;
         }
 
-        double[] columns = new double[w.UsableCount * 6];
-        double[] cost = new double[w.UsableCount];
+        // Priced torque slack, a +/- column pair per axis the attitude hold
+        // can actually control. The hard zero-torque equality forced tiny
+        // counter-burns (near-zero-duty lateral vertex members) even where
+        // the phase plane would absorb the residual for a fraction of the
+        // cost; pricing the residual lets the optimizer make that trade.
+        // Axes without rotation authority stay hard - the hold cannot
+        // absorb what it cannot command.
+        ref readonly RcsCapabilitySnapshot cap = ref exec.Capability;
+        Span<double> rotPrice = stackalloc double[3]
+        {
+            SlackPrice(cap.RotationMassFlowKgS.X, cap.RotationTorqueNm.X),
+            SlackPrice(cap.RotationMassFlowKgS.Y, cap.RotationTorqueNm.Y),
+            SlackPrice(cap.RotationMassFlowKgS.Z, cap.RotationTorqueNm.Z),
+        };
+        int slackCount = 0;
+        for (int a = 0; a < 3; a++)
+        {
+            if (rotPrice[a] > 0.0)
+                slackCount += 2;
+        }
+
+        int n = w.UsableCount + slackCount;
+        double[] columns = new double[n * 6];
+        double[] cost = new double[n];
         int[] map = new int[w.UsableCount];
         int k = 0;
         for (int i = 0; i < w.Count; i++)
@@ -973,39 +1034,67 @@ internal static class RcsExecutor
             map[k] = i;
             k++;
         }
+        int s = 0;
+        for (int a = 0; a < 3; a++)
+        {
+            if (rotPrice[a] <= 0.0)
+                continue;
+            columns[(k + s) * 6 + 3 + a] = 1.0;
+            cost[k + s] = rotPrice[a];
+            s++;
+            columns[(k + s) * 6 + 3 + a] = -1.0;
+            cost[k + s] = rotPrice[a];
+            s++;
+        }
         double[] rhs = { dir.X, dir.Y, dir.Z, 0.0, 0.0, 0.0 };
 
-        double[]? x = RcsLpSolver.Solve(6, w.UsableCount, columns, cost, rhs);
+        double[]? x = RcsLpSolver.Solve(6, n, columns, cost, rhs);
         if (x == null)
         {
             DropLpSolution(exec,
-                "the zero-torque force constraint is infeasible for this layout/direction");
+                "the force constraint is infeasible for this layout/direction");
             return;
         }
 
-        float[] full = new float[thrusters.Count];
         float maxX = 0f;
-        double costPerImpulse = 0.0;
-        int support = 0;
         for (int j = 0; j < w.UsableCount; j++)
-        {
-            float xi = (float)x[j];
-            if (xi <= 0f)
-                continue;
-            full[map[j]] = xi;
-            maxX = Math.Max(maxX, xi);
-            costPerImpulse += cost[j] * x[j];
-            support++;
-        }
+            maxX = Math.Max(maxX, (float)x[j]);
         if (maxX <= 0f)
         {
             DropLpSolution(exec, "the solver returned an empty firing pattern");
             return;
         }
 
-        exec.LpSecondsPerImpulse = full;
+        // Residual torque is summed over the pattern actually fired (post
+        // duty floor), not derived from the slack columns: the dropped
+        // epsilon members' torque lands on the attitude hold too.
+        float[] secondsPerImpulse = new float[thrusters.Count];
+        double costPerImpulse = 0.0;
+        Span<double> resTau = stackalloc double[3];
+        int support = 0;
+        for (int j = 0; j < w.UsableCount; j++)
+        {
+            float xi = (float)x[j];
+            if (xi < LpDutyFloor * maxX)
+                continue;
+            secondsPerImpulse[map[j]] = xi;
+            costPerImpulse += cost[j] * x[j];
+            resTau[0] += w.TorqueBody[map[j]].X * x[j];
+            resTau[1] += w.TorqueBody[map[j]].Y * x[j];
+            resTau[2] += w.TorqueBody[map[j]].Z * x[j];
+            support++;
+        }
+
+        double slackCost = 0.0;
+        for (int j = w.UsableCount; j < n; j++)
+            slackCost += cost[j] * x[j];
+
+        exec.LpSecondsPerImpulse = secondsPerImpulse;
         exec.LpImpulseCapNs = MaxPulseSec / maxX;
         exec.LpCostPerImpulse = costPerImpulse;
+        exec.LpSlackCostPerImpulse = slackCost;
+        exec.LpResidualTorquePerNs = new float3(
+            (float)resTau[0], (float)resTau[1], (float)resTau[2]);
 
         // Log the pattern only when its support set changes: cadence
         // re-solves with an unchanged set differ just in the last digits
@@ -1013,24 +1102,29 @@ internal static class RcsExecutor
         if (DebugConfig.RcsTranslation)
         {
             int signature = support;
-            for (int i = 0; i < full.Length; i++)
+            for (int i = 0; i < secondsPerImpulse.Length; i++)
             {
-                if (full[i] > 0f)
+                if (secondsPerImpulse[i] > 0f)
                     signature = signature * 31 + i;
             }
             if (signature != exec.LpLoggedSupportSignature)
             {
                 exec.LpLoggedSupportSignature = signature;
+                float3 res = exec.LpResidualTorquePerNs;
                 DefaultCategory.Log.Debug(
                     $"[AFC] RCS LP solved: vehicle='{vehicle.Id}' {support}/{w.UsableCount} thrusters, " +
-                    $"{costPerImpulse * 1e6:F2}mg per Ns, cap {exec.LpImpulseCapNs:F0}Ns/tick");
-                for (int i = 0; i < full.Length; i++)
+                    $"{costPerImpulse * 1e6:F2}mg per Ns, cap {exec.LpImpulseCapNs:F0}Ns/tick" +
+                    (slackCost > 0.0
+                        ? $", slack tau=({res.X:F2},{res.Y:F2},{res.Z:F2})Nms/Ns " +
+                          $"({slackCost * 1e6:F2}mg per Ns)"
+                        : string.Empty));
+                for (int i = 0; i < secondsPerImpulse.Length; i++)
                 {
-                    if (full[i] <= 0f)
+                    if (secondsPerImpulse[i] <= 0f)
                         continue;
                     float3 f = w.ForceBody[i];
                     DefaultCategory.Log.Debug(
-                        $"[AFC]   LP thruster {i}: duty={full[i] / maxX * 100f:F0}% " +
+                        $"[AFC]   LP thruster {i}: duty={secondsPerImpulse[i] / maxX * 100f:F0}% " +
                         $"F=({f.X / 1000f:F1},{f.Y / 1000f:F1},{f.Z / 1000f:F1})kN " +
                         $"|tau|={w.TorqueBody[i].Length() / 1000f:F1}kNm");
                 }
@@ -1042,6 +1136,8 @@ internal static class RcsExecutor
     {
         exec.LpSecondsPerImpulse = null;
         exec.LpCostPerImpulse = 0.0;
+        exec.LpSlackCostPerImpulse = 0.0;
+        exec.LpResidualTorquePerNs = default;
         if (!exec.LpFallbackLogged)
         {
             exec.LpFallbackLogged = true;

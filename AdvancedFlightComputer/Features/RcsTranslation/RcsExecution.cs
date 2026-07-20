@@ -147,8 +147,19 @@ internal sealed class RcsExecution
     public double LpSolvedAtSec = double.NegativeInfinity;
 
     /// <summary>Propellant per newton-second of net impulse for the current
-    /// solution; feeds the LP-honest sufficiency numbers.</summary>
+    /// solution, thruster columns only; feeds the LP-honest sufficiency
+    /// numbers and the fuel telemetry's translation attribution.</summary>
     public double LpCostPerImpulse;
+
+    /// <summary>Decision price paid to the torque-slack columns, kg per
+    /// newton-second. The attitude hold spends this, not the pattern, so
+    /// it joins the sufficiency numbers but never the translation
+    /// attribution (the hold's real cost lands in the attitude bucket).</summary>
+    public double LpSlackCostPerImpulse;
+
+    /// <summary>The pattern's own net torque per newton-second of impulse
+    /// (N m s per N s), i.e. what the attitude hold must counter.</summary>
+    public float3 LpResidualTorquePerNs;
 
     /// <summary>Signature of the last logged firing pattern (support
     /// indices), so the solve log fires on pattern changes instead of
@@ -219,6 +230,8 @@ internal sealed class RcsExecution
         LpImpulseCapNs = 0f;
         LpSolvedAtSec = double.NegativeInfinity;
         LpCostPerImpulse = 0.0;
+        LpSlackCostPerImpulse = 0.0;
+        LpResidualTorquePerNs = default;
         LpLoggedSupportSignature = 0;
         LpFallbackLogged = false;
     }

@@ -387,6 +387,14 @@ public sealed class RcsTranslationTest : IHarnessTest
         HarnessLog.Line($"[{Name}] capability: best axis {RcsExecutor.AxisName(bestAxis)} " +
                         $"F={cap.Get(bestAxis).ForceN:F1}N mdot={cap.Get(bestAxis).MassFlowKgS * 1000.0:F2}g/s, " +
                         $"mass={vehicle.TotalMass:F1}kg");
+        // Rotation authority per axis plus the implied LP torque-slack
+        // price (flow over torque, kg per N m s); the ground truth when
+        // slack behavior needs explaining.
+        HarnessLog.Line($"[{Name}] rotation: tau=({cap.RotationTorqueNm.X / 1000f:F0}," +
+                        $"{cap.RotationTorqueNm.Y / 1000f:F0},{cap.RotationTorqueNm.Z / 1000f:F0})kNm " +
+                        $"mdot=({cap.RotationMassFlowKgS.X:F1},{cap.RotationMassFlowKgS.Y:F1}," +
+                        $"{cap.RotationMassFlowKgS.Z:F1})kg/s " +
+                        $"price~({PriceMg(cap, 0):F3},{PriceMg(cap, 1):F3},{PriceMg(cap, 2):F3})mg/Nms");
 
         // Rate-hold the spawn attitude, then plan the burn along wherever
         // the strongest translation axis already points (Teleport would be
@@ -563,6 +571,15 @@ public sealed class RcsTranslationTest : IHarnessTest
                 initialSma, initialEcc);
         }
         return ok;
+    }
+
+    private static double PriceMg(in RcsCapabilitySnapshot cap, int axis)
+    {
+        float flow = axis == 0 ? cap.RotationMassFlowKgS.X
+            : axis == 1 ? cap.RotationMassFlowKgS.Y : cap.RotationMassFlowKgS.Z;
+        float torque = axis == 0 ? cap.RotationTorqueNm.X
+            : axis == 1 ? cap.RotationTorqueNm.Y : cap.RotationTorqueNm.Z;
+        return torque > 1f ? flow / torque * 1e6 : 0.0;
     }
 
     private void SampleFiringNozzles(Vehicle vehicle)

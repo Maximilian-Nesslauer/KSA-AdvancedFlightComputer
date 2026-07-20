@@ -23,6 +23,7 @@ public sealed class RcsLpSolverTest : IHarnessTest
         ok &= CheckCheapThrusterWins();
         ok &= CheckTorqueNullingPair();
         ok &= CheckSupportSelection();
+        ok &= CheckPricedTorqueSlack();
         ok &= CheckInfeasibleDirection();
         ok &= CheckUnnullableTorque();
         HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
@@ -91,6 +92,40 @@ public sealed class RcsLpSolverTest : IHarnessTest
         {
             ok &= Near("cheap clean: clean fires", x[2], 0.1);
             ok &= Near("cheap clean: pair idle", x[0] + x[1], 0.0);
+        }
+        return ok;
+    }
+
+    // Mirrors the executor's torque-slack columns: unit yaw-torque columns
+    // with a per-unit price. With cheap slack the LP fires only the lean
+    // thruster and hands its torque to the attitude hold; with expensive
+    // slack the balanced (but thirstier) pair wins. Cost accounting:
+    // lean-only is 0.1*1 + 0.5*price versus the pair's 0.05*1 + 0.05*3.
+    private bool CheckPricedTorqueSlack()
+    {
+        double[] columns = BuildColumns(
+            new[] { 10.0, 0, 0, 0, 0, 5.0 },
+            new[] { 10.0, 0, 0, 0, 0, -5.0 },
+            new[] { 0.0, 0, 0, 0, 0, 1.0 },
+            new[] { 0.0, 0, 0, 0, 0, -1.0 });
+        double[] rhs = { 1.0, 0, 0, 0, 0, 0 };
+
+        double[]? x = RcsLpSolver.Solve(6, 4, columns, new[] { 1.0, 3.0, 0.02, 0.02 }, rhs);
+        bool ok = Check("cheap slack: solved", x != null);
+        if (x != null)
+        {
+            ok &= Near("cheap slack: lean fires", x[0], 0.1);
+            ok &= Near("cheap slack: thirsty idle", x[1], 0.0);
+            ok &= Near("cheap slack: slack absorbs", x[3], 0.5);
+        }
+
+        x = RcsLpSolver.Solve(6, 4, columns, new[] { 1.0, 3.0, 1.0, 1.0 }, rhs);
+        ok &= Check("dear slack: solved", x != null);
+        if (x != null)
+        {
+            ok &= Near("dear slack: pair splits a", x[0], 0.05);
+            ok &= Near("dear slack: pair splits b", x[1], 0.05);
+            ok &= Near("dear slack: slack idle", x[2] + x[3], 0.0);
         }
         return ok;
     }
