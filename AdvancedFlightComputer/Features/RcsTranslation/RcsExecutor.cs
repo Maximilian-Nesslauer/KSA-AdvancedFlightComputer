@@ -217,7 +217,7 @@ internal static class RcsExecutor
                 DefaultCategory.Log.Warning(
                     $"[AFC] RCS activation failed for vehicle='{vehicle.Id}': {ex}");
                 if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? failed))
-                    failed.ClearActive();
+                    EndExecution(vehicle.FlightComputer, failed);
                 RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
                 vehicle.SetNavBallFrame(vehicle.VehicleRegion.GetVehicleReferenceFrame());
             }
@@ -302,6 +302,13 @@ internal static class RcsExecutor
         fc.BurnMode = FlightComputerBurnMode.Manual;
         vehicle.SetNavBallFrame(VehicleReferenceFrame.BurnBody);
 
+        // Take the stock RCS toggle over for the burn (see ForceRcsOn): the
+        // rate hold and align slew below need RCS authority the disabled
+        // toggle would otherwise deny.
+        if (ForceRcsOn(fc, exec) && DebugConfig.RcsTranslation)
+            DefaultCategory.Log.Debug(
+                $"[AFC] RCS: forced RCSMode=Enabled for the burn on vehicle='{vehicle.Id}' (pilot had RCS off).");
+
         // Translation pulses through an off-CoM layout leave residual
         // torque that only an engaged attitude hold corrects; without it a
         // Hold burn spins the vehicle up. Mirror the stabilization toggle.
@@ -319,7 +326,7 @@ internal static class RcsExecutor
         if (!EnsureAlignCommanded(fc, exec, exec.CapabilityProbedAtSec))
         {
             Alert($"RCS burn not engaged: cannot align or hold for the burn direction on '{vehicle.Id}'.");
-            exec.ClearActive();
+            EndExecution(fc, exec);
             return;
         }
         strategy = exec.ResolvedStrategy;
@@ -345,15 +352,55 @@ internal static class RcsExecutor
     public static void Cancel(Vehicle vehicle, RcsExecution exec, string reason)
     {
         RcsFuelSummary fuel = ComputeFuelSummary(vehicle.FlightComputer, exec);
-        // Hand the attitude back only when Align actually commanded the
-        // tracker; a deferred align cancelled during the coast never
-        // touched it (and Hold never does).
-        if (exec.AlignCommanded)
-            vehicle.FlightComputer.SetNullRot(VehicleReferenceFrame.BurnBody);
-        exec.ClearActive();
+        EndExecution(vehicle.FlightComputer, exec);
         RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
         DefaultCategory.Log.Info($"[AFC] RCS burn cancelled ({reason}): vehicle='{vehicle.Id}'");
         LogFuel(vehicle, in fuel);
+    }
+
+    /// <summary>Forces the stock RCS toggle on for the burn when the pilot
+    /// left it off. With RCSMode Disabled the game skips the RCS
+    /// torque-authority scan (FlightComputer.UpdateActiveControlSystems), so
+    /// the rate hold and align slew this executor delegates to stock produce
+    /// nothing while the hand-rolled translation channel keeps firing - a
+    /// Hold burn would tumble on its residual torque, an Align burn would
+    /// never leave the gate. The executor already owns BurnMode and
+    /// AttitudeMode for the burn; RCSMode joins them. Written directly rather
+    /// than via ToggleRCSMode() so the restore in Complete/Cancel is
+    /// deterministic. Returns true when it actually flipped the toggle.</summary>
+    private static bool ForceRcsOn(FlightComputer fc, RcsExecution exec)
+    {
+        if (fc.RCSMode != FlightComputerRCSMode.Disabled)
+            return false;
+        fc.RCSMode = FlightComputerRCSMode.Enabled;
+        exec.ForcedRcsOn = true;
+        return true;
+    }
+
+    /// <summary>Hands the stock RCS toggle back to the pilot's off setting
+    /// when the executor forced it on. Call before ClearActive wipes
+    /// <see cref="RcsExecution.ForcedRcsOn"/>.</summary>
+    private static void RestoreRcsMode(FlightComputer fc, RcsExecution exec)
+    {
+        if (exec.ForcedRcsOn)
+            fc.RCSMode = FlightComputerRCSMode.Disabled;
+    }
+
+    /// <summary>Single teardown for a finished execution: hands the attitude
+    /// tracker and the stock RCS toggle back to the pilot, then clears the
+    /// active state. Every terminal path (Complete, Cancel, the Activate
+    /// failure returns, the reconcile-not-found abandon) routes through here
+    /// so none can hand back a partial set - ClearActive wipes the
+    /// AlignCommanded and ForcedRcsOn flags the two handbacks are gated on.
+    /// Attitude is handed back only when Align actually commanded the tracker
+    /// (a deferred align abandoned during the coast never touched it, and
+    /// Hold never does).</summary>
+    private static void EndExecution(FlightComputer fc, RcsExecution exec)
+    {
+        if (exec.AlignCommanded)
+            fc.SetNullRot(VehicleReferenceFrame.BurnBody);
+        RestoreRcsMode(fc, exec);
+        exec.ClearActive();
     }
 
     private static void LogResolutionDebug(Vehicle vehicle)
@@ -525,9 +572,13 @@ internal static class RcsExecutor
             DefaultCategory.Log.Warning(
                 $"[AFC] RCS burn for vehicle='{vehicle.Id}' not found after load, cancelling.");
             // No summary is computed on this path; drop the previous
-            // execution's numbers so LastFuel reads as "no data".
+            // execution's numbers so LastFuel reads as "no data". Route
+            // through EndExecution, not a bare ClearActive: a mid-burn save
+            // whose burn then vanished still reloaded with the attitude
+            // tracker and the RCS toggle forced on, and abandoning the
+            // execution must hand both back to the pilot.
             exec.LastFuel = default;
-            exec.ClearActive();
+            EndExecution(fc, exec);
             return;
         }
         exec.ActiveBurn = burn;
@@ -559,6 +610,15 @@ internal static class RcsExecutor
             Cancel(vehicle, exec, "burn no longer loaded");
             return;
         }
+
+        // A mid-burn stock RCS toggle (default key R) would kill the attitude
+        // channel the executor leans on. Same "own the FC for the burn"
+        // stance as activation: re-enable it and remember to hand it back off
+        // at the end (leaving it off would let a Hold burn tumble on its
+        // residual torque while the translation channel keeps firing).
+        if (ForceRcsOn(fc, exec) && DebugConfig.RcsTranslation)
+            DefaultCategory.Log.Debug(
+                $"[AFC] RCS: re-enabled RCSMode after a mid-burn toggle on vehicle='{vehicle.Id}'.");
 
         if (nowSec - exec.CapabilityProbedAtSec > CapabilityRefreshSec)
         {
@@ -708,9 +768,7 @@ internal static class RcsExecutor
         double burnDv = exec.ActiveBurnDvMs ?? 0.0;
         Burn? completedBurn = exec.ActiveBurn;
         RcsFuelSummary fuel = ComputeFuelSummary(fc, exec);
-        if (exec.AlignCommanded)
-            fc.SetNullRot(VehicleReferenceFrame.BurnBody);
-        exec.ClearActive();
+        EndExecution(fc, exec);
         RcsBurnOptions? options = exec.FindOptions(burnTime, burnDv);
         if (options != null)
             exec.Options.Remove(options);

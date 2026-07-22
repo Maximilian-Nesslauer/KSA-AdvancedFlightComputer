@@ -89,6 +89,7 @@ public sealed class RcsTranslationTest : IHarnessTest
             ok = Fly(vehicle, driver);
             ok &= FlyAlignScenario(vehicle, driver);
             ok &= FlyDeferredAlignCheck(vehicle, driver);
+            ok &= FlyRcsToggleScenario(vehicle, driver);
         }
         finally
         {
@@ -357,6 +358,173 @@ public sealed class RcsTranslationTest : IHarnessTest
                         $"coast {fuel.CoastKg * 1000.0:F1}g slew {fuel.SlewKg * 1000.0:F1}g");
         CleanupBurns(fc);
         return ok;
+    }
+
+    // The stock RCS toggle (FlightComputer.RCSMode, default key R) gates the
+    // attitude-authority scan: with RCS disabled the executor's rate hold and
+    // align slew get no authority and a Hold burn would tumble on its
+    // residual torque while translation keeps firing. The executor owns the
+    // FC for the burn, so it forces RCS on and restores the pilot's setting
+    // afterwards. Part A covers disabled-at-activation through a real
+    // completion (delta-V delivered, restored to off); Part B covers a
+    // mid-burn toggle being re-enabled by the driver and restored on cancel.
+    private bool FlyRcsToggleScenario(Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        CleanupBurns(fc);
+        vehicle.RefillConsumables();
+        fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
+        fc.SetNullRot(VehicleReferenceFrame.EclBody);
+        driver.Step(StepSec, 10);
+        _completedVehicle = null;
+        _completedBurn = null;
+
+        RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
+        int bestAxis = cap.BestAxis();
+        if (bestAxis < 0)
+        {
+            HarnessLog.Line($"[{Name}] SKIP (rcs toggle): no usable translation axis on this save.");
+            return true;
+        }
+
+        // Part A: pilot has RCS off before clicking Auto.
+        Burn? burn = BuildStrongAxisBurn(vehicle, driver, bestAxis, out BurnTarget? bt);
+        if (burn == null || bt == null)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): could not set up the burn.");
+            return false;
+        }
+        RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
+        RcsBurnOptions options = exec.GetOrCreateOptions(burn.Time.Seconds(), burn.DeltaVVlf.Length());
+        options.Mode = RcsExecutionMode.Rcs;
+        options.Attitude = RcsAttitudeStrategy.Hold;
+
+        fc.RCSMode = FlightComputerRCSMode.Disabled;
+        vehicle.SetEnum(FlightComputerBurnMode.Auto);
+        if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): SetEnum(Auto) did not engage the executor.");
+            CleanupBurns(fc);
+            return false;
+        }
+
+        bool ok = true;
+        bool forcedOn = fc.RCSMode == FlightComputerRCSMode.Enabled && exec.ForcedRcsOn;
+        HarnessLog.Line($"[{Name}] TEST rcs toggle A engage: RCSMode={fc.RCSMode} " +
+                        $"forcedFlag={exec.ForcedRcsOn} => {TestSupport.Verdict(forcedOn)}");
+        ok &= forcedOn;
+
+        bool completed = false;
+        bool enginesQuiet = true;
+        int steps = (int)((BurnLeadSec + 200.0) / StepSec);
+        for (int i = 0; i < steps; i++)
+        {
+            driver.Step(StepSec);
+            if (AnyEngineCommanded(vehicle)) { enginesQuiet = false; break; }
+            if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive) { completed = true; break; }
+        }
+        if (!enginesQuiet)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): a main engine received a throttle command.");
+            ok = false;
+        }
+        if (!completed)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): burn did not complete " +
+                            $"(to go {bt.DeltaVToGoCci.Length():F3}m/s).");
+            ok = false;
+        }
+        else
+        {
+            // The completion event separates a genuine finish from any cancel
+            // path (a tumbling Hold burn without RCS would have stalled).
+            bool viaEvent = ReferenceEquals(_completedBurn, burn);
+            bool restored = fc.RCSMode == FlightComputerRCSMode.Disabled;
+            float accum = bt.DeltaVAccumCci.Length();
+            float residual = bt.DeltaVToGoCci.Length();
+            bool deliveredOk = viaEvent && accum > (float)(BurnDvMs * 0.9) && residual <= 0.1f;
+            HarnessLog.Line($"[{Name}] TEST rcs toggle A finish: viaEvent={viaEvent} " +
+                            $"accum={accum:F3}m/s residual={residual:F4}m/s restoredToOff={restored} => " +
+                            $"{TestSupport.Verdict(deliveredOk && restored)}");
+            ok &= deliveredOk && restored;
+        }
+        CleanupBurns(fc);
+
+        // Part B: RCS on at activation, toggled off mid-burn (during the
+        // pre-ignition coast), must be re-enabled by the driver and restored
+        // to off on cancel.
+        vehicle.RefillConsumables();
+        driver.Step(StepSec, 10);
+        _completedVehicle = null;
+        _completedBurn = null;
+        Burn? burnB = BuildStrongAxisBurn(vehicle, driver, bestAxis, out BurnTarget? btB);
+        if (burnB == null || btB == null)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (rcs toggle B): could not set up the burn.");
+            return false;
+        }
+        RcsExecution execB = RcsExecRegistry.GetOrCreate(vehicle.Id);
+        RcsBurnOptions optionsB = execB.GetOrCreateOptions(burnB.Time.Seconds(), burnB.DeltaVVlf.Length());
+        optionsB.Mode = RcsExecutionMode.Rcs;
+        optionsB.Attitude = RcsAttitudeStrategy.Hold;
+
+        fc.RCSMode = FlightComputerRCSMode.Enabled;
+        vehicle.SetEnum(FlightComputerBurnMode.Auto);
+        if (!RcsExecRegistry.TryGet(vehicle.Id, out execB!) || !execB.IsActive)
+        {
+            HarnessLog.Line($"[{Name}] FAIL (rcs toggle B): SetEnum(Auto) did not engage the executor.");
+            CleanupBurns(fc);
+            return false;
+        }
+        bool notForcedAtActivation = !execB.ForcedRcsOn && fc.RCSMode == FlightComputerRCSMode.Enabled;
+
+        // Simulate a mid-burn R press and let one driver tick react.
+        fc.RCSMode = FlightComputerRCSMode.Disabled;
+        driver.Step(StepSec);
+        bool reEnabled = false;
+        bool forcedFlag = false;
+        if (RcsExecRegistry.TryGet(vehicle.Id, out execB!) && execB.IsActive)
+        {
+            reEnabled = fc.RCSMode == FlightComputerRCSMode.Enabled;
+            forcedFlag = execB.ForcedRcsOn;
+        }
+        bool guardOk = notForcedAtActivation && reEnabled && forcedFlag;
+        HarnessLog.Line($"[{Name}] TEST rcs toggle B guard: notForcedAtActivation={notForcedAtActivation} " +
+                        $"reEnabledMidBurn={reEnabled} forcedFlag={forcedFlag} => {TestSupport.Verdict(guardOk)}");
+        ok &= guardOk;
+
+        if (RcsExecRegistry.TryGet(vehicle.Id, out execB!) && execB.IsActive)
+            RcsExecutor.Cancel(vehicle, execB, "test cleanup");
+        bool restoredB = fc.RCSMode == FlightComputerRCSMode.Disabled;
+        HarnessLog.Line($"[{Name}] TEST rcs toggle B restore: RCSMode after cancel={fc.RCSMode} => " +
+                        $"{TestSupport.Verdict(restoredB)}");
+        ok &= restoredB;
+
+        CleanupBurns(fc);
+        return ok;
+    }
+
+    // Adds a small burn along the strongest translation axis at BurnLeadSec
+    // in the future (Hold is fully feasible on a single strong axis for any
+    // layout) and returns it with the loaded BurnTarget.
+    private Burn? BuildStrongAxisBurn(Vehicle vehicle, SimDriver driver, int bestAxis, out BurnTarget? bt)
+    {
+        bt = null;
+        FlightComputer fc = vehicle.FlightComputer;
+        double burnTimeSec = driver.Elapsed.Seconds() + BurnLeadSec;
+        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(new SimTime(burnTimeSec));
+        if (patch == null)
+            return null;
+        double3 axisBody = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(bestAxis));
+        double3 dvDirCci = axisBody.Transform(vehicle.GetBody2Cci());
+        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(new SimTime(burnTimeSec));
+        doubleQuat vlf2Cci = burnSv.GetVlf2ParentCci().OrIdentity();
+        double3 dvVlf = (dvDirCci * BurnDvMs).Transform(vlf2Cci.Inverse());
+        OrbitPointCce point = patch.Orbit.GetPointAt(new SimTime(burnTimeSec));
+        Burn burn = Burn.Create(point, burnTimeSec, dvVlf, patch, vehicle);
+        fc.AddBurn(burn);
+        bt = fc.Burn;
+        return bt == null ? null : burn;
     }
 
     private static void CleanupBurns(FlightComputer fc)

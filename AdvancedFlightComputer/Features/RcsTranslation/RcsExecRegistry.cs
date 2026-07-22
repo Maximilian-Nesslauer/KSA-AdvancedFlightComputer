@@ -158,6 +158,7 @@ internal static class RcsExecRegistry
                                 "resolved_axis = {0}", exec.ResolvedAxis));
                             writer.WriteLine($"resolved_allocator = \"{exec.ResolvedAllocator}\"");
                             writer.WriteLine($"align_commanded = {(exec.AlignCommanded ? "true" : "false")}");
+                            writer.WriteLine($"forced_rcs_on = {(exec.ForcedRcsOn ? "true" : "false")}");
                         }
                         writer.WriteLine();
                     }
@@ -290,6 +291,9 @@ internal static class RcsExecRegistry
             if (block.TryGetValue("align_commanded", out string? alignStr)
                 && bool.TryParse(alignStr, out bool alignCommanded))
                 exec.AlignCommanded = alignCommanded;
+            if (block.TryGetValue("forced_rcs_on", out string? forcedRcsStr)
+                && bool.TryParse(forcedRcsStr, out bool forcedRcs))
+                exec.ForcedRcsOn = forcedRcs;
         }
     }
 

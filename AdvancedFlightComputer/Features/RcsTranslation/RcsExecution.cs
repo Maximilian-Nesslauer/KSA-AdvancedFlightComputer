@@ -44,6 +44,14 @@ internal sealed class RcsExecution
     /// the handback on Cancel/Complete must know that.</summary>
     public bool AlignCommanded { get; set; }
 
+    /// <summary>The executor forced FlightComputer.RCSMode to Enabled for
+    /// this burn because the pilot had the stock RCS toggle (default key R)
+    /// off, either at activation or via a mid-burn press. Restored to
+    /// Disabled at Complete/Cancel. Persisted because the game round-trips
+    /// RCSMode through its save, so a mid-burn load followed by completion
+    /// must still hand the toggle back to off.</summary>
+    public bool ForcedRcsOn { get; set; }
+
     #endregion
 
     #region Transient state
@@ -214,6 +222,7 @@ internal sealed class RcsExecution
         SlewingSinceSec = 0.0;
         FiringLogged = false;
         AlignCommanded = false;
+        ForcedRcsOn = false;
         StartMassKg = 0.0;
         LastTickMassKg = 0.0;
         SlewPropellantKg = 0.0;
