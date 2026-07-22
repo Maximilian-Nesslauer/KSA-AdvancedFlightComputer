@@ -6,7 +6,7 @@ Adds quick-tools to the Transfer Planner (set Pe/Ap, match/set inclination, circ
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.7.6.4939.
+Validated against KSA build version 2026.7.8.4980.
 
 ## Features
 
