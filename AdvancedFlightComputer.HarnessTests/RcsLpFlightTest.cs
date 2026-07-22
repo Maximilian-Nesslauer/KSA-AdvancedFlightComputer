@@ -45,7 +45,7 @@ public sealed class RcsLpFlightTest : IHarnessTest
             HarnessLog.Line($"[{Name}] FAIL: the loaded system has no home body.");
             return 1;
         }
-        IReadOnlyList<string> saves = RcsTestVehicles.Resolve();
+        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);
         if (saves.Count == 0)
         {
             HarnessLog.Line($"[{Name}] SKIP: no RCS test vehicle save present.");

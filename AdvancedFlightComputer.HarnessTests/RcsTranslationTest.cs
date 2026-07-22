@@ -14,9 +14,9 @@ namespace AdvancedFlightComputer.HarnessTests;
 // game's own delta-V accounting (BurnTarget.DeltaVAccumCci, fed by the
 // physics integrator), never a re-derivation.
 //
-// The vehicle comes from KSA_HEADLESS_VEHICLE (default "Test Vehicle 1");
-// a save without translation-capable thrusters skips with a log line, the
-// same policy the harness flight test uses for a missing save.
+// The vehicles come from TestSupport.ResolveVehicleSaves: the present members
+// of RcsTestVehicles.Candidates, or KSA_HEADLESS_VEHICLES when set. A save
+// without translation-capable thrusters skips with a log line.
 public sealed class RcsTranslationTest : IHarnessTest
 {
     private const double SpawnAltitudeM = 500_000.0;
@@ -38,7 +38,7 @@ public sealed class RcsTranslationTest : IHarnessTest
             HarnessLog.Line($"[{Name}] FAIL: the loaded system has no home body.");
             return 1;
         }
-        IReadOnlyList<string> saves = RcsTestVehicles.Resolve();
+        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);
         if (saves.Count == 0)
         {
             HarnessLog.Line($"[{Name}] SKIP: no RCS test vehicle save present.");
