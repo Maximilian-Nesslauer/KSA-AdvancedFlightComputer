@@ -22,6 +22,11 @@ internal readonly record struct SequenceInfo(
 /// core's ConsumptionOrder (the player-selected FlowRule) and counts
 /// only propellant-enabled tanks; decoupler subtrees are subtracted at
 /// sequence boundaries so StartMass reflects what's still attached.
+///
+/// Computed in-house rather than read from the game's SequencePerformanceList
+/// so the numbers stay vacuum-consistent for the Splitter regardless of a
+/// sequence's atmospheric toggle, and depend only on stable per-part inputs.
+/// SequenceBurnStateTest validates them against the game's own values.
 /// </summary>
 internal sealed class SequenceBurnState
 {

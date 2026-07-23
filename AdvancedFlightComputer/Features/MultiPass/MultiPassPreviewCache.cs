@@ -43,9 +43,6 @@ internal static class MultiPassPreviewCache
 
         _cachedState = SequenceBurnState.Analyze(source);
         _cachedStateKey = key;
-#if DEBUG
-        SequenceBurnStateCrossCheck.Log(source, _cachedState);
-#endif
         return _cachedState;
     }
 
