@@ -43,11 +43,16 @@ internal static class MultiPassPreviewCache
 
         _cachedState = SequenceBurnState.Analyze(source);
         _cachedStateKey = key;
+#if DEBUG
+        SequenceBurnStateCrossCheck.Log(source, _cachedState);
+#endif
         return _cachedState;
     }
 
-    // Catches state changes that don't move total mass: engine.IsActive
-    // toggles, sequence.Activated flips, engine reassignments.
+    // Catches state changes that leave total mass unchanged: engine.IsActive
+    // toggles, sequence.Activated flips, engine reassignments, per-core
+    // FlowRule changes, and tank PropellantUseEnabled toggles - each moves
+    // the SequenceBurnState result without moving MassBucket.
     private static int ComputeActiveEngineSignature(Vehicle source)
     {
         if (source.Parts == null) return 0;
@@ -68,8 +73,17 @@ internal static class MultiPassPreviewCache
             {
                 hc.Add(parts[i].InstanceId);
                 hc.Add(engines[e].IsActive);
+                foreach (RocketCore core in engines[e].Cores)
+                    hc.Add(core.ResourceManager != null ? (int)core.ResourceManager.FlowRule : -1);
             }
         }
+
+        // ComputeSequenceFuel skips propellant-disabled tanks, so a toggle
+        // changes burnable fuel while the vehicle's total mass is unchanged.
+        Span<Tank> tanks = source.Parts.Tanks.Modules;
+        for (int i = 0; i < tanks.Length; i++)
+            hc.Add(tanks[i].PropellantUseEnabled);
+
         return hc.ToHashCode();
     }
 

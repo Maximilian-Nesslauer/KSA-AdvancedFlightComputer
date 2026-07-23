@@ -19,7 +19,8 @@ internal readonly record struct SequenceInfo(
 /// <summary>
 /// Per-sequence Tsiolkovsky snapshot. Vacuum thrust (multi-pass burns
 /// fire at periapsis / AN / DN). Fuel routing follows each engine
-/// core's SameStage walk; decoupler subtrees are subtracted at
+/// core's ConsumptionOrder (the player-selected FlowRule) and counts
+/// only propellant-enabled tanks; decoupler subtrees are subtracted at
 /// sequence boundaries so StartMass reflects what's still attached.
 /// </summary>
 internal sealed class SequenceBurnState
@@ -148,18 +149,28 @@ internal sealed class SequenceBurnState
             foreach (RocketCore core in engine.Cores)
             {
                 ResourceManager rm = core.ResourceManager;
-                if (rm?.FurtherestToNearestNodeSameStage == null)
+                // ConsumptionOrder resolves the engine's player-selected
+                // FlowRule to the matching drain-level array, so a cross-stage
+                // rule pulls from the tanks the engine actually drains.
+                Tank[][]? levels = rm?.ConsumptionOrder;
+                if (levels == null)
                     continue;
 
-                Span<Tank[]> nodeSpan = rm.FurtherestToNearestNodeSameStage;
-                for (int i = 0; i < nodeSpan.Length; i++)
+                for (int i = 0; i < levels.Length; i++)
                 {
-                    if (nodeSpan[i].Length == 0) continue;
-                    Span<Tank> tanks = nodeSpan[i];
+                    Tank[] tanks = levels[i];
+                    if (tanks == null) continue;
                     for (int j = 0; j < tanks.Length; j++)
                     {
-                        // First-claim-wins across the whole walk.
                         Tank tank = tanks[j];
+                        if (tank == null) continue;
+                        // A propellant-disabled tank feeds no engine. Skip
+                        // it unclaimed so its mass stays as dead weight in
+                        // the running total and a later decoupler subtree
+                        // still accounts for it at jettison.
+                        if (!tank.PropellantUseEnabled)
+                            continue;
+                        // First-claim-wins across the whole walk.
                         if (!fuelClaimedTankIds.Add(tank.InstanceId))
                             continue;
                         total += tank.ComputeSubstanceMass(moleStates);
