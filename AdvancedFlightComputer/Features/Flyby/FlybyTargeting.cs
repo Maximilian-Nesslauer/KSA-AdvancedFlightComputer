@@ -185,6 +185,12 @@ internal static class FlybyTargeting
 
         bool isCross = IsCrossParentTransfer(source, target);
 
+        // OrbitalTransfers.SingleImpulseHyperbolicEscape throws outright on a
+        // hyperbolic parking orbit, and the offset solve below runs on the parking
+        // celestial's orbit, so nothing downstream would catch it. Stock guards the
+        // same way at its own call sites.
+        if (isCross && source.Orbit.Eccentricity >= 1.0) return FlybyOutcome.Unavailable;
+
         // The Lambert is solved in the target-parent CCI frame. For same-parent
         // the departure body is the vehicle itself; for cross-parent it is the
         // vehicle's parking-parent celestial, whose (heliocentric) orbit shares
