@@ -506,9 +506,15 @@ internal static class HohmannMultiPassPlanner
     /// filter; we then fall back to the cheapest dirty candidate so the
     /// preview is still drawn, and the advisory surfaces what the dirty
     /// trajectory does. Null when (a) no shift was needed, or (b) the best
-    /// candidate is clean.</summary>
+    /// candidate is clean.
+    ///
+    /// <see cref="ShiftedTransit"/> is the transit of the best shifted candidate
+    /// (used by the flyby retarget so it aims at the shifted geometry); it is
+    /// <c>default</c> on the no-shift paths, where the caller uses the porkchop
+    /// transit instead.</summary>
     internal readonly record struct ShiftResult(
-        HohmannPlanInput Input, int KShift, string? ScanAdvisory = null);
+        HohmannPlanInput Input, int KShift, string? ScanAdvisory = null,
+        SimTime ShiftedTransit = default);
 
     /// <summary>
     /// Same-parent moon transfers (LEO -> Luna, low-Mars -> Phobos, ...) have
@@ -587,7 +593,7 @@ internal static class HohmannMultiPassPlanner
             ParkingPeriodBucketSec: (long)Math.Round(parkingPeriodSec),
             KShift: kShift);
         if (_hasShiftCache && key == _shiftCacheKey)
-            return new ShiftResult(_shiftCacheInput, kShift, _shiftCacheAdvisory);
+            return new ShiftResult(_shiftCacheInput, kShift, _shiftCacheAdvisory, _shiftCacheTransit);
 
         SimTime shiftedStart = new SimTime(rawTFinalSec + kShift * parkingPeriodSec);
 
@@ -731,8 +737,9 @@ internal static class HohmannMultiPassPlanner
         _shiftCacheKey = key;
         _shiftCacheInput = shifted;
         _shiftCacheAdvisory = scanAdvisory;
+        _shiftCacheTransit = bestTd.Transit;
         _hasShiftCache = true;
-        return new ShiftResult(shifted, kShift, scanAdvisory);
+        return new ShiftResult(shifted, kShift, scanAdvisory, bestTd.Transit);
     }
 
     /// <summary>Drops the shift-input cache. Call from the UI's Reset and
@@ -744,6 +751,7 @@ internal static class HohmannMultiPassPlanner
         _shiftCacheInput = default;
         _shiftCacheKey = default;
         _shiftCacheAdvisory = null;
+        _shiftCacheTransit = default;
     }
 
     // SplitMode is not a field on the key on purpose: it affects K_total
@@ -761,6 +769,7 @@ internal static class HohmannMultiPassPlanner
     private static ShiftCacheKey _shiftCacheKey;
     private static HohmannPlanInput _shiftCacheInput;
     private static string? _shiftCacheAdvisory;
+    private static SimTime _shiftCacheTransit;
     private static bool _hasShiftCache;
 
     #region Internal helpers
