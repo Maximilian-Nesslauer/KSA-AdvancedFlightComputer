@@ -502,6 +502,14 @@ public sealed class RcsTranslationTest : IHarnessTest
             return false;
         }
 
+        // Estimate vs the measured fuel line below: the calibration record for
+        // the attitude-fight term (this is a strong-axis Hold, so the fight is
+        // the best group's own residual torque, not a multi-axis mix).
+        RcsEstimates est0 = exec.Estimates;
+        HarnessLog.Line($"[{Name}] estimate (pre-fire): hold {est0.HoldPropellantKg * 1000.0:F1}g " +
+                        $"(feasible {est0.HoldFeasible}), align {est0.AlignTotalPropellantKg * 1000.0:F1}g " +
+                        $"(feasible {est0.AlignFeasible}, slew {est0.AlignSlewPropellantKg * 1000.0:F1}g)");
+
         double expectedDuration = vehicle.TotalMass * BurnDvMs / cap.Get(bestAxis).ForceN;
         double timeoutSec = BurnLeadSec + expectedDuration * 4.0 + 60.0;
         double m0 = vehicle.TotalMass;
@@ -580,8 +588,8 @@ public sealed class RcsTranslationTest : IHarnessTest
             double modelKg = m0 * BurnDvMs * (bestGroup.MassFlowKgS / bestGroup.ForceN);
             bool fuelOk = fuel.Valid
                 && fuel.TotalKg > 0.0
-                && fuel.TranslationKg >= modelKg * 0.9                      // attribution matches model
-                && fuel.TranslationKg <= modelKg * 1.15                     // closed-loop wiggle margin
+                && fuel.TranslationKg >= modelKg * 0.9                      // attribution at least the clean model
+                && fuel.TranslationKg <= modelKg * 1.5                      // asymmetric drift inflates the mix cost
                 && Math.Abs(fuel.TotalKg - burned) <= 0.1 * burned + 0.005  // 10% + 5 g mass agreement
                 && fuel.DvAngleDeg < 5.0;                                   // pointing gate
             HarnessLog.Line($"[{Name}] TEST fuel telemetry: total={fuel.TotalKg * 1000.0:F1}g " +

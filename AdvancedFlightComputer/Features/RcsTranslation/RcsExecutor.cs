@@ -68,10 +68,27 @@ internal static class RcsExecutor
     /// waste (stock's equivalent checks read one cached global bool).</summary>
     private const long UiCacheTtlMs = 250;
 
-    /// <summary>Rough share of the transverse rotation groups' combined
-    /// mass flow that fires during a slew (one side of one axis at a time).
-    /// Estimate-only; the Auto decision carries a preference margin.</summary>
-    private const double SlewMassFlowFactor = 0.25;
+    /// <summary>Fraction of the transverse rotation groups' combined mass flow
+    /// that fires during the bang-off-bang slew. A clean bang-off-bang fires
+    /// the slewing axes at full authority, so ~1.0 is the physical baseline.
+    /// It still under-predicts an inefficient phase-plane slew (deadband limit
+    /// cycle, overshoot, cross-coupling on an off-CoM layout), and the
+    /// dev-propellant test saves under-withdraw, so this stays a structural
+    /// estimate pending a fully stocked save. Erring high is the safe side for
+    /// the Auto decision - it must not pick an Align that then stalls dry
+    /// mid-slew.</summary>
+    private const double SlewMassFlowFactor = 1.0;
+
+    /// <summary>Calibration factor for the group allocator's attitude-fight
+    /// estimate: the propellant the attitude hold spends nulling the residual
+    /// torque a group translation firing leaves on an off-CoM layout. 1.0 is
+    /// the ideal linear cost of a perfectly sized counter-pulse; deadband
+    /// quantization and overshoot argue higher, the hold's free absorption of
+    /// small residuals inside the deadband argues lower. Without it the Hold
+    /// (and Align) estimate is pure translation and reads artificially cheap,
+    /// so Auto could pick a strategy that stalls or costs more. Tuned against
+    /// the fuel telemetry's attitude bucket on the asymmetric test vehicle.</summary>
+    private const double AttitudeFightFactor = 1.0;
 
     /// <summary>Below this misalignment the slew cost is treated as zero.</summary>
     private const double AlignMinThetaRad = 0.01;
@@ -1374,7 +1391,8 @@ internal static class RcsExecutor
         if (est.HoldFeasible && holdForce > 0.0)
         {
             est.HoldDurationSec = mass * dv / holdForce;
-            est.HoldPropellantKg = est.HoldDurationSec * holdMassFlow;
+            est.HoldPropellantKg = est.HoldDurationSec * holdMassFlow
+                + mass * dv * GroupAttitudeFightPerImpulse(in cap, uBody);
         }
 
         // Align: strongest single axis pointed at the burn vector, plus the
@@ -1388,7 +1406,13 @@ internal static class RcsExecutor
             est.AlignAxis = best;
             est.AlignFeasible = true;
             est.AlignDurationSec = mass * dv / g.ForceN;
-            est.AlignPropellantKg = est.AlignDurationSec * g.MassFlowKgS;
+            // Firing the single strong axis while pointed at the burn still
+            // leaves the residual torque of that group on an off-CoM layout,
+            // so Align carries an attitude-fight term too (usually smaller
+            // than Hold's multi-axis mix, plus the one-off slew below).
+            est.AlignPropellantKg = est.AlignDurationSec * g.MassFlowKgS
+                + mass * dv * GroupAttitudeFightPerImpulse(
+                    in cap, double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best)));
 
             double3 axisCci = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best))
                 .Transform(vehicle.GetBody2Cci());
@@ -1457,6 +1481,49 @@ internal static class RcsExecutor
         }
         return true;
     }
+
+    /// <summary>Attitude-fight propellant the group allocator incurs firing a
+    /// translation along <paramref name="uBody"/>, kg per newton-second of
+    /// net impulse. Each demanded group's residual torque per unit axis force
+    /// (TorqueNm / ForceN) is summed weighted by the direction, then priced at
+    /// the rotation groups' flow per torque (the same ratio the LP slack
+    /// uses). The burn force cancels (residual torque scales with force), so
+    /// the result is per impulse; multiply by mass*dv for kilograms. Axes with
+    /// no usable rotation authority contribute nothing - the hold cannot null
+    /// what it cannot command, and the executor's attitude channel then simply
+    /// leaves that residual to the closed loop.</summary>
+    internal static double GroupAttitudeFightPerImpulse(in RcsCapabilitySnapshot cap, double3 uBody)
+    {
+        Span<double> weight = stackalloc double[6]
+        {
+            Math.Max(uBody.X, 0.0), Math.Max(-uBody.X, 0.0),
+            Math.Max(uBody.Y, 0.0), Math.Max(-uBody.Y, 0.0),
+            Math.Max(uBody.Z, 0.0), Math.Max(-uBody.Z, 0.0),
+        };
+        double3 torquePerForce = default;
+        for (int i = 0; i < 6; i++)
+        {
+            if (weight[i] < 1e-4)
+                continue;
+            RcsAxisGroup g = cap.Get(i);
+            if (!g.IsUsable)
+                continue;
+            double s = weight[i] / g.ForceN;
+            torquePerForce.X += g.TorqueNm.X * s;
+            torquePerForce.Y += g.TorqueNm.Y * s;
+            torquePerForce.Z += g.TorqueNm.Z * s;
+        }
+        double cost =
+            AxisAttitudeCost(Math.Abs(torquePerForce.X), cap.RotationMassFlowKgS.X, cap.RotationTorqueNm.X)
+            + AxisAttitudeCost(Math.Abs(torquePerForce.Y), cap.RotationMassFlowKgS.Y, cap.RotationTorqueNm.Y)
+            + AxisAttitudeCost(Math.Abs(torquePerForce.Z), cap.RotationMassFlowKgS.Z, cap.RotationTorqueNm.Z);
+        return AttitudeFightFactor * cost;
+    }
+
+    private static double AxisAttitudeCost(double torquePerForce, float rotFlowKgS, float rotTorqueNm)
+        => rotTorqueNm > MinSlackTorqueNm && rotFlowKgS > 0f
+            ? torquePerForce * rotFlowKgS / rotTorqueNm
+            : 0.0;
 
     public static string AxisName(int idx) => idx switch
     {

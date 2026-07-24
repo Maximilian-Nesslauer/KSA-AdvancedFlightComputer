@@ -22,6 +22,7 @@ public sealed class RcsAllocatorTest : IHarnessTest
         ok &= CheckCompletionFloor();
         ok &= CheckRemainingDuration();
         ok &= CheckCapabilityHelpers();
+        ok &= CheckAttitudeFight();
         HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
         return ok ? 0 : 1;
     }
@@ -194,6 +195,50 @@ public sealed class RcsAllocatorTest : IHarnessTest
 
     private static bool IsAxis(float3 v, float x, float y, float z)
         => v.X == x && v.Y == y && v.Z == z;
+
+    // The attitude-fight term: a group whose thrusters sit off the CoM leaves
+    // residual torque a Hold burn must null, priced at the rotation groups'
+    // flow per torque. Hand-checkable: 10 Nm pitch per 100 N of +X force is
+    // 0.1 Nm/N, priced at 0.5/50 = 0.01 kg per Nm s, so 0.001 kg per Ns.
+    private bool CheckAttitudeFight()
+    {
+        bool ok = true;
+        RcsCapabilitySnapshot cap = default;
+        cap.Set(0, new RcsAxisGroup
+        {
+            ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 1f,
+            TorqueNm = new float3(0f, 10f, 0f),
+        });
+        cap.RotationMassFlowKgS = new float3(0f, 0.5f, 0f);
+        cap.RotationTorqueNm = new float3(0f, 50f, 0f);
+        cap.HasAnyTranslation = true;
+
+        double perImpulse = RcsExecutor.GroupAttitudeFightPerImpulse(in cap, new double3(1.0, 0.0, 0.0));
+        ok &= NearD("attitude fight per impulse", perImpulse, 0.001);
+
+        // No rotation authority on the torqued axis: the hold cannot null it,
+        // so the estimate adds nothing (the closed loop absorbs it at run time).
+        RcsCapabilitySnapshot noRot = cap;
+        noRot.RotationMassFlowKgS = default;
+        noRot.RotationTorqueNm = default;
+        ok &= NearD("no rotation authority no cost",
+            RcsExecutor.GroupAttitudeFightPerImpulse(in noRot, new double3(1.0, 0.0, 0.0)), 0.0);
+
+        // A torque-free (balanced) group leaves no residual torque, so no fight.
+        RcsCapabilitySnapshot balanced = cap;
+        balanced.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 1f });
+        ok &= NearD("balanced group no fight",
+            RcsExecutor.GroupAttitudeFightPerImpulse(in balanced, new double3(1.0, 0.0, 0.0)), 0.0);
+        return ok;
+    }
+
+    private bool NearD(string label, double actual, double expected)
+    {
+        bool ok = Math.Abs(actual - expected) < 1e-9 + 1e-6 * Math.Abs(expected);
+        if (!ok)
+            HarnessLog.Line($"[{Name}] TEST {label}: got {actual}, expected {expected} => FAIL");
+        return ok;
+    }
 
     private bool Expect(string label, float actual, float expected)
     {

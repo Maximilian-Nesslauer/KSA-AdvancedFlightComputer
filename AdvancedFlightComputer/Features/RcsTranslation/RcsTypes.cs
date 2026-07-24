@@ -25,14 +25,17 @@ internal enum RcsAttitudeStrategy
 /// <summary>How the demanded impulse is turned into thruster pulses.</summary>
 internal enum RcsAllocator
 {
-    /// <summary>Stock-consistent signed-axis groups; residual torque is
-    /// corrected by the attitude hold. The automatic fallback when the LP is
-    /// infeasible for a layout.</summary>
+    /// <summary>Default. Stock-consistent signed-axis groups; residual torque
+    /// is corrected by the attitude hold. Also the automatic fallback when the
+    /// LP is infeasible for a layout.</summary>
     Groups,
 
-    /// <summary>Default. Fuel-optimal LP over the raw per-thruster wrenches
-    /// with the zero-net-torque constraint folded in. Falls back to Groups
-    /// when the constraint set is infeasible for the current layout.</summary>
+    /// <summary>Fuel-optimal LP over the raw per-thruster wrenches with the
+    /// zero-net-torque constraint folded in. Fuel-par and cleaner (torque-
+    /// nulled) on balanced layouts, but can cost far more where a thruster
+    /// axis is strongly off the CoM, since it fires opposed counter-thrust for
+    /// exact zero torque. Falls back to Groups when the constraint set is
+    /// infeasible for the current layout.</summary>
     Lp,
 }
 
@@ -48,10 +51,11 @@ internal sealed class RcsBurnOptions
     public RcsExecutionMode Mode { get; set; } = RcsExecutionMode.Default;
     public RcsAttitudeStrategy Attitude { get; set; } = RcsAttitudeStrategy.Auto;
 
-    /// <summary>Defaults to LP: fuel-par or better than the axis groups and
-    /// torque-nulled, so it puffs cleaner. See <see cref="RcsAllocator"/> for
-    /// the group fallback.</summary>
-    public RcsAllocator Allocator { get; set; } = RcsAllocator.Lp;
+    /// <summary>Defaults to Groups: stock-consistent and robust on every
+    /// layout. LP is fuel-par and cleaner on balanced layouts but can cost far
+    /// more where an axis is strongly off the CoM, so it is a per-burn opt-in.
+    /// See <see cref="RcsAllocator"/>.</summary>
+    public RcsAllocator Allocator { get; set; } = RcsAllocator.Groups;
 
     public bool Matches(double timeSec, double dvMs)
         => Math.Abs(BurnTimeSec - timeSec) < TimeMatchToleranceSec

@@ -15,6 +15,14 @@ internal struct RcsAxisGroup
     public float MassFlowKgS;
     public float MinImpulseNs;
 
+    /// <summary>Net torque (N m, body frame) the whole group produces when it
+    /// fires at the force <see cref="ForceN"/>: the sum of the member
+    /// thrusters' live torques. Near zero on a balanced layout, nonzero when
+    /// the group's thrusters sit off the CoM. Divided by <see cref="ForceN"/>
+    /// it is the torque per unit axis force the attitude hold must null, which
+    /// is what makes a Hold burn cost more than its bare translation.</summary>
+    public float3 TorqueNm;
+
     public readonly bool IsUsable => ForceN > 0f && MassFlowKgS > 0f;
 
     /// <summary>Effective exhaust speed of the group along its axis. Off-axis
@@ -131,12 +139,12 @@ internal static class RcsCapability
             if (massFlow <= 0f)
                 continue;
 
-            AccumulateAxis(ref snap, 0, state.IntendedForce.X, force.X, massFlow, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 1, state.IntendedForce.X, force.X, massFlow, thruster.MinimumPulseTime, positive: false);
-            AccumulateAxis(ref snap, 2, state.IntendedForce.Y, force.Y, massFlow, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 3, state.IntendedForce.Y, force.Y, massFlow, thruster.MinimumPulseTime, positive: false);
-            AccumulateAxis(ref snap, 4, state.IntendedForce.Z, force.Z, massFlow, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 5, state.IntendedForce.Z, force.Z, massFlow, thruster.MinimumPulseTime, positive: false);
+            AccumulateAxis(ref snap, 0, state.IntendedForce.X, force.X, massFlow, torque, thruster.MinimumPulseTime, positive: true);
+            AccumulateAxis(ref snap, 1, state.IntendedForce.X, force.X, massFlow, torque, thruster.MinimumPulseTime, positive: false);
+            AccumulateAxis(ref snap, 2, state.IntendedForce.Y, force.Y, massFlow, torque, thruster.MinimumPulseTime, positive: true);
+            AccumulateAxis(ref snap, 3, state.IntendedForce.Y, force.Y, massFlow, torque, thruster.MinimumPulseTime, positive: false);
+            AccumulateAxis(ref snap, 4, state.IntendedForce.Z, force.Z, massFlow, torque, thruster.MinimumPulseTime, positive: true);
+            AccumulateAxis(ref snap, 5, state.IntendedForce.Z, force.Z, massFlow, torque, thruster.MinimumPulseTime, positive: false);
 
             if (!state.IntendedTorque.X.IsExactlyZero())
             {
@@ -172,7 +180,7 @@ internal static class RcsCapability
     /// Both must agree in sign, else the thruster is skipped for the axis.</summary>
     private static void AccumulateAxis(
         ref RcsCapabilitySnapshot snap, int idx, float intendedForce, float liveForce,
-        float massFlow, float minPulse, bool positive)
+        float massFlow, float3 torque, float minPulse, bool positive)
     {
         if (positive ? intendedForce <= 0f : intendedForce >= 0f)
             return;
@@ -183,6 +191,11 @@ internal static class RcsCapability
         g.ForceN += f;
         g.MassFlowKgS += massFlow;
         g.MinImpulseNs += minPulse * f;
+        // The group fires all its members at one duty, so its net torque at
+        // full group force is the plain sum of the member torques. A thruster
+        // serving several axes adds its torque to each group it joins - the
+        // same cross-feed the force/flow accumulation already carries.
+        g.TorqueNm += torque;
         snap.Set(idx, g);
     }
 }

@@ -274,7 +274,7 @@ internal static class RcsExecRegistry
         RcsAttitudeStrategy attitude = ParseEnumField(
             block, "attitude", RcsAttitudeStrategy.Auto, sourceName, headerLine);
         RcsAllocator allocator = ParseEnumField(
-            block, "allocator", RcsAllocator.Lp, sourceName, headerLine);
+            block, "allocator", RcsAllocator.Groups, sourceName, headerLine);
 
         if (!into.TryGetValue((saveId, vehicleId), out RcsExecution? exec))
         {
