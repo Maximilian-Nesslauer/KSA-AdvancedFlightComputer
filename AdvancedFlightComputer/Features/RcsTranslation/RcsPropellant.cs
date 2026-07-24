@@ -4,10 +4,11 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 
 /// <summary>
 /// Estimates the propellant mass currently reachable by the vehicle's
-/// active RCS thrusters. Walks the same per-consumer tank graphs
-/// ResourceManager.ResourceAvailable walks (the flow-rule node arrays),
-/// sums reactant masses over the distinct reachable tanks, and bounds the
-/// usable total by the reactant mix's mass fractions.
+/// active RCS thrusters. Reads each Combustor core's resource-manager
+/// ConsumptionOrder (the flow-rule-selected reachable tank levels the
+/// game's own consumption path walks), sums reactant masses over the
+/// distinct reachable tanks, and bounds the usable total by the reactant
+/// mix's mass fractions.
 ///
 /// Approximations, acceptable for a warning: all thrusters are assumed to
 /// share one reactant mix (the first one found), and reachability ignores
@@ -28,8 +29,13 @@ internal static class RcsPropellant
                 continue;
             foreach (RocketCore core in thruster.Cores)
             {
-                mix ??= core.DesiredMix;
-                CollectReachableTanks(core.ResourceManager, tanks);
+                // Only a liquid core (Combustor) carries a reactant mix and a
+                // resource-manager tank graph; solid motors carry neither, so
+                // any non-Combustor core is skipped. RCS thrusters are liquid.
+                if (core is not Combustor combustor)
+                    continue;
+                mix ??= combustor.DesiredMix;
+                CollectReachableTanks(combustor.ResourceManager, tanks);
             }
         }
         if (mix == null || tanks.Count == 0)
@@ -54,16 +60,11 @@ internal static class RcsPropellant
 
     private static void CollectReachableTanks(ResourceManager? rm, HashSet<Tank> tanks)
     {
-        if (rm == null)
-            return;
-        Tank[][]? groups = rm.FlowRule switch
-        {
-            FlowRule.FurtherestToNearest => rm.FurtherestToNearestNode,
-            FlowRule.NearestToFurtherest => rm.NearestToFurtherestNode,
-            FlowRule.FurtherestToNearestSameStage => rm.FurtherestToNearestNodeSameStage,
-            FlowRule.NearestToFurtherestSameStage => rm.NearestToFurtherestNodeSameStage,
-            _ => null,
-        };
+        // ConsumptionOrder selects the flow-rule's reachable tank levels the
+        // same way the game's own consumption path does (ResourceManagerBase),
+        // so it stays correct if the flow-rule set changes; null before the
+        // manager's graph is built.
+        Tank[][]? groups = rm?.ConsumptionOrder;
         if (groups == null)
             return;
         foreach (Tank[]? group in groups)

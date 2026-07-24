@@ -631,7 +631,9 @@ public sealed class RcsTranslationTest : IHarnessTest
         while (enumerator.MoveNext())
         {
             ref readonly RocketNozzleState state = ref enumerator.Current.State;
-            if (state.Throttle <= 0f || state.Performance.MassFlowRate <= 0f)
+            // ThrustFraction is the per-frame fraction of max thrust produced;
+            // 0 means the nozzle is not firing this frame.
+            if (state.ThrustFraction <= 0f || state.Performance.MassFlowRate <= 0f)
                 continue;
             firing++;
             float f = state.Performance.TotalThrust;
