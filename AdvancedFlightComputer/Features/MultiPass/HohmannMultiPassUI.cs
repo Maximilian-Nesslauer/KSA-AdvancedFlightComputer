@@ -1,6 +1,7 @@
 using System;
 using System.Globalization;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
@@ -63,7 +64,10 @@ internal static class HohmannMultiPassUI
         int PassCount,
         SplitMode Mode,
         int StartPassIndex,
-        long MassBucket);
+        long MassBucket,
+        bool FlybyOn,
+        long FlybyRpBucket,
+        FlybySide FlybySide);
 
     private static PreviewKey _cachedKey;
     private static bool _hasCachedPreview;
@@ -84,6 +88,11 @@ internal static class HohmannMultiPassUI
     private static double _cachedFuelTotalDv = double.NaN;
     private static string? _lastSourceId;
     private static string? _lastTargetId;
+
+    // True when the flyby option is on but the multi-pass retarget could not be
+    // applied to the current geometry, so the split would depart center-aimed.
+    // Surfaced as a warning so the user does not silently get an impact plan.
+    private static bool _flybyRetargetFailed;
 
     // Per-frame dedup: two transpiler injections call DrawInline in
     // the same frame (see the DrawInline doc). First caller claims
@@ -197,6 +206,7 @@ internal static class HohmannMultiPassUI
         _autoClampReason = null;
         _autoClampKind = PassPlanFailure.None;
         _lastShiftKShift = 0;
+        _flybyRetargetFailed = false;
         _lastSourceId = null;
         _lastTargetId = null;
         _lastFrameDrawn = -1;
@@ -309,6 +319,10 @@ internal static class HohmannMultiPassUI
     /// here so the helper is self-contained.</summary>
     private static bool StockSelectedTransferOverlayActive()
     {
+        // With a flyby armed the flyby patch hides stock's overlay (it shows the
+        // center-aimed impact), so the final pass has to be drawn here instead of
+        // being delegated to stock.
+        if (HohmannFlybyUI.FlybyRequested) return false;
         if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
             return false;
         if (!(bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false))
@@ -429,6 +443,12 @@ internal static class HohmannMultiPassUI
         ImGui.TextWrapped(string.Format(Inv,
             "Lambert dV: {0:F1} m/s", entry.TransferData.TransferDvVlf.Length()));
         ImGui.PopStyleColor();
+
+        // Flyby targeting sits between the transfer summary and the pass-count
+        // splitting: it changes WHERE the departure aims (impact -> flyby), then
+        // multi-pass optionally splits that same departure into perigee kicks.
+        HohmannFlybyUI.DrawInline(source, entry, info);
+
         ImGui.Spacing();
 
         DrawPassCountSelector(source, entry, info);
@@ -441,6 +461,7 @@ internal static class HohmannMultiPassUI
             DrawPreviewFailureIfApplicable();
             DrawInsufficientFuelIfApplicable();
             DrawAdvisoryIfApplicable();
+            DrawFlybyMultipassNoteIfApplicable();
             DrawPassList();
             if (_hasCachedPreview && !_cachedPreview.Failed)
                 DrawTotalsAndSavings(source, _cachedPreview.Passes,
@@ -454,11 +475,14 @@ internal static class HohmannMultiPassUI
         // reset _autoClampedFromN, which is the only way to clear it.
         DrawAutoClampIfApplicable();
 
+        bool flyby = HohmannFlybyUI.FlybyRequested;
         if (_passCount <= 1 && _autoClampedFromN <= _passCount)
         {
             ImGui.Spacing();
             ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-            ImGui.TextWrapped("N = 1: stock Create button does a single Hohmann burn.");
+            ImGui.TextWrapped(flyby
+                ? "N = 1: stock Create button does a single flyby burn."
+                : "N = 1: stock Create button does a single Hohmann burn.");
             ImGui.PopStyleColor();
         }
         else if (_passCount > 1)
@@ -466,7 +490,9 @@ internal static class HohmannMultiPassUI
             ImGui.Spacing();
             ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
             ImGui.TextWrapped(string.Format(Inv,
-                "Click the stock Create button to start the {0}-pass execution.",
+                flyby
+                    ? "Click the stock Create button to start the {0}-pass flyby execution."
+                    : "Click the stock Create button to start the {0}-pass execution.",
                 _passCount));
             ImGui.PopStyleColor();
         }
@@ -869,6 +895,12 @@ internal static class HohmannMultiPassUI
                 passCount: _passCount, mode: _splitMode, startPassIndex: 0);
         }
 
+        // Bake the flyby offset into the (center-aimed) plan input so the
+        // multi-pass split departs toward the flyby, not the impact. The retarget
+        // failure is stored for DrawFlybyMultipassNoteIfApplicable to warn.
+        planInput = MaybeApplyFlyby(
+            source, info, planInput, ResolveFlybyTransit(shift, entry), out _flybyRetargetFailed);
+
         _cachedPreview = HohmannMultiPassPlanner.Plan(
             source, planInput, _passCount, startPassIndex: 0,
             parkingPeriodSec, state, now, _splitMode);
@@ -1124,6 +1156,12 @@ internal static class HohmannMultiPassUI
     public static bool WantedMultiPassButPreviewFailed() =>
         Enabled && _passCount > 1 && _hasCachedPreview && _cachedPreview.Failed;
 
+    /// <summary>The user has a split selected (N &gt; 1), regardless of whether it
+    /// could be armed. Lets the create interceptor tell the user when it falls back
+    /// to a single burn for a reason the preview banner does not cover (e.g. the
+    /// click-time intent rebuild failing after a successful preview).</summary>
+    public static bool WantsMultiPass => Enabled && _passCount > 1;
+
     /// <summary>
     /// True when the inline UI is armed for a Hohmann multi-pass on
     /// <paramref name="vehicle"/>: pass count > 1, a valid cached preview,
@@ -1251,6 +1289,16 @@ internal static class HohmannMultiPassUI
             raw, source, info, passCount, parkingPeriod, now, _splitMode, state);
         var input = shift.Input;
 
+        // Bake the flyby offset into the locked input so RecomputePass splits the
+        // flyby departure across passes. Uses the same transit as the preview path
+        // (via ResolveFlybyTransit) or the created plan diverges from the preview.
+        // Refuse to lock a center-aimed (impact) intent when the user armed the
+        // flyby: better to fall back to the stock burn with an alert than to
+        // silently start a multi-pass that impacts.
+        input = MaybeApplyFlyby(
+            source, info, input, ResolveFlybyTransit(shift, entry), out bool flybyFailed);
+        if (flybyFailed) return null;
+
         return new HohmannTransferIntent
         {
             TargetId = targetId,
@@ -1268,6 +1316,19 @@ internal static class HohmannMultiPassUI
         Vehicle source, HohmannMultiPassPlanner.HohmannPlanInput input,
         int passCount, SplitMode mode, int startPassIndex)
     {
+        // Flyby request is part of the key so toggling the flyby / its altitude /
+        // side busts the cached (center-aimed vs offset) preview.
+        bool flybyOn = false;
+        long flybyRpBucket = 0;
+        FlybySide flybySide = FlybySide.Inner;
+        if (input.Target is IParentBody target
+            && HohmannFlybyUI.TryGetRequest(target, out double rp, out FlybySide side))
+        {
+            flybyOn = true;
+            flybyRpBucket = (long)(rp / 1000.0);
+            flybySide = side;
+        }
+
         return new PreviewKey(
             SourceId: source.Id,
             TargetId: (input.Target as Astronomical)?.Id ?? string.Empty,
@@ -1279,7 +1340,77 @@ internal static class HohmannMultiPassUI
             PassCount: passCount,
             Mode: mode,
             StartPassIndex: startPassIndex,
-            MassBucket: (long)(source.TotalMass / 100.0));
+            MassBucket: (long)(source.TotalMass / 100.0),
+            FlybyOn: flybyOn,
+            FlybyRpBucket: flybyRpBucket,
+            FlybySide: flybySide);
+    }
+
+    /// <summary>The transit that the flyby retarget must aim at: the shifted
+    /// candidate's transit after a moon-shift, otherwise the porkchop transit.
+    /// Both the preview and the created intent must use the same value or the
+    /// created plan diverges from the preview, so it is resolved in one place.</summary>
+    private static SimTime ResolveFlybyTransit(
+        HohmannMultiPassPlanner.ShiftResult shift, OrbitalTransfers.PorkChopEntry entry)
+        => shift.KShift > 0 ? shift.ShiftedTransit : entry.TransferData.Transit;
+
+    /// <summary>Bakes the flyby offset into a center-aimed multi-pass input so the
+    /// split departs toward the flyby. Returns the input unchanged and sets
+    /// <paramref name="failed"/> when the flyby is off (failed = false) or the
+    /// retarget could not be applied (failed = true), so the caller can warn or
+    /// refuse instead of silently planning an impact. The planner locks exactly
+    /// one energy descriptor: the hyperbolic ejection excess for cross-parent, or
+    /// the post-burn apoapsis for same-parent. Math lives in <see cref="FlybyTargeting"/>.</summary>
+    private static HohmannMultiPassPlanner.HohmannPlanInput MaybeApplyFlyby(
+        Vehicle source, OrbitalTransfers.TransferInfo info,
+        HohmannMultiPassPlanner.HohmannPlanInput center, SimTime transit, out bool failed)
+    {
+        failed = false;
+        if (info.Target is not IParentBody target) return center;
+        if (info.Target is not IOrbiter targetOrbiter) return center;
+        if (!HohmannFlybyUI.TryGetRequest(target, out double rp, out FlybySide side))
+            return center;
+
+        var outcome = FlybyTargeting.ComputeFlybyDeparture(
+            source, targetOrbiter, center.TFinal, transit, rp, side);
+        if (outcome.Result == null)
+        {
+            failed = true;
+            return center;
+        }
+        FlybyTargeting.FlybyResult f = outcome.Result.Value;
+
+        if (center.IsCrossParent)
+        {
+            // Cross-parent locks the hyperbolic ejection excess; apoapsis unused.
+            if (!(f.PlannerVInfMs > 0.0)) { failed = true; return center; }
+            return center with
+            {
+                TFinal = f.BurnTime,
+                DFinalVlf = f.DvVlf,
+                VInfMs = f.PlannerVInfMs,
+            };
+        }
+
+        // Same-parent locks the post-burn apoapsis; v_inf unused.
+        if (!(f.PlannerApoTargetMeters > 0.0)) { failed = true; return center; }
+        return center with
+        {
+            TFinal = f.BurnTime,
+            DFinalVlf = f.DvVlf,
+            ApoTargetRadiusMeters = f.PlannerApoTargetMeters,
+        };
+    }
+
+    /// <summary>Warns when a multi-pass split is armed with the flyby option on
+    /// but the retarget failed, so the plan would depart center-aimed (impact).</summary>
+    private static void DrawFlybyMultipassNoteIfApplicable()
+    {
+        if (!HohmannFlybyUI.FlybyRequested || !_flybyRetargetFailed) return;
+        ImGui.Spacing();
+        ImGui.PushStyleColor(ImGuiCol.Text, ColorOrange);
+        ImGui.TextWrapped("[!] Flyby retarget failed for this multi-pass geometry; the split would still impact. Reduce passes, change the window, or flip the side.");
+        ImGui.PopStyleColor();
     }
 
     #endregion
