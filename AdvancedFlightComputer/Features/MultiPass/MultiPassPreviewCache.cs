@@ -70,8 +70,10 @@ internal static class MultiPassPreviewCache
             {
                 hc.Add(parts[i].InstanceId);
                 hc.Add(engines[e].IsActive);
+                // Only a Combustor carries a player-selected FlowRule; a
+                // SolidMotor has none, so it folds in as a constant.
                 foreach (RocketCore core in engines[e].Cores)
-                    hc.Add(core.ResourceManager != null ? (int)core.ResourceManager.FlowRule : -1);
+                    hc.Add(core is Combustor c && c.ResourceManager != null ? (int)c.ResourceManager.FlowRule : -1);
             }
         }
 

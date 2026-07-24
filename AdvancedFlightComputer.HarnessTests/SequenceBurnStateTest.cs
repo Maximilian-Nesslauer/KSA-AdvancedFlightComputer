@@ -1,3 +1,4 @@
+using System.IO;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.Numerics;
 using HeadlessHarness.Core;
@@ -45,7 +46,6 @@ public sealed class SequenceBurnStateTest : IHarnessTest
 
         SimDriver driver = session.CreateDriver();
         bool ok = true;
-        bool any = false;
 
         foreach (string saveId in DefaultVehicles)
         {
@@ -55,21 +55,20 @@ public sealed class SequenceBurnStateTest : IHarnessTest
                 HarnessLog.Line($"[{Name}] '{saveId}': not shipped, skipping.");
                 continue;
             }
-            any = true;
-            ok &= WithVehicle(session, driver, home, save, v =>
+            ok &= WithVehicle(session, driver, home, save.VehicleSaveData, v =>
                 CrossCheck($"{saveId} baseline", v, SequenceBurnState.Analyze(v)));
         }
 
-        if (!any)
-        {
-            HarnessLog.Line($"[{Name}] SKIP: no shipped default vehicle available.");
-            return 0;
-        }
+        // The shipped defaults are all liquid, so a synthetically-built single-SRB vehicle is the
+        // only coverage of the SolidMotor fuel and jettison-mass path. It is built from Core content,
+        // so it is always available (no machine-specific save, unlike the flight test).
+        ok &= WithVehicle(session, driver, home, BuildSyntheticSrb(), v =>
+            CrossCheck("SRB baseline", v, SequenceBurnState.Analyze(v)));
 
         if (DefaultVehicleSaves.FindSave(MultiStageVehicle) is VehicleSave rocket)
         {
-            ok &= WithVehicle(session, driver, home, rocket, DisabledTankCase);
-            ok &= WithVehicle(session, driver, home, rocket, FlowRuleCase);
+            ok &= WithVehicle(session, driver, home, rocket.VehicleSaveData, DisabledTankCase);
+            ok &= WithVehicle(session, driver, home, rocket.VehicleSaveData, FlowRuleCase);
         }
 
         HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
@@ -79,9 +78,9 @@ public sealed class SequenceBurnStateTest : IHarnessTest
     // Spawns a fresh copy of a default save, steps twice so the game initializes nozzle
     // states (thrust direction) and mass, runs the body, and always despawns.
     private bool WithVehicle(HeadlessSession session, SimDriver driver, IParentBody home,
-        VehicleSave save, Func<Vehicle, bool> body)
+        VehicleSaveData data, Func<Vehicle, bool> body)
     {
-        Vehicle vehicle = Spawn(session, home, save, $"BurnState_{save.Id}");
+        Vehicle vehicle = Spawn(session, home, data, $"BurnState_{data.Id}");
         try
         {
             driver.Step(1e-3, 2);
@@ -93,23 +92,55 @@ public sealed class SequenceBurnStateTest : IHarnessTest
         }
     }
 
-    // Replicates VehicleSpawner.SpawnFromSave, but sourced from DefaultVehicleSaves (the shipped
-    // defaults) instead of the machine-specific Vehicles folder. VehicleSaveData is populated in the
-    // UncompressedVehicleSave constructor, so no GPU Load is needed.
-    private static Vehicle Spawn(HeadlessSession session, IParentBody home, VehicleSave save, string id)
+    // Replicates VehicleSpawner.SpawnFromSave from an already-loaded VehicleSaveData, so it serves
+    // both the shipped DefaultVehicleSaves and the synthetic SRB below without a GPU Load.
+    private static Vehicle Spawn(HeadlessSession session, IParentBody home, VehicleSaveData data, string id)
     {
-        PartInstance design = save.VehicleSaveData.RootPartInstance
-            ?? throw new InvalidOperationException($"default vehicle '{save.Id}' has no root part instance.");
+        PartInstance design = data.RootPartInstance
+            ?? throw new InvalidOperationException($"vehicle '{data.Id}' has no root part instance.");
         PartTree tree = PartTree.Deserialize(design);
         SimTime now = Universe.GetElapsedSimTime();
         Orbit orbit = VehicleSpawner.CircularCci(home, home.MeanRadius + SpawnAltitudeM, now);
         Vehicle vehicle = Vehicle.CreateVehicle(
             session.System, doubleQuat.Identity, double3.Zero, home, id, tree.Root, orbit);
-        vehicle.Parts.SequenceList.SetActiveSequence(save.VehicleSaveData.ActiveSequence);
-        vehicle.Parts.SequenceList.ApplyEnvironments(save.VehicleSaveData.SequenceEnvironments);
-        vehicle.Parts.FuelLinks.ApplySaveData(save.VehicleSaveData.FuelLinks, design);
+        vehicle.Parts.SequenceList.SetActiveSequence(data.ActiveSequence);
+        vehicle.Parts.SequenceList.ApplyEnvironments(data.SequenceEnvironments);
+        vehicle.Parts.FuelLinks.ApplySaveData(data.FuelLinks, design);
         home.Children.Add(vehicle);
         return vehicle;
+    }
+
+    // A one-part solid booster, deserialized exactly like a real vehicle.xml (VehicleSaveData.LoadFrom)
+    // so the game builds the full part - RocketEngineController wrapping the SolidMotor core, which
+    // feeds its own grain segment, no cross-part connectors required. This is enough for the stack to
+    // resolve, the grain to fill, and both AFC and SequencePerformanceList to score the SRB sequence.
+    private static VehicleSaveData BuildSyntheticSrb()
+    {
+        // GrainGeometryLibrary.LoadAll runs in Program.Main, which the headless bring-up exits before,
+        // so the library is empty here even though its templates loaded with Core content. Instantiate
+        // them once so SolidGrainSegment.CreateComponents can resolve the default geometry.
+        if (GrainGeometryLibrary.All().IsEmpty)
+            GrainGeometryLibrary.LoadAll();
+
+        const string xml =
+            """
+            <?xml version="1.0" encoding="utf-8"?>
+            <VehicleSaveData Id="SrbSynthetic" ActiveSequence="0">
+              <RootPartRef InstanceOf="CorePropulsionA_Prefab_SRBA1" LocalInstanceId="1">
+                <Transform>
+                  <Position X="0" Y="0" Z="0" />
+                  <Rotation X="0" Y="0" Z="0" />
+                  <Scale X="1" Y="1" Z="1" />
+                </Transform>
+              </RootPartRef>
+            </VehicleSaveData>
+            """;
+        using var reader = new StringReader(xml);
+        var data = (VehicleSaveData)DefaultVehicleSaves.VehicleSerializer.Deserialize(reader)!;
+        // Matches VehicleSaveData.LoadFrom, which passes Mod.Empty (= new Mod()); the field itself
+        // is not visible to this assembly, so construct the equivalent empty mod directly.
+        data.OnDataLoad(new KSA.Mod());
+        return data;
     }
 
     // Per-sequence agreement of an AFC analysis against a fresh, vacuum stock recompute.
@@ -214,9 +245,10 @@ public sealed class SequenceBurnStateTest : IHarnessTest
             {
                 foreach (RocketCore core in engines[e].Cores)
                 {
-                    if (core.ResourceManager == null)
+                    // FlowRule moved onto Combustor; solid cores have none.
+                    if (core is not Combustor combustor || combustor.ResourceManager == null)
                         continue;
-                    core.ResourceManager.FlowRule = rule;
+                    combustor.ResourceManager.FlowRule = rule;
                     changed++;
                 }
             }
