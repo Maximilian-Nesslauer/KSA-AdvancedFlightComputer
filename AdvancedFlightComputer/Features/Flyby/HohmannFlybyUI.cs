@@ -31,6 +31,7 @@ internal static class HohmannFlybyUI
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
     private static readonly ImColor8 StatusGrey = new(120, 120, 120, 255);
     private static readonly ImColor8 ColorAmber = new(255, 200, 60, 255);
+    private static readonly ImColor8 ColorOrange = new(255, 150, 50, 255);
     private static readonly ImColor8 ColorGreen = new(80, 220, 80, 255);
     private static readonly string[] ReferenceLabels = { "Surface", "Center", "Atmosphere" };
     // Index-aligned with FlybySide.
@@ -75,8 +76,22 @@ internal static class HohmannFlybyUI
     private static FlybyTargeting.FlybyResult? _cachedResult;
     private static bool _belowFloor;
     private static double _predictedPeAlt = double.NaN;
+    // Propagated periapsis measured from the target's center, plus the floor it is
+    // judged against. The requested radius alone is not enough: the achieved
+    // periapsis comes out of the patched-conic propagation and can land below the
+    // body even when the input was above it.
+    private static double _predictedPeRadius = double.NaN;
+    private static double _minFlybyRadius = double.NaN;
+    private static bool _previewHasEncounter;
     private static FlightPlan? _previewPlan;
     private static string? _lastSourceId;
+
+    /// <summary>The propagated flyby would hit the body (or its atmosphere), so the
+    /// departure must not be armed however sane the requested altitude looked.</summary>
+    private static bool PredictedFlybyBelowFloor =>
+        _previewHasEncounter
+        && double.IsFinite(_predictedPeRadius) && double.IsFinite(_minFlybyRadius)
+        && _predictedPeRadius < _minFlybyRadius;
 
     /// <summary>Draws the flyby section. <paramref name="entry"/> and
     /// <paramref name="info"/> come from the stock selected porkchop entry, so no
@@ -271,6 +286,28 @@ internal static class HohmannFlybyUI
             return;
         }
 
+        if (PredictedFlybyBelowFloor)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, ColorOrange);
+            ImGui.TextWrapped(string.Format(Inv,
+                "[!] Propagated periapsis is below the safe floor ({0} from center): " +
+                "this trajectory impacts. Raise the altitude or try the other side.",
+                ManeuverToolsWindow.FormatDistance(_minFlybyRadius)));
+            ImGui.PopStyleColor();
+            return;
+        }
+
+        if (!_previewHasEncounter)
+        {
+            // Advisory rather than a block: the propagation is best-effort and has
+            // been seen to miss an encounter that a later recompute resolves, so
+            // refusing here could strand a valid plan.
+            ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
+            ImGui.TextWrapped("No encounter resolved in the preview; the flyby periapsis could not be confirmed.");
+            ImGui.PopStyleColor();
+            return;
+        }
+
         ImGui.PushStyleColor(ImGuiCol.Text, ColorGreen);
         ImGui.TextWrapped("Create fires this flyby departure directly.");
         ImGui.PopStyleColor();
@@ -336,6 +373,9 @@ internal static class HohmannFlybyUI
     {
         _previewPlan = null;
         _predictedPeAlt = double.NaN;
+        _predictedPeRadius = double.NaN;
+        _previewHasEncounter = false;
+        _minFlybyRadius = FlybyTargeting.MinFlybyRadius(target);
         if (result == null) return;
         try
         {
@@ -360,7 +400,9 @@ internal static class HohmannFlybyUI
             foreach (PatchedConic patch in fp.Patches)
                 if (patch.Orbit.Parent?.Id == target.Id)
                 {
-                    _predictedPeAlt = patch.Orbit.Periapsis - target.MeanRadius;
+                    _previewHasEncounter = true;
+                    _predictedPeRadius = patch.Orbit.Periapsis;
+                    _predictedPeAlt = _predictedPeRadius - target.MeanRadius;
                     return;
                 }
         }
@@ -464,6 +506,9 @@ internal static class HohmannFlybyUI
         _cachedKey = default;
         _belowFloor = false;
         _predictedPeAlt = double.NaN;
+        _predictedPeRadius = double.NaN;
+        _minFlybyRadius = double.NaN;
+        _previewHasEncounter = false;
         _previewPlan = null;
     }
 
@@ -489,6 +534,9 @@ internal static class HohmannFlybyUI
         // Never hand a past burn time to Burn.Create: no patch covers it, and the
         // interceptor would fall back to the stock impact-aimed burn.
         if (IsCacheExpired()) return false;
+        // The propagated trajectory, not the typed altitude, decides whether this is
+        // a flyby at all. A no-encounter preview is only advisory (see DrawResult).
+        if (PredictedFlybyBelowFloor) return false;
         result = _cachedResult.Value;
         return true;
     }

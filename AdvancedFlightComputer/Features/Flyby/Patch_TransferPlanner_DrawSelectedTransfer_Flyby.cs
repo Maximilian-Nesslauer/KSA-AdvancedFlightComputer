@@ -14,9 +14,10 @@ namespace AdvancedFlightComputer.Features.Flyby;
 /// <see cref="HohmannFlybyUI.RenderPreview"/> draws the retargeted one instead,
 /// from the postfix on the same <see cref="TransferPlanner.OnPreRender"/> pass.
 ///
-/// Only the orbit lines are suppressed; stock's marker overlay
-/// (<c>DrawSelectedTransferUi</c>) and the Lambert preview keep their own toggles.
-/// Multi-pass is exempt because it intentionally lets stock render the final pass.
+/// This covers the orbit lines only. Stock's markers hang off the same
+/// <c>_displaySelectedTransfer</c> toggle and are suppressed alongside by
+/// <see cref="Patch_TransferPlanner_DrawSelectedTransferUi_Flyby"/>; the Lambert
+/// preview has its own separate toggle and is deliberately left alone.
 /// </summary>
 [HarmonyPatch(typeof(TransferPlanner), "DrawSelectedTransfer")]
 internal static class Patch_TransferPlanner_DrawSelectedTransfer_Flyby

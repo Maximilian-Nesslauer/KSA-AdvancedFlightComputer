@@ -71,9 +71,11 @@ public sealed class Mod
                         "[AFC] Flyby targeting enabled (Hohmann plan window).");
 
                     // Hides stock's center-aimed (impact) preview while a flyby is
-                    // armed, so the 3D view shows only what Create will fly. The
-                    // flyby itself still works without it, just alongside stock's
-                    // line, so a missing anchor is a warning rather than a gate.
+                    // armed, so the 3D view shows only what Create will fly. Lines
+                    // and markers are separate stock methods on one toggle, hence
+                    // two patches. The flyby itself still works without them, just
+                    // alongside stock's overlay, so a missing anchor is a warning
+                    // rather than a gate.
                     if (Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent)
                         _harmony.CreateClassProcessor(
                             typeof(Patch_TransferPlanner_DrawSelectedTransfer_Flyby)).Patch();
@@ -81,6 +83,14 @@ public sealed class Mod
                         DefaultCategory.Log.Warning(
                             "[AFC] Flyby stock-preview suppression disabled - " +
                             "DrawSelectedTransfer anchor not found.");
+
+                    if (Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent)
+                        _harmony.CreateClassProcessor(
+                            typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Flyby)).Patch();
+                    else
+                        DefaultCategory.Log.Warning(
+                            "[AFC] Flyby stock-marker suppression disabled - " +
+                            "DrawSelectedTransferUi anchor not found.");
 
                     // Fallback DrawInline injection at the outermost
                     // ImGui.End() in DrawPlanWindow. Fires regardless of
