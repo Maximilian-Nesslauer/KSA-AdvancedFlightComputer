@@ -74,7 +74,12 @@ internal static class RcsBurnUi
                     };
                 }
 
-                RcsAllocator allocator = options?.Allocator ?? RcsAllocator.Groups;
+                // LP is the default allocator and Groups is its automatic
+                // infeasibility fallback, so it is not a user-facing choice;
+                // this selector is a debug-build affordance for comparing the
+                // two allocators by hand.
+#if DEBUG
+                RcsAllocator allocator = options?.Allocator ?? RcsAllocator.Lp;
                 ImGui.Text("Allocator"u8);
                 ImGui.SameLine(120f);
                 if (ImGui.Button($"{allocator}##rcsalloc{timeSec:R}", (float2?)null)
@@ -86,6 +91,7 @@ internal static class RcsBurnUi
                         ? RcsAllocator.Lp
                         : RcsAllocator.Groups;
                 }
+#endif
             }
         }
 

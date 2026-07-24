@@ -105,6 +105,7 @@ public sealed class RcsRegistryTest : IHarnessTest
         var exec = new RcsExecution { SaveId = "s", VehicleId = "v" };
 
         RcsBurnOptions o1 = exec.GetOrCreateOptions(100.0, 5.0);
+        ok &= Check("default allocator is Lp", o1.Allocator == RcsAllocator.Lp);
         // A small nudge (inside the match tolerance) must return the SAME
         // options instance and follow the burn to its new time, not orphan.
         RcsBurnOptions o1b = exec.GetOrCreateOptions(100.02, 5.0);
@@ -143,7 +144,7 @@ public sealed class RcsRegistryTest : IHarnessTest
             "burn_dv_ms = 1",
             "mode = \"Rcs\"",          // valid, preserved
             "attitude = \"Sideways\"", // no such value -> Auto
-            "allocator = \"7\"",       // out-of-range ordinal -> Groups
+            "allocator = \"7\"",       // out-of-range ordinal -> Lp (the default)
         };
         var parsed = new Dictionary<(string SaveId, string VehicleId), RcsExecution>();
         RcsExecRegistry.ParseLines(lines, "unknown-enum", parsed);
@@ -155,7 +156,7 @@ public sealed class RcsRegistryTest : IHarnessTest
             RcsBurnOptions o = parsed[("s", "v")].Options[0];
             ok &= Check("valid mode preserved", o.Mode == RcsExecutionMode.Rcs);
             ok &= Check("bad attitude falls back", o.Attitude == RcsAttitudeStrategy.Auto);
-            ok &= Check("out-of-range allocator falls back", o.Allocator == RcsAllocator.Groups);
+            ok &= Check("out-of-range allocator falls back", o.Allocator == RcsAllocator.Lp);
         }
         return ok;
     }

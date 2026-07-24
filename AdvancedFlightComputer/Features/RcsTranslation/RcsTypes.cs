@@ -26,12 +26,13 @@ internal enum RcsAttitudeStrategy
 internal enum RcsAllocator
 {
     /// <summary>Stock-consistent signed-axis groups; residual torque is
-    /// corrected by the attitude hold.</summary>
+    /// corrected by the attitude hold. The automatic fallback when the LP is
+    /// infeasible for a layout.</summary>
     Groups,
 
-    /// <summary>Fuel-optimal LP over the raw per-thruster wrenches with the
-    /// zero-net-torque constraint folded in. Falls back to Groups when the
-    /// constraint set is infeasible for the current layout.</summary>
+    /// <summary>Default. Fuel-optimal LP over the raw per-thruster wrenches
+    /// with the zero-net-torque constraint folded in. Falls back to Groups
+    /// when the constraint set is infeasible for the current layout.</summary>
     Lp,
 }
 
@@ -46,7 +47,11 @@ internal sealed class RcsBurnOptions
     public required double BurnDvMs { get; set; }
     public RcsExecutionMode Mode { get; set; } = RcsExecutionMode.Default;
     public RcsAttitudeStrategy Attitude { get; set; } = RcsAttitudeStrategy.Auto;
-    public RcsAllocator Allocator { get; set; } = RcsAllocator.Groups;
+
+    /// <summary>Defaults to LP: fuel-par or better than the axis groups and
+    /// torque-nulled, so it puffs cleaner. See <see cref="RcsAllocator"/> for
+    /// the group fallback.</summary>
+    public RcsAllocator Allocator { get; set; } = RcsAllocator.Lp;
 
     public bool Matches(double timeSec, double dvMs)
         => Math.Abs(BurnTimeSec - timeSec) < TimeMatchToleranceSec
