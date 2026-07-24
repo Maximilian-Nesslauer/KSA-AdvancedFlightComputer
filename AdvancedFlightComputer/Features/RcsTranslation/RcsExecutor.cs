@@ -430,7 +430,7 @@ internal static class RcsExecutor
             $"controllable={vehicle.IsControllable} -> stock Auto.");
     }
 
-    private static (RcsAttitudeStrategy, int) ResolveStrategy(
+    internal static (RcsAttitudeStrategy, int) ResolveStrategy(
         RcsAttitudeStrategy requested, in RcsEstimates estimates)
     {
         int alignAxis = estimates.AlignAxis;

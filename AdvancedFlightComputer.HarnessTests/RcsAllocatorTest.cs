@@ -20,6 +20,8 @@ public sealed class RcsAllocatorTest : IHarnessTest
         ok &= CheckMaxAxisPulse();
         ok &= CheckHoldPerformance();
         ok &= CheckCompletionFloor();
+        ok &= CheckRemainingDuration();
+        ok &= CheckCapabilityHelpers();
         HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
         return ok ? 0 : 1;
     }
@@ -127,6 +129,71 @@ public sealed class RcsAllocatorTest : IHarnessTest
             new float3(-6f, 0f, 0f), in cap));
         return ok;
     }
+
+    // The BurnTarget duration mirror the countdown and warp-to-burn mark
+    // read: the slowest demanded axis for groups (axes fire in parallel), the
+    // pattern throughput cap for the LP. The lpUsable flag gates the LP branch
+    // so a stale pattern during a slew or after staging falls back to groups.
+    private bool CheckRemainingDuration()
+    {
+        bool ok = true;
+
+        var groups = new RcsWorkerCommand
+        {
+            Active = true,
+            MaxPulseSec = 0.1f,
+            AxisForcePos = new float3(100f, 50f, 0f),
+            AxisForceNeg = new float3(100f, 50f, 0f),
+        };
+        // max(500/100, 100/50, 0) = 5 s: the X axis is the slowest.
+        ok &= Expect("groups slowest axis", RcsComputeControlPatch.RemainingDurationSec(
+            groups, new float3(500f, 100f, 0f), lpUsable: false), 5f);
+        // Negative demand uses the negative-axis force.
+        ok &= Expect("groups negative axis", RcsComputeControlPatch.RemainingDurationSec(
+            groups, new float3(-300f, 0f, 0f), lpUsable: false), 3f);
+
+        var lp = new RcsWorkerCommand
+        {
+            Active = true,
+            MaxPulseSec = 0.1f,
+            AxisForcePos = new float3(100f, 0f, 0f),
+            AxisForceNeg = new float3(100f, 0f, 0f),
+            LpSecondsPerImpulse = new float[1],
+            LpDirBody = new float3(1f, 0f, 0f),
+            LpImpulseCapNs = 200f,
+        };
+        // j = 1000, throughput 200 Ns per 0.1 s: 1000 * 0.1 / 200 = 0.5 s.
+        ok &= Expect("lp throughput cap", RcsComputeControlPatch.RemainingDurationSec(
+            lp, new float3(1000f, 0f, 0f), lpUsable: true), 0.5f);
+        // Same command with the LP disabled falls back to the group path.
+        ok &= Expect("lp disabled falls back", RcsComputeControlPatch.RemainingDurationSec(
+            lp, new float3(500f, 0f, 0f), lpUsable: false), 5f);
+        return ok;
+    }
+
+    private bool CheckCapabilityHelpers()
+    {
+        bool ok = true;
+        RcsCapabilitySnapshot cap = default;
+        cap.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 1f });
+        cap.Set(2, new RcsAxisGroup { ForceN = 250f, MassFlowKgS = 0.2f, MinImpulseNs = 2f });
+        cap.Set(4, new RcsAxisGroup { ForceN = 50f, MassFlowKgS = 0.05f, MinImpulseNs = 0.5f });
+        ok &= Check("best axis picks strongest", cap.BestAxis() == 2);
+
+        RcsCapabilitySnapshot empty = default;
+        ok &= Check("best axis none usable", empty.BestAxis() == -1);
+
+        ok &= Check("dir +X", IsAxis(RcsCapabilitySnapshot.AxisDirection(0), 1f, 0f, 0f));
+        ok &= Check("dir -X", IsAxis(RcsCapabilitySnapshot.AxisDirection(1), -1f, 0f, 0f));
+        ok &= Check("dir +Y", IsAxis(RcsCapabilitySnapshot.AxisDirection(2), 0f, 1f, 0f));
+        ok &= Check("dir -Y", IsAxis(RcsCapabilitySnapshot.AxisDirection(3), 0f, -1f, 0f));
+        ok &= Check("dir +Z", IsAxis(RcsCapabilitySnapshot.AxisDirection(4), 0f, 0f, 1f));
+        ok &= Check("dir -Z", IsAxis(RcsCapabilitySnapshot.AxisDirection(5), 0f, 0f, -1f));
+        return ok;
+    }
+
+    private static bool IsAxis(float3 v, float x, float y, float z)
+        => v.X == x && v.Y == y && v.Z == z;
 
     private bool Expect(string label, float actual, float expected)
     {

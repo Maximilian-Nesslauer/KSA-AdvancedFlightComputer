@@ -101,9 +101,11 @@ Required only to build the mod from source. Targets **.NET 10**.
 - `afc-set-periapsis` / `afc-set-apoapsis` assert that a computed apse burn reaches the requested altitude and leaves the opposite apse untouched, and that impossible requests yield no maneuver.
 - `afc-circularize` asserts circularization at both apses and the "nothing to do" contract for circular and unbound orbits.
 - `afc-set-inclination` / `afc-match-inclination` assert node burns against the ecliptic and equatorial references, partial-fraction burns, and the coplanar and hyperbolic edge cases.
-- `afc-rcs-allocator` asserts the RCS translation allocation math: per-axis pulse shaping (control-period cap, minimum-impulse floor), per-thruster group pulses, and the Hold-strategy performance model.
-- `afc-rcs-translation` flies a full RCS translation burn on the live simulation: a planned burn armed for RCS must reach its delta-V target within the minimum-impulse bound, consume thruster propellant, and never command a main engine. Needs a vehicle save with RCS thrusters (set via `KSA_HEADLESS_VEHICLE`, default "Test Vehicle 1"); without one the test skips.
+- `afc-rcs-allocator` asserts the RCS translation allocation math: per-axis pulse shaping (control-period cap, minimum-impulse floor), per-thruster group pulses, the Hold-strategy performance model, the burn-duration countdown mirror, and the capability helpers.
+- `afc-rcs-estimates` asserts the Auto attitude decision: the propellant a strategy needs and the Hold-vs-Align resolution, including the preference margin that keeps Auto from slewing for a marginal saving.
+- `afc-rcs-registry` asserts the persistence round-trip (TOML write/parse, including escaped ids and the active-execution fields) and the per-burn options keying that follows a burn as it is nudged.
 - `afc-rcs-lp-solver` asserts the LP allocator's simplex on hand-checkable problems: cost optimality, zero-torque constraint satisfaction, support selection, and clean infeasibility.
+- `afc-rcs-translation` flies a full RCS translation burn on the live simulation: a planned burn armed for RCS must reach its delta-V target within the minimum-impulse bound, consume thruster propellant, and never command a main engine. Also covers the align-slew, deferred-align, and RCS-toggle scenarios. It sweeps the present RCS test-vehicle saves (override with `KSA_HEADLESS_VEHICLES`); without one the test skips.
 - `afc-rcs-lp` flies the same burn with both allocators on one vehicle (A/B), asserts both complete with quiet engines, and logs the propellant comparison.
 
 The oracle is always the game's own orbit propagation, never a re-derivation of the math under test.

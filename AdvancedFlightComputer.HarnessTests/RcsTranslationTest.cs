@@ -16,7 +16,8 @@ namespace AdvancedFlightComputer.HarnessTests;
 //
 // The vehicles come from TestSupport.ResolveVehicleSaves: the present members
 // of RcsTestVehicles.Candidates, or KSA_HEADLESS_VEHICLES when set. A save
-// without translation-capable thrusters skips with a log line.
+// without translation-capable thrusters skips with a log line. The spawn,
+// burn setup, arming, and step loop live in RcsFlightSupport.
 public sealed class RcsTranslationTest : IHarnessTest
 {
     private const double SpawnAltitudeM = 500_000.0;
@@ -26,9 +27,6 @@ public sealed class RcsTranslationTest : IHarnessTest
     private const double ResidualMarginMs = 0.05;
 
     public string Name => "afc-rcs-translation";
-
-    private Vehicle? _completedVehicle;
-    private Burn? _completedBurn;
 
     public int Run(HeadlessSession session)
     {
@@ -56,50 +54,17 @@ public sealed class RcsTranslationTest : IHarnessTest
 
     private bool RunForSave(HeadlessSession session, IParentBody home, string saveId)
     {
-        CelestialSystem system = session.System;
-        SimDriver driver = session.CreateDriver();
-        Orbit orbit = VehicleSpawner.CircularCci(
-            home, ((Astronomical)home).MeanRadius + SpawnAltitudeM, driver.Elapsed);
-
-        HashSet<string> preexisting = TestSupport.CollectVehicleIds(system);
-        Vehicle vehicle;
-        try
-        {
-            vehicle = VehicleSpawner.SpawnFromSave(saveId, system, home, "HarnessRcsTest", orbit);
-        }
-        catch (InvalidOperationException e)
-        {
-            HarnessLog.Line($"[{Name}] SKIP '{saveId}': {e.Message}");
-            return true;
-        }
-        HarnessLog.Line($"[{Name}] vehicle save '{saveId}': mass={vehicle.TotalMass:F0}kg");
-        _completedVehicle = null;
-        _completedBurn = null;
-
-        bool ok;
-        Action<Vehicle, Burn> onCompleted = (v, b) =>
-        {
-            _completedVehicle = v;
-            _completedBurn = b;
-        };
-        try
-        {
-            VehicleUpdateTask._forceOffRails = true;
-            RcsBurnCompletions.Completed += onCompleted;
-            ok = Fly(vehicle, driver);
-            ok &= FlyAlignScenario(vehicle, driver);
-            ok &= FlyDeferredAlignCheck(vehicle, driver);
-            ok &= FlyRcsToggleScenario(vehicle, driver);
-        }
-        finally
-        {
-            RcsBurnCompletions.Completed -= onCompleted;
-            VehicleUpdateTask._forceOffRails = false;
-            RcsExecRegistry.Reset();
-            RcsCommandChannel.Reset();
-            TestSupport.DespawnNewVehicles(system, preexisting);
-        }
-        return ok;
+        return RcsFlightSupport.RunOnSave(
+            session, home, saveId, SpawnAltitudeM, "HarnessRcsTest", Name,
+            (vehicle, driver) =>
+            {
+                using var watcher = new RcsFlightSupport.CompletionWatcher();
+                bool ok = Fly(vehicle, driver, watcher);
+                ok &= FlyAlignScenario(vehicle, driver, watcher);
+                ok &= FlyDeferredAlignCheck(vehicle, driver);
+                ok &= FlyRcsToggleScenario(vehicle, driver, watcher);
+                return ok;
+            });
     }
 
     // Regression for the align-slew stall: an Align burn pointing well away
@@ -107,60 +72,44 @@ public sealed class RcsTranslationTest : IHarnessTest
     // slewing without delivering any delta-V. The no-progress watchdog must
     // not cancel that (it once did, blaming thruster coverage); the burn
     // must align, fire, and complete.
-    private bool FlyAlignScenario(Vehicle vehicle, SimDriver driver)
+    private bool FlyAlignScenario(Vehicle vehicle, SimDriver driver, RcsFlightSupport.CompletionWatcher watcher)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        CleanupBurns(fc);
+        RcsFlightSupport.CleanupBurns(fc);
         // The Hold burn before this scenario already drained RCS tanks and
         // the 90-degree slew is propellant-hungry; without a refill the
         // scenario tests tank size, not the executor.
         vehicle.RefillConsumables();
         driver.Step(StepSec, 10);
-        _completedVehicle = null;
-        _completedBurn = null;
+        watcher.Reset();
         RcsCancelLogPatch.LastReason = null;
 
         RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
         int bestAxis = cap.BestAxis();
-        double burnTimeSec = driver.Elapsed.Seconds() + BurnLeadSec;
-        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(new SimTime(burnTimeSec));
-        if (patch == null)
-        {
-            HarnessLog.Line($"[{Name}] FAIL (align): no flight-plan patch at the burn time.");
-            return false;
-        }
 
         // Perpendicular to where the best axis currently points, so the
         // executor has to slew ~90 degrees before the attitude gate opens.
-        double3 axisCci = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(bestAxis))
-            .Transform(vehicle.GetBody2Cci());
+        double3 axisCci = RcsFlightSupport.AxisDirCci(vehicle, bestAxis);
         double3 dvDirCci = double3.Cross(axisCci, double3.UnitZ);
         if (dvDirCci.IsNearlyZero())
             dvDirCci = double3.Cross(axisCci, double3.UnitY);
         dvDirCci = dvDirCci.Normalized();
 
-        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(new SimTime(burnTimeSec));
-        doubleQuat vlf2Cci = burnSv.GetVlf2ParentCci().OrIdentity();
-        double3 dvVlf = (dvDirCci * BurnDvMs).Transform(vlf2Cci.Inverse());
-        OrbitPointCce point = patch.Orbit.GetPointAt(new SimTime(burnTimeSec));
-        Burn burn = Burn.Create(point, burnTimeSec, dvVlf, patch, vehicle);
-        fc.AddBurn(burn);
-        BurnTarget? bt = fc.Burn;
-        if (bt == null)
+        RcsFlightSupport.BurnSetup? setup = RcsFlightSupport.AddBurn(vehicle, driver, dvDirCci, BurnDvMs, BurnLeadSec);
+        if (setup == null)
         {
-            HarnessLog.Line($"[{Name}] FAIL (align): BurnTarget did not load.");
+            HarnessLog.Line($"[{Name}] FAIL (align): no flight-plan patch or BurnTarget at the burn time.");
             return false;
         }
+        Burn burn = setup.Burn;
+        BurnTarget bt = setup.BurnTarget;
 
-        RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
-        RcsBurnOptions options = exec.GetOrCreateOptions(burn.Time.Seconds(), burn.DeltaVVlf.Length());
-        options.Mode = RcsExecutionMode.Rcs;
-        options.Attitude = RcsAttitudeStrategy.Align;
-        vehicle.SetEnum(FlightComputerBurnMode.Auto);
-        if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
+        RcsExecution? exec = RcsFlightSupport.ArmAndEngage(
+            vehicle, burn, RcsExecutionMode.Rcs, RcsAttitudeStrategy.Align, RcsAllocator.Groups);
+        if (exec == null)
         {
             HarnessLog.Line($"[{Name}] FAIL (align): SetEnum(Auto) did not engage the executor.");
-            CleanupBurns(fc);
+            RcsFlightSupport.CleanupBurns(fc);
             return false;
         }
         double propellantAtStartKg = RcsPropellant.AvailableKg(vehicle);
@@ -171,38 +120,27 @@ public sealed class RcsTranslationTest : IHarnessTest
         // Generous budget: ignition lead plus a slow slew plus the burn.
         int steps = (int)((BurnLeadSec + 200.0) / StepSec);
         int tracePeriod = (int)(10.0 / StepSec);
-        bool completed = false;
-        bool enginesQuiet = true;
-        for (int i = 0; i < steps; i++)
-        {
-            driver.Step(StepSec);
-            if (AnyEngineCommanded(vehicle))
+        RcsFlightSupport.RunResult result = RcsFlightSupport.RunUntilInactive(
+            vehicle, driver, StepSec, steps,
+            (i, _) =>
             {
-                enginesQuiet = false;
-                break;
-            }
-            if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
-            {
-                completed = true;
-                break;
-            }
-            if (i % tracePeriod == 0)
-                HarnessLog.Line($"[{Name}] align t+{i * StepSec:F0}s: " +
-                                $"errY={fc.ErrorAngles.Y:F4} errZ={fc.ErrorAngles.Z:F4} " +
-                                $"deadband={fc.AngleDeadband:F4} " +
-                                $"turnY={fc.AngleTurnaround.Y:F4} turnZ={fc.AngleTurnaround.Z:F4} " +
-                                $"togo={bt.DeltaVToGoCci.Length():F3} " +
-                                $"accum={bt.DeltaVAccumCci.Length():F3} " +
-                                $"mode={fc.AttitudeMode}/{fc.AttitudeTrackTarget}");
-        }
+                if (i % tracePeriod == 0)
+                    HarnessLog.Line($"[{Name}] align t+{i * StepSec:F0}s: " +
+                                    $"errY={fc.ErrorAngles.Y:F4} errZ={fc.ErrorAngles.Z:F4} " +
+                                    $"deadband={fc.AngleDeadband:F4} " +
+                                    $"turnY={fc.AngleTurnaround.Y:F4} turnZ={fc.AngleTurnaround.Z:F4} " +
+                                    $"togo={bt.DeltaVToGoCci.Length():F3} " +
+                                    $"accum={bt.DeltaVAccumCci.Length():F3} " +
+                                    $"mode={fc.AttitudeMode}/{fc.AttitudeTrackTarget}");
+            });
 
         bool ok = true;
-        if (!enginesQuiet)
+        if (!result.EnginesQuiet)
         {
             HarnessLog.Line($"[{Name}] FAIL (align): a main engine received a throttle command.");
             ok = false;
         }
-        if (!completed)
+        if (!result.Completed)
         {
             HarnessLog.Line($"[{Name}] FAIL (align): burn did not complete " +
                             $"(to go {bt.DeltaVToGoCci.Length():F3}m/s).");
@@ -215,7 +153,7 @@ public sealed class RcsTranslationTest : IHarnessTest
             // A cancel also deactivates the executor but never raises the
             // completion event, so the event separates a genuine completion
             // from any cancel path.
-            bool viaEvent = ReferenceEquals(_completedBurn, burn);
+            bool viaEvent = ReferenceEquals(watcher.LastBurn, burn);
             if (!viaEvent
                 && RcsCancelLogPatch.LastReason == "no translation authority"
                 && RcsPropellant.AvailableKg(vehicle) < 0.02 * propellantAtStartKg)
@@ -252,7 +190,7 @@ public sealed class RcsTranslationTest : IHarnessTest
                 }
             }
         }
-        CleanupBurns(fc);
+        RcsFlightSupport.CleanupBurns(fc);
         return ok;
     }
 
@@ -265,7 +203,7 @@ public sealed class RcsTranslationTest : IHarnessTest
     {
         const double DeferredLeadSec = 150.0;
         FlightComputer fc = vehicle.FlightComputer;
-        CleanupBurns(fc);
+        RcsFlightSupport.CleanupBurns(fc);
         vehicle.RefillConsumables();
         fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
         fc.SetNullRot(VehicleReferenceFrame.EclBody);
@@ -273,38 +211,29 @@ public sealed class RcsTranslationTest : IHarnessTest
 
         RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
         int bestAxis = cap.BestAxis();
-        double burnTimeSec = driver.Elapsed.Seconds() + DeferredLeadSec;
-        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(new SimTime(burnTimeSec));
-        if (patch == null)
+        double3 dvDirCci = RcsFlightSupport.AxisDirCci(vehicle, bestAxis);
+        RcsFlightSupport.BurnSetup? setup = RcsFlightSupport.AddBurn(vehicle, driver, dvDirCci, BurnDvMs, DeferredLeadSec);
+        if (setup == null)
         {
-            HarnessLog.Line($"[{Name}] FAIL (deferred align): no flight-plan patch at the burn time.");
+            HarnessLog.Line($"[{Name}] FAIL (deferred align): no flight-plan patch or BurnTarget at the burn time.");
             return false;
         }
-        double3 axisBody = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(bestAxis));
-        double3 dvDirCci = axisBody.Transform(vehicle.GetBody2Cci());
-        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(new SimTime(burnTimeSec));
-        doubleQuat vlf2Cci = burnSv.GetVlf2ParentCci().OrIdentity();
-        double3 dvVlf = (dvDirCci * BurnDvMs).Transform(vlf2Cci.Inverse());
-        OrbitPointCce point = patch.Orbit.GetPointAt(new SimTime(burnTimeSec));
-        Burn burn = Burn.Create(point, burnTimeSec, dvVlf, patch, vehicle);
-        fc.AddBurn(burn);
+        Burn burn = setup.Burn;
+        double burnTimeSec = burn.Time.Seconds();
 
-        RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
-        RcsBurnOptions options = exec.GetOrCreateOptions(burn.Time.Seconds(), burn.DeltaVVlf.Length());
-        options.Mode = RcsExecutionMode.Rcs;
-        options.Attitude = RcsAttitudeStrategy.Align;
-        vehicle.SetEnum(FlightComputerBurnMode.Auto);
-        if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
+        RcsExecution? exec = RcsFlightSupport.ArmAndEngage(
+            vehicle, burn, RcsExecutionMode.Rcs, RcsAttitudeStrategy.Align, RcsAllocator.Groups);
+        if (exec == null)
         {
             HarnessLog.Line($"[{Name}] FAIL (deferred align): SetEnum(Auto) did not engage the executor.");
-            CleanupBurns(fc);
+            RcsFlightSupport.CleanupBurns(fc);
             return false;
         }
         if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
         {
             HarnessLog.Line($"[{Name}] SKIP (deferred align): resolved to {exec.ResolvedStrategy} on this save.");
             RcsExecutor.Cancel(vehicle, exec, "test cleanup");
-            CleanupBurns(fc);
+            RcsFlightSupport.CleanupBurns(fc);
             return true;
         }
         // A slew estimate so long that the lead window is already open at
@@ -317,7 +246,7 @@ public sealed class RcsTranslationTest : IHarnessTest
             HarnessLog.Line($"[{Name}] SKIP (deferred align): slew estimate " +
                             $"{exec.Estimates.AlignSlewDurationSec:F0}s leaves no coast to observe.");
             RcsExecutor.Cancel(vehicle, exec, "test cleanup");
-            CleanupBurns(fc);
+            RcsFlightSupport.CleanupBurns(fc);
             return true;
         }
 
@@ -356,7 +285,7 @@ public sealed class RcsTranslationTest : IHarnessTest
             ? done.LastFuel : default;
         HarnessLog.Line($"[{Name}] deferred align fuel: total={fuel.TotalKg * 1000.0:F1}g " +
                         $"coast {fuel.CoastKg * 1000.0:F1}g slew {fuel.SlewKg * 1000.0:F1}g");
-        CleanupBurns(fc);
+        RcsFlightSupport.CleanupBurns(fc);
         return ok;
     }
 
@@ -368,16 +297,15 @@ public sealed class RcsTranslationTest : IHarnessTest
     // afterwards. Part A covers disabled-at-activation through a real
     // completion (delta-V delivered, restored to off); Part B covers a
     // mid-burn toggle being re-enabled by the driver and restored on cancel.
-    private bool FlyRcsToggleScenario(Vehicle vehicle, SimDriver driver)
+    private bool FlyRcsToggleScenario(Vehicle vehicle, SimDriver driver, RcsFlightSupport.CompletionWatcher watcher)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        CleanupBurns(fc);
+        RcsFlightSupport.CleanupBurns(fc);
         vehicle.RefillConsumables();
         fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
         fc.SetNullRot(VehicleReferenceFrame.EclBody);
         driver.Step(StepSec, 10);
-        _completedVehicle = null;
-        _completedBurn = null;
+        watcher.Reset();
 
         RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
         int bestAxis = cap.BestAxis();
@@ -388,12 +316,15 @@ public sealed class RcsTranslationTest : IHarnessTest
         }
 
         // Part A: pilot has RCS off before clicking Auto.
-        Burn? burn = BuildStrongAxisBurn(vehicle, driver, bestAxis, out BurnTarget? bt);
-        if (burn == null || bt == null)
+        RcsFlightSupport.BurnSetup? setupA = BuildStrongAxisBurn(vehicle, driver, bestAxis);
+        if (setupA == null)
         {
             HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): could not set up the burn.");
             return false;
         }
+        Burn burn = setupA.Burn;
+        BurnTarget bt = setupA.BurnTarget;
+
         RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
         RcsBurnOptions options = exec.GetOrCreateOptions(burn.Time.Seconds(), burn.DeltaVVlf.Length());
         options.Mode = RcsExecutionMode.Rcs;
@@ -404,7 +335,7 @@ public sealed class RcsTranslationTest : IHarnessTest
         if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
         {
             HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): SetEnum(Auto) did not engage the executor.");
-            CleanupBurns(fc);
+            RcsFlightSupport.CleanupBurns(fc);
             return false;
         }
 
@@ -414,21 +345,14 @@ public sealed class RcsTranslationTest : IHarnessTest
                         $"forcedFlag={exec.ForcedRcsOn} => {TestSupport.Verdict(forcedOn)}");
         ok &= forcedOn;
 
-        bool completed = false;
-        bool enginesQuiet = true;
         int steps = (int)((BurnLeadSec + 200.0) / StepSec);
-        for (int i = 0; i < steps; i++)
-        {
-            driver.Step(StepSec);
-            if (AnyEngineCommanded(vehicle)) { enginesQuiet = false; break; }
-            if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive) { completed = true; break; }
-        }
-        if (!enginesQuiet)
+        RcsFlightSupport.RunResult result = RcsFlightSupport.RunUntilInactive(vehicle, driver, StepSec, steps);
+        if (!result.EnginesQuiet)
         {
             HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): a main engine received a throttle command.");
             ok = false;
         }
-        if (!completed)
+        if (!result.Completed)
         {
             HarnessLog.Line($"[{Name}] FAIL (rcs toggle A): burn did not complete " +
                             $"(to go {bt.DeltaVToGoCci.Length():F3}m/s).");
@@ -438,7 +362,7 @@ public sealed class RcsTranslationTest : IHarnessTest
         {
             // The completion event separates a genuine finish from any cancel
             // path (a tumbling Hold burn without RCS would have stalled).
-            bool viaEvent = ReferenceEquals(_completedBurn, burn);
+            bool viaEvent = ReferenceEquals(watcher.LastBurn, burn);
             bool restored = fc.RCSMode == FlightComputerRCSMode.Disabled;
             float accum = bt.DeltaVAccumCci.Length();
             float residual = bt.DeltaVToGoCci.Length();
@@ -448,21 +372,22 @@ public sealed class RcsTranslationTest : IHarnessTest
                             $"{TestSupport.Verdict(deliveredOk && restored)}");
             ok &= deliveredOk && restored;
         }
-        CleanupBurns(fc);
+        RcsFlightSupport.CleanupBurns(fc);
 
         // Part B: RCS on at activation, toggled off mid-burn (during the
         // pre-ignition coast), must be re-enabled by the driver and restored
         // to off on cancel.
         vehicle.RefillConsumables();
         driver.Step(StepSec, 10);
-        _completedVehicle = null;
-        _completedBurn = null;
-        Burn? burnB = BuildStrongAxisBurn(vehicle, driver, bestAxis, out BurnTarget? btB);
-        if (burnB == null || btB == null)
+        watcher.Reset();
+        RcsFlightSupport.BurnSetup? setupB = BuildStrongAxisBurn(vehicle, driver, bestAxis);
+        if (setupB == null)
         {
             HarnessLog.Line($"[{Name}] FAIL (rcs toggle B): could not set up the burn.");
             return false;
         }
+        Burn burnB = setupB.Burn;
+
         RcsExecution execB = RcsExecRegistry.GetOrCreate(vehicle.Id);
         RcsBurnOptions optionsB = execB.GetOrCreateOptions(burnB.Time.Seconds(), burnB.DeltaVVlf.Length());
         optionsB.Mode = RcsExecutionMode.Rcs;
@@ -473,7 +398,7 @@ public sealed class RcsTranslationTest : IHarnessTest
         if (!RcsExecRegistry.TryGet(vehicle.Id, out execB!) || !execB.IsActive)
         {
             HarnessLog.Line($"[{Name}] FAIL (rcs toggle B): SetEnum(Auto) did not engage the executor.");
-            CleanupBurns(fc);
+            RcsFlightSupport.CleanupBurns(fc);
             return false;
         }
         bool notForcedAtActivation = !execB.ForcedRcsOn && fc.RCSMode == FlightComputerRCSMode.Enabled;
@@ -500,40 +425,18 @@ public sealed class RcsTranslationTest : IHarnessTest
                         $"{TestSupport.Verdict(restoredB)}");
         ok &= restoredB;
 
-        CleanupBurns(fc);
+        RcsFlightSupport.CleanupBurns(fc);
         return ok;
     }
 
     // Adds a small burn along the strongest translation axis at BurnLeadSec
     // in the future (Hold is fully feasible on a single strong axis for any
-    // layout) and returns it with the loaded BurnTarget.
-    private Burn? BuildStrongAxisBurn(Vehicle vehicle, SimDriver driver, int bestAxis, out BurnTarget? bt)
-    {
-        bt = null;
-        FlightComputer fc = vehicle.FlightComputer;
-        double burnTimeSec = driver.Elapsed.Seconds() + BurnLeadSec;
-        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(new SimTime(burnTimeSec));
-        if (patch == null)
-            return null;
-        double3 axisBody = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(bestAxis));
-        double3 dvDirCci = axisBody.Transform(vehicle.GetBody2Cci());
-        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(new SimTime(burnTimeSec));
-        doubleQuat vlf2Cci = burnSv.GetVlf2ParentCci().OrIdentity();
-        double3 dvVlf = (dvDirCci * BurnDvMs).Transform(vlf2Cci.Inverse());
-        OrbitPointCce point = patch.Orbit.GetPointAt(new SimTime(burnTimeSec));
-        Burn burn = Burn.Create(point, burnTimeSec, dvVlf, patch, vehicle);
-        fc.AddBurn(burn);
-        bt = fc.Burn;
-        return bt == null ? null : burn;
-    }
+    // layout) and returns the setup with the loaded BurnTarget.
+    private static RcsFlightSupport.BurnSetup? BuildStrongAxisBurn(Vehicle vehicle, SimDriver driver, int bestAxis)
+        => RcsFlightSupport.AddBurn(
+            vehicle, driver, RcsFlightSupport.AxisDirCci(vehicle, bestAxis), BurnDvMs, BurnLeadSec);
 
-    private static void CleanupBurns(FlightComputer fc)
-    {
-        while (fc.BurnPlan.HasActiveBurns)
-            fc.RemoveBurnAt(0);
-    }
-
-    private bool Fly(Vehicle vehicle, SimDriver driver)
+    private bool Fly(Vehicle vehicle, SimDriver driver, RcsFlightSupport.CompletionWatcher watcher)
     {
         FlightComputer fc = vehicle.FlightComputer;
         fc.BurnMode = FlightComputerBurnMode.Manual;
@@ -542,6 +445,7 @@ public sealed class RcsTranslationTest : IHarnessTest
         // Let the update task pick the vehicle up and the thruster states
         // (propellant availability, intended forces) materialize.
         driver.Step(StepSec, 40);
+        watcher.Reset();
 
         RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
         if (!cap.HasAnyTranslation)
@@ -572,48 +476,21 @@ public sealed class RcsTranslationTest : IHarnessTest
         fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
         fc.SetNullRot(VehicleReferenceFrame.EclBody);
 
-        double burnTimeSec = driver.Elapsed.Seconds() + BurnLeadSec;
-        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(new SimTime(burnTimeSec));
-        if (patch == null)
+        double3 dvDirCci = RcsFlightSupport.AxisDirCci(vehicle, bestAxis);
+        RcsFlightSupport.BurnSetup? setup = RcsFlightSupport.AddBurn(vehicle, driver, dvDirCci, BurnDvMs, BurnLeadSec);
+        if (setup == null)
         {
-            HarnessLog.Line($"[{Name}] FAIL: no flight-plan patch at the burn time.");
+            HarnessLog.Line($"[{Name}] FAIL: no flight-plan patch or BurnTarget at the burn time.");
             return false;
         }
-        double3 axisBody = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(bestAxis));
-        double3 dvDirCci = axisBody.Transform(vehicle.GetBody2Cci());
-        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(new SimTime(burnTimeSec));
-        doubleQuat vlf2Cci = burnSv.GetVlf2ParentCci().OrIdentity();
-        double3 dvVlf = (dvDirCci * BurnDvMs).Transform(vlf2Cci.Inverse());
-
-        // Orbit oracle: the impulsive application of the target delta-V
-        // through the game's own orbit math. The achieved orbit must land
-        // near this prediction, not merely have received the right delta-V
-        // magnitude somewhere.
-        double initialSma = patch.Orbit.SemiMajorAxis;
-        double initialEcc = patch.Orbit.Eccentricity;
-        Orbit predicted = Orbit.CreateFromStateCci(
-            patch.Orbit.Parent, new SimTime(burnTimeSec), burnSv.PositionCci,
-            burnSv.VelocityCci + dvDirCci * BurnDvMs, VehicleSpawner.OrbitLineColor);
-
-        OrbitPointCce point = patch.Orbit.GetPointAt(new SimTime(burnTimeSec));
-        Burn burn = Burn.Create(point, burnTimeSec, dvVlf, patch, vehicle);
-        fc.AddBurn(burn);
-        BurnTarget? bt = fc.Burn;
-        if (bt == null)
-        {
-            HarnessLog.Line($"[{Name}] FAIL: BurnTarget did not load from the added burn.");
-            return false;
-        }
+        Burn burn = setup.Burn;
+        BurnTarget bt = setup.BurnTarget;
 
         // Arm the burn for RCS with a fixed strategy (no estimate coin-flip
         // in the assertion path) and trigger through the stock enum sink.
-        RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
-        RcsBurnOptions options = exec.GetOrCreateOptions(burn.Time.Seconds(), burn.DeltaVVlf.Length());
-        options.Mode = RcsExecutionMode.Rcs;
-        options.Attitude = RcsAttitudeStrategy.Hold;
-        vehicle.SetEnum(FlightComputerBurnMode.Auto);
-
-        if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
+        RcsExecution? exec = RcsFlightSupport.ArmAndEngage(
+            vehicle, burn, RcsExecutionMode.Rcs, RcsAttitudeStrategy.Hold, RcsAllocator.Groups);
+        if (exec == null)
         {
             HarnessLog.Line($"[{Name}] FAIL: SetEnum(Auto) did not engage the RCS executor " +
                             $"(controllable={vehicle.IsControllable}).");
@@ -629,44 +506,33 @@ public sealed class RcsTranslationTest : IHarnessTest
         double timeoutSec = BurnLeadSec + expectedDuration * 4.0 + 60.0;
         double m0 = vehicle.TotalMass;
 
-        bool completed = false;
-        bool enginesQuiet = true;
         bool firingSampled = false;
         int steps = (int)(timeoutSec / StepSec);
-        for (int i = 0; i < steps; i++)
-        {
-            driver.Step(StepSec);
-            if (AnyEngineCommanded(vehicle))
+        RcsFlightSupport.RunResult result = RcsFlightSupport.RunUntilInactive(
+            vehicle, driver, StepSec, steps,
+            (_, __) =>
             {
-                enginesQuiet = false;
-                break;
-            }
-            if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
-            {
-                completed = true;
-                break;
-            }
-            // One live-performance sample while thrusters actually fire:
-            // the capability probe evaluates nozzle performance at probe
-            // conditions, and this line is the ground truth to hold the
-            // model against when the fuel numbers disagree. Comparable at
-            // vacuum only: the sampled Performance.TotalThrust is the
-            // flow-separation-clamped effective thrust, the model's
-            // GetTotalThrust is unclamped; they match at ambient ~0.
-            if (!firingSampled && driver.Elapsed.Seconds() > bt.IgnitionTime.Seconds() + 0.2)
-            {
-                firingSampled = true;
-                SampleFiringNozzles(vehicle);
-            }
-        }
+                // One live-performance sample while thrusters actually fire:
+                // the capability probe evaluates nozzle performance at probe
+                // conditions, and this line is the ground truth to hold the
+                // model against when the fuel numbers disagree. Comparable at
+                // vacuum only: the sampled Performance.TotalThrust is the
+                // flow-separation-clamped effective thrust, the model's
+                // GetTotalThrust is unclamped; they match at ambient ~0.
+                if (!firingSampled && driver.Elapsed.Seconds() > bt.IgnitionTime.Seconds() + 0.2)
+                {
+                    firingSampled = true;
+                    SampleFiringNozzles(vehicle);
+                }
+            });
 
         bool ok = true;
-        if (!enginesQuiet)
+        if (!result.EnginesQuiet)
         {
             HarnessLog.Line($"[{Name}] FAIL: a main engine received a throttle command during the RCS burn.");
             ok = false;
         }
-        if (!completed)
+        if (!result.Completed)
         {
             HarnessLog.Line($"[{Name}] FAIL: RCS burn did not complete within {timeoutSec:F0}s sim time " +
                             $"(to go {bt.DeltaVToGoCci.Length():F3}m/s of {BurnDvMs:F2}m/s).");
@@ -675,14 +541,7 @@ public sealed class RcsTranslationTest : IHarnessTest
         else
         {
             float residual = bt.DeltaVToGoCci.Length();
-            double impulseFloor = 0.0;
-            for (int i = 0; i < 6; i++)
-            {
-                RcsAxisGroup g = cap.Get(i);
-                if (g.IsUsable)
-                    impulseFloor = Math.Max(impulseFloor, g.MinImpulseNs);
-            }
-            double tol = 1.5 * impulseFloor / vehicle.TotalMass + ResidualMarginMs;
+            double tol = RcsFlightSupport.ResidualToleranceMs(in cap, vehicle.TotalMass, ResidualMarginMs);
             bool residualOk = residual <= tol;
             // The executor already stopped at or just past the target (its
             // completion check flips on the to-go/target dot product), so a
@@ -697,8 +556,8 @@ public sealed class RcsTranslationTest : IHarnessTest
             HarnessLog.Line($"[{Name}] TEST propellant: {burned * 1000.0:F1}g consumed => {TestSupport.Verdict(massOk)}");
             ok &= massOk;
 
-            bool eventOk = ReferenceEquals(_completedVehicle, vehicle)
-                && ReferenceEquals(_completedBurn, burn);
+            bool eventOk = ReferenceEquals(watcher.LastVehicle, vehicle)
+                && ReferenceEquals(watcher.LastBurn, burn);
             HarnessLog.Line($"[{Name}] TEST completion event: vehicle and burn delivered => " +
                             $"{TestSupport.Verdict(eventOk)}");
             ok &= eventOk;
@@ -735,8 +594,8 @@ public sealed class RcsTranslationTest : IHarnessTest
                             $"dv angle={fuel.DvAngleDeg:F2}deg => {TestSupport.Verdict(fuelOk)}");
             ok &= fuelOk;
 
-            ok &= RcsOrbitCheck.Assert(Name, "orbit", vehicle.Orbit, predicted,
-                initialSma, initialEcc);
+            ok &= RcsOrbitCheck.Assert(Name, "orbit", vehicle.Orbit, setup.Predicted,
+                setup.InitialSma, setup.InitialEcc);
         }
         return ok;
     }
@@ -776,22 +635,6 @@ public sealed class RcsTranslationTest : IHarnessTest
                         $"(X {thrustXN:F0}N), flow={flowKgS * 1000.0:F0}g/s, " +
                         $"ve={(flowKgS > 0f ? thrustN / flowKgS : 0f):F0}m/s");
     }
-
-    private static bool AnyEngineCommanded(Vehicle vehicle)
-    {
-        if (!ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
-                .TryGetFrom(vehicle.Parts.States, out var stateList))
-            return false;
-        var enumerator = new ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
-            .StateList.ModuleAndStateEnumerator(stateList);
-        while (enumerator.MoveNext())
-        {
-            if (enumerator.Current.State.CommandThrottle > 0f)
-                return true;
-        }
-        return false;
-    }
-
 }
 
 // The harness manifest runs only Core + HeadlessHarness, so the mod's

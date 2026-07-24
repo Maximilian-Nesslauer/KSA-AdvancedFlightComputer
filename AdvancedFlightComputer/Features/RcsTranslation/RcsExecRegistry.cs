@@ -127,42 +127,7 @@ internal static class RcsExecRegistry
             Directory.CreateDirectory(_modDir);
             using (var writer = new StreamWriter(tempPath))
             {
-                writer.WriteLine("# AdvancedFlightComputer RCS translation state.");
-                writer.WriteLine("# Auto-managed; manual edits are overwritten on the next save.");
-                writer.WriteLine();
-
-                foreach (var exec in _byKey.Values)
-                {
-                    if (string.IsNullOrEmpty(exec.SaveId)) continue;
-
-                    foreach (RcsBurnOptions o in exec.Options)
-                    {
-                        bool active = exec.ActiveBurnTimeSec.HasValue
-                            && o.Matches(exec.ActiveBurnTimeSec.Value, exec.ActiveBurnDvMs ?? o.BurnDvMs);
-
-                        writer.WriteLine("[[rcs_burn]]");
-                        writer.WriteLine($"save_id = \"{TomlIo.Escape(exec.SaveId)}\"");
-                        writer.WriteLine($"vehicle_id = \"{TomlIo.Escape(exec.VehicleId)}\"");
-                        writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                            "burn_time_sec = {0:R}", o.BurnTimeSec));
-                        writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                            "burn_dv_ms = {0:R}", o.BurnDvMs));
-                        writer.WriteLine($"mode = \"{o.Mode}\"");
-                        writer.WriteLine($"attitude = \"{o.Attitude}\"");
-                        writer.WriteLine($"allocator = \"{o.Allocator}\"");
-                        if (active)
-                        {
-                            writer.WriteLine("active = true");
-                            writer.WriteLine($"resolved_strategy = \"{exec.ResolvedStrategy}\"");
-                            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                                "resolved_axis = {0}", exec.ResolvedAxis));
-                            writer.WriteLine($"resolved_allocator = \"{exec.ResolvedAllocator}\"");
-                            writer.WriteLine($"align_commanded = {(exec.AlignCommanded ? "true" : "false")}");
-                            writer.WriteLine($"forced_rcs_on = {(exec.ForcedRcsOn ? "true" : "false")}");
-                        }
-                        writer.WriteLine();
-                    }
-                }
+                WriteToml(writer, _byKey.Values);
             }
             File.Move(tempPath, _configPath, overwrite: true);
         }
@@ -177,13 +142,65 @@ internal static class RcsExecRegistry
         }
     }
 
-    #region TOML parser
+    #region TOML serialization
+
+    /// <summary>Writes the persistable executions as flat [[rcs_burn]]
+    /// blocks. Kept separate from the file IO in <see cref="Save"/> so the
+    /// serialization is independent of the filesystem.</summary>
+    internal static void WriteToml(TextWriter writer, IEnumerable<RcsExecution> execs)
+    {
+        writer.WriteLine("# AdvancedFlightComputer RCS translation state.");
+        writer.WriteLine("# Auto-managed; manual edits are overwritten on the next save.");
+        writer.WriteLine();
+
+        foreach (var exec in execs)
+        {
+            if (string.IsNullOrEmpty(exec.SaveId)) continue;
+
+            foreach (RcsBurnOptions o in exec.Options)
+            {
+                bool active = exec.ActiveBurnTimeSec.HasValue
+                    && o.Matches(exec.ActiveBurnTimeSec.Value, exec.ActiveBurnDvMs ?? o.BurnDvMs);
+
+                writer.WriteLine("[[rcs_burn]]");
+                writer.WriteLine($"save_id = \"{TomlIo.Escape(exec.SaveId)}\"");
+                writer.WriteLine($"vehicle_id = \"{TomlIo.Escape(exec.VehicleId)}\"");
+                writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "burn_time_sec = {0:R}", o.BurnTimeSec));
+                writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "burn_dv_ms = {0:R}", o.BurnDvMs));
+                writer.WriteLine($"mode = \"{o.Mode}\"");
+                writer.WriteLine($"attitude = \"{o.Attitude}\"");
+                writer.WriteLine($"allocator = \"{o.Allocator}\"");
+                if (active)
+                {
+                    writer.WriteLine("active = true");
+                    writer.WriteLine($"resolved_strategy = \"{exec.ResolvedStrategy}\"");
+                    writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                        "resolved_axis = {0}", exec.ResolvedAxis));
+                    writer.WriteLine($"resolved_allocator = \"{exec.ResolvedAllocator}\"");
+                    writer.WriteLine($"align_commanded = {(exec.AlignCommanded ? "true" : "false")}");
+                    writer.WriteLine($"forced_rcs_on = {(exec.ForcedRcsOn ? "true" : "false")}");
+                }
+                writer.WriteLine();
+            }
+        }
+    }
 
     private static void ParseFile(string path)
+        => ParseLines(File.ReadAllLines(path), Path.GetFileName(path), _byKey);
+
+    /// <summary>Parses flat [[rcs_burn]] blocks into <paramref name="into"/>.
+    /// Fills only the caller-supplied dictionary (no file IO, no shared
+    /// registry state), so the parse is independent of the filesystem; the
+    /// file path is passed only as a <paramref name="sourceName"/> for the log
+    /// lines.</summary>
+    internal static void ParseLines(
+        string[] lines, string sourceName,
+        Dictionary<(string SaveId, string VehicleId), RcsExecution> into)
     {
         Dictionary<string, string>? current = null;
         int headerLine = 0;
-        string[] lines = File.ReadAllLines(path);
 
         for (int li = 0; li < lines.Length; li++)
         {
@@ -193,7 +210,7 @@ internal static class RcsExecRegistry
 
             if (line == "[[rcs_burn]]")
             {
-                FlushBlock(current, headerLine, path);
+                FlushBlock(current, headerLine, sourceName, into);
                 current = new Dictionary<string, string>();
                 headerLine = lineNumber;
                 continue;
@@ -201,9 +218,9 @@ internal static class RcsExecRegistry
             if (line[0] == '[')
             {
                 DefaultCategory.Log.Warning(
-                    $"[AFC] RcsExecRegistry: {Path.GetFileName(path)}:{lineNumber} " +
+                    $"[AFC] RcsExecRegistry: {sourceName}:{lineNumber} " +
                     $"unrecognised TOML header '{line}', skipping until next [[rcs_burn]].");
-                FlushBlock(current, headerLine, path);
+                FlushBlock(current, headerLine, sourceName, into);
                 current = null;
                 continue;
             }
@@ -217,7 +234,7 @@ internal static class RcsExecRegistry
             string val = line.Substring(eq + 1).Trim();
             if (val.Length >= 2 && val[0] == '"')
             {
-                // Escape-aware close-quote scan: Save() escapes embedded
+                // Escape-aware close-quote scan: WriteToml escapes embedded
                 // quotes in ids, so a plain IndexOf would truncate a
                 // vehicle name containing '"' and mis-key its options.
                 int close = FindClosingQuote(val, openAt: 0);
@@ -232,10 +249,12 @@ internal static class RcsExecRegistry
             }
             current[key] = val;
         }
-        FlushBlock(current, headerLine, path);
+        FlushBlock(current, headerLine, sourceName, into);
     }
 
-    private static void FlushBlock(Dictionary<string, string>? block, int headerLine, string path)
+    private static void FlushBlock(
+        Dictionary<string, string>? block, int headerLine, string sourceName,
+        Dictionary<(string SaveId, string VehicleId), RcsExecution> into)
     {
         if (block == null) return;
 
@@ -246,24 +265,21 @@ internal static class RcsExecRegistry
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] RcsExecRegistry: dropping block at line {headerLine} of " +
-                $"{Path.GetFileName(path)} (missing required fields).");
+                $"{sourceName} (missing required fields).");
             return;
         }
 
-        RcsExecutionMode mode = RcsExecutionMode.Default;
-        if (block.TryGetValue("mode", out string? modeStr))
-            Enum.TryParse(modeStr, out mode);
-        RcsAttitudeStrategy attitude = RcsAttitudeStrategy.Auto;
-        if (block.TryGetValue("attitude", out string? attStr))
-            Enum.TryParse(attStr, out attitude);
-        RcsAllocator allocator = RcsAllocator.Groups;
-        if (block.TryGetValue("allocator", out string? allocStr))
-            Enum.TryParse(allocStr, out allocator);
+        RcsExecutionMode mode = ParseEnumField(
+            block, "mode", RcsExecutionMode.Default, sourceName, headerLine);
+        RcsAttitudeStrategy attitude = ParseEnumField(
+            block, "attitude", RcsAttitudeStrategy.Auto, sourceName, headerLine);
+        RcsAllocator allocator = ParseEnumField(
+            block, "allocator", RcsAllocator.Groups, sourceName, headerLine);
 
-        if (!_byKey.TryGetValue((saveId, vehicleId), out RcsExecution? exec))
+        if (!into.TryGetValue((saveId, vehicleId), out RcsExecution? exec))
         {
             exec = new RcsExecution { SaveId = saveId, VehicleId = vehicleId };
-            _byKey[(saveId, vehicleId)] = exec;
+            into[(saveId, vehicleId)] = exec;
         }
         exec.Options.Add(new RcsBurnOptions
         {
@@ -302,6 +318,25 @@ internal static class RcsExecRegistry
         value = 0.0;
         return block.TryGetValue(key, out string? s)
             && double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out value);
+    }
+
+    /// <summary>Reads an optional enum field, falling back to
+    /// <paramref name="fallback"/>. A present token that does not parse to a
+    /// defined value (a renamed enum value after a mod update) is warned
+    /// about rather than silently downgrading a persisted user choice, the
+    /// same way the missing-required-field path logs.</summary>
+    private static TEnum ParseEnumField<TEnum>(
+        Dictionary<string, string> block, string key, TEnum fallback,
+        string sourceName, int headerLine) where TEnum : struct, Enum
+    {
+        if (!block.TryGetValue(key, out string? raw))
+            return fallback;
+        if (Enum.TryParse(raw, out TEnum value) && Enum.IsDefined(value))
+            return value;
+        DefaultCategory.Log.Warning(
+            $"[AFC] RcsExecRegistry: {sourceName} block at line {headerLine} " +
+            $"has unrecognised {key} '{raw}', using {fallback}.");
+        return fallback;
     }
 
     private static int FindClosingQuote(string s, int openAt)
