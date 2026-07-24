@@ -130,6 +130,7 @@ public sealed class Mod
                 _harmony.CreateClassProcessor(typeof(RcsGaugePatches.PackDataPatch)).Patch();
                 _harmony.CreateClassProcessor(typeof(RcsGaugePatches.HoveredPatch)).Patch();
                 _harmony.CreateClassProcessor(typeof(RcsBurnWindowUi)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsBurnCanvasUi)).Patch();
 
                 RcsExecRegistry.Init();
                 if (!saveObserverApplied)

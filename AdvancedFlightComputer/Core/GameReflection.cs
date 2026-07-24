@@ -114,6 +114,12 @@ internal static class GameReflection
         AccessTools.Method(typeof(Vehicle), "Hovered",
             new Type[] { typeof(FlightComputerBurnMode) });
 
+    // The 4980 flight burn editor draws through this static gauge-canvas
+    // host; the RCS burn panel postfixes it. Validated so a game-side rework
+    // degrades the panel gracefully instead of aborting the mod's patching.
+    public static readonly MethodInfo? BurnCanvasHost_Draw =
+        AccessTools.Method(typeof(BurnCanvasHost), "Draw");
+
     #endregion
 
     #region Validation
@@ -182,6 +188,7 @@ internal static class GameReflection
             ("Vehicle.Dispose",                            Vehicle_Dispose),
             ("GaugeButtonFlightComputer._enumValue",       GaugeButtonFlightComputer_enumValue),
             ("Vehicle.Hovered(FlightComputerBurnMode)",    Vehicle_Hovered_BurnMode),
+            ("BurnCanvasHost.Draw",                        BurnCanvasHost_Draw),
         };
         return ValidateTargets("RcsTranslation", targets);
     }
