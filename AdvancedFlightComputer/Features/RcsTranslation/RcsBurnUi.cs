@@ -8,9 +8,11 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 /// <summary>
 /// The per-burn RCS block (execution/attitude/allocator selectors, strategy
 /// estimates, live status + cancel), drawn inside whatever ImGui window the
-/// caller has open. Shared by the burn-editor surfaces: the stock rendezvous
-/// infobox (<see cref="RcsBurnWindowUi"/>) and the flight burn-editor gauge
-/// (<see cref="RcsBurnCanvasUi"/>).
+/// caller has open: the stock rendezvous infobox
+/// (<see cref="RcsBurnWindowUi"/>), and the detached-canvas fallback in
+/// <see cref="RcsBurnCanvasUi"/> where ImGauge cannot follow the viewport.
+/// The docked flight burn editor draws the gauge-styled
+/// <see cref="RcsGaugePanel"/> instead.
 /// </summary>
 internal static class RcsBurnUi
 {
@@ -109,8 +111,7 @@ internal static class RcsBurnUi
                 if (toIgnition > 0.0)
                     phase = $"waiting T-{toIgnition:F0}s";
                 else if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align
-                         && (Math.Abs(flightComputer.ErrorAngles.Y) > flightComputer.AngleDeadband
-                             || Math.Abs(flightComputer.ErrorAngles.Z) > flightComputer.AngleDeadband))
+                         && RcsExecutor.OutsideAlignGate(flightComputer))
                     phase = "aligning";
                 else
                     phase = "firing";

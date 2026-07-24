@@ -7,36 +7,50 @@ using KSA;
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
 /// <summary>
-/// Draws the per-burn RCS block (see <see cref="RcsBurnUi"/>) for the flight
-/// burn editor. The 4980 update moved that editor from an ImGui infobox to a
-/// gauge canvas: <see cref="BurnCanvasHost.Draw"/> renders the dV/time cells
-/// over the fixed, full 'Burn' gauge when <see cref="Program.ActiveBurn"/> is
-/// set. There is no room in that gauge for extra rows, so this postfix
-/// anchors an AFC panel directly above the gauge (which sits bottom-right),
-/// using the pixel rect the host is handed. The panel appears and disappears
-/// with the editor, so it reads as part of it rather than a floating window.
+/// Draws the per-burn RCS block below the flight burn editor's gauge, anchored
+/// to the gauge rect <see cref="BurnCanvasHost.Draw"/> is handed, so it appears
+/// and disappears with the editor.
+///
+/// Two renderers, picked by whether the canvas is docked: normally the
+/// gauge-styled <see cref="RcsGaugePanel"/>, but ImGauge only ever draws into
+/// the main viewport, so a canvas the player detached onto its own OS window
+/// falls back to the plain ImGui block.
 /// </summary>
 [HarmonyPatch(typeof(BurnCanvasHost), nameof(BurnCanvasHost.Draw))]
 internal static class RcsBurnCanvasUi
 {
-    static void Postfix(float2 canvasMinPixels, float2 canvasSizePixels)
+    static void Postfix(GaugeCanvas canvas, float2 canvasMinPixels, float2 canvasSizePixels)
     {
         Burn? burn = Program.ActiveBurn;
         if (burn == null || burn.ParentEjectBurn)
             return;
         Vehicle vehicle = burn.Vehicle;
+        try
+        {
+            if (canvas.Detached)
+                DrawImGuiFallback(burn, vehicle, canvasMinPixels, canvasSizePixels);
+            else
+                RcsGaugePanel.Draw(burn, vehicle, vehicle.FlightComputer,
+                    canvasMinPixels, canvasSizePixels);
+        }
+        catch (Exception ex)
+        {
+            // Once per load: this runs every frame the editor is open, and a
+            // persistent draw failure would otherwise flood the log.
+            LogHelper.WarnOnce("rcs-burn-canvas",
+                $"[AFC] RcsBurnCanvasUi failed for vehicle='{vehicle.Id}': {ex}");
+        }
+    }
 
-        // Top-right of the panel pinned to the gauge's bottom-right corner, so
-        // it stacks straight below the burn gauge, right edges aligned;
-        // AlwaysAutoResize then grows it down and to the left.
+    private static void DrawImGuiFallback(
+        Burn burn, Vehicle vehicle, float2 canvasMinPixels, float2 canvasSizePixels)
+    {
+        // Top-right pinned to the gauge's bottom-right corner; AlwaysAutoResize
+        // then grows the window down and to the left.
         float2 anchor = new float2(
             canvasMinPixels.X + canvasSizePixels.X,
             canvasMinPixels.Y + canvasSizePixels.Y);
         ImGui.SetNextWindowPos(in anchor, ImGuiCond.Always, new float2(1f, 0f));
-        // The host popped its own font/style before returning, so this window
-        // draws with the default ImGui styling. A new top-level window nested
-        // inside the still-open gauge window is a standard ImGui pattern; the
-        // matching End must always run, hence the finally.
         ImGui.Begin("RCS###AfcRcsBurnPanel"u8,
             ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoCollapse
             | ImGuiWindowFlags.AlwaysAutoResize | ImGuiWindowFlags.NoSavedSettings
@@ -45,13 +59,10 @@ internal static class RcsBurnCanvasUi
         {
             RcsBurnUi.DrawBlock(burn, vehicle, vehicle.FlightComputer);
         }
-        catch (Exception ex)
-        {
-            LogHelper.WarnOnce("rcs-burn-canvas",
-                $"[AFC] RcsBurnCanvasUi failed for vehicle='{vehicle.Id}': {ex}");
-        }
         finally
         {
+            // The matching End must run even if the block throws, or every
+            // later ImGui window nests inside this one.
             ImGui.End();
         }
     }

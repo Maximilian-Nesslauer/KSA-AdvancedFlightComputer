@@ -51,6 +51,8 @@ Multi-pass works best together with [AutoStage](https://github.com/Maximilian-Ne
 
 ### RCS Translation Burns
 
+![RCS burn options in the burn editor](images/RCS_burn_panel.png)
+
 Execute a planned burn with RCS thrusters only, no main engine. Useful for small correction burns (rotating the whole vehicle for the main engine can cost more than just translating) and for vehicles without an active main engine like small probes.
 
 - The stock **Auto** burn button is still the single trigger: it executes the next burn with its resolved method. A burn resolves to the main engine when an active, fueled engine exists, otherwise to RCS; a per-burn override is available in the burn editor window ("Execution: Default | Engine | RCS").
