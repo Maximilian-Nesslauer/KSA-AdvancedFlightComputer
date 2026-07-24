@@ -1,5 +1,6 @@
 using System;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Flyby;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -70,6 +71,10 @@ internal static class SaveLoadObserver
                 HohmannMultiPassPlanner.ResetShiftCache();
                 MultiPassUI.Reset();
                 HohmannMultiPassUI.Reset();
+                // Same reasoning: the flyby arm flag + inputs + result cache are
+                // keyed on the source vehicle and would otherwise carry into the
+                // just-loaded save, silently baking a flyby the user did not set.
+                HohmannFlybyUI.Reset();
 
                 // Refresh registry from disk so in-memory exec state
                 // matches whatever was persisted for the just-loaded

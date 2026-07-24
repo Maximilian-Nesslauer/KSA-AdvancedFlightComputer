@@ -13,14 +13,17 @@ internal static class DebugConfig
     public static bool ManeuverTools = true;
     public static bool MultiPass = true;
     public static bool RcsTranslation = true;
+    public static bool Flyby = true;
     public static bool Performance = true;
 #else
     public static bool HyperbolicTargets = false;
     public static bool ManeuverTools = false;
     public static bool MultiPass = false;
     public static bool RcsTranslation = false;
+    public static bool Flyby = false;
     public static bool Performance = false;
 #endif
 
-    public static bool Any => HyperbolicTargets || ManeuverTools || MultiPass || RcsTranslation || Performance;
+    public static bool Any => HyperbolicTargets || ManeuverTools || MultiPass
+        || RcsTranslation || Flyby || Performance;
 }

@@ -1,4 +1,5 @@
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -62,6 +63,34 @@ public sealed class Mod
                 {
                     _harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow_HohmannMultiPass)).Patch();
                     HohmannMultiPassUI.Enabled = true;
+
+                    // Flyby targeting draws inside the same inline injection and
+                    // rides the same Create interceptor, so it shares this anchor.
+                    HohmannFlybyUI.Enabled = true;
+                    DefaultCategory.Log.Info(
+                        "[AFC] Flyby targeting enabled (Hohmann plan window).");
+
+                    // Hides stock's center-aimed (impact) preview while a flyby is
+                    // armed, so the 3D view shows only what Create will fly. Lines
+                    // and markers are separate stock methods on one toggle, hence
+                    // two patches. The flyby itself still works without them, just
+                    // alongside stock's overlay, so a missing anchor is a warning
+                    // rather than a gate.
+                    if (Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent)
+                        _harmony.CreateClassProcessor(
+                            typeof(Patch_TransferPlanner_DrawSelectedTransfer_Flyby)).Patch();
+                    else
+                        DefaultCategory.Log.Warning(
+                            "[AFC] Flyby stock-preview suppression disabled - " +
+                            "DrawSelectedTransfer anchor not found.");
+
+                    if (Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent)
+                        _harmony.CreateClassProcessor(
+                            typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Flyby)).Patch();
+                    else
+                        DefaultCategory.Log.Warning(
+                            "[AFC] Flyby stock-marker suppression disabled - " +
+                            "DrawSelectedTransferUi anchor not found.");
 
                     // Fallback DrawInline injection at the outermost
                     // ImGui.End() in DrawPlanWindow. Fires regardless of
@@ -174,6 +203,8 @@ public sealed class Mod
         MultiPassUI.Reset();
         HohmannMultiPassUI.Enabled = false;
         HohmannMultiPassUI.Reset();
+        HohmannFlybyUI.Enabled = false;
+        HohmannFlybyUI.Reset();
         MultiPassPreviewCache.Reset();
         MultiPassRegistry.Reset();
         PassCompletionPatch.Reset();

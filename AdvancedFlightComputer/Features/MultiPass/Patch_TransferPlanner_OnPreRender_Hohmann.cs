@@ -1,4 +1,5 @@
 using System;
+using AdvancedFlightComputer.Features.Flyby;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
@@ -26,8 +27,16 @@ internal static class Patch_TransferPlanner_OnPreRender_Hohmann
     {
         try
         {
-            if (!HohmannMultiPassUI.ShouldRenderOverlay(out Vehicle? source)) return;
-            HohmannMultiPassUI.RenderOrbits(inViewport, source!);
+            // Multi-pass first: with N > 1 its preview already contains the
+            // flyby-retargeted departure, so it owns the overlay.
+            if (HohmannMultiPassUI.ShouldRenderOverlay(out Vehicle? source))
+            {
+                HohmannMultiPassUI.RenderOrbits(inViewport, source!);
+                return;
+            }
+
+            if (HohmannFlybyUI.ShouldRenderPreview(out Vehicle? flybySource))
+                HohmannFlybyUI.RenderPreview(inViewport, flybySource!);
         }
         catch (Exception ex)
         {
