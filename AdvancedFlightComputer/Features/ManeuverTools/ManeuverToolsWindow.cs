@@ -45,8 +45,11 @@ internal static class ManeuverToolsWindow
     private static bool _nodeDefaultInitialized;
     private static string? _lastSourceId;
 
-    private static TransferObject _selectedTarget;
-    private static bool _hasSelectedTarget;
+    // The target is held by id, never as a TransferObject: that struct stores only
+    // a LookupIndex, and LookupCollection.Deregister swap-removes, so an index kept
+    // across frames either resolves to a different body or, once it is past the end
+    // of the collection, makes CelestialSystem.GetIndex throw.
+    private static string? _selectedTargetId;
     private static readonly List<TransferObject> _targetListBuffer = new();
     private static string? _lastTargetParentId;
     private static bool _setTarget;
@@ -75,11 +78,10 @@ internal static class ManeuverToolsWindow
             DrawCircularize(source, useApoapsis: false);
     }
 
-    public static Orbit? GetSelectedTargetOrbit()
-        => _hasSelectedTarget ? (_selectedTarget.Body as IOrbiter)?.Orbit : null;
+    public static Orbit? GetSelectedTargetOrbit() => GetSelectedTargetOrbiter()?.Orbit;
 
     public static IOrbiter? GetSelectedTargetOrbiter()
-        => _hasSelectedTarget ? _selectedTarget.Body as IOrbiter : null;
+        => TargetSelection.Resolve(_selectedTargetId, _lastTargetParentId);
 
     public static void OnTypeChanged() => ResetForContextChange();
     public static void OnSourceChanged() => ResetForContextChange();
@@ -101,8 +103,7 @@ internal static class ManeuverToolsWindow
         _defaultsInitialized = false;
         _nodeDefaultInitialized = false;
         _lastSourceId = null;
-        _selectedTarget = default;
-        _hasSelectedTarget = false;
+        _selectedTargetId = null;
         _targetListBuffer.Clear();
         _lastTargetParentId = null;
         _setTarget = false;
@@ -425,60 +426,26 @@ internal static class ManeuverToolsWindow
             // After SOI transition the previous selection is in a different
             // context, so re-pick from the fresh list.
             _lastTargetParentId = parentId;
-            _hasSelectedTarget = false;
+            _selectedTargetId = null;
         }
 
-        // Rebuild every frame: TransferObject._index aliases LookupCollection
-        // slots, and Deregister swap-removes, so a stale list can resolve to
-        // the wrong body when vehicles are added/destroyed.
-        BuildTargetList(source, _targetListBuffer);
-
-        if (_targetListBuffer.Count == 0)
+        TargetSelection.BuildList(source, _targetListBuffer);
+        if (TargetSelection.Reconcile(_targetListBuffer, ref _selectedTargetId)
+            is not TransferObject reconciled)
         {
             ImGui.Text("No targets available in current SOI."u8);
             return;
         }
 
-        if (!_hasSelectedTarget)
-        {
-            _selectedTarget = _targetListBuffer[0];
-            _hasSelectedTarget = true;
-        }
-
-        TransferObject prevTarget = _selectedTarget;
-        if (ImGuiHelper.DrawCombo("Target:"u8, ref _selectedTarget, _targetListBuffer)
-            && _selectedTarget.GetKey() != prevTarget.GetKey())
+        TransferObject selected = reconciled;
+        if (ImGuiHelper.DrawCombo("Target:"u8, ref selected, _targetListBuffer)
+            && selected.GetKey() != reconciled.GetKey())
         {
             _defaultsInitialized = false;
-            _hasSelectedTarget = true;
-            if (_setTarget && _selectedTarget.Body is IOrbiter newOrbiter)
+            if (_setTarget && selected.Body is IOrbiter newOrbiter)
                 QueueTargetChange(source, newOrbiter);
         }
-    }
-
-    private static void BuildTargetList(Vehicle source, List<TransferObject> list)
-    {
-        list.Clear();
-        IParentBody? parent = source.Parent;
-        if (parent == null || Universe.CurrentSystem == null)
-            return;
-
-        // Vehicles: match stock's filter (only the ones in the current frame).
-        foreach (Vehicle v in Program.VehiclesInFrame)
-        {
-            if (v == source) continue;
-            if (v.Parent?.Id == parent.Id)
-                list.Add(new TransferObject(v));
-        }
-
-        // Celestials: full registry, since they don't move in/out of frame.
-        foreach (Astronomical astro in Universe.CurrentSystem.All.AsSpan())
-        {
-            if (astro is not Celestial celestial) continue;
-            if (celestial.Orbit == null) continue;
-            if (celestial.Parent?.Id == parent.Id)
-                list.Add(new TransferObject(astro));
-        }
+        _selectedTargetId = selected.GetKey();
     }
 
     private static void QueueTargetChange(Vehicle source, IOrbiter? target)

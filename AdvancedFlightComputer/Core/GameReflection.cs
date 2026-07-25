@@ -92,13 +92,6 @@ internal static class GameReflection
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose),
             Type.EmptyTypes);
 
-    // Private static property getter on TransferPlanner; used by
-    // HohmannCreateInterceptor.ShouldAllowCreateClick to resolve the
-    // current source vehicle at click time without re-implementing the
-    // _sourceBody.Body cast chain.
-    public static readonly MethodInfo? TransferPlanner_Source =
-        AccessTools.PropertyGetter(typeof(TransferPlanner), "Source");
-
     #endregion
 
     #region RcsTranslation
@@ -161,7 +154,11 @@ internal static class GameReflection
     /// <summary>Separate from ManeuverTools so a missing
     /// UpdateFromTaskResults disables only multi-pass execution, leaving
     /// the maneuver quick-tools functional. Without UncompressedSave
-    /// hooks we cannot scope registry entries to a save game.</summary>
+    /// hooks we cannot scope registry entries to a save game.
+    ///
+    /// The stock plan-window fields multi-pass also reads are not listed here:
+    /// <c>Mod.OnFullyLoaded</c> nests this block inside
+    /// <see cref="ValidateManeuverTools"/>, which already covers them.</summary>
     public static bool ValidateMultiPass()
     {
         var targets = new (string name, object? target)[]
@@ -170,7 +167,6 @@ internal static class GameReflection
             ("UncompressedSave.Load",         UncompressedSave_Load),
             ("UncompressedSave.Write",        UncompressedSave_Write),
             ("Vehicle.Dispose",               Vehicle_Dispose),
-            ("TransferPlanner.Source",        TransferPlanner_Source),
         };
         return ValidateTargets("MultiPass", targets);
     }

@@ -381,7 +381,19 @@ internal static class HohmannFlybyUI
         {
             FlybyTargeting.FlybyResult r = result.Value;
             PatchedConic? prePatch = source.FlightPlan.TryFindPatch(r.BurnTime);
-            if (prePatch == null) return;
+            if (prePatch == null)
+            {
+                // One of the two ways the predicted-periapsis readout comes back NaN.
+                // Logged unconditionally, like the catch below: the readout has been
+                // seen to come back NaN on the first compute for an input and resolve
+                // on the next one, so which branch was taken is the thing worth
+                // knowing after an in-game run.
+                DefaultCategory.Log.Warning(string.Format(Inv,
+                    "[AFC] HohmannFlybyUI.BuildPreview: no flight-plan patch covers burn time " +
+                    "{0:F1}s for vehicle='{1}' (live plan has {2} patches).",
+                    r.BurnTime.Seconds(), source.Id, source.FlightPlan.Patches.Count));
+                return;
+            }
 
             // Propagate with stock FlightPlan machinery (kept local so the flyby
             // feature does not couple back to the multi-pass planner). The target
@@ -405,6 +417,28 @@ internal static class HohmannFlybyUI
                     _predictedPeAlt = _predictedPeRadius - target.MeanRadius;
                     return;
                 }
+
+            // The other NaN branch: the propagation resolved no patch inside the
+            // target's SOI, so the readout is omitted and the arming guard falls back
+            // to a caution. Dump what the propagation did produce rather than guessing
+            // at it. Bounded by the 8-patch limit above, and only reached on a cache
+            // miss, so this cannot flood the log.
+            DefaultCategory.Log.Warning(string.Format(Inv,
+                "[AFC] HohmannFlybyUI.BuildPreview: no patch inside target '{0}' SOI for " +
+                "vehicle='{1}' burnTime={2:F1}s; prePatch parent='{3}', preview plan has " +
+                "{4} patch(es).",
+                target.Id, source.Id, r.BurnTime.Seconds(),
+                prePatch.Orbit.Parent?.Id ?? "?", fp.Patches.Count));
+            for (int i = 0; i < fp.Patches.Count; i++)
+            {
+                PatchedConic p = fp.Patches[i];
+                DefaultCategory.Log.Warning(string.Format(Inv,
+                    "[AFC]   patch[{0}] parent='{1}' {2}->{3} e={4:F4} t={5:F1}..{6:F1}s " +
+                    "encounter='{7}'",
+                    i, p.Orbit.Parent?.Id ?? "?", p.StartTransition, p.EndTransition,
+                    p.Orbit.Eccentricity, p.StartTime.Seconds(), p.EndTime.Seconds(),
+                    p.EncounterBody?.Id ?? "-"));
+            }
         }
         catch (Exception ex)
         {
@@ -428,22 +462,18 @@ internal static class HohmannFlybyUI
         // An elapsed departure cannot be flown, so neither draw it nor keep stock's
         // preview hidden for it.
         if (IsCacheExpired()) return false;
-        if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
-            return false;
-        if (!(bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false))
-            return false;
+        if (!StockPlanner.ShowPlanWindow) return false;
+        if (!StockPlanner.DisplaySelectedTransfer) return false;
         // Stock clears _transferCalculated on a source / destination change and once
         // the created burn's time passes, while keeping _selectedEntry. Without this
         // the cached plan (which only tracks the source id) would keep painting the
         // previous target's flyby over the live trajectory.
-        if (!(bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false))
+        if (!StockPlanner.TransferCalculated) return false;
+
+        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
             return false;
 
-        var transferType = (TransferType)GameReflection.TransferPlanner_transferType!.GetValue(null)!;
-        if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
-
-        var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!.GetValue(null)!;
-        source = sourceBody.Body as Vehicle;
+        source = StockPlanner.SourceVehicle;
         return source != null && source.Id == _cachedKey.SourceId;
     }
 

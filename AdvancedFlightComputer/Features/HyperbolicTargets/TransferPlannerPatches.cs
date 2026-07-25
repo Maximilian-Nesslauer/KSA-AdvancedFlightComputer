@@ -23,8 +23,7 @@ internal static class Patch_PopulateWithPlanets
 
         try
         {
-            var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!.GetValue(null)!;
-            if (sourceBody.Body is not Vehicle source) return;
+            if (StockPlanner.SourceVehicle is not Vehicle source) return;
 
             var star = HyperbolicTargets.GetParentStar(source);
             if (star == null) return;
@@ -103,12 +102,17 @@ internal static class Patch_HohmannFlight
 [HarmonyPatch(typeof(TransferPlanner), "SetTransferInfo", new Type[0])]
 internal static class Patch_SetTransferInfo
 {
+    /// <summary>Targets already alerted about this mod load, so re-selecting a
+    /// destination does not re-announce the same thing.</summary>
+    private static readonly HashSet<string> _alertedTargets = new();
+
+    public static void Reset() => _alertedTargets.Clear();
+
     static void Postfix()
     {
         try
         {
-            var info = GameReflection.TransferPlanner_transferInfo!.GetValue(null)
-                as OrbitalTransfers.TransferInfo;
+            OrbitalTransfers.TransferInfo? info = StockPlanner.TransferInfo;
             if (info?.Target?.Orbit == null) return;
             if (info.Target.Orbit.Eccentricity < 1.0) return;
 
@@ -123,11 +127,43 @@ internal static class Patch_SetTransferInfo
                 .SetValue(null, new SimTime(info.MinTransferTimeOfFlight.Seconds()));
             GameReflection.TransferPlanner_selectedMaxTime!
                 .SetValue(null, new SimTime(info.MaxTransferTimeOfFlight.Seconds()));
+
+            MaybeAlertDepartureWindowPast(info, hohmann);
         }
         catch (Exception ex)
         {
             DefaultCategory.Log.Warning($"[AFC] SetTransferInfo postfix: {ex}");
         }
+    }
+
+    /// <summary>Says once per target that the ideal departure - one transfer time
+    /// before the target's periapsis - is already behind the current sim time,
+    /// which is why the porkchop window looks degenerate.
+    ///
+    /// This lives here rather than in <see cref="Patch_AlignmentTime"/>, which
+    /// evaluates the same condition but also runs on the porkchop worker thread.
+    /// <c>TransferPlanner.SetTransferInfo</c> is only ever called from
+    /// <c>TransferPlanner.DrawPlanWindow</c>, so this postfix is draw-thread only
+    /// and both <c>TimedAlert.Create</c> and the plain dedup set above are safe
+    /// here.</summary>
+    private static void MaybeAlertDepartureWindowPast(
+        OrbitalTransfers.TransferInfo info, SimTime hohmannToF)
+    {
+        SimTime tPeri = info.Target.Orbit.TimeAtPeriapsis;
+        SimTime ideal = new SimTime(tPeri.Seconds() - hohmannToF.Seconds());
+        if (!(ideal < Universe.GetElapsedSimTime())) return;
+
+        string targetId = (info.Target as Astronomical)?.Id ?? "?";
+        if (!_alertedTargets.Add(targetId)) return;
+
+        // Deliberately does not claim the transfer falls back to a later window:
+        // an unbound target has a single periapsis passage, and TransferTask.Run
+        // builds its start sweep from the current sim time regardless of what
+        // AlignmentTime returned.
+        TimedAlert.Create(
+            $"{targetId}: the ideal departure, one transfer time before its periapsis, " +
+            "has already passed. The porkchop window starts from the current time.",
+            Color.Yellow, 6.0);
     }
 }
 
@@ -137,43 +173,74 @@ internal static class Patch_SetTransferInfo
 /// periapsis (closest to the Sun, slowest, longest dwell in the inner
 /// system), so we depart roughly hohmann_tof before that.
 ///
-/// When the ideal departure is already in the past, we emit a one-shot
-/// alert so the user understands why the porkchop window is degenerate.
+/// This prefix runs on two threads. <c>TransferTask</c>'s constructor queues its
+/// Run on the ThreadPool, and Run calls AlignmentTime whenever
+/// <c>TransferInfo.Source</c> is not a Vehicle, which
+/// <c>TransferPlanner.SetTransferInfo</c> makes true for any vehicle parked at a
+/// Celestial; <c>TransferPlanner.DrawPlanWindow</c>'s "Show Parent/Target
+/// Alignment" block calls it again every frame on the draw thread. So nothing
+/// here may touch state that assumes one thread. In particular the user-facing
+/// alert lives in <see cref="Patch_SetTransferInfo"/> instead:
+/// <c>TimedAlert.Create</c> appends to and sorts a static list that
+/// <c>Alert.DrawAll</c> walks and removes from on the draw thread, with no
+/// synchronization on either side. What is left is the computation, the
+/// <c>__result</c> write, and <see cref="LogHelper"/>'s locked dedup set.
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.AlignmentTime))]
 internal static class Patch_AlignmentTime
 {
-    /// <summary>Targets we've already alerted about this session, so
-    /// the per-frame alignment redraw does not spam the screen.</summary>
-    private static readonly HashSet<string> _alertedTargets = new();
-
-    public static void Reset() => _alertedTargets.Clear();
-
     static bool Prefix(OrbitalTransfers.TransferInfo transferInfo,
                        SimTime startTime,
                        ref SimTime __result)
     {
-        if (transferInfo.Target?.Orbit == null || transferInfo.Target.Orbit.Eccentricity < 1.0)
-            return true;
-
-        SimTime tPeri = transferInfo.Target.Orbit.TimeAtPeriapsis;
-        SimTime hohmannToF = transferInfo.HohmannTimeOfFlight;
-        SimTime ideal = new SimTime(tPeri.Seconds() - hohmannToF.Seconds());
-
-        if (ideal < startTime)
+        try
         {
-            string targetId = (transferInfo.Target as Astronomical)?.Id ?? "?";
-            LogHelper.WarnOnce($"alignment-past-{targetId}",
-                $"[AFC] {targetId} is past periapsis (peri at sim t={tPeri.Seconds():F0}s, " +
-                $"hohmann ToF {hohmannToF.Seconds():F0}s); alignment time clamped to startTime.");
+            // Celestial targets only. Stock's PopulateWithVehiclesAsTargets applies
+            // no eccentricity filter, so a vehicle in the same SOI that is on an
+            // escape trajectory would otherwise be routed through a heliocentric
+            // "depart before the target's periapsis" model that says nothing about
+            // it.
+            if (transferInfo.Target is not Celestial
+                || transferInfo.Target.Orbit == null
+                || transferInfo.Target.Orbit.Eccentricity < 1.0)
+                return true;
 
-            if (_alertedTargets.Add(targetId))
-                TimedAlert.Create(
-                    $"{targetId} has passed periapsis - departure window already open. Transfer uses next available alignment.",
-                    Color.Yellow, 6.0);
+            SimTime tPeri = transferInfo.Target.Orbit.TimeAtPeriapsis;
+            SimTime hohmannToF = transferInfo.HohmannTimeOfFlight;
+            if (!(hohmannToF.Seconds() > 0.0))
+            {
+                // The "Show Parent/Target Alignment" block news up a TransferInfo per
+                // frame, and no TransferInfo constructor assigns HohmannTimeOfFlight -
+                // only TransferPlanner.SetTransferInfo does. Left at zero the lead time
+                // this patch exists to apply would vanish and the alignment marker
+                // would sit at the target's periapsis instead of one transfer time
+                // before it, so derive it the same way SetTransferInfo does.
+                hohmannToF = OrbitalTransfers.HohmannFlight(
+                    transferInfo.Source.Orbit, transferInfo.Target.Orbit);
+                if (!(hohmannToF.Seconds() > 0.0)) return true;
+            }
+
+            SimTime ideal = new SimTime(tPeri.Seconds() - hohmannToF.Seconds());
+
+            if (ideal < startTime)
+            {
+                string targetId = (transferInfo.Target as Astronomical)?.Id ?? "?";
+                LogHelper.WarnOnce($"alignment-past-{targetId}",
+                    $"[AFC] {targetId}: ideal departure is already past (periapsis at sim " +
+                    $"t={tPeri.Seconds():F0}s minus Hohmann ToF {hohmannToF.Seconds():F0}s); " +
+                    "alignment time clamped to startTime.");
+            }
+
+            __result = SimTime.Max(ideal, startTime);
+            return false;
         }
-
-        __result = SimTime.Max(ideal, startTime);
-        return false;
+        catch (Exception ex)
+        {
+            // TransferTask.Run rethrows anything that is not an
+            // OperationCanceledException, and it is a ThreadPool work item, so an
+            // exception escaping here would be unhandled on a pool thread.
+            DefaultCategory.Log.Warning($"[AFC] AlignmentTime prefix: {ex}");
+            return true;
+        }
     }
 }

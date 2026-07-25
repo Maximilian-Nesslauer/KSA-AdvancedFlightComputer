@@ -9,9 +9,10 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 
 /// <summary>
 /// Transpiler-injected wrapper around <see cref="Burn.Create"/> at the
-/// stock Hohmann Create button site (<c>TransferPlanner.DrawPlanWindow</c>
-/// line ~443). Routes to multi-pass when the inline UI is armed (N>1
-/// with a valid preview); otherwise returns a stock single-burn.
+/// stock Hohmann Create button site, the single Burn.Create call in
+/// <c>TransferPlanner.DrawPlanWindow</c>'s own body. Routes to multi-pass
+/// when the inline UI is armed (N>1 with a valid preview); otherwise
+/// returns a stock single-burn.
 ///
 /// Lets users click ONE Create button - stock's "Create" - and get
 /// either single-burn or multi-pass based on the pass count selector.
@@ -43,8 +44,7 @@ internal static class HohmannCreateInterceptor
         if (!wasClicked) return false;
         try
         {
-            if (GameReflection.TransferPlanner_Source == null) return true; // gate unwired; let stock proceed
-            if (GameReflection.TransferPlanner_Source.Invoke(null, null) is not Vehicle source) return true;
+            if (StockPlanner.SourceVehicle is not Vehicle source) return true;
             if (!MultiPassRegistry.Has(source.Id)) return true;
 
             TimedAlert.Create(ActiveExecAlert, Color.Yellow, 5.0);
@@ -78,14 +78,12 @@ internal static class HohmannCreateInterceptor
             // click-time gate ShouldAllowCreateClick injected at the
             // "Create" DrawButton site, which absorbs the click before
             // it ever reaches Burn.Create. Reaching this branch means
-            // the gate let the click through; that happens in three
+            // the gate let the click through; that happens in two
             // cases:
             //   1. The transpiler couldn't find the DrawButton anchor
             //      (warned at patch time).
-            //   2. GameReflection.TransferPlanner_Source resolved null
-            //      (warned by ValidateMultiPass at load).
-            //   3. The gate's Invoke threw and it failed open.
-            // In all three the click is unguarded by us, so stock
+            //   2. Resolving the source threw and the gate failed open.
+            // In both the click is unguarded by us, so stock
             // queues a fresh Burn from Burn.Create. This is the pre-
             // gate regression (mod-only - duplicate burn alongside the
             // reattached pass burn, no use-after-Dispose since the two

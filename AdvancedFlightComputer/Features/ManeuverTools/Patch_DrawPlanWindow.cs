@@ -47,7 +47,9 @@ internal static class Patch_DrawPlanWindow
         TransferType transferType;
         try
         {
-            transferType = (TransferType)GameReflection.TransferPlanner_transferType!.GetValue(null)!;
+            if (StockPlanner.TransferType is not TransferType current)
+                return true;
+            transferType = current;
         }
         catch (Exception ex)
         {
@@ -57,9 +59,7 @@ internal static class Patch_DrawPlanWindow
 
         if (!ManeuverTools.IsHandledType(transferType.GetKey()))
         {
-            _ourBurn = null;
-            _lastEntry = null;
-            _lastSource = null;
+            DropPlanState();
             return true;
         }
 
@@ -82,14 +82,12 @@ internal static class Patch_DrawPlanWindow
 
     private static void DrawWindow(Viewport inViewport, TransferType transferType)
     {
-        CleanupStaleBurn();
-
         ImGui.SetNextWindowPos(
             inViewport.Position + new float2(inViewport.Size.X - MainWindowOffsetX, MainWindowOffsetY),
             ImGuiCond.Appearing, (float2?)null);
         ImGui.SetNextWindowSize(new float2(MainWindowWidth, MainWindowHeight), ImGuiCond.Appearing);
 
-        bool pOpen = (bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!;
+        bool pOpen = StockPlanner.ShowPlanWindow;
         bool windowOpen = ImGui.Begin("Transfer Planning"u8, ref pOpen,
             ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings);
         try
@@ -102,7 +100,7 @@ internal static class Patch_DrawPlanWindow
             if (!windowOpen)
                 return;
 
-            GameReflection.TransferPlanner_showPlanWindow!.SetValue(null, true);
+            StockPlanner.ShowPlanWindow = true;
 
             if (!DrawPlanTypeDropdown(ref transferType))
                 return;
@@ -113,6 +111,7 @@ internal static class Patch_DrawPlanWindow
             if (source?.Orbit == null)
                 return;
             _lastSource = source;
+            CleanupStaleBurn(source);
 
             ImGui.Separator();
 
@@ -176,8 +175,8 @@ internal static class Patch_DrawPlanWindow
         if (ImGuiHelper.DrawCombo("Plan Type:"u8, ref transferType, TransferPlanner.TransferTypes)
             && transferType.GetKey() != prev.GetKey())
         {
-            GameReflection.TransferPlanner_transferType!.SetValue(null, transferType);
-            GameReflection.TransferPlanner_transferCalculated!.SetValue(null, false);
+            StockPlanner.TransferType = transferType;
+            StockPlanner.TransferCalculated = false;
             ManeuverToolsWindow.OnTypeChanged();
 
             if (!ManeuverTools.IsHandledType(transferType.GetKey()))
@@ -191,10 +190,14 @@ internal static class Patch_DrawPlanWindow
 
     private static Vehicle? DrawSourceDropdown()
     {
-        var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!.GetValue(null)!;
+        TransferObject sourceBody = StockPlanner.SourceBody;
 
-        // Rebuild every frame from VehiclesInFrame to match stock and avoid
-        // TransferObject._index aliasing after a vehicle is destroyed.
+        // Rebuild every frame, as stock's own PopulateWithVehicles does: a
+        // TransferObject holds only a LookupIndex, and LookupCollection.Deregister
+        // swap-removes, so an entry kept across frames can resolve to a different
+        // vehicle once one is destroyed. Program.VehiclesInFrame is every vehicle in
+        // the current system (Program.RefreshVehiclesInFrame applies no filter
+        // beyond the type), which is the same set stock offers as a source.
         ReadOnlySpan<Vehicle> vehiclesInFrame = Program.VehiclesInFrame;
         Span<TransferObject> list = stackalloc TransferObject[vehiclesInFrame.Length];
         for (int i = 0; i < vehiclesInFrame.Length; i++)
@@ -202,7 +205,14 @@ internal static class Patch_DrawPlanWindow
 
         if (ImGui.IsWindowAppearing() || sourceBody.GetKey() == "N/A")
         {
-            sourceBody = default;
+            // new TransferObject(-1), not default: a TransferObject holds one int, so
+            // default is LookupIndex 0 and resolves to the first registered
+            // astronomical (normally the star), whose key is its Id and never "N/A".
+            // With default here the "N/A" fallback below would be dead, an unrelated
+            // body would end up in stock's _sourceBody, and stock's own re-pick could
+            // not repair it either, since that is keyed on "N/A" too. Only a negative
+            // index is the none sentinel.
+            sourceBody = new TransferObject(-1);
             if (Program.ControlledVehicle != null)
             {
                 for (int i = 0; i < list.Length; i++)
@@ -217,14 +227,14 @@ internal static class Patch_DrawPlanWindow
             if (sourceBody.GetKey() == "N/A" && list.Length > 0)
                 sourceBody = list[0];
 
-            GameReflection.TransferPlanner_sourceBody!.SetValue(null, sourceBody);
+            StockPlanner.SourceBody = sourceBody;
         }
 
         TransferObject prev = sourceBody;
         if (ImGuiHelper.DrawCombo("Source:"u8, ref sourceBody, list)
             && sourceBody.GetKey() != prev.GetKey())
         {
-            GameReflection.TransferPlanner_sourceBody!.SetValue(null, sourceBody);
+            StockPlanner.SourceBody = sourceBody;
             ManeuverToolsWindow.OnSourceChanged();
         }
 
@@ -384,6 +394,21 @@ internal static class Patch_DrawPlanWindow
     /// from Patch_OnPreRender when "Preview Orbit" is on.</summary>
     internal static void RenderOrbitPreview(Viewport inViewport)
     {
+        // Program.OnDrawUiThreadSafe calls DrawPlanWindow only while
+        // TransferPlanner.ShowPlanWindow is true, so neither the prefix nor
+        // HandleWindowClose runs once the window is closed from the
+        // ToggleTransferPlan keybind or the View menu - both of which flip the
+        // property and notify nobody. CelestialSystem.OnPreRender keeps calling
+        // TransferPlanner.OnPreRender either way, which is why stock re-tests
+        // ShowPlanWindow on both of its own overlay branches. Drop the plan state
+        // rather than only skipping the draw, so a closed window cannot leave a
+        // burn reference or a previous world's plan behind for the reopen.
+        if (!StockPlanner.ShowPlanWindow)
+        {
+            DropPlanState();
+            return;
+        }
+
         if (_ourBurn != null || _lastSource == null) return;
         if (!_showOrbitPreview) return;
 
@@ -456,11 +481,39 @@ internal static class Patch_DrawPlanWindow
         return null;
     }
 
-    private static void CleanupStaleBurn()
+    /// <summary>Drops <see cref="_ourBurn"/> unless it is still a live burn on the
+    /// vehicle currently selected as the source.
+    ///
+    /// Anchoring on the current source is what stock does: the first thing
+    /// <c>TransferPlanner.DrawPlanWindow</c> does is clear its own
+    /// <c>_transferBurn</c> when <c>Source.FlightComputer.BurnPlan.TryGetBurn</c>
+    /// says it is gone, where Source is the selected source, not the burn's own
+    /// vehicle. Asking the burn's own vehicle instead keeps answering "still
+    /// there" after the source dropdown moves to a different vehicle, and after a
+    /// save load, because <c>Vehicle.Dispose</c> leaves the destroyed vehicle's
+    /// FlightComputer and BurnPlan fully intact.
+    ///
+    /// The id comparison is not redundant with the plan lookup:
+    /// <c>Burn.Equals</c> compares Time and DeltaVVlf only, so
+    /// <c>BurnPlan.TryGetBurn</c> also matches an unrelated burn that happens to
+    /// coincide in both.</summary>
+    private static void CleanupStaleBurn(Vehicle source)
     {
         if (_ourBurn == null) return;
-        if (!_ourBurn.Vehicle.FlightComputer.BurnPlan.TryGetBurn(_ourBurn))
+        if (_ourBurn.Vehicle.Id != source.Id
+            || !source.FlightComputer.BurnPlan.TryGetBurn(_ourBurn))
             _ourBurn = null;
+    }
+
+    /// <summary>The cross-frame state a drawn window rebuilds every frame: the
+    /// burn we created, the porkchop entry the preview renders, and the vehicle
+    /// both are about. Every path that stops drawing the window clears all three
+    /// together, so none of them can outlive the world they describe.</summary>
+    private static void DropPlanState()
+    {
+        _ourBurn = null;
+        _lastEntry = null;
+        _lastSource = null;
     }
 
     private static void HandleWindowClose()
@@ -469,16 +522,12 @@ internal static class Patch_DrawPlanWindow
         // _selectedEntry, _lambertPatch, _transferCalculated) is cleared too;
         // setting only _showPlanWindow via reflection would leak that state.
         TransferPlanner.ShowPlanWindow = false;
-        _ourBurn = null;
-        _lastEntry = null;
-        _lastSource = null;
+        DropPlanState();
     }
 
     internal static void Reset()
     {
-        _ourBurn = null;
-        _lastEntry = null;
-        _lastSource = null;
+        DropPlanState();
         _showFlightPlanPreview = false;
         _showOrbitPreview = false;
     }
