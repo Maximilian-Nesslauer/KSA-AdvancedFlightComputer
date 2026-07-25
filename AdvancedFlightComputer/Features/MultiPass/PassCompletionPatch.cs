@@ -250,9 +250,10 @@ internal static class PassCompletionPatch
 
             // Re-sync stock _transferBurn now that the new pass burn is
             // actually in the plan; the sync in TryScheduleNext fires
-            // before ApplyInputEvents, so stock's line-172 auto-clear
-            // (which checks plan.TryGetBurn) may have wiped _transferBurn
-            // in between. This second sync closes that window.
+            // before ApplyInputEvents, so the auto-clear at the top of
+            // DrawPlanWindow (which drops _transferBurn when
+            // plan.TryGetBurn no longer finds it) may have wiped it in
+            // between. This second sync closes that window.
             if (exec.Intent is HohmannTransferIntent)
                 KeepStockTransferBurnInSync(exec.CurrentBurn);
 
@@ -565,16 +566,16 @@ internal static class PassCompletionPatch
         return true;
     }
 
-    /// <summary>Reflection setter so the stock TransferPlanner._transferBurn
-    /// field tracks our current pass during a Hohmann multi-pass.
-    /// Stock's line-172 auto-clear (when the burn leaves the plan) will
-    /// reset it next frame if our burn happens to be missing, which is
-    /// the desired behaviour at multi-pass completion.</summary>
+    /// <summary>Keeps the stock TransferPlanner._transferBurn field tracking our
+    /// current pass during a Hohmann multi-pass. The auto-clear at the top of
+    /// DrawPlanWindow (which drops the field when the burn leaves the plan) will
+    /// reset it next frame if our burn happens to be missing, which is the desired
+    /// behaviour at multi-pass completion.</summary>
     private static void KeepStockTransferBurnInSync(Burn currentBurn)
     {
         try
         {
-            GameReflection.TransferPlanner_transferBurn?.SetValue(null, currentBurn);
+            StockPlanner.TransferBurn = currentBurn;
         }
         catch (Exception ex)
         {
@@ -594,15 +595,10 @@ internal static class PassCompletionPatch
     {
         try
         {
-            if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
+            if (!StockPlanner.ShowPlanWindow) return false;
+            if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
                 return false;
-            var transferType = (TransferType?)GameReflection.TransferPlanner_transferType?
-                .GetValue(null);
-            if (transferType == null || transferType.Value.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann)
-                return false;
-            var sourceBody = (TransferObject?)GameReflection.TransferPlanner_sourceBody?
-                .GetValue(null);
-            return sourceBody?.Body is Vehicle v && v.Id == execVehicle.Id;
+            return StockPlanner.SourceVehicle is Vehicle v && v.Id == execVehicle.Id;
         }
         catch
         {
@@ -615,22 +611,16 @@ internal static class PassCompletionPatch
     /// (which would otherwise auto-clear the flag). Caller must scope
     /// via <see cref="IsPlanWindowOnVehicleHohmann"/>; the field is
     /// global and pinning it for the wrong vehicle stomps stock's
-    /// normal source / type-change resets.
-    ///
-    /// Skips the pin when stock's <c>_selectedEntry == null</c>:
-    /// after F4 close + reopen, ShowPlanWindow.set(false) nulled the
-    /// entry and IsWindowAppearing rebuilt _transferInfo with empty
-    /// PorkChopData. Pinning there routes stock's
-    /// DrawTransferSummary against a null PorkChopEntry, NRE-ing the
-    /// UI thread. Post-burn auto-clear keeps _selectedEntry
-    /// populated, so the gate doesn't affect that case.</summary>
+    /// normal source / type-change resets.</summary>
     private static void KeepStockTransferCalculatedInSync()
     {
         try
         {
-            if (GameReflection.TransferPlanner_selectedEntry?.GetValue(null) == null)
-                return;
-            GameReflection.TransferPlanner_transferCalculated?.SetValue(null, true);
+            // The flag we pin is stock's assertion that the porkchop array behind
+            // its selected-entry block is populated, so only re-assert it while
+            // that actually holds.
+            if (!StockPlanner.SelectedTransferBlockIsSafe) return;
+            StockPlanner.TransferCalculated = true;
         }
         catch (Exception ex)
         {
@@ -652,7 +642,7 @@ internal static class PassCompletionPatch
     {
         try
         {
-            GameReflection.TransferPlanner_displaySelectedTransfer?.SetValue(null, false);
+            StockPlanner.DisplaySelectedTransfer = false;
         }
         catch (Exception ex)
         {

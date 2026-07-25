@@ -59,22 +59,11 @@ internal static class SaveLoadObserver
             {
                 CurrentSaveId = __instance.Id ?? string.Empty;
 
-                // Drop the per-frame preview cache: its inputs (vehicle
-                // id, mass, engine signature) can match a same-named
-                // vehicle in the just-loaded save and return a stale
-                // SequenceBurnState / PassPreviewResult from the
-                // previous world.
-                MultiPassPreviewCache.Reset();
-                // Same reasoning for the Hohmann shift cache: keyed on
-                // vehicle / target id, would otherwise survive a save
-                // load with a same-id vehicle in a different geometry.
-                HohmannMultiPassPlanner.ResetShiftCache();
-                MultiPassUI.Reset();
-                HohmannMultiPassUI.Reset();
-                // Same reasoning: the flyby arm flag + inputs + result cache are
-                // keyed on the source vehicle and would otherwise carry into the
-                // just-loaded save, silently baking a flyby the user did not set.
-                HohmannFlybyUI.Reset();
+                // Everything keyed on the world this load just replaced. The
+                // membership lives in SaveScopedState so this path and Mod.Unload
+                // cannot drift apart, which is how Patch_DrawPlanWindow and
+                // ManeuverToolsWindow came to be reset on unload but not here.
+                SaveScopedState.ResetAll();
 
                 // Refresh registry from disk so in-memory exec state
                 // matches whatever was persisted for the just-loaded

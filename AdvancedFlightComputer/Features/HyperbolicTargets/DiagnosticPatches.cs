@@ -22,8 +22,7 @@ internal static class Patch_DiagnosticLog
 
         try
         {
-            var entry = GameReflection.TransferPlanner_selectedEntry!.GetValue(null)
-                as OrbitalTransfers.PorkChopEntry;
+            OrbitalTransfers.PorkChopEntry? entry = StockPlanner.SelectedEntry;
             if (entry?.FlightPlan == null) return;
 
             var data = entry.TransferData;

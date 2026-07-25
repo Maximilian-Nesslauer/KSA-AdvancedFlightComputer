@@ -48,9 +48,9 @@ internal static class HohmannMultiPassUI
     private static SplitMode _splitMode = SplitMode.EqualBurnTime;
 
     // Cache key components - quantized so per-frame floating drift on
-    // T_final / dV magnitude does not bust the cache. SplitMode now
-    // affects per-pass dV (real-K schedule via Splitter.Allocate); cache
-    // busts on mode toggle. StartPassIndex distinguishes init-phase
+    // T_final / dV magnitude does not bust the cache. SplitMode is part of
+    // the key because it drives per-pass dV through the real-K schedule
+    // (Splitter.Allocate). StartPassIndex distinguishes init-phase
     // (always 0) from active-exec (= exec.PassIndex), so a pass completion
     // naturally busts the cache.
     private readonly record struct PreviewKey(
@@ -169,15 +169,11 @@ internal static class HohmannMultiPassUI
     /// followed by a reopen (which clears _selectedEntry).</summary>
     private static bool TryDrawActiveFastPath()
     {
-        if (!(bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!)
+        if (!StockPlanner.ShowPlanWindow) return false;
+        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
             return false;
-        var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
-            .GetValue(null)!;
-        if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
 
-        var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!
-            .GetValue(null)!;
-        if (sourceBody.Body is not Vehicle source) return false;
+        if (StockPlanner.SourceVehicle is not Vehicle source) return false;
         if (!MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
             return false;
         if (exec.Intent is not HohmannTransferIntent) return false;
@@ -323,13 +319,9 @@ internal static class HohmannMultiPassUI
         // center-aimed impact), so the final pass has to be drawn here instead of
         // being delegated to stock.
         if (HohmannFlybyUI.FlybyRequested) return false;
-        if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
-            return false;
-        if (!(bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false))
-            return false;
-        if (!(bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false))
-            return false;
-        return true;
+        return StockPlanner.ShowPlanWindow
+               && StockPlanner.DisplaySelectedTransfer
+               && StockPlanner.TransferCalculated;
     }
 
     /// <summary>Shared gate for the 3D orbit overlay and the per-pass
@@ -350,22 +342,15 @@ internal static class HohmannMultiPassUI
         source = null;
         if (!HasMultiPassPreview) return false;
 
-        if (!(bool)(GameReflection.TransferPlanner_showPlanWindow?.GetValue(null) ?? false))
-            return false;
-        if (!(bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false))
+        if (!StockPlanner.ShowPlanWindow) return false;
+        if (!StockPlanner.DisplaySelectedTransfer) return false;
+        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
             return false;
 
-        var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
-            .GetValue(null)!;
-        if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
-
-        var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!
-            .GetValue(null)!;
-        source = sourceBody.Body as Vehicle;
+        source = StockPlanner.SourceVehicle;
         if (source == null) return false;
 
-        if (!MultiPassRegistry.Has(source.Id)
-            && !(bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false))
+        if (!MultiPassRegistry.Has(source.Id) && !StockPlanner.TransferCalculated)
             return false;
 
         return true;
@@ -384,32 +369,25 @@ internal static class HohmannMultiPassUI
 
         try
         {
-            var transferType = (TransferType)GameReflection.TransferPlanner_transferType!
-                .GetValue(null)!;
-            if (transferType.GetKey() != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
-
-            if (!(bool)GameReflection.TransferPlanner_showPlanWindow!.GetValue(null)!)
+            if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
                 return false;
+
+            if (!StockPlanner.ShowPlanWindow) return false;
 
             // Gates out stale _selectedEntry that stock keeps across
             // source/destination changes (only nulls it on full window
             // close via ShowPlanWindow.set(false)). Without this check
             // we'd render with the previous target's entry data
             // against the new target's transferInfo.
-            if (!(bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false))
-                return false;
+            if (!StockPlanner.TransferCalculated) return false;
 
-            entry = GameReflection.TransferPlanner_selectedEntry!.GetValue(null)
-                as OrbitalTransfers.PorkChopEntry;
+            entry = StockPlanner.SelectedEntry;
             if (entry == null) return false;
 
-            info = GameReflection.TransferPlanner_transferInfo!.GetValue(null)
-                as OrbitalTransfers.TransferInfo;
+            info = StockPlanner.TransferInfo;
             if (info == null || info.Target == null) return false;
 
-            var sourceBody = (TransferObject)GameReflection.TransferPlanner_sourceBody!
-                .GetValue(null)!;
-            source = sourceBody.Body as Vehicle;
+            source = StockPlanner.SourceVehicle;
             return source != null && source.Orbit?.Parent != null;
         }
         catch
@@ -617,9 +595,7 @@ internal static class HohmannMultiPassUI
         // no way to re-enable the 3D overlay without re-running
         // Calculate. Skipped when stock's checkbox is accessible to
         // avoid two coupled checkboxes that show the same state.
-        bool stockCheckboxAccessible =
-            (bool)(GameReflection.TransferPlanner_transferCalculated?.GetValue(null) ?? false);
-        if (!stockCheckboxAccessible)
+        if (!StockPlanner.TransferCalculated)
             DrawInlinePreviewToggle();
 
         ImGui.Spacing();
@@ -640,14 +616,13 @@ internal static class HohmannMultiPassUI
     private static void DrawInlinePreviewToggle()
     {
         ImGui.Spacing();
-        bool preview =
-            (bool)(GameReflection.TransferPlanner_displaySelectedTransfer?.GetValue(null) ?? false);
+        bool preview = StockPlanner.DisplaySelectedTransfer;
         bool previous = preview;
         ImGuiHelper.BeginColumns(2, SingleColumnWidths);
         ImGuiHelper.DrawCheckbox("Preview Selected Transfer"u8, ref preview, isChanged: false);
         ImGuiHelper.EndColumns();
         if (preview != previous)
-            GameReflection.TransferPlanner_displaySelectedTransfer?.SetValue(null, preview);
+            StockPlanner.DisplaySelectedTransfer = preview;
     }
 
     private static void UpdatePreviewForActiveExec(

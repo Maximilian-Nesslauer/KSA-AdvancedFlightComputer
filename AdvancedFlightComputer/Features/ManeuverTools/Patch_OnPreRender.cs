@@ -18,8 +18,8 @@ internal static class Patch_OnPreRender
     {
         try
         {
-            var transferType = (TransferType)GameReflection.TransferPlanner_transferType!.GetValue(null)!;
-            if (!ManeuverTools.IsHandledType(transferType.GetKey()))
+            string? typeKey = StockPlanner.TransferTypeKey;
+            if (typeKey == null || !ManeuverTools.IsHandledType(typeKey))
                 return;
 
             Patch_DrawPlanWindow.RenderOrbitPreview(inViewport);

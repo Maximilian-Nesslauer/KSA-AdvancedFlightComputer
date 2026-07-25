@@ -194,23 +194,23 @@ public sealed class Mod
         // No MultiPassRegistry.Save() here: persistence is driven by
         // UncompressedSave.Write events so a quit without KSA-saving
         // intentionally drops in-memory mutations.
+
+        // Everything scoped to one save game, shared with SaveLoadObserver's
+        // load path so the two lists cannot drift.
+        SaveScopedState.ResetAll();
+
+        // Unload-only: the feature gates, the registries the load path reloads
+        // from disk instead of clearing, and the dedup sets whose lifetime is the
+        // mod load rather than one save.
+        MultiPassUI.Enabled = false;
+        HohmannMultiPassUI.Enabled = false;
+        HohmannFlybyUI.Enabled = false;
         RcsExecRegistry.Reset();
         RcsCommandChannel.Reset();
         RcsBurnCompletions.Reset();
-        RcsExecutor.ResetUiCache();
-        Patch_DrawPlanWindow.Reset();
-        MultiPassUI.Enabled = false;
-        MultiPassUI.Reset();
-        HohmannMultiPassUI.Enabled = false;
-        HohmannMultiPassUI.Reset();
-        HohmannFlybyUI.Enabled = false;
-        HohmannFlybyUI.Reset();
-        MultiPassPreviewCache.Reset();
         MultiPassRegistry.Reset();
-        PassCompletionPatch.Reset();
         SaveLoadObserver.Reset();
-        ManeuverToolsWindow.Reset();
-        Patch_AlignmentTime.Reset();
+        Patch_SetTransferInfo.Reset();
         LogHelper.Reset();
 #if DEBUG
         PerfTracker.Reset();
