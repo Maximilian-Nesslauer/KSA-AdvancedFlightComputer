@@ -64,9 +64,9 @@ internal static class Patch_DrawPlanWindow_HohmannMultiPass
         {
             totalIns++;
             // Anchor on the first invocation of DrawCorrectionTransfer.
-            // Stock has exactly one call site in this method (verified
-            // against KSA 2026.5.7.4397); guarded with `injected` so a
-            // hypothetical future second site doesn't cause double draws.
+            // The invariant is that DrawPlanWindow calls it exactly once;
+            // guarded with `injected` so a hypothetical future second site
+            // doesn't cause double draws.
             if (ins.Calls(anchor))
             {
                 callsToAnchor++;

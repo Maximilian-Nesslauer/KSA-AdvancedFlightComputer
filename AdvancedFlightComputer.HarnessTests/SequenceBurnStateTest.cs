@@ -11,8 +11,8 @@ namespace AdvancedFlightComputer.HarnessTests;
 // SequencePerformanceList for real vehicles. The oracle is always the game's own
 // per-sequence numbers, never a re-derivation: for each Vacuum sequence, AFC's burnable
 // fuel, mass flow and exhaust velocity must match the game's BurnedFuelMass /
-// MassFlowRate / (Thrust / MassFlowRate). It also exercises the two fuel-accounting
-// fixes: toggling a tank's PropellantUseEnabled and setting a non-default engine
+// MassFlowRate / (Thrust / MassFlowRate). It also covers the two fuel-accounting edge
+// cases: toggling a tank's PropellantUseEnabled and setting a non-default engine
 // FlowRule must keep AFC in agreement with the game.
 //
 // AFC's SequenceBurnState is vacuum-only (it reads EngineController.VacuumData). The game

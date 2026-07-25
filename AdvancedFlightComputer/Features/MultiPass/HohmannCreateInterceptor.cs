@@ -9,9 +9,10 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 
 /// <summary>
 /// Transpiler-injected wrapper around <see cref="Burn.Create"/> at the
-/// stock Hohmann Create button site (<c>TransferPlanner.DrawPlanWindow</c>
-/// line ~443). Routes to multi-pass when the inline UI is armed (N>1
-/// with a valid preview); otherwise returns a stock single-burn.
+/// stock Hohmann Create button site, the single Burn.Create call in
+/// <c>TransferPlanner.DrawPlanWindow</c>'s own body. Routes to multi-pass
+/// when the inline UI is armed (N>1 with a valid preview); otherwise
+/// returns a stock single-burn.
 ///
 /// Lets users click ONE Create button - stock's "Create" - and get
 /// either single-burn or multi-pass based on the pass count selector.

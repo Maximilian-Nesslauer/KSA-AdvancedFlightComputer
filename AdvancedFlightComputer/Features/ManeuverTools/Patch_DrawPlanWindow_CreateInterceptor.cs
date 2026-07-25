@@ -13,10 +13,9 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 
 /// <summary>
 /// Second IL transpiler on <see cref="TransferPlanner.DrawPlanWindow"/>.
-/// Two related injections at the stock "Create" button site
-/// (line ~435-451 in KSA 2026.5.11.4462):
+/// Two related injections at the stock "Create" button site:
 ///
-/// 1. Swaps the <see cref="Burn.Create"/> call (line ~443) for our
+/// 1. Swaps the <see cref="Burn.Create"/> call for our
 ///    wrapper <see cref="HohmannCreateInterceptor.CreateMaybeMultiPass"/>,
 ///    so a single button click routes to multi-pass when armed for N>1
 ///    or falls through to a single burn otherwise.
@@ -35,10 +34,10 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// IL site), this one rewrites a call and inserts a gate (also different
 /// sites).
 ///
-/// DrawPlanWindow has exactly one Burn.Create call site (line ~443).
-/// The other Burn.Create at line ~904 lives in the separate
-/// DrawCorrectionTransfer method body and is NOT touched by this
-/// transpiler. The DrawButton anchor is located by walking back from
+/// The invariant this relies on: DrawPlanWindow's own body contains
+/// exactly one Burn.Create call site. Stock's other one belongs to
+/// DrawCorrectionTransfer, a separate method body, so it is NOT touched
+/// by this transpiler. The DrawButton anchor is located by walking back from
 /// the Burn.Create site, so multiple DrawButton calls earlier in the
 /// method (Calculate, Re-Calculate) are not affected.
 /// </summary>
@@ -57,8 +56,8 @@ internal static class Patch_DrawPlanWindow_CreateInterceptor
     };
 
     // Sanity ceiling for the IL gap between the located DrawButton and
-    // Burn.Create. KSA 2026.5.11.4462 produces ~35-40 instructions in
-    // that span; 80 leaves room for moderate stock-side IL changes but
+    // Burn.Create. Stock's Create block is around 35-40 instructions
+    // wide; 80 leaves room for moderate stock-side IL changes but
     // catches a wholesale refactor where the walk-back can no longer be
     // trusted to point at the "Create" button. The walk-back stops at
     // the first DrawButton, so the failure mode this guards is "stock

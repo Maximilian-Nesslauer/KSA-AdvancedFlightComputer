@@ -105,8 +105,8 @@ internal static class PlaneChangeBurnPlanner
         double3 vPerpVec = sv.VelocityCci - double3.Dot(sv.VelocityCci, rotAxis) * rotAxis;
         double vPerp = vPerpVec.Length();
 
-        // Per-spec section 5.5: theta = 2 * asin(dv / (2 * v_perp))
-        // where v_perp is the velocity component perpendicular to the
+        // theta = 2 * asin(dv / (2 * v_perp)), where v_perp is the velocity
+        // component perpendicular to the
         // rotation axis at the node (NOT the full |v|; the radial-velocity
         // component lies along the node line and does not rotate).
         double sinHalfTheta = vPerp >= 1e-3

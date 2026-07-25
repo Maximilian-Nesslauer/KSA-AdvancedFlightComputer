@@ -354,9 +354,8 @@ internal static class MultiPassRegistry
         if (pending == null) return;
         var block = pending.Fields;
 
-        // save_id is required; pre-format entries without it are
-        // dropped (they collided with the default starting situation
-        // and were unreliable).
+        // save_id is required: an entry without one cannot be scoped to a save
+        // game, so it would collide with the default starting situation.
         if (!block.TryGetValue("save_id", out string? saveId) || string.IsNullOrEmpty(saveId))
         {
             DefaultCategory.Log.Warning(

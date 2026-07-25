@@ -18,8 +18,8 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// The Lambert inputs (T_final, D_final direction, v_inf magnitude) are
 /// locked at Start so the asymptote phasing is preserved across N passes;
 /// otherwise re-planning each pass would chase a moving target window
-/// and drift the encounter geometry (this was the cross-parent failure
-/// mode the previous Oberth branch hit).
+/// and drift the encounter geometry, which is how a cross-parent transfer
+/// loses its encounter entirely.
 ///
 /// Per-pass dV is recomputed against the live orbit each commit. Prior
 /// passes share the splitter's equal-time / equal-dV allocation; the
@@ -227,8 +227,9 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         bool isCrossParent = kv.TryGetValue("is_cross_parent", out string? cp) && cp == "true";
         if (!TryParseDouble(kv, "v_inf_ms", out double vInf)) return null;
         if (!TryParseDouble(kv, "apo_target_radius_m", out double apoTarget)) return null;
-        // Older entries (pre-K-redesign) may not have parking_period_sec;
-        // 0.0 fallback would break recompute scheduling. Require it.
+        // parking_period_sec anchors the K-schedule, and a 0.0 fallback would
+        // break recompute scheduling, so an entry without it is rejected rather
+        // than defaulted.
         if (!TryParseDouble(kv, "parking_period_sec", out double parkingPeriod)
             || !(parkingPeriod > 0.0))
             return null;

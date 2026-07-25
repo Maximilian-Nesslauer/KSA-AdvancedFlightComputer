@@ -156,7 +156,7 @@ internal sealed class SequenceBurnState
         {
             foreach (RocketCore core in engine.Cores)
             {
-                // The ResourceManager lives on Combustor (liquid) now; a
+                // The ResourceManager lives on Combustor (liquid), while a
                 // SolidMotor feeds grain segments instead of tanks, so the two
                 // core kinds drain disjoint stores and are summed separately.
                 if (core is Combustor combustor)
