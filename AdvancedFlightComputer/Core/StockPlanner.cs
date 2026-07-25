@@ -20,10 +20,13 @@ namespace AdvancedFlightComputer.Core;
 /// <see cref="TransferPlanner.DrawPlanWindow"/>'s destination handling): its
 /// Body resolves to null and its key to "N/A".
 ///
-/// Deliberately not covered: the private <c>TransferPlanner.Source</c> property
-/// getter, which only <see cref="MultiPass.HohmannCreateInterceptor"/>'s click
-/// gate invokes, and the transfer-window time fields, which HyperbolicTargets
-/// writes as inputs rather than observing as state.
+/// <see cref="SourceVehicle"/> also replaces stock's private
+/// <c>TransferPlanner.Source</c> property, which is only
+/// <c>(_sourceBody.Body as Vehicle) ?? null</c> over the same field, so the mod no
+/// longer reflects on that getter at all.
+///
+/// Deliberately not covered: the transfer-window time fields, which
+/// HyperbolicTargets writes as inputs rather than observing as state.
 /// </summary>
 internal static class StockPlanner
 {

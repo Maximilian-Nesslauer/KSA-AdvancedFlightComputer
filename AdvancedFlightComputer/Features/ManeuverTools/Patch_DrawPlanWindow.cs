@@ -205,7 +205,14 @@ internal static class Patch_DrawPlanWindow
 
         if (ImGui.IsWindowAppearing() || sourceBody.GetKey() == "N/A")
         {
-            sourceBody = default;
+            // new TransferObject(-1), not default: a TransferObject holds one int, so
+            // default is LookupIndex 0 and resolves to the first registered
+            // astronomical (normally the star), whose key is its Id and never "N/A".
+            // With default here the "N/A" fallback below would be dead, an unrelated
+            // body would end up in stock's _sourceBody, and stock's own re-pick could
+            // not repair it either, since that is keyed on "N/A" too. Only a negative
+            // index is the none sentinel.
+            sourceBody = new TransferObject(-1);
             if (Program.ControlledVehicle != null)
             {
                 for (int i = 0; i < list.Length; i++)
