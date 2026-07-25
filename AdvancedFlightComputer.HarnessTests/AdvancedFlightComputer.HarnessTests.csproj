@@ -52,13 +52,12 @@
     </None>
   </ItemGroup>
 
-  <Target Name="CopyToMods" AfterTargets="Build">
-    <PropertyGroup>
-      <ModDir>$(USERPROFILE)\Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer.HarnessTests\</ModDir>
-    </PropertyGroup>
-    <MakeDir Directories="$(ModDir)" />
-    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
-    <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
-  </Target>
+  <!-- The harness suite is launched by scripts/run-headless.ps1, not from Visual Studio, so it
+       needs the deploy plumbing but no StarMap launch profile of its own. -->
+  <PropertyGroup>
+    <GenerateLaunchProfile>false</GenerateLaunchProfile>
+  </PropertyGroup>
+
+  <Import Project="..\build\ModDeploy.targets" />
 
 </Project>

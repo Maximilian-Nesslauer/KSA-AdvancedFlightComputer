@@ -1,0 +1,136 @@
+<Project>
+
+  <!--
+    Deploy plumbing shared by every project in this repo that copies its build output into the
+    game's mods folder. Import it near the end of the .csproj, after the project's own property
+    and item groups.
+
+    Optional inputs, all with a default:
+      ModDeployName          folder name under the game's mods directory (default: AssemblyName)
+      PatchFile              XML patch items to deploy into <mod>\Patches\ (default: none)
+      DeployToMods           false builds without touching the game's mods folder
+      GenerateLaunchProfile  false skips writing a StarMap launch profile for this project
+
+    Beyond the plain copy it does three things.
+
+    A missing Properties\launchSettings.json is written on demand. That file holds absolute local
+    paths, so it is gitignored, which means a fresh git worktree of this repo starts with no launch
+    profile at all and Visual Studio has nothing to run. Generating it lets any worktree start
+    StarMap without copying files by hand between checkouts.
+
+    A locked destination DLL is reported as one readable error. The running game holds the deployed
+    assembly open, and the default ten copy retries spend ten seconds to fail with a message that
+    never mentions the game.
+
+    The deployed copy records which checkout it came from. Several worktrees of one mod all deploy
+    into the same folder under the game's mods directory, so the last build silently wins. The
+    stamp plus the takeover notice make that visible instead of surprising.
+  -->
+
+  <PropertyGroup>
+    <ModDeployName Condition="'$(ModDeployName)' == ''">$(AssemblyName)</ModDeployName>
+    <DeployToMods Condition="'$(DeployToMods)' == ''">true</DeployToMods>
+    <GenerateLaunchProfile Condition="'$(GenerateLaunchProfile)' == ''">true</GenerateLaunchProfile>
+
+    <ModDeployDir>$(USERPROFILE)\Documents\My Games\Kitten Space Agency\mods\$(ModDeployName)\</ModDeployDir>
+    <ModDeployStamp>$(ModDeployDir).deployed-from</ModDeployStamp>
+    <LaunchProfile>$(MSBuildProjectDirectory)\Properties\launchSettings.json</LaunchProfile>
+
+    <!-- Both derived from this file rather than from the importing project, so they hold for a
+         project at any depth in the repo. This file sits one level under the repo root, the same
+         depth as a top-level project folder, so the same walk also reaches the KSA Modding tree. -->
+    <ModRepoRoot>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..'))</ModRepoRoot>
+    <StarMapDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\..\refs\starmap'))</StarMapDir>
+  </PropertyGroup>
+
+  <Target Name="EnsureLaunchProfile" BeforeTargets="Build"
+          Condition="'$(GenerateLaunchProfile)' == 'true' AND !Exists('$(LaunchProfile)')">
+    <PropertyGroup>
+      <_StarMapDirJson>$(StarMapDir.Replace('\','\\'))</_StarMapDirJson>
+      <_LaunchProfileBody>{
+  "profiles": {
+    "StarMap": {
+      "commandName": "Executable",
+      "executablePath": "$(_StarMapDirJson)\\StarMap.exe",
+      "workingDirectory": "$(_StarMapDirJson)"
+    }
+  }
+}</_LaunchProfileBody>
+    </PropertyGroup>
+    <MakeDir Directories="$(MSBuildProjectDirectory)\Properties" />
+    <WriteLinesToFile File="$(LaunchProfile)" Lines="$(_LaunchProfileBody)" Overwrite="true" />
+    <Message Importance="high"
+             Text="$(MSBuildProjectName): wrote the StarMap launch profile to Properties\launchSettings.json. Reload the solution in Visual Studio to get it into the run dropdown." />
+  </Target>
+
+  <Target Name="CopyToMods" AfterTargets="Build" Condition="'$(DeployToMods)' == 'true'">
+    <MakeDir Directories="$(ModDeployDir)" />
+
+    <!-- One attempt rather than the default ten retries: the only thing that ever locks this file
+         is the running game, and retrying only delays that verdict by ten seconds. -->
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll"
+          DestinationFolder="$(ModDeployDir)"
+          Retries="0"
+          ContinueOnError="true">
+      <Output TaskParameter="CopiedFiles" ItemName="_ModDeployedAssembly" />
+    </Copy>
+
+    <!-- Only on failure, so a normal build never pays for starting PowerShell. -->
+    <Exec Condition="'@(_ModDeployedAssembly)' == ''"
+          Command="powershell -NoProfile -NonInteractive -Command &quot;(Get-Process -Name StarMap,KSA -ErrorAction SilentlyContinue | ForEach-Object { $_.ProcessName + '.exe pid ' + $_.Id }) -join ', '&quot;"
+          ConsoleToMSBuild="true"
+          StandardOutputImportance="low"
+          IgnoreExitCode="true"
+          ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_RunningGameProcesses" />
+    </Exec>
+
+    <Error Condition="'@(_ModDeployedAssembly)' == '' AND '$(_RunningGameProcesses)' != ''"
+           Text="The game is running ($(_RunningGameProcesses)) and holds the deployed $(AssemblyName).dll open. Compiling succeeded, only the copy into &quot;$(ModDeployDir)&quot; was skipped. Close the game, then build again." />
+    <Error Condition="'@(_ModDeployedAssembly)' == '' AND '$(_RunningGameProcesses)' == ''"
+           Text="Could not copy $(AssemblyName).dll into &quot;$(ModDeployDir)&quot;. The game does not look like it is running, so check that the path exists and is writable." />
+
+    <Copy SourceFiles="$(MSBuildProjectDirectory)\mod.toml" DestinationFolder="$(ModDeployDir)" />
+    <MakeDir Directories="$(ModDeployDir)Patches\" Condition="'@(PatchFile)' != ''" />
+    <Copy SourceFiles="@(PatchFile)" DestinationFolder="$(ModDeployDir)Patches\" Condition="'@(PatchFile)' != ''" />
+  </Target>
+
+  <Target Name="StampDeploySlot" AfterTargets="CopyToMods" Condition="'$(DeployToMods)' == 'true'">
+    <ReadLinesFromFile File="$(ModDeployStamp)" Condition="Exists('$(ModDeployStamp)')">
+      <Output TaskParameter="Lines" PropertyName="_PreviousStamp" />
+    </ReadLinesFromFile>
+
+    <Exec Command="git -C &quot;$(ModRepoRoot)&quot; rev-parse --abbrev-ref HEAD"
+          ConsoleToMSBuild="true" StandardOutputImportance="low"
+          IgnoreExitCode="true" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_DeployBranch" />
+    </Exec>
+    <Exec Command="git -C &quot;$(ModRepoRoot)&quot; rev-parse --short HEAD"
+          ConsoleToMSBuild="true" StandardOutputImportance="low"
+          IgnoreExitCode="true" ContinueOnError="true">
+      <Output TaskParameter="ConsoleOutput" PropertyName="_DeployCommit" />
+    </Exec>
+
+    <PropertyGroup>
+      <_DeployCheckout>$(ModRepoRoot)</_DeployCheckout>
+      <!-- ReadLinesFromFile joins the lines with semicolons when it lands in a property, and the
+           checkout path is the first line, so everything up to the first separator is it. -->
+      <_PreviousCheckout>$(_PreviousStamp)</_PreviousCheckout>
+      <_PreviousCheckout Condition="'$(_PreviousStamp)' != '' AND $(_PreviousStamp.Contains(';'))">$(_PreviousStamp.Substring(0, $(_PreviousStamp.IndexOf(';'))))</_PreviousCheckout>
+    </PropertyGroup>
+
+    <Message Importance="high"
+             Condition="'$(_PreviousCheckout)' != '' AND '$(_PreviousCheckout)' != '$(_DeployCheckout)'"
+             Text="$(ModDeployName): deploy slot taken over. The game was loading the build from &quot;$(_PreviousCheckout)&quot;, from now on it loads &quot;$(_DeployCheckout)&quot; ($(_DeployBranch) at $(_DeployCommit)). Only one checkout at a time can reach the game." />
+
+    <ItemGroup>
+      <_DeployStampLine Include="$(_DeployCheckout)" />
+      <_DeployStampLine Include="branch = $(_DeployBranch)" />
+      <_DeployStampLine Include="commit = $(_DeployCommit)" />
+      <_DeployStampLine Include="deployed = $([System.DateTime]::UtcNow.ToString('u'))" />
+      <_DeployStampLine Include="# Written by the mod build. The first line is the checkout this copy came from." />
+    </ItemGroup>
+    <WriteLinesToFile File="$(ModDeployStamp)" Lines="@(_DeployStampLine)" Overwrite="true" />
+  </Target>
+
+</Project>
