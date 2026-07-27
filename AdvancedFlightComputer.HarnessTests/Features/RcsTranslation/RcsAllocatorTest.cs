@@ -1,7 +1,6 @@
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
-using HeadlessHarness.Core;
-using HeadlessHarness.Harness;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
@@ -9,65 +8,59 @@ namespace AdvancedFlightComputer.HarnessTests;
 // per-axis impulse shaping (cap and minimum-impulse suppression), the
 // per-thruster group pulse derivation, and the Hold-strategy performance
 // model that feeds the Auto attitude decision. No vehicle involved.
-public sealed class RcsAllocatorTest : IHarnessTest
+public sealed class RcsAllocatorTest : AfcTest
 {
-    public string Name => "afc-rcs-allocator";
+    private const double FloatTol = 1e-4;
 
-    public int Run(HeadlessSession session)
+    public override string Name => "afc-rcs-allocator";
+
+    protected override void Execute(TestContext t)
     {
-        bool ok = true;
-        ok &= CheckShapeAxis();
-        ok &= CheckMaxAxisPulse();
-        ok &= CheckHoldPerformance();
-        ok &= CheckCompletionFloor();
-        ok &= CheckRemainingDuration();
-        ok &= CheckCapabilityHelpers();
-        ok &= CheckAttitudeFight();
-        HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
-        return ok ? 0 : 1;
+        CheckShapeAxis(t);
+        CheckMaxAxisPulse(t);
+        CheckHoldPerformance(t);
+        CheckCompletionFloor(t);
+        CheckRemainingDuration(t);
+        CheckCapabilityHelpers(t);
+        CheckAttitudeFight(t);
     }
 
-    private bool CheckShapeAxis()
+    private static void CheckShapeAxis(TestContext t)
     {
-        bool ok = true;
         // Cap at one control period of group force.
-        ok &= Expect("cap positive", RcsComputeControlPatch.ShapeAxis(
-            50f, forcePos: 100f, forceNeg: 0f, minImpPos: 10f, minImpNeg: 0f, maxPulse: 0.1f), 10f);
+        t.CheckAbs("cap positive", RcsComputeControlPatch.ShapeAxis(
+            50f, forcePos: 100f, forceNeg: 0f, minImpPos: 10f, minImpNeg: 0f, maxPulse: 0.1f), 10f, FloatTol);
         // Below half the minimum impulse: suppressed.
-        ok &= Expect("min impulse floor", RcsComputeControlPatch.ShapeAxis(
-            4f, 100f, 0f, 10f, 0f, 0.1f), 0f);
+        t.CheckAbs("min impulse floor", RcsComputeControlPatch.ShapeAxis(
+            4f, 100f, 0f, 10f, 0f, 0.1f), 0f, FloatTol);
         // At/above half the minimum impulse: passes through uncapped.
-        ok &= Expect("small but usable", RcsComputeControlPatch.ShapeAxis(
-            6f, 100f, 0f, 10f, 0f, 0.1f), 6f);
+        t.CheckAbs("small but usable", RcsComputeControlPatch.ShapeAxis(
+            6f, 100f, 0f, 10f, 0f, 0.1f), 6f, FloatTol);
         // No group in the demanded direction: nothing to fire.
-        ok &= Expect("missing negative group", RcsComputeControlPatch.ShapeAxis(
-            -50f, 100f, 0f, 10f, 0f, 0.1f), 0f);
+        t.CheckAbs("missing negative group", RcsComputeControlPatch.ShapeAxis(
+            -50f, 100f, 0f, 10f, 0f, 0.1f), 0f, FloatTol);
         // Negative direction with its own group.
-        ok &= Expect("cap negative", RcsComputeControlPatch.ShapeAxis(
-            -50f, 0f, 100f, 0f, 10f, 0.1f), -10f);
-        return ok;
+        t.CheckAbs("cap negative", RcsComputeControlPatch.ShapeAxis(
+            -50f, 0f, 100f, 0f, 10f, 0.1f), -10f, FloatTol);
     }
 
-    private bool CheckMaxAxisPulse()
+    private static void CheckMaxAxisPulse(TestContext t)
     {
-        bool ok = true;
         // Participating thruster fires for J / F_group.
-        ok &= Expect("positive pulse", RcsComputeControlPatch.MaxAxisPulse(
-            0f, j: 50f, thrusterForce: 25f, groupForcePos: 100f, groupForceNeg: 0f), 0.5f);
-        ok &= Expect("negative pulse", RcsComputeControlPatch.MaxAxisPulse(
-            0f, -50f, -25f, 0f, 100f), 0.5f);
+        t.CheckAbs("positive pulse", RcsComputeControlPatch.MaxAxisPulse(
+            0f, j: 50f, thrusterForce: 25f, groupForcePos: 100f, groupForceNeg: 0f), 0.5f, FloatTol);
+        t.CheckAbs("negative pulse", RcsComputeControlPatch.MaxAxisPulse(
+            0f, -50f, -25f, 0f, 100f), 0.5f, FloatTol);
         // Wrong-sign thruster does not participate.
-        ok &= Expect("non-participating", RcsComputeControlPatch.MaxAxisPulse(
-            0f, 50f, -25f, 100f, 100f), 0f);
+        t.CheckAbs("non-participating", RcsComputeControlPatch.MaxAxisPulse(
+            0f, 50f, -25f, 100f, 100f), 0f, FloatTol);
         // Max across axes, not sum.
-        ok &= Expect("max not sum", RcsComputeControlPatch.MaxAxisPulse(
-            0.8f, 50f, 25f, 100f, 0f), 0.8f);
-        return ok;
+        t.CheckAbs("max not sum", RcsComputeControlPatch.MaxAxisPulse(
+            0.8f, 50f, 25f, 100f, 0f), 0.8f, FloatTol);
     }
 
-    private bool CheckHoldPerformance()
+    private static void CheckHoldPerformance(TestContext t)
     {
-        bool ok = true;
         RcsCapabilitySnapshot cap = default;
         var group = new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 1f };
         for (int i = 0; i < 6; i++)
@@ -77,26 +70,25 @@ public sealed class RcsAllocatorTest : IHarnessTest
         // Pure single-axis direction: full group force, single group flow.
         bool feasible = RcsExecutor.TryHoldPerformance(
             in cap, new double3(1.0, 0.0, 0.0), out double force, out double flow);
-        ok &= Check("single axis feasible", feasible);
-        ok &= Near("single axis force", force, 100.0);
-        ok &= Near("single axis flow", flow, 0.1);
+        t.Check("single axis feasible", feasible);
+        t.CheckRel("single axis force", force, 100.0, 1e-6, floor: 1.0);
+        t.CheckRel("single axis flow", flow, 0.1, 1e-6, floor: 1.0);
 
         // 45 degree in-plane direction: net force rises to F/cos45 with both
         // groups duty-cycled at full force, flow doubles.
         double s = Math.Sqrt(0.5);
         feasible = RcsExecutor.TryHoldPerformance(
             in cap, new double3(s, s, 0.0), out force, out flow);
-        ok &= Check("diagonal feasible", feasible);
-        ok &= Near("diagonal force", force, 100.0 / s);
-        ok &= Near("diagonal flow", flow, 0.2);
+        t.Check("diagonal feasible", feasible);
+        t.CheckRel("diagonal force", force, 100.0 / s, 1e-6, floor: 1.0);
+        t.CheckRel("diagonal flow", flow, 0.2, 1e-6, floor: 1.0);
 
         // Direction needing a missing group: infeasible.
         RcsCapabilitySnapshot oneSided = cap;
         oneSided.Set(1, new RcsAxisGroup());
         feasible = RcsExecutor.TryHoldPerformance(
             in oneSided, new double3(-1.0, 0.0, 0.0), out _, out _);
-        ok &= Check("missing group infeasible", !feasible);
-        return ok;
+        t.Check("missing group infeasible", !feasible);
     }
 
     // The completion floor must mirror the worker's per-axis suppression:
@@ -105,9 +97,8 @@ public sealed class RcsAllocatorTest : IHarnessTest
     // the regression from the first ingame stall: a residual just under the
     // strong axis's floor whose magnitude still exceeded a weak axis's
     // floor deadlocked the old magnitude-based check.
-    private bool CheckCompletionFloor()
+    private static void CheckCompletionFloor(TestContext t)
     {
-        bool ok = true;
         RcsCapabilitySnapshot cap = default;
         cap.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 10f });
         cap.Set(2, new RcsAxisGroup { ForceN = 2f, MassFlowKgS = 0.01f, MinImpulseNs = 0.2f });
@@ -116,29 +107,26 @@ public sealed class RcsAllocatorTest : IHarnessTest
         // X component under the X floor (5), Y component under the Y floor
         // (0.1), but |impulse| = ~4.9 above the Y floor: worker fires
         // nothing, so the floor must report complete.
-        ok &= Check("mixed floors complete", RcsExecutor.IsBelowImpulseFloor(
+        t.Check("mixed floors complete", RcsExecutor.IsBelowImpulseFloor(
             new float3(4.9f, 0.05f, 0f), in cap));
         // X component above its floor: the worker still fires, not complete.
-        ok &= Check("strong axis still firing", !RcsExecutor.IsBelowImpulseFloor(
+        t.Check("strong axis still firing", !RcsExecutor.IsBelowImpulseFloor(
             new float3(6f, 0f, 0f), in cap));
         // Weak axis alone above its own floor: still firing.
-        ok &= Check("weak axis still firing", !RcsExecutor.IsBelowImpulseFloor(
+        t.Check("weak axis still firing", !RcsExecutor.IsBelowImpulseFloor(
             new float3(0f, 0.15f, 0f), in cap));
         // Residual along a direction with no group at all: nothing can
         // fire, so the burn completes with that residual reported.
-        ok &= Check("missing group completes", RcsExecutor.IsBelowImpulseFloor(
+        t.Check("missing group completes", RcsExecutor.IsBelowImpulseFloor(
             new float3(-6f, 0f, 0f), in cap));
-        return ok;
     }
 
     // The BurnTarget duration mirror the countdown and warp-to-burn mark
     // read: the slowest demanded axis for groups (axes fire in parallel), the
     // pattern throughput cap for the LP. The lpUsable flag gates the LP branch
     // so a stale pattern during a slew or after staging falls back to groups.
-    private bool CheckRemainingDuration()
+    private static void CheckRemainingDuration(TestContext t)
     {
-        bool ok = true;
-
         var groups = new RcsWorkerCommand
         {
             Active = true,
@@ -147,11 +135,11 @@ public sealed class RcsAllocatorTest : IHarnessTest
             AxisForceNeg = new float3(100f, 50f, 0f),
         };
         // max(500/100, 100/50, 0) = 5 s: the X axis is the slowest.
-        ok &= Expect("groups slowest axis", RcsComputeControlPatch.RemainingDurationSec(
-            groups, new float3(500f, 100f, 0f), lpUsable: false), 5f);
+        t.CheckAbs("groups slowest axis", RcsComputeControlPatch.RemainingDurationSec(
+            groups, new float3(500f, 100f, 0f), lpUsable: false), 5f, FloatTol);
         // Negative demand uses the negative-axis force.
-        ok &= Expect("groups negative axis", RcsComputeControlPatch.RemainingDurationSec(
-            groups, new float3(-300f, 0f, 0f), lpUsable: false), 3f);
+        t.CheckAbs("groups negative axis", RcsComputeControlPatch.RemainingDurationSec(
+            groups, new float3(-300f, 0f, 0f), lpUsable: false), 3f, FloatTol);
 
         var lp = new RcsWorkerCommand
         {
@@ -164,33 +152,30 @@ public sealed class RcsAllocatorTest : IHarnessTest
             LpImpulseCapNs = 200f,
         };
         // j = 1000, throughput 200 Ns per 0.1 s: 1000 * 0.1 / 200 = 0.5 s.
-        ok &= Expect("lp throughput cap", RcsComputeControlPatch.RemainingDurationSec(
-            lp, new float3(1000f, 0f, 0f), lpUsable: true), 0.5f);
+        t.CheckAbs("lp throughput cap", RcsComputeControlPatch.RemainingDurationSec(
+            lp, new float3(1000f, 0f, 0f), lpUsable: true), 0.5f, FloatTol);
         // Same command with the LP disabled falls back to the group path.
-        ok &= Expect("lp disabled falls back", RcsComputeControlPatch.RemainingDurationSec(
-            lp, new float3(500f, 0f, 0f), lpUsable: false), 5f);
-        return ok;
+        t.CheckAbs("lp disabled falls back", RcsComputeControlPatch.RemainingDurationSec(
+            lp, new float3(500f, 0f, 0f), lpUsable: false), 5f, FloatTol);
     }
 
-    private bool CheckCapabilityHelpers()
+    private static void CheckCapabilityHelpers(TestContext t)
     {
-        bool ok = true;
         RcsCapabilitySnapshot cap = default;
         cap.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 1f });
         cap.Set(2, new RcsAxisGroup { ForceN = 250f, MassFlowKgS = 0.2f, MinImpulseNs = 2f });
         cap.Set(4, new RcsAxisGroup { ForceN = 50f, MassFlowKgS = 0.05f, MinImpulseNs = 0.5f });
-        ok &= Check("best axis picks strongest", cap.BestAxis() == 2);
+        t.Check("best axis picks strongest", cap.BestAxis() == 2);
 
         RcsCapabilitySnapshot empty = default;
-        ok &= Check("best axis none usable", empty.BestAxis() == -1);
+        t.Check("best axis none usable", empty.BestAxis() == -1);
 
-        ok &= Check("dir +X", IsAxis(RcsCapabilitySnapshot.AxisDirection(0), 1f, 0f, 0f));
-        ok &= Check("dir -X", IsAxis(RcsCapabilitySnapshot.AxisDirection(1), -1f, 0f, 0f));
-        ok &= Check("dir +Y", IsAxis(RcsCapabilitySnapshot.AxisDirection(2), 0f, 1f, 0f));
-        ok &= Check("dir -Y", IsAxis(RcsCapabilitySnapshot.AxisDirection(3), 0f, -1f, 0f));
-        ok &= Check("dir +Z", IsAxis(RcsCapabilitySnapshot.AxisDirection(4), 0f, 0f, 1f));
-        ok &= Check("dir -Z", IsAxis(RcsCapabilitySnapshot.AxisDirection(5), 0f, 0f, -1f));
-        return ok;
+        t.Check("dir +X", IsAxis(RcsCapabilitySnapshot.AxisDirection(0), 1f, 0f, 0f));
+        t.Check("dir -X", IsAxis(RcsCapabilitySnapshot.AxisDirection(1), -1f, 0f, 0f));
+        t.Check("dir +Y", IsAxis(RcsCapabilitySnapshot.AxisDirection(2), 0f, 1f, 0f));
+        t.Check("dir -Y", IsAxis(RcsCapabilitySnapshot.AxisDirection(3), 0f, -1f, 0f));
+        t.Check("dir +Z", IsAxis(RcsCapabilitySnapshot.AxisDirection(4), 0f, 0f, 1f));
+        t.Check("dir -Z", IsAxis(RcsCapabilitySnapshot.AxisDirection(5), 0f, 0f, -1f));
     }
 
     private static bool IsAxis(float3 v, float x, float y, float z)
@@ -200,9 +185,8 @@ public sealed class RcsAllocatorTest : IHarnessTest
     // residual torque a Hold burn must null, priced at the rotation groups'
     // flow per torque. Hand-checkable: 10 Nm pitch per 100 N of +X force is
     // 0.1 Nm/N, priced at 0.5/50 = 0.01 kg per Nm s, so 0.001 kg per Ns.
-    private bool CheckAttitudeFight()
+    private static void CheckAttitudeFight(TestContext t)
     {
-        bool ok = true;
         RcsCapabilitySnapshot cap = default;
         cap.Set(0, new RcsAxisGroup
         {
@@ -213,53 +197,24 @@ public sealed class RcsAllocatorTest : IHarnessTest
         cap.RotationTorqueNm = new float3(0f, 50f, 0f);
         cap.HasAnyTranslation = true;
 
-        double perImpulse = RcsExecutor.GroupAttitudeFightPerImpulse(in cap, new double3(1.0, 0.0, 0.0));
-        ok &= NearD("attitude fight per impulse", perImpulse, 0.001);
+        t.CheckMixed("attitude fight per impulse",
+            RcsExecutor.GroupAttitudeFightPerImpulse(in cap, new double3(1.0, 0.0, 0.0)), 0.001,
+            absTol: 1e-9, relTol: 1e-6);
 
         // No rotation authority on the torqued axis: the hold cannot null it,
         // so the estimate adds nothing (the closed loop absorbs it at run time).
         RcsCapabilitySnapshot noRot = cap;
         noRot.RotationMassFlowKgS = default;
         noRot.RotationTorqueNm = default;
-        ok &= NearD("no rotation authority no cost",
-            RcsExecutor.GroupAttitudeFightPerImpulse(in noRot, new double3(1.0, 0.0, 0.0)), 0.0);
+        t.CheckMixed("no rotation authority no cost",
+            RcsExecutor.GroupAttitudeFightPerImpulse(in noRot, new double3(1.0, 0.0, 0.0)), 0.0,
+            absTol: 1e-9, relTol: 1e-6);
 
         // A torque-free (balanced) group leaves no residual torque, so no fight.
         RcsCapabilitySnapshot balanced = cap;
         balanced.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 1f });
-        ok &= NearD("balanced group no fight",
-            RcsExecutor.GroupAttitudeFightPerImpulse(in balanced, new double3(1.0, 0.0, 0.0)), 0.0);
-        return ok;
-    }
-
-    private bool NearD(string label, double actual, double expected)
-    {
-        bool ok = Math.Abs(actual - expected) < 1e-9 + 1e-6 * Math.Abs(expected);
-        if (!ok)
-            HarnessLog.Line($"[{Name}] TEST {label}: got {actual}, expected {expected} => FAIL");
-        return ok;
-    }
-
-    private bool Expect(string label, float actual, float expected)
-    {
-        bool ok = Math.Abs(actual - expected) < 1e-4f;
-        if (!ok)
-            HarnessLog.Line($"[{Name}] TEST {label}: got {actual}, expected {expected} => FAIL");
-        return ok;
-    }
-
-    private bool Near(string label, double actual, double expected)
-    {
-        bool ok = Math.Abs(actual - expected) < 1e-6 * Math.Max(1.0, Math.Abs(expected));
-        if (!ok)
-            HarnessLog.Line($"[{Name}] TEST {label}: got {actual}, expected {expected} => FAIL");
-        return ok;
-    }
-
-    private bool Check(string label, bool condition)
-    {
-        if (!condition)
-            HarnessLog.Line($"[{Name}] TEST {label} => FAIL");
-        return condition;
+        t.CheckMixed("balanced group no fight",
+            RcsExecutor.GroupAttitudeFightPerImpulse(in balanced, new double3(1.0, 0.0, 0.0)), 0.0,
+            absTol: 1e-9, relTol: 1e-6);
     }
 }

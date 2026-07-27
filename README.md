@@ -126,6 +126,8 @@ Required only to build the mod from source. Targets **.NET 10**.
 
 The oracle is always the game's own orbit propagation, never a re-derivation of the math under test.
 
+Tests are grouped under `Features/<Feature>/` over a shared `Framework/` and `Fixtures/`; see [the suite README](AdvancedFlightComputer.HarnessTests/README.md) for the layout and the per-feature `-Tests` filters.
+
 To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
 
 ## Mod compatibility

@@ -1,6 +1,7 @@
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.HarnessTests.Fixtures;
+using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
-using HeadlessHarness.Core;
 using HeadlessHarness.Harness;
 using KSA;
 
@@ -16,7 +17,7 @@ namespace AdvancedFlightComputer.HarnessTests;
 // must still complete the burn; the test then reports the fallback instead
 // of a comparison. Spawn, burn setup, arming, and the step loop live in
 // RcsFlightSupport.
-public sealed class RcsLpFlightTest : IHarnessTest
+public sealed class RcsLpFlightTest : AfcTest
 {
     private const double SpawnAltitudeM = 600_000.0;
     private const double BurnDvMs = 0.5;
@@ -24,38 +25,33 @@ public sealed class RcsLpFlightTest : IHarnessTest
     private const double StepSec = 0.05;
     private const double ResidualMarginMs = 0.05;
 
-    public string Name => "afc-rcs-lp";
+    public override string Name => "afc-rcs-lp";
 
     private double _lastSlackCostPerImpulse;
     private float3 _lastResidualTorque;
 
-    public int Run(HeadlessSession session)
+    protected override void Execute(TestContext t)
     {
-        CelestialSystem system = session.System;
-        if (system.HomeBody is not IParentBody home || home is not Astronomical)
-        {
-            HarnessLog.Line($"[{Name}] FAIL: the loaded system has no home body.");
-            return 1;
-        }
+        if (!TestWorld.RequireHome(t, out IParentBody home))
+            return;
+
         IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);
         if (saves.Count == 0)
         {
-            HarnessLog.Line($"[{Name}] SKIP: no RCS test vehicle save present.");
-            return 0;
+            t.Skip("no RCS test vehicle save present.");
+            return;
         }
 
         RcsTestPatches.Ensure();
 
-        bool allOk = true;
         foreach (string saveId in saves)
-            allOk &= RcsFlightSupport.RunOnSave(
-                session, home, saveId, SpawnAltitudeM, "HarnessRcsLpTest", Name,
-                (vehicle, driver) => Fly(vehicle, driver));
-        HarnessLog.Line($"[{Name}] {TestSupport.Verdict(allOk)}");
-        return allOk ? 0 : 1;
+        {
+            RcsFlightSupport.RunOnSave(t, home, saveId, SpawnAltitudeM, "HarnessRcsLpTest",
+                (vehicle, driver) => Fly(t, vehicle, driver));
+        }
     }
 
-    private bool Fly(Vehicle vehicle, SimDriver driver)
+    private void Fly(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
         fc.BurnMode = FlightComputerBurnMode.Manual;
@@ -65,52 +61,50 @@ public sealed class RcsLpFlightTest : IHarnessTest
         RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
         if (!cap.HasAnyTranslation)
         {
-            HarnessLog.Line($"[{Name}] SKIP: save has no translation-capable RCS thrusters.");
-            return true;
+            t.Skip("save has no translation-capable RCS thrusters.");
+            return;
         }
         fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
         fc.SetNullRot(VehicleReferenceFrame.EclBody);
 
-        bool ok = RunBurn(vehicle, driver, RcsAllocator.Groups,
+        bool ok = RunBurn(t, vehicle, driver, RcsAllocator.Groups,
             out double groupsPropellantKg, out bool _);
         vehicle.RefillConsumables();
         driver.Step(StepSec, 20);
-        ok &= RunBurn(vehicle, driver, RcsAllocator.Lp,
+        ok &= RunBurn(t, vehicle, driver, RcsAllocator.Lp,
             out double lpPropellantKg, out bool lpSolutionUsed);
 
+        // The comparison only means anything if both burns actually flew.
         if (!ok)
-            return false;
+            return;
 
-        if (lpSolutionUsed)
+        if (!lpSolutionUsed)
         {
-            HarnessLog.Line($"[{Name}] TEST A/B propellant: groups={groupsPropellantKg * 1000.0:F1}g " +
-                            $"lp={lpPropellantKg * 1000.0:F1}g " +
-                            $"({(lpPropellantKg - groupsPropellantKg) / Math.Max(groupsPropellantKg, 1e-9) * 100.0:+0.0;-0.0}%)");
-            HarnessLog.Line($"[{Name}] lp slack: {_lastSlackCostPerImpulse * 1e6:F2}mg/Ns, " +
-                            $"residual tau=({_lastResidualTorque.X:F2},{_lastResidualTorque.Y:F2}," +
-                            $"{_lastResidualTorque.Z:F2})Nms/Ns");
-            // The A/B ratio is report-only: LP is legitimately far costlier
-            // than groups on strongly off-CoM layouts (measured ~9.7x on the
-            // asymmetric save's strong-axis burn, where exact zero torque
-            // forces opposed counter-thrust the group path leaves to the
-            // attitude hold), so a multiplicative bound would flag physics as
-            // a defect. Per-burn residual/orbit assertions cover correctness;
-            // here only a finiteness/positivity sanity guards a runaway solve.
-            bool sane = double.IsFinite(lpPropellantKg) && lpPropellantKg > 0.0;
-            if (!sane)
-                HarnessLog.Line($"[{Name}] TEST A/B propellant: LP propellant not finite/positive => FAIL");
-            ok &= sane;
+            t.Info("the LP was infeasible on this layout and fell back to groups; " +
+                   "completion asserted, no A/B comparison.");
+            return;
         }
-        else
-        {
-            HarnessLog.Line($"[{Name}] NOTE: the LP was infeasible on this layout and fell back " +
-                            "to groups; completion asserted, no A/B comparison.");
-        }
-        return ok;
+
+        t.Info($"A/B propellant: groups={groupsPropellantKg * 1000.0:F1}g " +
+               $"lp={lpPropellantKg * 1000.0:F1}g " +
+               $"({(lpPropellantKg - groupsPropellantKg) / Math.Max(groupsPropellantKg, 1e-9) * 100.0:+0.0;-0.0}%)");
+        t.Info($"lp slack: {_lastSlackCostPerImpulse * 1e6:F2}mg/Ns, " +
+               $"residual tau=({_lastResidualTorque.X:F2},{_lastResidualTorque.Y:F2}," +
+               $"{_lastResidualTorque.Z:F2})Nms/Ns");
+        // The A/B ratio is report-only: LP is legitimately far costlier
+        // than groups on strongly off-CoM layouts (measured ~9.7x on the
+        // asymmetric save's strong-axis burn, where exact zero torque
+        // forces opposed counter-thrust the group path leaves to the
+        // attitude hold), so a multiplicative bound would flag physics as
+        // a defect. Per-burn residual/orbit assertions cover correctness;
+        // here only a finiteness/positivity sanity guards a runaway solve.
+        t.Check("A/B propellant sane",
+            double.IsFinite(lpPropellantKg) && lpPropellantKg > 0.0,
+            $"lp={lpPropellantKg * 1000.0:F1}g");
     }
 
     private bool RunBurn(
-        Vehicle vehicle, SimDriver driver, RcsAllocator allocator,
+        TestContext t, Vehicle vehicle, SimDriver driver, RcsAllocator allocator,
         out double propellantKg, out bool lpSolutionUsed)
     {
         propellantKg = 0.0;
@@ -123,12 +117,10 @@ public sealed class RcsLpFlightTest : IHarnessTest
         RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
         int bestAxis = cap.BestAxis();
         double3 dvDirCci = RcsFlightSupport.AxisDirCci(vehicle, bestAxis);
-        RcsFlightSupport.BurnSetup? setup = RcsFlightSupport.AddBurn(vehicle, driver, dvDirCci, BurnDvMs, BurnLeadSec);
+        RcsFlightSupport.BurnSetup? setup =
+            RcsFlightSupport.AddBurn(vehicle, driver, dvDirCci, BurnDvMs, BurnLeadSec);
         if (setup == null)
-        {
-            HarnessLog.Line($"[{Name}] FAIL ({label}): no flight-plan patch or BurnTarget at the burn time.");
-            return false;
-        }
+            return t.Fail(label, "no flight-plan patch or BurnTarget at the burn time");
         Burn burn = setup.Burn;
         BurnTarget bt = setup.BurnTarget;
 
@@ -136,9 +128,8 @@ public sealed class RcsLpFlightTest : IHarnessTest
             vehicle, burn, RcsExecutionMode.Rcs, RcsAttitudeStrategy.Hold, allocator);
         if (exec == null)
         {
-            HarnessLog.Line($"[{Name}] FAIL ({label}): SetEnum(Auto) did not engage the executor.");
             RcsFlightSupport.CleanupBurns(fc);
-            return false;
+            return t.Fail(label, "SetEnum(Auto) did not engage the executor");
         }
 
         double expectedDuration = vehicle.TotalMass * BurnDvMs / cap.Get(bestAxis).ForceN;
@@ -171,26 +162,19 @@ public sealed class RcsLpFlightTest : IHarnessTest
 
         bool ok = true;
         if (!result.EnginesQuiet)
-        {
-            HarnessLog.Line($"[{Name}] FAIL ({label}): a main engine received a throttle command.");
-            ok = false;
-        }
+            ok &= t.Fail($"{label} engines quiet", "a main engine received a throttle command");
         if (!result.Completed)
         {
-            HarnessLog.Line($"[{Name}] FAIL ({label}): burn did not complete " +
-                            $"(to go {bt.DeltaVToGoCci.Length():F3}m/s).");
-            ok = false;
+            ok &= t.Fail(label, $"burn did not complete (to go {bt.DeltaVToGoCci.Length():F3}m/s)");
         }
         else
         {
             float residual = bt.DeltaVToGoCci.Length();
             double tol = RcsFlightSupport.ResidualToleranceMs(in cap, vehicle.TotalMass, ResidualMarginMs);
-            bool residualOk = residual <= tol;
-            HarnessLog.Line($"[{Name}] TEST {label}: residual={residual:F4}m/s (tol {tol:F4}) " +
-                            $"propellant={propellantKg * 1000.0:F1}g => {TestSupport.Verdict(residualOk)}");
-            ok &= residualOk;
+            ok &= t.Check(label, residual <= tol,
+                $"residual={residual:F4}m/s (tol {tol:F4}) propellant={propellantKg * 1000.0:F1}g");
 
-            ok &= RcsOrbitCheck.Assert(Name, $"{label} orbit", vehicle.Orbit, setup.Predicted,
+            ok &= RcsOrbitCheck.Assert(t, $"{label} orbit", vehicle.Orbit, setup.Predicted,
                 setup.InitialSma, setup.InitialEcc);
 
             // The BurnTarget duration mirror must count down with the
@@ -203,17 +187,14 @@ public sealed class RcsLpFlightTest : IHarnessTest
             const float ObservableDurationSec = 0.2f;
             if (durationAtFiringStart >= ObservableDurationSec)
             {
-                bool countdownOk = lastDuration >= 0f
-                    && lastDuration < durationAtFiringStart * 0.5f;
-                HarnessLog.Line($"[{Name}] TEST {label} countdown: " +
-                                $"{durationAtFiringStart:F1}s -> {lastDuration:F1}s => " +
-                                $"{TestSupport.Verdict(countdownOk)}");
-                ok &= countdownOk;
+                ok &= t.Check($"{label} countdown",
+                    lastDuration >= 0f && lastDuration < durationAtFiringStart * 0.5f,
+                    $"{durationAtFiringStart:F1}s -> {lastDuration:F1}s");
             }
             else
             {
-                HarnessLog.Line($"[{Name}] SKIP {label} countdown: burn too fast to sample " +
-                                $"({durationAtFiringStart:F2}s at ignition).");
+                t.Skip($"{label} countdown: burn too fast to sample " +
+                       $"({durationAtFiringStart:F2}s at ignition).");
             }
         }
         RcsFlightSupport.CleanupBurns(fc);

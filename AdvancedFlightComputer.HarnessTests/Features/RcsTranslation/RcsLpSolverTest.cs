@@ -1,6 +1,5 @@
 using AdvancedFlightComputer.Features.RcsTranslation;
-using HeadlessHarness.Core;
-using HeadlessHarness.Harness;
+using AdvancedFlightComputer.HarnessTests.Framework;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
@@ -11,26 +10,24 @@ namespace AdvancedFlightComputer.HarnessTests;
 // infeasibility (unreachable direction, un-nullable torque) returning
 // null instead of garbage. Columns are wrenches per second of firing:
 // rows 0-2 force, rows 3-5 torque.
-public sealed class RcsLpSolverTest : IHarnessTest
+public sealed class RcsLpSolverTest : AfcTest
 {
     private const double Tol = 1e-6;
+    private const double SolutionTol = 1e-5;
 
-    public string Name => "afc-rcs-lp-solver";
+    public override string Name => "afc-rcs-lp-solver";
 
-    public int Run(HeadlessSession session)
+    protected override void Execute(TestContext t)
     {
-        bool ok = true;
-        ok &= CheckCheapThrusterWins();
-        ok &= CheckTorqueNullingPair();
-        ok &= CheckSupportSelection();
-        ok &= CheckPricedTorqueSlack();
-        ok &= CheckInfeasibleDirection();
-        ok &= CheckUnnullableTorque();
-        HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
-        return ok ? 0 : 1;
+        CheckCheapThrusterWins(t);
+        CheckTorqueNullingPair(t);
+        CheckSupportSelection(t);
+        CheckPricedTorqueSlack(t);
+        CheckInfeasibleDirection(t);
+        CheckUnnullableTorque(t);
     }
 
-    private bool CheckCheapThrusterWins()
+    private static void CheckCheapThrusterWins(TestContext t)
     {
         // Two identical +X thrusters through the CoM, one twice as thirsty.
         double[] columns = BuildColumns(
@@ -38,35 +35,29 @@ public sealed class RcsLpSolverTest : IHarnessTest
             new[] { 10.0, 0, 0, 0, 0, 0 });
         double[]? x = RcsLpSolver.Solve(6, 2, columns, new[] { 1.0, 2.0 },
             new[] { 1.0, 0, 0, 0, 0, 0 });
-        bool ok = Check("cheap wins: solved", x != null);
-        if (x != null)
-        {
-            ok &= Near("cheap wins: x0", x[0], 0.1);
-            ok &= Near("cheap wins: x1", x[1], 0.0);
-        }
-        return ok;
+        if (!t.Check("cheap wins: solved", x != null))
+            return;
+        t.CheckAbs("cheap wins: x0", x![0], 0.1, SolutionTol);
+        t.CheckAbs("cheap wins: x1", x[1], 0.0, SolutionTol);
     }
 
-    private bool CheckTorqueNullingPair()
+    private static void CheckTorqueNullingPair(TestContext t)
     {
         // Two +X thrusters with opposite yaw torque: the only zero-torque
         // combination is the even split.
         double[] columns = BuildColumns(
             new[] { 10.0, 0, 0, 0, 0, 5.0 },
             new[] { 10.0, 0, 0, 0, 0, -5.0 });
-        double[]? x = RcsLpSolver.Solve(6, 2, columns, new[] { 1.0, 1.0 },
-            new[] { 1.0, 0, 0, 0, 0, 0 });
-        bool ok = Check("torque pair: solved", x != null);
-        if (x != null)
-        {
-            ok &= Near("torque pair: x0", x[0], 0.05);
-            ok &= Near("torque pair: x1", x[1], 0.05);
-            ok &= CheckResiduals("torque pair", columns, 2, x, new[] { 1.0, 0, 0, 0, 0, 0 });
-        }
-        return ok;
+        double[] rhs = { 1.0, 0, 0, 0, 0, 0 };
+        double[]? x = RcsLpSolver.Solve(6, 2, columns, new[] { 1.0, 1.0 }, rhs);
+        if (!t.Check("torque pair: solved", x != null))
+            return;
+        t.CheckAbs("torque pair: x0", x![0], 0.05, SolutionTol);
+        t.CheckAbs("torque pair: x1", x[1], 0.05, SolutionTol);
+        CheckResiduals(t, "torque pair", columns, 2, x, rhs);
     }
 
-    private bool CheckSupportSelection()
+    private static void CheckSupportSelection(TestContext t)
     {
         // Torque-coupled pair (combined cost 0.1 per unit impulse) vs a
         // clean single thruster: the LP must pick whichever is cheaper.
@@ -78,22 +69,19 @@ public sealed class RcsLpSolverTest : IHarnessTest
 
         // Clean thruster costs 0.25 per unit impulse: the pair wins.
         double[]? x = RcsLpSolver.Solve(6, 3, columns, new[] { 1.0, 1.0, 2.5 }, rhs);
-        bool ok = Check("expensive clean: solved", x != null);
-        if (x != null)
+        if (t.Check("expensive clean: solved", x != null))
         {
-            ok &= Near("expensive clean: pair fires", x[0] + x[1], 0.1);
-            ok &= Near("expensive clean: clean idle", x[2], 0.0);
+            t.CheckAbs("expensive clean: pair fires", x![0] + x[1], 0.1, SolutionTol);
+            t.CheckAbs("expensive clean: clean idle", x[2], 0.0, SolutionTol);
         }
 
         // Clean thruster costs 0.09 per unit impulse: it wins alone.
         x = RcsLpSolver.Solve(6, 3, columns, new[] { 1.0, 1.0, 0.9 }, rhs);
-        ok &= Check("cheap clean: solved", x != null);
-        if (x != null)
+        if (t.Check("cheap clean: solved", x != null))
         {
-            ok &= Near("cheap clean: clean fires", x[2], 0.1);
-            ok &= Near("cheap clean: pair idle", x[0] + x[1], 0.0);
+            t.CheckAbs("cheap clean: clean fires", x![2], 0.1, SolutionTol);
+            t.CheckAbs("cheap clean: pair idle", x[0] + x[1], 0.0, SolutionTol);
         }
-        return ok;
     }
 
     // Mirrors the executor's torque-slack columns: unit yaw-torque columns
@@ -101,7 +89,7 @@ public sealed class RcsLpSolverTest : IHarnessTest
     // thruster and hands its torque to the attitude hold; with expensive
     // slack the balanced (but thirstier) pair wins. Cost accounting:
     // lean-only is 0.1*1 + 0.5*price versus the pair's 0.05*1 + 0.05*3.
-    private bool CheckPricedTorqueSlack()
+    private static void CheckPricedTorqueSlack(TestContext t)
     {
         double[] columns = BuildColumns(
             new[] { 10.0, 0, 0, 0, 0, 5.0 },
@@ -111,57 +99,59 @@ public sealed class RcsLpSolverTest : IHarnessTest
         double[] rhs = { 1.0, 0, 0, 0, 0, 0 };
 
         double[]? x = RcsLpSolver.Solve(6, 4, columns, new[] { 1.0, 3.0, 0.02, 0.02 }, rhs);
-        bool ok = Check("cheap slack: solved", x != null);
-        if (x != null)
+        if (t.Check("cheap slack: solved", x != null))
         {
-            ok &= Near("cheap slack: lean fires", x[0], 0.1);
-            ok &= Near("cheap slack: thirsty idle", x[1], 0.0);
-            ok &= Near("cheap slack: slack absorbs", x[3], 0.5);
+            t.CheckAbs("cheap slack: lean fires", x![0], 0.1, SolutionTol);
+            t.CheckAbs("cheap slack: thirsty idle", x[1], 0.0, SolutionTol);
+            t.CheckAbs("cheap slack: slack absorbs", x[3], 0.5, SolutionTol);
         }
 
         x = RcsLpSolver.Solve(6, 4, columns, new[] { 1.0, 3.0, 1.0, 1.0 }, rhs);
-        ok &= Check("dear slack: solved", x != null);
-        if (x != null)
+        if (t.Check("dear slack: solved", x != null))
         {
-            ok &= Near("dear slack: pair splits a", x[0], 0.05);
-            ok &= Near("dear slack: pair splits b", x[1], 0.05);
-            ok &= Near("dear slack: slack idle", x[2] + x[3], 0.0);
+            t.CheckAbs("dear slack: pair splits a", x![0], 0.05, SolutionTol);
+            t.CheckAbs("dear slack: pair splits b", x[1], 0.05, SolutionTol);
+            t.CheckAbs("dear slack: slack idle", x[2] + x[3], 0.0, SolutionTol);
         }
-        return ok;
     }
 
-    private bool CheckInfeasibleDirection()
+    private static void CheckInfeasibleDirection(TestContext t)
     {
         double[] columns = BuildColumns(new[] { 10.0, 0, 0, 0, 0, 0 });
         double[]? x = RcsLpSolver.Solve(6, 1, columns, new[] { 1.0 },
             new[] { -1.0, 0, 0, 0, 0, 0 });
-        return Check("unreachable direction: null", x == null);
+        t.Check("unreachable direction: null", x == null);
     }
 
-    private bool CheckUnnullableTorque()
+    private static void CheckUnnullableTorque(TestContext t)
     {
         // A single off-CoM thruster cannot produce force without torque.
         double[] columns = BuildColumns(new[] { 10.0, 0, 0, 0, 0, 5.0 });
         double[]? x = RcsLpSolver.Solve(6, 1, columns, new[] { 1.0 },
             new[] { 1.0, 0, 0, 0, 0, 0 });
-        return Check("un-nullable torque: null", x == null);
+        t.Check("un-nullable torque: null", x == null);
     }
 
-    private bool CheckResiduals(string label, double[] columns, int n, double[] x, double[] rhs)
+    // Every wrench row the solution produces must land on the requested right-hand side; reported as
+    // the worst row, so one line names which constraint drifted.
+    private static void CheckResiduals(
+        TestContext t, string label, double[] columns, int n, double[] x, double[] rhs)
     {
-        bool ok = true;
+        double worst = 0.0;
+        int worstRow = 0;
         for (int r = 0; r < 6; r++)
         {
             double sum = 0.0;
             for (int i = 0; i < n; i++)
                 sum += columns[i * 6 + r] * x[i];
-            if (Math.Abs(sum - rhs[r]) > Tol)
+            double residual = Math.Abs(sum - rhs[r]);
+            if (residual > worst)
             {
-                HarnessLog.Line($"[{Name}] TEST {label}: row {r} residual {sum - rhs[r]:E3} => FAIL");
-                ok = false;
+                worst = residual;
+                worstRow = r;
             }
         }
-        return ok;
+        t.Check($"{label}: residuals", worst <= Tol, $"worst row {worstRow} off by {worst:E3}");
     }
 
     private static double[] BuildColumns(params double[][] wrenches)
@@ -173,20 +163,5 @@ public sealed class RcsLpSolverTest : IHarnessTest
                 columns[i * 6 + r] = wrenches[i][r];
         }
         return columns;
-    }
-
-    private bool Near(string label, double actual, double expected)
-    {
-        bool ok = Math.Abs(actual - expected) < 1e-5;
-        if (!ok)
-            HarnessLog.Line($"[{Name}] TEST {label}: got {actual}, expected {expected} => FAIL");
-        return ok;
-    }
-
-    private bool Check(string label, bool condition)
-    {
-        if (!condition)
-            HarnessLog.Line($"[{Name}] TEST {label} => FAIL");
-        return condition;
     }
 }

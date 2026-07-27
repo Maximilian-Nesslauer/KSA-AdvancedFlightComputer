@@ -1,5 +1,4 @@
-using HeadlessHarness.Core;
-using HeadlessHarness.Harness;
+using AdvancedFlightComputer.HarnessTests.Framework;
 using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
@@ -17,7 +16,7 @@ internal static class RcsOrbitCheck
     private const double SlackM = 1.0;
 
     public static bool Assert(
-        string test, string label, Orbit achieved, Orbit predicted,
+        TestContext t, string label, Orbit achieved, Orbit predicted,
         double initialSma, double initialEcc)
     {
         // Both element errors are measured against ONE scale: the burn's
@@ -32,14 +31,12 @@ internal static class RcsOrbitCheck
 
         double smaErrorM = Math.Abs(achieved.SemiMajorAxis - predicted.SemiMajorAxis);
         double eccErrorM = initialSma * Math.Abs(achieved.Eccentricity - predicted.Eccentricity);
-        bool ok = smaErrorM <= toleranceM && eccErrorM <= toleranceM;
 
-        HarnessLog.Line(
-            $"[{test}] TEST {label}: SMA {initialSma:F0} -> {achieved.SemiMajorAxis:F0}m " +
+        return t.Check(label, smaErrorM <= toleranceM && eccErrorM <= toleranceM,
+            $"SMA {initialSma:F0} -> {achieved.SemiMajorAxis:F0}m " +
             $"(predicted {predicted.SemiMajorAxis:F0}m, error {smaErrorM:F1}m), " +
             $"ecc {initialEcc:F6} -> {achieved.Eccentricity:F6} " +
             $"(predicted {predicted.Eccentricity:F6}, error {eccErrorM:F1}m), " +
-            $"effect scale {scaleM:F1}m, tol {toleranceM:F1}m => {TestSupport.Verdict(ok)}");
-        return ok;
+            $"effect scale {scaleM:F1}m, tol {toleranceM:F1}m");
     }
 }

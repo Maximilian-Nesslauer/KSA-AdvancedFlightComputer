@@ -1,7 +1,6 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
-using HeadlessHarness.Core;
-using HeadlessHarness.Harness;
+using AdvancedFlightComputer.HarnessTests.Framework;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
@@ -17,56 +16,58 @@ namespace AdvancedFlightComputer.HarnessTests;
 //     public surface, so they stand in for the whole: they are read by Patch_DrawPlanWindow in the
 //     same frame to compute the maneuver, and a value carried into a freshly loaded world would plan
 //     against the previous one's input.
-public sealed class SaveScopedStateTest : IHarnessTest
+public sealed class SaveScopedStateTest : AfcTest
 {
     private const double MarkerAltitudeM = 123_456.0;
     private const double MarkerInclinationRad = 0.75;
 
-    public string Name => "afc-save-scoped-reset";
+    public override string Name => "afc-save-scoped-reset";
 
-    public int Run(HeadlessSession session)
+    protected override void Execute(TestContext t)
     {
-        bool ok = true;
-
         // Cold: nothing has been drawn or cached in this process yet.
-        ok &= NoThrow("resets cold state");
+        CheckNoThrow(t, "resets cold state");
 
         ManeuverToolsWindow.TargetAltitude = MarkerAltitudeM;
         ManeuverToolsWindow.TargetInclinationRad = MarkerInclinationRad;
         ManeuverToolsWindow.UseDescendingNode = true;
 
-        ok &= NoThrow("resets populated state");
-        ok &= Check("clears TargetAltitude", ManeuverToolsWindow.TargetAltitude == 0.0);
-        ok &= Check("clears TargetInclinationRad", ManeuverToolsWindow.TargetInclinationRad == 0.0);
-        ok &= Check("clears UseDescendingNode", !ManeuverToolsWindow.UseDescendingNode);
-        ok &= Check("clears the target selection",
+        CheckNoThrow(t, "resets populated state");
+        t.Check("clears TargetAltitude", ManeuverToolsWindow.TargetAltitude == 0.0);
+        t.Check("clears TargetInclinationRad", ManeuverToolsWindow.TargetInclinationRad == 0.0);
+        t.Check("clears UseDescendingNode", !ManeuverToolsWindow.UseDescendingNode);
+        t.Check("clears the target selection",
             ManeuverToolsWindow.GetSelectedTargetOrbiter() == null);
 
         // Idempotent: the load postfix and Mod.Unload can both run in one process.
-        ok &= NoThrow("resets twice in a row");
-
-        HarnessLog.Line($"[{Name}] {TestSupport.Verdict(ok)}");
-        return ok ? 0 : 1;
+        CheckNoThrow(t, "resets twice in a row");
     }
 
-    private bool NoThrow(string label)
+    // "Must not throw" is the assertion, so this catches. Drift is let through: a renamed game
+    // member resolves inside this try, and catching it would hide an infrastructure failure.
+    private static void CheckNoThrow(TestContext t, string label)
     {
         try
         {
             SaveScopedState.ResetAll();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!IsGameApiDrift(ex))
         {
-            HarnessLog.Line($"[{Name}] TEST {label}: threw {ex.GetType().Name}: {ex.Message} => FAIL");
-            return false;
+            t.Check(label, false, $"threw {ex.GetType().Name}: {ex.Message}");
+            return;
         }
-        HarnessLog.Line($"[{Name}] TEST {label} => PASS");
-        return true;
+        t.Check(label, true);
     }
 
-    private bool Check(string label, bool pass)
+    // Drift can arrive wrapped (a TypeInitializationException around a MissingMethodException), so
+    // walk the chain, the same way HarnessRunner does.
+    private static bool IsGameApiDrift(Exception e)
     {
-        HarnessLog.Line($"[{Name}] TEST {label} => {TestSupport.Verdict(pass)}");
-        return pass;
+        for (Exception? cur = e; cur != null; cur = cur.InnerException)
+        {
+            if (cur is MissingMemberException or TypeLoadException)
+                return true;
+        }
+        return false;
     }
 }

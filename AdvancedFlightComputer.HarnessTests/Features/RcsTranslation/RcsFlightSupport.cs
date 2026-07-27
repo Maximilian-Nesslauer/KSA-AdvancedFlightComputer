@@ -1,6 +1,7 @@
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.HarnessTests.Fixtures;
+using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
-using HeadlessHarness.Core;
 using HeadlessHarness.Harness;
 using KSA;
 
@@ -9,24 +10,22 @@ namespace AdvancedFlightComputer.HarnessTests;
 // Shared flight machinery for the RCS translation tests: vehicle spawn plus
 // teardown, burn setup with the impulsive orbit oracle, RCS arming through the
 // gauge path, and the step-until-inactive loop. One driver for every scenario
-// keeps each test to its own assertions and gives the planned
-// strategy x allocator x angle sweep a single place to build from. The oracle
-// is always the game's own orbit math, never a re-derivation.
+// keeps each test to its own assertions and gives a strategy x allocator x angle
+// sweep a single place to build from. The oracle is always the game's own orbit
+// math, never a re-derivation.
 internal static class RcsFlightSupport
 {
     // Spawns a saved vehicle into a fresh circular orbit, runs the body, and
     // always tears the vehicle down afterwards. A save with no loadable
-    // vehicle skips (returns true) with a log line, matching the per-save
-    // contract of the flight tests.
-    internal static bool RunOnSave(
-        HeadlessSession session, IParentBody home, string saveId,
-        double altitudeM, string spawnName, string testName,
-        Func<Vehicle, SimDriver, bool> body)
+    // vehicle skips with a log line, matching the per-save contract of the
+    // flight tests.
+    internal static void RunOnSave(
+        TestContext t, IParentBody home, string saveId,
+        double altitudeM, string spawnName, Action<Vehicle, SimDriver> body)
     {
-        CelestialSystem system = session.System;
-        SimDriver driver = session.CreateDriver();
-        Orbit orbit = VehicleSpawner.CircularCci(
-            home, ((Astronomical)home).MeanRadius + altitudeM, driver.Elapsed);
+        CelestialSystem system = t.System;
+        SimDriver driver = t.Session.CreateDriver();
+        Orbit orbit = OrbitFixtures.CircularAt(home, altitudeM, driver.Elapsed);
         HashSet<string> preexisting = TestSupport.CollectVehicleIds(system);
         Vehicle vehicle;
         try
@@ -35,14 +34,14 @@ internal static class RcsFlightSupport
         }
         catch (InvalidOperationException e)
         {
-            HarnessLog.Line($"[{testName}] SKIP '{saveId}': {e.Message}");
-            return true;
+            t.Skip($"'{saveId}': {e.Message}");
+            return;
         }
-        HarnessLog.Line($"[{testName}] vehicle save '{saveId}': mass={vehicle.TotalMass:F0}kg");
+        t.Info($"vehicle save '{saveId}': mass={vehicle.TotalMass:F0}kg");
         try
         {
             VehicleUpdateTask._forceOffRails = true;
-            return body(vehicle, driver);
+            body(vehicle, driver);
         }
         finally
         {
@@ -80,16 +79,15 @@ internal static class RcsFlightSupport
     {
         FlightComputer fc = vehicle.FlightComputer;
         double burnTimeSec = driver.Elapsed.Seconds() + leadSec;
-        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(new SimTime(burnTimeSec));
+        SimTime burnTime = new SimTime(burnTimeSec);
+        PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(burnTime);
         if (patch == null)
             return null;
-        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(new SimTime(burnTimeSec));
+        StateVectors burnSv = patch.Orbit.GetStateVectorsAt(burnTime);
         doubleQuat vlf2Cci = burnSv.GetVlf2ParentCci().OrIdentity();
         double3 dvVlf = (dvDirCci * dvMs).Transform(vlf2Cci.Inverse());
-        Orbit predicted = Orbit.CreateFromStateCci(
-            patch.Orbit.Parent, new SimTime(burnTimeSec), burnSv.PositionCci,
-            burnSv.VelocityCci + dvDirCci * dvMs, VehicleSpawner.OrbitLineColor);
-        OrbitPointCce point = patch.Orbit.GetPointAt(new SimTime(burnTimeSec));
+        Orbit predicted = OrbitFixtures.ApplyImpulse(patch.Orbit, dvDirCci * dvMs, burnTime);
+        OrbitPointCce point = patch.Orbit.GetPointAt(burnTime);
         Burn burn = Burn.Create(point, burnTimeSec, dvVlf, patch, vehicle);
         fc.AddBurn(burn);
         BurnTarget? bt = fc.Burn;
