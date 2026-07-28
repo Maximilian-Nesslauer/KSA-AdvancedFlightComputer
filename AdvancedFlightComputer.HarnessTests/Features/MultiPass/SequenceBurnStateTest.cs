@@ -62,8 +62,13 @@ public sealed class SequenceBurnStateTest : AfcTest
         // The shipped defaults are all liquid, so a synthetically-built single-SRB vehicle is the
         // only coverage of the SolidMotor fuel and jettison-mass path. It is built from Core content,
         // so it is always available (no machine-specific save, unlike the flight test).
-        WithVehicle(t, driver, home, BuildSyntheticSrb(), v =>
-            CrossCheck(t, "SRB baseline", v, SequenceBurnState.Analyze(v)));
+        //
+        // The synthetic save carries no per-mole masses, and the game fills a reconfigured grain only
+        // while the editor is open (PartTree.RecomputeSolidMotorStacks), so headless the grain comes
+        // up empty and has to be filled explicitly or there is no propellant to score.
+        WithVehicle(t, driver, home, BuildSyntheticSrb(),
+            v => CrossCheck(t, "SRB baseline", v, SequenceBurnState.Analyze(v)),
+            afterSpawn: v => v.RefillConsumables());
 
         if (DefaultVehicleSaves.FindSave(MultiStageVehicle) is VehicleSave rocket)
         {
@@ -73,15 +78,18 @@ public sealed class SequenceBurnStateTest : AfcTest
     }
 
     // Spawns a fresh copy of a default save, steps twice so the game initializes nozzle
-    // states (thrust direction) and mass, runs the body, and always despawns.
+    // states (thrust direction) and mass, runs the body, and always despawns. afterSpawn runs
+    // before the steps, for state a save cannot carry.
     private static void WithVehicle(
-        TestContext t, SimDriver driver, IParentBody home, VehicleSaveData data, Action<Vehicle> body)
+        TestContext t, SimDriver driver, IParentBody home, VehicleSaveData data, Action<Vehicle> body,
+        Action<Vehicle>? afterSpawn = null)
     {
         Vehicle vehicle = VehicleFixtures.SpawnFromSaveData(
             t.System, home, data, $"BurnState_{data.Id}",
             OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedSimTime()));
         try
         {
+            afterSpawn?.Invoke(vehicle);
             driver.Step(1e-3, 2);
             body(vehicle);
         }
@@ -94,7 +102,8 @@ public sealed class SequenceBurnStateTest : AfcTest
     // A one-part solid booster, deserialized exactly like a real vehicle.xml (VehicleSaveData.LoadFrom)
     // so the game builds the full part - RocketEngineController wrapping the SolidMotor core, which
     // feeds its own grain segment, no cross-part connectors required. This is enough for the stack to
-    // resolve, the grain to fill, and both AFC and SequencePerformanceList to score the SRB sequence.
+    // resolve and for both AFC and SequencePerformanceList to score the SRB sequence, once the caller
+    // has filled the grain.
     private static VehicleSaveData BuildSyntheticSrb()
     {
         // GrainGeometryLibrary.LoadAll runs in Program.Main, which the headless bring-up exits before,
