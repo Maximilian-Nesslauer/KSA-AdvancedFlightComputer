@@ -657,7 +657,7 @@ internal static class HohmannMultiPassUI
             return;
 
         SimTime now = Universe.GetElapsedSimTime();
-        SequenceBurnState state = SequenceBurnState.Analyze(source);
+        SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
         // No PrepareShiftedInput / ScanAdvisory merge here: the shift was
         // applied at intent creation and the input's TFinal is locked.
         // Plan's own CheckFinalPassAdvisory still surfaces a live final-pass
@@ -790,7 +790,9 @@ internal static class HohmannMultiPassUI
         }
 
         var raw = BuildBasePlanInput(source, entry, info);
-        SequenceBurnState state = SequenceBurnState.Analyze(source);
+        // Through the shared cache: Analyze now runs the game's own drain
+        // simulation, far too heavy for this per-frame pre-key-check site.
+        SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
         var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
             raw, source, info, _passCount, parkingPeriodSec, now, _splitMode, state);
 
@@ -1259,7 +1261,7 @@ internal static class HohmannMultiPassUI
         // than EqualDv for the same N), so the intent must use the same
         // mode the user picked.
         var raw = BuildBasePlanInput(source, entry, info);
-        SequenceBurnState state = SequenceBurnState.Analyze(source);
+        SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
         var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
             raw, source, info, passCount, parkingPeriod, now, _splitMode, state);
         var input = shift.Input;

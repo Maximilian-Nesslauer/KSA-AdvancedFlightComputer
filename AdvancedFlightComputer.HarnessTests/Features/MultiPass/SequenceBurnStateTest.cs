@@ -7,24 +7,29 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Validates SequenceBurnState (AFC's staged-dV analyzer) against the game's own
-// SequencePerformanceList for real vehicles. The oracle is always the game's own
-// per-sequence numbers, never a re-derivation: for each Vacuum sequence, AFC's burnable
+// Validates SequenceBurnState (AFC's staged-dV snapshot) against the game's own
+// SequencePerformanceList for real vehicles: for each sequence AFC carries, its burnable
 // fuel, mass flow and exhaust velocity must match the game's BurnedFuelMass /
-// MassFlowRate / (Thrust / MassFlowRate). It also covers the two fuel-accounting edge
-// cases: toggling a tank's PropellantUseEnabled and setting a non-default engine
-// FlowRule must keep AFC in agreement with the game.
+// MassFlowRate / (Thrust / MassFlowRate). AFC adapts a private SequencePerformanceList
+// run of its own, so the oracle is the same computation and the model itself is not
+// cross-checked here; what this pins is the ADAPTER - the index-to-Number mapping, the
+// usability thresholds, the dry-mass clamp, and the sub-part inert-mass repair on
+// StartMassKg (asserted directly: start mass must exceed stock's WetMass by exactly the
+// attached sub-part inert mass, and where nothing was jettisoned it must also land on
+// Vehicle.TotalMass, an anchor computed through a different route entirely). It also
+// covers the two fuel-accounting edge cases: toggling a tank's PropellantUseEnabled and
+// setting a non-default engine FlowRule must keep AFC in agreement with the game.
 //
-// AFC's SequenceBurnState is vacuum-only (it reads EngineController.VacuumData). The game
-// evaluates each sequence at its own PerformanceEnvironment, except the active sequence,
-// which RecomputeForFlight(0f) pins to 0 Pa. So a sequence is comparable when it is Vacuum
-// or is the active sequence; a non-active Atmospheric sequence is computed at sea level and
-// skipped. Stock's side is computed on a private SequencePerformanceList so the test never
-// touches the game's shared, worker-thread-recomputed instance.
+// Both sides run RecomputeForFlight(0f) on a private list (never the game's shared,
+// worker-thread-recomputed instance): the active sequence evaluates at vacuum, a
+// non-active sequence at its own PerformanceEnvironment, so every sequence is
+// comparable.
 //
-// Start mass legitimately differs and is logged, not asserted: AFC uses Vehicle.TotalMass
-// (the real physics mass) while SequencePerformanceList.WetMass sums only top-level
-// InertMass and omits sub-part inert mass, so the game's start mass runs a little light.
+// Coverage note for game 2026.7.10.5056: stock's model zeroes out the shipped default
+// vehicles (decoupler-carrying parts left at the default Sequence 1 release their whole
+// subtrees at the first sequence index), so the baseline, disabled-tank and flow-rule
+// cases skip on them and the effective coverage is the synthetic SRB until a game update
+// fixes the model or the saves.
 public sealed class SequenceBurnStateTest : AfcTest
 {
     private const double SpawnAltitudeM = 500_000.0; // an arbitrary stable orbit; altitude does not feed the compared thrust
@@ -138,7 +143,16 @@ public sealed class SequenceBurnStateTest : AfcTest
     {
         if (afc.Sequences.Count == 0)
         {
-            t.Skip($"{label}: no usable sequences.");
+            // On 2026.7.10.5056 the stock model itself computes zero thrust and
+            // fuel for the shipped default vehicles: their saves leave
+            // decoupler-carrying parts (docking port, capsule coupling) at the
+            // default Sequence 1, and SnapshotJettisonSequences releases those
+            // parts' whole subtrees at the first sequence index, emptying the
+            // vehicle before any engine accumulates. The changelog's own note
+            // ("still need to fix more logic on where multiple engines in one
+            // sequence end their burn") marks the model as in progress, and AFC
+            // deliberately mirrors it, so this is a skip, not a failure.
+            t.Skip($"{label}: no usable sequences (stock reports none for this vehicle).");
             return;
         }
 
@@ -151,40 +165,53 @@ public sealed class SequenceBurnStateTest : AfcTest
         ReadOnlySpan<SequencePerformance> perf = stock.PerformanceSequences;
         int count = Math.Min(seqs.Length, perf.Length);
 
-        // The game evaluates a sequence at 0 Pa when it is Vacuum, or when it is the active sequence
-        // (RecomputeForFlight(0f) forces the active sequence's flight pressure to 0). A non-active
-        // Atmospheric sequence is computed at sea level, which AFC's vacuum-only analyzer cannot
-        // match, so mark it not-comparable.
-        int activeSeq = vehicle.Parts.SequenceList.ActiveSequence;
-        var byNumber = new Dictionary<int, (SequencePerformance Perf, bool SeaLevel)>(count);
+        var byNumber = new Dictionary<int, SequencePerformance>(count);
         for (int i = 0; i < count; i++)
-        {
-            bool seaLevel = seqs[i].Environment == PerformanceEnvironment.Atmospheric && seqs[i].Number != activeSeq;
-            byNumber[seqs[i].Number] = (perf[i], seaLevel);
-        }
+            byNumber[seqs[i].Number] = perf[i];
 
         foreach (SequenceInfo s in afc.Sequences)
         {
-            if (!byNumber.TryGetValue(s.Number, out (SequencePerformance Perf, bool SeaLevel) match))
+            if (!byNumber.TryGetValue(s.Number, out SequencePerformance p))
             {
                 t.Fail($"{label} seq {s.Number}", "no matching stock sequence");
                 continue;
             }
-            if (match.SeaLevel)
-            {
-                t.Skip($"{label} seq {s.Number}: non-active Atmospheric sequence, AFC is vacuum-only.");
-                continue;
-            }
-
-            SequencePerformance p = match.Perf;
             double stockVe = p.MassFlowRate > 0f ? p.Thrust / p.MassFlowRate : 0.0;
             bool fuelOk = Approx.Rel(s.FuelMassKg, p.BurnedFuelMass, FuelTol, ElementFloor);
             bool mDotOk = Approx.Rel(s.MassFlowKgPerSec, p.MassFlowRate, MDotTol, ElementFloor);
             bool veOk = Approx.Rel(s.ExhaustVelocityMs, stockVe, VeTol, ElementFloor);
-            t.Check($"{label} seq {s.Number}", fuelOk && mDotOk && veOk,
+
+            // The adapter's start-mass repair: stock's WetMass omits sub-part
+            // inert mass, so AFC's start mass must exceed it by exactly the
+            // attached sub-parts' inert sum. Recomputed here from the
+            // sequence's own attached set so a dropped or double-counted
+            // repair fails instead of merely reading differently in the log.
+            double subPartInert = 0.0;
+            int attachedCount = 0;
+            if (p.AttachedParts != null)
+            {
+                attachedCount = p.AttachedParts.Count;
+                foreach (Part part in p.AttachedParts)
+                {
+                    ReadOnlySpan<Part> subParts = part.SubParts;
+                    for (int i = 0; i < subParts.Length; i++)
+                        subPartInert += subParts[i].InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f;
+                }
+            }
+            bool startOk = Approx.Mixed(s.StartMassKg, p.WetMass + subPartInert, 0.5, 1e-6);
+            // Independent anchor where nothing was jettisoned before this
+            // sequence: the repaired start mass is the whole vehicle, whose
+            // TotalMass is computed through the full module list rather than
+            // through WetMass at all.
+            if (attachedCount == vehicle.Parts.Parts.Length)
+                startOk &= Approx.Rel(s.StartMassKg, vehicle.TotalMass, 1e-3, ElementFloor);
+
+            t.Check($"{label} seq {s.Number}", fuelOk && mDotOk && veOk && startOk,
                 $"fuel {s.FuelMassKg:F1}/{p.BurnedFuelMass:F1} " +
                 $"mDot {s.MassFlowKgPerSec:F2}/{p.MassFlowRate:F2} " +
-                $"Ve {s.ExhaustVelocityMs:F1}/{stockVe:F1} start {s.StartMassKg:F1}/{p.WetMass:F1}");
+                $"Ve {s.ExhaustVelocityMs:F1}/{stockVe:F1} " +
+                $"start {s.StartMassKg:F1} (wet {p.WetMass:F1} + subInert {subPartInert:F1}, " +
+                $"total {vehicle.TotalMass:F1})");
         }
     }
 
@@ -193,6 +220,13 @@ public sealed class SequenceBurnStateTest : AfcTest
     private static void DisabledTankCase(TestContext t, Vehicle vehicle)
     {
         double fuelBefore = TotalFuel(SequenceBurnState.Analyze(vehicle));
+        if (!(fuelBefore > 0.0))
+        {
+            // Same stock-side state as the baseline skip in CrossCheck: with no
+            // burnable fuel to start from, a drop cannot be measured.
+            t.Skip($"{MultiStageVehicle} disabled-tank: stock reports no burnable fuel for this vehicle.");
+            return;
+        }
 
         Tank? target = PickLargestEnabledTank(vehicle);
         if (target == null)

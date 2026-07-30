@@ -46,10 +46,12 @@ internal static class MultiPassPreviewCache
         return _cachedState;
     }
 
-    // Catches state changes that leave total mass unchanged: engine.IsActive
-    // toggles, sequence.Activated flips, engine reassignments, per-core
-    // FlowRule changes, and tank PropellantUseEnabled toggles - each moves
-    // the SequenceBurnState result without moving MassBucket.
+    // Catches state changes that can move the SequenceBurnState result
+    // without moving MassBucket: staging state, a sequence's ATM/VAC toggle
+    // (selects the stock model's evaluation pressure), engine and flow-rule
+    // reconfiguration, and tank PropellantUseEnabled toggles. Some entries
+    // over-invalidate under the stock-model adapter (it ignores IsActive
+    // outside the live active sequence), which only costs a spare recompute.
     private static int ComputeActiveEngineSignature(Vehicle source)
     {
         if (source.Parts == null) return 0;
@@ -60,6 +62,7 @@ internal static class MultiPassPreviewCache
         {
             hc.Add(sequences[i].Number);
             hc.Add(sequences[i].Activated);
+            hc.Add((int)sequences[i].Environment);
         }
 
         ReadOnlySpan<Part> parts = source.Parts.Parts;
@@ -77,8 +80,9 @@ internal static class MultiPassPreviewCache
             }
         }
 
-        // ComputeSequenceFuel skips propellant-disabled tanks, so a toggle
-        // changes burnable fuel while the vehicle's total mass is unchanged.
+        // The stock drain skips propellant-disabled tanks (the game filters on
+        // PropellantUseEnabled), so a toggle changes burnable fuel while the
+        // vehicle's total mass is unchanged.
         Span<Tank> tanks = source.Parts.Tanks.Modules;
         for (int i = 0; i < tanks.Length; i++)
             hc.Add(tanks[i].PropellantUseEnabled);

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using Brutal.Numerics;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
@@ -17,16 +16,44 @@ internal readonly record struct SequenceInfo(
     double BurnTimeSec);
 
 /// <summary>
-/// Per-sequence Tsiolkovsky snapshot. Vacuum thrust (multi-pass burns
-/// fire at periapsis / AN / DN). Fuel routing follows each engine
-/// core's ConsumptionOrder (the player-selected FlowRule) and counts
-/// only propellant-enabled tanks; decoupler subtrees are subtracted at
-/// sequence boundaries so StartMass reflects what's still attached.
+/// Per-sequence Tsiolkovsky snapshot for the Splitter, adapted from a private
+/// <see cref="SequencePerformanceList"/> run. The game's staged model is
+/// non-trivial - jettison subtrees resolve through the decoupler's connector
+/// side, engines from earlier sequences keep burning while still attached, and
+/// a sequence's drain stops when its cutoff group (engines a later sequence
+/// jettisons) is spent - so the numbers come from the game's own computation
+/// rather than a re-derivation that has to chase that model across updates.
 ///
-/// Computed in-house rather than read from the game's SequencePerformanceList
-/// so the numbers stay vacuum-consistent for the Splitter regardless of a
-/// sequence's atmospheric toggle, and depend only on stable per-part inputs.
-/// SequenceBurnStateTest validates them against the game's own values.
+/// Deliberate consequences of adopting the stock model, so they read as
+/// choices rather than oversights:
+/// <list type="bullet">
+/// <item><c>RecomputeForFlight(0f)</c> pins only the ACTIVE sequence to
+/// vacuum; a non-active sequence a player toggled Atmospheric evaluates at
+/// sea level, matching the stock sequence display. For an orbital split that
+/// under-states such a sequence's dV (sea-level Isp), which errs on the
+/// conservative side. The preview cache hashes the toggle so a change is not
+/// served stale.</item>
+/// <item>Stock applies no <c>engine.IsActive</c> filter outside the live
+/// active-sequence override, so a shut-down engine still contributes its
+/// design thrust to planned sequences (the old in-house walk excluded
+/// it).</item>
+/// <item>While the active sequence is actually firing, stock replaces its
+/// design numbers with the live throttled nozzle sums. The two preview caches
+/// freeze during Auto burns, so the Splitter rarely sees those transients;
+/// <see cref="MultiPassPreviewCache.GetSequenceState"/> has no such freeze,
+/// so the burn-time and savings readouts can show throttle-inflated numbers
+/// mid-burn.</item>
+/// </list>
+///
+/// The instance is private to the call so the game's shared, worker-thread-
+/// recomputed list is never touched. Safe because every piece of recompute
+/// scratch in <see cref="SequencePerformanceList"/> (and the drain helpers it
+/// calls) is instance state; re-verify that on game update, since scratch
+/// moving to a static would make this silently racy.
+///
+/// A sequence with cutoff phases really has a falling mass flow; this snapshot
+/// carries the ignition-time flow for the whole sequence, the same first-order
+/// simplification the game's own Isp readout makes.
 /// </summary>
 internal sealed class SequenceBurnState
 {
@@ -49,284 +76,68 @@ internal sealed class SequenceBurnState
         if (vehicle?.Parts == null)
             return Empty;
 
+        var performance = new SequencePerformanceList(vehicle.Parts);
+        performance.RecomputeForFlight(0f);
+
+        // PerformanceSequences is index-aligned with SequenceList.Sequences.
         ReadOnlySpan<Sequence> sequences = vehicle.Parts.SequenceList.Sequences;
-        ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
+        ReadOnlySpan<SequencePerformance> perf = performance.PerformanceSequences;
+        int count = Math.Min(sequences.Length, perf.Length);
 
-        // SequenceList sorts by Number ascending = firing order.
-        var jettisonedPartIds = new HashSet<uint>();
-        var fuelClaimedTankIds = new HashSet<ulong>();
-        var claimedGrainMoleIdx = new HashSet<int>();
-        var enginesScratch = new List<EngineController>();
-
-        double currentMassKg = vehicle.TotalMass;
-        var result = new List<SequenceInfo>(sequences.Length);
+        var result = new List<SequenceInfo>(count);
         bool anyUsable = false;
 
-        for (int si = 0; si < sequences.Length; si++)
+        for (int i = 0; i < count; i++)
         {
-            Sequence sequence = sequences[si];
-            if (sequence.Parts.IsEmpty)
+            ref readonly SequencePerformance p = ref perf[i];
+            if (!(p.MassFlowRate >= MinMassFlowKgPerSec) || !(p.Thrust > 0f))
                 continue;
 
-            currentMassKg -= ComputeJettisonedMass(
-                sequence, moleStates, jettisonedPartIds, fuelClaimedTankIds, claimedGrainMoleIdx);
-
-            // Activated sequences honour engine.IsActive (pilot may have
-            // killed some); not-yet-activated sequences co-ignite all.
-            CollectEngines(sequence, jettisonedPartIds, sequence.Activated, enginesScratch);
-            if (enginesScratch.Count == 0)
-                continue;
-
-            double thrust = 0.0;
-            double mDot = 0.0;
-            foreach (EngineController engine in enginesScratch)
-            {
-                thrust += engine.VacuumData.ThrustMax.Length();
-                mDot += engine.VacuumData.MassFlowRateMax;
-            }
-            if (mDot < MinMassFlowKgPerSec)
-                continue;
-
-            double vExhaust = thrust / mDot;
-
-            double fuelMass = ComputeSequenceFuel(
-                enginesScratch, fuelClaimedTankIds, claimedGrainMoleIdx, jettisonedPartIds, moleStates);
+            double vExhaust = p.Thrust / p.MassFlowRate;
+            // Stock's WetMass sums InertMass over top-level parts only, while
+            // its fuel sum does include sub-part tanks, so the reported start
+            // mass runs light by the sub-part inert mass (engines ship as
+            // sub-parts). Left uncorrected, ln(m0 / (m0 - fuel)) overstates dV
+            // capacity and the fuel-short warning can stay silent. Repair it
+            // from the sequence's own attached set.
+            double startMass = p.WetMass + SubPartInertMassKg(p.AttachedParts);
 
             // Keep end mass strictly positive for the Tsiolkovsky log.
-            double burnableFuel = fuelMass;
-            double maxBurnable = currentMassKg - MinDryMassKg;
+            double burnableFuel = p.BurnedFuelMass;
+            double maxBurnable = startMass - MinDryMassKg;
             if (burnableFuel > maxBurnable)
                 burnableFuel = Math.Max(0.0, maxBurnable);
 
-            double startMass = currentMassKg;
-            double endMass = currentMassKg - burnableFuel;
-            double burnTime = burnableFuel / mDot;
-
             result.Add(new SequenceInfo(
-                Number: sequence.Number,
+                Number: sequences[i].Number,
                 StartMassKg: startMass,
                 FuelMassKg: burnableFuel,
-                MassFlowKgPerSec: mDot,
+                MassFlowKgPerSec: p.MassFlowRate,
                 ExhaustVelocityMs: vExhaust,
-                BurnTimeSec: burnTime));
+                BurnTimeSec: burnableFuel / p.MassFlowRate));
 
             if (burnableFuel > 0.0)
                 anyUsable = true;
-
-            currentMassKg = endMass;
         }
 
         return new SequenceBurnState(result, anyUsable);
     }
 
-    private static void CollectEngines(
-        Sequence sequence,
-        HashSet<uint> jettisonedPartIds,
-        bool sequenceActivated,
-        List<EngineController> outEngines)
+    /// <summary>Inert mass of the sub-parts hanging off the still-attached
+    /// top-level parts, the share stock's WetMass omits. Mirrors stock's own
+    /// per-part accessor (<c>part.InertMass</c>) so this adds exactly the
+    /// missing terms and nothing else.</summary>
+    private static double SubPartInertMassKg(HashSet<Part>? attachedParts)
     {
-        outEngines.Clear();
-        ReadOnlySpan<Part> parts = sequence.Parts;
-        for (int pi = 0; pi < parts.Length; pi++)
-        {
-            Part part = parts[pi];
-            if (jettisonedPartIds.Contains(part.InstanceId))
-                continue;
-
-            Span<EngineController> engines = part.Modules.Get<EngineController>();
-            for (int ei = 0; ei < engines.Length; ei++)
-            {
-                EngineController engine = engines[ei];
-                if (sequenceActivated && !engine.IsActive)
-                    continue;
-                outEngines.Add(engine);
-            }
-        }
-    }
-
-    private static double ComputeSequenceFuel(
-        List<EngineController> engines,
-        HashSet<ulong> fuelClaimedTankIds,
-        HashSet<int> claimedGrainMoleIdx,
-        HashSet<uint> jettisonedPartIds,
-        ReadOnlySpan<MoleState> moleStates)
-    {
-        double total = 0.0;
-        foreach (EngineController engine in engines)
-        {
-            foreach (RocketCore core in engine.Cores)
-            {
-                // The ResourceManager lives on Combustor (liquid), while a
-                // SolidMotor feeds grain segments instead of tanks, so the two
-                // core kinds drain disjoint stores and are summed separately.
-                if (core is Combustor combustor)
-                    total += SumLiquidFuel(combustor.ResourceManager, fuelClaimedTankIds, moleStates);
-                else if (core is SolidMotor solid)
-                    total += SumSolidFuel(solid, claimedGrainMoleIdx, jettisonedPartIds, moleStates);
-            }
-        }
-        return total;
-    }
-
-    private static double SumLiquidFuel(
-        ResourceManager? rm,
-        HashSet<ulong> fuelClaimedTankIds,
-        ReadOnlySpan<MoleState> moleStates)
-    {
-        // ConsumptionOrder resolves the engine's player-selected FlowRule to
-        // the matching drain-level array, so a cross-stage rule pulls from the
-        // tanks the engine actually drains.
-        Tank[][]? levels = rm?.ConsumptionOrder;
-        if (levels == null)
+        if (attachedParts == null)
             return 0.0;
-
-        double total = 0.0;
-        for (int i = 0; i < levels.Length; i++)
-        {
-            Tank[] tanks = levels[i];
-            if (tanks == null) continue;
-            for (int j = 0; j < tanks.Length; j++)
-            {
-                Tank tank = tanks[j];
-                if (tank == null) continue;
-                // A propellant-disabled tank feeds no engine. Skip it unclaimed
-                // so its mass stays as dead weight in the running total and a
-                // later decoupler subtree still accounts for it at jettison.
-                if (!tank.PropellantUseEnabled)
-                    continue;
-                // First-claim-wins across the whole walk.
-                if (!fuelClaimedTankIds.Add(tank.InstanceId))
-                    continue;
-                total += tank.ComputeSubstanceMass(moleStates);
-            }
-        }
-        return total;
-    }
-
-    // Mirrors SequencePerformanceList.SnapshotSolidStarts: a grain contributes
-    // only its burnable mass (grain mass above the unburnable residual that can
-    // no longer sustain chamber pressure). The residual stays attached as dead
-    // weight and leaves only when the casing is jettisoned.
-    private static double SumSolidFuel(
-        SolidMotor solid,
-        HashSet<int> claimedGrainMoleIdx,
-        HashSet<uint> jettisonedPartIds,
-        ReadOnlySpan<MoleState> moleStates)
-    {
-        if (!solid.Stack.IsValid)
-            return 0.0;
-
-        double total = 0.0;
-        SolidGrainSegment[] segments = solid.Stack.Segments;
-        for (int i = 0; i < segments.Length; i++)
-        {
-            SolidGrainSegment segment = segments[i];
-            Mole? grain = segment.Grain;
-            if (grain == null)
-                continue;
-            // A segmented stack can span parts; skip grains that already left
-            // with a jettisoned subtree.
-            if (jettisonedPartIds.Contains(segment.FullPart.InstanceId))
-                continue;
-            // First-claim-wins; the parallel jettison walk claims the same
-            // grain by mole index so it is never counted twice.
-            if (!claimedGrainMoleIdx.Add(grain.StatesIdx))
-                continue;
-            double burnable = moleStates[grain.StatesIdx].Mass - segment.UnburnableGrainMass;
-            if (burnable > 0.0)
-                total += burnable;
-        }
-        return total;
-    }
-
-    private static double ComputeJettisonedMass(
-        Sequence sequence,
-        ReadOnlySpan<MoleState> moleStates,
-        HashSet<uint> jettisonedPartIds,
-        HashSet<ulong> fuelClaimedTankIds,
-        HashSet<int> claimedGrainMoleIdx)
-    {
-        double total = 0.0;
-        ReadOnlySpan<Part> parts = sequence.Parts;
-        for (int pi = 0; pi < parts.Length; pi++)
-        {
-            Part part = parts[pi];
-            if (!part.Modules.HasAny<Decoupler>()) continue;
-            total += CollectSubtreeMass(part, moleStates, jettisonedPartIds, fuelClaimedTankIds, claimedGrainMoleIdx);
-        }
-        return total;
-    }
-
-    private static double CollectSubtreeMass(
-        Part part,
-        ReadOnlySpan<MoleState> moleStates,
-        HashSet<uint> jettisonedPartIds,
-        HashSet<ulong> fuelClaimedTankIds,
-        HashSet<int> claimedGrainMoleIdx)
-    {
-        if (!jettisonedPartIds.Add(part.InstanceId))
-            return 0.0;
-
-        double mass = ComputePartMass(part, moleStates, fuelClaimedTankIds, claimedGrainMoleIdx);
-        List<Part> children = part.TreeChildren;
-        for (int i = 0; i < children.Count; i++)
-            mass += CollectSubtreeMass(children[i], moleStates, jettisonedPartIds, fuelClaimedTankIds, claimedGrainMoleIdx);
-        return mass;
-    }
-
-    private static double ComputePartMass(
-        Part part,
-        ReadOnlySpan<MoleState> moleStates,
-        HashSet<ulong> fuelClaimedTankIds,
-        HashSet<int> claimedGrainMoleIdx)
-    {
-        double mass = SumComponentMass(part.Modules, moleStates, fuelClaimedTankIds, claimedGrainMoleIdx);
-        ReadOnlySpan<Part> subParts = part.SubParts;
-        for (int i = 0; i < subParts.Length; i++)
-            mass += SumComponentMass(subParts[i].Modules, moleStates, fuelClaimedTankIds, claimedGrainMoleIdx);
-        return mass;
-    }
-
-    private static double SumComponentMass(
-        ModuleList components,
-        ReadOnlySpan<MoleState> moleStates,
-        HashSet<ulong> fuelClaimedTankIds,
-        HashSet<int> claimedGrainMoleIdx)
-    {
-        double mass = SumInertMass(components);
-        Span<Tank> tanks = components.Get<Tank>();
-        for (int i = 0; i < tanks.Length; i++)
-        {
-            // First-claim-wins. Claiming a tank in a jettisoned subtree
-            // also blocks later sequences' engine networks from pulling
-            // fuel from it (it leaves with the booster).
-            if (fuelClaimedTankIds.Add(tanks[i].InstanceId))
-                mass += tanks[i].ComputeSubstanceMass(moleStates);
-        }
-        Span<SolidGrainSegment> grains = components.Get<SolidGrainSegment>();
-        for (int i = 0; i < grains.Length; i++)
-        {
-            Mole? grain = grains[i].Grain;
-            if (grain == null) continue;
-            double full = moleStates[grain.StatesIdx].Mass;
-            // An unclaimed grain leaves whole with the booster. A grain already
-            // claimed as fuel has had its burnable part counted; only the
-            // unburnable residual is still aboard to leave with the casing.
-            // The casing itself is inert mass, already summed above.
-            if (claimedGrainMoleIdx.Add(grain.StatesIdx))
-                mass += full;
-            else
-                mass += Math.Min(full, grains[i].UnburnableGrainMass);
-        }
-        return mass;
-    }
-
-    private static double SumInertMass(ModuleList modules)
-    {
         double mass = 0.0;
-        Span<InertMass> inerts = modules.Get<InertMass>();
-        for (int i = 0; i < inerts.Length; i++)
-            mass += inerts[i].MassPropertiesAsmb.Props.Mass;
+        foreach (Part part in attachedParts)
+        {
+            ReadOnlySpan<Part> subParts = part.SubParts;
+            for (int i = 0; i < subParts.Length; i++)
+                mass += subParts[i].InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f;
+        }
         return mass;
     }
 }
