@@ -38,18 +38,23 @@ internal static class RcsExecutor
     /// absorbs the roughness of the slew propellant estimate.</summary>
     private const double AlignPreferenceFactor = 0.9;
 
-    /// <summary>Firing with no measurable to-go reduction for this long
-    /// cancels with a stall alert. Catches layouts whose axes cannot serve
-    /// the demanded direction at the current attitude (the axis suppression
-    /// then zeroes every pulse and nothing would ever terminate). Only
-    /// counts while firing is eligible: align slews and the pre-ignition
-    /// coast rebase the clock.</summary>
+    /// <summary>Accumulated firing-eligible sim time with no measurable
+    /// to-go reduction before the burn cancels with a stall alert. Catches
+    /// layouts whose axes cannot serve the demanded direction at the current
+    /// attitude (the axis suppression then zeroes every pulse and nothing
+    /// would ever terminate). Ineligible ticks (align slews, the
+    /// pre-ignition coast) pause the clock; only delivered progress resets
+    /// it, so a chattering attitude cannot keep the burn alive.</summary>
     private const double NoProgressTimeoutSec = 15.0;
 
-    /// <summary>Continuous-slew bound for Align: past this the vehicle is
-    /// judged unable to settle into the burn attitude and the burn cancels
-    /// with an attitude message (never a thruster-coverage one). Generous
-    /// on purpose - ingame slews estimate up to ~35 seconds.</summary>
+    /// <summary>Accumulated-slew bound for Align: past this much slewing
+    /// since the last delivered progress the vehicle is judged unable to
+    /// settle into the burn attitude and the burn cancels with an attitude
+    /// message (never a thruster-coverage one). Generous on purpose -
+    /// ingame slews estimate up to ~35 seconds. Accumulated rather than a
+    /// continuous-run timestamp: the stock RCS phase plane coasts the error
+    /// through zero instead of parking it, so the align gate chatters and a
+    /// single in-gate tick must not clear the clock.</summary>
     private const double AlignTimeoutSec = 120.0;
 
     /// <summary>The Align tracker is commanded only this close to the burn:
@@ -310,7 +315,6 @@ internal static class RcsExecutor
         exec.ActiveBurnDvMs = dvMs;
         exec.ResolvedStrategy = strategy;
         exec.ResolvedAxis = axis;
-        exec.StallAlerted = false;
 
         exec.BaselineFuel(fc, exec.CapabilityProbedAtSec);
 
@@ -637,6 +641,13 @@ internal static class RcsExecutor
             DefaultCategory.Log.Debug(
                 $"[AFC] RCS: re-enabled RCSMode after a mid-burn toggle on vehicle='{vehicle.Id}'.");
 
+        // Sim-time delta of this driver tick, the increment for the two
+        // stall accumulators below. Zero on the first active tick.
+        double tickDt = double.IsNaN(exec.LastTickSimSec)
+            ? 0.0
+            : Math.Max(0.0, nowSec - exec.LastTickSimSec);
+        exec.LastTickSimSec = nowSec;
+
         if (nowSec - exec.CapabilityProbedAtSec > CapabilityRefreshSec)
         {
             exec.Capability = RcsCapability.Probe(vehicle);
@@ -644,11 +655,7 @@ internal static class RcsExecutor
         }
         if (!exec.Capability.HasAnyTranslation)
         {
-            if (!exec.StallAlerted)
-            {
-                exec.StallAlerted = true;
-                Alert("RCS burn stalled: no thruster propellant.");
-            }
+            Alert("RCS burn stalled: no thruster propellant.");
             Cancel(vehicle, exec, "no translation authority");
             return;
         }
@@ -701,23 +708,40 @@ internal static class RcsExecutor
             return;
         }
 
-        // No-progress watchdog: firing was eligible but the to-go has not
-        // moved. Covers directions the current layout cannot serve (all
-        // pulses suppressed) without any propellant drain to trigger the
-        // capability stall above. While not yet eligible the clock rebases
-        // every tick, so an align slew or a pre-ignition coast never counts
-        // as "no progress".
-        if (!firingEligible || togoMs < exec.WatchdogTogoMs - ProgressEpsilonMs)
+        // No-progress watchdog: accumulated firing-eligible time without a
+        // to-go reduction. Covers directions the current layout cannot serve
+        // (all pulses suppressed) without any propellant drain to trigger
+        // the capability stall above. Ineligible ticks (slew, pre-ignition
+        // coast) pause the clock rather than reset it; only progress resets,
+        // so a gate that chatters between slewing and eligible cannot keep a
+        // going-nowhere burn alive indefinitely (observed to drain the tanks
+        // dry with neither bound firing when both rebased on state flips).
+        if (!firingEligible)
+        {
+            // Parasitic attitude/rate-hold delta-V can grow the to-go during
+            // the coast; track the growth so the eligible-phase progress test
+            // measures against the real pre-burn value.
+            if (togoMs > exec.WatchdogTogoMs)
+                exec.WatchdogTogoMs = togoMs;
+        }
+        else if (togoMs < exec.WatchdogTogoMs - ProgressEpsilonMs)
         {
             exec.WatchdogTogoMs = togoMs;
-            exec.WatchdogAtSec = nowSec;
+            exec.NoProgressAccumSec = 0.0;
+            // Delivered delta-V proves the attitude serves the burn, so the
+            // align bound restarts too.
+            exec.SlewAccumSec = 0.0;
         }
-        else if (nowSec - exec.WatchdogAtSec > NoProgressTimeoutSec)
+        else
         {
-            Alert($"RCS burn stalled: no progress on '{vehicle.Id}' " +
-                  $"({togoMs:F2}m/s to go). Check thruster coverage for the burn direction.");
-            Cancel(vehicle, exec, "no progress");
-            return;
+            exec.NoProgressAccumSec += tickDt;
+            if (exec.NoProgressAccumSec > NoProgressTimeoutSec)
+            {
+                Alert($"RCS burn stalled: no progress on '{vehicle.Id}' " +
+                      $"({togoMs:F2}m/s to go). Check thruster coverage for the burn direction.");
+                Cancel(vehicle, exec, "no progress");
+                return;
+            }
         }
 
         // Terminal bound for the slew itself: a vehicle that cannot settle
@@ -726,19 +750,14 @@ internal static class RcsExecutor
         // coverage.
         if (slewing)
         {
-            if (exec.SlewingSinceSec <= 0.0)
-                exec.SlewingSinceSec = nowSec;
-            else if (nowSec - exec.SlewingSinceSec > AlignTimeoutSec)
+            exec.SlewAccumSec += tickDt;
+            if (exec.SlewAccumSec > AlignTimeoutSec)
             {
                 Alert($"RCS burn cancelled: '{vehicle.Id}' cannot reach the burn attitude " +
-                      $"(still slewing after {AlignTimeoutSec:F0}s).");
+                      $"(slewing for {AlignTimeoutSec:F0}s without progress).");
                 Cancel(vehicle, exec, "cannot reach burn attitude");
                 return;
             }
-        }
-        else
-        {
-            exec.SlewingSinceSec = 0.0;
         }
 
         if (nowSec - exec.EstimatesComputedAtSec > EstimateRefreshSec)
@@ -864,7 +883,10 @@ internal static class RcsExecutor
         if (exec.StartMassKg <= 0.0)
             return;
         double massNow = fc.TotalMassPropsBody.Mass;
+        // Clamped to losses: a mass gain (refill, transfer, docking) is not
+        // propellant given back, so it must not shrink any bucket.
         double burnedTick = Math.Max(0.0, exec.LastTickMassKg - massNow);
+        exec.BurnedPropellantKg += burnedTick;
         if (slewing)
             exec.SlewPropellantKg += burnedTick;
         else if (!firingEligible)
@@ -931,7 +953,10 @@ internal static class RcsExecutor
             exec.LastFuel = default;
             return default;
         }
-        double totalKg = exec.StartMassKg - fc.TotalMassPropsBody.Mass;
+        // Accumulated per-tick losses, not start-minus-now: see
+        // RcsExecution.BurnedPropellantKg for why a raw mass difference
+        // inverts the report on any mid-burn mass gain.
+        double totalKg = exec.BurnedPropellantKg;
 
         double dvMs = 0.0;
         double veMs = 0.0;

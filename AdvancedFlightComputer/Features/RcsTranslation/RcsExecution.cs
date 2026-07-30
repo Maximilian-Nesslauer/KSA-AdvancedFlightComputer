@@ -68,17 +68,25 @@ internal sealed class RcsExecution
     public RcsEstimates Estimates;
     public double EstimatesComputedAtSec = double.NegativeInfinity;
 
-    /// <summary>One-shot guard so the propellant-stall alert fires once per stall.</summary>
-    public bool StallAlerted;
-
-    /// <summary>No-progress watchdog baseline: the smallest to-go seen and
-    /// when it was seen. Zero/infinity until the first active tick.</summary>
+    /// <summary>No-progress watchdog baseline: the smallest to-go seen while
+    /// firing was eligible. Infinity until the first eligible tick.</summary>
     public float WatchdogTogoMs = float.PositiveInfinity;
-    public double WatchdogAtSec;
 
-    /// <summary>Start of the current continuous Align slew, zero while not
-    /// slewing; feeds the cannot-reach-attitude bound.</summary>
-    public double SlewingSinceSec;
+    /// <summary>Accumulated firing-eligible sim seconds without a to-go
+    /// reduction. Accumulated rather than a rebased timestamp, so ticks that
+    /// are merely ineligible (slewing, pre-ignition) pause the clock instead
+    /// of resetting it; only actual progress resets it.</summary>
+    public double NoProgressAccumSec;
+
+    /// <summary>Accumulated slewing sim seconds since the last delivered
+    /// progress; feeds the cannot-reach-attitude bound. Accumulated so an
+    /// attitude chattering across the align gate cannot clear the clock with
+    /// a single in-gate tick.</summary>
+    public double SlewAccumSec;
+
+    /// <summary>Sim time of the previous active driver tick, the delta source
+    /// for the two accumulators above. NaN until the first active tick.</summary>
+    public double LastTickSimSec = double.NaN;
 
     /// <summary>One-shot guard for the ignition-crossing debug log.</summary>
     public bool FiringLogged;
@@ -90,8 +98,16 @@ internal sealed class RcsExecution
     /// line is skipped.</summary>
     public double StartMassKg;
 
-    /// <summary>Mass at the previous driver tick; feeds the slew bucket.</summary>
+    /// <summary>Mass at the previous driver tick; feeds the per-tick burn
+    /// deltas below.</summary>
     public double LastTickMassKg;
+
+    /// <summary>Total propellant spent, accumulated from per-tick mass
+    /// LOSSES only. Not start-minus-now: a mid-burn mass gain (the stock
+    /// refill action, resource transfer, docking) would turn that difference
+    /// negative and invert the whole fuel report, while a clamped per-tick
+    /// sum just ignores the gain and keeps counting real drain.</summary>
+    public double BurnedPropellantKg;
 
     /// <summary>Propellant spent while the Align slew held firing back, kg
     /// (mass delta over slewing ticks, which is all attitude by construction).</summary>
@@ -132,6 +148,7 @@ internal sealed class RcsExecution
     {
         StartMassKg = fc.TotalMassPropsBody.Mass;
         LastTickMassKg = StartMassKg;
+        BurnedPropellantKg = 0.0;
         SlewPropellantKg = 0.0;
         CoastPropellantKg = 0.0;
         TranslationPropellantKg = 0.0;
@@ -217,15 +234,16 @@ internal sealed class RcsExecution
         ActiveBurnDvMs = null;
         ResolvedAxis = -1;
         ResolvedStrategy = RcsAttitudeStrategy.Hold;
-        StallAlerted = false;
         WatchdogTogoMs = float.PositiveInfinity;
-        WatchdogAtSec = 0.0;
-        SlewingSinceSec = 0.0;
+        NoProgressAccumSec = 0.0;
+        SlewAccumSec = 0.0;
+        LastTickSimSec = double.NaN;
         FiringLogged = false;
         AlignCommanded = false;
         ForcedRcsOn = false;
         StartMassKg = 0.0;
         LastTickMassKg = 0.0;
+        BurnedPropellantKg = 0.0;
         SlewPropellantKg = 0.0;
         CoastPropellantKg = 0.0;
         TranslationPropellantKg = 0.0;
@@ -275,16 +293,18 @@ internal sealed class RcsExecution
     }
 }
 
-/// <summary>Fuel breakdown of one finished execution. Translation is
-/// model-attributed (delivered delta-V times the allocator's cost model),
-/// so Attitude also absorbs pulse quantization and model error; Slew is
-/// the measured mass delta while the Align slew held firing back, Coast
-/// the measured mass delta before the firing window opened (attitude and
-/// rate hold through the wait). A NEGATIVE Attitude means the tank
-/// yielded less mass than the applied flow: ResourceManager.MassChange
-/// withdraws per reactant and quietly under-delivers when a mix component
-/// is missing (dev-save territory), while the nozzle keeps firing at full
-/// thrust.</summary>
+/// <summary>Fuel breakdown of one finished execution. Total is the sum of
+/// per-tick mass losses (mass gains like a mid-burn refill are ignored, not
+/// subtracted). Translation is model-attributed (delivered delta-V times the
+/// allocator's cost model), so Attitude, the residual, also absorbs pulse
+/// quantization and model error; Slew is the measured mass delta while the
+/// Align slew held firing back, Coast the measured mass delta before the
+/// firing window opened (attitude and rate hold through the wait). A
+/// NEGATIVE Attitude therefore means the model over-attributed translation
+/// relative to the measured drain; the known case is a partially present
+/// reactant mix (dev-save territory), where ResourceManager.MassChange
+/// withdraws only the available reactants' share while the nozzle keeps
+/// firing at full thrust.</summary>
 internal struct RcsFuelSummary
 {
     public bool Valid;
