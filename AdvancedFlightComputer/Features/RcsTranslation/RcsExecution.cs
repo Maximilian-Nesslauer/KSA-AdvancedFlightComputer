@@ -13,8 +13,9 @@ internal sealed class RcsExecution
     #region Persisted state (serialised to rcs-exec.toml)
 
     /// <summary>Empty while running in an unsaved session;
-    /// <see cref="RcsExecRegistry.RekeyTransientsTo"/> promotes such entries
-    /// at the first save, same policy as the multi-pass registry.</summary>
+    /// <see cref="RcsExecRegistry.RekeyTo"/> moves the session's entries
+    /// whenever a save is written under a different id, same policy as the
+    /// multi-pass registry.</summary>
     public required string SaveId { get; set; }
 
     public required string VehicleId { get; init; }

@@ -14,10 +14,10 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// <item><c>UncompressedSave.Load</c> Postfix: capture the loaded
 /// save id and refresh the registry from disk so in-memory state
 /// matches whatever was persisted for that save.</item>
-/// <item><c>UncompressedSave.Write</c> Postfix: rekey transient
-/// entries to the just-saved save id and flush the registry to disk.
-/// This is the one auto-save point - mid-execution mutations are
-/// in-memory only.</item>
+/// <item><c>UncompressedSave.Write</c> Postfix: move the session's
+/// entries to the just-written save id when it differs from the loaded
+/// one, then flush the registry to disk. This is the one auto-save
+/// point - mid-execution mutations are in-memory only.</item>
 /// </list>
 /// </summary>
 internal static class SaveLoadObserver
@@ -30,9 +30,12 @@ internal static class SaveLoadObserver
     /// registry work is done. Other features (RcsTranslation) hang their
     /// save-scoped registries here so the UncompressedSave methods carry
     /// exactly one patch pair regardless of how many features are enabled.
-    /// The write event receives the just-written save id.</summary>
+    /// The write event receives (oldSaveId, newSaveId): by the time it fires
+    /// <see cref="CurrentSaveId"/> already holds the new id, so a subscriber
+    /// that needs the pre-write id for its own rekey must take it from the
+    /// event rather than read the property.</summary>
     public static event Action? SaveLoaded;
-    public static event Action<string>? SaveWritten;
+    public static event Action<string, string>? SaveWritten;
 
     public static void Reset()
     {
@@ -107,11 +110,16 @@ internal static class SaveLoadObserver
             try
             {
                 string newSaveId = __instance.Id ?? string.Empty;
+                // The id the session's registry entries are keyed under. A write
+                // can carry a different id than the loaded save (Save-As, first
+                // save of an unsaved session, overwriting another save from the
+                // saves list), and the rekey below needs both ids.
+                string oldSaveId = CurrentSaveId;
 
                 if (DebugConfig.MultiPass)
                 {
                     MultiPassDebug.LogRegistry(
-                        $"SaveLoadObserver.WritePatch (pre-rekey, target save='{newSaveId}')",
+                        $"SaveLoadObserver.WritePatch (pre-rekey, save '{oldSaveId}' -> '{newSaveId}')",
                         MultiPassRegistry.Snapshot);
 
                     Vehicle? controlled = Program.ControlledVehicle;
@@ -121,14 +129,14 @@ internal static class SaveLoadObserver
                             controlled.FlightComputer.BurnPlan);
                 }
 
-                // Rekey before Save() so the promoted entries hit disk.
-                MultiPassRegistry.RekeyTransientsTo(newSaveId);
+                // Rekey before Save() so the moved entries hit disk.
+                MultiPassRegistry.RekeyTo(oldSaveId, newSaveId);
 
                 CurrentSaveId = newSaveId;
 
                 MultiPassRegistry.Save();
 
-                SaveWritten?.Invoke(newSaveId);
+                SaveWritten?.Invoke(oldSaveId, newSaveId);
 
                 if (DebugConfig.MultiPass)
                     DefaultCategory.Log.Debug(

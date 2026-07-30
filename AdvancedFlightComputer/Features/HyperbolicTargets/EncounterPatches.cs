@@ -43,9 +43,11 @@ internal static class Patch_TryFindIntercept
             // Bound targets (or any with no resolvable orbit) fall through to
             // the stock dV sweep. The guard lives inside the try so a null
             // Target / Orbit degrades to "run original" instead of throwing on
-            // the ThreadPool thread RefineBurnTask runs us on.
+            // the ThreadPool thread RefineBurnTask runs us on. IsBound(), not
+            // an eccentricity compare, so the game-parabolic band around
+            // e = 1.0 (Period NaN) is handled here too.
             if (transferInfo.Target?.Orbit == null
-                || transferInfo.Target.Orbit.Eccentricity < 1.0)
+                || transferInfo.Target.Orbit.IsBound())
                 return true;
 
             double3 dv = selectedEntry.TransferData.TransferDvVlf;

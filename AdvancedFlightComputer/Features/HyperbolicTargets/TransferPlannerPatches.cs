@@ -41,6 +41,11 @@ internal static class Patch_PopulateWithPlanets
             for (int i = 0; i < all.Length; i++)
             {
                 if (all[i] is not Celestial celestial) continue;
+                // Deliberately e < 1.0 and NOT IsBound(): this is the exact
+                // complement of stock's own filter, so no body is listed twice.
+                // The handling guards below use IsBound() instead, so a
+                // game-parabolic body just under e = 1.0 (which stock lists but
+                // NaNs on) is still taken over.
                 if (celestial.Orbit == null || celestial.Orbit.Eccentricity < 1.0) continue;
                 if (celestial.Id == source.Id || celestial.Id == source.Parent?.Id) continue;
                 if (celestial.Parent != star) continue;
@@ -66,21 +71,30 @@ internal static class Patch_PopulateWithPlanets
 /// <summary>
 /// HohmannFlight derives the transfer ellipse SMA from (Apoapsis + Periapsis) / 2.
 /// For unbound orbits OrbitData sets Apoapsis to NaN, the NaN propagates through
-/// the sqrt, and the time-of-flight estimate becomes NaN. We substitute Periapsis
-/// for both ends so the porkchop search has a stable, time-invariant baseline.
+/// the sqrt, and the time-of-flight estimate becomes NaN. Each unbound end gets
+/// its Periapsis substituted (finite and time-invariant, a stable baseline for
+/// the porkchop search); a bound end keeps the semi-major axis stock would use.
+///
+/// Unbound is tested with IsBound(), not e &gt;= 1.0: the game classifies the
+/// band |e - 1| &lt;= 1e-6 as parabolic (SMA infinite, Apoapsis NaN), so an
+/// eccentricity compare would hand a game-parabolic orbit just under 1.0 back
+/// to stock's NaN math. Same reasoning for the guards in the other patches of
+/// this feature.
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.HohmannFlight))]
 internal static class Patch_HohmannFlight
 {
     static bool Prefix(Orbit origin, Orbit destination, ref SimTime __result)
     {
-        if (origin.Eccentricity < 1.0 && destination.Eccentricity < 1.0)
+        if (origin.IsBound() && destination.IsBound())
             return true;
 
-        double r1 = origin.Eccentricity < 1.0
+        double r1 = origin.IsBound()
             ? origin.SemiMajorAxis
             : origin.Periapsis;
-        double r2 = destination.Periapsis;
+        double r2 = destination.IsBound()
+            ? destination.SemiMajorAxis
+            : destination.Periapsis;
 
         double transferSma = (r1 + r2) * 0.5;
         if (transferSma <= 0.0)
@@ -114,7 +128,7 @@ internal static class Patch_SetTransferInfo
         {
             OrbitalTransfers.TransferInfo? info = StockPlanner.TransferInfo;
             if (info?.Target?.Orbit == null) return;
-            if (info.Target.Orbit.Eccentricity < 1.0) return;
+            if (info.Target.Orbit.IsBound()) return;
 
             SimTime hohmann = info.HohmannTimeOfFlight;
             if (double.IsNaN(hohmann.Seconds()) || hohmann.Seconds() <= 0.0)
@@ -202,7 +216,7 @@ internal static class Patch_AlignmentTime
             // it.
             if (transferInfo.Target is not Celestial
                 || transferInfo.Target.Orbit == null
-                || transferInfo.Target.Orbit.Eccentricity < 1.0)
+                || transferInfo.Target.Orbit.IsBound())
                 return true;
 
             SimTime tPeri = transferInfo.Target.Orbit.TimeAtPeriapsis;

@@ -61,19 +61,30 @@ internal static class RcsExecRegistry
         _byKey.Remove((saveId, vehicleId));
     }
 
-    public static void RekeyTransientsTo(string newSaveId)
+    /// <summary>Same move-on-save-id-change policy as
+    /// <see cref="MultiPassRegistry.RekeyTo"/>, and for the same reason: a
+    /// write under a different id (Save-As, first save of an unsaved
+    /// session, overwriting another save) would otherwise orphan the active
+    /// execution behind the CurrentSaveId-scoped lookups, with no path left
+    /// to its teardown.</summary>
+    public static void RekeyTo(string oldSaveId, string newSaveId)
     {
-        if (string.IsNullOrEmpty(newSaveId)) return;
+        if (string.IsNullOrEmpty(newSaveId) || oldSaveId == newSaveId) return;
 
-        List<RcsExecution> transients = new();
+        List<(string, string)> stale = new();
+        List<RcsExecution> moved = new();
         foreach (var (key, exec) in _byKey)
         {
-            if (string.IsNullOrEmpty(key.SaveId))
-                transients.Add(exec);
+            if (key.SaveId == newSaveId)
+                stale.Add(key);
+            else if (key.SaveId == oldSaveId)
+                moved.Add(exec);
         }
-        foreach (RcsExecution exec in transients)
+        foreach (var key in stale)
+            _byKey.Remove(key);
+        foreach (RcsExecution exec in moved)
         {
-            _byKey.Remove((string.Empty, exec.VehicleId));
+            _byKey.Remove((oldSaveId, exec.VehicleId));
             exec.SaveId = newSaveId;
             _byKey[(newSaveId, exec.VehicleId)] = exec;
         }

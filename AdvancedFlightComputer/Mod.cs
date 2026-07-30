@@ -225,9 +225,9 @@ public sealed class Mod
         RcsExecRegistry.Load();
     }
 
-    private static void OnRcsSaveWritten(string newSaveId)
+    private static void OnRcsSaveWritten(string oldSaveId, string newSaveId)
     {
-        RcsExecRegistry.RekeyTransientsTo(newSaveId);
+        RcsExecRegistry.RekeyTo(oldSaveId, newSaveId);
         RcsExecRegistry.Save();
     }
 }

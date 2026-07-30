@@ -25,8 +25,9 @@ internal sealed class MultiPassExecution
     #region Persisted state (serialised to multipass.toml)
 
     /// <summary>The KSA save-game id this execution belongs to. Empty
-    /// while running in an unsaved session; <see cref="MultiPassRegistry.RekeyTransientsTo"/>
-    /// promotes such entries to the new save id at first save.</summary>
+    /// while running in an unsaved session; <see cref="MultiPassRegistry.RekeyTo"/>
+    /// moves the session's entries whenever a save is written under a
+    /// different id (first save, Save-As, overwrite of another save).</summary>
     public required string SaveId { get; internal set; }
 
     public required string VehicleId { get; init; }

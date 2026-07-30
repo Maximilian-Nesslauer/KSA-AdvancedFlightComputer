@@ -113,31 +113,52 @@ internal static class MultiPassRegistry
         => _byKey;
 
     /// <summary>
-    /// Promotes transient entries (SaveId == "") to scoped entries
-    /// under <paramref name="newSaveId"/>. Called when the user saves
-    /// the game for the first time after starting a multi-pass.
+    /// Moves the session's entries to <paramref name="newSaveId"/> when a
+    /// save is written under a different id than the one the world came
+    /// from: Save-As, the first save of an unsaved session (old id ""), and
+    /// overwriting a different save from the saves list all write with an id
+    /// that does not match <see cref="SaveLoadObserver.CurrentSaveId"/>.
+    /// Without the move the active execution stays keyed to the old id,
+    /// where the CurrentSaveId-scoped lookups (and Remove) can no longer
+    /// reach it, so it silently stops advancing and leaks.
+    ///
+    /// Entries already keyed to <paramref name="newSaveId"/> belong to the
+    /// save being overwritten, whose world this write replaces wholesale,
+    /// so they are dropped rather than kept beside the moved ones.
     /// </summary>
-    public static void RekeyTransientsTo(string newSaveId)
+    public static void RekeyTo(string oldSaveId, string newSaveId)
     {
-        if (string.IsNullOrEmpty(newSaveId)) return;
+        if (string.IsNullOrEmpty(newSaveId) || oldSaveId == newSaveId) return;
 
-        var transients = new List<MultiPassExecution>();
+        var stale = new List<(string, string)>();
+        var moved = new List<MultiPassExecution>();
         foreach (var (key, exec) in _byKey)
         {
-            if (string.IsNullOrEmpty(key.SaveId))
-                transients.Add(exec);
+            if (key.SaveId == newSaveId)
+                stale.Add(key);
+            else if (key.SaveId == oldSaveId)
+                moved.Add(exec);
         }
 
-        foreach (MultiPassExecution exec in transients)
+        foreach (var key in stale)
         {
-            _byKey.Remove((string.Empty, exec.VehicleId));
+            _byKey.Remove(key);
+            if (DebugConfig.MultiPass)
+                DefaultCategory.Log.Debug(
+                    $"[AFC] MultiPassRegistry: dropped stale exec for " +
+                    $"vehicle={key.Item2} of overwritten save '{newSaveId}'.");
+        }
+
+        foreach (MultiPassExecution exec in moved)
+        {
+            _byKey.Remove((oldSaveId, exec.VehicleId));
             exec.SaveId = newSaveId;
             _byKey[(newSaveId, exec.VehicleId)] = exec;
 
             if (DebugConfig.MultiPass)
                 DefaultCategory.Log.Debug(
-                    $"[AFC] MultiPassRegistry: rekeyed transient exec for " +
-                    $"vehicle={exec.VehicleId} to save='{newSaveId}'.");
+                    $"[AFC] MultiPassRegistry: rekeyed exec for " +
+                    $"vehicle={exec.VehicleId} from save='{oldSaveId}' to '{newSaveId}'.");
         }
     }
 
