@@ -58,6 +58,16 @@ internal static class ManeuverTools
     {
         var types = TransferPlanner.TransferTypes;
         types.RemoveAll(t => IsOurType(t.GetKey()));
+
+        // Stock keeps the selected plan type in its own static and its window
+        // body only has branches for stock keys, so a selection left pointing
+        // at a removed AFC type would reopen to a window drawing nothing but
+        // the dropdown. Writing only the type is enough because every path
+        // that selects an AFC type also clears _transferCalculated, so stock
+        // re-enters its own type with the flag down and rebuilds TransferInfo
+        // itself.
+        if (StockPlanner.TransferTypeKey is string key && IsOurType(key) && types.Count > 0)
+            StockPlanner.TransferType = types[0];
     }
 
     /// <summary>

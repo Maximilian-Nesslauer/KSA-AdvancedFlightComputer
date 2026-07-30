@@ -16,7 +16,7 @@ namespace AdvancedFlightComputer.Features.Flyby;
 /// with the center-aimed plan's markers, which describe the impact the flyby
 /// replaced.
 /// </summary>
-[HarmonyPatch(typeof(TransferPlanner), "DrawSelectedTransferUi")]
+[HarmonyPatch(typeof(TransferPlanner), "DrawSelectedTransferUi", new[] { typeof(Viewport) })]
 internal static class Patch_TransferPlanner_DrawSelectedTransferUi_Flyby
 {
     public static bool IsAnchorPresent =>

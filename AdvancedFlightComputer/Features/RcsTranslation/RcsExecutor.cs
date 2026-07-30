@@ -262,6 +262,17 @@ internal static class RcsExecutor
         RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
         double timeSec = burn.Time.Seconds();
         double dvMs = burn.DeltaVVlf.Length();
+
+        // A zero-dV burn is a normal reachable state (the stock rendezvous
+        // window creates one at exactly double3.Zero for the gizmos to drag).
+        // Without this guard the estimate path reports it as infeasible and
+        // the refusal below would blame the thruster layout.
+        if (!(dvMs > 0.0))
+        {
+            Alert($"RCS burn not engaged: the burn on '{vehicle.Id}' has no delta-V yet.");
+            return;
+        }
+
         RcsBurnOptions options = exec.GetOrCreateOptions(timeSec, dvMs);
 
         exec.Capability = RcsCapability.Probe(vehicle);
@@ -655,8 +666,12 @@ internal static class RcsExecutor
         }
         if (!exec.Capability.HasAnyTranslation)
         {
-            Alert("RCS burn stalled: no thruster propellant.");
-            Cancel(vehicle, exec, "no translation authority");
+            // HasAnyTranslation is a composite verdict (thrusters inactive, out
+            // of propellant, or zero usable axis force), so neither the alert
+            // nor the cancel reason may claim one specific cause.
+            Alert($"RCS burn stalled: no usable RCS translation left on '{vehicle.Id}' " +
+                  "(thrusters inactive, out of propellant, or no usable axis).");
+            Cancel(vehicle, exec, "no usable translation");
             return;
         }
 

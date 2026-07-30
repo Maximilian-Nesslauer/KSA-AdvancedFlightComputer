@@ -16,7 +16,8 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 /// the main viewport, so a canvas the player detached onto its own OS window
 /// falls back to the plain ImGui block.
 /// </summary>
-[HarmonyPatch(typeof(BurnCanvasHost), nameof(BurnCanvasHost.Draw))]
+[HarmonyPatch(typeof(BurnCanvasHost), nameof(BurnCanvasHost.Draw),
+    new[] { typeof(GaugeCanvas), typeof(float2), typeof(float2) })]
 internal static class RcsBurnCanvasUi
 {
     static void Postfix(GaugeCanvas canvas, float2 canvasMinPixels, float2 canvasSizePixels)

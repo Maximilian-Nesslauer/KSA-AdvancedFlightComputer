@@ -121,7 +121,11 @@ internal static class StockPlanner
         => CanIndexPorkChopData(SelectedEntry, TransferBeingCalculated, TransferInfo);
 
     /// <summary>Explicit-input form of <see cref="SelectedTransferBlockIsSafe"/>,
-    /// so the decision can be exercised without writing stock's statics.
+    /// so the decision can be exercised without writing stock's statics. The
+    /// best-index fields validated here are read off the passed
+    /// <paramref name="info"/> as proxies for the private statics stock's
+    /// unchecked read dereferences; both point at the same TransferInfo
+    /// instance whenever the flag this decision guards is re-asserted.
     ///
     /// Two states leave the porkchop array unpopulated while
     /// <c>_selectedEntry</c> stays set, and stock's own

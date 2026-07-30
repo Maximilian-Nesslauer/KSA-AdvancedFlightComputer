@@ -27,19 +27,24 @@ internal static class RcsFlightSupport
         SimDriver driver = t.Session.CreateDriver();
         Orbit orbit = OrbitFixtures.CircularAt(home, altitudeM, driver.Elapsed);
         HashSet<string> preexisting = TestSupport.CollectVehicleIds(system);
-        Vehicle vehicle;
+        // The spawn lives inside the guarded block: Astronomical's constructor
+        // registers the vehicle before the Vehicle body's own validation can
+        // throw, so a spawn failure other than the expected
+        // InvalidOperationException must still reach the despawn cleanup or a
+        // half-built vehicle leaks into every later test.
         try
         {
-            vehicle = VehicleSpawner.SpawnFromSave(saveId, system, home, spawnName, orbit);
-        }
-        catch (InvalidOperationException e)
-        {
-            t.Skip($"'{saveId}': {e.Message}");
-            return;
-        }
-        t.Info($"vehicle save '{saveId}': mass={vehicle.TotalMass:F0}kg");
-        try
-        {
+            Vehicle vehicle;
+            try
+            {
+                vehicle = VehicleSpawner.SpawnFromSave(saveId, system, home, spawnName, orbit);
+            }
+            catch (InvalidOperationException e)
+            {
+                t.Skip($"'{saveId}': {e.Message}");
+                return;
+            }
+            t.Info($"vehicle save '{saveId}': mass={vehicle.TotalMass:F0}kg");
             VehicleUpdateTask._forceOffRails = true;
             body(vehicle, driver);
         }

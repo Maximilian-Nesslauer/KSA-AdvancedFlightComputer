@@ -53,7 +53,7 @@ internal static class SaveLoadObserver
             DefaultCategory.Log.Debug("[AFC] SaveLoadObserver: patches applied.");
     }
 
-    [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Load))]
+    [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Load), new Type[0])]
     private static class LoadPatch
     {
         static void Postfix(UncompressedSave __instance)
@@ -102,7 +102,7 @@ internal static class SaveLoadObserver
         }
     }
 
-    [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Write))]
+    [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Write), new Type[0])]
     private static class WritePatch
     {
         static void Postfix(UncompressedSave __instance)

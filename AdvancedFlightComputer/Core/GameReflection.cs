@@ -111,7 +111,8 @@ internal static class GameReflection
     // host; the RCS burn panel postfixes it. Validated so a game-side rework
     // degrades the panel gracefully instead of aborting the mod's patching.
     public static readonly MethodInfo? BurnCanvasHost_Draw =
-        AccessTools.Method(typeof(BurnCanvasHost), "Draw");
+        AccessTools.Method(typeof(BurnCanvasHost), "Draw",
+            new Type[] { typeof(GaugeCanvas), typeof(Brutal.Numerics.float2), typeof(Brutal.Numerics.float2) });
 
     #endregion
 

@@ -140,7 +140,7 @@ public sealed class RcsTranslationTest : AfcTest
             // from any cancel path.
             bool viaEvent = ReferenceEquals(watcher.LastBurn, burn);
             if (!viaEvent
-                && RcsCancelLogPatch.LastReason == "no translation authority"
+                && RcsCancelLogPatch.LastReason == "no usable translation"
                 && RcsPropellant.AvailableKg(vehicle) < 0.02 * propellantAtStartKg)
             {
                 // Dev-propellant saves (Test Vehicle 1) can drain the whole

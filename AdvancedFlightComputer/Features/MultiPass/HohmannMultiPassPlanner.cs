@@ -692,32 +692,26 @@ internal static class HohmannMultiPassPlanner
             return new ShiftResult(raw, 0);
         }
 
-        // Same-parent: stock's entry.FlightPlan.Patches[0].Orbit.Apoapsis is
-        // the un-shifted target. BuildFlightPlan at the shifted Start + new
-        // dV gives the actual post-burn apoapsis to track.
+        // Same-parent only past the IsCrossParent early-return above, so the
+        // energy descriptor to re-read at the shifted geometry is the post-burn
+        // apoapsis (stock's entry.FlightPlan.Patches[0].Orbit.Apoapsis is the
+        // un-shifted target; BuildFlightPlan at the shifted Start + new dV
+        // gives the one to track). VInfMs stays the same-parent 0.
         double apoTargetRadiusM = 0.0;
-        if (!raw.IsCrossParent)
+        var fp = FlightPlan.CreateUninitialized(source.Hash);
+        OrbitalTransfers.BuildFlightPlan(
+            ref fp, info, bestTd.Start, bestTd.TransferDvVlf, out _, out _);
+        if (fp.Patches.Count > 0)
         {
-            var fp = FlightPlan.CreateUninitialized(source.Hash);
-            OrbitalTransfers.BuildFlightPlan(
-                ref fp, info, bestTd.Start, bestTd.TransferDvVlf, out _, out _);
-            if (fp.Patches.Count > 0)
-            {
-                double apo = fp.Patches[0].Orbit.Apoapsis;
-                if (double.IsFinite(apo) && apo > source.Orbit.Periapsis)
-                    apoTargetRadiusM = apo;
-            }
+            double apo = fp.Patches[0].Orbit.Apoapsis;
+            if (double.IsFinite(apo) && apo > source.Orbit.Periapsis)
+                apoTargetRadiusM = apo;
         }
-
-        double vInfMs = raw.IsCrossParent
-            ? bestTd.EjectionVelocityCci.Length()
-            : 0.0;
 
         var shifted = raw with
         {
             TFinal = bestTd.Start,
             DFinalVlf = bestTd.TransferDvVlf,
-            VInfMs = vInfMs,
             ApoTargetRadiusMeters = apoTargetRadiusM,
         };
 
@@ -731,7 +725,7 @@ internal static class HohmannMultiPassPlanner
                 source.Id, key.TargetId, passCount, kTotal, kShift,
                 rawTFinalSec, bestTd.Start.Seconds(),
                 raw.DFinalVlf.Length(), bestDvLen,
-                bestTd.Transit.Seconds(), apoTargetRadiusM, vInfMs,
+                bestTd.Transit.Seconds(), apoTargetRadiusM, shifted.VInfMs,
                 raw.IsCrossParent, scanAdvisory ?? "-"));
 
         _shiftCacheKey = key;

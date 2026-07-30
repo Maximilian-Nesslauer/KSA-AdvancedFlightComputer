@@ -19,7 +19,7 @@ namespace AdvancedFlightComputer.Features.Flyby;
 /// <see cref="Patch_TransferPlanner_DrawSelectedTransferUi_Flyby"/>; the Lambert
 /// preview has its own separate toggle and is deliberately left alone.
 /// </summary>
-[HarmonyPatch(typeof(TransferPlanner), "DrawSelectedTransfer")]
+[HarmonyPatch(typeof(TransferPlanner), "DrawSelectedTransfer", new[] { typeof(Viewport) })]
 internal static class Patch_TransferPlanner_DrawSelectedTransfer_Flyby
 {
     /// <summary>Whether the private stock method still exists in this build, so
