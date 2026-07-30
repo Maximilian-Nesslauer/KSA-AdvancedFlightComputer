@@ -50,6 +50,12 @@ internal static class MultiPassForwardChainPlanner
     // fine for a preview that only needs an indicative trajectory.
     private const int FlightPlanPolynomialOrder = 8;
 
+    // Minimum spacing of the per-pass orbit diagnostic. Preview replans
+    // arrive per frame while thrust drifts the orbit through the cache
+    // key's quantization buckets, and each replan would log every pass;
+    // sampling keeps the diagnostic readable without losing its signal.
+    private const double PassDiagnosticMinIntervalSec = 2.0;
+
     public static PassPreviewResult PlanForwardChain(
         Vehicle source,
         PassAllocation[] allocations,
@@ -57,6 +63,12 @@ internal static class MultiPassForwardChainPlanner
         PassStepFactory stepFactory)
     {
         var results = new List<PassPreview>(allocations.Length);
+
+        // Decided once per chain (so a sampled plan logs all of its passes
+        // together instead of a torn subset), but lazily at the first pass
+        // diagnostic: a chain that fails before reaching it must not
+        // consume the throttle window while logging nothing.
+        bool? logPasses = null;
 
         Orbit currentOrbit = source.Orbit;
         SimTime earliestTime = now;
@@ -116,6 +128,9 @@ internal static class MultiPassForwardChainPlanner
             // and eccentricity nearly unchanged; apse burns should swing
             // one apsis substantially. Useful to spot dv-direction bugs.
             if (DebugConfig.MultiPass)
+                logPasses ??= LogHelper.ThrottleAllows(
+                    "forward-chain-passes", PassDiagnosticMinIntervalSec);
+            if (logPasses == true)
             {
                 Orbit pre = currentOrbit;
                 Orbit post = burnPatch.Orbit;

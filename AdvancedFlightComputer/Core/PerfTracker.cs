@@ -20,7 +20,9 @@ namespace AdvancedFlightComputer.Core;
 /// </summary>
 internal static class PerfTracker
 {
-    private const double ReportIntervalSeconds = 5.0;
+    // 30s keeps the regression signal while the plan window is open
+    // without the summary dominating the session log.
+    private const double ReportIntervalSeconds = 30.0;
 
     private static readonly Dictionary<string, PerfData> _entries = new();
     private static readonly List<string> _orderedKeys = new();

@@ -3,6 +3,7 @@ using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.RcsTranslation;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -67,7 +68,16 @@ internal static class HohmannMultiPassUI
         long MassBucket,
         bool FlybyOn,
         long FlybyRpBucket,
-        FlybySide FlybySide);
+        FlybySide FlybySide)
+    {
+        /// <summary>The key with its drift-derived fields zeroed. Thrust
+        /// drains MassBucket, and TFinalBucketSec can move through the
+        /// K-shift as the parking period changes; the porkchop-cell fields
+        /// (DvMag / VInf / ApoTarget), the flyby options and the exec
+        /// StartPassIndex only change on real user or execution intent.</summary>
+        public PreviewKey WithoutDrift() =>
+            this with { TFinalBucketSec = 0, MassBucket = 0 };
+    }
 
     private static PreviewKey _cachedKey;
     private static bool _hasCachedPreview;
@@ -647,13 +657,17 @@ internal static class HohmannMultiPassUI
             startPassIndex: exec.PassIndex);
         if (_hasCachedPreview && key == _cachedKey) return;
 
-        // Freeze during Auto burn so per-tick mass drift does not
-        // recompute every physics tick. Pass completion increments
-        // exec.PassIndex (part of the cache key via StartPassIndex),
-        // busting the cache on the next frame. Mode transitions alone
-        // do not change the key.
+        // Freeze while thrust is being delivered (stock Auto burn, or an
+        // AFC RCS burn, which keeps BurnMode at Manual), but only against
+        // the drift-derived key fields: a changed StartPassIndex (pass
+        // completion on an Auto-flown pass) or pass count replans through
+        // the WithoutDrift comparison. The freeze lifts when stock drops
+        // BurnMode back to Manual or the RCS execution ends; accumulated
+        // MassBucket drift then busts the key.
         if (_hasCachedPreview
-            && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
+            && (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
+                || RcsExecutor.IsActive(source))
+            && key.WithoutDrift() == _cachedKey.WithoutDrift())
             return;
 
         SimTime now = Universe.GetElapsedSimTime();
@@ -806,12 +820,17 @@ internal static class HohmannMultiPassUI
             return;
         }
 
-        // Freeze the cache during an Auto burn so mid-burn mass drift
-        // does not recompute every physics tick. Accumulated drift in
-        // quantized key fields (MassBucket etc.) busts the cache once
-        // the freeze lifts; the mode transition itself is not in the key.
+        // Freeze the cache while thrust is being delivered (stock Auto
+        // burn, or an AFC RCS burn, which keeps BurnMode at Manual), but
+        // only against the drift-derived key fields: clicking another
+        // porkchop cell, toggling a flyby option or changing the pass
+        // count still replans through the WithoutDrift comparison. The
+        // freeze lifts when stock drops BurnMode back to Manual or the
+        // RCS execution ends; accumulated drift then busts the key.
         if (_hasCachedPreview
-            && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
+            && (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
+                || RcsExecutor.IsActive(source))
+            && key.WithoutDrift() == _cachedKey.WithoutDrift())
             return;
 
         int requestedN = _passCount;

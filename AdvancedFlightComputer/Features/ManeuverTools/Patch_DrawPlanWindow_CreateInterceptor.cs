@@ -177,8 +177,11 @@ internal static class Patch_DrawPlanWindow_CreateInterceptor
             DefaultCategory.Log.Warning(
                 "[AFC] HohmannCreateInterceptor transpiler: no Burn.Create call " +
                 "found in DrawPlanWindow; create-button interception inactive.");
+        // Once per load: Harmony re-runs this transpiler whenever another
+        // patch lands on or leaves DrawPlanWindow, and each re-run would
+        // repeat the two success lines.
         else if (DebugConfig.MultiPass)
-            DefaultCategory.Log.Debug(
+            LogHelper.DebugOnce("transpiler-create-interceptor-swap",
                 "[AFC] HohmannCreateInterceptor transpiler: replaced Burn.Create " +
                 "in DrawPlanWindow.");
 
@@ -199,7 +202,7 @@ internal static class Patch_DrawPlanWindow_CreateInterceptor
                     "CreateMaybeMultiPass, which still queues a duplicate burn).");
         }
         else if (DebugConfig.MultiPass)
-            DefaultCategory.Log.Debug(
+            LogHelper.DebugOnce("transpiler-create-interceptor-gate",
                 "[AFC] HohmannCreateInterceptor transpiler: click gate injected after " +
                 "DrawButton (sync-gap duplicate-burn protection active).");
     }

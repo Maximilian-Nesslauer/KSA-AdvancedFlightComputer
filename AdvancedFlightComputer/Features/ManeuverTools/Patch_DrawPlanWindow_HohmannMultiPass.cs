@@ -89,8 +89,11 @@ internal static class Patch_DrawPlanWindow_HohmannMultiPass
 
         if (injected)
         {
+            // Once per load: Harmony re-runs this transpiler whenever
+            // another patch lands on or leaves DrawPlanWindow, and each
+            // re-run would repeat the success line.
             if (DebugConfig.MultiPass)
-                DefaultCategory.Log.Debug(
+                LogHelper.DebugOnce("transpiler-hohmann-multipass",
                     $"[AFC] HohmannMultiPass transpiler: injected DrawInline before " +
                     $"DrawCorrectionTransfer ({totalIns} IL instructions scanned, " +
                     $"{callsToAnchor} anchor call(s) found).");

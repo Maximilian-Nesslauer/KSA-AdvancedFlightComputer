@@ -88,8 +88,11 @@ internal static class Patch_DrawPlanWindow_HohmannFallback
 
         if (injected)
         {
+            // Once per load: Harmony re-runs this transpiler whenever
+            // another patch lands on or leaves DrawPlanWindow, and each
+            // re-run would repeat the success line.
             if (DebugConfig.MultiPass)
-                DefaultCategory.Log.Debug(
+                LogHelper.DebugOnce("transpiler-hohmann-fallback",
                     "[AFC] HohmannFallback transpiler: injected DrawInline before " +
                     "ImGui.End (" + totalIns + " IL instructions scanned).");
         }

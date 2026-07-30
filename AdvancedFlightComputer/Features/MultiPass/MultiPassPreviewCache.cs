@@ -1,6 +1,7 @@
 using System;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.RcsTranslation;
 using KSA;
 using static AdvancedFlightComputer.Features.ManeuverTools.ManeuverTools;
 
@@ -131,6 +132,13 @@ internal static class MultiPassPreviewCache
                 ManeuverToolsWindow.InclinationRef,
                 target?.Id ?? string.Empty);
         }
+
+        /// <summary>The key with its drift-derived fields zeroed. Thrust
+        /// walks dV, SMA and mass through their quantization buckets with
+        /// no user input; every other field only changes on real intent
+        /// (type, pass count, split mode, target, inclination inputs).</summary>
+        public PreviewKey WithoutDrift() =>
+            this with { DvBucket = 0, SmaBucket = 0, MassBucket = 0 };
     }
 
     private static PassPreviewResult? _cachedPreview;
@@ -166,14 +174,22 @@ internal static class MultiPassPreviewCache
         if (_hasPreviewKey && _cachedPreview != null && key == _cachedPreviewKey)
             return;
 
-        // Mid-burn state is intrinsically unstable (orbit + mass drift
-        // every physics tick). Freeze the cache while engines fire.
-        // Pass completion feeds a lower passCount (remaining = total -
-        // PassIndex), busting the key; mode transitions alone do not
-        // change the key. Allow the initial build so a user who opens
-        // the window mid-burn still sees a (slightly stale) preview.
+        // Mid-burn state is intrinsically unstable: thrust (a stock Auto
+        // engine burn, or an AFC RCS burn, which keeps BurnMode at Manual)
+        // walks orbit, mass and remaining dV through their quantization
+        // buckets every physics tick. While thrust is active, ignore key
+        // changes confined to those drift fields instead of replanning per
+        // frame; any other key change is real user input and replans
+        // immediately. The freeze lifts when stock drops BurnMode back to
+        // Manual or the RCS execution ends; the accumulated drift then
+        // busts the key. Allow the initial build so a user who opens the
+        // window mid-burn still sees a (slightly stale) preview. Known
+        // trade: TargetAltitude reaches the key only through DvBucket, so
+        // during thrust an altitude edit stays frozen with the drift.
         if (_hasPreviewKey && _cachedPreview != null
-            && source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto)
+            && (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
+                || RcsExecutor.IsActive(source))
+            && key.WithoutDrift() == _cachedPreviewKey.WithoutDrift())
             return;
 
         // Cache miss path: times Splitter + per-type planner together.
