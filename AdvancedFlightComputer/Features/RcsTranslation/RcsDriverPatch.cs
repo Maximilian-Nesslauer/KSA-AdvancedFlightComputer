@@ -52,7 +52,7 @@ internal static class RcsSetEnumPatch
 /// <summary>Drops a disposed vehicle's registry entry so a recycled id
 /// cannot inherit an orphaned execution, mirroring the multi-pass
 /// VehicleDisposePatch.</summary>
-[HarmonyPatch(typeof(Vehicle), nameof(Vehicle.Dispose), new Type[0])]
+[HarmonyPatch(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) })]
 internal static class RcsVehicleDisposePatch
 {
     static void Postfix(Vehicle __instance)

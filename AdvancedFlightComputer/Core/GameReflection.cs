@@ -90,7 +90,7 @@ internal static class GameReflection
     // a recycled vehicle id could pick up an orphaned execution.
     public static readonly MethodInfo? Vehicle_Dispose =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose),
-            Type.EmptyTypes);
+            new[] { typeof(bool) });
 
     #endregion
 
