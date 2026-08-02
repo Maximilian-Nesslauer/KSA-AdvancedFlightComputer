@@ -104,6 +104,9 @@ public sealed class RcsTranslationTest : AfcTest
             return;
         }
         double propellantAtStartKg = RcsPropellant.AvailableKg(vehicle);
+        // Baseline for the thrust-stamp check below; an earlier scenario's burn
+        // may already have set the field, so only the advance counts.
+        double lastThrustBeforeSec = fc.LastThrustTime.Seconds();
         t.Info($"align scenario: propellant={propellantAtStartKg:F0}kg " +
                $"est slew={exec.Estimates.AlignSlewPropellantKg:F0}kg/" +
                $"{exec.Estimates.AlignSlewDurationSec:F0}s");
@@ -158,6 +161,15 @@ public sealed class RcsTranslationTest : AfcTest
                 t.Check("align burn", deliveredOk,
                     $"accum={accum:F3}m/s of {BurnDvMs:F2}m/s residual={residual:F4}m/s " +
                     $"completedEvent={viaEvent}");
+
+                // The committed pulses must stamp FlightComputer.LastThrustTime,
+                // the field Vehicle.ShouldForceMarkerLabels reads; stock only
+                // stamps for its own engine command or translation pulses,
+                // which Fly() rules out by zeroing the manual inputs.
+                t.Check("align thrust stamp",
+                    fc.LastThrustTime.Seconds() > lastThrustBeforeSec,
+                    $"LastThrustTime={fc.LastThrustTime.Seconds():F1}s " +
+                    $"vs {lastThrustBeforeSec:F1}s before the burn");
 
                 if (viaEvent)
                 {
@@ -485,6 +497,7 @@ public sealed class RcsTranslationTest : AfcTest
         double expectedDuration = vehicle.TotalMass * BurnDvMs / cap.Get(bestAxis).ForceN;
         double timeoutSec = BurnLeadSec + expectedDuration * 4.0 + 60.0;
         double m0 = vehicle.TotalMass;
+        double lastThrustBeforeSec = fc.LastThrustTime.Seconds();
 
         bool firingSampled = false;
         int steps = (int)(timeoutSec / StepSec);
@@ -531,6 +544,20 @@ public sealed class RcsTranslationTest : AfcTest
         t.Check("completion event",
             ReferenceEquals(watcher.LastVehicle, vehicle) && ReferenceEquals(watcher.LastBurn, burn),
             "vehicle and burn delivered");
+
+        // Stock only stamps LastThrustTime for its own engine command or its
+        // own translation pulses, and Fly() zeroes the manual inputs, so an
+        // advance here can only come from the executor's committed pulses.
+        // Vehicle.ShouldForceMarkerLabels reads the field; a regression
+        // silently loses the forced orbit marker labels in vacuum. Not
+        // compared against bt.IgnitionTime: the executor recomputes it every
+        // tick from the shrinking remaining duration, so by read time it has
+        // drifted to the impulsive instant.
+        t.Check("thrust stamp",
+            fc.LastThrustTime.Seconds() > lastThrustBeforeSec
+            && fc.LastThrustTime.Seconds() <= driver.Elapsed.Seconds(),
+            $"LastThrustTime={fc.LastThrustTime.Seconds():F1}s " +
+            $"baseline={lastThrustBeforeSec:F1}s elapsed={driver.Elapsed.Seconds():F1}s");
 
         // Fuel telemetry: recorded, total consistent with the test's own
         // mass delta, delivered delta-V pointing at the target, and the

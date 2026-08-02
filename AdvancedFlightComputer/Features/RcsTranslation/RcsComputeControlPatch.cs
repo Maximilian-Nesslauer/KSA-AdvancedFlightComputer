@@ -75,6 +75,15 @@ internal static class RcsComputeControlPatch
             return;
         }
 
+        // Committed pulses also stamp LastThrustTime. Stock stamps it at the end
+        // of ComputeControl, before this postfix fires anything, and only for
+        // its own engine command or its own translation pulses, neither of
+        // which an RCS execution produces, so without the stamp here
+        // Vehicle.ShouldForceMarkerLabels never treats an RCS burn as thrust
+        // and the forced orbit marker labels stay hidden in vacuum. Only
+        // translation pulses count, matching the split stock draws with
+        // ManualTranslationFired; the align slew returns above without firing.
+
         // LP pattern path: fire every thruster of the solved pattern for
         // its share of the demanded impulse. The length guard covers
         // staging swapping VehicleConfig between driver ticks; the group
@@ -82,7 +91,8 @@ internal static class RcsComputeControlPatch
         float[]? lp = cmd.LpSecondsPerImpulse;
         if (lp != null && lp.Length == __instance.VehicleConfig.Thrusters.Count)
         {
-            FireLpPattern(__instance, ref outputs, cmd, lp, impulse);
+            if (FireLpPattern(__instance, ref outputs, cmd, lp, impulse))
+                __instance.LastThrustTime = nav.Time;
             return;
         }
 
@@ -129,8 +139,11 @@ internal static class RcsComputeControlPatch
             outputs.AnyActuatorCommanded = true;
         }
         if (float.IsFinite(minCommanded))
+        {
             outputs.NextWakeupDeltaTime = Math.Min(
                 outputs.NextWakeupDeltaTime, Math.Min(RcsExecutor.MaxPulseSec, minCommanded));
+            __instance.LastThrustTime = nav.Time;
+        }
     }
 
     /// <summary>Remaining burn time for the current residual impulse: the
@@ -162,7 +175,8 @@ internal static class RcsComputeControlPatch
         return force > 0f ? Math.Abs(j) / force : 0f;
     }
 
-    private static void FireLpPattern(
+    /// <summary>Returns true when at least one pulse was committed.</summary>
+    private static bool FireLpPattern(
         FlightComputer fc, ref FlightComputerOutput outputs, RcsWorkerCommand cmd,
         float[] secondsPerImpulse, float3 impulseBody)
     {
@@ -174,7 +188,7 @@ internal static class RcsComputeControlPatch
         if (j <= 0f)
         {
             outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
-            return;
+            return false;
         }
 
         float minCommanded = float.PositiveInfinity;
@@ -199,10 +213,13 @@ internal static class RcsComputeControlPatch
             outputs.AnyActuatorCommanded = true;
         }
         if (float.IsFinite(minCommanded))
+        {
             outputs.NextWakeupDeltaTime = Math.Min(
                 outputs.NextWakeupDeltaTime, Math.Min(RcsExecutor.MaxPulseSec, minCommanded));
-        else
-            outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
+            return true;
+        }
+        outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
+        return false;
     }
 
     /// <summary>Caps one axis of the impulse demand to a single control
