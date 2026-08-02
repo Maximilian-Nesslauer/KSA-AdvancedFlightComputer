@@ -510,7 +510,8 @@ internal static class HohmannFlybyUI
         }
 
         fp.AddLineInstances(viewport, source, isActive: true,
-            drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN);
+            drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN,
+            isPostBurnOrbit: true);
     }
 
     private static bool IsThrusting(Vehicle source) =>

@@ -56,7 +56,7 @@ internal static class ManeuverToolsWindow
 
     #endregion
 
-    public static void DrawInline(string typeKey, Vehicle source)
+    public static void DrawInline(string typeKey, Vehicle source, PlanningBasis basis)
     {
         if (_lastSourceId != source.Id)
         {
@@ -64,18 +64,26 @@ internal static class ManeuverToolsWindow
             ResetForContextChange();
         }
 
+        if (basis.IsChained)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
+            ImGui.TextWrapped("Planning from the trajectory after your last planned burn.");
+            ImGui.PopStyleColor();
+            ImGui.Spacing();
+        }
+
         if (typeKey == ManeuverTools.KeySetPeriapsis)
-            DrawSetApse(source, isSetPeriapsis: true);
+            DrawSetApse(source, isSetPeriapsis: true, basis);
         else if (typeKey == ManeuverTools.KeySetApoapsis)
-            DrawSetApse(source, isSetPeriapsis: false);
+            DrawSetApse(source, isSetPeriapsis: false, basis);
         else if (typeKey == ManeuverTools.KeyMatchInclination)
-            DrawMatchInclination(source);
+            DrawMatchInclination(source, basis);
         else if (typeKey == ManeuverTools.KeySetInclination)
-            DrawSetInclination(source);
+            DrawSetInclination(source, basis);
         else if (typeKey == ManeuverTools.KeyStockCircularizeApoapsis)
-            DrawCircularize(source, useApoapsis: true);
+            DrawCircularize(source, useApoapsis: true, basis);
         else if (typeKey == ManeuverTools.KeyStockCircularizePeriapsis)
-            DrawCircularize(source, useApoapsis: false);
+            DrawCircularize(source, useApoapsis: false, basis);
     }
 
     public static Orbit? GetSelectedTargetOrbit() => GetSelectedTargetOrbiter()?.Orbit;
@@ -111,9 +119,9 @@ internal static class ManeuverToolsWindow
 
     #region Set Periapsis / Set Apoapsis
 
-    private static void DrawSetApse(Vehicle source, bool isSetPeriapsis)
+    private static void DrawSetApse(Vehicle source, bool isSetPeriapsis, PlanningBasis basis)
     {
-        Orbit orbit = source.Orbit;
+        Orbit orbit = basis.Orbit;
         double parentRadius = source.Parent?.MeanRadius ?? 0.0;
         double currentPeAlt = Math.Max(0.0, orbit.Periapsis - parentRadius);
         double currentApAlt = Math.Max(0.0, orbit.Apoapsis - parentRadius);
@@ -187,9 +195,9 @@ internal static class ManeuverToolsWindow
 
     #region Circularize
 
-    private static void DrawCircularize(Vehicle source, bool useApoapsis)
+    private static void DrawCircularize(Vehicle source, bool useApoapsis, PlanningBasis basis)
     {
-        Orbit orbit = source.Orbit;
+        Orbit orbit = basis.Orbit;
 
         if (orbit.Eccentricity >= 1.0)
         {
@@ -234,10 +242,10 @@ internal static class ManeuverToolsWindow
 
     #region Match Inclination
 
-    private static void DrawMatchInclination(Vehicle source)
+    private static void DrawMatchInclination(Vehicle source, PlanningBasis basis)
     {
-        Orbit orbit = source.Orbit;
-        SimTime now = Universe.GetElapsedSimTime();
+        Orbit orbit = basis.Orbit;
+        SimTime now = basis.Earliest;
 
         if (orbit.Eccentricity >= 1.0)
         {
@@ -294,10 +302,10 @@ internal static class ManeuverToolsWindow
 
     #region Set Inclination
 
-    private static void DrawSetInclination(Vehicle source)
+    private static void DrawSetInclination(Vehicle source, PlanningBasis basis)
     {
-        Orbit orbit = source.Orbit;
-        SimTime now = Universe.GetElapsedSimTime();
+        Orbit orbit = basis.Orbit;
+        SimTime now = basis.Earliest;
 
         if (orbit.Eccentricity >= 1.0)
         {

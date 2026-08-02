@@ -111,6 +111,30 @@ internal static class ManeuverTools
         harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_OnPreRender)).Patch();
 
+        // The shortcuts only link to the window the prefix above draws, so they are
+        // gated on that prefix having applied. Their own failure is contained here
+        // rather than left to the caller's TryPatchBlock: this block owns the four
+        // quick-tools, and a block-level failure strips them from stock's dropdown.
+        // A convenience shortcut must not be able to cost that, and the gate alone
+        // cannot cover every shape change BurnContextMenu.Draw could take.
+        if (Patch_BurnContextMenu_Launcher.IsAnchorPresent)
+        {
+            try
+            {
+                harmony.CreateClassProcessor(typeof(Patch_BurnContextMenu_Launcher)).Patch();
+                BurnMenuLauncher.Enabled = true;
+            }
+            catch (Exception ex)
+            {
+                BurnMenuLauncher.Enabled = false;
+                DefaultCategory.Log.Warning(
+                    $"[AFC] Burn context-menu shortcuts disabled - patching BurnContextMenu.Draw failed: {ex}");
+            }
+        }
+        else
+            DefaultCategory.Log.Warning(
+                "[AFC] Burn context-menu shortcuts disabled - BurnContextMenu.Draw not found.");
+
         if (DebugConfig.ManeuverTools)
             DefaultCategory.Log.Debug("[AFC] ManeuverTools: all patches applied.");
     }

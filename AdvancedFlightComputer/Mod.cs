@@ -58,6 +58,7 @@ public sealed class Mod
             {
                 // With the DrawPlanWindow prefix possibly missing, the injected
                 // types would sit in stock's dropdown with no window body.
+                BurnMenuLauncher.Enabled = false;
                 if (_maneuverTypesInjected)
                 {
                     ManeuverTools.RemoveTransferTypes();
@@ -258,6 +259,7 @@ public sealed class Mod
         MultiPassUI.Enabled = false;
         HohmannMultiPassUI.Enabled = false;
         HohmannFlybyUI.Enabled = false;
+        BurnMenuLauncher.Enabled = false;
         RcsExecRegistry.Reset();
         RcsCommandChannel.Reset();
         RcsBurnCompletions.Reset();

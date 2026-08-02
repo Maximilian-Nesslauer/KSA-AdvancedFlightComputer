@@ -115,12 +115,18 @@ internal static class Patch_DrawPlanWindow
 
             ImGui.Separator();
 
-            ManeuverToolsWindow.DrawInline(transferType.GetKey(), source);
+            // Resolved once per frame and threaded through: the window, the maneuver
+            // math and the preview all have to agree on which trajectory is being
+            // planned against, or the readout describes a different orbit than the
+            // Create button would burn on.
+            PlanningBasis basis = PlanningBasis.For(source);
 
-            var result = ComputeManeuver(transferType.GetKey(), source);
+            ManeuverToolsWindow.DrawInline(transferType.GetKey(), source, basis);
+
+            var result = ComputeManeuver(transferType.GetKey(), source, basis);
             if (result != null)
             {
-                _lastEntry = BuildTransferEntry(source, result.Value);
+                _lastEntry = BuildTransferEntry(source, result.Value, basis);
 
                 ImGui.Separator();
                 DrawManeuverInfo(result.Value);
@@ -128,7 +134,7 @@ internal static class Patch_DrawPlanWindow
                 MultiPassUI.Draw(source, result.Value, transferType.GetKey());
 
                 ImGui.Spacing();
-                DrawCreateButton(source, result.Value, transferType.GetKey());
+                DrawCreateButton(source, result.Value, transferType.GetKey(), basis);
 
                 // Hidden only when a single-burn maneuver node has been
                 // created (stock then owns the rendering); during active
@@ -178,6 +184,7 @@ internal static class Patch_DrawPlanWindow
             StockPlanner.TransferType = transferType;
             StockPlanner.TransferCalculated = false;
             ManeuverToolsWindow.OnTypeChanged();
+            OnManeuverContextChanged();
 
             if (!ManeuverTools.IsHandledType(transferType.GetKey()))
             {
@@ -283,7 +290,8 @@ internal static class Patch_DrawPlanWindow
     }
 
     private static void DrawCreateButton(
-        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey)
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
+        PlanningBasis basis)
     {
         if (MultiPassRegistry.Has(source.Id))
         {
@@ -316,20 +324,44 @@ internal static class Patch_DrawPlanWindow
                 KSAColor.Xkcd.DustyBlue, Color.Green))
         {
             if (MultiPassUI.IsArmed(typeKey))
-                MultiPassController.Start(source, typeKey);
+            {
+                // The intents recompute every pass from the vehicle's live orbit,
+                // so a multi-pass started on a chained basis would execute against
+                // a different trajectory than the window just displayed.
+                if (basis.IsChained)
+                    TimedAlert.Create(
+                        "Multi-pass cannot start on a pending burn's trajectory; " +
+                        "use a single pass or clear the plan first.", Color.Yellow, 4.0);
+                else
+                    MultiPassController.Start(source, typeKey);
+            }
             else
-                CreateSingleBurn(source, maneuver);
+                CreateSingleBurn(source, maneuver, basis);
         }
 
         if (blockedByFailedPreview)
             ImGui.EndDisabled();
     }
 
-    private static void CreateSingleBurn(Vehicle source, OrbitManeuvers.ManeuverResult maneuver)
+    /// <summary>Drops the "we already created this node" marker because the user is
+    /// now configuring a different maneuver. The marker only exists to stop a second
+    /// click duplicating the same node across the frame gap between queueing a burn
+    /// and it appearing in the plan, so holding it past a plan-type change would
+    /// suppress the Create button, both preview checkboxes and the orbit preview for
+    /// a maneuver that has not been created at all - which is what chaining a second
+    /// tool onto a pending burn does.</summary>
+    internal static void OnManeuverContextChanged()
+    {
+        _ourBurn = null;
+    }
+
+    private static void CreateSingleBurn(
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, PlanningBasis basis)
     {
         // Routed through MultiPassCommitter so single-burn and the first
         // multi-pass pass take the same Burn.Create -> buffer-Add path.
-        Burn? burn = MultiPassCommitter.QueueAddBurn(source, maneuver.BurnTime, maneuver.DvVlf);
+        Burn? burn = MultiPassCommitter.QueueAddBurn(
+            source, maneuver.BurnTime, maneuver.DvVlf, basis.Plan);
         if (burn == null) return;
 
         _ourBurn = burn;
@@ -342,15 +374,25 @@ internal static class Patch_DrawPlanWindow
     /// can run unchanged.
     /// </summary>
     private static OrbitalTransfers.PorkChopEntry BuildTransferEntry(
-        Vehicle source, OrbitManeuvers.ManeuverResult maneuver)
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, PlanningBasis basis)
     {
         var transferData = new OrbitalTransfers.TransferData
         {
             Start = maneuver.BurnTime,
-            Point = source.Orbit.GetPointAt(maneuver.BurnTime),
+            Point = basis.Orbit.GetPointAt(maneuver.BurnTime),
             DeltaVelocityCci = maneuver.DvCci,
             TransferDvVlf = maneuver.DvVlf
         };
+
+        // Chained: propagate off the patch the preceding burn produces. The stock
+        // BuildFlightPlan path below starts from the vehicle's live state, which for
+        // a chained maneuver is the orbit before that burn.
+        if (basis.IsChained && basis.Patch != null)
+        {
+            var (chainedPlan, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
+                source, basis.Patch, maneuver.BurnTime, maneuver.DvVlf);
+            return new OrbitalTransfers.PorkChopEntry(transferData, chainedPlan);
+        }
 
         FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
         // Committed burns get this margin stamped by Burn.Create, so the preview's
@@ -387,7 +429,7 @@ internal static class Patch_DrawPlanWindow
             inViewport, _lastSource!, Color.Green,
             TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0),
             ManeuverToolsWindow.GetSelectedTargetOrbiter());
-        _lastEntry!.FlightPlan.DrawUi(inViewport, uiContext);
+        _lastEntry!.FlightPlan.DrawUi(inViewport, uiContext, tintDanger: true);
     }
 
     /// <summary>3D-view post-burn orbit (single-burn or multi-pass), drawn
@@ -435,18 +477,22 @@ internal static class Patch_DrawPlanWindow
         }
 
         fp.AddLineInstances(inViewport, _lastSource, isActive: true,
-            drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN);
+            drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN,
+            isPostBurnOrbit: true);
     }
 
     #endregion
 
     #region Helpers
 
-    private static OrbitManeuvers.ManeuverResult? ComputeManeuver(string key, Vehicle source)
+    private static OrbitManeuvers.ManeuverResult? ComputeManeuver(
+        string key, Vehicle source, PlanningBasis basis)
     {
-        Orbit orbit = source.Orbit;
+        Orbit orbit = basis.Orbit;
         double parentRadius = source.Parent?.MeanRadius ?? 0.0;
-        SimTime now = Universe.GetElapsedSimTime();
+        // Not "now": on a chained maneuver every apsis and node has to be sought
+        // after the burn this one follows, or the result lands before it.
+        SimTime now = basis.Earliest;
 
         if (key == ManeuverTools.KeySetPeriapsis)
             return OrbitManeuvers.ComputeSetPeriapsis(

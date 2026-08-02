@@ -37,10 +37,15 @@ internal static class MultiPassRenderer
             EnsurePatchPointsCached(fp);
 
             // isActive=true matches stock's selected-porkchop rendering;
-            // without it the lines look ghosted.
+            // without it the lines look ghosted. Ground-track danger markers go on
+            // the final trajectory only, as stock does for its own burn plan; the
+            // index is unreachable while skipLast holds, where stock renders the
+            // final pass itself and every pass shown here is an intermediate one.
             fp.AddLineInstances(viewport, source, isActive: true,
                 drawVehiclePosition: false,
-                TrueAnomaly.NaN, TrueAnomaly.NaN);
+                TrueAnomaly.NaN, TrueAnomaly.NaN,
+                drawDangerGroundTrack: i == passes.Length - 1,
+                isPostBurnOrbit: true);
         }
     }
 

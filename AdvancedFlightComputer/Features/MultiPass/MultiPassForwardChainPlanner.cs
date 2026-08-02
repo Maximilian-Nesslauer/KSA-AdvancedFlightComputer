@@ -186,6 +186,10 @@ internal static class MultiPassForwardChainPlanner
         // run between passes would never fire.
         fp.ComputeCompleteTrajectory(out _, FlightPlanPatchLimit, FlightPlanPolynomialOrder,
             encounterFilter, resolveImpactsCompletely: true);
+        // Closest approaches stay on for every pass, unlike stock's burn plan which
+        // computes them for the final trajectory only. MultiPassMarkers draws them
+        // per pass and labels them with the pass number, so suppressing the
+        // intermediate ones would empty that overlay.
         if (source.Target != null)
             fp.CalculateTargetNodes(source.Target);
         return (fp, burnPatch);

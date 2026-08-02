@@ -42,9 +42,17 @@ internal static class MultiPassCommitter
     /// the caller can hold a reference, or null if no patch covers
     /// <paramref name="burnTime"/>.
     /// </summary>
-    public static Burn? QueueAddBurn(Vehicle source, SimTime burnTime, double3 dvVlf)
+    public static Burn? QueueAddBurn(
+        Vehicle source, SimTime burnTime, double3 dvVlf, FlightPlan? chainPlan = null)
     {
-        PatchedConic? patch = source.FlightPlan.TryFindPatch(burnTime);
+        // chainPlan is the trajectory a chained maneuver was planned against (the
+        // pending burn's flight plan); without it the burn anchors on the vehicle's
+        // live plan. Pass commits deliberately stay on the live plan: at commit time
+        // the vehicle IS on the previous pass's post-burn orbit, while the plan of
+        // the just-fired burn may still linger in the BurnPlan and describe that
+        // orbit only as well as the pre-burn prediction did.
+        PatchedConic? patch = chainPlan?.TryFindPatch(burnTime)
+                              ?? source.FlightPlan.TryFindPatch(burnTime);
         if (patch == null)
         {
             if (DebugConfig.MultiPass)
