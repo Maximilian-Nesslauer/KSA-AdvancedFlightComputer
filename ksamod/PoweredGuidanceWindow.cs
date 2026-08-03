@@ -46,6 +46,12 @@ public static partial class PoweredGuidanceWindow
             ImGui.EndTabBar();
         }
 
+        // Manual escape hatch: stop everything and hand the vehicle back, in case
+        // a guidance flow didn't end cleanly on its own. Below the tabs so it's
+        // reachable regardless of which one is open.
+        if (ImGui.Button("Reset flight computer"))
+            ResetFlightComputer();
+
         // Any warp the mod wants needs the user's OK first.
         DrawWarpPrompt();
 
