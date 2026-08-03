@@ -13,17 +13,6 @@ using static Brutal.Strings.Utf8;
 
 namespace NovaTec.GravityTurnMod
 {
-    [HarmonyPatch(typeof(FlightComputer), "UpdateActiveControlSystems")]
-    public class PatchRcsPriority
-    {
-        static public AttitudeControlSystem PriorityControlSystem = AttitudeControlSystem.Rcs;
-        public static void Postfix(FlightComputer __instance, ref readonly FlightComputerOutput outputs)
-        {
-            if (__instance.RcsTorqueAuthority.X > __instance.TvcTorqueAuthority.X && PriorityControlSystem == AttitudeControlSystem.Rcs)
-                __instance.ActiveControlSystem.X = AttitudeControlSystem.Rcs;
-        }
-    }
-
     public class GravityController
     {
         /*
@@ -98,10 +87,17 @@ namespace NovaTec.GravityTurnMod
 
             Console.WriteLine("Launch vehicle");
             vehicle.SetStabilization(true);
-            vehicle.FlightComputer.RateHold(VehicleReferenceFrame.EnuBody); // rate control rel to surface
+/*            vehicle.FlightComputer.RateHold(VehicleReferenceFrame.EnuBody); // rate control rel to surface
             vehicle.FlightComputer.RollMode = FlightComputerRollMode.Up;
             vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Up);
             vehicle.FlightComputer.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Up;
+*/
+            FlightControlOverride.Active = true;
+            FlightControlOverride.BurnMode = FlightComputerBurnMode.Manual;
+            FlightControlOverride.RollMode = vehicle.FlightComputer.RollMode = FlightComputerRollMode.Up;
+            FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Up;
+            FlightControlOverride.AttitudeFrame = VehicleReferenceFrame.EnuBody;
+
 
             Console.WriteLine("Active Sequence: " + vehicle.Parts.SequenceList.ActiveSequence);
             if (vehicle.Parts.SequenceList.ActiveSequence <= 0)
@@ -486,7 +482,7 @@ namespace NovaTec.GravityTurnMod
             PatchedConic patch = new PatchedConic(vehicle.NextApoapsisTime, vehicle.NextApoapsisTime, PatchTransition.Burn, PatchTransition.Burn, vehicle.Orbit, KeyHash.Make(new ReadOnlySpan<char>("Circularize".ToArray())));
             Burn burn = Burn.Create(point,
                 vehicle.NextApoapsisTime.Seconds(),
-                new double3(dV.Length(), 0, 0),
+                new double3(dV.Length()*1.0, 0, 0),
                 patch,
                 vehicle);
 
@@ -495,7 +491,7 @@ namespace NovaTec.GravityTurnMod
             if (UseWarp)
             {
                 Universe.SetSimulationSpeed(10.0, false);
-                //Universe.WarpToNext();
+                Universe.WarpToNext();
             }
         }
 
@@ -522,26 +518,29 @@ namespace NovaTec.GravityTurnMod
 */
             }
             // Burn is about to start, so stop auto warp and set speed to 1x
-            if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 5 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 1))
+            if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 10 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 1))
             {
                 ThrottleOverride.Active = false;
+                FlightControlOverride.Active = false;
 
                 Console.WriteLine("Burn close to ignition");
+                Console.WriteLine("  Burns: {0}", fc.BurnPlan.BurnCount);
+                Console.WriteLine("  Duration: {0}", fc.Burn.BurnDuration);
                 Universe.SetSimulationSpeed(1.0, false);
                 Universe.AutoWarpStop(true);
             }
             // burn completed?
-            else if (fc.Burn == null || fc.Burn.BurnDuration < 0.001f)
+            else if (fc.Burn == null || fc.Burn.BurnDuration < 0.1f)
             {
                 Console.WriteLine("Burn complete? Burns: {0}", fc.BurnPlan.BurnCount);
+                Console.WriteLine("  Duration: {0}", fc.Burn.BurnDuration);
                 if (fc.BurnPlan.BurnCount > 0)
                 {
-                    fc.RemoveBurnAt(0);
+                    fc.RemoveBurnAt(fc.BurnPlan.BurnCount-1);
                     Console.WriteLine("Burn complete, deleting burn");
                 }
-
                 FlightControlOverride.Active = true;
-                FlightControlOverride.BurnMode = FlightComputerBurnMode.Auto;
+                FlightControlOverride.BurnMode = FlightComputerBurnMode.Manual;
                 FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Prograde;
                 FlightControlOverride.AttitudeFrame = VehicleReferenceFrame.EclBody;
                 FlightControlOverride.AttitudeMode = FlightComputerAttitudeMode.Auto;
@@ -550,9 +549,12 @@ namespace NovaTec.GravityTurnMod
             }
             else if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 0)
             {
+                Console.WriteLine("Burns: {0}", fc.BurnPlan.BurnCount);
+                Console.WriteLine("   Burn Duration: {0}", fc.Burn.BurnDuration);
                 // needs staging?
                 if (vehicle.Parts.SequenceList.ActiveSequence > 0 && !GetSequenceHasFuel() && AutoStage)
                 {
+                    Console.WriteLine("Burn complete, stage!");
                     StartPhaseStage(vehicle);
                 }
             }
@@ -920,6 +922,17 @@ namespace NovaTec.GravityTurnMod
             fc.CustomAttitudeTarget = CustomAttitudeTarget;
             fc.TrackTarget(AttitudeTrackTarget);
             fc.AttitudeTrackTarget = AttitudeTrackTarget;
+        }
+    }
+
+    [HarmonyPatch(typeof(FlightComputer), "UpdateActiveControlSystems")]
+    public class PatchRcsPriority
+    {
+        static public AttitudeControlSystem PriorityControlSystem = AttitudeControlSystem.Rcs;
+        public static void Postfix(FlightComputer __instance, ref readonly FlightComputerOutput outputs)
+        {
+            if (__instance.RcsTorqueAuthority.X > __instance.TvcTorqueAuthority.X && PriorityControlSystem == AttitudeControlSystem.Rcs)
+                __instance.ActiveControlSystem.X = AttitudeControlSystem.Rcs;
         }
     }
 
