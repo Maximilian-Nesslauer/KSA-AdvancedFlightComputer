@@ -22,6 +22,7 @@ CoverageReport/
 gfold/native/
 
 # Generated solver output
+gfold_*.csv
 gfold/gfold_*.csv
 gfold/python_ref/*.csv
 
