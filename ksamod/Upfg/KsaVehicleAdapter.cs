@@ -4,191 +4,263 @@ using KSA;
 
 namespace PoweredGuidance.Upfg;
 
-// Builds the UPFG stage list from the controlled vehicle's live KSA part tree.
+// Builds the UPFG stage list from KSA's own staging simulator.
 //
-// KSA orders in-flight events by *sequences* (PartTree.SequenceList): activating the
-// next sequence fires the IActivate modules (EngineController ignitions, Decoupler
-// separations) on that sequence's parts. We replay the not-yet-activated sequences
-// over the current part tree, tracking which parts remain attached and which engines
-// are lit, and emit one UPFG stage (Mode 1, constant vacuum thrust) per powered phase.
+// Since the August 2026 build the game models staging itself: PartTree
+// .PerformanceSequences holds one SequencePerformance per entry in
+// SequenceList.Sequences (same index order) and is what drives the in-game stage
+// menu's delta-v / TWR readout. For sequence k it jettisons the parts whose
+// decoupler fires at k, burns with every still-attached engine ignited in
+// sequences 0..k, and stops when the engines that the NEXT jettison will drop are
+// spent — which is precisely a UPFG stage boundary. Its mole masses are seeded
+// from the live tank/grain states, so every figure is "from here on".
 //
-// Mass model (serial staging): a powered phase runs until the next separation, and
-// the propellant it burns is whatever is left in the parts that separation drops;
-// the final phase burns everything still aboard. Dry mass per part is the sum of its
-// InertMass modules; propellant is the live substance mass of its tanks. These are
-// the same two terms KSA itself sums for Vehicle.TotalMass, so the stage masses stay
-// consistent with the mass the guidance loop is fed each step.
+// ALWAYS START AT INDEX 0. The game's Recompute() seeds its simulated mole
+// masses from the live tanks at index 0 and then drains them forward, so index 0
+// is the burn in progress and every later index continues from the state the
+// previous one left. It is tempting to skip ahead to the entry matching
+// SequenceList.ActiveSequence, but that entry's propellant has already been
+// consumed by index 0's own simulation: a spent sequence survives in the list as
+// long as any of its parts are still attached, which is the normal SRB layout
+// (sequence 0 ignites core + boosters, sequence 1 drops the boosters, sequence 0
+// stays because the core engine hangs off it). Skipping forward then reads a
+// drained, fuel-less entry, yields no stages at all, and silently falls back to
+// the single-stage live-engine model. Leftover spent sequences are harmless read
+// in order — they simply produce zero-duration phases, which are filtered below.
+//
+// We consume SequencePerformance.Phases rather than the headline Thrust/Isp. A
+// sequence is split into phases wherever the number of burning engines changes —
+// solid boosters flaming out under a still-burning core, asparagus drops — and
+// each phase is constant-thrust, so it maps one-to-one onto a UPFG Mode 1 stage.
+// The headline Thrust/MassFlowRate are only phase 0's, and in flight mode they
+// are the *live throttled* values for the active sequence while DeltaV still
+// comes from the design-condition drain sim, so the two must never be combined.
+//
+// Solid boosters come out right for free. Their grain lives in SolidGrainSegment
+// rather than a Tank (so a tank walk sees no propellant at all), part of it is
+// permanently unburnable, and thrust follows the burning area over the burn —
+// the game's sim handles all three, linearising the thrust curve to a constant
+// mass flow of usable-grain/BurnSeconds with thrust scaled to preserve Isp.
+//
+// Pressure: the drain sim uses each sequence's own Environment setting (Vacuum =
+// 0 Pa, Atmospheric = 101325 Pa), NOT the ambient pressure passed to
+// RecomputeForFlight. Sequences default to Vacuum, which is what UPFG wants;
+// AnyAtmosphericSequence reports the exception so the UI can flag it.
 public static class KsaVehicleAdapter
 {
     private const double G0 = 9.80665;
 
+    // Phases shorter than this are numerical dust from the drain simulation's
+    // fixed iteration budget; their mass change is still carried forward so the
+    // stage chain stays continuous.
+    private const double MinPhaseSeconds = 1e-3;
+
     public static UpfgVehicle Build(Vehicle vehicle)
     {
         var result = new UpfgVehicle();
-        PartTree tree = vehicle.Parts;
-        if (tree == null || tree.Moles == null || tree.SequenceList == null)
+
+        PartTree tree = vehicle?.Parts;
+        SequenceList sequenceList = tree?.SequenceList;
+        SequencePerformanceList performanceList = tree?.PerformanceSequences;
+        if (sequenceList == null || performanceList == null)
             return result;
 
-        // Per-part masses from the live tree. SubtreeModules covers a part's
-        // sub-parts too, and every module belongs to exactly one full part, so
-        // summing over tree parts counts each module exactly once.
-        var attached = new HashSet<Part>();
-        var dryMass = new Dictionary<Part, double>();
-        var propMass = new Dictionary<Part, double>();
-        var engines = new HashSet<EngineController>();
+        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
+        ReadOnlySpan<SequencePerformance> performance = performanceList.PerformanceSequences;
+        int count = Math.Min(sequences.Length, performance.Length);
+        if (count == 0)
+            return result;
 
-        ReadOnlySpan<MoleState> moleStates = tree.Moles.States;
-        ReadOnlySpan<Part> parts = tree.Parts;
-        for (int i = 0; i < parts.Length; i++)
+        for (int i = 0; i < count; i++)
         {
-            Part part = parts[i];
-            attached.Add(part);
-
-            double dry = 0;
-            Span<InertMass> inert = part.SubtreeModules.Get<InertMass>();
-            for (int j = 0; j < inert.Length; j++)
-                dry += inert[j].MassPropertiesAsmb.Props.Mass;
-            dryMass[part] = dry;
-
-            double prop = 0;
-            Span<Tank> tanks = part.SubtreeModules.Get<Tank>();
-            for (int j = 0; j < tanks.Length; j++)
-                prop += tanks[j].ComputeSubstanceMass(moleStates);
-            propMass[part] = prop;
-
-            Span<EngineController> ecs = part.SubtreeModules.Get<EngineController>();
-            for (int j = 0; j < ecs.Length; j++)
-                if (ecs[j].IsActive)
-                    engines.Add(ecs[j]);
-        }
-
-        double wet = 0;
-        foreach (Part p in attached)
-            wet += dryMass[p] + propMass[p];
-
-        // Replay the remaining sequences in activation order (the list is kept
-        // sorted by SequenceList.ResetCaches).
-        ReadOnlySpan<Sequence> sequences = tree.SequenceList.Sequences;
-        for (int i = 0; i < sequences.Length; i++)
-        {
-            Sequence seq = sequences[i];
-            if (seq.Activated)
+            SequencePerformance perf = performance[i];
+            List<SequencePhaseInfo> phases = perf.Phases;
+            if (phases == null)
                 continue;
 
-            var ignited = new List<EngineController>();
-            var detachRoots = new List<Part>();
-            ReadOnlySpan<Part> seqParts = seq.Parts;
-            for (int j = 0; j < seqParts.Length; j++)
+            // Each sequence's WetMass already accounts for the burns and the
+            // jettisoned structure of every sequence before it, so the running
+            // mass is re-seeded here rather than carried across the boundary.
+            double mass = perf.WetMass;
+            for (int j = 0; j < phases.Count; j++)
             {
-                Part p = seqParts[j];
-                if (!attached.Contains(p))
+                SequencePhaseInfo phase = phases[j];
+                double thrust = phase.Thrust;
+                double massFlow = phase.MassFlowRate;
+                double duration = phase.Duration;
+                if (!(thrust > 0.0) || !(massFlow > 0.0) || !(duration > 0.0))
                     continue;
 
-                Span<EngineController> ecs = p.SubtreeModules.Get<EngineController>();
-                for (int k = 0; k < ecs.Length; k++)
-                    ignited.Add(ecs[k]);
-
-                Span<Decoupler> decs = p.SubtreeModules.Get<Decoupler>();
-                for (int k = 0; k < decs.Length; k++)
+                double burnout = mass - massFlow * duration;
+                if (duration >= MinPhaseSeconds && mass > 0.0 && burnout > 0.0)
                 {
-                    Part root = DetachedRoot(decs[k]);
-                    if (root != null && attached.Contains(root))
-                        detachRoots.Add(root);
+                    result.Stages.Add(new UpfgStage
+                    {
+                        Mode = 1,
+                        Thrust = thrust,
+                        Isp = thrust / (massFlow * G0),
+                        MassTotal = mass,
+                        MassDry = burnout,
+                        GLim = 1e9,
+                    });
                 }
+                mass = burnout;
             }
-
-            if (detachRoots.Count > 0)
-            {
-                var dropped = new HashSet<Part>();
-                foreach (Part root in detachRoots)
-                    CollectSubtree(root, attached, dropped);
-
-                double droppedProp = 0;
-                foreach (Part p in dropped)
-                    droppedProp += propMass[p];
-
-                (double thrust, double flow) = SumThrust(engines, attached);
-                if (thrust > 0 && flow > 0 && droppedProp > 0)
-                {
-                    // The phase ending at this separation burns the propellant of
-                    // the parts it is about to drop.
-                    result.Stages.Add(MakeStage(thrust, flow, wet, wet - droppedProp));
-                    wet -= droppedProp;
-                    foreach (Part p in dropped)
-                        propMass[p] = 0;
-                }
-
-                // Jettison structure plus any propellant that was never burned.
-                foreach (Part p in dropped)
-                {
-                    wet -= dryMass[p] + propMass[p];
-                    attached.Remove(p);
-                }
-                engines.RemoveWhere(e => !attached.Contains(e.Parent.FullPart));
-            }
-
-            foreach (EngineController e in ignited)
-                if (attached.Contains(e.Parent.FullPart))
-                    engines.Add(e);
         }
 
-        // Final phase: burn everything still aboard.
-        double remaining = 0;
-        foreach (Part p in attached)
-            remaining += propMass[p];
-        (double finalThrust, double finalFlow) = SumThrust(engines, attached);
-        if (finalThrust > 0 && finalFlow > 0 && remaining > 0)
-            result.Stages.Add(MakeStage(finalThrust, finalFlow, wet, wet - remaining));
-
+        CorrectBurningSolids(vehicle, result);
         return result;
     }
 
-    // The part whose subtree separates when this decoupler fires: the tree-child
-    // side of the decoupler's connection — the same rule Vehicle.Split applies.
-    private static Part DetachedRoot(Decoupler decoupler)
+    // Repairs the one place the game's staging model is wrong for a solid that is
+    // already burning.
+    //
+    // SequencePerformanceList.ComputeSolidPacingMassFlowRate paces a solid at
+    // (usable grain REMAINING) / (BurnSeconds of a FULL grain), and scales its
+    // thrust by the same ratio to preserve exhaust velocity. At ignition that is
+    // exact. Part-way through it is not: with a fraction f of the grain left the
+    // model reports f x the true thrust and mass flow, and — because the burn
+    // time it implies is remaining/(remaining/BurnSeconds) — predicts a further
+    // FULL BurnSeconds of burn no matter how little grain is left.
+    //
+    // The mass ratio survives that (f cancels), which is why the stock stage
+    // menu's delta-v looks right, but thrust and burn time are exactly what UPFG
+    // steers on — hence the visible attitude jump when the boosters finally go.
+    //
+    // The fix takes the solid's LIVE nozzle performance as truth (solids have
+    // MinimumThrottle = 1, so live is full-throttle by definition — no throttle
+    // contamination), works out what the model contributed, and swaps one for the
+    // other in the stage that is burning now. Solids that are attached but not yet
+    // lit have a full grain, so f = 1 and this is a no-op for them.
+    private static void CorrectBurningSolids(Vehicle vehicle, UpfgVehicle result)
     {
-        Part.Connection conn = decoupler.Connector?.Connection;
-        if (conn == null)
-            return null;
-        Part a = conn.Connectors[0].ConnectionPart;
-        Part b = conn.Connectors[1].ConnectionPart;
-        if (a == null || b == null)
-            return null;
-        return !a.TreeChildren.Contains(b) ? a : b;
-    }
-
-    private static void CollectSubtree(Part root, HashSet<Part> attached, HashSet<Part> dropped)
-    {
-        if (!attached.Contains(root) || !dropped.Add(root))
+        if (result.Stages.Count == 0)
             return;
-        foreach (Part child in root.TreeChildren)
-            CollectSubtree(child, attached, dropped);
-    }
 
-    private static (double thrust, double flow) SumThrust(
-        HashSet<EngineController> engines, HashSet<Part> attached)
-    {
-        double thrust = 0, flow = 0;
-        foreach (EngineController e in engines)
+        PartTree tree = vehicle.Parts;
+        if (tree?.Moles == null || tree.RocketNozzles == null)
+            return;
+        ReadOnlySpan<MoleState> moles = tree.Moles.States;
+
+        double deltaThrust = 0.0, deltaFlow = 0.0;
+        double solidBurnLeft = double.PositiveInfinity;
+
+        // Hoisted: stackalloc inside the loops below would not be reclaimed until
+        // this method returns. TrySampleThrustCurve only needs somewhere to write
+        // the samples — we want the preview's BurnSeconds, not the curve.
+        Span<float> curve = stackalloc float[2];
+
+        Span<EngineController> engines = tree.Modules.Get<EngineController>();
+        for (int i = 0; i < engines.Length; i++)
         {
-            if (!attached.Contains(e.Parent.FullPart))
+            if (!engines[i].IsActive)
                 continue;
-            thrust += e.VacuumData.ThrustMax.Length();
-            flow += e.VacuumData.MassFlowRateMax;
+            RocketCore[] cores = engines[i].Cores;
+            for (int j = 0; j < cores.Length; j++)
+            {
+                if (cores[j] is not SolidMotor solid || solid.Rocket == null || !solid.Stack.IsValid)
+                    continue;
+
+                // What this motor is actually doing right now.
+                double liveThrust = 0.0, liveFlow = 0.0;
+                var nozzles = tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan());
+                foreach (var nozzle in nozzles)
+                {
+                    liveThrust += nozzle.State.Performance.TotalThrust;
+                    liveFlow += nozzle.State.Performance.MassFlowRate;
+                }
+                if (liveThrust <= 0.0 || liveFlow <= 0.0)
+                    continue;   // mid-transient; leave the model alone this step
+
+                // Grain left that can actually burn — the residue never does.
+                double usable = 0.0;
+                SolidGrainSegment[] segments = solid.Stack.Segments;
+                for (int k = 0; k < segments.Length; k++)
+                {
+                    Mole grain = segments[k].Grain;
+                    if (grain != null)
+                        usable += Math.Max(0.0,
+                            moles[grain.StatesIdx].Mass - segments[k].UnburnableGrainMass);
+                }
+                if (usable <= 0.0)
+                    continue;
+
+                if (!solid.TrySampleThrustCurve(curve, out SolidMotor.ThrustCurvePreview preview)
+                    || preview.BurnSeconds <= 0.0f)
+                    continue;
+
+                // The pacing the model used, and the exhaust velocity it kept.
+                double modelFlow = usable / preview.BurnSeconds;
+                double exhaustVel = liveThrust / liveFlow;
+
+                deltaFlow += liveFlow - modelFlow;
+                deltaThrust += exhaustVel * (liveFlow - modelFlow);
+                solidBurnLeft = Math.Min(solidBurnLeft, usable / liveFlow);
+            }
         }
-        return (thrust, flow);
+
+        if (deltaFlow == 0.0 && double.IsPositiveInfinity(solidBurnLeft))
+            return;
+
+        UpfgStage stage = result.Stages[0];
+        double modelStageFlow = stage.Thrust / (stage.Isp * G0);
+        double thrust = stage.Thrust + deltaThrust;
+        double flow = modelStageFlow + deltaFlow;
+        if (!(thrust > 0.0) || !(flow > 0.0))
+            return;
+
+        // The model's own phase length still bounds us — whatever else runs dry
+        // first (a core tank) is unaffected by the solid's pacing.
+        double duration = (stage.MassTotal - stage.MassDry) / modelStageFlow;
+        if (!double.IsPositiveInfinity(solidBurnLeft))
+            duration = Math.Min(duration, solidBurnLeft);
+
+        double burnout = stage.MassTotal - flow * duration;
+        if (!(burnout > 0.0) || burnout >= stage.MassTotal)
+            return;
+
+        // Propellant the model burned during a stage that is now shorter is still
+        // aboard. It is whatever the non-solid engines would not have consumed,
+        // and it lives in the tanks the next stage burns to depletion — so hand it
+        // to that stage's start mass and leave its burnout mass alone.
+        double restored = burnout - stage.MassDry;
+        if (restored > 0.0 && result.Stages.Count > 1)
+            result.Stages[1].MassTotal += restored;
+
+        stage.Thrust = thrust;
+        stage.Isp = thrust / (flow * G0);
+        stage.MassDry = burnout;
     }
 
-    private static UpfgStage MakeStage(double thrust, double flow, double wet, double dry)
+    // True if any sequence is set to compute at sea level instead of in vacuum.
+    // That is a per-sequence player setting saved with the vehicle, so the mod
+    // surfaces it rather than overwriting it.
+    public static bool AnyAtmosphericSequence(Vehicle vehicle)
     {
-        return new UpfgStage
-        {
-            Mode = 1,
-            Thrust = thrust,
-            Isp = thrust / flow / G0,
-            MassTotal = wet,
-            MassDry = Math.Max(dry, 1.0),
-            GLim = 1e9,
-        };
+        SequenceList sequenceList = vehicle?.Parts?.SequenceList;
+        if (sequenceList == null)
+            return false;
+
+        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
+        for (int i = 0; i < sequences.Length; i++)
+            if (sequences[i].Environment == PerformanceEnvironment.Atmospheric)
+                return true;
+        return false;
+    }
+
+    // Start mass the game's model believes the vehicle currently has — index 0's
+    // WetMass, i.e. the burn in progress. Compared against Vehicle.TotalMass in
+    // the UI: the two are computed by different code paths and any persistent gap
+    // is worth seeing, though UPFG reconciles stage 0 against the live mass each
+    // step regardless.
+    public static double CurrentStageWetMass(Vehicle vehicle)
+    {
+        PartTree tree = vehicle?.Parts;
+        SequencePerformanceList performanceList = tree?.PerformanceSequences;
+        if (performanceList == null)
+            return 0.0;
+
+        ReadOnlySpan<SequencePerformance> performance = performanceList.PerformanceSequences;
+        return performance.Length > 0 ? performance[0].WetMass : 0.0;
     }
 }

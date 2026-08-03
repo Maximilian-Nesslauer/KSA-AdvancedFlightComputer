@@ -115,27 +115,33 @@ public static partial class PoweredGuidanceWindow
     // ignite, sometimes another press before that) — so whenever the vehicle has no
     // engine actually producing thrust (lit AND fed with propellant, per the game's
     // own live engine state), keep firing the next sequence every SequenceCooldown
-    // seconds until one is. This single rule covers pad ignition, burnout staging,
-    // and decouple-only sequences. Same call pair the game's staging key uses, from
+    // seconds until one is. That covers pad ignition, burnout staging, and
+    // decouple-only sequences. Same call pair the game's staging key uses, from
     // the same (main) thread.
+    //
+    // Total thrust loss is not the only staging cue, though: strap-on boosters
+    // burn out while the core keeps firing, so the vehicle never goes quiet and
+    // spent casings would ride all the way to orbit. DropSpentEngines covers that
+    // second case.
     private static void AutoSequence(Vehicle vehicle)
     {
-        bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
-        if (thrustOn)
-        {
-            _stagingActive = false;
-            return;
-        }
-
         SequenceList sequenceList = vehicle.Parts?.SequenceList;
         if (sequenceList == null)
             return;
+
         bool anyRemaining = false;
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
         for (int i = 0; i < sequences.Length; i++)
             if (!sequences[i].Activated)
                 anyRemaining = true;
         if (!anyRemaining)
+        {
+            _stagingActive = false;
+            return;
+        }
+
+        bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
+        if (thrustOn && !ShouldDropSpentEngines(vehicle, sequenceList))
         {
             _stagingActive = false;
             return;
@@ -148,23 +154,145 @@ public static partial class PoweredGuidanceWindow
             sequenceList.ActivateNextSequence(vehicle);
             vehicle.UpdateAfterPartTreeModification();
             _lastSequenceTime = now;
+            _stageModelDirty = true;   // the stage list just changed under us
+            _spentStagedFor.Clear();
+            _spentStagedFor.UnionWith(_spentEngineParts);
         }
     }
 
-    // The staged vehicle in UPFG's format: KSA's remaining activation sequences
-    // mapped to a list of constant-thrust stages. If the vehicle has no usable
-    // sequences (e.g. a single stack with engines already lit and no decouplers),
-    // fall back to one stage built from the live engine configuration. Null means
-    // no thrust anywhere — a transient the caller waits out.
+    // Engine parts that are lit but out of propellant, and the set we last staged
+    // for. Kept as fields so the check allocates nothing on the sim path.
+    private static readonly HashSet<uint> _spentEngineParts = new HashSet<uint>();
+    private static readonly HashSet<uint> _spentStagedFor = new HashSet<uint>();
+
+    // True when a burnt-out engine is still attached and the next sequence is the
+    // one that separates something — i.e. spent boosters waiting to be dropped
+    // while the core still burns.
+    //
+    // Two guards keep this from turning into a staging loop. The next sequence
+    // must actually contain a decoupler, so a dead engine with nothing left to
+    // separate is ignored; and the same set of dead engines only ever triggers one
+    // activation, so if a sequence fires without removing them we stop rather than
+    // walk the whole list at one activation per cooldown.
+    private static bool ShouldDropSpentEngines(Vehicle vehicle, SequenceList sequenceList)
+    {
+        _spentEngineParts.Clear();
+        if (!ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var engineStates))
+            return false;
+
+        foreach (var engine in engineStates.ModulesAndStates)
+        {
+            if (engine.Module.IsActive && !engine.State.IsPropellantAvailable)
+                _spentEngineParts.Add(engine.Module.Parent.FullPart.InstanceId);
+        }
+        if (_spentEngineParts.Count == 0 || _spentEngineParts.SetEquals(_spentStagedFor))
+            return false;
+
+        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
+        for (int i = 0; i < sequences.Length; i++)
+        {
+            if (sequences[i].Activated)
+                continue;
+            ReadOnlySpan<Part> parts = sequences[i].Parts;
+            for (int j = 0; j < parts.Length; j++)
+                if (!parts[j].SubtreeModules.Get<Decoupler>().IsEmpty)
+                    return true;
+            return false;   // the next sequence separates nothing
+        }
+        return false;
+    }
+
+    // --- Stage model ---
+    // KSA models staging itself (PartTree.PerformanceSequences — see
+    // KsaVehicleAdapter), but in flight it only recomputes while the stage or
+    // engine-control panel is open, so the mod drives it.
+    //
+    // Where this happens matters. The game's own recompute runs on a vehicle
+    // worker thread, concurrently with the UI draw; PerformanceSequences
+    // double-buffers its arrays for that, but the Lists inside them are reused,
+    // so reading the stage list from the draw can tear. The PrepareWorker prefix
+    // can't: Universe.PrepareVehicleWorkers runs on the main thread after
+    // VehicleSolvers.Wait() and before the tasks are re-queued, so no worker is
+    // in flight. Hence both the recompute and the copy-out happen here, and the
+    // guidance step consumes the snapshot. One sim step of staleness is
+    // immaterial — UPFG reconciles stage 0 against the live mass every step.
+    private static UpfgVehicle _stageModel;
+    private static Vehicle _stageModelVehicle;
+    private static bool _stageModelDirty = true;
+    private static long _stageModelTick;
+    private const long StageModelIntervalMs = 250;
+
+    private static void RefreshStageModel(Vehicle vehicle)
+    {
+        // A different vehicle is being flown: the old snapshot describes someone
+        // else's staging, so drop it rather than let it be read for an interval.
+        if (!ReferenceEquals(vehicle, _stageModelVehicle))
+        {
+            _stageModel = null;
+            _stageModelVehicle = vehicle;
+            _stageModelDirty = true;
+        }
+
+        // Wall-clock gated, not sim-time gated: under warp sim time elapses
+        // instantly and this would run every step.
+        long now = Environment.TickCount64;
+        if (!_stageModelDirty && now - _stageModelTick < StageModelIntervalMs)
+            return;
+        _stageModelTick = now;
+        _stageModelDirty = false;
+
+        // A staging frame can catch the part tree mid-rebuild. Losing one
+        // refresh is harmless — the previous snapshot stays valid and we retry
+        // immediately — but letting it escape would skip the attitude command
+        // for that step, which is not.
+        try
+        {
+            // Vacuum. Closed-loop guidance only flies above significant
+            // atmosphere, and UPFG re-converges in real time regardless; the
+            // pressure argument would in any case only change the active
+            // sequence's headline thrust, which the adapter doesn't consume.
+            SequencePerformanceList performance = vehicle.Parts?.PerformanceSequences;
+            if (performance == null || vehicle.Parts.SequenceList == null)
+                return;
+            performance.RecomputeForFlight(0f);
+            _stageModel = KsaVehicleAdapter.Build(vehicle);
+        }
+        catch (Exception)
+        {
+            _stageModelDirty = true;
+        }
+    }
+
+    // The staged vehicle in UPFG's format, taken from the snapshot above. If the
+    // vehicle has no usable sequences (e.g. a single stack with engines already
+    // lit and no decouplers), fall back to one stage built from the live engine
+    // configuration. Null means "nothing to fly with yet" — either the snapshot
+    // hasn't been taken or there is no thrust anywhere — a transient the caller
+    // waits out by holding its last solution.
     private static UpfgVehicle BuildUpfgVehicle(Vehicle vehicle)
     {
-        var upfgVehicle = KsaVehicleAdapter.Build(vehicle);
-        if (upfgVehicle.Stages.Count > 0)
-            return upfgVehicle;
+        UpfgVehicle snapshot = _stageModel;
+        if (snapshot == null)
+            return null;   // no refresh has landed for this vehicle yet
 
-        var cfg = vehicle.FlightComputer.VehicleConfig;
-        double thrust = cfg.TotalEngineVacuumThrust;
-        double exhaustVel = cfg.TotalEngineExhaustVelocity;
+        if (snapshot.Stages.Count > 0)
+        {
+            // Hand out fresh stage objects: ApplyGLimit rewrites Mode/GLim in
+            // place, and the snapshot has to survive into the next step.
+            var copy = new UpfgVehicle();
+            foreach (UpfgStage s in snapshot.Stages)
+                copy.Stages.Add(new UpfgStage
+                {
+                    Mode = s.Mode, Thrust = s.Thrust, Isp = s.Isp,
+                    MassTotal = s.MassTotal, MassDry = s.MassDry, GLim = s.GLim,
+                });
+            return copy;
+        }
+
+        var upfgVehicle = new UpfgVehicle();
+        (double thrust, double massFlow) = KsaEnginePerf.Vacuum(vehicle);
+        double exhaustVel = massFlow > 0 ? thrust / massFlow : 0.0;
         if (thrust <= 0 || exhaustVel <= 0)
             return null;
 
@@ -228,15 +356,24 @@ public static partial class PoweredGuidanceWindow
     public static void ApplyAutopilot(Vehicle vehicle)
     {
         // Fast path: this runs on every sim step for every vehicle (thousands of
-        // calls per second under time warp) — bail before touching anything when
-        // the autopilot has nothing to do. Keyed on the mod actually being active
-        // (guidance running or a landing in progress), not on the engage toggle,
-        // which defaults on and would defeat the bail.
-        bool landingActive = _landingPhase != LandingPhase.Idle && _landingPhase != LandingPhase.Done;
-        if (!_running && !landingActive && !_wasEngaged && !_landingCutPending)
+        // calls per second under time warp) — do nothing for anything that isn't
+        // the vehicle the player is flying.
+        if (!ReferenceEquals(vehicle, Program.ControlledVehicle))
             return;
 
-        if (!ReferenceEquals(vehicle, Program.ControlledVehicle))
+        // Keep the staging model current even while the autopilot is idle: both
+        // EXECUTE handlers need a stage list the instant they are pressed, and
+        // this is the only point in the frame where it can be built without
+        // racing the game's own recompute on the vehicle worker thread. Gated to
+        // ~4 Hz on the wall clock, so time warp doesn't multiply it.
+        RefreshStageModel(vehicle);
+
+        // Bail before touching the flight computer when the autopilot has nothing
+        // to do. Keyed on the mod actually being active (guidance running or a
+        // landing in progress), not on the engage toggle, which defaults on and
+        // would defeat the bail.
+        bool landingActive = _landingPhase != LandingPhase.Idle && _landingPhase != LandingPhase.Done;
+        if (!_running && !landingActive && !_wasEngaged && !_landingCutPending)
             return;
 
         // The open-loop phases (vertical/kick/prograde) don't need a converged UPFG

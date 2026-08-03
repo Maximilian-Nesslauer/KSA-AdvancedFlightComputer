@@ -53,7 +53,7 @@ public static partial class PoweredGuidanceWindow
     // Thrust-to-weight at the current mass and local gravity — hover needs > 1.
     private static double TerminalTwr(Vehicle vehicle, Orbit orbit, double mu)
     {
-        double thrustMax = vehicle.FlightComputer.VehicleConfig.TotalEngineVacuumThrust;
+        double thrustMax = KsaEnginePerf.VacuumThrust(vehicle);
         double rLen = orbit.StateVectors.PositionCci.Length();
         double g = mu / (rLen * rLen);
         double weight = vehicle.TotalMass * g;
@@ -125,7 +125,7 @@ public static partial class PoweredGuidanceWindow
         // Local (x = up) command: throttle from the magnitude, direction clamped
         // to the tilt cone so lateral authority never flips the vehicle over.
         var local = new double3(Math.Max(aUp, 0.0), aE, aN);
-        double thrustMax = vehicle.FlightComputer.VehicleConfig.TotalEngineVacuumThrust;
+        double thrustMax = KsaEnginePerf.VacuumThrust(vehicle);
         _gfoldThrottle = thrustMax > 0
             ? Math.Clamp(local.Length() * vehicle.TotalMass / thrustMax, 0.0, 1.0)
             : 0.0;

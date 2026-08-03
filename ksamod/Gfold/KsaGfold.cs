@@ -73,9 +73,8 @@ internal static class KsaGfold
         double glideSlopeDeg, double pointingDeg, double vMax,
         double arrivalAltM, double arrivalRateMs, double throttleMin, double throttleMax)
     {
-        var cfg = vehicle.FlightComputer.VehicleConfig;
-        double thrust = cfg.TotalEngineVacuumThrust;
-        double exhaustVel = cfg.TotalEngineExhaustVelocity;
+        (double thrust, double massFlow) = KsaEnginePerf.Vacuum(vehicle);
+        double exhaustVel = massFlow > 0 ? thrust / massFlow : 0.0;
         if (thrust <= 0 || exhaustVel <= 0)
             return null;
 

@@ -42,8 +42,8 @@ public static partial class PoweredGuidanceWindow
     // Gravity-turn shaping: at the turn-start altitude the commanded pitch ramps
     // down from vertical at a fixed rate toward the launch azimuth (open loop —
     // atmospheric physics is currently too jank to trust prograde-following).
-    private static double _turnStartAltKm = 1.0;
-    private static double _turnRateDegS = 0.5;
+    private static double _turnStartAltKm = 0.5;
+    private static double _turnRateDegS = 1;
     private const double TerminalTgo = 10.0;
     // Hand over to UPFG no later than this altitude, even if the pitch profiles
     // never crossed — the failsafe against an open-loop runaway vehicle.

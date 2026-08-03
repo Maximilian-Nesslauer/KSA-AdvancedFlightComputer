@@ -130,15 +130,36 @@ public static partial class PoweredGuidanceWindow
         ImGui.SeparatorText("Vehicle stages (UPFG)");
         if (_upfgVehicle != null && _upfgVehicle.Stages.Count > 0)
         {
-            ImGui.Text("       thrust      Isp      wet      dry     burn");
+            ImGui.Text("       thrust      Isp      wet      dry     burn        dV");
+            double totalDv = 0.0;
             for (int i = 0; i < _upfgVehicle.Stages.Count; i++)
             {
                 PoweredGuidance.Upfg.UpfgStage s = _upfgVehicle.Stages[i];
                 double burnTime = s.Mode == 2
                     ? s.Isp * 9.80665 * System.Math.Log(s.MassTotal / s.MassDry) / (s.GLim * 9.80665)
                     : (s.MassTotal - s.MassDry) / (s.Thrust / (s.Isp * 9.80665));
+                double stageDv = s.Isp * 9.80665 * System.Math.Log(s.MassTotal / s.MassDry);
+                totalDv += stageDv;
                 string marker = s.Mode == 2 ? " G" : "";
-                ImGui.Text($"S{i + 1}  {s.Thrust / 1000.0,8:F0} kN {s.Isp,5:F0} s {s.MassTotal / 1000.0,7:F1} t {s.MassDry / 1000.0,7:F1} t {burnTime,5:F0} s{marker}");
+                ImGui.Text($"S{i + 1}  {s.Thrust / 1000.0,8:F0} kN {s.Isp,5:F0} s {s.MassTotal / 1000.0,7:F1} t {s.MassDry / 1000.0,7:F1} t {burnTime,5:F0} s {stageDv,7:F0}{marker}");
+            }
+            ImGui.Text($"Total remaining dV: {totalDv,8:F0} m/s");
+
+            // Cross-checks against the game's own model. The stage list comes from
+            // KSA's staging simulator (the same one behind the in-game stage menu),
+            // so these two are the ways it can silently disagree with reality.
+            if (PoweredGuidance.Upfg.KsaVehicleAdapter.AnyAtmosphericSequence(vehicle))
+                ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                    "A sequence is set to Atmospheric: its figures are sea-level, not vacuum.");
+
+            double modelMass = PoweredGuidance.Upfg.KsaVehicleAdapter.CurrentStageWetMass(vehicle);
+            double liveMass = vehicle.TotalMass;
+            if (modelMass > 0 && liveMass > 0
+                && System.Math.Abs(modelMass - liveMass) > 0.005 * liveMass)
+            {
+                ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                    $"Stage mass {modelMass / 1000.0:F1} t vs vehicle {liveMass / 1000.0:F1} t "
+                    + $"({(modelMass - liveMass) / liveMass * 100.0:+0.0;-0.0} %)");
             }
         }
         else
