@@ -159,6 +159,30 @@ if (p4.Status is not (EcosStatus.Optimal or EcosStatus.OptimalInaccurate))
     return Fail("P4 did not solve");
 File.WriteAllText("gfold_p4.csv", p4.ToCsv());
 
+// --- thrust-slew smoothing: SlewReg>0 exercises the new smoothing cone and should
+//     cut the total thrust slew (sum of ||u[n+1]-u[n]||) at a small fuel cost. ---
+double TotalSlew(GfoldTrajectory t)
+{
+    double s = 0;
+    for (int n = 0; n < t.Nodes - 1; n++)
+    {
+        double dx = t.AccelCmd[n + 1][0] - t.AccelCmd[n][0];
+        double dy = t.AccelCmd[n + 1][1] - t.AccelCmd[n][1];
+        double dz = t.AccelCmd[n + 1][2] - t.AccelCmd[n][2];
+        s += Math.Sqrt(dx * dx + dy * dy + dz * dz);
+    }
+    return s;
+}
+Console.WriteLine();
+Console.WriteLine($"Thrust-slew smoothing (baseline SlewReg=0 slew {TotalSlew(p4):F2}, fuel {p4.FuelUsed:F1} kg):");
+foreach (double w in new[] { 0.02, 0.1, 0.5 })
+{
+    GfoldTrajectory ps = GfoldPlanner.SolveMinFuel(
+        p, tf, nodes, p3.LandingPoint, options: GfoldOptions.Reference with { SlewReg = w });
+    Console.WriteLine($"   SlewReg={w,5}: [{ps.Status,-8}] slew {TotalSlew(ps),7:F2}   fuel {ps.FuelUsed,7:F1} kg");
+}
+Console.WriteLine();
+
 // --- independent physical verification of the P4 trajectory ---
 Console.WriteLine();
 bool ok = true;

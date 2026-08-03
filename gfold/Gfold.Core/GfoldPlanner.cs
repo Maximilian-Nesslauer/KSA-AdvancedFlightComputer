@@ -56,6 +56,13 @@ public sealed record GfoldOptions
     // sensible — at no accuracy cost. Tiny by design: a pure tiebreaker.
     public double LandingFuelReg { get; init; }
 
+    // Thrust-slew smoothing (min-fuel / P4 only): a penalty on the L2 norm of the
+    // stacked thrust-vector differences ||u[n+1]-u[n]|| added to the objective, so the
+    // solver spreads direction/throttle changes out over time instead of demanding
+    // rapid slews the 6-DOF autopilot can't track. A soft regularizer — larger values
+    // trade a little fuel for a smoother command; 0 disables it (unchanged behaviour).
+    public double SlewReg { get; init; }
+
     public static readonly GfoldOptions Reference = new();
     public static readonly GfoldOptions RealTime = new()
     {
@@ -231,7 +238,12 @@ public static class GfoldPlanner
         int IZ(int n) => 9 * N + n;
         int IS(int n) => 10 * N + n;
         int IT = 11 * N;                          // P3 epigraph variable
-        int nv = 11 * N + (p3 ? 1 : 0);
+        // Thrust-slew smoothing adds one variable bounding the L2 norm of the stacked
+        // thrust differences. Min-fuel (P4) only, so it never distorts P3 reachability.
+        // In P4 there is no IT, so its slot (11*N) is reused for the slew variable.
+        bool smooth = !p3 && opt.SlewReg > 0;
+        int IQ = 11 * N + (p3 ? 1 : 0);           // slew-norm variable (when smoothing)
+        int nv = 11 * N + (p3 ? 1 : 0) + (smooth ? 1 : 0);
 
         // --- equality constraints  A x = b ---
         // Boundary rows: r0 (3) + v0 (3) + vf (3) + s_end (1) + u_end (3) +
@@ -321,7 +333,8 @@ public static class GfoldPlanner
             + 4 * pathNodes // velocity cones, Q4
             + 4 * (N - 1)   // thrust magnitude cones, Q4
             + (opt.EnforceLowerThrust ? 3 * Math.Max(N - 2, 0) : 0) // thrust floor cones
-            + (p3 ? 4 : 0); // landing-error epigraph cone, Q4
+            + (p3 ? 4 : 0) // landing-error epigraph cone, Q4
+            + (smooth ? 1 + 3 * (N - 1) : 0); // thrust-slew smoothing cone, Q(1+3(N-1))
 
         var G = new SparseCcs(mIneq, nv);
         var h = new double[mIneq];
@@ -448,6 +461,23 @@ public static class GfoldPlanner
             soc.Add(4);
         }
 
+        // Thrust-slew smoothing cone: q >= || (u[1]-u[0], ..., u[N-1]-u[N-2]) ||. With
+        // c[IQ] = SlewReg in the objective, minimizing pulls the stacked thrust
+        // differences toward zero, spreading changes out into a gradual command.
+        if (smooth)
+        {
+            G.Add(row, IQ, -1);
+            h[row++] = 0;                          // cone top: s0 = q
+            for (int n = 0; n < N - 1; n++)
+                for (int i = 0; i < 3; i++)
+                {
+                    G.Add(row, IU(n + 1, i), -1);
+                    G.Add(row, IU(n, i), 1);
+                    h[row++] = 0;                  // s = u[n+1,i] - u[n,i]
+                }
+            soc.Add(1 + 3 * (N - 1));
+        }
+
         // --- objective ---
         var c = new double[nv];
         if (p3)
@@ -460,6 +490,8 @@ public static class GfoldPlanner
         {
             c[IZ(N - 1)] = -1;                  // maximize final ln(mass) = min fuel
         }
+        if (smooth)
+            c[IQ] = opt.SlewReg;                // penalize the thrust-slew L2 norm
 
         var problem = new EcosProblem
         {

@@ -60,9 +60,10 @@ internal static class KsaGfold
 
     // Builds the G-FOLD parameter set from the live vehicle and site. Returns
     // null if the vehicle has no usable engine (no thrust to plan with).
-    // refPosCci is the reference point the solve plans for — the caller passes the
-    // base of the vehicle (landing legs), so the trajectory is built for where the
-    // legs touch down rather than the CoM.
+    // refPosCci is the reference point the solve plans for — the vehicle CoM.
+    // (The vehicle-height allowance is applied by the caller as an offset on the
+    // TARGET altitude, never by shifting this reference: an attitude-dependent
+    // reference point injects modelling error as the vehicle rotates.)
     // arrivalAltM / arrivalRateMs implement "Option B": the target is a point
     // arrivalAltM directly above the pad, reached descending vertically at
     // arrivalRateMs with zero horizontal velocity — so G-FOLD nulls cross-range up
@@ -72,9 +73,8 @@ internal static class KsaGfold
         double glideSlopeDeg, double pointingDeg, double vMax,
         double arrivalAltM, double arrivalRateMs, double throttleMin, double throttleMax)
     {
-        var cfg = vehicle.FlightComputer.VehicleConfig;
-        double thrust = cfg.TotalEngineVacuumThrust;
-        double exhaustVel = cfg.TotalEngineExhaustVelocity;
+        (double thrust, double massFlow) = KsaEnginePerf.Vacuum(vehicle);
+        double exhaustVel = massFlow > 0 ? thrust / massFlow : 0.0;
         if (thrust <= 0 || exhaustVel <= 0)
             return null;
 
@@ -84,7 +84,7 @@ internal static class KsaGfold
         double siteR = siteCci.Length();
         double g = parent.Mu / (siteR * siteR);
 
-        double3 r = refPosCci;   // base of the vehicle (legs), already shifted by the caller
+        double3 r = refPosCci;   // vehicle CoM
         double3 v = vehicle.Orbit.StateVectors.VelocityCci;
         // Surface-relative velocity: the site frame co-rotates with the body, so
         // remove the rotation to make "land at rest on the ground" = vf 0.

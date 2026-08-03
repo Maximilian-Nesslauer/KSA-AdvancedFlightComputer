@@ -9,12 +9,11 @@ using KSA;
 // solver is working with: the planned path, the glideslope cone, the target, the
 // commanded thrust at each node, the live vehicle state, and a numeric HUD.
 //
-// Drawn on its own transparent, click-through, full-screen ImGui window using the
-// active camera's world->screen projection. There is no depth test, so lines draw
-// on top of terrain rather than being occluded by it — fine for a debug view.
+// The projection and drawing helpers it uses are shared with the ascent overlay —
+// see PoweredGuidanceOverlayCore.cs.
 public static partial class PoweredGuidanceWindow
 {
-    private static bool _showGfoldOverlay = true;
+    private static bool _showGfoldOverlay;
     private static bool _retargetArmed;
     private static bool _landingTabActive;   // set while the Landing tab is the open tab
 
@@ -128,15 +127,7 @@ public static partial class PoweredGuidanceWindow
     private static void DrawRetargetPreview(Viewport vp, Camera cam, bool hit,
                                             double3 hitEcl, double latDeg, double lonDeg)
     {
-        const ImGuiWindowFlags flags =
-            ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove |
-            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoBringToFrontOnFocus |
-            ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoInputs |
-            ImGuiWindowFlags.NoBackground;
-        ImGui.SetNextWindowPos(new float2(0f, 0f));
-        ImGui.SetNextWindowSize(new float2(vp.Width, vp.Height));
-        ImGui.Begin("##retarget_preview", flags);
-        ImDrawListPtr dl = ImGui.GetWindowDrawList();
+        ImDrawListPtr dl = BeginOverlayWindow(vp, "##retarget_preview");
         float2 m = ImGui.GetMousePos();
         var col = new ImColor8(255, 90, 220);
         if (hit)
@@ -160,7 +151,7 @@ public static partial class PoweredGuidanceWindow
         _siteLatDeg = latDeg;
         _siteLonDeg = lonDeg;
         _landingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";
-        if (_landingPhase == LandingPhase.GfoldDescent || _landingPhase == LandingPhase.VerticalDescent)
+        if (_landingPhase == LandingPhase.GfoldDescent)
         {
             _gfoldForceSearch = true;
             _gfoldLastSolveTime = double.NegativeInfinity;
@@ -169,23 +160,13 @@ public static partial class PoweredGuidanceWindow
         }
     }
 
-    // Per-frame projection context, set at the top of DrawGfoldOverlay so the
-    // helpers don't each re-fetch the camera and body transforms.
-    private static Camera _ovCam;
-    private static double3 _ovBodyEcl;     // landing body's position in ECL
-    private static doubleQuat _ovCci2Ccf;  // body inertial -> body fixed
-    private static doubleQuat _ovCcf2Ecl;  // body fixed -> ECL
-    private static readonly float2[] _ovSeg = new float2[2];
-
     private static void DrawGfoldOverlay(Viewport vp, Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         if (!_showGfoldOverlay)
             return;
 
         GfoldTrajectory plan = _gfoldPlan;
-        bool active = _landingPhase == LandingPhase.GfoldDescent
-                   || _landingPhase == LandingPhase.VerticalDescent;
-        if (plan == null || !active)
+        if (plan == null || _landingPhase != LandingPhase.GfoldDescent)
             return;
         if (!SetupProjection(parent))
             return;
@@ -209,15 +190,7 @@ public static partial class PoweredGuidanceWindow
         var devCol = new ImColor8(255, 80, 80);
         var hudCol = new ImColor8(205, 215, 225);
 
-        const ImGuiWindowFlags flags =
-            ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove |
-            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoBringToFrontOnFocus |
-            ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoInputs |
-            ImGuiWindowFlags.NoBackground;
-        ImGui.SetNextWindowPos(new float2(0f, 0f));
-        ImGui.SetNextWindowSize(new float2(vp.Width, vp.Height));
-        ImGui.Begin("##gfold_overlay", flags);
-        ImDrawListPtr dl = ImGui.GetWindowDrawList();
+        ImDrawListPtr dl = BeginOverlayWindow(vp, "##gfold_overlay");
 
         // --- Glideslope cone (drawn first so the path sits on top of it). The
         // constraint is ||r_horizontal|| <= cot(gs) * height-above-target, i.e. a
@@ -284,24 +257,24 @@ public static partial class PoweredGuidanceWindow
             dl.AddText(pad + new float2(8f, -6f), padCol, "PAD");
         }
 
-        // --- Live vehicle state: reference point (legs), velocity, plan deviation ---
-        double3 legs = GfoldRefPos(orbit);
-        double3 vSrf = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), legs);
-        OvLine(dl, legs, legs + vSrf * 1.5, velCol, 2.0f); // velocity vector (~1.5 s lookahead)
-        if (TryProjectCci(legs, out float2 lp))
+        // --- Live vehicle state: CoM (the flown reference), velocity, plan deviation ---
+        double3 com = orbit.StateVectors.PositionCci;
+        double3 vSrf = orbit.StateVectors.VelocityCci - double3.Cross(parent.GetAngularVelocityCci(), com);
+        OvLine(dl, com, com + vSrf * 1.5, velCol, 2.0f); // velocity vector (~1.5 s lookahead)
+        if (TryProjectCci(com, out float2 lp))
         {
             dl.AddCircleFilled(lp, 5f, liveCol);
-            dl.AddText(lp + new float2(8f, -6f), liveCol, "LEGS");
+            dl.AddText(lp + new float2(8f, -6f), liveCol, "CG");
         }
 
-        // Deviation: current reference point vs. where the plan says it should be now.
+        // Deviation: current CoM vs. where the plan says it should be now.
         double elapsed = now - _gfoldPlanStart;
         double sf = Math.Clamp(elapsed / plan.Dt, 0.0, n - 1);
         int s0 = Math.Clamp((int)Math.Floor(sf), 0, n - 2);
         double sfrac = Math.Clamp(sf - s0, 0.0, 1.0);
         double3 refLocal = Lerp(Node(plan.Position, s0), Node(plan.Position, s0 + 1), sfrac);
-        OvLine(dl, legs, PlanCci(f, refLocal), devCol, 1.5f);
-        double devM = (refLocal - f.PointToLocal(legs)).Length();
+        OvLine(dl, com, PlanCci(f, refLocal), devCol, 1.5f);
+        double devM = (refLocal - f.PointToLocal(com)).Length();
 
         // --- Numeric HUD (top-right) ---
         double tgo = _gfoldArrivalTime - now;
@@ -310,7 +283,7 @@ public static partial class PoweredGuidanceWindow
             $"G-FOLD   {_gfoldStatus}",
             $"phase    {_landingPhase}",
             $"tgo     {tgo,6:F1} s   tf {plan.TimeOfFlight,5:F1} s",
-            $"alt(legs){_gfoldAltM,7:F0} m",
+            $"alt     {_gfoldAltM,7:F0} m",
             $"speed   {_gfoldSpeedMs,6:F1} / {_gfoldVMaxMs,5:F0} m/s",
             $"throttle{_gfoldThrottle * 100,5:F0} %",
             $"fuel    {vehicle.PropellantMass,7:F0} kg",
@@ -327,22 +300,6 @@ public static partial class PoweredGuidanceWindow
         ImGui.End();
     }
 
-    // Set the per-frame projection context (camera + body transforms) used by
-    // TryProjectCci. False if there's no camera or the parent isn't a Celestial.
-    private static bool SetupProjection(IParentBody parent)
-    {
-        if (parent is not Celestial body)
-            return false;
-        Camera cam = Program.GetMainCamera();
-        if (cam == null)
-            return false;
-        _ovCam = cam;
-        _ovBodyEcl = body.GetPositionEcl();
-        _ovCci2Ccf = parent.GetCci2Ccf();
-        _ovCcf2Ecl = body.GetBodyFixed2Ecl();
-        return true;
-    }
-
     // The landing-site marker, drawn in the world whenever the Landing tab is open
     // (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
     private static void DrawLandingSiteMarker(Viewport vp, IParentBody parent)
@@ -353,15 +310,7 @@ public static partial class PoweredGuidanceWindow
         if (!TryProjectCci(siteCci, out float2 s))
             return;
 
-        const ImGuiWindowFlags flags =
-            ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove |
-            ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoBringToFrontOnFocus |
-            ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoInputs |
-            ImGuiWindowFlags.NoBackground;
-        ImGui.SetNextWindowPos(new float2(0f, 0f));
-        ImGui.SetNextWindowSize(new float2(vp.Width, vp.Height));
-        ImGui.Begin("##landing_site", flags);
-        ImDrawListPtr dl = ImGui.GetWindowDrawList();
+        ImDrawListPtr dl = BeginOverlayWindow(vp, "##landing_site");
         var col = new ImColor8(120, 230, 255);
         const float g = 5f, r = 13f;            // crosshair gap and reach
         ScreenLine(dl, s + new float2(g, 0f), s + new float2(r, 0f), col, 1.6f);
@@ -373,34 +322,6 @@ public static partial class PoweredGuidanceWindow
         ImGui.End();
     }
 
-    private static void ScreenLine(ImDrawListPtr dl, float2 a, float2 b, ImColor8 col, float thick)
-    {
-        _ovSeg[0] = a;
-        _ovSeg[1] = b;
-        dl.AddPolyline(_ovSeg, col, ImDrawFlags.None, thick);
-    }
-
     // A point in the plan's site-local frame (x = up) back to a CCI position.
     private static double3 PlanCci(KsaGfold.Frame f, double3 local) => f.Origin + f.VecToCci(local);
-
-    // Project a CCI point to screen pixels; false if it is behind the camera. The
-    // chain is CCI -> body-fixed -> ECL (+ body ECL position) -> screen.
-    private static bool TryProjectCci(double3 cci, out float2 screen)
-    {
-        double3 ecl = _ovBodyEcl + cci.Transform(_ovCci2Ccf).Transform(_ovCcf2Ecl);
-        float4 clip = _ovCam.EgoToClip(_ovCam.EclToEgo(ecl));
-        if (clip.W <= 0.001f) { screen = default; return false; } // behind the camera
-        screen = _ovCam.EclToScreen(ecl, false);
-        return true;
-    }
-
-    private static void OvLine(ImDrawListPtr dl, double3 cciA, double3 cciB, ImColor8 col, float thick)
-    {
-        if (TryProjectCci(cciA, out float2 a) && TryProjectCci(cciB, out float2 b))
-        {
-            _ovSeg[0] = a;
-            _ovSeg[1] = b;
-            dl.AddPolyline(_ovSeg, col, ImDrawFlags.None, thick);
-        }
-    }
 }
