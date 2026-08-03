@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.1]
+HOTFIX
+
+- Fixed flight computer not resetting properly.
+
 ## [0.2.0]
 
 Updated compatability with new staging menu, added ascent overlay, tweaked landing parameters

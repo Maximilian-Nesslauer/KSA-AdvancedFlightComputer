@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -464,6 +465,15 @@ public static partial class PoweredGuidanceWindow
         // the track is already there when the overlay is switched on.
         RecordTrace(vehicle, vehicle.Orbit);
 
+        // A requested reset runs ahead of the activity bail below: the whole point
+        // of the button is to recover when the mod's own state is wrong, so it must
+        // not depend on that state saying the autopilot is still active.
+        if (_fcResetPending)
+        {
+            ApplyPendingFcReset(vehicle);
+            return;
+        }
+
         // Bail before touching the flight computer when the autopilot has nothing
         // to do. Keyed on the mod actually being active (guidance running or a
         // landing in progress), not on the engage toggle, which defaults on and
@@ -552,63 +562,105 @@ public static partial class PoweredGuidanceWindow
         }
         else if (_wasEngaged)
         {
-            ReleaseAttitude(vehicle, fc);
+            ReleaseAttitude(vehicle);
             _wasEngaged = false;
         }
     }
 
-    // Flight-computer attitude state as it was before we took control, captured on
-    // the engaging frame so releasing can put it back exactly.
-    private static bool _fcSaved;
-    private static Vehicle _fcSavedVehicle;
-    private static FlightComputerAttitudeMode _fcSavedMode;
-    private static VehicleReferenceFrame _fcSavedFrame;
-    private static FlightComputerAttitudeTrackTarget _fcSavedTrack;
-    private static double3 _fcSavedCustom;
+    // Vehicle.FlightComputer is `get; private set;`, so swapping in a new instance
+    // needs the non-public setter. Same approach as ManualInputs above.
+    private static readonly MethodInfo SetVehicleFlightComputer =
+        AccessTools.PropertySetter(typeof(Vehicle), nameof(Vehicle.FlightComputer));
 
-    private static void SaveAttitudeState(Vehicle vehicle, FlightComputer fc)
+    // Hand the vehicle back to the player by giving it a brand new flight computer,
+    // straight off the default template.
+    //
+    // Restoring individual fields is the wrong shape for this: AngleDeadband and
+    // RateLimit are a ratchet (UpdateRcsParams only ever raises them, ONE-WAY,
+    // toward the RCS's physical floor) and RateDeadband/RateBit/AttitudeTarget are
+    // derived from them each step, so a snapshot taken while our guidance was
+    // flying could already be sitting on a ratcheted value — restoring it just
+    // restores the corruption. A new FlightComputer starts at the Balanced-profile
+    // defaults with nothing ratcheted.
+    //
+    // It also clears CustomAttitudeTarget, which MUST be cleared and not merely
+    // untracked: KSA reads that one field two ways depending on AttitudeTrackTarget
+    // — Euler angles under Custom (what we write to steer), but a body RATE command
+    // in rad/s under None (see UpdateAttitudeTarget). Leaving our steering angles
+    // behind with tracking dropped to None is read as a rate command of up to
+    // pi rad/s, and the vehicle tumbles the moment anything selects a rate mode.
+    //
+    // ReadUpdatedVehicleConfiguration is ESSENTIAL here, not a nicety. A fresh
+    // FlightComputer has an empty VehicleConfig — no thrusters, no gimbals — and
+    // the game only repopulates it on part-tree modification, refill/deplete, or
+    // save load; NOT every step. Without this call the vehicle keeps its attitude
+    // commands but has no RCS or TVC to execute them with, and stays that way until
+    // the player happens to stage or dock.
+    //
+    // The new BurnPlan is empty, so any burn node the player had queued is cleared
+    // along with everything else. That is the cost of a genuine reset rather than a
+    // selective one.
+    private static void ReleaseAttitude(Vehicle vehicle)
     {
-        _fcSaved = true;
-        _fcSavedVehicle = vehicle;
-        _fcSavedMode = fc.AttitudeMode;
-        _fcSavedFrame = fc.AttitudeFrame;
-        _fcSavedTrack = fc.AttitudeTrackTarget;
-        _fcSavedCustom = fc.CustomAttitudeTarget;
+        var fresh = new FlightComputer();
+        if (SetVehicleFlightComputer != null)
+        {
+            SetVehicleFlightComputer.Invoke(vehicle, new object[] { fresh });
+            fresh.ReadUpdatedVehicleConfiguration(vehicle);
+            return;
+        }
+
+        // Setter not resolvable (a game update changed the property): copy the
+        // template onto the existing instance instead. Same resulting state, minus
+        // ConservativeFlipTime/DetumbleRateLimit, which CopyFrom skips and
+        // UpdateRcsParams recomputes anyway.
+        FlightComputer fc = vehicle.FlightComputer;
+        fc.CopyFrom(fresh);
+        fc.ReadUpdatedVehicleConfiguration(vehicle);
     }
 
-    // Hand attitude back to the player.
+    // The "Reset flight computer" button's action: unconditionally stop every
+    // guidance flow, cut the engine, and reset the flight computer — regardless of
+    // what state the mod's own bookkeeping thinks it's in. A backstop for the
+    // normal disengage path not running (an unhandled exception, a phase the
+    // fail-streak logic didn't cover), so it deliberately doesn't rely on any of
+    // that bookkeeping being correct.
     //
-    // CustomAttitudeTarget MUST be cleared here, not just the tracking mode. KSA
-    // reads that one field two different ways depending on AttitudeTrackTarget:
-    // with Custom it is Euler angles (what we write to steer), but with None it is
-    // a body RATE command in rad/s — see FlightComputer.UpdateAttitudeTarget. So
-    // releasing by setting TrackTarget = None while leaving our steering Euler
-    // angles behind reinterprets them as rates of up to pi rad/s (~180 deg/s). The
-    // vehicle then tumbles the moment anything selects a rate mode, long after
-    // guidance has stopped. (The game's own attitude panel has the same trap — its
-    // "Track Rate"/"Track Attitude" buttons flip the mode without clearing the
-    // field, which is why it also ships a separate "Zero Targets" button.)
-    //
-    // Restoring the snapshot covers that and puts the navball reference frame back
-    // as well. If the player has switched vehicles since engaging, the snapshot
-    // belongs to someone else, so fall back to a neutral state instead.
-    private static void ReleaseAttitude(Vehicle vehicle, FlightComputer fc)
+    // The mod-side flags are set here, but the flight-computer write itself is
+    // only REQUESTED — see _fcResetPending. This runs from the UI draw, and a
+    // flight-computer write from the draw does not survive: within one frame the
+    // game applies the worker's results onto the live FC, then runs PrepareWorker
+    // and snapshots the FC into NewFlightComputer, and only then draws the UI. So
+    // anything the draw writes lands after that snapshot and is overwritten by the
+    // next frame's copy-back. The same reason every other FC write in this mod
+    // happens from the PrepareWorker prefix.
+    private static bool _fcResetPending;
+
+    private static void ResetFlightComputer()
     {
-        if (_fcSaved && ReferenceEquals(vehicle, _fcSavedVehicle))
-        {
-            fc.CustomAttitudeTarget = _fcSavedCustom;
-            fc.AttitudeFrame = _fcSavedFrame;
-            fc.AttitudeTrackTarget = _fcSavedTrack;
-            fc.AttitudeMode = _fcSavedMode;
-        }
-        else
-        {
-            fc.CustomAttitudeTarget = double3.Zero;
-            fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.None;
-            fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
-        }
-        _fcSaved = false;
-        _fcSavedVehicle = null;
+        _running = false;
+        _landingPhase = LandingPhase.Idle;
+        _autoLaunch = false;
+        _hasCommand = false;
+        _fcResetPending = true;
+        _status = "Flight computer reset — autopilot disengaged, engine cut.";
+    }
+
+    // Applies a requested reset from inside the PrepareWorker prefix, where writes
+    // to the flight computer and to _manualControlInputs actually reach the sim.
+    private static void ApplyPendingFcReset(Vehicle vehicle)
+    {
+        _fcResetPending = false;
+        ReleaseAttitude(vehicle);
+
+        ref ManualControlInputs inputs = ref ManualInputs(vehicle);
+        inputs.EngineOn = false;
+        inputs.EngineThrottle = 0f;
+
+        // Cleared last: _wasEngaged gates the normal release path, which would
+        // otherwise fire again on top of the reset we just did.
+        _wasEngaged = false;
+        _landingCutPending = false;
     }
 
     // Convert a commanded thrust direction into the flight computer's Custom-attitude
@@ -634,11 +686,6 @@ public static partial class PoweredGuidanceWindow
         double3 euler = value.ToRollYawPitchRadians();
 
         var fc = vehicle.FlightComputer;
-        // Snapshot before the first write of the engagement, so ReleaseAttitude can
-        // undo everything we are about to change.
-        if (fullEngage)
-            SaveAttitudeState(vehicle, fc);
-
         fc.CustomAttitudeTarget = euler;
         if (fullEngage)
         {
