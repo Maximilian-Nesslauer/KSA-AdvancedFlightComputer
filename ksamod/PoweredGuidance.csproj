@@ -86,6 +86,7 @@
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="..\LICENSE" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="CHANGELOG.md" DestinationFolder="$(ReleaseDir)" />
     <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />
     <RemoveDir Directories="$(OutputPath)release" />
     <Message Importance="high" Text="Release packaged: $(ZipPath)" />
