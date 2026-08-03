@@ -57,8 +57,10 @@ public static partial class PoweredGuidanceWindow
     private static double3 _frozenDir;
     private static double _cutoffTime;
 
-    // The Ascent tab body. Only the things an end user directly sets live here;
-    // profile tuning is in the Adjust-params window.
+    // The Ascent tab body: target orbit, profile tuning, launch-to-target, and the
+    // commit controls. Everything the user sets is in this one panel — the profile
+    // parameters used to live in a separate popup window, which meant tuning them
+    // hid the guidance readout behind a second window.
     private static void DrawAscentTab(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                       double bodyRadius)
     {
@@ -69,8 +71,10 @@ public static partial class PoweredGuidanceWindow
             _lanSeeded = true;
         }
 
-        // --- Target inputs (collapsible to keep the panel compact) ---
-        if (ImGui.CollapsingHeader("Target orbit"))
+        // Both sections open by default: everything that shapes the ascent should
+        // be visible without hunting for it. They stay collapsible for when the
+        // panel needs to be compact.
+        if (ImGui.CollapsingHeader("Target orbit", ImGuiTreeNodeFlags.DefaultOpen))
         {
             ImGui.InputDouble("Periapsis (km)", ref _peKm);
             ImGui.InputDouble("Apoapsis (km)", ref _apKm);
@@ -79,6 +83,15 @@ public static partial class PoweredGuidanceWindow
             ImGui.SameLine();
             if (ImGui.Button("From position"))
                 _lanDeg = LanOverhead(orbit.StateVectors.PositionCci, _incDeg);
+        }
+
+        if (ImGui.CollapsingHeader("Ascent params", ImGuiTreeNodeFlags.DefaultOpen))
+        {
+            ImGui.InputDouble("Turn start alt (km)", ref _turnStartAltKm);
+            ImGui.InputDouble("Turn rate (deg/s)", ref _turnRateDegS);
+            ImGui.Checkbox("G-limit", ref _gLimitEnabled);
+            ImGui.SameLine();
+            ImGui.InputDouble("Max accel (g)", ref _gLimitG);
         }
 
         // --- Launch to target (runs its own launch-window logic, not collapsed) ---
@@ -92,6 +105,7 @@ public static partial class PoweredGuidanceWindow
         ImGui.Checkbox("Engage autopilot", ref _engage);
         ImGui.SameLine();
         ImGui.Checkbox("Auto engines/staging", ref _autoStage);
+        ImGui.Checkbox("Show target orbit & track", ref _showAscentOverlay);
 
         if (ImGui.Button("EXECUTE"))
             StartGuidance(orbit, parent);
@@ -102,28 +116,8 @@ public static partial class PoweredGuidanceWindow
             _autoLaunch = false;
         }
         ImGui.SameLine();
-        if (ImGui.Button(_showAscentParams ? "Close params" : "Ascent params..."))
-            _showAscentParams = !_showAscentParams;
-    }
-
-    // Ascent-profile tuning, in its own popup so it isn't mixed with the other
-    // flows' parameters.
-    private static bool _showAscentParams;
-
-    private static void DrawAscentParamsWindow()
-    {
-        if (!_showAscentParams)
-            return;
-
-        ImGui.Begin("Ascent params", ImGuiWindowFlags.AlwaysAutoResize);
-        ImGui.InputDouble("Turn start alt (km)", ref _turnStartAltKm);
-        ImGui.InputDouble("Turn rate (deg/s)", ref _turnRateDegS);
-        ImGui.Checkbox("G-limit", ref _gLimitEnabled);
-        ImGui.SameLine();
-        ImGui.InputDouble("Max accel (g)", ref _gLimitG);
-        if (ImGui.Button("Close"))
-            _showAscentParams = false;
-        ImGui.End();
+        if (ImGui.Button("Clear track"))
+            ResetTrace();
     }
 
     // Per-frame ascent stepping, run from Draw regardless of the visible tab.

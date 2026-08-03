@@ -15,8 +15,8 @@ public static partial class PoweredGuidanceWindow
 {
     // Descent profile (all tuning lives in the Adjust-params window).
     private static double _termTouchdownRate = 0.5;  // m/s, constant final descent
-    private static double _termConstAltM = 0.5;      // constant-rate zone height
-    private static double _termQuadK = 0.01;         // m^-1 s^-1: v = touch + k·(h-h0)²
+    private static double _termConstAltM = 0.25;      // constant-rate zone height
+    private static double _termQuadK = 0.2;         // m^-1 s^-1: v = touch + k·(h-h0)²
     private static double _termMaxDescRate = 15.0;   // profile cap
     private static double _termMaxTiltDeg = 20.0;    // thrust tilt limit off vertical
     // PID gains: velocity error (m/s) -> commanded acceleration (m/s²).
@@ -89,14 +89,13 @@ public static partial class PoweredGuidanceWindow
         _gfoldSpeedMs = vSrf.Length();
 
         double vUp = double3.Dot(vSrf, up);
-        if (h <= 0.05 && vUp > -2.0 * Math.Max(_termTouchdownRate, 0.5))
-        {
-            _gfoldThrottle = 0.0;
-            _landingPhase = LandingPhase.Done;
-            _landingCutPending = true;
-            _landingStatus = $"Terminal hover touchdown ({_gfoldSpeedMs:F1} m/s).";
-            return;
-        }
+
+        // No altitude-based cutoff here. Touchdown is decided solely by KSA's own
+        // contact flag, in StepLanding — see HasTouchedDown. The old test cut at
+        // h <= 0.05 m, but h is a terrain-height sample minus an assumed vehicle
+        // height, so it could sit above zero with the legs already down (or trip
+        // early over rough ground). The hover just keeps flying the profile until
+        // something actually touches.
 
         // Descent-rate setpoint from the quadratic profile, plus the user's
         // vertical nudge bias. Above _termConstAltM the rate grows with height

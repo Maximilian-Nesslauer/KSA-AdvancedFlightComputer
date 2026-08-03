@@ -20,7 +20,7 @@ public static partial class PoweredGuidanceWindow
     // controller for the final touchdown (see StepGfoldDescent). G-FOLD brings the
     // vehicle down to roughly here — slow and near-vertical — and the hover flies
     // it the rest of the way.
-    private static double _gfoldHoverHandoffAltM = 20.0;
+    private static double _gfoldHoverHandoffAltM = 10.0;
     // Solver thrust bounds, as a fraction of max thrust. These bound the planned
     // trajectory only — the tracker still uses the full 0-100% throttle range.
     private static double _gfoldThrottleMin = 0.05;
@@ -34,7 +34,7 @@ public static partial class PoweredGuidanceWindow
     // pad), NOT by shifting the vehicle reference point — the state G-FOLD flies
     // is always the CoM. Shifting the reference by the pointing axis injected
     // modelling error as the vehicle rotated.
-    private static double _vehicleHeightM = 0.0;
+    private static double _vehicleHeightM = 10.0;
     // What the solver aims the CoM at: the surface plus the vehicle height, so the
     // legs (not the CoM) meet the ground at rest. G-FOLD always plans the whole way
     // to the surface; the hover handoff (above) simply cuts over in the last stretch.
@@ -42,7 +42,7 @@ public static partial class PoweredGuidanceWindow
     // Hand UPFG braking over to G-FOLD this many seconds before gate arrival,
     // skipping the UPFG terminal freeze (which oscillates as its solution decays
     // near the gate). G-FOLD plans from wherever we are to the surface.
-    private static double _gfoldHandoffTgo = 20.0;
+    private static double _gfoldHandoffTgo = 40.0;
     private static double _gfoldThrottle;
     private static double _gfoldHandoffTime;
     private static double _gfoldLastSolveTime = double.NegativeInfinity;
@@ -292,8 +292,10 @@ public static partial class PoweredGuidanceWindow
         if (!_showGfoldParams)
             return;
 
+        // Note: the UPFG->G-FOLD handoff gate lives in the Deorbit sub-tab, not
+        // here — it governs when the braking burn ends, which is a deorbit-phase
+        // decision, not a G-FOLD tuning one.
         ImGui.Begin("G-FOLD params", ImGuiWindowFlags.AlwaysAutoResize);
-        ImGui.InputDouble("Handoff at T-gate (s)", ref _gfoldHandoffTgo);
         ImGui.InputDouble("Glide slope (deg)", ref _gfoldGlideSlopeDeg);
         ImGui.InputDouble("Thrust pointing (deg)", ref _gfoldPointingDeg);
         ImGui.InputDouble("Max speed (m/s)", ref _gfoldVMaxMs);

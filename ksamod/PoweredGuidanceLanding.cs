@@ -21,7 +21,7 @@ public static partial class PoweredGuidanceWindow
     // Astronomicals.xml, Landmark Id="Apollo11" on the Moon).
     private static double _siteLatDeg = 0.67408;
     private static double _siteLonDeg = 23.47297;
-    private static double _downrangeFactor = 1.5;  // light the burn this × predicted distance out
+    private static double _downrangeFactor = 1.2;  // light the burn this × predicted distance out
     // The burn targets "high gate" — an aim point this far above the site, reached
     // descending at this rate — not the surface. A surface/zero-speed target is
     // geometrically infeasible: burn time is fixed by the energy (worse with a
@@ -125,6 +125,9 @@ public static partial class PoweredGuidanceWindow
             ImGui.InputDouble("Aim altitude (km)", ref _aimAltKm);
             ImGui.InputDouble("Descent rate (m/s)", ref _descentRate);
             ImGui.InputDouble("Gate uprange (km)", ref _gateUprangeKm);
+            // Where the braking burn ends and G-FOLD takes over. It shapes this
+            // phase, so it belongs here rather than with the G-FOLD tuning.
+            ImGui.InputDouble("Hand off to G-FOLD at T-gate (s)", ref _gfoldHandoffTgo);
         }
 
         double3 r = orbit.StateVectors.PositionCci;
@@ -346,6 +349,28 @@ public static partial class PoweredGuidanceWindow
         return downrange;
     }
 
+    // The phases that are flying the vehicle down under power, and so are the ones
+    // a ground contact should terminate.
+    private static bool IsPoweredDescentPhase(LandingPhase phase) =>
+        phase == LandingPhase.Burn
+        || phase == LandingPhase.GfoldDescent
+        || phase == LandingPhase.TerminalHover;
+
+    // KSA's own contact switch. The physics step raises a terrain-contact flag on
+    // the vehicle whenever ANY part of it makes a Bepu contact with the terrain or
+    // launch-pad collider (ConstraintSim.DetectTerrainContact), and ocean entry
+    // sets the matching ocean flag — so this fires on the legs, or on whatever
+    // else reaches the ground first, without us guessing at leg geometry.
+    //
+    // This replaces trusting the altitude estimate to notice touchdown. That
+    // estimate is terrain-height sampling minus an assumed vehicle height, and
+    // when it reads low the hover controller keeps flying a vehicle that is
+    // already on the ground.
+    private static bool HasTouchedDown(Vehicle vehicle) => vehicle.Situation.HasAnyContact();
+
+    private static bool _touchdownArmed;
+    private static LandingPhase _touchdownPrevPhase = LandingPhase.Idle;
+
     // Per-frame landing state machine (runs whichever tab is visible).
     private static void StepLanding(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                     double mu, double bodyRadius)
@@ -354,6 +379,34 @@ public static partial class PoweredGuidanceWindow
             return;
 
         double now = SimNow();
+
+        // Touchdown, from the physics rather than from geometry. Checked before
+        // any powered phase steps, so the engine is cut on the frame contact is
+        // reported instead of the controller fighting the ground.
+        //
+        // Armed only once the vehicle has actually been off the ground: a vehicle
+        // sitting on the pad already reports terrain contact (the launch-pad
+        // collider counts), so without this, taking over with terminal hover from
+        // the ground would cut the engine on its first step. Re-armed on every
+        // phase change, which is free in the air — the same frame clears it.
+        bool contact = HasTouchedDown(vehicle);
+        if (_landingPhase != _touchdownPrevPhase)
+        {
+            _touchdownPrevPhase = _landingPhase;
+            _touchdownArmed = false;
+        }
+        if (!contact)
+            _touchdownArmed = true;
+
+        if (contact && _touchdownArmed && IsPoweredDescentPhase(_landingPhase))
+        {
+            _gfoldThrottle = 0.0;
+            _hasCommand = false;
+            _landingPhase = LandingPhase.Done;
+            _landingCutPending = true;
+            _landingStatus = $"TOUCHDOWN — contact detected, engine cut ({_gfoldSpeedMs:F1} m/s).";
+            return;
+        }
 
         if (_landingPhase == LandingPhase.GfoldDescent)
         {

@@ -151,6 +151,12 @@ public static partial class PoweredGuidanceWindow
         double now = SimNow();
         if (now - _lastSequenceTime >= SequenceCooldown)
         {
+            if (WouldLoseControl(vehicle, sequenceList))
+            {
+                _stagingActive = false;
+                _status = "Auto-staging held: the next sequence would separate the control module.";
+                return;
+            }
             sequenceList.ActivateNextSequence(vehicle);
             vehicle.UpdateAfterPartTreeModification();
             _lastSequenceTime = now;
@@ -158,6 +164,91 @@ public static partial class PoweredGuidanceWindow
             _spentStagedFor.Clear();
             _spentStagedFor.UnionWith(_spentEngineParts);
         }
+    }
+
+    private static readonly HashSet<Part> _stagingDropped = new HashSet<Part>();
+
+    // True if firing the next sequence would leave the vehicle we are flying with
+    // no control module.
+    //
+    // Vehicle.Split detaches the TREE-CHILD side of a decoupler's connection into a
+    // NEW vehicle and keeps the tree-parent side as the vehicle object the player is
+    // still controlling — and nothing in KSA moves control to follow the pod
+    // (Program.ControlledVehicle is only reassigned by camera targeting and EVA). So
+    // if every Control module sits on the child side, that separation hands the pod
+    // away and leaves the player attached to the debris. The symptom is unmistakable
+    // once seen: Vehicle.IsControllable is `Parts.Controls.NumModules > 0`, and the
+    // flight computer greys out everything it gates on that — the Strict/Balanced/
+    // Relaxed attitude profiles included, since those fall through to a bare
+    // !IsControllable test.
+    //
+    // Doing that deliberately is a legitimate thing to want; doing it automatically,
+    // mid-ascent, is not the autopilot's call.
+    private static bool WouldLoseControl(Vehicle vehicle, SequenceList sequenceList)
+    {
+        PartTree tree = vehicle.Parts;
+        if (tree == null)
+            return false;
+
+        // The sequence ActivateNextSequence will actually fire: the first one not
+        // yet activated that still has parts (it skips empty ones).
+        Sequence next = null;
+        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
+        for (int i = 0; i < sequences.Length; i++)
+        {
+            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+            {
+                next = sequences[i];
+                break;
+            }
+        }
+        if (next == null)
+            return false;
+
+        _stagingDropped.Clear();
+        ReadOnlySpan<Part> parts = next.Parts;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
+            for (int j = 0; j < decouplers.Length; j++)
+            {
+                Part root = DetachedRoot(decouplers[j]);
+                if (root != null)
+                    CollectSubtree(root, _stagingDropped);
+            }
+        }
+        if (_stagingDropped.Count == 0)
+            return false;   // nothing separates
+
+        Span<Control> controls = tree.Modules.Get<Control>();
+        if (controls.Length == 0)
+            return false;   // already uncontrollable — nothing left to protect
+        for (int i = 0; i < controls.Length; i++)
+            if (!_stagingDropped.Contains(controls[i].Parent.FullPart))
+                return false;   // at least one control module stays with us
+        return true;
+    }
+
+    // The part whose subtree separates when this decoupler fires: the tree-child
+    // side of its connection — the same rule Vehicle.Split applies.
+    private static Part DetachedRoot(Decoupler decoupler)
+    {
+        Part.Connection conn = decoupler.Connector?.Connection;
+        if (conn == null)
+            return null;
+        Part a = conn.Connectors[0].ConnectionPart;
+        Part b = conn.Connectors[1].ConnectionPart;
+        if (a == null || b == null)
+            return null;
+        return !a.TreeChildren.Contains(b) ? a : b;
+    }
+
+    private static void CollectSubtree(Part root, HashSet<Part> into)
+    {
+        if (!into.Add(root))
+            return;
+        foreach (Part child in root.TreeChildren)
+            CollectSubtree(child, into);
     }
 
     // Engine parts that are lit but out of propellant, and the set we last staged
@@ -368,6 +459,11 @@ public static partial class PoweredGuidanceWindow
         // ~4 Hz on the wall clock, so time warp doesn't multiply it.
         RefreshStageModel(vehicle);
 
+        // Likewise the flown-trajectory trace: sampled off the simulation rather
+        // than the frame rate, and recorded whether or not guidance is running so
+        // the track is already there when the overlay is switched on.
+        RecordTrace(vehicle, vehicle.Orbit);
+
         // Bail before touching the flight computer when the autopilot has nothing
         // to do. Keyed on the mod actually being active (guidance running or a
         // landing in progress), not on the engage toggle, which defaults on and
@@ -456,11 +552,63 @@ public static partial class PoweredGuidanceWindow
         }
         else if (_wasEngaged)
         {
-            // Disengaged (or guidance stopped): hand attitude back to the player.
-            fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.None;
-            fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+            ReleaseAttitude(vehicle, fc);
             _wasEngaged = false;
         }
+    }
+
+    // Flight-computer attitude state as it was before we took control, captured on
+    // the engaging frame so releasing can put it back exactly.
+    private static bool _fcSaved;
+    private static Vehicle _fcSavedVehicle;
+    private static FlightComputerAttitudeMode _fcSavedMode;
+    private static VehicleReferenceFrame _fcSavedFrame;
+    private static FlightComputerAttitudeTrackTarget _fcSavedTrack;
+    private static double3 _fcSavedCustom;
+
+    private static void SaveAttitudeState(Vehicle vehicle, FlightComputer fc)
+    {
+        _fcSaved = true;
+        _fcSavedVehicle = vehicle;
+        _fcSavedMode = fc.AttitudeMode;
+        _fcSavedFrame = fc.AttitudeFrame;
+        _fcSavedTrack = fc.AttitudeTrackTarget;
+        _fcSavedCustom = fc.CustomAttitudeTarget;
+    }
+
+    // Hand attitude back to the player.
+    //
+    // CustomAttitudeTarget MUST be cleared here, not just the tracking mode. KSA
+    // reads that one field two different ways depending on AttitudeTrackTarget:
+    // with Custom it is Euler angles (what we write to steer), but with None it is
+    // a body RATE command in rad/s — see FlightComputer.UpdateAttitudeTarget. So
+    // releasing by setting TrackTarget = None while leaving our steering Euler
+    // angles behind reinterprets them as rates of up to pi rad/s (~180 deg/s). The
+    // vehicle then tumbles the moment anything selects a rate mode, long after
+    // guidance has stopped. (The game's own attitude panel has the same trap — its
+    // "Track Rate"/"Track Attitude" buttons flip the mode without clearing the
+    // field, which is why it also ships a separate "Zero Targets" button.)
+    //
+    // Restoring the snapshot covers that and puts the navball reference frame back
+    // as well. If the player has switched vehicles since engaging, the snapshot
+    // belongs to someone else, so fall back to a neutral state instead.
+    private static void ReleaseAttitude(Vehicle vehicle, FlightComputer fc)
+    {
+        if (_fcSaved && ReferenceEquals(vehicle, _fcSavedVehicle))
+        {
+            fc.CustomAttitudeTarget = _fcSavedCustom;
+            fc.AttitudeFrame = _fcSavedFrame;
+            fc.AttitudeTrackTarget = _fcSavedTrack;
+            fc.AttitudeMode = _fcSavedMode;
+        }
+        else
+        {
+            fc.CustomAttitudeTarget = double3.Zero;
+            fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.None;
+            fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        }
+        _fcSaved = false;
+        _fcSavedVehicle = null;
     }
 
     // Convert a commanded thrust direction into the flight computer's Custom-attitude
@@ -486,6 +634,11 @@ public static partial class PoweredGuidanceWindow
         double3 euler = value.ToRollYawPitchRadians();
 
         var fc = vehicle.FlightComputer;
+        // Snapshot before the first write of the engagement, so ReleaseAttitude can
+        // undo everything we are about to change.
+        if (fullEngage)
+            SaveAttitudeState(vehicle, fc);
+
         fc.CustomAttitudeTarget = euler;
         if (fullEngage)
         {

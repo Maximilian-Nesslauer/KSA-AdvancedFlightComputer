@@ -63,14 +63,18 @@ public static partial class PoweredGuidanceWindow
         ImGui.End();
 
         // Per-domain tuning popups (each no-ops unless opened from its tab) and the
-        // G-FOLD debug plots.
-        DrawAscentParamsWindow();
+        // G-FOLD debug plots. Ascent tuning is inline in its tab, not a popup.
         DrawGfoldParamsWindow();
         DrawTermParamsWindow();
         DrawGfoldDebugWindow();
 
-        // World-space G-FOLD debug overlay (its own full-screen window, drawn after
-        // the panel so it layers correctly). No-ops unless toggled on with a plan up.
+        // World-space overlays (each its own full-screen window, drawn after the
+        // panel so they layer correctly). Each no-ops unless toggled on. The
+        // ascent overlay is also hidden while the Landing tab is open — the same
+        // way the G-FOLD overlay only appears for landing — so the two don't
+        // clutter each other's view. Ascent guidance keeps running regardless.
+        if (!_landingTabActive)
+            DrawAscentOverlay(viewport, orbit, parent, bodyRadius);
         DrawGfoldOverlay(viewport, vehicle, orbit, parent);
 
         // Landing-site marker: shown whenever the Landing tab is open, so the target is
@@ -127,14 +131,19 @@ public static partial class PoweredGuidanceWindow
         }
 
         // --- Staged vehicle model ---
+        // While flying, show the list UPFG is actually steering on (post g-limit
+        // split). While idle, show the snapshot the PrepareWorker prefix keeps
+        // current anyway — so the staging can be checked on the pad, before
+        // committing to a launch, at no extra cost.
         ImGui.SeparatorText("Vehicle stages (UPFG)");
-        if (_upfgVehicle != null && _upfgVehicle.Stages.Count > 0)
+        var stageList = (_running || landingActive) ? _upfgVehicle : _stageModel;
+        if (stageList != null && stageList.Stages.Count > 0)
         {
             ImGui.Text("       thrust      Isp      wet      dry     burn        dV");
             double totalDv = 0.0;
-            for (int i = 0; i < _upfgVehicle.Stages.Count; i++)
+            for (int i = 0; i < stageList.Stages.Count; i++)
             {
-                PoweredGuidance.Upfg.UpfgStage s = _upfgVehicle.Stages[i];
+                PoweredGuidance.Upfg.UpfgStage s = stageList.Stages[i];
                 double burnTime = s.Mode == 2
                     ? s.Isp * 9.80665 * System.Math.Log(s.MassTotal / s.MassDry) / (s.GLim * 9.80665)
                     : (s.MassTotal - s.MassDry) / (s.Thrust / (s.Isp * 9.80665));
@@ -164,7 +173,7 @@ public static partial class PoweredGuidanceWindow
         }
         else
         {
-            ImGui.Text("No staged model yet — EXECUTE builds it.");
+            ImGui.Text("No staged model — the vehicle has no sequenced engines.");
         }
 
         // --- Current vs target ---
