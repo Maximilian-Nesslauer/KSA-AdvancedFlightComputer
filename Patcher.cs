@@ -1,4 +1,5 @@
-﻿using HarmonyLib;
+﻿using Brutal.Numerics;
+using HarmonyLib;
 using KSA;
 
 namespace NovaTec.GravityTurnMod
@@ -27,4 +28,5 @@ namespace NovaTec.GravityTurnMod
             Console.WriteLine("ModLibrary.LoadAll patched by GravityTurn.");
         }
     }
+
 }

@@ -289,12 +289,17 @@ namespace NovaTec.GravityTurnMod
             Console.WriteLine("GravityTurn - On immediate loaded");
 
         }
+        private static bool _autoLoaded;
 
         [StarMapAllModsLoaded]
         public void OnFullyLoaded()
         {
             Console.WriteLine("GravityTurn - On fully loaded");
             Patcher.Patch();
+
+            new Harmony("gravityturn.autoload").Patch(
+                AccessTools.Method(typeof(Program), "OnFrame", new[] { typeof(double), typeof(double) }),
+                postfix: new HarmonyMethod(typeof(GravityTurn), nameof(AutoLoad)));
         }
 
         [StarMapUnload]
@@ -303,5 +308,12 @@ namespace NovaTec.GravityTurnMod
             Console.WriteLine("GravityTurn - Unload");
             Patcher.Unload();
         }
+        private static void AutoLoad()
+        {
+            if (_autoLoaded) return;
+            _autoLoaded = true;
+            Program.TerminalInterface.Execute("load Launch");
+        }
+
     }
 }
