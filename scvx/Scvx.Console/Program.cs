@@ -611,6 +611,7 @@ static int RecedingHorizonCheck()
         var times = new List<double>();
         var iters = new List<int>();
         int converged = 0, cycles = 8;
+        var itersUsed = new List<int>();
         for (int c = 0; c < cycles; c++)
         {
             double dt = sig / (n - 1);
@@ -635,6 +636,7 @@ static int RecedingHorizonCheck()
             s2.Reseed(newX0, xs, us, sig, trustRegion: 0.05);
             var sw = System.Diagnostics.Stopwatch.StartNew();
             ScvxStatus rs = s2.Solve(budget);
+            itersUsed.Add(s2.IterationCount);
             times.Add(sw.Elapsed.TotalMilliseconds);
             iters.Add(s2.IterationCount);
             if (rs == ScvxStatus.Converged) converged++;
@@ -647,7 +649,8 @@ static int RecedingHorizonCheck()
         double med = times[times.Count / 2], worst = times[^1], mean = times.Average();
         Console.WriteLine($"  budget {budget} SCvx iter(s)/cycle: " +
                           $"mean {mean,6:F0} ms   median {med,6:F0} ms   WORST {worst,6:F0} ms   " +
-                          $"({converged}/{cycles} hit the convergence test)");
+                          $"({converged}/{cycles} hit the convergence test)  " +
+                          $"SCvx iters actually used: [{string.Join(",", itersUsed)}]");
     }
 
     Console.WriteLine();
