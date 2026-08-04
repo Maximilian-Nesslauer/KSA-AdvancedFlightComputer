@@ -11,9 +11,9 @@ using KSA;
 // of the committed optimal trajectory.
 public static partial class PoweredGuidanceWindow
 {
-    private static double _gfoldGlideSlopeDeg = 30.0;
-    private static double _gfoldPointingDeg = 80.0;
-    private static double _gfoldVMaxMs = 120.0;
+    private static double _gfoldGlideSlopeDeg = 1.0;
+    private static double _gfoldPointingDeg = 90.0;
+    private static double _gfoldVMaxMs = 500.0;
     private static double _gfoldIntervalS = 0.25;   // re-solve cadence
     private static int _gfoldNodes = 50;
     // Below this height above the legs, G-FOLD hands off to the terminal hover
@@ -34,7 +34,7 @@ public static partial class PoweredGuidanceWindow
     // pad), NOT by shifting the vehicle reference point — the state G-FOLD flies
     // is always the CoM. Shifting the reference by the pointing axis injected
     // modelling error as the vehicle rotated.
-    private static double _vehicleHeightM = 10.0;
+    private static double _vehicleHeightM = 15.0;
     // What the solver aims the CoM at: the surface plus the vehicle height, so the
     // legs (not the CoM) meet the ground at rest. G-FOLD always plans the whole way
     // to the surface; the hover handoff (above) simply cuts over in the last stretch.

@@ -27,12 +27,12 @@ public static partial class PoweredGuidanceWindow
     // geometrically infeasible: burn time is fixed by the energy (worse with a
     // powerful engine), and there is no time to also descend the full orbit
     // altitude. G-FOLD takes over below the gate.
-    private static double _aimAltKm = 2.0;
-    private static double _descentRate = 100.0;
+    private static double _aimAltKm = 0.1;
+    private static double _descentRate = 20.0;
     // The gate also sits this far uprange of the site (against the approach
     // direction), so the burn hands over to terminal guidance with the target
     // still ahead rather than directly underneath.
-    private static double _gateUprangeKm = 2.0;
+    private static double _gateUprangeKm = 0.0;
     private static double _burnDownrangeKm;        // predicted braking distance
     private static double _burnStartTime;          // sim time of ignition
     private static string _landingStatus = "";
