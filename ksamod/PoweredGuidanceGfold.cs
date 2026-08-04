@@ -55,6 +55,14 @@ public static partial class PoweredGuidanceWindow
     private const double GfoldMinTf = 4.0;
     private const double GfoldCoastThrottle = 0.02;  // below this, cut the engine (true coast)
 
+    // Flight-time search bounds. SearchTfMax is the cold-start ceiling; the two
+    // bracket factors are the window searched around the previous solution's
+    // remaining time when one is available (see SolveGfoldPlan). Wide enough to
+    // absorb a plan that has drifted, narrow enough to cut most of the coarse scan.
+    private const double SearchTfMax = 120.0;
+    private const double SearchBracketLo = 0.5;
+    private const double SearchBracketHi = 2.0;
+
     // Committed-trajectory tracking: the solved descent plan is flown by time
     // index (feed-forward the planned thrust at the current time + light PD
     // feedback on the reference state) and re-solved on a cadence, rather than
@@ -159,9 +167,55 @@ public static partial class PoweredGuidanceWindow
             }
             if (traj == null)
             {
-                GfoldPlanner.SearchResult best = GfoldPlanner.SearchMinFuel(
-                    p, _gfoldNodes, tfLo: GfoldMinTf, tfHi: 120.0,
-                    options: GfoldOptions.Descent with { SlewReg = _gfoldSlewReg });
+                // Warm-start the SEARCH from the last solution. The solver itself
+                // can't be warm started — ECOS is an interior-point method and the
+                // previous optimum sits on the boundary, the worst possible starting
+                // iterate — but the flight-time search around it can be.
+                //
+                // The committed plan's remaining time IS the previous solution
+                // carried forward: _gfoldArrivalTime was set to now + tf* when that
+                // search ran, so (_gfoldArrivalTime - now) is tf* minus the time
+                // since. That's the best available estimate of the new optimum, so
+                // bracket it instead of rescanning the full range. Searching
+                // [4, 120] from cold spends 8 coarse points plus ~10 golden-section
+                // steps, at up to two SOCP solves each — 35-40 solves. A tight
+                // bracket collapses the coarse scan onto the plausible range.
+                //
+                // Both bounds move, not just the upper one: with a 20 s remaining
+                // flight the old floor of 4 s was as wasteful as the old 120 s
+                // ceiling, just at the other end.
+                // _gfoldForceSearch means the previous solution is no longer a valid
+                // guess — a retarget replaces _gfoldArrivalTime with a placeholder
+                // far in the future purely to escape the terminal freeze, so
+                // bracketing around it would spend a narrow search on a fabricated
+                // centre and then fall back anyway. Go straight to the full range.
+                double tfLo = GfoldMinTf, tfHi = SearchTfMax;
+                bool bracketed = !_gfoldForceSearch
+                    && _gfoldPlan != null && _gfoldArrivalTime - now > GfoldMinTf;
+                if (bracketed)
+                {
+                    double expected = _gfoldArrivalTime - now;
+                    tfLo = Math.Max(expected * SearchBracketLo, GfoldMinTf);
+                    tfHi = Math.Min(expected * SearchBracketHi, SearchTfMax);
+                    bracketed = tfHi > tfLo;
+                }
+
+                GfoldPlanner.SearchResult best = bracketed
+                    ? GfoldPlanner.SearchMinFuel(
+                        p, _gfoldNodes, tfLo: tfLo, tfHi: tfHi,
+                        options: GfoldOptions.Descent with { SlewReg = _gfoldSlewReg })
+                    : null;
+
+                // A bracket can only lose solutions that lie outside it, so the full
+                // range is still tried before declaring the site unreachable. Costs
+                // the old price only when the cheap window genuinely found nothing —
+                // which is also exactly when the vehicle's situation has changed
+                // enough that the previous solution was a bad guess.
+                if (best == null)
+                    best = GfoldPlanner.SearchMinFuel(
+                        p, _gfoldNodes, tfLo: GfoldMinTf, tfHi: SearchTfMax,
+                        options: GfoldOptions.Descent with { SlewReg = _gfoldSlewReg });
+
                 if (best == null)
                 {
                     FailGfold($"G-FOLD unreachable: alt {_gfoldAltM:F0} m, {_gfoldSpeedMs:F0} m/s, " +
