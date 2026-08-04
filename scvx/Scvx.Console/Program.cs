@@ -15,6 +15,11 @@ const int NU = Dynamics6Dof.NU;
 const int RowLen = NX + NU + NX + NX * NX + NX * NU;
 
 bool verbose = args.Contains("--verbose");
+
+// --sub: validate the cone-problem assembly by solving the same SCvx subproblem
+// CVXPY solved in python_ref/sub_ref.py and diffing the optimal trajectory.
+if (args.Contains("--sub"))
+    return SubproblemCheck(verbose, args.Contains("--dump"));
 string csv = args.FirstOrDefault(a => !a.StartsWith("--"))
              ?? FindRef() ?? "dyn_ref.csv";
 
@@ -126,6 +131,124 @@ Console.WriteLine(failures == 0
 return failures == 0 ? 0 : 1;
 
 
+// Solve the reference SCvx subproblem with the C# cone assembly and compare the
+// optimum against CVXPY's. Agreement proves the hand-written canonicalisation:
+// the equality blocks, the cone layout, and the epigraph reformulation of the
+// three quadratic penalties.
+static int SubproblemCheck(bool verbose, bool dump)
+{
+    string path = FindFile("sub_ref.csv") ?? "sub_ref.csv";
+    if (!File.Exists(path))
+    {
+        Console.Error.WriteLine($"reference not found: {path}");
+        Console.Error.WriteLine("run:  python scvx/python_ref/sub_ref.py");
+        return 2;
+    }
+
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] Row(int i) => lines[i].Split(',')
+        .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+
+    double[] x0 = Row(0), xf = Row(1), xbar = Row(2), ubar = Row(3);
+    double[] meta = Row(4);
+    double[] xRef = Row(5), uRef = Row(6), tail = Row(7);
+    double sigBar = meta[0], tr = meta[1];
+    double sigRef = tail[0], objRef = tail[1];
+
+    int n = xbar.Length / NX;
+    var cfg = new Scvx6DofConfig { Nodes = n };
+    var dyn = new Dynamics6Dof.Params();
+
+    // Linearise about the reference trajectory, exactly as the SCvx loop would.
+    double[] A = new double[n * NX * NX];
+    double[] B = new double[n * NX * NU];
+    double[] f0 = new double[n * NX];
+    for (int k = 0; k < n; k++)
+        Dynamics6Dof.Jacobian(
+            xbar.AsSpan(k * NX, NX), ubar.AsSpan(k * NU, NU), dyn,
+            f0.AsSpan(k * NX, NX),
+            A.AsSpan(k * NX * NX, NX * NX),
+            B.AsSpan(k * NX * NU, NX * NU));
+
+    using var sub = new Scvx6DofSubproblem(cfg);
+    Console.WriteLine($"ECOS {EcosWorkspace.NativeVersion}   " +
+                      $"n={sub.VariableCount} eq={sub.EqualityCount} cone={sub.ConeRowCount}");
+
+    // Assemble first, audit, THEN solve. ECOS equilibrates the matrices in place
+    // at setup, so the audit has to happen while they still hold the problem as
+    // written. Feeding it a point the reference solver called optimal separates a
+    // formulation error from a conditioning one.
+    sub.Assemble(x0, xf, xbar, ubar, sigBar, tr, A, B, f0);
+    if (lines.Length > 8)
+    {
+        double[] wvRef = Row(8);
+        double[] packed = sub.PackPrimal(xRef, uRef, wvRef, sigRef);
+        var (eqRes, eqRow, coneVio, coneIdx) = sub.CheckPrimal(packed);
+        Console.WriteLine($"reference point audit: max |Ax-b| {eqRes:E2} (row {eqRow}), " +
+                          $"worst cone violation {coneVio:E2} (row {coneIdx})");
+        // c'x at the reference point vs the reference objective minus the constant
+        // term we drop (mInit/mInit = 1). Separates an objective-vector bug from a
+        // constraint bug: the audit above only proves feasibility.
+        double cx = sub.LinearObjective(packed);
+        Console.WriteLine($"  c'x at reference = {cx:E10}   expected {objRef - 1.0:E10}   " +
+                          $"rel {Math.Abs(cx - (objRef - 1.0)) / Math.Abs(objRef - 1.0):E2}");
+        if (eqRes > 1e-6 || coneVio > 1e-6)
+            Console.Write(sub.Diagnose(packed));
+    }
+
+    if (dump)
+    {
+        string dumpPath = Path.Combine(Path.GetDirectoryName(path)!, "cone_dump.txt");
+        sub.Dump(dumpPath);
+        Console.WriteLine($"dumped cone program -> {dumpPath}");
+    }
+
+    var t0 = System.Diagnostics.Stopwatch.StartNew();
+    EcosStatus st = sub.Run(verbose);
+    double firstSolveMs = t0.Elapsed.TotalMilliseconds;
+    Console.WriteLine($"first solve : {st}, {sub.Iterations} iters, {firstSolveMs:F1} ms (includes ECOS_setup)");
+
+    if (!st.IsUsable())
+    {
+        Console.Error.WriteLine($"solve failed: {st}");
+        return 1;
+    }
+
+    // Second solve on identical data: exercises the refill path and ECOS_updateData,
+    // and shows what a warm SCvx iteration actually costs once setup is paid.
+    var t1 = System.Diagnostics.Stopwatch.StartNew();
+    EcosStatus st2 = sub.Solve(x0, xf, xbar, ubar, sigBar, tr, A, B, f0, false);
+    double reMs = t1.Elapsed.TotalMilliseconds;
+    Console.WriteLine($"refill solve: {st2}, {sub.Iterations} iters, {reMs:F1} ms (pattern + factorisation reused)");
+
+    double[] xGot = sub.SolutionX, uGot = sub.SolutionU;
+    double objGot = sub.EvaluateObjective(x0[Dynamics6Dof.IM]);
+
+    double ex = MaxRelDiff(xGot, xRef, out int wx);
+    double eu = MaxRelDiff(uGot, uRef, out int wu);
+    double es = Math.Abs(sub.SolutionSigma - sigRef) / Math.Abs(sigRef);
+    double eo = Math.Abs(objGot - objRef) / Math.Abs(objRef);
+
+    Console.WriteLine();
+    Console.WriteLine($"vs CVXPY reference:");
+    Console.WriteLine($"  X       max rel diff {ex:E2}  (node {wx / NX}, comp {wx % NX})");
+    Console.WriteLine($"  U       max rel diff {eu:E2}  (node {wu / NU}, comp {wu % NU})");
+    Console.WriteLine($"  sigma   {sub.SolutionSigma:F6} vs {sigRef:F6}   rel {es:E2}");
+    Console.WriteLine($"  objective {objGot:E10} vs {objRef:E10}   rel {eo:E2}");
+
+    // Both sides solve the same convex program but with different interior-point
+    // codes (C# ECOS, reference Clarabel), so agreement is limited by solver
+    // tolerance rather than by arithmetic. 1e-6 is comfortably tighter than any
+    // formulation error would be and looser than the solvers disagree.
+    const double Tol = 1e-6;
+    bool ok = ex < Tol && eu < Tol && es < Tol && eo < Tol;
+    Console.WriteLine();
+    Console.WriteLine(ok
+        ? "PASS - cone assembly reproduces the reference subproblem"
+        : $"FAIL - exceeds {Tol:E0}");
+    return ok ? 0 : 1;
+}
+
 // df/dx by central differences. Step per variable is cbrt(eps) scaled by the
 // variable's own magnitude — central differences trade O(h^2) truncation against
 // O(eps/h) round-off, so cbrt(eps) is the optimum, giving ~eps^(2/3) accuracy.
@@ -174,12 +297,14 @@ static double MaxRelDiff(double[] got, double[] want, out int worstIdx)
 }
 
 // Walk up from the executable to find the repo's python_ref output.
-static string? FindRef()
+static string? FindRef() => FindFile("dyn_ref.csv");
+
+static string? FindFile(string name)
 {
     var dir = new DirectoryInfo(AppContext.BaseDirectory);
     while (dir != null)
     {
-        string candidate = Path.Combine(dir.FullName, "python_ref", "dyn_ref.csv");
+        string candidate = Path.Combine(dir.FullName, "python_ref", name);
         if (File.Exists(candidate)) return candidate;
         dir = dir.Parent;
     }

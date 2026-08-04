@@ -5,12 +5,19 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Scvx</RootNamespace>
-    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
   </PropertyGroup>
 
-  <!-- Deliberately references nothing: not KSA, not the game's assemblies.
-       The SCvx solve must be pure computation over plain data so it can run off
-       the main thread, and keeping the dependency out at project level makes a
-       violation a compile error rather than a review comment. -->
+  <ItemGroup>
+    <!-- The native solver travels with the managed library, same as Gfold.Core:
+         anything referencing Scvx.Core gets ecos.dll beside it, and the
+         DllImport resolver loads it from there. Shared with gfold rather than
+         vendored twice — it is the same binary. -->
+    <None Include="..\..\gfold\native\ecos.dll" Link="ecos.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Deliberately references no other project and no game assembly. The SCvx
+       solve must be pure computation over plain data so it can run off the main
+       thread, and keeping that out at project level makes a violation a compile
+       error rather than a review comment. -->
 
 </Project>
