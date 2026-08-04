@@ -3,6 +3,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
+using RenderCore;
 using RenderCore.Input;
 using System;
 using System.Collections;
@@ -121,9 +122,6 @@ namespace NovaTec.GravityTurnMod
             if (vehicle == null)
                 return;
 
-            //if (System.DateTime.Now.Ticks - tick < 50*10000 && tick != 0) return;
-            tick = System.DateTime.Now.Ticks;
-
             switch (Phase)
             {
                 case PhaseEnum.Landed:
@@ -149,10 +147,10 @@ namespace NovaTec.GravityTurnMod
                                         {
                                             ThrottleDown();
                                         }
-                                        //else if (vehicle.NavBallData.ThrustWeightRatio < this.DeltaVUsed / 600 + 1.65 && GetApoapsisTime() < TimeToApoapsisStart)
-                                        //{
-                                        //    ThrottleUp();
-                                        //}
+                                        else if (vehicle.NavBallData.ThrustWeightRatio < this.DeltaVUsed / 600 + 1.65 && GetApoapsisTime() < TimeToApoapsisStart)
+                                        {
+                                            ThrottleUp();
+                                        }
                                     }
             
             vehicle.UpdatePerFrameData();
@@ -185,12 +183,13 @@ namespace NovaTec.GravityTurnMod
             LastTransitionTime = Universe.GetElapsedSimTime();
 
             vehicle.SetStabilization(true);
+
             // create custom target for pitch
-/*            double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * InitialPitch, Math.PI / 2*0);
-            vehicle.FlightComputer.CustomAttitudeTarget = target;
-            vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
-            vehicle.FlightComputer.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
-*/
+            /*            double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * InitialPitch, Math.PI / 2*0);
+                        vehicle.FlightComputer.CustomAttitudeTarget = target;
+                        vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
+                        vehicle.FlightComputer.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
+            */
             double3 target = new double3(Math.PI / 2 * 0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * InitialPitch, Math.PI / 2 * 0);
             FlightControlOverride.Active = true;
             FlightControlOverride.BurnMode = FlightComputerBurnMode.Manual;
@@ -252,6 +251,9 @@ namespace NovaTec.GravityTurnMod
                 return;
             }
 
+            //if (System.DateTime.Now.Ticks - tick < 200*10000 && tick != 0 && GetApoapsisAltitude() < GetAtmosphereHeight()) return;
+            //tick = System.DateTime.Now.Ticks;
+
             // roll is at nearly 0?
             if (Math.Abs(GetRoll()) < 6 && vehicle.FlightComputer.ActiveControlSystem.X == AttitudeControlSystem.Rcs)
                 PatchRcsPriority.PriorityControlSystem = AttitudeControlSystem.Tvc;
@@ -263,7 +265,7 @@ namespace NovaTec.GravityTurnMod
             double diff = GetApoapsisTime() - lastTimeToApoapsis;
 
             // now check time to apoapsis
-            if (GetApoapsisTime() > TimeToApoapsisTarget && vehicle.GetManualThrottle() > 0.4 && dt > 5)
+            if (GetApoapsisTime() > TimeToApoapsisTarget && vehicle.GetManualThrottle() > 0.2 && dt > 5)
             {
                 didReachTargetApoapsis = true;
                 ThrottleDown();
@@ -275,7 +277,8 @@ namespace NovaTec.GravityTurnMod
             if (GetApoapsisTime() < TimeToApoapsisTarget)
                 ThrottleUp();
 
-            // after 1st stage sequency do pitch up or down. If that is not enough, it's an indicator of wrong startup values.
+
+            // after 1st stage sequence do pitch up or down. If that is not enough, it's an indicator of wrong startup values.
             // In general the need to pitch up is a sign of a weak 2nd stage.
             if (vehicle.Parts.SequenceList.ActiveSequence > 2 && didReachTargetApoapsis)
             {
@@ -321,10 +324,10 @@ namespace NovaTec.GravityTurnMod
 
                     //double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 20, 0);
                     double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
-                    vehicle.FlightComputer.CustomAttitudeTarget = target;
-                    if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
+                    FlightControlOverride.CustomAttitudeTarget = target;
+                    if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
                     {
-                        vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
+                        FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
                         RunWorker();
                     }
                     PitchesUp = true;
@@ -344,11 +347,10 @@ namespace NovaTec.GravityTurnMod
 
                     //double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 20, 0);
                     double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
-                    vehicle.FlightComputer.CustomAttitudeTarget = target;
-                    if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
+                    FlightControlOverride.CustomAttitudeTarget = target;
+                    if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
                     {
-                        vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
-                        RunWorker();
+                        FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
                     }
                     PitchesUp = true;
                 }
@@ -356,10 +358,9 @@ namespace NovaTec.GravityTurnMod
                 {
                     iniPitch = 0;
                     fwdPitch = 0;
-                    if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Forward)
+                    if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Forward)
                     {
-                        vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Forward);
-                        RunWorker();
+                        FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Forward;
                     }
 
                     PitchesUp = false;
@@ -377,6 +378,12 @@ namespace NovaTec.GravityTurnMod
             if (GetApoapsisAltitude() > GetAtmosphereHeight() && UseWarp)
             {
                 Universe.SetSimulationSpeed(10.0);
+                ThrottleOverride.Throttle = 0.1f;
+            }
+
+            if (GetApoapsisAltitude()/1000 > TargetAltitude*0.9)
+            {
+                ThrottleOverride.Throttle = 0.1f;
             }
 
             lastTimeToApoapsis = GetApoapsisTime();
@@ -454,39 +461,49 @@ namespace NovaTec.GravityTurnMod
         {
             Console.WriteLine("PHASE: Circularize");
             Phase = PhaseEnum.Circularize;
-            ThrottleOverride.Active = false;
-            FlightControlOverride.Active = false;
             ControlledVehicle?.FlightComputer.BurnMode = FlightComputerBurnMode.Auto;
 
             double currentAp = vehicle.Apoapsis;
             double currentPe = vehicle.Periapsis;
             double targetR = currentAp;
 
-
-
             FlightComputer fc = vehicle.FlightComputer;
 
             ThrottleOverride.Active = true;
-            SetEngineThrottle(1.0);
+            SetEngineThrottle(0.1);
             PatchRcsPriority.PriorityControlSystem = AttitudeControlSystem.Rcs;
             FlightControlOverride.Active = true;
             FlightControlOverride.BurnMode = FlightComputerBurnMode.Auto;
             FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Prograde;
             FlightControlOverride.AttitudeFrame = VehicleReferenceFrame.EclBody;
+            RunWorker();
 
             // create burn to circularize
             double3 dV = OrbitalTransfers.DvCciToCircularize(vehicle.Orbit, vehicle.NextApoapsisTime);
+            double ignitionOffset = 0;
+            // if we need to stage, then we have to adapt the burn time and ignition time
+            if (vehicle.Parts.PerformanceSequences.FindActiveSequenceDeltaV() < dV.Length())
+            {
+                Console.WriteLine("need to stage => make burn 30 seconds earlier");
+                ignitionOffset = 30;
+            }
 
             Console.WriteLine("Circularization dV X:" + dV.X + ", Y: " + dV.Y + ", Z: " + dV.Z + ", r2: " + dV.Length());
             OrbitPointCce point = new OrbitPointCce(vehicle.Orbit.GetApoapsisPositionOrb(), vehicle.TimeSincePeriapsis, vehicle.NextApoapsisTime - Universe.GetElapsedSimTime(), TrueAnomaly.NaN);
             PatchedConic patch = new PatchedConic(vehicle.NextApoapsisTime, vehicle.NextApoapsisTime, PatchTransition.Burn, PatchTransition.Burn, vehicle.Orbit, KeyHash.Make(new ReadOnlySpan<char>("Circularize".ToArray())));
             Burn burn = Burn.Create(point,
-                vehicle.NextApoapsisTime.Seconds(),
+                vehicle.NextApoapsisTime.Seconds()-ignitionOffset,
                 new double3(dV.Length()*1.0, 0, 0),
                 patch,
                 vehicle);
 
             fc.AddBurn(burn);
+            Console.WriteLine("  Duration: {0} of {1}", fc.Burn?.BurnDuration, fc.BurnPlan.BurnCount);
+            if (fc.Burn?.BurnDuration < 2)
+            {
+                Console.WriteLine("  short burn, replace with low thrust burn");
+                fc.RemoveBurn(burn);
+            }
 
             if (UseWarp)
             {
@@ -504,7 +521,7 @@ namespace NovaTec.GravityTurnMod
             FlightComputer fc = vehicle.FlightComputer;
             if (UseWarp)
             {
-/*                if ((Universe.GetElapsedSimTime() - fc.Burn.IgnitionTime).Seconds() >= 3 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() < 1.1)
+                if ((Universe.GetElapsedSimTime() - fc.Burn.IgnitionTime).Seconds() >= 3 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() < 1.1)
                 {
                     if (fc.Burn.BurnDuration > 10)
                         Universe.SetSimulationSpeed(2.0, false);
@@ -515,46 +532,46 @@ namespace NovaTec.GravityTurnMod
                 {
                     Universe.SetSimulationSpeed(1.0, false);
                 }
-*/
             }
+
             // Burn is about to start, so stop auto warp and set speed to 1x
-            if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 10 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 1))
+            if (ThrottleOverride.Active && (fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 5 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 1))
             {
                 ThrottleOverride.Active = false;
                 FlightControlOverride.Active = false;
 
                 Console.WriteLine("Burn close to ignition");
-                Console.WriteLine("  Burns: {0}", fc.BurnPlan.BurnCount);
-                Console.WriteLine("  Duration: {0}", fc.Burn.BurnDuration);
+                Console.WriteLine("   Burn Duration: {0} engine: {1}", fc.Burn.BurnDuration, vehicle.ComputeActiveThrust(0));
                 Universe.SetSimulationSpeed(1.0, false);
                 Universe.AutoWarpStop(true);
             }
             // burn completed?
-            else if (fc.Burn == null || fc.Burn.BurnDuration < 0.1f)
+            else if (fc.Burn == null || fc.Burn.BurnDuration <= 0.01f )
             {
-                Console.WriteLine("Burn complete? Burns: {0}", fc.BurnPlan.BurnCount);
+                Console.WriteLine("\nBurn complete? Burns: {0}", fc.BurnPlan.BurnCount);
                 Console.WriteLine("  Duration: {0}", fc.Burn.BurnDuration);
                 if (fc.BurnPlan.BurnCount > 0)
                 {
                     fc.RemoveBurnAt(fc.BurnPlan.BurnCount-1);
-                    Console.WriteLine("Burn complete, deleting burn");
+                    Console.WriteLine("Burn complete, deleting burn [{0}]", fc.BurnPlan.BurnCount-1);
                 }
                 FlightControlOverride.Active = true;
                 FlightControlOverride.BurnMode = FlightComputerBurnMode.Manual;
                 FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Prograde;
                 FlightControlOverride.AttitudeFrame = VehicleReferenceFrame.EclBody;
                 FlightControlOverride.AttitudeMode = FlightComputerAttitudeMode.Auto;
+                RunWorker();
+                FlightControlOverride.Active = true;
 
                 Phase = PhaseEnum.Idle;
             }
             else if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 0)
             {
-                Console.WriteLine("Burns: {0}", fc.BurnPlan.BurnCount);
-                Console.WriteLine("   Burn Duration: {0}", fc.Burn.BurnDuration);
+                Console.Write("   Burn Duration left: {0} engine: {1}  \r", fc.Burn.BurnDuration, vehicle.IsAnyEngineActive());
                 // needs staging?
                 if (vehicle.Parts.SequenceList.ActiveSequence > 0 && !GetSequenceHasFuel() && AutoStage)
                 {
-                    Console.WriteLine("Burn complete, stage!");
+                    Console.WriteLine("\nNo fuel, stage!");
                     StartPhaseStage(vehicle);
                 }
             }
@@ -864,6 +881,21 @@ namespace NovaTec.GravityTurnMod
             return res;
         }
 
+        public PositionVertex? GetCurrentPosition()
+        {
+            Vehicle vehicle = ControlledVehicle;
+            if (vehicle == null) return null;
+            if (!(vehicle.Orbit.Parent is Celestial celestial))
+            {
+                return null;
+            }
+            double3 position = vehicle.Orbit.StateVectors.PositionCci;
+            double3 velocity = vehicle.Orbit.StateVectors.VelocityCci;
+            double3 surfaceVector = GetSurfaceVector();
+            double3 orbitVector = GetOrbitVector();
+            return null;
+        }
+        
 
     }
 

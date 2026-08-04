@@ -272,7 +272,7 @@ namespace NovaTec.GravityTurnMod
 
                 ImGui.Text("Pitching up:          " + Controller.PitchesUp + ", " + Program.AttitudePitch.Current);
                 //ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
-                //ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);
+                //ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);vehicle.Orbit.StateVectors.PositionCci
 
 
             }
