@@ -29,6 +29,11 @@
          folder by the CopyToMods target below. -->
     <ProjectReference Include="..\gfold\Gfold.Core\Gfold.Core.csproj" />
     <None Include="..\gfold\native\ecos.dll" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- 6-DOF successive-convexification guidance. Like Gfold.Core it references
+         no game assembly, so the solve stays pure computation that can run off
+         the main thread. Currently dynamics + AD only; nothing calls it yet. -->
+    <ProjectReference Include="..\scvx\Scvx.Core\Scvx.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -68,6 +73,7 @@
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ModDir)" />
   </Target>
 
@@ -84,6 +90,7 @@
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="..\LICENSE" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="CHANGELOG.md" DestinationFolder="$(ReleaseDir)" />
