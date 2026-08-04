@@ -75,6 +75,9 @@
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ModDir)" />
+    <!-- Scvx.Core P/Invokes BOTH natives; shipping it without scs.dll would fail
+         at the first SCS call with a DllNotFoundException, not at load. -->
+    <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ModDir)" />
   </Target>
 
   <!-- Release builds also produce a distributable zip: a top-level PoweredGuidance\ folder the
@@ -92,6 +95,7 @@
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="..\LICENSE" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="CHANGELOG.md" DestinationFolder="$(ReleaseDir)" />
     <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />

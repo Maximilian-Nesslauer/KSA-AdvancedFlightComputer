@@ -18,13 +18,30 @@ CoverageReport/
 # Local Claude / agent settings (never publish)
 .claude/
 
-# Native build output (rebuilt by gfold/build-ecos.ps1 from gfold/ecos/)
+# Native build output — the .dll/.lib/.pdb are rebuilt from the vendored C
+# sources, which ARE committed. (scs.pdb alone is 1.4 MB.)
+#   gfold/native/ <- gfold/build-ecos.ps1 from gfold/ecos/
+#   scvx/native/  <- scvx/build-scs.ps1  from scvx/scs/
 gfold/native/
+scvx/native/
 
 # Generated solver output
 gfold_*.csv
 gfold/gfold_*.csv
 gfold/python_ref/*.csv
+
+# SCvx debug dumps: whole cone programs written out to be re-solved in Python
+# (see scvx/python_ref/cone_check.py). Hundreds of KB, regenerated on demand by
+# `Scvx.Console --sub --dump` and `python canon_dump.py`.
+scvx/python_ref/cone_dump.txt
+scvx/python_ref/canon_dump.txt
+
+# NOT ignored, deliberately, unlike gfold/python_ref/*.csv above:
+# scvx/python_ref/dyn_ref.csv and sub_ref.csv are small (18/24 KB) validation
+# FIXTURES, not outputs — they are the JAX/CVXPY oracles the C# checks diff
+# against. Committing them means `Scvx.Console --verbose` and `--sub-scs` run
+# standalone; regenerating them needs JAX + cvxpy, which is a heavy dependency
+# to force on anyone who just wants to run the tests.
 
 # Python virtualenv / cache (gfold/python_ref)
 gfold/python_ref/.venv/

@@ -20,6 +20,17 @@ bool verbose = args.Contains("--verbose");
 // CVXPY solved in python_ref/sub_ref.py and diffing the optimal trajectory.
 if (args.Contains("--sub"))
     return SubproblemCheck(verbose, args.Contains("--dump"));
+
+// --sub-scs: same validation, but through the SCS native-P formulation instead
+// of the ECOS epigraph one.
+if (args.Contains("--sub-scs"))
+    return SubproblemCheckScs(verbose);
+
+if (args.Contains("--scs-layout"))
+{
+    Console.WriteLine(ScsWorkspace.DumpNativeStructLayouts());
+    return 0;
+}
 string csv = args.FirstOrDefault(a => !a.StartsWith("--"))
              ?? FindRef() ?? "dyn_ref.csv";
 
@@ -245,6 +256,134 @@ static int SubproblemCheck(bool verbose, bool dump)
     Console.WriteLine();
     Console.WriteLine(ok
         ? "PASS - cone assembly reproduces the reference subproblem"
+        : $"FAIL - exceeds {Tol:E0}");
+    return ok ? 0 : 1;
+}
+
+// Same validation as SubproblemCheck, against the SCS native-P formulation:
+// reference-point feasibility + objective audit, then an actual solve, then
+// compare X/U/sigma/objective to the CVXPY reference. Also exercises the
+// warm-start path (second solve with warmStart=true) since that's the entire
+// reason to prefer SCS here.
+static int SubproblemCheckScs(bool verbose)
+{
+    string path = FindFile("sub_ref.csv") ?? "sub_ref.csv";
+    if (!File.Exists(path))
+    {
+        Console.Error.WriteLine($"reference not found: {path}");
+        Console.Error.WriteLine("run:  python scvx/python_ref/sub_ref.py");
+        return 2;
+    }
+
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] Row(int i) => lines[i].Split(',')
+        .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+
+    double[] x0 = Row(0), xf = Row(1), xbar = Row(2), ubar = Row(3);
+    double[] meta = Row(4);
+    double[] xRef = Row(5), uRef = Row(6), tail = Row(7);
+    double sigBar = meta[0], tr = meta[1];
+    double sigRef = tail[0], objRef = tail[1];
+
+    int n = xbar.Length / NX;
+    var cfg = new Scvx6DofConfig { Nodes = n };
+    var dyn = new Dynamics6Dof.Params();
+
+    double[] A = new double[n * NX * NX];
+    double[] B = new double[n * NX * NU];
+    double[] f0 = new double[n * NX];
+    for (int k = 0; k < n; k++)
+        Dynamics6Dof.Jacobian(
+            xbar.AsSpan(k * NX, NX), ubar.AsSpan(k * NU, NU), dyn,
+            f0.AsSpan(k * NX, NX),
+            A.AsSpan(k * NX * NX, NX * NX),
+            B.AsSpan(k * NX * NU, NX * NU));
+
+    var sub = new Scvx6DofSubproblemScs(cfg);
+    Console.WriteLine($"SCS {ScsWorkspace.NativeVersion}   " +
+                      $"n={sub.VariableCount} eq={sub.EqualityCount} rows={sub.RowCount}   " +
+                      $"(ECOS port was n=950 rows=1972 — {950 - sub.VariableCount} fewer vars, " +
+                      $"{1972 - sub.RowCount} fewer rows, from dropping the epigraphs)");
+
+    sub.Assemble(x0, xf, xbar, ubar, sigBar, tr, A, B, f0);
+    if (lines.Length > 8)
+    {
+        double[] wvRef = Row(8);
+        double[] packed = sub.PackPrimal(xRef, uRef, wvRef, sigRef);
+        var (eqRes, eqRow, coneVio, coneIdx) = sub.CheckPrimal(packed);
+        double obj = sub.Objective(packed);
+        Console.WriteLine($"reference point audit: max |Az-b| {eqRes:E2} (row {eqRow}), " +
+                          $"worst cone violation {coneVio:E2} (row {coneIdx})");
+        Console.WriteLine($"  objective at reference = {obj:E10}   expected {objRef - 1.0:E10}   " +
+                          $"rel {Math.Abs(obj - (objRef - 1.0)) / Math.Abs(objRef - 1.0):E2}");
+    }
+
+    Console.WriteLine(sub.DiagnoseScsValidation());
+
+    var t0 = System.Diagnostics.Stopwatch.StartNew();
+    ScsStatus st = sub.Run(warmStart: false, verbose, maxIterations: 100_000, epsAbs: 1e-7, epsRel: 1e-7);
+    double firstMs = t0.Elapsed.TotalMilliseconds;
+    Console.WriteLine($"first solve : {st} \"{sub.StatusText}\", {sub.Iterations} iters, {firstMs:F1} ms");
+
+    if (!st.IsUsable())
+    {
+        Console.Error.WriteLine($"solve failed: {st}");
+        return 1;
+    }
+
+    // Re-assemble with IDENTICAL data (a no-op iteration) and solve warm-started,
+    // to show the warm-start path runs and to see its iteration count against
+    // the cold solve above — on identical data this should converge in very few
+    // iterations if warm starting is doing anything.
+    t0 = System.Diagnostics.Stopwatch.StartNew();
+    sub.Assemble(x0, xf, xbar, ubar, sigBar, tr, A, B, f0);
+    ScsStatus st2 = sub.Run(warmStart: true, false, maxIterations: 100_000, epsAbs: 1e-7, epsRel: 1e-7);
+    double warmMs = t0.Elapsed.TotalMilliseconds;
+    Console.WriteLine($"warm solve  : {st2} \"{sub.StatusText}\", {sub.Iterations} iters, {warmMs:F1} ms " +
+                      "(re-init is unavoidable, so timing reflects the ADMM iteration count, not a skipped setup)");
+
+    double[] xGot = sub.SolutionX, uGot = sub.SolutionU;
+    double objGot = sub.PrimalObjective;   // SCS's own reported (1/2)x'Px+c'x, already unscaled to our units? see note below
+
+    double ex = MaxRelDiff(xGot, xRef, out int wx);
+    double eu = MaxRelDiff(uGot, uRef, out int wu);
+    double es = Math.Abs(sub.SolutionSigma - sigRef) / Math.Abs(sigRef);
+
+    Console.WriteLine();
+    Console.WriteLine("vs CVXPY reference:");
+    Console.WriteLine($"  X       max rel diff {ex:E2}  (node {wx / NX}, comp {wx % NX})");
+    Console.WriteLine($"  U       max rel diff {eu:E2}  (node {wu / NU}, comp {wu % NU})");
+    Console.WriteLine($"  sigma   {sub.SolutionSigma:F6} vs {sigRef:F6}   rel {es:E2}");
+    Console.WriteLine($"  SCS-reported objective (scaled coords): {objGot:E6}");
+
+    // Recompute the objective from the unscaled solution the same way the audit
+    // did, which is the honest apples-to-apples number against objRef.
+    double[] solZ = sub.PackPrimal(xGot, uGot, sub.SolutionWv, sub.SolutionSigma);
+    double objRecomputed = sub.Objective(solZ);
+    double eo = Math.Abs(objRecomputed - (objRef - 1.0)) / Math.Abs(objRef - 1.0);
+    Console.WriteLine($"  objective (recomputed) {objRecomputed:E10} vs {objRef - 1.0:E10}   rel {eo:E2}");
+
+    // Tolerance is set by the WEAKEST of the four comparisons, which is the
+    // per-component control diff (~1.5e-3); everything else lands far tighter
+    // (X 6e-6, sigma 3e-7, objective 1.2e-5).
+    //
+    // That spread is the point: the OBJECTIVE agrees to 1.2e-5 while an
+    // individual control component differs by 1.5e-3. Matching objective with
+    // differing components is the signature of a near-degenerate optimum — at
+    // SCvx iteration 0 the trust region is active on almost every variable
+    // (visible as dozens of trust rows at ~0 slack in the audit above), so the
+    // argmin is close to non-unique and two correct solvers can legitimately
+    // land on different points of the same optimal face.
+    //
+    // So this is deliberately NOT justified by "solvers disagree by about this
+    // much" — the Clarabel-vs-SCS gap measured in session 2 was an OBJECTIVE
+    // gap (~1e-5), which is a different quantity and would be the wrong thing
+    // to compare a component tolerance against.
+    const double Tol = 1e-2;
+    bool ok = ex < Tol && eu < Tol && es < Tol && eo < Tol;
+    Console.WriteLine();
+    Console.WriteLine(ok
+        ? "PASS - SCS native-P formulation reproduces the reference subproblem"
         : $"FAIL - exceeds {Tol:E0}");
     return ok ? 0 : 1;
 }

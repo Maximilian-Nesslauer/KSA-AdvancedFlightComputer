@@ -1,0 +1,28 @@
+---
+name: GPU
+on:
+  - push
+  - pull_request
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: Jimver/cuda-toolkit@v0.2.30
+        id: cuda-toolkit
+        with:
+          method: network
+          non-cuda-sub-packages: '["libcublas", "libcusparse", "libcudart"]'
+      - run: sudo apt-get install libopenblas-dev liblapack-dev
+      - run: make gpu
+      - run: make test_gpu
+      # - run: out/run_tests_gpu_indirect    # gpus not available yet
+      - name: Install cudss
+        run: sudo apt-get -y install cudss
+      - name: Make cudss target
+        run: |
+          export CUDSS_PATH=/usr/lib/cudss
+          export CUCC=${CUDA_PATH}/bin/nvcc
+          ${CUCC} --version
+          make cudss
+      # - run: out/run_tests_cudss           # gpus not available yet
