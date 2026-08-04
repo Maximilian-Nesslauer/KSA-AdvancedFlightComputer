@@ -22,16 +22,26 @@ namespace Scvx;
 public sealed class ScsWorkspace
 {
     /// <summary>
-    /// Iteration budget and tolerance that this problem actually needs.
+    /// Iteration budget and tolerance for OFFLINE / validation solves.
     ///
     /// These are NOT SCS's own defaults (100k / 1e-4) and emphatically not
-    /// interior-point-style defaults. Measured on the reference subproblem:
-    /// 5000 iters at 1e-6 returned "solved (inaccurate — reached max_iters)"
-    /// with the objective ~5% out; 1e-7 with a large budget converges properly
-    /// in ~5400 iterations cold, ~750 warm. ADMM needs iteration headroom the
-    /// way an IPM never does, so a low cap silently degrades the answer rather
-    /// than failing loudly — which is exactly the trap these constants exist to
-    /// keep the SCvx loop out of.
+    /// interior-point-style defaults. ADMM needs iteration headroom the way an
+    /// IPM never does, so a low cap silently degrades the answer rather than
+    /// failing loudly — which is what the large budget exists to prevent.
+    ///
+    /// The TOLERANCE, however, is deliberately conservative and should NOT be
+    /// used for flight. Measured across the whole SCvx loop at N=30, eps
+    /// 1e-5 / 1e-6 / 1e-7 all converge in 17 iterations to the SAME answer to
+    /// five significant figures (merit 9.7619e-2, defect 9.5e-6, peak tilt
+    /// 6.1 deg, burn 24.2 s) — but cost 1.7 s / 3.1 s / 5.5 s respectively, and
+    /// in receding horizon 33 ms / 334 ms / 1266 ms per cycle. ADMM's tail is
+    /// almost the entire bill and it buys nothing here. Set
+    /// <c>Scvx6DofSolver.SubproblemEps</c> to 1e-5 for real-time use.
+    ///
+    /// Caveat that motivated the conservative default: an under-solved
+    /// subproblem is dangerous in a DIFFERENT way (see
+    /// <see cref="HitIterationLimit"/>) — the guard there, not a tight
+    /// tolerance, is what actually keeps the loop honest.
     /// </summary>
     public const int DefaultMaxIterations = 100_000;
     public const double DefaultEps = 1e-7;
@@ -45,10 +55,32 @@ public sealed class ScsWorkspace
     public int Iterations { get; private set; }
     public string StatusText { get; private set; } = "";
 
+    /// <summary>
+    /// True if the solve stopped because it ran out of iterations rather than
+    /// because it converged.
+    ///
+    /// SCS reports this as SolvedInaccurate ("solved (inaccurate - reached
+    /// max_iters)"), which <see cref="ScsStatusEx.IsUsable"/> counts as usable —
+    /// and for a one-off solve it broadly is. It is NOT usable as an SCvx step:
+    /// a truncated ADMM iterate can violate the trust region by orders of
+    /// magnitude while still being returned, and feeding that to the ratio test
+    /// produces a wildly wrong rho and an accepted garbage step.
+    /// </summary>
+    public bool HitIterationLimit { get; private set; }
+
     public static string NativeVersion => ScsNative.Version();
 
     /// <summary>Debug aid: .NET's actual computed struct layout for the P/Invoke types.</summary>
     public static string DumpNativeStructLayouts() => ScsNative.DumpLayouts();
+
+    /// <summary>
+    /// True once a usable solution has been stored and not since discarded.
+    /// The SCvx loop must key its warm start off THIS, not off its own iteration
+    /// counter: a receding-horizon Reseed resets that counter while the solver
+    /// iterate is still perfectly good, so counting iterations threw the warm
+    /// start away on exactly the cycles that needed it.
+    /// </summary>
+    public bool HasWarmStart => _prevX != null;
 
     /// <summary>Discard the carried solution, e.g. after a large jump the previous iterate can't help with.</summary>
     public void ResetWarmStart()
@@ -155,6 +187,7 @@ public sealed class ScsWorkspace
                 X = xBuf; Y = yBuf; S = sBuf;
                 PrimalObjective = info.Pobj;
                 Iterations = info.Iter;
+                HitIterationLimit = info.Iter >= maxIterations;
                 StatusText = System.Text.Encoding.ASCII.GetString(info.Status)
                     .TrimEnd('\0');
 

@@ -54,6 +54,8 @@ public sealed class Scvx6DofSubproblemScs
     public int Iterations => _ws.Iterations;
     public double PrimalObjective => _ws.PrimalObjective;
     public string StatusText => _ws.StatusText;
+    public bool HitIterationLimit => _ws.HitIterationLimit;
+    public bool HasWarmStart => _ws.HasWarmStart;
 
     public int IX(int node, int i) => _oX + node * NX + i;
     public int IU(int node, int j) => _oU + node * NU + j;
@@ -165,9 +167,32 @@ public sealed class Scvx6DofSubproblemScs
             off += d;
         }
 
+        // Bound the row norms before inverting, exactly as SCS's own Ruiz
+        // equilibration does (apply_limit in scs_matrix.c, "need to bound to 1
+        // for rows of all zeros, otherwise blows up").
+        //
+        // This is not defensive padding — it is load-bearing here. The TILT row
+        // linearises R22 >= cos(tilt_max) about the reference quaternion, giving
+        // gradient (-4*qx, -4*qy), which is EXACTLY ZERO for a perfectly vertical
+        // booster and tiny for a nearly-vertical one — which is the whole flight.
+        // Its constant term stays O(0.13). Dividing that row by a ~1e-3 norm
+        // amplifies the right-hand side by a thousand and wrecks the conditioning
+        // of an otherwise well-scaled problem. Unbounded, this made every SCvx
+        // iteration past the first fail to converge in 100k ADMM iterations, at
+        // any trust-region size — and shrinking the trust region did not help,
+        // which is what gave it away: a genuinely too-large step would have got
+        // easier as the region shrank.
+        // Only the LOWER bound is applied. SCS pairs it with an upper clamp of
+        // 1e4, but that is inside its own Ruiz iteration on already-scaled data;
+        // imposing it on raw rows here is actively harmful — the mass trust-region
+        // rows legitimately have norm ~2.5e5 (Xscale for mass), and clamping
+        // leaves them 25x unnormalised, which broke the FIRST iteration that had
+        // previously converged. Large rows are exactly the ones equilibration
+        // exists to fix; only vanishing ones need protecting from inversion.
+        const double MinRowNorm = 1e-4;
         var inv = new double[_nCone];
         for (int i = 0; i < _nCone; i++)
-            inv[i] = rowMax[i] > 0 ? 1.0 / rowMax[i] : 1.0;
+            inv[i] = rowMax[i] < MinRowNorm ? 1.0 : 1.0 / rowMax[i];
 
         for (int col = 0; col < _A.Cols; col++)
             for (int k = jc[col]; k < jc[col + 1]; k++)
