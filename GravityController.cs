@@ -26,11 +26,11 @@ namespace NovaTec.GravityTurnMod
         */
         /* works for RSS size*/
         public double InitialPitch { get; set; } = 10;
-        public double InitialSpeed { get; set; } = 100;
+        public double InitialSpeed { get; set; } = 80;
         public int TimeToApoapsisStart { get; set; } = 65;
         public int TimeToApoapsisEnd { get; set; } = 65;
         public int TimeToApoapsisTarget { get; set; } = 70;
-        public double TargetAltitude { get; set; } = 250;
+        public double TargetAltitude { get; set; } = 280;
         public double MinThrottle{ get; set; } = 0.2;
 
         /* works for 1/4th size
@@ -240,7 +240,7 @@ namespace NovaTec.GravityTurnMod
         double fwdPitch = 0;
         double iniPitch = 0;
 
-        bool didReachTargetApoapsis = false;
+        bool didReachTargetApoapsisTime = false;
 
         private void RunPhaseHold(Vehicle vehicle)
         {
@@ -266,7 +266,7 @@ namespace NovaTec.GravityTurnMod
             // now check time to apoapsis
             if (GetApoapsisTime() > TimeToApoapsisTarget && vehicle.GetManualThrottle() > MinThrottle && dt > 5)
             {
-                didReachTargetApoapsis = true;
+                didReachTargetApoapsisTime = true;
                 ThrottleDown();
             }
 
@@ -279,7 +279,7 @@ namespace NovaTec.GravityTurnMod
 
             // after 1st stage sequence do pitch up or down. If that is not enough, it's an indicator of wrong startup values.
             // In general the need to pitch up is a sign of a weak 2nd stage.
-            if (vehicle.Parts.SequenceList.ActiveSequence > 2 && didReachTargetApoapsis)
+            if (vehicle.Parts.SequenceList.ActiveSequence > 2 && didReachTargetApoapsisTime)
             {
 /*                if (GetApoapsisTime() < TimeToApoapsisTarget - 1 && GetApoapsisTime() > TimeToApoapsisStart-2 && diff < 0)
                 {
@@ -366,40 +366,51 @@ namespace NovaTec.GravityTurnMod
                 }
             }
 
-            // transition to coast if AP target altitude is reached.
-            if (GetApoapsisAltitude()/1000 > TargetAltitude)
+            // reduce throttle if AP is close to target altitude - better to use rcs only, but not for now...
+            if (GetApoapsisAltitude() / 1000 > TargetAltitude * 0.90 && didReachTargetApoapsisTime)
             {
-                ShutdownEngines();
-                StartPhaseCoast(vehicle);
-            }
-            // reduce throttle if AP is close to target altitude 
-            if (GetApoapsisAltitude() / 1000 > TargetAltitude * 0.95 && !didReachTargetApoapsis)
-            {
-                ThrottleOverride.Throttle = 0.3f;
+                ThrottleOverride.Throttle = 0.05f;
             }
 
             double phaseDuration = Universe.GetElapsedSeconds() - LastTransitionTime;
 
-            // slow warp if deltaV is low or just after staging
-            if (UseWarp && (vehicle.NavBallData.DeltaV < 150 || (phaseDuration < 2 && GetCurrentSequence().Number > 1)))
+            // slow warp if deltaV is low 
+            if (UseWarp && vehicle.NavBallData.DeltaV < 450)
             {
-                Console.WriteLine("Slowdown warp");
-                Universe.SetSimulationSpeed(1.0, false);
+                if (Universe.SimulationSpeed > 9)
+                    Console.WriteLine("Slowdown warp before staging");
+                var warp = Math.Clamp(vehicle.NavBallData.DeltaV / 50.0, 1.0, 9.0);
+                //Console.WriteLine("Slowdown warp {0}, {1}, {2}", warp, vehicle.NavBallData.DeltaV, vehicle.NavBallData.DeltaV / 400.0);
+                Universe.SetSimulationSpeed(warp, false);
+            }
+            // slow warp just after staging
+            else if (UseWarp && (phaseDuration <= 9 && GetCurrentSequence().Number > 1))
+            {
+                if (Universe.SimulationSpeed > 9)
+                    Console.WriteLine("Rampup warp after staging");
+                Universe.SetSimulationSpeed(Math.Clamp(phaseDuration, 1.0, 9.0), false);
             }
             // reduce throttle if AP is close to target altitude and set sim speed to 1
-            else if (UseWarp && GetApoapsisAltitude() / 1000 > TargetAltitude * 0.95 && !didReachTargetApoapsis)
+            else if (UseWarp && GetApoapsisAltitude() / 1000 > TargetAltitude * 0.90 && didReachTargetApoapsisTime)
             {
-                Universe.SetSimulationSpeed(1.0, false);
+                if (Universe.SimulationSpeed > 9)
+                    Console.WriteLine("Slowdown warp, AP close to target");
+                double warp = (1.0 - (GetApoapsisAltitude() / 1000 / TargetAltitude)) * 90.0;
+                Console.WriteLine("  {0}", warp);
+                Universe.SetSimulationSpeed(Math.Clamp(warp, 1.0, 10.0), false);
             }
-            else if (UseWarp && phaseDuration <= 5 && GetCurrentSequence().Number > 1)
-            {
-                Universe.SetSimulationSpeed(phaseDuration, false);
-            }
-            // increase sim speed if AP is above atmosphere
-            else if (UseWarp && GetApoapsisAltitude() > GetAtmosphereHeight() * 0.20 && Universe.SimulationSpeed < 10)
+            // increase sim speed if AP is above lower atmosphere
+            else if (UseWarp && didReachTargetApoapsisTime && Universe.SimulationSpeed < 10)
             {
                 Console.WriteLine("Speedup to warp 10");
                 Universe.SetSimulationSpeed(10.0, false);
+            }
+
+            // transition to coast if AP target altitude is reached.
+            if (GetApoapsisAltitude() / 1000 > TargetAltitude)
+            {
+                ShutdownEngines();
+                StartPhaseCoast(vehicle);
             }
 
             lastTimeToApoapsis = GetApoapsisTime();
@@ -441,8 +452,8 @@ namespace NovaTec.GravityTurnMod
         private void StartPhaseCoast(Vehicle vehicle)
         {
             Console.WriteLine("PHASE: Coast");
-            if (UseWarp)
-                Universe.SetSimulationSpeed(4.0);
+            ShutdownEngines();
+
             LastTransitionTime = Universe.GetElapsedSeconds();
             Phase = PhaseEnum.Coast;
 
@@ -452,7 +463,6 @@ namespace NovaTec.GravityTurnMod
             FlightControlOverride.AttitudeFrame = VehicleReferenceFrame.EclBody;
             FlightControlOverride.RollMode = FlightComputerRollMode.Up;
 
-            ShutdownEngines();
         }
         private void RunPhaseCoast(Vehicle vehicle)
         {
@@ -465,6 +475,11 @@ namespace NovaTec.GravityTurnMod
             {
                 SetEngineThrottle(0.1);
                 ShutdownEngines();
+            }
+
+            if (UseWarp && Universe.SimulationSpeed < 10.5)
+            {
+                Universe.SetSimulationSpeed(Math.Clamp(Universe.GetElapsedSeconds() - LastTransitionTime, 1.0, 10.0), false);
             }
 
             if (GetAltitude() > GetAtmosphereHeight())
@@ -581,7 +596,9 @@ namespace NovaTec.GravityTurnMod
                 Universe.SetSimulationSpeed(1.0, false);
                 Universe.AutoWarpStop(true);
                 FlightControlOverride.Active = true;
+                FlightControlOverride.BurnMode = FlightComputerBurnMode.Auto;
                 FlightControlOverride.RCSMode = FlightComputerRCSMode.Enabled;
+                ThrottleOverride.Active = false;
             }
             // burn completed?
             else if (fc.Burn == null || fc.Burn.BurnDuration <= 0.01f || fc.BurnPlan.BurnCount == 0)
