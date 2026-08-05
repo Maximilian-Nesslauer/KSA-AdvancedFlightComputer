@@ -16,6 +16,19 @@ using Scvx;
 public static class Ksa6DofSetup
 {
     /// <summary>
+    /// What the last <see cref="TryBuild"/> assumed about the air, for the UI.
+    ///
+    /// These are diagnostics, not inputs — nothing reads them back. They exist
+    /// because the vacuum-thrust bug was invisible: the solver plans a perfectly
+    /// feasible trajectory for a vehicle with 25% more thrust than it has, and the
+    /// only symptom is that the vehicle slowly loses the altitude fight. Showing
+    /// the ratio makes the assumption checkable at a glance instead.
+    /// </summary>
+    public static double LastAmbientPressurePa { get; private set; }
+    public static double LastVacuumThrustN { get; private set; }
+    public static double LastPressureThrustN { get; private set; }
+
+    /// <summary>
     /// Inertia about the model's body axes, in kg m^2.
     ///
     /// KSA's Vehicle.TotalMassPropsBody.Inertia is a FULL symmetric tensor about
@@ -264,12 +277,28 @@ public static class Ksa6DofSetup
         dyn = null!;
         error = "";
 
-        (double thrust, double massFlow) = KsaEnginePerf.Vacuum(vehicle);
+        // Thrust AT THE PRESSURE THE VEHICLE WILL ACTUALLY SEE, not in vacuum.
+        //
+        // Evaluated at the TARGET altitude rather than the current one, deliberately.
+        // Thrust falls as a lander descends into thicker air, so the current (high,
+        // thin) altitude is the most optimistic point on the whole trajectory —
+        // using it reintroduces a smaller copy of the same error. The target is the
+        // densest air the vehicle will meet, so this under-promises slightly for the
+        // rest of the descent, and under-promising is the safe direction: the plan
+        // is conservative rather than one the vehicle cannot fly.
+        double siteAltAsl = siteCci.Length() - parent.MeanRadius;
+        double targetAltAsl = siteAltAsl + xf[2];
+        LastAmbientPressurePa = KsaEnginePerf.AmbientPressureAt(parent, targetAltAsl);
+
+        (double thrust, double massFlow) = KsaEnginePerf.AtPressure(vehicle, LastAmbientPressurePa);
         if (thrust <= 0.0 || massFlow <= 0.0)
         {
             error = "no engine thrust to plan with";
             return false;
         }
+
+        LastVacuumThrustN = KsaEnginePerf.VacuumThrust(vehicle);
+        LastPressureThrustN = thrust;
 
         // THRUST FRACTION IS DELIBERATELY NOT APPLIED TO Tmax. It used to be, and that
         // was a serious bug: the plan was built against a REDUCED Tmax while the

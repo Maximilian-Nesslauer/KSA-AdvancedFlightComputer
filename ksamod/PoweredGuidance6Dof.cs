@@ -554,12 +554,19 @@ public static partial class PoweredGuidanceWindow
         if (parent == null)
             return;
 
-        (double thrust, _) = KsaEnginePerf.Vacuum(vehicle);
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+
+        // Must use the SAME pressure-corrected thrust the planner does. This panel
+        // reading vacuum thrust while the plan used something else is precisely how
+        // the atmospheric shortfall stayed hidden: "max TWR" looked healthy because
+        // it was quoting a number the vehicle could only reach in space.
+        double ambientPa = KsaEnginePerf.AmbientPressureAt(
+            parent, siteCci.Length() - parent.MeanRadius + _sixDofTargetAltM);
+        (double thrust, _) = KsaEnginePerf.AtPressure(vehicle, ambientPa);
         if (thrust <= 0.0)
             return;
         thrust *= Math.Clamp(_sixDofThrustFrac, 0.01, 1.0);
 
-        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
         Ksa6DofSetup.ThrottleMargin(thrust, _sixDofThrottleFloor, mass, g,
@@ -568,6 +575,18 @@ public static partial class PoweredGuidanceWindow
         ImGui.SeparatorText("Feasibility");
         ImGui.Text($"thrust used {thrust / 1e6,6:F2} MN   weight {mass * g / 1e6,6:F2} MN   " +
                    $"max TWR {thrust / (mass * g),5:F2}");
+
+        // The air, and what it costs. On an airless world this reads 0 Pa / 100%
+        // and the whole line is a no-op; anywhere else it is the number that
+        // decides whether the plan is flyable.
+        double vac = KsaEnginePerf.VacuumThrust(vehicle) * Math.Clamp(_sixDofThrustFrac, 0.01, 1.0);
+        double frac = vac > 0.0 ? thrust / vac : 1.0;
+        ImGui.Text($"ambient {ambientPa / 1000.0,6:F1} kPa (at target alt)   " +
+                   $"thrust {frac * 100.0,5:F1} % of vacuum {vac / 1e6:F2} MN");
+        if (frac < 0.97)
+            ImGui.TextColored(new float4(0.6f, 0.85f, 1f, 1f),
+                $"planning against sea-level performance - vacuum thrust would over-promise by " +
+                $"{(1.0 / Math.Max(frac, 1e-6) - 1.0) * 100.0:F0} %%.");
         ImGui.Text($"TWR at min throttle {twrMin,5:F2}   " +
                    $"(floor {_sixDofThrottleFloor:F2}, vehicle can do {Ksa6DofSetup.VehicleThrottleFloor(vehicle):F2})");
 

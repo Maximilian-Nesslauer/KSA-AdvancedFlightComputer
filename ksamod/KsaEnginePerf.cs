@@ -1,4 +1,5 @@
 using System;
+using Brutal.Numerics;
 using KSA;
 
 // Vehicle-wide propulsion totals for the main engines.
@@ -10,12 +11,14 @@ using KSA;
 // performance for that controller's cores — thrust vector and max mass flow at
 // full throttle — refreshed by PartTree whenever the part tree changes.
 //
-// These are deliberately NOT filtered by EngineController.IsActive. The callers
-// (G-FOLD planning, terminal hover) size a burn that may be commanded from a
-// coast: both cut the engine when the commanded throttle falls near zero, so an
-// active-only total would read zero exactly when the next solve needs it. This
-// is a vehicle-configuration figure, not a live-thrust one — for live thrust use
-// Vehicle.ComputeActiveThrust(ambientPressure).
+// The Vacuum* members are deliberately NOT filtered by EngineController.IsActive.
+// The callers (G-FOLD planning, terminal hover) size a burn that may be commanded
+// from a coast: both cut the engine when the commanded throttle falls near zero,
+// so an active-only total would read zero exactly when the next solve needs it.
+// They are vehicle-configuration figures, not live-thrust ones.
+//
+// They are also VACUUM figures, so they overstate thrust in any atmosphere. Use
+// AtPressure for anything flown on a world with air — see the comment there.
 internal static class KsaEnginePerf
 {
     // Full-throttle vacuum thrust (N) and mass flow (kg/s) of the vehicle's
@@ -45,5 +48,76 @@ internal static class KsaEnginePerf
     {
         (double thrust, double massFlow) = Vacuum(vehicle);
         return massFlow > 0.0 ? thrust / massFlow : 0.0;
+    }
+
+    // ---------------------------------------------------------------- pressure
+
+    // Full-throttle thrust (N) and mass flow (kg/s) AT A GIVEN AMBIENT PRESSURE,
+    // counting only the engines that will actually be lit.
+    //
+    // Vacuum() overstates thrust everywhere there is air — a booster's sea-level
+    // thrust is typically ~80% of its vacuum figure, so a planner fed the vacuum
+    // number believes in ~25% more thrust than exists. It never arrests as
+    // planned, each re-solve starts lower than the last, and the trajectory
+    // eventually curls into a loop because that is the only feasible shape left.
+    // Vacuum figures being exactly right on an airless world is why this looked
+    // like a Moon-works/Earth-fails bug rather than a thrust bug.
+    //
+    // RocketControllerData.ComputeFromCores is the game's own routine and is a
+    // CAPABILITY at full throttle, not a measurement of current thrust. That
+    // distinction matters: Vehicle.ComputeActiveThrust(p) reports what the engines
+    // are producing right now, and feeding a live figure back in as Tmax builds a
+    // loop — throttle down, Tmax reads low, the plan believes it has less
+    // authority, it throttles down further.
+    internal static (double thrust, double massFlow) AtPressure(Vehicle vehicle, double ambientPressure)
+    {
+        PartTree tree = vehicle?.Parts;
+        FlightComputer fc = vehicle?.FlightComputer;
+        if (tree == null || fc == null)
+            return (0.0, 0.0);
+
+        Span<EngineController> engines = tree.Modules.Get<EngineController>();
+        if (engines.Length == 0)
+            return (0.0, 0.0);
+
+        float3 com = fc.CenterOfMassAsmb;
+        var p = (float)Math.Max(ambientPressure, 0.0);
+
+        // Prefer the engines that are actually lit, but fall back to all of them
+        // when none are. Both cases are real: a replan mid-burn wants the live
+        // subset (an over-powered booster lands on some of its engines, and
+        // counting the dark ones inflates Tmax), while the FIRST plan is built
+        // before ignition, when an active-only sum would be zero and would fail
+        // the solve outright.
+        double thrust = 0.0, massFlow = 0.0;
+        for (int pass = 0; pass < 2; pass++)
+        {
+            bool activeOnly = pass == 0;
+            for (int i = 0; i < engines.Length; i++)
+            {
+                if (activeOnly && !engines[i].IsActive)
+                    continue;
+                RocketControllerData d = RocketControllerData.ComputeFromCores(engines[i].Cores, com, p);
+                thrust += d.ThrustMax.Length();
+                massFlow += d.MassFlowRateMax;
+            }
+            if (thrust > 0.0 && massFlow > 0.0)
+                break;
+            thrust = massFlow = 0.0;
+        }
+        return (thrust, massFlow);
+    }
+
+    // Ambient pressure (Pa) at an altitude above the body's sea level datum, or 0
+    // on an airless world. Anything missing reads as vacuum, which is the safe
+    // direction for every caller except a planner — see AtPressure's callers for
+    // which altitude they choose.
+    internal static double AmbientPressureAt(IParentBody parent, double altitudeAslM)
+    {
+        PhysicalAtmosphereReference phys = parent?.GetAtmosphereReference().Physical;
+        if (phys == null || !phys.IsValid())
+            return 0.0;
+        double p = phys.GetAtmosphericPressureAtAltitude(altitudeAslM);
+        return double.IsFinite(p) && p > 0.0 ? p : 0.0;
     }
 }
