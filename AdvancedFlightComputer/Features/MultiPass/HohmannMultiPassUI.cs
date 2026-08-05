@@ -35,10 +35,7 @@ internal static class HohmannMultiPassUI
     private const int MinPasses = 1;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    private static readonly ImColor8 StatusGrey = new(120, 120, 120, 255);
-    private static readonly ImColor8 ColorAmber = new(255, 200, 60, 255);
-    private static readonly ImColor8 ColorOrange = new(255, 150, 50, 255);
-    private static readonly float[] SingleColumnWidths = new float[] { 0.9f };
+    private static readonly string[] SplitModeLabels = { "EQUAL TIME", "EQUAL DV" };
 
     public static bool Enabled { get; set; }
 
@@ -425,12 +422,11 @@ internal static class HohmannMultiPassUI
             return;
         }
 
-        ImGui.TextWrapped(string.Format(Inv,
-            "Departure to {0}", (info.Target as Astronomical)?.Id ?? "?"));
-        ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-        ImGui.TextWrapped(string.Format(Inv,
-            "Lambert dV: {0:F1} m/s", entry.TransferData.TransferDvVlf.Length()));
-        ImGui.PopStyleColor();
+        ConsoleWidgets.RegionHeader("MULTI-PASS DEPARTURE".AsSpan());
+        ConsoleWidgets.Readout("DESTINATION".AsSpan(),
+            ((info.Target as Astronomical)?.Id ?? "?").AsSpan());
+        ConsoleWidgets.Readout("LAMBERT DV".AsSpan(),
+            string.Format(Inv, "{0:F1} m/s", entry.TransferData.TransferDvVlf.Length()).AsSpan());
 
         // Flyby targeting sits between the transfer summary and the pass-count
         // splitting: it changes WHERE the departure aims (impact -> flyby), then
@@ -443,7 +439,7 @@ internal static class HohmannMultiPassUI
 
         if (_passCount > 1)
         {
-            DrawSplitModeRadio();
+            DrawSplitModeSelector();
             UpdatePreviewIfStale(source, entry, info);
             DrawSpanInfo(source);
             DrawPreviewFailureIfApplicable();
@@ -467,22 +463,18 @@ internal static class HohmannMultiPassUI
         if (_passCount <= 1 && _autoClampedFromN <= _passCount)
         {
             ImGui.Spacing();
-            ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-            ImGui.TextWrapped(flyby
-                ? "N = 1: stock Create button does a single flyby burn."
-                : "N = 1: stock Create button does a single Hohmann burn.");
-            ImGui.PopStyleColor();
+            ConsoleUi.MutedWrapped(flyby
+                ? "N = 1: the Create button does a single flyby burn."
+                : "N = 1: the Create button does a single Hohmann burn.");
         }
         else if (_passCount > 1)
         {
             ImGui.Spacing();
-            ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-            ImGui.TextWrapped(string.Format(Inv,
+            ConsoleUi.MutedWrapped(string.Format(Inv,
                 flyby
-                    ? "Click the stock Create button to start the {0}-pass flyby execution."
-                    : "Click the stock Create button to start the {0}-pass execution.",
+                    ? "Click Create to start the {0}-pass flyby execution."
+                    : "Click Create to start the {0}-pass execution.",
                 _passCount));
-            ImGui.PopStyleColor();
         }
     }
 
@@ -509,19 +501,16 @@ internal static class HohmannMultiPassUI
                          - passes[0].BurnTime.Seconds();
         if (!(spanSec > 0.0)) return;
 
-        ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-        ImGui.TextWrapped(string.Format(Inv,
-            "Span: {0:F0} parking periods (~{1})",
-            spanSec / tPark, FormatHelper.FormatDuration(spanSec)));
+        ConsoleWidgets.Readout("SPAN".AsSpan(), string.Format(Inv, "{0:F0} parking periods (~{1})",
+            spanSec / tPark, FormatHelper.FormatDuration(spanSec)).AsSpan());
         if (_lastShiftKShift > 0)
         {
             double shiftSec = _lastShiftKShift * tPark;
-            ImGui.TextWrapped(string.Format(Inv,
+            ConsoleUi.MutedWrapped(string.Format(Inv,
                 "Final burn pushed {0} parking period(s) (~{1}) later so the " +
                 "multi-pass schedule fits; transfer re-planned at the later time.",
                 _lastShiftKShift, FormatHelper.FormatDuration(shiftSec)));
         }
-        ImGui.PopStyleColor();
     }
 
     /// <summary>SplitMode selector. EqualBurnTime is the literature-standard
@@ -529,11 +518,18 @@ internal static class HohmannMultiPassUI
     /// same duration); EqualDv is the simpler "uniform per-pass dV"
     /// alternative. Drawn only when N &gt;= 2; mode change busts cached
     /// preview.</summary>
-    private static void DrawSplitModeRadio()
+    private static void DrawSplitModeSelector()
     {
-        ImGui.Spacing();
+        ConsoleWidgets.BeginRow("SPLIT".AsSpan());
+        int picked = ConsoleWidgets.Segmented("AfcHmpSplit".AsSpan(), SplitModeLabels,
+            _splitMode == SplitMode.EqualDv ? 1 : 0);
+        if (ConsoleWidgets.RowHovered)
+            ConsoleWidgets.Tooltip(
+                "Equal burn time fires the engines for the same duration each pass, equalizing finite-burn arc length (the literature-standard default for finite-burn loss). Equal delta-v delivers the same magnitude each pass: simpler to reason about, slightly less efficient for finite burns.".AsSpan());
+        ConsoleWidgets.EndRow();
+
         bool isBurnTime = _splitMode == SplitMode.EqualBurnTime;
-        if (ImGui.RadioButton("Equal Burn Time"u8, isBurnTime) && !isBurnTime)
+        if (picked == 0 && !isBurnTime)
         {
             _splitMode = SplitMode.EqualBurnTime;
             _hasCachedPreview = false;
@@ -546,13 +542,9 @@ internal static class HohmannMultiPassUI
                 DefaultCategory.Log.Debug(
                     "[AFC] HohmannMultiPassUI: split mode -> EqualBurnTime");
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Each pass fires the engines for the same duration.\nEqualises finite-burn arc length across passes\n(literature-standard default for finite-burn loss)."u8);
 
-        ImGui.SameLine();
         bool isEqualDv = _splitMode == SplitMode.EqualDv;
-        if (ImGui.RadioButton("Equal Delta-V"u8, isEqualDv) && !isEqualDv)
+        if (picked == 1 && !isEqualDv)
         {
             _splitMode = SplitMode.EqualDv;
             _hasCachedPreview = false;
@@ -565,20 +557,14 @@ internal static class HohmannMultiPassUI
                 DefaultCategory.Log.Debug(
                     "[AFC] HohmannMultiPassUI: split mode -> EqualDv");
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Each pass delivers the same delta-v magnitude.\nSimpler to reason about but slightly less efficient\nfor finite burns than Equal Burn Time."u8);
     }
 
     #region Active execution
 
     private static void DrawActive(Vehicle source, MultiPassExecution exec)
     {
-        ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-        ImGui.Text(string.Format(Inv,
-            "Multi-pass active: pass {0} of {1}",
-            exec.PassIndex + 1, exec.PassCountTotal));
-        ImGui.PopStyleColor();
+        ConsoleWidgets.Readout("MULTI-PASS ACTIVE".AsSpan(),
+            string.Format(Inv, "PASS {0} OF {1}", exec.PassIndex + 1, exec.PassCountTotal).AsSpan());
 
         // Refresh preview from the locked intent state so the 3D overlay
         // reflects the chained orbit (post-prior-passes) rather than the
@@ -609,8 +595,7 @@ internal static class HohmannMultiPassUI
             DrawInlinePreviewToggle();
 
         ImGui.Spacing();
-        if (ImGuiHelper.DrawButton("Cancel remaining passes"u8,
-                KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Red))
+        if (ConsoleWidgets.DangerButton("CANCEL REMAINING PASSES".AsSpan()))
             CancelExecution(source, exec);
     }
 
@@ -618,20 +603,12 @@ internal static class HohmannMultiPassUI
     /// field via reflection so toggling our copy stays in sync with
     /// any future user interaction with stock's own checkbox (when
     /// stock's section is visible again). Drawn only when stock's
-    /// section is hidden; see the caller in <see cref="DrawActive"/>.
-    /// Wrapped in BeginColumns / EndColumns because
-    /// <see cref="ImGuiHelper.DrawCheckbox"/> needs that for the label
-    /// to render inline with the box; without columns the label drops
-    /// onto a second line.</summary>
+    /// section is hidden; see the caller in <see cref="DrawActive"/>.</summary>
     private static void DrawInlinePreviewToggle()
     {
-        ImGui.Spacing();
         bool preview = StockPlanner.DisplaySelectedTransfer;
-        bool previous = preview;
-        ImGuiHelper.BeginColumns(2, SingleColumnWidths);
-        ImGuiHelper.DrawCheckbox("Preview Selected Transfer"u8, ref preview, isChanged: false);
-        ImGuiHelper.EndColumns();
-        if (preview != previous)
+        if (ConsoleUi.CheckboxRow("PREVIEW SELECTED TRANSFER".AsSpan(),
+                "AfcHmpPreview".AsSpan(), ref preview))
             StockPlanner.DisplaySelectedTransfer = preview;
     }
 
@@ -694,12 +671,10 @@ internal static class HohmannMultiPassUI
 
     private static void DrawBlockedByOtherExecution(MultiPassExecution exec)
     {
-        ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
-        ImGui.TextWrapped(string.Format(Inv,
-            "Vehicle is already running a {0} multi-pass ({1} of {2}).\n" +
+        ConsoleUi.WarningWrapped(string.Format(Inv,
+            "Vehicle is already running a {0} multi-pass ({1} of {2}). " +
             "Cancel it from its own plan window before starting a Hohmann.",
             exec.Intent.Kind, exec.PassIndex + 1, exec.PassCountTotal));
-        ImGui.PopStyleColor();
     }
 
     private static void CancelExecution(Vehicle source, MultiPassExecution exec)
@@ -731,45 +706,25 @@ internal static class HohmannMultiPassUI
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info)
     {
-        ImGui.Text("Passes:"u8);
-        ImGui.SameLine();
-        if (ImGuiHelper.DrawButton("<"u8, KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Green))
-        {
-            if (_passCount > MinPasses)
-            {
-                int before = _passCount;
-                _passCount--;
-                _hasCachedPreview = false;
-                _cachedFuelSum = double.NaN;
-                _cachedFuelTotalDv = double.NaN;
-                _autoClampedFromN = 0;
-                _autoClampReason = null;
-                _autoClampKind = PassPlanFailure.None;
-                if (DebugConfig.MultiPass)
-                    DefaultCategory.Log.Debug(
-                        $"[AFC] HohmannMultiPassUI: < clicked, _passCount {before} -> {_passCount}.");
-            }
-        }
-        ImGui.SameLine();
-        ImGui.Text(_passCount.ToString(Inv));
-        ImGui.SameLine();
-        if (ImGuiHelper.DrawButton(">"u8, KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Green))
-        {
-            if (_passCount < Splitter.MaxPasses)
-            {
-                int before = _passCount;
-                _passCount++;
-                _hasCachedPreview = false;
-                _cachedFuelSum = double.NaN;
-                _cachedFuelTotalDv = double.NaN;
-                _autoClampedFromN = 0;
-                _autoClampReason = null;
-                _autoClampKind = PassPlanFailure.None;
-                if (DebugConfig.MultiPass)
-                    DefaultCategory.Log.Debug(
-                        $"[AFC] HohmannMultiPassUI: > clicked, _passCount {before} -> {_passCount}.");
-            }
-        }
+        ConsoleWidgets.BeginRow("PASSES".AsSpan());
+        int passes = _passCount;
+        bool changed = ConsoleWidgets.SliderInt("AfcHmpPasses".AsSpan(), ref passes,
+            MinPasses, Splitter.MaxPasses, passes.ToString(Inv).AsSpan(), pending: false);
+        ConsoleWidgets.EndRow();
+        if (!changed)
+            return;
+
+        int before = _passCount;
+        _passCount = passes;
+        _hasCachedPreview = false;
+        _cachedFuelSum = double.NaN;
+        _cachedFuelTotalDv = double.NaN;
+        _autoClampedFromN = 0;
+        _autoClampReason = null;
+        _autoClampKind = PassPlanFailure.None;
+        if (DebugConfig.MultiPass)
+            DefaultCategory.Log.Debug(
+                $"[AFC] HohmannMultiPassUI: pass slider moved, _passCount {before} -> {_passCount}.");
     }
 
     private static void UpdatePreviewIfStale(
@@ -937,11 +892,9 @@ internal static class HohmannMultiPassUI
     {
         if (!_hasCachedPreview || !_cachedPreview.Failed) return;
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ColorOrange);
-        ImGui.TextWrapped(string.Format(Inv,
-            "[!] Multi-pass preview incomplete: {0}.",
+        ConsoleUi.WarningWrapped(string.Format(Inv,
+            "Multi-pass preview incomplete: {0}.",
             _cachedPreview.FailureReason ?? "unknown reason"));
-        ImGui.PopStyleColor();
     }
 
     /// <summary>Soft warning when the final-pass FP (or the shifted-Lambert
@@ -955,10 +908,7 @@ internal static class HohmannMultiPassUI
         if (!_hasCachedPreview || _cachedPreview.Failed) return;
         if (_cachedPreview.Advisory == null) return;
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
-        ImGui.TextWrapped(string.Format(Inv,
-            "[!] {0}", _cachedPreview.Advisory));
-        ImGui.PopStyleColor();
+        ConsoleUi.WarningWrapped(_cachedPreview.Advisory);
     }
 
     private static void DrawInsufficientFuelIfApplicable()
@@ -969,19 +919,16 @@ internal static class HohmannMultiPassUI
         if (_cachedFuelSum >= _cachedFuelTotalDv * 0.995) return;
 
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ColorOrange);
-        ImGui.TextWrapped(string.Format(Inv,
-            "[!] Vehicle can only deliver ~{0:F0} m/s of the {1:F0} m/s required.\n" +
+        ConsoleUi.WarningWrapped(string.Format(Inv,
+            "Vehicle can only deliver ~{0:F0} m/s of the {1:F0} m/s required. " +
             "Multi-pass will run out of fuel before the departure is reached.",
             _cachedFuelSum, _cachedFuelTotalDv));
-        ImGui.PopStyleColor();
     }
 
     private static void DrawAutoClampIfApplicable()
     {
         if (_autoClampedFromN <= _passCount) return;
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
 
         // PassPlanFailure-based advice. Driven by the planner's classifier
         // (PassPlanFailure) instead of substring-matching the human-
@@ -992,8 +939,8 @@ internal static class HohmannMultiPassUI
             ? SplitMode.EqualDv
             : SplitMode.EqualBurnTime;
         string otherModeLabel = otherMode == SplitMode.EqualBurnTime
-            ? "Equal Burn Time"
-            : "Equal Delta-V";
+            ? "equal burn time"
+            : "equal delta-v";
 
         string advice = _autoClampKind switch
         {
@@ -1019,13 +966,12 @@ internal static class HohmannMultiPassUI
                 $"Reduce passes, try {otherModeLabel}, or pick a later porkchop entry.",
         };
 
-        ImGui.TextWrapped(string.Format(Inv,
-            "[!] {0} pass(es) requested, only {1} feasible at this departure entry.\n{2}",
+        ConsoleUi.WarningWrapped(string.Format(Inv,
+            "{0} pass(es) requested, only {1} feasible at this departure entry. {2}",
             _autoClampedFromN, _passCount, advice));
         if (DebugConfig.MultiPass && _autoClampReason != null)
-            ImGui.TextWrapped(string.Format(Inv,
+            ConsoleUi.MutedWrapped(string.Format(Inv,
                 "Debug: kind={0}, reason: {1}", _autoClampKind, _autoClampReason));
-        ImGui.PopStyleColor();
     }
 
     private static void DrawPassList(int firstPassDisplayNumber = 1)
@@ -1034,20 +980,18 @@ internal static class HohmannMultiPassUI
         PassPreview[] passes = _cachedPreview.Passes;
         if (passes.Length == 0) return;
 
-        ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
         for (int i = 0; i < passes.Length; i++)
         {
             double dv = passes[i].DvVlf.Length();
             double t = passes[i].EstimatedBurnTimeSec;
-            int n = firstPassDisplayNumber + i;
-            string suffix = i == passes.Length - 1 ? " (final)" : "";
-            string line = t > 0.5
-                ? string.Format(Inv, "Pass {0}: {1:F0} m/s, {2:F0}s{3}", n, dv, t, suffix)
-                : string.Format(Inv, "Pass {0}: {1:F0} m/s{2}", n, dv, suffix);
-            ImGui.Text(line);
+            string label = i == passes.Length - 1
+                ? string.Format(Inv, "PASS {0} (FINAL)", firstPassDisplayNumber + i)
+                : string.Format(Inv, "PASS {0}", firstPassDisplayNumber + i);
+            string value = t > 0.5
+                ? string.Format(Inv, "{0:F0} m/s, {1:F0}s", dv, t)
+                : string.Format(Inv, "{0:F0} m/s", dv);
+            ConsoleWidgets.Readout(label.AsSpan(), value.AsSpan());
         }
-        ImGui.PopStyleColor();
     }
 
     /// <summary>One line under the per-pass list - "Total: X m/s |
@@ -1070,13 +1014,13 @@ internal static class HohmannMultiPassUI
         for (int i = 0; i < passes.Length; i++)
             sumDv += passes[i].DvVlf.Length();
 
-        ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-        ImGui.Text(string.Format(Inv,
-            "Total: {0:F0} m/s | Lambert: {1:F0} m/s", sumDv, lambertDv));
+        ConsoleWidgets.Rule();
+        ConsoleWidgets.Readout("TOTAL".AsSpan(),
+            string.Format(Inv, "{0:F0} m/s", sumDv).AsSpan());
+        ConsoleWidgets.Readout("LAMBERT".AsSpan(),
+            string.Format(Inv, "{0:F0} m/s", lambertDv).AsSpan());
         string? savingsLine = TryFormatRobbinsSavings(source, passes, lambertDv, tPark);
-        if (savingsLine != null) ImGui.Text(savingsLine);
-        ImGui.PopStyleColor();
+        if (savingsLine != null) ConsoleUi.MutedWrapped(savingsLine);
     }
 
     /// <summary>Returns the formatted savings line, or null when the
@@ -1404,9 +1348,7 @@ internal static class HohmannMultiPassUI
     {
         if (!HohmannFlybyUI.FlybyRequested || !_flybyRetargetFailed) return;
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ColorOrange);
-        ImGui.TextWrapped("[!] Flyby retarget failed for this multi-pass geometry; the split would still impact. Reduce passes, change the window, or flip the side.");
-        ImGui.PopStyleColor();
+        ConsoleUi.WarningWrapped("Flyby retarget failed for this multi-pass geometry; the split would still impact. Reduce passes, change the window, or flip the side.");
     }
 
     #endregion

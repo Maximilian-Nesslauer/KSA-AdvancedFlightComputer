@@ -1,9 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
-using Brutal.Logging;
 using Brutal.Numerics;
 using CommunityToolkit.HighPerformance.Buffers;
 using HarmonyLib;
@@ -14,27 +14,36 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// <summary>
 /// Prefix on TransferPlanner.DrawPlanWindow that takes over the entire window
 /// when one of our plan types is selected. Draws the Plan Type dropdown, Source
-/// dropdown, type-specific controls, and Create button all inside the stock
-/// "Transfer Planning" window.
+/// dropdown and type-specific controls in the window body, with Create in the
+/// footer where stock's own Create button sits.
 ///
 /// Returns false (skip original) for our types, true for stock types.
 /// </summary>
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
 internal static class Patch_DrawPlanWindow
 {
-    // Window placement, kept to match stock TransferPlanner.DrawPlanWindow and
-    // DrawSelectedTransferFlightPlan window-position constants.
+    // Window placement and identity, kept to match stock
+    // TransferPlanner.DrawPlanWindow and DrawSelectedTransferFlightPlan. The
+    // id, title and signature are stock's own: this prefix replaces that window
+    // for our plan types, so sharing them keeps the position and size the player
+    // set when they switch between a stock and an AFC plan type.
+    private const string WindowId = "transfer-planning";
+    private const string WindowTitle = "TRANSFER PLANNING";
+    private const string WindowSignature = "KSA-TRJ";
     private const float MainWindowOffsetX = 440f;
     private const float MainWindowOffsetY = 50f;
     private const float MainWindowWidth = 400f;
-    private const float MainWindowHeight = 600f;
+    private const float MainWindowHeight = 1050f;
+    private const string FlightPlanWindowId = "afc-maneuver-flightplan";
+    private const string FlightPlanWindowTitle = "MANEUVER FLIGHT PLAN";
     private const float FlightPlanWindowOffsetX = 620f;
     private const float FlightPlanWindowOffsetY = 40f;
     private const float FlightPlanWindowWidth = 460f;
     private const float FlightPlanWindowHeight = 620f;
 
-    private static readonly ImColor8 StatusGrey = new(120, 120, 120, 255);
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    private static readonly List<TransferObject> _sourceListBuffer = new();
 
     private static Burn? _ourBurn;
     private static OrbitalTransfers.PorkChopEntry? _lastEntry;
@@ -53,7 +62,11 @@ internal static class Patch_DrawPlanWindow
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix (type lookup): {ex}");
+            // Deduped: this runs per ImGui frame, and a persistent throw would
+            // otherwise write a stack trace at frame rate into a log the next
+            // game start overwrites.
+            LogHelper.WarnOnce("maneuvertools-type-lookup:" + ex.GetType().Name,
+                $"[AFC] ManeuverTools Prefix (type lookup): {ex}");
             return true;
         }
 
@@ -73,7 +86,13 @@ internal static class Patch_DrawPlanWindow
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools Prefix: {ex}");
+            // Keyed by plan type as well as exception type: one plan type
+            // throwing must not silence a different one for the rest of the
+            // session, and the type is the first thing to reproduce with.
+            string typeKey = transferType.GetKey();
+            LogHelper.WarnOnce($"maneuvertools-draw:{typeKey}:{ex.GetType().Name}",
+                $"[AFC] ManeuverTools Prefix (plan type '{typeKey}', "
+                + $"source '{_lastSource?.Id ?? "none"}'): {ex}");
             // ImGui state may be partially set; do not let stock also Begin the
             // same window this frame, that produces ID-stack conflicts.
         }
@@ -85,80 +104,52 @@ internal static class Patch_DrawPlanWindow
         ImGui.SetNextWindowPos(
             inViewport.Position + new float2(inViewport.Size.X - MainWindowOffsetX, MainWindowOffsetY),
             ImGuiCond.Appearing, (float2?)null);
-        ImGui.SetNextWindowSize(new float2(MainWindowWidth, MainWindowHeight), ImGuiCond.Appearing);
 
-        bool pOpen = StockPlanner.ShowPlanWindow;
-        bool windowOpen = ImGui.Begin("Transfer Planning"u8, ref pOpen,
-            ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings);
+        bool open = StockPlanner.ShowPlanWindow;
+        // BeginWindow ends the underlying ImGui window itself when it returns
+        // false, so only the true branch owes an EndWindow.
+        if (!ConsoleStyle.BeginWindow(WindowId, WindowTitle, WindowSignature, ref open,
+                new float2(MainWindowWidth, MainWindowHeight), ImGuiWindowFlags.NoScrollbar))
+            return;
+
+        Commit commit = default;
         try
         {
-            if (!pOpen)
+            if (!open)
             {
                 HandleWindowClose();
                 return;
             }
-            if (!windowOpen)
-                return;
 
             StockPlanner.ShowPlanWindow = true;
 
-            if (!DrawPlanTypeDropdown(ref transferType))
-                return;
-
-            ImGui.Text(""u8);
-
-            Vehicle? source = DrawSourceDropdown();
-            if (source?.Orbit == null)
-                return;
-            _lastSource = source;
-            CleanupStaleBurn(source);
-
-            ImGui.Separator();
-
-            // Resolved once per frame and threaded through: the window, the maneuver
-            // math and the preview all have to agree on which trajectory is being
-            // planned against, or the readout describes a different orbit than the
-            // Create button would burn on.
-            PlanningBasis basis = PlanningBasis.For(source);
-
-            ManeuverToolsWindow.DrawInline(transferType.GetKey(), source, basis);
-
-            var result = ComputeManeuver(transferType.GetKey(), source, basis);
-            if (result != null)
+            ConsoleStyle.BeginBody();
+            ConsoleStyle.PushWidgetStyle();
+            try
             {
-                _lastEntry = BuildTransferEntry(source, result.Value, basis);
-
-                ImGui.Separator();
-                DrawManeuverInfo(result.Value);
-
-                MultiPassUI.Draw(source, result.Value, transferType.GetKey());
-
-                ImGui.Spacing();
-                DrawCreateButton(source, result.Value, transferType.GetKey(), basis);
-
-                // Hidden only when a single-burn maneuver node has been
-                // created (stock then owns the rendering); during active
-                // multi-pass execution the checkboxes stay visible so
-                // the user can toggle the future-passes overlay.
-                if (_ourBurn == null)
-                {
-                    ImGui.Separator();
-                    ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
-                    ImGuiHelper.DrawCheckbox("Preview Orbit"u8, ref _showOrbitPreview, isChanged: false);
-                    ImGuiHelper.DrawCheckbox("Preview Flight Plan"u8, ref _showFlightPlanPreview,
-                        isChanged: false);
-                    ImGuiHelper.EndColumns();
-                }
+                commit = DrawBody(transferType);
             }
-            else
+            finally
             {
-                _lastEntry = null;
+                ConsoleStyle.PopWidgetStyle();
+                ConsoleStyle.EndBody();
             }
+
+            ConsoleStyle.BeginFooter();
+            bool create = DrawFooter(commit.State);
+            ConsoleStyle.EndFooter();
+
+            // Outside the footer, matching stock: the commit runs ImGui-free
+            // work and queues a burn, which has no business happening between
+            // BeginFooter and EndFooter. DrawFooter only returns true for
+            // CommitState.Ready, which DrawBody produces only with a resolved
+            // source, so the source is non-null here.
+            if (create)
+                CreateSingleOrMultiPass(commit);
         }
         finally
         {
-            // ImGui requires End() for every Begin(), regardless of return value.
-            ImGui.End();
+            ConsoleStyle.EndWindow();
         }
 
         if (_showOrbitPreview && _lastSource != null)
@@ -173,12 +164,75 @@ internal static class Patch_DrawPlanWindow
             DrawFlightPlanWindow(inViewport);
     }
 
+    /// <summary>Window body. Returns what the footer needs to offer the commit
+    /// action, so the primary button can sit in the footer where stock's own
+    /// Create button sits.</summary>
+    private static Commit DrawBody(TransferType transferType)
+    {
+        if (!DrawPlanTypeDropdown(ref transferType))
+            return default;
+
+        Vehicle? source = DrawSourceDropdown();
+        if (source?.Orbit == null)
+            return default;
+        _lastSource = source;
+        CleanupStaleBurn(source);
+
+        ImGui.Separator();
+
+        // Resolved once per frame and threaded through: the window, the maneuver
+        // math and the preview all have to agree on which trajectory is being
+        // planned against, or the readout describes a different orbit than the
+        // Create button would burn on.
+        PlanningBasis basis = PlanningBasis.For(source);
+        string typeKey = transferType.GetKey();
+
+        ManeuverToolsWindow.DrawInline(typeKey, source, basis);
+
+        var result = ComputeManeuver(typeKey, source, basis);
+        if (result == null)
+        {
+            _lastEntry = null;
+            return default;
+        }
+
+        _lastEntry = BuildTransferEntry(source, result.Value, basis);
+
+        ImGui.Separator();
+        DrawManeuverInfo(result.Value);
+
+        MultiPassUI.Draw(source, result.Value, typeKey);
+
+        CommitState state = ResolveCommitState(source, typeKey);
+        if (state == CommitState.MultiPassRunning)
+        {
+            ImGui.Spacing();
+            MultiPassController.DrawStatus(source);
+        }
+
+        // Hidden only when a single-burn maneuver node has been
+        // created (stock then owns the rendering); during active
+        // multi-pass execution the checkboxes stay visible so
+        // the user can toggle the future-passes overlay.
+        if (_ourBurn == null)
+        {
+            ConsoleWidgets.Rule();
+            ConsoleUi.CheckboxRow("PREVIEW ORBIT".AsSpan(), "AfcMtPreviewOrbit".AsSpan(),
+                ref _showOrbitPreview);
+            ConsoleUi.CheckboxRow("PREVIEW FLIGHT PLAN".AsSpan(), "AfcMtPreviewPlan".AsSpan(),
+                ref _showFlightPlanPreview);
+        }
+
+        return new Commit(state, source, result.Value, typeKey, basis);
+    }
+
     #region Dropdowns
 
     private static bool DrawPlanTypeDropdown(ref TransferType transferType)
     {
         TransferType prev = transferType;
-        if (ImGuiHelper.DrawCombo("Plan Type:"u8, ref transferType, TransferPlanner.TransferTypes)
+        if (ConsoleUi.ComboRow("PLAN TYPE".AsSpan(), "PlanType".AsSpan(), ref transferType,
+                TransferPlanner.TransferTypes)
             && transferType.GetKey() != prev.GetKey())
         {
             StockPlanner.TransferType = transferType;
@@ -238,7 +292,12 @@ internal static class Patch_DrawPlanWindow
         }
 
         TransferObject prev = sourceBody;
-        if (ImGuiHelper.DrawCombo("Source:"u8, ref sourceBody, list)
+        // A stack Span cannot cross into the helper's IReadOnlyList parameter, so
+        // the per-frame list is copied into a reusable buffer for the combo.
+        _sourceListBuffer.Clear();
+        for (int i = 0; i < list.Length; i++)
+            _sourceListBuffer.Add(list[i]);
+        if (ConsoleUi.ComboRow("SOURCE".AsSpan(), "Source".AsSpan(), ref sourceBody, _sourceListBuffer)
             && sourceBody.GetKey() != prev.GetKey())
         {
             StockPlanner.SourceBody = sourceBody;
@@ -257,13 +316,13 @@ internal static class Patch_DrawPlanWindow
         double dvMag = maneuver.DvCci.Length();
         double timeToNode = maneuver.BurnTime.Seconds() - Universe.GetElapsedSimTime().Seconds();
 
-        ImGuiHelper.DrawTextWidget("Required Delta V:"u8,
-            string.Format(Inv, "{0:F1} m/s", dvMag));
+        ConsoleWidgets.Readout("REQUIRED DELTA V".AsSpan(),
+            string.Format(Inv, "{0:F1} m/s", dvMag).AsSpan());
 
         if (timeToNode > 0)
         {
-            ImGuiHelper.DrawTextWidget("Time to Burn:"u8,
-                FormatHelper.FormatDuration(timeToNode));
+            ConsoleWidgets.Readout("TIME TO BURN".AsSpan(),
+                FormatHelper.FormatDuration(timeToNode).AsSpan());
         }
     }
 
@@ -278,69 +337,113 @@ internal static class Patch_DrawPlanWindow
         ImGui.SetNextWindowPos(
             inViewport.Position + new float2(FlightPlanWindowOffsetX, FlightPlanWindowOffsetY),
             ImGuiCond.Appearing, (float2?)null);
-        ImGui.SetNextWindowSize(new float2(FlightPlanWindowWidth, FlightPlanWindowHeight),
-            ImGuiCond.Appearing);
 
-        if (ImGui.Begin("Maneuver Flight Plan"u8, ref _showFlightPlanPreview,
-                ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoFocusOnAppearing))
+        // Mirrors stock's own DrawSelectedTransferFlightPlan shell, footer included.
+        if (!ConsoleStyle.BeginWindow(FlightPlanWindowId, FlightPlanWindowTitle, WindowSignature,
+                ref _showFlightPlanPreview,
+                new float2(FlightPlanWindowWidth, FlightPlanWindowHeight),
+                ImGuiWindowFlags.NoFocusOnAppearing))
+            return;
+
+        try
         {
-            fp.DrawPatchInfo();
+            ConsoleStyle.BeginBody();
+            ConsoleStyle.PushWidgetStyle();
+            try
+            {
+                fp.DrawPatchInfo();
+            }
+            finally
+            {
+                ConsoleStyle.PopWidgetStyle();
+                ConsoleStyle.EndBody();
+            }
+            ConsoleStyle.BeginFooter();
+            ConsoleStyle.EndFooter();
         }
-        ImGui.End();
+        finally
+        {
+            ConsoleStyle.EndWindow();
+        }
     }
 
-    private static void DrawCreateButton(
-        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
-        PlanningBasis basis)
+    private enum CommitState
+    {
+        /// <summary>No maneuver to commit (no source, no solution).</summary>
+        None,
+        MultiPassRunning,
+        NodeCreated,
+        /// <summary>Multi-pass selected but its preview failed. Offering Create
+        /// would silently fall back to a full-dV single burn.</summary>
+        Blocked,
+        Ready,
+    }
+
+    private readonly record struct Commit(
+        CommitState State, Vehicle? Source, OrbitManeuvers.ManeuverResult Maneuver,
+        string TypeKey, PlanningBasis Basis);
+
+    /// <summary>Decides what the footer may offer. Also retires an expired
+    /// <see cref="_ourBurn"/>, which is what lets the Create button come back
+    /// once the node it created is in the past.</summary>
+    private static CommitState ResolveCommitState(Vehicle source, string typeKey)
     {
         if (MultiPassRegistry.Has(source.Id))
-        {
-            MultiPassController.DrawStatus(source);
-            return;
-        }
+            return CommitState.MultiPassRunning;
 
         if (_ourBurn != null)
         {
             if (_ourBurn.Time < Universe.GetElapsedSimTime())
-            {
                 _ourBurn = null;
-            }
             else
-            {
-                ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-                ImGui.Text("Maneuver node created."u8);
-                ImGui.PopStyleColor();
-                return;
-            }
+                return CommitState.NodeCreated;
         }
 
-        // Multi-pass selected but preview failed: disable Create rather
-        // than silently fall back to a full-dV single burn.
-        bool blockedByFailedPreview = MultiPassUI.WantsMultiPassButCannot(typeKey);
-        if (blockedByFailedPreview)
-            ImGui.BeginDisabled();
+        return MultiPassUI.WantsMultiPassButCannot(typeKey)
+            ? CommitState.Blocked
+            : CommitState.Ready;
+    }
 
-        if (ImGuiHelper.DrawButton("Create"u8, KSAColor.DarkGrey,
-                KSAColor.Xkcd.DustyBlue, Color.Green))
+    /// <summary>Returns true when the player clicked Create.</summary>
+    private static bool DrawFooter(CommitState state)
+    {
+        switch (state)
         {
-            if (MultiPassUI.IsArmed(typeKey))
-            {
-                // The intents recompute every pass from the vehicle's live orbit,
-                // so a multi-pass started on a chained basis would execute against
-                // a different trajectory than the window just displayed.
-                if (basis.IsChained)
-                    TimedAlert.Create(
-                        "Multi-pass cannot start on a pending burn's trajectory; " +
-                        "use a single pass or clear the plan first.", Color.Yellow, 4.0);
-                else
-                    MultiPassController.Start(source, typeKey);
-            }
-            else
-                CreateSingleBurn(source, maneuver, basis);
+            case CommitState.MultiPassRunning:
+                ConsoleStyle.FooterStatus("MULTI-PASS RUNNING".AsSpan(), pending: true);
+                return false;
+            case CommitState.NodeCreated:
+                ConsoleStyle.FooterStatus("NODE CREATED".AsSpan(), pending: false);
+                return false;
+            case CommitState.Blocked:
+                ConsoleStyle.FooterWarning("MULTI-PASS PREVIEW FAILED".AsSpan());
+                return false;
+            case CommitState.Ready:
+                ConsoleStyle.FooterStatus("MANEUVER READY".AsSpan(), pending: true);
+                ConsoleStyle.FooterRightAlign(ConsoleWidgets.ButtonWidth("CREATE".AsSpan()));
+                return ConsoleWidgets.PrimaryButton("CREATE".AsSpan());
+            default:
+                ConsoleStyle.FooterStatus("NO MANEUVER".AsSpan(), pending: false);
+                return false;
         }
+    }
 
-        if (blockedByFailedPreview)
-            ImGui.EndDisabled();
+    private static void CreateSingleOrMultiPass(in Commit commit)
+    {
+        if (MultiPassUI.IsArmed(commit.TypeKey))
+        {
+            // The intents recompute every pass from the vehicle's live orbit,
+            // so a multi-pass started on a chained basis would execute against
+            // a different trajectory than the window just displayed.
+            if (commit.Basis.IsChained)
+                TimedAlert.Create(
+                    "Multi-pass cannot start on a pending burn's trajectory; " +
+                    "use a single pass or clear the plan first.", Color.Yellow, 4.0);
+            else
+                MultiPassController.Start(commit.Source!, commit.TypeKey);
+        }
+        else
+            CreateSingleBurn(commit.Source!, commit.Maneuver, commit.Basis);
     }
 
     /// <summary>Drops the "we already created this node" marker because the user is

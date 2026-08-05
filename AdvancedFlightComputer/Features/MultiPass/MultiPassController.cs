@@ -84,15 +84,11 @@ internal static class MultiPassController
         if (!MultiPassRegistry.TryGet(source.Id, out var exec))
             return;
 
-        ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-        ImGui.Text(string.Format(Inv,
-            "Multi-pass active: pass {0} of {1}",
-            exec.PassIndex + 1, exec.PassCountTotal));
-        ImGui.PopStyleColor();
+        ConsoleWidgets.Readout("MULTI-PASS ACTIVE".AsSpan(),
+            string.Format(Inv, "PASS {0} OF {1}", exec.PassIndex + 1, exec.PassCountTotal).AsSpan());
 
         ImGui.Spacing();
-        if (ImGuiHelper.DrawButton("Cancel remaining passes"u8,
-                KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Red))
+        if (ConsoleWidgets.DangerButton("CANCEL REMAINING PASSES".AsSpan()))
             CancelExecution(source, exec);
     }
 

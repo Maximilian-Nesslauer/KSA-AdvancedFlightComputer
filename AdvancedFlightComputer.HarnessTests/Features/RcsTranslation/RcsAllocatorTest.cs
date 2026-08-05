@@ -148,7 +148,7 @@ public sealed class RcsAllocatorTest : AfcTest
             AxisForcePos = new float3(100f, 0f, 0f),
             AxisForceNeg = new float3(100f, 0f, 0f),
             LpSecondsPerImpulse = new float[1],
-            LpDirBody = new float3(1f, 0f, 0f),
+            LpDirCtrl = new float3(1f, 0f, 0f),
             LpImpulseCapNs = 200f,
         };
         // j = 1000, throughput 200 Ns per 0.1 s: 1000 * 0.1 / 200 = 0.5 s.

@@ -33,6 +33,7 @@ internal static class ManeuverToolsWindow
     #endregion
 
     private static readonly string[] InclinationRefLabels = { "Ecliptic", "Equatorial" };
+    private static readonly string[] NodeLabels = { "ASCENDING", "DESCENDING" };
 
     /// <summary>Min separation in km between target apsis input and the opposite apsis.</summary>
     private const double MinApseSeparationKm = 1.0;
@@ -66,9 +67,7 @@ internal static class ManeuverToolsWindow
 
         if (basis.IsChained)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
-            ImGui.TextWrapped("Planning from the trajectory after your last planned burn.");
-            ImGui.PopStyleColor();
+            ConsoleUi.MutedWrapped("Planning from the trajectory after your last planned burn.");
             ImGui.Spacing();
         }
 
@@ -134,26 +133,27 @@ internal static class ManeuverToolsWindow
 
         if (orbit.Eccentricity >= 1.0)
         {
-            ImGui.Text("Requires a bound (elliptical) orbit."u8);
+            ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;
         }
 
-        string inputLabel = isSetPeriapsis ? "Target Periapsis (km):" : "Target Apoapsis (km):";
-        DrawAltitudeInput(inputLabel);
+        ConsoleUi.InputDoubleRow(
+            isSetPeriapsis ? "TARGET PERIAPSIS (KM)".AsSpan() : "TARGET APOAPSIS (KM)".AsSpan(),
+            "##AfcAltInput"u8, ref _inputAltitudeKm, 10.0, 100.0, "%.2f"u8);
+        if (_inputAltitudeKm < 0.0)
+            _inputAltitudeKm = 0.0;
         TargetAltitude = _inputAltitudeKm * 1000.0;
 
-        string burnLocation = isSetPeriapsis ? "Apoapsis" : "Periapsis";
-
-        ImGui.Spacing();
-        ImGuiHelper.DrawTextWidget("Current Periapsis:"u8, FormatDistance(currentPeAlt));
-        ImGuiHelper.DrawTextWidget("Current Apoapsis:"u8, FormatDistance(currentApAlt));
-        ImGuiHelper.DrawTextWidget("Burn Location:"u8, burnLocation);
+        ConsoleWidgets.Rule();
+        ConsoleWidgets.Readout("CURRENT PERIAPSIS".AsSpan(), FormatDistance(currentPeAlt).AsSpan());
+        ConsoleWidgets.Readout("CURRENT APOAPSIS".AsSpan(), FormatDistance(currentApAlt).AsSpan());
+        ConsoleWidgets.Readout("BURN LOCATION".AsSpan(),
+            (isSetPeriapsis ? "APOAPSIS" : "PERIAPSIS").AsSpan());
         if (ImGui.IsItemHovered())
         {
-            if (isSetPeriapsis)
-                ImGui.SetTooltip("Burns at apoapsis change the periapsis on the opposite\nside of the orbit. This is the most fuel-efficient point\nto lower or raise your periapsis."u8);
-            else
-                ImGui.SetTooltip("Burns at periapsis change the apoapsis on the opposite\nside of the orbit. This is the most fuel-efficient point\nto lower or raise your apoapsis."u8);
+            ConsoleWidgets.Tooltip(isSetPeriapsis
+                ? "Burns at apoapsis change the periapsis on the opposite side of the orbit. This is the most fuel-efficient point to lower or raise your periapsis.".AsSpan()
+                : "Burns at periapsis change the apoapsis on the opposite side of the orbit. This is the most fuel-efficient point to lower or raise your apoapsis.".AsSpan());
         }
 
         bool invalid = isSetPeriapsis
@@ -163,11 +163,9 @@ internal static class ManeuverToolsWindow
         if (invalid)
         {
             ImGui.Spacing();
-            ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-            ImGui.Text(isSetPeriapsis
-                ? "Target must be below current apoapsis."u8
-                : "Target must be above current periapsis."u8);
-            ImGui.PopStyleColor();
+            ConsoleUi.Warning(isSetPeriapsis
+                ? "Target must be below current apoapsis.".AsSpan()
+                : "Target must be above current periapsis.".AsSpan());
             return;
         }
 
@@ -179,9 +177,8 @@ internal static class ManeuverToolsWindow
             if (parentSoi > 0.0 && newRadius > parentSoi)
             {
                 ImGui.Spacing();
-                ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-                ImGui.TextWrapped("Target apoapsis is above SOI; vehicle will escape after the burn.");
-                ImGui.PopStyleColor();
+                ConsoleUi.WarningWrapped(
+                    "Target apoapsis is above SOI; vehicle will escape after the burn.");
             }
         }
 
@@ -201,7 +198,7 @@ internal static class ManeuverToolsWindow
 
         if (orbit.Eccentricity >= 1.0)
         {
-            ImGui.Text("Requires a bound (elliptical) orbit."u8);
+            ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;
         }
 
@@ -211,27 +208,22 @@ internal static class ManeuverToolsWindow
         double targetRadius = useApoapsis ? orbit.Apoapsis : orbit.Periapsis;
         double targetAlt = Math.Max(0.0, targetRadius - parentRadius);
 
-        string burnLocation = useApoapsis ? "Apoapsis" : "Periapsis";
-
-        ImGui.Spacing();
-        ImGuiHelper.DrawTextWidget("Current Periapsis:"u8, FormatDistance(currentPeAlt));
-        ImGuiHelper.DrawTextWidget("Current Apoapsis:"u8, FormatDistance(currentApAlt));
-        ImGuiHelper.DrawTextWidget("Burn Location:"u8, burnLocation);
+        ConsoleWidgets.Readout("CURRENT PERIAPSIS".AsSpan(), FormatDistance(currentPeAlt).AsSpan());
+        ConsoleWidgets.Readout("CURRENT APOAPSIS".AsSpan(), FormatDistance(currentApAlt).AsSpan());
+        ConsoleWidgets.Readout("BURN LOCATION".AsSpan(),
+            (useApoapsis ? "APOAPSIS" : "PERIAPSIS").AsSpan());
         if (ImGui.IsItemHovered())
         {
-            if (useApoapsis)
-                ImGui.SetTooltip("Burns at apoapsis raise the periapsis to the apoapsis radius,\nproducing a circular orbit at the current apoapsis altitude."u8);
-            else
-                ImGui.SetTooltip("Burns at periapsis lower the apoapsis to the periapsis radius,\nproducing a circular orbit at the current periapsis altitude."u8);
+            ConsoleWidgets.Tooltip(useApoapsis
+                ? "Burns at apoapsis raise the periapsis to the apoapsis radius, producing a circular orbit at the current apoapsis altitude.".AsSpan()
+                : "Burns at periapsis lower the apoapsis to the periapsis radius, producing a circular orbit at the current periapsis altitude.".AsSpan());
         }
-        ImGuiHelper.DrawTextWidget("Target Altitude:"u8, FormatDistance(targetAlt));
+        ConsoleWidgets.Readout("TARGET ALTITUDE".AsSpan(), FormatDistance(targetAlt).AsSpan());
 
         if (orbit.Eccentricity < 0.001)
         {
             ImGui.Spacing();
-            ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(80, 220, 80, 255));
-            ImGui.Text("Orbit is already nearly circular."u8);
-            ImGui.PopStyleColor();
+            ConsoleUi.Positive("Orbit is already nearly circular.".AsSpan());
             return;
         }
 
@@ -249,7 +241,7 @@ internal static class ManeuverToolsWindow
 
         if (orbit.Eccentricity >= 1.0)
         {
-            ImGui.Text("Requires a bound (elliptical) orbit."u8);
+            ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;
         }
 
@@ -258,32 +250,27 @@ internal static class ManeuverToolsWindow
         Orbit? targetOrbit = GetSelectedTargetOrbit();
         if (targetOrbit == null)
         {
-            ImGui.Text("Select a target body."u8);
+            ConsoleUi.Muted("Select a target body.".AsSpan());
             return;
         }
 
         IOrbiter? targetOrbiter = GetSelectedTargetOrbiter();
 
-        ImGui.Spacing();
-        ImGuiHelper.BeginColumns(2, new float[] { 0.9f });
         bool prevSetTarget = _setTarget;
-        if (ImGuiHelper.DrawCheckbox("Set Target"u8, ref _setTarget, isChanged: false))
+        if (ConsoleUi.CheckboxRow("SET TARGET".AsSpan(), "AfcMtSetTarget".AsSpan(), ref _setTarget)
+            && _setTarget != prevSetTarget)
         {
-            if (_setTarget != prevSetTarget)
-                QueueTargetChange(source, _setTarget ? targetOrbiter : null);
+            QueueTargetChange(source, _setTarget ? targetOrbiter : null);
         }
-        ImGuiHelper.EndColumns();
 
         double relIncDeg = orbit.GetRelativeInclination(targetOrbit).Value() * (180.0 / Math.PI);
-        ImGui.Spacing();
-        ImGuiHelper.DrawTextWidget("Relative Inclination:"u8,
-            string.Format(Inv, "{0:F2} deg", relIncDeg));
+        ConsoleWidgets.Rule();
+        ConsoleWidgets.Readout("RELATIVE INCLINATION".AsSpan(),
+            string.Format(Inv, "{0:F2} deg", relIncDeg).AsSpan());
 
         if (relIncDeg < 0.06)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(80, 220, 80, 255));
-            ImGui.Text("Orbits are already nearly coplanar."u8);
-            ImGui.PopStyleColor();
+            ConsoleUi.Positive("Orbits are already nearly coplanar.".AsSpan());
             return;
         }
 
@@ -309,32 +296,17 @@ internal static class ManeuverToolsWindow
 
         if (orbit.Eccentricity >= 1.0)
         {
-            ImGui.Text("Requires a bound (elliptical) orbit."u8);
+            ConsoleUi.Muted("Requires a bound (elliptical) orbit.".AsSpan());
             return;
         }
 
-        ImGui.Text("Reference Plane:"u8);
-        ImGui.SameLine(220f);
-        ImGui.PushItemWidth(-1f);
-        int refIdx = (int)InclinationRef;
-        if (ImGui.BeginCombo("##incRef"u8, InclinationRefLabels[refIdx]))
+        int picked = ConsoleUi.ComboRow("REFERENCE PLANE".AsSpan(), "AfcMtIncRef".AsSpan(),
+            (int)InclinationRef, InclinationRefLabels);
+        if (picked >= 0 && (OrbitManeuvers.InclinationReference)picked != InclinationRef)
         {
-            for (int i = 0; i < InclinationRefLabels.Length; i++)
-            {
-                bool isSelected = i == refIdx;
-                if (ImGui.Selectable(InclinationRefLabels[i], isSelected))
-                {
-                    var newRef = (OrbitManeuvers.InclinationReference)i;
-                    if (newRef != InclinationRef)
-                    {
-                        InclinationRef = newRef;
-                        _defaultsInitialized = false;
-                    }
-                }
-            }
-            ImGui.EndCombo();
+            InclinationRef = (OrbitManeuvers.InclinationReference)picked;
+            _defaultsInitialized = false;
         }
-        ImGui.PopItemWidth();
 
         double currentIncDeg = OrbitManeuvers.GetInclinationAgainst(orbit, InclinationRef)
             * (180.0 / Math.PI);
@@ -345,25 +317,19 @@ internal static class ManeuverToolsWindow
             _defaultsInitialized = true;
         }
 
-        ImGui.Text("Target Inclination:"u8);
-        ImGui.SameLine(220f);
-        ImGui.PushItemWidth(-1f);
-        ImGui.InputDouble("##incInput"u8, ref _inputInclinationDeg, 1.0, 10.0,
-            "%.2f"u8, ImGuiInputTextFlags.CharsDecimal);
+        ConsoleUi.InputDoubleRow("TARGET INCLINATION".AsSpan(), "##AfcIncInput"u8,
+            ref _inputInclinationDeg, 1.0, 10.0, "%.2f"u8);
         _inputInclinationDeg = Math.Clamp(_inputInclinationDeg, 0.0, 180.0);
-        ImGui.PopItemWidth();
         TargetInclinationRad = _inputInclinationDeg * (Math.PI / 180.0);
 
-        ImGui.Spacing();
-        ImGuiHelper.DrawTextWidget("Current Inclination:"u8,
-            string.Format(Inv, "{0:F2} deg", currentIncDeg));
+        ConsoleWidgets.Rule();
+        ConsoleWidgets.Readout("CURRENT INCLINATION".AsSpan(),
+            string.Format(Inv, "{0:F2} deg", currentIncDeg).AsSpan());
 
         double incDiff = Math.Abs(_inputInclinationDeg - currentIncDeg);
         if (incDiff < 0.06)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(80, 220, 80, 255));
-            ImGui.Text("Already at target inclination."u8);
-            ImGui.PopStyleColor();
+            ConsoleUi.Positive("Already at target inclination.".AsSpan());
             return;
         }
 
@@ -399,31 +365,37 @@ internal static class ManeuverToolsWindow
             _nodeDefaultInitialized = true;
         }
 
-        ImGui.Spacing();
+        // Inside a row, and hover-tested through RowHovered: Segmented ends by
+        // rewinding the cursor and emitting a zero-width Dummy, so an
+        // IsItemHovered after it can never report the segments as hovered.
+        ConsoleWidgets.BeginRow("BURN NODE".AsSpan());
+        int picked = ConsoleWidgets.Segmented("AfcMtNode".AsSpan(), NodeLabels,
+            UseDescendingNode ? 1 : 0);
+        if (ConsoleWidgets.RowHovered)
+            ConsoleWidgets.Tooltip(
+                "Where the orbit crosses the reference plane: ascending upward, descending downward. Same plane change either way; the cheaper one is the node with the lower orbital speed.".AsSpan());
+        ConsoleWidgets.EndRow();
+        if (picked >= 0)
+            UseDescendingNode = picked == 1;
 
-        bool useAn = !UseDescendingNode;
-        if (ImGui.RadioButton("Ascending Node"u8, useAn))
-            UseDescendingNode = false;
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The point where your orbit crosses upward through the reference\nplane. A normal burn here changes your orbital inclination.\nLower speed at the node means cheaper dV."u8);
-        ImGui.Indent();
-        ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatHelper.FormatDuration(timeToAn));
-        ImGuiHelper.DrawTextWidget("Required Delta V:"u8, string.Format(Inv, "{0:F1} m/s", dvAn));
-        ImGuiHelper.DrawTextWidget("Speed at Node:"u8, string.Format(Inv, "{0:F1} m/s", speedAtAn));
-        ImGui.Unindent();
+        // Both nodes stay on screen: picking between them is the whole decision
+        // this section supports, and it is made on the dV and the time to burn.
+        double timeToSel = UseDescendingNode ? timeToDn : timeToAn;
+        double dvSel = UseDescendingNode ? dvDn : dvAn;
+        double speedSel = UseDescendingNode ? speedAtDn : speedAtAn;
+        double timeToAlt = UseDescendingNode ? timeToAn : timeToDn;
+        double dvAlt = UseDescendingNode ? dvAn : dvDn;
 
-        ImGui.Spacing();
-
-        bool useDn = UseDescendingNode;
-        if (ImGui.RadioButton("Descending Node"u8, useDn))
-            UseDescendingNode = true;
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip("The point where your orbit crosses downward through the reference\nplane. Same plane change but at the opposite side of the orbit.\nMay cost less dV if speed is lower here."u8);
-        ImGui.Indent();
-        ImGuiHelper.DrawTextWidget("Time to Burn:"u8, FormatHelper.FormatDuration(timeToDn));
-        ImGuiHelper.DrawTextWidget("Required Delta V:"u8, string.Format(Inv, "{0:F1} m/s", dvDn));
-        ImGuiHelper.DrawTextWidget("Speed at Node:"u8, string.Format(Inv, "{0:F1} m/s", speedAtDn));
-        ImGui.Unindent();
+        ConsoleWidgets.Readout("TIME TO BURN".AsSpan(),
+            FormatHelper.FormatDuration(timeToSel).AsSpan());
+        ConsoleWidgets.Readout("REQUIRED DELTA V".AsSpan(),
+            string.Format(Inv, "{0:F1} m/s", dvSel).AsSpan());
+        ConsoleWidgets.Readout("SPEED AT NODE".AsSpan(),
+            string.Format(Inv, "{0:F1} m/s", speedSel).AsSpan());
+        ConsoleWidgets.Readout(
+            (UseDescendingNode ? "ASCENDING INSTEAD" : "DESCENDING INSTEAD").AsSpan(),
+            string.Format(Inv, "{0:F1} m/s in {1}", dvAlt,
+                FormatHelper.FormatDuration(timeToAlt)).AsSpan());
     }
 
     private static void DrawTargetSelector(Vehicle source)
@@ -441,12 +413,12 @@ internal static class ManeuverToolsWindow
         if (TargetSelection.Reconcile(_targetListBuffer, ref _selectedTargetId)
             is not TransferObject reconciled)
         {
-            ImGui.Text("No targets available in current SOI."u8);
+            ConsoleUi.Muted("No targets available in the current SOI.".AsSpan());
             return;
         }
 
         TransferObject selected = reconciled;
-        if (ImGuiHelper.DrawCombo("Target:"u8, ref selected, _targetListBuffer)
+        if (ConsoleUi.ComboRow("TARGET".AsSpan(), "AfcMtTarget".AsSpan(), ref selected, _targetListBuffer)
             && selected.GetKey() != reconciled.GetKey())
         {
             _defaultsInitialized = false;
@@ -480,30 +452,11 @@ internal static class ManeuverToolsWindow
         double ecc = (apRadius - peRadius) / (apRadius + peRadius);
         double period = 2.0 * Math.PI * Math.Sqrt(sma * sma * sma / mu);
 
-        ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
-        ImGui.Text("Resulting Orbit:"u8);
-        ImGuiHelper.DrawTextWidget("  Periapsis:"u8, FormatDistance(peRadius - parentRadius));
-        ImGuiHelper.DrawTextWidget("  Apoapsis:"u8, FormatDistance(apRadius - parentRadius));
-        ImGuiHelper.DrawTextWidget("  Eccentricity:"u8, string.Format(Inv, "{0:F4}", ecc));
-        ImGuiHelper.DrawTextWidget("  Period:"u8, FormatHelper.FormatDuration(period));
-        ImGui.PopStyleColor();
-    }
-
-    #endregion
-
-    #region UI Helpers
-
-    private static void DrawAltitudeInput(string label)
-    {
-        ImGui.Text(label);
-        ImGui.SameLine(220f);
-        ImGui.PushItemWidth(-1f);
-        ImGui.InputDouble("##altInput"u8, ref _inputAltitudeKm, 10.0, 100.0,
-            "%.2f"u8, ImGuiInputTextFlags.CharsDecimal);
-        if (_inputAltitudeKm < 0.0)
-            _inputAltitudeKm = 0.0;
-        ImGui.PopItemWidth();
+        ConsoleWidgets.RegionHeader("RESULTING ORBIT".AsSpan());
+        ConsoleWidgets.Readout("PERIAPSIS".AsSpan(), FormatDistance(peRadius - parentRadius).AsSpan());
+        ConsoleWidgets.Readout("APOAPSIS".AsSpan(), FormatDistance(apRadius - parentRadius).AsSpan());
+        ConsoleWidgets.Readout("ECCENTRICITY".AsSpan(), string.Format(Inv, "{0:F4}", ecc).AsSpan());
+        ConsoleWidgets.Readout("PERIOD".AsSpan(), FormatHelper.FormatDuration(period).AsSpan());
     }
 
     #endregion

@@ -29,10 +29,6 @@ namespace AdvancedFlightComputer.Features.Flyby;
 internal static class HohmannFlybyUI
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    private static readonly ImColor8 StatusGrey = new(120, 120, 120, 255);
-    private static readonly ImColor8 ColorAmber = new(255, 200, 60, 255);
-    private static readonly ImColor8 ColorOrange = new(255, 150, 50, 255);
-    private static readonly ImColor8 ColorGreen = new(80, 220, 80, 255);
     private static readonly string[] ReferenceLabels = { "Surface", "Center", "Atmosphere" };
     // Index-aligned with FlybySide.
     private static readonly string[] SideLabels =
@@ -123,11 +119,8 @@ internal static class HohmannFlybyUI
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info)
     {
-        ImGui.Spacing();
         bool prevOn = _flybyOn;
-        ImGuiHelper.BeginColumns(2, SingleColumnWidths);
-        ImGuiHelper.DrawCheckbox("Target flyby periapsis"u8, ref _flybyOn, isChanged: false);
-        ImGuiHelper.EndColumns();
+        ConsoleUi.CheckboxRow("TARGET FLYBY PERIAPSIS".AsSpan(), "AfcFlybyOn".AsSpan(), ref _flybyOn);
         if (_flybyOn != prevOn)
         {
             InvalidateCache();
@@ -142,9 +135,7 @@ internal static class HohmannFlybyUI
 
         if (info.Target is not IParentBody target)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
-            ImGui.TextWrapped("Flyby targeting needs a celestial body (not a vehicle).");
-            ImGui.PopStyleColor();
+            ConsoleUi.WarningWrapped("Flyby targeting needs a celestial body (not a vehicle).");
             return;
         }
 
@@ -156,19 +147,16 @@ internal static class HohmannFlybyUI
         double minRadius = FlybyTargeting.MinFlybyRadius(target);
         _belowFloor = peRadius < minRadius;
 
-        ImGui.Spacing();
-        ImGuiHelper.DrawTextWidget("Flyby periapsis (from center):"u8,
-            ManeuverToolsWindow.FormatDistance(peRadius));
+        ConsoleWidgets.Readout("FLYBY PERIAPSIS (FROM CENTER)".AsSpan(),
+            ManeuverToolsWindow.FormatDistance(peRadius).AsSpan());
 
         if (_belowFloor)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
             // The floor is the terrain ceiling on an airless body and the top of the
             // atmosphere on one with an atmosphere, so it is not always "the surface".
-            ImGui.TextWrapped(string.Format(Inv,
+            ConsoleUi.WarningWrapped(string.Format(Inv,
                 "Periapsis is below the safe flyby floor ({0} from center). Raise the altitude.",
                 ManeuverToolsWindow.FormatDistance(minRadius)));
-            ImGui.PopStyleColor();
             return;
         }
 
@@ -186,11 +174,10 @@ internal static class HohmannFlybyUI
             InvalidateCache();
         }
 
-        ImGui.Text("Reference:"u8);
-        ImGui.SameLine(220f);
-        ImGui.PushItemWidth(-1f);
         int refIdx = (int)_reference;
-        if (ImGui.BeginCombo("##flybyRef"u8, ReferenceLabels[refIdx]))
+        ConsoleWidgets.BeginRow("REFERENCE".AsSpan());
+        if (ConsoleWidgets.BeginComboControl("AfcFlybyRef".AsSpan(),
+                ReferenceLabels[refIdx].AsSpan(), pending: false))
         {
             for (int i = 0; i < ReferenceLabels.Length; i++)
             {
@@ -202,27 +189,21 @@ internal static class HohmannFlybyUI
                     if (newRef != _reference) { _reference = newRef; InvalidateCache(); }
                 }
             }
-            ImGui.EndCombo();
+            ConsoleWidgets.EndComboControl();
         }
-        ImGui.PopItemWidth();
+        ConsoleWidgets.EndRow();
     }
 
     private static void DrawValueInput(IParentBody target)
     {
-        // Kept short so the label fits the 220px column the input starts at; the
-        // Reference dropdown directly above already states what it is measured from.
-        string label = _reference == FlybyReference.Center
-            ? "Radius (km):"
-            : "Altitude (km):";
-        ImGui.Text(label);
-        ImGui.SameLine(220f);
-        ImGui.PushItemWidth(-1f);
+        // The Reference dropdown directly above states what the value is
+        // measured from, so the label only has to name the quantity.
         double prev = _inputValueKm;
-        ImGui.InputDouble("##flybyAlt"u8, ref _inputValueKm, 10.0, 100.0,
-            "%.1f"u8, ImGuiInputTextFlags.CharsDecimal);
+        ConsoleUi.InputDoubleRow(
+            _reference == FlybyReference.Center ? "RADIUS (KM)".AsSpan() : "ALTITUDE (KM)".AsSpan(),
+            "##AfcFlybyAlt"u8, ref _inputValueKm, 10.0, 100.0, "%.1f"u8);
         if (_inputValueKm < 0.0) _inputValueKm = 0.0;
         if (Math.Abs(_inputValueKm - prev) > 1e-9) InvalidateCache();
-        ImGui.PopItemWidth();
     }
 
     /// <summary>Side picker in the target's orbital frame. A side whose axis is
@@ -230,10 +211,9 @@ internal static class HohmannFlybyUI
     /// the periapsis there), so it is drawn disabled rather than silently aimed at.</summary>
     private static void DrawSidePicker()
     {
-        ImGui.Text("Flyby side:"u8);
-        ImGui.SameLine(220f);
-        ImGui.PushItemWidth(-1f);
-        if (ImGui.BeginCombo("##flybySide"u8, SideLabels[(int)_side]))
+        ConsoleWidgets.BeginRow("FLYBY SIDE".AsSpan());
+        if (ConsoleWidgets.BeginComboControl("AfcFlybySide".AsSpan(),
+                SideLabels[(int)_side].AsSpan(), pending: false))
         {
             for (int i = 0; i < SideLabels.Length; i++)
             {
@@ -247,18 +227,16 @@ internal static class HohmannFlybyUI
                 }
                 if (!reachable) ImGui.EndDisabled();
             }
-            ImGui.EndCombo();
+            ConsoleWidgets.EndComboControl();
         }
-        ImGui.PopItemWidth();
+        ConsoleWidgets.EndRow();
     }
 
     private static void DrawResult(Vehicle source, OrbitalTransfers.PorkChopEntry entry)
     {
         if (!_hasCached || _cachedResult == null)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
-            ImGui.TextWrapped("Flyby retarget failed for this geometry; the stock burn would still impact. Try a different transfer window or side.");
-            ImGui.PopStyleColor();
+            ConsoleUi.WarningWrapped("Flyby retarget failed for this geometry; the stock burn would still impact. Try a different transfer window or side.");
             return;
         }
 
@@ -266,34 +244,28 @@ internal static class HohmannFlybyUI
         double stockDv = entry.TransferData.TransferDvVlf.Length();
         double flybyDv = r.DvVlf.Length();
 
-        ImGui.PushStyleColor(ImGuiCol.Text, StatusGrey);
-        ImGuiHelper.DrawTextWidget("Approach speed:"u8,
-            string.Format(Inv, "{0:F1} m/s", r.VInfMs));
-        ImGuiHelper.DrawTextWidget("Impact parameter:"u8,
-            ManeuverToolsWindow.FormatDistance(r.ImpactParameterMeters));
-        ImGuiHelper.DrawTextWidget("Departure dV:"u8,
-            string.Format(Inv, "{0:F1} m/s ({1:+0.0;-0.0} vs impact)", flybyDv, flybyDv - stockDv));
+        ConsoleWidgets.Readout("APPROACH SPEED".AsSpan(),
+            string.Format(Inv, "{0:F1} m/s", r.VInfMs).AsSpan());
+        ConsoleWidgets.Readout("IMPACT PARAMETER".AsSpan(),
+            ManeuverToolsWindow.FormatDistance(r.ImpactParameterMeters).AsSpan());
+        ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(),
+            string.Format(Inv, "{0:F1} m/s ({1:+0.0;-0.0} vs impact)", flybyDv, flybyDv - stockDv).AsSpan());
         if (!double.IsNaN(_predictedPeAlt))
-            ImGuiHelper.DrawTextWidget("Predicted periapsis:"u8,
-                ManeuverToolsWindow.FormatDistance(_predictedPeAlt));
-        ImGui.PopStyleColor();
+            ConsoleWidgets.Readout("PREDICTED PERIAPSIS".AsSpan(),
+                ManeuverToolsWindow.FormatDistance(_predictedPeAlt).AsSpan());
 
         if (IsCacheExpired())
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
-            ImGui.TextWrapped("Departure time has passed - Re-Calculate to pick a new window.");
-            ImGui.PopStyleColor();
+            ConsoleUi.WarningWrapped("Departure time has passed - Re-Calculate to pick a new window.");
             return;
         }
 
         if (PredictedFlybyBelowFloor)
         {
-            ImGui.PushStyleColor(ImGuiCol.Text, ColorOrange);
-            ImGui.TextWrapped(string.Format(Inv,
-                "[!] Propagated periapsis is below the safe floor ({0} from center): " +
+            ConsoleUi.WarningWrapped(string.Format(Inv,
+                "Propagated periapsis is below the safe floor ({0} from center): " +
                 "this trajectory impacts. Raise the altitude or try the other side.",
                 ManeuverToolsWindow.FormatDistance(_minFlybyRadius)));
-            ImGui.PopStyleColor();
             return;
         }
 
@@ -302,15 +274,11 @@ internal static class HohmannFlybyUI
             // Advisory rather than a block: the propagation is best-effort and has
             // been seen to miss an encounter that a later recompute resolves, so
             // refusing here could strand a valid plan.
-            ImGui.PushStyleColor(ImGuiCol.Text, ColorAmber);
-            ImGui.TextWrapped("No encounter resolved in the preview; the flyby periapsis could not be confirmed.");
-            ImGui.PopStyleColor();
+            ConsoleUi.WarningWrapped("No encounter resolved in the preview; the flyby periapsis could not be confirmed.");
             return;
         }
 
-        ImGui.PushStyleColor(ImGuiCol.Text, ColorGreen);
-        ImGui.TextWrapped("Create fires this flyby departure directly.");
-        ImGui.PopStyleColor();
+        ConsoleUi.Positive("Create fires this flyby departure directly.".AsSpan());
     }
 
     #region Cache

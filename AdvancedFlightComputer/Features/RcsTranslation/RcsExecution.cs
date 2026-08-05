@@ -165,10 +165,10 @@ internal sealed class RcsExecution
     public double WrenchBuiltAtSec = double.NegativeInfinity;
 
     /// <summary>Seconds of firing per newton-second of net impulse along
-    /// <see cref="LpDirBody"/>, index-aligned with the wrench table (and
+    /// <see cref="LpDirCtrl"/>, index-aligned with the wrench table (and
     /// with VehicleConfig.Thrusters). Null while no valid solution exists.</summary>
     public float[]? LpSecondsPerImpulse;
-    public float3 LpDirBody;
+    public float3 LpDirCtrl;
     public float LpImpulseCapNs;
     public double LpSolvedAtSec = double.NegativeInfinity;
 
@@ -254,7 +254,7 @@ internal sealed class RcsExecution
         Wrench = null;
         WrenchBuiltAtSec = double.NegativeInfinity;
         LpSecondsPerImpulse = null;
-        LpDirBody = default;
+        LpDirCtrl = default;
         LpImpulseCapNs = 0f;
         LpSolvedAtSec = double.NegativeInfinity;
         LpCostPerImpulse = 0.0;

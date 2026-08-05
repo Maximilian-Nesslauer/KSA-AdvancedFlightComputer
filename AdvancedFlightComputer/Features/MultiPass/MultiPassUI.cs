@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -31,6 +32,8 @@ internal static class MultiPassUI
     private const int SuggestMaxN = 8;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
+
+    private static readonly string[] SplitModeLabels = { "EQUAL TIME", "EQUAL DV" };
 
     private static int _passCount = 1;
     private static SplitMode _splitMode = SplitMode.EqualBurnTime;
@@ -128,7 +131,7 @@ internal static class MultiPassUI
         DrawPassCountSelector();
 
         if (_passCount > 1)
-            DrawSplitModeRadio();
+            DrawSplitModeSelector();
 
         DrawAdvisoryIfApplicable(source.Orbit, totalDv, totalBurnTime);
 
@@ -190,12 +193,10 @@ internal static class MultiPassUI
         }
 
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-        ImGui.TextWrapped(string.Format(Inv,
+        ConsoleUi.WarningWrapped(string.Format(Inv,
             "Vehicle is running a \"{0}\" multi-pass. " +
             "Switch the Plan Type back to \"{0}\" to view its passes.",
             label));
-        ImGui.PopStyleColor();
     }
 
     public static void Render(Viewport viewport, Vehicle source)
@@ -253,28 +254,15 @@ internal static class MultiPassUI
 
     private static void DrawPassCountSelector()
     {
-        ImGui.Text("Passes:"u8);
-        ImGui.SameLine();
-
-        if (ImGuiHelper.DrawButton("<"u8, KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Green))
+        ConsoleWidgets.BeginRow("PASSES".AsSpan());
+        int passes = _passCount;
+        if (ConsoleWidgets.SliderInt("AfcMpPasses".AsSpan(), ref passes, MinPasses,
+                Splitter.MaxPasses, passes.ToString(Inv).AsSpan(), pending: false))
         {
-            if (_passCount > MinPasses)
-            {
-                _passCount--;
-                MultiPassPreviewCache.Invalidate();
-            }
+            _passCount = passes;
+            MultiPassPreviewCache.Invalidate();
         }
-        ImGui.SameLine();
-        ImGui.Text(_passCount.ToString(Inv));
-        ImGui.SameLine();
-        if (ImGuiHelper.DrawButton(">"u8, KSAColor.DarkGrey, KSAColor.Xkcd.DustyBlue, Color.Green))
-        {
-            if (_passCount < Splitter.MaxPasses)
-            {
-                _passCount++;
-                MultiPassPreviewCache.Invalidate();
-            }
-        }
+        ConsoleWidgets.EndRow();
     }
 
     private static void DrawPassList(int firstPassDisplayNumber)
@@ -284,44 +272,34 @@ internal static class MultiPassUI
         PassPreview[] passes = MultiPassPreviewCache.PreviewPasses;
         if (passes.Length == 0) return;
 
-        ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
         for (int i = 0; i < passes.Length; i++)
         {
             double dv = passes[i].DvVlf.Length();
             double t = passes[i].EstimatedBurnTimeSec;
-            int n = firstPassDisplayNumber + i;
-            string line = t > 0.5
-                ? string.Format(Inv, "Pass {0}: {1:F0} m/s, {2:F0}s", n, dv, t)
-                : string.Format(Inv, "Pass {0}: {1:F0} m/s", n, dv);
-            ImGui.Text(line);
+            string value = t > 0.5
+                ? string.Format(Inv, "{0:F0} m/s, {1:F0}s", dv, t)
+                : string.Format(Inv, "{0:F0} m/s", dv);
+            ConsoleWidgets.Readout(
+                string.Format(Inv, "PASS {0}", firstPassDisplayNumber + i).AsSpan(), value.AsSpan());
         }
-        ImGui.PopStyleColor();
     }
 
-    private static void DrawSplitModeRadio()
+    private static void DrawSplitModeSelector()
     {
-        ImGui.Spacing();
-        bool isBurnTime = _splitMode == SplitMode.EqualBurnTime;
-        if (ImGui.RadioButton("Equal Burn Time"u8, isBurnTime) && !isBurnTime)
-        {
-            _splitMode = SplitMode.EqualBurnTime;
-            MultiPassPreviewCache.Invalidate();
-        }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Each pass fires the engines for the same duration.\nEqualizes finite-burn arc length across passes\n(Oberth-optimal default)."u8);
+        ConsoleWidgets.BeginRow("SPLIT".AsSpan());
+        int picked = ConsoleWidgets.Segmented("AfcMpSplit".AsSpan(), SplitModeLabels,
+            _splitMode == SplitMode.EqualDv ? 1 : 0);
+        if (ConsoleWidgets.RowHovered)
+            ConsoleWidgets.Tooltip(
+                "Equal burn time fires the engines for the same duration each pass, equalizing finite-burn arc length (Oberth-optimal default). Equal delta-v delivers the same magnitude each pass.".AsSpan());
+        ConsoleWidgets.EndRow();
 
-        ImGui.SameLine();
-        bool isEqualDv = _splitMode == SplitMode.EqualDv;
-        if (ImGui.RadioButton("Equal Delta-V"u8, isEqualDv) && !isEqualDv)
+        SplitMode pickedMode = picked == 1 ? SplitMode.EqualDv : SplitMode.EqualBurnTime;
+        if (picked >= 0 && pickedMode != _splitMode)
         {
-            _splitMode = SplitMode.EqualDv;
+            _splitMode = pickedMode;
             MultiPassPreviewCache.Invalidate();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(
-                "Each pass delivers the same delta-v magnitude"u8);
     }
 
     private static void DrawPreviewFailureIfApplicable()
@@ -329,13 +307,11 @@ internal static class MultiPassUI
         if (!MultiPassPreviewCache.LastPreviewFailed) return;
 
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 150, 50, 255));
         string reason = MultiPassPreviewCache.LastPreviewFailureReason ?? "unknown reason";
-        ImGui.TextWrapped(string.Format(Inv,
-            "[!] Multi-pass preview incomplete: {0}.\n" +
+        ConsoleUi.WarningWrapped(string.Format(Inv,
+            "Multi-pass preview incomplete: {0}. " +
             "Try fewer passes or a different split mode.",
             reason));
-        ImGui.PopStyleColor();
     }
 
     // Warns when allocation sum < requested dV (vehicle is fuel-short).
@@ -353,12 +329,10 @@ internal static class MultiPassUI
         if (sum >= totalDv * 0.995) return;
 
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 150, 50, 255));
-        ImGui.TextWrapped(string.Format(Inv,
-            "[!] Vehicle can only deliver ~{0:F0} m/s of the {1:F0} m/s required.\n" +
+        ConsoleUi.WarningWrapped(string.Format(Inv,
+            "Vehicle can only deliver ~{0:F0} m/s of the {1:F0} m/s required. " +
             "Multi-pass will run out of fuel before the goal is reached.",
             sum, totalDv));
-        ImGui.PopStyleColor();
     }
 
     private static void DrawAdvisoryIfApplicable(
@@ -378,12 +352,10 @@ internal static class MultiPassUI
         double estimatedSavings = singlePassLoss - splitLoss;
 
         ImGui.Spacing();
-        ImGui.PushStyleColor(ImGuiCol.Text, new ImColor8(255, 200, 60, 255));
-        ImGui.TextWrapped(string.Format(Inv,
-            "[!] Burn duration ({0:F0}s) is {1:F0}%% of orbital period. " +
+        ConsoleUi.WarningWrapped(string.Format(Inv,
+            "Burn duration ({0:F0}s) is {1:F0}% of orbital period. " +
             "Splitting across {2} passes saves ~{3:F0} m/s.",
             totalBurnTime, burnRatio * 100.0, suggestedN, estimatedSavings));
-        ImGui.PopStyleColor();
     }
 
     // Smallest N where per-pass loss is below the ceiling AND one more
@@ -434,10 +406,8 @@ internal static class MultiPassUI
         double savings = singleLoss - splitLoss;
         if (savings < 1.0) return;
 
-        ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyleColorVec4(ImGuiCol.TextDisabled));
-        ImGui.Text(string.Format(Inv,
-            "Total savings vs single burn: ~{0:F0} m/s", savings));
-        ImGui.PopStyleColor();
+        ConsoleWidgets.Readout("SAVINGS VS SINGLE BURN".AsSpan(),
+            string.Format(Inv, "~{0:F0} m/s", savings).AsSpan());
     }
 
     #endregion

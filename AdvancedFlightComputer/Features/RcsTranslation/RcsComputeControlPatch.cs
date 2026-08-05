@@ -40,7 +40,8 @@ internal static class RcsComputeControlPatch
 
         float3 togo = bt.DeltaVToGoCci;
         float3 impulse = float3.Pack(
-            double3.Unpack(togo).Transform(nav.Body2Cci.Inverse())) * __instance.TotalMassPropsBody.Mass;
+            double3.Unpack(togo).Transform(doubleQuat.Concatenate(nav.Ctrl2Body, nav.Body2Cci).Inverse()))
+            * __instance.TotalMassPropsBody.Mass;
 
         // Mirror RCS timing into the shared BurnTarget: stock recomputes
         // BurnDuration/IgnitionTime from engine mass flow every tick, which
@@ -50,7 +51,7 @@ internal static class RcsComputeControlPatch
         // down instead of freezing at the total. The LP model only applies
         // while its pattern could actually fire: during an align slew the
         // projection onto the stale solve direction decays with the
-        // rotating body frame (a countdown for a burn that is not firing),
+        // rotating control frame (a countdown for a burn that is not firing),
         // and after staging the pattern no longer maps onto the thruster
         // list; both fall back to the stable group model.
         bool lpUsable = cmd.LpSecondsPerImpulse != null
@@ -58,6 +59,19 @@ internal static class RcsComputeControlPatch
             && (!cmd.RequireAttitude || !RcsExecutor.OutsideAlignGate(__instance));
         bt.BurnDuration = RemainingDurationSec(cmd, impulse, lpUsable);
         bt.IgnitionTime = new SimTime(cmd.IgnitionTimeSec);
+
+        // ComputeRcsControl drops the thruster command flags and UpdateRcsParams
+        // zeroes the authority whenever RCSMode is not Enabled, so firing below
+        // would put jets on a vehicle stock considers to have RCS off. The driver
+        // owns RCSMode for the burn and restores it every tick, so this only
+        // covers a tick landing between a pilot toggle and that restore. It sits
+        // AFTER the timing mirror on purpose: UpdateBurnTarget rewrites
+        // BurnDuration and IgnitionTime from the engine mass flow every tick, which
+        // is ~0 on an RCS burn, so returning earlier would snap the countdown to
+        // zero and hand RcsExecutor.TickActive an ignition time stock just
+        // overwrote.
+        if (__instance.RCSMode != FlightComputerRCSMode.Enabled)
+            return;
 
         double toIgnition = cmd.IgnitionTimeSec - nav.Time.Seconds();
         if (toIgnition > 0.0)
@@ -152,20 +166,20 @@ internal static class RcsComputeControlPatch
     /// Conservative on purpose: minimum-pulse round-up on small pattern
     /// members delivers slightly faster than modeled, so the countdown
     /// converges to zero a bit early rather than hanging past it.</summary>
-    internal static float RemainingDurationSec(RcsWorkerCommand cmd, float3 impulseBody, bool lpUsable)
+    internal static float RemainingDurationSec(RcsWorkerCommand cmd, float3 impulseCtrl, bool lpUsable)
     {
         if (lpUsable && cmd.LpSecondsPerImpulse != null && cmd.LpImpulseCapNs > 0f)
         {
-            float j = Math.Max(float3.Dot(impulseBody, cmd.LpDirBody), 0f);
+            float j = Math.Max(float3.Dot(impulseCtrl, cmd.LpDirCtrl), 0f);
             return j * cmd.MaxPulseSec / cmd.LpImpulseCapNs;
         }
         float duration = 0f;
         duration = Math.Max(duration, AxisDurationSec(
-            impulseBody.X, cmd.AxisForcePos.X, cmd.AxisForceNeg.X));
+            impulseCtrl.X, cmd.AxisForcePos.X, cmd.AxisForceNeg.X));
         duration = Math.Max(duration, AxisDurationSec(
-            impulseBody.Y, cmd.AxisForcePos.Y, cmd.AxisForceNeg.Y));
+            impulseCtrl.Y, cmd.AxisForcePos.Y, cmd.AxisForceNeg.Y));
         duration = Math.Max(duration, AxisDurationSec(
-            impulseBody.Z, cmd.AxisForcePos.Z, cmd.AxisForceNeg.Z));
+            impulseCtrl.Z, cmd.AxisForcePos.Z, cmd.AxisForceNeg.Z));
         return duration;
     }
 
@@ -178,12 +192,12 @@ internal static class RcsComputeControlPatch
     /// <summary>Returns true when at least one pulse was committed.</summary>
     private static bool FireLpPattern(
         FlightComputer fc, ref FlightComputerOutput outputs, RcsWorkerCommand cmd,
-        float[] secondsPerImpulse, float3 impulseBody)
+        float[] secondsPerImpulse, float3 impulseCtrl)
     {
         // The pattern is valid along its solved direction only; project the
         // remaining impulse onto it and let the driver re-solve when the
         // direction drifts. A negative projection fires nothing.
-        float j = float3.Dot(impulseBody, cmd.LpDirBody);
+        float j = float3.Dot(impulseCtrl, cmd.LpDirCtrl);
         j = Math.Min(j, cmd.LpImpulseCapNs);
         if (j <= 0f)
         {

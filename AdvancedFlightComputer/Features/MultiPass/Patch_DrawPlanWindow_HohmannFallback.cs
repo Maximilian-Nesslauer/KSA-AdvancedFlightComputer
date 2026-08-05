@@ -2,18 +2,17 @@ using System.Collections.Generic;
 using System.Reflection.Emit;
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
-using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
 /// <summary>
-/// Second IL transpiler on <see cref="TransferPlanner.DrawPlanWindow"/>
+/// IL transpiler on <see cref="TransferPlanner.DrawPlanWindow"/>
 /// that injects <see cref="HohmannMultiPassUI.DrawInline"/> right
-/// before the outermost <see cref="ImGui.End"/> call. This is the
-/// fallback render point that fires regardless of stock's
-/// <c>_transferCalculated</c> state.
+/// before the <see cref="ConsoleStyle.PopWidgetStyle"/> call that closes
+/// the window body. This is the fallback render point that fires
+/// regardless of stock's <c>_transferCalculated</c> state.
 ///
 /// The first injection (<see cref="ManeuverTools.Patch_DrawPlanWindow_HohmannMultiPass"/>)
 /// lives inside the <c>if (_transferCalculated &amp;&amp; _transferInfo != null)</c>
@@ -30,34 +29,44 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// the first injection has already rendered mid-window, the call from
 /// this second injection short-circuits and there is no duplicate UI.
 ///
-/// Anchor stability: <see cref="TransferPlanner.DrawPlanWindow"/>
-/// contains exactly one direct <c>ImGui.End()</c> call (matching the
-/// outer <c>ImGui.Begin("Transfer Planning")</c>). Helper methods
-/// invoked from inside (<c>DrawCorrectionTransfer</c>, etc.) live in
-/// separate method bodies, so their End calls do not appear in this
-/// transpiler's IL stream. If stock later adds another End in this
-/// method (e.g., a sub-window), we anchor on the FIRST one, which by
-/// stock's current structure is the outer one.
+/// Anchor choice: the injected UI has to land inside the body child
+/// window and while the console widget style is still pushed, which is
+/// exactly the span <c>PopWidgetStyle</c> terminates. Anchoring on the
+/// window's own <c>EndWindow</c> instead would draw into the raw window
+/// after <c>EndBody</c> has already closed the child.
+/// <see cref="TransferPlanner.DrawPlanWindow"/> contains exactly one
+/// <c>PopWidgetStyle</c> call; helpers invoked from inside
+/// (<c>DrawCorrectionTransfer</c>, etc.) live in separate method bodies,
+/// so their calls do not appear in this transpiler's IL stream. Should
+/// stock ever add a second one, we anchor on the FIRST, which by stock's
+/// current structure is the one closing the main body.
 /// </summary>
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
 internal static class Patch_DrawPlanWindow_HohmannFallback
 {
-    /// <summary>Returns true if the <see cref="ImGui.End"/> overload
-    /// we anchor on exists. Mod.cs uses this to decide whether to
+    /// <summary>Returns true if the <see cref="ConsoleStyle.PopWidgetStyle"/>
+    /// overload we anchor on exists. Mod.cs uses this to decide whether to
     /// apply the transpiler.</summary>
-    public static bool IsAnchorPresent =>
-        AccessTools.Method(typeof(ImGui), nameof(ImGui.End), System.Type.EmptyTypes) != null;
+    public static bool IsAnchorPresent => Anchor != null;
+
+    private static System.Reflection.MethodInfo? Anchor =>
+        AccessTools.Method(typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle),
+            System.Type.EmptyTypes);
 
     [HarmonyTranspiler]
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
-        var anchor = AccessTools.Method(typeof(ImGui), nameof(ImGui.End), System.Type.EmptyTypes);
+        var anchor = Anchor;
         var injectTarget = AccessTools.Method(typeof(HohmannMultiPassUI),
             nameof(HohmannMultiPassUI.DrawInline));
 
+        // Deduped like the success line: Harmony re-runs every transpiler on
+        // DrawPlanWindow whenever another patch lands on or leaves it, and five
+        // AFC patches target that method, so an undeduped failure line prints
+        // once per re-run.
         if (anchor == null || injectTarget == null)
         {
-            DefaultCategory.Log.Warning(
+            LogHelper.WarnOnce("transpiler-hohmann-fallback-missing",
                 "[AFC] HohmannFallback transpiler: anchor or inject target missing " +
                 "(anchor=" + (anchor != null ? "ok" : "MISSING") + ", " +
                 "inject=" + (injectTarget != null ? "ok" : "MISSING") +
@@ -71,10 +80,9 @@ internal static class Patch_DrawPlanWindow_HohmannFallback
         foreach (var ins in instructions)
         {
             totalIns++;
-            // Inject before the first ImGui.End() call. By stock's
-            // current layout this is the outermost call inside the
-            // "Transfer Planning" ImGui.Begin block, after all the
-            // window content has been drawn.
+            // Inject before the first PopWidgetStyle call: by stock's current
+            // layout that is the end of the plan window's body content, after
+            // everything stock draws and while the widget style still applies.
             if (!injected && ins.Calls(anchor))
             {
                 var injectIns = new CodeInstruction(OpCodes.Call, injectTarget);
@@ -94,13 +102,12 @@ internal static class Patch_DrawPlanWindow_HohmannFallback
             if (DebugConfig.MultiPass)
                 LogHelper.DebugOnce("transpiler-hohmann-fallback",
                     "[AFC] HohmannFallback transpiler: injected DrawInline before " +
-                    "ImGui.End (" + totalIns + " IL instructions scanned).");
+                    "ConsoleStyle.PopWidgetStyle (" + totalIns + " IL instructions scanned).");
         }
         else
-            DefaultCategory.Log.Warning(
-                "[AFC] HohmannFallback transpiler: no ImGui.End() call found in " +
-                "DrawPlanWindow IL (" + totalIns + " IL instructions scanned); " +
-                "fallback render inactive (multi-pass status hidden after F4 close+reopen " +
-                "until user clicks Calculate).");
+            LogHelper.WarnOnce("transpiler-hohmann-fallback-noanchor",
+                "[AFC] HohmannFallback transpiler: no ConsoleStyle.PopWidgetStyle() call found in " +
+                "DrawPlanWindow IL; fallback render inactive (multi-pass status hidden " +
+                "after F4 close+reopen until user clicks Calculate).");
     }
 }

@@ -39,12 +39,15 @@ internal static class RcsBurnUi
         // re-resolve mid-flight.
         using (new ImGuiDisabledScope(isActiveBurn))
         {
-            ImGui.Text("Execution"u8);
-            ImGui.SameLine(120f);
+            ConsoleWidgets.BeginRow("EXECUTION".AsSpan());
             string modeLabel = mode == RcsExecutionMode.Default
-                ? $"Default ({resolved})##rcsmode{timeSec:R}"
-                : $"{mode}##rcsmode{timeSec:R}";
-            if (ImGui.Button(modeLabel, (float2?)null) && !isActiveBurn)
+                ? $"DEFAULT ({resolved})"
+                : mode.ToString().ToUpperInvariant();
+            bool modeClicked = ConsoleWidgets.Button(
+                modeLabel.AsSpan(), $"rcsmode{timeSec:R}".AsSpan(),
+                new float2(ConsoleWidgets.RowControlWidth, ConsoleWidgets.ButtonHeight));
+            ConsoleWidgets.EndRow();
+            if (modeClicked && !isActiveBurn)
             {
                 RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
                 RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
@@ -61,10 +64,12 @@ internal static class RcsBurnUi
             if (resolved == RcsExecutionMode.Rcs || isActiveBurn)
             {
                 RcsAttitudeStrategy attitude = options?.Attitude ?? RcsAttitudeStrategy.Auto;
-                ImGui.Text("Attitude"u8);
-                ImGui.SameLine(120f);
-                if (ImGui.Button($"{attitude}##rcsatt{timeSec:R}", (float2?)null)
-                    && !isActiveBurn)
+                ConsoleWidgets.BeginRow("ATTITUDE".AsSpan());
+                bool attClicked = ConsoleWidgets.Button(
+                    attitude.ToString().ToUpperInvariant().AsSpan(), $"rcsatt{timeSec:R}".AsSpan(),
+                    new float2(ConsoleWidgets.RowControlWidth, ConsoleWidgets.ButtonHeight));
+                ConsoleWidgets.EndRow();
+                if (attClicked && !isActiveBurn)
                 {
                     RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
                     RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
@@ -78,10 +83,12 @@ internal static class RcsBurnUi
 
                 // Per-burn allocator choice; see RcsAllocator for the tradeoff.
                 RcsAllocator allocator = options?.Allocator ?? RcsAllocator.Groups;
-                ImGui.Text("Allocator"u8);
-                ImGui.SameLine(120f);
-                if (ImGui.Button($"{allocator}##rcsalloc{timeSec:R}", (float2?)null)
-                    && !isActiveBurn)
+                ConsoleWidgets.BeginRow("ALLOCATOR".AsSpan());
+                bool allocClicked = ConsoleWidgets.Button(
+                    allocator.ToString().ToUpperInvariant().AsSpan(), $"rcsalloc{timeSec:R}".AsSpan(),
+                    new float2(ConsoleWidgets.RowControlWidth, ConsoleWidgets.ButtonHeight));
+                ConsoleWidgets.EndRow();
+                if (allocClicked && !isActiveBurn)
                 {
                     RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
                     RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
@@ -122,10 +129,12 @@ internal static class RcsBurnUi
             string allocator = exec.ResolvedAllocator == RcsAllocator.Lp
                 ? (exec.LpSecondsPerImpulse != null ? "LP" : "LP->Groups")
                 : "Groups";
-            ImGuiHelper.DrawTextWidget("RCS status"u8, $"{phase} ({strategy}, {allocator})");
+            ConsoleWidgets.Readout("RCS STATUS".AsSpan(),
+                $"{phase} ({strategy}, {allocator})".AsSpan());
             if (bt != null)
-                ImGuiHelper.DrawTextWidget("To go"u8, $"{bt.DeltaVToGoCci.Length():F2} m/s");
-            if (ImGui.Button("Cancel RCS burn"u8, (float2?)null))
+                ConsoleWidgets.Readout("TO GO".AsSpan(),
+                    $"{bt.DeltaVToGoCci.Length():F2} m/s".AsSpan());
+            if (ConsoleWidgets.DangerButton("CANCEL RCS BURN".AsSpan()))
                 RcsExecutor.Cancel(vehicle, exec, "user request");
             return;
         }
@@ -152,12 +161,12 @@ internal static class RcsBurnUi
             return;
         ref readonly RcsEstimates est = ref exec.Estimates;
         if (est.HoldFeasible)
-            ImGuiHelper.DrawTextWidget("Hold est."u8,
-                $"{est.HoldPropellantKg:F1} kg, {est.HoldDurationSec:F0} s");
+            ConsoleWidgets.Readout("HOLD EST.".AsSpan(),
+                $"{est.HoldPropellantKg:F1} kg, {est.HoldDurationSec:F0} s".AsSpan());
         if (est.AlignFeasible)
-            ImGuiHelper.DrawTextWidget("Align est."u8,
-                $"{est.AlignTotalPropellantKg:F1} kg, " +
-                $"{est.AlignDurationSec:F0} s ({RcsExecutor.AxisName(est.AlignAxis)})");
+            ConsoleWidgets.Readout("ALIGN EST.".AsSpan(),
+                ($"{est.AlignTotalPropellantKg:F1} kg, " +
+                 $"{est.AlignDurationSec:F0} s ({RcsExecutor.AxisName(est.AlignAxis)})").AsSpan());
 
         double neededKg = est.RequiredPropellantKg(attitude);
         double availableKg = RcsExecutor.AvailablePropellantCached(vehicle);
@@ -165,10 +174,5 @@ internal static class RcsBurnUi
             DrawWarning($"Propellant short: needs ~{neededKg:F0} kg, {availableKg:F0} kg available");
     }
 
-    private static void DrawWarning(string text)
-    {
-        ImGui.PushStyleColor(ImGuiCol.Text, Color.Red.AsByte4);
-        ImGui.Text(text);
-        ImGui.PopStyleColor(1);
-    }
+    private static void DrawWarning(string text) => ConsoleUi.DangerWrapped(text);
 }

@@ -307,7 +307,7 @@ internal static class RcsExecutor
         // considerably more than the axis-group estimate.
         exec.ResolvedAllocator = options.Allocator;
         if (exec.ResolvedAllocator == RcsAllocator.Lp)
-            EnsureLpSolution(vehicle, fc, exec, ImpulseBodyFromTogo(vehicle, fc, fc.Burn),
+            EnsureLpSolution(vehicle, fc, exec, ImpulseCtrlFromTogo(vehicle, fc, fc.Burn),
                 Universe.GetElapsedSimTime().Seconds());
 
         // Warn-only sufficiency check: the user may refill mid-burn or
@@ -486,10 +486,12 @@ internal static class RcsExecutor
         }
     }
 
-    /// <summary>Points body axis <paramref name="axisIdx"/> at the burn
-    /// vector via the stock attitude tracker. +X/-X map onto the stock
-    /// PositiveDv/NegativeDv targets; other axes use a Custom target in the
-    /// BurnBody frame (whose +X is the burn direction by construction).
+    /// <summary>Points control-frame axis <paramref name="axisIdx"/> at the burn
+    /// vector via the stock attitude tracker, which itself tracks the control
+    /// frame (FlightComputer takes its attitude error against Ctrl2Cci). +X/-X
+    /// map onto the stock PositiveDv/NegativeDv targets; other axes use a Custom
+    /// target in the BurnBody frame (whose +X is the burn direction by
+    /// construction).
     /// False when the euler round trip cannot express the mapping; the
     /// caller must fall back to Hold so the attitude gate is not left
     /// waiting on a target that was never commanded.</summary>
@@ -528,11 +530,11 @@ internal static class RcsExecutor
         return true;
     }
 
-    /// <summary>Remaining delta-V as a body-frame impulse (CCI to BODY,
+    /// <summary>Remaining delta-V as a control-frame impulse (CCI to CTRL,
     /// scaled by total mass). The worker computes the same quantity from
     /// its navigation snapshot; these are the main-thread sites.</summary>
-    private static float3 ImpulseBodyFromTogo(Vehicle vehicle, FlightComputer fc, BurnTarget bt)
-        => float3.Pack(double3.Unpack(bt.DeltaVToGoCci).Transform(vehicle.GetBody2Cci().Inverse()))
+    private static float3 ImpulseCtrlFromTogo(Vehicle vehicle, FlightComputer fc, BurnTarget bt)
+        => float3.Pack(double3.Unpack(bt.DeltaVToGoCci).Transform(vehicle.GetCtrl2Cci().Inverse()))
            * fc.TotalMassPropsBody.Mass;
 
     private static doubleQuat ShortestArc(double3 from, double3 to)
@@ -659,11 +661,29 @@ internal static class RcsExecutor
             : Math.Max(0.0, nowSec - exec.LastTickSimSec);
         exec.LastTickSimSec = nowSec;
 
-        if (nowSec - exec.CapabilityProbedAtSec > CapabilityRefreshSec)
+        // The refresh cadence is a staleness bound on force and flow, which move
+        // slowly. A control-frame change is not slow: it relabels every axis
+        // group at once, so it re-probes immediately rather than waiting out the
+        // cadence with groups that describe the frame the worker has left. The
+        // comparison is against the LIVE frame, not the cached one the snapshot
+        // carries: comparing cached to cached only ever repeats what the last
+        // probe already read.
+        floatQuat liveCtrl2Body = RcsCtrlFrame.For(vehicle).Ctrl2Body;
+        if (liveCtrl2Body != exec.Capability.Ctrl2Body
+            || nowSec - exec.CapabilityProbedAtSec > CapabilityRefreshSec)
         {
             exec.Capability = RcsCapability.Probe(vehicle);
             exec.CapabilityProbedAtSec = nowSec;
         }
+
+        // The snapshot is probed in the frame the thruster cache holds, but the
+        // impulse below is derived from the live one. They separate the moment
+        // the player moves the control point and rejoin once the worker
+        // revalidates the cache (Rocket.UpdateThrusterCache, which itself sits
+        // behind an idle early-out, so "next tick" is not guaranteed). While
+        // they differ, per-axis magnitudes describe different axes than the
+        // impulse does.
+        bool ctrlFrameSettled = liveCtrl2Body == exec.Capability.Ctrl2Body;
         if (!exec.Capability.HasAnyTranslation)
         {
             // HasAnyTranslation is a composite verdict (thrusters inactive, out
@@ -684,7 +704,7 @@ internal static class RcsExecutor
 
         float3 togo = bt.DeltaVToGoCci;
         float togoMs = togo.Length();
-        float3 impulseBody = ImpulseBodyFromTogo(vehicle, fc, bt);
+        float3 impulseCtrl = ImpulseCtrlFromTogo(vehicle, fc, bt);
 
         // The worker's firing eligibility, mirrored here: an Align burn
         // deliberately fires nothing while pitch/yaw error is outside the
@@ -699,24 +719,28 @@ internal static class RcsExecutor
             && OutsideAlignGate(fc);
         bool firingEligible = !slewing && nowSec >= bt.IgnitionTime.Seconds();
 
-        // Solving during the slew is waste: the direction in the body frame
+        // Solving during the slew is waste: the direction in the control frame
         // rotates every tick (churning the simplex and its logs) and the
         // worker cannot fire the pattern anyway.
         if (exec.ResolvedAllocator == RcsAllocator.Lp && !slewing)
-            EnsureLpSolution(vehicle, fc, exec, impulseBody, nowSec);
+            EnsureLpSolution(vehicle, fc, exec, impulseCtrl, nowSec);
 
-        AccumulateFuel(exec, fc, bt, impulseBody, slewing, firingEligible);
+        AccumulateFuel(exec, fc, bt, impulseCtrl, slewing, firingEligible);
 
         // The completion floor must match whichever allocation the worker
         // actually runs: LP pattern floors when a solution is published,
         // the per-axis group floors otherwise (including LP fallback). It
         // is only meaningful while firing is eligible - during a slew the
-        // rotating body direction can make a stale LP projection dip below
-        // the floors and would falsely complete a burn that never fired.
-        bool belowFloor = firingEligible
+        // rotating control-frame direction can make a stale LP projection dip below
+        // the floors and would falsely complete a burn that never fired. The
+        // frame gate is there for the same reason and matters more, because
+        // completing is not reversible: while the snapshot's axes and the
+        // impulse are in different frames, a comparison between them says
+        // nothing about how much delta-V is really left.
+        bool belowFloor = firingEligible && ctrlFrameSettled
             && (exec.LpSecondsPerImpulse != null
-                ? IsBelowLpFloor(impulseBody, fc, exec)
-                : IsBelowImpulseFloor(impulseBody, in exec.Capability));
+                ? IsBelowLpFloor(impulseCtrl, fc, exec)
+                : IsBelowImpulseFloor(impulseCtrl, in exec.Capability));
         if (float3.Dot(togo, bt.DeltaVTargetCci) <= 0f || belowFloor)
         {
             Complete(vehicle, fc, exec, togoMs);
@@ -795,12 +819,12 @@ internal static class RcsExecutor
                 // groups carry the burn and at what force.
                 ref readonly RcsCapabilitySnapshot cap = ref exec.Capability;
                 DefaultCategory.Log.Debug(
-                    $"[AFC]   axis impulse split: X={impulseBody.X / 1000f:F1}kNs " +
-                    $"(F {(impulseBody.X >= 0f ? cap.Ax0.ForceN : cap.Ax1.ForceN) / 1000f:F1}kN), " +
-                    $"Y={impulseBody.Y / 1000f:F1}kNs " +
-                    $"(F {(impulseBody.Y >= 0f ? cap.Ax2.ForceN : cap.Ax3.ForceN) / 1000f:F1}kN), " +
-                    $"Z={impulseBody.Z / 1000f:F1}kNs " +
-                    $"(F {(impulseBody.Z >= 0f ? cap.Ax4.ForceN : cap.Ax5.ForceN) / 1000f:F1}kN)");
+                    $"[AFC]   axis impulse split: X={impulseCtrl.X / 1000f:F1}kNs " +
+                    $"(F {(impulseCtrl.X >= 0f ? cap.Ax0.ForceN : cap.Ax1.ForceN) / 1000f:F1}kN), " +
+                    $"Y={impulseCtrl.Y / 1000f:F1}kNs " +
+                    $"(F {(impulseCtrl.Y >= 0f ? cap.Ax2.ForceN : cap.Ax3.ForceN) / 1000f:F1}kN), " +
+                    $"Z={impulseCtrl.Z / 1000f:F1}kNs " +
+                    $"(F {(impulseCtrl.Z >= 0f ? cap.Ax4.ForceN : cap.Ax5.ForceN) / 1000f:F1}kN)");
             }
             else
             {
@@ -856,19 +880,19 @@ internal static class RcsExecutor
     }
 
     /// <summary>True when the worker's per-axis suppression would command
-    /// nothing for this body-frame residual impulse: every signed-axis
+    /// nothing for this control-frame residual impulse: every signed-axis
     /// component is below its own group's minimum-impulse floor (or has no
     /// usable group). Must mirror RcsComputeControlPatch.ShapeAxis exactly,
     /// component-wise - comparing the residual's magnitude against the
     /// floors instead deadlocks a burn whose remainder sits just under a
     /// strong axis's floor while a weak axis's floor is smaller.</summary>
-    internal static bool IsBelowImpulseFloor(float3 impulseBody, in RcsCapabilitySnapshot cap)
+    internal static bool IsBelowImpulseFloor(float3 impulseCtrl, in RcsCapabilitySnapshot cap)
     {
         Span<float> components = stackalloc float[6]
         {
-            Math.Max(impulseBody.X, 0f), Math.Max(-impulseBody.X, 0f),
-            Math.Max(impulseBody.Y, 0f), Math.Max(-impulseBody.Y, 0f),
-            Math.Max(impulseBody.Z, 0f), Math.Max(-impulseBody.Z, 0f),
+            Math.Max(impulseCtrl.X, 0f), Math.Max(-impulseCtrl.X, 0f),
+            Math.Max(impulseCtrl.Y, 0f), Math.Max(-impulseCtrl.Y, 0f),
+            Math.Max(impulseCtrl.Z, 0f), Math.Max(-impulseCtrl.Z, 0f),
         };
         for (int i = 0; i < 6; i++)
         {
@@ -893,7 +917,7 @@ internal static class RcsExecutor
     /// remainder is reported as attitude.</summary>
     private static void AccumulateFuel(
         RcsExecution exec, FlightComputer fc, BurnTarget bt,
-        float3 impulseBody, bool slewing, bool firingEligible)
+        float3 impulseCtrl, bool slewing, bool firingEligible)
     {
         if (exec.StartMassKg <= 0.0)
             return;
@@ -917,7 +941,7 @@ internal static class RcsExecutor
                 double costPerNs = exec.LpSecondsPerImpulse != null
                     ? exec.LpCostPerImpulse
                     : GroupCostPerNs(in exec.Capability,
-                        double3.Unpack(impulseBody).NormalizeOrZero());
+                        double3.Unpack(impulseCtrl).NormalizeOrZero());
                 exec.TranslationPropellantKg += deliveredNs * costPerNs;
             }
         }
@@ -927,18 +951,18 @@ internal static class RcsExecutor
     }
 
     /// <summary>Model cost of group-allocated translation along
-    /// <paramref name="uBody"/>, kg per newton-second of net impulse: each
+    /// <paramref name="uCtrl"/>, kg per newton-second of net impulse: each
     /// demanded signed axis contributes its direction weight times the
     /// group's massflow per force (the L1 penalty falls out of the weights
     /// summing above 1 for off-axis directions). Unusable axes are skipped,
     /// matching the worker's suppression of those components.</summary>
-    private static double GroupCostPerNs(in RcsCapabilitySnapshot cap, double3 uBody)
+    private static double GroupCostPerNs(in RcsCapabilitySnapshot cap, double3 uCtrl)
     {
         Span<double> weight = stackalloc double[6]
         {
-            Math.Max(uBody.X, 0.0), Math.Max(-uBody.X, 0.0),
-            Math.Max(uBody.Y, 0.0), Math.Max(-uBody.Y, 0.0),
-            Math.Max(uBody.Z, 0.0), Math.Max(-uBody.Z, 0.0),
+            Math.Max(uCtrl.X, 0.0), Math.Max(-uCtrl.X, 0.0),
+            Math.Max(uCtrl.Y, 0.0), Math.Max(-uCtrl.Y, 0.0),
+            Math.Max(uCtrl.Z, 0.0), Math.Max(-uCtrl.Z, 0.0),
         };
         double cost = 0.0;
         for (int i = 0; i < 6; i++)
@@ -1073,34 +1097,41 @@ internal static class RcsExecutor
     /// the axis-group path; the cadence still applies so a persistently
     /// infeasible layout is retried, not re-solved every tick.</summary>
     private static void EnsureLpSolution(
-        Vehicle vehicle, FlightComputer fc, RcsExecution exec, float3 impulseBody, double nowSec)
+        Vehicle vehicle, FlightComputer fc, RcsExecution exec, float3 impulseCtrl, double nowSec)
     {
         List<ThrusterController> thrusters = fc.VehicleConfig.Thrusters;
+        RcsCtrlFrame ctrl = RcsCtrlFrame.For(vehicle);
         exec.Wrench ??= new RcsWrenchTable();
         if (nowSec - exec.WrenchBuiltAtSec > CapabilityRefreshSec
-            || !exec.Wrench.Matches(thrusters))
+            || !exec.Wrench.Matches(thrusters, in ctrl))
         {
-            exec.Wrench.Build(vehicle, fc);
+            exec.Wrench.Build(vehicle, fc, in ctrl);
             exec.WrenchBuiltAtSec = nowSec;
             exec.LpSolvedAtSec = double.NegativeInfinity;
             // The slack price reads the capability snapshot; refreshing it
             // on the same trigger keeps both halves of one solve describing
-            // the same vehicle configuration across a staging swap.
+            // the same vehicle configuration across a staging swap. The two
+            // still differ in control frame until the thruster cache catches
+            // up: the wrench table is built live, the snapshot is probed in
+            // the cached frame (see the frame gate in TickActive). Only the
+            // slack price crosses over, which is a cost weight, not a
+            // direction, so a stale frame skews the price rather than
+            // pointing the pattern somewhere wrong.
             exec.Capability = RcsCapability.Probe(vehicle);
             exec.CapabilityProbedAtSec = nowSec;
         }
 
-        float3 dir = impulseBody.NormalizeOrZero();
+        float3 dir = impulseCtrl.NormalizeOrZero();
         if (dir.IsExactlyZero())
             return;
-        // LpDirBody records the last ATTEMPTED direction (also on failure),
+        // LpDirCtrl records the last ATTEMPTED direction (also on failure),
         // so an infeasible layout honors the cadence instead of re-running
         // the simplex every driver tick.
-        bool drifted = float3.Dot(dir, exec.LpDirBody) < 0.999f;
+        bool drifted = float3.Dot(dir, exec.LpDirCtrl) < 0.999f;
         if (!drifted && nowSec - exec.LpSolvedAtSec <= EstimateRefreshSec)
             return;
         exec.LpSolvedAtSec = nowSec;
-        exec.LpDirBody = dir;
+        exec.LpDirCtrl = dir;
 
         RcsWrenchTable w = exec.Wrench;
         if (w.UsableCount == 0)
@@ -1139,12 +1170,12 @@ internal static class RcsExecutor
         {
             if (!w.Usable[i])
                 continue;
-            columns[k * 6 + 0] = w.ForceBody[i].X;
-            columns[k * 6 + 1] = w.ForceBody[i].Y;
-            columns[k * 6 + 2] = w.ForceBody[i].Z;
-            columns[k * 6 + 3] = w.TorqueBody[i].X;
-            columns[k * 6 + 4] = w.TorqueBody[i].Y;
-            columns[k * 6 + 5] = w.TorqueBody[i].Z;
+            columns[k * 6 + 0] = w.ForceCtrl[i].X;
+            columns[k * 6 + 1] = w.ForceCtrl[i].Y;
+            columns[k * 6 + 2] = w.ForceCtrl[i].Z;
+            columns[k * 6 + 3] = w.TorqueCtrl[i].X;
+            columns[k * 6 + 4] = w.TorqueCtrl[i].Y;
+            columns[k * 6 + 5] = w.TorqueCtrl[i].Z;
             cost[k] = w.MassFlow[i];
             map[k] = i;
             k++;
@@ -1194,9 +1225,9 @@ internal static class RcsExecutor
                 continue;
             secondsPerImpulse[map[j]] = xi;
             costPerImpulse += cost[j] * x[j];
-            resTau[0] += w.TorqueBody[map[j]].X * x[j];
-            resTau[1] += w.TorqueBody[map[j]].Y * x[j];
-            resTau[2] += w.TorqueBody[map[j]].Z * x[j];
+            resTau[0] += w.TorqueCtrl[map[j]].X * x[j];
+            resTau[1] += w.TorqueCtrl[map[j]].Y * x[j];
+            resTau[2] += w.TorqueCtrl[map[j]].Z * x[j];
             support++;
         }
 
@@ -1237,11 +1268,11 @@ internal static class RcsExecutor
                 {
                     if (secondsPerImpulse[i] <= 0f)
                         continue;
-                    float3 f = w.ForceBody[i];
+                    float3 f = w.ForceCtrl[i];
                     DefaultCategory.Log.Debug(
                         $"[AFC]   LP thruster {i}: duty={secondsPerImpulse[i] / maxX * 100f:F0}% " +
                         $"F=({f.X / 1000f:F1},{f.Y / 1000f:F1},{f.Z / 1000f:F1})kN " +
-                        $"|tau|={w.TorqueBody[i].Length() / 1000f:F1}kNm");
+                        $"|tau|={w.TorqueCtrl[i].Length() / 1000f:F1}kNm");
                 }
             }
         }
@@ -1265,13 +1296,13 @@ internal static class RcsExecutor
     /// the demanded impulse, so once every participating thruster's pulse
     /// would fall below its own minimum-pulse floor the worker fires
     /// nothing and the burn is as done as this pattern can make it.</summary>
-    private static bool IsBelowLpFloor(float3 impulseBody, FlightComputer fc, RcsExecution exec)
+    private static bool IsBelowLpFloor(float3 impulseCtrl, FlightComputer fc, RcsExecution exec)
     {
         float[] x = exec.LpSecondsPerImpulse!;
         List<ThrusterController> thrusters = fc.VehicleConfig.Thrusters;
         if (x.Length != thrusters.Count)
             return false;
-        float j = float3.Dot(impulseBody, exec.LpDirBody);
+        float j = float3.Dot(impulseCtrl, exec.LpDirCtrl);
         if (j <= 0f)
             return false;
         for (int i = 0; i < x.Length; i++)
@@ -1395,7 +1426,7 @@ internal static class RcsExecutor
             AxisMinImpulsePos = new float3(cap.Ax0.MinImpulseNs, cap.Ax2.MinImpulseNs, cap.Ax4.MinImpulseNs),
             AxisMinImpulseNeg = new float3(cap.Ax1.MinImpulseNs, cap.Ax3.MinImpulseNs, cap.Ax5.MinImpulseNs),
             LpSecondsPerImpulse = exec.LpSecondsPerImpulse,
-            LpDirBody = exec.LpDirBody,
+            LpDirCtrl = exec.LpDirCtrl,
             LpImpulseCapNs = exec.LpImpulseCapNs,
         });
     }
@@ -1421,18 +1452,18 @@ internal static class RcsExecutor
         float mass = vehicle.FlightComputer.TotalMassPropsBody.Mass;
         est.Valid = true;
 
-        // Hold: the current attitude fixes the body direction of the burn
-        // vector; axis groups fire in the ratio of its components. The net
+        // Hold: the current attitude fixes the control-frame direction of the
+        // burn vector; axis groups fire in the ratio of its components. The net
         // force is limited by the weakest required axis, propellant follows
         // the duty-cycled mass flows.
-        double3 uBody = double3.Unpack(togo)
-            .Transform(vehicle.GetBody2Cci().Inverse()).NormalizeOrZero();
-        est.HoldFeasible = TryHoldPerformance(in cap, uBody, out double holdForce, out double holdMassFlow);
+        double3 uCtrl = double3.Unpack(togo)
+            .Transform(vehicle.GetCtrl2Cci().Inverse()).NormalizeOrZero();
+        est.HoldFeasible = TryHoldPerformance(in cap, uCtrl, out double holdForce, out double holdMassFlow);
         if (est.HoldFeasible && holdForce > 0.0)
         {
             est.HoldDurationSec = mass * dv / holdForce;
             est.HoldPropellantKg = est.HoldDurationSec * holdMassFlow
-                + mass * dv * GroupAttitudeFightPerImpulse(in cap, uBody);
+                + mass * dv * GroupAttitudeFightPerImpulse(in cap, uCtrl);
         }
 
         // Align: strongest single axis pointed at the burn vector, plus the
@@ -1455,7 +1486,7 @@ internal static class RcsExecutor
                     in cap, double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best)));
 
             double3 axisCci = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best))
-                .Transform(vehicle.GetBody2Cci());
+                .Transform(vehicle.GetCtrl2Cci());
             double3 uCci = double3.Unpack(togo).NormalizeOrZero();
             double theta = MathEx.SafeAcos(double3.Dot(axisCci, uCci));
             FlightComputer fc = vehicle.FlightComputer;
@@ -1482,21 +1513,21 @@ internal static class RcsExecutor
     }
 
     internal static bool TryHoldPerformance(
-        in RcsCapabilitySnapshot cap, double3 uBody, out double netForce, out double massFlow)
+        in RcsCapabilitySnapshot cap, double3 uCtrl, out double netForce, out double massFlow)
     {
         netForce = 0.0;
         massFlow = 0.0;
-        if (uBody.IsNearlyZero())
+        if (uCtrl.IsNearlyZero())
             return false;
 
         // Required signed groups: +u.X needs the +X group and so on.
         Span<double> weight = stackalloc double[6];
-        weight[0] = Math.Max(uBody.X, 0.0);
-        weight[1] = Math.Max(-uBody.X, 0.0);
-        weight[2] = Math.Max(uBody.Y, 0.0);
-        weight[3] = Math.Max(-uBody.Y, 0.0);
-        weight[4] = Math.Max(uBody.Z, 0.0);
-        weight[5] = Math.Max(-uBody.Z, 0.0);
+        weight[0] = Math.Max(uCtrl.X, 0.0);
+        weight[1] = Math.Max(-uCtrl.X, 0.0);
+        weight[2] = Math.Max(uCtrl.Y, 0.0);
+        weight[3] = Math.Max(-uCtrl.Y, 0.0);
+        weight[4] = Math.Max(uCtrl.Z, 0.0);
+        weight[5] = Math.Max(-uCtrl.Z, 0.0);
 
         double maxNet = double.PositiveInfinity;
         for (int i = 0; i < 6; i++)
@@ -1523,7 +1554,7 @@ internal static class RcsExecutor
     }
 
     /// <summary>Attitude-fight propellant the group allocator incurs firing a
-    /// translation along <paramref name="uBody"/>, kg per newton-second of
+    /// translation along <paramref name="uCtrl"/>, kg per newton-second of
     /// net impulse. Each demanded group's residual torque per unit axis force
     /// (TorqueNm / ForceN) is summed weighted by the direction, then priced at
     /// the rotation groups' flow per torque (the same ratio the LP slack
@@ -1532,13 +1563,13 @@ internal static class RcsExecutor
     /// no usable rotation authority contribute nothing - the hold cannot null
     /// what it cannot command, and the executor's attitude channel then simply
     /// leaves that residual to the closed loop.</summary>
-    internal static double GroupAttitudeFightPerImpulse(in RcsCapabilitySnapshot cap, double3 uBody)
+    internal static double GroupAttitudeFightPerImpulse(in RcsCapabilitySnapshot cap, double3 uCtrl)
     {
         Span<double> weight = stackalloc double[6]
         {
-            Math.Max(uBody.X, 0.0), Math.Max(-uBody.X, 0.0),
-            Math.Max(uBody.Y, 0.0), Math.Max(-uBody.Y, 0.0),
-            Math.Max(uBody.Z, 0.0), Math.Max(-uBody.Z, 0.0),
+            Math.Max(uCtrl.X, 0.0), Math.Max(-uCtrl.X, 0.0),
+            Math.Max(uCtrl.Y, 0.0), Math.Max(-uCtrl.Y, 0.0),
+            Math.Max(uCtrl.Z, 0.0), Math.Max(-uCtrl.Z, 0.0),
         };
         double3 torquePerForce = default;
         for (int i = 0; i < 6; i++)

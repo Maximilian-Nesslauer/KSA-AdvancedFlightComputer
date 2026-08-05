@@ -17,7 +17,7 @@ public sealed class Mod
     private static Harmony? _harmony;
     private static bool _maneuverTypesInjected;
 
-    private const string TestedGameVersion = "v2026.8.3.5117";
+    private const string TestedGameVersion = "v2026.8.5.5168";
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
@@ -122,21 +122,23 @@ public sealed class Mod
                                 "[AFC] Flyby stock-marker suppression disabled - " +
                                 "DrawSelectedTransferUi anchor not found.");
 
-                        // Fallback DrawInline injection at the outermost
-                        // ImGui.End() in DrawPlanWindow. Fires regardless of
-                        // stock's _transferCalculated state so the active-
-                        // exec status + Cancel button stay reachable after
-                        // F4 close + reopen (where the primary injection
-                        // above would be gated out). DrawInline self-dedups
-                        // per ImGui frame so the normal-flow render does not
-                        // double up. Nested under the primary anchor check
-                        // because without DrawInline being enabled the
-                        // fallback would modify IL for no rendered effect.
+                        // Fallback DrawInline injection before the
+                        // ConsoleStyle.PopWidgetStyle that closes DrawPlanWindow's
+                        // body, so the UI still lands inside the body child with
+                        // the widget style pushed. Fires regardless of stock's
+                        // _transferCalculated state so the active-exec status +
+                        // Cancel button stay reachable after F4 close + reopen
+                        // (where the primary injection above would be gated out).
+                        // DrawInline self-dedups per ImGui frame so the
+                        // normal-flow render does not double up. Nested under the
+                        // primary anchor check because without DrawInline being
+                        // enabled the fallback would modify IL for no rendered
+                        // effect.
                         if (Patch_DrawPlanWindow_HohmannFallback.IsAnchorPresent)
                             harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow_HohmannFallback)).Patch();
                         else
                             DefaultCategory.Log.Warning(
-                                "[AFC] HohmannFallback disabled - ImGui.End anchor not found.");
+                                "[AFC] HohmannFallback disabled - ConsoleStyle.PopWidgetStyle anchor not found.");
                     }
                     else
                         DefaultCategory.Log.Warning(

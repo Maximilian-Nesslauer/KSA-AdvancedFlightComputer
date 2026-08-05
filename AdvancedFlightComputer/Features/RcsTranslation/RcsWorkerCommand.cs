@@ -39,12 +39,12 @@ internal sealed class RcsWorkerCommand
     public float3 AxisMinImpulseNeg { get; init; }
 
     /// <summary>LP allocation: seconds of firing per newton-second of net
-    /// impulse along <see cref="LpDirBody"/>, index-aligned with
+    /// impulse along <see cref="LpDirCtrl"/>, index-aligned with
     /// VehicleConfig.Thrusters. Null runs the axis-group path. The worker
     /// verifies the length against the live thruster list because staging
     /// can swap VehicleConfig between driver ticks.</summary>
     public float[]? LpSecondsPerImpulse { get; init; }
-    public float3 LpDirBody { get; init; }
+    public float3 LpDirCtrl { get; init; }
 
     /// <summary>Impulse ceiling per control period so no single pulse in
     /// the LP pattern exceeds <see cref="MaxPulseSec"/>.</summary>

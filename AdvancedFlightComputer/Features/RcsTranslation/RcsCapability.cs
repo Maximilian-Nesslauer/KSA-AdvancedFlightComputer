@@ -5,9 +5,9 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 
 /// <summary>
 /// Main-thread probe of a vehicle's RCS translation capability, grouped
-/// by the six signed body axes the stock ControlMap flags cover.
-/// Axis order: +X, -X, +Y, -Y, +Z, -Z (body: +X forward, +Y right,
-/// +Z down, matching ThrusterController.ComputeControlMap).
+/// by the six signed control-frame axes the stock ControlMap flags cover.
+/// Axis order: +X, -X, +Y, -Y, +Z, -Z (+X forward, +Y right, +Z down,
+/// matching ThrusterController.ComputeControlMap).
 /// </summary>
 internal struct RcsAxisGroup
 {
@@ -15,7 +15,7 @@ internal struct RcsAxisGroup
     public float MassFlowKgS;
     public float MinImpulseNs;
 
-    /// <summary>Net torque (N m, body frame) the whole group produces when it
+    /// <summary>Net torque (N m, control frame) the whole group produces when it
     /// fires at the force <see cref="ForceN"/>: the sum of the member
     /// thrusters' live torques. Near zero on a balanced layout, nonzero when
     /// the group's thrusters sit off the CoM. Divided by <see cref="ForceN"/>
@@ -34,6 +34,12 @@ internal struct RcsAxisGroup
 internal struct RcsCapabilitySnapshot
 {
     public bool HasAnyTranslation;
+
+    /// <summary>The control frame this snapshot describes, taken from the
+    /// thruster cache it was built against. A snapshot outlives a control-point
+    /// change, so the driver compares this against the live cache to know when
+    /// the axis groups stopped describing the frame the worker fires in.</summary>
+    public floatQuat Ctrl2Body;
 
     /// <summary>Indexed +X,-X,+Y,-Y,+Z,-Z.</summary>
     public RcsAxisGroup Ax0, Ax1, Ax2, Ax3, Ax4, Ax5;
@@ -67,7 +73,7 @@ internal struct RcsCapabilitySnapshot
         }
     }
 
-    /// <summary>Signed-axis unit direction in body frame for a group index.</summary>
+    /// <summary>Signed-axis unit direction in the control frame for a group index.</summary>
     public static float3 AxisDirection(int idx) => idx switch
     {
         0 => new float3(1f, 0f, 0f),
@@ -109,9 +115,15 @@ internal static class RcsCapability
     /// the IntendedForce/IntendedTorque signs are exactly what the worker
     /// and the stock attitude control fire by), but magnitudes are
     /// recomputed live via RcsWrenchTable.ComputeLive: the game's thruster
-    /// cache revalidates only on 0.1 percent mass, CoM, or 100 Pa pressure drift,
-    /// so a cached IntendedForce can carry a different vintage than a fresh
-    /// mass-flow read and misstate force per flow.
+    /// cache revalidates only on 0.1 percent mass, CoM, 100 Pa pressure drift or
+    /// a control-frame change, so a cached IntendedForce can carry a different
+    /// vintage than a fresh mass-flow read and misstate force per flow.
+    ///
+    /// The control frame comes from that same cache rather than from the live
+    /// vehicle, because the sign test in AccumulateAxis pairs a cached
+    /// IntendedForce component with a freshly computed one: reading the live
+    /// frame would compare across frames for the tick between a control-point
+    /// change and the worker refreshing the cache, and silently drop thrusters.
     /// </summary>
     public static RcsCapabilitySnapshot Probe(Vehicle vehicle)
     {
@@ -123,6 +135,8 @@ internal static class RcsCapability
         ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
         float3 com = vehicle.TotalMassPropsAsmb.Offset;
         float ambientPressure = vehicle.PhysicsEnvironment.AtmosphericPressure;
+        RcsCtrlFrame ctrl = new(stateList.GlobalState.CachedCtrl2Body);
+        snap.Ctrl2Body = ctrl.Ctrl2Body;
 
         var enumerator = new ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
             .StateList.ModuleAndStateEnumerator(stateList);
@@ -134,7 +148,7 @@ internal static class RcsCapability
             if (!thruster.IsActive || !state.IsPropellantAvailable)
                 continue;
 
-            RcsWrenchTable.ComputeLive(thruster, coreStates, com, ambientPressure,
+            RcsWrenchTable.ComputeLive(thruster, coreStates, com, ambientPressure, in ctrl,
                 out float3 force, out float3 torque, out float massFlow);
             if (massFlow <= 0f)
                 continue;
