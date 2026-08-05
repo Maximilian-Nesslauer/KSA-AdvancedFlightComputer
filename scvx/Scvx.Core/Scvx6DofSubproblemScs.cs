@@ -208,8 +208,47 @@ public sealed class Scvx6DofSubproblemScs
     public ScsStatus Run(bool warmStart, bool verbose = false,
                          int maxIterations = ScsWorkspace.DefaultMaxIterations,
                          double epsAbs = ScsWorkspace.DefaultEps,
-                         double epsRel = ScsWorkspace.DefaultEps) =>
-        _ws.Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, verbose, maxIterations, epsAbs, epsRel);
+                         double epsRel = ScsWorkspace.DefaultEps)
+    {
+        ThrowIfNotFinite();
+        return _ws.Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, verbose, maxIterations, epsAbs, epsRel);
+    }
+
+    /// <summary>
+    /// Refuse to hand a non-finite problem to SCS.
+    ///
+    /// SCS is native and does no input validation worth relying on: a NaN or Inf
+    /// anywhere in A, P, b or c gets consumed silently and comes back as nonsense, a
+    /// NULL workspace with no readable diagnostic, or — as seen in flight — takes the
+    /// whole PROCESS down. A managed exception naming the offending entry is
+    /// enormously more useful than a game crash, and the check is O(nnz) against a
+    /// solve that runs thousands of ADMM iterations, so it costs nothing measurable.
+    ///
+    /// Non-finite values here always mean bad INPUT DATA rather than a solver fault:
+    /// a zero or negative inertia, a degenerate scale, a NaN in the linearisation
+    /// because the reference trajectory contains one. Naming which array and index is
+    /// what makes that traceable.
+    /// </summary>
+    private void ThrowIfNotFinite()
+    {
+        static int FirstBad(double[] v)
+        {
+            for (int i = 0; i < v.Length; i++)
+                if (!double.IsFinite(v[i]))
+                    return i;
+            return -1;
+        }
+
+        int bad;
+        if ((bad = FirstBad(_A.Values)) >= 0)
+            throw new InvalidOperationException($"constraint matrix A has non-finite value at nz {bad} ({_A.Values[bad]})");
+        if (_P.NonZeros > 0 && (bad = FirstBad(_P.Values)) >= 0)
+            throw new InvalidOperationException($"objective matrix P has non-finite value at nz {bad} ({_P.Values[bad]})");
+        if ((bad = FirstBad(_b)) >= 0)
+            throw new InvalidOperationException($"constraint vector b has non-finite value at row {bad} ({_b[bad]})");
+        if ((bad = FirstBad(_c)) >= 0)
+            throw new InvalidOperationException($"objective vector c has non-finite value at column {bad} ({_c[bad]})");
+    }
 
     public void ResetWarmStart() => _ws.ResetWarmStart();
 

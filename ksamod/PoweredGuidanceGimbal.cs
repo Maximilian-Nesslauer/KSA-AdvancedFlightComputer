@@ -159,7 +159,7 @@ public static partial class PoweredGuidanceWindow
 
         if (a.SaturationScale < 1.0)
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                $"Saturated - demand scaled to {a.SaturationScale * 100.0:F0}% (direction preserved).");
+                $"Saturated - demand scaled to {a.SaturationScale * 100.0:F0}%% (direction preserved).");
     }
 
     // Per-gimbal breakdown. The "axes" column is the interesting one: it shows which

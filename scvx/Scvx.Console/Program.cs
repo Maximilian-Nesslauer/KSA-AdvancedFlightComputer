@@ -29,6 +29,21 @@ if (args.Contains("--loop"))
 // --rh: measure receding-horizon cost, the number that decides whether this is
 // realtime feasible. Cold-converge once, then repeatedly advance one control
 // interval and re-converge from the shifted reference with a capped budget.
+if (args.Contains("--mpc"))
+    return MpcHarness.Run();
+
+if (args.Contains("--fixed"))
+    return FixedTimeCheck();
+
+if (args.Contains("--ablate"))
+    return AblateCheck();
+
+if (args.Contains("--roll"))
+    return RollCheck();
+
+if (args.Contains("--arc"))
+    return ArcCheck();
+
 if (args.Contains("--body"))
     return BodyCheck();
 
@@ -1099,5 +1114,619 @@ static int BodyCheck()
     Console.WriteLine();
     Console.WriteLine("All bodies must converge with a defect under 1e-3. A hard-coded 9.81");
     Console.WriteLine("would show as the low-gravity cases failing or drifting.");
+    return 0;
+}
+
+// A descent starting DIRECTLY ABOVE the pad, with no horizontal position or velocity
+// and pointing straight up. Nothing in the geometry favours going sideways, so any
+// horizontal excursion is the solver telling us something. Sweeps the throttle floor,
+// because a floor above hover forces the vehicle to tilt to shed thrust and an arc is
+// then the CORRECT min-fuel answer, not a bug.
+static int ArcCheck()
+{
+    const int n = 30;
+    double g = 9.81, m0 = 250000.0, tmax = 6.0e6;
+    double h = 300.0, vDown = 40.0, alt = 20.0;
+
+    var x0 = new double[NX];
+    x0[2] = h; x0[5] = -vDown; x0[Dynamics6Dof.IQ] = 1.0; x0[Dynamics6Dof.IM] = m0;
+    var xf = new double[NX];
+    xf[2] = alt; xf[Dynamics6Dof.IQ] = 1.0;
+
+    Console.WriteLine($"straight-down descent: {h:F0} m -> {alt:F0} m, {vDown:F0} m/s, starting vertical");
+    Console.WriteLine($"weight {m0 * g / 1e6:F2} MN, Tmax {tmax / 1e6:F2} MN (max TWR {tmax / (m0 * g):F2})");
+    Console.WriteLine();
+    Console.WriteLine("  floor  TWRmin   sigma   max |horizontal|   peak tilt   defect     status");
+
+    foreach (double floor in new[] { 0.05, 0.10, 0.20, 0.30, 0.40, 0.50 })
+    {
+        double L = h - alt;
+        double V = Math.Max(Math.Max(vDown, Math.Sqrt(L * g)), 1.0);
+        double sigma = Math.Sqrt(2.0 * L / g) * 2.0;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = floor,
+            WDu = 0.0, WW = 0.0, ProximalWeight = 0.05,     // penalties OFF, as reported
+            SigmaMin = sigma * 0.15, SigmaMax = sigma * 4.0, SigmaScale = sigma,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+
+        var xSeed = new double[n * NX];
+        var uSeed = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xSeed[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+                xSeed[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+            }
+            xSeed[k * NX + Dynamics6Dof.IQ] = 1.0;
+            xSeed[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            uSeed[k * NU + Dynamics6Dof.IT] = Math.Max(1.05 * m0 * g, floor * tmax);
+        }
+
+        var s = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        s.Initialize(x0, xf, xSeed, uSeed, sigma);
+        ScvxStatus st = s.Solve(30);
+
+        double[] X = s.ReferenceX;
+        double horiz = 0, tilt = 0;
+        for (int k = 0; k < n; k++)
+        {
+            horiz = Math.Max(horiz, Math.Sqrt(X[k * NX] * X[k * NX] + X[k * NX + 1] * X[k * NX + 1]));
+            double qx = X[k * NX + 7], qy = X[k * NX + 8];
+            double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
+            tilt = Math.Max(tilt, Math.Acos(Math.Clamp(r22, -1, 1)) * 180.0 / Math.PI);
+        }
+        double defect = double.PositiveInfinity;
+        for (int i = s.Trace.Count - 1; i >= 0; i--)
+            if (s.Trace[i].Accepted) { defect = s.Trace[i].DefectNorm; break; }
+
+        Console.WriteLine($"  {floor,5:F2}  {floor * tmax / (m0 * g),6:F2}  {s.Sigma,6:F2}   {horiz,12:F1} m   {tilt,8:F1} deg  {defect,9:E2}  {st}");
+    }
+    // Now perturb the START, one variable at a time, to see what actually bends it.
+    Console.WriteLine();
+    Console.WriteLine("  perturbation of the START (floor 0.10 throughout):");
+    Console.WriteLine("  case                       sigma   max |horizontal|   peak tilt   status");
+
+    void Perturb(string label, double vx, double tiltDeg, double xOffset)
+    {
+        var px0 = new double[NX];
+        px0[0] = xOffset; px0[2] = h; px0[3] = vx; px0[5] = -vDown; px0[Dynamics6Dof.IM] = m0;
+        double a = tiltDeg * Math.PI / 180.0 / 2.0;
+        px0[Dynamics6Dof.IQ] = Math.Cos(a); px0[Dynamics6Dof.IQ + 2] = Math.Sin(a);
+
+        double L = Math.Sqrt(xOffset * xOffset + (h - alt) * (h - alt));
+        double sp = Math.Sqrt(vx * vx + vDown * vDown);
+        double V = Math.Max(Math.Max(sp, Math.Sqrt(L * g)), 1.0);
+        double sg = Math.Sqrt(2.0 * L / g) * 2.0;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = 0.10,
+            WDu = 0.0, WW = 0.0, ProximalWeight = 0.05,
+            SigmaMin = sg * 0.15, SigmaMax = sg * 4.0, SigmaScale = sg,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+        var xs = new double[n * NX];
+        var us = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xs[k * NX + i] = px0[i] + t * (xf[i] - px0[i]);
+                xs[k * NX + 3 + i] = px0[3 + i] + t * (xf[3 + i] - px0[3 + i]);
+            }
+            for (int i = 0; i < 4; i++)
+                xs[k * NX + Dynamics6Dof.IQ + i] = px0[Dynamics6Dof.IQ + i] * (1 - t) + xf[Dynamics6Dof.IQ + i] * t;
+            double qn = 0;
+            for (int i = 0; i < 4; i++) qn += xs[k * NX + 6 + i] * xs[k * NX + 6 + i];
+            qn = Math.Sqrt(qn);
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] /= qn;
+            xs[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            us[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+        Array.Copy(px0, 0, xs, 0, NX);
+
+        var sv = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        sv.Initialize(px0, xf, xs, us, sg);
+        ScvxStatus st = sv.Solve(30);
+        double[] X = sv.ReferenceX;
+        double hz = 0, tl = 0;
+        for (int k = 0; k < n; k++)
+        {
+            hz = Math.Max(hz, Math.Sqrt(X[k * NX] * X[k * NX] + X[k * NX + 1] * X[k * NX + 1]));
+            double qx = X[k * NX + 7], qy = X[k * NX + 8];
+            tl = Math.Max(tl, Math.Acos(Math.Clamp(1.0 - 2.0 * (qx * qx + qy * qy), -1, 1)) * 180.0 / Math.PI);
+        }
+        Console.WriteLine($"  {label,-24} {sv.Sigma,6:F2}   {hz,12:F1} m   {tl,8:F1} deg  {st}");
+    }
+
+    Perturb("baseline (nothing)",        0.0,  0.0,  0.0);
+    Perturb("horiz velocity 10 m/s",    10.0,  0.0,  0.0);
+    Perturb("horiz velocity 30 m/s",    30.0,  0.0,  0.0);
+    Perturb("initial tilt 10 deg",       0.0, 10.0,  0.0);
+    Perturb("initial tilt 25 deg",       0.0, 25.0,  0.0);
+    Perturb("downrange offset 100 m",    0.0,  0.0, 100.0);
+
+    Console.WriteLine();
+    Console.WriteLine("TWRmin > 1 CANNOT hold altitude pointing up: it must tilt to shed thrust,");
+    Console.WriteLine("so a large horizontal excursion there is correct physics, not a solver bug.");
+    return 0;
+}
+
+// Motion starts in the x-z plane (horizontal velocity along +x only) and the target
+// is on the axis, so the optimal trajectory is PLANAR. Any y excursion is the solver
+// exploiting a degeneracy, not physics.
+//
+// The degeneracy: the translational dynamics only see R(q)*(tdx,tdy,T) — three
+// numbers — but the control has FOUR components. Roll is a free parameter; infinitely
+// many (roll, tdx, tdy) triples give the same inertial thrust. W_W (the angular-rate
+// penalty) is the only thing that picks among them. Drive it to zero and roll becomes
+// arbitrary, which shows up as out-of-plane kinks.
+static int RollCheck()
+{
+    const int n = 30;
+    double g = 9.81, m0 = 250000.0, tmax = 6.0e6;
+    double h = 300.0, alt = 20.0, vx = 20.0, vDown = 40.0;
+
+    var x0 = new double[NX];
+    x0[2] = h; x0[3] = vx; x0[5] = -vDown; x0[Dynamics6Dof.IQ] = 1.0; x0[Dynamics6Dof.IM] = m0;
+    var xf = new double[NX];
+    xf[2] = alt; xf[Dynamics6Dof.IQ] = 1.0;
+
+    Console.WriteLine("planar problem: velocity along +x only, target on the axis.");
+    Console.WriteLine("any OUT-OF-PLANE (y) motion is degeneracy, not physics.");
+    Console.WriteLine();
+    Console.WriteLine("   W_W     in-plane |x|   OUT-OF-PLANE |y|   peak roll rate   peak |tau_roll|   merit");
+
+    foreach (double ww in new[] { 0.0, 1e-4, 1e-3, 1e-2, 5e-2 })
+    {
+        double L = h - alt;
+        double V = Math.Max(Math.Sqrt(vx * vx + vDown * vDown), 1.0);
+        double sg = Math.Sqrt(2.0 * L / g) * 2.0;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = 0.10,
+            WDu = 0.0, WW = ww, ProximalWeight = 0.05,
+            SigmaMin = sg * 0.15, SigmaMax = sg * 4.0, SigmaScale = sg,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+        var xs = new double[n * NX];
+        var us = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xs[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+                xs[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+            }
+            xs[k * NX + Dynamics6Dof.IQ] = 1.0;
+            xs[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            us[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+        Array.Copy(x0, 0, xs, 0, NX);
+
+        var sv = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        sv.Initialize(x0, xf, xs, us, sg);
+        sv.Solve(30);
+        double[] X = sv.ReferenceX, U = sv.ReferenceU;
+        double inPlane = 0, outPlane = 0, rollRate = 0, tauRoll = 0;
+        for (int k = 0; k < n; k++)
+        {
+            inPlane = Math.Max(inPlane, Math.Abs(X[k * NX]));
+            outPlane = Math.Max(outPlane, Math.Abs(X[k * NX + 1]));
+            rollRate = Math.Max(rollRate, Math.Abs(X[k * NX + 12]));
+            tauRoll = Math.Max(tauRoll, Math.Abs(U[k * NU + 3]));
+        }
+        Console.WriteLine($"  {ww,6:F4}  {inPlane,12:F1} m  {outPlane,15:F2} m  {rollRate,14:F4}  {tauRoll,16:E2}  {sv.Cost:E3}");
+    }
+    // The clean start above stays perfectly planar. Now the two things a REAL engage
+    // has that it did not: an arbitrary initial attitude (including ROLL about the
+    // thrust axis, which rotates how tdx/tdy map to inertial directions) and non-zero
+    // body rates. Plus a sweep of W_DU, since with no control-rate penalty the
+    // min-fuel optimum is bang-bang and the thrust vector may jump between nodes.
+    Console.WriteLine();
+    Console.WriteLine("  realistic start (tilt 15 deg + roll 40 deg, rates 0.05 rad/s):");
+    Console.WriteLine("   W_DU   path kink        speed at kink        slowest point        burn time");
+
+    foreach (double wdu in new[] { 0.0, 1e-3, 1e-2, 5e-2 })
+    {
+        var px0 = new double[NX];
+        px0[2] = h; px0[3] = vx; px0[5] = -vDown; px0[Dynamics6Dof.IM] = m0;
+        // tilt 15 deg about body Y, then roll 40 deg about body Z
+        double ha = 15.0 * Math.PI / 180.0 / 2.0, hr = 40.0 * Math.PI / 180.0 / 2.0;
+        double tw = Math.Cos(ha), ty = Math.Sin(ha);
+        double rw = Math.Cos(hr), rz = Math.Sin(hr);
+        px0[Dynamics6Dof.IQ + 0] = tw * rw;
+        px0[Dynamics6Dof.IQ + 1] = -ty * rz;
+        px0[Dynamics6Dof.IQ + 2] = ty * rw;
+        px0[Dynamics6Dof.IQ + 3] = tw * rz;
+        px0[10] = 0.05; px0[11] = -0.05; px0[12] = 0.05;
+
+        double L = h - alt;
+        double V = Math.Max(Math.Sqrt(vx * vx + vDown * vDown), 1.0);
+        double sg = Math.Sqrt(2.0 * L / g) * 2.0;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = 0.10,
+            WDu = wdu, WW = 1e-3, ProximalWeight = 0.05,
+            SigmaMin = sg * 0.15, SigmaMax = sg * 4.0, SigmaScale = sg,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+        var xs = new double[n * NX];
+        var us = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xs[k * NX + i] = px0[i] + t * (xf[i] - px0[i]);
+                xs[k * NX + 3 + i] = px0[3 + i] + t * (xf[3 + i] - px0[3 + i]);
+            }
+            for (int i = 0; i < 4; i++)
+                xs[k * NX + 6 + i] = px0[6 + i] * (1 - t) + xf[6 + i] * t;
+            double qn = 0;
+            for (int i = 0; i < 4; i++) qn += xs[k * NX + 6 + i] * xs[k * NX + 6 + i];
+            qn = Math.Sqrt(qn);
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] /= qn;
+            for (int i = 0; i < 3; i++) xs[k * NX + 10 + i] = px0[10 + i] * (1 - t);
+            xs[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            us[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+        Array.Copy(px0, 0, xs, 0, NX);
+
+        var sv = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        sv.Initialize(px0, xf, xs, us, sg);
+        sv.Solve(30);
+        double[] X = sv.ReferenceX, U = sv.ReferenceU;
+        double ip = 0, op = 0, jump = 0, rr = 0;
+        double px = 0, py = 0, pz = 0;
+        for (int k = 0; k < n; k++)
+        {
+            ip = Math.Max(ip, Math.Abs(X[k * NX]));
+            op = Math.Max(op, Math.Abs(X[k * NX + 1]));
+            rr = Math.Max(rr, Math.Abs(X[k * NX + 12]));
+            double tn = Math.Sqrt(U[k * NU] * U[k * NU] + U[k * NU + 1] * U[k * NU + 1] + U[k * NU + 2] * U[k * NU + 2]);
+            double dx = U[k * NU] / tn, dy = U[k * NU + 1] / tn, dz = U[k * NU + 2] / tn;
+            if (k > 0)
+            {
+                double d = Math.Acos(Math.Clamp(dx * px + dy * py + dz * pz, -1, 1)) * 180.0 / Math.PI;
+                jump = Math.Max(jump, d);
+            }
+            px = dx; py = dy; pz = dz;
+        }
+        // The thing actually being LOOKED AT: the angle between consecutive position
+        // segments. Control smoothness is not the same measurement, and a path kink
+        // is what the overlay draws.
+        double pathKink = 0; int kinkAt = -1;
+        for (int k = 1; k + 1 < n; k++)
+        {
+            double ax = X[k * NX] - X[(k - 1) * NX], ay = X[k * NX + 1] - X[(k - 1) * NX + 1], az = X[k * NX + 2] - X[(k - 1) * NX + 2];
+            double bx = X[(k + 1) * NX] - X[k * NX], by = X[(k + 1) * NX + 1] - X[k * NX + 1], bz = X[(k + 1) * NX + 2] - X[k * NX + 2];
+            double na = Math.Sqrt(ax * ax + ay * ay + az * az), nb = Math.Sqrt(bx * bx + by * by + bz * bz);
+            if (na < 1e-9 || nb < 1e-9) continue;
+            double c = Math.Clamp((ax * bx + ay * by + az * bz) / (na * nb), -1, 1);
+            double ang = Math.Acos(c) * 180.0 / Math.PI;
+            if (ang > pathKink) { pathKink = ang; kinkAt = k; }
+        }
+        double defc = double.PositiveInfinity;
+        for (int i = sv.Trace.Count - 1; i >= 0; i--)
+            if (sv.Trace[i].Accepted) { defc = sv.Trace[i].DefectNorm; break; }
+        double vAtKink = kinkAt >= 0
+            ? Math.Sqrt(X[kinkAt * NX + 3] * X[kinkAt * NX + 3] + X[kinkAt * NX + 4] * X[kinkAt * NX + 4] + X[kinkAt * NX + 5] * X[kinkAt * NX + 5])
+            : 0.0;
+        double vMin = double.MaxValue; int vMinAt = -1;
+        for (int k = 0; k < n; k++)
+        {
+            double vv = Math.Sqrt(X[k * NX + 3] * X[k * NX + 3] + X[k * NX + 4] * X[k * NX + 4] + X[k * NX + 5] * X[k * NX + 5]);
+            if (vv < vMin) { vMin = vv; vMinAt = k; }
+        }
+        double thrMin = double.MaxValue, thrMax = 0;
+        for (int k = 0; k < n; k++) { thrMin = Math.Min(thrMin, U[k * NU + 2]); thrMax = Math.Max(thrMax, U[k * NU + 2]); }
+        Console.WriteLine($"  {wdu,6:F3} kink {pathKink,6:F1} deg @{kinkAt,2}  |v| there {vAtKink,6:F2} m/s   " +
+                          $"min |v| {vMin,6:F2} @{vMinAt,2}   sigma {sv.Sigma,6:F2}  " +
+                          $"throttle {thrMin / tmax * 100,4:F0}-{thrMax / tmax * 100,3:F0}%");
+    }
+
+    // Is the kink a bad LOCAL OPTIMUM (seed / budget) or the true answer? Sweep the
+    // iteration budget and the sigma seed at fixed weights.
+    Console.WriteLine();
+    Console.WriteLine("  is it a local optimum? (W_DU 0.01, W_W 1e-3)");
+    Console.WriteLine("   iters  sigma seed   sigma   path kink   |v| at kink   merit      status");
+
+    foreach (int budget in new[] { 30, 100 })
+    foreach (double seedMult in new[] { 0.7, 1.0, 1.5 })
+    {
+        var px0 = new double[NX];
+        px0[2] = h; px0[3] = vx; px0[5] = -vDown; px0[Dynamics6Dof.IM] = m0;
+        double ha = 15.0 * Math.PI / 180.0 / 2.0, hr = 40.0 * Math.PI / 180.0 / 2.0;
+        double tw = Math.Cos(ha), ty = Math.Sin(ha), rw = Math.Cos(hr), rz = Math.Sin(hr);
+        px0[6] = tw * rw; px0[7] = -ty * rz; px0[8] = ty * rw; px0[9] = tw * rz;
+        px0[10] = 0.05; px0[11] = -0.05; px0[12] = 0.05;
+
+        double L = h - alt;
+        double V = Math.Max(Math.Sqrt(vx * vx + vDown * vDown), 1.0);
+        double sg = Math.Sqrt(2.0 * L / g) * 2.0 * seedMult;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = 0.10,
+            WDu = 0.01, WW = 1e-3, ProximalWeight = 0.05,
+            SigmaMin = sg * 0.15, SigmaMax = sg * 4.0, SigmaScale = sg,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+        var xs = new double[n * NX];
+        var us = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xs[k * NX + i] = px0[i] + t * (xf[i] - px0[i]);
+                xs[k * NX + 3 + i] = px0[3 + i] + t * (xf[3 + i] - px0[3 + i]);
+            }
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] = px0[6 + i] * (1 - t) + xf[6 + i] * t;
+            double qn = 0;
+            for (int i = 0; i < 4; i++) qn += xs[k * NX + 6 + i] * xs[k * NX + 6 + i];
+            qn = Math.Sqrt(qn);
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] /= qn;
+            for (int i = 0; i < 3; i++) xs[k * NX + 10 + i] = px0[10 + i] * (1 - t);
+            xs[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            us[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+        Array.Copy(px0, 0, xs, 0, NX);
+
+        var sv = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        sv.Initialize(px0, xf, xs, us, sg);
+        ScvxStatus st = sv.Solve(budget);
+        double[] X = sv.ReferenceX;
+        double kink = 0; int at = -1;
+        for (int k = 1; k + 1 < n; k++)
+        {
+            double ax = X[k * NX] - X[(k - 1) * NX], ay = X[k * NX + 1] - X[(k - 1) * NX + 1], az = X[k * NX + 2] - X[(k - 1) * NX + 2];
+            double bx = X[(k + 1) * NX] - X[k * NX], by = X[(k + 1) * NX + 1] - X[k * NX + 1], bz = X[(k + 1) * NX + 2] - X[k * NX + 2];
+            double na = Math.Sqrt(ax * ax + ay * ay + az * az), nb = Math.Sqrt(bx * bx + by * by + bz * bz);
+            if (na < 1e-9 || nb < 1e-9) continue;
+            double ang = Math.Acos(Math.Clamp((ax * bx + ay * by + az * bz) / (na * nb), -1, 1)) * 180.0 / Math.PI;
+            if (ang > kink) { kink = ang; at = k; }
+        }
+        double vk = at >= 0 ? Math.Sqrt(X[at * NX + 3] * X[at * NX + 3] + X[at * NX + 4] * X[at * NX + 4] + X[at * NX + 5] * X[at * NX + 5]) : 0;
+        Console.WriteLine($"  {budget,5}  {sg,10:F2}  {sv.Sigma,6:F2}   {kink,7:F1} deg  {vk,10:F2} m/s  {sv.Cost:E3}  {st}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("If more iterations do not remove it, the kink is a genuine local optimum");
+    Console.WriteLine("and the SEED is what selects it.");
+    return 0;
+}
+
+// Is the Python reference's neat trajectory a property of the SOLVER, or of a
+// benign initial condition? Its x0 is planar (r.y = v.y = 0), has NO horizontal
+// velocity, is perfectly upright at BOTH ends, and is not rotating. Perturb one
+// thing at a time from that exact state and watch the path kink.
+static int AblateCheck()
+{
+    string path = FindFile("loop_ref.csv") ?? "loop_ref.csv";
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] R(int i) => lines[i].Split(',').Select(z => double.Parse(z, CultureInfo.InvariantCulture)).ToArray();
+    double[] refX0 = R(0), xf = R(1);
+    const int n = 30;
+    double g = 9.81, tmax = 6.0e6, m0 = refX0[Dynamics6Dof.IM];
+
+    Console.WriteLine("perturbing the PYTHON REFERENCE initial condition, one change at a time");
+    Console.WriteLine();
+    Console.WriteLine("  case                          path kink   |v| at kink   out-of-plane   merit");
+
+    void Run(string label, double vy, double tiltDeg, double rollDeg, double rate)
+    {
+        var x0 = (double[])refX0.Clone();
+        x0[4] = vy;
+        double ha = tiltDeg * Math.PI / 180.0 / 2.0, hr = rollDeg * Math.PI / 180.0 / 2.0;
+        double tw = Math.Cos(ha), ty = Math.Sin(ha), rw = Math.Cos(hr), rz = Math.Sin(hr);
+        x0[6] = tw * rw; x0[7] = -ty * rz; x0[8] = ty * rw; x0[9] = tw * rz;
+        x0[10] = rate; x0[11] = -rate; x0[12] = rate;
+
+        double L = 0;
+        for (int i = 0; i < 3; i++) L += (x0[i] - xf[i]) * (x0[i] - xf[i]);
+        L = Math.Sqrt(L);
+        double sp = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
+        double V = Math.Max(Math.Max(sp, Math.Sqrt(L * g)), 1.0);
+        double sg = 12.0;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = 0.40,
+            WDu = 0.01, WW = 1e-3, ProximalWeight = 0.05,
+            SigmaMin = sg * 0.15, SigmaMax = sg * 4.0, SigmaScale = sg,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+        var xs = new double[n * NX];
+        var us = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xs[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+                xs[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+            }
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] = x0[6 + i] * (1 - t) + xf[6 + i] * t;
+            double qn = 0;
+            for (int i = 0; i < 4; i++) qn += xs[k * NX + 6 + i] * xs[k * NX + 6 + i];
+            qn = Math.Sqrt(qn);
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] /= qn;
+            for (int i = 0; i < 3; i++) xs[k * NX + 10 + i] = x0[10 + i] * (1 - t);
+            xs[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            us[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+        Array.Copy(x0, 0, xs, 0, NX);
+
+        var sv = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        sv.Initialize(x0, xf, xs, us, sg);
+        sv.Solve(60);
+        double[] X = sv.ReferenceX;
+        double kink = 0, oop = 0; int at = -1;
+        for (int k = 0; k < n; k++) oop = Math.Max(oop, Math.Abs(X[k * NX + 1]));
+        for (int k = 1; k + 1 < n; k++)
+        {
+            double ax = X[k * NX] - X[(k - 1) * NX], ay = X[k * NX + 1] - X[(k - 1) * NX + 1], az = X[k * NX + 2] - X[(k - 1) * NX + 2];
+            double bx = X[(k + 1) * NX] - X[k * NX], by = X[(k + 1) * NX + 1] - X[k * NX + 1], bz = X[(k + 1) * NX + 2] - X[k * NX + 2];
+            double na = Math.Sqrt(ax * ax + ay * ay + az * az), nb = Math.Sqrt(bx * bx + by * by + bz * bz);
+            if (na < 1e-9 || nb < 1e-9) continue;
+            double a2 = Math.Acos(Math.Clamp((ax * bx + ay * by + az * bz) / (na * nb), -1, 1)) * 180.0 / Math.PI;
+            if (a2 > kink) { kink = a2; at = k; }
+        }
+        double vk = at >= 0 ? Math.Sqrt(X[at * NX + 3] * X[at * NX + 3] + X[at * NX + 4] * X[at * NX + 4] + X[at * NX + 5] * X[at * NX + 5]) : 0;
+        Console.WriteLine($"  {label,-28} {kink,7:F1} deg  {vk,10:F2} m/s  {oop,10:F2} m  {sv.Cost:E3}");
+    }
+
+    Run("reference exactly",            0.0,  0.0,  0.0, 0.0);
+    Run("+ out-of-plane vel 10 m/s",   10.0,  0.0,  0.0, 0.0);
+    Run("+ initial tilt 15 deg",        0.0, 15.0,  0.0, 0.0);
+    Run("+ initial ROLL 40 deg",        0.0,  0.0, 40.0, 0.0);
+    Run("+ body rates 0.05 rad/s",      0.0,  0.0,  0.0, 0.05);
+    Run("+ all of the above",          10.0, 15.0, 40.0, 0.05);
+    return 0;
+}
+
+// Does pinning sigma actually deliver what it promises? The claim is that with sigma
+// fixed the regularisers can no longer buy anything by stretching time, so raising
+// them for smoothness stops distorting the trajectory.
+static int FixedTimeCheck()
+{
+    string path = FindFile("loop_ref.csv") ?? "loop_ref.csv";
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] R(int i) => lines[i].Split(',').Select(z => double.Parse(z, CultureInfo.InvariantCulture)).ToArray();
+    double[] rx = R(0), xf = R(1);
+    const int n = 30;
+    double g = 9.81, tmax = 6.0e6, m0 = rx[Dynamics6Dof.IM];
+
+    // The realistic (perturbed) start, which is where the kinks showed up.
+    var x0 = (double[])rx.Clone();
+    x0[4] = 10.0;
+    double ha = 15.0 * Math.PI / 180.0 / 2.0, hr = 40.0 * Math.PI / 180.0 / 2.0;
+    double tw = Math.Cos(ha), ty = Math.Sin(ha), rw = Math.Cos(hr), rz = Math.Sin(hr);
+    x0[6] = tw * rw; x0[7] = -ty * rz; x0[8] = ty * rw; x0[9] = tw * rz;
+    x0[10] = 0.05; x0[11] = -0.05; x0[12] = 0.05;
+
+    Console.WriteLine("realistic perturbed start, sweeping W_DU under FREE vs FIXED burn time");
+    Console.WriteLine();
+    Console.WriteLine("  mode     W_DU    sigma    path kink   out-of-plane   merit");
+
+    void Run(bool fixedTime, double wdu)
+    {
+        double L = 0;
+        for (int i = 0; i < 3; i++) L += (x0[i] - xf[i]) * (x0[i] - xf[i]);
+        L = Math.Sqrt(L);
+        double sp = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
+        double V = Math.Max(Math.Max(sp, Math.Sqrt(L * g)), 1.0);
+        double sg = 16.0;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = 0.40,
+            WDu = wdu, WW = 1e-3, ProximalWeight = 0.05, SigmaScale = sg,
+            SigmaMin = fixedTime ? sg * (1 - 1e-9) : sg * 0.15,
+            SigmaMax = fixedTime ? sg * (1 + 1e-9) : sg * 4.0,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+        var xs = new double[n * NX];
+        var us = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xs[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+                xs[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+            }
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] = x0[6 + i] * (1 - t) + xf[6 + i] * t;
+            double qn = 0;
+            for (int i = 0; i < 4; i++) qn += xs[k * NX + 6 + i] * xs[k * NX + 6 + i];
+            qn = Math.Sqrt(qn);
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] /= qn;
+            for (int i = 0; i < 3; i++) xs[k * NX + 10 + i] = x0[10 + i] * (1 - t);
+            xs[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            us[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+        Array.Copy(x0, 0, xs, 0, NX);
+
+        var sv = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        sv.Initialize(x0, xf, xs, us, sg);
+        sv.Solve(40);
+        double[] X = sv.ReferenceX;
+        double kink = 0, oop = 0;
+        for (int k = 0; k < n; k++) oop = Math.Max(oop, Math.Abs(X[k * NX + 1]));
+        for (int k = 1; k + 1 < n; k++)
+        {
+            double ax = X[k * NX] - X[(k - 1) * NX], ay = X[k * NX + 1] - X[(k - 1) * NX + 1], az = X[k * NX + 2] - X[(k - 1) * NX + 2];
+            double bx = X[(k + 1) * NX] - X[k * NX], by = X[(k + 1) * NX + 1] - X[k * NX + 1], bz = X[(k + 1) * NX + 2] - X[k * NX + 2];
+            double na = Math.Sqrt(ax * ax + ay * ay + az * az), nb = Math.Sqrt(bx * bx + by * by + bz * bz);
+            if (na < 1e-9 || nb < 1e-9) continue;
+            kink = Math.Max(kink, Math.Acos(Math.Clamp((ax * bx + ay * by + az * bz) / (na * nb), -1, 1)) * 180.0 / Math.PI);
+        }
+        Console.WriteLine($"  {(fixedTime ? "FIXED" : "free "),-6} {wdu,6:F3}  {sv.Sigma,6:F2}   {kink,7:F1} deg  {oop,10:F2} m  {sv.Cost:E3}");
+    }
+
+    // How tight can the sigma pin be before it fights the solver's own tolerance?
+    Console.WriteLine("  sigma pin width vs solve cost (SubproblemEps is 1e-5):");
+    Console.WriteLine("   rel slack   ADMM it     ms    sigma      status");
+    foreach (double slack in new[] { 1e-9, 1e-7, 1e-5, 1e-3, 1e-2 })
+    {
+        double L = 0;
+        for (int i = 0; i < 3; i++) L += (x0[i] - xf[i]) * (x0[i] - xf[i]);
+        L = Math.Sqrt(L);
+        double sp = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
+        double V = Math.Max(Math.Max(sp, Math.Sqrt(L * g)), 1.0);
+        double sg = 16.0;
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, ThrottleFloor = 0.40,
+            WDu = 0.05, WW = 1e-3, ProximalWeight = 0.05, SigmaScale = sg,
+            SigmaMin = sg * (1 - slack), SigmaMax = sg * (1 + slack),
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+        var xs = new double[n * NX];
+        var us = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xs[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+                xs[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+            }
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] = x0[6 + i] * (1 - t) + xf[6 + i] * t;
+            double qn = 0;
+            for (int i = 0; i < 4; i++) qn += xs[k * NX + 6 + i] * xs[k * NX + 6 + i];
+            qn = Math.Sqrt(qn);
+            for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] /= qn;
+            for (int i = 0; i < 3; i++) xs[k * NX + 10 + i] = x0[10 + i] * (1 - t);
+            xs[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            us[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+        Array.Copy(x0, 0, xs, 0, NX);
+        var sv = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        sv.Initialize(x0, xf, xs, us, sg);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        ScvxStatus st = sv.Solve(40);
+        Console.WriteLine($"   {slack,9:E0}  {sv.Trace.Sum(t => t.SolverIterations),8}  {sw.Elapsed.TotalMilliseconds,6:F0}  {sv.Sigma,7:F3}   {st}");
+    }
+    Console.WriteLine();
+
+    foreach (double wdu in new[] { 0.01, 0.05, 0.20 }) Run(false, wdu);
+    Console.WriteLine();
+    foreach (double wdu in new[] { 0.01, 0.05, 0.20 }) Run(true, wdu);
+    Console.WriteLine();
+    Console.WriteLine("free: sigma should DRIFT UPWARD with W_DU (the regulariser buying time).");
+    Console.WriteLine("fixed: sigma constant, so W_DU only smooths and does not distort.");
     return 0;
 }

@@ -45,8 +45,15 @@ public sealed class Scvx6DofConfig
     /// </summary>
     public double ProximalWeight { get; init; }
 
-    public double SigmaMin { get; init; } = 5.0;
-    public double SigmaMax { get; init; } = 25.0;
+    /// <summary>
+    /// Burn-time bounds. SETTABLE, not init-only, so a fixed-time formulation can pin
+    /// sigma per cycle (SigmaMin == SigmaMax) without rebuilding the solver — which
+    /// would throw away the ADMM warm start and turn a 25 ms update into 1.3 s.
+    /// The subproblem writes these into its cone rows on every Assemble, so a change
+    /// takes effect on the next solve.
+    /// </summary>
+    public double SigmaMin { get; set; } = 5.0;
+    public double SigmaMax { get; set; } = 25.0;
     public double SigmaScale { get; init; } = 12.0;
 
     public double[] XScale { get; init; } =

@@ -27,16 +27,52 @@ public static class Ksa6DofSetup
     /// </summary>
     public static void Inertia(Vehicle vehicle, out double ixx, out double iyy, out double izz)
     {
+        Inertia(vehicle, out ixx, out iyy, out izz, out _, out _);
+    }
+
+    /// <summary>
+    /// As above, plus the two numbers that say whether the diagonal approximation is
+    /// actually valid for this vehicle.
+    ///
+    /// The model wants a DIAGONAL inertia; KSA supplies a full symmetric tensor. For a
+    /// genuinely axisymmetric booster — thrust axis along the symmetry axis, centre of
+    /// mass on it — the tensor in the model's body frame is exactly diag(It, It, Ia),
+    /// so dropping the off-diagonals costs NOTHING and the transverse terms are equal.
+    /// That is a property of the vehicle, not an assumption we are entitled to make,
+    /// so both are measured:
+    ///
+    ///   offDiagonalRatio  max|off-diagonal| / max|diagonal|. Near 0 means the model
+    ///                     frame IS a principal-axis frame and the approximation is
+    ///                     exact. Large means real coupling is being discarded.
+    ///   transverseAsymmetry |Ixx-Iyy| / max(Ixx,Iyy). Near 0 confirms axisymmetry —
+    ///                     and if it holds, the arbitrary roll reference that
+    ///                     BodyAxes picks is harmless, because the transverse inertia
+    ///                     is degenerate and ANY perpendicular pair are principal axes.
+    /// </summary>
+    public static void Inertia(Vehicle vehicle, out double ixx, out double iyy, out double izz,
+                               out double offDiagonalRatio, out double transverseAsymmetry)
+    {
         Symmetric3x3 t = vehicle.TotalMassPropsBody.Inertia;
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
 
-        double Quadratic(double3 a) =>
-            t.XX * a.X * a.X + t.YY * a.Y * a.Y + t.ZZ * a.Z * a.Z +
-            2.0 * (t.YX * a.X * a.Y + t.ZX * a.X * a.Z + t.ZY * a.Y * a.Z);
+        // a' I b, with Symmetric3x3's YX/ZX/ZY being Ixy/Ixz/Iyz.
+        double Bilinear(double3 a, double3 b) =>
+            t.XX * a.X * b.X + t.YY * a.Y * b.Y + t.ZZ * a.Z * b.Z +
+            t.YX * (a.X * b.Y + a.Y * b.X) +
+            t.ZX * (a.X * b.Z + a.Z * b.X) +
+            t.ZY * (a.Y * b.Z + a.Z * b.Y);
 
-        ixx = Quadratic(mx);
-        iyy = Quadratic(my);
-        izz = Quadratic(mz);
+        ixx = Bilinear(mx, mx);
+        iyy = Bilinear(my, my);
+        izz = Bilinear(mz, mz);
+
+        double maxDiag = Math.Max(Math.Abs(ixx), Math.Max(Math.Abs(iyy), Math.Abs(izz)));
+        double maxOff = Math.Max(Math.Abs(Bilinear(mx, my)),
+                        Math.Max(Math.Abs(Bilinear(mx, mz)), Math.Abs(Bilinear(my, mz))));
+        offDiagonalRatio = maxDiag > 0.0 ? maxOff / maxDiag : 0.0;
+
+        double maxTransverse = Math.Max(Math.Abs(ixx), Math.Abs(iyy));
+        transverseAsymmetry = maxTransverse > 0.0 ? Math.Abs(ixx - iyy) / maxTransverse : 0.0;
     }
 
     /// <summary>
@@ -235,7 +271,23 @@ public static class Ksa6DofSetup
             return false;
         }
 
-        thrust *= Math.Clamp(thrustFraction, 0.01, 1.0);
+        // THRUST FRACTION IS DELIBERATELY NOT APPLIED TO Tmax. It used to be, and that
+        // was a serious bug: the plan was built against a REDUCED Tmax while the
+        // throttle command was computed as T / Tmax_model, so a fraction of 0.4 made
+        // "full planned thrust" command throttle 1.0 and KSA delivered 2.5x what the
+        // plan assumed. The vehicle then overshot every plan, every re-solve started
+        // from a state nowhere near the last one, and the trajectory appeared to jump.
+        //
+        // It cannot be made to work by rescaling alone either: we do not shut engines
+        // down, so the achievable range is fixed at [floor * Tmax_real, Tmax_real].
+        // Pretending it is smaller is unphysical at BOTH ends — the reduced floor
+        // would also fall below the engine's real minimum and be clamped back up.
+        //
+        // An over-powered vehicle is a real physical situation, not something to
+        // model around: the feasibility panel reports it and names the throttle floor
+        // that would work. Genuinely landing on fewer engines needs the engines
+        // actually shut down, which is a separate piece of work.
+        _ = thrustFraction;
 
         double gimbalDeg = GimbalLimitDeg(vehicle);
         if (gimbalDeg <= 0.0)
@@ -423,6 +475,49 @@ public static class Ksa6DofSetup
                 Math.Max(mass, 1.0),
             ],
         };
+        // VALIDATE EVERYTHING BEFORE HANDING IT TO THE SOLVER. Every number above is
+        // derived from live game state, and a single non-finite one poisons the whole
+        // problem: XScale feeds the column scaling, which multiplies into every entry
+        // of A and P, so one Inf makes the entire matrix Inf and SCS — which is native
+        // and does not validate its input — can take the PROCESS down rather than
+        // returning an error.
+        //
+        // The realistic path is not exotic: `gScale = Mu / |siteCci|^2` is Infinity if
+        // the site has not resolved yet, and `Math.Max(NaN, x)` RETURNS NaN, so a
+        // single bad intermediate propagates silently through the scale chain.
+        (string Name, double Value)[] mustBeFinitePositive =
+        [
+            ("Tmax", cfg.Tmax), ("Tmin", cfg.Tmin), ("gimbal limit", cfg.GimbalMaxDeg),
+            ("tau_roll max", cfg.TauRollMax), ("tilt limit", cfg.TiltMaxDeg),
+            ("sigma scale", cfg.SigmaScale), ("sigma min", cfg.SigmaMin), ("sigma max", cfg.SigmaMax),
+            ("length scale", lengthScale), ("velocity scale", velocityScale),
+            ("gravity", -dyn.Gz), ("Isp", dyn.Isp), ("L_arm", dyn.LArm),
+            ("Ixx", dyn.Ixx), ("Iyy", dyn.Iyy), ("Izz", dyn.Izz),
+            ("mass", mass),
+        ];
+        foreach ((string name, double value) in mustBeFinitePositive)
+        {
+            if (!double.IsFinite(value) || value <= 0.0)
+            {
+                error = $"{name} is {value} - not a usable number. The solver would be " +
+                        "handed a poisoned problem.";
+                return false;
+            }
+        }
+        for (int i = 0; i < cfg.XScale.Length; i++)
+        {
+            if (!double.IsFinite(cfg.XScale[i]) || cfg.XScale[i] <= 0.0)
+            {
+                error = $"state scale [{i}] is {cfg.XScale[i]} - not usable.";
+                return false;
+            }
+        }
+        if (cfg.SigmaMin >= cfg.SigmaMax)
+        {
+            error = $"burn-time bounds are inverted ({cfg.SigmaMin:F2} .. {cfg.SigmaMax:F2}).";
+            return false;
+        }
+
         return true;
     }
 }

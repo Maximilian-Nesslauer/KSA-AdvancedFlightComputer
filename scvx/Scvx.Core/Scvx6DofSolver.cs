@@ -104,6 +104,30 @@ public sealed class Scvx6DofSolver
     public const double RealTimeEps = 1e-5;
 
     /// <summary>
+    /// Hard cap on ADMM iterations per subproblem. THE REAL-TIME PATH MUST HAVE A
+    /// BOUNDED WORST CASE — a mean is not a guarantee.
+    ///
+    /// ScsWorkspace.DefaultMaxIterations is 100,000, which is an OFFLINE VALIDATION
+    /// number: it exists so a hard problem is solved properly rather than silently
+    /// truncated. On a game thread it is a licence to stall for seconds. Measured in
+    /// closed loop, an UNCAPPED worst-case subproblem ran 31,800 ADMM iterations /
+    /// 1.7 s while the mean was ~400 — and that is on a synthetic problem. In game
+    /// that presents as a freeze, and then the process is killed.
+    ///
+    /// Capping is SAFE BY CONSTRUCTION here, and that is not a lucky accident: SCS
+    /// reports a truncated solve as SolvedInaccurate, ScsWorkspace.HitIterationLimit
+    /// detects it, and the SCvx loop already treats it as a subproblem FAILURE and
+    /// shrinks the trust region rather than accepting the iterate. So a cap converts
+    /// "stall for two seconds" into "fail fast and take a smaller step".
+    /// </summary>
+    /// SETTABLE, because the cold solve and the receding-horizon re-solve need
+    /// different budgets: measured, a cap of 1000 FAILS the cold solve outright while
+    /// 2000 handles every warm re-solve with room to spare. The cold solve happens
+    /// during a coast where a two-second stall is acceptable; a re-solve happens in
+    /// the loop where it is not.
+    public int MaxSubproblemIterations { get; set; } = ScsWorkspace.DefaultMaxIterations;
+
+    /// <summary>
     /// Feed each subproblem the previous solve's ADMM iterate. The problem
     /// changes between SCvx iterations, but only within the trust region, so the
     /// last point is a good start. This is the ONLY warm start SCS offers —
@@ -238,7 +262,9 @@ public sealed class Scvx6DofSolver
         //    point is a good ADMM start. ScsWorkspace refuses to carry forward an
         //    unusable solution, so a failed solve cannot poison this.
         _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigBar, TrustRegion, _a, _b, _f0);
-        ScsStatus st = _sub.Run(warmStart: WarmStart && _sub.HasWarmStart, epsAbs: SubproblemEps, epsRel: SubproblemEps);
+        ScsStatus st = _sub.Run(warmStart: WarmStart && _sub.HasWarmStart,
+                                maxIterations: MaxSubproblemIterations,
+                                epsAbs: SubproblemEps, epsRel: SubproblemEps);
 
         // A truncated solve counts as a failure, not a step. SCS returns
         // SolvedInaccurate when it runs out of iterations, and that iterate can

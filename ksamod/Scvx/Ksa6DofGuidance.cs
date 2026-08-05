@@ -88,6 +88,71 @@ public sealed class Ksa6DofGuidance
     /// <summary>True when the last Update needed the wide-trust-region retry — that retry is what turns a ~30 ms solve into ~500 ms.</summary>
     public bool FellBack { get; private set; }
 
+    /// <summary>
+    /// Update the inertia used by the dynamics. KSA's TotalMassPropsBody.Inertia is
+    /// LIVE — it is rebuilt whenever propellant changes — so a value captured at
+    /// engage goes stale over a burn that spends a meaningful fraction of the wet
+    /// mass. That produces a SYSTEMATIC torque error: the plan is computed against a
+    /// heavier vehicle than the one flying, so every commanded torque is wrong in the
+    /// same direction, and MPC cannot correct it because re-anchoring the state does
+    /// not touch the model. Call this each cycle; it is three field writes.
+    /// </summary>
+    public void SetInertia(double ixx, double iyy, double izz)
+    {
+        if (ixx > 0.0) _dyn.Ixx = ixx;
+        if (iyy > 0.0) _dyn.Iyy = iyy;
+        if (izz > 0.0) _dyn.Izz = izz;
+    }
+
+    /// <summary>Inertia currently in the model, for the readout.</summary>
+    public double3 Inertia => new(_dyn.Ixx, _dyn.Iyy, _dyn.Izz);
+
+    /// <summary>
+    /// Fly a FIXED burn time instead of letting the solver choose it.
+    ///
+    /// Free final time makes the dynamics BILINEAR in (sigma, x, u) — sigma multiplies
+    /// f(x,u) in the collocation — which is a first-class nonconvexity and the root of
+    /// several separate pathologies: sigma pinning at its bounds, the regularisers
+    /// biasing the trajectory (BOTH W_DU and W_W get cheaper as sigma grows, so they
+    /// push it to the ceiling), loitering to fill an over-long burn, and plan-to-plan
+    /// inconsistency as sigma jumps between MPC cycles.
+    ///
+    /// Pinning sigma removes all of that at once. In particular the regularisers can
+    /// no longer buy anything by stretching time, so they can be set for smoothness
+    /// and conditioning without distorting the answer.
+    ///
+    /// This is what the 3-DOF Gfold planner already does — fixed time-of-flight per
+    /// solve with an outer bracket-and-golden-section search over it — and is the
+    /// classic powered-descent formulation.
+    /// </summary>
+    public bool FixedTime { get; set; } = true;
+
+    /// <summary>Burn time committed at engage; receding horizon counts down from it.</summary>
+    public double CommittedSigma { get; private set; }
+
+    /// <summary>Floor for the counted-down burn time, so the last cycles before arrival cannot divide by ~0.</summary>
+    public double MinimumBurnTime { get; init; } = 1.0;
+
+    /// <summary>
+    /// ADMM iteration caps. THIS IS WHAT STOPS THE GAME FREEZING.
+    ///
+    /// SCS defaults to 100,000 iterations per subproblem — an offline-validation
+    /// number. Measured in closed loop, an uncapped worst-case subproblem ran 31,800
+    /// iterations / 1.7 s against a mean of ~400, and several of those back to back on
+    /// the sim thread is a multi-second stall: the game stops responding and is killed.
+    ///
+    /// Capping is free here. Same closed-loop run, cap 2000 vs uncapped: identical
+    /// miss (2.1 m), BETTER path (1.27 vs 1.36 x direct), same plan jump, worst case
+    /// 561 ms instead of 1709 ms. It is safe because SCS reports a truncated solve as
+    /// SolvedInaccurate, HitIterationLimit catches it, and the SCvx loop already
+    /// treats that as a subproblem failure and shrinks the trust region — so the cap
+    /// turns a stall into a smaller step.
+    ///
+    /// Cold needs more than warm: a cap of 1000 fails the cold solve outright.
+    /// </summary>
+    public int ColdAdmmCap { get; init; } = 20_000;
+    public int WarmAdmmCap { get; init; } = 2_000;
+
     /// <summary>Plan node count, for the overlay.</summary>
     public int Nodes => _n;
 
@@ -100,6 +165,7 @@ public sealed class Ksa6DofGuidance
         _dyn = dyn;
         _n = cfg.Nodes;
         _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        _solver.MaxSubproblemIterations = ColdAdmmCap;
     }
 
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
@@ -152,6 +218,91 @@ public sealed class Ksa6DofGuidance
     private double[] _xf = [];
 
     /// <summary>
+    /// Constrain sigma to a single value. A hair of slack either side rather than an
+    /// exact equality: SigmaMin == SigmaMax to the last bit is a knife-edge for the
+    /// solver's feasibility check, and costs nothing to avoid.
+    /// </summary>
+    private void PinSigma(double sigma)
+    {
+        _cfg.SigmaMin = sigma * (1.0 - 1e-9);
+        _cfg.SigmaMax = sigma * (1.0 + 1e-9);
+    }
+
+    /// <summary>
+    /// Cold solve with a search over burn time, mirroring Gfold's bracket. Each sample
+    /// warm-starts from the previous one rather than starting cold, so the sweep costs
+    /// far less than N independent solves.
+    ///
+    /// Selection is by MERIT among samples that are actually PHYSICAL (defect within
+    /// tolerance) — a shorter burn that only "wins" because it failed to converge is
+    /// not a win.
+    /// </summary>
+    public bool PlanSearch(double[] x0, double[] xf, double sigmaGuess, double simNow,
+                           int samples = 5, int iterationsPerSample = 20)
+    {
+        double lo = Math.Max(sigmaGuess * 0.6, 1.0);
+        double hi = Math.Max(sigmaGuess * 1.8, lo + 1.0);
+
+        double[] bestX = null, bestU = null;
+        double bestSigma = 0.0, bestMerit = double.PositiveInfinity;
+        bool seeded = false;
+        SearchLog = "";
+
+        for (int i = 0; i < samples; i++)
+        {
+            double sigma = samples == 1 ? sigmaGuess : lo + (hi - lo) * i / (samples - 1);
+            PinSigma(sigma);
+
+            if (!seeded)
+            {
+                if (!Plan(x0, xf, sigma, simNow, iterationsPerSample))
+                {
+                    SearchLog += $"{sigma:F1}s fail  ";
+                    continue;
+                }
+                seeded = true;
+            }
+            else
+            {
+                _solver.Reseed(x0, _planX, _planU, sigma, trustRegion: _solver.TrustRegionMax);
+                if (!Finish(x0, simNow, iterationsPerSample))
+                {
+                    SearchLog += $"{sigma:F1}s fail  ";
+                    continue;
+                }
+            }
+
+            double merit = _solver.Cost;
+            SearchLog += $"{sigma:F1}s J={merit:F4}  ";
+            if (merit < bestMerit)
+            {
+                bestMerit = merit;
+                bestSigma = sigma;
+                bestX = (double[])_planX.Clone();
+                bestU = (double[])_planU.Clone();
+            }
+        }
+
+        if (bestX == null)
+        {
+            Error = "burn-time search found no physical plan: " + SearchLog;
+            return false;
+        }
+
+        _planX = bestX;
+        _planU = bestU;
+        _planSigma = bestSigma;
+        CommittedSigma = bestSigma;
+        _solveTime = simNow;
+        PinSigma(bestSigma);
+        Error = "";
+        return true;
+    }
+
+    /// <summary>What the burn-time search tried and what it cost, for the readout.</summary>
+    public string SearchLog { get; private set; } = "";
+
+    /// <summary>
     /// One MPC step: re-solve from the live state. The previous solution, shifted
     /// forward, seeds it — that is what keeps the warm start good and the solve at
     /// ~33 ms — but the ANSWER is anchored at the vehicle by the initial-state
@@ -161,6 +312,9 @@ public sealed class Ksa6DofGuidance
     {
         if (!HasPlan)
             return false;
+
+        // Bounded worst case from here on: this runs inside the guidance loop.
+        _solver.MaxSubproblemIterations = WarmAdmmCap;
 
         double dt = _planSigma / (_n - 1);
         double elapsed = Math.Max(0.0, simNow - _solveTime);
@@ -181,7 +335,20 @@ public sealed class Ksa6DofGuidance
         // plan's node `shift`.
         Array.Copy(x0, 0, xs, 0, NX);
 
-        double sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
+        // FIXED TIME: count the COMMITTED burn time down rather than letting the
+        // solver re-choose it every cycle. Re-choosing is what made successive plans
+        // change shape instead of merely advancing, and it is what let the
+        // regularisers stretch sigma to make themselves cheaper.
+        double sigma;
+        if (FixedTime)
+        {
+            sigma = Math.Max(_planSigma - elapsed, MinimumBurnTime);
+            PinSigma(sigma);
+        }
+        else
+        {
+            sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
+        }
         FellBack = false;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: 0.05);
         if (Finish(x0, simNow, maxIterations))
@@ -293,6 +460,12 @@ public sealed class Ksa6DofGuidance
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre
         // of mass — the model's own gimbal-torque relation, verbatim.
         torqueModel = new double3(_dyn.LArm * tdy, -_dyn.LArm * tdx, tauRoll);
+        LastLateralForce = new double2(tdx, tdy);
+        // Throttle is the plan's axial thrust as a fraction of the SAME Tmax the plan
+        // was built against. These two must be the identical number — if the model
+        // plans against one Tmax and the command divides by another, every thrust the
+        // vehicle produces is wrong by that ratio, and no amount of re-solving fixes
+        // it because the error is systematic.
         throttle = Math.Clamp(thrust / _cfg.Tmax, 0.0, 1.0);
         return true;
     }
@@ -376,6 +549,19 @@ public sealed class Ksa6DofGuidance
                 rateDamping += _cfg.WW * w * w;
             }
     }
+
+    /// <summary>
+    /// The LATERAL thrust the model believes it is producing, (tdx, tdy) in model
+    /// body axes, N. The model rigidly couples this to pitch/yaw torque through a
+    /// SINGLE engine at LArm: tau = r_T x T_body. The real vehicle does not — the
+    /// allocator makes the requested torque using every gimbal it has, including
+    /// verniers, and its lateral force is whatever that geometry gives.
+    ///
+    /// If the two disagree, the plan's TRANSLATIONAL dynamics are wrong even though
+    /// attitude tracks: the vehicle gets a different sideways push than planned.
+    /// Compare against KsaGimbalControl.LastAllocation.AchievedForce.
+    /// </summary>
+    public double2 LastLateralForce { get; private set; }
 
     /// <summary>Plan node 0 in model coordinates — where the plan believes the vehicle is.</summary>
     public double3 PlanOrigin => HasPlan

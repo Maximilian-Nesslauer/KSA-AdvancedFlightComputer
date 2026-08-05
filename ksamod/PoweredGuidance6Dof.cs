@@ -21,7 +21,25 @@ public static partial class PoweredGuidanceWindow
     private static string _sixDofError = "";
     private static double _sixDofLastReplan;
 
-    private static int _sixDofNodes = 20;
+    // 50. Measured in CLOSED LOOP (Scvx.Console --mpc, zero dispersion, so any plan
+    // movement is the model's own error rather than disturbance):
+    //   nodes   miss   path/direct   plan jump   ADMM/cycle
+    //      20   1.9 m     1.50          4.0 m       2377
+    //      30   2.1 m     1.36          2.4 m       1785
+    //      50   1.6 m     1.28          1.3 m       1988
+    //      80   4.3 m     1.25          1.0 m        821
+    //
+    // The plan JUMPING between re-solves is DISCRETISATION ERROR — the gap between
+    // the trapezoidal collocation and the true dynamics — and it falls monotonically
+    // with node count. No weight, scale or conditioning change moved it at all. The
+    // over-long curved path improves with nodes too, and the vehicle never actually
+    // moves AWAY from the target (away-from-target is 0.0 m at every node count), so
+    // the "loops" are a long curve, not a loop.
+    //
+    // 20 was the worst point on this curve on ALL THREE reported symptoms at once —
+    // most plan jump, longest path, and the MOST ADMM iterations. More nodes does not
+    // cost more here: the smoother problem converges in fewer ADMM iterations.
+    private static int _sixDofNodes = 50;
     private static double _sixDofTiltDeg = 60.0;
     private static double _sixDofThrottleFloor = 0.40;
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
@@ -46,13 +64,39 @@ public static partial class PoweredGuidanceWindow
     // upper bound. Turned down twice after flight testing. Exposed because the right
     // value depends on the vehicle and is easiest to find by flying it.
     private static double _sixDofRateDampShare = 0.002;   // rate penalty as a share of fuel
-    private static double _sixDofControlSmooth = 0.01;    // W_DU
+    // W_DU. Raised back to 0.05 after flight testing: unlike W_W (which was pinning
+    // burn time at its upper bound and deserved cutting), THIS term has a distinct
+    // job — it is the only thing keeping the control profile CONTINUOUS. Min-fuel
+    // with no control-rate penalty is bang-bang, and the optimum genuinely has the
+    // thrust direction jumping between nodes. Measured on a realistic start:
+    //   W_DU 0.000 -> 19.1 deg thrust-direction jump node-to-node (visible kinks)
+    //   W_DU 0.010 ->  5.9 deg
+    //   W_DU 0.050 ->  3.9 deg
+    // It also suppresses out-of-plane wandering (15.9 m -> 8.3 m) by discouraging the
+    // solver from hopping between local optima. Cost is a slightly longer path.
+    private static double _sixDofControlSmooth = 0.05;    // W_DU
 
     // Proximal conditioning. The regularisers above were also holding P together;
     // turning them down for a correct trajectory tripled the ADMM iteration count.
     // This puts the conditioning back without the bias. 0.05 keeps the answer and is
     // ~3.8x faster; higher is faster still but starts moving the solution.
     private static double _sixDofProximal = 0.05;
+    private static double _sixDofOffDiag, _sixDofAsym;   // diagonal-approximation validity
+
+    // Fixed burn time (see Ksa6DofGuidance.FixedTime). Free final time makes the
+    // dynamics bilinear in (sigma, x, u) and is the root of sigma pinning, the
+    // regularisers biasing the trajectory, and loitering. Gfold already works this way.
+    // Default back to FREE burn time. Fixing it removed the regulariser/sigma
+    // coupling exactly as predicted, but did not fix the kinks, the wandering or the
+    // solve times — so it is kept as an option rather than imposed.
+    private static bool _sixDofFixedTime;
+
+    // Touchdown latch. A vehicle sitting on the pad ALREADY reports terrain contact
+    // (the launch-pad collider counts), so "cut on contact" must not fire until the
+    // vehicle has first been observed OFF the ground. Same trap the landing flow hit.
+    private static bool _sixDofTouchdownArmed;
+    private static double _sixDofLastThrottle;
+    private static int _sixDofSigmaSamples = 5;
 
     private static void Draw6DofTab(Vehicle vehicle, IParentBody parent, double bodyRadius)
     {
@@ -141,7 +185,10 @@ public static partial class PoweredGuidanceWindow
             ImGui.Checkbox("Throttle floor from vehicle", ref _sixDofFloorAuto);
             if (!_sixDofFloorAuto)
                 ImGui.InputDouble("Throttle floor", ref _sixDofThrottleFloor);
+            ImGui.Checkbox("Fixed burn time", ref _sixDofFixedTime);
             ImGui.InputDouble("Burn time seed (s)", ref _sixDofSigmaSeed);
+            if (_sixDofFixedTime)
+                ImGui.InputInt("Burn-time search samples", ref _sixDofSigmaSamples);
             ImGui.InputDouble("Target altitude (m)", ref _sixDofTargetAltM);
             ImGui.InputDouble("Re-solve every (plan nodes)", ref _sixDofReplanNodes);
             ImGui.InputDouble("Thrust fraction", ref _sixDofThrustFrac);
@@ -166,8 +213,18 @@ public static partial class PoweredGuidanceWindow
         double cadenceS = _sixDofReplanNodes * _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1);
         bool stale = age > cadenceS * 2.5;
         double sg = _sixDof.Sigma;
+        if (_sixDofFixedTime)
+        {
+            ImGui.Text($"burn time {sg,6:F1} s   FIXED (committed {_sixDof.CommittedSigma:F1} s, counting down)");
+            if (_sixDof.SearchLog.Length > 0)
+                ImGui.TextWrapped("search: " + _sixDof.SearchLog);
+        }
         bool atMax = sg >= _sixDof.SigmaMax * 0.999, atMin = sg <= _sixDof.SigmaMin * 1.001;
-        if (atMax || atMin)
+        if (_sixDofFixedTime)
+        {
+            // sigma is pinned by construction, so the bound warnings below are moot.
+        }
+        else if (atMax || atMin)
             ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
                 $"burn time {sg:F1} s - PINNED AT {(atMax ? "MAX" : "MIN")} " +
                 $"[{_sixDof.SigmaMin:F1}, {_sixDof.SigmaMax:F1}] s. The bound is dictating the " +
@@ -222,6 +279,50 @@ public static partial class PoweredGuidanceWindow
                 "Regularisers exceed fuel - this is NOT min-fuel any more, and both " +
                 "shrink as burn time grows, so sigma will run to its upper bound.");
 
+        // Is the diagonal-inertia approximation actually valid for this vehicle?
+        // For a truly axisymmetric booster both of these are ~0 and the approximation
+        // is EXACT rather than approximate — and the arbitrary roll reference that
+        // BodyAxes picks becomes harmless, since the transverse inertia is degenerate.
+        ImGui.SeparatorText("Inertia (model body axes)");
+        double3 inr = _sixDof.Inertia;
+        ImGui.Text($"Ixx {inr.X:E3}   Iyy {inr.Y:E3}   Izz {inr.Z:E3} kg m2");
+        bool diagOk = _sixDofOffDiag < 0.02, axiOk = _sixDofAsym < 0.05;
+        ImGui.TextColored(diagOk ? new float4(0.4f, 1f, 0.5f, 1f) : new float4(1f, 0.5f, 0.3f, 1f),
+            $"off-diagonal {_sixDofOffDiag * 100,6:F2}%% of diagonal" +
+            (diagOk ? " - diagonal model is exact here" : " - REAL COUPLING IS BEING DISCARDED"));
+        ImGui.TextColored(axiOk ? new float4(0.4f, 1f, 0.5f, 1f) : new float4(1f, 0.8f, 0.3f, 1f),
+            $"transverse asymmetry {_sixDofAsym * 100,6:F2}%%" +
+            (axiOk ? " - axisymmetric" : " - not axisymmetric, roll reference matters"));
+
+        // MODEL vs REALITY on lateral force. The model couples lateral force and
+        // pitch/yaw torque rigidly through one engine at LArm; the allocator makes the
+        // torque with every gimbal it has and produces whatever force falls out. A
+        // mismatch here means the plan's TRANSLATIONAL dynamics are wrong even when
+        // attitude tracks perfectly — the vehicle gets a different sideways push than
+        // was planned, drifts, and the next re-solve starts somewhere unexpected.
+        // Commanded throttle, with the vehicle's own floor beside it. If the command
+        // ever sits at or below the floor the engine is at its minimum and the plan
+        // has no downward authority left.
+        ImGui.SeparatorText("Throttle");
+        ImGui.Text($"commanded {_sixDofLastThrottle * 100,5:F1} %   " +
+                   $"vehicle floor {Ksa6DofSetup.VehicleThrottleFloor(vehicle) * 100,4:F1} %   engine ON while guiding");
+
+        ImGui.SeparatorText("Lateral force: model vs allocator");
+        double2 mf = _sixDof.LastLateralForce;
+        TvcAllocationResult al = KsaGimbalControl.LastAllocation;
+        KsaFrameBridge.BodyAxes(vehicle, out double3 bx, out double3 by, out _);
+        double afx = al.AchievedForce.X * bx.X + al.AchievedForce.Y * bx.Y + al.AchievedForce.Z * bx.Z;
+        double afy = al.AchievedForce.X * by.X + al.AchievedForce.Y * by.Y + al.AchievedForce.Z * by.Z;
+        ImGui.Text($"model  ({mf.X / 1000.0,9:F1},{mf.Y / 1000.0,9:F1}) kN");
+        ImGui.Text($"actual ({afx / 1000.0,9:F1},{afy / 1000.0,9:F1}) kN");
+        double mfn = Math.Sqrt(mf.X * mf.X + mf.Y * mf.Y);
+        double afn = Math.Sqrt(afx * afx + afy * afy);
+        double rel = Math.Max(mfn, afn) > 1.0 ? Math.Abs(mfn - afn) / Math.Max(mfn, afn) : 0.0;
+        if (rel > 0.25)
+            ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
+                $"MISMATCH {rel * 100:F0}%% - the model's translational dynamics do not " +
+                "match what the vehicle actually gets sideways.");
+
         // Commanded vs delivered torque — the link the drift numbers cannot see. A gap
         // means the plan is asking for torque this vehicle does not have.
         ImGui.SeparatorText("Torque commanded vs delivered (KSA body axes)");
@@ -231,7 +332,7 @@ public static partial class PoweredGuidanceWindow
         ImGui.Text($"max  ({a.MaxTorque.X / 1000.0,9:F1},{a.MaxTorque.Y / 1000.0,9:F1},{a.MaxTorque.Z / 1000.0,9:F1}) kN-m");
         if (a.SaturationScale < 0.999)
             ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
-                $"ALLOCATOR SATURATED - delivering {a.SaturationScale * 100.0:F0}% of the demand.");
+                $"ALLOCATOR SATURATED - delivering {a.SaturationScale * 100.0:F0}%% of the demand.");
     }
 
     private static void Disengage6Dof(Vehicle vehicle)
@@ -288,6 +389,24 @@ public static partial class PoweredGuidanceWindow
         if (_sixDof == null || !_sixDof.HasPlan)
             return;
 
+        // TOUCHDOWN. Without this the guidance kept commanding the plan's terminal
+        // control forever after arriving - nothing watched the ground, nothing cut
+        // the engine. Armed only once the vehicle has been seen OFF the ground,
+        // because a vehicle on the pad already reports contact against the pad.
+        //
+        // This MUST live in the step, not the draw: the draw only runs when the tab
+        // is open, and writes from it are erased by the sim copy-back a frame later.
+        if (!vehicle.Situation.HasAnyContact())
+        {
+            _sixDofTouchdownArmed = true;
+        }
+        else if (_sixDofTouchdownArmed)
+        {
+            Disengage6Dof(vehicle);
+            _sixDofError = "touchdown - engine cut, 6-DOF guidance disengaged.";
+            return;
+        }
+
         // THE MPC STEP: re-solve from the MEASURED state on a cadence. This is where
         // all the feedback in the system comes from — there is nothing else.
         //
@@ -299,6 +418,13 @@ public static partial class PoweredGuidanceWindow
         // next step instead of letting the clock run.
         double cadence = Math.Clamp(
             _sixDofReplanNodes * _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1), 0.05, 5.0);
+        // Refresh inertia from the live vehicle before re-solving. It changes as
+        // propellant drains, and a stale value is a SYSTEMATIC torque error that MPC
+        // structurally cannot correct — re-anchoring the state does not fix the model.
+        Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz,
+                             out _sixDofOffDiag, out _sixDofAsym);
+        _sixDof.SetInertia(ixx, iyy, izz);
+
         if (now - _sixDofLastReplan >= cadence)
         {
             if (_sixDof.Update(x, now))
@@ -311,6 +437,13 @@ public static partial class PoweredGuidanceWindow
                 _sixDofError = "re-solve failed: " + _sixDof.Error;
             }
         }
+
+        // Past the end of the plan the node index clamps, so the terminal control is
+        // held indefinitely. That is a reasonable hold-in-place fallback, but it is
+        // NOT guidance any more and must not look like it.
+        if (_sixDof.PlanElapsed > _sixDof.Sigma)
+            _sixDofError = $"plan expired {_sixDof.PlanElapsed - _sixDof.Sigma:F1} s ago - " +
+                           "holding the terminal command, no longer guiding.";
 
         if (!_sixDof.Command(now, out double3 torqueModel, out double throttle))
             return;
@@ -327,8 +460,20 @@ public static partial class PoweredGuidanceWindow
         KsaGimbalControl.Mode = GimbalOverrideMode.Lsq;
 
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
-        manual.EngineOn = throttle > 0.02;
+        // ENGINE STAYS LIT WHILE GUIDING. This was `throttle > 0.02`, copied from the
+        // G-FOLD path where it is correct — that planner has NO thrust floor and plans
+        // genuine coasts, so a near-zero command means "actually stop burning".
+        //
+        // The 6-DOF model is the opposite: its throttle box guarantees T >= Tmin > 0,
+        // so it NEVER asks for a coast. And KSA clamps a vehicle's MinimumThrottle as
+        // low as 0.01, so with the floor now read from the vehicle a perfectly normal
+        // min-fuel opening command of 1% fell below the 2% threshold and shut the
+        // engine down. That loses THRUST AND TORQUE together — gimbals have no
+        // authority without thrust — so the vehicle went into free fall with no
+        // attitude control on the very first step.
+        manual.EngineOn = true;
         manual.EngineThrottle = (float)throttle;
+        _sixDofLastThrottle = throttle;
     }
 
     private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,
@@ -353,8 +498,15 @@ public static partial class PoweredGuidanceWindow
             return false;
         }
 
-        _sixDof = new Ksa6DofGuidance(cfg, dyn);
-        if (!_sixDof.Plan(x, xf, _sixDofSigmaSeed, now))
+        _sixDof = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _sixDofFixedTime };
+
+        // Fixed time needs a burn time CHOSEN, so search for it the way Gfold does
+        // rather than trusting the seed. Each sample warm-starts from the last, so
+        // the sweep is much cheaper than N independent cold solves.
+        bool ok = _sixDofFixedTime
+            ? _sixDof.PlanSearch(x, xf, _sixDofSigmaSeed, now, Math.Clamp(_sixDofSigmaSamples, 1, 12))
+            : _sixDof.Plan(x, xf, _sixDofSigmaSeed, now);
+        if (!ok)
         {
             _sixDofError = "cold solve failed: " + _sixDof.Error;
             _sixDof = null;
@@ -363,6 +515,7 @@ public static partial class PoweredGuidanceWindow
 
         _sixDofError = "";
         _sixDofActive = true;
+        _sixDofTouchdownArmed = false;
         _sixDofLastReplan = now;
         return true;
     }

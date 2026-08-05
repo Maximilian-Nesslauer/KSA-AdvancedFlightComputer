@@ -147,6 +147,27 @@ public static class KsaTvcAllocator
         if (trace <= 0.0)
             return result;                        // no authority at all (no thrust)
 
+        // Per-axis capability first, so the demand can be clamped to what each axis can
+        // actually deliver. Without this a weak axis (roll here: 700x weaker than
+        // pitch/yaw) sends the least-squares solution far outside the deflection box,
+        // and the uniform saturation scaling below then throttles the STRONG axes too.
+        double lambda0 = RelativeRegularization * trace;
+        Span<double> g0 = stackalloc double[9];
+        for (int i = 0; i < 9; i++) g0[i] = g[i];
+        g0[0] += lambda0; g0[4] += lambda0; g0[8] += lambda0;
+        if (Invert3x3(g0, out Span<double> inv0))
+        {
+            var cap = new double3(
+                AxisCapability(bTorque, cols, inv0, 0),
+                AxisCapability(bTorque, cols, inv0, 1),
+                AxisCapability(bTorque, cols, inv0, 2));
+            desiredTorque = new double3(
+                Math.Clamp(desiredTorque.X, -Math.Abs(cap.X), Math.Abs(cap.X)),
+                Math.Clamp(desiredTorque.Y, -Math.Abs(cap.Y), Math.Abs(cap.Y)),
+                Math.Clamp(desiredTorque.Z, -Math.Abs(cap.Z), Math.Abs(cap.Z)));
+            result.DemandClamped = true;
+        }
+
         double lambda = RelativeRegularization * trace;
         g[0] += lambda; g[4] += lambda; g[8] += lambda;
 
@@ -166,9 +187,21 @@ public static class KsaTvcAllocator
             peak = Math.Max(peak, Math.Abs(u));
         }
 
-        // Saturation: scale the WHOLE solution rather than clipping per component.
-        // Clipping would change the torque DIRECTION, which for attitude control is
-        // worse than delivering less of the right torque.
+        // Saturation: scale the WHOLE solution rather than clipping per component, so
+        // the torque DIRECTION survives.
+        //
+        // That policy is only sound when the axes have COMPARABLE authority. Measured
+        // in flight this vehicle has roll capability of 2.8 kN-m against 1902 kN-m in
+        // pitch and yaw — a factor of 700. A roll demand a few percent over its limit
+        // then dragged the entire command down to 29%, so pitch and yaw arrived at a
+        // third of their value despite being well inside capability. Preserving the
+        // direction of a vector whose smallest component is 700x cheaper to satisfy is
+        // not a meaningful thing to preserve.
+        //
+        // The demand is therefore clamped PER AXIS to what that axis can actually do,
+        // BEFORE allocation (see Solve's caller-facing clamp above); uniform scaling
+        // then only ever handles a genuinely unachievable magnitude rather than one
+        // weak axis vetoing the other two.
         if (peak > 1.0)
         {
             double scale = 1.0 / peak;
@@ -261,4 +294,7 @@ public struct TvcAllocationResult
 
     /// <summary>1 when unsaturated; below 1 the demand was scaled down to fit, preserving direction.</summary>
     public double SaturationScale;
+
+    /// <summary>True once the demand has been clipped per axis to real capability.</summary>
+    public bool DemandClamped;
 }
