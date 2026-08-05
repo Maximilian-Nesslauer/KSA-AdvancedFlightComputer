@@ -92,7 +92,7 @@ namespace NovaTec.GravityTurnMod
                     {
                         Console.WriteLine("toggle RCS");
                         FlightControlOverride.Active = true;
-                        FlightControlOverride.RcsMode = FlightControlOverride.RcsMode == FlightComputerRCSMode.Disabled ? FlightComputerRCSMode.Enabled : FlightComputerRCSMode.Disabled;
+                        FlightControlOverride.RCSMode = FlightControlOverride.RCSMode == FlightComputerRCSMode.Disabled ? FlightComputerRCSMode.Enabled : FlightComputerRCSMode.Disabled;
                     }
                     if (ImGui.MenuItem("Stage"))
                     {
@@ -240,7 +240,7 @@ namespace NovaTec.GravityTurnMod
 
                 double hoa = Controller.GetApoapsisAltitude();
                 ImGui.TextColored(new float4(1, 0.5f, 0, 1), "Telemetry:");
-                ImGui.TextColored(new float4(0.2f, 1, 0.2f, 1), "Phase: " + Controller.Phase.ToString() + ", " + vehicle.Situation.ToString() + ", " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
+                ImGui.TextColored(new float4(0.2f, 1, 0.2f, 1), "Phase: " + Controller.Phase.ToString() + ", " + vehicle.Situation.ToString() + ", " + vehicle.FlightComputer.ActiveControlSystem.X.ToString() + ", " + Math.Round(Universe.GetElapsedSeconds() - Controller.LastTransitionTime,1) + "s");
                 ImGui.Text("Target time to AP:    " + Controller.TimeToApoapsisTarget.ToString("n1") + "s");
                 ImGui.Text("Actual time to AP:    " + Controller.GetApoapsisTime().ToString("n1") + "s (" + (hoa / 1000).ToString("n1") + "km)");
                 ImGui.Separator();
