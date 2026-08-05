@@ -43,6 +43,12 @@ public static partial class PoweredGuidanceWindow
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("Gimbal"))
+            {
+                DrawGimbalTab(vehicle);
+                ImGui.EndTabItem();
+            }
+
             ImGui.EndTabBar();
         }
 
@@ -50,7 +56,13 @@ public static partial class PoweredGuidanceWindow
         // a guidance flow didn't end cleanly on its own. Below the tabs so it's
         // reachable regardless of which one is open.
         if (ImGui.Button("Reset flight computer"))
+        {
+            // The TVC override lives outside the flight computer, so a reset would
+            // otherwise leave it silently driving the nozzles.
+            _gimbalMode = 0;
+            KsaGimbalControl.Disengage();
             ResetFlightComputer();
+        }
 
         // Any warp the mod wants needs the user's OK first.
         DrawWarpPrompt();
