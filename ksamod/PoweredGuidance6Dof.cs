@@ -216,6 +216,14 @@ public static partial class PoweredGuidanceWindow
             ImGui.Checkbox("Limit climb rate", ref _sixDofVzEnabled);
             if (_sixDofVzEnabled)
                 ImGui.InputDouble("Max climb rate (m/s)", ref _sixDofVzMaxMs);
+            ImGui.Checkbox("Reduce nodes on approach", ref _sixDofNodeGates);
+            if (_sixDofNodeGates)
+                ImGui.TextWrapped(
+                    "Steps the node count down at fixed altitude gates (" +
+                    "400 m -> 50, 150 m -> 30, 60 m -> 20) as the horizon shrinks, so node " +
+                    "SPACING stays roughly constant. Each step rebuilds the solver and loses " +
+                    "the ADMM warm start, so it is done at gates rather than tracked " +
+                    "continuously; the plan itself carries across by resampling.");
             ImGui.Checkbox("Hand off to terminal hover", ref _sixDofHoverHandoff);
             if (_sixDofHoverHandoff)
             {
@@ -300,6 +308,8 @@ public static partial class PoweredGuidanceWindow
         // THE check that the MPC re-anchored at the vehicle instead of serving a
         // stale trajectory — which is what "the plan starts a node below" looked like.
         ImGui.Text($"anchor offset {_sixDof.AnchorOffsetM,8:F2} m");
+        if (_sixDofNodeGates)
+            ImGui.Text($"nodes {_sixDof.Nodes,5}   gate steps {_sixDofGateChanges}");
 
         // The physicality check. Virtual control is a SLACK variable in the dynamics
         // constraint, so an unconverged plan contains motion no force produced — it
@@ -396,6 +406,80 @@ public static partial class PoweredGuidanceWindow
     /// between this and the next controller's first command — survivable high up,
     /// not at the handover altitude, which is exactly where it would happen.
     /// </param>
+    /// <summary>
+    /// Altitude gates and the node count to run below each, highest first. Read as
+    /// "below 400 m, 50 nodes". Above the first gate the configured count applies.
+    ///
+    /// Chosen to keep node spacing roughly constant as the horizon shrinks rather
+    /// than to hit any particular count: the last few hundred metres take a couple
+    /// of seconds, where 20 nodes is finer than 80 was at altitude.
+    /// </summary>
+    private static readonly (double AltM, int Nodes)[] NodeGates =
+    [
+        (400.0, 50),
+        (150.0, 30),
+        (60.0, 20),
+    ];
+
+    private static bool _sixDofNodeGates = true;
+    private static int _sixDofGateIndex = -1;    // -1 = above every gate
+    private static int _sixDofGateChanges;
+
+    /// <summary>
+    /// Step the node count down when the vehicle drops past a gate, carrying the
+    /// current plan across by resampling it onto the new node count.
+    ///
+    /// A failed rebuild leaves the existing guidance untouched and simply retries at
+    /// the next gate — losing the optimisation is survivable, losing the plan is not.
+    /// </summary>
+    private static void StepNodeGates(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                      double[] x, double now)
+    {
+        int want = _sixDofGateIndex;
+        for (int i = NodeGates.Length - 1; i >= 0; i--)
+            if (x[2] <= NodeGates[i].AltM) { want = i; break; }
+
+        // One-way only: never step back up on a transient climb.
+        if (want <= _sixDofGateIndex)
+            return;
+
+        int nodes = NodeGates[want].Nodes;
+        if (nodes >= _sixDof.Nodes)
+        {
+            _sixDofGateIndex = want;   // already at or below this count, nothing to do
+            return;
+        }
+
+        var xf = new double[14];
+        xf[2] = _sixDofTargetAltM;
+        xf[6] = 1.0;
+
+        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _sixDofTiltDeg,
+                                   _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
+                                   _sixDofRateDampShare, _sixDofControlSmooth,
+                                   _sixDofProximal,
+                                   _sixDofGlideSlopeDeg, _sixDofVzEnabled ? _sixDofVzMaxMs : -1.0,
+                                   x, xf,
+                                   out Scvx6DofConfig cfg,
+                                   out Dynamics6Dof.Params dyn, out _))
+        {
+            _sixDofGateIndex = want;   // do not retry this gate every cycle
+            return;
+        }
+
+        var next = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _sixDofFixedTime };
+        Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
+        next.SetInertia(ixx, iyy, izz);
+
+        if (next.SeedFrom(_sixDof, x, now))
+        {
+            _sixDof = next;
+            _sixDofGateChanges++;
+            _sixDofLastReplan = now;
+        }
+        _sixDofGateIndex = want;
+    }
+
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
     {
         _sixDofActive = false;
@@ -489,6 +573,27 @@ public static partial class PoweredGuidanceWindow
             _sixDofError = _landingStatus;
             return;
         }
+
+        // NODE SCHEDULE: drop node count at fixed altitude GATES.
+        //
+        // The quantity worth holding roughly constant is node SPACING, not node
+        // count. Node spacing is sigma/(N-1), so as the horizon collapses on
+        // approach the same N buys ever finer resolution than the problem needs,
+        // and the solve is paying for nodes that are no longer earning anything.
+        // The earlier measurement that fewer nodes means more plan jump (4.0 m at
+        // N=20 against 1.0 m at N=80) was taken over a FULL-LENGTH trajectory,
+        // where N=20 meant coarse spacing; close in, the same count is fine.
+        //
+        // Stepped at gates rather than recomputed continuously, on purpose. Every
+        // change of N rebuilds the solver and throws away the ADMM warm start (the
+        // sparsity pattern is frozen at the node count), so a continuously-tracked
+        // N would pay that on EVERY cycle and never keep a warm start at all. Four
+        // transitions over a descent is affordable; four hundred is not.
+        //
+        // One-way, too: the ladder never steps back up. Re-crossing a gate during a
+        // brief climb would rebuild twice for no benefit.
+        if (_sixDofNodeGates)
+            StepNodeGates(vehicle, parent, siteCci, x, now);
 
         // THE MPC STEP: re-solve from the MEASURED state on a cadence. This is where
         // all the feedback in the system comes from — there is nothing else.
@@ -599,6 +704,8 @@ public static partial class PoweredGuidanceWindow
         _sixDofError = "";
         _sixDofActive = true;
         _sixDofTouchdownArmed = false;
+        _sixDofGateIndex = -1;
+        _sixDofGateChanges = 0;
         _sixDofLastReplan = now;
         return true;
     }

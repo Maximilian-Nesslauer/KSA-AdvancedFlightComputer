@@ -250,6 +250,73 @@ public sealed class Ksa6DofGuidance
     private double[] _xf = [];
 
     /// <summary>
+    /// Seed this guidance from ANOTHER one's plan, resampled onto this node count.
+    /// Used when the node schedule steps down: the node count is fixed at
+    /// construction (it sizes the frozen sparsity pattern), so a change means a new
+    /// solver, and a new solver would otherwise start cold.
+    ///
+    /// What survives the transition and what does not is the whole point:
+    ///
+    ///   LOST - the ADMM iterate. ScsWorkspace length-checks its stored x/y/s
+    ///   against the new problem dimensions and discards them, so this cannot be
+    ///   carried across however much we would like it to.
+    ///
+    ///   KEPT - the reference TRAJECTORY, which is the seed that actually matters.
+    ///   It is just a time series, so it resamples by interpolation. It is what
+    ///   keeps the cold solve feasible (see the trust-region note in Plan) and what
+    ///   stops the plan jumping on the transition cycle.
+    ///
+    /// The transition solve is therefore ADMM-cold but trajectory-warm, and it
+    /// happens at the SMALLER node count, where a solve is cheap anyway - measured
+    /// p50 4 ms at N=30 against 13 ms at N=80.
+    /// </summary>
+    public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5)
+    {
+        if (prev == null || !prev.HasPlan)
+            return false;
+
+        var xs = new double[_n * NX];
+        var us = new double[_n * NU];
+        int src = prev._n;
+
+        for (int k = 0; k < _n; k++)
+        {
+            // Same normalised time in both plans, so this is a pure resample of the
+            // trajectory rather than a reinterpretation of it.
+            double t = (double)k / (_n - 1) * (src - 1);
+            int i0 = Math.Clamp((int)Math.Floor(t), 0, src - 1);
+            int i1 = Math.Min(i0 + 1, src - 1);
+            double a = t - i0;
+
+            for (int i = 0; i < NX; i++)
+                xs[k * NX + i] = prev._planX[i0 * NX + i] * (1.0 - a) + prev._planX[i1 * NX + i] * a;
+            for (int j = 0; j < NU; j++)
+                us[k * NU + j] = prev._planU[i0 * NU + j] * (1.0 - a) + prev._planU[i1 * NU + j] * a;
+
+            // Componentwise interpolation does not preserve unit norm, and the
+            // dynamics assume it does.
+            Normalize(xs.AsSpan(k * NX + 6, 4));
+        }
+
+        // Node 0 is the measured state exactly, for the same reason as in Plan: the
+        // equality and the trust region leave no slack there at all.
+        Array.Copy(x0, 0, xs, 0, NX);
+
+        _xf = (double[])prev._xf.Clone();
+        double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - Math.Max(0.0, simNow - prev._solveTime));
+        if (FixedTime) PinSigma(sigma);
+        _solver.Initialize(x0, _xf, xs, us, sigma);
+        return Finish(x0, simNow, maxIterations);
+    }
+
+    private static void Normalize(Span<double> q)
+    {
+        double m = Math.Sqrt(q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]);
+        if (m < 1e-12) { q[0] = 1.0; q[1] = q[2] = q[3] = 0.0; return; }
+        for (int i = 0; i < 4; i++) q[i] /= m;
+    }
+
+    /// <summary>
     /// Constrain sigma to a single value. A hair of slack either side rather than an
     /// exact equality: SigmaMin == SigmaMax to the last bit is a knife-edge for the
     /// solver's feasibility check, and costs nothing to avoid.
