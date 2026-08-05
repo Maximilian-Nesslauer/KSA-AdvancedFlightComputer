@@ -15,15 +15,29 @@
 #    Leaving DLONG undefined gives scs_int = int32, matching the C# side.
 #  - CTRLC=0: no console signal handler — this DLL ends up inside the game
 #    process, which must own its own signal handling.
-#  - USE_LAPACK left UNDEFINED (not "=0"): every LAPACK-gated block in the
-#    source is `#ifdef USE_LAPACK`, which tests DEFINEDNESS, not the value —
-#    so `-DUSE_LAPACK=0` still compiles the LAPACK path and the link fails on
-#    an undefined dsyevr_. We only use the zero/positive-orthant/second-order
-#    cones (no SDP), and the direct linear-system backend (AMD + qdldl, both
-#    vendored under linsys/external, no BLAS/LAPACK) solves the KKT system.
-#    LAPACK is needed only for SDP cone projection and Anderson acceleration;
-#    aa.c has a complete no-LAPACK fallback (acceleration becomes a no-op), so
-#    leaving the macro undefined costs nothing we use.
+#  - USE_LAPACK is defined for src/aa.c ONLY, which is why that file is compiled
+#    to its own object first and linked in separately below.
+#
+#    This USED to be undefined everywhere, with the note "aa.c has a complete
+#    no-LAPACK fallback (acceleration becomes a no-op), so leaving the macro
+#    undefined costs nothing we use." The fact was right and the conclusion was
+#    wrong. Anderson acceleration is not an optional extra — SCS turns it on by
+#    default (ACCELERATION_LOOKBACK = 10) and it is the mechanism that keeps the
+#    ADMM iteration count down on ill-conditioned problems, which every SCvx
+#    subproblem is. Measured in closed loop, scs_init is 2-6% of solve time and
+#    the ADMM sweeps are the other 94-98%, so iteration count is the ONLY thing
+#    worth attacking and we had disabled the tool for attacking it.
+#
+#    Scoping it to aa.c alone is what makes this cheap. `struct ACCEL_WORK` is
+#    defined inside aa.c and everyone else sees an opaque AaWork*, so no other
+#    translation unit's ABI depends on the macro. That keeps cones.c on its
+#    non-LAPACK path (so the SDP-only dsyevr_/dgesvd_/dsyrk_ never enter the
+#    link, and we use no SDP cones) and leaves linalg.c on its hand-written
+#    loops. Only six routines are then needed — dnrm2_, daxpy_, dscal_, dgemv_,
+#    dgemm_, dgesv_ — supplied by native_src/blas_shim.c rather than by linking
+#    a multi-megabyte OpenBLAS into the game process. The sizes involved are
+#    tiny (Anderson memory is 10, so a 10x10 LU and skinny dim-by-10 products),
+#    nowhere near the KKT solve that dominates each iteration.
 #  - NDEBUG: disables AMD's internal debug dumps, matching the ECOS build.
 
 param(
@@ -45,7 +59,7 @@ New-Item -ItemType Directory -Force $out | Out-Null
 $sources = @(
     "src/scs.c", "src/scs_version.c", "src/cones.c", "src/ctrlc.c",
     "src/exp_cone.c", "src/linalg.c", "src/normalize.c", "src/rw.c",
-    "src/util.c", "src/aa.c",
+    "src/util.c",
     "linsys/scs_matrix.c", "linsys/csparse.c",
     "linsys/cpu/direct/private.c",
     "linsys/external/qdldl/qdldl.c"
@@ -60,18 +74,43 @@ $includes = @(
 
 $opt = if ($Configuration -eq "Release") { "-O2" } else { "-O0 -g" }
 
+$shim = Join-Path $root "native_src/blas_shim.c"
+if (-not (Test-Path $shim)) { throw "BLAS shim not found at $shim" }
+$aaObj = Join-Path $out "aa_lapack.o"
+$shimObj = Join-Path $out "blas_shim.o"
+
 Push-Location $scs
 try {
+    # aa.c alone gets -DUSE_LAPACK, so Anderson acceleration is compiled in
+    # rather than stubbed out to a no-op. See the header comment.
+    $aaArgs = @("cc", "-target", "x86_64-windows-gnu", "-c") +
+        $opt.Split(" ") +
+        @("-DCTRLC=0", "-DNDEBUG", "-DUSE_LAPACK") +
+        $includes + @("src/aa.c", "-o", $aaObj)
+    & $ZigExe @aaArgs
+    if ($LASTEXITCODE -ne 0) { throw "zig cc failed compiling aa.c with exit code $LASTEXITCODE" }
+
+    # The shim needs the macro too: scs_blas.h puts the blas_int typedef and the
+    # BLAS() name-mangling macros behind #ifdef USE_LAPACK, so without it the
+    # shim cannot even name the types it is implementing.
+    $shimArgs = @("cc", "-target", "x86_64-windows-gnu", "-c") +
+        $opt.Split(" ") +
+        @("-DCTRLC=0", "-DNDEBUG", "-DUSE_LAPACK") +
+        $includes + @($shim, "-o", $shimObj)
+    & $ZigExe @shimArgs
+    if ($LASTEXITCODE -ne 0) { throw "zig cc failed compiling blas_shim.c with exit code $LASTEXITCODE" }
+
     $zigArgs = @("cc", "-target", "x86_64-windows-gnu", "-shared") +
         $opt.Split(" ") +
         @("-DCTRLC=0", "-DNDEBUG") +
-        $includes + $sources +
+        $includes + $sources + @($shimObj, $aaObj) +
         @("-o", (Join-Path $out "scs.dll"))
     & $ZigExe @zigArgs
     if ($LASTEXITCODE -ne 0) { throw "zig cc failed with exit code $LASTEXITCODE" }
 }
 finally {
     Pop-Location
+    Remove-Item $aaObj, $shimObj -ErrorAction SilentlyContinue
 }
 
 Write-Host "Built: $(Join-Path $out 'scs.dll')" -ForegroundColor Green

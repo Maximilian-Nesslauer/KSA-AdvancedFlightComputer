@@ -45,17 +45,20 @@ public static partial class PoweredGuidanceWindow
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     private static double _sixDofSigmaSeed = 20.0;
     private static double _sixDofTargetAltM = 10.0;
-    // Cadence in PLAN NODES, not seconds — the scale-free quantity. Node spacing is
-    // sigma/(N-1), so a fixed wall-clock interval becomes an ever-larger fraction of a
-    // node as sigma shrinks through the burn: it drifts toward the stale-warm-start
-    // cliff exactly when the vehicle is closest to the ground.
+    // Cadence in SECONDS of wall clock. The scale-free quantity is really plan NODES
+    // — node spacing is sigma/(N-1), so a fixed interval becomes an ever-larger
+    // fraction of a node as sigma shrinks through the burn, drifting toward the
+    // stale-warm-start cliff exactly when the vehicle is closest to the ground. But
+    // seconds is what the frame budget is denominated in, and it is what you can
+    // reason about while flying, so it is what the knob exposes.
     //
     // Measured (Scvx.Console --rh --cadence), worst-case solve vs advance per cycle:
     //   0.25 nd -> 63 ms | 0.5 nd -> 71 ms | 1.0 nd -> 335 ms | 3.0 nd -> 2829 ms
     // Past ~2 nodes the warm start is too stale, the tight trust region fails and it
-    // thrashes. Worst case matters more than mean here: a 335 ms spike on the sim
-    // thread is a visible hitch, 130 ms/s of steady load is not.
-    private static double _sixDofReplanNodes = 0.1;
+    // thrashes. At the default 0.1 s and N=80 that bound is far away (a 20 s burn is
+    // 0.25 s/node, so 0.1 s is 0.4 of a node) — but it TIGHTENS as sigma falls, so
+    // the readout below reports the cadence in nodes as well to keep it visible.
+    private static double _sixDofReplanSec = 0.1;
     private static double _sixDofThrustFrac = 1.0;   // share of total thrust the burn uses
 
     // Objective regulariser weights. Both were originally the Python test case's
@@ -190,7 +193,7 @@ public static partial class PoweredGuidanceWindow
             if (_sixDofFixedTime)
                 ImGui.InputInt("Burn-time search samples", ref _sixDofSigmaSamples);
             ImGui.InputDouble("Target altitude (m)", ref _sixDofTargetAltM);
-            ImGui.InputDouble("Re-solve every (plan nodes)", ref _sixDofReplanNodes);
+            ImGui.InputDouble("Re-solve every (s)", ref _sixDofReplanSec);
             ImGui.InputDouble("Thrust fraction", ref _sixDofThrustFrac);
             ImGui.InputDouble("Rate damping (share of fuel)", ref _sixDofRateDampShare);
             ImGui.InputDouble("Control smoothing (W_DU)", ref _sixDofControlSmooth);
@@ -210,12 +213,20 @@ public static partial class PoweredGuidanceWindow
         // further along a trajectory that is no longer being refreshed: the plan's
         // time index outruns the vehicle.
         double age = _sixDof.PlanElapsed;
-        double cadenceS = _sixDofReplanNodes * _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1);
+        double cadenceS = _sixDofReplanSec;
         bool stale = age > cadenceS * 2.5;
         double sg = _sixDof.Sigma;
+        // Solver health. The occasional multi-second solve was an ITERATION cap that
+        // did not bound TIME: one ADMM iteration costs ~20x more at N=80 than at
+        // N=30, so a fixed 2000-iteration budget was 1.5 s there. The cap is derived
+        // from this measured cost each cycle instead.
+        ImGui.Text($"solver {_sixDof.MsPerAdmmIteration * 1000.0,6:F0} us/ADMM-iter   " +
+                   $"budget {_sixDof.SubproblemBudgetMs:F0} ms -> cap " +
+                   $"{(int)(_sixDof.SubproblemBudgetMs / Math.Max(_sixDof.MsPerAdmmIteration, 1e-4))} iters   " +
+                   $"escalations {_sixDof.Escalations}");
         if (_sixDofFixedTime)
         {
-            ImGui.Text($"burn time {sg,6:F1} s   FIXED (committed {_sixDof.CommittedSigma:F1} s, counting down)");
+        ImGui.Text($"burn time {sg,6:F1} s   FIXED (committed {_sixDof.CommittedSigma:F1} s, counting down)");
             if (_sixDof.SearchLog.Length > 0)
                 ImGui.TextWrapped("search: " + _sixDof.SearchLog);
         }
@@ -239,7 +250,19 @@ public static partial class PoweredGuidanceWindow
                 $"PLAN AGE {age:F1} s - re-solves are failing, this plan is stale " +
                 $"(cadence {cadenceS:F2} s). Commands are running ahead of the vehicle.");
         else
-            ImGui.Text($"plan age  {age,6:F2} s   cadence {cadenceS,5:F2} s   (node spacing {_sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1),5:F2} s)");
+        {
+            // Cadence in nodes is the number that decides whether the warm start is
+            // still fresh, and it moves on its own as sigma shrinks even though the
+            // knob is fixed — so show it, and flag the ~2-node cliff.
+            double nodeDt = _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1);
+            double cadenceNodes = cadenceS / Math.Max(nodeDt, 1e-6);
+            ImGui.Text($"plan age  {age,6:F2} s   cadence {cadenceS,5:F2} s = " +
+                       $"{cadenceNodes,4:F2} nodes   (node spacing {nodeDt,5:F2} s)");
+            if (cadenceNodes > 2.0)
+                ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                    $"cadence is {cadenceNodes:F1} NODES - past ~2 the warm start is too stale " +
+                    "and solves thrash. Shorten the re-solve interval.");
+        }
 
         // Node 0 is an equality constraint, so this is ~0 on any usable plan. It is
         // THE check that the MPC re-anchored at the vehicle instead of serving a
@@ -416,8 +439,7 @@ public static partial class PoweredGuidanceWindow
         // index ran on along a trajectory that was never refreshed, which is the
         // "green dot outruns the vehicle" symptom. A failed solve now retries on the
         // next step instead of letting the clock run.
-        double cadence = Math.Clamp(
-            _sixDofReplanNodes * _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1), 0.05, 5.0);
+        double cadence = Math.Clamp(_sixDofReplanSec, 0.02, 5.0);
         // Refresh inertia from the live vehicle before re-solving. It changes as
         // propellant drains, and a stale value is a SYSTEMATIC torque error that MPC
         // structurally cannot correct — re-anchoring the state does not fix the model.

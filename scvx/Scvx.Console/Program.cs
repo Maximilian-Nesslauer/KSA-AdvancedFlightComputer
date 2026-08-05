@@ -30,7 +30,13 @@ if (args.Contains("--loop"))
 // realtime feasible. Cold-converge once, then repeatedly advance one control
 // interval and re-converge from the shifted reference with a capped budget.
 if (args.Contains("--mpc"))
+{
+    MpcHarness.TruncOnly = args.Contains("--trunc");
+    MpcHarness.BudgetOnly = args.Contains("--budget");
+    MpcHarness.SplitOnly = args.Contains("--split");
+    MpcHarness.TailOnly = args.Contains("--tail");
     return MpcHarness.Run();
+}
 
 if (args.Contains("--fixed"))
     return FixedTimeCheck();

@@ -38,6 +38,12 @@ internal static class MpcHarness
     internal static double Dispersion = 1.0;
     internal static int Budget = 5;
     internal static int AdmmCap = ScsWorkspace.DefaultMaxIterations;
+    internal static int EscalateCap;
+    internal static bool TruncOnly;
+    internal static bool BudgetOnly;
+    internal static bool SplitOnly;
+    internal static bool TailOnly;
+    internal static double Eps = Scvx6DofSolver.RealTimeEps;
 
     internal static int Run()
     {
@@ -83,6 +89,102 @@ internal static class MpcHarness
         Console.WriteLine();
         Console.WriteLine("  config                            miss    path/direct   PLAN JUMP   AWAY   WORST subproblem");
 
+        if (TailOnly)
+        {
+            // The TAIL is the symptom, not the mean: p50 is fine and p90/p99 are the
+            // hitches. Both knobs here act on ADMM iteration count, which is 94-98%
+            // of solve time, so this is where a tail fix has to come from.
+            Console.WriteLine("  TAIL vs tolerance and Anderson memory (N=80, closed loop, dispersed):");
+            Console.WriteLine("     eps  lookback    p50    p90    p99    MAX   ADMM/solve      miss   PLAN JUMP");
+            foreach (double eps in new[] { 1e-5, 1e-4, 1e-3 })
+            {
+                foreach (int? look in new int?[] { null, 20 })
+                {
+                    Eps = eps;
+                    ScsWorkspace.AccelerationLookback = look;
+                    ScsWorkspace.ResetTimers();
+                    var sw = new System.IO.StringWriter();
+                    var prev = Console.Out;
+                    Console.SetOut(sw);
+                    SimulateNodes(configs[2], x0, xf, 80);
+                    Console.SetOut(prev);
+                    string tail = sw.ToString().Trim();
+                    Console.WriteLine(
+                        $"  {eps,6:0.0e+0}  {(look?.ToString() ?? "10 (def)"),8}  " +
+                        $"{ScsWorkspace.SolveMsPercentile(0.50),6:F1} {ScsWorkspace.SolveMsPercentile(0.90),6:F1} " +
+                        $"{ScsWorkspace.SolveMsPercentile(0.99),6:F1} {ScsWorkspace.SolveMsPercentile(1.0),6:F0}  " +
+                        $"{(double)ScsWorkspace.TotalAdmmIterations / Math.Max(ScsWorkspace.TotalCalls, 1),10:F0}   " +
+                        tail);
+                }
+            }
+            Eps = Scvx6DofSolver.RealTimeEps;
+            ScsWorkspace.AccelerationLookback = null;
+            return 0;
+        }
+
+        if (SplitOnly)
+        {
+            // WHERE DOES THE TIME ACTUALLY GO? scs_init rebuilds everything every
+            // call — deep copy, Ruiz equilibration, AMD ordering, symbolic+numeric
+            // LDL — while scs_solve runs the ADMM sweeps. Our sparsity pattern never
+            // changes, so if init dominates, all of that ordering work is being
+            // recomputed identically every solve and can be hoisted.
+            Console.WriteLine("  WHERE THE TIME GOES (closed loop, MOD AS SHIPPED, dispersed):");
+            Console.WriteLine("     N   solves   init%   mean    p50    p90    p99    MAX   ADMM/solve");
+            foreach (int nn in new[] { 30, 50, 80 })
+            {
+                ScsWorkspace.ResetTimers();
+                var sw = new System.IO.StringWriter();
+                var prev = Console.Out;
+                Console.SetOut(sw);
+                SimulateNodes(configs[2], x0, xf, nn);
+                Console.SetOut(prev);
+
+                double init = ScsWorkspace.TotalInitMs, solve = ScsWorkspace.TotalSolveMs;
+                double fin = ScsWorkspace.TotalFinishMs;
+                long calls = Math.Max(ScsWorkspace.TotalCalls, 1);
+                double tot = init + solve + fin;
+                Console.WriteLine(
+                    $"  {nn,4}  {calls,7}  {100.0 * init / Math.Max(tot, 1e-9),5:F1}%  " +
+                    $"{tot / calls,6:F1} {ScsWorkspace.SolveMsPercentile(0.50),6:F1} " +
+                    $"{ScsWorkspace.SolveMsPercentile(0.90),6:F1} {ScsWorkspace.SolveMsPercentile(0.99),6:F1} " +
+                    $"{ScsWorkspace.SolveMsPercentile(1.0),6:F0}  " +
+                    $"{(double)ScsWorkspace.TotalAdmmIterations / calls,10:F0}");
+            }
+            return 0;
+        }
+
+        if (BudgetOnly)
+        {
+            // REAL-TIME ITERATION: does one SCvx iteration per cycle track as well as
+            // five? Real MPC implementations never solve to convergence — they take a
+            // single step per cycle and rely on the cycle rate. If tracking holds, the
+            // per-cycle cost drops by the iteration count.
+            Console.WriteLine("  SCvx iterations per cycle (N=50, with dispersion):");
+            Console.WriteLine("  budget     miss   path/direct   PLAN JUMP   AWAY   WORST subproblem");
+            foreach (int b in new[] { 1, 2, 3, 5 })
+            {
+                Budget = b;
+                Console.Write($"  {b,6}  ");
+                SimulateNodes(configs[2], x0, xf, 50);
+            }
+            Budget = 5;
+            return 0;
+        }
+
+        if (TruncOnly)
+        {
+            Console.WriteLine("  truncation handling (N=80, the configuration flown):");
+            Console.WriteLine("  base cap  escalate     miss   PLAN JUMP   WORST subproblem");
+            foreach ((int cap, int esc) in new[] { (2000, 0), (2000, 12000) })
+            {
+                AdmmCap = cap; EscalateCap = esc;
+                Console.Write($"  {cap,8}  {(esc == 0 ? "none" : esc.ToString()),8}  ");
+                SimulateNodes(configs[2], x0, xf, 80);
+            }
+            return 0;
+        }
+
         foreach (Config c in configs)
             Simulate(c, x0, xf, n);
 
@@ -103,6 +205,21 @@ internal static class MpcHarness
         }
         Dispersion = 1.0;
         Budget = 5;
+
+        // Does the ESCALATE-instead-of-shrink path remove the stalls? A truncated
+        // subproblem used to shrink the trust region, which makes ADMM's job harder,
+        // so it truncated again - and the truncated iterate was also kept as the next
+        // warm start, so the failure propagated. Both are now fixed; this measures it.
+        Console.WriteLine();
+        Console.WriteLine("  truncation handling (N=80, the configuration flown):");
+        Console.WriteLine("  base cap  escalate     miss   PLAN JUMP   WORST subproblem");
+        foreach ((int cap, int esc) in new[] { (2000, 0), (2000, 12000), (8000, 0), (8000, 24000) })
+        {
+            AdmmCap = cap; EscalateCap = esc;
+            Console.Write($"  {cap,8}  {(esc == 0 ? "none" : esc.ToString()),8}  ");
+            SimulateNodes(configs[2], x0, xf, 80);
+        }
+        AdmmCap = ScsWorkspace.DefaultMaxIterations; EscalateCap = 0;
 
         // Does capping ADMM buy a bounded worst case without wrecking the answer?
         // The SCvx loop already treats a truncated solve as a subproblem FAILURE and
@@ -156,7 +273,7 @@ internal static class MpcHarness
             SigmaMax = c.FixedSigma ? sigmaSeed * (1 + 1e-6) : sigmaSeed * 3.0,
         };
         var dyn = new Dynamics6Dof.Params();
-        var solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps, MaxSubproblemIterations = AdmmCap };
+        var solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Eps, MaxSubproblemIterations = AdmmCap, EscalatedSubproblemIterations = EscalateCap > 0 ? EscalateCap : AdmmCap };
 
         // Cold solve.
         var xSeed = new double[n * NX];

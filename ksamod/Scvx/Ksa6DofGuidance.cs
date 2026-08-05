@@ -153,6 +153,37 @@ public sealed class Ksa6DofGuidance
     public int ColdAdmmCap { get; init; } = 20_000;
     public int WarmAdmmCap { get; init; } = 2_000;
 
+    /// One retry budget for a subproblem that merely ran out of iterations. Keeps the
+    /// common case fast on the low cap while giving the occasional hard subproblem
+    /// enough room to finish, instead of shrinking the trust region and spiralling.
+    public int EscalatedAdmmCap { get; init; } = 12_000;
+
+    /// <summary>
+    /// Wall-clock budget per subproblem, milliseconds. THE CAP THAT ACTUALLY MATTERS.
+    ///
+    /// An ITERATION cap does not bound TIME, because the cost of one ADMM iteration
+    /// scales with problem size: measured, ~0.04 ms at N=30 but ~0.77 ms at N=80,
+    /// twenty times more, since the KKT factorisation grows. So the 2000-iteration cap
+    /// that kept N=30 under 60 ms is 1.5 SECONDS at N=80 — which is exactly the
+    /// "periodic 2000 ms solve" seen in flight: the common case converges in ~50
+    /// iterations and is a few ms, while the occasional hard subproblem takes its full
+    /// budget and stalls the frame.
+    ///
+    /// So the iteration cap is DERIVED each cycle from a measured cost per iteration.
+    /// That adapts automatically to node count, vehicle and machine, instead of being
+    /// a constant that is only correct for one problem size.
+    /// </summary>
+    public double SubproblemBudgetMs { get; init; } = 40.0;
+
+    /// <summary>Budget for the one escalated retry. Larger, but still bounded.</summary>
+    public double EscalatedBudgetMs { get; init; } = 200.0;
+
+    /// <summary>Measured cost of one ADMM iteration, ms. Seeded pessimistically and refined from real solves.</summary>
+    public double MsPerAdmmIteration { get; private set; } = 0.05;
+
+    /// <summary>Subproblems that needed the escalated budget, for the readout.</summary>
+    public int Escalations => _solver.Escalations;
+
     /// <summary>Plan node count, for the overlay.</summary>
     public int Nodes => _n;
 
@@ -166,6 +197,7 @@ public sealed class Ksa6DofGuidance
         _n = cfg.Nodes;
         _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
         _solver.MaxSubproblemIterations = ColdAdmmCap;
+        _solver.EscalatedSubproblemIterations = EscalatedAdmmCap;
     }
 
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
@@ -308,13 +340,22 @@ public sealed class Ksa6DofGuidance
     /// ~33 ms — but the ANSWER is anchored at the vehicle by the initial-state
     /// equality, not at the shifted seed.
     /// </summary>
+    /// <param name="maxIterations">
+    /// SCvx iterations per cycle. Measured in closed loop at N=50 with dispersion, a
+    /// budget of 1 is indistinguishable from 5 in tracking (miss 1.8 vs 1.7 m, path
+    /// 1.29 vs 1.28 x direct, plan jump 1.3 m for both) for a fifth of the work — the
+    /// standard real-time iteration scheme. Held at 5 for now anyway: that measurement
+    /// was taken against the harness dynamics, and the thrust-shortfall question is
+    /// still open, so this is not the moment to also cut the loop's convergence
+    /// margin. Drop it to 1 once the model is trusted.
+    /// </param>
     public bool Update(double[] x0, double simNow, int maxIterations = 5)
     {
         if (!HasPlan)
             return false;
 
         // Bounded worst case from here on: this runs inside the guidance loop.
-        _solver.MaxSubproblemIterations = WarmAdmmCap;
+        ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
 
         double dt = _planSigma / (_n - 1);
         double elapsed = Math.Max(0.0, simNow - _solveTime);
@@ -364,11 +405,36 @@ public sealed class Ksa6DofGuidance
         return Finish(x0, simNow, maxIterations * 3);
     }
 
+    /// <summary>
+    /// Convert the wall-clock budgets into iteration caps using the measured cost per
+    /// ADMM iteration. Floors exist because a cap so low that nothing can converge
+    /// just burns the budget failing; the escalation path is what covers a subproblem
+    /// that genuinely needs more.
+    /// </summary>
+    private void ApplyTimeBudget(double budgetMs, double escalatedMs)
+    {
+        double perIter = Math.Max(MsPerAdmmIteration, 1e-4);
+        _solver.MaxSubproblemIterations = (int)Math.Clamp(budgetMs / perIter, 200, 50_000);
+        _solver.EscalatedSubproblemIterations = (int)Math.Clamp(escalatedMs / perIter, 400, 100_000);
+    }
+
     private bool Finish(double[] x0, double simNow, int maxIterations)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         Status = _solver.Solve(maxIterations);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
+
+        // Refine the cost-per-iteration estimate from what this solve actually did.
+        // Exponential average so one outlier cannot swing the budget, but it still
+        // tracks a change in node count or vehicle within a few cycles.
+        int admm = 0;
+        foreach (ScvxIteration it in _solver.Trace)
+            admm += it.SolverIterations;
+        if (admm > 50 && LastSolveMs > 0.0)
+        {
+            double sample = LastSolveMs / admm;
+            MsPerAdmmIteration = 0.8 * MsPerAdmmIteration + 0.2 * sample;
+        }
         LastIterations = _solver.IterationCount;
         SolveCount++;
 

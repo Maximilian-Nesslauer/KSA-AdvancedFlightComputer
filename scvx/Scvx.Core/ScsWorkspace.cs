@@ -46,6 +46,15 @@ public sealed class ScsWorkspace
     public const int DefaultMaxIterations = 100_000;
     public const double DefaultEps = 1e-7;
 
+    /// <summary>
+    /// Anderson acceleration memory, or null to leave SCS's own default (10).
+    ///
+    /// This only does anything because aa.c is now compiled with USE_LAPACK — see
+    /// native_src/blas_shim.c. Before that the entire accelerator was a no-op and
+    /// this setting had no effect whatsoever.
+    /// </summary>
+    public static int? AccelerationLookback;
+
     private double[]? _prevX, _prevY, _prevS;
 
     public double[] X { get; private set; } = [];
@@ -67,6 +76,51 @@ public sealed class ScsWorkspace
     /// produces a wildly wrong rho and an accepted garbage step.
     /// </summary>
     public bool HitIterationLimit { get; private set; }
+
+    /// <summary>
+    /// Wall-clock split of the last Solve call, in milliseconds.
+    ///
+    /// This exists because "the solve is slow" is ambiguous: scs_init rebuilds the
+    /// ENTIRE factorisation every call (deep copy, Ruiz equilibration, AMD ordering,
+    /// symbolic + numeric LDL) while scs_solve runs the ADMM sweeps. Optimising the
+    /// wrong one is wasted work, so measure the split before touching either.
+    /// </summary>
+    public double LastInitMs { get; private set; }
+    public double LastSolveMs { get; private set; }
+    public double LastFinishMs { get; private set; }
+
+    /// <summary>Totals since the last <see cref="ResetTimers"/>, for sweeps.</summary>
+    public static double TotalInitMs, TotalSolveMs, TotalFinishMs;
+    public static long TotalCalls, TotalAdmmIterations;
+
+    /// <summary>
+    /// Per-solve wall clock, for percentiles. The MEAN is the wrong statistic for a
+    /// real-time loop: a hitch is what the player sees, and a mean of 80 ms could be
+    /// almost every solve at 5 ms plus a handful at two seconds. Those two
+    /// distributions need completely different fixes, so measure the tail directly.
+    /// </summary>
+    public static readonly List<double> SolveMsSamples = [];
+
+    public static void ResetTimers()
+    {
+        TotalInitMs = TotalSolveMs = TotalFinishMs = 0;
+        TotalCalls = TotalAdmmIterations = 0;
+        SolveMsSamples.Clear();
+    }
+
+    /// <summary>Percentile of the recorded per-solve times, 0..1. Empty -> 0.</summary>
+    public static double SolveMsPercentile(double q)
+    {
+        if (SolveMsSamples.Count == 0) return 0.0;
+        var sorted = SolveMsSamples.ToArray();
+        Array.Sort(sorted);
+        int i = (int)Math.Round(q * (sorted.Length - 1));
+        return sorted[Math.Clamp(i, 0, sorted.Length - 1)];
+    }
+
+    private static double Ms(long since) =>
+        (System.Diagnostics.Stopwatch.GetTimestamp() - since) * 1000.0
+        / System.Diagnostics.Stopwatch.Frequency;
 
     public static string NativeVersion => ScsNative.Version();
 
@@ -102,6 +156,7 @@ public sealed class ScsWorkspace
                            int maxIterations = DefaultMaxIterations,
                            double epsAbs = DefaultEps, double epsRel = DefaultEps)
     {
+        LastInitMs = LastSolveMs = LastFinishMs = 0;
         int n = A.Cols, m = A.Rows;
         if (c.Length != n) throw new ArgumentException($"c is {c.Length}, expected n={n}");
         if (b.Length != m) throw new ArgumentException($"b is {b.Length}, expected m={m}");
@@ -166,8 +221,11 @@ public sealed class ScsWorkspace
             settings.EpsAbs = epsAbs;
             settings.EpsRel = epsRel;
             settings.WarmStart = useWarmStart ? 1 : 0;
+            if (AccelerationLookback is int look) settings.AccelerationLookback = look;
 
+            long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             IntPtr work = ScsNative.scs_init(ref data, ref cone, ref settings);
+            LastInitMs = Ms(t0);
             if (work == IntPtr.Zero)
                 throw new InvalidOperationException("scs_init failed");
 
@@ -182,7 +240,9 @@ public sealed class ScsWorkspace
                 // SizeConst before the call, or the marshaler has nothing to copy
                 // the native bytes into.
                 var info = new ScsNative.ScsInfo { Status = new byte[128], LinSysSolver = new byte[128] };
+                long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
                 int exit = ScsNative.scs_solve(work, ref sol, ref info, useWarmStart ? 1 : 0);
+                LastSolveMs = Ms(t1);
 
                 X = xBuf; Y = yBuf; S = sBuf;
                 PrimalObjective = info.Pobj;
@@ -201,7 +261,14 @@ public sealed class ScsWorkspace
                 // warm start degrades convergence rather than erroring. The SCvx
                 // loop retries after shrinking the trust region, so this is a live
                 // path, not a theoretical one.
-                if (status.IsUsable())
+                // ...and NOT a TRUNCATED one either. SolvedInaccurate passes
+                // IsUsable(), so before this check a solve that merely ran out of
+                // ADMM iterations was stored and became the next solve's starting
+                // point — seeding the next run from a half-converged iterate, which
+                // makes IT more likely to truncate too. That is the mechanism behind
+                // long solves arriving in BURSTS rather than singly: one truncation
+                // poisons the warm start and the next few inherit it.
+                if (status.IsUsable() && !HitIterationLimit)
                 {
                     _prevX = xBuf; _prevY = yBuf; _prevS = sBuf;
                 }
@@ -210,7 +277,15 @@ public sealed class ScsWorkspace
             }
             finally
             {
+                long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
                 ScsNative.scs_finish(work);
+                LastFinishMs = Ms(t2);
+                TotalInitMs += LastInitMs;
+                TotalSolveMs += LastSolveMs;
+                TotalFinishMs += LastFinishMs;
+                TotalCalls++;
+                TotalAdmmIterations += Iterations;
+                SolveMsSamples.Add(LastInitMs + LastSolveMs + LastFinishMs);
             }
         }
         finally

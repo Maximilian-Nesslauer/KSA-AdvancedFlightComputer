@@ -101,7 +101,28 @@ public sealed class Scvx6DofSolver
     /// rejects truncated solves outright — it is that guard, not a tight tolerance,
     /// that keeps a bad subproblem out of the ratio test.
     /// </summary>
-    public const double RealTimeEps = 1e-5;
+    /// <summary>
+    /// Subproblem tolerance for FLIGHT. Not SCS's default and not the validation
+    /// tolerance (<see cref="ScsWorkspace.DefaultEps"/>, 1e-7) — offline solves keep
+    /// that.
+    ///
+    /// Measured in closed loop at N=80 with dispersion, eps 1e-5 / 1e-4 / 1e-3 all
+    /// produce the SAME trajectory (miss 4.1-4.2 m, path 1.25-1.26 x direct, plan
+    /// jump 1.0 m) but cost wildly different amounts of time:
+    ///
+    ///     eps     p50     p90     p99     max     ADMM/solve
+    ///     1e-5   36.5   251.1   390.7     964            491
+    ///     1e-4   12.7    25.6   828.0    1909            264
+    ///     1e-3    9.0    12.7   807.7    1975            169
+    ///
+    /// 1e-4 is the pick. The p50/p90 collapse is the whole story: at 1e-5 roughly
+    /// HALF of all solves overran the 40 ms subproblem budget and got truncated, at
+    /// 1e-4 under a tenth do. The p99/max going UP is real but does not reach the
+    /// vehicle — those solves hit the wall-clock budget and are cut off either way.
+    /// 1e-3 buys little more and leaves less margin on the iterate SCvx's ratio test
+    /// depends on.
+    /// </summary>
+    public const double RealTimeEps = 1e-4;
 
     /// <summary>
     /// Hard cap on ADMM iterations per subproblem. THE REAL-TIME PATH MUST HAVE A
@@ -126,6 +147,26 @@ public sealed class Scvx6DofSolver
     /// during a coast where a two-second stall is acceptable; a re-solve happens in
     /// the loop where it is not.
     public int MaxSubproblemIterations { get; set; } = ScsWorkspace.DefaultMaxIterations;
+
+    /// <summary>
+    /// Budget for ONE retry when a subproblem merely ran out of ADMM iterations.
+    ///
+    /// Hitting the iteration cap and being INFEASIBLE are different failures and
+    /// used to share a response. Infeasible means the linearisation is being asked
+    /// to do too much, and shrinking the trust region is right. Truncation means the
+    /// SOLVER ran out of budget - shrinking does nothing for that and actively makes
+    /// it WORSE, because a tighter trust region leaves more constraints active and a
+    /// more degenerate problem, which ADMM finds harder. Measured in flight: cap,
+    /// shrink, harder, cap... seven iterations, ZERO accepted, 2026 ms burnt, and
+    /// the plan refused for an infinite defect because no step was ever taken.
+    ///
+    /// The matrices are already assembled at that point, so the retry costs only the
+    /// extra ADMM iterations - no re-linearisation and no re-assembly.
+    /// </summary>
+    public int EscalatedSubproblemIterations { get; set; } = ScsWorkspace.DefaultMaxIterations;
+
+    /// <summary>Subproblems that needed the escalated budget. Occasional is fine; frequent means the base cap is too low.</summary>
+    public int Escalations { get; private set; }
 
     /// <summary>
     /// Feed each subproblem the previous solve's ADMM iterate. The problem
@@ -270,6 +311,18 @@ public sealed class Scvx6DofSolver
         // SolvedInaccurate when it runs out of iterations, and that iterate can
         // sit far outside the trust region — accepting it produced a step 100x
         // the radius and a rho of +335 before this guard existed.
+        // Truncation is a BUDGET problem, not a trajectory problem: retry the same
+        // already-assembled subproblem with more iterations rather than shrinking the
+        // trust region, which would only make it harder. Warm-started from the last
+        // GOOD iterate, since truncated ones are no longer carried forward.
+        if (_sub.HitIterationLimit && EscalatedSubproblemIterations > MaxSubproblemIterations)
+        {
+            Escalations++;
+            st = _sub.Run(warmStart: WarmStart && _sub.HasWarmStart,
+                          maxIterations: EscalatedSubproblemIterations,
+                          epsAbs: SubproblemEps, epsRel: SubproblemEps);
+        }
+
         if (!st.IsUsable() || _sub.HitIterationLimit)
         {
             // Subproblem failure is not fatal — shrink and retry from the same
