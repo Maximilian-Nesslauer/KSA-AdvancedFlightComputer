@@ -65,6 +65,22 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double AnchorOffsetM { get; private set; }
 
+    /// <summary>
+    /// Worst dynamics defect on the accepted plan, scaled by XScale. THE test of
+    /// whether the plan is physical at all.
+    ///
+    /// The dynamics are imposed as X[k+1] = X[k] + 0.5*dtau*sigma*(g_k + g_k+1) + Wv[k]
+    /// where Wv is VIRTUAL CONTROL — a slack variable, penalised by RhoVc but not
+    /// constrained to zero. Until SCvx converges, Wv is non-zero and the trajectory
+    /// DOES NOT OBEY THE DYNAMICS: the state teleports between nodes on fictitious
+    /// forces. Such a plan cannot be flown at any thrust, which is what "the vehicle
+    /// chases a solution it cannot fly" looks like from the cockpit.
+    /// </summary>
+    public double LastDefect { get; private set; } = double.PositiveInfinity;
+
+    /// <summary>Defect below which the plan counts as physically realisable.</summary>
+    public double DefectTolerance => _solver.DefectTolerance;
+
     /// <summary>Sigma bounds, so the UI can show when burn time is being DICTATED by a bound rather than chosen.</summary>
     public double SigmaMin => _cfg.SigmaMin;
     public double SigmaMax => _cfg.SigmaMax;
@@ -200,6 +216,15 @@ public sealed class Ksa6DofGuidance
             return false;
         }
 
+        // Worst defect over the trace — the LAST entry is the accepted reference's.
+        LastDefect = double.PositiveInfinity;
+        for (int i = _solver.Trace.Count - 1; i >= 0; i--)
+            if (_solver.Trace[i].Accepted)
+            {
+                LastDefect = _solver.Trace[i].DefectNorm;
+                break;
+            }
+
         double[] xNew = _solver.ReferenceX;
         AnchorOffsetM = Math.Sqrt(
             (xNew[0] - x0[0]) * (xNew[0] - x0[0]) +
@@ -213,6 +238,20 @@ public sealed class Ksa6DofGuidance
         {
             Error = $"plan not anchored to the vehicle ({AnchorOffsetM:F1} m off) - " +
                     $"{AcceptedSteps} accepted step(s)";
+            return false;
+        }
+
+        // REFUSE AN UNPHYSICAL PLAN. IterationLimit was previously accepted outright,
+        // which shipped whatever the loop happened to have reached — including
+        // trajectories still carrying large virtual control. Flying one means asking
+        // the vehicle to reproduce motion that no force produced, so it saturates
+        // thrust and falls further behind on every cycle. Better to keep the previous
+        // plan and say so.
+        if (!(LastDefect <= _solver.DefectTolerance))
+        {
+            Error = $"plan is not physical - dynamics defect {LastDefect:E2} " +
+                    $"exceeds {_solver.DefectTolerance:E0} after {_solver.IterationCount} iters " +
+                    $"({AcceptedSteps} accepted). Needs more iterations or an easier problem.";
             return false;
         }
 

@@ -29,6 +29,9 @@ if (args.Contains("--loop"))
 // --rh: measure receding-horizon cost, the number that decides whether this is
 // realtime feasible. Cold-converge once, then repeatedly advance one control
 // interval and re-converge from the shifted reference with a capped budget.
+if (args.Contains("--body"))
+    return BodyCheck();
+
 if (args.Contains("--cond"))
     return CondCheck();
 
@@ -1015,5 +1018,86 @@ static int CondCheck()
     Console.WriteLine();
     Console.WriteLine("ADMM iterations is the cost driver. If the low-weight rows blow up,");
     Console.WriteLine("the objective weights are conditioning P, not just shaping the answer.");
+    return 0;
+}
+
+// Is the solver body-agnostic? Gravity enters the dynamics, the velocity scale, the
+// seed thrust and the over-powered test; a hard-coded 9.81 anywhere would show up as
+// the Moon case failing or planning something unflyable. Vehicle thrust is scaled
+// with gravity so the TWR is comparable and only the body changes.
+static int BodyCheck()
+{
+    string path = FindFile("loop_ref.csv") ?? "loop_ref.csv";
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] Row(int i) => lines[i].Split(',')
+        .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+    double[] x0 = Row(0), xf = Row(1), xRef = Row(2);
+    int n = xRef.Length / NX;
+    double m0 = x0[Dynamics6Dof.IM];
+
+    Console.WriteLine("  body        g     v0       Tmax      sigma   defect     merit   ADMM    ms   status");
+
+    foreach ((string name, double g) in new[]
+             { ("Earth", 9.81), ("Moon", 1.62), ("Mars", 3.72), ("Ceres", 0.27) })
+    {
+        // Same TWR on every body, so only gravity differs.
+        double tmax = 6.0e6 * (g / 9.81);
+
+        // AND a physically equivalent entry speed. Holding v0 at the Earth value is
+        // not a body-agnosticism test — at the same TWR the stopping distance scales
+        // as v0^2/g, so 50 m/s needs 532 m on the Moon and 3193 m on Ceres against
+        // 316 m of altitude. Those cases are simply impossible, and the solver
+        // correctly refuses them. Scaling v0 as sqrt(L*g) makes the descent equally
+        // hard everywhere (109 m of stopping distance on every body).
+        double L = 0;
+        for (int i = 0; i < 3; i++) L += (x0[i] - xf[i]) * (x0[i] - xf[i]);
+        L = Math.Sqrt(L);
+
+        var bx0 = (double[])x0.Clone();
+        double vEntry = Math.Sqrt(L * g);
+        bx0[3] = 0.0; bx0[4] = 0.0; bx0[5] = -vEntry;
+        double V = Math.Max(vEntry, 1.0);
+
+        // Free-fall-ish time over the descent, the same rule the mod's seed uses.
+        double sigma = Math.Sqrt(2.0 * L / g);
+        var cfg = new Scvx6DofConfig
+        {
+            Nodes = n, Tmax = tmax, WDu = 0.01, WW = 0.05, ProximalWeight = 0.05,
+            SigmaMin = sigma * 0.15, SigmaMax = sigma * 4.0, SigmaScale = sigma,
+            XScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, m0],
+        };
+        var dyn = new Dynamics6Dof.Params { Gz = -g };
+
+        var xSeed = new double[n * NX];
+        var uSeed = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xSeed[k * NX + i] = bx0[i] + t * (xf[i] - bx0[i]);
+                xSeed[k * NX + 3 + i] = bx0[3 + i] + t * (xf[3 + i] - bx0[3 + i]);
+            }
+            xSeed[k * NX + Dynamics6Dof.IQ] = 1.0;
+            xSeed[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            uSeed[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * g;
+        }
+
+        var s = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        s.Initialize(bx0, xf, xSeed, uSeed, sigma);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        ScvxStatus st = s.Solve(25);
+        double ms = sw.Elapsed.TotalMilliseconds;
+        int admm = s.Trace.Sum(t => t.SolverIterations);
+        double defect = double.PositiveInfinity;
+        for (int i = s.Trace.Count - 1; i >= 0; i--)
+            if (s.Trace[i].Accepted) { defect = s.Trace[i].DefectNorm; break; }
+
+        Console.WriteLine($"  {name,-8} {g,5:F2} {vEntry,5:F1}  {tmax,9:E2}  {s.Sigma,6:F2}  {defect,9:E2}  " +
+                          $"{s.Cost,8:E2}  {admm,6}  {ms,5:F0}  {st}");
+    }
+    Console.WriteLine();
+    Console.WriteLine("All bodies must converge with a defect under 1e-3. A hard-coded 9.81");
+    Console.WriteLine("would show as the low-gravity cases failing or drifting.");
     return 0;
 }

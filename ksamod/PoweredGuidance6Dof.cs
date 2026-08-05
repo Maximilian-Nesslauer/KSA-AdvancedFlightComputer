@@ -21,12 +21,12 @@ public static partial class PoweredGuidanceWindow
     private static string _sixDofError = "";
     private static double _sixDofLastReplan;
 
-    private static int _sixDofNodes = 30;
-    private static double _sixDofTiltDeg = 30.0;
+    private static int _sixDofNodes = 20;
+    private static double _sixDofTiltDeg = 60.0;
     private static double _sixDofThrottleFloor = 0.40;
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     private static double _sixDofSigmaSeed = 20.0;
-    private static double _sixDofTargetAltM = 20.0;
+    private static double _sixDofTargetAltM = 10.0;
     // Cadence in PLAN NODES, not seconds — the scale-free quantity. Node spacing is
     // sigma/(N-1), so a fixed wall-clock interval becomes an ever-larger fraction of a
     // node as sigma shrinks through the burn: it drifts toward the stale-warm-start
@@ -37,7 +37,7 @@ public static partial class PoweredGuidanceWindow
     // Past ~2 nodes the warm start is too stale, the tight trust region fails and it
     // thrashes. Worst case matters more than mean here: a 335 ms spike on the sim
     // thread is a visible hitch, 130 ms/s of steady load is not.
-    private static double _sixDofReplanNodes = 0.35;
+    private static double _sixDofReplanNodes = 0.1;
     private static double _sixDofThrustFrac = 1.0;   // share of total thrust the burn uses
 
     // Objective regulariser weights. Both were originally the Python test case's
@@ -188,6 +188,19 @@ public static partial class PoweredGuidanceWindow
         // THE check that the MPC re-anchored at the vehicle instead of serving a
         // stale trajectory — which is what "the plan starts a node below" looked like.
         ImGui.Text($"anchor offset {_sixDof.AnchorOffsetM,8:F2} m");
+
+        // The physicality check. Virtual control is a SLACK variable in the dynamics
+        // constraint, so an unconverged plan contains motion no force produced — it
+        // cannot be flown at any thrust. Plans above tolerance are now refused, so a
+        // green reading here is what makes the displayed trajectory meaningful.
+        double def = _sixDof.LastDefect;
+        if (def <= _sixDof.DefectTolerance)
+            ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
+                $"dynamics defect {def:E2}  (tol {_sixDof.DefectTolerance:E0}) - plan is physical");
+        else
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
+                $"dynamics defect {def:E2} EXCEEDS {_sixDof.DefectTolerance:E0} - " +
+                "plan is NOT physically realisable and was refused.");
 
         // Pure diagnostics; nothing acts on these. Under MPC, drift between re-solves
         // is expected — what matters is that it RESETS each cycle rather than growing.
