@@ -102,6 +102,12 @@ public static partial class PoweredGuidanceWindow
                 ImGui.EndTabItem();
             }
 
+            if (ImGui.BeginTabItem("6dof"))
+            {
+                Draw6DofTab(vehicle, parent, bodyRadius);
+                ImGui.EndTabItem();
+            }
+
             ImGui.EndTabBar();
         }
 
