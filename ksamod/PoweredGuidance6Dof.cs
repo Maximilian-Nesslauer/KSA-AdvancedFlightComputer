@@ -24,6 +24,7 @@ public static partial class PoweredGuidanceWindow
     private static int _sixDofNodes = 30;
     private static double _sixDofTiltDeg = 30.0;
     private static double _sixDofThrottleFloor = 0.40;
+    private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     private static double _sixDofSigmaSeed = 20.0;
     private static double _sixDofTargetAltM = 20.0;
     // Cadence in PLAN NODES, not seconds — the scale-free quantity. Node spacing is
@@ -38,6 +39,20 @@ public static partial class PoweredGuidanceWindow
     // thread is a visible hitch, 130 ms/s of steady load is not.
     private static double _sixDofReplanNodes = 0.35;
     private static double _sixDofThrustFrac = 1.0;   // share of total thrust the burn uses
+
+    // Objective regulariser weights. Both were originally the Python test case's
+    // (W_DU 0.2, W_W 1.0), where they came to 121% of the fuel term — dominating the
+    // objective and, because both shrink as burn time grows, pinning sigma at its
+    // upper bound. Turned down twice after flight testing. Exposed because the right
+    // value depends on the vehicle and is easiest to find by flying it.
+    private static double _sixDofRateDampShare = 0.002;   // rate penalty as a share of fuel
+    private static double _sixDofControlSmooth = 0.01;    // W_DU
+
+    // Proximal conditioning. The regularisers above were also holding P together;
+    // turning them down for a correct trajectory tripled the ADMM iteration count.
+    // This puts the conditioning back without the bias. 0.05 keeps the answer and is
+    // ~3.8x faster; higher is faster still but starts moving the solution.
+    private static double _sixDofProximal = 0.05;
 
     private static void Draw6DofTab(Vehicle vehicle, IParentBody parent, double bodyRadius)
     {
@@ -96,6 +111,11 @@ public static partial class PoweredGuidanceWindow
             "optimiser's own controls, interpolated along the fresh trajectory. " +
             "There is no trajectory tracking - the feedback IS the re-solve.");
 
+        // KSA knows the real floor; the 0.40 default was the Python test case's value
+        // and overstating it is what makes an otherwise fine vehicle "over-powered".
+        if (_sixDofFloorAuto && !_sixDofActive)
+            _sixDofThrottleFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
+
         if (!_sixDofActive)
         {
             if (ImGui.Button("Engage 6-DOF guidance"))
@@ -118,11 +138,16 @@ public static partial class PoweredGuidanceWindow
         {
             ImGui.InputInt("Nodes", ref _sixDofNodes);
             ImGui.InputDouble("Tilt limit (deg)", ref _sixDofTiltDeg);
-            ImGui.InputDouble("Throttle floor", ref _sixDofThrottleFloor);
+            ImGui.Checkbox("Throttle floor from vehicle", ref _sixDofFloorAuto);
+            if (!_sixDofFloorAuto)
+                ImGui.InputDouble("Throttle floor", ref _sixDofThrottleFloor);
             ImGui.InputDouble("Burn time seed (s)", ref _sixDofSigmaSeed);
             ImGui.InputDouble("Target altitude (m)", ref _sixDofTargetAltM);
             ImGui.InputDouble("Re-solve every (plan nodes)", ref _sixDofReplanNodes);
             ImGui.InputDouble("Thrust fraction", ref _sixDofThrustFrac);
+            ImGui.InputDouble("Rate damping (share of fuel)", ref _sixDofRateDampShare);
+            ImGui.InputDouble("Control smoothing (W_DU)", ref _sixDofControlSmooth);
+            ImGui.InputDouble("Proximal conditioning", ref _sixDofProximal);
         }
 
         if (_sixDof == null || !_sixDof.HasPlan)
@@ -140,7 +165,18 @@ public static partial class PoweredGuidanceWindow
         double age = _sixDof.PlanElapsed;
         double cadenceS = _sixDofReplanNodes * _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1);
         bool stale = age > cadenceS * 2.5;
-        ImGui.Text($"burn time {_sixDof.Sigma,6:F1} s");
+        double sg = _sixDof.Sigma;
+        bool atMax = sg >= _sixDof.SigmaMax * 0.999, atMin = sg <= _sixDof.SigmaMin * 1.001;
+        if (atMax || atMin)
+            ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
+                $"burn time {sg:F1} s - PINNED AT {(atMax ? "MAX" : "MIN")} " +
+                $"[{_sixDof.SigmaMin:F1}, {_sixDof.SigmaMax:F1}] s. The bound is dictating the " +
+                "trajectory, not the physics - if it cannot hover it will loop to burn the time.");
+        else
+            ImGui.Text($"burn time {sg,6:F1} s   (bounds {_sixDof.SigmaMin:F1} - {_sixDof.SigmaMax:F1} s)");
+        if (_sixDof.FellBack)
+            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                "re-solve needed the WIDE TRUST REGION retry - this is what costs ~500 ms.");
         if (stale)
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
                 $"PLAN AGE {age:F1} s - re-solves are failing, this plan is stale " +
@@ -158,6 +194,20 @@ public static partial class PoweredGuidanceWindow
         _sixDof.Diagnostics(x, out double pe, out double ve, out double ae);
         ImGui.SeparatorText("Drift since last solve");
         ImGui.Text($"position {pe,8:F1} m   velocity {ve,7:F2} m/s   attitude {ae,6:F2} deg");
+
+        // Objective breakdown. Fuel must dominate: both regularisers get CHEAPER as
+        // burn time grows, so if either rivals fuel the optimiser is minimising them
+        // instead and will push sigma to its upper bound.
+        _sixDof.ObjectiveTerms(out double jFuel, out double jDu, out double jW);
+        ImGui.SeparatorText("Objective");
+        double denom = Math.Max(jFuel, 1e-12);
+        ImGui.Text($"fuel            {jFuel:E3}");
+        ImGui.Text($"control smooth  {jDu:E3}   ({jDu / denom * 100,5:F0}% of fuel)");
+        ImGui.Text($"rate damping    {jW:E3}   ({jW / denom * 100,5:F0}% of fuel)");
+        if (jDu + jW > jFuel)
+            ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
+                "Regularisers exceed fuel - this is NOT min-fuel any more, and both " +
+                "shrink as burn time grows, so sigma will run to its upper bound.");
 
         // Commanded vs delivered torque — the link the drift numbers cannot see. A gap
         // means the plan is asking for torque this vehicle does not have.
@@ -280,6 +330,8 @@ public static partial class PoweredGuidanceWindow
 
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, _sixDofNodes, _sixDofTiltDeg,
                                    _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
+                                   _sixDofRateDampShare, _sixDofControlSmooth,
+                                   _sixDofProximal,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out string error))
@@ -328,7 +380,8 @@ public static partial class PoweredGuidanceWindow
         ImGui.SeparatorText("Feasibility");
         ImGui.Text($"thrust used {thrust / 1e6,6:F2} MN   weight {mass * g / 1e6,6:F2} MN   " +
                    $"max TWR {thrust / (mass * g),5:F2}");
-        ImGui.Text($"TWR at min throttle {twrMin,5:F2}");
+        ImGui.Text($"TWR at min throttle {twrMin,5:F2}   " +
+                   $"(floor {_sixDofThrottleFloor:F2}, vehicle can do {Ksa6DofSetup.VehicleThrottleFloor(vehicle):F2})");
 
         if (needTilt >= _sixDofTiltDeg)
         {

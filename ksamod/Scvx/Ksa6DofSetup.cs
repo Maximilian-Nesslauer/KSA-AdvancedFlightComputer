@@ -142,6 +142,25 @@ public static class Ksa6DofSetup
         return Math.Min(Along(mx), Along(my));
     }
 
+    /// <summary>
+    /// The vehicle's actual minimum throttle, from KSA's own aggregate
+    /// (PartTree.EngineThrottleMin = min of MinimumThrottle over every engine).
+    ///
+    /// The model's throttle floor was defaulting to 0.40 — the PYTHON TEST CASE's
+    /// value, chosen there so min thrust sits just under hover. On a vehicle that can
+    /// actually throttle to 0.10 that overstates Tmin four-fold, which is precisely
+    /// the over-powered condition that forces the solver to tilt to shed thrust and
+    /// produces looping, spiralling descents.
+    /// </summary>
+    public static double VehicleThrottleFloor(Vehicle vehicle)
+    {
+        PartTree tree = vehicle?.Parts;
+        if (tree == null)
+            return 1.0;
+        double f = tree.EngineThrottleMin;
+        return f is > 0.0 and <= 1.0 ? f : 1.0;
+    }
+
     /// <summary>Smallest gimbal deflection limit on the vehicle, in degrees — the binding one.</summary>
     public static double GimbalLimitDeg(Vehicle vehicle)
     {
@@ -199,6 +218,8 @@ public static class Ksa6DofSetup
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed, double thrustFraction,
+                                double rateDampShare, double controlSmoothWeight,
+                                double proximalWeight,
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error)
@@ -334,6 +355,35 @@ public static class Ksa6DofSetup
         // elsewhere gives the solver a starting point outside its own feasible range
         // and a badly conditioned scale. Both are set from the seed instead.
         double sigma = Math.Max(sigmaSeed, 1.0);
+        // REGULARISER WEIGHTS SIZED FOR THIS PROBLEM, not the Python test case.
+        //
+        // 6dof.py uses W_DU = 0.2, W_W = 1.0, and at its converged solution those
+        // contribute 41% and 80% of the fuel term respectively — 121% combined.
+        // They are not regularising the objective, they ARE the objective.
+        //
+        // That matters because BOTH GET CHEAPER AS SIGMA GROWS: stretch the same
+        // manoeuvre over a longer burn and the node-to-node control deltas shrink,
+        // and the rotation rates shrink. Only the fuel term pushes back. W_W scales
+        // as N*3*omega^2, so at a perfectly ordinary 0.1 rad/s it is ~10x fuel and
+        // at 0.2 rad/s ~40x — at which point the optimiser is simply minimising
+        // rotation rate, and the cheapest way to rotate slowly is to take as long
+        // as possible. Sigma pins to its upper bound and the vehicle loops.
+        //
+        // Fix: size W_W so the rate penalty is a SMALL FRACTION of fuel at the
+        // rate this manoeuvre actually needs — roughly the tilt range swept over
+        // half the burn. Scvx6DofConfig's defaults stay at the Python values so
+        // the reference validation and the constants drift guard remain valid;
+        // only flight overrides them.
+        // rateDampShare is the fraction of a typical (~0.1) fuel term the rate penalty
+        // should cost at the manoeuvre's characteristic rate. Turned right down after
+        // flight testing: these terms only need to discourage chatter and spin, and
+        // anything large enough to show up against fuel is steering the trajectory
+        // instead. There IS a floor — at zero the control can go bang-bang between
+        // nodes and the attitude can oscillate — so the objective panel and the plan
+        // overlay are the check when reducing further.
+        double omegaScale = Math.Max(tiltMaxDeg * Math.PI / 180.0 / Math.Max(sigma * 0.5, 1.0), 1e-3);
+        double wW = Math.Max(rateDampShare, 0.0) / (nodes * 3.0 * omegaScale * omegaScale);
+
         cfg = new Scvx6DofConfig
         {
             Nodes = nodes,
@@ -343,8 +393,26 @@ public static class Ksa6DofSetup
             TauRollMax = tauRoll,
             TiltMaxDeg = tiltMaxDeg,
             GroundFloor = -1.0,
-            SigmaMin = sigma * 0.25,
-            SigmaMax = sigma * 2.5,
+
+            // Generous bounds. These only need to BRACKET the answer — sigma is a free
+            // variable and the solver picks it — but a bound that binds silently
+            // dictates the trajectory instead of the physics: sigma pinned at the max
+            // forces the vehicle to spend that long in the air, and if it cannot hover
+            // it loops to burn the time. Widening costs nothing, because conditioning
+            // comes from SigmaScale (the seed), not from the bounds.
+            WW = wW,
+            WDu = Math.Max(controlSmoothWeight, 0.0),
+            // Restores the conditioning the regularisers used to provide, without the
+            // bias. Measured on the reference problem at low weights: 91650 ADMM
+            // iterations / 4907 ms at 0, versus 23675 / 1295 ms at 0.05 — 3.8x faster
+            // for a burn time within 1.2% and a merit within 0.03%. Do NOT raise this
+            // chasing more speed: at 0.2 it is 7x faster but shifts burn time 6% and
+            // worsens merit 1%, because SCvx stops at a tolerance rather than exactly
+            // at X = Xbar, so a large proximal term leaves a residual pull and starts
+            // acting as a second trust region.
+            ProximalWeight = Math.Max(proximalWeight, 0.0),
+            SigmaMin = sigma * 0.15,
+            SigmaMax = sigma * 4.0,
             SigmaScale = sigma,
             XScale =
             [

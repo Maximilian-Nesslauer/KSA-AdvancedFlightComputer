@@ -25,6 +25,26 @@ public sealed class Scvx6DofConfig
     public double RhoVc { get; init; } = 1e5;                   // virtual-control penalty
     public double WDu { get; init; } = 0.2;                     // control-rate smoothing
     public double WW { get; init; } = 1.0;                      // angular-rate damping
+    /// <summary>
+    /// PROXIMAL weight: penalise deviation from the REFERENCE trajectory,
+    /// rho * ||(X - Xbar)/Xscale||^2, rather than deviation from zero.
+    ///
+    /// Exists purely for CONDITIONING. The WDu and WW regularisers were doing two
+    /// jobs at once: shaping the answer (badly — both get cheaper as sigma grows, so
+    /// they pin burn time at its upper bound) and adding positive-definite mass to
+    /// P's diagonal. Turning them down fixes the trajectory and TRIPLES the ADMM
+    /// iteration count, because P loses that mass and SCS's convergence rate degrades.
+    ///
+    /// A proximal term restores exactly the same conditioning WITHOUT the bias: it is
+    /// centred on the current reference, so it does not prefer slow rotation or long
+    /// burns, and it vanishes at convergence where X = Xbar. This is the standard
+    /// proximal-SCvx formulation rather than an invention.
+    ///
+    /// DEFAULT 0 so the reference validation and the constants drift guard compare
+    /// against exactly the Python problem; only flight turns it on.
+    /// </summary>
+    public double ProximalWeight { get; init; }
+
     public double SigmaMin { get; init; } = 5.0;
     public double SigmaMax { get; init; } = 25.0;
     public double SigmaScale { get; init; } = 12.0;

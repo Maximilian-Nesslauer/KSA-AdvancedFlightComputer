@@ -65,6 +65,13 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double AnchorOffsetM { get; private set; }
 
+    /// <summary>Sigma bounds, so the UI can show when burn time is being DICTATED by a bound rather than chosen.</summary>
+    public double SigmaMin => _cfg.SigmaMin;
+    public double SigmaMax => _cfg.SigmaMax;
+
+    /// <summary>True when the last Update needed the wide-trust-region retry — that retry is what turns a ~30 ms solve into ~500 ms.</summary>
+    public bool FellBack { get; private set; }
+
     /// <summary>Plan node count, for the overlay.</summary>
     public int Nodes => _n;
 
@@ -134,7 +141,7 @@ public sealed class Ksa6DofGuidance
     /// ~33 ms — but the ANSWER is anchored at the vehicle by the initial-state
     /// equality, not at the shifted seed.
     /// </summary>
-    public bool Update(double[] x0, double simNow, int maxIterations = 8)
+    public bool Update(double[] x0, double simNow, int maxIterations = 5)
     {
         if (!HasPlan)
             return false;
@@ -159,9 +166,12 @@ public sealed class Ksa6DofGuidance
         Array.Copy(x0, 0, xs, 0, NX);
 
         double sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
+        FellBack = false;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: 0.05);
         if (Finish(x0, simNow, maxIterations))
             return true;
+
+        FellBack = true;
 
         // The tight trust region above assumes the vehicle is near its previous plan.
         // Once it has genuinely diverged that makes the problem infeasible, and a
@@ -295,6 +305,37 @@ public sealed class Ksa6DofGuidance
     {
         int k1 = Math.Min(k + 1, _n - 1);
         return a[k * NU + off] * (1 - f) + a[k1 * NU + off] * f;
+    }
+
+    /// <summary>
+    /// Objective breakdown at the current plan. Fuel SHOULD dominate — if a
+    /// regulariser is comparable to or larger than it, the optimiser is no longer
+    /// solving min-fuel, and because both regularisers get cheaper as sigma grows
+    /// the visible symptom is burn time pinned at its upper bound.
+    /// </summary>
+    public void ObjectiveTerms(out double fuel, out double controlSmoothing, out double rateDamping)
+    {
+        fuel = controlSmoothing = rateDamping = 0.0;
+        if (!HasPlan)
+            return;
+
+        double m0 = _planX[13];
+        fuel = (m0 - _planX[(_n - 1) * NX + 13]) / Math.Max(m0, 1.0);
+
+        double[] us = _cfg.ResolvedUScale;
+        for (int k = 0; k < _n - 1; k++)
+            for (int j = 0; j < NU; j++)
+            {
+                double d = (_planU[(k + 1) * NU + j] - _planU[k * NU + j]) / us[j];
+                controlSmoothing += _cfg.WDu * d * d;
+            }
+
+        for (int k = 0; k < _n; k++)
+            for (int i = 0; i < 3; i++)
+            {
+                double w = _planX[k * NX + 10 + i];
+                rateDamping += _cfg.WW * w * w;
+            }
     }
 
     /// <summary>Plan node 0 in model coordinates — where the plan believes the vehicle is.</summary>

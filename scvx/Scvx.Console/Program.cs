@@ -29,6 +29,9 @@ if (args.Contains("--loop"))
 // --rh: measure receding-horizon cost, the number that decides whether this is
 // realtime feasible. Cold-converge once, then repeatedly advance one control
 // interval and re-converge from the shifted reference with a capped budget.
+if (args.Contains("--cond"))
+    return CondCheck();
+
 if (args.Contains("--scale"))
     return ScaleCheck();
 
@@ -942,5 +945,75 @@ static int ScaleCheck()
 
         Console.WriteLine($"  {mult,4:F0}x   {Run(false)}   {Run(true)}");
     }
+    return 0;
+}
+
+// Where is the SOLVE TIME going? ADMM iteration count is the currency, not wall
+// clock: a subproblem that needs 50x the ADMM iterations costs 50x, and that is a
+// CONDITIONING property of the matrices we hand it. This isolates the two things
+// the mod changed relative to the validated reference — the state scaling and the
+// objective weights — and reports ADMM iterations for each.
+static int CondCheck()
+{
+    string path = FindFile("loop_ref.csv") ?? "loop_ref.csv";
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] Row(int i) => lines[i].Split(',')
+        .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+    double[] x0 = Row(0), xf = Row(1), xRef = Row(2);
+    int n = xRef.Length / NX;
+    double m0 = x0[Dynamics6Dof.IM];
+
+    double[] refScale = [100, 100, 300, 50, 50, 50, 1, 1, 1, 1, 1, 1, 1, 250000.0];
+    double L = 0, sp = 0;
+    for (int i = 0; i < 3; i++) { L += (x0[i] - xf[i]) * (x0[i] - xf[i]); sp += x0[3 + i] * x0[3 + i]; }
+    L = Math.Sqrt(L); sp = Math.Sqrt(sp);
+    double V = Math.Max(Math.Max(sp, Math.Sqrt(L * 9.81)), 1.0);
+    double[] adaptScale = [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, 250000.0];
+
+    Console.WriteLine($"reference XScale  pos {refScale[2],8:F1}  vel {refScale[3],8:F1}");
+    Console.WriteLine($"adaptive  XScale  pos {L,8:F1}  vel {V,8:F1}");
+    Console.WriteLine();
+    Console.WriteLine("  case                          SCvx it   ADMM it    ms   burn time   merit");
+
+    void Run(string name, double[] xs, double wDu, double wW, double prox = 0.0)
+    {
+        var cfg = new Scvx6DofConfig { Nodes = n, XScale = xs, WDu = wDu, WW = wW, ProximalWeight = prox };
+        var xSeed = new double[n * NX];
+        var uSeed = new double[n * NU];
+        for (int k = 0; k < n; k++)
+        {
+            double t = (double)k / (n - 1);
+            for (int i = 0; i < 3; i++)
+            {
+                xSeed[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+                xSeed[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+            }
+            xSeed[k * NX + Dynamics6Dof.IQ] = 1.0;
+            xSeed[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+            uSeed[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * 9.81;
+        }
+        var s = new Scvx6DofSolver(cfg) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        s.Initialize(x0, xf, xSeed, uSeed, 12.0);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        ScvxStatus st = s.Solve(25);
+        double ms = sw.Elapsed.TotalMilliseconds;
+        int admm = s.Trace.Sum(t => t.SolverIterations);
+        Console.WriteLine($"  {name,-28} {s.IterationCount,5}  {admm,8}  {ms,6:F0}   sigma {s.Sigma,6:F2}  merit {s.Cost:E4}   {st}");
+    }
+
+    // Reference weights are 0.2 / 1.0. The mod now runs far smaller ones.
+    Run("reference scale + weights", refScale, 0.2, 1.0);
+    Run("adaptive scale, ref weights", adaptScale, 0.2, 1.0);
+    Run("reference scale, low weights", refScale, 0.01, 0.05);
+    Run("adaptive scale, low weights", adaptScale, 0.01, 0.05);
+    Run("adaptive scale, tiny weights", adaptScale, 0.001, 0.005);
+    Console.WriteLine();
+    Console.WriteLine("  + proximal conditioning (same low weights, no bias):");
+    foreach (double prox in new[] { 0.001, 0.01, 0.05, 0.2 })
+        Run($"  prox {prox:F3}", adaptScale, 0.01, 0.05, prox);
+
+    Console.WriteLine();
+    Console.WriteLine("ADMM iterations is the cost driver. If the low-weight rows blow up,");
+    Console.WriteLine("the objective weights are conditioning P, not just shaping the answer.");
     return 0;
 }

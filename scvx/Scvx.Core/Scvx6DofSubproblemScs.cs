@@ -128,7 +128,7 @@ public sealed class Scvx6DofSubproblemScs
         Array.Clear(_b);
         Array.Clear(_c);
 
-        AssembleObjective(x0[Dynamics6Dof.IM]);
+        AssembleObjective(x0[Dynamics6Dof.IM], xbar);
         AssembleEqualities(x0, xf, xbar, ubar, sigBar, A, B, f0);
         AssembleCone(xbar, ubar, sigBar, tr);
 
@@ -236,7 +236,7 @@ public sealed class Scvx6DofSubproblemScs
 
     // ---------------------------------------------------------------- objective
 
-    private void AssembleObjective(double mInit)
+    private void AssembleObjective(double mInit, double[] xbar)
     {
         _c[IX(_n - 1, Dynamics6Dof.IM)] = -1.0 / mInit * _colScale[IX(_n - 1, Dynamics6Dof.IM)];
 
@@ -254,6 +254,21 @@ public sealed class Scvx6DofSubproblemScs
         for (int k = 0; k < _n; k++)
             for (int i = 0; i < 3; i++)
                 AddP(IX(k, Dynamics6Dof.IW + i), IX(k, Dynamics6Dof.IW + i), 2.0 * _cfg.WW);
+
+        // Proximal term: ProximalWeight * sum_k ||(X[k]-Xbar[k])/Xscale||^2.
+        // Expanding gives a diagonal P contribution 2*w/xs^2 and a LINEAR term
+        // -2*w*xbar/xs^2; the constant xbar'xbar is dropped as it cannot change the
+        // argmin. Conditions P exactly as WW did but centred on the reference, so it
+        // biases nothing and is zero at convergence.
+        if (_cfg.ProximalWeight > 0.0)
+            for (int k = 0; k < _n; k++)
+                for (int i = 0; i < NX; i++)
+                {
+                    double w = _cfg.ProximalWeight / (_xs[i] * _xs[i]);
+                    int col = IX(k, i);
+                    AddP(col, col, 2.0 * w);
+                    _c[col] += -2.0 * w * xbar[k * NX + i] * _colScale[col];
+                }
 
         // RhoVc * sum_k ||Wv[k]/Xscale||^2 — pure diagonal
         for (int k = 0; k < _n - 1; k++)
