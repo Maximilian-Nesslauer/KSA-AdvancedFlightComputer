@@ -45,6 +45,11 @@ public static partial class PoweredGuidanceWindow
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     private static double _sixDofSigmaSeed = 20.0;
     private static double _sixDofTargetAltM = 10.0;
+    // Hand over to the terminal hover controller for the last stretch. Default ON
+    // and above the target altitude, so the solver is never asked to fly the part
+    // of the trajectory it is worst at — see the handover in Step6DofCore.
+    private static bool _sixDofHoverHandoff = true;
+    private static double _sixDofHoverHandoffAltM = 30.0;
     // Cadence in SECONDS of wall clock. The scale-free quantity is really plan NODES
     // — node spacing is sigma/(N-1), so a fixed interval becomes an ever-larger
     // fraction of a node as sigma shrinks through the burn, drifting toward the
@@ -193,6 +198,15 @@ public static partial class PoweredGuidanceWindow
             if (_sixDofFixedTime)
                 ImGui.InputInt("Burn-time search samples", ref _sixDofSigmaSamples);
             ImGui.InputDouble("Target altitude (m)", ref _sixDofTargetAltM);
+            ImGui.Checkbox("Hand off to terminal hover", ref _sixDofHoverHandoff);
+            if (_sixDofHoverHandoff)
+            {
+                ImGui.InputDouble("Handoff altitude (m)", ref _sixDofHoverHandoffAltM);
+                if (_sixDofHoverHandoffAltM <= _sixDofTargetAltM)
+                    ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                        "handoff is at or below the target altitude - it will never fire, " +
+                        "because the plan levels off at the target and never descends past it.");
+            }
             ImGui.InputDouble("Re-solve every (s)", ref _sixDofReplanSec);
             ImGui.InputDouble("Thrust fraction", ref _sixDofThrustFrac);
             ImGui.InputDouble("Rate damping (share of fuel)", ref _sixDofRateDampShare);
@@ -358,14 +372,20 @@ public static partial class PoweredGuidanceWindow
                 $"ALLOCATOR SATURATED - delivering {a.SaturationScale * 100.0:F0}%% of the demand.");
     }
 
-    private static void Disengage6Dof(Vehicle vehicle)
+    /// <param name="cutEngine">
+    /// False when handing the vehicle to another controller rather than ending the
+    /// flight. Cutting the engine on a handover would drop thrust for the frame
+    /// between this and the next controller's first command — survivable high up,
+    /// not at the handover altitude, which is exactly where it would happen.
+    /// </param>
+    private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
     {
         _sixDofActive = false;
         _sixDofEngagePending = false;
         _sixDof = null;
         _gimbalMode = 0;
         KsaGimbalControl.Disengage();
-        if (vehicle != null)
+        if (vehicle != null && cutEngine)
         {
             ref ManualControlInputs inputs = ref ManualInputs(vehicle);
             inputs.EngineOn = false;
@@ -427,6 +447,28 @@ public static partial class PoweredGuidanceWindow
         {
             Disengage6Dof(vehicle);
             _sixDofError = "touchdown - engine cut, 6-DOF guidance disengaged.";
+            return;
+        }
+
+        // HAND OFF THE LAST STRETCH TO TERMINAL HOVER, as G-FOLD does.
+        //
+        // The final metres are the worst part of the trajectory for this solver and
+        // the easiest for the hover PID. The horizon has collapsed to almost
+        // nothing, so the plan is a handful of nodes over a second or two and the
+        // trust region is the binding constraint; meanwhile the terminal state is
+        // exactly what a hover controller is built for — near-zero velocity,
+        // upright, holding a point. Optimising a descent is the wrong question by
+        // then.
+        //
+        // Handing over ABOVE the target altitude on purpose: the 6-DOF plan aims at
+        // _sixDofTargetAltM and this fires on the way down to it. A handover set
+        // below the target would simply never trigger, which the UI warns about.
+        if (_sixDofHoverHandoff && x[2] <= _sixDofHoverHandoffAltM)
+        {
+            Disengage6Dof(vehicle, cutEngine: false);
+            StartTerminalHover();
+            _landingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
+            _sixDofError = _landingStatus;
             return;
         }
 
