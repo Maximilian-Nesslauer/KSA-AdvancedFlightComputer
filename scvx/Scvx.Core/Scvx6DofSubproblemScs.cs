@@ -39,7 +39,8 @@ public sealed class Scvx6DofSubproblemScs
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _nVars;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _nVars;
+    private readonly int _nGs, _nVz;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -66,6 +67,10 @@ public sealed class Scvx6DofSubproblemScs
     public int IW(int interval, int i) => _oW + interval * NX + i;
     public int ISigma => _iSig;
 
+    /// <summary>Slack index for path node <paramref name="k"/>, which is TRAJECTORY node k+1.</summary>
+    public int IGs(int k) => _oGs + k;
+    public int IVz(int k) => _oVz + k;
+
     public Scvx6DofSubproblemScs(Scvx6DofConfig cfg)
     {
         _cfg = cfg;
@@ -74,16 +79,27 @@ public sealed class Scvx6DofSubproblemScs
         _xs = cfg.XScale;
         _us = cfg.ResolvedUScale;
 
+        // Path constraints apply from node 1 onward, NEVER at node 0 — see
+        // Scvx6DofConfig.GlideSlopeWeight for why that is a correctness
+        // requirement rather than a tidiness choice. Zero when disabled, so a
+        // config without them assembles exactly the problem it did before.
+        _nGs = cfg.GlideSlopeEnabled ? _n - 1 : 0;
+        _nVz = cfg.VzLimitEnabled ? _n - 1 : 0;
+
         _oX = 0;
         _oU = _oX + _n * NX;
         _oW = _oU + _n * NU;
         _iSig = _oW + (_n - 1) * NX;
-        _nVars = _iSig + 1;
+        _oGs = _iSig + 1;             // glideslope slacks, one per constrained node
+        _oVz = _oGs + _nGs;           // climb-rate slacks, likewise
+        _nVars = _oVz + _nVz;
 
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2);
-        _lDim = _n * 6 + 2 * _n * NX + 2 * _n * NU + 4;
-        _socDims = new int[_n];
-        for (int k = 0; k < _n; k++) _socDims[k] = 3;   // gimbal cone per node
+        // + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows
+        _lDim = _n * 6 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz;
+        _socDims = new int[_n + _nGs];
+        for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
+        for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
         _nCone = _nEq + _lDim + _socDims.Sum();
 
         _A = new CcsAssembler(_nCone, _nVars);
@@ -105,6 +121,10 @@ public sealed class Scvx6DofSubproblemScs
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++) _colScale[IW(k, i)] = _xs[i];
         _colScale[_iSig] = cfg.SigmaScale;
+        // Slacks carry the units of what they relax, so they take the same scale as
+        // the quantity being violated: metres of horizontal miss, m/s of climb.
+        for (int k = 0; k < _nGs; k++) _colScale[IGs(k)] = _xs[Dynamics6Dof.IR];
+        for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
     }
 
     private void AddA(int row, int col, double value) => _A.Add(row, col, value * _colScale[col]);
@@ -130,7 +150,7 @@ public sealed class Scvx6DofSubproblemScs
 
         AssembleObjective(x0[Dynamics6Dof.IM], xbar);
         AssembleEqualities(x0, xf, xbar, ubar, sigBar, A, B, f0);
-        AssembleCone(xbar, ubar, sigBar, tr);
+        AssembleCone(xf, xbar, ubar, sigBar, tr);
 
         if (!_frozen) { _A.Freeze(); _P.Freeze(); _frozen = true; }
         else { _A.EndRefill(); _P.EndRefill(); }
@@ -316,6 +336,26 @@ public sealed class Scvx6DofSubproblemScs
                 double w = _cfg.RhoVc / (_xs[i] * _xs[i]);
                 AddP(IW(k, i), IW(k, i), 2.0 * w);
             }
+
+        // Path-constraint slacks: LINEAR (L1) penalties, not quadratic. An L1
+        // penalty is EXACT — above a finite weight the solution is identical to the
+        // hard-constrained one, so the slack sits at zero whenever the corridor is
+        // reachable and only opens when the alternative is having no plan at all. A
+        // quadratic penalty would instead always trade a little violation for a
+        // little objective, quietly flying just outside the cone forever.
+        //
+        // The penalty applies to the NORMALISED slack (violation / XScale), which is
+        // what makes the weight dimensionless and comparable with the rest of the
+        // objective — the fuel term is -m_final/m_init, so everything here is order
+        // 1. Penalising the RAW slack instead puts a coefficient of
+        // weight * XScale = 1e6 next to terms of order 1e-2, and SCS does not merely
+        // solve that slowly: it returns "unbounded", because a cost that lopsided
+        // makes the dual infeasible to working precision. Dividing by the same scale
+        // the column already carries keeps the two in step even if that scale changes.
+        for (int k = 0; k < _nGs; k++)
+            _c[IGs(k)] += _cfg.GlideSlopeWeight * _colScale[IGs(k)] / _xs[Dynamics6Dof.IR];
+        for (int k = 0; k < _nVz; k++)
+            _c[IVz(k)] += _cfg.VzWeight * _colScale[IVz(k)] / _xs[Dynamics6Dof.IV];
     }
 
     // -------------------------------------------------------------- equalities
@@ -398,7 +438,8 @@ public sealed class Scvx6DofSubproblemScs
     // Same positive-orthant rows as the ECOS port's AssembleCone, minus the
     // three epigraph cones (now handled by P instead), written starting at row
     // offset _nEq since SCS stacks equalities and cone rows into one matrix.
-    private void AssembleCone(double[] xbar, double[] ubar, double sigBar, double tr)
+    private void AssembleCone(ReadOnlySpan<double> xf, double[] xbar, double[] ubar,
+                              double sigBar, double tr)
     {
         _row = _nEq;
         ref int row = ref _row;
@@ -447,6 +488,32 @@ public sealed class Scvx6DofSubproblemScs
                 _b[row++] = lim - @ref;
             }
 
+        // CLIMB RATE, from node 1 onward: v_z - d_k <= VzMax, d_k >= 0.
+        //
+        // Node 0 is excluded on purpose. It is pinned by an equality to the measured
+        // state, so constraining it constrains a value the solver cannot change —
+        // and a vehicle that happens to be moving upward at that instant (a gust, a
+        // wobble, the pitch-over after ignition) would make the whole problem
+        // infeasible rather than merely expensive.
+        for (int k = 0; k < _nVz; k++)
+        {
+            AddA(row, IX(k + 1, Dynamics6Dof.IV + 2), 1.0);
+            AddA(row, IVz(k), -1.0);
+            _b[row++] = _cfg.VzMax;
+        }
+
+        // Slack non-negativity for both path constraints: -slack <= 0.
+        for (int k = 0; k < _nGs; k++)
+        {
+            AddA(row, IGs(k), -1.0);
+            _b[row++] = 0.0;
+        }
+        for (int k = 0; k < _nVz; k++)
+        {
+            AddA(row, IVz(k), -1.0);
+            _b[row++] = 0.0;
+        }
+
         double sigLim = tr * _cfg.SigmaScale;
         AddA(row, _iSig, 1.0);
         _b[row++] = sigLim + sigBar;
@@ -465,6 +532,33 @@ public sealed class Scvx6DofSubproblemScs
             _b[row++] = 0;
             AddA(row, IU(k, Dynamics6Dof.ITDY), -1.0);
             _b[row++] = 0;
+        }
+
+        // GLIDESLOPE, from node 1 onward, as a second-order cone:
+        //     ||r_xy[k] - target_xy||  <=  cot(angle) * (r_z[k] - target_z) + g_k
+        //
+        // SCS reads a SOC block as s = b - Ax with s[0] >= ||s[1:]||, so the three
+        // rows carry the cone's height and its two horizontal offsets. Excluded at
+        // node 0 for the same reason as the climb rate, and slackened by g_k for a
+        // sharper one: alone, either constraint is survivable, but a vehicle that is
+        // both outside the cone and too low can only get back inside by CLIMBING —
+        // which the climb-rate row forbids. Hard versions of the two together can
+        // trap the vehicle in a region with no feasible exit at all. Soft versions
+        // cannot, and the L1 penalty keeps the slack at exactly zero whenever the
+        // corridor is actually reachable.
+        double cot = _cfg.CotGlideSlope;
+        for (int k = 0; k < _nGs; k++)
+        {
+            int node = k + 1;
+            AddA(row, IX(node, Dynamics6Dof.IR + 2), -cot);
+            AddA(row, IGs(k), -1.0);
+            _b[row++] = -cot * xf[Dynamics6Dof.IR + 2];
+
+            AddA(row, IX(node, Dynamics6Dof.IR + 0), -1.0);
+            _b[row++] = -xf[Dynamics6Dof.IR + 0];
+
+            AddA(row, IX(node, Dynamics6Dof.IR + 1), -1.0);
+            _b[row++] = -xf[Dynamics6Dof.IR + 1];
         }
 
         if (row != _nCone)
@@ -559,6 +653,51 @@ public sealed class Scvx6DofSubproblemScs
     /// internally. This reproduces the same checks in C# where nothing can eat
     /// the output.
     /// </summary>
+    /// <summary>
+    /// Finds the structural cause of an "unbounded" result: a variable that the
+    /// objective rewards moving in a direction nothing constrains.
+    ///
+    /// SCvx subproblems are LINEARISED, so they are unbounded by default — the
+    /// trust region is what makes them solvable at all. Every variable therefore
+    /// needs either a box, a cone, or a quadratic penalty holding it in. A new
+    /// variable added without one does not produce a wrong answer, it produces
+    /// "unbounded", with nothing to say which of several hundred columns is at
+    /// fault. This names it.
+    /// </summary>
+    public string DiagnoseUnbounded()
+    {
+        var sb = new System.Text.StringBuilder();
+        int[] ajc = _A.ColumnPointers, air = _A.RowIndices;
+        double[] apr = _A.Values;
+        int[] pjc = _P.ColumnPointers;
+
+        for (int col = 0; col < _nVars; col++)
+        {
+            bool hasQuadratic = pjc[col + 1] > pjc[col];
+            // A column only BOUNDS its variable through rows that can stop it: a
+            // nonneg or SOC row. An equality row constrains it relative to others
+            // but cannot on its own stop it running off.
+            bool bounded = false;
+            for (int k = ajc[col]; k < ajc[col + 1]; k++)
+                if (air[k] >= _nEq && apr[k] != 0.0) { bounded = true; break; }
+
+            if (!bounded && !hasQuadratic && _c[col] != 0.0)
+                sb.AppendLine($"  col {col} ({NameOf(col)}): c={_c[col]:E2}, " +
+                              "no inequality/cone row and no P entry - UNBOUNDED RAY");
+        }
+        return sb.Length == 0 ? "  no structurally unbounded columns\n" : sb.ToString();
+    }
+
+    private string NameOf(int col)
+    {
+        if (col >= _oVz && _nVz > 0) return $"vz slack {col - _oVz}";
+        if (col >= _oGs && _nGs > 0) return $"glideslope slack {col - _oGs}";
+        if (col == _iSig) return "sigma";
+        if (col >= _oW) return $"Wv[{(col - _oW) / NX},{(col - _oW) % NX}]";
+        if (col >= _oU) return $"U[{(col - _oU) / NU},{(col - _oU) % NU}]";
+        return $"X[{col / NX},{col % NX}]";
+    }
+
     public string DiagnoseScsValidation()
     {
         var sb = new System.Text.StringBuilder();

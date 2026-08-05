@@ -53,6 +53,43 @@ public static partial class PoweredGuidanceWindow
         for (int k = 0; k < n; k++)
             node[k] = f.PosToCci(new double3(px[k * 14 + 0], px[k * 14 + 1], px[k * 14 + 2]));
 
+        // --- Glideslope cone, drawn first so the path sits on top of it.
+        //
+        // Same construction as the G-FOLD overlay: apex at the target, opening
+        // upward, radius cot(angle) * height. Drawing it from the SAME angle the
+        // solver was configured with is the point — a cone drawn from a separate
+        // number would keep looking right while the solver enforced something else.
+        if (_sixDofGlideSlopeDeg > 0.0)
+        {
+            var coneCol = new ImColor8(90, 140, 190);
+            double apexZ = _sixDofTargetAltM;
+            double topZ = Math.Max(px[0 * 14 + 2], apexZ + 1.0);   // up to the plan's start
+            double cot = 1.0 / Math.Tan(Math.Clamp(_sixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
+            double3 apex = f.PosToCci(new double3(0, 0, apexZ));
+
+            const int rings = 4, seg = 28;
+            for (int ring = 1; ring <= rings; ring++)
+            {
+                double dz = (topZ - apexZ) * ring / rings;
+                double rad = cot * dz, z = apexZ + dz;
+                double3 prev = default;
+                for (int j = 0; j <= seg; j++)
+                {
+                    double th = 2.0 * Math.PI * j / seg;
+                    double3 p = f.PosToCci(new double3(rad * Math.Cos(th), rad * Math.Sin(th), z));
+                    if (j > 0) OvLine(dl, prev, p, coneCol, 1.3f);
+                    prev = p;
+                }
+            }
+            double topRad = cot * (topZ - apexZ);
+            for (int a = 0; a < 4; a++)
+            {
+                double th = Math.PI / 2.0 * a;
+                double3 rim = f.PosToCci(new double3(topRad * Math.Cos(th), topRad * Math.Sin(th), topZ));
+                OvLine(dl, apex, rim, coneCol, 1.3f);
+            }
+        }
+
         // --- planned path ---
         for (int k = 0; k + 1 < n; k++)
             OvLine(dl, node[k], node[k + 1], trajCol, 2.0f);

@@ -45,6 +45,15 @@ public static partial class PoweredGuidanceWindow
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     private static double _sixDofSigmaSeed = 20.0;
     private static double _sixDofTargetAltM = 10.0;
+    // Approach corridor and climb limit. Both OFF by default — they change the shape
+    // of every trajectory, so they are opt-in rather than something that silently
+    // alters a configuration that already flies. Both are soft (penalised slack) and
+    // skip node 0; see Scvx6DofConfig.GlideSlopeWeight for why that is a correctness
+    // requirement, not a nicety.
+    private static double _sixDofGlideSlopeDeg;      // 0 = off; degrees above horizontal
+    private static bool _sixDofVzEnabled;
+    private static double _sixDofVzMaxMs = 0.5;
+
     // Hand over to the terminal hover controller for the last stretch. Default ON
     // and above the target altitude, so the solver is never asked to fly the part
     // of the trajectory it is worst at — see the handover in Step6DofCore.
@@ -198,6 +207,15 @@ public static partial class PoweredGuidanceWindow
             if (_sixDofFixedTime)
                 ImGui.InputInt("Burn-time search samples", ref _sixDofSigmaSamples);
             ImGui.InputDouble("Target altitude (m)", ref _sixDofTargetAltM);
+            ImGui.InputDouble("Glide slope (deg, 0 = off)", ref _sixDofGlideSlopeDeg);
+            if (_sixDofGlideSlopeDeg > 0.0)
+                ImGui.TextWrapped(
+                    "Degrees above the horizontal at the target - LARGER is steeper and tighter. " +
+                    "The plan respects exactly this, so leave a couple of degrees of margin: a " +
+                    "trajectory that rides the boundary is one disturbance away from being outside it.");
+            ImGui.Checkbox("Limit climb rate", ref _sixDofVzEnabled);
+            if (_sixDofVzEnabled)
+                ImGui.InputDouble("Max climb rate (m/s)", ref _sixDofVzMaxMs);
             ImGui.Checkbox("Hand off to terminal hover", ref _sixDofHoverHandoff);
             if (_sixDofHoverHandoff)
             {
@@ -554,6 +572,7 @@ public static partial class PoweredGuidanceWindow
                                    _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
                                    _sixDofRateDampShare, _sixDofControlSmooth,
                                    _sixDofProximal,
+                                   _sixDofGlideSlopeDeg, _sixDofVzEnabled ? _sixDofVzMaxMs : -1.0,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out string error))

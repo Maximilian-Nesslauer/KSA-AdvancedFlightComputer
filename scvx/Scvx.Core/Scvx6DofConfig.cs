@@ -60,6 +60,71 @@ public sealed class Scvx6DofConfig
         [100, 100, 300, 50, 50, 50, 1, 1, 1, 1, 1, 1, 1, 250000.0];
     public double[]? UScale { get; init; }                      // defaults from Tmax/gimbal
 
+    /// <summary>
+    /// Glideslope angle above the HORIZONTAL, in degrees, measured at the target.
+    /// Zero (the default) disables the constraint entirely and costs nothing — no
+    /// variables, no rows.
+    ///
+    /// Constrains the path to a cone opening upward from the target:
+    /// ||r_xy - target_xy|| &lt;= cot(angle) * (r_z - target_z). Equivalently, every
+    /// node must sit at least this many degrees above the horizontal plane through
+    /// the target, so a LARGER angle is a TIGHTER cone and a steeper approach.
+    /// Same convention and same formula as the G-FOLD path already in the mod
+    /// (PoweredGuidanceOverlay draws the cone with cot = 1/tan of this angle), so
+    /// the two agree and the overlay draws what the solver enforces.
+    ///
+    /// The plan respects exactly this number, so set it a couple of degrees tighter
+    /// than the terrain actually requires. An optimum that RIDES a constraint
+    /// boundary is the dangerous case: any disturbance then puts the vehicle
+    /// outside, and with no margin the next re-solve starts from a violated state.
+    /// The slack below keeps that recoverable, but margin keeps it from happening.
+    /// </summary>
+    public double GlideSlopeDeg { get; init; }
+
+    /// <summary>
+    /// Maximum ALLOWED climb rate, m/s, applied from node 1 onward. Negative
+    /// disables the constraint entirely.
+    ///
+    /// Deliberately a small POSITIVE number rather than a hard zero. The intent is
+    /// "do not balloon", and a hard v_z &lt;= 0 turns every transient - a gust, a
+    /// tracking wobble, the pitch-over right after ignition - into a constraint
+    /// the vehicle is already violating. The tolerance costs nothing visually and
+    /// removes a cliff.
+    /// </summary>
+    public double VzMax { get; init; } = -1.0;
+
+    /// <summary>
+    /// Penalties on the glideslope and climb-rate slacks, per metre and per m/s of
+    /// violation.
+    ///
+    /// BOTH CONSTRAINTS ARE SOFT, and that is the whole point. Node 0 is pinned by
+    /// an equality to the measured state, so a HARD constraint that the vehicle is
+    /// already violating makes the problem infeasible by construction - not
+    /// "expensive", not "suboptimal", but unsolvable, with no plan at all to fly.
+    /// This exact failure already bit this codebase once, when the trust-region box
+    /// applied at node 0 and any vehicle more than 11.5 degrees off vertical could
+    /// not be planned for. Both constraints therefore start at node 1, AND carry a
+    /// penalised slack so that even a genuinely unreachable corridor degrades into
+    /// an expensive plan rather than no plan.
+    ///
+    /// The danger is the two together, not either alone: outside the cone and too
+    /// low, the only way back inside is to climb - which the climb-rate constraint
+    /// forbids. Hard versions of both can trap the vehicle in a region with no
+    /// feasible exit. Soft versions cannot.
+    ///
+    /// These are L1 (linear) penalties, so they are EXACT: above a finite threshold
+    /// the solution is identical to the hard-constrained one, rather than trading a
+    /// little violation for a little objective the way a quadratic penalty would.
+    /// </summary>
+    public double GlideSlopeWeight { get; init; } = 1e4;
+    public double VzWeight { get; init; } = 1e4;
+
+    public bool GlideSlopeEnabled => GlideSlopeDeg > 0.0;
+    public bool VzLimitEnabled => VzMax >= 0.0;
+
+    /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
+    public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
+
     public double Tmin => ThrottleFloor * Tmax;
     public double TanGimbal => Math.Tan(GimbalMaxDeg * Math.PI / 180.0);
     public double CosTilt => Math.Cos(TiltMaxDeg * Math.PI / 180.0);

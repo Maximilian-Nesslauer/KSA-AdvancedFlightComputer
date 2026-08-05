@@ -262,6 +262,10 @@ public static class Ksa6DofSetup
     /// communicated. This is usually the difference between a feasible plan and a
     /// spiral.
     /// </param>
+    /// <param name="glideSlopeDeg">
+    /// Approach corridor, degrees above the horizontal at the target. 0 disables it.
+    /// </param>
+    /// <param name="vzMaxMs">Largest allowed climb rate, m/s. Negative disables it.</param>
     /// <param name="x0">Initial model state — needed to SIZE THE PROBLEM, see XScale below.</param>
     /// <param name="xf">Terminal model state, same reason.</param>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
@@ -269,6 +273,7 @@ public static class Ksa6DofSetup
                                 double sigmaSeed, double thrustFraction,
                                 double rateDampShare, double controlSmoothWeight,
                                 double proximalWeight,
+                                double glideSlopeDeg, double vzMaxMs,
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error)
@@ -492,6 +497,8 @@ public static class Ksa6DofSetup
             // at X = Xbar, so a large proximal term leaves a residual pull and starts
             // acting as a second trust region.
             ProximalWeight = Math.Max(proximalWeight, 0.0),
+            GlideSlopeDeg = glideSlopeDeg,
+            VzMax = vzMaxMs,
             SigmaMin = sigma * 0.15,
             SigmaMax = sigma * 4.0,
             SigmaScale = sigma,

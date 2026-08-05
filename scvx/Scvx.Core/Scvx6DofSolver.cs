@@ -169,6 +169,13 @@ public sealed class Scvx6DofSolver
     public int Escalations { get; private set; }
 
     /// <summary>
+    /// Structural explanation for an Unbounded subproblem: which variable the
+    /// objective rewards moving with nothing to stop it. See
+    /// Scvx6DofSubproblemScs.DiagnoseUnbounded.
+    /// </summary>
+    public string DiagnoseUnbounded() => _sub.DiagnoseUnbounded();
+
+    /// <summary>
     /// Feed each subproblem the previous solve's ADMM iterate. The problem
     /// changes between SCvx iterations, but only within the trust region, so the
     /// last point is a good start. This is the ONLY warm start SCS offers —
