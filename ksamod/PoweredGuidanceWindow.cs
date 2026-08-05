@@ -94,6 +94,7 @@ public static partial class PoweredGuidanceWindow
         if (!_landingTabActive)
             DrawAscentOverlay(viewport, orbit, parent, bodyRadius);
         DrawGfoldOverlay(viewport, vehicle, orbit, parent);
+        Draw6DofOverlay(viewport, parent);
 
         // Landing-site marker: shown whenever the Landing tab is open, so the target is
         // visible for planning/UPFG, not only during a G-FOLD descent.

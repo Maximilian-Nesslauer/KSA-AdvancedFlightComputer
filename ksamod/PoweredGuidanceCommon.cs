@@ -474,6 +474,21 @@ public static partial class PoweredGuidanceWindow
             return;
         }
 
+        // 6-DOF guidance is EXCLUSIVE: it drives attitude through the TVC allocator
+        // rather than the flight computer, so it must not be mixed with the UPFG /
+        // G-FOLD command path below. Runs ahead of the idle bail because it has its
+        // own engage flag and does not set _running.
+        //
+        // The PENDING flag must be part of this test, not just the active one. The
+        // engage button can only set pending — it runs in the draw, and draw-time
+        // writes are erased — so gating solely on _sixDofActive deadlocked: the step
+        // that sets active could only run once active was already set.
+        if (_sixDofActive || _sixDofEngagePending)
+        {
+            Step6Dof(vehicle);
+            return;
+        }
+
         // Bail before touching the flight computer when the autopilot has nothing
         // to do. Keyed on the mod actually being active (guidance running or a
         // landing in progress), not on the engage toggle, which defaults on and
