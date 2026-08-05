@@ -26,7 +26,18 @@ public static partial class PoweredGuidanceWindow
     private static double _sixDofThrottleFloor = 0.40;
     private static double _sixDofSigmaSeed = 20.0;
     private static double _sixDofTargetAltM = 20.0;
-    private static double _sixDofReplanSec = 1.0;
+    // Cadence in PLAN NODES, not seconds — the scale-free quantity. Node spacing is
+    // sigma/(N-1), so a fixed wall-clock interval becomes an ever-larger fraction of a
+    // node as sigma shrinks through the burn: it drifts toward the stale-warm-start
+    // cliff exactly when the vehicle is closest to the ground.
+    //
+    // Measured (Scvx.Console --rh --cadence), worst-case solve vs advance per cycle:
+    //   0.25 nd -> 63 ms | 0.5 nd -> 71 ms | 1.0 nd -> 335 ms | 3.0 nd -> 2829 ms
+    // Past ~2 nodes the warm start is too stale, the tight trust region fails and it
+    // thrashes. Worst case matters more than mean here: a 335 ms spike on the sim
+    // thread is a visible hitch, 130 ms/s of steady load is not.
+    private static double _sixDofReplanNodes = 0.35;
+    private static double _sixDofThrustFrac = 1.0;   // share of total thrust the burn uses
 
     private static void Draw6DofTab(Vehicle vehicle, IParentBody parent, double bodyRadius)
     {
@@ -90,6 +101,7 @@ public static partial class PoweredGuidanceWindow
             if (ImGui.Button("Engage 6-DOF guidance"))
                 _sixDofEngagePending = true;
             ImGui.TextWrapped("Cold solve takes ~1.7 s on the sim thread - engage during a coast.");
+            Draw6DofFeasibility(vehicle);
         }
         else
         {
@@ -109,7 +121,8 @@ public static partial class PoweredGuidanceWindow
             ImGui.InputDouble("Throttle floor", ref _sixDofThrottleFloor);
             ImGui.InputDouble("Burn time seed (s)", ref _sixDofSigmaSeed);
             ImGui.InputDouble("Target altitude (m)", ref _sixDofTargetAltM);
-            ImGui.InputDouble("Re-solve every (s)", ref _sixDofReplanSec);
+            ImGui.InputDouble("Re-solve every (plan nodes)", ref _sixDofReplanNodes);
+            ImGui.InputDouble("Thrust fraction", ref _sixDofThrustFrac);
         }
 
         if (_sixDof == null || !_sixDof.HasPlan)
@@ -125,14 +138,15 @@ public static partial class PoweredGuidanceWindow
         // further along a trajectory that is no longer being refreshed: the plan's
         // time index outruns the vehicle.
         double age = _sixDof.PlanElapsed;
-        bool stale = age > _sixDofReplanSec * 2.5;
+        double cadenceS = _sixDofReplanNodes * _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1);
+        bool stale = age > cadenceS * 2.5;
         ImGui.Text($"burn time {_sixDof.Sigma,6:F1} s");
         if (stale)
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
                 $"PLAN AGE {age:F1} s - re-solves are failing, this plan is stale " +
-                $"(cadence {_sixDofReplanSec:F1} s). Commands are running ahead of the vehicle.");
+                $"(cadence {cadenceS:F2} s). Commands are running ahead of the vehicle.");
         else
-            ImGui.Text($"plan age  {age,6:F1} s   (node spacing {_sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1),5:F2} s)");
+            ImGui.Text($"plan age  {age,6:F2} s   cadence {cadenceS,5:F2} s   (node spacing {_sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1),5:F2} s)");
 
         // Node 0 is an equality constraint, so this is ~0 on any usable plan. It is
         // THE check that the MPC re-anchored at the vehicle instead of serving a
@@ -220,7 +234,9 @@ public static partial class PoweredGuidanceWindow
         // index ran on along a trajectory that was never refreshed, which is the
         // "green dot outruns the vehicle" symptom. A failed solve now retries on the
         // next step instead of letting the clock run.
-        if (now - _sixDofLastReplan >= _sixDofReplanSec)
+        double cadence = Math.Clamp(
+            _sixDofReplanNodes * _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1), 0.05, 5.0);
+        if (now - _sixDofLastReplan >= cadence)
         {
             if (_sixDof.Update(x, now))
             {
@@ -255,20 +271,22 @@ public static partial class PoweredGuidanceWindow
     private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                    double[] x, double now)
     {
+        // Target: hover point above the pad, upright and at rest. Mass is free, so the
+        // terminal state carries 13 of the 14 components. Built BEFORE the config
+        // because the problem scaling is sized from the x0 -> xf extent.
+        var xf = new double[14];
+        xf[2] = _sixDofTargetAltM;
+        xf[6] = 1.0;
+
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, _sixDofNodes, _sixDofTiltDeg,
-                                   _sixDofThrottleFloor, _sixDofSigmaSeed,
+                                   _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
+                                   x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out string error))
         {
             _sixDofError = "cannot plan: " + error;
             return false;
         }
-
-        // Target: hover point above the pad, upright and at rest. Mass is free, so the
-        // terminal state carries 13 of the 14 components.
-        var xf = new double[14];
-        xf[2] = _sixDofTargetAltM;
-        xf[6] = 1.0;
 
         _sixDof = new Ksa6DofGuidance(cfg, dyn);
         if (!_sixDof.Plan(x, xf, _sixDofSigmaSeed, now))
@@ -282,5 +300,56 @@ public static partial class PoweredGuidanceWindow
         _sixDofActive = true;
         _sixDofLastReplan = now;
         return true;
+    }
+
+    // Whether a plan can exist AT ALL, shown before engaging rather than after a
+    // failed solve. Thrust-to-weight at MINIMUM throttle is the number that decides
+    // it: the model's throttle box means the engine cannot go below Tmin while lit,
+    // so if Tmin exceeds weight the vehicle must tilt to shed the excess, and beyond
+    // the tilt limit no descent exists. That single ratio explains infeasible solves,
+    // spiral trajectories, and the long solve times that come from retrying them.
+    private static void Draw6DofFeasibility(Vehicle vehicle)
+    {
+        IParentBody parent = vehicle.Orbit?.Parent;
+        if (parent == null)
+            return;
+
+        (double thrust, _) = KsaEnginePerf.Vacuum(vehicle);
+        if (thrust <= 0.0)
+            return;
+        thrust *= Math.Clamp(_sixDofThrustFrac, 0.01, 1.0);
+
+        double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double g = parent.Mu / (siteCci.Length() * siteCci.Length());
+        double mass = vehicle.TotalMass;
+        Ksa6DofSetup.ThrottleMargin(thrust, _sixDofThrottleFloor, mass, g,
+                                    out double twrMin, out double needTilt);
+
+        ImGui.SeparatorText("Feasibility");
+        ImGui.Text($"thrust used {thrust / 1e6,6:F2} MN   weight {mass * g / 1e6,6:F2} MN   " +
+                   $"max TWR {thrust / (mass * g),5:F2}");
+        ImGui.Text($"TWR at min throttle {twrMin,5:F2}");
+
+        if (needTilt >= _sixDofTiltDeg)
+        {
+            double feasibleFloor = Math.Cos(_sixDofTiltDeg * Math.PI / 180.0) * mass * g / thrust;
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
+                $"OVER-POWERED - needs {needTilt:F0} deg tilt just to stop climbing " +
+                $"(limit {_sixDofTiltDeg:F0}). No descent exists.");
+            ImGui.TextWrapped(
+                $"Fix: throttle floor below {feasibleFloor:F2}, or thrust fraction " +
+                $"~{feasibleFloor / Math.Max(_sixDofThrottleFloor, 1e-6):F2} to plan on fewer engines.");
+        }
+        else if (twrMin > 1.0)
+        {
+            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                $"Min thrust exceeds weight - needs {needTilt:F0} deg of tilt to hold " +
+                "altitude, so expect the path to curve rather than descend straight.");
+        }
+        else
+        {
+            ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
+                "Can hover at minimum throttle - a straight descent is available.");
+        }
     }
 }

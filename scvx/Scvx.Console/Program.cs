@@ -29,6 +29,12 @@ if (args.Contains("--loop"))
 // --rh: measure receding-horizon cost, the number that decides whether this is
 // realtime feasible. Cold-converge once, then repeatedly advance one control
 // interval and re-converge from the shifted reference with a capped budget.
+if (args.Contains("--scale"))
+    return ScaleCheck();
+
+if (args.Contains("--rh") && args.Contains("--cadence"))
+    return CadenceSweep();
+
 if (args.Contains("--rh"))
     return RecedingHorizonCheck();
 
@@ -762,4 +768,179 @@ static int CheckConstants(string path, Scvx6DofConfig cfg, Dynamics6Dof.Params d
             "Dynamics6Dof.Params / Scvx6DofConfig against 6dof.py.");
     }
     return bad;
+}
+
+// How does the re-solve cadence affect COST? Intuition says fewer solves is cheaper.
+// It is the other way round: the warm start is only good while the vehicle is still
+// near its previous plan, so a LONGER interval makes each individual solve harder as
+// well as the plan staler. This sweeps the advance per cycle, in fractions of a plan
+// node, and reports both cost per cycle and cost per second of flight.
+static int CadenceSweep()
+{
+    string path = FindFile("loop_ref.csv") ?? "loop_ref.csv";
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] Row(int i) => lines[i].Split(',')
+        .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+    double[] x0 = Row(0), xf = Row(1), xRef = Row(2);
+
+    int n = xRef.Length / NX;
+    var cfg = new Scvx6DofConfig { Nodes = n };
+    double m0 = x0[Dynamics6Dof.IM];
+
+    double[] xSeed = new double[n * NX], uSeed = new double[n * NU];
+    for (int k = 0; k < n; k++)
+    {
+        double t = (double)k / (n - 1);
+        for (int i = 0; i < 3; i++)
+        {
+            xSeed[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+            xSeed[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+        }
+        xSeed[k * NX + Dynamics6Dof.IQ] = 1.0;
+        xSeed[k * NX + Dynamics6Dof.IM] = m0 + t * (0.92 * m0 - m0);
+        uSeed[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * 9.81;
+    }
+
+    Console.WriteLine("re-solve cadence sweep (eps 1e-5, budget 5, 12 cycles each)");
+    Console.WriteLine("advance is in PLAN NODES; 1.0 node is what --rh measures");
+    Console.WriteLine();
+    Console.WriteLine("  advance   cadence     mean     median     worst    ms per second of flight");
+
+    foreach (double step in new[] { 0.25, 0.5, 1.0, 1.5, 2.0, 3.0 })
+    {
+        var s2 = new Scvx6DofSolver(cfg) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+        s2.Initialize(x0, xf, xSeed, uSeed, 12.0);
+        s2.Solve(150);
+
+        double[] x = (double[])s2.ReferenceX.Clone();
+        double[] u = (double[])s2.ReferenceU.Clone();
+        double sig = s2.Sigma;
+        var rng = new Random(12345);
+        var times = new List<double>();
+
+        for (int c = 0; c < 12; c++)
+        {
+            double dt = sig / (n - 1);
+            double[] xs = new double[n * NX], us = new double[n * NU];
+            for (int k = 0; k < n; k++)
+            {
+                double src = Math.Min(k + step, n - 1);
+                int a = (int)src, b = Math.Min(a + 1, n - 1);
+                double f = src - a;
+                for (int i = 0; i < NX; i++)
+                    xs[k * NX + i] = x[a * NX + i] * (1 - f) + x[b * NX + i] * f;
+                for (int i = 0; i < NU; i++)
+                    us[k * NU + i] = u[a * NU + i] * (1 - f) + u[b * NU + i] * f;
+            }
+            double qn = 0;
+            for (int k = 0; k < n; k++)
+            {
+                qn = 0;
+                for (int i = 0; i < 4; i++) qn += xs[k * NX + 6 + i] * xs[k * NX + 6 + i];
+                qn = Math.Sqrt(qn);
+                if (qn > 1e-12) for (int i = 0; i < 4; i++) xs[k * NX + 6 + i] /= qn;
+            }
+
+            double[] newX0 = new double[NX];
+            Array.Copy(xs, 0, newX0, 0, NX);
+            // Tracking error accumulates with the interval, so scale it with the step
+            // rather than injecting a fixed amount regardless of how far we advanced.
+            for (int i = 0; i < 3; i++)
+            {
+                newX0[i] += (rng.NextDouble() - 0.5) * 2.0 * step;
+                newX0[3 + i] += (rng.NextDouble() - 0.5) * 0.6 * step;
+            }
+            Array.Copy(newX0, 0, xs, 0, NX);
+            sig = Math.Max(sig - dt * step, cfg.SigmaMin + 1e-3);
+
+            s2.Reseed(newX0, xs, us, sig, trustRegion: 0.05);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            s2.Solve(5);
+            times.Add(sw.Elapsed.TotalMilliseconds);
+            x = (double[])s2.ReferenceX.Clone();
+            u = (double[])s2.ReferenceU.Clone();
+            sig = s2.Sigma;
+        }
+
+        double nodeDt = s2.Sigma / (n - 1);
+        double cadence = step * nodeDt;
+        times.Sort();
+        double mean = times.Average(), med = times[times.Count / 2], worst = times[^1];
+        Console.WriteLine($"  {step,5:F2} nd  {cadence,7:F2} s  {mean,7:F0} ms {med,8:F0} ms {worst,8:F0} ms   {mean / cadence,8:F0} ms/s");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("A SHORTER cadence is cheaper PER SOLVE (better warm start) and the");
+    Console.WriteLine("last column shows whether it is also cheaper in total CPU.");
+    return 0;
+}
+
+// Does the problem still solve when it is BIGGER than the reference case?
+//
+// The solver works on x~ = x/scale and the trust region is in those units, so a
+// scale hard-coded to one test case means the physical step size stays fixed while
+// the problem grows — and the iteration budget eventually cannot traverse it. This
+// scales the reference descent up and compares a FIXED reference XScale against one
+// sized from the problem itself.
+static int ScaleCheck()
+{
+    string path = FindFile("loop_ref.csv") ?? "loop_ref.csv";
+    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
+    double[] Row(int i) => lines[i].Split(',')
+        .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
+    double[] baseX0 = Row(0), baseXf = Row(1), xRef = Row(2);
+    int n = xRef.Length / NX;
+
+    Console.WriteLine("descent scaled up; 1x is the reference case (300 m, 50 m/s)");
+    Console.WriteLine();
+    Console.WriteLine("  size        FIXED XScale [100,100,300,50,50,50]      ADAPTIVE XScale");
+
+    foreach (double mult in new[] { 1.0, 2.0, 5.0, 10.0, 20.0 })
+    {
+        var x0 = (double[])baseX0.Clone();
+        var xf = (double[])baseXf.Clone();
+        for (int i = 0; i < 3; i++) { x0[i] *= mult; xf[i] *= mult; }
+        for (int i = 3; i < 6; i++) x0[i] *= Math.Sqrt(mult);   // free-fall-ish entry speed
+        double sigma = 12.0 * Math.Sqrt(mult);
+
+        string Run(bool adaptive)
+        {
+            double L = Math.Sqrt((x0[0]-xf[0])*(x0[0]-xf[0]) + (x0[1]-xf[1])*(x0[1]-xf[1]) + (x0[2]-xf[2])*(x0[2]-xf[2]));
+            double sp = Math.Sqrt(x0[3]*x0[3] + x0[4]*x0[4] + x0[5]*x0[5]);
+            double V = Math.Max(Math.Max(sp, Math.Sqrt(L * 9.81)), 1.0);
+            double[] xs = adaptive
+                ? [L, L, L, V, V, V, 1, 1, 1, 1, 1, 1, 1, 250000.0]
+                : [100, 100, 300, 50, 50, 50, 1, 1, 1, 1, 1, 1, 1, 250000.0];
+
+            var cfg = new Scvx6DofConfig
+            {
+                Nodes = n, XScale = xs, SigmaScale = sigma,
+                SigmaMin = sigma * 0.25, SigmaMax = sigma * 2.5,
+            };
+            var xSeed = new double[n * NX];
+            var uSeed = new double[n * NU];
+            double m0 = x0[Dynamics6Dof.IM];
+            for (int k = 0; k < n; k++)
+            {
+                double t = (double)k / (n - 1);
+                for (int i = 0; i < 3; i++)
+                {
+                    xSeed[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
+                    xSeed[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
+                }
+                xSeed[k * NX + Dynamics6Dof.IQ] = 1.0;
+                xSeed[k * NX + Dynamics6Dof.IM] = m0 * (1.0 - 0.08 * t);
+                uSeed[k * NU + Dynamics6Dof.IT] = 1.05 * m0 * 9.81;
+            }
+
+            var s = new Scvx6DofSolver(cfg) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
+            s.Initialize(x0, xf, xSeed, uSeed, sigma);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            ScvxStatus st = s.Solve(25);
+            return $"{st,-22} {s.IterationCount,2} it {sw.Elapsed.TotalMilliseconds,6:F0} ms";
+        }
+
+        Console.WriteLine($"  {mult,4:F0}x   {Run(false)}   {Run(true)}");
+    }
+    return 0;
 }

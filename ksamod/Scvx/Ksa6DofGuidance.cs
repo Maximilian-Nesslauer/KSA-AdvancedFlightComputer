@@ -93,10 +93,33 @@ public sealed class Ksa6DofGuidance
                 xSeed[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
                 xSeed[k * NX + 3 + i] = x0[3 + i] + t * (xf[3 + i] - x0[3 + i]);
             }
-            xSeed[k * NX + 6] = 1.0;                              // identity quaternion
+
+            // ATTITUDE AND RATES MUST INTERPOLATE FROM THE MEASURED STATE, not jump
+            // to identity. This is a FEASIBILITY requirement, not a quality one.
+            //
+            // The trust region is a box on every node INCLUDING NODE 0
+            // (|X[k][i] - xbar[k][i]| <= tr * XScale[i]), and node 0 is simultaneously
+            // pinned by the equality X[0] = x0. Together those demand
+            // |x0[i] - xSeed[0][i]| <= tr * XScale[i]. With identity seeded into the
+            // quaternion and zero into the rates — XScale 1, tr 0.1 — the cold solve
+            // is INFEASIBLE for any vehicle more than ~11.5 deg off vertical or
+            // rotating faster than 0.1 rad/s. Not slow: infeasible, immediately, and
+            // untouched by relaxing any of the physical constraints.
+            //
+            // The Python reference never shows this because it starts at exactly
+            // q = identity, omega = 0, so its seed matches node 0 perfectly.
+            Slerp(x0.AsSpan(6, 4), xf.AsSpan(6, 4), t, xSeed.AsSpan(k * NX + 6, 4));
+            for (int i = 0; i < 3; i++)
+                xSeed[k * NX + 10 + i] = x0[10 + i] * (1.0 - t);   // spin down to zero
+
             xSeed[k * NX + 13] = m0 * (1.0 - 0.08 * t);
             uSeed[k * NU + 2] = 1.05 * m0 * Math.Abs(_dyn.Gz);    // ~hover axial thrust
         }
+
+        // Belt and braces: node 0 IS the measured state, exactly. Interpolation should
+        // already give this at t=0, but the equality and the trust region leave no
+        // slack at all here, so it is not worth depending on floating-point luck.
+        Array.Copy(x0, 0, xSeed, 0, NX);
 
         _xf = (double[])xf.Clone();
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
@@ -223,6 +246,49 @@ public sealed class Ksa6DofGuidance
         torqueModel = new double3(_dyn.LArm * tdy, -_dyn.LArm * tdx, tauRoll);
         throttle = Math.Clamp(thrust / _cfg.Tmax, 0.0, 1.0);
         return true;
+    }
+
+    /// <summary>
+    /// Shortest-arc quaternion interpolation, scalar-first. Sign-corrected first: q
+    /// and -q are the same rotation, so without that the interpolation can take the
+    /// long way round through zero and produce a degenerate mid-path attitude.
+    /// Falls back to normalised lerp when the endpoints are nearly parallel, where
+    /// the slerp formula divides by ~0.
+    /// </summary>
+    private static void Slerp(ReadOnlySpan<double> a, ReadOnlySpan<double> b, double t, Span<double> outQ)
+    {
+        double dot = a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
+        double sign = dot < 0.0 ? -1.0 : 1.0;
+        dot = Math.Abs(dot);
+
+        double wa, wb;
+        if (dot > 0.9995)
+        {
+            wa = 1.0 - t;
+            wb = t;
+        }
+        else
+        {
+            double theta = Math.Acos(Math.Clamp(dot, -1.0, 1.0));
+            double s = Math.Sin(theta);
+            wa = Math.Sin((1.0 - t) * theta) / s;
+            wb = Math.Sin(t * theta) / s;
+        }
+
+        double n = 0.0;
+        for (int i = 0; i < 4; i++)
+        {
+            outQ[i] = wa * a[i] + wb * sign * b[i];
+            n += outQ[i] * outQ[i];
+        }
+        n = Math.Sqrt(n);
+        if (n < 1e-12)
+        {
+            outQ[0] = 1.0; outQ[1] = outQ[2] = outQ[3] = 0.0;
+            return;
+        }
+        for (int i = 0; i < 4; i++)
+            outQ[i] /= n;
     }
 
     private double Lerp(double[] a, int off, int k, double f)

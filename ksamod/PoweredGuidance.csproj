@@ -70,7 +70,11 @@
        the folder via mod.toml and loads PoweredGuidance as the EntryAssembly. -->
   <Target Name="CopyToMods" AfterTargets="Build">
     <MakeDir Directories="$(ModDir)" />
-    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
+    <!-- Dependencies FIRST, entry assembly LAST. The game holds a lock on the entry
+         assembly whenever it is running, and MSBuild aborts the target at the first
+         failed Copy — so with the entry assembly first, a running game silently left
+         every dependency stale. That shipped new mod code against an hour-old
+         Scvx.Core.dll and looked like "the mod stopped working". -->
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
@@ -79,6 +83,7 @@
          SCS call with a DllNotFoundException, not at load. (ecos.dll above is for
          Gfold.Core, which still uses it — Scvx's ECOS port was removed.) -->
     <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
   </Target>
 
   <!-- Release builds also produce a distributable zip: a top-level PoweredGuidance\ folder the

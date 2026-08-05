@@ -161,9 +161,45 @@ public static class Ksa6DofSetup
     /// vehicle cannot be planned for (no engine, no gimbal, no roll authority) —
     /// better a refusal than a plan built on zeros.
     /// </summary>
+    /// <summary>
+    /// Thrust-to-weight at the MINIMUM throttle, and the tilt that implies.
+    ///
+    /// THE SINGLE MOST IMPORTANT NUMBER FOR WHETHER A PLAN EXISTS. The model has a
+    /// convex throttle box Tmin &lt;= T &lt;= Tmax, so the vehicle can never thrust below
+    /// Tmin while the engine is lit. If Tmin exceeds weight the vehicle CANNOT hold
+    /// altitude pointing up — the only way to shed the excess is to tilt until the
+    /// vertical component drops to 1 g, needing acos(1/TWRmin) of tilt. Past the tilt
+    /// limit no descent exists at all and the solver reports infeasible; just inside
+    /// it, the solver tilts to burn off thrust and the path curves away sideways,
+    /// which is where the "spiral" trajectories come from.
+    ///
+    /// The Python reference is tuned to TWRmin ~ 0.98 (min thrust just under hover),
+    /// which is why it never shows this. A real vehicle rarely obliges — especially
+    /// when Tmax sums every engine on the craft rather than the ones that will be lit.
+    /// </summary>
+    public static void ThrottleMargin(double thrust, double throttleFloor, double mass, double g,
+                                      out double twrMin, out double requiredTiltDeg)
+    {
+        double weight = Math.Max(mass * g, 1e-9);
+        twrMin = throttleFloor * thrust / weight;
+        requiredTiltDeg = twrMin <= 1.0
+            ? 0.0
+            : Math.Acos(Math.Clamp(1.0 / twrMin, -1.0, 1.0)) * 180.0 / Math.PI;
+    }
+
+    /// <param name="thrustFraction">
+    /// Share of the vehicle's total thrust the landing burn will actually use. An
+    /// over-powered booster lands on a SUBSET of its engines; the model has no way to
+    /// express "shut three of five down", so scaling Tmax is how that intent is
+    /// communicated. This is usually the difference between a feasible plan and a
+    /// spiral.
+    /// </param>
+    /// <param name="x0">Initial model state — needed to SIZE THE PROBLEM, see XScale below.</param>
+    /// <param name="xf">Terminal model state, same reason.</param>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
-                                double sigmaSeed,
+                                double sigmaSeed, double thrustFraction,
+                                double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error)
     {
@@ -177,6 +213,8 @@ public static class Ksa6DofSetup
             error = "no engine thrust to plan with";
             return false;
         }
+
+        thrust *= Math.Clamp(thrustFraction, 0.01, 1.0);
 
         double gimbalDeg = GimbalLimitDeg(vehicle);
         if (gimbalDeg <= 0.0)
@@ -220,6 +258,27 @@ public static class Ksa6DofSetup
             return false;
         }
 
+        // Refuse an over-powered configuration up front, with the number needed to fix
+        // it. Reporting "infeasible" after a 500 ms solve tells the user nothing; this
+        // says exactly which knob is wrong and what value would work.
+        {
+            double gSite = parent.Mu / (siteCci.Length() * siteCci.Length());
+            ThrottleMargin(thrust, throttleFloor, vehicle.TotalMass, gSite,
+                           out double twrMin, out double needTiltDeg);
+            if (needTiltDeg >= tiltMaxDeg)
+            {
+                double feasibleFloor = Math.Cos(tiltMaxDeg * Math.PI / 180.0) *
+                                       vehicle.TotalMass * gSite / thrust;
+                error =
+                    $"over-powered: min throttle gives TWR {twrMin:F2}, which needs " +
+                    $"{needTiltDeg:F0} deg of tilt just to stop climbing (limit {tiltMaxDeg:F0} deg). " +
+                    $"Lower the throttle floor below {feasibleFloor:F2}, raise the tilt limit, " +
+                    $"or set the thrust fraction to ~{feasibleFloor / Math.Max(throttleFloor, 1e-6):F2} " +
+                    "to plan on fewer engines.";
+                return false;
+            }
+        }
+
         // Gravity at the SITE, from the body actually being landed on — not 9.81.
         // Constant over the descent, which is the model's assumption; see the
         // fidelity notes for when that stops being true.
@@ -236,9 +295,40 @@ public static class Ksa6DofSetup
             Ixx = ixx, Iyy = iyy, Izz = izz,
         };
 
-        // Scales are what make the problem solvable at all (raw SI is not solvable
-        // by any of the solvers tried) so they track the vehicle, not the defaults.
+        // NON-DIMENSIONALISE AGAINST THIS PROBLEM, not against the Python test case.
+        //
+        // This is the difference between converging and "cold solve failed". The
+        // solver works on x~ = x/scale, and THE TRUST REGION IS IN THOSE UNITS,
+        // capped at TrustRegionMax = 0.1. So the movement permitted per iteration is
+        // 0.1*scale in physical terms. With the scale hard-coded to the reference
+        // case's 300 m altitude, that is ~30 m per iteration REGARDLESS of the actual
+        // descent: engage from 3 km and the problem is ten times larger while the step
+        // stays the same, so the iteration budget can no longer traverse it. The
+        // problem is perfectly feasible; the solver simply cannot walk there. It also
+        // explains why relaxing constraints does not help — this was never a
+        // constraint failure.
+        //
+        // Gfold learned this already (GfoldPlanner: "length scale ~ the problem size,
+        // time scale such that gravity is ~1... ECOS breaks down on the raw SI
+        // problem"). Same lesson, applied here.
+        //
+        // One length scale for all three position axes rather than per-axis: it is
+        // the trajectory's own extent, and it keeps the scaling isotropic so a mostly
+        // horizontal approach conditions as well as a vertical one. Velocity is
+        // scaled by the natural free-fall speed over that length, floored by the
+        // actual initial speed so a fast entry is not under-scaled.
+        //
+        // Quaternion and body-rate scales stay at 1: both are already dimensionless
+        // or O(1), and they are the values the reference converges with — no reason
+        // to perturb a validated part of the setup.
         double mass = vehicle.TotalMass;
+        double gScale = parent.Mu / (siteCci.Length() * siteCci.Length());
+        double lengthScale = Math.Max(
+            Math.Sqrt((x0[0] - xf[0]) * (x0[0] - xf[0]) +
+                      (x0[1] - xf[1]) * (x0[1] - xf[1]) +
+                      (x0[2] - xf[2]) * (x0[2] - xf[2])), 1.0);
+        double speed0 = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
+        double velocityScale = Math.Max(Math.Max(speed0, Math.Sqrt(lengthScale * gScale)), 1.0);
         // Burn-time bounds must BRACKET the seed. Scvx6DofConfig's defaults (5..25 s,
         // scale 12) describe the Python test case; leaving them while seeding sigma
         // elsewhere gives the solver a starting point outside its own feasible range
@@ -256,7 +346,14 @@ public static class Ksa6DofSetup
             SigmaMin = sigma * 0.25,
             SigmaMax = sigma * 2.5,
             SigmaScale = sigma,
-            XScale = [100, 100, 300, 50, 50, 50, 1, 1, 1, 1, 1, 1, 1, Math.Max(mass, 1.0)],
+            XScale =
+            [
+                lengthScale, lengthScale, lengthScale,
+                velocityScale, velocityScale, velocityScale,
+                1, 1, 1, 1,
+                1, 1, 1,
+                Math.Max(mass, 1.0),
+            ],
         };
         return true;
     }
