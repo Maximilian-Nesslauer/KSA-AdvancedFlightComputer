@@ -88,6 +88,12 @@ namespace NovaTec.GravityTurnMod
                         Console.WriteLine("toggle Stability Assist");
                         vehicle.ToggleStabilization();
                     }
+                    if (ImGui.MenuItem("RCS"))
+                    {
+                        Console.WriteLine("toggle RCS");
+                        FlightControlOverride.Active = true;
+                        FlightControlOverride.RcsMode = FlightControlOverride.RcsMode == FlightComputerRCSMode.Disabled ? FlightComputerRCSMode.Enabled : FlightComputerRCSMode.Disabled;
+                    }
                     if (ImGui.MenuItem("Stage"))
                     {
                         Controller.NextStequence();
@@ -254,23 +260,26 @@ namespace NovaTec.GravityTurnMod
 
 
                 ImGui.Separator();
-/*
-                doubleQuat p = vehicle.GetBody2Cci();
-                VehicleReferenceFrameEx.GetEclBody2Cci(p);
-                doubleQuat b = VehicleReferenceFrameEx.GetEclBody2Cci(p);
-                double3 e = VehicleReferenceFrameEx.QuaternionToEulerAngles(VehicleReferenceFrame.EclBody, b);
-                int3 a = vehicle.NavBallData.AttitudeAngles;
-                a.Z -= 270;
-                a.Y -= 90;
+                /*
+                                doubleQuat p = vehicle.GetBody2Cci();
+                                VehicleReferenceFrameEx.GetEclBody2Cci(p);
+                                doubleQuat b = VehicleReferenceFrameEx.GetEclBody2Cci(p);
+                                double3 e = VehicleReferenceFrameEx.QuaternionToEulerAngles(VehicleReferenceFrame.EclBody, b);
+                                int3 a = vehicle.NavBallData.AttitudeAngles;
+                                a.Z -= 270;
+                                a.Y -= 90;
 
-                double3 fc = Controller.GetSurfaceVector();
-*/
+                                double3 fc = Controller.GetSurfaceVector();
+                */
                 //ImGui.Text("vector:      " + CoordToString(vehicle.GetVelocityCce().Normalized()) );
                 //ImGui.Text("target:      " + CoordToString(vehicle.FlightComputer.CustomAttitudeTarget));
                 //Controller.GetFuelTank();
                 //ReadOnlySpan<MoleState> moleStates = Controller.GetCurrentSequence().Parts. .Moles.States;
-
-                ImGui.Text("Pitching up:          " + Controller.PitchesUp + ", " + Program.AttitudePitch.Current);
+                if (vehicle.FlightComputer.Burn != null)
+                    ImGui.Text(String.Format("Burn:          {0}s", vehicle.FlightComputer.Burn.BurnDuration));
+                else
+                    ImGui.Text("Pitching up:          " + Controller.PitchesUp + ", pitch: " + Program.AttitudePitch.Current);
+                
                 //ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
                 //ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);vehicle.Orbit.StateVectors.PositionCci
 
