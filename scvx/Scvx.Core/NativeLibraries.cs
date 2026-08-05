@@ -6,11 +6,11 @@ namespace Scvx;
 /// <summary>
 /// Single DllImportResolver registration for the whole assembly.
 ///
-/// NativeLibrary.SetDllImportResolver throws if called twice for the same
-/// assembly — so ECOS and SCS, both P/Invoke'd from Scvx.Core, cannot each
-/// register their own resolver in their own ModuleInitializer the way each did
-/// independently at first. One resolver here dispatches by requested library
-/// name and loads whichever native DLL sits beside this assembly.
+/// NativeLibrary.SetDllImportResolver THROWS if called twice for the same
+/// assembly, so every native library P/Invoke'd from Scvx.Core must be
+/// dispatched from this one resolver — a second [ModuleInitializer] registering
+/// its own is an InvalidOperationException at load, which is how this file came
+/// to exist. Add new natives to the switch below, never as a new initializer.
 /// </summary>
 internal static class NativeLibraries
 {
@@ -23,7 +23,6 @@ internal static class NativeLibraries
         {
             string? fileName = name switch
             {
-                "ecos" => "ecos.dll",
                 "scs" => "scs.dll",
                 _ => null,
             };

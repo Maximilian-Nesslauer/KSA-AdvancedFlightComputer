@@ -209,6 +209,21 @@ def row(a):
 
 with open(out, "w") as fh:
     fh.write(f"# N={N} converged_iters={it} solver=CLARABEL\n")
+    # Constants line. Everything here is hand-mirrored in C# (Dynamics6Dof.Params
+    # and Scvx6DofConfig), so editing one side alone would silently make the two
+    # sides solve DIFFERENT problems while the comparison still reported PASS.
+    # Scvx.Console asserts against these, turning that into a loud failure.
+    consts = {
+        "gz": float(g_vec[2]), "g0": g0, "isp": Isp, "l_arm": L_arm,
+        "ixx": float(I_vec[0]), "iyy": float(I_vec[1]), "izz": float(I_vec[2]),
+        "tmax": Tmax, "throttle_floor": Tmin / Tmax,
+        "gimbal_max_deg": float(np.degrees(delta_max)),
+        "tau_roll_max": tau_roll_max,
+        "tilt_max_deg": float(np.degrees(tilt_max)),
+        "rho_vc": RHO_VC, "w_du": W_DU, "w_w": W_W,
+        "sig_min": SIG_MIN, "sig_max": SIG_MAX, "sig_scale": SIG_SCALE,
+    }
+    print("# consts " + " ".join(f"{k}={v!r}" for k, v in consts.items()), file=fh)
     fh.write(row(np.concatenate([r0, v0, q0, w0, [m0]])) + "\n")
     fh.write(row(np.concatenate([rf, vf, qf, wf])) + "\n")
     fh.write(row(Xbar) + "\n")

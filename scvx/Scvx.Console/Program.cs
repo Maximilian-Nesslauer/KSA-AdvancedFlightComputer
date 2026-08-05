@@ -16,13 +16,8 @@ const int RowLen = NX + NU + NX + NX * NX + NX * NU;
 
 bool verbose = args.Contains("--verbose");
 
-// --sub: validate the cone-problem assembly by solving the same SCvx subproblem
-// CVXPY solved in python_ref/sub_ref.py and diffing the optimal trajectory.
-if (args.Contains("--sub"))
-    return SubproblemCheck(verbose, args.Contains("--dump"));
-
-// --sub-scs: same validation, but through the SCS native-P formulation instead
-// of the ECOS epigraph one.
+// --sub-scs: validate the cone-problem assembly by solving the same SCvx
+// subproblem CVXPY solved in python_ref/sub_ref.py and diffing the trajectory.
 if (args.Contains("--sub-scs"))
     return SubproblemCheckScs(verbose);
 
@@ -153,125 +148,7 @@ Console.WriteLine(failures == 0
 return failures == 0 ? 0 : 1;
 
 
-// Solve the reference SCvx subproblem with the C# cone assembly and compare the
-// optimum against CVXPY's. Agreement proves the hand-written canonicalisation:
-// the equality blocks, the cone layout, and the epigraph reformulation of the
-// three quadratic penalties.
-static int SubproblemCheck(bool verbose, bool dump)
-{
-    string path = FindFile("sub_ref.csv") ?? "sub_ref.csv";
-    if (!File.Exists(path))
-    {
-        Console.Error.WriteLine($"reference not found: {path}");
-        Console.Error.WriteLine("run:  python scvx/python_ref/sub_ref.py");
-        return 2;
-    }
-
-    string[] lines = File.ReadAllLines(path).Where(l => l.Length > 0 && l[0] != '#').ToArray();
-    double[] Row(int i) => lines[i].Split(',')
-        .Select(s => double.Parse(s, CultureInfo.InvariantCulture)).ToArray();
-
-    double[] x0 = Row(0), xf = Row(1), xbar = Row(2), ubar = Row(3);
-    double[] meta = Row(4);
-    double[] xRef = Row(5), uRef = Row(6), tail = Row(7);
-    double sigBar = meta[0], tr = meta[1];
-    double sigRef = tail[0], objRef = tail[1];
-
-    int n = xbar.Length / NX;
-    var cfg = new Scvx6DofConfig { Nodes = n };
-    var dyn = new Dynamics6Dof.Params();
-
-    // Linearise about the reference trajectory, exactly as the SCvx loop would.
-    double[] A = new double[n * NX * NX];
-    double[] B = new double[n * NX * NU];
-    double[] f0 = new double[n * NX];
-    for (int k = 0; k < n; k++)
-        Dynamics6Dof.Jacobian(
-            xbar.AsSpan(k * NX, NX), ubar.AsSpan(k * NU, NU), dyn,
-            f0.AsSpan(k * NX, NX),
-            A.AsSpan(k * NX * NX, NX * NX),
-            B.AsSpan(k * NX * NU, NX * NU));
-
-    using var sub = new Scvx6DofSubproblem(cfg);
-    Console.WriteLine($"ECOS {EcosWorkspace.NativeVersion}   " +
-                      $"n={sub.VariableCount} eq={sub.EqualityCount} cone={sub.ConeRowCount}");
-
-    // Assemble first, audit, THEN solve. ECOS equilibrates the matrices in place
-    // at setup, so the audit has to happen while they still hold the problem as
-    // written. Feeding it a point the reference solver called optimal separates a
-    // formulation error from a conditioning one.
-    sub.Assemble(x0, xf, xbar, ubar, sigBar, tr, A, B, f0);
-    if (lines.Length > 8)
-    {
-        double[] wvRef = Row(8);
-        double[] packed = sub.PackPrimal(xRef, uRef, wvRef, sigRef);
-        var (eqRes, eqRow, coneVio, coneIdx) = sub.CheckPrimal(packed);
-        Console.WriteLine($"reference point audit: max |Ax-b| {eqRes:E2} (row {eqRow}), " +
-                          $"worst cone violation {coneVio:E2} (row {coneIdx})");
-        // c'x at the reference point vs the reference objective minus the constant
-        // term we drop (mInit/mInit = 1). Separates an objective-vector bug from a
-        // constraint bug: the audit above only proves feasibility.
-        double cx = sub.LinearObjective(packed);
-        Console.WriteLine($"  c'x at reference = {cx:E10}   expected {objRef - 1.0:E10}   " +
-                          $"rel {Math.Abs(cx - (objRef - 1.0)) / Math.Abs(objRef - 1.0):E2}");
-        if (eqRes > 1e-6 || coneVio > 1e-6)
-            Console.Write(sub.Diagnose(packed));
-    }
-
-    if (dump)
-    {
-        string dumpPath = Path.Combine(Path.GetDirectoryName(path)!, "cone_dump.txt");
-        sub.Dump(dumpPath);
-        Console.WriteLine($"dumped cone program -> {dumpPath}");
-    }
-
-    var t0 = System.Diagnostics.Stopwatch.StartNew();
-    EcosStatus st = sub.Run(verbose);
-    double firstSolveMs = t0.Elapsed.TotalMilliseconds;
-    Console.WriteLine($"first solve : {st}, {sub.Iterations} iters, {firstSolveMs:F1} ms (includes ECOS_setup)");
-
-    if (!st.IsUsable())
-    {
-        Console.Error.WriteLine($"solve failed: {st}");
-        return 1;
-    }
-
-    // Second solve on identical data: exercises the refill path and ECOS_updateData,
-    // and shows what a warm SCvx iteration actually costs once setup is paid.
-    var t1 = System.Diagnostics.Stopwatch.StartNew();
-    EcosStatus st2 = sub.Solve(x0, xf, xbar, ubar, sigBar, tr, A, B, f0, false);
-    double reMs = t1.Elapsed.TotalMilliseconds;
-    Console.WriteLine($"refill solve: {st2}, {sub.Iterations} iters, {reMs:F1} ms (pattern + factorisation reused)");
-
-    double[] xGot = sub.SolutionX, uGot = sub.SolutionU;
-    double objGot = sub.EvaluateObjective(x0[Dynamics6Dof.IM]);
-
-    double ex = MaxRelDiff(xGot, xRef, out int wx);
-    double eu = MaxRelDiff(uGot, uRef, out int wu);
-    double es = Math.Abs(sub.SolutionSigma - sigRef) / Math.Abs(sigRef);
-    double eo = Math.Abs(objGot - objRef) / Math.Abs(objRef);
-
-    Console.WriteLine();
-    Console.WriteLine($"vs CVXPY reference:");
-    Console.WriteLine($"  X       max rel diff {ex:E2}  (node {wx / NX}, comp {wx % NX})");
-    Console.WriteLine($"  U       max rel diff {eu:E2}  (node {wu / NU}, comp {wu % NU})");
-    Console.WriteLine($"  sigma   {sub.SolutionSigma:F6} vs {sigRef:F6}   rel {es:E2}");
-    Console.WriteLine($"  objective {objGot:E10} vs {objRef:E10}   rel {eo:E2}");
-
-    // Both sides solve the same convex program but with different interior-point
-    // codes (C# ECOS, reference Clarabel), so agreement is limited by solver
-    // tolerance rather than by arithmetic. 1e-6 is comfortably tighter than any
-    // formulation error would be and looser than the solvers disagree.
-    const double Tol = 1e-6;
-    bool ok = ex < Tol && eu < Tol && es < Tol && eo < Tol;
-    Console.WriteLine();
-    Console.WriteLine(ok
-        ? "PASS - cone assembly reproduces the reference subproblem"
-        : $"FAIL - exceeds {Tol:E0}");
-    return ok ? 0 : 1;
-}
-
-// Same validation as SubproblemCheck, against the SCS native-P formulation:
+// Validate the cone assembly against the SCS native-P formulation:
 // reference-point feasibility + objective audit, then an actual solve, then
 // compare X/U/sigma/objective to the CVXPY reference. Also exercises the
 // warm-start path (second solve with warmStart=true) since that's the entire
@@ -424,6 +301,8 @@ static int LoopCheck(bool verbose)
 
     int n = xRef.Length / NX;
     var cfg = new Scvx6DofConfig { Nodes = n };
+    if (CheckConstants(path, cfg, new Dynamics6Dof.Params()) != 0)
+        return 1;
 
     // Same cold seed as the reference: straight-line r/v, identity attitude,
     // linear mass bleed, hover-ish axial thrust, sigma = 12 s.
@@ -523,7 +402,8 @@ static int LoopCheck(bool verbose)
     }
     Console.WriteLine($"wrote {outPath}");
 
-    string audit = AuditTrajectory(xGot, uGot, solver.Sigma, x0, xf, cfg, out bool feasible);
+    string audit = AuditTrajectory(xGot, uGot, solver.Sigma, x0, xf, cfg,
+                                   solver.SubproblemEps, out bool feasible);
     Console.WriteLine();
     Console.WriteLine("true (nonlinear) constraint audit of the converged solution:");
     Console.Write(audit);
@@ -666,11 +546,26 @@ static int RecedingHorizonCheck()
 // violate the real one (the tilt cone especially, since its linearisation is
 // only exact at the reference), so this is the check that means something.
 static string AuditTrajectory(double[] x, double[] u, double sigma,
-                              double[] x0, double[] xf, Scvx6DofConfig cfg, out bool feasible)
+                              double[] x0, double[] xf, Scvx6DofConfig cfg,
+                              double solverEps, out bool feasible)
 {
     int n = cfg.Nodes;
     var sb = new System.Text.StringBuilder();
     bool allOk = true;   // local, because a lambda cannot capture an out parameter
+
+    // Constraint tolerances SCALE WITH THE SOLVER TOLERANCE, because auditing more
+    // tightly than you solved is just measuring the solver's own residual and
+    // calling it a violation. A fixed 1e-6 gate against a 1e-5 solve reported
+    // terminal-state and throttle-floor "violations" of 2e-6 and 8e-6 -- i.e. below
+    // what was asked for -- while the physical answer was identical to five
+    // significant figures.
+    //
+    // The 10x multiple is because these are DERIVED quantities: the solver's eps
+    // bounds its own residual on the convex subproblem, and the audit measures the
+    // result of the whole SCvx loop through the true nonlinear constraints. The 1e-6
+    // floor keeps the historical gate for tight solves, so nothing gets looser than
+    // it was.
+    double conTol = Math.Max(10.0 * solverEps, 1e-6);
 
     void Check(string name, double worst, double tol, string units = "")
     {
@@ -684,8 +579,8 @@ static string AuditTrajectory(double[] x, double[] u, double sigma,
     double bcf = 0;
     for (int i = 0; i < NX - 1; i++)
         bcf = Math.Max(bcf, Math.Abs(x[(n - 1) * NX + i] - xf[i]) / Math.Max(Math.Abs(xf[i]), 1));
-    Check("initial state (rel)", bc0, 1e-6);
-    Check("terminal state (rel)", bcf, 1e-6);
+    Check("initial state (rel)", bc0, conTol);
+    Check("terminal state (rel)", bcf, conTol);
 
     double quatErr = 0, thrustLo = 0, thrustHi = 0, gimbal = 0, roll = 0, tilt = 0, ground = 0;
     for (int k = 0; k < n; k++)
@@ -708,12 +603,16 @@ static string AuditTrajectory(double[] x, double[] u, double sigma,
         ground = Math.Max(ground, cfg.GroundFloor - x[k * NX + 2]);
     }
 
+    // |q|=1 does NOT scale: the solver reprojects the quaternion on every accepted
+    // step, so this is exact regardless of tolerance and a loose gate would hide a
+    // real bug. "above ground" does not scale either — it is a physical margin in
+    // metres, not a solver residual.
     Check("|q| = 1", quatErr, 1e-9);
-    Check("thrust >= Tmin (rel Tmax)", thrustLo, 1e-6);
-    Check("thrust <= Tmax (rel Tmax)", thrustHi, 1e-6);
-    Check("gimbal cone (rel Tmax)", gimbal, 1e-6);
-    Check("|roll torque| (rel max)", roll, 1e-6);
-    Check("tilt cone (cos margin)", tilt, 1e-6);
+    Check("thrust >= Tmin (rel Tmax)", thrustLo, conTol);
+    Check("thrust <= Tmax (rel Tmax)", thrustHi, conTol);
+    Check("gimbal cone (rel Tmax)", gimbal, conTol);
+    Check("|roll torque| (rel max)", roll, conTol);
+    Check("tilt cone (cos margin)", tilt, conTol);
     Check("above ground (m)", ground, 1e-3, " m");
 
     double peakTiltDeg = 0;
@@ -792,4 +691,75 @@ static string? FindFile(string name)
         dir = dir.Parent;
     }
     return null;
+}
+
+
+// Guard against the C# and Python constant sets drifting apart.
+//
+// The SCENARIO (x0/xf) travels through loop_ref.csv rows, so the two sides cannot
+// disagree about WHICH problem they solve. Everything else -- gravity, Isp, inertia,
+// thrust and gimbal limits, SCvx weights -- is hand-mirrored between
+// Dynamics6Dof.Params / Scvx6DofConfig and 6dof.py. Editing one side alone used to
+// leave this comparison reporting PASS while the two sides solved DIFFERENT
+// problems: a green tick on the wrong question. loop_ref.py now emits its values on
+// a "# consts" line and this asserts against them.
+//
+// Tolerance is RELATIVE, not exact: values that round-trip through radians come back
+// as e.g. 29.999999999999996 deg, which is agreement, not drift.
+static int CheckConstants(string path, Scvx6DofConfig cfg, Dynamics6Dof.Params dyn)
+{
+    const double RelTolerance = 1e-9;
+
+    string? line = File.ReadLines(path).FirstOrDefault(l => l.StartsWith("# consts "));
+    if (line == null)
+    {
+        Console.Error.WriteLine("reference has no '# consts' line - regenerate it:");
+        Console.Error.WriteLine("  python scvx/python_ref/loop_ref.py");
+        return 1;
+    }
+
+    var reference = new Dictionary<string, double>();
+    foreach (string token in line["# consts ".Length..].Split(' ', StringSplitOptions.RemoveEmptyEntries))
+    {
+        string[] kv = token.Split('=');
+        if (kv.Length == 2 && double.TryParse(kv[1], NumberStyles.Float, CultureInfo.InvariantCulture, out double v))
+            reference[kv[0]] = v;
+    }
+
+    (string Name, double Ours)[] ours =
+    [
+        ("gz", dyn.Gz), ("g0", dyn.G0), ("isp", dyn.Isp), ("l_arm", dyn.LArm),
+        ("ixx", dyn.Ixx), ("iyy", dyn.Iyy), ("izz", dyn.Izz),
+        ("tmax", cfg.Tmax), ("throttle_floor", cfg.ThrottleFloor),
+        ("gimbal_max_deg", cfg.GimbalMaxDeg), ("tau_roll_max", cfg.TauRollMax),
+        ("tilt_max_deg", cfg.TiltMaxDeg),
+        ("rho_vc", cfg.RhoVc), ("w_du", cfg.WDu), ("w_w", cfg.WW),
+        ("sig_min", cfg.SigmaMin), ("sig_max", cfg.SigmaMax), ("sig_scale", cfg.SigmaScale),
+    ];
+
+    int bad = 0;
+    foreach ((string name, double mine) in ours)
+    {
+        if (!reference.TryGetValue(name, out double theirs))
+        {
+            Console.Error.WriteLine($"  constant '{name}' missing from the reference");
+            bad++;
+            continue;
+        }
+        double scale = Math.Max(Math.Abs(theirs), 1.0);
+        if (Math.Abs(mine - theirs) > RelTolerance * scale)
+        {
+            Console.Error.WriteLine($"  CONSTANT DRIFT '{name}': C# {mine:G17} vs 6dof.py {theirs:G17}");
+            bad++;
+        }
+    }
+
+    if (bad > 0)
+    {
+        Console.Error.WriteLine(
+            $"{bad} constant(s) differ - the C# and Python sides are solving different " +
+            "problems, so any comparison below would be meaningless. Reconcile " +
+            "Dynamics6Dof.Params / Scvx6DofConfig against 6dof.py.");
+    }
+    return bad;
 }

@@ -5,8 +5,12 @@ namespace Scvx;
 ///     minimize    (1/2) x'Px + c'x
 ///     subject to  Ax + s = b,  s in K = zero(z) x nonneg(l) x SOC(q...)
 ///
-/// Same convex subproblem as <see cref="Scvx6DofSubproblem"/> (the ECOS port),
-/// but formulated for a solver that takes a quadratic objective directly. The
+/// This problem was first ported to ECOS; that port is DELETED (see git history
+/// if the comparison is ever needed) because ECOS minimises a LINEAR objective
+/// only, and every reference to "the ECOS port" below is history explaining why
+/// this design is as it is, not a pointer to live code.
+///
+/// Formulated for a solver that takes a quadratic objective directly. The
 /// three sum_squares penalties go into P; there are no epigraph variables and
 /// no epigraph cones, so this problem is smaller (n = N*NX + N*NU + (N-1)*NX +
 /// 1, vs +4 and +3 extra large SOCs for the ECOS port) and the SOC set is just
@@ -46,7 +50,7 @@ public sealed class Scvx6DofSubproblemScs
 
     private readonly ScsWorkspace _ws = new();
     private bool _frozen;
-    private int _row;   // cone-row cursor (shared field, see EpigraphHead-style helpers in the ECOS port)
+    private int _row;   // cone-row cursor
 
     public int VariableCount => _nVars;
     public int EqualityCount => _nEq;
@@ -262,7 +266,7 @@ public sealed class Scvx6DofSubproblemScs
 
     // -------------------------------------------------------------- equalities
 
-    // Identical construction to Scvx6DofSubproblem.AssembleEqualities — same
+    // Identical construction to the deleted ECOS port's AssembleEqualities — same
     // trapezoidal, time-dilated, virtual-controlled dynamics, same interior-only
     // quaternion tangent plane (nodes 0 and N-1 are pinned outright, so including
     // them there is a linearly dependent row; that redundancy was diagnosed

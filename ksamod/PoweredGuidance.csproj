@@ -75,8 +75,9 @@
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ModDir)" />
-    <!-- Scvx.Core P/Invokes BOTH natives; shipping it without scs.dll would fail
-         at the first SCS call with a DllNotFoundException, not at load. -->
+    <!-- Scvx.Core P/Invokes scs.dll; shipping it without would fail at the first
+         SCS call with a DllNotFoundException, not at load. (ecos.dll above is for
+         Gfold.Core, which still uses it — Scvx's ECOS port was removed.) -->
     <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ModDir)" />
   </Target>
 

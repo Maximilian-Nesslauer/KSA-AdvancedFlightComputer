@@ -82,7 +82,26 @@ public sealed class Scvx6DofSolver
     /// converged. First-order methods have slow tail convergence, so demanding
     /// too little error here costs iterations superlinearly.
     /// </summary>
+    /// <summary>
+    /// Tolerance each convex subproblem is solved to — distinct from the OUTER
+    /// SCvx convergence test. Defaults to the conservative offline value; flight
+    /// code should pass <see cref="RealTimeEps"/>.
+    /// </summary>
     public double SubproblemEps { get; init; } = ScsWorkspace.DefaultEps;
+
+    /// <summary>
+    /// The tolerance to use in flight. Measured at N=30: 1e-5, 1e-6 and 1e-7 all
+    /// converge in the SAME 17 iterations to the SAME answer to five significant
+    /// figures (merit 9.7619e-2, defect 9.5e-6, peak tilt 6.1 deg, burn 24.2 s),
+    /// but cost 1.7 s / 3.1 s / 5.5 s cold and 33 ms / 334 ms / 1266 ms per
+    /// receding-horizon cycle. ADMM's slow tail is almost the entire bill here and
+    /// buys nothing, so the tighter defaults are for offline validation only.
+    ///
+    /// This is safe ONLY because <see cref="ScsWorkspace.HitIterationLimit"/>
+    /// rejects truncated solves outright — it is that guard, not a tight tolerance,
+    /// that keeps a bad subproblem out of the ratio test.
+    /// </summary>
+    public const double RealTimeEps = 1e-5;
 
     /// <summary>
     /// Feed each subproblem the previous solve's ADMM iterate. The problem
