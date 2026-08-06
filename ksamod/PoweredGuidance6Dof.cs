@@ -247,12 +247,12 @@ public static partial class PoweredGuidanceWindow
             ImGui.Checkbox("Reduce nodes on approach", ref _sixDofNodeGates);
             if (_sixDofNodeGates)
                 ImGui.TextWrapped(
-                    "Ten nodes per step as the horizon shrinks: 1000 m -> 50, 750 -> 40, " +
-                    "500 -> 30, 250 -> 20, 100 -> 10, never outside 10-50. Holds node " +
-                    "SPACING roughly constant rather than the count, since spacing is " +
-                    "sigma/(N-1) and sigma falls as the target nears. Each step rebuilds the " +
-                    "solver and loses the ADMM warm start, so it is done at gates rather than " +
-                    "tracked continuously; the plan itself carries across by resampling.");
+                    "1000 m -> 20, 500 -> 15, 100 -> 10, 50 -> 5. Aggressive, chosen for " +
+                    "solve time; watch the dynamics defect, because a plan that trips the " +
+                    "gate is REFUSED and the vehicle then flies a stale open-loop " +
+                    "trajectory. Each step rebuilds the solver and loses the ADMM warm " +
+                    "start, so it is done at gates rather than tracked continuously; the " +
+                    "plan itself carries across by resampling.");
             ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
             if (_sixDofBiasEnabled)
                 ImGui.TextWrapped(
@@ -497,20 +497,23 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private static readonly (double AltM, int Nodes)[] NodeGates =
     [
-        (1000.0, 50),
-        ( 750.0, 40),
-        ( 500.0, 30),
-        ( 250.0, 20),
+        (1000.0, 20),
+        ( 500.0, 15),
         ( 100.0, 10),
+        (  50.0,  5),
     ];
 
     /// <summary>
-    /// Hard bounds on node count, ladder or configured. Below ~10 the collocation
-    /// defect grows past what the plan gate will accept (measured 2.36 m at N=10
-    /// against 0.13 m at N=50, at 235 m altitude); above 50 the solve is paying for
-    /// resolution the problem does not need.
+    /// Hard bounds on node count, ladder or configured.
+    ///
+    /// The floor is 5 because the ladder now goes there. That is AGGRESSIVE: the
+    /// binding constraint at low node counts is not accuracy in the abstract but the
+    /// defect gate in Finish - collocation error grows with node SPACING, and a plan
+    /// that trips the gate is refused, which leaves the vehicle flying a stale
+    /// open-loop trajectory. Run `Scvx.Console --nodes` for the measured defect and
+    /// solve time against altitude before changing the ladder.
     /// </summary>
-    private const int MinNodes = 10;
+    private const int MinNodes = 5;
     private const int MaxNodes = 50;
 
     private static bool _sixDofNodeGates = true;

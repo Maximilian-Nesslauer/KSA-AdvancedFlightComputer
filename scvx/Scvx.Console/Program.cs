@@ -23,6 +23,11 @@ if (args.Contains("--sub-scs"))
 
 // --loop: run the full SCvx loop and compare the converged trajectory against
 // python_ref/loop_ref.py.
+if (args.Contains("--nodes"))
+{
+    return NodeSweep.Run();
+}
+
 if (args.Contains("--spiral"))
 {
     return SpiralCheck.Run();
