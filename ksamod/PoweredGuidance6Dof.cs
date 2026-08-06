@@ -813,6 +813,45 @@ public static partial class PoweredGuidanceWindow
         ImGui.Text($"TWR at min throttle {twrMin,5:F2}   " +
                    $"(floor {_sixDofThrottleFloor:F2}, vehicle can do {Ksa6DofSetup.VehicleThrottleFloor(vehicle):F2})");
 
+        // CAN THIS BE DONE AT ALL? The question the rest of the panel does not ask.
+        //
+        // Thrust only buys deceleration ABOVE hover, so the usable figure is
+        // (TWR - 1) * g, not TWR * g. Stopping from speed v therefore needs
+        // v^2 / (2 * (TWR-1) * g) of altitude, and if that exceeds what is left the
+        // landing is impossible for ANY guidance law - the solver will return its
+        // best effort, which is a long curving miss that looks exactly like a
+        // controller bug and is not one.
+        //
+        // Measured in closed loop against this criterion (Scvx.Console --mpc --grav,
+        // 300 m up at 50 m/s down): TWR 2.00 needs 127 m and misses by 4.8 m; TWR
+        // 1.50 needs 255 m and misses by 39 m; TWR 1.25 needs 510 m of the 300 m
+        // available and misses by 173 m. The failure tracks reachability, not
+        // conditioning - Earth at TWR 2.0 actually solves FASTER than the Moon.
+        //
+        // A necessary condition, not a sufficient one: it assumes thrust straight up,
+        // so any tilt to kill downrange makes it worse.
+        double[] xNow = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
+        double altToGo = xNow[2] - _sixDofTargetAltM;
+        double descent = -xNow[5];
+        if (altToGo > 1.0 && descent > 1.0)
+        {
+            double twrNow = thrust / (mass * g);
+            double netDecel = (twrNow - 1.0) * g;
+            double stopDist = netDecel > 0.01 ? descent * descent / (2.0 * netDecel) : double.PositiveInfinity;
+            double twrNeeded = 1.0 + descent * descent / (2.0 * altToGo * g);
+
+            ImGui.Text($"descending {descent,5:F0} m/s with {altToGo,6:F0} m to go   " +
+                       $"needs {(double.IsInfinity(stopDist) ? 99999.0 : stopDist),6:F0} m to stop");
+            if (stopDist >= altToGo)
+                ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
+                    $"CANNOT STOP IN TIME - needs TWR {twrNeeded:F2}, has {twrNow:F2}. No guidance " +
+                    "can land this; the plan will be a long curving miss. Burn earlier, or arrive slower.");
+            else if (stopDist > 0.8 * altToGo)
+                ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                    $"MARGINAL - {stopDist / altToGo * 100.0:F0}%% of the remaining altitude is needed just " +
+                    $"to stop, leaving almost none to null downrange. Needs TWR {twrNeeded:F2}, has {twrNow:F2}.");
+        }
+
         if (needTilt >= _sixDofTiltDeg)
         {
             double feasibleFloor = Math.Cos(_sixDofTiltDeg * Math.PI / 180.0) * mass * g / thrust;

@@ -44,6 +44,7 @@ if (args.Contains("--mpc"))
     MpcHarness.TruncOnly = args.Contains("--trunc");
     MpcHarness.BudgetOnly = args.Contains("--budget");
     MpcHarness.SplitOnly = args.Contains("--split");
+    MpcHarness.GravityOnly = args.Contains("--grav");
     MpcHarness.TailOnly = args.Contains("--tail");
     return MpcHarness.Run();
 }

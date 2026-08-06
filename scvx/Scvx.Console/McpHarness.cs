@@ -33,6 +33,13 @@ internal static class MpcHarness
         public double[] XScale = [];
         public double WDu, WW, Proximal;
         public bool FixedSigma;
+        // Gravity and thrust-to-weight, so the same geometric problem can be posed on
+        // different worlds. Tmax is derived from Twr rather than set directly, which
+        // is what makes a constant-TWR comparison across gravities meaningful.
+        public double Gz = -9.81;
+        public double Twr;              // 0 = leave Scvx6DofConfig's default Tmax
+        public double ThrottleFloor = 0.40;
+        public double SigmaSeed = 12.0;
     }
 
     internal static double Dispersion = 1.0;
@@ -42,6 +49,7 @@ internal static class MpcHarness
     internal static bool TruncOnly;
     internal static bool BudgetOnly;
     internal static bool SplitOnly;
+    internal static bool GravityOnly;
     internal static bool TailOnly;
     internal static double Eps = Scvx6DofSolver.RealTimeEps;
 
@@ -119,6 +127,65 @@ internal static class MpcHarness
             }
             Eps = Scvx6DofSolver.RealTimeEps;
             ScsWorkspace.AccelerationLookback = null;
+            return 0;
+        }
+
+        if (GravityOnly)
+        {
+            // IS HIGH GRAVITY A CONDITIONING PROBLEM, OR A MARGIN PROBLEM?
+            //
+            // Those need different fixes and the symptom does not distinguish them,
+            // so the comparison is designed to. Row 2 poses the SAME geometric
+            // problem at Earth gravity with the SAME thrust-to-weight as the Moon
+            // case: if conditioning degrades with g, it shows up there, with margin
+            // held constant. The remaining rows hold g at Earth and take TWR down,
+            // which is what a real vehicle actually experiences when it moves from
+            // the Moon to Earth - the same engines are suddenly far weaker relative
+            // to weight.
+            Console.WriteLine("  GRAVITY vs MARGIN (N=50, dispersed, same start and target):");
+            Console.WriteLine("    world      g     TWR   TWR@min      miss   path/direct   PLAN JUMP   burn time    worst subproblem");
+            (string name, double g, double twr)[] cases =
+            [
+                ("Moon  ", 1.62, 2.00),
+                ("Earth ", 9.81, 2.00),   // same margin - isolates pure conditioning
+                ("Earth ", 9.81, 1.50),
+                ("Earth ", 9.81, 1.25),
+                ("Earth ", 9.81, 1.10),
+            ];
+            const double GRef = 9.81;
+            foreach ((string name, double g, double twr) in cases)
+            {
+                // DYNAMIC SIMILARITY, or the comparison is meaningless. A descent
+                // from height h under gravity g has characteristic velocity
+                // sqrt(g*h) and characteristic time sqrt(h/g), so posing the SAME
+                // metres and the SAME m/s on the Moon is not the same problem
+                // scaled down - it is a much slower, gentler one given a burn-time
+                // window sized for Earth. Scaling velocity by sqrt(g/gRef) and time
+                // by sqrt(gRef/g) makes TWR the only thing that differs.
+                double vs = Math.Sqrt(g / GRef), ts = Math.Sqrt(GRef / g);
+                var xg = (double[])x0.Clone();
+                for (int i = 0; i < 3; i++) xg[Dynamics6Dof.IV + i] = x0[Dynamics6Dof.IV + i] * vs;
+
+                var c = new Config
+                {
+                    Name = name, XScale = configs[2].XScale, WDu = configs[2].WDu,
+                    WW = configs[2].WW, Proximal = configs[2].Proximal,
+                    Gz = -g, Twr = twr, SigmaSeed = 12.0 * ts,
+                };
+                // Run each case CLEAN and DISPERSED. Control authority above hover
+                // is (TWR - 1)*g, not TWR*g, so at TWR 1.25 a 3% thrust error eats
+                // 15% of the usable margin against 6% at TWR 2.0. If the clean run
+                // is fine and only the dispersed one fails, the problem is
+                // sensitivity to modelling error rather than raw infeasibility -
+                // which points at model fidelity, not at the solver.
+                double saved = Dispersion;
+                Dispersion = 0.0;
+                Console.Write($"  {name} {g,5:F2} {twr,7:F2} {twr * c.ThrottleFloor,9:F2}  clean  ");
+                SimulateNodes(c, xg, xf, 50);
+                Dispersion = saved;
+                Console.Write($"  {name} {g,5:F2} {twr,7:F2} {twr * c.ThrottleFloor,9:F2}  disp   ");
+                SimulateNodes(c, xg, xf, 50);
+            }
             return 0;
         }
 
@@ -260,7 +327,7 @@ internal static class MpcHarness
 
     private static void Simulate(Config c, double[] x0, double[] xf, int n, bool compact = false)
     {
-        double sigmaSeed = 12.0;
+        double sigmaSeed = c.SigmaSeed;
         var cfg = new Scvx6DofConfig
         {
             Nodes = n,
@@ -271,8 +338,10 @@ internal static class MpcHarness
             SigmaScale = sigmaSeed,
             SigmaMin = c.FixedSigma ? sigmaSeed * (1 - 1e-6) : sigmaSeed * 0.2,
             SigmaMax = c.FixedSigma ? sigmaSeed * (1 + 1e-6) : sigmaSeed * 3.0,
+            ThrottleFloor = c.ThrottleFloor,
+            Tmax = c.Twr > 0.0 ? c.Twr * x0[13] * Math.Abs(c.Gz) : new Scvx6DofConfig().Tmax,
         };
-        var dyn = new Dynamics6Dof.Params();
+        var dyn = new Dynamics6Dof.Params { Gz = c.Gz };
         var solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Eps, MaxSubproblemIterations = AdmmCap, EscalatedSubproblemIterations = EscalateCap > 0 ? EscalateCap : AdmmCap };
 
         // Cold solve.
@@ -414,8 +483,20 @@ internal static class MpcHarness
         double direct = Dist((x0[0], x0[1], x0[2]), (xf[0], xf[1], xf[2]));
         double miss = Dist((state[0], state[1], state[2]), (xf[0], xf[1], xf[2]));
         if (compact)
+        {
+            // Burn time and whether it is PINNED at a bound. A min-fuel solve with a
+            // free final time that sits on its ceiling is not choosing that duration,
+            // it is being handed it - and a vehicle with time it cannot spend
+            // descending has to spend it going somewhere, which is what a "loop"
+            // actually is. Distinguishing that from a tracking failure matters
+            // because they have completely different fixes.
+            string pin = solver.Sigma >= cfg.SigmaMax * 0.999 ? " MAX"
+                       : solver.Sigma <= cfg.SigmaMin * 1.001 ? " min" : "    ";
             Console.WriteLine($"{miss,7:F1} m   {pathLength / Math.Max(direct, 1),8:F2}   " +
-                              $"{planJump / Math.Max(cycles, 1),8:F1} m   worst {worstAdmm,7} ADMM   worst {worstMs,6:F0} ms");
+                              $"{planJump / Math.Max(cycles, 1),8:F1} m   " +
+                              $"sig {solver.Sigma,5:F1}{pin}   " +
+                              $"worst {worstAdmm,7} ADMM   worst {worstMs,6:F0} ms");
+        }
         else
             Console.WriteLine($"  {c.Name,-32} {miss,7:F1} m   {pathLength / Math.Max(direct, 1),8:F2}   " +
                               $"{planJump / Math.Max(cycles, 1),8:F1} m   {awayFromTarget,6:F1} m   " +
