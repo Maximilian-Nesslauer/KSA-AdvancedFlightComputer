@@ -45,14 +45,18 @@ public static partial class PoweredGuidanceWindow
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     private static double _sixDofSigmaSeed = 20.0;
     private static double _sixDofTargetAltM = 10.0;
-    // Approach corridor and climb limit. Both OFF by default — they change the shape
-    // of every trajectory, so they are opt-in rather than something that silently
-    // alters a configuration that already flies. Both are soft (penalised slack) and
-    // skip node 0; see Scvx6DofConfig.GlideSlopeWeight for why that is a correctness
-    // requirement, not a nicety.
-    private static double _sixDofGlideSlopeDeg;      // 0 = off; degrees above horizontal
-    private static bool _sixDofVzEnabled;
-    private static double _sixDofVzMaxMs = 0.5;
+    // Approach corridor and climb limit. Both are SOFT — they start at node 1 and
+    // carry a penalised slack — which is what makes these otherwise aggressive
+    // defaults safe; see Scvx6DofConfig.GlideSlopeWeight for why that is a
+    // correctness requirement and not a nicety. 10 degrees above the horizontal is a
+    // shallow corridor that mainly stops the trajectory going wide, rather than a
+    // tight one the plan would have to ride.
+    private static double _sixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
+    private static bool _sixDofVzEnabled = true;
+    // Zero, i.e. "never climb". Safe as a hard-looking number only because the
+    // constraint is SOFT: it starts at node 1 and carries a penalised slack, so a
+    // vehicle that is already climbing gets an expensive plan rather than no plan.
+    private static double _sixDofVzMaxMs;
 
     // Hand over to the terminal hover controller for the last stretch. Default ON
     // and above the target altitude, so the solver is never asked to fly the part
@@ -113,6 +117,10 @@ public static partial class PoweredGuidanceWindow
     // vehicle has first been observed OFF the ground. Same trap the landing flow hit.
     private static bool _sixDofTouchdownArmed;
     private static double _sixDofLastThrottle;
+    // Thrust bookkeeping for the readout: what the optimiser asked for against what
+    // the vehicle can actually produce right now.
+    private static double _sixDofDemandN, _sixDofCapabilityN;
+    private static bool _sixDofThrustSaturated;
     private static int _sixDofSigmaSamples = 5;
 
     private static void Draw6DofTab(Vehicle vehicle, IParentBody parent, double bodyRadius)
@@ -220,7 +228,7 @@ public static partial class PoweredGuidanceWindow
             if (_sixDofNodeGates)
                 ImGui.TextWrapped(
                     "Steps the node count down at fixed altitude gates (" +
-                    "400 m -> 50, 150 m -> 30, 60 m -> 20) as the horizon shrinks, so node " +
+                    "1000 m -> 50, 400 m -> 20, 60 m -> 10) as the horizon shrinks, so node " +
                     "SPACING stays roughly constant. Each step rebuilds the solver and loses " +
                     "the ADMM warm start, so it is done at gates rather than tracked " +
                     "continuously; the plan itself carries across by resampling.");
@@ -308,6 +316,24 @@ public static partial class PoweredGuidanceWindow
         // THE check that the MPC re-anchored at the vehicle instead of serving a
         // stale trajectory — which is what "the plan starts a node below" looked like.
         ImGui.Text($"anchor offset {_sixDof.AnchorOffsetM,8:F2} m");
+
+        // DEMAND vs CAPABILITY. The throttle is now demand/capability using KSA's own
+        // live figure, so these two being close is what "the thrust we command is the
+        // thrust we get" looks like. A capability far from the plan's Tmax is not an
+        // error - the plan is deliberately built against the conservative
+        // target-altitude figure - but the ratio is the number that used to be
+        // silently wrong, so it is on screen.
+        if (_sixDofCapabilityN > 1.0)
+        {
+            ImGui.Text($"thrust demand {_sixDofDemandN / 1e6,6:F2} MN   " +
+                       $"live capability {_sixDofCapabilityN / 1e6,6:F2} MN   " +
+                       $"(plan Tmax {_sixDof.Tmax / 1e6:F2} MN)   " +
+                       $"throttle {_sixDofLastThrottle * 100.0,3:F0} %");
+            if (_sixDofThrustSaturated)
+                ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
+                    "THRUST SATURATED - the plan is asking for more than the vehicle has, " +
+                    "so the trajectory being flown is not the one that was planned.");
+        }
         if (_sixDofNodeGates)
             ImGui.Text($"nodes {_sixDof.Nodes,5}   gate steps {_sixDofGateChanges}");
 
@@ -416,9 +442,9 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private static readonly (double AltM, int Nodes)[] NodeGates =
     [
-        (400.0, 50),
-        (150.0, 30),
-        (60.0, 20),
+        (1000.0, 50),
+        (400.0, 20),
+        (60.0, 10),
     ];
 
     private static bool _sixDofNodeGates = true;
@@ -632,8 +658,37 @@ public static partial class PoweredGuidanceWindow
             _sixDofError = $"plan expired {_sixDof.PlanElapsed - _sixDof.Sigma:F1} s ago - " +
                            "holding the terminal command, no longer guiding.";
 
-        if (!_sixDof.Command(now, out double3 torqueModel, out double throttle))
+        if (!_sixDof.Command(now, out double3 torqueModel, out double thrustN))
             return;
+
+        // CLOSE THE LOOP ON THRUST. The optimiser asks for newtons; KSA's throttle is
+        // a fraction of what the engines can produce AT THIS INSTANT, so the demand is
+        // divided by the vehicle's live capability rather than by the plan's Tmax.
+        //
+        // This is what makes the commanded thrust the delivered thrust regardless of
+        // engine performance. The plan's Tmax is fixed at solve time and evaluated at
+        // the TARGET altitude, so it is deliberately conservative and drifts further
+        // from the truth the higher the vehicle is; dividing by it under-throttles by
+        // exactly that ratio the whole way down. MPC cannot see this - re-solving
+        // fixes the state estimate, not the actuator mapping, so every replan is
+        // executed just as wrongly as the one before. That is the shortfall that made
+        // the vehicle sink below its own plan until only a loop was feasible.
+        double ambientPa = KsaEnginePerf.AmbientPressureAt(
+            parent, siteCci.Length() - parent.MeanRadius + x[2]);
+        double capability = KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa);
+
+        // Falling back to the plan's Tmax when nothing is lit is not a nicety: on the
+        // very first step the engine has not ignited, so capability is 0 and dividing
+        // would give infinity or a NaN throttle.
+        double denom = capability > 1.0 ? capability : _sixDof.Tmax;
+        double throttle = Math.Clamp(thrustN / denom, 0.0, 1.0);
+
+        _sixDofDemandN = thrustN;
+        _sixDofCapabilityN = capability;
+        // Saturation is the honest failure signal here: the plan is asking for more
+        // than the vehicle physically has, so the trajectory being flown is not the
+        // one that was planned, and no amount of feedback recovers it.
+        _sixDofThrustSaturated = capability > 1.0 && thrustN > capability;
 
         // Model body axes -> KSA body axes. The allocator works in KSA's frame; a
         // missed conversion here would put roll torque on the pitch axis.

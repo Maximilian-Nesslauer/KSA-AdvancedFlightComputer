@@ -14,8 +14,9 @@ using Scvx;
 /// The optimiser's control IS the actuator command: u = (tdx, tdy, T, tau_roll) is a
 /// gimbal deflection, an axial thrust and a roll torque. Applying it means
 ///     torque  = r_T x T_body = (LArm*tdy, -LArm*tdx, tau_roll)
-///     throttle = T / Tmax
-/// and nothing else. Attitude then evolves from the torque that deflection produces,
+///     thrust  = T, in NEWTONS
+/// and nothing else. Converting that thrust into a KSA throttle needs the vehicle's
+/// LIVE capability and so belongs at the KSA boundary, not here — see Command. Attitude then evolves from the torque that deflection produces,
 /// exactly as the model's own dynamics say it will.
 ///
 /// NODE 0 IS THE VEHICLE, and that has to be enforced rather than assumed. The
@@ -80,6 +81,9 @@ public sealed class Ksa6DofGuidance
 
     /// <summary>Defect below which the plan counts as physically realisable.</summary>
     public double DefectTolerance => _solver.DefectTolerance;
+
+    /// <summary>The Tmax the PLAN was built against — a fallback divisor only; see Command.</summary>
+    public double Tmax => _cfg.Tmax;
 
     /// <summary>Sigma bounds, so the UI can show when burn time is being DICTATED by a bound rather than chosen.</summary>
     public double SigmaMin => _cfg.SigmaMin;
@@ -570,10 +574,10 @@ public sealed class Ksa6DofGuidance
     /// Read at (now - solveTime), so immediately after a solve this is node 0's
     /// control — the control the optimiser chose FOR THE VEHICLE'S ACTUAL STATE.
     /// </summary>
-    public bool Command(double simNow, out double3 torqueModel, out double throttle)
+    public bool Command(double simNow, out double3 torqueModel, out double thrustN)
     {
         torqueModel = default;
-        throttle = 0.0;
+        thrustN = 0.0;
         if (!HasPlan)
             return false;
 
@@ -594,12 +598,21 @@ public sealed class Ksa6DofGuidance
         // of mass — the model's own gimbal-torque relation, verbatim.
         torqueModel = new double3(_dyn.LArm * tdy, -_dyn.LArm * tdx, tauRoll);
         LastLateralForce = new double2(tdx, tdy);
-        // Throttle is the plan's axial thrust as a fraction of the SAME Tmax the plan
-        // was built against. These two must be the identical number — if the model
-        // plans against one Tmax and the command divides by another, every thrust the
-        // vehicle produces is wrong by that ratio, and no amount of re-solving fixes
-        // it because the error is systematic.
-        throttle = Math.Clamp(thrust / _cfg.Tmax, 0.0, 1.0);
+
+        // AXIAL THRUST IN NEWTONS, not a throttle fraction.
+        //
+        // This used to return thrust / _cfg.Tmax, and that was the systematic error
+        // behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is
+        // built, so the moment the vehicle's real capability differs from it — a
+        // different ambient pressure, an engine out, propellant starvation — every
+        // commanded thrust is wrong by exactly that ratio. It is invisible to the
+        // MPC too: re-solving corrects the STATE, but the error is in the actuator
+        // mapping, so each new plan is executed just as wrongly as the last.
+        //
+        // Newtons is the honest unit for the optimiser to speak in. Converting to a
+        // throttle needs the vehicle's LIVE capability, which only the caller can
+        // measure, so that conversion belongs at the KSA boundary and not here.
+        thrustN = Math.Max(thrust, 0.0);
         return true;
     }
 

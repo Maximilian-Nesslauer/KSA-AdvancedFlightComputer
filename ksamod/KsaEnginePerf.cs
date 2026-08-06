@@ -115,6 +115,28 @@ internal static class KsaEnginePerf
         return (thrust, massFlow);
     }
 
+    // The vehicle's thrust capability RIGHT NOW, in newtons: full throttle, current
+    // ambient pressure, counting only engines that are lit and fed.
+    //
+    // This is the number a thrust command must be divided by. KSA's EngineThrottle
+    // is a FRACTION of whatever the engines can currently produce, so dividing a
+    // demand by anything else — a figure from plan time, a vacuum figure, a
+    // different altitude's figure — delivers the wrong thrust by exactly that ratio.
+    //
+    // Safe to use as a divisor despite the name: ComputeActivePerformance calls
+    // ComputeFromCores, whose ComputeConditions(1f) hardcodes FULL throttle, so this
+    // is a capability and NOT scaled by the current throttle. There is therefore no
+    // feedback loop in dividing by it. (It does return VacuumData when pressure <= 0,
+    // so airless bodies are handled by the same call.) Zero if nothing is lit, which
+    // the caller must treat as "no authority" rather than dividing by it.
+    internal static double ActiveThrustCapability(Vehicle vehicle, double ambientPressure)
+    {
+        if (vehicle == null)
+            return 0.0;
+        float t = vehicle.ComputeActiveThrust((float)Math.Max(ambientPressure, 0.0));
+        return double.IsFinite(t) && t > 0.0 ? t : 0.0;
+    }
+
     // Ambient pressure (Pa) at an altitude above the body's sea level datum, or 0
     // on an airless world. Anything missing reads as vacuum, which is the safe
     // direction for every caller except a planner — see AtPressure's callers for
