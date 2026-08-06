@@ -129,6 +129,51 @@ public sealed class Ksa6DofGuidance
     /// <summary>Inertia currently in the model, for the readout.</summary>
     public double3 Inertia => new(_dyn.Ixx, _dyn.Iyy, _dyn.Izz);
 
+    private double3 _baseGravity;
+    private bool _haveBaseGravity;
+
+    /// <summary>
+    /// Unmodelled acceleration, site frame, m/s^2 — added to the model's gravity so
+    /// the OPTIMISER plans around it rather than fighting it.
+    ///
+    /// This is offset-free MPC, and it is the piece that was missing. Plain MPC
+    /// corrects the STATE every cycle but keeps planning with the same wrong model,
+    /// so a persistent force it does not know about is re-encountered identically on
+    /// every replan: the plan promises to arrive, the vehicle falls short, the next
+    /// plan promises again. Nothing about re-solving fixes a model error.
+    ///
+    /// Measured on a real descent, the model was short by about 2.2 m/s^2 in the
+    /// vertical — a fitted 10.3% thrust shortfall on top of gravity being 9.4% low
+    /// (10.74 measured against 9.82 from Mu/r^2). That is roughly a fifth of the
+    /// vehicle's net climb authority, applied continuously, which is more than
+    /// enough to turn an approach into an overshoot and then an orbit.
+    ///
+    /// Estimating the RESIDUAL rather than any individual term is deliberate: it
+    /// needs no theory about which of gravity, thrust calibration or aerodynamics is
+    /// responsible, and it picks up drag for free — including the way drag falls off
+    /// as speed comes off, since the estimate simply follows it down.
+    /// </summary>
+    public double3 AccelBias { get; private set; }
+
+    public void SetAccelBias(double3 bias)
+    {
+        if (!_haveBaseGravity)
+        {
+            _baseGravity = new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
+            _haveBaseGravity = true;
+        }
+        if (!double.IsFinite(bias.X) || !double.IsFinite(bias.Y) || !double.IsFinite(bias.Z))
+            return;
+
+        AccelBias = bias;
+        _dyn.Gx = _baseGravity.X + bias.X;
+        _dyn.Gy = _baseGravity.Y + bias.Y;
+        _dyn.Gz = _baseGravity.Z + bias.Z;
+    }
+
+    /// <summary>Gravity the config was built with, before any bias — for the readout.</summary>
+    public double3 BaseGravity => _haveBaseGravity ? _baseGravity : new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
+
     /// <summary>
     /// Fly a FIXED burn time instead of letting the solver choose it.
     ///
@@ -653,7 +698,23 @@ public sealed class Ksa6DofGuidance
         // Newtons is the honest unit for the optimiser to speak in. Converting to a
         // throttle needs the vehicle's LIVE capability, which only the caller can
         // measure, so that conversion belongs at the KSA boundary and not here.
-        thrustN = Math.Max(thrust, 0.0);
+        // TOTAL thrust magnitude, not just the axial component.
+        //
+        // The model's control is a VECTOR, u = (tdx, tdy, T, tau_roll): T is the
+        // AXIAL thrust and tdx/tdy are the lateral components the gimbal produces.
+        // KSA's throttle sets the total thrust magnitude along the gimballed nozzle,
+        // so commanding T alone delivers a vector of length T, whose axial part is
+        // only T*cos(deflection) - short by exactly the cosine loss.
+        //
+        // Commanding |u| instead makes the axial part |u| * T/|u| = T and the
+        // lateral parts tdx, tdy: precisely the force vector the optimiser chose.
+        //
+        // Measured on a real descent this is worth almost nothing - the deflections
+        // were 0.1 to 2.2 degrees, so cos is 0.999 - and it is NOT the explanation
+        // for the 10.3% thrust shortfall seen there. It is fixed because it is
+        // wrong, not because it is large.
+        thrustN = Math.Sqrt(thrust * thrust + tdx * tdx + tdy * tdy);
+        thrustN = Math.Max(thrustN, 0.0);
         return true;
     }
 

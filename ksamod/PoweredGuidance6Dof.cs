@@ -251,6 +251,13 @@ public static partial class PoweredGuidanceWindow
                     "SPACING stays roughly constant. Each step rebuilds the solver and loses " +
                     "the ADMM warm start, so it is done at gates rather than tracked " +
                     "continuously; the plan itself carries across by resampling.");
+            ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
+            if (_sixDofBiasEnabled)
+                ImGui.TextWrapped(
+                    "Measures what the model is missing - gravity error, thrust calibration, " +
+                    "drag - and adds it to the planner's gravity, so the optimiser plans " +
+                    "around it. Plain MPC cannot: it corrects the STATE each cycle but keeps " +
+                    "planning with the same wrong model, so it meets the same error every time.");
             ImGui.Checkbox("Hand off to terminal hover", ref _sixDofHoverHandoff);
             if (_sixDofHoverHandoff)
             {
@@ -335,6 +342,19 @@ public static partial class PoweredGuidanceWindow
         // THE check that the MPC re-anchored at the vehicle instead of serving a
         // stale trajectory — which is what "the plan starts a node below" looked like.
         ImGui.Text($"anchor offset {_sixDof.AnchorOffsetM,8:F2} m");
+
+        double3 bias = _sixDof.AccelBias;
+        double biasMag = Math.Sqrt(bias.X * bias.X + bias.Y * bias.Y + bias.Z * bias.Z);
+        if (_sixDofBiasEnabled)
+        {
+            double3 g0 = _sixDof.BaseGravity;
+            ImGui.Text($"unmodelled accel ({bias.X,6:F2},{bias.Y,6:F2},{bias.Z,6:F2}) m/s2   " +
+                       $"|{biasMag,5:F2}|   (model g {-g0.Z:F2} -> {-(g0.Z + bias.Z):F2})");
+            if (biasMag > 0.15 * Math.Abs(g0.Z))
+                ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                    $"model is off by {biasMag / Math.Abs(g0.Z) * 100.0:F0}%% of gravity - " +
+                    "being corrected, but worth knowing where it comes from.");
+        }
 
         // DEMAND vs CAPABILITY. The throttle is now demand/capability using KSA's own
         // live figure, so these two being close is what "the thrust we command is the
@@ -596,10 +616,89 @@ public static partial class PoweredGuidanceWindow
             AmbientPa = ambientPa,
             AltToGo = altToGo, DescentRate = descent, StopDistM = stopDist,
             GlideViolM = glideViol,
+            BiasX = _sixDof.AccelBias.X, BiasY = _sixDof.AccelBias.Y, BiasZ = _sixDof.AccelBias.Z,
             Error = _sixDofError,
         };
         SixDofLog.Cycle(row);
         _sixDofDidSolve = false;
+    }
+
+    // Acceleration-bias estimator state. Reset on engage.
+    private static double[] _sixDofPrevV;
+    private static double _sixDofPrevT;
+    private static double3 _sixDofBias;
+    private static bool _sixDofBiasEnabled = true;
+
+    /// <summary>
+    /// Estimate the acceleration the model does NOT account for, and hand it to the
+    /// solver as a gravity offset.
+    ///
+    /// residual = measured acceleration - (delivered thrust / m + modelled gravity)
+    ///
+    /// Everything unmodelled lands here together - a mis-set gravity, a thrust
+    /// calibration error, aerodynamic drag - which is the point: the correction does
+    /// not need to know which. It also tracks drag DOWN as speed comes off, instead
+    /// of assuming a fixed penalty.
+    ///
+    /// Three guards, none of them decoration:
+    ///   - a time constant, because a one-frame velocity difference is mostly noise
+    ///     and feeding that into the plan would make the trajectory jitter;
+    ///   - a clamp, so a physics glitch or a stage separation cannot hand the solver
+    ///     an absurd gravity and make every subsequent plan nonsense;
+    ///   - a dt window, since the first cycle after engage has no previous sample and
+    ///     a paused or warped frame produces a meaningless one.
+    /// </summary>
+    private static void UpdateAccelBias(double[] x, double now, double thrustDelivered)
+    {
+        if (_sixDof == null)
+            return;
+        if (!_sixDofBiasEnabled)
+        {
+            _sixDof.SetAccelBias(default);
+            return;
+        }
+
+        double dt = now - _sixDofPrevT;
+        if (_sixDofPrevV == null || dt < 1e-3 || dt > 0.5)
+        {
+            _sixDofPrevV = [x[3], x[4], x[5]];
+            _sixDofPrevT = now;
+            return;
+        }
+
+        // Measured acceleration, site frame.
+        double ax = (x[3] - _sixDofPrevV[0]) / dt;
+        double ay = (x[4] - _sixDofPrevV[1]) / dt;
+        double az = (x[5] - _sixDofPrevV[2]) / dt;
+        _sixDofPrevV = [x[3], x[4], x[5]];
+        _sixDofPrevT = now;
+
+        // Modelled acceleration: thrust along the body +Z axis, plus the gravity the
+        // config was built with (NOT the biased value, or the estimate feeds itself).
+        double qw = x[6], qx = x[7], qy = x[8], qz = x[9];
+        double zx = 2.0 * (qx * qz + qw * qy);
+        double zy = 2.0 * (qy * qz - qw * qx);
+        double zz = 1.0 - 2.0 * (qx * qx + qy * qy);
+        double m = Math.Max(x[13], 1.0);
+        double3 g0 = _sixDof.BaseGravity;
+
+        double rx = ax - (thrustDelivered / m * zx + g0.X);
+        double ry = ay - (thrustDelivered / m * zy + g0.Y);
+        double rz = az - (thrustDelivered / m * zz + g0.Z);
+
+        // ~2 s time constant at a 0.02 s step: slow enough to ignore per-frame noise,
+        // fast enough to follow drag falling away through the descent.
+        double alpha = Math.Clamp(dt / 2.0, 0.0, 1.0);
+        _sixDofBias = new double3(
+            _sixDofBias.X + alpha * (rx - _sixDofBias.X),
+            _sixDofBias.Y + alpha * (ry - _sixDofBias.Y),
+            _sixDofBias.Z + alpha * (rz - _sixDofBias.Z));
+
+        const double Limit = 5.0;
+        _sixDof.SetAccelBias(new double3(
+            Math.Clamp(_sixDofBias.X, -Limit, Limit),
+            Math.Clamp(_sixDofBias.Y, -Limit, Limit),
+            Math.Clamp(_sixDofBias.Z, -Limit, Limit)));
     }
 
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
@@ -702,6 +801,10 @@ public static partial class PoweredGuidanceWindow
             _sixDofError = _landingStatus;
             return;
         }
+
+        // Estimate what the model is missing BEFORE re-solving, so the optimiser
+        // plans around it rather than rediscovering it every cycle.
+        UpdateAccelBias(x, now, _sixDofLastThrottle * _sixDofCapabilityN);
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -876,6 +979,8 @@ public static partial class PoweredGuidanceWindow
         _sixDofGateIndex = -1;
         _sixDofGateChanges = 0;
         _sixDofLastReplan = now;
+        _sixDofPrevV = null;
+        _sixDofBias = default;
 
         if (_sixDofLogging)
         {
