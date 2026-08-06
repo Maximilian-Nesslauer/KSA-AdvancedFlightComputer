@@ -40,6 +40,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --defect        defect gate vs range and node count
           --spiral        reproduce a logged engage state offline
           --seed          cold-start seed: straight line vs 3-DOF G-FOLD
+          --spread        spread the cold solve across frames while the vehicle falls
 
         MEASUREMENT - closed-loop MPC with injected dispersions
           --mpc                 sweep configurations
@@ -63,6 +64,11 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --no-warm             disable warm starting
         """);
     return 0;
+}
+
+if (args.Contains("--spread"))
+{
+    return SpreadCheck.Run();
 }
 
 if (args.Contains("--seed"))
