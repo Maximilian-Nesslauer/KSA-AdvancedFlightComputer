@@ -522,7 +522,7 @@ public static partial class PoweredGuidanceWindow
 
         var xf = new double[14];
         xf[2] = _sixDofTargetAltM;
-        xf[6] = 1.0;
+        TerminalAttitude(x, xf);
 
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _sixDofTiltDeg,
                                    _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
@@ -699,6 +699,41 @@ public static partial class PoweredGuidanceWindow
             Math.Clamp(_sixDofBias.X, -Limit, Limit),
             Math.Clamp(_sixDofBias.Y, -Limit, Limit),
             Math.Clamp(_sixDofBias.Z, -Limit, Limit)));
+    }
+
+    /// <summary>
+    /// Terminal attitude: UPRIGHT, at whatever yaw the vehicle already has.
+    ///
+    /// This used to be the identity quaternion, which pins the yaw as well - and yaw
+    /// about the thrust axis is the one attitude degree of freedom a landing does not
+    /// care about. Pinning it is not free: it is a ROLL in the model's body frame,
+    /// the axis with by far the least authority, since roll comes only from the
+    /// off-axis vernier gimbals (measured ~700x weaker than pitch/yaw on this
+    /// vehicle). A vehicle that happens to be yawed 180 degrees - which is exactly
+    /// what the flight logs show, qw ~ 0 and qz ~ -1 - is then required to perform a
+    /// 180 degree roll on its weakest axis for no reason at all, and the optimiser
+    /// spends real control authority and real trajectory shape doing it. Measured
+    /// offline on the logged state, that alone turns a 1 degree bearing sweep into 26.
+    ///
+    /// Keeping the current yaw means levelling out is the ONLY attitude work left.
+    /// Projecting q onto (w, 0, 0, z) and renormalising is exactly "same yaw, no
+    /// tilt": the x and y components ARE the tilt.
+    /// </summary>
+    private static void TerminalAttitude(double[] x, double[] xf)
+    {
+        double qw = x[6], qz = x[9];
+        double m = Math.Sqrt(qw * qw + qz * qz);
+        if (m < 1e-9)
+        {
+            // Tilted a full 180 degrees, so there is no yaw to preserve. Identity is
+            // as good an answer as any and keeps the quaternion a unit.
+            xf[6] = 1.0; xf[7] = xf[8] = xf[9] = 0.0;
+            return;
+        }
+        xf[6] = qw / m;
+        xf[7] = 0.0;
+        xf[8] = 0.0;
+        xf[9] = qz / m;
     }
 
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
@@ -953,7 +988,7 @@ public static partial class PoweredGuidanceWindow
         // because the problem scaling is sized from the x0 -> xf extent.
         var xf = new double[14];
         xf[2] = _sixDofTargetAltM;
-        xf[6] = 1.0;
+        TerminalAttitude(x, xf);
 
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, _sixDofNodes, _sixDofTiltDeg,
                                    _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,

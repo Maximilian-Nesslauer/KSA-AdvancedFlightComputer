@@ -23,6 +23,11 @@ if (args.Contains("--sub-scs"))
 
 // --loop: run the full SCvx loop and compare the converged trajectory against
 // python_ref/loop_ref.py.
+if (args.Contains("--spiral"))
+{
+    return SpiralCheck.Run();
+}
+
 if (args.Contains("--defect"))
 {
     return DefectCheck.Run();
