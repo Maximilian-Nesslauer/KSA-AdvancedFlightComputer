@@ -686,13 +686,13 @@ namespace NovaTec.GravityTurnMod
         {
             ThrottleOverride.Active = true;
             ThrottleOverride.EngineOn = true;
-            ControlledVehicle?.SetEnum(VehicleEngine.MainIgnite);
+            //ControlledVehicle?.SetEnum(VehicleEngine.MainIgnite);
         }
         public void ShutdownEngines()
         {
             ThrottleOverride.EngineOn = false;
-            ControlledVehicle?.SetEnum(VehicleEngine.MainShutdown);
-            ThrottleOverride.Active = false;
+            //ControlledVehicle?.SetEnum(VehicleEngine.MainShutdown);
+            ThrottleOverride.Active = true;
         }
 
         //-------------------------------------------------------------------------
@@ -781,9 +781,11 @@ namespace NovaTec.GravityTurnMod
         {
             Vehicle vehicle = Program.ControlledVehicle;
             if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return null;
-
-            Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
+            Sequence sequence = GetCurrentSequence();
+            //Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             ArrayList engines = new ArrayList();
+            if (sequence == null) return engines;
+
             foreach (Part p in sequence.Parts)
             {
                 engines.AddRange(p.SubtreeModules.Get<EngineController>().ToArray());
