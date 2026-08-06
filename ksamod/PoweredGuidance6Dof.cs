@@ -225,6 +225,7 @@ public static partial class PoweredGuidanceWindow
         if (ImGui.CollapsingHeader("Parameters"))
         {
             ImGui.InputInt("Nodes", ref _sixDofNodes);
+            _sixDofNodes = Math.Clamp(_sixDofNodes, MinNodes, MaxNodes);
             ImGui.InputDouble("Tilt limit (deg)", ref _sixDofTiltDeg);
             ImGui.Checkbox("Throttle floor from vehicle", ref _sixDofFloorAuto);
             if (!_sixDofFloorAuto)
@@ -246,11 +247,12 @@ public static partial class PoweredGuidanceWindow
             ImGui.Checkbox("Reduce nodes on approach", ref _sixDofNodeGates);
             if (_sixDofNodeGates)
                 ImGui.TextWrapped(
-                    "Steps the node count down at fixed altitude gates (" +
-                    "1000 m -> 50, 400 m -> 20, 60 m -> 10) as the horizon shrinks, so node " +
-                    "SPACING stays roughly constant. Each step rebuilds the solver and loses " +
-                    "the ADMM warm start, so it is done at gates rather than tracked " +
-                    "continuously; the plan itself carries across by resampling.");
+                    "Ten nodes per step as the horizon shrinks: 1000 m -> 50, 750 -> 40, " +
+                    "500 -> 30, 250 -> 20, 100 -> 10, never outside 10-50. Holds node " +
+                    "SPACING roughly constant rather than the count, since spacing is " +
+                    "sigma/(N-1) and sigma falls as the target nears. Each step rebuilds the " +
+                    "solver and loses the ADMM warm start, so it is done at gates rather than " +
+                    "tracked continuously; the plan itself carries across by resampling.");
             ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
             if (_sixDofBiasEnabled)
                 ImGui.TextWrapped(
@@ -478,18 +480,38 @@ public static partial class PoweredGuidanceWindow
     /// </param>
     /// <summary>
     /// Altitude gates and the node count to run below each, highest first. Read as
-    /// "below 400 m, 50 nodes". Above the first gate the configured count applies.
+    /// "below 1000 m, 50 nodes". Above the first gate the configured count applies,
+    /// clamped to <see cref="MaxNodes"/>.
     ///
-    /// Chosen to keep node spacing roughly constant as the horizon shrinks rather
-    /// than to hit any particular count: the last few hundred metres take a couple
-    /// of seconds, where 20 nodes is finer than 80 was at altitude.
+    /// Ten nodes per step, 50 down to 10 between 1000 m and 100 m. The point is to
+    /// hold node SPACING roughly constant rather than any particular count: spacing
+    /// is sigma/(N-1), and sigma shrinks as the vehicle closes in, so the same count
+    /// buys steadily finer resolution than the problem needs. The bands tighten
+    /// toward the ground for the same reason - the last 150 m go by far quicker than
+    /// the first 250.
+    ///
+    /// The cost of a step is a solver rebuild and the loss of the ADMM warm start
+    /// (the sparsity pattern is frozen at the node count), which is why this is a
+    /// ladder and not a continuously tracked value. The reference TRAJECTORY carries
+    /// across by resampling, and that is the seed that actually matters.
     /// </summary>
     private static readonly (double AltM, int Nodes)[] NodeGates =
     [
         (1000.0, 50),
-        (400.0, 20),
-        (60.0, 10),
+        ( 750.0, 40),
+        ( 500.0, 30),
+        ( 250.0, 20),
+        ( 100.0, 10),
     ];
+
+    /// <summary>
+    /// Hard bounds on node count, ladder or configured. Below ~10 the collocation
+    /// defect grows past what the plan gate will accept (measured 2.36 m at N=10
+    /// against 0.13 m at N=50, at 235 m altitude); above 50 the solve is paying for
+    /// resolution the problem does not need.
+    /// </summary>
+    private const int MinNodes = 10;
+    private const int MaxNodes = 50;
 
     private static bool _sixDofNodeGates = true;
     private static int _sixDofGateIndex = -1;    // -1 = above every gate
@@ -513,7 +535,7 @@ public static partial class PoweredGuidanceWindow
         if (want <= _sixDofGateIndex)
             return;
 
-        int nodes = NodeGates[want].Nodes;
+        int nodes = Math.Clamp(NodeGates[want].Nodes, MinNodes, MaxNodes);
         if (nodes >= _sixDof.Nodes)
         {
             _sixDofGateIndex = want;   // already at or below this count, nothing to do

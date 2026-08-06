@@ -360,10 +360,15 @@ start is too stale and the solver thrashes.
 
 ### Node gates
 
-Node count steps down at fixed altitudes (never continuously — every change rebuilds
-the solver and discards the ADMM warm start, since the sparsity pattern is frozen at
-the node count). The **reference trajectory survives** by interpolation, and that is
-the seed that matters. Measured 10–30× cheaper than a cold solve at the gate.
+Node count steps down at fixed altitudes — **ten nodes per step, 50 down to 10
+between 1000 m and 100 m**, never outside `[10, 50]`. Never continuously: every change
+rebuilds the solver and discards the ADMM warm start, since the sparsity pattern is
+frozen at the node count. The **reference trajectory survives** by interpolation, and
+that is the seed that matters — measured 5–90× cheaper than a cold solve at the gate.
+
+The floor of 10 is not arbitrary. Collocation defect grows with node spacing, and at
+N=10 it is 2.36 m at 235 m altitude against the 1 m flight gate — so N=10 is only
+safe once the horizon is short, which is why that rung sits at 100 m (0.41 m there).
 
 Hold node **spacing** roughly constant, not node count: collocation error grows with
 spacing, and an earlier "N=20 gives 4 m of plan jump" was measured on a full-length
