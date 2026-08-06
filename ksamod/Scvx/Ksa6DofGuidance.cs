@@ -100,6 +100,22 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double MaxDefectM { get; set; } = 1.0;
 
+    /// <summary>
+    /// The same gate for a COLD solve, deliberately far looser.
+    ///
+    /// The two cases have completely different costs for refusing. A refused
+    /// re-solve falls back on the previous plan, which is very nearly as good - it
+    /// is one cadence tick stale - so being strict there is cheap. A refused COLD
+    /// solve leaves NO plan at all: the guidance simply does not engage, and the
+    /// vehicle gets nothing.
+    ///
+    /// A few metres of defect on a first plan is not a reason to refuse to fly. MPC
+    /// re-solves ten times a second from the measured state, so the first plan only
+    /// has to be a usable starting point - the loop refines it long before the
+    /// vehicle has travelled far. Some solution is better than no solution.
+    /// </summary>
+    public double ColdMaxDefectM { get; set; } = 15.0;
+
     /// <summary>The Tmax the PLAN was built against — a fallback divisor only; see Command.</summary>
     public double Tmax => _cfg.Tmax;
 
@@ -311,7 +327,7 @@ public sealed class Ksa6DofGuidance
 
         _xf = (double[])xf.Clone();
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
-        return Finish(x0, simNow, maxIterations);
+        return Finish(x0, simNow, maxIterations, cold: true);
     }
 
     private double[] _xf = [];
@@ -373,7 +389,7 @@ public sealed class Ksa6DofGuidance
         double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - Math.Max(0.0, simNow - prev._solveTime));
         if (FixedTime) PinSigma(sigma);
         _solver.Initialize(x0, _xf, xs, us, sigma);
-        return Finish(x0, simNow, maxIterations);
+        return Finish(x0, simNow, maxIterations, cold: true);
     }
 
     private static void Normalize(Span<double> q)
@@ -431,7 +447,7 @@ public sealed class Ksa6DofGuidance
             else
             {
                 _solver.Reseed(x0, _planX, _planU, sigma, trustRegion: _solver.TrustRegionMax);
-                if (!Finish(x0, simNow, iterationsPerSample))
+                if (!Finish(x0, simNow, iterationsPerSample, cold: true))
                 {
                     SearchLog += $"{sigma:F1}s fail  ";
                     continue;
@@ -552,7 +568,7 @@ public sealed class Ksa6DofGuidance
         _solver.EscalatedSubproblemIterations = (int)Math.Clamp(escalatedMs / perIter, 400, 100_000);
     }
 
-    private bool Finish(double[] x0, double simNow, int maxIterations)
+    private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
         Status = _solver.Solve(maxIterations);
@@ -637,10 +653,11 @@ public sealed class Ksa6DofGuidance
         // trajectory flyable — and the answer no longer depends on how close the
         // target happens to be.
         LastDefectM = LastDefect * _cfg.XScale[Dynamics6Dof.IR];
-        if (!(LastDefectM <= MaxDefectM))
+        double gate = cold ? ColdMaxDefectM : MaxDefectM;
+        if (!(LastDefectM <= gate))
         {
             Error = $"plan is not physical - dynamics defect {LastDefectM:F2} m " +
-                    $"exceeds {MaxDefectM:F2} m after {_solver.IterationCount} iters " +
+                    $"exceeds {gate:F2} m after {_solver.IterationCount} iters " +
                     $"({AcceptedSteps} accepted). Needs more iterations, or more nodes.";
             return false;
         }

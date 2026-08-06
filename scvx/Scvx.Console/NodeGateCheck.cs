@@ -44,8 +44,11 @@ internal static class NodeGateCheck
         // full-length trajectory is a different and much harder problem than
         // coarsening the last 150 m, and testing the former would say nothing
         // useful about the latter.
-        // Mirrors the flown ladder in PoweredGuidance6Dof.NodeGates: ten nodes per
-        // step, 50 down to 10 between 1000 m and 100 m.
+        // Representative node-count transitions. The mod now derives its count from
+        // target node SPACING rather than altitude (see NodeRungs), so these
+        // altitudes are only a plausible descent to hang the transitions on - what is
+        // under test is whether a change of N carries the plan across, which does not
+        // depend on what triggered it.
         (double AltM, int From, int To)[] gates =
         [
             (1000.0, 50, 40),

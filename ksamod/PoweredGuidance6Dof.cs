@@ -247,12 +247,18 @@ public static partial class PoweredGuidanceWindow
             ImGui.Checkbox("Reduce nodes on approach", ref _sixDofNodeGates);
             if (_sixDofNodeGates)
                 ImGui.TextWrapped(
-                    "1000 m -> 20, 500 -> 15, 100 -> 10, 50 -> 5. Aggressive, chosen for " +
-                    "solve time; watch the dynamics defect, because a plan that trips the " +
-                    "gate is REFUSED and the vehicle then flies a stale open-loop " +
-                    "trajectory. Each step rebuilds the solver and loses the ADMM warm " +
-                    "start, so it is done at gates rather than tracked continuously; the " +
-                    "plan itself carries across by resampling.");
+                    "Node count is derived from the target SPACING below, not from " +
+                    "altitude: collocation error depends on sigma/(N-1), so as burn time " +
+                    "counts down the count follows. Snapped to rungs (50/40/30/25/20/15/" +
+                    "10/5) and one-way, because each change rebuilds the solver and loses " +
+                    "the ADMM warm start; the plan itself carries across by resampling.");
+            if (_sixDofNodeGates)
+            {
+                ImGui.InputDouble("Target node spacing (s)", ref _sixDofNodeDtTarget);
+                if (_sixDof != null && _sixDof.HasPlan)
+                    ImGui.Text($"  sigma {_sixDof.Sigma,5:F1} s / {_sixDof.Nodes} nodes = " +
+                               $"{_sixDof.Sigma / Math.Max(_sixDof.Nodes - 1, 1),4:F2} s actual");
+            }
             ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
             if (_sixDofBiasEnabled)
                 ImGui.TextWrapped(
@@ -495,13 +501,32 @@ public static partial class PoweredGuidanceWindow
     /// ladder and not a continuously tracked value. The reference TRAJECTORY carries
     /// across by resampling, and that is the seed that actually matters.
     /// </summary>
-    private static readonly (double AltM, int Nodes)[] NodeGates =
-    [
-        (1000.0, 20),
-        ( 500.0, 15),
-        ( 100.0, 10),
-        (  50.0,  5),
-    ];
+    /// <summary>
+    /// Node counts the ladder is allowed to take, coarsest last. Quantised rather
+    /// than continuous because every change of N rebuilds the solver and throws away
+    /// the ADMM warm start - a continuously tracked count would pay that every cycle.
+    /// </summary>
+    private static readonly int[] NodeRungs = [50, 40, 30, 25, 20, 15, 10, 5];
+
+    /// <summary>
+    /// Target node SPACING, seconds. This is the quantity the ladder is really
+    /// derived from.
+    ///
+    /// Collocation error depends on spacing, not on node count, and spacing is
+    /// sigma/(N-1). Measured across a descent (Scvx.Console --nodes), pooling every
+    /// altitude and node count together:
+    ///
+    ///     dt &lt; 2 s     defect &lt;= 0.09 m
+    ///     dt 2 - 4 s   median 0.12 m
+    ///     dt 4 - 8 s   median 0.36 m, worst 0.77 m
+    ///     dt &gt; 8 s     median 0.57 m, worst 0.90 m
+    ///
+    /// A dt band predicts defect far better than a node count does, because two
+    /// vehicles at the same altitude with different burn times need different counts
+    /// for the same accuracy. Targeting 1.5 s leaves roughly a 10x margin on the 1 m
+    /// flight gate.
+    /// </summary>
+    private static double _sixDofNodeDtTarget = 1.5;
 
     /// <summary>
     /// Hard bounds on node count, ladder or configured.
@@ -530,15 +555,31 @@ public static partial class PoweredGuidanceWindow
     private static void StepNodeGates(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                       double[] x, double now)
     {
-        int want = _sixDofGateIndex;
-        for (int i = NodeGates.Length - 1; i >= 0; i--)
-            if (x[2] <= NodeGates[i].AltM) { want = i; break; }
-
-        // One-way only: never step back up on a transient climb.
-        if (want <= _sixDofGateIndex)
+        // Nodes needed to hold the target spacing at the CURRENT burn time. Sigma is
+        // what sets spacing, and sigma counts down through the descent, so this falls
+        // naturally without reference to altitude at all - and it adapts to a fast
+        // entry or a slow one, which an altitude ladder cannot.
+        double sigma = _sixDof.Sigma;
+        if (sigma <= 0.0)
             return;
+        int ideal = (int)Math.Ceiling(sigma / Math.Max(_sixDofNodeDtTarget, 0.05)) + 1;
 
-        int nodes = Math.Clamp(NodeGates[want].Nodes, MinNodes, MaxNodes);
+        // Snap to a rung: the COARSEST count that still delivers at least the
+        // resolution asked for. Falls back to the FINEST rung, not the coarsest, when
+        // the burn is long enough that no rung reaches the target - wanting more
+        // resolution than is on offer must give the most available, and defaulting
+        // the other way would hand a 60-node problem 5 nodes.
+        int nodes = MaxNodes;
+        for (int i = NodeRungs.Length - 1; i >= 0; i--)
+            if (NodeRungs[i] >= ideal) { nodes = NodeRungs[i]; break; }
+        nodes = Math.Clamp(nodes, MinNodes, MaxNodes);
+
+        // One-way only: never step back up. Sigma wobbles cycle to cycle, and
+        // rebuilding the solver to add a node the problem does not really need costs
+        // a warm start for nothing.
+        int want = Array.IndexOf(NodeRungs, nodes);
+        if (want < 0 || want <= _sixDofGateIndex)
+            return;
         if (nodes >= _sixDof.Nodes)
         {
             _sixDofGateIndex = want;   // already at or below this count, nothing to do
@@ -568,15 +609,16 @@ public static partial class PoweredGuidanceWindow
 
         if (next.SeedFrom(_sixDof, x, now))
         {
-            SixDofLog.Event(now, $"NODE GATE at alt {x[2]:F0} m: {_sixDof.Nodes} -> {nodes} nodes " +
-                                 $"(defect {next.LastDefectM:F2} m, sigma {next.Sigma:F1} s)");
+            SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m: {_sixDof.Nodes} -> {nodes} nodes " +
+                                 $"(sigma {sigma:F1} s -> dt {sigma / Math.Max(nodes - 1, 1):F2} s, " +
+                                 $"defect {next.LastDefectM:F2} m)");
             _sixDof = next;
             _sixDofGateChanges++;
             _sixDofLastReplan = now;
         }
         else
         {
-            SixDofLog.Event(now, $"NODE GATE at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
+            SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
                                  $"nodes ({next.Error}) - staying at {_sixDof.Nodes}");
         }
         _sixDofGateIndex = want;
