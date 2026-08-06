@@ -25,8 +25,8 @@ namespace NovaTec.GravityTurnMod
         public double TargetAltitude { get; set; } = 280.0;
         */
         /* works for RSS size*/
-        public double InitialPitch { get; set; } = 10;
-        public double InitialSpeed { get; set; } = 80;
+        public double InitialPitch { get; set; } = 7;
+        public double InitialSpeed { get; set; } = 110;
         public int TimeToApoapsisStart { get; set; } = 65;
         public int TimeToApoapsisEnd { get; set; } = 65;
         public int TimeToApoapsisTarget { get; set; } = 70;
@@ -367,7 +367,7 @@ namespace NovaTec.GravityTurnMod
             }
 
             // reduce throttle if AP is close to target altitude - better to use rcs only, but not for now...
-            if (GetApoapsisAltitude() / 1000 > TargetAltitude * 0.90 && didReachTargetApoapsisTime)
+            if (GetApoapsisAltitude() / 1000 > TargetAltitude * 0.90 && didReachTargetApoapsisTime && GetApoapsisTime() > TimeToApoapsisTarget + TimeToApoapsisStart*2)
             {
                 ThrottleOverride.Throttle = 0.05f;
             }
@@ -503,7 +503,6 @@ namespace NovaTec.GravityTurnMod
             FlightComputer fc = vehicle.FlightComputer;
             
             ThrottleOverride.Active = true;
-            SetEngineThrottle(0.1);
 
             // create burn to circularize
             double3 dV = OrbitalTransfers.DvCciToCircularize(vehicle.Orbit, vehicle.NextApoapsisTime);
@@ -515,6 +514,8 @@ namespace NovaTec.GravityTurnMod
                 ignitionOffset = 30;
             }
 
+            SetEngineThrottle(dV.Length() / 500.0);
+
             Console.WriteLine("Circularization dV X:" + dV.X + ", Y: " + dV.Y + ", Z: " + dV.Z + ", r2: " + dV.Length());
             OrbitPointCce point = new OrbitPointCce(vehicle.Orbit.GetApoapsisPositionOrb(), vehicle.TimeSincePeriapsis, vehicle.NextApoapsisTime - Universe.GetElapsedSimTime(), TrueAnomaly.NaN);
             PatchedConic patch = new PatchedConic(vehicle.NextApoapsisTime, vehicle.NextApoapsisTime, PatchTransition.Burn, PatchTransition.Burn, vehicle.Orbit, KeyHash.Make(new ReadOnlySpan<char>("Circularize".ToArray())));
@@ -525,7 +526,7 @@ namespace NovaTec.GravityTurnMod
                 vehicle);
 
             fc.AddBurn(burn);
-            Console.WriteLine("  Duration: {0} of {1}", fc.Burn?.BurnDuration, fc.BurnPlan.BurnCount);
+            Console.WriteLine("  Duration: {0} s", fc.Burn?.BurnDuration);
 
 
             PatchRcsPriority.PriorityControlSystem = AttitudeControlSystem.None;
@@ -534,23 +535,10 @@ namespace NovaTec.GravityTurnMod
             FlightControlOverride.Active = true;
             ThrottleOverride.Active = false;
 
-/*
-            FlightControlOverride.Active = true;
-            FlightControlOverride.BurnMode = FlightComputerBurnMode.Auto;
-            FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Prograde;
-            FlightControlOverride.AttitudeFrame = VehicleReferenceFrame.EclBody;
-*/
-
-            if (fc.Burn?.BurnDuration < 2)
-            {
-                Console.WriteLine("  short burn, replace with low thrust burn");
-                //fc.RemoveBurn(burn);
-            }
 
             if (UseWarp)
             {
                 Universe.SetSimulationSpeed(10.0, false);
-                //Universe.WarpToNext();
             }
 
         }
@@ -574,12 +562,12 @@ namespace NovaTec.GravityTurnMod
                     Universe.SetSimulationSpeed(Math.Clamp(warp, 10.0, warpSpeed), false);
                 }
                 // slow down warp if closer to ignition
-                else if (secondsToIgnition < warpSpeed * 2 && secondsToIgnition >= 5 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() >= 4)
+                else if (secondsToIgnition < warpSpeed * 2 && secondsToIgnition >= 60 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() >= 4)
                 {
                     if (Universe.GetSimulationSpeed() == warpSpeed)
                         Console.WriteLine("Slowdown warp to burn ignition in {0,3:N} s", secondsToIgnition);
-                    double warp = secondsToIgnition/2.0;
-                    Universe.SetSimulationSpeed(Math.Clamp(warp, 4.0, warpSpeed), false);
+                    double warp = Universe.GetSimulationSpeed() / 1.011;
+                    Universe.SetSimulationSpeed(Math.Clamp(warp, 4.1, warpSpeed), false);
                 }
                 else if (secondsToIgnition >= 3 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() < 1.1)
                 {
