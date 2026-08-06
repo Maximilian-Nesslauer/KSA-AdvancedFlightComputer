@@ -23,6 +23,11 @@ if (args.Contains("--sub-scs"))
 
 // --loop: run the full SCvx loop and compare the converged trajectory against
 // python_ref/loop_ref.py.
+if (args.Contains("--defect"))
+{
+    return DefectCheck.Run();
+}
+
 if (args.Contains("--gates"))
 {
     return NodeGateCheck.Run(FindFile("loop_ref.csv"));

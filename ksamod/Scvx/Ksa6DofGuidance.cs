@@ -82,6 +82,24 @@ public sealed class Ksa6DofGuidance
     /// <summary>Defect below which the plan counts as physically realisable.</summary>
     public double DefectTolerance => _solver.DefectTolerance;
 
+    /// <summary>
+    /// The same defect expressed in METRES — LastDefect * XScale — which is what the
+    /// flight gate actually judges. See Finish for why the scaled figure is the wrong
+    /// yardstick on an approach.
+    /// </summary>
+    public double LastDefectM { get; private set; } = double.PositiveInfinity;
+
+    /// <summary>
+    /// Largest position defect, in metres, that still counts as a flyable plan.
+    ///
+    /// Measured across a full descent (Scvx.Console --defect), a well-resolved plan
+    /// sits around 0.1 m regardless of range, so 1 m is comfortably permissive
+    /// without accepting anything meaningfully unphysical. It DOES bite on a badly
+    /// under-resolved plan, which is the case worth catching: at 235 m altitude the
+    /// absolute defect is 0.13 m at N=50, 0.45 m at N=20 and 2.36 m at N=10.
+    /// </summary>
+    public double MaxDefectM { get; set; } = 1.0;
+
     /// <summary>The Tmax the PLAN was built against — a fallback divisor only; see Command.</summary>
     public double Tmax => _cfg.Tmax;
 
@@ -551,11 +569,34 @@ public sealed class Ksa6DofGuidance
         // the vehicle to reproduce motion that no force produced, so it saturates
         // thrust and falls further behind on every cycle. Better to keep the previous
         // plan and say so.
-        if (!(LastDefect <= _solver.DefectTolerance))
+        // THE GATE IS IN METRES, NOT IN SCALED UNITS.
+        //
+        // DefectNorm is max|defect| / XScale, and XScale's position entries are L,
+        // the range to the target — which is exactly the thing that shrinks on an
+        // approach. A fixed scaled tolerance therefore means 1e-3 * L METRES, so the
+        // gate silently tightens as the vehicle closes in: measured, it allows 1.07 m
+        // of defect at 1 km, 0.26 m at 235 m and 0.04 m at 50 m.
+        //
+        // Nothing about the plan got worse. Measured at N=50 the ABSOLUTE defect is
+        // flat down the whole descent (0.04, 0.01, 0.13, 0.07, 0.06 m); only the
+        // ruler moved. Past ~100 m the solver was producing perfectly flyable
+        // trajectories - centimetres of discrepancy over a 10 s plan - and having
+        // them rejected for being centimetres off.
+        //
+        // That is why the trajectory "starts sensible and becomes a loop": a rejected
+        // re-solve leaves _planX and _solveTime untouched, so the vehicle keeps
+        // flying an ageing open-loop plan while the commands are read further and
+        // further along it. The failure is the gate, not the guidance.
+        //
+        // Judged in metres this asks the question that actually matters — is the
+        // trajectory flyable — and the answer no longer depends on how close the
+        // target happens to be.
+        LastDefectM = LastDefect * _cfg.XScale[Dynamics6Dof.IR];
+        if (!(LastDefectM <= MaxDefectM))
         {
-            Error = $"plan is not physical - dynamics defect {LastDefect:E2} " +
-                    $"exceeds {_solver.DefectTolerance:E0} after {_solver.IterationCount} iters " +
-                    $"({AcceptedSteps} accepted). Needs more iterations or an easier problem.";
+            Error = $"plan is not physical - dynamics defect {LastDefectM:F2} m " +
+                    $"exceeds {MaxDefectM:F2} m after {_solver.IterationCount} iters " +
+                    $"({AcceptedSteps} accepted). Needs more iterations, or more nodes.";
             return false;
         }
 

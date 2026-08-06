@@ -341,14 +341,19 @@ public static partial class PoweredGuidanceWindow
         // constraint, so an unconverged plan contains motion no force produced — it
         // cannot be flown at any thrust. Plans above tolerance are now refused, so a
         // green reading here is what makes the displayed trajectory meaningful.
-        double def = _sixDof.LastDefect;
-        if (def <= _sixDof.DefectTolerance)
+        //
+        // Reported in METRES, which is also how it is now judged. The scaled figure
+        // is normalised by the range to the target, so it climbs on an approach even
+        // when nothing about the plan changed - it was rejecting centimetre-accurate
+        // trajectories inside 100 m. See Ksa6DofGuidance.Finish.
+        double defM = _sixDof.LastDefectM;
+        if (defM <= _sixDof.MaxDefectM)
             ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
-                $"dynamics defect {def:E2}  (tol {_sixDof.DefectTolerance:E0}) - plan is physical");
+                $"dynamics defect {defM:F2} m  (limit {_sixDof.MaxDefectM:F2} m) - plan is physical");
         else
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                $"dynamics defect {def:E2} EXCEEDS {_sixDof.DefectTolerance:E0} - " +
-                "plan is NOT physically realisable and was refused.");
+                $"dynamics defect {defM:F2} m EXCEEDS {_sixDof.MaxDefectM:F2} m - plan refused. " +
+                "Almost always too few nodes: the collocation error grows with node spacing.");
 
         // Pure diagnostics; nothing acts on these. Under MPC, drift between re-solves
         // is expected — what matters is that it RESETS each cycle rather than growing.
