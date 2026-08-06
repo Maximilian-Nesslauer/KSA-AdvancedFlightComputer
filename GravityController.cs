@@ -25,8 +25,8 @@ namespace NovaTec.GravityTurnMod
         public double TargetAltitude { get; set; } = 280.0;
         */
         /* works for RSS size*/
-        public double InitialPitch { get; set; } = 7;
-        public double InitialSpeed { get; set; } = 110;
+        public double InitialPitch { get; set; } = 10;
+        public double InitialSpeed { get; set; } = 90;
         public int TimeToApoapsisStart { get; set; } = 65;
         public int TimeToApoapsisEnd { get; set; } = 65;
         public int TimeToApoapsisTarget { get; set; } = 70;
@@ -217,7 +217,6 @@ namespace NovaTec.GravityTurnMod
         }
         public void StartPhaseHold(Vehicle vehicle)
         {
-            FlightControlOverride.Active = false;
             Console.WriteLine("PHASE: Hold");
             if (UseWarp)
                 Universe.SetSimulationSpeed(4.0, false);
@@ -279,7 +278,7 @@ namespace NovaTec.GravityTurnMod
 
             // after 1st stage sequence do pitch up or down. If that is not enough, it's an indicator of wrong startup values.
             // In general the need to pitch up is a sign of a weak 2nd stage.
-            if (vehicle.Parts.SequenceList.ActiveSequence > 2 && didReachTargetApoapsisTime)
+            //if (vehicle.Parts.SequenceList.ActiveSequence > 1 && didReachTargetApoapsisTime)
             {
 /*                if (GetApoapsisTime() < TimeToApoapsisTarget - 1 && GetApoapsisTime() > TimeToApoapsisStart-2 && diff < 0)
                 {
@@ -327,7 +326,6 @@ namespace NovaTec.GravityTurnMod
                     if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
                     {
                         FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
-                        //RunWorker();
                     }
                     PitchesUp = true;
                 }
@@ -344,7 +342,6 @@ namespace NovaTec.GravityTurnMod
                     else
                         fwdPitch = pitch;
 
-                    //double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 20, 0);
                     double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
                     FlightControlOverride.CustomAttitudeTarget = target;
                     if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
@@ -403,6 +400,10 @@ namespace NovaTec.GravityTurnMod
             {
                 Console.WriteLine("Speedup to warp 10");
                 Universe.SetSimulationSpeed(10.0, false);
+            }
+            if (PitchesUp)
+            {
+                Universe.SetSimulationSpeed(2.0, false);
             }
 
             // transition to coast if AP target altitude is reached.
@@ -587,7 +588,7 @@ namespace NovaTec.GravityTurnMod
                 FlightControlOverride.Active = true;
                 FlightControlOverride.RCSMode = FlightComputerRCSMode.Enabled;
                 FlightControlOverride.BurnMode = FlightComputerBurnMode.Auto;
-                PatchRcsPriority.PriorityControlSystem = AttitudeControlSystem.Rcs;
+                PatchRcsPriority.PriorityControlSystem = AttitudeControlSystem.Tvc;
                 FlightControlOverride.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Prograde;
                 FlightControlOverride.AttitudeFrame = VehicleReferenceFrame.EclBody;
                 if (Universe.IsAutoWarpActive)
@@ -659,7 +660,7 @@ namespace NovaTec.GravityTurnMod
                     }
                     Console.WriteLine("  burns left: {0}", fc.BurnPlan.BurnCount);
                     fc.BurnPlan.Clear();
-                    Console.WriteLine("Burn complete, left burns [{0}], active {1}", fc.BurnPlan.BurnCount, fc.BurnPlan.HasActiveBurns);
+                    Console.WriteLine("Burn complete, burn count {0}, active {1}", fc.BurnPlan.BurnCount, fc.BurnPlan.HasActiveBurns);
                 }
 
                 // Cleanup logic for the cleanup phase

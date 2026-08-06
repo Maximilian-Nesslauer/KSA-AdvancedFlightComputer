@@ -322,7 +322,7 @@ namespace NovaTec.GravityTurnMod
         {
             if (_autoLoaded) return;
             _autoLoaded = true;
-            Program.TerminalInterface.Execute("load LaunchGeminiLuna");
+            Program.TerminalInterface.Execute("load Launch");
         }
 
     }
