@@ -11,14 +11,47 @@ public static partial class PoweredGuidanceWindow
 {
     public static void Draw(Viewport viewport)
     {
+        // The End() is in a finally so that an exception anywhere below cannot leave
+        // ImGui inside this window.
+        //
+        // ImGui keeps a window STACK, so an unwound Begin does not fail where the
+        // fault is — it fails at the end of the frame, as "window Powered Guidance:
+        // missing End", and then keeps failing every frame afterwards. That message
+        // names this function no matter what actually threw, so the real fault (twice
+        // now, a null KSA reference several calls deep) is completely hidden. The
+        // exception still propagates and is still logged with its stack trace; this
+        // only guarantees the ImGui stack is balanced on the way out, so what the
+        // game reports is the actual error rather than a misleading structural one.
+        Vehicle vehicle = null;
+        try
+        {
+            vehicle = DrawBody(viewport);
+        }
+        finally
+        {
+            ImGui.End();
+        }
+
+        // Skipped entirely if DrawBody threw — the exception propagates through the
+        // finally above, so this is only reached on a clean frame.
+        if (vehicle != null)
+            DrawTrailingWindows(viewport, vehicle);
+    }
+
+    /// <summary>
+    /// The window's contents. Returns the controlled vehicle, or null if there was
+    /// none and nothing further should be drawn. Deliberately does NOT call End() —
+    /// see Draw.
+    /// </summary>
+    private static Vehicle DrawBody(Viewport viewport)
+    {
         ImGui.Begin("Powered Guidance", ImGuiWindowFlags.AlwaysAutoResize);
 
         Vehicle vehicle = Program.ControlledVehicle;
         if (vehicle == null)
         {
             ImGui.Text("No controlled vehicle.");
-            ImGui.End();
-            return;
+            return null;
         }
 
         Orbit orbit = vehicle.Orbit;
@@ -77,8 +110,17 @@ public static partial class PoweredGuidanceWindow
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f), _status);
 
         DrawStatusReadout(vehicle, orbit, bodyRadius);
+        return vehicle;
+    }
 
-        ImGui.End();
+    // Everything that must be drawn AFTER the panel's window has closed: the
+    // per-domain tuning popups and the world-space overlays, which are their own
+    // ImGui windows and would otherwise nest inside the panel.
+    private static void DrawTrailingWindows(Viewport viewport, Vehicle vehicle)
+    {
+        Orbit orbit = vehicle.Orbit;
+        IParentBody parent = orbit.Parent;
+        double bodyRadius = parent.MeanRadius;
 
         // Per-domain tuning popups (each no-ops unless opened from its tab) and the
         // G-FOLD debug plots. Ascent tuning is inline in its tab, not a popup.
@@ -187,7 +229,12 @@ public static partial class PoweredGuidanceWindow
             {
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                     $"Stage mass {modelMass / 1000.0:F1} t vs vehicle {liveMass / 1000.0:F1} t "
-                    + $"({(modelMass - liveMass) / liveMass * 100.0:+0.0;-0.0} %)");
+                    // %% because TextColored is printf-formatted native-side: the C#
+                    // overload takes one string, which ImGui passes as its FORMAT
+                    // argument. A lone "%)" is an invalid conversion specifier and
+                    // reads a vararg that was never pushed. ImGui.Text is exempt (it
+                    // maps to igTextUnformatted); TextColored and TextWrapped are not.
+                    + $"({(modelMass - liveMass) / liveMass * 100.0:+0.0;-0.0} %%)");
             }
         }
         else

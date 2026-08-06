@@ -97,7 +97,14 @@ internal static class KsaEnginePerf
             {
                 if (activeOnly && !engines[i].IsActive)
                     continue;
-                RocketControllerData d = RocketControllerData.ComputeFromCores(engines[i].Cores, com, p);
+                // Cores is a RocketCore[] and can be null on a part that has not
+                // finished building. Same reasoning as the atmosphere lookup above:
+                // this runs from the ImGui draw, so an exception here does not
+                // surface as a stack trace, it surfaces as a corrupted ImGui frame.
+                RocketCore[] cores = engines[i].Cores;
+                if (cores == null || cores.Length == 0)
+                    continue;
+                RocketControllerData d = RocketControllerData.ComputeFromCores(cores, com, p);
                 thrust += d.ThrustMax.Length();
                 massFlow += d.MassFlowRateMax;
             }
@@ -114,7 +121,16 @@ internal static class KsaEnginePerf
     // which altitude they choose.
     internal static double AmbientPressureAt(IParentBody parent, double altitudeAslM)
     {
-        PhysicalAtmosphereReference phys = parent?.GetAtmosphereReference().Physical;
+        // EVERY link here is nullable and an airless body breaks the FIRST one.
+        // AtmosphereReference is a class, so GetAtmosphereReference() returns null
+        // on a body with no atmosphere — which is most of them, and is exactly the
+        // case this function exists to report 0 for. Guarding only `parent` (as an
+        // earlier version did) throws a NullReferenceException instead, and because
+        // this is called from the ImGui draw the exception unwinds past the window's
+        // End() and leaves ImGui mid-window: the game reports "missing End" and the
+        // panel is unusable, with nothing pointing back at the atmosphere lookup.
+        AtmosphereReference atmo = parent?.GetAtmosphereReference();
+        PhysicalAtmosphereReference phys = atmo?.Physical;
         if (phys == null || !phys.IsValid())
             return 0.0;
         double p = phys.GetAtmosphericPressureAtAltitude(altitudeAslM);
