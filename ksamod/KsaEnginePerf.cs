@@ -137,6 +137,95 @@ internal static class KsaEnginePerf
         return double.IsFinite(t) && t > 0.0 ? t : 0.0;
     }
 
+    // Thrust (N) the lit engines produce at an ARBITRARY throttle and pressure.
+    //
+    // THRUST IS NOT PROPORTIONAL TO THROTTLE IN AN ATMOSPHERE, which is why this has
+    // to exist rather than scaling a full-throttle figure. Throttle sets COMBUSTION
+    // PRESSURE (CombustorConfig.ComputeConditions: `throttle * CombustionPressureMax`
+    // into a gas-property LUT), and nozzle thrust is momentum plus pressure:
+    //
+    //     F = mdot*Ve + (Pe - Pa)*Ae
+    //
+    // The momentum term scales with throttle. The ambient term -Pa*Ae does NOT — it
+    // is the same at 30% throttle as at 100%. So
+    //
+    //     F(t) = t*F(1) - Pa*Ae*(1 - t)
+    //
+    // and the deficit is LARGEST at low throttle. Assuming linearity therefore
+    // over-estimates delivered thrust by a near-constant amount, which is exactly
+    // the signature the flight logs showed and which I first misread as a gravity
+    // error, since a constant offset looks like one.
+    internal static double ThrustAtThrottle(Vehicle vehicle, double throttle, double ambientPressure)
+    {
+        PartTree tree = vehicle?.Parts;
+        if (tree == null)
+            return 0.0;
+        Span<EngineController> engines = tree.Modules.Get<EngineController>();
+        if (engines.Length == 0)
+            return 0.0;
+
+        var th = (float)Math.Clamp(throttle, 0.0, 1.0);
+        var p = (float)Math.Max(ambientPressure, 0.0);
+
+        // Same active-first, fall-back-to-all rule as AtPressure, for the same reason.
+        for (int pass = 0; pass < 2; pass++)
+        {
+            bool activeOnly = pass == 0;
+            double total = 0.0;
+            bool sawAny = false;
+            for (int i = 0; i < engines.Length; i++)
+            {
+                if (activeOnly && !engines[i].IsActive)
+                    continue;
+                RocketCore[] cores = engines[i].Cores;
+                if (cores == null)
+                    continue;
+                foreach (RocketCore core in cores)
+                {
+                    RocketNozzle[] nozzles = core?.Rocket?.Nozzles;
+                    if (nozzles == null)
+                        continue;
+                    sawAny = true;
+                    RocketCoreConditions cond = core.ComputeConditions(th);
+                    foreach (RocketNozzle nz in nozzles)
+                        total += nz.ComputePerformance(in cond, p).GetTotalThrust();
+                }
+            }
+            if (sawAny)
+                return total > 0.0 ? total : 0.0;
+        }
+        return 0.0;
+    }
+
+    /// <summary>
+    /// The throttle that actually delivers <paramref name="demandN"/> newtons, by
+    /// inverting the real thrust curve. Returns -1 if there is nothing to invert and
+    /// the caller should fall back.
+    ///
+    /// Bisection rather than algebra: the curve is very nearly affine above the
+    /// minimum throttle, but it is exactly zero below it, and inverting KSA's own
+    /// function needs no assumption about shape at all.
+    /// </summary>
+    internal static double ThrottleForThrust(Vehicle vehicle, double demandN, double ambientPressure)
+    {
+        if (!(demandN > 0.0))
+            return 0.0;
+        double full = ThrustAtThrottle(vehicle, 1.0, ambientPressure);
+        if (!(full > 1.0))
+            return -1.0;
+        if (demandN >= full)
+            return 1.0;
+
+        double lo = 0.0, hi = 1.0;
+        for (int i = 0; i < 20; i++)
+        {
+            double mid = 0.5 * (lo + hi);
+            if (ThrustAtThrottle(vehicle, mid, ambientPressure) < demandN) lo = mid;
+            else hi = mid;
+        }
+        return 0.5 * (lo + hi);
+    }
+
     // Ambient pressure (Pa) at an altitude above the body's sea level datum, or 0
     // on an airless world. Anything missing reads as vacuum, which is the safe
     // direction for every caller except a planner — see AtPressure's callers for
@@ -153,8 +242,25 @@ internal static class KsaEnginePerf
         // panel is unusable, with nothing pointing back at the atmosphere lookup.
         AtmosphereReference atmo = parent?.GetAtmosphereReference();
         PhysicalAtmosphereReference phys = atmo?.Physical;
-        if (phys == null || !phys.IsValid())
+        if (phys == null)
             return 0.0;
+
+        // DO NOT gate this on phys.IsValid(). It requires ScaleHeight.IsValid(), and
+        // DistanceReference.IsValid() is `Math.Abs(value) > 100000.0` — over 100 km.
+        // Atmospheric scale heights are single-digit kilometres (Earth's is ~8.5 km),
+        // so that predicate is FALSE for every atmosphere in the game. The check is
+        // written for orbital distances and is simply the wrong test here.
+        //
+        // Trusting it made this function return 0 on every world with air, and 0 is
+        // not a harmless answer: EngineController.ComputeActivePerformance returns
+        // VacuumData when pressure <= 0, so both the planner's Tmax and the throttle
+        // divisor silently became VACUUM thrust. The vehicle then planned against
+        // thrust it did not have and under-throttled by the same ratio all the way
+        // down — which is exactly the constant shortfall the flight logs showed.
+        //
+        // Validating the RESULT is the honest check: a body with no atmosphere has
+        // zero or NaN sea-level pressure and lands on 0 here anyway, and a zero
+        // scale height divides to infinity and is caught by IsFinite.
         double p = phys.GetAtmosphericPressureAtAltitude(altitudeAslM);
         return double.IsFinite(p) && p > 0.0 ? p : 0.0;
     }

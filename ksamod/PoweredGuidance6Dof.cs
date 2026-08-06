@@ -891,11 +891,21 @@ public static partial class PoweredGuidanceWindow
             parent, siteCci.Length() - parent.MeanRadius + x[2]);
         double capability = KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa);
 
-        // Falling back to the plan's Tmax when nothing is lit is not a nicety: on the
-        // very first step the engine has not ignited, so capability is 0 and dividing
-        // would give infinity or a NaN throttle.
-        double denom = capability > 1.0 ? capability : _sixDof.Tmax;
-        double throttle = Math.Clamp(thrustN / denom, 0.0, 1.0);
+        // Invert the REAL thrust curve rather than dividing by full-throttle thrust.
+        // Thrust is not proportional to throttle in an atmosphere - see
+        // KsaEnginePerf.ThrustAtThrottle - so demand/capability under-delivers by a
+        // near-constant amount, worst at low throttle, which is precisely where a
+        // descent spends its time.
+        //
+        // Falling back to the linear estimate when there is nothing to invert is not
+        // a nicety: before ignition capability is 0 and dividing gives NaN.
+        double throttle = KsaEnginePerf.ThrottleForThrust(vehicle, thrustN, ambientPa);
+        if (throttle < 0.0)
+        {
+            double denom = capability > 1.0 ? capability : _sixDof.Tmax;
+            throttle = thrustN / denom;
+        }
+        throttle = Math.Clamp(throttle, 0.0, 1.0);
 
         _sixDofDemandN = thrustN;
         _sixDofCapabilityN = capability;
