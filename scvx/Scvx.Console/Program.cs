@@ -23,6 +23,47 @@ if (args.Contains("--sub-scs"))
 
 // --loop: run the full SCvx loop and compare the converged trajectory against
 // python_ref/loop_ref.py.
+if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
+{
+    Console.WriteLine("""
+        Scvx.Console - headless validation and measurement for the 6-DOF SCvx solver.
+
+        CORRECTNESS - these should always pass
+          --fd            forward-mode AD Jacobians against the JAX reference
+          --sub-scs       one subproblem against the reference solution
+          --loop          the full SCvx loop against the reference trajectory
+          --scs-layout    P/Invoke struct layouts against the native SCS build
+
+        BEHAVIOUR - properties the guidance depends on
+          --path          path constraints bind, and stay solvable when violated
+          --gates         node-ladder transitions carry the plan across
+          --defect        defect gate vs range and node count
+          --spiral        reproduce a logged engage state offline
+
+        MEASUREMENT - closed-loop MPC with injected dispersions
+          --mpc                 sweep configurations
+          --mpc --split         where solve time goes, and its distribution
+          --mpc --tail          tolerance and Anderson memory against the tail
+          --mpc --budget        SCvx iterations per cycle
+          --mpc --trunc         truncation handling
+          --mpc --grav          gravity vs thrust margin, at dynamic similarity
+          --nodes               node count vs altitude: defect and solve time
+
+        RECEDING HORIZON AND TUNING
+          --rh [--cadence]      receding-horizon behaviour; cadence sweep
+          --scale --cond        problem scaling and conditioning
+          --arc --roll          trajectory smoothness diagnostics
+          --ablate --fixed      objective-term ablation; fixed burn time
+          --body                the same descent on different worlds
+
+        OPTIONS
+          --verbose             per-iteration trace
+          --eps <value>         subproblem tolerance
+          --no-warm             disable warm starting
+        """);
+    return 0;
+}
+
 if (args.Contains("--nodes"))
 {
     return NodeSweep.Run();
