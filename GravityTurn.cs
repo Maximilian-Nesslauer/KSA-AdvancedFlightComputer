@@ -227,7 +227,8 @@ namespace NovaTec.GravityTurnMod
                     else
                     {
                         vehicle.SetEnum(VehicleEngine.MainShutdown);
-                        Controller.Phase = GravityController.PhaseEnum.Idle;
+                        Controller.Phase = GravityController.PhaseEnum.Cleanup;
+                        Controller.RunPhaseCleanup(vehicle);
                     }
 
                 }

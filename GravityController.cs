@@ -208,7 +208,7 @@ namespace NovaTec.GravityTurnMod
 
             double diff = Universe.GetElapsedSeconds() - LastTransitionTime;
             if (UseWarp && diff > 3 && Universe.SimulationSpeed < 1.1)
-                Universe.SetSimulationSpeed(2.0);
+                Universe.SetSimulationSpeed(2.0, false);
 
             if (diff > InitialPitch * 0.8 /*&& Math.Abs(vehicle.BodyRates.X) < 0.005 && Math.Abs(vehicle.BodyRates.Y) < 0.005*/)
             {
@@ -220,7 +220,7 @@ namespace NovaTec.GravityTurnMod
             FlightControlOverride.Active = false;
             Console.WriteLine("PHASE: Hold");
             if (UseWarp)
-                Universe.SetSimulationSpeed(4.0);
+                Universe.SetSimulationSpeed(4.0, false);
 
             /*            if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Forward)
                             vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Forward);
@@ -396,7 +396,6 @@ namespace NovaTec.GravityTurnMod
                 if (Universe.SimulationSpeed > 9)
                     Console.WriteLine("Slowdown warp, AP close to target");
                 double warp = (1.0 - (GetApoapsisAltitude() / 1000 / TargetAltitude)) * 90.0;
-                Console.WriteLine("  {0}", warp);
                 Universe.SetSimulationSpeed(Math.Clamp(warp, 1.0, 10.0), false);
             }
             // increase sim speed if AP is above lower atmosphere
@@ -421,7 +420,7 @@ namespace NovaTec.GravityTurnMod
         {
             Console.WriteLine("PHASE: Stage");
             if (UseWarp)
-                Universe.SetSimulationSpeed(1.0);
+                Universe.SetSimulationSpeed(1.0, false);
             LastTransitionTime = Universe.GetElapsedSeconds();
             Phase = PhaseEnum.Stage;
         }
@@ -441,7 +440,10 @@ namespace NovaTec.GravityTurnMod
             {
                 // no fuel in this stage, then it's probably a decoupler, so skip to next stage
                 if (!GetSequenceHasFuel())
+                {
+                    Console.WriteLine("Separate decoupler, then light engine");
                     NextStequence();
+                }
 
                 if ((int)GetApoapsisTime() > TimeToApoapsisStart)
                     TimeToApoapsisTarget = (int)GetApoapsisTime();
@@ -492,6 +494,7 @@ namespace NovaTec.GravityTurnMod
         {
             Console.WriteLine("PHASE: Circularize");
             Phase = PhaseEnum.Circularize;
+            LastTransitionTime = Universe.GetElapsedSeconds();
 
             double currentAp = vehicle.Apoapsis;
             double currentPe = vehicle.Periapsis;
@@ -557,26 +560,40 @@ namespace NovaTec.GravityTurnMod
             if (vehicle.GetManualThrottle() < 1.0 && Universe.GetSimulationSpeed() < 5)
                 ThrottleUp();
 
-
             FlightComputer fc = vehicle.FlightComputer;
+            double secondsToIgnition = (fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds();
             if (UseWarp && fc.Burn != null)
             {
-                const int warpSpeed = 120;
-                if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() >= 60 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() < warpSpeed)
+                const double warpSpeed = 120;
+                // speedup warp if ignition is far away
+                if (secondsToIgnition >= warpSpeed * 2 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() < warpSpeed)
                 {
-                    Universe.SetSimulationSpeed(warpSpeed, false);
+                    double warp = (Universe.GetElapsedSeconds() - LastTransitionTime) * 1.5 + 10.0;
+                    if (Universe.GetSimulationSpeed() <= 10.0)
+                        Console.WriteLine("Warp to burn ignition in {0} s with warp {1,3:N}", secondsToIgnition, warp);
+                    Universe.SetSimulationSpeed(Math.Clamp(warp, 10.0, warpSpeed), false);
                 }
-                else if ((Universe.GetElapsedSimTime() - fc.Burn.IgnitionTime).Seconds() >= 3 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() < 1.1)
+                // slow down warp if closer to ignition
+                else if (secondsToIgnition < warpSpeed * 2 && secondsToIgnition >= 5 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() >= 4)
+                {
+                    if (Universe.GetSimulationSpeed() == warpSpeed)
+                        Console.WriteLine("Slowdown warp to burn ignition in {0,3:N} s", secondsToIgnition);
+                    double warp = secondsToIgnition/2.0;
+                    Universe.SetSimulationSpeed(Math.Clamp(warp, 4.0, warpSpeed), false);
+                }
+                else if (secondsToIgnition >= 3 && !Universe.IsAutoWarpActive && Universe.GetSimulationSpeed() < 1.1)
                 {
                     if (fc.Burn.BurnDuration > 20)
                         Universe.SetSimulationSpeed(4.0, false);
-                    if (fc.Burn.BurnDuration > 10)
+                    else if (fc.Burn.BurnDuration > 10)
                         Universe.SetSimulationSpeed(2.0, false);
+                    else
+                        Universe.SetSimulationSpeed(1.0, false);
                 }
             }
 
             // Burn is about to start, so stop auto warp and set speed to 1x
-            if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 60 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 4))
+            if (secondsToIgnition < 60 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 4))
             {
                 fc.BurnMode = FlightComputerBurnMode.Auto;
                 FlightControlOverride.Active = true;
@@ -589,7 +606,7 @@ namespace NovaTec.GravityTurnMod
                     Universe.AutoWarpStop(true);
                 Universe.SetSimulationSpeed(4.0, false);
             }
-            if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 5 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 1))
+            if (secondsToIgnition < 5 && (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 1))
             {
                 Console.WriteLine("Burn close to ignition");
                 Console.WriteLine("   Burn Duration: {0} burns: {1}", fc.Burn.BurnDuration, fc.BurnPlan.BurnCount);
@@ -621,7 +638,7 @@ namespace NovaTec.GravityTurnMod
                 Phase = PhaseEnum.Cleanup;
                 LastTransitionTime = Universe.GetElapsedSeconds();
             }
-            else if ((fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() < 0)
+            else if (secondsToIgnition < 0)
             {
                 Console.Write("   Burn Duration left: {0} engine: {1}  \r", fc.Burn.BurnDuration, vehicle.IsAnyEngineActive());
                 // needs staging?
@@ -635,21 +652,32 @@ namespace NovaTec.GravityTurnMod
 
         public void RunPhaseCleanup(Vehicle vehicle)
         {
-            if (Universe.GetElapsedSeconds() - LastTransitionTime > 5)
+            ThrottleOverride.Active = true;
+            SetEngineThrottle(1.0);
+            if (Universe.GetElapsedSeconds() - LastTransitionTime > 1)
             {
+                SetEngineThrottle(1.0);
                 Console.WriteLine("Gravity turn cleanup done.");
 
                 FlightComputer fc = vehicle.FlightComputer;
                 if (fc.BurnPlan.BurnCount > 0)
                 {
-                    Console.WriteLine("Burn complete, deleting burn [{0}]", fc.BurnPlan.BurnCount - 1);
+                    fc.BurnMode = FlightComputerBurnMode.Manual;
+                    Console.WriteLine("Burn complete, deleting burn [{0}], active {1}", fc.BurnPlan.BurnCount - 1, fc.BurnPlan.HasActiveBurns);
+                    if (Program.ActiveBurn != null)
+                    {
+                        fc.RemoveBurn(Program.ActiveBurn);
+                        fc.Burn = null;
+                    }
+                    Console.WriteLine("  burns left: {0}", fc.BurnPlan.BurnCount);
                     fc.BurnPlan.Clear();
+                    Console.WriteLine("Burn complete, left burns [{0}], active {1}", fc.BurnPlan.BurnCount, fc.BurnPlan.HasActiveBurns);
                 }
 
                 // Cleanup logic for the cleanup phase
-                FlightControlOverride.RCSMode = FlightComputerRCSMode.Disabled;
-                FlightControlOverride.Active = false;
+                vehicle.FlightComputer.RCSMode = FlightComputerRCSMode.Disabled;
                 PatchRcsPriority.Active = false;
+                FlightControlOverride.Active = false;
                 ThrottleOverride.Active = false;
 
                 Phase = PhaseEnum.Idle;
@@ -710,6 +738,7 @@ namespace NovaTec.GravityTurnMod
             _DeltaVUsed += DeltaVAtLast - ControlledVehicle.NavBallData.DeltaV;
             DeltaVAtLast = ControlledVehicle.NavBallData.DeltaV;
         }
+
         public Sequence GetCurrentSequence()
         {
             Vehicle vehicle = Program.ControlledVehicle;
@@ -721,14 +750,19 @@ namespace NovaTec.GravityTurnMod
             {
                 sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             }
+            else
+            {
+                //vehicle.Parts.SequenceList.RemoveSpentSequences();
+                sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.Count - 1];
+            }
             return sequence;
         }
+
         public Sequence NextStequence()
         {
             Vehicle vehicle = Program.ControlledVehicle;
             Sequence sequence = null;
 
-            Console.WriteLine("Sequence: {0:D} / {1:D}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count );
             if (vehicle != null && vehicle.Parts.SequenceList.ActiveSequence <= 0)
             {
                 //sequence = vehicle.Parts.SequenceList.Sequences[0];
@@ -739,11 +773,11 @@ namespace NovaTec.GravityTurnMod
             {
                 ShutdownEngines();
                 vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
-                //RunWorker();
             }
 
             //vehicle.Parts.SequenceList.ResetCaches();
             //GetCurrentSequence().RecacheParts();
+            vehicle.Parts.SequenceList.RemoveSpentSequences();
             vehicle.UpdateAfterPartTreeModification();
 
             if (vehicle.Parts.SequenceList.ActiveSequence > 0)
