@@ -116,6 +116,9 @@ public static partial class PoweredGuidanceWindow
     // (the launch-pad collider counts), so "cut on contact" must not fire until the
     // vehicle has first been observed OFF the ground. Same trap the landing flow hit.
     private static bool _sixDofTouchdownArmed;
+    // Telemetry, default ON. The whole point is to catch a bad run without having to
+    // reproduce it, so it needs to already be recording when one happens.
+    private static bool _sixDofLogging = true;
     private static double _sixDofLastThrottle;
     // Thrust bookkeeping for the readout: what the optimiser asked for against what
     // the vehicle can actually produce right now.
@@ -198,6 +201,22 @@ public static partial class PoweredGuidanceWindow
                 Disengage6Dof(vehicle);
             ImGui.SameLine();
             ImGui.Checkbox("Show plan overlay", ref _show6DofOverlay);
+
+        // Telemetry. Cheap enough to leave on: rows buffer in memory and flush on an
+        // interval, so the sim thread never waits on the disk.
+        ImGui.Checkbox("Log telemetry to file", ref _sixDofLogging);
+        if (SixDofLog.Enabled)
+        {
+            ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
+                $"logging {SixDofLog.RunName} - {SixDofLog.RowsWritten} rows");
+            ImGui.Text(SixDofLog.Directory);
+            if (ImGui.Button("Flush log now"))
+                SixDofLog.Flush();
+        }
+        else if (_sixDofLogging)
+            ImGui.Text("logging will start when guidance engages");
+        if (SixDofLog.LastError.Length > 0)
+            ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f), "log error: " + SixDofLog.LastError);
         }
 
         if (_sixDofError.Length > 0)
@@ -504,15 +523,88 @@ public static partial class PoweredGuidanceWindow
 
         if (next.SeedFrom(_sixDof, x, now))
         {
+            SixDofLog.Event(now, $"NODE GATE at alt {x[2]:F0} m: {_sixDof.Nodes} -> {nodes} nodes " +
+                                 $"(defect {next.LastDefectM:F2} m, sigma {next.Sigma:F1} s)");
             _sixDof = next;
             _sixDofGateChanges++;
             _sixDofLastReplan = now;
         }
+        else
+        {
+            SixDofLog.Event(now, $"NODE GATE at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
+                                 $"nodes ({next.Error}) - staying at {_sixDof.Nodes}");
+        }
         _sixDofGateIndex = want;
+    }
+
+    // Set by the cadence gate so a row can say whether THIS cycle re-solved, rather
+    // than only reporting the last solve's result forever. Without that distinction
+    // a run of refusals is indistinguishable from a run of cycles that simply were
+    // not due to solve.
+    private static bool _sixDofDidSolve, _sixDofSolveOk;
+
+    private static void LogCycle(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                 double[] x, double now, double thrustN, double capability,
+                                 double throttle, double3 torqueModel, double ambientPa)
+    {
+        if (!SixDofLog.Enabled)
+            return;
+
+        double g = parent.Mu / (siteCci.Length() * siteCci.Length());
+        double mass = vehicle.TotalMass;
+        double weight = Math.Max(mass * g, 1.0);
+        double altToGo = x[2] - _sixDofTargetAltM;
+        double descent = -x[5];
+        double netDecel = (capability / weight - 1.0) * g;
+        double stopDist = descent > 0.0 && netDecel > 0.01
+            ? descent * descent / (2.0 * netDecel)
+            : 0.0;
+
+        // Signed distance outside the glideslope cone, same convention the solver
+        // enforces: positive means outside.
+        double glideViol = 0.0;
+        if (_sixDofGlideSlopeDeg > 0.0)
+        {
+            double cot = 1.0 / Math.Tan(Math.Clamp(_sixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
+            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - cot * (x[2] - _sixDofTargetAltM);
+        }
+
+        double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
+        TvcAllocationResult a = KsaGimbalControl.LastAllocation;
+
+        var row = new SixDofLog.CycleRow
+        {
+            T = now, Alt = x[2],
+            Rx = x[0], Ry = x[1], Rz = x[2], Vx = x[3], Vy = x[4], Vz = x[5],
+            Qw = x[6], Qx = x[7], Qy = x[8], Qz = x[9],
+            TiltDeg = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI,
+            Wx = x[10], Wy = x[11], Wz = x[12], Mass = x[13],
+            Solved = _sixDofDidSolve && _sixDofSolveOk,
+            Status = _sixDofDidSolve ? _sixDof.Status.ToString() : "(no solve this cycle)",
+            ScvxIters = _sixDof.LastIterations, Accepted = _sixDof.AcceptedSteps,
+            SolveMs = _sixDof.LastSolveMs, Admm = 0,
+            DefectM = _sixDof.LastDefectM, DefectLimitM = _sixDof.MaxDefectM,
+            AnchorM = _sixDof.AnchorOffsetM,
+            FellBack = _sixDof.FellBack, Escalations = _sixDof.Escalations,
+            Nodes = _sixDof.Nodes, Sigma = _sixDof.Sigma, PlanElapsed = _sixDof.PlanElapsed,
+            ThrustDemandN = thrustN, CapabilityN = capability, Throttle = throttle,
+            Saturated = _sixDofThrustSaturated,
+            TauX = torqueModel.X, TauY = torqueModel.Y, TauZ = torqueModel.Z,
+            AllocX = a.AchievedTorque.X, AllocY = a.AchievedTorque.Y, AllocZ = a.AchievedTorque.Z,
+            AllocSat = a.SaturationScale,
+            Twr = capability / weight, TwrMin = _sixDofThrottleFloor * capability / weight,
+            AmbientPa = ambientPa,
+            AltToGo = altToGo, DescentRate = descent, StopDistM = stopDist,
+            GlideViolM = glideViol,
+            Error = _sixDofError,
+        };
+        SixDofLog.Cycle(row);
+        _sixDofDidSolve = false;
     }
 
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
     {
+        SixDofLog.Stop();
         _sixDofActive = false;
         _sixDofEngagePending = false;
         _sixDof = null;
@@ -578,6 +670,9 @@ public static partial class PoweredGuidanceWindow
         }
         else if (_sixDofTouchdownArmed)
         {
+            SixDofLog.Event(now, $"TOUCHDOWN at alt {x[2]:F1} m, vz {x[5]:F2} m/s, " +
+                                 $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
+            SixDofLog.Stop();
             Disengage6Dof(vehicle);
             _sixDofError = "touchdown - engine cut, 6-DOF guidance disengaged.";
             return;
@@ -598,6 +693,9 @@ public static partial class PoweredGuidanceWindow
         // below the target would simply never trigger, which the UI warns about.
         if (_sixDofHoverHandoff && x[2] <= _sixDofHoverHandoffAltM)
         {
+            SixDofLog.Event(now, $"HANDOFF to terminal hover at alt {x[2]:F1} m, " +
+                                 $"vz {x[5]:F2} m/s, lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m");
+            SixDofLog.Stop();
             Disengage6Dof(vehicle, cutEngine: false);
             StartTerminalHover();
             _landingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
@@ -645,14 +743,22 @@ public static partial class PoweredGuidanceWindow
 
         if (now - _sixDofLastReplan >= cadence)
         {
+            _sixDofDidSolve = true;
             if (_sixDof.Update(x, now))
             {
                 _sixDofLastReplan = now;
                 _sixDofError = "";
+                _sixDofSolveOk = true;
+                SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
             }
             else
             {
                 _sixDofError = "re-solve failed: " + _sixDof.Error;
+                _sixDofSolveOk = false;
+                // Every refusal, with its reason. A refused re-solve silently leaves
+                // the vehicle on a stale open-loop plan, so a run of these in the
+                // event log is the signature to look for first.
+                SixDofLog.Event(now, "RE-SOLVE REFUSED: " + _sixDof.Error);
             }
         }
 
@@ -721,6 +827,9 @@ public static partial class PoweredGuidanceWindow
         manual.EngineOn = true;
         manual.EngineThrottle = (float)throttle;
         _sixDofLastThrottle = throttle;
+
+        LogCycle(vehicle, parent, siteCci, x, now, thrustN, capability, throttle,
+                 torqueModel, ambientPa);
     }
 
     private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,
@@ -767,6 +876,22 @@ public static partial class PoweredGuidanceWindow
         _sixDofGateIndex = -1;
         _sixDofGateChanges = 0;
         _sixDofLastReplan = now;
+
+        if (_sixDofLogging)
+        {
+            SixDofLog.Start(vehicle.ToString(), parent.ToString());
+            SixDofLog.Event(now,
+                $"ENGAGED  nodes {_sixDofNodes}  tilt {_sixDofTiltDeg:F0} deg  " +
+                $"floor {_sixDofThrottleFloor:F2}  target alt {_sixDofTargetAltM:F0} m  " +
+                $"glideslope {_sixDofGlideSlopeDeg:F0} deg  " +
+                $"vzMax {(_sixDofVzEnabled ? _sixDofVzMaxMs.ToString("F1") : "off")}  " +
+                $"cadence {_sixDofReplanSec:F2} s  gates {(_sixDofNodeGates ? "on" : "off")}");
+            SixDofLog.Event(now,
+                $"cold solve: {_sixDof.Status}, {_sixDof.LastIterations} iters, " +
+                $"defect {_sixDof.LastDefectM:F2} m, sigma {_sixDof.Sigma:F1} s, " +
+                $"Tmax {_sixDof.Tmax / 1e6:F2} MN");
+            SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
+        }
         return true;
     }
 
