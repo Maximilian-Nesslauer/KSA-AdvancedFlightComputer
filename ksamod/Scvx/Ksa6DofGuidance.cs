@@ -330,6 +330,32 @@ public sealed class Ksa6DofGuidance
         return Finish(x0, simNow, maxIterations, cold: true);
     }
 
+    /// <summary>
+    /// Cold solve from a SUPPLIED seed rather than the built-in straight line.
+    ///
+    /// SCvx refines a reference, it does not search for one, so the seed sets both how
+    /// many iterations the cold solve needs and which local solution it walks toward.
+    /// See Ksa6DofGfoldSeed for the one that matters: a convex 3-DOF solve of the same
+    /// landing, which costs a few milliseconds and gets position, velocity, mass, burn
+    /// time and thrust direction all approximately right.
+    /// </summary>
+    public bool PlanFromSeed(double[] x0, double[] xf, double[] xSeed, double[] uSeed,
+                             double sigmaSeed, double simNow, int maxIterations = 25)
+    {
+        if (xSeed.Length != _n * NX || uSeed.Length != _n * NU)
+            return false;
+
+        // Node 0 must be the measured state exactly - the equality pins it and the
+        // trust region applies there too, so a seed that disagrees is infeasible
+        // rather than merely inaccurate.
+        Array.Copy(x0, 0, xSeed, 0, NX);
+
+        _xf = (double[])xf.Clone();
+        if (FixedTime) PinSigma(sigmaSeed);
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
+        return Finish(x0, simNow, maxIterations, cold: true);
+    }
+
     private double[] _xf = [];
 
     /// <summary>

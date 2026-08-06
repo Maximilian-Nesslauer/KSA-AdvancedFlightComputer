@@ -10,6 +10,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Scvx.Core\Scvx.Core.csproj" />
+    <!-- G-FOLD, for the cold-start seed. Ksa6DofGfoldSeed depends only on Gfold and
+         Scvx (no KSA), so it can be compiled in here and measured headless. -->
+    <ProjectReference Include="..\..\gfold\Gfold.Core\Gfold.Core.csproj" />
+    <Compile Include="..\..\ksamod\Scvx\Ksa6DofGfoldSeed.cs" Link="Ksa6DofGfoldSeed.cs" />
   </ItemGroup>
 
 </Project>

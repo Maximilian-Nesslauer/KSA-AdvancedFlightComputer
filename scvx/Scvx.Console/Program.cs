@@ -39,6 +39,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --gates         node-ladder transitions carry the plan across
           --defect        defect gate vs range and node count
           --spiral        reproduce a logged engage state offline
+          --seed          cold-start seed: straight line vs 3-DOF G-FOLD
 
         MEASUREMENT - closed-loop MPC with injected dispersions
           --mpc                 sweep configurations
@@ -62,6 +63,11 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --no-warm             disable warm starting
         """);
     return 0;
+}
+
+if (args.Contains("--seed"))
+{
+    return SeedCheck.Run();
 }
 
 if (args.Contains("--nodes"))

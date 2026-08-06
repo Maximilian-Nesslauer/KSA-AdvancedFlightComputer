@@ -542,6 +542,19 @@ public static partial class PoweredGuidanceWindow
     private const int MaxNodes = 50;
 
     private static bool _sixDofNodeGates = true;
+    // Seed the cold solve from a convex 3-DOF G-FOLD solve.
+    //
+    // OFF, because it was MEASURED not to help (Scvx.Console --seed). The idea is
+    // sound in general - SCvx refines a reference rather than searching for one - but
+    // there is almost no headroom to win here: at the node counts now flown the
+    // straight-line seed already converges in 6 to 8 SCvx iterations and 130-260 ms
+    // total, so a seed costing 300-1000 ms to compute cannot pay for itself, and on
+    // several cases it made the first subproblem fail outright.
+    //
+    // Kept behind a flag with its test, because it should be revisited if cold-solve
+    // cost ever becomes the bottleneck again - at higher node counts, or from a much
+    // worse initial state, the balance would be different.
+    private static bool _sixDofGfoldSeed;
     private static int _sixDofGateIndex = -1;    // -1 = above every gate
     private static int _sixDofGateChanges;
 
@@ -1072,12 +1085,33 @@ public static partial class PoweredGuidanceWindow
 
         _sixDof = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _sixDofFixedTime };
 
-        // Fixed time needs a burn time CHOSEN, so search for it the way Gfold does
-        // rather than trusting the seed. Each sample warm-starts from the last, so
-        // the sweep is much cheaper than N independent cold solves.
-        bool ok = _sixDofFixedTime
-            ? _sixDof.PlanSearch(x, xf, _sixDofSigmaSeed, now, Math.Clamp(_sixDofSigmaSamples, 1, 12))
-            : _sixDof.Plan(x, xf, _sixDofSigmaSeed, now);
+        // SEED FROM G-FOLD. SCvx refines a reference rather than searching for one,
+        // so the seed decides how many iterations the cold solve needs and which local
+        // solution it walks toward. G-FOLD solves the same landing under a convex
+        // 3-DOF model in a few milliseconds, with no initial guess of its own and no
+        // local minima, and its golden-section search over time of flight also
+        // supplies a burn time far better than a fixed guess.
+        //
+        // Strictly an optimisation: any failure falls back to the straight-line seed,
+        // because a worse guess is enormously better than not engaging.
+        bool ok = false;
+        string seedNote = "";
+        if (_sixDofGfoldSeed && !_sixDofFixedTime &&
+            Ksa6DofGfoldSeed.TryBuild(x, xf, cfg, dyn, _sixDofNodes,
+                                      out double[] gx, out double[] gu, out double gSigma,
+                                      out seedNote))
+        {
+            ok = _sixDof.PlanFromSeed(x, xf, gx, gu, gSigma, now);
+            if (!ok)
+                seedNote += $" (rejected: {_sixDof.Error}) - retrying from the straight-line seed";
+        }
+
+        if (!ok)
+        {
+            ok = _sixDofFixedTime
+                ? _sixDof.PlanSearch(x, xf, _sixDofSigmaSeed, now, Math.Clamp(_sixDofSigmaSamples, 1, 12))
+                : _sixDof.Plan(x, xf, _sixDofSigmaSeed, now);
+        }
         if (!ok)
         {
             _sixDofError = "cold solve failed: " + _sixDof.Error;
@@ -1104,6 +1138,7 @@ public static partial class PoweredGuidanceWindow
                 $"vzMax {(_sixDofVzEnabled ? _sixDofVzMaxMs.ToString("F1") : "off")}  " +
                 $"cadence {_sixDofReplanSec:F2} s  gates {(_sixDofNodeGates ? "on" : "off")}");
             SixDofLog.Event(now,
+                (seedNote.Length > 0 ? seedNote + "  |  " : "") +
                 $"cold solve: {_sixDof.Status}, {_sixDof.LastIterations} iters, " +
                 $"defect {_sixDof.LastDefectM:F2} m, sigma {_sixDof.Sigma:F1} s, " +
                 $"Tmax {_sixDof.Tmax / 1e6:F2} MN");
