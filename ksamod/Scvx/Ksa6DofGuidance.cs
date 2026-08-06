@@ -286,8 +286,23 @@ public sealed class Ksa6DofGuidance
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
     public bool Plan(double[] x0, double[] xf, double sigmaSeed, double simNow, int maxIterations = 25)
     {
-        var xSeed = new double[_n * NX];
-        var uSeed = new double[_n * NU];
+        BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
+        _xf = (double[])xf.Clone();
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
+        return Finish(x0, simNow, maxIterations, cold: true);
+    }
+
+    /// <summary>
+    /// The straight-line cold seed, shared by Plan and BeginCold.
+    ///
+    /// Attitude and rates interpolate FROM THE MEASURED STATE rather than jumping to
+    /// identity - see the note inside. That is a feasibility requirement, not a
+    /// quality one.
+    /// </summary>
+    private void BuildColdSeed(double[] x0, double[] xf, out double[] xSeed, out double[] uSeed)
+    {
+        xSeed = new double[_n * NX];
+        uSeed = new double[_n * NU];
         double m0 = x0[13];
         for (int k = 0; k < _n; k++)
         {
@@ -325,9 +340,6 @@ public sealed class Ksa6DofGuidance
         // slack at all here, so it is not worth depending on floating-point luck.
         Array.Copy(x0, 0, xSeed, 0, NX);
 
-        _xf = (double[])xf.Clone();
-        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
-        return Finish(x0, simNow, maxIterations, cold: true);
     }
 
     /// <summary>
@@ -354,6 +366,60 @@ public sealed class Ksa6DofGuidance
         if (FixedTime) PinSigma(sigmaSeed);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         return Finish(x0, simNow, maxIterations, cold: true);
+    }
+
+    /// <summary>
+    /// Begin a cold solve WITHOUT running it, so the iterations can be spread over
+    /// several frames by StepCold.
+    ///
+    /// Blocking for a whole cold solve costs 130-280 ms in the caller's frame, which
+    /// on the sim thread is a visible hitch. Spreading it is possible because SCvx is
+    /// iterative by construction and the solver keeps all its state between calls -
+    /// Iterate() is just one pass of the loop that Solve() runs in a batch.
+    /// </summary>
+    public void BeginCold(double[] x0, double[] xf, double sigmaSeed)
+    {
+        BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
+        _xf = (double[])xf.Clone();
+        if (FixedTime) PinSigma(sigmaSeed);
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
+        Status = ScvxStatus.IterationLimit;
+        Error = "converging";
+    }
+
+    /// <summary>
+    /// Advance a spread cold solve by up to <paramref name="iterations"/> SCvx steps,
+    /// re-anchored at the CURRENT vehicle state.
+    ///
+    /// Re-anchoring every frame is what makes the vehicle continuing to fall a
+    /// non-issue: it is the same thing Update does at every cadence tick, so the drift
+    /// is absorbed rather than invalidating the work so far. Measured, the vehicle
+    /// falls 1-6 m before the plan becomes flyable, because that takes about three
+    /// frames rather than the full iteration budget.
+    ///
+    /// Returns true once the plan is good enough to fly, at which point the caller
+    /// should switch to Update.
+    /// </summary>
+    public bool StepCold(double[] x0, double simNow, int iterations = 1)
+    {
+        ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
+
+        // Re-anchor at the vehicle before iterating, exactly as Update does.
+        if (_solver.IterationCount > 0)
+        {
+            double[] xs = (double[])_solver.ReferenceX.Clone();
+            double[] us = (double[])_solver.ReferenceU.Clone();
+            Array.Copy(x0, 0, xs, 0, NX);
+            _solver.Reseed(x0, xs, us, _solver.Sigma, trustRegion: _solver.TrustRegion);
+        }
+
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
+            _solver.Iterate();
+        LastSolveMs = sw.Elapsed.TotalMilliseconds;
+        LastIterations = _solver.IterationCount;
+
+        return Finish(x0, simNow, 0, cold: true);
     }
 
     private double[] _xf = [];

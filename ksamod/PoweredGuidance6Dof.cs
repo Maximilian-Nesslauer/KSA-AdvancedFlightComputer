@@ -259,6 +259,13 @@ public static partial class PoweredGuidanceWindow
                     ImGui.Text($"  sigma {_sixDof.Sigma,5:F1} s / {_sixDof.Nodes} nodes = " +
                                $"{_sixDof.Sigma / Math.Max(_sixDof.Nodes - 1, 1),4:F2} s actual");
             }
+            ImGui.Checkbox("Spread cold solve over frames", ref _sixDofSpreadCold);
+            if (_sixDofSpreadCold)
+                ImGui.TextWrapped(
+                    "Runs the cold solve one SCvx iteration per frame instead of blocking for " +
+                    "the whole thing, so engaging does not hitch the sim thread. A flyable plan " +
+                    "typically arrives in ~3 frames; the vehicle keeps falling meanwhile, which " +
+                    "is absorbed because each frame re-anchors at the measured state.");
             ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
             if (_sixDofBiasEnabled)
                 ImGui.TextWrapped(
@@ -525,8 +532,26 @@ public static partial class PoweredGuidanceWindow
     /// vehicles at the same altitude with different burn times need different counts
     /// for the same accuracy. Targeting 1.5 s leaves roughly a 10x margin on the 1 m
     /// flight gate.
+    ///
+    /// 1.5 s looked safe on that evidence and was NOT, in flight. The sweep advances
+    /// the state ALONG the plan, so it measures collocation error with no tracking
+    /// error present; a real descent has both, and their combination is what the gate
+    /// sees. Flight log 20260806-142450 stepped to 5 nodes at 261 m with a nominal dt
+    /// of 1.48 s, and the defect immediately blew past 390 m and refused every
+    /// subsequent re-solve - leaving the vehicle open loop.
+    ///
+    /// 0.85 s is calibrated instead against the altitude ladder that DID work,
+    /// swept against the burn times actually flown in that log. It reproduces the old
+    /// gates almost exactly - 20 nodes at 1000 m, 15 at 500, 10 at 100-350 - and its
+    /// worst disagreement anywhere is one rung. The one deliberate difference is at
+    /// the bottom: where the old ladder dropped to 5 it now holds 10, because 5 is
+    /// the rung that failed.
+    ///
+    /// The floor matters more than the ceiling here. Too many nodes costs solve time,
+    /// which the wall-clock budget already bounds; too few costs the PLAN, and a
+    /// refused plan means flying open loop.
     /// </summary>
-    private static double _sixDofNodeDtTarget = 1.5;
+    private static double _sixDofNodeDtTarget = 0.85;
 
     /// <summary>
     /// Hard bounds on node count, ladder or configured.
@@ -540,6 +565,18 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private const int MinNodes = 5;
     private const int MaxNodes = 50;
+
+    // Consecutive refused re-solves since the last node step, and the coarsest rung
+    // index the ladder may still move to. A refused plan means the vehicle is flying
+    // the previous one OPEN LOOP, so a step that causes them has to be undone -
+    // one-way stepping on its own cannot recover from a rung that does not work.
+    private static int _sixDofRefusalRun;
+    private static int _sixDofRungFloor = int.MaxValue;
+
+    // Refusals tolerated before undoing a node step. Long enough that one awkward
+    // cycle does not trigger it, short enough that the vehicle is not open loop for
+    // long: at a 0.1 s cadence this is half a second.
+    private const int RefusalsBeforeBackOff = 5;
 
     private static bool _sixDofNodeGates = true;
     // Seed the cold solve from a convex 3-DOF G-FOLD solve.
@@ -555,6 +592,18 @@ public static partial class PoweredGuidanceWindow
     // cost ever becomes the bottleneck again - at higher node counts, or from a much
     // worse initial state, the balance would be different.
     private static bool _sixDofGfoldSeed;
+
+    // Spread the cold solve over frames instead of blocking on it.
+    //
+    // A blocking cold solve costs 130-280 ms in the sim thread's frame, which is a
+    // visible hitch. SCvx is iterative and the solver keeps its state between calls,
+    // so the same work can be done one iteration per frame. Measured, a flyable plan
+    // arrives in about three frames and the vehicle falls 1-6 m in the meantime -
+    // absorbed automatically, because each frame re-anchors at the measured state
+    // exactly as the warm loop does.
+    private static bool _sixDofSpreadCold = true;
+    private static bool _sixDofConverging;      // cold solve in progress, not yet flyable
+    private static int _sixDofColdFrames;
     private static int _sixDofGateIndex = -1;    // -1 = above every gate
     private static int _sixDofGateChanges;
 
@@ -568,6 +617,26 @@ public static partial class PoweredGuidanceWindow
     private static void StepNodeGates(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                       double[] x, double now)
     {
+        // RECOVERY. A run of refusals means the vehicle is flying an ageing
+        // open-loop plan, and the commonest cause is a node step that landed on a
+        // count too coarse for the conditions - the flight log for 20260806-142450
+        // shows a step to 5 nodes at 261 m taking the defect from 0.49 m to 390 m and
+        // refusing every re-solve thereafter. One-way stepping cannot recover from
+        // that on its own, so step BACK UP one rung and refuse to go that coarse
+        // again for the rest of the run.
+        if (_sixDofRefusalRun >= RefusalsBeforeBackOff && _sixDofGateIndex > 0)
+        {
+            int finer = _sixDofGateIndex - 1;
+            _sixDofRungFloor = Math.Min(_sixDofRungFloor, finer);
+            SixDofLog.Event(now,
+                $"NODE BACK-OFF at alt {x[2]:F0} m after {_sixDofRefusalRun} refused re-solves: " +
+                $"{_sixDof.Nodes} -> {NodeRungs[finer]} nodes, and no coarser this run");
+            _sixDofRefusalRun = 0;
+            if (RebuildAt(vehicle, parent, siteCci, x, now, NodeRungs[finer]))
+                _sixDofGateIndex = finer;
+            return;
+        }
+
         // Nodes needed to hold the target spacing at the CURRENT burn time. Sigma is
         // what sets spacing, and sigma counts down through the descent, so this falls
         // naturally without reference to altitude at all - and it adapts to a fast
@@ -590,15 +659,34 @@ public static partial class PoweredGuidanceWindow
         // One-way only: never step back up. Sigma wobbles cycle to cycle, and
         // rebuilding the solver to add a node the problem does not really need costs
         // a warm start for nothing.
-        int want = Array.IndexOf(NodeRungs, nodes);
-        if (want < 0 || want <= _sixDofGateIndex)
+        int want0 = Array.IndexOf(NodeRungs, nodes);
+        if (want0 < 0)
             return;
+        // Never move coarser than a rung already shown to be unflyable this run.
+        int want = Math.Min(want0, _sixDofRungFloor);
+        if (want <= _sixDofGateIndex)
+            return;
+        nodes = NodeRungs[want];
         if (nodes >= _sixDof.Nodes)
         {
             _sixDofGateIndex = want;   // already at or below this count, nothing to do
             return;
         }
 
+        if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
+            _sixDofGateChanges++;
+        _sixDofGateIndex = want;
+    }
+
+    /// <summary>
+    /// Rebuild the guidance at a different node count, carrying the current plan
+    /// across by resampling. Returns false and leaves the existing guidance untouched
+    /// if anything fails — losing the node change is survivable, losing the plan is
+    /// not.
+    /// </summary>
+    private static bool RebuildAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                  double[] x, double now, int nodes)
+    {
         var xf = new double[14];
         xf[2] = _sixDofTargetAltM;
         TerminalAttitude(x, xf);
@@ -612,29 +700,29 @@ public static partial class PoweredGuidanceWindow
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _))
         {
-            _sixDofGateIndex = want;   // do not retry this gate every cycle
-            return;
+            SixDofLog.Event(now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
+            return false;
         }
 
         var next = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _sixDofFixedTime };
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         next.SetInertia(ixx, iyy, izz);
+        next.SetAccelBias(_sixDof.AccelBias);
 
-        if (next.SeedFrom(_sixDof, x, now))
-        {
-            SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m: {_sixDof.Nodes} -> {nodes} nodes " +
-                                 $"(sigma {sigma:F1} s -> dt {sigma / Math.Max(nodes - 1, 1):F2} s, " +
-                                 $"defect {next.LastDefectM:F2} m)");
-            _sixDof = next;
-            _sixDofGateChanges++;
-            _sixDofLastReplan = now;
-        }
-        else
+        double sigmaWas = _sixDof.Sigma;
+        if (!next.SeedFrom(_sixDof, x, now))
         {
             SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
                                  $"nodes ({next.Error}) - staying at {_sixDof.Nodes}");
+            return false;
         }
-        _sixDofGateIndex = want;
+
+        SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m: {_sixDof.Nodes} -> {nodes} nodes " +
+                             $"(sigma {sigmaWas:F1} s -> dt {sigmaWas / Math.Max(nodes - 1, 1):F2} s, " +
+                             $"defect {next.LastDefectM:F2} m)");
+        _sixDof = next;
+        _sixDofLastReplan = now;
+        return true;
     }
 
     // Set by the cadence gate so a row can say whether THIS cycle re-solved, rather
@@ -821,6 +909,7 @@ public static partial class PoweredGuidanceWindow
         SixDofLog.Stop();
         _sixDofActive = false;
         _sixDofEngagePending = false;
+        _sixDofConverging = false;
         _sixDof = null;
         _gimbalMode = 0;
         KsaGimbalControl.Disengage();
@@ -866,6 +955,36 @@ public static partial class PoweredGuidanceWindow
             _sixDofEngagePending = false;
             if (!Engage6Dof(vehicle, parent, siteCci, x, now))
                 return;
+        }
+
+        // Advance a spread cold solve. Until it produces a flyable plan there is
+        // nothing to command, so this returns without touching the actuators - the
+        // vehicle carries on doing whatever it was doing.
+        if (_sixDofConverging)
+        {
+            _sixDofColdFrames++;
+            if (_sixDof.StepCold(x, now))
+            {
+                _sixDofConverging = false;
+                _sixDofError = "";
+                SixDofLog.Event(now,
+                    $"COLD SOLVE CONVERGED after {_sixDofColdFrames} frames, " +
+                    $"defect {_sixDof.LastDefectM:F2} m, sigma {_sixDof.Sigma:F1} s");
+                SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
+            }
+            else
+            {
+                _sixDofError = $"converging... {_sixDofColdFrames} frames, " +
+                               $"defect {_sixDof.LastDefectM:F1} m";
+                // Give up rather than fall forever if it is not going to converge.
+                if (_sixDofColdFrames > 240)
+                {
+                    SixDofLog.Event(now, "COLD SOLVE gave up after 240 frames: " + _sixDof.Error);
+                    Disengage6Dof(vehicle);
+                    _sixDofError = "cold solve failed to converge: " + _sixDof.Error;
+                }
+                return;
+            }
         }
 
         if (_sixDof == null || !_sixDof.HasPlan)
@@ -967,12 +1086,14 @@ public static partial class PoweredGuidanceWindow
                 _sixDofLastReplan = now;
                 _sixDofError = "";
                 _sixDofSolveOk = true;
+                _sixDofRefusalRun = 0;
                 SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
             }
             else
             {
                 _sixDofError = "re-solve failed: " + _sixDof.Error;
                 _sixDofSolveOk = false;
+                _sixDofRefusalRun++;
                 // Every refusal, with its reason. A refused re-solve silently leaves
                 // the vehicle on a stale open-loop plan, so a run of these in the
                 // event log is the signature to look for first.
@@ -1094,6 +1215,33 @@ public static partial class PoweredGuidanceWindow
         //
         // Strictly an optimisation: any failure falls back to the straight-line seed,
         // because a worse guess is enormously better than not engaging.
+        // SPREAD: start the cold solve and return. Step6DofCore advances it a frame
+        // at a time until the plan is flyable, so the engage costs one iteration
+        // rather than the whole solve.
+        if (_sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed)
+        {
+            _sixDof.BeginCold(x, xf, _sixDofSigmaSeed);
+            _sixDofConverging = true;
+            _sixDofColdFrames = 0;
+            _sixDofActive = true;
+            _sixDofTouchdownArmed = false;
+            _sixDofGateIndex = -1;
+            _sixDofGateChanges = 0;
+            _sixDofRefusalRun = 0;
+            _sixDofRungFloor = int.MaxValue;
+            _sixDofPrevV = null;
+            _sixDofBias = default;
+            _sixDofLastReplan = now;
+            _sixDofError = "converging...";
+            if (_sixDofLogging)
+            {
+                SixDofLog.Start(vehicle.ToString(), parent.ToString());
+                SixDofLog.Event(now, $"ENGAGED (spread cold solve)  nodes {_sixDofNodes}  " +
+                                     $"target alt {_sixDofTargetAltM:F0} m  cadence {_sixDofReplanSec:F2} s");
+            }
+            return true;
+        }
+
         bool ok = false;
         string seedNote = "";
         if (_sixDofGfoldSeed && !_sixDofFixedTime &&
@@ -1126,6 +1274,8 @@ public static partial class PoweredGuidanceWindow
         _sixDofGateChanges = 0;
         _sixDofLastReplan = now;
         _sixDofPrevV = null;
+        _sixDofRefusalRun = 0;
+        _sixDofRungFloor = int.MaxValue;
         _sixDofBias = default;
 
         if (_sixDofLogging)
