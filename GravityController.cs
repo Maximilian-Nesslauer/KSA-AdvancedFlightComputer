@@ -32,17 +32,7 @@ namespace NovaTec.GravityTurnMod
         public int TimeToApoapsisTarget { get; set; } = 70;
         public double TargetAltitude { get; set; } = 280;
         public double MinThrottle{ get; set; } = 0.2;
-
-        /* works for 1/4th size
-        public double InitialPitch { get; set; } = 12.0;
-        public double InitialSpeed { get; set; } = 70.0;
-        public int TimeToApoapsisStart { get; set; } = 50;
-        public int TimeToApoapsisEnd { get; set; } = 50;
-        public int TimeToApoapsisTarget { get; set; } = 50;
-        public double TargetAltitude { get; set; } = 120.0;
-        */
-
-        public double TargetInclination { get; set; } = 0.0;
+        public double TargetInclination { get; set; } = 94.5;
         public bool UseWarp { get; set; } = true;
         public bool AutoStage{ get; set; } = true;
 
@@ -183,7 +173,7 @@ namespace NovaTec.GravityTurnMod
             vehicle.SetStabilization(true);
 
             // create custom target for pitch
-            double inclination = 0;
+            double inclination = TargetInclination;
             double3 target = new double3(0, DegToRad(90 - InitialPitch), DegToRad(inclination));
             FlightControlOverride.Active = true;
             FlightControlOverride.BurnMode = FlightComputerBurnMode.Manual;
@@ -282,7 +272,7 @@ namespace NovaTec.GravityTurnMod
                     else
                         fwdPitch = pitch;
 
-                    double3 target = new double3(0, DegToRad(-fwdPitch), 0);
+                    double3 target = new double3(0, DegToRad(-fwdPitch), vehicle.Orbit.Inclination);
                     FlightControlOverride.CustomAttitudeTarget = target;
                     if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
                     {
@@ -304,7 +294,7 @@ namespace NovaTec.GravityTurnMod
                     else
                         fwdPitch = pitch;
 
-                    double3 target = new double3(0, DegToRad(-fwdPitch), 0);
+                    double3 target = new double3(0, DegToRad(-fwdPitch), vehicle.Orbit.Inclination);
                     FlightControlOverride.CustomAttitudeTarget = target;
                     if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
                     {
