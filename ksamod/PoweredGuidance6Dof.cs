@@ -596,6 +596,11 @@ public static partial class PoweredGuidanceWindow
     // ~100 consecutive refusals seen in flight log 20260807-093052.
     private const int RefusalsBeforeRestart = 15;
 
+    // Drift past which the warm seed has stopped being worth having and a cold restart
+    // is the cheaper option. Taken as the larger of this and 5% of altitude, so it
+    // scales with how much room there is: 20 m matters at 100 m and is noise at 2 km.
+    private const double ColdRestartDriftM = 20.0;
+
     private static bool _sixDofNodeGates = true;
     // Seed the cold solve from a convex 3-DOF G-FOLD solve.
     //
@@ -997,14 +1002,35 @@ public static partial class PoweredGuidanceWindow
         // deeper. Once that happens the answer is not to keep hammering it: throw the
         // plan away and cold-start again, spread over frames so it does not stall the
         // sim thread.
-        if (!_sixDofConverging && _sixDof != null && _sixDofRefusalRun >= RefusalsBeforeRestart)
+        // ESCALATION LADDER. Each rung is only reached when the cheaper one below has
+        // stopped working, and the trigger for the top rung is DRIFT rather than a
+        // failure count - because drift is the cause and failures are the symptom.
+        //
+        //   1. warm re-solve, tight trust region        (Update, normal case)
+        //   2. wide trust region, re-linearised         (Update's retry, on divergence)
+        //   3. cold re-seed from the current state      (here, spread over frames)
+        //
+        // A warm start is an advantage only while the vehicle is NEAR its plan. Past
+        // that, the stale plan is a worse seed than a straight line from where the
+        // vehicle actually is, because the straight line is at least self-consistent.
+        // So once drift passes that point there is nothing to be gained by re-solving
+        // from it, however many times we try - and waiting for fifteen failures first
+        // just means fifteen expensive cycles of flying open loop.
+        double drift = _sixDof != null ? _sixDof.MeasureDrift(x, now) : 0.0;
+        double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
+        bool driftedOff = _sixDof != null && _sixDof.HasPlan && drift > driftLimit;
+
+        if (!_sixDofConverging && _sixDof != null &&
+            (driftedOff || _sixDofRefusalRun >= RefusalsBeforeRestart))
         {
             var xfR = new double[14];
             xfR[2] = _sixDofTargetAltM;
             TerminalAttitude(x, xfR);
             SixDofLog.Event(now,
-                $"COLD RESTART at alt {x[2]:F0} m after {_sixDofRefusalRun} refused re-solves " +
-                $"(plan {_sixDof.PlanElapsed:F1} s stale, defect {_sixDof.LastDefectM:F0} m)");
+                $"COLD RESTART at alt {x[2]:F0} m: " +
+                (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
+                            : $"{_sixDofRefusalRun} refused re-solves") +
+                $" - plan {_sixDof.PlanElapsed:F1} s stale, defect {_sixDof.LastDefectM:F0} m");
             _sixDof.BeginCold(x, xfR, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
             _sixDofConverging = true;
             _sixDofColdFrames = 0;

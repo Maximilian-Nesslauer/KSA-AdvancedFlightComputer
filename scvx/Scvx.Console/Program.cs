@@ -41,6 +41,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --spiral        reproduce a logged engage state offline
           --seed          cold-start seed: straight line vs 3-DOF G-FOLD
           --spread        spread the cold solve across frames while the vehicle falls
+          --soft          soft terminal position: unreachable target still yields a plan
 
         MEASUREMENT - closed-loop MPC with injected dispersions
           --mpc                 sweep configurations
@@ -64,6 +65,11 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --no-warm             disable warm starting
         """);
     return 0;
+}
+
+if (args.Contains("--soft"))
+{
+    return SoftTerminalCheck.Run();
 }
 
 if (args.Contains("--spread"))

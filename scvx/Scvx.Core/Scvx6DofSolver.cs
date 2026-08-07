@@ -290,6 +290,67 @@ public sealed class Scvx6DofSolver
         return ScvxStatus.IterationLimit;
     }
 
+    private bool _sliceOpen;
+    private int _sliceIndex;
+    private System.Diagnostics.Stopwatch _sliceWatch = new();
+
+    /// <summary>True while a sliced iteration is part-way through its subproblem.</summary>
+    public bool SliceInProgress => _sliceOpen;
+
+    /// <summary>
+    /// One SCvx iteration, run in SLICES of at most <paramref name="admmSlice"/> ADMM
+    /// iterations, so no single call blocks for long. Returns true when the iteration
+    /// completed (ratio test done, reference possibly advanced); false means it needs
+    /// calling again to continue the SAME subproblem.
+    ///
+    /// This is what makes a cold solve invisible rather than merely shorter. Doing one
+    /// whole SCvx iteration per frame still costs 50-100 ms in that frame, because the
+    /// expense is inside a single subproblem solve; the only way to bound a FRAME is
+    /// to stop part-way through ADMM and resume next time. SCS supports that directly
+    /// - its warm start IS the ADMM iterate - provided the truncated iterate is kept
+    /// rather than discarded, which is why Run takes keepTruncatedIterate.
+    ///
+    /// The subproblem is assembled once per iteration, on the first slice. Nothing
+    /// about it changes while slicing, so resuming is exact rather than approximate.
+    /// </summary>
+    public bool IterateSliced(int admmSlice)
+    {
+        if (!_sliceOpen)
+        {
+            _sliceIndex = IterationCount++;
+            _sliceWatch = System.Diagnostics.Stopwatch.StartNew();
+            for (int k = 0; k < _n; k++)
+                Dynamics6Dof.Jacobian(
+                    _xbar.AsSpan(k * NX, NX), _ubar.AsSpan(k * NU, NU), _dyn,
+                    _f0.AsSpan(k * NX, NX),
+                    _a.AsSpan(k * NX * NX, NX * NX),
+                    _b.AsSpan(k * NX * NU, NX * NU));
+            _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigBar, TrustRegion, _a, _b, _f0);
+            _sliceOpen = true;
+        }
+
+        ScsStatus st = _sub.Run(warmStart: WarmStart && _sub.HasWarmStart,
+                                maxIterations: Math.Max(admmSlice, 1),
+                                epsAbs: SubproblemEps, epsRel: SubproblemEps,
+                                keepTruncatedIterate: true);
+
+        if (_sub.HitIterationLimit)
+            return false;               // more slices needed; the iterate carries over
+
+        _sliceOpen = false;
+        if (!st.IsUsable())
+        {
+            TrustRegion = Math.Max(TrustRegionMin, TrustRegion * Shrink);
+            LastFailureReason = $"{st} \"{_sub.StatusText}\"";
+            var failed = new ScvxIteration(_sliceIndex, false, false, double.NaN, TrustRegion,
+                _sigBar, 0, double.NaN, _jRef, _sub.Iterations, _sliceWatch.Elapsed.TotalMilliseconds);
+            _trace.Add(failed);
+            return true;
+        }
+        CompleteIteration(_sliceIndex, _sliceWatch);
+        return true;
+    }
+
     /// <summary>One SCvx iteration: linearise, solve, ratio-test, update.</summary>
     public ScvxIteration Iterate()
     {
@@ -344,6 +405,16 @@ public sealed class Scvx6DofSolver
             return failed;
         }
 
+        return CompleteIteration(index, sw);
+    }
+
+    /// <summary>
+    /// The ratio test, accept/reject and trust-region update, given a SOLVED
+    /// subproblem. Split out so a sliced iteration can reach it after however many
+    /// partial solves it took.
+    /// </summary>
+    private ScvxIteration CompleteIteration(int index, System.Diagnostics.Stopwatch sw)
+    {
         double[] x = _sub.SolutionX, u = _sub.SolutionU, wv = _sub.SolutionWv;
         double sigma = _sub.SolutionSigma;
 

@@ -499,6 +499,14 @@ public static class Ksa6DofSetup
             ProximalWeight = Math.Max(proximalWeight, 0.0),
             GlideSlopeDeg = glideSlopeDeg,
             VzMax = vzMaxMs,
+            // Terminal position and speed are SOFT, heavily penalised. A hard terminal
+            // says "arrive exactly there, exactly at rest", and when that is not
+            // achievable the honest answer is a plan that misses rather than no plan
+            // at all - a descending booster cannot decline to land. The weights are
+            // high enough that both slacks sit at zero whenever the target is
+            // genuinely reachable, so this changes nothing on a normal descent.
+            TerminalMissWeight = 1.0e3,
+            TerminalSpeedWeight = 1.0e4,
             SigmaMin = sigma * 0.15,
             SigmaMax = sigma * 4.0,
             SigmaScale = sigma,

@@ -119,6 +119,46 @@ public sealed class Scvx6DofConfig
     public double GlideSlopeWeight { get; init; } = 1e4;
     public double VzWeight { get; init; } = 1e4;
 
+    /// <summary>
+    /// Penalty per metre on missing the terminal POSITION, or 0 to keep it a hard
+    /// equality.
+    ///
+    /// A hard terminal constraint says "arrive exactly there, exactly at rest". When
+    /// that is not achievable - which reachability makes routine, not exotic - the
+    /// problem is INFEASIBLE and the solver returns nothing. But a booster on the way
+    /// down cannot decline to land, so "no plan" is not a safe answer; it just means
+    /// flying an older plan that is getting worse.
+    ///
+    /// Softening the position lets the optimiser answer "land 40 m off" instead of
+    /// refusing. The order of things worth giving up on a descent is fuel optimality,
+    /// then landing precision, then landing softly - so precision is the right thing
+    /// to trade, and terminal VELOCITY stays hard because arriving at rest is the part
+    /// that matters.
+    ///
+    /// L1 again, so it is exact: above a finite weight the slack sits at zero whenever
+    /// the target is actually reachable, and the answer is identical to the hard
+    /// problem. It only opens when the alternative is no answer at all.
+    /// </summary>
+    public double TerminalMissWeight { get; init; }
+
+    /// <summary>
+    /// Penalty per m/s on missing the terminal VELOCITY, or 0 to keep it hard.
+    ///
+    /// Softening position alone does not help the case it was meant for. When a
+    /// vehicle cannot stop in time, what is unreachable is arriving AT REST, not
+    /// arriving THERE - so the position slack sits unused and the solver still fakes
+    /// the terminal condition with virtual control, which is what the defect gate then
+    /// refuses. Measured: hard 5.27 m of defect, position-soft 5.22 m. No help.
+    ///
+    /// Weighted far more heavily than the position miss, because the ordering of what
+    /// to concede on a descent is fuel, then precision, then softness. This is the
+    /// last thing to give up, and it should only open when the alternative is a plan
+    /// that claims a touchdown speed the vehicle cannot achieve.
+    /// </summary>
+    public double TerminalSpeedWeight { get; init; }
+
+    public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0;
+
     public bool GlideSlopeEnabled => GlideSlopeDeg > 0.0;
     public bool VzLimitEnabled => VzMax >= 0.0;
 

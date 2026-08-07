@@ -418,7 +418,13 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public bool StepCold(double[] x0, double simNow, int iterations = 1)
     {
-        ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
+        // A SMALL per-frame budget, not the flight one. Doing a whole SCvx iteration
+        // per frame still costs 50-100 ms in that frame, because the expense sits
+        // inside a single subproblem; bounding a FRAME means stopping part-way through
+        // ADMM and resuming next frame. Taking longer in total is the trade being
+        // made deliberately - a second of invisible convergence beats three frames of
+        // visible stutter.
+        ApplyTimeBudget(ColdFrameBudgetMs, ColdFrameBudgetMs);
 
         // Re-anchor at the vehicle before iterating, exactly as Update does.
         if (_solver.IterationCount > 0)
@@ -430,10 +436,14 @@ public sealed class Ksa6DofGuidance
         }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        for (int i = 0; i < iterations; i++)
-            _solver.Iterate();
+        int slice = Math.Max((int)(ColdFrameBudgetMs / Math.Max(MsPerAdmmIteration, 1e-4)), 20);
+        bool completed = _solver.IterateSliced(slice);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
         LastIterations = _solver.IterationCount;
+
+        // Mid-subproblem: there is nothing to judge yet.
+        if (!completed)
+            return false;
 
         // Accept against the WARM gate first. Only fall back to the looser cold gate
         // once the iteration count says it has stopped improving, so a genuinely hard
@@ -450,6 +460,43 @@ public sealed class Ksa6DofGuidance
     /// not in total.
     /// </summary>
     public int ColdStallIterations { get; set; } = 60;
+
+    /// <summary>
+    /// Wall-clock a spread cold solve may spend per frame. Small on purpose: the point
+    /// is that no single frame is noticeable, not that the total is short.
+    /// </summary>
+    public double ColdFrameBudgetMs { get; set; } = 6.0;
+
+    /// <summary>
+    /// How far the vehicle is from where its own plan says it should be, right now.
+    ///
+    /// This is the number that decides whether a WARM start is still worth having. A
+    /// warm start is an advantage only while the vehicle is near its plan; past some
+    /// drift the stale plan is a WORSE seed than a straight line from the current
+    /// state, because the straight line is at least self-consistent while the stale
+    /// one asserts a trajectory the vehicle is no longer on. At that point re-solving
+    /// from it is paying to use a bad guess.
+    /// </summary>
+    public double PlanDriftM { get; private set; }
+
+    /// <summary>Distance from the vehicle to the plan's prediction for right now.</summary>
+    public double MeasureDrift(double[] x0, double simNow)
+    {
+        if (!HasPlan) return double.PositiveInfinity;
+        double dt = _planSigma / (_n - 1);
+        double t = Math.Max(0.0, simNow - _solveTime);
+        double s = Math.Clamp(t / dt, 0.0, _n - 1.001);
+        int k = (int)s;
+        double f = s - k;
+        double d = 0.0;
+        for (int i = 0; i < 3; i++)
+        {
+            double px = Lerp(_planX, i, k, f);
+            d += (px - x0[i]) * (px - x0[i]);
+        }
+        PlanDriftM = Math.Sqrt(d);
+        return PlanDriftM;
+    }
 
     private double[] _xf = [];
 

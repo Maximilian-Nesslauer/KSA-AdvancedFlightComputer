@@ -39,8 +39,8 @@ public sealed class Scvx6DofSubproblemScs
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _nVars;
-    private readonly int _nGs, _nVz;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _nVars;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -92,11 +92,21 @@ public sealed class Scvx6DofSubproblemScs
         _iSig = _oW + (_n - 1) * NX;
         _oGs = _iSig + 1;             // glideslope slacks, one per constrained node
         _oVz = _oGs + _nGs;           // climb-rate slacks, likewise
-        _nVars = _oVz + _nVz;
+        // Terminal miss: a POSITIVE and a NEGATIVE slack per position axis, so the
+        // miss can go either way while both parts stay non-negative and the penalty
+        // stays linear. Six variables in total, or none when the terminal is hard.
+        _oTm = _oVz + _nVz;
+        // Six per softened block: a positive and a negative slack per axis, so the
+        // miss may go either way while both stay non-negative and the penalty linear.
+        _nTmPos = cfg.TerminalMissWeight > 0.0 ? 6 : 0;
+        _nTmVel = cfg.TerminalSpeedWeight > 0.0 ? 6 : 0;
+        _nTm = _nTmPos + _nTmVel;
+        _nVars = _oTm + _nTm;
 
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2);
         // + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows
-        _lDim = _n * 6 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz;
+        // + _nTm non-negativity rows for the terminal-miss slacks
+        _lDim = _n * 6 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm;
         _socDims = new int[_n + _nGs];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -125,6 +135,8 @@ public sealed class Scvx6DofSubproblemScs
         // the quantity being violated: metres of horizontal miss, m/s of climb.
         for (int k = 0; k < _nGs; k++) _colScale[IGs(k)] = _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
+        for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
+        for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
     }
 
     private void AddA(int row, int col, double value) => _A.Add(row, col, value * _colScale[col]);
@@ -228,10 +240,12 @@ public sealed class Scvx6DofSubproblemScs
     public ScsStatus Run(bool warmStart, bool verbose = false,
                          int maxIterations = ScsWorkspace.DefaultMaxIterations,
                          double epsAbs = ScsWorkspace.DefaultEps,
-                         double epsRel = ScsWorkspace.DefaultEps)
+                         double epsRel = ScsWorkspace.DefaultEps,
+                         bool keepTruncatedIterate = false)
     {
         ThrowIfNotFinite();
-        return _ws.Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, verbose, maxIterations, epsAbs, epsRel);
+        return _ws.Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, verbose,
+                         maxIterations, epsAbs, epsRel, keepTruncatedIterate);
     }
 
     /// <summary>
@@ -356,6 +370,11 @@ public sealed class Scvx6DofSubproblemScs
             _c[IGs(k)] += _cfg.GlideSlopeWeight * _colScale[IGs(k)] / _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nVz; k++)
             _c[IVz(k)] += _cfg.VzWeight * _colScale[IVz(k)] / _xs[Dynamics6Dof.IV];
+        for (int i = 0; i < _nTmPos; i++)
+            _c[_oTm + i] += _cfg.TerminalMissWeight * _colScale[_oTm + i] / _xs[Dynamics6Dof.IR];
+        for (int i = 0; i < _nTmVel; i++)
+            _c[_oTm + _nTmPos + i] +=
+                _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _xs[Dynamics6Dof.IV];
     }
 
     // -------------------------------------------------------------- equalities
@@ -380,6 +399,21 @@ public sealed class Scvx6DofSubproblemScs
         for (int i = 0; i < NX - 1; i++)
         {
             AddA(row, IX(_n - 1, i), 1.0);
+            // Terminal POSITION may miss, if softened: X[n-1] - (s+ - s-) = xf, with
+            // both slacks non-negative and penalised. Velocity and attitude stay hard
+            // - arriving at rest and upright is the part that must not be traded.
+            if (_nTmPos > 0 && i >= Dynamics6Dof.IR && i < Dynamics6Dof.IR + 3)
+            {
+                int axis = i - Dynamics6Dof.IR;
+                AddA(row, _oTm + 2 * axis, -1.0);
+                AddA(row, _oTm + 2 * axis + 1, 1.0);
+            }
+            else if (_nTmVel > 0 && i >= Dynamics6Dof.IV && i < Dynamics6Dof.IV + 3)
+            {
+                int axis = i - Dynamics6Dof.IV;
+                AddA(row, _oTm + _nTmPos + 2 * axis, -1.0);
+                AddA(row, _oTm + _nTmPos + 2 * axis + 1, 1.0);
+            }
             _b[row++] = xf[i];
         }
 
@@ -511,6 +545,11 @@ public sealed class Scvx6DofSubproblemScs
         for (int k = 0; k < _nVz; k++)
         {
             AddA(row, IVz(k), -1.0);
+            _b[row++] = 0.0;
+        }
+        for (int i = 0; i < _nTm; i++)
+        {
+            AddA(row, _oTm + i, -1.0);
             _b[row++] = 0.0;
         }
 
