@@ -389,7 +389,16 @@ public static partial class PoweredGuidanceWindow
                     "so the trajectory being flown is not the one that was planned.");
         }
         if (_sixDofNodeGates)
-            ImGui.Text($"nodes {_sixDof.Nodes,5}   gate steps {_sixDofGateChanges}");
+            ImGui.Text($"nodes {_sixDof.Nodes,5}   gate steps {_sixDofGateChanges}   " +
+                       $"cold restarts {_sixDofRecoveries}");
+
+        // THE health number. Under a working MPC this is 0 almost always: a refusal
+        // means the vehicle is flying the PREVIOUS plan, so a sustained run of them is
+        // open-loop flight however healthy everything else looks.
+        if (_sixDofRefusalRun > 0)
+            ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
+                $"{_sixDofRefusalRun} consecutive re-solves REFUSED - flying a stale plan. " +
+                $"Cold restart at {RefusalsBeforeRestart}.");
 
         // The physicality check. Virtual control is a SLACK variable in the dynamics
         // constraint, so an unconverged plan contains motion no force produced — it
@@ -572,11 +581,20 @@ public static partial class PoweredGuidanceWindow
     // one-way stepping on its own cannot recover from a rung that does not work.
     private static int _sixDofRefusalRun;
     private static int _sixDofRungFloor = int.MaxValue;
+    // Rung index a back-off has already been attempted from, so a failed attempt is
+    // not repeated. -1 means none tried yet.
+    private static int _sixDofBackedOffTo = -1;
+    private static int _sixDofRecoveries;
 
     // Refusals tolerated before undoing a node step. Long enough that one awkward
     // cycle does not trigger it, short enough that the vehicle is not open loop for
     // long: at a 0.1 s cadence this is half a second.
     private const int RefusalsBeforeBackOff = 5;
+
+    // Refusals after which the plan is abandoned and cold-started again. Well past the
+    // back-off threshold, so the cheaper remedy is tried first, but far short of the
+    // ~100 consecutive refusals seen in flight log 20260807-093052.
+    private const int RefusalsBeforeRestart = 15;
 
     private static bool _sixDofNodeGates = true;
     // Seed the cold solve from a convex 3-DOF G-FOLD solve.
@@ -624,16 +642,32 @@ public static partial class PoweredGuidanceWindow
         // refusing every re-solve thereafter. One-way stepping cannot recover from
         // that on its own, so step BACK UP one rung and refuse to go that coarse
         // again for the rest of the run.
-        if (_sixDofRefusalRun >= RefusalsBeforeBackOff && _sixDofGateIndex > 0)
+        if (_sixDofRefusalRun >= RefusalsBeforeBackOff && _sixDofGateIndex > _sixDofBackedOffTo)
         {
             int finer = _sixDofGateIndex - 1;
+            // Record the attempt BEFORE trying, so a rebuild that fails is not retried
+            // every five cycles forever. Flight log 20260807-093052 did exactly that:
+            // the same back-off to 25 nodes failed and was retried ~40 times, each one
+            // a full config build plus a failed cold solve, which is pure added cost
+            // on top of an already-failing loop.
+            _sixDofBackedOffTo = _sixDofGateIndex;
             _sixDofRungFloor = Math.Min(_sixDofRungFloor, finer);
-            SixDofLog.Event(now,
-                $"NODE BACK-OFF at alt {x[2]:F0} m after {_sixDofRefusalRun} refused re-solves: " +
-                $"{_sixDof.Nodes} -> {NodeRungs[finer]} nodes, and no coarser this run");
             _sixDofRefusalRun = 0;
+
             if (RebuildAt(vehicle, parent, siteCci, x, now, NodeRungs[finer]))
+            {
+                SixDofLog.Event(now,
+                    $"NODE BACK-OFF at alt {x[2]:F0} m: {NodeRungs[_sixDofGateIndex]} -> " +
+                    $"{NodeRungs[finer]} nodes, and no coarser this run");
                 _sixDofGateIndex = finer;
+                _sixDofBackedOffTo = finer;
+            }
+            else
+            {
+                SixDofLog.Event(now,
+                    $"NODE BACK-OFF at alt {x[2]:F0} m to {NodeRungs[finer]} nodes FAILED; " +
+                    "not retrying - the node count is not what is wrong");
+            }
             return;
         }
 
@@ -957,6 +991,28 @@ public static partial class PoweredGuidanceWindow
                 return;
         }
 
+        // CIRCUIT BREAKER. A long run of refusals means the plan is stale, the vehicle
+        // has diverged from it, and every further Update is running the wide-trust-
+        // region retry - so failure costs MORE than success and the loop digs itself
+        // deeper. Once that happens the answer is not to keep hammering it: throw the
+        // plan away and cold-start again, spread over frames so it does not stall the
+        // sim thread.
+        if (!_sixDofConverging && _sixDof != null && _sixDofRefusalRun >= RefusalsBeforeRestart)
+        {
+            var xfR = new double[14];
+            xfR[2] = _sixDofTargetAltM;
+            TerminalAttitude(x, xfR);
+            SixDofLog.Event(now,
+                $"COLD RESTART at alt {x[2]:F0} m after {_sixDofRefusalRun} refused re-solves " +
+                $"(plan {_sixDof.PlanElapsed:F1} s stale, defect {_sixDof.LastDefectM:F0} m)");
+            _sixDof.BeginCold(x, xfR, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
+            _sixDofConverging = true;
+            _sixDofColdFrames = 0;
+            _sixDofRefusalRun = 0;
+            _sixDofRecoveries++;
+            _sixDofError = "re-converging...";
+        }
+
         // Advance a spread cold solve. Until it produces a flyable plan there is
         // nothing to command, so this returns without touching the actuators - the
         // vehicle carries on doing whatever it was doing.
@@ -1276,6 +1332,8 @@ public static partial class PoweredGuidanceWindow
         _sixDofPrevV = null;
         _sixDofRefusalRun = 0;
         _sixDofRungFloor = int.MaxValue;
+        _sixDofBackedOffTo = -1;
+        _sixDofRecoveries = 0;
         _sixDofBias = default;
 
         if (_sixDofLogging)

@@ -123,6 +123,9 @@ public sealed class Ksa6DofGuidance
     public double SigmaMin => _cfg.SigmaMin;
     public double SigmaMax => _cfg.SigmaMax;
 
+    /// <summary>Consecutive failed Update calls, used to stop paying for a retry that is not working.</summary>
+    private int _consecutiveFailures;
+
     /// <summary>True when the last Update needed the wide-trust-region retry — that retry is what turns a ~30 ms solve into ~500 ms.</summary>
     public bool FellBack { get; private set; }
 
@@ -385,6 +388,7 @@ public sealed class Ksa6DofGuidance
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         Status = ScvxStatus.IterationLimit;
         Error = "converging";
+        _consecutiveFailures = 0;
     }
 
     /// <summary>
@@ -399,6 +403,18 @@ public sealed class Ksa6DofGuidance
     ///
     /// Returns true once the plan is good enough to fly, at which point the caller
     /// should switch to Update.
+    ///
+    /// HANDS OVER AT THE WARM GATE, not the cold one. The cold gate exists so a first
+    /// plan is not refused outright, but handing the warm loop a plan it will
+    /// immediately reject is worse than not engaging: the loop refuses every cycle,
+    /// the plan goes stale, the vehicle diverges from it, and each refusal costs MORE
+    /// than a success because it runs the wide-trust-region retry. Flight log
+    /// 20260807-093052 did exactly that - handed over at 14.48 m against a 1 m warm
+    /// gate, then accepted 6 re-solves out of 103 while burning 250-500 ms a cycle.
+    ///
+    /// Iterating further is nearly free here, because the whole point of spreading is
+    /// that the iterations are already amortised over frames. Only if it stalls does
+    /// the cold gate apply, so a hard case still flies rather than never engaging.
     /// </summary>
     public bool StepCold(double[] x0, double simNow, int iterations = 1)
     {
@@ -419,8 +435,21 @@ public sealed class Ksa6DofGuidance
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
         LastIterations = _solver.IterationCount;
 
-        return Finish(x0, simNow, 0, cold: true);
+        // Accept against the WARM gate first. Only fall back to the looser cold gate
+        // once the iteration count says it has stopped improving, so a genuinely hard
+        // case still engages instead of converging forever.
+        if (Finish(x0, simNow, 0))
+            return true;
+        bool stalled = _solver.IterationCount >= ColdStallIterations;
+        return stalled && Finish(x0, simNow, 0, cold: true);
     }
+
+    /// <summary>
+    /// Iterations after which a spread cold solve settles for the looser cold gate.
+    /// Generous, because spread iterations are cheap - the cost is bounded per FRAME,
+    /// not in total.
+    /// </summary>
+    public int ColdStallIterations { get; set; } = 60;
 
     private double[] _xf = [];
 
@@ -635,16 +664,40 @@ public sealed class Ksa6DofGuidance
         FellBack = false;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: 0.05);
         if (Finish(x0, simNow, maxIterations))
+        {
+            _consecutiveFailures = 0;
             return true;
+        }
+
+        // WIDE-TRUST-REGION RETRY, but NOT on every failure.
+        //
+        // It is the right response to a one-off divergence: the tight region above
+        // assumes the vehicle is near its previous plan, and once it is not, the
+        // problem is infeasible until the region opens up. But it costs a second
+        // reseed and three times the iterations, so doing it on every failure makes a
+        // REFUSAL more expensive than a SUCCESS - and once the loop starts failing
+        // repeatedly that is precisely backwards. Flight log 20260807-093052 spent
+        // 250-500 ms per cycle this way while accepting 6 re-solves in 103.
+        //
+        // If the previous cycle already tried it and still failed, it is not going to
+        // work this cycle either: something structural is wrong, and the caller's
+        // circuit breaker should cold-restart instead. So fail fast and cheap.
+        if (_consecutiveFailures >= 2)
+        {
+            _consecutiveFailures++;
+            FellBack = false;
+            return false;
+        }
 
         FellBack = true;
-
-        // The tight trust region above assumes the vehicle is near its previous plan.
-        // Once it has genuinely diverged that makes the problem infeasible, and a
-        // failed solve would otherwise leave the OLD plan in place — flying a stale
-        // trajectory, which is the failure mode this whole class exists to avoid.
+        _consecutiveFailures++;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax);
-        return Finish(x0, simNow, maxIterations * 3);
+        if (Finish(x0, simNow, maxIterations * 3))
+        {
+            _consecutiveFailures = 0;
+            return true;
+        }
+        return false;
     }
 
     /// <summary>
