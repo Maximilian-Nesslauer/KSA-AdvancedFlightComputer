@@ -261,11 +261,17 @@ public static partial class PoweredGuidanceWindow
             }
             ImGui.Checkbox("Spread cold solve over frames", ref _sixDofSpreadCold);
             if (_sixDofSpreadCold)
+            {
+                ImGui.InputDouble("Cold frame budget (ms)", ref _sixDofColdBudgetMs, 1.0, 2.0, "%.1f");
+                _sixDofColdBudgetMs = Math.Clamp(_sixDofColdBudgetMs, 1.0, 50.0);
                 ImGui.TextWrapped(
-                    "Runs the cold solve one SCvx iteration per frame instead of blocking for " +
-                    "the whole thing, so engaging does not hitch the sim thread. A flyable plan " +
-                    "typically arrives in ~3 frames; the vehicle keeps falling meanwhile, which " +
-                    "is absorbed because each frame re-anchors at the measured state.");
+                    "Spends at most this long per frame on the cold solve, resuming where it " +
+                    "stopped, so engaging costs about a second of wall time instead of one " +
+                    "long hitch. The budget cuts INSIDE a subproblem, not between iterations - " +
+                    "an SCvx iteration alone can take 50-100 ms, so stopping only at iteration " +
+                    "boundaries would still drop frames. The vehicle keeps falling meanwhile, " +
+                    "which is absorbed because each frame re-anchors at the measured state.");
+            }
             ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
             if (_sixDofBiasEnabled)
                 ImGui.TextWrapped(
@@ -625,6 +631,10 @@ public static partial class PoweredGuidanceWindow
     // absorbed automatically, because each frame re-anchors at the measured state
     // exactly as the warm loop does.
     private static bool _sixDofSpreadCold = true;
+    // Per-frame slice of the cold solve. 6 ms leaves most of a 60 fps frame for the
+    // game, and the whole cold solve then lands in about a second - longer in
+    // absolute terms than blocking would be, but never visible as a dropped frame.
+    private static double _sixDofColdBudgetMs = 6.0;
     private static bool _sixDofConverging;      // cold solve in progress, not yet flyable
     private static int _sixDofColdFrames;
     private static int _sixDofGateIndex = -1;    // -1 = above every gate
@@ -1031,6 +1041,7 @@ public static partial class PoweredGuidanceWindow
                 (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
                             : $"{_sixDofRefusalRun} refused re-solves") +
                 $" - plan {_sixDof.PlanElapsed:F1} s stale, defect {_sixDof.LastDefectM:F0} m");
+            _sixDof.ColdFrameBudgetMs = _sixDofColdBudgetMs;
             _sixDof.BeginCold(x, xfR, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
             _sixDofConverging = true;
             _sixDofColdFrames = 0;
@@ -1297,11 +1308,12 @@ public static partial class PoweredGuidanceWindow
         //
         // Strictly an optimisation: any failure falls back to the straight-line seed,
         // because a worse guess is enormously better than not engaging.
-        // SPREAD: start the cold solve and return. Step6DofCore advances it a frame
-        // at a time until the plan is flyable, so the engage costs one iteration
-        // rather than the whole solve.
+        // SPREAD: start the cold solve and return. Step6DofCore advances it a
+        // bounded slice at a time until the plan is flyable, so engaging costs a
+        // few milliseconds of this frame rather than the whole solve.
         if (_sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed)
         {
+            _sixDof.ColdFrameBudgetMs = _sixDofColdBudgetMs;
             _sixDof.BeginCold(x, xf, _sixDofSigmaSeed);
             _sixDofConverging = true;
             _sixDofColdFrames = 0;
