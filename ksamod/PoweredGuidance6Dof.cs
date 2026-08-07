@@ -262,15 +262,15 @@ public static partial class PoweredGuidanceWindow
             ImGui.Checkbox("Spread cold solve over frames", ref _sixDofSpreadCold);
             if (_sixDofSpreadCold)
             {
-                ImGui.InputDouble("Cold frame budget (ms)", ref _sixDofColdBudgetMs, 1.0, 2.0, "%.1f");
-                _sixDofColdBudgetMs = Math.Clamp(_sixDofColdBudgetMs, 1.0, 50.0);
+                ImGui.InputDouble("Gap between iterations (s)", ref _sixDofColdIntervalS, 0.05, 0.1, "%.2f");
+                _sixDofColdIntervalS = Math.Clamp(_sixDofColdIntervalS, 0.0, 1.0);
                 ImGui.TextWrapped(
-                    "Spends at most this long per frame on the cold solve, resuming where it " +
-                    "stopped, so engaging costs about a second of wall time instead of one " +
-                    "long hitch. The budget cuts INSIDE a subproblem, not between iterations - " +
-                    "an SCvx iteration alone can take 50-100 ms, so stopping only at iteration " +
-                    "boundaries would still drop frames. The vehicle keeps falling meanwhile, " +
-                    "which is absorbed because each frame re-anchors at the measured state.");
+                    "Runs the cold solve one SCvx iteration at a time instead of blocking for " +
+                    "the whole thing, waiting this long between iterations so they land as " +
+                    "separate short hitches rather than merging into one visible freeze. At " +
+                    "0.25 s the solve takes about a second in total - longer than blocking, " +
+                    "but spread. The vehicle keeps falling meanwhile, which is absorbed " +
+                    "because every iteration re-anchors at the measured state.");
             }
             ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
             if (_sixDofBiasEnabled)
@@ -631,10 +631,10 @@ public static partial class PoweredGuidanceWindow
     // absorbed automatically, because each frame re-anchors at the measured state
     // exactly as the warm loop does.
     private static bool _sixDofSpreadCold = true;
-    // Per-frame slice of the cold solve. 6 ms leaves most of a 60 fps frame for the
-    // game, and the whole cold solve then lands in about a second - longer in
-    // absolute terms than blocking would be, but never visible as a dropped frame.
-    private static double _sixDofColdBudgetMs = 6.0;
+    // Gap between cold-solve iterations, in seconds. At 0.25 s the handful of
+    // iterations a cold solve needs lands across about a second, as separate short
+    // hitches rather than one merged freeze.
+    private static double _sixDofColdIntervalS = 0.25;
     private static bool _sixDofConverging;      // cold solve in progress, not yet flyable
     private static int _sixDofColdFrames;
     private static int _sixDofGateIndex = -1;    // -1 = above every gate
@@ -1041,7 +1041,7 @@ public static partial class PoweredGuidanceWindow
                 (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
                             : $"{_sixDofRefusalRun} refused re-solves") +
                 $" - plan {_sixDof.PlanElapsed:F1} s stale, defect {_sixDof.LastDefectM:F0} m");
-            _sixDof.ColdFrameBudgetMs = _sixDofColdBudgetMs;
+            _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
             _sixDof.BeginCold(x, xfR, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
             _sixDofConverging = true;
             _sixDofColdFrames = 0;
@@ -1061,13 +1061,14 @@ public static partial class PoweredGuidanceWindow
                 _sixDofConverging = false;
                 _sixDofError = "";
                 SixDofLog.Event(now,
-                    $"COLD SOLVE CONVERGED after {_sixDofColdFrames} frames, " +
-                    $"defect {_sixDof.LastDefectM:F2} m, sigma {_sixDof.Sigma:F1} s");
+                    $"COLD SOLVE CONVERGED in {_sixDof.LastIterations} iterations spread over " +
+                    $"{_sixDofColdFrames} frames, defect {_sixDof.LastDefectM:F2} m, " +
+                    $"sigma {_sixDof.Sigma:F1} s");
                 SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
             }
             else
             {
-                _sixDofError = $"converging... {_sixDofColdFrames} frames, " +
+                _sixDofError = $"converging... {_sixDof.LastIterations} iterations, " +
                                $"defect {_sixDof.LastDefectM:F1} m";
                 // Give up rather than fall forever if it is not going to converge.
                 if (_sixDofColdFrames > 240)
@@ -1313,7 +1314,7 @@ public static partial class PoweredGuidanceWindow
         // few milliseconds of this frame rather than the whole solve.
         if (_sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed)
         {
-            _sixDof.ColdFrameBudgetMs = _sixDofColdBudgetMs;
+            _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
             _sixDof.BeginCold(x, xf, _sixDofSigmaSeed);
             _sixDofConverging = true;
             _sixDofColdFrames = 0;

@@ -389,6 +389,7 @@ public sealed class Ksa6DofGuidance
         Status = ScvxStatus.IterationLimit;
         Error = "converging";
         _consecutiveFailures = 0;
+        _lastColdIterationS = 0.0;
     }
 
     /// <summary>
@@ -397,9 +398,10 @@ public sealed class Ksa6DofGuidance
     ///
     /// Re-anchoring every frame is what makes the vehicle continuing to fall a
     /// non-issue: it is the same thing Update does at every cadence tick, so the drift
-    /// is absorbed rather than invalidating the work so far. Measured, the vehicle
-    /// falls 1-6 m before the plan becomes flyable, because that takes about three
-    /// frames rather than the full iteration budget.
+    /// is absorbed rather than invalidating the work so far.
+    ///
+    /// The iterations are also PACED - see ColdIterationIntervalS - so the handful it
+    /// takes lands across about a second rather than on consecutive frames.
     ///
     /// Returns true once the plan is good enough to fly, at which point the caller
     /// should switch to Update.
@@ -418,13 +420,22 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public bool StepCold(double[] x0, double simNow, int iterations = 1)
     {
-        // A SMALL per-frame budget, not the flight one. Doing a whole SCvx iteration
-        // per frame still costs 50-100 ms in that frame, because the expense sits
-        // inside a single subproblem; bounding a FRAME means stopping part-way through
-        // ADMM and resuming next frame. Taking longer in total is the trade being
-        // made deliberately - a second of invisible convergence beats three frames of
-        // visible stutter.
-        ApplyTimeBudget(ColdFrameBudgetMs, ColdFrameBudgetMs);
+        // PACING. An SCvx iteration is the indivisible unit of work here, so the cost
+        // of one is whatever it is; what can be chosen is how close together they land.
+        // Back to back on consecutive frames, three iterations read as ONE freeze of
+        // their combined length. Spaced a few hundred milliseconds apart they read as
+        // three brief hitches with normal frames in between, which is far less
+        // noticeable even though the total work - and the total wall time - is the same
+        // or worse.
+        //
+        // Between iterations this returns immediately, so those frames cost nothing.
+        if (_lastColdIterationS > 0.0 && simNow - _lastColdIterationS < ColdIterationIntervalS)
+            return false;
+        _lastColdIterationS = simNow;
+
+        // The flight budget, not a smaller one. An SCvx iteration is indivisible, so
+        // cutting it short here would only mean throwing the frame's work away.
+        ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
 
         // Re-anchor at the vehicle before iterating, exactly as Update does.
         if (_solver.IterationCount > 0)
@@ -436,14 +447,10 @@ public sealed class Ksa6DofGuidance
         }
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        int slice = Math.Max((int)(ColdFrameBudgetMs / Math.Max(MsPerAdmmIteration, 1e-4)), 20);
-        bool completed = _solver.IterateSliced(slice);
+        for (int i = 0; i < Math.Max(iterations, 1); i++)
+            _solver.Iterate();
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
         LastIterations = _solver.IterationCount;
-
-        // Mid-subproblem: there is nothing to judge yet.
-        if (!completed)
-            return false;
 
         // Accept against the WARM gate first. Only fall back to the looser cold gate
         // once the iteration count says it has stopped improving, so a genuinely hard
@@ -459,13 +466,25 @@ public sealed class Ksa6DofGuidance
     /// Generous, because spread iterations are cheap - the cost is bounded per FRAME,
     /// not in total.
     /// </summary>
-    public int ColdStallIterations { get; set; } = 60;
+    public int ColdStallIterations { get; set; } = 12;
 
     /// <summary>
-    /// Wall-clock a spread cold solve may spend per frame. Small on purpose: the point
-    /// is that no single frame is noticeable, not that the total is short.
+    /// Sim-time gap between iterations of a spread cold solve, in seconds.
+    ///
+    /// Sets how the cold solve FEELS, not how long it takes. At 0.25 s the measured
+    /// three-to-four-iteration cold solve lands across about a second, as four short
+    /// hitches separated by fifteen normal frames, instead of four consecutive heavy
+    /// frames that merge into one visible freeze.
+    ///
+    /// The cost of waiting is that the vehicle falls further before the plan is
+    /// flyable - about 4 m/s of accumulated descent per second on Earth. That is
+    /// absorbed rather than wasted, because every iteration re-anchors node 0 at the
+    /// measured state, so the extra fall changes the problem slightly rather than
+    /// invalidating the work.
     /// </summary>
-    public double ColdFrameBudgetMs { get; set; } = 6.0;
+    public double ColdIterationIntervalS { get; set; } = 0.25;
+
+    private double _lastColdIterationS;
 
     /// <summary>
     /// How far the vehicle is from where its own plan says it should be, right now.

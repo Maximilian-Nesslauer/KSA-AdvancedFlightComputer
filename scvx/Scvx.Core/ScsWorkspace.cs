@@ -154,8 +154,7 @@ public sealed class ScsWorkspace
                            int zeroDim, int posDim, int[] socDims,
                            bool warmStart, bool verbose = false,
                            int maxIterations = DefaultMaxIterations,
-                           double epsAbs = DefaultEps, double epsRel = DefaultEps,
-                           bool keepTruncatedIterate = false)
+                           double epsAbs = DefaultEps, double epsRel = DefaultEps)
     {
         LastInitMs = LastSolveMs = LastFinishMs = 0;
         int n = A.Cols, m = A.Rows;
@@ -269,13 +268,7 @@ public sealed class ScsWorkspace
                 // makes IT more likely to truncate too. That is the mechanism behind
                 // long solves arriving in BURSTS rather than singly: one truncation
                 // poisons the warm start and the next few inherit it.
-                // keepTruncatedIterate inverts the rule below ON PURPOSE, and only
-                // for a caller deliberately RESUMING this same subproblem in slices.
-                // There a truncated iterate is not a contaminated answer to a
-                // different question - it is the exact ADMM state this run left off
-                // at, and discarding it would restart the solve every slice and never
-                // converge.
-                if (status.IsUsable() && (!HitIterationLimit || keepTruncatedIterate))
+                if (status.IsUsable() && !HitIterationLimit)
                 {
                     _prevX = xBuf; _prevY = yBuf; _prevS = sBuf;
                 }

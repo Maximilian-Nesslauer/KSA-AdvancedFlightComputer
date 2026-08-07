@@ -240,12 +240,11 @@ public sealed class Scvx6DofSubproblemScs
     public ScsStatus Run(bool warmStart, bool verbose = false,
                          int maxIterations = ScsWorkspace.DefaultMaxIterations,
                          double epsAbs = ScsWorkspace.DefaultEps,
-                         double epsRel = ScsWorkspace.DefaultEps,
-                         bool keepTruncatedIterate = false)
+                         double epsRel = ScsWorkspace.DefaultEps)
     {
         ThrowIfNotFinite();
         return _ws.Solve(_A, _b, _c, _P, _nEq, _lDim, _socDims, warmStart, verbose,
-                         maxIterations, epsAbs, epsRel, keepTruncatedIterate);
+                         maxIterations, epsAbs, epsRel);
     }
 
     /// <summary>
