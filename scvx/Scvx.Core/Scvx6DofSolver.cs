@@ -277,8 +277,25 @@ public sealed class Scvx6DofSolver
     /// region collapses. Safe to call repeatedly — it continues from the current
     /// reference, which is what a receding-horizon caller wants.
     /// </summary>
-    public ScvxStatus Solve(int maxIterations)
+    /// <param name="deadlineMs">
+    /// Wall-clock ceiling for the WHOLE call, or 0 for none.
+    ///
+    /// Bounding the SUBPROBLEM is not the same as bounding the CYCLE, and only the
+    /// second one is what a caller on a frame thread cares about. A per-subproblem
+    /// budget of 40 ms with maxIterations of 5 authorises 200 ms of work, and with
+    /// the escalated retry, a full second. Measured in flight: p50 108 ms, p99 432 ms
+    /// per cycle against a 100 ms cadence - the loop was asking for more time than
+    /// existed, every cycle, and the sim thread paid for it.
+    ///
+    /// Checked BETWEEN iterations rather than inside one, because an SCvx iteration
+    /// is indivisible: what this bounds is how many more are started, and the answer
+    /// is still a complete, self-consistent trajectory - just refined less. Since a
+    /// cycle is judged on the defect of its ACCEPTED step, stopping early costs
+    /// convergence margin, not validity.
+    /// </param>
+    public ScvxStatus Solve(int maxIterations, double deadlineMs = 0.0)
     {
+        var sw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < maxIterations; i++)
         {
             ScvxIteration it = Iterate();
@@ -286,9 +303,20 @@ public sealed class Scvx6DofSolver
                 return _trace.Any(t => t.Accepted) ? ScvxStatus.TrustRegionCollapsed : ScvxStatus.Failed;
             if (it.Accepted && it.Step < StepTolerance && it.DefectNorm < DefectTolerance)
                 return ScvxStatus.Converged;
+            // At least one iteration always runs: a cycle that returns without taking
+            // a step hands back the stale plan, which is worse than being late once.
+            if (deadlineMs > 0.0 && sw.Elapsed.TotalMilliseconds >= deadlineMs)
+            {
+                TimedOut = true;
+                return ScvxStatus.IterationLimit;
+            }
         }
         return ScvxStatus.IterationLimit;
     }
+
+    /// <summary>True if the last Solve stopped on its wall-clock deadline rather than
+    /// on convergence or the iteration count. Diagnostic only.</summary>
+    public bool TimedOut { get; private set; }
 
     /// <summary>One SCvx iteration: linearise, solve, ratio-test, update.</summary>
     public ScvxIteration Iterate()

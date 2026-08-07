@@ -264,6 +264,24 @@ public sealed class Ksa6DofGuidance
     /// <summary>Budget for the one escalated retry. Larger, but still bounded.</summary>
     public double EscalatedBudgetMs { get; init; } = 200.0;
 
+    /// <summary>
+    /// Wall-clock ceiling for a WHOLE guidance cycle, ms - the number that decides
+    /// whether the sim thread stutters.
+    ///
+    /// The per-subproblem budgets above bound one solve; a cycle runs up to
+    /// maxIterations of them, so they authorised 5 x 40 ms, and 5 x 200 ms once the
+    /// escalated retry fired. Measured in flight log 20260807-103232: p50 108 ms and
+    /// p99 432 ms per cycle against a 100 ms cadence. Nothing was exceeding its
+    /// stated budget; the stated budget was simply not a budget for the thing that
+    /// hitches.
+    ///
+    /// 25 ms is a quarter of the cadence, so a solve and the frame it lands in still
+    /// leave room for the game. Iterations beyond the first are refinement - measured
+    /// defect over that whole flight was 0.02-0.13 m against a 1 m gate - so trading
+    /// them for frame time is cheap.
+    /// </summary>
+    public double CycleBudgetMs { get; set; } = 25.0;
+
     /// <summary>Measured cost of one ADMM iteration, ms. Seeded pessimistically and refined from real solves.</summary>
     public double MsPerAdmmIteration { get; private set; } = 0.05;
 
@@ -457,21 +475,23 @@ public sealed class Ksa6DofGuidance
         var sw = System.Diagnostics.Stopwatch.StartNew();
         for (int i = 0; i < Math.Max(iterations, 1); i++)
             _solver.Iterate();
-        LastSolveMs = sw.Elapsed.TotalMilliseconds;
-        // The SOLVER's count is useless here: StepCold re-anchors through Reseed
-        // before every iteration, and Reseed zeroes IterationCount. Reporting it
-        // showed "converged in 1 iterations" no matter how many ran, and worse, made
-        // ColdStallIterations unreachable - so the looser cold gate was never applied
-        // and a hard case ran to the give-up limit instead of settling for a plan.
-        LastIterations = _coldIterations;
+        double iterationMs = sw.Elapsed.TotalMilliseconds;
 
         // Accept against the WARM gate first. Only fall back to the looser cold gate
         // once the iteration count says it has stopped improving, so a genuinely hard
-        // case still engages instead of converging forever.
-        if (Finish(x0, simNow, 0))
-            return true;
+        // case still engages instead of converging forever. Finish does no solving
+        // here - the 0 budget means it runs the gates over what Iterate just produced.
         bool stalled = _coldIterations >= ColdStallIterations;
-        return stalled && Finish(x0, simNow, 0, cold: true);
+        bool ok = Finish(x0, simNow, 0) || (stalled && Finish(x0, simNow, 0, cold: true));
+
+        // AFTER Finish, which overwrites both from the solver. The SOLVER's iteration
+        // count is useless here - StepCold re-anchors through Reseed before every
+        // iteration and Reseed zeroes IterationCount - so it read 1 no matter how many
+        // ran, and ColdStallIterations above could never be reached. Its solve time is
+        // likewise the time of a zero-iteration Finish, not of the work done.
+        LastIterations = _coldIterations;
+        LastSolveMs = iterationMs;
+        return ok;
     }
 
     /// <summary>
@@ -809,14 +829,27 @@ public sealed class Ksa6DofGuidance
     private void ApplyTimeBudget(double budgetMs, double escalatedMs)
     {
         double perIter = Math.Max(MsPerAdmmIteration, 1e-4);
-        _solver.MaxSubproblemIterations = (int)Math.Clamp(budgetMs / perIter, 200, 50_000);
-        _solver.EscalatedSubproblemIterations = (int)Math.Clamp(escalatedMs / perIter, 400, 100_000);
+
+        // ONE CAP, NOT TWO. The two-stage scheme ran a subproblem to the small cap
+        // and, if it truncated, ran the SAME subproblem again with the big one - so a
+        // truncating solve paid for both. It was built for one-off truncation, but
+        // measured in flight it fired on 77% of solves (213 escalations in 149
+        // cycles), which means the small cap was not a budget, it was a tax.
+        //
+        // SCS stops at its tolerance, not at the cap, so a subproblem that converges
+        // is completely unaffected by how high the cap is - raising it costs nothing
+        // on the common path and saves the wasted first run on the uncommon one. What
+        // bounds the cycle now is CycleBudgetMs, which bounds the thing that actually
+        // matters.
+        int cap = (int)Math.Clamp(Math.Max(budgetMs, escalatedMs) / perIter, 400, 100_000);
+        _solver.MaxSubproblemIterations = cap;
+        _solver.EscalatedSubproblemIterations = cap;   // equal, so no retry is issued
     }
 
     private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        Status = _solver.Solve(maxIterations);
+        Status = _solver.Solve(maxIterations, CycleBudgetMs);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
 
         // Refine the cost-per-iteration estimate from what this solve actually did.
