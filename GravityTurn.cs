@@ -248,10 +248,10 @@ namespace NovaTec.GravityTurnMod
                 double vss = vehicle.GetSurfaceSpeed();
                 ImGui.Text("Speed (surface):      " + (vss / 1000).ToString("n2") + "km/s");
                 ImGui.Text("Altitude:             " + (Controller.GetAltitude() / 1000).ToString("n1") + "km");
-                ImGui.Text("TWR:                  " + vehicle.NavBallData.ThrustWeightRatio.ToString("n2") + ", " + vehicle.IsAnyEnginePropellantAvailable());
+                ImGui.Text("TWR:                  " + vehicle.NavBallData.ThrustWeightRatio.ToString("n2"));
                 
                 ImGui.Separator();
-                ImGui.Text("Burn dV:              " + Controller.DeltaVUsed.ToString("n0") + "m/s, " + vehicle.Parts.PerformanceSequences.FindActiveSequenceDeltaV());
+                ImGui.Text("Burn dV:              " + Controller.DeltaVUsed.ToString("n0") + "m/s");
                 ImGui.Text(String.Format("Stage Sequence:       {0} of {1}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count));
                 //ImGui.Text("Throttle:             " + vehicle.GetManualThrottle() * 100);
                 //ImGui.Text("Atmosphere:          " + (Controller.GetAtmosphereHeight()/1000).ToString("n1") + "km");
