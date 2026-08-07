@@ -186,13 +186,8 @@ namespace NovaTec.GravityTurnMod
             vehicle.SetStabilization(true);
 
             // create custom target for pitch
-            /*            double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * InitialPitch, Math.PI / 2*0);
-                        vehicle.FlightComputer.CustomAttitudeTarget = target;
-                        vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
-                        vehicle.FlightComputer.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
-            */
             double inclination = 0;
-            double3 target = new double3(Math.PI / 2 * 0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * InitialPitch, 0* DegToRad(inclination));
+            double3 target = new double3(0, DegToRad(90 - InitialPitch), DegToRad(inclination));
             FlightControlOverride.Active = true;
             FlightControlOverride.BurnMode = FlightComputerBurnMode.Manual;
             FlightControlOverride.CustomAttitudeTarget = target;
@@ -280,48 +275,21 @@ namespace NovaTec.GravityTurnMod
             // In general the need to pitch up is a sign of a weak 2nd stage.
             //if (vehicle.Parts.SequenceList.ActiveSequence > 1 && didReachTargetApoapsisTime)
             {
-/*                if (GetApoapsisTime() < TimeToApoapsisTarget - 1 && GetApoapsisTime() > TimeToApoapsisStart-2 && diff < 0)
-                {
-                    double pitch = (double)Program.AttitudePitch.Current;
-                    if (iniPitch.IsNearlyZero())
-                        iniPitch = pitch;
-                    else
-                        pitch = iniPitch;
-
-                    if ((TimeToApoapsisTarget - GetApoapsisTime()) / 2 < 0)
-                        fwdPitch = pitch + (TimeToApoapsisTarget - GetApoapsisTime()) / 2;
-                    else
-                        fwdPitch = pitch;
-
-                    //double3 target = new double3(Math.PI / 2 * 0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 45, 0);
-                    double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
-                    vehicle.FlightComputer.CustomAttitudeTarget = target;
-                    if (vehicle.FlightComputer.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
-                    {
-                        vehicle.FlightComputer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
-                        RunWorker();
-                    }
-                    //vehicle.FlightComputer.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
-                    PitchesUp = true;
-                    Universe.SetSimulationSpeed(1.0, false);
-                }
-
                 // if tta is decreasing with full throttle then pitch up
-                else*/ if (GetApoapsisTime() < TimeToApoapsisStart - 1 && vehicle.GetManualThrottle() >= 1 && diff < 0)
+                if (GetApoapsisTime() < TimeToApoapsisStart - 1 && vehicle.GetManualThrottle() >= 1 && diff < 0)
                 {
                     double pitch = (double)Program.AttitudePitch.Current;
                     if (iniPitch.IsNearlyZero())
                         iniPitch = pitch;
                     else
                         pitch = iniPitch;
-
+                    
                     if ((TimeToApoapsisStart - GetApoapsisTime()) > 0)
                         fwdPitch = pitch - (TimeToApoapsisStart - GetApoapsisTime()) / 2.0;
                     else
                         fwdPitch = pitch;
 
-                    //double3 target = new double3(Math.PI / 2*0, Math.PI / 2 + Math.PI * 2 / 360 * -1 * 20, 0);
-                    double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
+                    double3 target = new double3(0, DegToRad(-fwdPitch), 0);
                     FlightControlOverride.CustomAttitudeTarget = target;
                     if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
                     {
@@ -342,7 +310,7 @@ namespace NovaTec.GravityTurnMod
                     else
                         fwdPitch = pitch;
 
-                    double3 target = new double3(0, Math.PI * 2 / 360 * -1 * fwdPitch, 0);
+                    double3 target = new double3(0, DegToRad(-fwdPitch), 0);
                     FlightControlOverride.CustomAttitudeTarget = target;
                     if (FlightControlOverride.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.Custom)
                     {
