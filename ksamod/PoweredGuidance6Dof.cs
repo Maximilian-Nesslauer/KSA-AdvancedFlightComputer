@@ -723,8 +723,22 @@ public static partial class PoweredGuidanceWindow
         }
 
         if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
+        {
             _sixDofGateChanges++;
-        _sixDofGateIndex = want;
+            _sixDofGateIndex = want;
+            return;
+        }
+
+        // The step was refused, which means this rung is too coarse to produce a
+        // flyable plan for the trajectory actually being flown. Remember that: the
+        // node-spacing target is a PROXY for collocation error, and how good a proxy
+        // it is depends on the manoeuvre. Measured offline on gentle descents, 0.5-1 s
+        // spacing costs 0.02 m of defect; on the logged 81 m/s, 92-degrees-off-vertical
+        // entry the same spacing cost 1.13 m, twenty times more, because defect
+        // follows how fast the state is changing and not spacing alone. Rather than
+        // retune a number that cannot be right for every case, let the rung floor
+        // record what this descent will actually take, and stop asking again.
+        _sixDofRungFloor = Math.Min(_sixDofRungFloor, want - 1);
     }
 
     /// <summary>

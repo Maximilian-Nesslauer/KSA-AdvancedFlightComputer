@@ -390,6 +390,7 @@ public sealed class Ksa6DofGuidance
         Error = "converging";
         _consecutiveFailures = 0;
         _lastColdIterationS = 0.0;
+        _coldIterations = 0;
     }
 
     /// <summary>
@@ -428,10 +429,17 @@ public sealed class Ksa6DofGuidance
         // noticeable even though the total work - and the total wall time - is the same
         // or worse.
         //
+        // Paced on WALL CLOCK, not sim time. What is being protected is the frame
+        // rate, which is a wall-clock property: sim time stalls when the game is
+        // paused or running slow and races under time warp, so pacing on it either
+        // never fires - one measured run managed a single iteration in 164 frames
+        // and then hit the give-up limit - or fires every frame and spreads nothing.
         // Between iterations this returns immediately, so those frames cost nothing.
-        if (_lastColdIterationS > 0.0 && simNow - _lastColdIterationS < ColdIterationIntervalS)
+        double wallNow = _wallClock.Elapsed.TotalSeconds;
+        if (_coldIterations > 0 && wallNow - _lastColdIterationS < ColdIterationIntervalS)
             return false;
-        _lastColdIterationS = simNow;
+        _lastColdIterationS = wallNow;
+        _coldIterations++;
 
         // The flight budget, not a smaller one. An SCvx iteration is indivisible, so
         // cutting it short here would only mean throwing the frame's work away.
@@ -450,14 +458,19 @@ public sealed class Ksa6DofGuidance
         for (int i = 0; i < Math.Max(iterations, 1); i++)
             _solver.Iterate();
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
-        LastIterations = _solver.IterationCount;
+        // The SOLVER's count is useless here: StepCold re-anchors through Reseed
+        // before every iteration, and Reseed zeroes IterationCount. Reporting it
+        // showed "converged in 1 iterations" no matter how many ran, and worse, made
+        // ColdStallIterations unreachable - so the looser cold gate was never applied
+        // and a hard case ran to the give-up limit instead of settling for a plan.
+        LastIterations = _coldIterations;
 
         // Accept against the WARM gate first. Only fall back to the looser cold gate
         // once the iteration count says it has stopped improving, so a genuinely hard
         // case still engages instead of converging forever.
         if (Finish(x0, simNow, 0))
             return true;
-        bool stalled = _solver.IterationCount >= ColdStallIterations;
+        bool stalled = _coldIterations >= ColdStallIterations;
         return stalled && Finish(x0, simNow, 0, cold: true);
     }
 
@@ -485,6 +498,8 @@ public sealed class Ksa6DofGuidance
     public double ColdIterationIntervalS { get; set; } = 0.25;
 
     private double _lastColdIterationS;
+    private int _coldIterations;
+    private readonly System.Diagnostics.Stopwatch _wallClock = System.Diagnostics.Stopwatch.StartNew();
 
     /// <summary>
     /// How far the vehicle is from where its own plan says it should be, right now.
@@ -507,10 +522,16 @@ public sealed class Ksa6DofGuidance
         double s = Math.Clamp(t / dt, 0.0, _n - 1.001);
         int k = (int)s;
         double f = s - k;
+        // NOT Lerp() - that one strides by NU because every other caller passes
+        // _planU. Using it on _planX reads element k*4+i, so from node 1 onward it
+        // returns velocity and quaternion components as if they were positions. That
+        // put ~6% of altitude of fictitious drift on a plan solved milliseconds ago,
+        // which tripped the 5%-of-altitude restart limit on literally every plan.
+        int k1 = Math.Min(k + 1, _n - 1);
         double d = 0.0;
         for (int i = 0; i < 3; i++)
         {
-            double px = Lerp(_planX, i, k, f);
+            double px = _planX[k * NX + i] * (1.0 - f) + _planX[k1 * NX + i] * f;
             d += (px - x0[i]) * (px - x0[i]);
         }
         PlanDriftM = Math.Sqrt(d);
@@ -539,6 +560,19 @@ public sealed class Ksa6DofGuidance
     /// The transition solve is therefore ADMM-cold but trajectory-warm, and it
     /// happens at the SMALLER node count, where a solve is cheap anyway - measured
     /// p50 4 ms at N=30 against 13 ms at N=80.
+    /// </summary>
+    /// <summary>
+    /// JUDGED AT THE WARM GATE, not the cold one, for the same reason StepCold is.
+    /// A node step accepted at the loose cold tolerance commits a plan that the warm
+    /// loop will then reject on every single cycle: flight log 20260807-101448
+    /// stepped 50 -> 30 nodes with 1.13 m of defect, passed the 15 m cold gate, and
+    /// every cycle afterwards read "no solve this cycle" against the 1 m warm gate
+    /// while the vehicle flew an ageing open-loop plan.
+    ///
+    /// The coarser rung is an OPTIMISATION - it exists to make solves cheaper. If it
+    /// cannot produce a plan the loop will actually fly, declining the step and
+    /// staying at the finer count costs only solve time, which is the thing the step
+    /// was trying to save. That is the right way round.
     /// </summary>
     public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5)
     {
@@ -576,7 +610,7 @@ public sealed class Ksa6DofGuidance
         double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - Math.Max(0.0, simNow - prev._solveTime));
         if (FixedTime) PinSigma(sigma);
         _solver.Initialize(x0, _xf, xs, us, sigma);
-        return Finish(x0, simNow, maxIterations, cold: true);
+        return Finish(x0, simNow, maxIterations);
     }
 
     private static void Normalize(Span<double> q)
