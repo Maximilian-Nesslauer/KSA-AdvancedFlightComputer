@@ -25,8 +25,8 @@ namespace NovaTec.GravityTurnMod
         public double TargetAltitude { get; set; } = 280.0;
         */
         /* works for RSS size*/
-        public double InitialPitch { get; set; } = 15;
-        public double InitialSpeed { get; set; } = 60;
+        public double InitialPitch { get; set; } = 10;
+        public double InitialSpeed { get; set; } = 80;
         public int TimeToApoapsisStart { get; set; } = 65;
         public int TimeToApoapsisEnd { get; set; } = 65;
         public int TimeToApoapsisTarget { get; set; } = 70;
@@ -400,8 +400,7 @@ namespace NovaTec.GravityTurnMod
                 LastTransitionTime = Universe.GetElapsedSeconds();
                 Console.WriteLine("Trigger decoupler, then light engine");
                 NextStequence();
-                // TODO: remove
-                //AutoStage = false;
+                return;
             }
             // Wait for ignition to get clear of previous stage
             else if (diff > 0.8)
@@ -825,7 +824,6 @@ namespace NovaTec.GravityTurnMod
 
             if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return false;
 
-            bool hasFuel = false;
             ArrayList engines = GetEngineControllers();
             if (engines != null)
             {
@@ -851,13 +849,14 @@ namespace NovaTec.GravityTurnMod
                 return 0;
 
             IParentBody parent = ControlledVehicle.Orbit.Parent;
+            #pragma warning disable CS8602 // Dereference of a possibly null reference. Was checked above
             double atmosphereHeight = parent.GetAtmosphereReference().Physical.Height.InMeters();
             return atmosphereHeight;
         }
 
         public double3 GetOrbitVector()
         {
-            Vehicle vehicle = ControlledVehicle;
+            Vehicle? vehicle = ControlledVehicle;
             if (vehicle == null) return new double3(0,0,0);
 
             if (!(vehicle.Orbit.Parent is Celestial celestial))
@@ -877,7 +876,7 @@ namespace NovaTec.GravityTurnMod
 
         public double3 GetSurfaceVector()
         {
-            Vehicle vehicle = ControlledVehicle; 
+            Vehicle? vehicle = ControlledVehicle; 
             if (vehicle == null) return new double3(0, 0, 0);
 
             if (!(vehicle.Orbit.Parent is Celestial celestial))
@@ -911,7 +910,26 @@ namespace NovaTec.GravityTurnMod
             {
                 if (Program.GetNearbyCelestial() == null || ControlledVehicle == null)
                     return 0;
+                if (Program.ControlledVehicle.Situation == Situation.Landed)
+                    return 0;
                 return ControlledVehicle.Apoapsis - Program.GetNearbyCelestial().MeanRadius;
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return 0;
+            }
+        }
+        public double GetPeriapsisAltitude()
+        {
+            try
+            {
+                if (Program.GetNearbyCelestial() == null || ControlledVehicle == null)
+                    return 0;
+                if (Program.ControlledVehicle.Situation == Situation.Landed)
+                    return 0;
+                var altPeriapsis = ControlledVehicle.Periapsis - Program.GetNearbyCelestial().MeanRadius;
+                return altPeriapsis > 0 ? altPeriapsis : 0;
             }
             catch (Exception ex)
             {
@@ -929,10 +947,10 @@ namespace NovaTec.GravityTurnMod
                     && ControlledVehicle.NextApoapsisTime.IsNotNaN()
                     && ControlledVehicle.NextApoapsisTime.IsNotZero()
                     && Program.GetNearbyCelestial() != null
-                    && Program.GetNearbyCelestial().GetNearSurfaceRadius() != null)
+                    && Program.GetNearbyCelestial().GetNearSurfaceRadius() > 0)
                 {
                     SimTime tta = ControlledVehicle.NextApoapsisTime - gt;
-                    if (GetAltitude() < 100)
+                    if (ControlledVehicle.GetRadarAltitude() < 100 || tta.Seconds() < 0)
                         return 0;
                     else
                         return tta.Seconds();
@@ -960,7 +978,7 @@ namespace NovaTec.GravityTurnMod
 
         public PositionVertex? GetCurrentPosition()
         {
-            Vehicle vehicle = ControlledVehicle;
+            Vehicle? vehicle = ControlledVehicle;
             if (vehicle == null) return null;
             if (!(vehicle.Orbit.Parent is Celestial celestial))
             {

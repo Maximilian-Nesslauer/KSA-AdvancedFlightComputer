@@ -18,7 +18,7 @@ namespace NovaTec.GravityTurnMod
 
         private Vehicle? _controlledVehicle = null;
 
-        private GravityController Controller = null;
+        private GravityController? Controller = null;
 
         public String CoordToString(doubleQuat q)
         {
@@ -240,14 +240,15 @@ namespace NovaTec.GravityTurnMod
 
 
                 double hoa = Controller.GetApoapsisAltitude();
+                double hop = Controller.GetPeriapsisAltitude();
                 ImGui.TextColored(new float4(1, 0.5f, 0, 1), "Telemetry:");
                 ImGui.TextColored(new float4(0.2f, 1, 0.2f, 1), "Phase: " + Controller.Phase.ToString() + ", " + vehicle.Situation.ToString() + ", " + vehicle.FlightComputer.ActiveControlSystem.X.ToString() + ", " + Math.Round(Universe.GetElapsedSeconds() - Controller.LastTransitionTime,1) + "s");
                 ImGui.Text("Target time to AP:    " + Controller.TimeToApoapsisTarget.ToString("n1") + "s");
-                ImGui.Text("Actual time to AP:    " + Controller.GetApoapsisTime().ToString("n1") + "s (" + (hoa / 1000).ToString("n1") + "km)");
+                ImGui.Text("Actual time to AP:    " + Controller.GetApoapsisTime().ToString("n1") + "s (" + (hoa / 1000).ToString("n0") + "km - " + (hop / 1000).ToString("n0") + "km, " + GravityController.RadToDeg(vehicle.Orbit.Inclination).ToString("n1") + "°)");
                 ImGui.Separator();
                 double vss = vehicle.GetSurfaceSpeed();
                 ImGui.Text("Speed (surface):      " + (vss / 1000).ToString("n2") + "km/s");
-                ImGui.Text("Altitude:             " + (Controller.GetAltitude() / 1000).ToString("n1") + "km");
+                ImGui.Text("Altitude:             " + (vehicle.GetRadarAltitude() / 1000).ToString("n1") + "km");
                 ImGui.Text("TWR:                  " + vehicle.NavBallData.ThrustWeightRatio.ToString("n2"));
                 
                 ImGui.Separator();
@@ -322,7 +323,7 @@ namespace NovaTec.GravityTurnMod
         {
             if (_autoLoaded) return;
             _autoLoaded = true;
-            Program.TerminalInterface.Execute("load LaunchRadialKourou");
+            Program.TerminalInterface.Execute("load Launch");
         }
 
     }
