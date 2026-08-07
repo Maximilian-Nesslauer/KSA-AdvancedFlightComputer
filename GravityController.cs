@@ -345,7 +345,7 @@ namespace NovaTec.GravityTurnMod
                     Universe.SetSimulationSpeed(warp, false);
                 }
                 // slow warp just after staging
-                else if ((phaseDuration <= 9 && GetCurrentSequence().Number > 1))
+                else if ((phaseDuration <= 9 && GetCurrentSequence()?.Number > 1))
                 {
                     if (Universe.SimulationSpeed > 9)
                         Console.WriteLine("Rampup warp after staging");
@@ -695,20 +695,20 @@ namespace NovaTec.GravityTurnMod
             DeltaVAtLast = ControlledVehicle.NavBallData.DeltaV;
         }
 
-        public Sequence GetCurrentSequence()
+        public Sequence? GetCurrentSequence()
         {
             Vehicle? vehicle = Program.ControlledVehicle;
-            Sequence sequence = null;
+            Sequence? sequence = null;
+            if (vehicle == null || vehicle.Parts == null || vehicle.Parts.SequenceList == null)
+                return null;
 
-            if (vehicle != null && vehicle.Parts != null && vehicle.Parts.SequenceList != null 
-                && vehicle.Parts.SequenceList.ActiveSequence > 0
-                && vehicle.Parts.SequenceList.Count > vehicle.Parts.SequenceList.ActiveSequence)
+            if (vehicle.Parts.SequenceList.ActiveSequence > 0
+             && vehicle.Parts.SequenceList.Count > vehicle.Parts.SequenceList.ActiveSequence)
             {
                 sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             }
             else
             {
-                //vehicle.Parts.SequenceList.RemoveSpentSequences();
                 sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.Count - 1];
             }
             return sequence;
@@ -717,7 +717,7 @@ namespace NovaTec.GravityTurnMod
         public Sequence? NextStequence()
         {
             Vehicle? vehicle = Program.ControlledVehicle;
-            Sequence sequence = null;
+            Sequence? sequence = null;
             if (vehicle == null) 
                 return null;
 
@@ -752,7 +752,9 @@ namespace NovaTec.GravityTurnMod
 
         public float GetFuelInSequence()
         {
-            Vehicle vehicle = Program.ControlledVehicle;
+            Vehicle? vehicle = Program.ControlledVehicle;
+            if (vehicle == null)
+                return 0.0f;
             Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             foreach (Part p in sequence.Parts)
             {
@@ -769,11 +771,12 @@ namespace NovaTec.GravityTurnMod
         }
         public ArrayList GetEngineControllers()
         {
-            Vehicle vehicle = Program.ControlledVehicle;
-            if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return null;
-            Sequence sequence = GetCurrentSequence();
-            //Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             ArrayList engines = new ArrayList();
+            Vehicle? vehicle = Program.ControlledVehicle;
+            if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) 
+                return engines;
+            Sequence? sequence = GetCurrentSequence();
+            //Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             if (sequence == null) return engines;
 
             foreach (Part p in sequence.Parts)
@@ -784,23 +787,23 @@ namespace NovaTec.GravityTurnMod
         }
         public ArrayList GetFuelTanks()
         {
-            Vehicle vehicle = Program.ControlledVehicle;
+            ArrayList tanks = new ArrayList();
+            Vehicle? vehicle = Program.ControlledVehicle;
             if (vehicle == null 
                 || vehicle.Parts.SequenceList.ActiveSequence < 1
                 || vehicle.Parts.SequenceList.Count <= vehicle.Parts.SequenceList.ActiveSequence)
-                return null;
+                return tanks;
 
             Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
-            ArrayList tanks = new ArrayList();
             foreach (Part p in sequence.Parts)
             {
                 tanks.AddRange(p.SubtreeModules.Get<Tank>().ToArray());
             }
             return tanks;
         }
-        public Tank GetFuelTank()
+        public Tank? GetFuelTank()
         {
-            Vehicle vehicle = Program.ControlledVehicle;
+            Vehicle? vehicle = Program.ControlledVehicle;
             if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return null;
 
             Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
@@ -818,7 +821,7 @@ namespace NovaTec.GravityTurnMod
         }
         public bool GetSequenceHasFuel()
         {
-            Vehicle vehicle = Program.ControlledVehicle;
+            Vehicle? vehicle = Program.ControlledVehicle;
 
             if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) return false;
 
@@ -831,14 +834,12 @@ namespace NovaTec.GravityTurnMod
                 {
                     foreach (RocketCore c in ec.Cores)
                     {
-                        hasFuel |= c.ComputePropellantAvailable(states, true);
                         if (!c.ComputePropellantAvailable(states, false))
                             return false;
                     }
                 }
             }
             return vehicle.NavBallData.DeltaV > 0.01;
-            return hasFuel;
         }
         
         public double GetAtmosphereHeight()
