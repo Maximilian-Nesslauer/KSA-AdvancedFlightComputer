@@ -79,7 +79,7 @@ internal static class SixDofLog
                 "cycle", "t", "alt", "rx", "ry", "rz", "vx", "vy", "vz", "speed",
                 "qw", "qx", "qy", "qz", "tiltDeg", "wx", "wy", "wz", "mass",
                 "solved", "status", "scvxIters", "accepted", "solveMs", "admm",
-                "defectM", "defectLimitM", "defectChan", "defectGroup", "defectRaw", "defectNode",
+                "defectM", "defectLimitM", "defectChan", "defectGroup", "defectRaw", "defectNode", "qFlips",
                 "anchorM", "fellBack", "escalations",
                 "nodes", "sigma", "planElapsed",
                 "thrustDemandN", "capabilityN", "throttle", "saturated",
@@ -166,7 +166,7 @@ internal static class SixDofLog
             F(sb, r.SolveMs); sb.Append(r.Admm).Append(',');
             F(sb, r.DefectM); F(sb, r.DefectLimitM);
             sb.Append(Csv(r.DefectChan)).Append(',').Append(Csv(r.DefectGroup)).Append(',');
-            F(sb, r.DefectRaw); sb.Append(r.DefectNode).Append(','); F(sb, r.AnchorM);
+            F(sb, r.DefectRaw); sb.Append(r.DefectNode).Append(',').Append(r.QFlips).Append(','); F(sb, r.AnchorM);
             sb.Append(r.FellBack ? 1 : 0).Append(',').Append(r.Escalations).Append(',');
             sb.Append(r.Nodes).Append(',');
             F(sb, r.Sigma); F(sb, r.PlanElapsed);
@@ -278,6 +278,10 @@ internal static class SixDofLog
         public string DefectChan, DefectGroup;
         public double DefectRaw;
         public int DefectNode;
+        // Nodes re-expressed onto the vehicle's quaternion branch this cycle. Normally
+        // zero; non-zero means the double cover was about to inject a defect that has
+        // no physical meaning. See Ksa6DofGuidance.AlignQuaternionBranch.
+        public int QFlips;
         public bool FellBack;
         public double ThrustDemandN, CapabilityN, Throttle;
         public bool Saturated;

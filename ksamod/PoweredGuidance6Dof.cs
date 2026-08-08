@@ -923,6 +923,7 @@ public static partial class PoweredGuidanceWindow
             DefectM = _sixDof.LastDefectM, DefectLimitM = _sixDof.MaxDefectM,
             DefectChan = _sixDof.LastDefectChannelName, DefectGroup = _sixDof.LastDefectGroup,
             DefectRaw = _sixDof.LastDefectRaw, DefectNode = _sixDof.LastDefectNode,
+            QFlips = _sixDof.LastBranchFlips,
             AnchorM = _sixDof.AnchorOffsetM,
             FellBack = _sixDof.FellBack, Escalations = _sixDof.Escalations,
             Nodes = _sixDof.Nodes, Sigma = _sixDof.Sigma, PlanElapsed = _sixDof.PlanElapsed,
@@ -1322,6 +1323,15 @@ public static partial class PoweredGuidanceWindow
                 _sixDofError = "";
                 _sixDofSolveOk = true;
                 _sixDofRefusalRun = 0;
+                // Worth an event, not just a column: this fires exactly once per real
+                // sign flip - the plan is stored on the vehicle's branch afterwards, so
+                // the next cycle finds nothing to do - and before the fix each one cost
+                // fifteen refusals and a cold restart.
+                if (_sixDof.LastBranchFlips > 0)
+                    SixDofLog.Event(now,
+                        $"QUATERNION BRANCH FLIP at alt {x[2]:F0} m: re-expressed " +
+                        $"{_sixDof.LastBranchFlips} of {_sixDof.Nodes - 1} plan nodes onto the " +
+                        "vehicle's branch (q and -q are the same rotation; the defect is not)");
                 SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
             }
             else

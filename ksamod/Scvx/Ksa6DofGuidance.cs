@@ -507,6 +507,7 @@ public sealed class Ksa6DofGuidance
             double[] xs = (double[])_solver.ReferenceX.Clone();
             double[] us = (double[])_solver.ReferenceU.Clone();
             Array.Copy(x0, 0, xs, 0, NX);
+            LastBranchFlips = AlignQuaternionBranch(xs, _n);
             _solver.Reseed(x0, xs, us, _solver.Sigma, trustRegion: _solver.TrustRegion);
         }
 
@@ -716,6 +717,7 @@ public sealed class Ksa6DofGuidance
         // Node 0 is the measured state exactly, for the same reason as in Plan: the
         // equality and the trust region leave no slack there at all.
         Array.Copy(x0, 0, xs, 0, NX);
+        LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         _xf = (double[])prev._xf.Clone();
         double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - Math.Max(0.0, simNow - prev._solveTime));
@@ -723,6 +725,60 @@ public sealed class Ksa6DofGuidance
         _solver.Initialize(x0, _xf, xs, us, sigma);
         return Finish(x0, simNow, maxIterations);
     }
+
+    /// <summary>
+    /// Put every node of a seed on the same quaternion BRANCH as node 0, and report
+    /// how many had to be flipped.
+    ///
+    /// q and -q are the same rotation - the double cover - so a measured attitude is
+    /// only defined up to sign, and nothing physical distinguishes the two. The
+    /// COLLOCATION DEFECT does distinguish them, because it is arithmetic on the
+    /// components: the trapezoid across an interval whose ends sit on opposite
+    /// branches sees a jump of up to 2 in a component that never moved.
+    ///
+    /// That is precisely the failure in flight log 20260808-122824. Three frames as
+    /// the vehicle rotated through qw = 0:
+    ///
+    ///     t+3.92   qw +0.000009  qx +0.68365  qz -0.72981    defect    0.2 m
+    ///     t+3.93   qw +0.000027  qx -0.68301  qz +0.73041    defect    0.2 m
+    ///     t+3.95   qw +0.000066  qx -0.68235  qz +0.73102    defect 3548.0 m
+    ///
+    /// The vehicle did not move; the REPRESENTATION flipped. Node 0 was then
+    /// re-anchored to the flipped measurement while nodes 1..N still carried the old
+    /// branch from the shifted plan, and the defect at interval 0 came out as 1.47 -
+    /// which is 0.73041 - (-0.72897), the antipodal gap and nothing else. Every
+    /// subsequent cycle re-anchored the same way, so it could not self-correct:
+    /// fifteen refusals, then a cold restart, which repaired it only because
+    /// BuildColdSeed goes through Slerp and Slerp already takes the short way round.
+    ///
+    /// NODE 0 IS NEVER TOUCHED. It is the measurement, and the measurement is not ours
+    /// to rewrite; the plan is. Walking forward from it flips the plan onto the
+    /// measurement's branch while preserving the plan's own internal continuity, so
+    /// the anchor stays exact and the trajectory stays smooth. On a seed that is
+    /// already consistent - the overwhelmingly common case - this does nothing at all.
+    /// </summary>
+    private static int AlignQuaternionBranch(double[] traj, int n)
+    {
+        int flips = 0;
+        for (int k = 1; k < n; k++)
+        {
+            int q = k * NX + Dynamics6Dof.IQ, p = (k - 1) * NX + Dynamics6Dof.IQ;
+            double dot = traj[q] * traj[p] + traj[q + 1] * traj[p + 1]
+                       + traj[q + 2] * traj[p + 2] + traj[q + 3] * traj[p + 3];
+            if (dot >= 0.0)
+                continue;
+            for (int i = 0; i < 4; i++) traj[q + i] = -traj[q + i];
+            flips++;
+        }
+        return flips;
+    }
+
+    /// <summary>
+    /// Nodes whose quaternion branch had to be flipped to match the vehicle on the
+    /// last seed build. Non-zero means the double cover was about to inject a
+    /// fictitious defect - see <see cref="AlignQuaternionBranch"/>. Diagnostic only.
+    /// </summary>
+    public int LastBranchFlips { get; private set; }
 
     private static void Normalize(Span<double> q)
     {
@@ -857,6 +913,12 @@ public sealed class Ksa6DofGuidance
         // step still hands back a plan anchored at the vehicle rather than at the old
         // plan's node `shift`.
         Array.Copy(x0, 0, xs, 0, NX);
+
+        // Put the shifted plan on the MEASUREMENT quaternion branch. Without this, a
+        // sign flip in the measured attitude - a no-op physically - lands as ~1.5 of
+        // quaternion defect at interval 0 and gets the plan refused every cycle until
+        // the circuit breaker throws it away. See AlignQuaternionBranch.
+        LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         // FIXED TIME: count the COMMITTED burn time down rather than letting the
         // solver re-choose it every cycle. Re-choosing is what made successive plans

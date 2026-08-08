@@ -555,6 +555,22 @@ public sealed class Scvx6DofSolver
         return worst;
     }
 
+    /// <summary>
+    /// Renormalise every node's quaternion, and keep the trajectory on ONE branch of
+    /// the double cover.
+    ///
+    /// The subproblem knows nothing about q and -q being the same rotation - it sees
+    /// four ordinary variables - so a solution is free to come back with a node on the
+    /// opposite branch from its neighbour. Nothing is wrong with such a trajectory
+    /// physically, but the next linearisation is taken about it, and the collocation
+    /// defect is arithmetic on the components: a branch change between adjacent nodes
+    /// reads as a jump of up to 2 in a channel whose scale is 1.
+    ///
+    /// Node 0 is left alone - it is pinned to the measured state by the initial-state
+    /// equality, so it is the reference the rest should agree with rather than the
+    /// other way round. On a trajectory that is already consistent this is a no-op,
+    /// which is why it does not move the Python reference comparison.
+    /// </summary>
     private void NormaliseQuaternions(double[] x)
     {
         for (int k = 0; k < _n; k++)
@@ -564,6 +580,13 @@ public sealed class Scvx6DofSolver
                                   + x[q + 2] * x[q + 2] + x[q + 3] * x[q + 3]);
             if (norm < 1e-12) continue;
             for (int i = 0; i < 4; i++) x[q + i] /= norm;
+
+            if (k == 0) continue;
+            int p = (k - 1) * NX + Dynamics6Dof.IQ;
+            double dot = x[q] * x[p] + x[q + 1] * x[p + 1]
+                       + x[q + 2] * x[p + 2] + x[q + 3] * x[p + 3];
+            if (dot < 0.0)
+                for (int i = 0; i < 4; i++) x[q + i] = -x[q + i];
         }
     }
 }

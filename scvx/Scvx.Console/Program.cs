@@ -82,6 +82,11 @@ if (args.Contains("--coldn"))
     return ColdNodeCheck.Run();
 }
 
+if (args.Contains("--quat"))
+{
+    return QuaternionBranchCheck.Run();
+}
+
 if (args.Contains("--seed"))
 {
     return SeedCheck.Run();
