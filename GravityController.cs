@@ -35,7 +35,7 @@ namespace NovaTec.GravityTurnMod
         public int TimeToApoapsisTarget { get; set; } = 70;
         public double TargetAltitude { get; set; } = 280;
         public double MinThrottle{ get; set; } = 0.2;
-        public double TargetInclination { get; set; } = 90;
+        public double TargetInclination { get; set; } = 51.6;
         public double LaunchAzimuth{ get; set; } = 0.0;
         public bool UseWarp { get; set; } = true;
         public bool AutoStage{ get; set; } = true;
@@ -754,11 +754,11 @@ namespace NovaTec.GravityTurnMod
             Console.WriteLine(String.Format("Launch into inclination: {0}", inclination));
             Console.WriteLine("   latitude: " + latitude);
             Console.WriteLine("   inertial: " + inertial);
-            Console.WriteLine("   planet radius: " + vehicle.Parent.MinTerrainRadius);
+            Console.WriteLine("   planet radius: " + vehicle.Parent.MeanRadius);
             var vOrbit = GetOrbitalSpeed(vehicle.Parent.MeanRadius + TargetAltitude * 1000);
             Console.WriteLine("   orbital speed: " + vOrbit);
             var vAngular = vehicle.Parent.GetAngularVelocity();
-            double vEquator = vAngular * parent.MinTerrainRadius;
+            double vEquator = vAngular * parent.MeanRadius;
             double vLatitude= Math.Cos(DegToRad(latitude)) * vEquator;
             Console.WriteLine("   angular velocity: " + vAngular);
             Console.WriteLine("   equatorial speed: " + vEquator);
@@ -768,7 +768,7 @@ namespace NovaTec.GravityTurnMod
             Console.WriteLine("   vXrot: " + vXrot);
             var vYrot = vOrbit * Math.Cos(DegToRad(inertial));
             Console.WriteLine("   vYrot: " + vYrot);
-            var azimuth = 90 - RadToDeg(Math.Atan(vXrot / vYrot));
+            var azimuth = RadToDeg(Math.Atan(vXrot / vYrot))-90;
             Console.WriteLine("Launch azimuth: " + azimuth);
 
             return azimuth;
