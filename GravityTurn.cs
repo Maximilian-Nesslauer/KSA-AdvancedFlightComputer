@@ -14,28 +14,13 @@ namespace NovaTec.GravityTurnMod
     [StarMapMod]
     public class GravityTurn
     {
-        private static Harmony? _harmony;
-
-        private Vehicle? _controlledVehicle = null;
-
         private GravityController? Controller = null;
 
         public String CoordToString(doubleQuat q)
         {
             double3 angles = VehicleReferenceFrameEx.QuaternionToEulerAngles(VehicleReferenceFrame.EnuBody, q);
 
-            return CoordToString(angles);
-        }
-
-        public String CoordToString(double3 angles)
-        {
-            double3 degrees = new double3
-            {
-                X = (MathEx.ToCompassAngle(angles.X) * (180.0 / Math.PI)) % 360,
-                Y = (MathEx.ToCompassAngle(angles.Y) * (180.0 / Math.PI)) % 360,
-                Z = (MathEx.ToCompassAngle(angles.Z) * (180.0 / Math.PI)) % 360
-            };
-            return String.Format("X: {0,6:N}, >: {1,6:N}, Z: {2,6:N}", degrees.X, degrees.Y, degrees.Z);
+            return GravityController.CoordToString(angles);
         }
 
         [StarMapAfterGui]
@@ -67,7 +52,7 @@ namespace NovaTec.GravityTurnMod
             }
 
             ImGui.Begin("Gravityturn", flags);
-            ImGui.SetWindowSize("Gravityturn", new Brutal.Numerics.float2(600, 600));
+            ImGui.SetWindowSize("Gravityturn", new Brutal.Numerics.float2(600, 620));
 
             if (ImGui.BeginMenuBar())
             {
@@ -223,7 +208,10 @@ namespace NovaTec.GravityTurnMod
                 if (ImGui.Button(vehicle.Situation == Situation.Landed ? "Launch!" : "Abort", new float2(120, yl - y - ImGui.GetStyle().ItemInnerSpacing.Y)))
                 {
                     if (vehicle.Situation == Situation.Landed)
+                    {
+                        Controller.SetVehicle(vehicle);
                         Controller.Launch(vehicle);
+                    }
                     else
                     {
                         vehicle.SetEnum(VehicleEngine.MainShutdown);
@@ -281,7 +269,7 @@ namespace NovaTec.GravityTurnMod
                     ImGui.Text(String.Format("Burn:          {0}s", vehicle.FlightComputer.Burn.BurnDuration));
                 else
                     ImGui.Text("Pitching up:          " + Controller.PitchesUp + ", pitch: " + Program.AttitudePitch.Current);
-                
+
                 //ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
                 //ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);vehicle.Orbit.StateVectors.PositionCci
 

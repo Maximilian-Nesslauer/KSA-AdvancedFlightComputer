@@ -1,6 +1,7 @@
 ﻿using Brutal.GlfwApi;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
+using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 using RenderCore;
@@ -8,8 +9,10 @@ using RenderCore.Input;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
 using System.Text;
+using System.Text.Json.Nodes;
 using static Brutal.Strings.Utf8;
 
 namespace NovaTec.GravityTurnMod
@@ -25,14 +28,15 @@ namespace NovaTec.GravityTurnMod
         public double TargetAltitude { get; set; } = 280.0;
         */
         /* works for RSS size*/
-        public double InitialPitch { get; set; } = 10;
-        public double InitialSpeed { get; set; } = 80;
+        public double InitialPitch { get; set; } = 9;
+        public double InitialSpeed { get; set; } = 95;
         public int TimeToApoapsisStart { get; set; } = 65;
         public int TimeToApoapsisEnd { get; set; } = 65;
         public int TimeToApoapsisTarget { get; set; } = 70;
         public double TargetAltitude { get; set; } = 280;
         public double MinThrottle{ get; set; } = 0.2;
-        public double TargetInclination { get; set; } = 94.5;
+        public double TargetInclination { get; set; } = 90;
+        public double LaunchAzimuth{ get; set; } = 0.0;
         public bool UseWarp { get; set; } = true;
         public bool AutoStage{ get; set; } = true;
 
@@ -59,15 +63,19 @@ namespace NovaTec.GravityTurnMod
             Phase = PhaseEnum.Landed;
             ControlledVehicle = vehicle;
         }
+        public void SetVehicle(Vehicle vehicle)
+        {
+            ControlledVehicle = vehicle;
+        }
 
         public void Launch(Vehicle vehicle)
         {
             if (vehicle == null)
                 return;
 
-            ControlledVehicle = vehicle;
             LaunchAltitude = GetAltitude();
-            LaunchAltitude = ControlledVehicle.Apoapsis;
+            LaunchAltitude = ControlledVehicle.GetBarometricAltitude();
+            LaunchAzimuth = CalculateLaunchAzimuth(TargetInclination);
 
             TimeToApoapsisTarget = TimeToApoapsisStart;
             DeltaVAtLast = vehicle.NavBallData.DeltaV;
@@ -101,6 +109,7 @@ namespace NovaTec.GravityTurnMod
 
         public void Run()
         {
+            SetVehicle(Program.ControlledVehicle);
             Vehicle? vehicle = ControlledVehicle;
             if (vehicle == null)
                 return;
@@ -153,7 +162,7 @@ namespace NovaTec.GravityTurnMod
         private void RunPhaseInitial(Vehicle vehicle)
         {
 
-            if (UseWarp &&vehicle.GetBarometricAltitude() > 100 && Universe.SimulationSpeed < 2 )
+            if (UseWarp && vehicle.GetBarometricAltitude() > 100 && Universe.SimulationSpeed < 2 )
                 Universe.SetSimulationSpeed(2.0, false);
 
             if (GetSpeed() > InitialSpeed)
@@ -173,8 +182,9 @@ namespace NovaTec.GravityTurnMod
             vehicle.SetStabilization(true);
 
             // create custom target for pitch
-            double inclination = TargetInclination;
-            double3 target = new double3(0, DegToRad(90 - InitialPitch), DegToRad(inclination));
+            double azimuth = LaunchAzimuth;
+
+            double3 target = new double3(0, DegToRad(90 - InitialPitch), DegToRad(azimuth));
             FlightControlOverride.Active = true;
             FlightControlOverride.BurnMode = FlightComputerBurnMode.Manual;
             FlightControlOverride.RollMode = FlightComputerRollMode.Up;
@@ -684,9 +694,101 @@ namespace NovaTec.GravityTurnMod
             DeltaVAtLast = ControlledVehicle.NavBallData.DeltaV;
         }
 
+        static public String CoordToString(double3 angles)
+        {
+            double3 degrees = new double3
+            {
+                X = RadToDeg(angles.X),
+                Y = RadToDeg(angles.Y),
+                Z = RadToDeg(angles.Z)
+            };
+            return String.Format("X: {0,6:N}, >: {1,6:N}, Z: {2,6:N}", degrees.X, degrees.Y, degrees.Z);
+        }
+        static public String AnglesToString(double3 angles)
+        {
+            double3 degrees = new double3
+            {
+                X = RadToDeg(angles.X),
+                Y = RadToDeg(angles.Y),
+                Z = RadToDeg(angles.Z)
+            };
+            return String.Format("X: {0,6:N}, >: {1,6:N}, Z: {2,6:N}", degrees.X, degrees.Y, degrees.Z);
+        }
+
+        public double CalculateEquatoriaRotationSpeed()
+        {
+            Vehicle? vehicle = ControlledVehicle;
+            if (vehicle == null || vehicle.Orbit == null || vehicle.Orbit.Parent == null)
+                return 0;
+            IParentBody parent = vehicle.Orbit.Parent;
+            if (parent.GetAtmosphereReference() == null)
+                return 0;
+            double lat = RadToDeg(vehicle.Orbit.Inclination);
+            double angularVelocity = parent.GetAngularVelocity();
+            double equatorialSpeed = Math.Cos(DegToRad(lat)) * angularVelocity * parent.MeanRadius;
+            Console.WriteLine("Equatorial speed: " + equatorialSpeed);
+            return equatorialSpeed;
+        }
+        public double CalculateLaunchAzimuth(double inclination)
+        {
+            Vehicle? vehicle = ControlledVehicle;
+            if (vehicle == null || vehicle.Orbit == null || vehicle.Orbit.Parent == null)
+                return 0;
+            IParentBody parent = vehicle.Orbit.Parent;
+            double latitude = RadToDeg(vehicle.Orbit.Inclination);
+
+            if (inclination == double.NaN || inclination == 0.0)
+            {
+                DefaultCategory.Log.Info(String.Format("Launch east: {0}", latitude));
+                return 0.0;
+            }
+
+            double inertial = Math.Asin(Math.Cos(DegToRad(inclination)) / Math.Cos(DegToRad(latitude)));
+            if (inertial == double.NaN)
+            {
+                DefaultCategory.Log.Info(String.Format("Launch east: {0}", latitude));
+                return 0.0;
+            }
+            inertial = RadToDeg(inertial);
+
+            Console.WriteLine(String.Format("Launch into inclination: {0}", inclination));
+            Console.WriteLine("   latitude: " + latitude);
+            Console.WriteLine("   inertial: " + inertial);
+            Console.WriteLine("   planet radius: " + vehicle.Parent.MinTerrainRadius);
+            var vOrbit = GetOrbitalSpeed(vehicle.Parent.MeanRadius + TargetAltitude * 1000);
+            Console.WriteLine("   orbital speed: " + vOrbit);
+            var vAngular = vehicle.Parent.GetAngularVelocity();
+            double vEquator = vAngular * parent.MinTerrainRadius;
+            double vLatitude= Math.Cos(DegToRad(latitude)) * vEquator;
+            Console.WriteLine("   angular velocity: " + vAngular);
+            Console.WriteLine("   equatorial speed: " + vEquator);
+            Console.WriteLine("   latitude speed: " + vLatitude);
+
+            var vXrot = vOrbit * Math.Sin(DegToRad(inertial)) - vEquator * Math.Cos(DegToRad(latitude));
+            Console.WriteLine("   vXrot: " + vXrot);
+            var vYrot = vOrbit * Math.Cos(DegToRad(inertial));
+            Console.WriteLine("   vYrot: " + vYrot);
+            var azimuth = 90 - RadToDeg(Math.Atan(vXrot / vYrot));
+            Console.WriteLine("Launch azimuth: " + azimuth);
+
+            return azimuth;
+        }
+
+        //-------------------------------------------------------------------------
+
+        public double GetOrbitalSpeed(double radiusMeters)
+        {
+            if (ControlledVehicle == null)
+                return 0.0;
+
+            // assume circular orbit
+            double semiMajorAxis = radiusMeters;
+            return Math.Sqrt(ControlledVehicle.Orbit.Mu * (2.0 / radiusMeters - 1.0 / semiMajorAxis));
+        }
+
         public Sequence? GetCurrentSequence()
         {
-            Vehicle? vehicle = Program.ControlledVehicle;
+            Vehicle? vehicle = ControlledVehicle;
             Sequence? sequence = null;
             if (vehicle == null || vehicle.Parts == null || vehicle.Parts.SequenceList == null)
                 return null;
@@ -696,7 +798,7 @@ namespace NovaTec.GravityTurnMod
             {
                 sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             }
-            else
+            else if (vehicle.Parts.SequenceList.Count > 0)
             {
                 sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.Count - 1];
             }
@@ -705,7 +807,7 @@ namespace NovaTec.GravityTurnMod
 
         public Sequence? NextStequence()
         {
-            Vehicle? vehicle = Program.ControlledVehicle;
+            Vehicle? vehicle = ControlledVehicle;
             Sequence? sequence = null;
             if (vehicle == null) 
                 return null;
@@ -900,7 +1002,7 @@ namespace NovaTec.GravityTurnMod
             {
                 if (Program.GetNearbyCelestial() == null || ControlledVehicle == null)
                     return 0;
-                if (Program.ControlledVehicle.Situation == Situation.Landed)
+                if (ControlledVehicle.Situation == Situation.Landed)
                     return 0;
                 return ControlledVehicle.Apoapsis - Program.GetNearbyCelestial().MeanRadius;
             }
@@ -916,7 +1018,7 @@ namespace NovaTec.GravityTurnMod
             {
                 if (Program.GetNearbyCelestial() == null || ControlledVehicle == null)
                     return 0;
-                if (Program.ControlledVehicle.Situation == Situation.Landed)
+                if (ControlledVehicle.Situation == Situation.Landed)
                     return 0;
                 var altPeriapsis = ControlledVehicle.Periapsis - Program.GetNearbyCelestial().MeanRadius;
                 return altPeriapsis > 0 ? altPeriapsis : 0;
@@ -1005,14 +1107,16 @@ namespace NovaTec.GravityTurnMod
 
         public static double DegToRad(double degrees)
         {
-            double rad = degrees * Math.PI / 180.0;
+            // double rad = degrees * Math.PI / 180.0;
+            double rad = degrees * (Math.PI / 180.0);
 
             return rad;
         }
 
         public static double RadToDeg(double rad)
         {
-            double degrees = rad / (Math.PI / 180.0);
+            //double degrees = rad / (Math.PI / 180.0);
+            double degrees = rad * (180.0 /Math.PI);
 
             return degrees;
         }
