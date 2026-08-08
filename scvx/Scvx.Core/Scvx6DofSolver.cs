@@ -12,7 +12,15 @@ public readonly record struct ScvxIteration(
     double DefectNorm,    // max |true nonlinear defect| / Xscale
     double Cost,          // true merit at the reference after this iteration
     int SolverIterations,
-    double ElapsedMs);
+    double ElapsedMs,
+    // WHERE that worst defect is. The magnitude alone cannot be read: DefectNorm is a
+    // max over all 14 state channels, each divided by its OWN scale, and the position
+    // scale is metres while the quaternion and body-rate scales are 1. Callers that
+    // multiply by the length scale to report "metres" are therefore only reporting a
+    // distance when the worst channel happens to be a position - otherwise the units
+    // are a rate error times a length. -1 when no defect was evaluated.
+    int DefectChannel,    // state index 0..13, or -1
+    int DefectNode);      // interval k (between node k and k+1), or -1
 
 public enum ScvxStatus
 {
@@ -318,6 +326,34 @@ public sealed class Scvx6DofSolver
     /// on convergence or the iteration count. Diagnostic only.</summary>
     public bool TimedOut { get; private set; }
 
+    /// <summary>
+    /// Name of a state channel, for reading a defect report. The units matter as much
+    /// as the name: position is metres, velocity m/s, quaternion dimensionless, body
+    /// rate rad/s, mass kg - and the defect is that channel's error divided by that
+    /// channel's scale, so two equal DefectNorms on different channels mean entirely
+    /// different physical things.
+    /// </summary>
+    public static string ChannelName(int i) => i switch
+    {
+        0 => "rx", 1 => "ry", 2 => "rz",
+        3 => "vx", 4 => "vy", 5 => "vz",
+        6 => "qw", 7 => "qx", 8 => "qy", 9 => "qz",
+        10 => "wx", 11 => "wy", 12 => "wz",
+        13 => "mass",
+        _ => "-",
+    };
+
+    /// <summary>Which family a channel belongs to: what the defect is ABOUT.</summary>
+    public static string ChannelGroup(int i) => i switch
+    {
+        >= 0 and < 3 => "position",
+        >= 3 and < 6 => "velocity",
+        >= 6 and < 10 => "attitude",
+        >= 10 and < 13 => "rate",
+        13 => "mass",
+        _ => "none",
+    };
+
     /// <summary>One SCvx iteration: linearise, solve, ratio-test, update.</summary>
     public ScvxIteration Iterate()
     {
@@ -367,7 +403,8 @@ public sealed class Scvx6DofSolver
             LastFailureReason = $"{st} \"{_sub.StatusText}\"" +
                                 (_sub.HitIterationLimit ? " [truncated at iteration cap]" : "");
             var failed = new ScvxIteration(index, false, false, double.NaN, TrustRegion,
-                _sigBar, 0, double.NaN, _jRef, _sub.Iterations, sw.Elapsed.TotalMilliseconds);
+                _sigBar, 0, double.NaN, _jRef, _sub.Iterations, sw.Elapsed.TotalMilliseconds,
+                -1, -1);
             _trace.Add(failed);
             return failed;
         }
@@ -379,7 +416,8 @@ public sealed class Scvx6DofSolver
         //    proxy (the virtual control); actual reduction uses the true
         //    nonlinear defect at the new point.
         double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _xs);
-        (double jTrue, double defectNorm) = TrueCost(x, u, sigma);
+        (double jTrue, double defectNorm) = TrueCost(x, u, sigma,
+                                                     out int defectChannel, out int defectNode);
 
         double predicted = _jRef - jLin;
         double actual = _jRef - jTrue;
@@ -417,7 +455,8 @@ public sealed class Scvx6DofSolver
             TrustRegion = Math.Min(TrustRegionMax, TrustRegion * Grow);
 
         var result = new ScvxIteration(index, true, accepted, rho, TrustRegion, _sigBar,
-            step, defectNorm, _jRef, _sub.Iterations, sw.Elapsed.TotalMilliseconds);
+            step, defectNorm, _jRef, _sub.Iterations, sw.Elapsed.TotalMilliseconds,
+            defectChannel, defectNode);
         _trace.Add(result);
         return result;
     }
@@ -431,11 +470,23 @@ public sealed class Scvx6DofSolver
     /// feasible, not merely optimal for its own linearisation).
     /// </summary>
     public (double Cost, double DefectNorm) TrueCost(double[] x, double[] u, double sigma)
+        => TrueCost(x, u, sigma, out _, out _);
+
+    /// <summary>
+    /// As above, and also reports WHERE the worst defect is - which state channel and
+    /// which interval. Without that the magnitude is close to unreadable, because the
+    /// max runs over channels whose scales differ by orders of magnitude and whose
+    /// units differ entirely.
+    /// </summary>
+    public (double Cost, double DefectNorm) TrueCost(double[] x, double[] u, double sigma,
+                                                     out int worstChannel, out int worstNode)
     {
         Span<double> fk = stackalloc double[NX];
         Span<double> fk1 = stackalloc double[NX];
         double sumSq = 0, worst = 0;
         double half = 0.5 * _dtau * sigma;
+        worstChannel = -1;
+        worstNode = -1;
 
         Dynamics6Dof.Eval(x.AsSpan(0, NX), u.AsSpan(0, NU), _dyn, fk);
         for (int k = 0; k < _n - 1; k++)
@@ -446,7 +497,12 @@ public sealed class Scvx6DofSolver
                 double d = x[(k + 1) * NX + i] - x[k * NX + i] - half * (fk[i] + fk1[i]);
                 double scaled = d / _xs[i];
                 sumSq += scaled * scaled;
-                worst = Math.Max(worst, Math.Abs(scaled));
+                if (Math.Abs(scaled) > worst)
+                {
+                    worst = Math.Abs(scaled);
+                    worstChannel = i;
+                    worstNode = k;
+                }
             }
             fk1.CopyTo(fk);
         }

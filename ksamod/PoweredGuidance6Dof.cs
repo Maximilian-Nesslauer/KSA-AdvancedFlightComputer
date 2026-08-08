@@ -450,6 +450,17 @@ public static partial class PoweredGuidanceWindow
                 $"dynamics defect {defM:F2} m EXCEEDS {_sixDof.MaxDefectM:F2} m - plan refused. " +
                 "Almost always too few nodes: the collocation error grows with node spacing.");
 
+        // WHICH CHANNEL, because the metres figure above cannot be read on its own.
+        // It is a max over all fourteen state channels, each divided by its own scale,
+        // then multiplied by the POSITION scale - so it is a distance only when the
+        // worst channel is a position. On a body rate, "3900 m" is a rad/s error times
+        // a length, and reading it as a spatial error sends the investigation the
+        // wrong way entirely.
+        if (_sixDof.LastDefectChannel >= 0)
+            ImGui.Text($"  worst on {_sixDof.LastDefectChannelName} ({_sixDof.LastDefectGroup}) " +
+                       $"at interval {_sixDof.LastDefectNode} of {_sixDof.Nodes - 1} = " +
+                       $"{_sixDof.LastDefectRaw:G3} {_sixDof.LastDefectUnits}");
+
         // Pure diagnostics; nothing acts on these. Under MPC, drift between re-solves
         // is expected — what matters is that it RESETS each cycle rather than growing.
         _sixDof.Diagnostics(x, out double pe, out double ve, out double ae);
@@ -910,6 +921,8 @@ public static partial class PoweredGuidanceWindow
             ScvxIters = _sixDof.LastIterations, Accepted = _sixDof.AcceptedSteps,
             SolveMs = _sixDof.LastSolveMs, Admm = 0,
             DefectM = _sixDof.LastDefectM, DefectLimitM = _sixDof.MaxDefectM,
+            DefectChan = _sixDof.LastDefectChannelName, DefectGroup = _sixDof.LastDefectGroup,
+            DefectRaw = _sixDof.LastDefectRaw, DefectNode = _sixDof.LastDefectNode,
             AnchorM = _sixDof.AnchorOffsetM,
             FellBack = _sixDof.FellBack, Escalations = _sixDof.Escalations,
             Nodes = _sixDof.Nodes, Sigma = _sixDof.Sigma, PlanElapsed = _sixDof.PlanElapsed,

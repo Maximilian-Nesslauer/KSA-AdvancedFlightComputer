@@ -285,6 +285,42 @@ public sealed class Ksa6DofGuidance
     /// <summary>Measured cost of one ADMM iteration, ms. Seeded pessimistically and refined from real solves.</summary>
     public double MsPerAdmmIteration { get; private set; } = 0.05;
 
+    /// <summary>
+    /// WHERE the last reported defect actually is. The magnitude on its own cannot be
+    /// read: DefectNorm is a max over all fourteen state channels, each divided by its
+    /// OWN scale, and LastDefectM then multiplies it by the POSITION scale to put it in
+    /// metres. That is a real distance only when the worst channel happens to be a
+    /// position. When it is a body rate, "3900 m" is a rate error in rad/s times a
+    /// length in metres, and reading it as a spatial error points the investigation at
+    /// entirely the wrong thing.
+    /// </summary>
+    public int LastDefectChannel { get; private set; } = -1;
+
+    /// <summary>Interval (between node k and k+1) carrying the worst defect, or -1.</summary>
+    public int LastDefectNode { get; private set; } = -1;
+
+    public string LastDefectChannelName => Scvx6DofSolver.ChannelName(LastDefectChannel);
+    public string LastDefectGroup => Scvx6DofSolver.ChannelGroup(LastDefectChannel);
+
+    /// <summary>
+    /// The worst defect in ITS OWN units - scaled error times that channel's scale -
+    /// which is the number that can actually be interpreted. Metres for a position,
+    /// m/s for a velocity, rad/s for a body rate, dimensionless for a quaternion.
+    /// </summary>
+    public double LastDefectRaw => LastDefectChannel >= 0 && LastDefectChannel < _cfg.XScale.Length
+        ? LastDefect * _cfg.XScale[LastDefectChannel]
+        : double.NaN;
+
+    public string LastDefectUnits => Scvx6DofSolver.ChannelGroup(LastDefectChannel) switch
+    {
+        "position" => "m",
+        "velocity" => "m/s",
+        "attitude" => "(quat)",
+        "rate" => "rad/s",
+        "mass" => "kg",
+        _ => "",
+    };
+
     /// <summary>Subproblems that needed the escalated budget, for the readout.</summary>
     public int Escalations => _solver.Escalations;
 
@@ -933,11 +969,18 @@ public sealed class Ksa6DofGuidance
         }
 
         // Worst defect over the trace — the LAST entry is the accepted reference's.
+        // The CHANNEL comes from the same entry, deliberately: reading it from the
+        // solver's latest evaluation instead would let the magnitude and its location
+        // come from different iterations and quietly disagree.
         LastDefect = double.PositiveInfinity;
+        LastDefectChannel = -1;
+        LastDefectNode = -1;
         for (int i = _solver.Trace.Count - 1; i >= 0; i--)
             if (_solver.Trace[i].Accepted)
             {
                 LastDefect = _solver.Trace[i].DefectNorm;
+                LastDefectChannel = _solver.Trace[i].DefectChannel;
+                LastDefectNode = _solver.Trace[i].DefectNode;
                 break;
             }
 
@@ -991,7 +1034,10 @@ public sealed class Ksa6DofGuidance
         {
             Error = $"plan is not physical - dynamics defect {LastDefectM:F2} m " +
                     $"exceeds {gate:F2} m after {_solver.IterationCount} iters " +
-                    $"({AcceptedSteps} accepted). Needs more iterations, or more nodes.";
+                    $"({AcceptedSteps} accepted), worst on {LastDefectChannelName} " +
+                    $"({LastDefectGroup}) at interval {LastDefectNode} = " +
+                    $"{LastDefectRaw:G3} {LastDefectUnits}. " +
+                    "Needs more iterations, or more nodes.";
             return false;
         }
 

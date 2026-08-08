@@ -63,14 +63,16 @@ internal static class ColdNodeCheck
                           $"{"defect",8}  {"to cold gate",13} {"warm?",6}");
 
         var rows = new List<(int n, double eps, double perIter, double worst, double total,
-                             double defect, int itersToCold, bool warm)>();
+                             double defect, int itersToCold, bool warm,
+                             string chan, string group, double raw, string units)>();
 
         foreach (double eps in new[] { Scvx6DofSolver.RealTimeEps, 3e-4, 1e-3 })
         {
             foreach (int n in counts)
             {
                 var r = Measure(n, eps);
-                rows.Add((n, eps, r.perIter, r.worst, r.total, r.defect, r.itersToCold, r.warm));
+                rows.Add((n, eps, r.perIter, r.worst, r.total, r.defect, r.itersToCold, r.warm,
+                          r.chan, r.group, r.raw, r.units));
                 string cold = r.itersToCold > 0 ? $"{r.itersToCold} iters" : "never";
                 Console.WriteLine($"  {n,3} {eps,7:0.0e0} {r.iters,6} {r.perIter,8:F1}ms {r.worst,6:F0}ms "
                                   + $"{r.total,7:F0}ms {r.defect,7:F2}m  {cold,13} {(r.warm ? "yes" : "NO"),6}");
@@ -120,7 +122,13 @@ internal static class ColdNodeCheck
 
         Console.WriteLine("    defect against node count, tight tolerance:");
         foreach (var r in tight)
-            Console.WriteLine($"      N={r.n,3}: {r.defect,7:F2} m, worst frame {r.worst,4:F0} ms");
+            Console.WriteLine($"      N={r.n,3}: {r.defect,7:F2} m, worst frame {r.worst,4:F0} ms, "
+                              + $"worst channel {r.chan} ({r.group}) = {r.raw:G3} {r.units}");
+        Console.WriteLine();
+        Console.WriteLine("    WHICH CHANNEL is the whole question. The metres figure is a max over");
+        Console.WriteLine("    all fourteen state channels - each divided by its OWN scale - and is");
+        Console.WriteLine("    then multiplied by the POSITION scale to be called metres. It is a");
+        Console.WriteLine("    distance only when the worst channel happens to be a position.");
 
         // Monotonicity is the sanity condition: if more nodes did not help, the defect
         // would not be a collocation problem and none of this reasoning would apply.
@@ -163,7 +171,8 @@ internal static class ColdNodeCheck
     /// iteration at a time, re-anchored at the falling vehicle between each.
     /// </summary>
     private static (int iters, double perIter, double worst, double total, double defect,
-                    int itersToCold, bool warm)
+                    int itersToCold, bool warm,
+                    string chan, string group, double raw, string units)
         Measure(int n, double eps)
     {
         (Scvx6DofSolver s, double L) = Build(n, eps);
@@ -175,6 +184,8 @@ internal static class ColdNodeCheck
         var sw = new System.Diagnostics.Stopwatch();
         int itersToCold = 0;
         double defect = double.PositiveInfinity;
+        int worstChan = -1;
+        double rawScaled = double.NaN;
 
         // MATCHES THE MOD: ColdStallIterations. Running longer is not a more generous
         // test, it is a different one - at 0.25 s per iteration the vehicle free-falls
@@ -195,7 +206,17 @@ internal static class ColdNodeCheck
             // which is exactly what the mod does NOT do: it hands over the moment the
             // gate is met.
             double d = Defect(s, L);
-            if (double.IsFinite(d)) defect = Math.Min(defect, d);
+            if (double.IsFinite(d) && d < defect)
+            {
+                defect = d;
+                for (int j = s.Trace.Count - 1; j >= 0; j--)
+                    if (s.Trace[j].Accepted)
+                    {
+                        worstChan = s.Trace[j].DefectChannel;
+                        rawScaled = s.Trace[j].DefectNorm;
+                        break;
+                    }
+            }
 
             if (itersToCold == 0 && defect <= ColdGateM && i >= 1)
                 itersToCold = i + 1;
@@ -214,8 +235,31 @@ internal static class ColdNodeCheck
 
         double total = times.Sum();
         times.Sort();
+        string group = Scvx6DofSolver.ChannelGroup(worstChan);
+        string units = group switch
+        {
+            "position" => "m", "velocity" => "m/s", "attitude" => "(quat)",
+            "rate" => "rad/s", "mass" => "kg", _ => "",
+        };
+        // Back into the channel's OWN units: the scaled defect times that channel's
+        // scale, not the position scale everything else gets multiplied by.
+        double raw = worstChan >= 0 ? rawScaled * ScaleOf(worstChan, L) : double.NaN;
         return (times.Count, times[times.Count / 2], times[^1], total, defect, itersToCold,
-                double.IsFinite(defect) && defect <= WarmGateM);
+                double.IsFinite(defect) && defect <= WarmGateM,
+                Scvx6DofSolver.ChannelName(worstChan), group, raw, units);
+    }
+
+    /// <summary>The scale this check builds into XScale, per channel.</summary>
+    private static double ScaleOf(int i, double L)
+    {
+        double V = Math.Max(Math.Max(Math.Abs(EngageState[5]), Math.Sqrt(L * 9.81)), 1.0);
+        return i switch
+        {
+            >= 0 and < 3 => L,
+            >= 3 and < 6 => V,
+            13 => EngageState[13],
+            _ => 1.0,
+        };
     }
 
     private static void FreeFall(double[] x, double dt)
