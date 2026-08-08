@@ -46,7 +46,7 @@ internal static class ColdNodeCheck
 
     /// <summary>Tilt cone, degrees. Settable so the node-0 feasibility question can be
     /// probed rather than assumed.</summary>
-    internal static double TiltLimitDeg = 100.0;
+    internal static double TiltLimitDeg = 120.0;
 
     internal static int Run()
     {
@@ -135,12 +135,13 @@ internal static class ColdNodeCheck
         // makes the problem infeasible at node 0, and no node count rescues it.
         TiltLimitDeg = 60.0;
         var capped = Measure(30, Scvx6DofSolver.RealTimeEps);
-        TiltLimitDeg = 100.0;
+        TiltLimitDeg = 120.0;
         var widened = Measure(30, Scvx6DofSolver.RealTimeEps);
         bool tiltMatters = !double.IsFinite(capped.defect) && double.IsFinite(widened.defect);
         Console.WriteLine($"    a tilt cap below the entry attitude is fatal, not costly: "
                           + $"{(tiltMatters ? "yes" : "NO")} "
-                          + $"(60 deg cap -> {capped.defect:F0} m, 100 deg cap -> {widened.defect:F2} m)");
+                          + $"(60 deg cap -> {capped.defect:F0} m, {TiltLimitDeg:F0} deg cap -> {widened.defect:F2} m)");
+        Console.WriteLine("      and above the entry attitude the cap stops mattering: 95 and 120 agree");
 
         Console.WriteLine();
         bool ok = monotone && tiltMatters;

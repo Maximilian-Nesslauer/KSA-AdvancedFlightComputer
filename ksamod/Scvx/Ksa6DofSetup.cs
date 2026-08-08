@@ -505,6 +505,13 @@ public static class Ksa6DofSetup
             // node 1. Widening rather than restructuring the rows, because the row
             // layout is what the Python reference comparison checks.
             //
+            // A GUARD, NOT A DIAGNOSIS. The flight this was measured against had already
+            // been flown with the cap raised to 120, so it was feasible throughout - the
+            // trouble there was node spacing, not this. What this prevents is the case
+            // where someone leaves the cap at a value that sounds cautious and the
+            // vehicle simply cannot be planned for, with nothing in the failure text to
+            // say why.
+            //
             // The margin is what makes it a starting point rather than a knife edge: a
             // cap exactly at the current tilt leaves the first node with no slack at all.
             TiltMaxDeg = Math.Min(Math.Max(tiltMaxDeg, EntryTiltDeg(x0) + 5.0), 175.0),

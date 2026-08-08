@@ -61,7 +61,12 @@ public static partial class PoweredGuidanceWindow
             if (NodeRungs[i] >= ideal) { nodes = NodeRungs[i]; break; }
         return Math.Clamp(nodes, MinNodes, MaxNodes);
     }
-    private static double _sixDofTiltDeg = 60.0;
+    // TILT CONE, degrees off vertical. 120 rather than 60 because that is what a
+    // booster entry actually needs: this vehicle arrives in a belly-flop at 92 degrees
+    // and has to rotate upright under thrust, so a cap below the ENTRY attitude is not
+    // a conservative choice, it is an infeasible one - the cone applies at node 0, and
+    // node 0 is pinned by equality to the measured state.
+    private static double _sixDofTiltDeg = 120.0;
     private static double _sixDofThrottleFloor = 0.40;
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     private static double _sixDofSigmaSeed = 20.0;
