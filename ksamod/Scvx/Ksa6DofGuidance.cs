@@ -409,6 +409,7 @@ public sealed class Ksa6DofGuidance
         _consecutiveFailures = 0;
         _lastColdIterationS = 0.0;
         _coldIterations = 0;
+        _solver.SubproblemEps = ColdSubproblemEps;
     }
 
     /// <summary>
@@ -491,6 +492,12 @@ public sealed class Ksa6DofGuidance
         // likewise the time of a zero-iteration Finish, not of the work done.
         LastIterations = _coldIterations;
         LastSolveMs = iterationMs;
+
+        // Back to flight accuracy for everything after this. The looser tolerance is
+        // only defensible while the answer is a seed for the next solve rather than a
+        // trajectory the vehicle is about to fly.
+        if (ok)
+            _solver.SubproblemEps = Scvx6DofSolver.RealTimeEps;
         return ok;
     }
 
@@ -516,6 +523,26 @@ public sealed class Ksa6DofGuidance
     /// invalidating the work.
     /// </summary>
     public double ColdIterationIntervalS { get; set; } = 0.25;
+
+    /// <summary>
+    /// SCS tolerance for the cold solve, looser than the flight one.
+    ///
+    /// A cold solve is looking for a STARTING POINT, and the warm loop refines it ten
+    /// times a second afterwards, so solving each subproblem to flight accuracy is
+    /// work spent on a trajectory that is about to be replaced. Measured on the log
+    /// 20260807-103232 entry at 10 nodes: 1e-4 peaks at 20 ms per iteration, 3e-4 at
+    /// 17 ms, 1e-3 at 15 ms.
+    ///
+    /// 3e-4 rather than 1e-3, and the reason is a floor rather than a preference: at 5
+    /// nodes, 1e-3 does not converge at all - 40 iterations and 207 m of defect, while
+    /// 3e-4 lands in 6 iterations with 0.59 m. A small problem has less redundancy to
+    /// absorb a sloppy solve, and the node ladder is heading that way, so the tolerance
+    /// has to be safe at the SMALL end rather than optimal at the large one.
+    ///
+    /// Restored to the flight tolerance the moment the plan hands over, because from
+    /// then on the answer is flown rather than refined.
+    /// </summary>
+    public double ColdSubproblemEps { get; set; } = 3e-4;
 
     private double _lastColdIterationS;
     private int _coldIterations;

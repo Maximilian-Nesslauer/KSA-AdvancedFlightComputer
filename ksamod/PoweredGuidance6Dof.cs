@@ -40,6 +40,21 @@ public static partial class PoweredGuidanceWindow
     // most plan jump, longest path, and the MOST ADMM iterations. More nodes does not
     // cost more here: the smoother problem converges in fewer ADMM iterations.
     private static int _sixDofNodes = 50;
+
+    // NODE COUNT FOR THE COLD SOLVE, which is not the same question as the node count
+    // for flying. A cold solve wants a starting point; the warm loop refines it ten
+    // times a second afterwards, and the node ladder moves the count to whatever the
+    // descent actually needs within a cycle or two.
+    //
+    // Measured on the flight-20260807-103232 entry (1790 m, 130 m/s), worst frame of
+    // the whole cold solve: 226 ms at 50 nodes, 20 ms at 10. The flown engage used 50
+    // and stepped to 25 within 10 ms of converging, so those 226 ms bought a
+    // trajectory that was discarded almost immediately.
+    //
+    // 10 rather than 5: at 5 the problem is small enough that a loose subproblem
+    // tolerance stops converging, and the margin on the warm gate is thinner (0.64 m
+    // against 0.44 m at 10). 10 is the cheapest count that still lands with room.
+    private static int _sixDofColdNodes = 10;
     private static double _sixDofTiltDeg = 60.0;
     private static double _sixDofThrottleFloor = 0.40;
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
@@ -587,6 +602,11 @@ public static partial class PoweredGuidanceWindow
     // one-way stepping on its own cannot recover from a rung that does not work.
     private static int _sixDofRefusalRun;
     private static int _sixDofRungFloor = int.MaxValue;
+
+    // Speed at which the rung floor was set. A refusal is evidence about the
+    // conditions it happened in, NOT about the whole descent, and this is what lets
+    // the floor expire once those conditions have gone.
+    private static double _sixDofRungFloorSpeed;
     // Rung index a back-off has already been attempted from, so a failed attempt is
     // not repeated. -1 means none tried yet.
     private static int _sixDofBackedOffTo = -1;
@@ -667,6 +687,7 @@ public static partial class PoweredGuidanceWindow
             // on top of an already-failing loop.
             _sixDofBackedOffTo = _sixDofGateIndex;
             _sixDofRungFloor = Math.Min(_sixDofRungFloor, finer);
+            _sixDofRungFloorSpeed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
             _sixDofRefusalRun = 0;
 
             if (RebuildAt(vehicle, parent, siteCci, x, now, NodeRungs[finer]))
@@ -711,7 +732,37 @@ public static partial class PoweredGuidanceWindow
         int want0 = Array.IndexOf(NodeRungs, nodes);
         if (want0 < 0)
             return;
-        // Never move coarser than a rung already shown to be unflyable this run.
+        // EXPIRE THE FLOOR WHEN THE CONDITIONS THAT SET IT HAVE GONE.
+        //
+        // A refused rung is evidence about the state it was refused in, not a fact
+        // about the descent. Collocation defect follows how fast the state is
+        // changing, so a rung that could not hold 130 m/s at 92 degrees off vertical
+        // says nothing about the same rung at 34 m/s upright - and treating it as
+        // permanent pins the whole approach at a count it stopped needing.
+        //
+        // That is exactly what flight log 20260807-103232 did: one refusal at 1738 m
+        // fixed the floor at 25 nodes, and the run then flew all 18 s to touchdown at
+        // 25 while the ladder was asking for 20 and then 10, with defect margins of
+        // 24x to 92x on the gate and solves costing 75-330 ms that should have cost
+        // ~16 ms. The user read that as being too coarse near the end; it was the
+        // opposite, and this is why.
+        //
+        // Speed rather than altitude, because speed is what the defect tracks. A
+        // third off is a material change and cheap to re-test: the retry costs one
+        // refused reseed, and if conditions really have not eased it just sets the
+        // floor again at the new speed.
+        double speedNow = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+        if (_sixDofRungFloor != int.MaxValue && speedNow < 0.67 * _sixDofRungFloorSpeed)
+        {
+            SixDofLog.Event(now,
+                $"NODE FLOOR CLEARED at alt {x[2]:F0} m: speed {speedNow:F0} m/s is well below the "
+                + $"{_sixDofRungFloorSpeed:F0} m/s that refused {NodeRungs[Math.Min(_sixDofRungFloor + 1, NodeRungs.Length - 1)]} nodes");
+            _sixDofRungFloor = int.MaxValue;
+            _sixDofBackedOffTo = -1;
+        }
+
+        // Never move coarser than a rung already shown to be unflyable in CURRENT
+        // conditions - see the expiry above.
         int want = Math.Min(want0, _sixDofRungFloor);
         if (want <= _sixDofGateIndex)
             return;
@@ -739,6 +790,7 @@ public static partial class PoweredGuidanceWindow
         // retune a number that cannot be right for every case, let the rung floor
         // record what this descent will actually take, and stop asking again.
         _sixDofRungFloor = Math.Min(_sixDofRungFloor, want - 1);
+        _sixDofRungFloorSpeed = speedNow;
     }
 
     /// <summary>
@@ -1299,7 +1351,14 @@ public static partial class PoweredGuidanceWindow
         xf[2] = _sixDofTargetAltM;
         TerminalAttitude(x, xf);
 
-        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, _sixDofNodes, _sixDofTiltDeg,
+        // Spread cold solves engage COARSE; everything else uses the configured count.
+        // The ladder takes over from the first cycle, so this is a starting point
+        // rather than a choice about how the descent is flown.
+        int engageNodes = _sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed
+            ? Math.Clamp(_sixDofColdNodes, MinNodes, MaxNodes)
+            : _sixDofNodes;
+
+        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _sixDofTiltDeg,
                                    _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
                                    _sixDofRateDampShare, _sixDofControlSmooth,
                                    _sixDofProximal,
@@ -1338,6 +1397,7 @@ public static partial class PoweredGuidanceWindow
             _sixDofGateChanges = 0;
             _sixDofRefusalRun = 0;
             _sixDofRungFloor = int.MaxValue;
+            _sixDofRungFloorSpeed = 0.0;
             _sixDofPrevV = null;
             _sixDofBias = default;
             _sixDofLastReplan = now;
@@ -1345,7 +1405,7 @@ public static partial class PoweredGuidanceWindow
             if (_sixDofLogging)
             {
                 SixDofLog.Start(vehicle.ToString(), parent.ToString());
-                SixDofLog.Event(now, $"ENGAGED (spread cold solve)  nodes {_sixDofNodes}  " +
+                SixDofLog.Event(now, $"ENGAGED (spread cold solve)  nodes {engageNodes}  " +
                                      $"target alt {_sixDofTargetAltM:F0} m  cadence {_sixDofReplanSec:F2} s");
             }
             return true;
@@ -1354,7 +1414,7 @@ public static partial class PoweredGuidanceWindow
         bool ok = false;
         string seedNote = "";
         if (_sixDofGfoldSeed && !_sixDofFixedTime &&
-            Ksa6DofGfoldSeed.TryBuild(x, xf, cfg, dyn, _sixDofNodes,
+            Ksa6DofGfoldSeed.TryBuild(x, xf, cfg, dyn, engageNodes,
                                       out double[] gx, out double[] gu, out double gSigma,
                                       out seedNote))
         {
@@ -1385,6 +1445,7 @@ public static partial class PoweredGuidanceWindow
         _sixDofPrevV = null;
         _sixDofRefusalRun = 0;
         _sixDofRungFloor = int.MaxValue;
+        _sixDofRungFloorSpeed = 0.0;
         _sixDofBackedOffTo = -1;
         _sixDofRecoveries = 0;
         _sixDofBias = default;
@@ -1393,7 +1454,7 @@ public static partial class PoweredGuidanceWindow
         {
             SixDofLog.Start(vehicle.ToString(), parent.ToString());
             SixDofLog.Event(now,
-                $"ENGAGED  nodes {_sixDofNodes}  tilt {_sixDofTiltDeg:F0} deg  " +
+                $"ENGAGED  nodes {engageNodes}  tilt {_sixDofTiltDeg:F0} deg  " +
                 $"floor {_sixDofThrottleFloor:F2}  target alt {_sixDofTargetAltM:F0} m  " +
                 $"glideslope {_sixDofGlideSlopeDeg:F0} deg  " +
                 $"vzMax {(_sixDofVzEnabled ? _sixDofVzMaxMs.ToString("F1") : "off")}  " +

@@ -87,7 +87,7 @@ public sealed class Scvx6DofSolver
     /// SCvx convergence test. Defaults to the conservative offline value; flight
     /// code should pass <see cref="RealTimeEps"/>.
     /// </summary>
-    public double SubproblemEps { get; init; } = ScsWorkspace.DefaultEps;
+    public double SubproblemEps { get; set; } = ScsWorkspace.DefaultEps;
 
     /// <summary>
     /// The tolerance to use in flight. Measured at N=30: 1e-5, 1e-6 and 1e-7 all

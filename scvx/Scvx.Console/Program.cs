@@ -77,6 +77,11 @@ if (args.Contains("--spread"))
     return SpreadCheck.Run();
 }
 
+if (args.Contains("--coldn"))
+{
+    return ColdNodeCheck.Run();
+}
+
 if (args.Contains("--seed"))
 {
     return SeedCheck.Run();
