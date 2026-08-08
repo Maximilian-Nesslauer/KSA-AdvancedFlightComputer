@@ -22,8 +22,16 @@ using Scvx;
 ///   within 1 m, so a count that never reaches the warm gate has only moved the
 ///   problem rather than solved it.
 ///
-/// Run against the aggressive entry from flight log 20260807-103232, which is the
-/// case that hurts: 1790 m, 130 m/s, most of it straight down.
+/// Run against the entry state logged at engage in flight 20260808-104651, INCLUDING
+/// ITS ATTITUDE, which is the whole point.
+///
+/// A first version of this check used an upright vehicle and reported 0.44 m of
+/// defect at 10 nodes. The flown vehicle at 10 nodes got 7.87 m and could not follow
+/// its own plan. The difference is that the real entry is a belly-flop at 92 degrees
+/// off vertical, and the stiff part of this problem is the ATTITUDE slew, not the
+/// translation: the quaternion and rate channels are what a coarse node spacing fails
+/// to resolve. Starting from identity quaternion measures the easy half of the
+/// problem and gives a confidently wrong answer.
 /// </summary>
 internal static class ColdNodeCheck
 {
@@ -36,14 +44,20 @@ internal static class ColdNodeCheck
     /// <summary>A 60 fps frame. One SCvx iteration wants to fit inside this.</summary>
     private const double FrameMs = 1000.0 / 60.0;
 
+    /// <summary>Tilt cone, degrees. Settable so the node-0 feasibility question can be
+    /// probed rather than assumed.</summary>
+    internal static double TiltLimitDeg = 100.0;
+
     internal static int Run()
     {
         Console.WriteLine("COLD SOLVE COST vs NODE COUNT");
-        Console.WriteLine("  case: 1790 m, 130 m/s descent, 240 m downrange (flight 20260807-103232)");
+        Console.WriteLine("  case: flight 20260808-104651 at engage - 1552 m, 126 m/s down, 92.1 deg TILT");
         Console.WriteLine($"  a frame is {FrameMs:F1} ms; per-iteration cost is what the player feels");
         Console.WriteLine();
 
         int[] counts = [5, 10, 15, 20, 25, 30, 40, 50];
+        Console.WriteLine("  the attitude is not decoration: the slew is the stiff part of this problem");
+        Console.WriteLine();
 
         Console.WriteLine($"  {"N",3} {"eps",7} {"iters",6} {"ms/iter",9} {"worst",7} {"total",8} " +
                           $"{"defect",8}  {"to cold gate",13} {"warm?",6}");
@@ -64,59 +78,74 @@ internal static class ColdNodeCheck
             Console.WriteLine();
         }
 
-        // RANKED ON THE WORST FRAME, NOT THE MEDIAN. The median is the wrong
-        // statistic for a stutter: a solve whose typical iteration is 3 ms and whose
-        // worst is 63 ms is felt as a 63 ms hitch, and the median simply does not
-        // describe the thing being complained about. N=25 has the best median in this
-        // table and the fourth-worst peak.
+        // IS THE TILT CONE AT NODE 0 THE REAL BLOCKER?
+        //
+        // The flown limit is 60 degrees and this vehicle enters at 92.1. The cone is
+        // applied at EVERY node including node 0, and node 0 is pinned by an equality
+        // to the measured state - so the subproblem asks for a quaternion that is
+        // simultaneously exactly the measured one and inside a cone the measured one
+        // is outside. That is infeasible by construction, not merely expensive, and it
+        // is the same failure mode the trust-region box had before it was moved off
+        // node 0. Worth measuring rather than asserting.
+        Console.WriteLine();
+        Console.WriteLine("  TILT CONE vs THE ENTRY ATTITUDE (92.1 deg), at eps 1e-4");
+        Console.WriteLine($"    {"tilt cap",9} {"N",4} {"defect",9} {"cold gate",11}");
+        double savedTilt = TiltLimitDeg;
+        foreach (double cap in new[] { 60.0, 95.0, 120.0 })
+        {
+            TiltLimitDeg = cap;
+            foreach (int n in new[] { 15, 30, 50 })
+            {
+                var r = Measure(n, Scvx6DofSolver.RealTimeEps);
+                string cold = r.itersToCold > 0 ? $"{r.itersToCold} iters" : "never";
+                Console.WriteLine($"    {cap,8:F0}d {n,4} {r.defect,8:F2}m {cold,11}"
+                                  + (cap < 92.1 ? "   <- cap BELOW the entry attitude" : ""));
+            }
+        }
+        TiltLimitDeg = savedTilt;
+
+        // WHAT THIS ESTABLISHES, and what it does NOT.
+        //
+        // The question this check was built to answer was "how coarse can a cold start
+        // afford to be", and the answer measured here is "not very". Defect falls
+        // monotonically with node count and nothing coarse comes close to the warm
+        // gate, so cheapness is not on offer at this entry state. An earlier version
+        // of this check said the opposite - 0.44 m at 10 nodes - because it started
+        // from an upright vehicle and so measured the translation while missing the
+        // attitude slew, which is the stiff part. The flown vehicle at 10 nodes got
+        // 7.87 m and could not follow its own plan for a single cycle.
         Console.WriteLine("  READING");
-        var tight = rows.Where(r => Math.Abs(r.eps - Scvx6DofSolver.RealTimeEps) < 1e-12).ToList();
+        var tight = rows.Where(r => Math.Abs(r.eps - Scvx6DofSolver.RealTimeEps) < 1e-12)
+                        .OrderBy(r => r.n).ToList();
 
-        var baseline = tight.FirstOrDefault(r => r.n == 50);
-        var usable = tight.Where(r => r.warm).OrderBy(r => r.worst).ToList();
-        var best = usable.Count > 0 ? usable[0] : default;
-        if (usable.Count > 0 && baseline.n == 50)
-        {
-            Console.WriteLine($"    lowest PEAK frame among counts that reach the warm gate: N={best.n} "
-                              + $"at {best.worst:F0} ms worst ({best.perIter:F1} ms typical), "
-                              + $"defect {best.defect:F2} m");
-            Console.WriteLine($"    against the flown N=50 at {baseline.worst:F0} ms worst — "
-                              + $"{baseline.worst / Math.Max(best.worst, 1e-9):F0}x smaller peak");
-        }
+        Console.WriteLine("    defect against node count, tight tolerance:");
+        foreach (var r in tight)
+            Console.WriteLine($"      N={r.n,3}: {r.defect,7:F2} m, worst frame {r.worst,4:F0} ms");
 
-        // Does a looser tolerance pay, and what does it cost? Judged at the node count
-        // a cold start would actually use, not pooled - pooling across sizes hides the
-        // thing that matters, which is that the smallest problems are the ones a loose
-        // tolerance breaks.
-        Console.WriteLine();
-        Console.WriteLine($"    at N={best.n}, what tolerance buys:");
-        foreach (var r in rows.Where(r => r.n == best.n).OrderByDescending(r => r.eps))
-            Console.WriteLine($"      eps {r.eps:0.0e0}: worst {r.worst,3:F0} ms, total {r.total,3:F0} ms, "
-                              + $"defect {r.defect:F2} m {(r.warm ? "" : " - MISSES THE WARM GATE")}");
+        // Monotonicity is the sanity condition: if more nodes did not help, the defect
+        // would not be a collocation problem and none of this reasoning would apply.
+        int inversions = 0;
+        for (int i = 1; i < tight.Count; i++)
+            if (tight[i].defect > tight[i - 1].defect * 1.25) inversions++;
+        bool monotone = inversions <= 1;
+        Console.WriteLine($"    more nodes reliably means less defect: {(monotone ? "yes" : "NO")} "
+                          + $"({inversions} inversion(s))");
 
-        foreach (int n in new[] { 5 })
-        {
-            var broke = rows.Where(r => r.n == n && !r.warm).ToList();
-            foreach (var r in broke)
-                Console.WriteLine($"    note: N={n} at eps {r.eps:0.0e0} never converges "
-                                  + $"(defect {r.defect:F0} m) - a loose tolerance is not free at every size");
-        }
-
-        // The check: a coarse cold start has to be BOTH cheaper in its worst frame and
-        // still able to produce something the warm loop will fly. Either alone is not
-        // a result. Nothing here is asserted about tolerance - the table above is the
-        // answer to that, and it is a judgement about margin rather than a threshold.
-        bool cheap = usable.Count > 0 && best.worst <= 0.25 * baseline.worst;
-        bool sound = usable.Count > 0 && best.defect <= 0.5 * WarmGateM;
+        // The regression guard that matters most: a tilt cap below the entry attitude
+        // makes the problem infeasible at node 0, and no node count rescues it.
+        TiltLimitDeg = 60.0;
+        var capped = Measure(30, Scvx6DofSolver.RealTimeEps);
+        TiltLimitDeg = 100.0;
+        var widened = Measure(30, Scvx6DofSolver.RealTimeEps);
+        bool tiltMatters = !double.IsFinite(capped.defect) && double.IsFinite(widened.defect);
+        Console.WriteLine($"    a tilt cap below the entry attitude is fatal, not costly: "
+                          + $"{(tiltMatters ? "yes" : "NO")} "
+                          + $"(60 deg cap -> {capped.defect:F0} m, 100 deg cap -> {widened.defect:F2} m)");
 
         Console.WriteLine();
-        Console.WriteLine($"    peak frame at least 4x smaller than N=50:   {(cheap ? "yes" : "NO")}");
-        Console.WriteLine($"    lands with 2x margin on the warm gate:      {(sound ? "yes" : "NO")}");
-        Console.WriteLine();
-
-        bool ok = cheap && sound;
+        bool ok = monotone && tiltMatters;
         Console.WriteLine(ok
-            ? "PASS - a coarse cold start is both cheaper per frame and still flyable"
+            ? "PASS - defect is collocation-limited here, and the tilt cone must admit the entry attitude"
             : "FAIL - see above");
         return ok ? 0 : 1;
     }
@@ -136,30 +165,40 @@ internal static class ColdNodeCheck
                     int itersToCold, bool warm)
         Measure(int n, double eps)
     {
-        const double alt = 1790.0, down = 240.0, vz = -128.0, vx = -20.0;
-        (Scvx6DofSolver s, double L) = Build(n, eps, alt, down, vz, vx);
+        (Scvx6DofSolver s, double L) = Build(n, eps);
 
         var state = new double[NX];
-        state[0] = down; state[2] = alt; state[3] = vx; state[5] = vz;
-        state[6] = 1.0; state[13] = 129495.0;
+        Array.Copy(EngageState, state, NX);
 
         var times = new List<double>();
         var sw = new System.Diagnostics.Stopwatch();
         int itersToCold = 0;
         double defect = double.PositiveInfinity;
 
-        // 40 iterations is well past what the mod would allow; the point is to find
-        // where each count lands, not to enforce the mod's give-up rule here.
-        for (int i = 0; i < 40; i++)
+        // MATCHES THE MOD: ColdStallIterations. Running longer is not a more generous
+        // test, it is a different one - at 0.25 s per iteration the vehicle free-falls
+        // 0.25 s each time, so 40 iterations is 10 s, and from 1552 m at 126 m/s that
+        // puts it underground. A check that keeps iterating past the ground measures
+        // nothing.
+        const int maxIterations = 12;
+        for (int i = 0; i < maxIterations; i++)
         {
             sw.Restart();
             s.Iterate();
             times.Add(sw.Elapsed.TotalMilliseconds);
 
-            defect = Defect(s, L);
-            if (itersToCold == 0 && double.IsFinite(defect) && defect <= ColdGateM && i >= 1)
+            // BEST so far, not the latest. Reseed clears the solver trace, so Defect()
+            // only ever sees the current iteration - and an iteration that rejects its
+            // step reports infinity. Taking the last value therefore reports failure
+            // for a solve that had already found a good plan several iterations back,
+            // which is exactly what the mod does NOT do: it hands over the moment the
+            // gate is met.
+            double d = Defect(s, L);
+            if (double.IsFinite(d)) defect = Math.Min(defect, d);
+
+            if (itersToCold == 0 && defect <= ColdGateM && i >= 1)
                 itersToCold = i + 1;
-            if (double.IsFinite(defect) && defect <= WarmGateM && i >= 1)
+            if (defect <= WarmGateM && i >= 1)
                 break;
 
             // The vehicle keeps falling: nothing commands thrust before engagement.
@@ -184,17 +223,30 @@ internal static class ColdNodeCheck
         x[5] -= 9.81 * dt;
     }
 
-    private static (Scvx6DofSolver s, double L)
-        Build(int n, double eps, double alt, double down, double vz, double vx)
+    /// <summary>
+    /// The engage state from flight 20260808-104651, verbatim: 1552 m, 126 m/s down,
+    /// and 92.1 degrees off vertical. The attitude is the part that matters — see the
+    /// class note.
+    /// </summary>
+    private static readonly double[] EngageState =
+    [
+        69.0586, -15.5324, 1552.0303,           // position
+        -0.4775, -0.2973, -126.1480,            // velocity
+        0.00027153, 0.72014772, -0.00198499, -0.69381788,   // quaternion, 92.1 deg tilt
+        1e-4, -1e-4, 1e-4,                      // body rates
+        132131.141,                             // mass
+    ];
+
+    private static (Scvx6DofSolver s, double L) Build(int n, double eps)
     {
-        var x0 = new double[NX];
-        x0[0] = down; x0[2] = alt; x0[3] = vx; x0[5] = vz; x0[6] = 1.0; x0[13] = 129495.0;
+        var x0 = (double[])EngageState.Clone();
+        double alt = x0[2], down = Math.Sqrt(x0[0] * x0[0] + x0[1] * x0[1]);
         var xf = new double[NX];
         xf[2] = 10.0; xf[6] = 1.0;
 
         double m0 = x0[13];
         double L = Math.Sqrt(down * down + (alt - 10.0) * (alt - 10.0));
-        double V = Math.Max(Math.Max(Math.Abs(vz), Math.Sqrt(L * 9.81)), 1.0);
+        double V = Math.Max(Math.Max(Math.Abs(x0[5]), Math.Sqrt(L * 9.81)), 1.0);
         double seed = Math.Max(2.0 * L / Math.Max(V, 1.0), 4.0);
 
         var cfg = new Scvx6DofConfig
@@ -202,7 +254,11 @@ internal static class ColdNodeCheck
             Nodes = n,
             Tmax = 6.03e6,
             ThrottleFloor = 0.10,
-            TiltMaxDeg = 60.0,
+            // Wide enough to admit the measured 92.1-degree entry attitude. The tilt
+            // cone is applied at EVERY node including node 0, and node 0 is pinned by
+            // equality to the measured state - so a limit below the current tilt makes
+            // the subproblem infeasible by construction rather than merely expensive.
+            TiltMaxDeg = TiltLimitDeg,
             WDu = 0.05,
             WW = 0.002,
             ProximalWeight = 0.05,
@@ -223,7 +279,19 @@ internal static class ColdNodeCheck
                 xSeed[k * NX + i] = x0[i] + t * (xf[i] - x0[i]);
                 xSeed[k * NX + 3 + i] = x0[3 + i] * (1.0 - t);
             }
-            xSeed[k * NX + 6] = 1.0;
+            // Slerp-free straight interpolation of the quaternion, renormalised - the
+            // same thing Ksa6DofGuidance.BuildColdSeed does, so the seed a cold start
+            // actually gets is the seed measured here.
+            double qn = 0.0;
+            for (int i = 0; i < 4; i++)
+            {
+                double q = x0[6 + i] * (1.0 - t) + xf[6 + i] * t;
+                xSeed[k * NX + 6 + i] = q;
+                qn += q * q;
+            }
+            qn = Math.Sqrt(qn);
+            if (qn > 1e-12)
+                for (int i = 0; i < 4; i++) xSeed[k * NX + 6 + i] /= qn;
             xSeed[k * NX + 13] = m0 * (1.0 - 0.08 * t);
             uSeed[k * NU + 2] = 1.05 * m0 * 9.81;
         }

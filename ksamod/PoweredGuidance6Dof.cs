@@ -41,20 +41,26 @@ public static partial class PoweredGuidanceWindow
     // cost more here: the smoother problem converges in fewer ADMM iterations.
     private static int _sixDofNodes = 50;
 
-    // NODE COUNT FOR THE COLD SOLVE, which is not the same question as the node count
-    // for flying. A cold solve wants a starting point; the warm loop refines it ten
-    // times a second afterwards, and the node ladder moves the count to whatever the
-    // descent actually needs within a cycle or two.
+    // A FIXED COARSE COLD START WAS WRONG. It was chosen from an offline sweep that
+    // measured 0.44 m of defect at 10 nodes; the flown vehicle at 10 nodes got 7.87 m
+    // and could not follow its own plan for a single cycle. The sweep started from an
+    // UPRIGHT vehicle, and the real entry is a belly-flop at 92 degrees - so it
+    // measured the translation and missed the attitude slew, which is the stiff part
+    // of this problem and the part a coarse spacing fails to resolve.
     //
-    // Measured on the flight-20260807-103232 entry (1790 m, 130 m/s), worst frame of
-    // the whole cold solve: 226 ms at 50 nodes, 20 ms at 10. The flown engage used 50
-    // and stepped to 25 within 10 ms of converging, so those 226 ms bought a
-    // trajectory that was discarded almost immediately.
-    //
-    // 10 rather than 5: at 5 the problem is small enough that a loose subproblem
-    // tolerance stops converging, and the margin on the warm gate is thinner (0.64 m
-    // against 0.44 m at 10). 10 is the cheapest count that still lands with room.
-    private static int _sixDofColdNodes = 10;
+    // The cold count is now derived from the same spacing target as everything else,
+    // so there is one criterion rather than two, and it cannot drift away from what
+    // the ladder believes. Cheapness is not a property worth having on its own: a
+    // plan the vehicle cannot follow costs a cold restart, and the log shows three of
+    // them in ten seconds before it gave up entirely.
+    private static int ColdNodesFor(double sigmaSeed)
+    {
+        int ideal = (int)Math.Ceiling(sigmaSeed / Math.Max(_sixDofNodeDtTarget, 0.05)) + 1;
+        int nodes = MaxNodes;
+        for (int i = NodeRungs.Length - 1; i >= 0; i--)
+            if (NodeRungs[i] >= ideal) { nodes = NodeRungs[i]; break; }
+        return Math.Clamp(nodes, MinNodes, MaxNodes);
+    }
     private static double _sixDofTiltDeg = 60.0;
     private static double _sixDofThrottleFloor = 0.40;
     private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
@@ -581,7 +587,19 @@ public static partial class PoweredGuidanceWindow
     /// which the wall-clock budget already bounds; too few costs the PLAN, and a
     /// refused plan means flying open loop.
     /// </summary>
-    private static double _sixDofNodeDtTarget = 0.85;
+    // NODE SPACING TARGET, seconds. Measured on this vehicle, flight defect against
+    // the spacing that produced it:
+    //
+    //     dt 1.80 s -> 8.02 m      dt 0.79 s -> 1.13 m
+    //     dt 1.30 s -> 3.93 m      dt 0.65 s -> 0.25 m
+    //     dt 0.93 s -> 4.49 m      dt 0.61 s -> 0.18 m
+    //                              dt 0.46 s -> 0.52 m
+    //
+    // The knee is sharp and it sits between 0.79 s and 0.65 s: above it the plan is at
+    // or over the 1 m gate and the loop refuses everything it produces, below it there
+    // is an order of magnitude of margin. 0.85 s was on the wrong side of that knee,
+    // which is why the ladder kept asking for counts whose plans could not be flown.
+    private static double _sixDofNodeDtTarget = 0.60;
 
     /// <summary>
     /// Hard bounds on node count, ladder or configured.
@@ -1132,6 +1150,45 @@ public static partial class PoweredGuidanceWindow
                     $"sigma {_sixDof.Sigma:F1} s");
                 SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
             }
+            else if (_sixDof.NeedsMoreNodes && _sixDof.Nodes < MaxNodes)
+            {
+                // MORE NODES, NOT MORE TRIES. The cold solve has stopped improving
+                // while still above the gate the warm loop judges by, and repeating it
+                // at the same node count reruns the identical problem. Flight log
+                // 20260808-104651 did that three times before giving up: settle at
+                // 7.87 m, hand over, get refused fifteen times, cold restart, repeat.
+                int finer = NodeRungs.Length - 1;
+                for (int i = NodeRungs.Length - 1; i >= 0; i--)
+                    if (NodeRungs[i] > _sixDof.Nodes) { finer = i; break; }
+                int nodes = Math.Clamp(NodeRungs[finer], MinNodes, MaxNodes);
+
+                SixDofLog.Event(now,
+                    $"COLD SOLVE stalled at {_sixDof.LastDefectM:F1} m with {_sixDof.Nodes} nodes " +
+                    $"after {_sixDof.LastIterations} iterations - retrying at {nodes} nodes");
+
+                var xfMore = new double[14];
+                xfMore[2] = _sixDofTargetAltM;
+                TerminalAttitude(x, xfMore);
+                if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
+                {
+                    _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
+                    _sixDof.BeginCold(x, xfMore, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
+                    _sixDofColdFrames = 0;
+                }
+                else
+                {
+                    // The rebuild itself failed, so there is nothing finer to try.
+                    // Fall back to the loose cold gate rather than never engaging.
+                    SixDofLog.Event(now, $"COLD SOLVE cannot rebuild at {nodes} nodes - " +
+                                         "accepting the coarse plan against the cold gate");
+                    if (_sixDof.AcceptCold(x, now))
+                    {
+                        _sixDofConverging = false;
+                        _sixDofError = "";
+                    }
+                }
+                return;
+            }
             else
             {
                 _sixDofError = $"converging... {_sixDof.LastIterations} iterations, " +
@@ -1355,7 +1412,7 @@ public static partial class PoweredGuidanceWindow
         // The ladder takes over from the first cycle, so this is a starting point
         // rather than a choice about how the descent is flown.
         int engageNodes = _sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed
-            ? Math.Clamp(_sixDofColdNodes, MinNodes, MaxNodes)
+            ? ColdNodesFor(_sixDofSigmaSeed)
             : _sixDofNodes;
 
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _sixDofTiltDeg,

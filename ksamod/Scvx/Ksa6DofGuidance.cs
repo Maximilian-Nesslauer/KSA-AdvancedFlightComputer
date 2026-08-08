@@ -409,6 +409,7 @@ public sealed class Ksa6DofGuidance
         _consecutiveFailures = 0;
         _lastColdIterationS = 0.0;
         _coldIterations = 0;
+        NeedsMoreNodes = false;
         _solver.SubproblemEps = ColdSubproblemEps;
     }
 
@@ -482,8 +483,21 @@ public sealed class Ksa6DofGuidance
         // once the iteration count says it has stopped improving, so a genuinely hard
         // case still engages instead of converging forever. Finish does no solving
         // here - the 0 budget means it runs the gates over what Iterate just produced.
+        // STALLED ABOVE THE WARM GATE MEANS TOO FEW NODES, NOT "GOOD ENOUGH".
+        //
+        // The loose cold gate exists so a first plan is not refused outright, but
+        // handing the warm loop a plan it will reject is worse than not engaging - the
+        // whole point of hlanding over at the warm gate. Flight log 20260808-104651 did
+        // exactly this three times: cold solve settles at 7.87 m against the 15 m cold
+        // gate, reports CONVERGED, and the warm loop then refuses that same plan
+        // fifteen times at 7.8 m before cold-restarting to do it again.
+        //
+        // The solver's own message says what is wrong - "needs more iterations, or more
+        // nodes" - and iterations have already stalled, so it is nodes. The caller can
+        // act on that; settling cannot.
         bool stalled = _coldIterations >= ColdStallIterations;
-        bool ok = Finish(x0, simNow, 0) || (stalled && Finish(x0, simNow, 0, cold: true));
+        bool ok = Finish(x0, simNow, 0);
+        NeedsMoreNodes = !ok && stalled && LastDefectM > MaxDefectM;
 
         // AFTER Finish, which overwrites both from the solver. The SOLVER's iteration
         // count is useless here - StepCold re-anchors through Reseed before every
@@ -502,7 +516,21 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
-    /// Iterations after which a spread cold solve settles for the looser cold gate.
+    /// Accept the current cold plan against the LOOSE gate. Last resort, for when
+    /// there are no more nodes to add: an imperfect plan the loop may refuse still
+    /// beats no plan at all on a vehicle that is already falling.
+    /// </summary>
+    public bool AcceptCold(double[] x0, double simNow) => Finish(x0, simNow, 0, cold: true);
+
+    /// <summary>
+    /// Set when a cold solve has stopped improving while still above the warm gate.
+    /// The caller should give it more nodes rather than accept the plan or restart at
+    /// the same count - both of those just repeat the same solve.
+    /// </summary>
+    public bool NeedsMoreNodes { get; private set; }
+
+    /// <summary>
+    /// Iterations after which a spread cold solve is judged to have stopped improving.
     /// Generous, because spread iterations are cheap - the cost is bounded per FRAME,
     /// not in total.
     /// </summary>

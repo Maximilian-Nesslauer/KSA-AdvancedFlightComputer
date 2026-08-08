@@ -97,6 +97,19 @@ public static class Ksa6DofSetup
     /// layout — the same one KsaFrameBridge derives the body axes from, so the two
     /// cannot disagree about which engine they mean.
     /// </summary>
+    /// <summary>
+    /// How far off vertical the vehicle is RIGHT NOW, in degrees, from the model
+    /// quaternion - the same r22 the subproblem's tilt cone is written against, so the
+    /// two cannot disagree about what "tilt" means.
+    /// </summary>
+    public static double EntryTiltDeg(double[] x0)
+    {
+        if (x0 == null || x0.Length < 14) return 0.0;
+        double qx = x0[Dynamics6Dof.IQ + 1], qy = x0[Dynamics6Dof.IQ + 2];
+        double r22 = Math.Clamp(1.0 - 2.0 * (qx * qx + qy * qy), -1.0, 1.0);
+        return Math.Acos(r22) * 180.0 / Math.PI;
+    }
+
     public static double EngineArm(Vehicle vehicle)
     {
         KsaFrameBridge.BodyAxes(vehicle, out _, out _, out double3 mz);
@@ -477,7 +490,24 @@ public static class Ksa6DofSetup
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
             TauRollMax = tauRoll,
-            TiltMaxDeg = tiltMaxDeg,
+            // WIDENED TO ADMIT THE CURRENT ATTITUDE. The tilt cone is applied at every
+            // node INCLUDING node 0, and node 0 is pinned by an equality to the measured
+            // state - so a cap below the vehicle's present tilt asks for a quaternion
+            // that is simultaneously exactly the measured one and inside a cone the
+            // measured one is outside. That is infeasible by construction, not merely
+            // expensive: measured offline from the 20260808-104651 entry at 92.1 degrees
+            // with a 60-degree cap, NO node count solves at all - infinite defect at 15,
+            // 30 and 50 nodes, never reaching even the loose cold gate. Raise the cap
+            // above the entry attitude and the same problem solves at every one of them.
+            //
+            // This is the same failure the trust-region box had before it was moved off
+            // node 0, and the reason the glideslope and climb-rate constraints start at
+            // node 1. Widening rather than restructuring the rows, because the row
+            // layout is what the Python reference comparison checks.
+            //
+            // The margin is what makes it a starting point rather than a knife edge: a
+            // cap exactly at the current tilt leaves the first node with no slack at all.
+            TiltMaxDeg = Math.Min(Math.Max(tiltMaxDeg, EntryTiltDeg(x0) + 5.0), 175.0),
             GroundFloor = -1.0,
 
             // Generous bounds. These only need to BRACKET the answer — sigma is a free
