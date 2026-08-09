@@ -981,6 +981,10 @@ public static partial class PoweredGuidanceWindow
     private static bool _sixDofThreaded = true;
     private static Ksa6DofSolveWorker _sixDofWorker;
 
+    /// <summary>Outcome of the last collected cold iteration, so the converging block
+    /// can judge it on the frame it lands rather than the frame it was dispatched.</summary>
+    private static bool _sixDofColdResult;
+
     /// <summary>
     /// True when it is safe to touch the guidance object from the sim thread: solve on
     /// it, rebuild it, or replace it. While a solve is in flight the worker owns it
@@ -1272,7 +1276,10 @@ public static partial class PoweredGuidanceWindow
                 (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
                             : $"{_sixDofRefusalRun} refused re-solves") +
                 $" - plan {_sixDof.PlanElapsed:F1} s stale, defect {_sixDof.LastDefectM:F0} m");
-            _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
+            // No pacing when threaded: spacing iterations out exists to keep frames
+            // smooth, and off the sim thread there is no frame to protect - it would
+            // only make the vehicle fall further before it has a plan.
+            _sixDof.ColdIterationIntervalS = _sixDofThreaded ? 0.0 : _sixDofColdIntervalS;
             _sixDof.BeginCold(x, xfR, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
             _sixDofConverging = true;
             _sixDofColdFrames = 0;
@@ -1287,7 +1294,34 @@ public static partial class PoweredGuidanceWindow
         if (_sixDofConverging && GuidanceIdle)
         {
             _sixDofColdFrames++;
-            if (_sixDof.StepCold(x, now))
+
+            // THE COLD SOLVE IS A SOLVE TOO. Threading Update alone left this running
+            // inline, and flight log 20260809-113132 hitched throughout because of it -
+            // three cold solves of a dozen iterations each, every one on the sim
+            // thread at up to 300 ms a piece.
+            //
+            // Dispatched one iteration at a time rather than looping on the worker, so
+            // the anchor stays as fresh as it was inline: at 126 m/s the vehicle falls
+            // over a hundred metres during a cold solve, and freezing x0 for the whole
+            // of it would seed the first warm cycle from where the vehicle used to be.
+            bool coldDone;
+            if (_sixDofThreaded && _sixDofWorker != null)
+            {
+                if (_sixDofWorker.TryCollect(out Ksa6DofJob cJob, out bool cOk, out _, out _))
+                    _sixDofColdResult = cJob == Ksa6DofJob.StepCold && cOk;
+                else
+                {
+                    _sixDofWorker.TryDispatchStepCold(_sixDof, x, now);
+                    return;         // nothing to judge until it lands
+                }
+                coldDone = _sixDofColdResult;
+            }
+            else
+            {
+                coldDone = _sixDof.StepCold(x, now);
+            }
+
+            if (coldDone)
             {
                 _sixDofConverging = false;
                 _sixDofError = "";
@@ -1318,7 +1352,7 @@ public static partial class PoweredGuidanceWindow
                 TerminalAttitude(x, xfMore);
                 if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
                 {
-                    _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
+                    _sixDof.ColdIterationIntervalS = _sixDofThreaded ? 0.0 : _sixDofColdIntervalS;
                     _sixDof.BeginCold(x, xfMore, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
                     _sixDofColdFrames = 0;
                 }
@@ -1449,14 +1483,19 @@ public static partial class PoweredGuidanceWindow
         {
             // THREADED: collect whatever finished since last frame, then dispatch if
             // the cadence is due and the worker is free. Never blocks.
-            if (_sixDofWorker != null && _sixDofWorker.TryCollect(out bool tSolved, out string tError))
+            // Only warm results are handled here. A cold iteration is collected by
+            // the converging block above, which returns before reaching this point, so
+            // the two cannot consume each other's results.
+            if (_sixDofWorker != null &&
+                _sixDofWorker.TryCollect(out Ksa6DofJob job, out bool tSolved, out string tError, out _)
+                && job == Ksa6DofJob.Update)
             {
                 _sixDofDidSolve = true;
                 if (tSolved) OnSolveSucceeded(now, x); else OnSolveRefused(now, tError);
             }
 
             if (now - _sixDofLastReplan >= cadence && _sixDofWorker != null)
-                _sixDofWorker.TryDispatch(_sixDof, x, now, 5);
+                _sixDofWorker.TryDispatchUpdate(_sixDof, x, now, 5);
         }
         else if (now - _sixDofLastReplan >= cadence)
         {
@@ -1591,7 +1630,7 @@ public static partial class PoweredGuidanceWindow
         // few milliseconds of this frame rather than the whole solve.
         if (_sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed)
         {
-            _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
+            _sixDof.ColdIterationIntervalS = _sixDofThreaded ? 0.0 : _sixDofColdIntervalS;
             _sixDof.BeginCold(x, xf, _sixDofSigmaSeed);
             _sixDofConverging = true;
             _sixDofWorker = _sixDofThreaded ? new Ksa6DofSolveWorker() : null;
