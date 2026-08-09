@@ -285,6 +285,33 @@ public static partial class PoweredGuidanceWindow
                     ImGui.Text($"  sigma {_sixDof.Sigma,5:F1} s / {_sixDof.Nodes} nodes = " +
                                $"{_sixDof.Sigma / Math.Max(_sixDof.Nodes - 1, 1),4:F2} s actual");
             }
+            if (ImGui.Checkbox("Solve on a background thread", ref _sixDofThreaded))
+            {
+                // Switching mid-flight is the point of having the toggle, so it has to
+                // be safe: stop the worker on the way off, start one on the way on.
+                if (!_sixDofThreaded) { _sixDofWorker?.Dispose(); _sixDofWorker = null; }
+                else if (_sixDofActive && _sixDofWorker == null) _sixDofWorker = new Ksa6DofSolveWorker();
+            }
+            if (_sixDofThreaded)
+            {
+                ImGui.TextWrapped(
+                    "Runs the re-solve off the sim thread, so a solve costs no frame time at " +
+                    "all. The cycle budget already bounds a solve BETWEEN SCvx iterations, but " +
+                    "one iteration is indivisible and measures 43 ms typically and 300 ms at " +
+                    "worst - that floor is the remaining stutter, and threading removes it " +
+                    "rather than lowering it. The plan is one solve older in exchange; a 300 ms " +
+                    "solve becomes a plan refreshing at 3 Hz instead of a 300 ms hitch.");
+                if (_sixDofWorker != null)
+                    ImGui.Text($"  {_sixDofWorker.Completed} solves, {_sixDofWorker.Skipped} ticks skipped " +
+                               $"(worker busy), last {_sixDofWorker.LastSolveMs:F0} ms" +
+                               (_sixDofWorker.IsBusy ? "   [solving]" : ""));
+            }
+            else
+                ImGui.TextWrapped(
+                    "Solving inline on the sim thread. Correct, and easier to reason about " +
+                    "from a log, but a solve is frame time - which is what the threaded path " +
+                    "exists to stop paying.");
+
             ImGui.Checkbox("Spread cold solve over frames", ref _sixDofSpreadCold);
             if (_sixDofSpreadCold)
             {
@@ -914,6 +941,53 @@ public static partial class PoweredGuidanceWindow
         return true;
     }
 
+    /// <summary>
+    /// What happens after a solve lands, whichever thread produced it. Shared on
+    /// purpose: two copies of this would drift, and the A/B toggle is only worth
+    /// having if both sides are otherwise identical.
+    /// </summary>
+    private static void OnSolveSucceeded(double now, double[] x)
+    {
+        _sixDofLastReplan = now;
+        _sixDofError = "";
+        _sixDofSolveOk = true;
+        _sixDofRefusalRun = 0;
+        // Worth an event, not just a column: this fires exactly once per real sign
+        // flip - the plan is stored on the vehicle's branch afterwards, so the next
+        // cycle finds nothing to do - and before the fix each one cost fifteen
+        // refusals and a cold restart.
+        if (_sixDof.LastBranchFlips > 0)
+            SixDofLog.Event(now,
+                $"QUATERNION BRANCH FLIP at alt {x[2]:F0} m: re-expressed " +
+                $"{_sixDof.LastBranchFlips} of {_sixDof.Nodes - 1} plan nodes onto the " +
+                "vehicle's branch (q and -q are the same rotation; the defect is not)");
+        SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
+    }
+
+    private static void OnSolveRefused(double now, string error)
+    {
+        _sixDofError = "re-solve failed: " + error;
+        _sixDofSolveOk = false;
+        _sixDofRefusalRun++;
+        // Every refusal, with its reason. A refused re-solve silently leaves the
+        // vehicle on a stale open-loop plan, so a run of these in the event log is the
+        // signature to look for first.
+        SixDofLog.Event(now, "RE-SOLVE REFUSED: " + error);
+    }
+
+    // A/B TOGGLE. The synchronous path is kept in full rather than removed, because
+    // every real bug this feature has produced was found in a flight log, and being
+    // able to switch back mid-descent is worth more than the duplicated branch costs.
+    private static bool _sixDofThreaded = true;
+    private static Ksa6DofSolveWorker _sixDofWorker;
+
+    /// <summary>
+    /// True when it is safe to touch the guidance object from the sim thread: solve on
+    /// it, rebuild it, or replace it. While a solve is in flight the worker owns it
+    /// outright - only Published and Inputs may be crossed, and both are immutable.
+    /// </summary>
+    private static bool GuidanceIdle => !_sixDofThreaded || _sixDofWorker == null || !_sixDofWorker.IsBusy;
+
     // Set by the cadence gate so a row can say whether THIS cycle re-solved, rather
     // than only reporting the last solve's result forever. Without that distinction
     // a run of refusals is indistinguishable from a run of cycles that simply were
@@ -1105,6 +1179,11 @@ public static partial class PoweredGuidanceWindow
         _sixDofActive = false;
         _sixDofEngagePending = false;
         _sixDofConverging = false;
+        // BEFORE dropping the guidance. Dispose waits for an in-flight solve rather
+        // than abandoning the worker mid-Update on an object about to be collected;
+        // it is a background thread, so the wait is bounded and survivable either way.
+        _sixDofWorker?.Dispose();
+        _sixDofWorker = null;
         _sixDof = null;
         _gimbalMode = 0;
         KsaGimbalControl.Disengage();
@@ -1172,11 +1251,17 @@ public static partial class PoweredGuidanceWindow
         // So once drift passes that point there is nothing to be gained by re-solving
         // from it, however many times we try - and waiting for fifteen failures first
         // just means fifteen expensive cycles of flying open loop.
+        // Reads the PUBLISHED plan, so it is safe while a solve is in flight - see
+        // Ksa6DofGuidance.MeasureDrift.
         double drift = _sixDof != null ? _sixDof.MeasureDrift(x, now) : 0.0;
         double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
         bool driftedOff = _sixDof != null && _sixDof.HasPlan && drift > driftLimit;
 
-        if (!_sixDofConverging && _sixDof != null &&
+        // GuidanceIdle: a cold restart calls BeginCold, which reinitialises the solver
+        // out from under anything using it. While a solve is in flight the worker owns
+        // the guidance outright, so this waits - a cycle of delay on a restart that
+        // only fires after fifteen refusals is not a cost worth worrying about.
+        if (!_sixDofConverging && _sixDof != null && GuidanceIdle &&
             (driftedOff || _sixDofRefusalRun >= RefusalsBeforeRestart))
         {
             var xfR = new double[14];
@@ -1199,7 +1284,7 @@ public static partial class PoweredGuidanceWindow
         // Advance a spread cold solve. Until it produces a flyable plan there is
         // nothing to command, so this returns without touching the actuators - the
         // vehicle carries on doing whatever it was doing.
-        if (_sixDofConverging)
+        if (_sixDofConverging && GuidanceIdle)
         {
             _sixDofColdFrames++;
             if (_sixDof.StepCold(x, now))
@@ -1337,7 +1422,10 @@ public static partial class PoweredGuidanceWindow
         //
         // One-way, too: the ladder never steps back up. Re-crossing a gate during a
         // brief climb would rebuild twice for no benefit.
-        if (_sixDofNodeGates)
+        // Same rule: StepNodeGates can call RebuildAt, which constructs a new guidance
+        // and assigns _sixDof. Doing that while the worker holds a reference to the old
+        // one would leave a solve running on an object nothing is going to read.
+        if (_sixDofNodeGates && GuidanceIdle)
             StepNodeGates(vehicle, parent, siteCci, x, now);
 
         // THE MPC STEP: re-solve from the MEASURED state on a cadence. This is where
@@ -1357,36 +1445,24 @@ public static partial class PoweredGuidanceWindow
                              out _sixDofOffDiag, out _sixDofAsym);
         _sixDof.Inputs = _sixDof.Inputs.WithInertia(ixx, iyy, izz);
 
-        if (now - _sixDofLastReplan >= cadence)
+        if (_sixDofThreaded)
+        {
+            // THREADED: collect whatever finished since last frame, then dispatch if
+            // the cadence is due and the worker is free. Never blocks.
+            if (_sixDofWorker != null && _sixDofWorker.TryCollect(out bool tSolved, out string tError))
+            {
+                _sixDofDidSolve = true;
+                if (tSolved) OnSolveSucceeded(now, x); else OnSolveRefused(now, tError);
+            }
+
+            if (now - _sixDofLastReplan >= cadence && _sixDofWorker != null)
+                _sixDofWorker.TryDispatch(_sixDof, x, now, 5);
+        }
+        else if (now - _sixDofLastReplan >= cadence)
         {
             _sixDofDidSolve = true;
-            if (_sixDof.Update(x, now))
-            {
-                _sixDofLastReplan = now;
-                _sixDofError = "";
-                _sixDofSolveOk = true;
-                _sixDofRefusalRun = 0;
-                // Worth an event, not just a column: this fires exactly once per real
-                // sign flip - the plan is stored on the vehicle's branch afterwards, so
-                // the next cycle finds nothing to do - and before the fix each one cost
-                // fifteen refusals and a cold restart.
-                if (_sixDof.LastBranchFlips > 0)
-                    SixDofLog.Event(now,
-                        $"QUATERNION BRANCH FLIP at alt {x[2]:F0} m: re-expressed " +
-                        $"{_sixDof.LastBranchFlips} of {_sixDof.Nodes - 1} plan nodes onto the " +
-                        "vehicle's branch (q and -q are the same rotation; the defect is not)");
-                SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
-            }
-            else
-            {
-                _sixDofError = "re-solve failed: " + _sixDof.Error;
-                _sixDofSolveOk = false;
-                _sixDofRefusalRun++;
-                // Every refusal, with its reason. A refused re-solve silently leaves
-                // the vehicle on a stale open-loop plan, so a run of these in the
-                // event log is the signature to look for first.
-                SixDofLog.Event(now, "RE-SOLVE REFUSED: " + _sixDof.Error);
-            }
+            if (_sixDof.Update(x, now)) OnSolveSucceeded(now, x);
+            else OnSolveRefused(now, _sixDof.Error);
         }
 
         // Past the end of the plan the node index clamps, so the terminal control is
@@ -1518,6 +1594,7 @@ public static partial class PoweredGuidanceWindow
             _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
             _sixDof.BeginCold(x, xf, _sixDofSigmaSeed);
             _sixDofConverging = true;
+            _sixDofWorker = _sixDofThreaded ? new Ksa6DofSolveWorker() : null;
             _sixDofColdFrames = 0;
             _sixDofActive = true;
             _sixDofTouchdownArmed = false;
@@ -1566,6 +1643,7 @@ public static partial class PoweredGuidanceWindow
 
         _sixDofError = "";
         _sixDofActive = true;
+        _sixDofWorker = _sixDofThreaded ? new Ksa6DofSolveWorker() : null;
         _sixDofTouchdownArmed = false;
         _sixDofGateIndex = -1;
         _sixDofGateChanges = 0;

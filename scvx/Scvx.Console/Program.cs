@@ -92,6 +92,11 @@ if (args.Contains("--snapshot"))
     return SnapshotCheck.Run();
 }
 
+if (args.Contains("--thread"))
+{
+    return ThreadCheck.Run();
+}
+
 if (args.Contains("--seed"))
 {
     return SeedCheck.Run();
