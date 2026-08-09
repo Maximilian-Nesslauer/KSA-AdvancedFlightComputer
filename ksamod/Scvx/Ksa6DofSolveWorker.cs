@@ -240,14 +240,38 @@ public sealed class Ksa6DofSolveWorker : IDisposable
         }
     }
 
+    /// <summary>
+    /// Stop the worker. NEVER BLOCKS THE CALLER, and never throws.
+    ///
+    /// Both of those are load-bearing, because this is reached from the ImGui draw when
+    /// the Disengage button is pressed.
+    ///
+    /// It used to Join for two seconds, which froze the UI for as long as an in-flight
+    /// solve took. Worse, it called Release unconditionally on a semaphore created with
+    /// maxCount 1: if a job had been dispatched but not yet picked up, the count was
+    /// already at the maximum and Release threw SemaphoreFullException. That escaped
+    /// through Disengage6Dof into the draw, so _sixDofWorker and _sixDof were never
+    /// cleared and the ImGui window lost its End - which is what "the disengage button
+    /// gets stuck" looked like from outside. Loading a save is exactly the moment to
+    /// hit it: a dispatch in flight and a disengage arriving together.
+    ///
+    /// Abandoning a running job is safe. The thread is background, so it cannot keep
+    /// the game alive, and it works only on plain arrays belonging to a guidance the
+    /// caller is about to drop. A solve finishing into an orphan harms nothing.
+    /// </summary>
     public void Dispose()
     {
         _running = false;
-        try { _work.Release(); } catch (ObjectDisposedException) { }
-        // Give an in-flight job a moment rather than abandoning the worker mid-solve on
-        // an object about to be collected. Background thread, so the wait is bounded
-        // and survivable either way.
-        _thread.Join(TimeSpan.FromSeconds(2));
-        _work.Dispose();
+        // The worker may be waiting, or may be mid-job with the count already at its
+        // maximum. Both are fine; neither may throw out of here.
+        try { _work.Release(); }
+        catch (SemaphoreFullException) { }
+        catch (ObjectDisposedException) { }
+        catch (Exception) { }
+
+        // NOT disposed and NOT joined. A running worker still holds the semaphore, and
+        // disposing it underneath would throw on that thread instead of this one -
+        // moving the problem rather than fixing it. Letting a background thread finish
+        // and fall out of its loop costs nothing.
     }
 }

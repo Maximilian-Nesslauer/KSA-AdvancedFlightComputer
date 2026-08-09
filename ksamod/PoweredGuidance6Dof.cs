@@ -985,6 +985,11 @@ public static partial class PoweredGuidanceWindow
     /// can judge it on the frame it lands rather than the frame it was dispatched.</summary>
     private static bool _sixDofColdResult;
 
+    /// <summary>The vehicle this guidance was engaged on, so a save load can be
+    /// detected. Compared by reference only - never dereferenced, because by the time
+    /// it differs the old one may already be destroyed.</summary>
+    private static Vehicle _sixDofEngagedVehicle;
+
     /// <summary>
     /// True when it is safe to touch the guidance object from the sim thread: solve on
     /// it, rebuild it, or replace it. While a solve is in flight the worker owns it
@@ -1183,12 +1188,18 @@ public static partial class PoweredGuidanceWindow
         _sixDofActive = false;
         _sixDofEngagePending = false;
         _sixDofConverging = false;
-        // BEFORE dropping the guidance. Dispose waits for an in-flight solve rather
-        // than abandoning the worker mid-Update on an object about to be collected;
-        // it is a background thread, so the wait is bounded and survivable either way.
-        _sixDofWorker?.Dispose();
+
+        // CLEAR THE REFERENCE FIRST, then stop the worker. If stopping ever throws,
+        // the mod must still end up disengaged: leaving a live _sixDofWorker behind
+        // means the next engage builds a second one and the first keeps solving into
+        // an orphan. Disengage is also reached from the ImGui draw, so nothing here
+        // may block or throw - see Ksa6DofSolveWorker.Dispose.
+        Ksa6DofSolveWorker worker = _sixDofWorker;
         _sixDofWorker = null;
         _sixDof = null;
+        _sixDofColdResult = false;
+        _sixDofEngagedVehicle = null;
+        try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
         _gimbalMode = 0;
         KsaGimbalControl.Disengage();
         if (vehicle != null && cutEngine)
@@ -1222,6 +1233,18 @@ public static partial class PoweredGuidanceWindow
 
     private static void Step6DofCore(Vehicle vehicle)
     {
+        // THE VEHICLE CAN CHANGE UNDER US. Loading a save replaces it while the mod's
+        // statics survive, so _sixDof would be a plan for a vehicle that no longer
+        // exists - flown against whatever the game handed us instead. Disengage
+        // instead of guessing; re-engaging is one button.
+        if (_sixDofActive && _sixDofEngagedVehicle != null &&
+            !ReferenceEquals(_sixDofEngagedVehicle, vehicle))
+        {
+            Disengage6Dof(null, cutEngine: false);
+            _sixDofError = "vehicle changed (new save or vessel switch) - 6-DOF disengaged.";
+            return;
+        }
+
         IParentBody parent = vehicle.Orbit.Parent;
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame frame = KsaFrameBridge.BuildSiteFrame(siteCci);
@@ -1636,6 +1659,7 @@ public static partial class PoweredGuidanceWindow
             _sixDofWorker = _sixDofThreaded ? new Ksa6DofSolveWorker() : null;
             _sixDofColdFrames = 0;
             _sixDofActive = true;
+            _sixDofEngagedVehicle = vehicle;
             _sixDofTouchdownArmed = false;
             _sixDofGateIndex = -1;
             _sixDofGateChanges = 0;
@@ -1682,6 +1706,7 @@ public static partial class PoweredGuidanceWindow
 
         _sixDofError = "";
         _sixDofActive = true;
+        _sixDofEngagedVehicle = vehicle;
         _sixDofWorker = _sixDofThreaded ? new Ksa6DofSolveWorker() : null;
         _sixDofTouchdownArmed = false;
         _sixDofGateIndex = -1;
