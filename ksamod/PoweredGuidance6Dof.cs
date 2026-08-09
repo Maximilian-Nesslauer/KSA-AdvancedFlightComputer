@@ -828,13 +828,25 @@ public static partial class PoweredGuidanceWindow
     }
 
     /// <summary>
-    /// Rebuild the guidance at a different node count, carrying the current plan
-    /// across by resampling. Returns false and leaves the existing guidance untouched
-    /// if anything fails — losing the node change is survivable, losing the plan is
-    /// not.
+    /// Everything a node-count rebuild needs, gathered from the live vehicle. Plain
+    /// data: once this exists the rebuild touches no game state at all.
+    ///
+    /// The split exists because the two halves belong to different threads. Building
+    /// the config reads the vehicle, its parts and the atmosphere, so it can only
+    /// happen where KSA's state is safe to touch. Constructing the guidance and
+    /// seeding it is arithmetic on arrays, and it is the expensive half - SeedFrom
+    /// runs a full solve.
     /// </summary>
-    private static bool RebuildAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
-                                  double[] x, double now, int nodes)
+    private sealed record RebuildRequest(
+        int Nodes, Scvx6DofConfig Cfg, Dynamics6Dof.Params Dyn, Ksa6DofInputs Inputs, double[] Xf);
+
+    /// <summary>
+    /// The GAME-THREAD half of a rebuild: read the vehicle and produce a request.
+    /// Does no solving and mutates nothing, so a failure here costs only the node
+    /// change.
+    /// </summary>
+    private static RebuildRequest PrepareRebuild(Vehicle vehicle, IParentBody parent,
+                                                 double3 siteCci, double[] x, double now, int nodes)
     {
         var xf = new double[14];
         xf[2] = _sixDofTargetAltM;
@@ -850,19 +862,47 @@ public static partial class PoweredGuidanceWindow
                                    out Dynamics6Dof.Params dyn, out _))
         {
             SixDofLog.Event(now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
-            return false;
+            return null;
         }
 
-        var next = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _sixDofFixedTime };
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
-        next.SetInertia(ixx, iyy, izz);
-        next.SetAccelBias(_sixDof.AccelBias);
+        return new RebuildRequest(nodes, cfg, dyn,
+                                  new Ksa6DofInputs(_sixDof.AccelBias, ixx, iyy, izz), xf);
+    }
+
+    /// <summary>
+    /// The PURE half: construct the new guidance and carry the current plan across by
+    /// resampling. Reads nothing but the request and the outgoing guidance, so this is
+    /// the part that can move off the sim thread wholesale.
+    ///
+    /// Returns null and leaves the existing guidance untouched if the reseed fails —
+    /// losing the node change is survivable, losing the plan is not.
+    /// </summary>
+    private static Ksa6DofGuidance ApplyRebuild(RebuildRequest req, Ksa6DofGuidance from,
+                                                double[] x, double now)
+    {
+        var next = new Ksa6DofGuidance(req.Cfg, req.Dyn) { FixedTime = _sixDofFixedTime };
+        next.Inputs = req.Inputs;
+        return next.SeedFrom(from, x, now) ? next : null;
+    }
+
+    /// <summary>
+    /// Rebuild the guidance at a different node count. Prepare on the game thread,
+    /// apply off it — for now both happen here, back to back.
+    /// </summary>
+    private static bool RebuildAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                  double[] x, double now, int nodes)
+    {
+        RebuildRequest req = PrepareRebuild(vehicle, parent, siteCci, x, now, nodes);
+        if (req == null)
+            return false;
 
         double sigmaWas = _sixDof.Sigma;
-        if (!next.SeedFrom(_sixDof, x, now))
+        Ksa6DofGuidance next = ApplyRebuild(req, _sixDof, x, now);
+        if (next == null)
         {
             SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
-                                 $"nodes ({next.Error}) - staying at {_sixDof.Nodes}");
+                                 $"nodes - staying at {_sixDof.Nodes}");
             return false;
         }
 
@@ -974,7 +1014,7 @@ public static partial class PoweredGuidanceWindow
             return;
         if (!_sixDofBiasEnabled)
         {
-            _sixDof.SetAccelBias(default);
+            _sixDof.Inputs = _sixDof.Inputs.WithBias(default);
             return;
         }
 
@@ -1015,7 +1055,10 @@ public static partial class PoweredGuidanceWindow
             _sixDofBias.Z + alpha * (rz - _sixDofBias.Z));
 
         const double Limit = 5.0;
-        _sixDof.SetAccelBias(new double3(
+        // PUBLISHED, not applied. The guidance folds it into the model at the entry to
+        // its next solve and not before, so a solve already running keeps the model it
+        // started with. See Ksa6DofInputs.
+        _sixDof.Inputs = _sixDof.Inputs.WithBias(new double3(
             Math.Clamp(_sixDofBias.X, -Limit, Limit),
             Math.Clamp(_sixDofBias.Y, -Limit, Limit),
             Math.Clamp(_sixDofBias.Z, -Limit, Limit)));
@@ -1312,7 +1355,7 @@ public static partial class PoweredGuidanceWindow
         // structurally cannot correct — re-anchoring the state does not fix the model.
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz,
                              out _sixDofOffDiag, out _sixDofAsym);
-        _sixDof.SetInertia(ixx, iyy, izz);
+        _sixDof.Inputs = _sixDof.Inputs.WithInertia(ixx, iyy, izz);
 
         if (now - _sixDofLastReplan >= cadence)
         {

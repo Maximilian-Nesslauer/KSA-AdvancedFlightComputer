@@ -130,19 +130,47 @@ public sealed class Ksa6DofGuidance
     public bool FellBack { get; private set; }
 
     /// <summary>
-    /// Update the inertia used by the dynamics. KSA's TotalMassPropsBody.Inertia is
-    /// LIVE — it is rebuilt whenever propellant changes — so a value captured at
-    /// engage goes stale over a burn that spends a meaningful fraction of the wet
-    /// mass. That produces a SYSTEMATIC torque error: the plan is computed against a
-    /// heavier vehicle than the one flying, so every commanded torque is wrong in the
-    /// same direction, and MPC cannot correct it because re-anchoring the state does
-    /// not touch the model. Call this each cycle; it is three field writes.
+    /// The measurements this guidance will use on its NEXT solve. Publishing is a
+    /// single reference assignment and the object is immutable, so a solve already
+    /// under way keeps the inputs it started with — see Ksa6DofInputs for why that
+    /// matters once the solve is not on the caller's thread.
+    ///
+    /// Setting this does NOT change the model. CommitInputs does, once, at the entry
+    /// to a solve. That is the whole point: there is exactly one moment at which the
+    /// dynamics can change, and it is a moment when nothing is reading them.
     /// </summary>
-    public void SetInertia(double ixx, double iyy, double izz)
+    public Ksa6DofInputs Inputs { get; set; } = Ksa6DofInputs.None;
+
+    /// <summary>
+    /// Fold the published inputs into the model. Called at the top of every solve
+    /// entry point and nowhere else.
+    ///
+    /// KSA's TotalMassPropsBody.Inertia is LIVE — rebuilt whenever propellant changes
+    /// — so a value captured at engage goes stale over a burn that spends a meaningful
+    /// fraction of the wet mass. That is a SYSTEMATIC torque error: the plan is
+    /// computed against a heavier vehicle than the one flying, so every commanded
+    /// torque is wrong in the same direction, and MPC cannot correct it, because
+    /// re-anchoring the state does not touch the model.
+    /// </summary>
+    private void CommitInputs()
     {
-        if (ixx > 0.0) _dyn.Ixx = ixx;
-        if (iyy > 0.0) _dyn.Iyy = iyy;
-        if (izz > 0.0) _dyn.Izz = izz;
+        Ksa6DofInputs inputs = Inputs;      // one read: it may be replaced at any time
+        if (inputs == null || !inputs.IsUsable)
+            return;
+
+        if (inputs.Ixx > 0.0) _dyn.Ixx = inputs.Ixx;
+        if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
+        if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
+
+        if (!_haveBaseGravity)
+        {
+            _baseGravity = new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
+            _haveBaseGravity = true;
+        }
+        AccelBias = inputs.AccelBias;
+        _dyn.Gx = _baseGravity.X + AccelBias.X;
+        _dyn.Gy = _baseGravity.Y + AccelBias.Y;
+        _dyn.Gz = _baseGravity.Z + AccelBias.Z;
     }
 
     /// <summary>Inertia currently in the model, for the readout.</summary>
@@ -172,23 +200,8 @@ public sealed class Ksa6DofGuidance
     /// responsible, and it picks up drag for free — including the way drag falls off
     /// as speed comes off, since the estimate simply follows it down.
     /// </summary>
+    /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
     public double3 AccelBias { get; private set; }
-
-    public void SetAccelBias(double3 bias)
-    {
-        if (!_haveBaseGravity)
-        {
-            _baseGravity = new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
-            _haveBaseGravity = true;
-        }
-        if (!double.IsFinite(bias.X) || !double.IsFinite(bias.Y) || !double.IsFinite(bias.Z))
-            return;
-
-        AccelBias = bias;
-        _dyn.Gx = _baseGravity.X + bias.X;
-        _dyn.Gy = _baseGravity.Y + bias.Y;
-        _dyn.Gz = _baseGravity.Z + bias.Z;
-    }
 
     /// <summary>Gravity the config was built with, before any bias — for the readout.</summary>
     public double3 BaseGravity => _haveBaseGravity ? _baseGravity : new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
@@ -343,6 +356,12 @@ public sealed class Ksa6DofGuidance
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
     public bool Plan(double[] x0, double[] xf, double sigmaSeed, double simNow, int maxIterations = 25)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
@@ -436,6 +455,12 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public void BeginCold(double[] x0, double[] xf, double sigmaSeed)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
@@ -477,6 +502,12 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public bool StepCold(double[] x0, double simNow, int iterations = 1)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         // PACING. An SCvx iteration is the indivisible unit of work here, so the cost
         // of one is whatever it is; what can be chosen is how close together they land.
         // Back to back on consecutive frames, three iterations read as ONE freeze of
@@ -688,6 +719,12 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         if (prev == null || !prev.HasPlan)
             return false;
 
@@ -891,6 +928,13 @@ public sealed class Ksa6DofGuidance
     {
         if (!HasPlan)
             return false;
+
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
 
         // Bounded worst case from here on: this runs inside the guidance loop.
         ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
