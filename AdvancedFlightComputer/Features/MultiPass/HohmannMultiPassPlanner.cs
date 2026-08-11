@@ -89,7 +89,7 @@ internal static class HohmannMultiPassPlanner
     /// </summary>
     internal readonly record struct HohmannPlanInput(
         IOrbiter Target,
-        SimTime TFinal,
+        UniverseTime TFinal,
         double3 DFinalVlf,
         bool IsCrossParent,
         double VInfMs,
@@ -112,7 +112,7 @@ internal static class HohmannMultiPassPlanner
         int startPassIndex,
         double parkingPeriodSec,
         SequenceBurnState vehicleState,
-        SimTime now,
+        UniverseTime now,
         SplitMode mode)
     {
         if (source?.Orbit?.Parent == null)
@@ -215,9 +215,12 @@ internal static class HohmannMultiPassPlanner
         //     Use vehicle's ACTUAL next-periapsis time instead.
         if (remainingCount == 1)
         {
-            SimTime burnTime = (startPassIndex == 0)
+            UniverseTime? lastBurnTime = (startPassIndex == 0)
                 ? input.TFinal
                 : currentOrbit.GetNextPeriapsisTime(now);
+            if (lastBurnTime is not UniverseTime burnTime)
+                return Fail($"vehicle '{source.Id}': chained orbit has no next periapsis",
+                    PassPlanFailure.Other);
             return PlanSinglePass(source, input, now,
                 burnTime, vTargetXy, thetaKAbsolute[startPassIndex]);
         }
@@ -257,19 +260,21 @@ internal static class HohmannMultiPassPlanner
         // live state; target sum is whatever (T_final - times[0]) / T_park
         // works out to, real value.
         double targetSumPeriods;
-        double timesZeroSec;
+        UniverseTime timesZero;
         if (startPassIndex == 0)
         {
             double sumRaw = 0.0;
             for (int i = 0; i < priors; i++) sumRaw += kSeq[i];
             targetSumPeriods = Math.Round(sumRaw);
-            timesZeroSec = input.TFinal.Seconds() - targetSumPeriods * tPark;
+            timesZero = input.TFinal - targetSumPeriods * tPark;
         }
         else
         {
-            SimTime nextPe = currentOrbit.GetNextPeriapsisTime(now);
-            timesZeroSec = nextPe.Seconds();
-            targetSumPeriods = (input.TFinal.Seconds() - timesZeroSec) / tPark;
+            if (currentOrbit.GetNextPeriapsisTime(now) is not UniverseTime nextPe)
+                return Fail($"vehicle '{source.Id}': chained orbit has no next periapsis",
+                    PassPlanFailure.Other);
+            timesZero = nextPe;
+            targetSumPeriods = (input.TFinal - timesZero).Seconds() / tPark;
         }
 
         // Pre-adjustment K-sequence from BuildRealKSchedule is guaranteed
@@ -327,23 +332,24 @@ internal static class HohmannMultiPassPlanner
                 source.Id, vTargetXy, vpLast),
                 PassPlanFailure.ParabolicVp);
 
-        if (timesZeroSec < now.Seconds() + EarliestPassMarginSec)
+        UniverseTime earliestAllowed = now + EarliestPassMarginSec;
+        if (timesZero < earliestAllowed)
             return Fail(string.Format(CultureInfo.InvariantCulture,
                 "vehicle '{0}': first pass would fire {1:F0}s before now+margin " +
                 "(needs ~{2:F1} parking periods = {3:F0}s of warning time); " +
                 "pick later porkchop entry",
                 source.Id,
-                now.Seconds() + EarliestPassMarginSec - timesZeroSec,
+                (earliestAllowed - timesZero).Seconds(),
                 targetSumPeriods, targetSumPeriods * tPark),
                 PassPlanFailure.TimeBudget);
 
         // Schedule per-pass firing times. Each subsequent pass fires K_k
         // parking periods after the previous: vehicle returns to chained
         // periapsis after one full chained-orbit period (= K_k * T_park).
-        var times = new SimTime[remainingCount];
-        times[0] = new SimTime(timesZeroSec);
+        var times = new UniverseTime[remainingCount];
+        times[0] = timesZero;
         for (int k = 1; k < remainingCount; k++)
-            times[k] = new SimTime(times[k - 1].Seconds() + kSeq[k - 1] * tPark);
+            times[k] = times[k - 1] + kSeq[k - 1] * tPark;
 
         // Slice the absolute theta schedule for the current call. theta_k
         // for absolute pass k stays stable across recomputes (see
@@ -442,7 +448,7 @@ internal static class HohmannMultiPassPlanner
                 "K[{12}] thetaK[{13}]rad dV[{14}]m/s advisory='{15}'",
                 totalPassCount, startPassIndex, remainingCount, mode, targetSumPeriods, tPark,
                 input.TFinal.Seconds(), times[0].Seconds(),
-                input.TFinal.Seconds() - times[0].Seconds(), vpTarget, vTargetXy,
+                (input.TFinal - times[0]).Seconds(), vpTarget, vTargetXy,
                 thetaTotal, FormatKSeq(kSeq), FormatThetaSeq(thetaK), FormatDvSeq(dvMagSeq),
                 finalAdvisory ?? "-"));
 
@@ -469,7 +475,7 @@ internal static class HohmannMultiPassPlanner
     /// succeeds, so there is no threshold to bisect on.</summary>
     public static int LargestFeasibleN(
         Vehicle source, HohmannPlanInput input, SequenceBurnState state,
-        double parkingPeriodSec, SimTime now, int requestedN, SplitMode mode,
+        double parkingPeriodSec, UniverseTime now, int requestedN, SplitMode mode,
         out string? firstFailureReason, out PassPlanFailure firstFailureKind)
     {
         firstFailureReason = null;
@@ -514,7 +520,7 @@ internal static class HohmannMultiPassPlanner
     /// transit instead.</summary>
     internal readonly record struct ShiftResult(
         HohmannPlanInput Input, int KShift, string? ScanAdvisory = null,
-        SimTime ShiftedTransit = default);
+        UniverseTime ShiftedTransit = default);
 
     /// <summary>
     /// Same-parent moon transfers (LEO -> Luna, low-Mars -> Phobos, ...) have
@@ -545,7 +551,7 @@ internal static class HohmannMultiPassPlanner
     /// </summary>
     internal static ShiftResult PrepareShiftedInput(
         HohmannPlanInput raw, Vehicle source, OrbitalTransfers.TransferInfo info,
-        int passCount, double parkingPeriodSec, SimTime now,
+        int passCount, double parkingPeriodSec, UniverseTime now,
         SplitMode mode, SequenceBurnState state)
     {
         if (passCount <= 1 || !(parkingPeriodSec > 0.0))
@@ -573,29 +579,27 @@ internal static class HohmannMultiPassPlanner
             // will surface a more descriptive error; no shift needed.
             return new ShiftResult(raw, 0);
 
-        double rawTFinalSec = raw.TFinal.Seconds();
-        double earliestAllowedSec = now.Seconds()
-            + kTotal * parkingPeriodSec
-            + EarliestPassMarginSec;
-        if (rawTFinalSec >= earliestAllowedSec)
+        UniverseTime earliestAllowed = now
+            + (kTotal * parkingPeriodSec + EarliestPassMarginSec);
+        if (raw.TFinal >= earliestAllowed)
             return new ShiftResult(raw, 0);
 
         int kShift = (int)Math.Ceiling(
-            (earliestAllowedSec - rawTFinalSec) / parkingPeriodSec);
+            (earliestAllowed - raw.TFinal).Seconds() / parkingPeriodSec);
         if (kShift <= 0)
             return new ShiftResult(raw, 0);
 
         var key = new ShiftCacheKey(
             VehicleId: source.Id,
             TargetId: (info.Target as Astronomical)?.Id ?? string.Empty,
-            RawTFinalBucketSec: (long)rawTFinalSec,
+            RawTFinalBucketSec: (long)raw.TFinal.Seconds(),
             PassCount: passCount,
             ParkingPeriodBucketSec: (long)Math.Round(parkingPeriodSec),
             KShift: kShift);
         if (_hasShiftCache && key == _shiftCacheKey)
             return new ShiftResult(_shiftCacheInput, kShift, _shiftCacheAdvisory, _shiftCacheTransit);
 
-        SimTime shiftedStart = new SimTime(rawTFinalSec + kShift * parkingPeriodSec);
+        UniverseTime shiftedStart = raw.TFinal + kShift * parkingPeriodSec;
 
         // Floor on min transit: defensive against an uninitialised
         // TransferInfo where MinTransferTimeOfFlight is 0 (would feed
@@ -623,9 +627,12 @@ internal static class HohmannMultiPassPlanner
             var candidate = new OrbitalTransfers.TransferData
             {
                 Start = shiftedStart,
-                Transit = new SimTime(transitSec),
+                Transit = new UniverseTime(transitSec),
                 ClosestApproachDistance = double.MaxValue,
             };
+            // A false return is stock's DepartureInfeasible case (the worker sets
+            // that flag in the same else branch), so the scan's filter below needs
+            // to cover only Impacts and BadEncounter.
             if (!OrbitalTransfers.SolveLambert(info, ref candidate)) continue;
 
             double dvLen = candidate.TransferDvVlf.Length();
@@ -652,7 +659,7 @@ internal static class HohmannMultiPassPlanner
             // the planned arrival mark the candidate as impacting; patches with
             // a PrimaryBody outside the {Source, Source.Parent, Target} tuple
             // mark a bad encounter.
-            SimTime arrival = candidate.Start + candidate.Transit;
+            UniverseTime arrival = candidate.Start + candidate.Transit;
             string? dirtyReason = ClassifyScanCandidate(probeFp, info, arrival);
             bool clean = dirtyReason == null;
 
@@ -723,7 +730,7 @@ internal static class HohmannMultiPassPlanner
                 "shiftedDv={8:F1}m/s shiftedTransit={9:F0}s apoTarget={10:F0}m " +
                 "vInf={11:F1}m/s isCrossParent={12} scanAdvisory='{13}'",
                 source.Id, key.TargetId, passCount, kTotal, kShift,
-                rawTFinalSec, bestTd.Start.Seconds(),
+                raw.TFinal.Seconds(), bestTd.Start.Seconds(),
                 raw.DFinalVlf.Length(), bestDvLen,
                 bestTd.Transit.Seconds(), apoTargetRadiusM, shifted.VInfMs,
                 raw.IsCrossParent, scanAdvisory ?? "-"));
@@ -763,7 +770,7 @@ internal static class HohmannMultiPassPlanner
     private static ShiftCacheKey _shiftCacheKey;
     private static HohmannPlanInput _shiftCacheInput;
     private static string? _shiftCacheAdvisory;
-    private static SimTime _shiftCacheTransit;
+    private static UniverseTime _shiftCacheTransit;
     private static bool _hasShiftCache;
 
     #region Internal helpers
@@ -1018,7 +1025,7 @@ internal static class HohmannMultiPassPlanner
         return Math.Sqrt(mu * term);
     }
 
-    private static string? CheckInterPass(FlightPlan priorFp, SimTime nextTime, int passIndex)
+    private static string? CheckInterPass(FlightPlan priorFp, UniverseTime nextTime, int passIndex)
     {
         foreach (PatchedConic p in priorFp.Patches)
         {
@@ -1046,7 +1053,7 @@ internal static class HohmannMultiPassPlanner
     /// patch labelled Impact (because we don't model atmospheric capture)
     /// doesn't trip the filter.</summary>
     private static string? ClassifyScanCandidate(
-        FlightPlan fp, OrbitalTransfers.TransferInfo info, SimTime arrival)
+        FlightPlan fp, OrbitalTransfers.TransferInfo info, UniverseTime arrival)
     {
         string targetId = info.Target?.Id ?? string.Empty;
         string targetParentId = info.Target?.Parent?.Id ?? string.Empty;
@@ -1172,8 +1179,8 @@ internal static class HohmannMultiPassPlanner
     /// of the chained orbit, which may drift seconds-to-hours away from
     /// <c>input.TFinal</c> due to finite-burn losses on prior passes.</summary>
     private static PassPreviewResult PlanSinglePass(
-        Vehicle source, HohmannPlanInput input, SimTime now,
-        SimTime burnTime, double vTargetXy, double theta)
+        Vehicle source, HohmannPlanInput input, UniverseTime now,
+        UniverseTime burnTime, double vTargetXy, double theta)
     {
         PatchedConic? prePatch = source.FlightPlan.TryFindPatch(burnTime);
         if (prePatch == null || prePatch.PrimaryBody == null)
@@ -1213,7 +1220,7 @@ internal static class HohmannMultiPassPlanner
                 "vpLive={4:F1}m/s vTargetXy={5:F1}m/s theta={6:F5}rad " +
                 "dV=({7:F1},{8:F1},{9:F1})m/s |dV|={10:F1}m/s",
                 source.Id, burnTime.Seconds(), input.TFinal.Seconds(),
-                burnTime.Seconds() - input.TFinal.Seconds(),
+                (burnTime - input.TFinal).Seconds(),
                 vpLive, vTargetXy, theta, dvX, dvY, dvZ, dvFinalMag));
 
         var (fp, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(

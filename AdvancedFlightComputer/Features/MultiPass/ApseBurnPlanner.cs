@@ -18,7 +18,7 @@ internal static class ApseBurnPlanner
         double3 totalDvVlf,
         TrueAnomaly burnTa,
         PassAllocation[] allocations,
-        SimTime now)
+        UniverseTime now)
     {
         double3 dvDir = totalDvVlf.NormalizeOrZero();
         if (dvDir.LengthSquared() < 0.5)
@@ -29,7 +29,8 @@ internal static class ApseBurnPlanner
             (orbit, dvCap, earliestTime) =>
             {
                 // Caller must guard Eccentricity < 1 so this returns >= earliestTime.
-                SimTime burnTime = orbit.TimeOfTrueAnomaly(burnTa, earliestTime);
+                if (orbit.TimeOfTrueAnomaly(burnTa, earliestTime) is not UniverseTime burnTime)
+                    return null;
                 return new PassStep(burnTime, dvDir * dvCap);
             });
     }

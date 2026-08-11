@@ -622,7 +622,7 @@ internal static class HohmannMultiPassUI
 
         var input = new HohmannMultiPassPlanner.HohmannPlanInput(
             Target: target,
-            TFinal: new SimTime(intent.TFinalSec),
+            TFinal: new UniverseTime(intent.TFinalSec),
             DFinalVlf: intent.DFinalVlf,
             IsCrossParent: intent.IsCrossParent,
             VInfMs: intent.VInfMs,
@@ -647,7 +647,7 @@ internal static class HohmannMultiPassUI
             && key.WithoutDrift() == _cachedKey.WithoutDrift())
             return;
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
         // No PrepareShiftedInput / ScanAdvisory merge here: the shift was
         // applied at intent creation and the input's TFinal is locked.
@@ -731,7 +731,7 @@ internal static class HohmannMultiPassUI
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info)
     {
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         double parkingPeriodSec = source.Orbit?.Period ?? double.NaN;
 
         // Vehicle is no longer in a bound orbit (e.g. just completed a
@@ -1127,7 +1127,7 @@ internal static class HohmannMultiPassUI
             return false;
         if (uiSource == null || uiSource.Id != vehicle.Id) return false;
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         intent = BuildIntent(uiSource, entry!, info!, _passCount, now);
         if (intent == null) return false;
 
@@ -1165,10 +1165,10 @@ internal static class HohmannMultiPassUI
 
         if (isCrossParent)
         {
-            // Cross-parent Lambert: EjectionVelocityCci is the hyperbolic
+            // Cross-parent Lambert: DepartureVelocityCci is the hyperbolic
             // excess in the parking-orbit-parent's CCI frame (magnitude
             // invariant under the cci2Cce / cce2Cci transform stock applies).
-            vInfMs = entry.TransferData.EjectionVelocityCci.Length();
+            vInfMs = entry.TransferData.DepartureVelocityCci.Length();
         }
         else
         {
@@ -1201,7 +1201,7 @@ internal static class HohmannMultiPassUI
     private static HohmannTransferIntent? BuildIntent(
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info,
-        int passCount, SimTime now)
+        int passCount, UniverseTime now)
     {
         if (source.Orbit?.Parent == null) return null;
         string targetId = (info.Target as Astronomical)?.Id ?? string.Empty;
@@ -1290,7 +1290,7 @@ internal static class HohmannMultiPassUI
     /// candidate's transit after a moon-shift, otherwise the porkchop transit.
     /// Both the preview and the created intent must use the same value or the
     /// created plan diverges from the preview, so it is resolved in one place.</summary>
-    private static SimTime ResolveFlybyTransit(
+    private static UniverseTime ResolveFlybyTransit(
         HohmannMultiPassPlanner.ShiftResult shift, OrbitalTransfers.PorkChopEntry entry)
         => shift.KShift > 0 ? shift.ShiftedTransit : entry.TransferData.Transit;
 
@@ -1303,7 +1303,7 @@ internal static class HohmannMultiPassUI
     /// the post-burn apoapsis for same-parent. Math lives in <see cref="FlybyTargeting"/>.</summary>
     private static HohmannMultiPassPlanner.HohmannPlanInput MaybeApplyFlyby(
         Vehicle source, OrbitalTransfers.TransferInfo info,
-        HohmannMultiPassPlanner.HohmannPlanInput center, SimTime transit, out bool failed)
+        HohmannMultiPassPlanner.HohmannPlanInput center, UniverseTime transit, out bool failed)
     {
         failed = false;
         if (info.Target is not IParentBody target) return center;

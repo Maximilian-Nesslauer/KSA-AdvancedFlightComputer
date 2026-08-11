@@ -314,7 +314,7 @@ internal static class Patch_DrawPlanWindow
     private static void DrawManeuverInfo(OrbitManeuvers.ManeuverResult maneuver)
     {
         double dvMag = maneuver.DvCci.Length();
-        double timeToNode = maneuver.BurnTime.Seconds() - Universe.GetElapsedSimTime().Seconds();
+        double timeToNode = (maneuver.BurnTime - Universe.GetElapsedTime()).Seconds();
 
         ConsoleWidgets.Readout("REQUIRED DELTA V".AsSpan(),
             string.Format(Inv, "{0:F1} m/s", dvMag).AsSpan());
@@ -393,7 +393,7 @@ internal static class Patch_DrawPlanWindow
 
         if (_ourBurn != null)
         {
-            if (_ourBurn.Time < Universe.GetElapsedSimTime())
+            if (_ourBurn.Time < Universe.GetElapsedTime())
                 _ourBurn = null;
             else
                 return CommitState.NodeCreated;
@@ -595,7 +595,7 @@ internal static class Patch_DrawPlanWindow
         double parentRadius = source.Parent?.MeanRadius ?? 0.0;
         // Not "now": on a chained maneuver every apsis and node has to be sought
         // after the burn this one follows, or the result lands before it.
-        SimTime now = basis.Earliest;
+        UniverseTime now = basis.Earliest;
 
         if (key == ManeuverTools.KeySetPeriapsis)
             return OrbitManeuvers.ComputeSetPeriapsis(

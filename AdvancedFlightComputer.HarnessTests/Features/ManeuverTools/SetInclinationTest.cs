@@ -42,7 +42,7 @@ public sealed class SetInclinationTest : AfcTest
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         Orbit orbit = OrbitFixtures.InclinedEllipticalAt(
             home, PeriapsisAltitudeM, ApoapsisAltitudeM, StartInclinationRad, now);
         Orbit offApse = OrbitFixtures.InclinedEllipticalAt(
@@ -69,7 +69,7 @@ public sealed class SetInclinationTest : AfcTest
     }
 
     private static void CheckEcliptic(
-        TestContext t, Orbit orbit, double targetRad, bool useDescendingNode, string label, SimTime now)
+        TestContext t, Orbit orbit, double targetRad, bool useDescendingNode, string label, UniverseTime now)
     {
         OrbitManeuvers.ManeuverResult? result = OrbitManeuvers.ComputeSetInclination(
             orbit, targetRad, useDescendingNode, now, OrbitManeuvers.InclinationReference.Ecliptic);
@@ -100,7 +100,7 @@ public sealed class SetInclinationTest : AfcTest
         return Math.Abs(double3.Dot(lineBefore, lineAfter)) > NodeLineDotMin;
     }
 
-    private static void CheckHalfFraction(TestContext t, Orbit orbit, SimTime now)
+    private static void CheckHalfFraction(TestContext t, Orbit orbit, UniverseTime now)
     {
         OrbitManeuvers.ManeuverResult? result = OrbitManeuvers.ComputeSetInclination(
             orbit, RaiseTargetRad, false, now, OrbitManeuvers.InclinationReference.Ecliptic, HalfFraction);
@@ -116,7 +116,7 @@ public sealed class SetInclinationTest : AfcTest
             $"(expect {OrbitFixtures.Deg(expected):F3}deg)");
     }
 
-    private static void CheckEquatorial(TestContext t, Orbit orbit, IParentBody home, SimTime now)
+    private static void CheckEquatorial(TestContext t, Orbit orbit, IParentBody home, UniverseTime now)
     {
         OrbitManeuvers.ManeuverResult? result = OrbitManeuvers.ComputeSetInclination(
             orbit, EquatorialTargetRad, false, now, OrbitManeuvers.InclinationReference.Equatorial);
@@ -137,7 +137,7 @@ public sealed class SetInclinationTest : AfcTest
             $"obliquity {OrbitFixtures.Deg(obliquity):F2}deg)");
     }
 
-    private static void CheckCoplanarStart(TestContext t, IParentBody home, SimTime now)
+    private static void CheckCoplanarStart(TestContext t, IParentBody home, UniverseTime now)
     {
         // An orbit in the ecliptic plane has no defined node against the ecliptic; the tool picks
         // CCI +X by convention. The set must still work and must put the node line on X.

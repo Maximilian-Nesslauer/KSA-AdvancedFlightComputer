@@ -73,7 +73,7 @@ internal static class FlybyTargeting
     public readonly record struct FlybyResult(
         double3 DvVlf,
         double3 DvCci,
-        SimTime BurnTime,
+        UniverseTime BurnTime,
         double ImpactParameterMeters,
         double VInfMs,
         double TargetPeRadiusMeters,
@@ -167,7 +167,7 @@ internal static class FlybyTargeting
     /// center-aimed burn and warn. The axis alignments are reported either way so
     /// the UI can show which sides this approach can actually reach.</summary>
     public static FlybyOutcome ComputeFlybyDeparture(
-        Vehicle source, IOrbiter target, SimTime start, SimTime transit,
+        Vehicle source, IOrbiter target, UniverseTime start, UniverseTime transit,
         double targetPeRadius, FlybySide side, int iterations = DefaultIterations)
     {
         // Vehicle.Orbit is non-nullable (it throws on an empty plan rather than
@@ -216,9 +216,11 @@ internal static class FlybyTargeting
             return new FlybyOutcome(null, radialAlign, normalAlign);
         OffsetSolve s = solve.Value;
 
-        FlybyResult result = isCross
+        FlybyResult? departure = isCross
             ? BuildCrossParentDeparture(source, lambertParent, start, s, targetPeRadius)
             : BuildSameParentDeparture(source, start, s, targetPeRadius);
+        if (departure is not FlybyResult result)
+            return new FlybyOutcome(null, radialAlign, normalAlign);
 
         if (!IsFinite(result.DvVlf) || !(result.DvVlf.Length() > 0.0))
             return new FlybyOutcome(null, radialAlign, normalAlign);
@@ -282,21 +284,21 @@ internal static class FlybyTargeting
     }
 
     /// <summary>Departure state from the offset-aim Lambert solve, in the
-    /// target-parent CCI frame. <see cref="EjectDeltaCci"/> is
-    /// <c>vEject - sourceInFrame.velocity(start)</c>: the injection dV for
+    /// target-parent CCI frame. <see cref="DepartureDeltaCci"/> is
+    /// <c>vDeparture - sourceInFrame.velocity(start)</c>: the injection dV for
     /// same-parent, or the hyperbolic excess relative to the parking parent for
-    /// cross-parent (the quantity stock names EjectionVelocityCci).</summary>
+    /// cross-parent (the quantity stock names DepartureVelocityCci).</summary>
     private readonly record struct OffsetSolve(
-        double3 EjectDeltaCci,
-        SimTime Transit,
+        double3 DepartureDeltaCci,
+        UniverseTime Transit,
         double ImpactParameter,
         double VInf,
         double3 OffsetDir,
-        SimTime CaTime);
+        UniverseTime CaTime);
 
     private static OffsetSolve? SolveOffsetTransfer(
         double muParent, Orbit sourceInFrame, Orbit targetOrbit,
-        SimTime start, SimTime transit, double rpRadius, double muTarget,
+        UniverseTime start, UniverseTime transit, double rpRadius, double muTarget,
         double soiTarget, FlybySide side, int iterations,
         out double radialAlign, out double normalAlign)
     {
@@ -309,20 +311,20 @@ internal static class FlybyTargeting
         // Seed with the stock center-aimed solve.
         double3 arrivalCenter = targetOrbit.GetStateVectorsAt(start + transit).PositionCci;
         OrbitalTransfers.SuperiorLambert(
-            muParent, departurePos, arrivalCenter, transit, out double3 vEject, out _);
+            muParent, departurePos, arrivalCenter, transit, out double3 vDeparture, out _);
 
-        SimTime lastTransit = transit;
+        UniverseTime lastTransit = transit;
         double lastB = double.NaN;
         double lastVInf = double.NaN;
         double3 lastOffsetDir = double3.Zero;
-        SimTime lastCaTime = default;
+        UniverseTime lastCaTime = default;
 
         for (int iter = 0; iter < iterations; iter++)
         {
             Orbit transfer = Orbit.CreateFromStateCci(
-                targetOrbit.Parent, start, departurePos, vEject, lineColor);
+                targetOrbit.Parent, start, departurePos, vDeparture, lineColor);
 
-            SimTime caTime = FindClosestApproach(
+            UniverseTime caTime = FindClosestApproach(
                 transfer, targetOrbit, start, start + lastTransit);
 
             // Relative velocity at closest approach (offset direction) and, a
@@ -332,7 +334,7 @@ internal static class FlybyTargeting
             double vRelCaLen = vRelCa.Length();
             if (!(vRelCaLen > 0.0)) return null;
 
-            SimTime soiTime = new SimTime(caTime.Seconds() - soiTarget / vRelCaLen);
+            UniverseTime soiTime = caTime - soiTarget / vRelCaLen;
             double3 vRelSoi = transfer.GetStateVectorsAt(soiTime).VelocityCci
                               - targetOrbit.GetStateVectorsAt(soiTime).VelocityCci;
             double vInf = vRelSoi.Length();
@@ -380,11 +382,11 @@ internal static class FlybyTargeting
 
             double3 aim = tsvCa.PositionCci + b * offsetDir;
 
-            SimTime newTransit = new SimTime(caTime.Seconds() - start.Seconds());
-            if (!(newTransit.Seconds() > 0.0)) return null;
+            UniverseTime newTransit = caTime - start;
+            if (!(newTransit > 0.0)) return null;
 
             OrbitalTransfers.SuperiorLambert(
-                muParent, departurePos, aim, newTransit, out vEject, out _);
+                muParent, departurePos, aim, newTransit, out vDeparture, out _);
 
             lastTransit = newTransit;
             lastB = b;
@@ -393,20 +395,20 @@ internal static class FlybyTargeting
             lastCaTime = caTime;
         }
 
-        double3 ejectDelta = vEject - departureVel;
-        if (!IsFinite(ejectDelta)) return null;
+        double3 departureDelta = vDeparture - departureVel;
+        if (!IsFinite(departureDelta)) return null;
         return new OffsetSolve(
-            ejectDelta, lastTransit, lastB, lastVInf, lastOffsetDir, lastCaTime);
+            departureDelta, lastTransit, lastB, lastVInf, lastOffsetDir, lastCaTime);
     }
 
     private static FlybyResult BuildSameParentDeparture(
-        Vehicle source, SimTime start, OffsetSolve s, double rpRadius)
+        Vehicle source, UniverseTime start, OffsetSolve s, double rpRadius)
     {
-        // Same-parent: EjectDeltaCci is the geocentric injection dV directly
+        // Same-parent: DepartureDeltaCci is the geocentric injection dV directly
         // (matches OrbitalTransfers.FinalizeLambert's Source == Vehicle branch, magnitude
         // preserved through the VLF rotation). Departs at the transfer Start,
         // no true-anomaly nudge.
-        double3 dvCci = s.EjectDeltaCci;
+        double3 dvCci = s.DepartureDeltaCci;
         StateVectors sv = source.Orbit.GetStateVectorsAt(start);
         double3 dvVlf = ToVlf(sv, dvCci);
 
@@ -422,11 +424,11 @@ internal static class FlybyTargeting
             PlannerVInfMs: double.NaN, PlannerApoTargetMeters: apoTarget);
     }
 
-    private static FlybyResult BuildCrossParentDeparture(
-        Vehicle source, IParentBody lambertParent, SimTime start,
+    private static FlybyResult? BuildCrossParentDeparture(
+        Vehicle source, IParentBody lambertParent, UniverseTime start,
         OffsetSolve s, double rpRadius)
     {
-        // Cross-parent: EjectDeltaCci is the heliocentric excess relative to the
+        // Cross-parent: DepartureDeltaCci is the heliocentric excess relative to the
         // parking parent. Convert it to the parking-parent frame and solve the
         // single-impulse hyperbolic escape, mirroring OrbitalTransfers.FinalizeLambert's
         // Source != Vehicle branch (including its true-anomaly start nudge).
@@ -436,24 +438,28 @@ internal static class FlybyTargeting
         doubleQuat cci2Cce = lambertParent.GetCci2Cce();
         doubleQuat cce2Cci = parkingParent.GetCce2Cci();
         doubleQuat toParking = doubleQuat.Concatenate(cci2Cce, cce2Cci);
-        double3 velHypInfinity = s.EjectDeltaCci.Transform(toParking);
+        double3 velSoiExit = s.DepartureDeltaCci.Transform(toParking);
 
         StateVectors sv = source.Orbit.GetStateVectorsAt(start);
-        OrbitalTransfers.SingleImpulseTransfer impulse =
-            OrbitalTransfers.SingleImpulseHyperbolicEscape(
-                muParking, source.Orbit, sv.PositionCci, sv.VelocityCci, velHypInfinity);
+        // Null when the requested SOI-exit velocity has no hyperbolic excess the
+        // parking orbit can reach, which is the departure stock now reports as
+        // infeasible rather than solving for an asymptote it cannot fly.
+        if (OrbitalTransfers.SingleImpulseHyperbolicEscape(
+                muParking, source.Orbit, sv.PositionCci, sv.VelocityCci, velSoiExit)
+            is not OrbitalTransfers.SingleImpulseTransfer impulse)
+            return null;
 
-        double3 dvCci = impulse.VelocityEject - impulse.VelParking;
+        double3 dvCci = impulse.VelocityDeparture - impulse.VelParking;
 
         // Shift the burn to the escape true anomaly the impulse solver chose.
-        SimTime toBurnTa = source.Orbit.GetTimeFromPeTo(impulse.BurnTrueAnomaly);
-        SimTime toCurrentTa = source.Orbit.GetTimeFromPeTo(sv.TrueAnomaly);
-        SimTime burnTime = start + (toBurnTa - toCurrentTa);
+        UniverseTime toBurnTa = source.Orbit.GetTimeFromPeTo(impulse.BurnTrueAnomaly);
+        UniverseTime toCurrentTa = source.Orbit.GetTimeFromPeTo(sv.TrueAnomaly);
+        UniverseTime burnTime = start + (toBurnTa - toCurrentTa);
 
         double3 dvVlf = ToVlf(source.Orbit.GetStateVectorsAt(burnTime), dvCci);
         // The hyperbolic ejection excess relative to the parking parent is the
         // energy descriptor the multi-pass planner targets for cross-parent.
-        double plannerVInf = s.EjectDeltaCci.Length();
+        double plannerVInf = s.DepartureDeltaCci.Length();
         return new FlybyResult(dvVlf, dvCci, burnTime,
             s.ImpactParameter, s.VInf, rpRadius, IsCrossParent: true,
             PlannerVInfMs: plannerVInf, PlannerApoTargetMeters: double.NaN);
@@ -472,31 +478,36 @@ internal static class FlybyTargeting
     /// <summary>Time of closest approach of <paramref name="transfer"/> to
     /// <paramref name="target"/> within [<paramref name="tStart"/>,
     /// <paramref name="tEnd"/>]: a coarse scan to bracket the minimum, then
-    /// Brent refinement (same shape as the stock closest-approach search).</summary>
-    private static SimTime FindClosestApproach(
-        Orbit transfer, Orbit target, SimTime tStart, SimTime tEnd)
+    /// Brent refinement (same shape as the stock closest-approach search).
+    ///
+    /// The scan runs on seconds measured from <paramref name="tStart"/> rather
+    /// than on absolute sim seconds. A UniverseTime carries 128-bit nanoseconds,
+    /// so flattening an absolute instant into the minimiser's double would spend
+    /// most of the mantissa on the epoch offset instead of on the window being
+    /// searched.</summary>
+    private static UniverseTime FindClosestApproach(
+        Orbit transfer, Orbit target, UniverseTime tStart, UniverseTime tEnd)
     {
-        double a = tStart.Seconds();
-        double bEnd = tEnd.Seconds();
-        // Widen the window slightly past the seed arrival so an offset transfer's
-        // true closest approach (a touch later or earlier) stays bracketed.
-        double span = bEnd - a;
         // Skip the first second so the search never latches onto the departure
-        // point itself (distance is small there for a low parking orbit).
-        a += 1.0;
-        bEnd += span * 0.25;
+        // point itself (distance is small there for a low parking orbit), and
+        // widen the window past the seed arrival so an offset transfer's true
+        // closest approach (a touch later or earlier) stays bracketed.
+        double span = (tEnd - tStart).Seconds();
+        double a = 1.0;
+        double bEnd = span * 1.25;
 
-        double Dist(double t)
+        double Dist(double dt)
         {
-            double3 p = transfer.GetStateVectorsAt(new SimTime(t)).PositionCci
-                        - target.GetStateVectorsAt(new SimTime(t)).PositionCci;
+            UniverseTime t = tStart + dt;
+            double3 p = transfer.GetStateVectorsAt(t).PositionCci
+                        - target.GetStateVectorsAt(t).PositionCci;
             return p.Length();
         }
 
         double bestT = a;
         double bestD = double.MaxValue;
         double step = (bEnd - a) / ClosestApproachCoarseSteps;
-        if (!(step > 0.0)) return new SimTime(a);
+        if (!(step > 0.0)) return tStart + a;
         for (int i = 0; i <= ClosestApproachCoarseSteps; i++)
         {
             double t = a + i * step;
@@ -507,7 +518,9 @@ internal static class FlybyTargeting
         double lo = Math.Max(a, bestT - step);
         double hi = Math.Min(bEnd, bestT + step);
         double refined = MathEx.BrentMin(Dist, lo, hi, 1e-06);
-        return new SimTime(refined);
+        // A degenerate propagation makes Dist NaN and Brent can carry that out;
+        // UniverseTime rejects NaN, so fall back to the bracketed coarse sample.
+        return tStart + (double.IsFinite(refined) ? refined : bestT);
     }
 
     /// <summary>Component of <paramref name="v"/> perpendicular to the unit vector

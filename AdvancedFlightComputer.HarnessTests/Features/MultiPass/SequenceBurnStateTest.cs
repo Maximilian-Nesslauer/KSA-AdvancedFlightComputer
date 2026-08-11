@@ -91,7 +91,7 @@ public sealed class SequenceBurnStateTest : AfcTest
     {
         Vehicle vehicle = VehicleFixtures.SpawnFromSaveData(
             t.System, home, data, $"BurnState_{data.Id}",
-            OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedSimTime()));
+            OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedTime()));
         try
         {
             afterSpawn?.Invoke(vehicle);

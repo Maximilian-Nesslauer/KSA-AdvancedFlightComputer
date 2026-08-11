@@ -199,7 +199,7 @@ internal static class MultiPassPreviewCache
 
         PassAllocation[] allocations = Splitter.Allocate(totalDv, passCount, splitMode, state);
         PassPreviewResult result = PlanForType(
-            source, maneuver, typeKey, allocations, Universe.GetElapsedSimTime());
+            source, maneuver, typeKey, allocations, Universe.GetElapsedTime());
 
         _cachedPreview = result;
         _cachedAllocations = allocations;
@@ -218,7 +218,7 @@ internal static class MultiPassPreviewCache
     /// vector carries a retrograde component.</summary>
     private static PassPreviewResult PlanForType(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
-        PassAllocation[] allocations, SimTime now)
+        PassAllocation[] allocations, UniverseTime now)
     {
         if (typeKey == KeySetApoapsis)
             return ApseBurnPlanner.Plan(source, maneuver.DvVlf, TrueAnomaly.Zero, allocations, now);

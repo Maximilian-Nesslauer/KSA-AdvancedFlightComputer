@@ -50,7 +50,7 @@ internal sealed class CircularizeIntent : IManeuverIntent
         if (vehicle.Orbit.Parent.Id != ParentId) return null;
 
         return OrbitManeuvers.ComputeCircularize(
-            vehicle.Orbit, IsAtApoapsis, Universe.GetElapsedSimTime());
+            vehicle.Orbit, IsAtApoapsis, Universe.GetElapsedTime());
     }
 
     public PassPlanResult RecomputePass(
@@ -70,7 +70,7 @@ internal sealed class CircularizeIntent : IManeuverIntent
         if (remainingCount <= 0)
             return PassPlanResult.Failure($"passIndex {passIndex} >= total {passCountTotal}");
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         SequenceBurnState state = SequenceBurnState.Analyze(vehicle);
         PassAllocation[] allocations = Splitter.Allocate(
             maneuver.Value.DvCci.Length(), remainingCount, mode, state);

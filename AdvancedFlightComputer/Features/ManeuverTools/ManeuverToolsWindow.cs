@@ -237,7 +237,7 @@ internal static class ManeuverToolsWindow
     private static void DrawMatchInclination(Vehicle source, PlanningBasis basis)
     {
         Orbit orbit = basis.Orbit;
-        SimTime now = basis.Earliest;
+        UniverseTime now = basis.Earliest;
 
         if (orbit.Eccentricity >= 1.0)
         {
@@ -276,8 +276,8 @@ internal static class ManeuverToolsWindow
 
         TrueAnomaly anTa = orbit.GetAscendingNode(targetOrbit);
         TrueAnomaly dnTa = orbit.GetDescendingNode(targetOrbit);
-        SimTime anTime = orbit.TimeOfTrueAnomaly(anTa, now);
-        SimTime dnTime = orbit.TimeOfTrueAnomaly(dnTa, now);
+        UniverseTime? anTime = orbit.TimeOfTrueAnomaly(anTa, now);
+        UniverseTime? dnTime = orbit.TimeOfTrueAnomaly(dnTa, now);
 
         var anResult = OrbitManeuvers.ComputeMatchInclination(orbit, targetOrbit, false, now);
         var dnResult = OrbitManeuvers.ComputeMatchInclination(orbit, targetOrbit, true, now);
@@ -292,7 +292,7 @@ internal static class ManeuverToolsWindow
     private static void DrawSetInclination(Vehicle source, PlanningBasis basis)
     {
         Orbit orbit = basis.Orbit;
-        SimTime now = basis.Earliest;
+        UniverseTime now = basis.Earliest;
 
         if (orbit.Eccentricity >= 1.0)
         {
@@ -348,20 +348,30 @@ internal static class ManeuverToolsWindow
     /// Shared between Match Target and Set Angle modes.
     /// </summary>
     private static void DrawNodeSelection(Orbit orbit,
-        SimTime anTime, SimTime dnTime,
+        UniverseTime? anTime, UniverseTime? dnTime,
         OrbitManeuvers.ManeuverResult? anResult, OrbitManeuvers.ManeuverResult? dnResult)
     {
-        SimTime now = Universe.GetElapsedSimTime();
-        double timeToAn = anTime.Seconds() - now.Seconds();
-        double timeToDn = dnTime.Seconds() - now.Seconds();
-        double speedAtAn = orbit.GetStateVectorsAt(anTime).VelocityCci.Length();
-        double speedAtDn = orbit.GetStateVectorsAt(dnTime).VelocityCci.Length();
-        double dvAn = anResult?.DvCci.Length() ?? 0.0;
-        double dvDn = dnResult?.DvCci.Length() ?? 0.0;
+        // A node the orbit never reaches again yields no time from
+        // Orbit.TimeOfTrueAnomaly and no maneuver, and every number about it is
+        // then meaningless rather than zero. NaN carries that through the
+        // readouts, which is also what keeps it from winning the default below:
+        // every comparison against NaN is false.
+        UniverseTime now = Universe.GetElapsedTime();
+        double timeToAn = anTime.HasValue ? (anTime.Value - now).Seconds() : double.NaN;
+        double timeToDn = dnTime.HasValue ? (dnTime.Value - now).Seconds() : double.NaN;
+        double speedAtAn = anTime.HasValue
+            ? orbit.GetStateVectorsAt(anTime.Value).VelocityCci.Length() : double.NaN;
+        double speedAtDn = dnTime.HasValue
+            ? orbit.GetStateVectorsAt(dnTime.Value).VelocityCci.Length() : double.NaN;
+        double dvAn = anResult?.DvCci.Length() ?? double.NaN;
+        double dvDn = dnResult?.DvCci.Length() ?? double.NaN;
 
         if (!_nodeDefaultInitialized)
         {
-            UseDescendingNode = dvDn < dvAn;
+            // Prefer the cheaper node, but never an unreachable one: with dvDn
+            // NaN the compare is false and ascending wins, and the explicit
+            // second test covers the mirror case.
+            UseDescendingNode = dvDn < dvAn || double.IsNaN(dvAn);
             _nodeDefaultInitialized = true;
         }
 
@@ -388,15 +398,20 @@ internal static class ManeuverToolsWindow
 
         ConsoleWidgets.Readout("TIME TO BURN".AsSpan(),
             FormatHelper.FormatDuration(timeToSel).AsSpan());
-        ConsoleWidgets.Readout("REQUIRED DELTA V".AsSpan(),
-            string.Format(Inv, "{0:F1} m/s", dvSel).AsSpan());
-        ConsoleWidgets.Readout("SPEED AT NODE".AsSpan(),
-            string.Format(Inv, "{0:F1} m/s", speedSel).AsSpan());
+        ConsoleWidgets.Readout("REQUIRED DELTA V".AsSpan(), FormatSpeed(dvSel).AsSpan());
+        ConsoleWidgets.Readout("SPEED AT NODE".AsSpan(), FormatSpeed(speedSel).AsSpan());
         ConsoleWidgets.Readout(
             (UseDescendingNode ? "ASCENDING INSTEAD" : "DESCENDING INSTEAD").AsSpan(),
-            string.Format(Inv, "{0:F1} m/s in {1}", dvAlt,
+            string.Format(Inv, "{0} in {1}", FormatSpeed(dvAlt),
                 FormatHelper.FormatDuration(timeToAlt)).AsSpan());
     }
+
+    /// <summary>A speed readout that says "N/A" for an unreachable node instead
+    /// of printing "NaN m/s".</summary>
+    private static string FormatSpeed(double metersPerSecond)
+        => double.IsNaN(metersPerSecond)
+            ? "N/A"
+            : string.Format(Inv, "{0:F1} m/s", metersPerSecond);
 
     private static void DrawTargetSelector(Vehicle source)
     {

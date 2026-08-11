@@ -49,7 +49,7 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
         if (targetOrbit == null) return null;
 
         return OrbitManeuvers.ComputeMatchInclination(
-            vehicle.Orbit, targetOrbit, UseDescendingNode, Universe.GetElapsedSimTime());
+            vehicle.Orbit, targetOrbit, UseDescendingNode, Universe.GetElapsedTime());
     }
 
     public PassPlanResult RecomputePass(
@@ -66,7 +66,7 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
             return PassPlanResult.Failure($"target '{TargetId}' no longer in system");
 
         OrbitManeuvers.ManeuverResult? maneuver = OrbitManeuvers.ComputeMatchInclination(
-            vehicle.Orbit, targetOrbit, UseDescendingNode, Universe.GetElapsedSimTime());
+            vehicle.Orbit, targetOrbit, UseDescendingNode, Universe.GetElapsedTime());
         if (maneuver == null)
             return PassPlanResult.Failure("inclinations already match");
 
@@ -74,7 +74,7 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
         if (remainingCount <= 0)
             return PassPlanResult.Failure($"passIndex {passIndex} >= total {passCountTotal}");
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         SequenceBurnState state = SequenceBurnState.Analyze(vehicle);
         PassAllocation[] allocations = Splitter.Allocate(
             maneuver.Value.DvCci.Length(), remainingCount, mode, state);

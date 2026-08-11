@@ -47,7 +47,7 @@ public sealed class FlybyDepartureTest : AfcTest
         SimDriver driver = t.Session.CreateDriver();
         Vehicle vehicle = VehicleFixtures.SpawnFromSaveData(
             t.System, home, save.VehicleSaveData, "FlybyDeparture",
-            OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedSimTime()));
+            OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedTime()));
         try
         {
             driver.Step(1e-3, 2);
@@ -61,9 +61,9 @@ public sealed class FlybyDepartureTest : AfcTest
 
     private static void RunChecks(TestContext t, IParentBody home, Celestial moon, Vehicle vehicle)
     {
-        SimTime now = Universe.GetElapsedSimTime();
-        SimTime start = new SimTime(now.Seconds() + 60.0);
-        SimTime transit = OrbitalTransfers.HohmannFlight(vehicle.Orbit, moon.Orbit);
+        UniverseTime now = Universe.GetElapsedTime();
+        UniverseTime start = now + 60.0;
+        UniverseTime transit = OrbitalTransfers.HohmannFlight(vehicle.Orbit, moon.Orbit);
         if (!(transit.Seconds() > 0.0))
         {
             t.Skip("non-positive Hohmann time of flight.");
@@ -102,7 +102,7 @@ public sealed class FlybyDepartureTest : AfcTest
     }
 
     private static void CheckFlybySide(
-        TestContext t, IParentBody home, Celestial moon, Vehicle vehicle, SimTime start, SimTime transit,
+        TestContext t, IParentBody home, Celestial moon, Vehicle vehicle, UniverseTime start, UniverseTime transit,
         double rp, double surface, FlybySide side, out double3 missVec)
     {
         missVec = double3.Zero;
@@ -142,7 +142,7 @@ public sealed class FlybyDepartureTest : AfcTest
         // toward it), which is the whole point of picking a side.
         double3 caMissHat = missVec.NormalizeOrZero();
         double3 moonRadialHat = moon.Orbit
-            .GetStateVectorsAt(new SimTime(f.BurnTime.Seconds())).PositionCci.NormalizeOrZero();
+            .GetStateVectorsAt(f.BurnTime).PositionCci.NormalizeOrZero();
         double radialLean = double3.Dot(caMissHat, moonRadialHat);
         bool sideOk = side == FlybySide.Outer ? radialLean > 0.0 : radialLean < 0.0;
 
@@ -155,7 +155,7 @@ public sealed class FlybyDepartureTest : AfcTest
     // Minimum center-to-center distance between the transfer and the moon over
     // [start, start + 1.3*transit], plus the miss vector (transfer - moon) at that time.
     private static double ClosestApproach(
-        Orbit transfer, Orbit moon, SimTime start, SimTime transit, out double3 missVec)
+        Orbit transfer, Orbit moon, UniverseTime start, UniverseTime transit, out double3 missVec)
     {
         double a = start.Seconds();
         double bEnd = a + transit.Seconds() * 1.3;
@@ -164,7 +164,7 @@ public sealed class FlybyDepartureTest : AfcTest
         for (int i = 0; i <= SampleSteps; i++)
         {
             double time = a + (bEnd - a) * i / SampleSteps;
-            var st = new SimTime(time);
+            var st = new UniverseTime(time);
             double3 d = transfer.GetStateVectorsAt(st).PositionCci - moon.GetStateVectorsAt(st).PositionCci;
             double len = d.Length();
             if (len < best) { best = len; missVec = d; }

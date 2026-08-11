@@ -53,7 +53,7 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
     public required bool IsCrossParent { get; init; }
 
     /// <summary>Hyperbolic excess velocity magnitude at the parking
-    /// radius, derived from the stock Lambert EjectionVelocityCci.
+    /// radius, derived from the stock Lambert DepartureVelocityCci.
     /// Used iff <see cref="IsCrossParent"/>.</summary>
     public required double VInfMs { get; init; }
 
@@ -116,9 +116,9 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
             return PassPlanResult.Failure(
                 $"parent changed: was {ParentId}, now {vehicle.Orbit.Parent.Id}");
 
-        SimTime now = Universe.GetElapsedSimTime();
-        var tFinal = new SimTime(TFinalSec);
-        if (tFinal.Seconds() < now.Seconds())
+        UniverseTime now = Universe.GetElapsedTime();
+        var tFinal = new UniverseTime(TFinalSec);
+        if (tFinal < now)
             return PassPlanResult.Failure(
                 "Lambert window has passed; multi-pass cannot recover phasing");
 
@@ -246,11 +246,16 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         };
     }
 
+    /// <summary>Rejects a non-finite value as well as an unparsable one:
+    /// <c>t_final_sec</c> becomes a UniverseTime, which throws on NaN, so a
+    /// hand-edited or truncated multipass.toml has to drop the entry here rather
+    /// than take the mod down on the first recompute.</summary>
     private static bool TryParseDouble(
         IReadOnlyDictionary<string, string> kv, string key, out double value)
     {
         value = 0.0;
         return kv.TryGetValue(key, out string? s)
-            && double.TryParse(s, NumberStyles.Float, Inv, out value);
+            && double.TryParse(s, NumberStyles.Float, Inv, out value)
+            && double.IsFinite(value);
     }
 }

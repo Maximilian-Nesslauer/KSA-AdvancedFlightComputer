@@ -279,7 +279,7 @@ internal static class RcsGaugePanel
     {
         if (bt == null)
             return "WAITING";
-        double toIgnition = bt.IgnitionTime.Seconds() - Universe.GetElapsedSimTime().Seconds();
+        double toIgnition = (bt.IgnitionTime - Universe.GetElapsedTime()).Seconds();
         if (toIgnition > 0.0)
             return $"T-{toIgnition:F0} S";
         return exec.ResolvedStrategy == RcsAttitudeStrategy.Align && RcsExecutor.OutsideAlignGate(fc)

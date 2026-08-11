@@ -10,18 +10,20 @@ using KSA;
 namespace AdvancedFlightComputer.Features.MultiPass;
 
 /// <summary>
-/// Per-vehicle Postfix on <see cref="Vehicle.UpdateFromTaskResults"/>
-/// that drives multi-pass plans forward by detecting burn completion
-/// and scheduling the next pass.
+/// Postfix on <see cref="Universe.ApplyVehicleSolvers"/> that drives
+/// multi-pass plans forward by detecting burn completion and scheduling
+/// the next pass.
+///
+/// The hook sits on the main thread between the solver results being applied
+/// to every vehicle and <c>InputEvents.ApplyInputEvents</c>, so the burn
+/// mutations queued below are drained in the same frame they are decided in.
 ///
 /// Completion is detected as an Auto -> Manual mode transition where
 /// <c>DeltaVToGoCci . DeltaVTargetCci &lt;= 0</c>: only a real
 /// completion reverses the to-go vector, an "out of fuel" event flips
 /// the mode without flipping the dot-product sign.
 /// </summary>
-[HarmonyPatch(typeof(Vehicle), nameof(Vehicle.UpdateFromTaskResults),
-    new[] { typeof(VehicleUpdateData), typeof(BubbleOrigin), typeof(Vehicle), typeof(ReadOnlySpan<Vehicle>), typeof(double3), typeof(double3) },
-    new[] { ArgumentType.Ref, ArgumentType.Ref, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal })]
+[HarmonyPatch(typeof(Universe), nameof(Universe.ApplyVehicleSolvers))]
 internal static class PassCompletionPatch
 {
     private const int MaxAwaitingMaterializationTicks = 4;
@@ -33,7 +35,7 @@ internal static class PassCompletionPatch
     private const double BurnIdentityToleranceSec = 0.5;
 
     // Keyed by vehicle id (string), the stable per-vehicle key that also
-    // matches MultiPassRegistry's scoping. UpdateFromTaskResults overwrites
+    // matches MultiPassRegistry's scoping. The solver apply overwrites
     // FlightComputer.BurnMode every tick via CopyFrom (into the existing
     // instance, not a swap), and the FlightComputer instance itself is replaced
     // on save load (Vehicle.DeserializeSave news up a fresh one), so a
@@ -43,27 +45,36 @@ internal static class PassCompletionPatch
     public static void Reset() => _lastBurnMode.Clear();
 
     /// <summary>
-    /// Drops the burn-mode tracking entry for one vehicle when an
-    /// outside-postfix site (e.g. the Cancel button) removes the
+    /// Drops the burn-mode tracking entry for one vehicle when a site
+    /// outside this driver (e.g. the Cancel button) removes the
     /// registry entry directly. The internal CancelExecution path
     /// does this inline.
     /// </summary>
     public static void OnRegistryRemovedExternally(string vehicleId)
         => _lastBurnMode.Remove(vehicleId);
 
-    static void Postfix(Vehicle __instance)
+    static void Postfix()
     {
-        if (!MultiPassRegistry.TryGet(__instance.Id, out var exec))
+        foreach (Astronomical astro in LoadedVehicles.All)
+        {
+            if (astro is Vehicle vehicle && !vehicle.IsDisposed)
+                TickVehicle(vehicle);
+        }
+    }
+
+    private static void TickVehicle(Vehicle vehicle)
+    {
+        if (!MultiPassRegistry.TryGet(vehicle.Id, out var exec))
             return;
 
         // Per-tick per-tracked-vehicle. Skipped when no execution is
         // active for this vehicle (the TryGet early-out above), so
         // the measurement reflects only real multi-pass work.
 #if DEBUG
-        using var _perf = new PerfTracker.Scope("PassCompletionPatch.Postfix");
+        using var _perf = new PerfTracker.Scope("PassCompletionPatch.TickVehicle");
 #endif
 
-        FlightComputer fc = __instance.FlightComputer;
+        FlightComputer fc = vehicle.FlightComputer;
 
         // Hohmann piggybacks on stock's Transfer Planning window: once a
         // pass ignites, stock's DrawPlanWindow auto-clears
@@ -77,18 +88,18 @@ internal static class PassCompletionPatch
         // different source/type doesn't get their stock UI pinned by
         // some other vehicle's still-running exec.
         if (exec.Intent is HohmannTransferIntent
-            && IsPlanWindowOnVehicleHohmann(__instance))
+            && IsPlanWindowOnVehicleHohmann(vehicle))
             KeepStockTransferCalculatedInSync();
 
         // Mutations here are in-memory only; SaveLoadObserver flushes
         // the registry to disk on KSA save events.
         try
         {
-            ReconcileResult reconcile = ReconcileAfterLoad(__instance.Id, exec, fc);
+            ReconcileResult reconcile = ReconcileAfterLoad(vehicle.Id, exec, fc);
             if (reconcile != ReconcileResult.Proceed)
                 return;
 
-            UpdateBurnModeTracking(__instance.Id, fc, out var prevMode, out var hadPrev);
+            UpdateBurnModeTracking(vehicle.Id, fc, out var prevMode, out var hadPrev);
 
             // Engine running under Auto clears a prior stall hint, so a user
             // who re-engages Auto and then stalls again gets re-alerted.
@@ -108,26 +119,26 @@ internal static class PassCompletionPatch
             if (fc.BurnMode == FlightComputerBurnMode.Auto
                 && fc.Burn != null
                 && exec.CurrentBurn != null
-                && Math.Abs(fc.Burn.ImpulsiveInstant.Seconds()
-                            - exec.CurrentBurn.Time.Seconds()) < BurnIdentityToleranceSec
+                && Math.Abs((fc.Burn.ImpulsiveInstant - exec.CurrentBurn.Time).Seconds())
+                   < BurnIdentityToleranceSec
                 && !exec.BurnAutoEngagedThisPass)
             {
                 exec.BurnAutoEngagedThisPass = true;
                 if (DebugConfig.MultiPass)
                     DefaultCategory.Log.Debug(
-                        $"[AFC] MultiPass: vehicle='{__instance.Id}' pass " +
+                        $"[AFC] MultiPass: vehicle='{vehicle.Id}' pass " +
                         $"{exec.PassIndex + 1}/{exec.PassCountTotal} Auto engaged " +
                         $"(burn t={exec.CurrentBurn.Time.Seconds():F1}s).");
             }
 
             if (DebugConfig.MultiPass && hadPrev && prevMode != fc.BurnMode)
                 DefaultCategory.Log.Debug(
-                    $"[AFC] MultiPass: vehicle='{__instance.Id}' BurnMode " +
+                    $"[AFC] MultiPass: vehicle='{vehicle.Id}' BurnMode " +
                     $"{prevMode} -> {fc.BurnMode} (passIndex={exec.PassIndex}/" +
                     $"{exec.PassCountTotal}, CurrentBurn={(exec.CurrentBurn != null ? "set" : "null")}, " +
                     $"fc.Burn={(fc.Burn != null ? "set" : "null")}).");
 
-            if (UpdateMaterializationTracking(__instance.Id, exec, fc) == MaterializationResult.Cancelled)
+            if (UpdateMaterializationTracking(vehicle.Id, exec, fc) == MaterializationResult.Cancelled)
                 return;
 
             // Two completion paths, short-circuit ordered:
@@ -139,20 +150,20 @@ internal static class PassCompletionPatch
             //      BurnPlan AFTER its scheduled time AND we saw Auto
             //      engaged this pass. Handles the race where another
             //      mod (e.g., AutoRemoveFinishedBurns) removed the
-            //      finished burn before our postfix ran, taking
+            //      finished burn before this tick ran, taking
             //      fc.Burn down with it via UnloadBurn and starving
             //      path 1.
             bool didCommit = false;
             if (DetectCompletion(exec, fc, prevMode, hadPrev)
-                || DetectImplicitCompletion(__instance.Id, exec, fc))
+                || DetectImplicitCompletion(vehicle.Id, exec, fc))
             {
-                CommitCompletion(__instance.Id, exec, fc);
+                CommitCompletion(vehicle.Id, exec, fc);
                 didCommit = true;
             }
 
             if (!didCommit && DetectExternalDelete(exec, fc))
             {
-                CancelExecution(__instance.Id,
+                CancelExecution(vehicle.Id,
                     "pending burn was deleted externally; cancelling");
                 return;
             }
@@ -162,22 +173,22 @@ internal static class PassCompletionPatch
             // plan, so without a nudge the exec would sit on this pass. One-shot
             // hint; state stays intact so the user can re-engage Auto or cancel.
             if (!didCommit && exec.CurrentBurn != null)
-                MaybeAlertStalledPass(__instance.Id, exec, fc);
+                MaybeAlertStalledPass(vehicle.Id, exec, fc);
 
             if (exec.CurrentBurn == null && exec.PassIndex >= exec.PassCountTotal)
             {
-                CompleteExecution(__instance.Id, exec);
+                CompleteExecution(vehicle.Id, exec);
                 return;
             }
 
             if (exec.CurrentBurn == null)
-                TryScheduleNext(__instance, exec);
+                TryScheduleNext(vehicle, exec);
         }
         catch (Exception ex)
         {
             DefaultCategory.Log.Error(
-                $"[AFC] MultiPass: vehicle={__instance.Id} postfix threw, cancelling execution: {ex}");
-            CancelExecution(__instance.Id, reason: null);
+                $"[AFC] MultiPass: vehicle={vehicle.Id} tick threw, cancelling execution: {ex}");
+            CancelExecution(vehicle.Id, reason: null);
         }
     }
 
@@ -301,8 +312,7 @@ internal static class PassCompletionPatch
         // Identity check: a non-multi-pass Burn ahead of ours in the
         // plan would also trigger Auto->Manual + reversed dot. Only
         // count the transition when fc.Burn is OUR burn.
-        bool isOurBurn = Math.Abs(fc.Burn.ImpulsiveInstant.Seconds()
-                                  - exec.CurrentBurn.Time.Seconds())
+        bool isOurBurn = Math.Abs((fc.Burn.ImpulsiveInstant - exec.CurrentBurn.Time).Seconds())
                          < BurnIdentityToleranceSec;
         float dot = float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci);
 
@@ -383,7 +393,7 @@ internal static class PassCompletionPatch
     /// completion. Covers the race where stock's UpdateBurnTarget
     /// flipped BurnMode Auto->Manual on burn finish, then another mod
     /// (e.g., <c>AutoRemoveFinishedBurns</c>) removed the burn via
-    /// <see cref="FlightComputer.RemoveBurn"/> before our postfix ran;
+    /// <see cref="FlightComputer.RemoveBurn"/> before this tick ran;
     /// that path's UnloadBurn nulls <c>fc.Burn</c>, which makes the
     /// standard DetectCompletion bail on its <c>fc.Burn == null</c>
     /// guard.</summary>
@@ -402,8 +412,8 @@ internal static class PassCompletionPatch
         // against bizarre cases where Auto briefly engaged during prep
         // (e.g., warp-to-burn nudge) but the burn was removed before
         // its actual ignition - that would otherwise be misclassified
-        // as completion. 1s margin absorbs SimTime float rounding.
-        SimTime simNow = Universe.GetElapsedSimTime();
+        // as completion. 1s margin absorbs the burn-time bookkeeping slack.
+        UniverseTime simNow = Universe.GetElapsedTime();
         if (simNow < exec.CurrentBurn.Time - 1.0)
             return false;
 
@@ -432,7 +442,7 @@ internal static class PassCompletionPatch
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass.DetectExternalDelete: vehicle='{exec.VehicleId}' " +
                 $"burn t={exec.CurrentBurn!.Time.Seconds():F1}s removed at sim t=" +
-                $"{Universe.GetElapsedSimTime().Seconds():F1}s " +
+                $"{Universe.GetElapsedTime().Seconds():F1}s " +
                 $"(autoEngaged={exec.BurnAutoEngagedThisPass}); treating as user delete.");
         return fired;
     }
@@ -469,7 +479,7 @@ internal static class PassCompletionPatch
         // Compares against the impulsive instant, not ignition time, so a stall
         // in the first half of a long burn is reported up to 0.5*BurnDuration
         // late - acceptable for a hint.
-        if (Universe.GetElapsedSimTime() < exec.CurrentBurn.Time) return;
+        if (Universe.GetElapsedTime() < exec.CurrentBurn.Time) return;
 
         exec.StallHintShown = true;
         DefaultCategory.Log.Warning(

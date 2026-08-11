@@ -46,7 +46,7 @@ internal sealed class SetInclinationIntent : IManeuverIntent
 
         return OrbitManeuvers.ComputeSetInclination(
             vehicle.Orbit, TargetInclinationRad, UseDescendingNode,
-            Universe.GetElapsedSimTime(), Reference);
+            Universe.GetElapsedTime(), Reference);
     }
 
     public PassPlanResult RecomputePass(
@@ -66,7 +66,7 @@ internal sealed class SetInclinationIntent : IManeuverIntent
         if (remainingCount <= 0)
             return PassPlanResult.Failure($"passIndex {passIndex} >= total {passCountTotal}");
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         SequenceBurnState state = SequenceBurnState.Analyze(vehicle);
         PassAllocation[] allocations = Splitter.Allocate(
             maneuver.Value.DvCci.Length(), remainingCount, mode, state);

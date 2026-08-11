@@ -123,7 +123,7 @@ internal static class RcsExecutor
         FlightComputer fc = vehicle.FlightComputer;
         if (fc.Burn == null || !vehicle.IsControllable)
             return false;
-        Burn? first = fc.BurnPlan.FirstBurn;
+        Burn? first = fc.BurnPlan.FindFirstExecutableBurn();
         if (first == null)
             return false;
         RcsBurnOptions? options = null;
@@ -255,7 +255,7 @@ internal static class RcsExecutor
     public static void Activate(Vehicle vehicle)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        Burn? burn = fc.BurnPlan.FirstBurn;
+        Burn? burn = fc.BurnPlan.FindFirstExecutableBurn();
         if (burn == null || fc.Burn == null)
             return;
 
@@ -276,7 +276,7 @@ internal static class RcsExecutor
         RcsBurnOptions options = exec.GetOrCreateOptions(timeSec, dvMs);
 
         exec.Capability = RcsCapability.Probe(vehicle);
-        exec.CapabilityProbedAtSec = Universe.GetElapsedSimTime().Seconds();
+        exec.CapabilityProbedAtSec = Universe.GetElapsedTime().Seconds();
         if (!exec.Capability.HasAnyTranslation)
             return;
 
@@ -308,7 +308,7 @@ internal static class RcsExecutor
         exec.ResolvedAllocator = options.Allocator;
         if (exec.ResolvedAllocator == RcsAllocator.Lp)
             EnsureLpSolution(vehicle, fc, exec, ImpulseCtrlFromTogo(vehicle, fc, fc.Burn),
-                Universe.GetElapsedSimTime().Seconds());
+                Universe.GetElapsedTime().Seconds());
 
         // Warn-only sufficiency check: the user may refill mid-burn or
         // accept a partial burn, so an underfueled activation proceeds.
@@ -438,7 +438,7 @@ internal static class RcsExecutor
     private static void LogResolutionDebug(Vehicle vehicle)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        Burn? first = fc.BurnPlan.FirstBurn;
+        Burn? first = fc.BurnPlan.FindFirstExecutableBurn();
         if (fc.Burn == null || first == null)
         {
             DefaultCategory.Log.Debug(
@@ -554,9 +554,9 @@ internal static class RcsExecutor
 
     #region Per-tick driver
 
-    /// <summary>Runs on the main thread once per solver apply for every
-    /// vehicle (Vehicle.UpdateFromTaskResults postfix). Cheap early-outs
-    /// keep the no-RCS common case free.</summary>
+    /// <summary>Runs on the main thread once per frame for every vehicle
+    /// (the Universe.ApplyVehicleSolvers postfix). Cheap early-outs keep the
+    /// no-RCS common case free.</summary>
     public static void Tick(Vehicle vehicle)
     {
         FlightComputer fc = vehicle.FlightComputer;
@@ -567,7 +567,7 @@ internal static class RcsExecutor
             return;
         }
 
-        double nowSec = Universe.GetElapsedSimTime().Seconds();
+        double nowSec = Universe.GetElapsedTime().Seconds();
 
         if (hasExec && !exec!.ReconciledAfterLoad)
             Reconcile(vehicle, fc, exec);
@@ -623,7 +623,7 @@ internal static class RcsExecutor
 
         // Fuel telemetry restarts at the load; the completion line then
         // covers the post-load remainder of the burn.
-        exec.BaselineFuel(fc, Universe.GetElapsedSimTime().Seconds());
+        exec.BaselineFuel(fc, Universe.GetElapsedTime().Seconds());
 
         DefaultCategory.Log.Info(
             $"[AFC] RCS burn reattached after load: vehicle='{vehicle.Id}' t={burn.Time.Seconds():F1}s");
@@ -639,7 +639,7 @@ internal static class RcsExecutor
         // wrong target.
         if (burn == null || bt == null
             || !fc.BurnPlan.TryGetBurn(burn)
-            || Math.Abs(bt.ImpulsiveInstant.Seconds() - burn.Time.Seconds()) > BurnIdentityToleranceSec)
+            || Math.Abs((bt.ImpulsiveInstant - burn.Time).Seconds()) > BurnIdentityToleranceSec)
         {
             Cancel(vehicle, exec, "burn no longer loaded");
             return;
@@ -1033,7 +1033,7 @@ internal static class RcsExecutor
                 - exec.SlewPropellantKg - exec.CoastPropellantKg,
             EffectiveVeMs = veMs,
             DvAngleDeg = angleDeg,
-            ElapsedSec = Universe.GetElapsedSimTime().Seconds() - exec.EngagedAtSec,
+            ElapsedSec = Universe.GetElapsedTime().Seconds() - exec.EngagedAtSec,
         };
         exec.LastFuel = fuel;
         return fuel;
@@ -1412,13 +1412,18 @@ internal static class RcsExecutor
         // and the driver's watchdog rebases while slewing. Folding the
         // (rough) slew estimate into the warp-to-burn mark is a separate
         // UX decision, not needed for correctness.
-        double ignition = bt.ImpulsiveInstant.Seconds() - 0.5 * duration;
+        //
+        // A NaN duration would make the UniverseTime shift throw (an infinite
+        // one only saturates), so it degrades to the impulsive instant: the
+        // worker then opens the firing window a little late instead of taking
+        // the frame down.
+        double ignitionLead = double.IsFinite(duration) ? 0.5 * duration : 0.0;
 
         ref readonly RcsCapabilitySnapshot cap = ref exec.Capability;
         RcsCommandChannel.Publish(fc.BurnPlan, new RcsWorkerCommand
         {
             Active = true,
-            IgnitionTimeSec = ignition,
+            IgnitionTime = bt.ImpulsiveInstant - ignitionLead,
             RequireAttitude = align,
             MaxPulseSec = MaxPulseSec,
             AxisForcePos = new float3(cap.Ax0.ForceN, cap.Ax2.ForceN, cap.Ax4.ForceN),

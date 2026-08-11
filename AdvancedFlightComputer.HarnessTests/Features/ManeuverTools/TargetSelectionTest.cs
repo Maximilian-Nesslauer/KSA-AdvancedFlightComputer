@@ -147,5 +147,5 @@ public sealed class TargetSelectionTest : AfcTest
         TestContext t, IParentBody home, PartInstance design, string id, double altitudeM)
         => VehicleFixtures.SpawnDesign(
             t.System, home, design, id,
-            OrbitFixtures.CircularAt(home, altitudeM, Universe.GetElapsedSimTime()));
+            OrbitFixtures.CircularAt(home, altitudeM, Universe.GetElapsedTime()));
 }

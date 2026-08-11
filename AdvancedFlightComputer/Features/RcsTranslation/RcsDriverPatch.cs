@@ -1,5 +1,4 @@
 using AdvancedFlightComputer.Core;
-using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
 
@@ -7,27 +6,44 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 
 /// <summary>
 /// Main-thread per-tick driver hook: a postfix on
-/// <see cref="Vehicle.UpdateFromTaskResults"/> (the same site the
-/// multi-pass PassCompletionPatch uses) that runs the RCS executor state
-/// machine after the solver results have been copied back to the vehicle.
+/// <see cref="Universe.ApplyVehicleSolvers"/> (the same site the multi-pass
+/// PassCompletionPatch uses) that runs the RCS executor state machine once
+/// per vehicle, after the solver results have been copied back to every
+/// vehicle and before <c>InputEvents.ApplyInputEvents</c> drains the buffers
+/// the executor queues into.
+///
+/// Every vehicle is walked, not just the ones with a registry entry: the
+/// executor creates the entry itself once a burn resolves to RCS, so the burn
+/// editor has estimates before the first click.
 /// </summary>
-[HarmonyPatch(typeof(Vehicle), nameof(Vehicle.UpdateFromTaskResults),
-    new[] { typeof(VehicleUpdateData), typeof(BubbleOrigin), typeof(Vehicle), typeof(ReadOnlySpan<Vehicle>), typeof(double3), typeof(double3) },
-    new[] { ArgumentType.Ref, ArgumentType.Ref, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal, ArgumentType.Normal })]
+[HarmonyPatch(typeof(Universe), nameof(Universe.ApplyVehicleSolvers))]
 internal static class RcsDriverPatch
 {
-    static void Postfix(Vehicle __instance)
+    static void Postfix()
     {
-        try
+        foreach (Astronomical astro in LoadedVehicles.All)
         {
-            RcsExecutor.Tick(__instance);
-        }
-        catch (Exception ex)
-        {
-            // Once per vehicle per load: this runs at solver rate and a
-            // persistent failure would otherwise flood the log.
-            LogHelper.WarnOnce($"rcs-driver-{__instance.Id}",
-                $"[AFC] RcsDriverPatch for vehicle='{__instance.Id}': {ex}");
+            if (astro is not Vehicle vehicle || vehicle.IsDisposed)
+                continue;
+            try
+            {
+                RcsExecutor.Tick(vehicle);
+            }
+            catch (Exception ex)
+            {
+                // Fail closed. Tick owns every terminal path of the executor, so
+                // a throw leaves the last RcsWorkerCommand published and the
+                // worker keeps acting on it: RcsComputeControlPatch zeroes the
+                // engine commands for that BurnPlan on every solver pass, which
+                // would silently deny engine burns for the rest of the session.
+                // Dropping the command hands the vehicle back to stock.
+                RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
+
+                // Once per vehicle per load: this runs at frame rate and a
+                // persistent failure would otherwise flood the log.
+                LogHelper.WarnOnce($"rcs-driver-{vehicle.Id}",
+                    $"[AFC] RcsDriverPatch for vehicle='{vehicle.Id}': {ex}");
+            }
         }
     }
 }

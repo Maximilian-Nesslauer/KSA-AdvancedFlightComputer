@@ -45,12 +45,12 @@ internal static class RcsFlightSupport
                 return;
             }
             t.Info($"vehicle save '{saveId}': mass={vehicle.TotalMass:F0}kg");
-            VehicleUpdateTask._forceOffRails = true;
+            PhysicsBubble._forceOffRails = true;
             body(vehicle, driver);
         }
         finally
         {
-            VehicleUpdateTask._forceOffRails = false;
+            PhysicsBubble._forceOffRails = false;
             RcsExecRegistry.Reset();
             RcsCommandChannel.Reset();
             TestSupport.DespawnNewVehicles(system, preexisting);
@@ -83,8 +83,8 @@ internal static class RcsFlightSupport
         Vehicle vehicle, SimDriver driver, double3 dvDirCci, double dvMs, double leadSec)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        double burnTimeSec = driver.Elapsed.Seconds() + leadSec;
-        SimTime burnTime = new SimTime(burnTimeSec);
+        UniverseTime burnTime = driver.Elapsed + leadSec;
+        double burnTimeSec = burnTime.Seconds();
         PatchedConic? patch = vehicle.FlightPlan.TryFindPatch(burnTime);
         if (patch == null)
             return null;

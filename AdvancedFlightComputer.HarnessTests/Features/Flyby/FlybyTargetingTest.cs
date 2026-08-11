@@ -44,7 +44,7 @@ public sealed class FlybyTargetingTest : AfcTest
 
     private static void CheckImpactParameter(TestContext t, IParentBody body)
     {
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         double mu = body.Mu;
 
         foreach ((double vInf, double alt) in Cases)

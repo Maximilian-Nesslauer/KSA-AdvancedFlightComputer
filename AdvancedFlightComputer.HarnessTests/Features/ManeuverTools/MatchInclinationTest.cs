@@ -39,7 +39,7 @@ public sealed class MatchInclinationTest : AfcTest
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         Orbit vehicle = OrbitFixtures.InclinedEllipticalAt(
             home, VehiclePeriapsisAltitudeM, VehicleApoapsisAltitudeM, VehicleInclinationRad, now);
         Orbit vehicleOffApse = OrbitFixtures.InclinedEllipticalAt(
@@ -66,7 +66,7 @@ public sealed class MatchInclinationTest : AfcTest
     }
 
     private static void CheckMatches(
-        TestContext t, Orbit vehicle, Orbit target, bool useDescendingNode, string label, SimTime now)
+        TestContext t, Orbit vehicle, Orbit target, bool useDescendingNode, string label, UniverseTime now)
     {
         OrbitManeuvers.ManeuverResult? result =
             OrbitManeuvers.ComputeMatchInclination(vehicle, target, useDescendingNode, now);
@@ -87,7 +87,7 @@ public sealed class MatchInclinationTest : AfcTest
             $"speed {speedBefore:F2}->{speedAfter:F2}m/s");
     }
 
-    private static void CheckHalves(TestContext t, Orbit vehicle, Orbit target, double relInc0, SimTime now)
+    private static void CheckHalves(TestContext t, Orbit vehicle, Orbit target, double relInc0, UniverseTime now)
     {
         OrbitManeuvers.ManeuverResult? result =
             OrbitManeuvers.ComputeMatchInclination(vehicle, target, false, now, HalfFraction);

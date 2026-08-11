@@ -24,7 +24,7 @@ public sealed class CircularizeTest : AfcTest
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         Orbit orbit = OrbitFixtures.EllipticalAt(home, PeriapsisAltitudeM, ApoapsisAltitudeM, now);
 
         CheckCircularizes(t, orbit, useApoapsis: true, orbit.Apoapsis, "at Ap", now);
@@ -38,7 +38,7 @@ public sealed class CircularizeTest : AfcTest
     }
 
     private static void CheckCircularizes(
-        TestContext t, Orbit orbit, bool useApoapsis, double burnRadius, string label, SimTime now)
+        TestContext t, Orbit orbit, bool useApoapsis, double burnRadius, string label, UniverseTime now)
     {
         OrbitManeuvers.ManeuverResult? result = OrbitManeuvers.ComputeCircularize(orbit, useApoapsis, now);
         if (!ManeuverAssertions.RequireResult(t, label, result))

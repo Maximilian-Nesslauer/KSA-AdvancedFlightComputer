@@ -8,11 +8,11 @@ namespace AdvancedFlightComputer.HarnessTests.Fixtures;
 // meters above the parent's mean radius; VehicleSpawner carries the radius-based builders.
 public static class OrbitFixtures
 {
-    public static Orbit CircularAt(IParentBody parent, double altitudeM, SimTime time)
+    public static Orbit CircularAt(IParentBody parent, double altitudeM, UniverseTime time)
         => VehicleSpawner.CircularCci(parent, parent.MeanRadius + altitudeM, time);
 
     public static Orbit EllipticalAt(
-        IParentBody parent, double periapsisAltitudeM, double apoapsisAltitudeM, SimTime time)
+        IParentBody parent, double periapsisAltitudeM, double apoapsisAltitudeM, UniverseTime time)
         => VehicleSpawner.EllipticalCci(
             parent, parent.MeanRadius + periapsisAltitudeM, parent.MeanRadius + apoapsisAltitudeM, time);
 
@@ -20,7 +20,7 @@ public static class OrbitFixtures
     // 0 puts the periapsis on the node itself. Equal altitudes give the circular case.
     public static Orbit InclinedEllipticalAt(
         IParentBody parent, double periapsisAltitudeM, double apoapsisAltitudeM, double inclinationRad,
-        SimTime time, double argumentOfPeriapsisRad = 0.0)
+        UniverseTime time, double argumentOfPeriapsisRad = 0.0)
     {
         double periapsisRadius = parent.MeanRadius + periapsisAltitudeM;
         double apoapsisRadius = parent.MeanRadius + apoapsisAltitudeM;
@@ -36,7 +36,7 @@ public static class OrbitFixtures
     }
 
     // Unbound and planar: 1.2x escape speed at periapsis.
-    public static Orbit HyperbolicAt(IParentBody parent, double periapsisAltitudeM, SimTime time)
+    public static Orbit HyperbolicAt(IParentBody parent, double periapsisAltitudeM, UniverseTime time)
     {
         double periapsisRadius = parent.MeanRadius + periapsisAltitudeM;
         double v = 1.2 * Math.Sqrt(2.0 * parent.Mu / periapsisRadius);
@@ -45,7 +45,7 @@ public static class OrbitFixtures
             VehicleSpawner.OrbitLineColor);
     }
 
-    public static Orbit ApplyImpulse(Orbit orbit, double3 dvCci, SimTime at)
+    public static Orbit ApplyImpulse(Orbit orbit, double3 dvCci, UniverseTime at)
     {
         StateVectors sv = orbit.GetStateVectorsAt(at);
         return Orbit.CreateFromStateCci(

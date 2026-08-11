@@ -11,7 +11,7 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// </summary>
 internal static class OrbitManeuvers
 {
-    public record struct ManeuverResult(double3 DvCci, double3 DvVlf, SimTime BurnTime);
+    public record struct ManeuverResult(double3 DvCci, double3 DvVlf, UniverseTime BurnTime);
 
     /// <summary>Reference plane for inclination measurement.</summary>
     public enum InclinationReference { Ecliptic, Equatorial }
@@ -44,7 +44,7 @@ internal static class OrbitManeuvers
     /// to a target altitude above the parent body's surface.
     /// </summary>
     public static ManeuverResult? ComputeSetPeriapsis(
-        Orbit orbit, double targetAltitudeMeters, double parentRadius, SimTime now)
+        Orbit orbit, double targetAltitudeMeters, double parentRadius, UniverseTime now)
     {
         if (orbit.Eccentricity >= 1.0)
             return null;
@@ -55,7 +55,8 @@ internal static class OrbitManeuvers
         if (newPeRadius <= 0.0 || newPeRadius >= currentApRadius)
             return null;
 
-        SimTime burnTime = orbit.GetNextApoapsisTime(now);
+        if (orbit.GetNextApoapsisTime(now) is not UniverseTime burnTime)
+            return null;
         return ComputeApseBurn(orbit, burnTime, currentApRadius, newPeRadius);
     }
 
@@ -64,7 +65,7 @@ internal static class OrbitManeuvers
     /// to a target altitude above the parent body's surface.
     /// </summary>
     public static ManeuverResult? ComputeSetApoapsis(
-        Orbit orbit, double targetAltitudeMeters, double parentRadius, SimTime now)
+        Orbit orbit, double targetAltitudeMeters, double parentRadius, UniverseTime now)
     {
         if (orbit.Eccentricity >= 1.0)
             return null;
@@ -75,7 +76,8 @@ internal static class OrbitManeuvers
         if (newApRadius <= currentPeRadius)
             return null;
 
-        SimTime burnTime = orbit.GetNextPeriapsisTime(now);
+        if (orbit.GetNextPeriapsisTime(now) is not UniverseTime burnTime)
+            return null;
         return ComputeApseBurn(orbit, burnTime, currentPeRadius, newApRadius);
     }
 
@@ -90,16 +92,18 @@ internal static class OrbitManeuvers
     /// Create button line up).
     /// </summary>
     public static ManeuverResult? ComputeCircularize(
-        Orbit orbit, bool useApoapsis, SimTime now)
+        Orbit orbit, bool useApoapsis, UniverseTime now)
     {
         if (orbit.Eccentricity >= 1.0)
             return null;
         if (orbit.Eccentricity < 0.001)
             return null;
 
-        SimTime burnTime = useApoapsis
+        UniverseTime? apsisTime = useApoapsis
             ? orbit.GetNextApoapsisTime(now)
             : orbit.GetNextPeriapsisTime(now);
+        if (apsisTime is not UniverseTime burnTime)
+            return null;
 
         double3 dvCci = OrbitalTransfers.DvCciToCircularize(orbit, burnTime);
         if (dvCci.LengthSquared() < 1e-12)
@@ -117,7 +121,7 @@ internal static class OrbitManeuvers
     /// full match, 0.5 = halve the relative inclination).
     /// </summary>
     public static ManeuverResult? ComputeMatchInclination(
-        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, SimTime now,
+        Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, UniverseTime now,
         double fraction = 1.0)
     {
         // GetNextPeriapsisTime / TimeOfTrueAnomaly behaviour for hyperbolic
@@ -133,7 +137,8 @@ internal static class OrbitManeuvers
             ? vehicleOrbit.GetDescendingNode(targetOrbit)
             : vehicleOrbit.GetAscendingNode(targetOrbit);
 
-        SimTime nodeTime = vehicleOrbit.TimeOfTrueAnomaly(nodeTa, now);
+        if (vehicleOrbit.TimeOfTrueAnomaly(nodeTa, now) is not UniverseTime nodeTime)
+            return null;
         StateVectors sv = vehicleOrbit.GetStateVectorsAt(nodeTime);
 
         double3 vehicleNormal = vehicleOrbit.GetOrbitNormalCci();
@@ -159,7 +164,7 @@ internal static class OrbitManeuvers
     /// 0.5 = halve the remaining inclination delta).
     /// </summary>
     public static ManeuverResult? ComputeSetInclination(
-        Orbit orbit, double targetInclinationRad, bool useDescendingNode, SimTime now,
+        Orbit orbit, double targetInclinationRad, bool useDescendingNode, UniverseTime now,
         InclinationReference reference, double fraction = 1.0)
     {
         if (orbit.Eccentricity >= 1.0)
@@ -187,7 +192,8 @@ internal static class OrbitManeuvers
             ? new TrueAnomaly((anTa.Value() + Math.PI) % (Math.PI * 2.0))
             : anTa;
 
-        SimTime nodeTime = orbit.TimeOfTrueAnomaly(nodeTa, now);
+        if (orbit.TimeOfTrueAnomaly(nodeTa, now) is not UniverseTime nodeTime)
+            return null;
         StateVectors sv = orbit.GetStateVectorsAt(nodeTime);
 
         // Target normal: rotate reference normal around the node line by target
@@ -212,9 +218,10 @@ internal static class OrbitManeuvers
     /// <summary>
     /// Computes AN/DN true anomalies and times relative to the chosen reference
     /// plane. Used by the UI to display both node options for Set Inclination.
+    /// A node time is null when the orbit never reaches that anomaly again.
     /// </summary>
-    public static (TrueAnomaly anTa, TrueAnomaly dnTa, SimTime anTime, SimTime dnTime)
-        GetReferenceNodes(Orbit orbit, SimTime now, InclinationReference reference)
+    public static (TrueAnomaly anTa, TrueAnomaly dnTa, UniverseTime? anTime, UniverseTime? dnTime)
+        GetReferenceNodes(Orbit orbit, UniverseTime now, InclinationReference reference)
     {
         double3 vehicleNormal = orbit.GetOrbitNormalCci();
         double3 referenceNormal = GetReferenceNormalCci(orbit, reference);
@@ -228,8 +235,8 @@ internal static class OrbitManeuvers
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
         TrueAnomaly dnTa = new TrueAnomaly((anTa.Value() + Math.PI) % (Math.PI * 2.0));
-        SimTime anTime = orbit.TimeOfTrueAnomaly(anTa, now);
-        SimTime dnTime = orbit.TimeOfTrueAnomaly(dnTa, now);
+        UniverseTime? anTime = orbit.TimeOfTrueAnomaly(anTa, now);
+        UniverseTime? dnTime = orbit.TimeOfTrueAnomaly(dnTa, now);
 
         return (anTa, dnTa, anTime, dnTime);
     }
@@ -243,7 +250,7 @@ internal static class OrbitManeuvers
     /// vis-viva radius and the actual position radius agree).
     /// </summary>
     private static ManeuverResult? ComputeApseBurn(
-        Orbit orbit, SimTime burnTime, double burnRadius, double oppositeRadius)
+        Orbit orbit, UniverseTime burnTime, double burnRadius, double oppositeRadius)
     {
         double newSma = (burnRadius + oppositeRadius) / 2.0;
         if (newSma <= 0.0)
@@ -262,7 +269,7 @@ internal static class OrbitManeuvers
     /// Converts a dV vector from CCI frame to VLF frame (same transform stock
     /// Circularize uses to populate TransferData.TransferDvVlf).
     /// </summary>
-    private static double3 CciToVlf(double3 dvCci, Orbit orbit, SimTime time)
+    private static double3 CciToVlf(double3 dvCci, Orbit orbit, UniverseTime time)
     {
         doubleQuat parentCci2Vlf = orbit.GetStateVectorsAt(time).GetVlf2ParentCci().OrIdentity().Inverse();
         return dvCci.Transform(parentCci2Vlf);

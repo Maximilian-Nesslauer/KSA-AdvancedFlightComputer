@@ -16,7 +16,11 @@ internal sealed class RcsWorkerCommand
     /// once the ignition time and attitude gate allow.</summary>
     public required bool Active { get; init; }
 
-    public double IgnitionTimeSec { get; init; }
+    /// <summary>Built on the main thread rather than from a raw seconds value
+    /// the worker converts: UniverseTime throws on a NaN construction, and the
+    /// worker runs inside the physics step where that would take the frame
+    /// down rather than one burn.</summary>
+    public UniverseTime IgnitionTime { get; init; }
 
     /// <summary>Fire only when the pitch/yaw error angles are inside the
     /// align gate (Align strategy; see RcsExecutor.OutsideAlignGate). Roll

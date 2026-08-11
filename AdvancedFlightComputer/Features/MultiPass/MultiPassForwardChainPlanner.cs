@@ -9,7 +9,7 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 
 /// <summary>Per-pass output of a <see cref="PassStepFactory"/>: when
 /// the pass fires and the VLF dV vector to apply.</summary>
-internal readonly record struct PassStep(SimTime BurnTime, double3 DvVlf);
+internal readonly record struct PassStep(UniverseTime BurnTime, double3 DvVlf);
 
 /// <summary>Maneuver-type-specific step computer invoked once per pass
 /// by <see cref="MultiPassForwardChainPlanner.PlanForwardChain"/>. The
@@ -27,7 +27,7 @@ internal readonly record struct PassStep(SimTime BurnTime, double3 DvVlf);
 /// chained <c>TimeOfTrueAnomaly</c> calls return the next occurrence
 /// rather than the current one.</param>
 internal delegate PassStep? PassStepFactory(
-    Orbit currentOrbit, double dvCapacityMs, SimTime earliestTime);
+    Orbit currentOrbit, double dvCapacityMs, UniverseTime earliestTime);
 
 /// <summary>
 /// Forward-chains N flight plans for a multi-pass execution. Generic
@@ -59,7 +59,7 @@ internal static class MultiPassForwardChainPlanner
     public static PassPreviewResult PlanForwardChain(
         Vehicle source,
         PassAllocation[] allocations,
-        SimTime now,
+        UniverseTime now,
         PassStepFactory stepFactory)
     {
         var results = new List<PassPreview>(allocations.Length);
@@ -71,7 +71,7 @@ internal static class MultiPassForwardChainPlanner
         bool? logPasses = null;
 
         Orbit currentOrbit = source.Orbit;
-        SimTime earliestTime = now;
+        UniverseTime earliestTime = now;
         PatchedConic? prePatch = null;
         FlightPlan? lastFp = null;
         PatchedConic? lastBurnPatch = null;
@@ -154,7 +154,7 @@ internal static class MultiPassForwardChainPlanner
                 break;
 
             currentOrbit = burnPatch.Orbit;
-            earliestTime = new SimTime(step.Value.BurnTime.Seconds() + NextOccurrenceEpsilonSec);
+            earliestTime = step.Value.BurnTime + NextOccurrenceEpsilonSec;
             lastFp = fp;
             lastBurnPatch = burnPatch;
         }
@@ -170,10 +170,10 @@ internal static class MultiPassForwardChainPlanner
     /// the departure actually gets to (e.g.) Mars; null detects all
     /// high-SOI siblings. Shared with <see cref="HohmannMultiPassPlanner"/>.</summary>
     internal static (FlightPlan fp, PatchedConic burnPatch) BuildPassFlightPlan(
-        Vehicle source, PatchedConic prePatch, SimTime burnTime, double3 dvVlf,
+        Vehicle source, PatchedConic prePatch, UniverseTime burnTime, double3 dvVlf,
         IOrbiter? encounterFilter = null)
     {
-        SimTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(burnTime);
+        UniverseTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(burnTime);
         FlightPlan fp = FlightPlan.CreateUninitialized(source.Hash);
         // The game stamps every vehicle-installed plan with the bounding radius, so
         // the preview's impact test matches what the committed burn will compute.

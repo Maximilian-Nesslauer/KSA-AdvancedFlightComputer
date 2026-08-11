@@ -15,9 +15,9 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 /// </summary>
 internal sealed class MultiPassExecution
 {
-    // Persisted with :R round-trip format, so deserialized values are
-    // bit-exact. Small tolerance absorbs any FP normalisation drift
-    // through SimTime constructors / dV transforms, while staying
+    // Persisted with :R round-trip format, and a UniverseTime is integer
+    // nanoseconds, so a reloaded burn time compares exactly. The tolerance is
+    // there for the burn being nudged and for dV transform drift, while staying
     // tight enough to disambiguate adjacent burns.
     private const double BurnTimeMatchToleranceSec = 0.05;
     private const double BurnDvMatchToleranceMs = 0.1;

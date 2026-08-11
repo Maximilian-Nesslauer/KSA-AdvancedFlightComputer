@@ -23,7 +23,7 @@ internal static class RcsBurnCanvasUi
     static void Postfix(GaugeCanvas canvas, float2 canvasMinPixels, float2 canvasSizePixels)
     {
         Burn? burn = Program.ActiveBurn;
-        if (burn == null || burn.ParentEjectBurn)
+        if (burn == null || burn.ParentDepartureBurn)
             return;
         Vehicle vehicle = burn.Vehicle;
         try

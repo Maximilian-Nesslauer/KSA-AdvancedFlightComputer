@@ -24,7 +24,7 @@ internal static class ManeuverAssertions
     // The burn is not in the past, and DvVlf is DvCci in the VLF frame at the burn point (the
     // transform the mod uses to fill the stock transfer UI, via StateVectors.GetVlf2ParentCci).
     public static bool ResultShapeHolds(
-        TestContext t, string label, Orbit orbit, in OrbitManeuvers.ManeuverResult maneuver, SimTime now)
+        TestContext t, string label, Orbit orbit, in OrbitManeuvers.ManeuverResult maneuver, UniverseTime now)
     {
         doubleQuat vlf2Cci = orbit.GetStateVectorsAt(maneuver.BurnTime).GetVlf2ParentCci().OrIdentity();
         double roundTrip = (maneuver.DvVlf.Transform(vlf2Cci) - maneuver.DvCci).Length();

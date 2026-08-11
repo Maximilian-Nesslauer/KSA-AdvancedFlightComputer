@@ -51,7 +51,7 @@ internal sealed class ApseIntent : IManeuverIntent
 
         double parentRadius = vehicle.Orbit.Parent.MeanRadius;
         double targetAltitude = TargetRadiusMeters - parentRadius;
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
 
         return IsSetApoapsis
             ? OrbitManeuvers.ComputeSetApoapsis(vehicle.Orbit, targetAltitude, parentRadius, now)
@@ -77,7 +77,7 @@ internal sealed class ApseIntent : IManeuverIntent
         if (remainingCount <= 0)
             return PassPlanResult.Failure($"passIndex {passIndex} >= total {passCountTotal}");
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         SequenceBurnState state = SequenceBurnState.Analyze(vehicle);
         PassAllocation[] allocations = Splitter.Allocate(
             maneuver.Value.DvCci.Length(), remainingCount, mode, state);

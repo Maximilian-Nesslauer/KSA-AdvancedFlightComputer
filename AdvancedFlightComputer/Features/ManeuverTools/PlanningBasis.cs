@@ -13,7 +13,7 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// was about to replace.
 /// </summary>
 internal readonly record struct PlanningBasis(
-    Orbit Orbit, PatchedConic? Patch, SimTime Earliest, bool IsChained, FlightPlan? Plan)
+    Orbit Orbit, PatchedConic? Patch, UniverseTime Earliest, bool IsChained, FlightPlan? Plan)
 {
     /// <summary>Resolves what to plan against: the trajectory after the last burn
     /// that actually changes it, or the live orbit when the plan is empty. Mirrors
@@ -24,7 +24,7 @@ internal readonly record struct PlanningBasis(
     /// orbit.</summary>
     public static PlanningBasis For(Vehicle source)
     {
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
 
         Burn? finalBurn = source.FlightComputer.BurnPlan.FindFinalNontrivialBurn();
         if (finalBurn == null)

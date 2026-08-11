@@ -41,7 +41,7 @@ public sealed class StockPinGuardTest : AfcTest
 
         Vehicle vehicle = VehicleFixtures.SpawnDesign(
             t.System, home, save.VehicleSaveData.RootPartInstance, "StockPinGuard_Source",
-            OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedSimTime()));
+            OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedTime()));
         try
         {
             // A porkchop cell only has to be non-null for the decision; its contents are never read.

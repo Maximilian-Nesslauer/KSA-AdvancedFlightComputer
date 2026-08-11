@@ -23,7 +23,7 @@ public sealed class SetApoapsisTest : AfcTest
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         Orbit orbit = OrbitFixtures.EllipticalAt(home, PeriapsisAltitudeM, ApoapsisAltitudeM, now);
 
         CheckReaches(t, orbit, home, RaiseTargetAltitudeM, "raise Ap", now);
@@ -37,7 +37,7 @@ public sealed class SetApoapsisTest : AfcTest
     }
 
     private static void CheckReaches(
-        TestContext t, Orbit orbit, IParentBody home, double targetAltitudeM, string label, SimTime now)
+        TestContext t, Orbit orbit, IParentBody home, double targetAltitudeM, string label, UniverseTime now)
     {
         OrbitManeuvers.ManeuverResult? result =
             OrbitManeuvers.ComputeSetApoapsis(orbit, targetAltitudeM, home.MeanRadius, now);

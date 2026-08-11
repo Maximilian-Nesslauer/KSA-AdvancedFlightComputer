@@ -22,7 +22,7 @@ internal static class PlaneChangeBurnPlanner
 {
     public static PassPreviewResult PlanForMatch(
         Vehicle source, Orbit targetOrbit, bool useDescendingNode,
-        PassAllocation[] allocations, SimTime now)
+        PassAllocation[] allocations, UniverseTime now)
     {
         return MultiPassForwardChainPlanner.PlanForwardChain(source, allocations, now,
             (orbit, dvCap, earliestTime) =>
@@ -34,7 +34,8 @@ internal static class PlaneChangeBurnPlanner
                 TrueAnomaly nodeTa = useDescendingNode
                     ? orbit.GetDescendingNode(targetOrbit)
                     : orbit.GetAscendingNode(targetOrbit);
-                SimTime nodeTime = orbit.TimeOfTrueAnomaly(nodeTa, earliestTime);
+                if (orbit.TimeOfTrueAnomaly(nodeTa, earliestTime) is not UniverseTime nodeTime)
+                    return null;
 
                 double3 rotAxis = double3.Cross(
                     orbit.GetOrbitNormalCci(),
@@ -51,7 +52,7 @@ internal static class PlaneChangeBurnPlanner
     public static PassPreviewResult PlanForSet(
         Vehicle source, double targetInclinationRad,
         OrbitManeuvers.InclinationReference reference, bool useDescendingNode,
-        PassAllocation[] allocations, SimTime now)
+        PassAllocation[] allocations, UniverseTime now)
     {
         return MultiPassForwardChainPlanner.PlanForwardChain(source, allocations, now,
             (orbit, dvCap, earliestTime) =>
@@ -72,7 +73,8 @@ internal static class PlaneChangeBurnPlanner
                 TrueAnomaly nodeTa = useDescendingNode
                     ? new TrueAnomaly((anTa.Value() + Math.PI) % (Math.PI * 2.0))
                     : anTa;
-                SimTime nodeTime = orbit.TimeOfTrueAnomaly(nodeTa, earliestTime);
+                if (orbit.TimeOfTrueAnomaly(nodeTa, earliestTime) is not UniverseTime nodeTime)
+                    return null;
 
                 // Reconstruct the same target normal that ComputeSetInclination
                 // will compute so rotAxis / fullAngle here match what the actual
@@ -96,7 +98,7 @@ internal static class PlaneChangeBurnPlanner
     /// <paramref name="logLabel"/> is included in the per-pass debug log
     /// to distinguish Match vs Set entries.</summary>
     private static PassStep? BuildStep(
-        Orbit orbit, SimTime nodeTime, double3 rotAxis, double fullAngle,
+        Orbit orbit, UniverseTime nodeTime, double3 rotAxis, double fullAngle,
         double dvCapMs,
         Func<double, OrbitManeuvers.ManeuverResult?> computeWithFraction,
         string logLabel)

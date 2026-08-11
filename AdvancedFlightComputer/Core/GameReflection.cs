@@ -64,17 +64,20 @@ internal static class GameReflection
 
     #region MultiPass
 
-    public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
-        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateFromTaskResults),
-            new Type[]
-            {
-                typeof(VehicleUpdateData).MakeByRefType(),
-                typeof(BubbleOrigin).MakeByRefType(),
-                typeof(Vehicle),
-                typeof(ReadOnlySpan<Vehicle>),
-                typeof(Brutal.Numerics.double3),
-                typeof(Brutal.Numerics.double3),
-            });
+    // The per-frame tick both this feature and RcsTranslation drive their state
+    // machines from. It runs on the main thread between the solver results being
+    // applied to every vehicle and InputEvents.ApplyInputEvents, which is what
+    // lets a driver read the fresh FlightComputer state and still queue burn
+    // mutations for the same frame's drain.
+    //
+    // Neither per-vehicle half of the solver apply is a sound host for a driver
+    // that mutates process-global registries: Vehicle.UpdateFromTaskResultsUnsynchronized
+    // runs one worker per physics bubble and so can execute for two vehicles at
+    // once, and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined,
+    // which a Harmony detour on the callee cannot survive.
+    public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
+        AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers),
+            Type.EmptyTypes);
 
     // UncompressedSave is the concrete path that calls Universe.DeserializeSave;
     // VehicleSave.Load is per-vehicle, not world-state. We use UncompressedSave.Id
@@ -153,7 +156,7 @@ internal static class GameReflection
     }
 
     /// <summary>Separate from ManeuverTools so a missing
-    /// UpdateFromTaskResults disables only multi-pass execution, leaving
+    /// ApplyVehicleSolvers disables only multi-pass execution, leaving
     /// the maneuver quick-tools functional. Without UncompressedSave
     /// hooks we cannot scope registry entries to a save game.
     ///
@@ -164,7 +167,7 @@ internal static class GameReflection
     {
         var targets = new (string name, object? target)[]
         {
-            ("Vehicle.UpdateFromTaskResults", Vehicle_UpdateFromTaskResults),
+            ("Universe.ApplyVehicleSolvers",  Universe_ApplyVehicleSolvers),
             ("UncompressedSave.Load",         UncompressedSave_Load),
             ("UncompressedSave.Write",        UncompressedSave_Write),
             ("Vehicle.Dispose",               Vehicle_Dispose),
@@ -174,12 +177,12 @@ internal static class GameReflection
 
     /// <summary>Shares the save/load and per-tick hooks with MultiPass on
     /// purpose: both features scope their registries by save id and drive
-    /// their state machines from Vehicle.UpdateFromTaskResults.</summary>
+    /// their state machines from Universe.ApplyVehicleSolvers.</summary>
     public static bool ValidateRcsTranslation()
     {
         var targets = new (string name, object? target)[]
         {
-            ("Vehicle.UpdateFromTaskResults",              Vehicle_UpdateFromTaskResults),
+            ("Universe.ApplyVehicleSolvers",               Universe_ApplyVehicleSolvers),
             ("UncompressedSave.Load",                      UncompressedSave_Load),
             ("UncompressedSave.Write",                     UncompressedSave_Write),
             ("Vehicle.Dispose",                            Vehicle_Dispose),

@@ -112,22 +112,25 @@ internal static class Patch_TryFindIntercept
             if (patch.PrimaryBody?.Hash != targetOrbit.Parent.Hash)
                 continue;
 
-            double start = patch.StartTime.Seconds();
-            double end = Math.Min(start + transitSeconds * 2.0, patch.EndTime.Seconds());
+            // Offsets from the patch start, not absolute sim seconds: a
+            // UniverseTime is 128-bit nanoseconds, so sampling it through
+            // absolute doubles would throw away resolution the sweep needs.
+            UniverseTime patchStart = patch.StartTime;
+            double end = Math.Min(transitSeconds * 2.0, (patch.EndTime - patchStart).Seconds());
 
-            for (double t = start; t <= end; t += CoarseStep)
+            for (double t = 0.0; t <= end; t += CoarseStep)
             {
-                double dist = DistanceAt(patch, targetOrbit, t);
+                double dist = DistanceAt(patch, targetOrbit, patchStart + t);
                 if (dist < minDist) { minDist = dist; minTime = t; }
             }
 
             if (double.IsNaN(minTime)) continue;
 
-            double refineStart = Math.Max(start, minTime - RefineHalfWindow);
+            double refineStart = Math.Max(0.0, minTime - RefineHalfWindow);
             double refineEnd = Math.Min(end, minTime + RefineHalfWindow);
             for (double t = refineStart; t <= refineEnd; t += RefineStep)
             {
-                double dist = DistanceAt(patch, targetOrbit, t);
+                double dist = DistanceAt(patch, targetOrbit, patchStart + t);
                 if (dist < minDist) minDist = dist;
             }
         }
@@ -135,10 +138,10 @@ internal static class Patch_TryFindIntercept
         return minDist;
     }
 
-    private static double DistanceAt(PatchedConic patch, Orbit targetOrbit, double t)
+    private static double DistanceAt(PatchedConic patch, Orbit targetOrbit, UniverseTime t)
     {
-        var posShip = patch.Orbit.GetStateVectorsAt(new SimTime(t)).PositionCci;
-        var posTarget = targetOrbit.GetStateVectorsAt(new SimTime(t)).PositionCci;
+        var posShip = patch.Orbit.GetStateVectorsAt(t).PositionCci;
+        var posTarget = targetOrbit.GetStateVectorsAt(t).PositionCci;
         return (posTarget - posShip).Length();
     }
 }

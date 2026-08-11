@@ -58,7 +58,7 @@ internal static class RcsComputeControlPatch
             && cmd.LpSecondsPerImpulse.Length == __instance.VehicleConfig.Thrusters.Count
             && (!cmd.RequireAttitude || !RcsExecutor.OutsideAlignGate(__instance));
         bt.BurnDuration = RemainingDurationSec(cmd, impulse, lpUsable);
-        bt.IgnitionTime = new SimTime(cmd.IgnitionTimeSec);
+        bt.IgnitionTime = cmd.IgnitionTime;
 
         // ComputeRcsControl drops the thruster command flags and UpdateRcsParams
         // zeroes the authority whenever RCSMode is not Enabled, so firing below
@@ -73,7 +73,7 @@ internal static class RcsComputeControlPatch
         if (__instance.RCSMode != FlightComputerRCSMode.Enabled)
             return;
 
-        double toIgnition = cmd.IgnitionTimeSec - nav.Time.Seconds();
+        double toIgnition = (cmd.IgnitionTime - nav.Time).Seconds();
         if (toIgnition > 0.0)
         {
             outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, toIgnition);

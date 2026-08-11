@@ -367,7 +367,7 @@ internal static class HohmannFlybyUI
             // feature does not couple back to the multi-pass planner). The target
             // is the encounter filter so the SOI patch is resolved; 8/8 are ample
             // patch / precision limits for one short departure.
-            SimTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(r.BurnTime);
+            UniverseTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(r.BurnTime);
             FlightPlan fp = FlightPlan.CreateUninitialized(source.Hash);
             fp.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
             PatchedConic burnPatch = fp.CalculateBurnPatch(prePatch, timeSincePe, r.DvVlf, r.BurnTime);
@@ -494,7 +494,7 @@ internal static class HohmannFlybyUI
     {
         if (!_hasCached || _cachedResult == null) return false;
         return _cachedResult.Value.BurnTime.Seconds()
-               <= Universe.GetElapsedSimTime().Seconds();
+               <= Universe.GetElapsedTime().Seconds();
     }
 
     private static void InvalidateCache()

@@ -43,7 +43,7 @@ internal static class MultiPassCommitter
     /// <paramref name="burnTime"/>.
     /// </summary>
     public static Burn? QueueAddBurn(
-        Vehicle source, SimTime burnTime, double3 dvVlf, FlightPlan? chainPlan = null)
+        Vehicle source, UniverseTime burnTime, double3 dvVlf, FlightPlan? chainPlan = null)
     {
         // chainPlan is the trajectory a chained maneuver was planned against (the
         // pending burn's flight plan); without it the burn anchors on the vehicle's

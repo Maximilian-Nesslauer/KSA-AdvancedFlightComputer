@@ -84,7 +84,7 @@ internal static class Patch_PopulateWithPlanets
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.HohmannFlight))]
 internal static class Patch_HohmannFlight
 {
-    static bool Prefix(Orbit origin, Orbit destination, ref SimTime __result)
+    static bool Prefix(Orbit origin, Orbit destination, ref UniverseTime __result)
     {
         if (origin.IsBound() && destination.IsBound())
             return true;
@@ -101,7 +101,28 @@ internal static class Patch_HohmannFlight
             transferSma = Math.Max(r1, r2);
 
         double tof = Math.PI * Math.Sqrt(transferSma * transferSma * transferSma / origin.Mu);
-        __result = new SimTime(tof);
+        // A degenerate radius or mu still reaches here (the transferSma <= 0.0
+        // test above is false for NaN), and UniverseTime rejects NaN outright.
+        // Running the original is NOT an escape: stock takes its
+        // (Apoapsis + Periapsis) / 2 branch for any orbit above e = 0.01, and
+        // Apoapsis is NaN on the unbound orbit this prefix exists for, so it
+        // would construct from NaN one frame deeper. Zero is the sentinel every
+        // consumer of this estimate already tests for (both AFC patches gate on
+        // "> 0.0" before using it), so it degrades instead of throwing.
+        //
+        // Worth the care because the porkchop worker reaches this: stock's
+        // TransferTask.Run is a ThreadPool work item and calls AlignmentTime,
+        // whose AFC prefix calls HohmannFlight on its fallback path.
+        if (!double.IsFinite(tof))
+        {
+            LogHelper.WarnOnce(
+                $"hohmann-tof-degenerate-{origin.Parent?.Id ?? "?"}",
+                $"[AFC] HohmannFlight: degenerate geometry (r1={r1:E3}m r2={r2:E3}m " +
+                $"mu={origin.Mu:E3}); reporting no transfer estimate.");
+            __result = UniverseTime.Zero;
+            return false;
+        }
+        __result = new UniverseTime(tof);
         return false;
     }
 }
@@ -130,17 +151,18 @@ internal static class Patch_SetTransferInfo
             if (info?.Target?.Orbit == null) return;
             if (info.Target.Orbit.IsBound()) return;
 
-            SimTime hohmann = info.HohmannTimeOfFlight;
-            if (double.IsNaN(hohmann.Seconds()) || hohmann.Seconds() <= 0.0)
+            UniverseTime hohmann = info.HohmannTimeOfFlight;
+            double hohmannSec = hohmann.Seconds();
+            if (!(hohmannSec > 0.0))
                 return;
 
-            info.MinTransferTimeOfFlight = hohmann * HyperbolicTargets.MinTofRatio;
-            info.MaxTransferTimeOfFlight = hohmann * HyperbolicTargets.MaxTofRatio;
+            info.MinTransferTimeOfFlight = new UniverseTime(hohmannSec * HyperbolicTargets.MinTofRatio);
+            info.MaxTransferTimeOfFlight = new UniverseTime(hohmannSec * HyperbolicTargets.MaxTofRatio);
 
             GameReflection.TransferPlanner_selectedMinTime!
-                .SetValue(null, new SimTime(info.MinTransferTimeOfFlight.Seconds()));
+                .SetValue(null, info.MinTransferTimeOfFlight);
             GameReflection.TransferPlanner_selectedMaxTime!
-                .SetValue(null, new SimTime(info.MaxTransferTimeOfFlight.Seconds()));
+                .SetValue(null, info.MaxTransferTimeOfFlight);
 
             MaybeAlertDepartureWindowPast(info, hohmann);
         }
@@ -161,11 +183,10 @@ internal static class Patch_SetTransferInfo
     /// and both <c>TimedAlert.Create</c> and the plain dedup set above are safe
     /// here.</summary>
     private static void MaybeAlertDepartureWindowPast(
-        OrbitalTransfers.TransferInfo info, SimTime hohmannToF)
+        OrbitalTransfers.TransferInfo info, UniverseTime hohmannToF)
     {
-        SimTime tPeri = info.Target.Orbit.TimeAtPeriapsis;
-        SimTime ideal = new SimTime(tPeri.Seconds() - hohmannToF.Seconds());
-        if (!(ideal < Universe.GetElapsedSimTime())) return;
+        UniverseTime ideal = info.Target.Orbit.TimeAtPeriapsis - hohmannToF;
+        if (!(ideal < Universe.GetElapsedTime())) return;
 
         string targetId = (info.Target as Astronomical)?.Id ?? "?";
         if (!_alertedTargets.Add(targetId)) return;
@@ -204,8 +225,8 @@ internal static class Patch_SetTransferInfo
 internal static class Patch_AlignmentTime
 {
     static bool Prefix(OrbitalTransfers.TransferInfo transferInfo,
-                       SimTime startTime,
-                       ref SimTime __result)
+                       UniverseTime startTime,
+                       ref UniverseTime __result)
     {
         try
         {
@@ -219,8 +240,8 @@ internal static class Patch_AlignmentTime
                 || transferInfo.Target.Orbit.IsBound())
                 return true;
 
-            SimTime tPeri = transferInfo.Target.Orbit.TimeAtPeriapsis;
-            SimTime hohmannToF = transferInfo.HohmannTimeOfFlight;
+            UniverseTime tPeri = transferInfo.Target.Orbit.TimeAtPeriapsis;
+            UniverseTime hohmannToF = transferInfo.HohmannTimeOfFlight;
             if (!(hohmannToF.Seconds() > 0.0))
             {
                 // The "Show Parent/Target Alignment" block news up a TransferInfo per
@@ -234,7 +255,7 @@ internal static class Patch_AlignmentTime
                 if (!(hohmannToF.Seconds() > 0.0)) return true;
             }
 
-            SimTime ideal = new SimTime(tPeri.Seconds() - hohmannToF.Seconds());
+            UniverseTime ideal = tPeri - hohmannToF;
 
             if (ideal < startTime)
             {
@@ -245,7 +266,7 @@ internal static class Patch_AlignmentTime
                     "alignment time clamped to startTime.");
             }
 
-            __result = SimTime.Max(ideal, startTime);
+            __result = UniverseTime.Max(ideal, startTime);
             return false;
         }
         catch (Exception ex)

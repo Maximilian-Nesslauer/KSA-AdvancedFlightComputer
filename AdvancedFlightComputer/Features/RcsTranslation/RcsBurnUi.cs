@@ -18,7 +18,7 @@ internal static class RcsBurnUi
 {
     internal static void DrawBlock(Burn burn, Vehicle vehicle, FlightComputer flightComputer)
     {
-        if (burn.ParentEjectBurn)
+        if (burn.ParentDepartureBurn)
             return;
         if (vehicle.Parts.Modules.Get<ThrusterController>().Length == 0)
             return;
@@ -114,7 +114,7 @@ internal static class RcsBurnUi
             string phase = "waiting";
             if (bt != null)
             {
-                double toIgnition = bt.IgnitionTime.Seconds() - Universe.GetElapsedSimTime().Seconds();
+                double toIgnition = (bt.IgnitionTime - Universe.GetElapsedTime()).Seconds();
                 if (toIgnition > 0.0)
                     phase = $"waiting T-{toIgnition:F0}s";
                 else if (exec.ResolvedStrategy == RcsAttitudeStrategy.Align
@@ -149,14 +149,14 @@ internal static class RcsBurnUi
             return;
         }
 
-        // The estimates are computed against the loaded first burn only
-        // (stock loads BurnPlan.FirstBurn exclusively); showing them on a
-        // later burn's editor would be someone else's numbers.
+        // The estimates are computed against the loaded first burn only (stock
+        // loads BurnPlan.FindFirstExecutableBurn exclusively); showing them on
+        // a later burn's editor would be someone else's numbers.
         if (exec == null || !exec.Estimates.Valid)
             return;
         BurnTarget? loaded = flightComputer.Burn;
         if (loaded == null
-            || Math.Abs(loaded.ImpulsiveInstant.Seconds() - burn.Time.Seconds())
+            || Math.Abs((loaded.ImpulsiveInstant - burn.Time).Seconds())
                > RcsExecutor.BurnIdentityToleranceSec)
             return;
         ref readonly RcsEstimates est = ref exec.Estimates;
