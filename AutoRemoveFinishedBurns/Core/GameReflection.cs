@@ -1,5 +1,4 @@
 using System.Reflection;
-using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -10,17 +9,12 @@ static class GameReflection
 {
     #region Detection
 
-    public static readonly MethodInfo? Vehicle_UpdateFromTaskResults =
-        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateFromTaskResults),
-            new[]
-            {
-                typeof(VehicleUpdateData).MakeByRefType(),
-                typeof(BubbleOrigin).MakeByRefType(),
-                typeof(Vehicle),
-                typeof(ReadOnlySpan<Vehicle>),
-                typeof(Brutal.Numerics.double3),
-                typeof(Brutal.Numerics.double3),
-            });
+    // Applies every physics bubble's solver results on the main thread. The
+    // parameter list is pinned so a future overload cannot silently take over
+    // the patch.
+    public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
+        AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers),
+            Type.EmptyTypes);
 
     #endregion
 
@@ -67,8 +61,7 @@ static class GameReflection
     {
         var targets = new (string name, object? target)[]
         {
-            ("Vehicle.UpdateFromTaskResults(ref readonly VehicleUpdateData, ref readonly BubbleOrigin, Vehicle, ReadOnlySpan<Vehicle>)",
-                Vehicle_UpdateFromTaskResults),
+            ("Universe.ApplyVehicleSolvers()", Universe_ApplyVehicleSolvers),
         };
         return ValidateTargets("Detection", targets);
     }

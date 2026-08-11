@@ -28,7 +28,9 @@ namespace AutoRemoveFinishedBurns.HarnessTests;
 //   3. disabled:     Config.Enabled = false, completed -> the burn stays; re-enabling afterwards
 //                     does not retroactively remove it.
 //   4. manual:       completion injected while in Manual mode -> the burn stays.
-//   5. uncontrolled: completed on a vehicle that is not Program.ControlledVehicle -> the burn stays.
+//   5. zero-dv:      a zero-delta-V node inserted ahead of the armed burn drops the flight computer
+//                    out of Auto by itself -> both burns stay.
+//   6. uncontrolled: completed on a vehicle that is not Program.ControlledVehicle -> the burn stays.
 public sealed class BurnRemovalTest : IHarnessTest
 {
     private const string HarmonyId = "com.maxi.autoremovefinishedburns.harnesstests";
@@ -67,7 +69,7 @@ public sealed class BurnRemovalTest : IHarnessTest
             return 0;
         }
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         IParentBody parent = source.Orbit.Parent;
         Orbit orbit = VehicleSpawner.CircularCci(parent, source.Orbit.SemiMajorAxis + SpawnAltitudeOffsetM, now);
         Vehicle vehicle = VehicleSpawner.SpawnCopy(source, parent, "ArfbTestVehicle", orbit);
@@ -97,6 +99,7 @@ public sealed class BurnRemovalTest : IHarnessTest
             ok &= ScenarioNoPropellantKeeps(vehicle, driver);
             ok &= ScenarioDisabledKeeps(vehicle, driver);
             ok &= ScenarioManualKeeps(vehicle, driver);
+            ok &= ScenarioZeroDeltaVKeeps(vehicle, driver);
             ok &= ScenarioUncontrolledKeeps(vehicle, driver);
         }
         finally
@@ -193,6 +196,27 @@ public sealed class BurnRemovalTest : IHarnessTest
         return ok;
     }
 
+    // A node with no delta-V reads as "already reversed" (DeltaVToGoCci and DeltaVTargetCci are both
+    // zero, so their dot product is 0), and inserting one ahead of the running burn makes stock
+    // FlightComputer.AddBurn unload the loaded burn, which flips Auto -> Manual. Both halves of the
+    // completion signal therefore appear without any burn having finished.
+    private static bool ScenarioZeroDeltaVKeeps(Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        bool ok = BeginScenario("zero-dv", vehicle, driver);
+        ok = ok && Arm("zero-dv", vehicle, driver);
+
+        if (ok)
+        {
+            QueueBurn(vehicle, driver, BurnLeadSeconds * 0.5, double3.Zero);
+            ok &= Check("zero-dv", "flight computer dropped out of Auto on the insert",
+                fc.BurnMode == FlightComputerBurnMode.Manual);
+            ok &= Check("zero-dv", "both burns kept in the plan", fc.BurnPlan.BurnCount == 2);
+        }
+        CleanupBurn(fc);
+        return ok;
+    }
+
     private static bool ScenarioUncontrolledKeeps(Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
@@ -208,9 +232,6 @@ public sealed class BurnRemovalTest : IHarnessTest
             ok &= Check("uncontrolled", "burn kept on a vehicle that is not controlled", fc.BurnPlan.HasActiveBurns);
         }
         Program.ControlledVehicle = vehicle;
-        // Clear the mode table before the vehicle is controlled again, so the stale pre-scenario
-        // state cannot pair with the flip that happened while uncontrolled.
-        BurnRemovalPatch.Reset();
         CleanupBurn(fc);
         return ok;
     }
@@ -222,22 +243,28 @@ public sealed class BurnRemovalTest : IHarnessTest
         BurnRemovalPatch.Reset();
         FlightComputer fc = vehicle.FlightComputer;
         fc.BurnMode = FlightComputerBurnMode.Manual;
+        QueueBurn(vehicle, driver, BurnLeadSeconds, new double3(BurnDvMps, 0.0, 0.0));
+        return Check(scenario, "burn added and burn target loaded",
+            fc.BurnPlan.HasActiveBurns && fc.Burn != null);
+    }
 
-        SimTime now = Universe.GetElapsedSimTime();
-        PatchedConic patch = new PatchedConic(now, SimTime.PositiveInfinity, PatchTransition.Burn,
+    // Adds one burn through the same input-event path the game's burn UI uses, then steps so the
+    // event drains. Burns sort by time, so leadSeconds also decides which one the flight computer
+    // loads.
+    private static void QueueBurn(Vehicle vehicle, SimDriver driver, double leadSeconds, double3 deltaVVlf)
+    {
+        UniverseTime now = Universe.GetElapsedTime();
+        PatchedConic patch = new PatchedConic(now, UniverseTime.EndOfTime, PatchTransition.Burn,
             PatchTransition.Final, Orbit.CreateFrom(vehicle.Orbit), vehicle.ParentPatchIdHash);
-        Burn burn = Burn.Create(OrbitPointCce.Zero, (now + BurnLeadSeconds).Seconds(),
-            new double3(BurnDvMps, 0.0, 0.0), patch, vehicle);
+        Burn burn = Burn.Create(OrbitPointCce.Zero, (now + leadSeconds).Seconds(),
+            deltaVVlf, patch, vehicle);
         InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
         {
-            FlightComputer = fc,
+            FlightComputer = vehicle.FlightComputer,
             Burn = burn,
             AddBurn = true,
         });
         driver.Step(StepDt);
-
-        bool ok = Check(scenario, "burn added and burn target loaded", fc.BurnPlan.HasActiveBurns && fc.Burn != null);
-        return ok;
     }
 
     // Puts the flight computer into Auto and proves it survived a full step (the postfix can only

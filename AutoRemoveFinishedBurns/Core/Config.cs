@@ -1,5 +1,6 @@
 using System.Globalization;
 using Brutal.Logging;
+using KSA;
 
 namespace AutoRemoveFinishedBurns.Core;
 
@@ -10,8 +11,7 @@ namespace AutoRemoveFinishedBurns.Core;
 static class Config
 {
     private static readonly string ModDir = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-        "My Games", "Kitten Space Agency", "mods", "AutoRemoveFinishedBurns");
+        Constants.DocumentsFolderPath, "mods", "AutoRemoveFinishedBurns");
 
     private static readonly string ConfigPath = Path.Combine(
         ModDir, "autoremovefinishedburns.toml");

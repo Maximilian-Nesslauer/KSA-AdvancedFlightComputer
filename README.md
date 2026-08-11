@@ -9,7 +9,7 @@ mod cleans up completed auto-burns automatically.
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.8.5.5168.
+Validated against KSA build version 2026.8.19.5261.
 
 ## Features
 
@@ -62,7 +62,8 @@ Required only to build the mod from source. Targets **.NET 10**.
 `AutoRemoveFinishedBurns.HarnessTests/` is a developer-only test suite for [HeadlessHarness](https://github.com/Maximilian-Nesslauer/KSA-HeadlessHarness), which brings the real game up GPU-free and runs plug-in tests against the live simulation:
 
 - `arfb-api-drift` checks every reflection target and the IL anchor of the settings transpiler against the current game build, so an update that breaks the mod is caught without launching the full game.
-- `arfb-burn-removal` spawns a vehicle, adds a real burn through the game's input queue, and drives the real flight computer through the Auto -> Manual transition: a completed auto-burn is removed, while out-of-fuel, disabled-setting, manual-mode, and uncontrolled-vehicle cases keep the burn.
+- `arfb-burn-removal` spawns a vehicle, adds a real burn through the game's input queue, and drives the real flight computer through the Auto -> Manual transition: a completed auto-burn is removed, while out-of-fuel, disabled-setting, manual-mode, zero-delta-V-insert, and uncontrolled-vehicle cases keep the burn.
+- `arfb-rcs-interop` binds to AdvancedFlightComputer's RCS completion event and checks the removal policy on it. It skips when AFC is not deployed.
 
 To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
 
@@ -76,6 +77,10 @@ To run it: build this solution and the HeadlessHarness repo, checked out as a si
   computer already evaluates each tick to flip Auto -> Manual on burn
   completion. If the vector hasn't reversed (you ran out of fuel before
   reaching the target) the burn entry is preserved.
+- Only the vehicle you control is watched. A burn that finishes on a
+  background vehicle stays in its plan, and taking control afterwards does
+  not clean it up, because the completion already happened. Delete that one
+  by hand.
 - The toggle is persisted to
   `Documents\My Games\Kitten Space Agency\mods\AutoRemoveFinishedBurns\autoremovefinishedburns.toml`.
 

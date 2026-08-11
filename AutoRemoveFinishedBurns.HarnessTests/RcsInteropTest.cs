@@ -59,7 +59,7 @@ public sealed class RcsInteropTest : IHarnessTest
             return 0;
         }
 
-        SimTime now = Universe.GetElapsedSimTime();
+        UniverseTime now = Universe.GetElapsedTime();
         IParentBody parent = source.Orbit.Parent;
         Orbit orbit = VehicleSpawner.CircularCci(
             parent, source.Orbit.SemiMajorAxis + SpawnAltitudeOffsetM, now);
@@ -170,8 +170,8 @@ public sealed class RcsInteropTest : IHarnessTest
     {
         FlightComputer fc = vehicle.FlightComputer;
         fc.BurnMode = FlightComputerBurnMode.Manual;
-        SimTime now = Universe.GetElapsedSimTime();
-        PatchedConic patch = new PatchedConic(now, SimTime.PositiveInfinity, PatchTransition.Burn,
+        UniverseTime now = Universe.GetElapsedTime();
+        PatchedConic patch = new PatchedConic(now, UniverseTime.EndOfTime, PatchTransition.Burn,
             PatchTransition.Final, Orbit.CreateFrom(vehicle.Orbit), vehicle.ParentPatchIdHash);
         burn = Burn.Create(OrbitPointCce.Zero, (now + BurnLeadSeconds).Seconds(),
             new double3(BurnDvMps, 0.0, 0.0), patch, vehicle);

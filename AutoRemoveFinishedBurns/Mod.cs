@@ -13,7 +13,7 @@ public sealed class Mod
     private static Harmony? _harmony;
 
     // Keep in sync with README.md.
-    private const string TestedGameVersion = "v2026.8.5.5168";
+    private const string TestedGameVersion = "v2026.8.19.5261";
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
@@ -66,12 +66,11 @@ public sealed class Mod
                 "[AutoRemoveFinishedBurns] Settings tab disabled - reflection targets not found.");
         }
 
+        // TryEnable reports why it declined; a failure is not an error here
+        // because the AFC dependency is optional.
         if (AfcRcsInterop.TryEnable())
             DefaultCategory.Log.Info(
                 "[AutoRemoveFinishedBurns] AdvancedFlightComputer RCS interop active.");
-        else if (DebugConfig.Detection)
-            DefaultCategory.Log.Debug(
-                "[AutoRemoveFinishedBurns] AdvancedFlightComputer not present; RCS interop off.");
 
         DefaultCategory.Log.Info("[AutoRemoveFinishedBurns] Loaded.");
     }

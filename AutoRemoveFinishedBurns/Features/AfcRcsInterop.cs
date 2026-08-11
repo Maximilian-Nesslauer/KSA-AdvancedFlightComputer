@@ -34,7 +34,14 @@ static class AfcRcsInterop
             return true;
         Type? type = AccessTools.TypeByName(CompletionsTypeName);
         if (type == null)
+        {
+            // Logged here rather than by the caller, because only this method
+            // can tell "AFC absent" apart from "AFC present but drifted".
+            if (DebugConfig.Detection)
+                DefaultCategory.Log.Debug(
+                    "[AutoRemoveFinishedBurns] AdvancedFlightComputer not present; RCS interop off.");
             return false;
+        }
         EventInfo? evt = type.GetEvent(EventName, BindingFlags.Public | BindingFlags.Static);
         if (evt == null || evt.EventHandlerType != typeof(Action<Vehicle, Burn>))
         {
@@ -72,9 +79,9 @@ static class AfcRcsInterop
 
     // Same policy as BurnRemovalPatch: only while enabled, only for the
     // controlled vehicle, and only while the burn is still in the plan.
-    // AFC raises from its main-thread per-tick driver, the same context the
-    // removal patch runs in - the live BurnPlan list has no locking, so a
-    // raise from any other thread would be an AFC contract break.
+    // The live BurnPlan list has no locking and the game now applies vehicle
+    // solver results across worker threads, so AFC must raise this from the
+    // main thread; a raise from a solver worker would be an AFC contract break.
     // TryGetBurn and RemoveBurn match by Burn value equality (Time +
     // DeltaVVlf), not reference; for the burn AFC just completed they are
     // the same entry.
@@ -100,7 +107,7 @@ static class AfcRcsInterop
         catch (Exception ex)
         {
             LogHelper.ErrorOnce("AfcRcsInterop:" + ex.GetType().Name,
-                $"[AutoRemoveFinishedBurns] vehicle='{vehicle?.Id ?? "<null>"}' RCS completion " +
+                $"[AutoRemoveFinishedBurns] vehicle='{vehicle.Id}' RCS completion " +
                 $"handler threw: {ex}");
         }
     }
