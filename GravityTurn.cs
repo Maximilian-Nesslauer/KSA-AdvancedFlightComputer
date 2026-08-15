@@ -86,18 +86,10 @@ namespace NovaTec.GravityTurnMod
                     if (ImGui.MenuItem("Throttle UP"))
                     {
                         Controller.ThrottleUp();
-                        //vehicle.ProcessInput(InputAction.MainEngineThrottleUp, GlfwKeyAction.Press, 0);
-                        //Controller.RunWorker();
-                        //vehicle.ProcessInput(InputAction.MainEngineThrottleUp, GlfwKeyAction.Release, 0);
-                        //Controller.RunWorker();
                     }
                     if (ImGui.MenuItem("Throttle DOWN"))
                     {
                         Controller.ThrottleDown();
-                        //vehicle.ProcessInput(InputAction.MainEngineThrottleDown, GlfwKeyAction.Press, 0);
-                        //Controller.RunWorker();
-                        //vehicle.ProcessInput(InputAction.MainEngineThrottleDown, GlfwKeyAction.Release, 0);
-                        //Controller.RunWorker();
                     }
 
                     if (ImGui.MenuItem("HOLD Forward/Prograde"))
@@ -251,38 +243,12 @@ namespace NovaTec.GravityTurnMod
                 
                 ImGui.Separator();
                 ImGui.Text("Burn dV:              " + Controller.DeltaVUsed.ToString("n0") + "m/s");
-                //ImGui.Text(String.Format("Stage Sequence:       {0} of {1}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count));
-                //ImGui.Text("Throttle:             " + vehicle.GetManualThrottle() * 100);
-                //ImGui.Text("Atmosphere:          " + (Controller.GetAtmosphereHeight()/1000).ToString("n1") + "km");
-                //ImGui.Text("Roll:                 " + Controller.GetRoll() + "°");
-                
-
-
                 ImGui.Separator();
-                /*
-                                doubleQuat p = vehicle.GetBody2Cci();
-                                VehicleReferenceFrameEx.GetEclBody2Cci(p);
-                                doubleQuat b = VehicleReferenceFrameEx.GetEclBody2Cci(p);
-                                double3 e = VehicleReferenceFrameEx.QuaternionToEulerAngles(VehicleReferenceFrame.EclBody, b);
-                                int3 a = vehicle.NavBallData.AttitudeAngles;
-                                a.Z -= 270;
-                                a.Y -= 90;
-
-                                double3 fc = Controller.GetSurfaceVector();
-                */
-                //ImGui.Text("vector:      " + CoordToString(vehicle.GetVelocityCce().Normalized()) );
-                //ImGui.Text("target:      " + CoordToString(vehicle.FlightComputer.CustomAttitudeTarget));
-                //Controller.GetFuelTank();
-                //ReadOnlySpan<MoleState> moleStates = Controller.GetCurrentSequence().Parts. .Moles.States;
                 if (vehicle.FlightComputer.Burn != null && vehicle.FlightComputer.Burn.BurnDuration > 0.1)
                     ImGui.Text(String.Format("Burn:                 {0}s", vehicle.FlightComputer.Burn.BurnDuration.ToString("n1")));
                 else if (Controller.PitchesUp)
                     ImGui.Text("Pitching up:          " + Controller.PitchesUp + ", pitch: " + Program.AttitudePitch.Current);
 				//ImGui.Text("Target:               " + vehicle.FlightComputer.AttitudeTrackTarget.ToString() + ", " + vehicle.FlightComputer.AttitudeFrame.ToString());
-
-				//ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
-				//ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);vehicle.Orbit.StateVectors.PositionCci
-
 
 			}
 

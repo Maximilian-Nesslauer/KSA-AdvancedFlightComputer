@@ -19,15 +19,7 @@ namespace NovaTec.GravityTurnMod
 {
     public class GravityController
     {
-        /*
-        public double InitialPitch { get; set; } = 25.0;
-        public double InitialSpeed { get; set; } = 100.0;
-        public int TimeToApoapsisStart { get; set; } = 70;
-        public int TimeToApoapsisEnd { get; set; } = 70;
-        public int TimeToApoapsisTarget { get; set; } = 70;
-        public double TargetAltitude { get; set; } = 280.0;
-        */
-        /* works for RSS size*/
+        /* works for RSS size with 1.7 TWR at launch */
         public double InitialPitch { get; set; } = 9;
         public double InitialSpeed { get; set; } = 95;
         public int TimeToApoapsisStart { get; set; } = 65;
@@ -63,7 +55,7 @@ namespace NovaTec.GravityTurnMod
             Phase = PhaseEnum.Landed;
             ControlledVehicle = vehicle;
         }
-        public void SetVehicle(Vehicle vehicle)
+        public void SetVehicle(Vehicle? vehicle)
         {
             ControlledVehicle = vehicle;
         }
@@ -74,7 +66,7 @@ namespace NovaTec.GravityTurnMod
                 return;
 
             LaunchAltitude = GetAltitude();
-            LaunchAltitude = ControlledVehicle.GetBarometricAltitude();
+            LaunchAltitude = vehicle.GetBarometricAltitude();
             LaunchAzimuth = CalculateLaunchAzimuth(TargetInclination);
 
             TimeToApoapsisTarget = TimeToApoapsisStart;
@@ -154,7 +146,6 @@ namespace NovaTec.GravityTurnMod
         private void RunPhaseLanded(Vehicle vehicle)
         {
             LaunchAltitude = GetAltitude();
-            // do nothing, maybe collect stats later
         }
 
         //
@@ -194,20 +185,22 @@ namespace NovaTec.GravityTurnMod
 
         }
 
+        // this phase pitches the rocket over to a given angle
         private void RunPhasePitch(Vehicle vehicle)
         {
-            //CalculateStats();
             double pitch = vehicle.BodyRates.X;
 
             double diff = Universe.GetElapsedSeconds() - LastTransitionTime;
             if (UseWarp && diff > 3 && Universe.SimulationSpeed < 1.1)
                 Universe.SetSimulationSpeed(2.0, false);
 
-            if (diff > InitialPitch * 0.8 /*&& Math.Abs(vehicle.BodyRates.X) < 0.005 && Math.Abs(vehicle.BodyRates.Y) < 0.005*/)
+            if (diff > InitialPitch * 0.8)
             {
                 StartPhaseHold(vehicle);
             }
         }
+
+        // this phase holds alignment forward
         public void StartPhaseHold(Vehicle vehicle)
         {
             Console.WriteLine("PHASE: Hold");
@@ -224,6 +217,7 @@ namespace NovaTec.GravityTurnMod
             Phase = PhaseEnum.Hold;
         }
 
+        // this is a bit ugly...
         double lastTimeToApoapsis = 0;
         double fwdPitch = 0;
         double iniPitch = 0;
@@ -381,6 +375,7 @@ namespace NovaTec.GravityTurnMod
 
         }
 
+        // this phase activates the next stage
         private void StartPhaseStage(Vehicle vehicle)
         {
             Console.WriteLine("PHASE: Stage");
@@ -418,6 +413,8 @@ namespace NovaTec.GravityTurnMod
             }
 
         }
+
+        // coast towards target orbit height
         private void StartPhaseCoast(Vehicle vehicle)
         {
             Console.WriteLine("PHASE: Coast");
@@ -457,6 +454,8 @@ namespace NovaTec.GravityTurnMod
             }
 
         }
+
+        // circularize orbit, create a maneuver, wait for it to happen
         public void StartPhaseCircularize(Vehicle vehicle)
         {
             Console.WriteLine("PHASE: Circularize");
@@ -605,6 +604,7 @@ namespace NovaTec.GravityTurnMod
             }
         }
 
+        // cleanup stuff, make it ready for the next launch
         public void RunPhaseCleanup(Vehicle vehicle)
         {
             ThrottleOverride.Active = true;
@@ -640,12 +640,6 @@ namespace NovaTec.GravityTurnMod
 
         }
 
-        public void RunWorker()
-        {
-            ControlledVehicle?.PrepareWorker(Universe.GetNextSimStep());
-
-        }
-
         public void ThrottleUp()
         {
             var vehicle = ControlledVehicle;
@@ -669,12 +663,10 @@ namespace NovaTec.GravityTurnMod
         {
             ThrottleOverride.Active = true;
             ThrottleOverride.EngineOn = true;
-            //ControlledVehicle?.SetEnum(VehicleEngine.MainIgnite);
         }
         public void ShutdownEngines()
         {
             ThrottleOverride.EngineOn = false;
-            //ControlledVehicle?.SetEnum(VehicleEngine.MainShutdown);
             ThrottleOverride.Active = true;
         }
 
@@ -867,7 +859,6 @@ namespace NovaTec.GravityTurnMod
             if (vehicle == null || vehicle.Parts.SequenceList.ActiveSequence < 1) 
                 return engines;
             Sequence? sequence = GetCurrentSequence();
-            //Sequence sequence = vehicle.Parts.SequenceList.Sequences[vehicle.Parts.SequenceList.ActiveSequence - 1];
             if (sequence == null) return engines;
 
             foreach (Part p in sequence.Parts)
@@ -1080,28 +1071,6 @@ namespace NovaTec.GravityTurnMod
             double3 surfaceVector = GetSurfaceVector();
             double3 orbitVector = GetOrbitVector();
             return null;
-        }
-
-        // The steering direction expressed as the same pitch/heading numbers the in-game
-        // navball shows in its surface (EnuBody) frame. Computed with KSA's own functions
-        // (ComputeBurnBody2Cci + EnuBody frame + RollPitchYaw decomposition + compass
-        // wrap) so the readout matches the navball digit-for-digit. Note KSA's ENU frame
-        // is East-referenced, so this differs from a real-world compass azimuth by 90°.
-        public static (double pitchDeg, double headingDeg) NavballSteerAngles(double3 r, double3 dir)
-        {
-            if (r.Length() < 1 || dir.Length() < 1e-9) return (0, 0);
-
-            doubleQuat desired = BurnTarget.ComputeBurnBody2Cci(
-                float3.Pack(double3.Normalize(r)), float3.Pack(double3.Normalize(dir)));
-            doubleQuat enuBody2Cci = VehicleReferenceFrameEx.GetEnuBody2Cci(r) ?? doubleQuat.Identity;
-
-            // Same construction as the navball: frame -> desired-body orientation.
-            doubleQuat frame2Desired = doubleQuat.Concatenate(enuBody2Cci, doubleQuat.Inverse(desired));
-            double3 angles = VehicleReferenceFrame.EnuBody.QuaternionToEulerAngles(frame2Desired);
-
-            double pitchDeg = angles.Y * 180.0 / Math.PI;
-            double headingDeg = MathEx.ToCompassAngle(angles.Z) * 180.0 / Math.PI;
-            return (pitchDeg, headingDeg);
         }
 
         public static double DegToRad(double degrees)
