@@ -35,7 +35,7 @@ namespace NovaTec.GravityTurnMod
         public int TimeToApoapsisTarget { get; set; } = 70;
         public double TargetAltitude { get; set; } = 280;
         public double MinThrottle{ get; set; } = 0.2;
-        public double TargetInclination { get; set; } = 51.6;
+        public double TargetInclination { get; set; } = 0;
         public double LaunchAzimuth{ get; set; } = 0.0;
         public bool UseWarp { get; set; } = true;
         public bool AutoStage{ get; set; } = true;
@@ -487,7 +487,7 @@ namespace NovaTec.GravityTurnMod
                 SetEngineThrottle(1.0);
 
             Console.WriteLine("Circularization dV X:" + dV.X + ", Y: " + dV.Y + ", Z: " + dV.Z + ", r2: " + dV.Length());
-            OrbitPointCce point = new OrbitPointCce(vehicle.Orbit.GetApoapsisPositionOrb(), vehicle.TimeSincePeriapsis, vehicle.NextApoapsisTime - Universe.GetElapsedSimTime(), TrueAnomaly.NaN);
+            OrbitPointCce point = new OrbitPointCce(vehicle.Orbit.GetApoapsisPositionOrb(), vehicle.TimeSincePeriapsis, vehicle.NextApoapsisTime - Universe.GetElapsedTime(), TrueAnomaly.NaN);
             PatchedConic patch = new PatchedConic(vehicle.NextApoapsisTime, vehicle.NextApoapsisTime, PatchTransition.Burn, PatchTransition.Burn, vehicle.Orbit, KeyHash.Make(new ReadOnlySpan<char>("Circularize".ToArray())));
             Burn burn = Burn.Create(point,
                 vehicle.NextApoapsisTime.Seconds()-ignitionOffset,
@@ -517,7 +517,7 @@ namespace NovaTec.GravityTurnMod
         {
             FlightComputer fc = vehicle.FlightComputer;
 
-            double secondsToIgnition = fc.Burn != null ? (fc.Burn.IgnitionTime - Universe.GetElapsedSimTime()).Seconds() : 0;
+            double secondsToIgnition = fc.Burn != null ? (fc.Burn.IgnitionTime - Universe.GetElapsedTime()).Seconds() : 0;
 
             if (UseWarp && fc.Burn != null)
             {
@@ -1034,14 +1034,13 @@ namespace NovaTec.GravityTurnMod
         {
             try
             {
-                SimTime gt = Universe.GetElapsedSimTime();
+                UniverseTime gt = Universe.GetElapsedTime();
                 if (ControlledVehicle != null
-                    && ControlledVehicle.NextApoapsisTime.IsNotNaN()
                     && ControlledVehicle.NextApoapsisTime.IsNotZero()
                     && Program.GetNearbyCelestial() != null
                     && Program.GetNearbyCelestial().GetNearSurfaceRadius() > 0)
                 {
-                    SimTime tta = ControlledVehicle.NextApoapsisTime - gt;
+                    UniverseTime tta = ControlledVehicle.NextApoapsisTime - gt;
                     if (ControlledVehicle.GetRadarAltitude() < 100 || tta.Seconds() < 0)
                         return 0;
                     else

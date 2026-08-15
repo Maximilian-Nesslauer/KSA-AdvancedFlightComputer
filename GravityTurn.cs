@@ -83,7 +83,7 @@ namespace NovaTec.GravityTurnMod
                     {
                         Controller.NextStequence();
                     }
-                    if (ImGui.MenuItem("Throttle UP") && vehicle.UpdateTask != null)
+                    if (ImGui.MenuItem("Throttle UP"))
                     {
                         Controller.ThrottleUp();
                         //vehicle.ProcessInput(InputAction.MainEngineThrottleUp, GlfwKeyAction.Press, 0);
@@ -91,7 +91,7 @@ namespace NovaTec.GravityTurnMod
                         //vehicle.ProcessInput(InputAction.MainEngineThrottleUp, GlfwKeyAction.Release, 0);
                         //Controller.RunWorker();
                     }
-                    if (ImGui.MenuItem("Throttle DOWN") && vehicle.UpdateTask != null)
+                    if (ImGui.MenuItem("Throttle DOWN"))
                     {
                         Controller.ThrottleDown();
                         //vehicle.ProcessInput(InputAction.MainEngineThrottleDown, GlfwKeyAction.Press, 0);
@@ -120,9 +120,8 @@ namespace NovaTec.GravityTurnMod
 
             double pdt = KSA.Program.GetPlayerDeltaTime();
             double pt = KSA.Program.GetPlayerTime();
-            SimTime gt = Universe.GetElapsedSimTime();
+            UniverseTime gt = Universe.GetElapsedTime();
             if (vehicle != null 
-                && vehicle.NextApoapsisTime.IsNotNaN() 
                 && vehicle.NextApoapsisTime.IsNotZero()
                 && Program.GetNearbyCelestial() != null
                )
@@ -146,6 +145,17 @@ namespace NovaTec.GravityTurnMod
                     Controller.TargetAltitude = talt;
                 }
 
+				ImGui.Text("Target inclination");
+				ImGui.SameLine();
+				ImGui.SetCursorPosX(x + width * 0.45f + ImGui.GetStyle().ItemInnerSpacing.X);
+				ImGui.SetNextItemWidth(width * 0.2f);
+				int tinc= (int)Controller.TargetInclination;
+				ImGui.InputInt("°", flags: ImGuiInputTextFlags.CharsDecimal, v: ref tinc);
+				if (tinc != Controller.TargetInclination)
+				{
+					Controller.TargetInclination = tinc;
+				}
+				
                 ImGui.Text("Pitch speed");
                 ImGui.SameLine();
                 ImGui.SetCursorPosX(x + width * 0.45f + ImGui.GetStyle().ItemInnerSpacing.X);
@@ -160,7 +170,7 @@ namespace NovaTec.GravityTurnMod
                 ImGui.SetCursorPosX(x + width * 0.45f + ImGui.GetStyle().ItemInnerSpacing.X);
                 ImGui.SetNextItemWidth(width * 0.2f);
                 double initialAngle = Controller.InitialPitch;
-                ImGui.InputDouble("°", format: "%.1f", flags: ImGuiInputTextFlags.CharsDecimal, v: ref initialAngle);
+                ImGui.InputDouble("° ", format: "%.1f", flags: ImGuiInputTextFlags.CharsDecimal, v: ref initialAngle);
                 if (initialAngle != Controller.InitialPitch)
                     Controller.InitialPitch = initialAngle;
 
@@ -237,15 +247,14 @@ namespace NovaTec.GravityTurnMod
                 double vss = vehicle.GetSurfaceSpeed();
                 ImGui.Text("Speed (surface):      " + (vss / 1000).ToString("n2") + "km/s");
                 ImGui.Text("Altitude:             " + (vehicle.GetRadarAltitude() / 1000).ToString("n1") + "km");
-                ImGui.Text("TWR:                  " + vehicle.NavBallData.ThrustWeightRatio.ToString("n2"));
+                //ImGui.Text("TWR:                  " + vehicle.NavBallData.ThrustWeightRatio.ToString("n2"));
                 
                 ImGui.Separator();
                 ImGui.Text("Burn dV:              " + Controller.DeltaVUsed.ToString("n0") + "m/s");
-                ImGui.Text(String.Format("Stage Sequence:       {0} of {1}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count));
+                //ImGui.Text(String.Format("Stage Sequence:       {0} of {1}", vehicle.Parts.SequenceList.ActiveSequence, vehicle.Parts.SequenceList.Count));
                 //ImGui.Text("Throttle:             " + vehicle.GetManualThrottle() * 100);
                 //ImGui.Text("Atmosphere:          " + (Controller.GetAtmosphereHeight()/1000).ToString("n1") + "km");
                 //ImGui.Text("Roll:                 " + Controller.GetRoll() + "°");
-                ImGui.Text("Target:               " + vehicle.FlightComputer.AttitudeTrackTarget.ToString() + ", " + vehicle.FlightComputer.AttitudeFrame.ToString());
                 
 
 
@@ -265,18 +274,19 @@ namespace NovaTec.GravityTurnMod
                 //ImGui.Text("target:      " + CoordToString(vehicle.FlightComputer.CustomAttitudeTarget));
                 //Controller.GetFuelTank();
                 //ReadOnlySpan<MoleState> moleStates = Controller.GetCurrentSequence().Parts. .Moles.States;
-                if (vehicle.FlightComputer.Burn != null)
-                    ImGui.Text(String.Format("Burn:          {0}s", vehicle.FlightComputer.Burn.BurnDuration));
-                else
+                if (vehicle.FlightComputer.Burn != null && vehicle.FlightComputer.Burn.BurnDuration > 0.1)
+                    ImGui.Text(String.Format("Burn:                 {0}s", vehicle.FlightComputer.Burn.BurnDuration.ToString("n1")));
+                else if (Controller.PitchesUp)
                     ImGui.Text("Pitching up:          " + Controller.PitchesUp + ", pitch: " + Program.AttitudePitch.Current);
+				//ImGui.Text("Target:               " + vehicle.FlightComputer.AttitudeTrackTarget.ToString() + ", " + vehicle.FlightComputer.AttitudeFrame.ToString());
 
-                //ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
-                //ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);vehicle.Orbit.StateVectors.PositionCci
+				//ImGui.Text("hasFuel: " + Controller.GetSequenceHasFuel() + ", ActiveControlSystem: " + vehicle.FlightComputer.ActiveControlSystem.X.ToString());
+				//ImGui.Text("ISP: " + vehicle.FlightComputer.VehicleConfig.TotalEngineIsp);vehicle.Orbit.StateVectors.PositionCci
 
 
-            }
+			}
 
-            ImGui.End();
+			ImGui.End();
 
             flags = ImGuiWindowFlags.NoTitleBar | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoScrollbar | ImGuiWindowFlags.NoBackground | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.MenuBar;
 
