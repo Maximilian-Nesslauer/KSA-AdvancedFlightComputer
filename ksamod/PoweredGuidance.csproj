@@ -29,6 +29,11 @@
          folder by the CopyToMods target below. -->
     <ProjectReference Include="..\gfold\Gfold.Core\Gfold.Core.csproj" />
     <None Include="..\gfold\native\ecos.dll" CopyToOutputDirectory="PreserveNewest" />
+
+    <!-- 6-DOF successive-convexification guidance. Like Gfold.Core it references
+         no game assembly, so the solve stays pure computation that can run off
+         the main thread. Currently dynamics + AD only; nothing calls it yet. -->
+    <ProjectReference Include="..\scvx\Scvx.Core\Scvx.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -65,10 +70,20 @@
        the folder via mod.toml and loads PoweredGuidance as the EntryAssembly. -->
   <Target Name="CopyToMods" AfterTargets="Build">
     <MakeDir Directories="$(ModDir)" />
-    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
+    <!-- Dependencies FIRST, entry assembly LAST. The game holds a lock on the entry
+         assembly whenever it is running, and MSBuild aborts the target at the first
+         failed Copy — so with the entry assembly first, a running game silently left
+         every dependency stale. That shipped new mod code against an hour-old
+         Scvx.Core.dll and looked like "the mod stopped working". -->
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ModDir)" />
+    <!-- Scvx.Core P/Invokes scs.dll; shipping it without would fail at the first
+         SCS call with a DllNotFoundException, not at load. (ecos.dll above is for
+         Gfold.Core, which still uses it — Scvx's ECOS port was removed.) -->
+    <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
   </Target>
 
   <!-- Release builds also produce a distributable zip: a top-level PoweredGuidance\ folder the
@@ -84,7 +99,9 @@
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="..\LICENSE" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="CHANGELOG.md" DestinationFolder="$(ReleaseDir)" />
     <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />

@@ -44,6 +44,16 @@ public sealed class Mod
                 nameof(OnPrepareWorker), BindingFlags.NonPublic | BindingFlags.Static);
             _harmony.Patch(prepTarget, prefix: new HarmonyMethod(prepPrefix));
 
+            // Direct gimbal control. A POSTFIX on ComputeControl, because that runs
+            // after ComputeTvcControl has already allocated (or zeroed) every
+            // gimbal — so our command is the last write and holds regardless of the
+            // vehicle's attitude mode. See KsaGimbalControl for the details.
+            MethodInfo tvcTarget = typeof(FlightComputer).GetMethod(
+                nameof(FlightComputer.ComputeControl), BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo tvcPostfix = typeof(Mod).GetMethod(
+                nameof(OnComputeControl), BindingFlags.NonPublic | BindingFlags.Static);
+            _harmony.Patch(tvcTarget, postfix: new HarmonyMethod(tvcPostfix));
+
             Console.WriteLine("[PG] loaded via StarMap; mod dir = " + ModDir);
         }
         catch (Exception e)
@@ -85,6 +95,21 @@ public sealed class Mod
         catch (Exception e)
         {
             LogErrorThrottled("autopilot apply failed: ", e);
+        }
+    }
+
+    // Runs on a VehicleSolvers job thread, not the main thread — keep it allocation-free
+    // and non-throwing. __instance is the worker's FlightComputer COPY, which is why
+    // KsaGimbalControl identifies the vehicle by VehicleConfig rather than by this.
+    private static void OnComputeControl(FlightComputer __instance, ref FlightComputerOutput outputs)
+    {
+        try
+        {
+            KsaGimbalControl.OnComputeControl(__instance, ref outputs);
+        }
+        catch (Exception e)
+        {
+            LogErrorThrottled("gimbal override failed: ", e);
         }
     }
 

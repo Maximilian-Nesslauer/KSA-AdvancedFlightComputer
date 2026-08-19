@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Scvx</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Both native solvers travel with the managed library, same pattern as
+         Gfold.Core. ecos.dll is shared with gfold rather than vendored twice —
+         it is the same binary; scs.dll is built by build-scs.ps1 into
+         scvx/native. Each DLL's own DllImportResolver (EcosNative/ScsNative)
+         loads it from beside this assembly. -->
+    <None Include="..\..\gfold\native\ecos.dll" Link="ecos.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\native\scs.dll" Link="scs.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <!-- Deliberately references no other project and no game assembly. The SCvx
+       solve must be pure computation over plain data so it can run off the main
+       thread, and keeping that out at project level makes a violation a compile
+       error rather than a review comment. -->
+
+</Project>
