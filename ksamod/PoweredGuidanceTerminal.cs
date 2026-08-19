@@ -40,12 +40,12 @@ public static partial class PoweredGuidanceWindow
     {
         _engage = true;
         _autoStage = true;
-        _running = false;
+        _s.Running = false;
         _landingPhase = LandingPhase.TerminalHover;
         _termPidUp = _termPidE = _termPidN = default;
         _termInit = false;
         _termSetE = _termSetN = _termSetUp = 0.0;
-        _hasCommand = false;
+        _s.HasCommand = false;
         _termTabSelectPending = true;
         _landingStatus = "Terminal hover engaged.";
     }
@@ -132,8 +132,8 @@ public static partial class PoweredGuidanceWindow
         double3 dir = dirLocal.X * up + dirLocal.Y * east + dirLocal.Z * north;
         if (dir.Length() > 1e-6)
         {
-            _commandDir = double3.Normalize(dir);
-            _hasCommand = true;
+            _s.CommandDir = double3.Normalize(dir);
+            _s.HasCommand = true;
         }
     }
 

@@ -54,6 +54,12 @@ public static partial class PoweredGuidanceWindow
             return null;
         }
 
+        // THE WINDOW IS ABOUT THE FOCUSED VEHICLE. The sim thread points the ambient
+        // state at whichever craft it is servicing - routinely not this one now that a
+        // booster can fly itself home unattended - so the draw claims it back before
+        // reading or writing anything.
+        Use(vehicle);
+
         Orbit orbit = vehicle.Orbit;
         IParentBody parent = orbit.Parent;
         double mu = parent.Mu;
@@ -104,10 +110,10 @@ public static partial class PoweredGuidanceWindow
         StepLanding(vehicle, orbit, parent, mu, bodyRadius);
         StepAscent(vehicle, orbit, parent, mu, bodyRadius);
 
-        if (_error.Length > 0)
-            ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Error: " + _error);
-        if (_status.Length > 0)
-            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f), _status);
+        if (_s.GuidanceError.Length > 0)
+            ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Error: " + _s.GuidanceError);
+        if (_s.Status.Length > 0)
+            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f), _s.Status);
 
         DrawStatusReadout(vehicle, orbit, bodyRadius);
         return vehicle;
@@ -153,17 +159,17 @@ public static partial class PoweredGuidanceWindow
     {
         ImGui.SeparatorText("Guidance");
         bool landingActive = _landingPhase != LandingPhase.Idle;
-        if (_running || landingActive)
+        if (_s.Running || landingActive)
         {
             double3 r = orbit.StateVectors.PositionCci;
-            double3 steer = _hasCommand ? _commandDir : Guidance.Steering;
+            double3 steer = _s.HasCommand ? _s.CommandDir : Guidance.Steering;
 
             ImGui.Text(landingActive
                 ? $"Phase: landing — {_landingPhase} (UPFG mode {Guidance.Mode})"
-                : $"Phase: {PhaseName(_phase)}");
-            if (!landingActive && _phase == AscentPhase.Terminal)
+                : $"Phase: {PhaseName(_s.Phase)}");
+            if (!landingActive && _s.Phase == AscentPhase.Terminal)
             {
-                double remaining = _cutoffTime - SimNow();
+                double remaining = _s.CutoffTime - SimNow();
                 if (remaining > 0)
                     ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                         $"TERMINAL — attitude frozen, cutoff in {remaining,5:F1} s");
@@ -197,7 +203,7 @@ public static partial class PoweredGuidanceWindow
         // current anyway — so the staging can be checked on the pad, before
         // committing to a launch, at no extra cost.
         ImGui.SeparatorText("Vehicle stages (UPFG)");
-        var stageList = (_running || landingActive) ? _upfgVehicle : _stageModel;
+        var stageList = (_s.Running || landingActive) ? _s.UpfgVehicle : _s.StageModel;
         if (stageList != null && stageList.Stages.Count > 0)
         {
             ImGui.Text("       thrust      Isp      wet      dry     burn        dV");
@@ -251,23 +257,23 @@ public static partial class PoweredGuidanceWindow
 
         // --- Autopilot ---
         ImGui.SeparatorText("Autopilot");
-        if (_engage && _running && _hasCommand)
+        if (_engage && _s.Running && _s.HasCommand)
         {
             // The actual flight-computer writes happen in ApplyAutopilot, from the
             // Harmony prefix just before the sim snapshots the FC (Vehicle.
             // PrepareWorker). Writing from here — the UI draw — lands in the
             // window where the sim's copy-back erases it.
             float errDeg = (float)(vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / System.Math.PI);
-            ImGui.Text($"Flying {PhaseName(_phase)} attitude. Error: {errDeg:F1} deg");
+            ImGui.Text($"Flying {PhaseName(_s.Phase)} attitude. Error: {errDeg:F1} deg");
             ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f), _autoStage
-                ? (_cutoffDone
+                ? (_s.CutoffDone
                     ? "(Auto: engines cut off — done.)"
-                    : (_stagingActive
+                    : (_s.StagingActive
                         ? "(Auto: STAGING — firing sequences until thrust returns.)"
                         : "(Auto: engines on, full throttle, staging at burnout.)"))
                 : "(Steering only — throttle and staging are manual.)");
         }
-        else if (_engage && _running)
+        else if (_engage && _s.Running)
         {
             ImGui.Text("Waiting for a steering solution...");
         }

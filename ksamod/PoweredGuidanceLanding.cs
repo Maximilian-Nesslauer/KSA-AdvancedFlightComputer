@@ -213,7 +213,7 @@ public static partial class PoweredGuidanceWindow
         {
             _engage = true;
             _autoStage = true;
-            _running = false;
+            _s.Running = false;
             _landingPhase = LandingPhase.GfoldDescent;
             _gfoldHandoffTime = SimNow();
             _gfoldLastSolveTime = double.NegativeInfinity;
@@ -221,7 +221,7 @@ public static partial class PoweredGuidanceWindow
             _gfoldFailStreak = 0;
             _gfoldTrackInit = false;
             _gfoldEngineOn = false;
-            _hasCommand = false;
+            _s.HasCommand = false;
             _landingStatus = "G-FOLD started from current state.";
         }
         if (ImGui.Button("Abort landing"))
@@ -309,11 +309,11 @@ public static partial class PoweredGuidanceWindow
         _burnDownrangeKm = downrange / 1000.0;
 
         _burnStartTime = SimNow() + wait;
-        _running = false;          // landing owns guidance and the autopilot now
+        _s.Running = false;          // landing owns guidance and the autopilot now
         _autoLaunch = false;
-        _cutoffDone = false;
-        _stagingActive = false;
-        _hasCommand = false;
+        _s.CutoffDone = false;
+        _s.StagingActive = false;
+        _s.HasCommand = false;
         _landingPhase = LandingPhase.Coast;
         // A fresh EXECUTE re-arms the prompt even if an earlier one was declined.
         _warpDeclinedLabel = "";
@@ -407,7 +407,7 @@ public static partial class PoweredGuidanceWindow
         if (contact && _touchdownArmed && IsPoweredDescentPhase(_landingPhase))
         {
             _gfoldThrottle = 0.0;
-            _hasCommand = false;
+            _s.HasCommand = false;
             _landingPhase = LandingPhase.Done;
             _landingCutPending = true;
             _landingStatus = $"TOUCHDOWN — contact detected, engine cut ({_gfoldSpeedMs:F1} m/s).";
@@ -448,7 +448,7 @@ public static partial class PoweredGuidanceWindow
             {
                 if (_gLimitEnabled && _gLimitG > 0.1)
                     ApplyGLimit(live, _gLimitG);
-                _upfgVehicle = live;
+                _s.UpfgVehicle = live;
 
                 double3 r = orbit.StateVectors.PositionCci;
                 double3 v = orbit.StateVectors.VelocityCci;
@@ -470,17 +470,17 @@ public static partial class PoweredGuidanceWindow
                     Rdes = gateDir * gateRadius,
                 };
                 Guidance.Step(r, v, vehicle.TotalMass, mu, target, live, 3);
-                _commandDir = Guidance.Steering;
-                _hasCommand = _commandDir.Length() > 0.5;
+                _s.CommandDir = Guidance.Steering;
+                _s.HasCommand = _s.CommandDir.Length() > 0.5;
             }
-            _failStreak = 0;
-            _error = "";
+            _s.FailStreak = 0;
+            _s.GuidanceError = "";
         }
         catch (Exception e)
         {
-            _failStreak++;
-            _error = e.Message;
-            if (_failStreak > MaxFailStreak)
+            _s.FailStreak++;
+            _s.GuidanceError = e.Message;
+            if (_s.FailStreak > MaxFailStreak)
             {
                 _landingPhase = LandingPhase.Done;
                 _landingCutPending = true;

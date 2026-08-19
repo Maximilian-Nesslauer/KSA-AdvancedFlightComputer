@@ -49,7 +49,7 @@ public static partial class PoweredGuidanceWindow
     /// Never null once Use() has run. It starts as a detached instance so a stray read
     /// before the first vehicle arrives reads harmless defaults rather than throwing.
     /// </summary>
-    private static SixDofState _s = new();
+    private static VehicleAutopilotState _s = new();
 
     /// <summary>
     /// Mass loss in a single step that means a separation rather than a burn. A step is
@@ -59,9 +59,9 @@ public static partial class PoweredGuidanceWindow
     private const double StagingMassDropFraction = 0.05;
 
     /// <summary>Point the ambient state at this vehicle for the work that follows.</summary>
-    private static SixDofState Use(Vehicle vehicle)
+    private static VehicleAutopilotState Use(Vehicle vehicle)
     {
-        _s = vehicle != null ? SixDofState.For(vehicle) : new SixDofState();
+        _s = vehicle != null ? VehicleAutopilotState.For(vehicle) : new VehicleAutopilotState();
         return _s;
     }
 

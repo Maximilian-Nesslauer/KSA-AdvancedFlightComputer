@@ -280,7 +280,7 @@ public static partial class PoweredGuidanceWindow
         double3 dirLocal = ClampToCone(cmd, _gfoldPointingDeg);
         double3 targetDir = double3.Normalize(f.VecToCci(dirLocal));
         if (!double.IsFinite(targetDir.X) || !double.IsFinite(targetDir.Y) || !double.IsFinite(targetDir.Z))
-            targetDir = _commandDir.Length() > 0.5 ? _commandDir : f.Ex;
+            targetDir = _s.CommandDir.Length() > 0.5 ? _s.CommandDir : f.Ex;
 
         // First-order low-pass toward the fresh command, so feedback noise and
         // re-solve steps don't reach the engine/gimbal as chatter.
@@ -292,10 +292,10 @@ public static partial class PoweredGuidanceWindow
         _gfoldTrackInit = true;
 
         _gfoldThrottle += a * (targetThrottle - _gfoldThrottle);
-        double3 blended = _commandDir.Length() > 0.5 ? _commandDir + a * (targetDir - _commandDir) : targetDir;
+        double3 blended = _s.CommandDir.Length() > 0.5 ? _s.CommandDir + a * (targetDir - _s.CommandDir) : targetDir;
         if (blended.Length() > 1e-6)
-            _commandDir = double3.Normalize(blended);
-        _hasCommand = true;
+            _s.CommandDir = double3.Normalize(blended);
+        _s.HasCommand = true;
     }
 
     // Unit thrust direction of v, clamped to within maxAngleDeg of local up (+X).

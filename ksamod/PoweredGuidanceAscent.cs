@@ -27,7 +27,6 @@ public static partial class PoweredGuidanceWindow
     private static double _apKm = 420.0;
     private static double _incDeg = 51.6;
     private static double _lanDeg = 250;
-    private static bool _lanSeeded;
 
     // Launch-to-target: pick another vehicle, derive its plane (inc/LAN) and a
     // co-elliptic chase orbit some km below it, wait (warping, if confirmed) until
@@ -49,13 +48,9 @@ public static partial class PoweredGuidanceWindow
     // never crossed — the failsafe against an open-loop runaway vehicle.
     private const double FailsafeAltKm = 50.0;
 
-    private enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
-    private static AscentPhase _phase = AscentPhase.Vertical;
-    private static double _turnStartTime;
+    public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
 
     // Terminal-phase freeze: the steering at freeze time and the predicted cutoff.
-    private static double3 _frozenDir;
-    private static double _cutoffTime;
 
     // The Ascent tab body: target orbit, profile tuning, launch-to-target, and the
     // commit controls. Everything the user sets is in this one panel — the profile
@@ -65,10 +60,10 @@ public static partial class PoweredGuidanceWindow
                                       double bodyRadius)
     {
         // Seed the LAN from where the vessel is right now, once a vehicle exists.
-        if (!_lanSeeded)
+        if (!_s.LanSeeded)
         {
             _lanDeg = LanOverhead(orbit.StateVectors.PositionCci, _incDeg);
-            _lanSeeded = true;
+            _s.LanSeeded = true;
         }
 
         // Both sections open by default: everything that shapes the ascent should
@@ -112,7 +107,7 @@ public static partial class PoweredGuidanceWindow
         ImGui.SameLine();
         if (ImGui.Button("Stop / reset"))
         {
-            _running = false;
+            _s.Running = false;
             _autoLaunch = false;
         }
         ImGui.SameLine();
@@ -128,32 +123,32 @@ public static partial class PoweredGuidanceWindow
         // releases. Leaving it engaged kept CommandAttitude running on every sim
         // step (thousands/s under warp) and held the flight computer in active
         // attitude tracking — the lag that appeared with warp and lingered after.
-        if (_running && _phase == AscentPhase.Terminal && SimNow() > _cutoffTime + 15.0)
+        if (_s.Running && _s.Phase == AscentPhase.Terminal && SimNow() > _s.CutoffTime + 15.0)
         {
-            _running = false;
-            _status = "Ascent complete — guidance released.";
+            _s.Running = false;
+            _s.Status = "Ascent complete — guidance released.";
         }
 
-        if (!_running)
+        if (!_s.Running)
             return;
 
         try
         {
             StepGuidance(vehicle, orbit, parent, mu, bodyRadius);
-            if (_engage && _autoStage && !_cutoffDone)
+            if (_engage && _autoStage && !_s.CutoffDone)
                 AutoSequence(vehicle);
-            _failStreak = 0;
-            _error = "";
+            _s.FailStreak = 0;
+            _s.GuidanceError = "";
         }
         catch (Exception e)
         {
             // Transient failures (staging frames, mid-mutation part trees) skip
             // the step and keep flying the last solution; only a sustained streak
             // means something is actually broken.
-            _failStreak++;
-            _error = e.Message;
-            if (_failStreak > MaxFailStreak)
-                _running = false;
+            _s.FailStreak++;
+            _s.GuidanceError = e.Message;
+            if (_s.FailStreak > MaxFailStreak)
+                _s.Running = false;
         }
     }
 
@@ -162,15 +157,15 @@ public static partial class PoweredGuidanceWindow
     {
         _landingPhase = LandingPhase.Idle; // ascent takes over from any landing flow
         Guidance.Reset();
-        _error = "";
-        _status = "";
-        _failStreak = 0;
-        _running = true;
-        _phase = AscentPhase.Vertical;
-        _hasCommand = false;
-        _cutoffDone = false;
-        _stagingActive = false;
-        _lastSequenceTime = double.NegativeInfinity;
+        _s.GuidanceError = "";
+        _s.Status = "";
+        _s.FailStreak = 0;
+        _s.Running = true;
+        _s.Phase = AscentPhase.Vertical;
+        _s.HasCommand = false;
+        _s.CutoffDone = false;
+        _s.StagingActive = false;
+        _s.LastSequenceTime = double.NegativeInfinity;
     }
 
     // The launch-to-target panel: target picker, chase-orbit offset, node direction,
@@ -275,13 +270,13 @@ public static partial class PoweredGuidanceWindow
             _lanDeg = UpfgTarget.RadToDeg(lanT);
             _peKm = chasePe;
             _apKm = chaseAp;
-            _lanSeeded = true;
+            _s.LanSeeded = true;
         }
 
         // Armed: ask to warp to just before the window (the warp itself needs the
         // user's confirmation — see DrawWarpPrompt), then press EXECUTE for them.
         // The engage/auto toggles are respected as configured, not forced.
-        if (_autoLaunch && !_running && !double.IsNaN(waitSec))
+        if (_autoLaunch && !_s.Running && !double.IsNaN(waitSec))
         {
             if (!_engage || !_autoStage)
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
@@ -303,7 +298,7 @@ public static partial class PoweredGuidanceWindow
                 ? "Auto-warping to the launch window..."
                 : "Armed — will EXECUTE at the window.");
         }
-        else if (_autoLaunch && _running)
+        else if (_autoLaunch && _s.Running)
         {
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                 "Guidance already running — auto-launch is waiting (Stop / reset to clear).");
@@ -319,7 +314,7 @@ public static partial class PoweredGuidanceWindow
         // In the terminal phase the solution is frozen: re-running UPFG over a
         // near-zero remaining arc makes the steering chase itself and destabilizes
         // the attitude right before cutoff.
-        if (_phase != AscentPhase.Terminal)
+        if (_s.Phase != AscentPhase.Terminal)
         {
             // Rebuild from the live part tree every step so UPFG always sees current
             // masses and the actual remaining staging sequence. No usable thrust is a
@@ -328,16 +323,16 @@ public static partial class PoweredGuidanceWindow
             UpfgVehicle live = BuildUpfgVehicle(vehicle);
             if (live == null)
             {
-                _status = "No thrust — holding last solution (staging/coast).";
+                _s.Status = "No thrust — holding last solution (staging/coast).";
             }
             else
             {
                 if (_gLimitEnabled && _gLimitG > 0.1)
                     ApplyGLimit(live, _gLimitG);
-                _status = "";
-                _upfgVehicle = live;
+                _s.Status = "";
+                _s.UpfgVehicle = live;
                 var target = UpfgTarget.FromOrbit(_peKm, _apKm, _incDeg, _lanDeg, bodyRadius, mu);
-                Guidance.Step(r, v, vehicle.TotalMass, mu, target, _upfgVehicle);
+                Guidance.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle);
             }
         }
 
@@ -353,13 +348,13 @@ public static partial class PoweredGuidanceWindow
         double upfgPitch = PitchOf(up, Guidance.Steering);
         double turnPitch = TurnPitchDeg();
 
-        switch (_phase)
+        switch (_s.Phase)
         {
             case AscentPhase.Vertical:
                 if (alt >= _turnStartAltKm * 1000.0)
                 {
-                    _phase = AscentPhase.Turn;
-                    _turnStartTime = SimNow();
+                    _s.Phase = AscentPhase.Turn;
+                    _s.TurnStartTime = SimNow();
                 }
                 break;
 
@@ -369,44 +364,44 @@ public static partial class PoweredGuidanceWindow
                 // regardless, so an open-loop profile can't run away.
                 if ((Guidance.Converged && turnPitch <= upfgPitch)
                     || alt >= FailsafeAltKm * 1000.0)
-                    _phase = AscentPhase.ClosedLoop;
+                    _s.Phase = AscentPhase.ClosedLoop;
                 break;
 
             case AscentPhase.ClosedLoop:
                 if (Guidance.Converged && Guidance.Tgo <= TerminalTgo)
                 {
-                    _phase = AscentPhase.Terminal;
-                    _frozenDir = Guidance.Steering;
-                    _cutoffTime = SimNow() + Guidance.Tgo;
+                    _s.Phase = AscentPhase.Terminal;
+                    _s.FrozenDir = Guidance.Steering;
+                    _s.CutoffTime = SimNow() + Guidance.Tgo;
                 }
                 break;
         }
 
-        switch (_phase)
+        switch (_s.Phase)
         {
             case AscentPhase.Vertical:
-                _commandDir = up;
+                _s.CommandDir = up;
                 break;
             case AscentPhase.Turn:
-                _commandDir = TurnDir(up, turnPitch);
+                _s.CommandDir = TurnDir(up, turnPitch);
                 break;
             case AscentPhase.ClosedLoop:
-                _commandDir = Guidance.Steering;
+                _s.CommandDir = Guidance.Steering;
                 break;
             case AscentPhase.Terminal:
-                _commandDir = _frozenDir;
+                _s.CommandDir = _s.FrozenDir;
                 break;
         }
-        _hasCommand = _commandDir.Length() > 0.5;
+        _s.HasCommand = _s.CommandDir.Length() > 0.5;
     }
 
     // The open-loop turn's commanded pitch: down from vertical at the fixed rate
     // since the turn started, never below the horizon.
     private static double TurnPitchDeg()
     {
-        if (_phase != AscentPhase.Turn)
+        if (_s.Phase != AscentPhase.Turn)
             return 90.0;
-        double elapsed = SimNow() - _turnStartTime;
+        double elapsed = SimNow() - _s.TurnStartTime;
         return Math.Max(90.0 - _turnRateDegS * elapsed, 0.0);
     }
 

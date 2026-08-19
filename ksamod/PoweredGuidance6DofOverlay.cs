@@ -20,7 +20,7 @@ public static partial class PoweredGuidanceWindow
         // ambient current. The overlay draws what the player is looking at, and the
         // draw reaches it through several entry points - relying on one of them having
         // pointed the ambient at the right vehicle would be a trap.
-        if (!_show6DofOverlay || !SixDofState.TryGet(Program.ControlledVehicle, out SixDofState st)
+        if (!_show6DofOverlay || !VehicleAutopilotState.TryGet(Program.ControlledVehicle, out VehicleAutopilotState st)
             || !st.Active)
             return;
 

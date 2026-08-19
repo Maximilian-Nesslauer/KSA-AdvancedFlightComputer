@@ -1,9 +1,10 @@
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
+using PoweredGuidance.Upfg;
 using KSA;
 
 /// <summary>
-/// Everything the 6-DOF autopilot remembers about ONE vehicle.
+/// Everything the autopilot remembers about ONE vehicle.
 ///
 /// This used to be static fields on PoweredGuidanceWindow, which meant the mod could
 /// fly exactly one vehicle at a time — and worse, that the state outlived the vehicle
@@ -20,7 +21,7 @@ using KSA;
 /// was set. What lives here is what a vehicle is DOING: whether guidance is engaged,
 /// its plan, its worker, and the counters the escalation ladder runs on.
 /// </summary>
-public sealed class SixDofState
+public sealed class VehicleAutopilotState
 {
     // --- engagement ---
     public Ksa6DofGuidance Guidance;
@@ -72,6 +73,47 @@ public sealed class SixDofState
     /// </summary>
     public double LastMass;
 
+    // ------------------------------------------------------------------ UPFG / ascent
+    //
+    // The flight-computer path, which every non-6-DOF mode drives. These were static
+    // too, so two vehicles would have shared one _running, one _status and one
+    // command direction - the upper stage's guidance writing over the booster's.
+
+    /// <summary>Guidance is driving the flight computer for this vehicle.</summary>
+    public bool Running;
+    public bool WasEngaged;
+    public string GuidanceError = "";
+    public string Status = "";
+    public int FailStreak;
+
+    /// <summary>The staged vehicle model UPFG plans against, rebuilt as the stack changes.</summary>
+    public UpfgVehicle UpfgVehicle;
+
+    /// <summary>Last commanded inertial direction, and whether there is one.</summary>
+    public double3 CommandDir;
+    public bool HasCommand;
+
+    public bool CutoffDone;
+    public bool StagingActive;
+    public double LastSequenceTime = double.NegativeInfinity;
+
+    // The stage model cache. VehicleStageModel used to carry the vehicle it was built
+    // for, purely so a switch could invalidate it; the key is the vehicle now, so that
+    // field is gone.
+    public UpfgVehicle StageModel;
+    public bool StageModelDirty = true;
+    public long StageModelTick;
+
+    /// <summary>A flight-computer reset the draw asked for, applied on the sim thread.</summary>
+    public bool FcResetPending;
+
+    // ------------------------------------------------------------------ ascent
+    public PoweredGuidanceWindow.AscentPhase Phase = PoweredGuidanceWindow.AscentPhase.Vertical;
+    public double TurnStartTime;
+    public double3 FrozenDir;
+    public double CutoffTime;
+    public bool LanSeeded;
+
     /// <summary>
     /// True when the sim thread may touch this vehicle's guidance: solve on it, rebuild
     /// it, or replace it. While a job is in flight the worker owns it outright — only
@@ -86,17 +128,17 @@ public sealed class SixDofState
     /// the exact bookkeeping that made a stale plan survive a save load in the first
     /// place. Nothing here needs to outlive its vehicle.
     /// </summary>
-    private static readonly ConditionalWeakTable<Vehicle, SixDofState> Table = new();
+    private static readonly ConditionalWeakTable<Vehicle, VehicleAutopilotState> Table = new();
 
     /// <summary>State for this vehicle, created on first use.</summary>
-    public static SixDofState For(Vehicle vehicle) => Table.GetOrCreateValue(vehicle);
+    public static VehicleAutopilotState For(Vehicle vehicle) => Table.GetOrCreateValue(vehicle);
 
     /// <summary>
     /// State for this vehicle ONLY if it already has some. The autopilot hook runs for
     /// every vehicle on every sim step — thousands of calls a second under time warp —
     /// so the hot path must not allocate for craft that have never been engaged.
     /// </summary>
-    public static bool TryGet(Vehicle vehicle, out SixDofState state)
+    public static bool TryGet(Vehicle vehicle, out VehicleAutopilotState state)
     {
         state = null;
         return vehicle != null && Table.TryGetValue(vehicle, out state);
