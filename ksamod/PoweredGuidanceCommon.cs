@@ -7,13 +7,16 @@ using HarmonyLib;
 using KSA;
 using PoweredGuidance.Upfg;
 
-// Shared state and plumbing used by both the Ascent and Landing flows: the
-// engage/auto toggles, the commanded attitude, the autopilot writes (applied from
-// the Vehicle.PrepareWorker Harmony prefix), auto-staging, the UPFG vehicle
-// builder, the warp-confirmation prompt, and small math helpers.
+// Shared plumbing used by every flow: the per-vehicle step-and-apply entry point
+// (ApplyAutopilot, called from the Vehicle.PrepareWorker Harmony prefix for each
+// craft in turn), the commanded attitude, auto-staging, the UPFG vehicle builder,
+// the warp-confirmation prompt, and small math helpers.
+//
+// The state these act on is NOT here — it lives on the vehicle being serviced, via
+// the ambient _s pointer (see VehicleAutopilotState). What remains static in this
+// partial class belongs to the panel or to the process, not to a craft.
 public static partial class PoweredGuidanceWindow
 {
-    private static bool _engage = true;      // toggles default on — the normal flow
 
     // Guidance must survive transient bad frames (the staging frame reports zero
     // thrust while the next engine ignites; the part tree can be mid-mutation). A
@@ -21,28 +24,25 @@ public static partial class PoweredGuidanceWindow
     // unbroken run of failures stops guidance for good.
     private const int MaxFailStreak = 600; // ~10 s of consecutive bad frames
 
-    private static readonly UpfgGuidance Guidance = new UpfgGuidance();
+    // THE UPFG SOLVER IS PER VEHICLE — see VehicleAutopilotState.Upfg. It used to be
+    // one static instance shared by every craft, which is wrong for a filter that
+    // warm-starts from its own previous state and differences velocities across
+    // calls: switching focus fed one vehicle's inertial velocity into another's vgo.
 
     // The staged vehicle model UPFG flies, rebuilt from KSA's sequence list every
     // guidance step (matching original navbox, where the sim feeds UPFG current
     // data each cycle): stage 0 always carries the present masses, so burn times
     // are inherently time-remaining, and manual staging shows up automatically.
 
-    // The attitude the current phase wants, produced each frame and applied from
-    // the Vehicle.PrepareWorker prefix (see ApplyAutopilot).
-
     // Auto engines & staging: while armed (and the autopilot is engaged), the mod
     // ignites the first sequence, fires the next sequence whenever the current
     // powered phase has no thrust or is about to flame out, and shuts the engines
     // down at the terminal cutoff. Throttle is forced to 1 while burning.
-    private static bool _autoStage = true;   // defaults on, like _engage
     private const double SequenceCooldown = 1.0;   // s between auto activations
 
     // Vehicle-wide acceleration limit: any part of any burn that would exceed this
     // becomes a constant-acceleration (Mode 2) segment in the UPFG stage list, and
     // the auto-throttle follows UPFG's throttle command to hold it.
-    private static bool _gLimitEnabled;
-    private static double _gLimitG = 4.0;
 
     private const double WarpLeadTime = 10.0;  // end auto-warp this many s early
 
@@ -131,7 +131,16 @@ public static partial class PoweredGuidanceWindow
         }
 
         bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
-        if (thrustOn && !ShouldDropSpentEngines(vehicle, sequenceList))
+
+        // EVALUATED UNCONDITIONALLY, not short-circuited behind thrustOn. Its real
+        // output is not just the bool: it refills _spentEngineParts, and the
+        // activation below records that set as "already staged for". Skipping the
+        // call left the buffer holding whatever the PREVIOUS vehicle in this step's
+        // sweep put there, and that craft's engine ids were then written into this
+        // one's SpentStagedFor. Harmless while one vehicle was ever serviced; not
+        // once the hook runs every craft in sequence.
+        bool dropSpent = ShouldDropSpentEngines(vehicle, sequenceList);
+        if (thrustOn && !dropSpent)
         {
             _s.StagingActive = false;
             return;
@@ -151,8 +160,8 @@ public static partial class PoweredGuidanceWindow
             vehicle.UpdateAfterPartTreeModification();
             _s.LastSequenceTime = now;
             _s.StageModelDirty = true;   // the stage list just changed under us
-            _spentStagedFor.Clear();
-            _spentStagedFor.UnionWith(_spentEngineParts);
+            _s.SpentStagedFor.Clear();
+            _s.SpentStagedFor.UnionWith(_spentEngineParts);
         }
     }
 
@@ -241,10 +250,11 @@ public static partial class PoweredGuidanceWindow
             CollectSubtree(child, into);
     }
 
-    // Engine parts that are lit but out of propellant, and the set we last staged
-    // for. Kept as fields so the check allocates nothing on the sim path.
+    // Engine parts that are lit but out of propellant. SCRATCH: filled and consumed
+    // within one vehicle's AutoSequence call, never read across calls — the set we
+    // last staged for is per vehicle (VehicleAutopilotState.SpentStagedFor). Kept as a
+    // field so the check allocates nothing on the sim path.
     private static readonly HashSet<uint> _spentEngineParts = new HashSet<uint>();
-    private static readonly HashSet<uint> _spentStagedFor = new HashSet<uint>();
 
     // True when a burnt-out engine is still attached and the next sequence is the
     // one that separates something — i.e. spent boosters waiting to be dropped
@@ -267,7 +277,7 @@ public static partial class PoweredGuidanceWindow
             if (engine.Module.IsActive && !engine.State.IsPropellantAvailable)
                 _spentEngineParts.Add(engine.Module.Parent.FullPart.InstanceId);
         }
-        if (_spentEngineParts.Count == 0 || _spentEngineParts.SetEquals(_spentStagedFor))
+        if (_spentEngineParts.Count == 0 || _spentEngineParts.SetEquals(_s.SpentStagedFor))
             return false;
 
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
@@ -426,90 +436,99 @@ public static partial class PoweredGuidanceWindow
     // immediately before the sim snapshots the flight computer for this step, the one
     // place where our writes are guaranteed to reach the control loop instead of being
     // erased by the worker copy-back.
+    //
+    // EVERY MODE IS STEPPED HERE, FOR EVERY VEHICLE. Ascent and the landing machine
+    // used to be stepped from the UI draw, which is called once per frame for the
+    // focused craft only — so an unfocused vehicle's guidance simply stopped, and its
+    // flight computer coasted on whatever attitude it had been left holding until the
+    // player looked at it again. That is not an autopilot per vehicle; it is one
+    // autopilot that follows the camera. Running the flows from the per-vehicle sim
+    // hook is what makes a booster able to fly itself home unwatched, and it also
+    // closes the frame of lag that came from computing a command in the draw and only
+    // applying it at the NEXT step's prefix.
     public static void ApplyAutopilot(Vehicle vehicle)
     {
         bool focused = ReferenceEquals(vehicle, Program.ControlledVehicle);
 
-        // Point the ambient state at the focused craft before the housekeeping below
-        // touches it. Only for the focused one: Use creates the entry, and this runs
-        // for every vehicle on every step, so doing it unconditionally would allocate
-        // state for craft that have never been engaged. Unfocused vehicles running
-        // 6-DOF get theirs inside Step6Dof.
+        // Point the ambient state at THIS vehicle for everything that follows.
+        //
+        // For() only for the focused craft, because it creates the entry and this runs
+        // for every vehicle on every sim step — thousands of calls a second under time
+        // warp — so a craft that has never been engaged must cost one failed lookup
+        // and no allocation.
         if (focused)
             Use(vehicle);
+        else if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
+            _s = state;
+        else
+            return;
 
-        // FOCUSED-VEHICLE HOUSEKEEPING FIRST, and ahead of the 6-DOF dispatch on
-        // purpose. Both of these used to run before it and must keep doing so: the
-        // trace is what draws the flown trajectory, and losing it the moment guidance
-        // engages would blank the overlay during exactly the descent worth watching.
-        if (focused)
+        bool sixDof = _s.Active || _s.EngagePending;
+        bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
+        bool flying = sixDof || _s.Running || landingActive || _s.WasEngaged || _s.LandingCutPending;
+
+        // Nothing engaged and nobody looking: an unfocused idle craft is not worth a
+        // stage-model rebuild or a trace sample.
+        if (!focused && !flying)
+            return;
+
+        // HOUSEKEEPING FIRST, ahead of the 6-DOF dispatch on purpose — that dispatch
+        // returns, so anything below it is skipped for a craft flying 6-DOF.
+        //
+        // Keep the staging model current even while the autopilot is idle: both
+        // EXECUTE handlers need a stage list the instant they are pressed, and this is
+        // the only point in the frame where it can be built without racing the game's
+        // own recompute on the vehicle worker thread. Gated to ~4 Hz on the wall
+        // clock, per vehicle, so time warp doesn't multiply it.
+        RefreshStageModel(vehicle);
+
+        // Likewise the flown-trajectory trace: sampled off the simulation rather than
+        // the frame rate, and recorded whether or not guidance is running so the track
+        // is already there when the overlay is switched on — losing it the moment
+        // guidance engages would blank the overlay during exactly the descent worth
+        // watching.
+        RecordTrace(vehicle, vehicle.Orbit);
+
+        // A requested reset runs ahead of everything below: the whole point of the
+        // button is to recover when the mod's own state is wrong, so it must not
+        // depend on that state saying the autopilot is still active.
+        if (_s.FcResetPending)
         {
-            // Keep the staging model current even while the autopilot is idle: both
-            // EXECUTE handlers need a stage list the instant they are pressed, and
-            // this is the only point in the frame where it can be built without
-            // racing the game's own recompute on the vehicle worker thread. Gated to
-            // ~4 Hz on the wall clock, so time warp doesn't multiply it.
-            RefreshStageModel(vehicle);
-
-            // Likewise the flown-trajectory trace: sampled off the simulation rather
-            // than the frame rate, and recorded whether or not guidance is running so
-            // the track is already there when the overlay is switched on.
-            RecordTrace(vehicle, vehicle.Orbit);
-
-            // A requested reset runs ahead of everything below: the whole point of the
-            // button is to recover when the mod's own state is wrong, so it must not
-            // depend on that state saying the autopilot is still active.
-            if (_s.FcResetPending)
-            {
-                ApplyPendingFcReset(vehicle);
-                return;
-            }
+            ApplyPendingFcReset(vehicle);
+            return;
         }
 
-        // 6-DOF RUNS FOR EVERY VEHICLE, not just the focused one. That is the whole
-        // point of keying its state per vehicle: a booster flies itself home while the
-        // player watches the upper stage carry on to orbit.
-        //
-        // TryGet rather than For, deliberately. This runs on every sim step for every
-        // vehicle — thousands of calls a second under time warp — so a craft that has
-        // never been engaged must cost a failed lookup and nothing else, no allocation.
-        if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState six) && (six.Active || six.EngagePending))
+        // 6-DOF is EXCLUSIVE: it drives attitude through the TVC allocator rather than
+        // the flight computer, so it must not be mixed with the UPFG / G-FOLD command
+        // path below. It has its own engage flag and does not set _s.Running.
+        if (sixDof)
         {
             Step6Dof(vehicle);
             return;
         }
 
-        // Everything below is UI-facing or single-vehicle by nature, so it stays scoped
-        // to the craft the player is flying.
-        if (!focused)
+        if (!flying)
             return;
 
-        // 6-DOF guidance is EXCLUSIVE: it drives attitude through the TVC allocator
-        // rather than the flight computer, so it must not be mixed with the UPFG /
-        // G-FOLD command path below. Runs ahead of the idle bail because it has its
-        // own engage flag and does not set _s.Running.
+        // --- Step this vehicle's guidance, then apply what it produced ---
+        Orbit orbit = vehicle.Orbit;
+        IParentBody stepParent = orbit.Parent;
+        StepLanding(vehicle, orbit, stepParent, stepParent.Mu, stepParent.MeanRadius);
+        StepAscent(vehicle, orbit, stepParent, stepParent.Mu, stepParent.MeanRadius);
+
+        // Read straight off _s, not off the values the bail above was computed from:
+        // the flows just ran, and a touchdown, an abort or a handoff can have changed
+        // the phase on this very step.
         //
-        // The 6-DOF dispatch now happens at the very top of this method, ahead of the
-        // focused-vehicle bail, because it is no longer a focused-vehicle concern.
-
-        // Bail before touching the flight computer when the autopilot has nothing
-        // to do. Keyed on the mod actually being active (guidance running or a
-        // landing in progress), not on the engage toggle, which defaults on and
-        // would defeat the bail.
-        bool landingActive = _landingPhase != LandingPhase.Idle && _landingPhase != LandingPhase.Done;
-        if (!_s.Running && !landingActive && !_s.WasEngaged && !_landingCutPending)
-            return;
-
         // The open-loop phases (vertical/kick/prograde) don't need a converged UPFG
         // solution; once flying, keep commanding through transient re-convergence
         // (e.g. right after staging) — dropping to Manual mid-ascent would be far
         // more disruptive.
-        bool landingGuides = _landingPhase == LandingPhase.Prep
-            || _landingPhase == LandingPhase.Burn
-            || _landingPhase == LandingPhase.GfoldDescent
-            || _landingPhase == LandingPhase.TerminalHover;
-        bool shouldCommand = _engage && (_s.Running || landingGuides) && _s.HasCommand;
-        var fc = vehicle.FlightComputer;
+        bool landingGuides = _s.LandingPhase == LandingPhase.Prep
+            || _s.LandingPhase == LandingPhase.Burn
+            || _s.LandingPhase == LandingPhase.GfoldDescent
+            || _s.LandingPhase == LandingPhase.TerminalHover;
+        bool shouldCommand = _s.Engage && (_s.Running || landingGuides) && _s.HasCommand;
 
         // Auto engine control: master switch on at full throttle while flying, off
         // for good once the terminal countdown expires. Written here — the prefix
@@ -518,38 +537,38 @@ public static partial class PoweredGuidanceWindow
         // One-shot engine cut when the landing flow ends (cutoff, abort, failure) —
         // after this the player's inputs are untouched, so the final descent below
         // the gate can be flown manually.
-        if (_landingCutPending)
+        if (_s.LandingCutPending)
         {
             ref ManualControlInputs cut = ref ManualInputs(vehicle);
             cut.EngineOn = false;
-            _landingCutPending = false;
+            _s.LandingCutPending = false;
         }
 
-        if (_engage && _autoStage)
+        if (_s.Engage && _s.AutoStage)
         {
             if (landingGuides)
             {
                 ref ManualControlInputs inputs = ref ManualInputs(vehicle);
-                if (_landingPhase == LandingPhase.Burn)
+                if (_s.LandingPhase == LandingPhase.Burn)
                 {
                     inputs.EngineOn = true;
                     // Mode 3's throttle command stretches the burn onto the site.
-                    inputs.EngineThrottle = (float)Guidance.Throttle;
+                    inputs.EngineThrottle = (float)_s.Upfg.Throttle;
                 }
-                else if (_landingPhase == LandingPhase.GfoldDescent)
+                else if (_s.LandingPhase == LandingPhase.GfoldDescent)
                 {
                     // Cut the engine on a planned coast so it genuinely throttles
                     // down. Hysteresis (off below 2%, on above 6%) stops the engine
                     // toggling every step when the command sits near the threshold.
-                    if (_gfoldThrottle < GfoldCoastThrottle) _gfoldEngineOn = false;
-                    else if (_gfoldThrottle > GfoldCoastThrottle * 3.0) _gfoldEngineOn = true;
-                    inputs.EngineOn = _gfoldEngineOn;
-                    inputs.EngineThrottle = (float)_gfoldThrottle;
+                    if (_s.GfoldThrottle < GfoldCoastThrottle) _s.GfoldEngineOn = false;
+                    else if (_s.GfoldThrottle > GfoldCoastThrottle * 3.0) _s.GfoldEngineOn = true;
+                    inputs.EngineOn = _s.GfoldEngineOn;
+                    inputs.EngineThrottle = (float)_s.GfoldThrottle;
                 }
-                else if (_landingPhase == LandingPhase.TerminalHover)
+                else if (_s.LandingPhase == LandingPhase.TerminalHover)
                 {
-                    inputs.EngineOn = _gfoldThrottle > 0.01;
-                    inputs.EngineThrottle = (float)_gfoldThrottle;
+                    inputs.EngineOn = _s.GfoldThrottle > 0.01;
+                    inputs.EngineThrottle = (float)_s.GfoldThrottle;
                 }
                 else
                 {
@@ -568,7 +587,7 @@ public static partial class PoweredGuidanceWindow
                 {
                     inputs.EngineOn = true;
                     // Full throttle unless UPFG is holding the acceleration limit.
-                    inputs.EngineThrottle = (float)Guidance.Throttle;
+                    inputs.EngineThrottle = (float)_s.Upfg.Throttle;
                 }
             }
         }
@@ -656,8 +675,8 @@ public static partial class PoweredGuidanceWindow
     private static void ResetFlightComputer()
     {
         _s.Running = false;
-        _landingPhase = LandingPhase.Idle;
-        _autoLaunch = false;
+        _s.LandingPhase = LandingPhase.Idle;
+        _s.AutoLaunch = false;
         _s.HasCommand = false;
         _s.FcResetPending = true;
         _s.Status = "Flight computer reset — autopilot disengaged, engine cut.";
@@ -677,7 +696,7 @@ public static partial class PoweredGuidanceWindow
         // Cleared last: _s.WasEngaged gates the normal release path, which would
         // otherwise fire again on top of the reset we just did.
         _s.WasEngaged = false;
-        _landingCutPending = false;
+        _s.LandingCutPending = false;
     }
 
     // Convert a commanded thrust direction into the flight computer's Custom-attitude

@@ -15,7 +15,10 @@ public static partial class PoweredGuidanceWindow
     // target orbit lives in, so the two are directly comparable. A ring buffer:
     // once full, the oldest sample is dropped, so a long flight shows its most
     // recent stretch rather than growing without bound.
-    private const int TraceCapacity = 2400;
+    // Public because each vehicle owns its own ring buffer of this size — the track
+    // belongs to the craft that flew it, so switching focus shows that craft's path
+    // instead of throwing away whichever one was on screen.
+    public const int TraceCapacity = 2400;
     private const double TraceIntervalSec = 0.5;
 
     // Newest samples are held back from the drawing. The most recent one sits
@@ -23,14 +26,9 @@ public static partial class PoweredGuidanceWindow
     // stuck to the hull — harmless at map zoom, but an ugly antenna in the
     // close-in view. Dropping a couple of seconds' worth leaves a clean gap.
     private const int TraceTrimSamples = 4;
-    private static readonly double3[] _trace = new double3[TraceCapacity];
-    private static int _traceCount;
-    private static int _traceHead;          // next write slot
-    private static double _traceLastTime = double.NegativeInfinity;
-    private static Vehicle _traceVehicle;
-    private static IParentBody _traceParent;
 
-    // Unrolled copy of the ring buffer in oldest-to-newest order, for drawing.
+    // Unrolled copy of the ring buffer in oldest-to-newest order, for drawing. Stays
+    // static: it is scratch, filled and consumed inside one DrawTrace call.
     private static readonly double3[] _traceOrdered = new double3[TraceCapacity];
 
     // Called from ApplyAutopilot (the PrepareWorker prefix), so sampling is driven
@@ -41,31 +39,35 @@ public static partial class PoweredGuidanceWindow
         if (parent == null)
             return;
 
-        // A different vehicle, or a change of SOI, makes the existing samples
-        // meaningless: they were positions in another body's frame.
-        if (!ReferenceEquals(vehicle, _traceVehicle) || !ReferenceEquals(parent, _traceParent))
+        // A change of SOI makes the existing samples meaningless: they were positions
+        // in another body's frame. The vehicle no longer needs checking — the buffer
+        // is keyed on the vehicle, so it cannot be holding another craft's track.
+        if (!ReferenceEquals(parent, _s.TraceParent))
         {
             ResetTrace();
-            _traceVehicle = vehicle;
-            _traceParent = parent;
+            _s.TraceParent = parent;
         }
 
         double now = SimNow();
-        if (now - _traceLastTime < TraceIntervalSec)
+        if (now - _s.TraceLastTime < TraceIntervalSec)
             return;
-        _traceLastTime = now;
+        _s.TraceLastTime = now;
 
-        _trace[_traceHead] = orbit.StateVectors.PositionCci;
-        _traceHead = (_traceHead + 1) % TraceCapacity;
-        if (_traceCount < TraceCapacity)
-            _traceCount++;
+        // Allocated on the first sample rather than with the state: this is by far the
+        // largest thing a vehicle's flight computer owns, and state now exists for
+        // every craft the panel draws, not only the ones being flown.
+        _s.Trace ??= new double3[TraceCapacity];
+        _s.Trace[_s.TraceHead] = orbit.StateVectors.PositionCci;
+        _s.TraceHead = (_s.TraceHead + 1) % TraceCapacity;
+        if (_s.TraceCount < TraceCapacity)
+            _s.TraceCount++;
     }
 
     private static void ResetTrace()
     {
-        _traceCount = 0;
-        _traceHead = 0;
-        _traceLastTime = double.NegativeInfinity;
+        _s.TraceCount = 0;
+        _s.TraceHead = 0;
+        _s.TraceLastTime = double.NegativeInfinity;
     }
 
     private static void DrawAscentOverlay(Viewport vp, Orbit orbit, IParentBody parent,
@@ -98,8 +100,8 @@ public static partial class PoweredGuidanceWindow
     private static void DrawTargetOrbit(ImDrawListPtr dl, double3 vehicleCci,
                                         double bodyRadius, ImColor8 col)
     {
-        double pe = _peKm * 1000.0 + bodyRadius;
-        double ap = _apKm * 1000.0 + bodyRadius;
+        double pe = _s.PeKm * 1000.0 + bodyRadius;
+        double ap = _s.ApKm * 1000.0 + bodyRadius;
         if (ap < pe) (ap, pe) = (pe, ap);
         if (pe <= 0.0)
             return;
@@ -108,8 +110,8 @@ public static partial class PoweredGuidanceWindow
         double ecc = (ap - pe) / (ap + pe);
         double semiLatus = sma * (1.0 - ecc * ecc);
 
-        double inc = UpfgTarget.DegToRad(_incDeg);
-        double lan = UpfgTarget.DegToRad(_lanDeg);
+        double inc = UpfgTarget.DegToRad(_s.IncDeg);
+        double lan = UpfgTarget.DegToRad(_s.LanDeg);
 
         // In-plane basis: periapsis at the vehicle's position flattened into the
         // target plane, normal is UPFG's own plane normal, prograde completes the
@@ -136,26 +138,26 @@ public static partial class PoweredGuidanceWindow
         if (TryProjectCci(ring[0], out float2 peScreen))
         {
             dl.AddCircleFilled(peScreen, 4f, col);
-            dl.AddText(peScreen + new float2(7f, -6f), col, $"Pe {_peKm:F0} km");
+            dl.AddText(peScreen + new float2(7f, -6f), col, $"Pe {_s.PeKm:F0} km");
         }
         if (TryProjectCci(ring[segments / 2], out float2 apScreen))
         {
             dl.AddCircleFilled(apScreen, 4f, col);
-            dl.AddText(apScreen + new float2(7f, -6f), col, $"Ap {_apKm:F0} km");
+            dl.AddText(apScreen + new float2(7f, -6f), col, $"Ap {_s.ApKm:F0} km");
         }
     }
 
     private static void DrawTrace(ImDrawListPtr dl, ImColor8 col)
     {
-        int count = _traceCount - TraceTrimSamples;
+        int count = _s.TraceCount - TraceTrimSamples;
         if (count < 2)
             return;
 
         // Unroll the ring into chronological order before drawing, so the polyline
         // doesn't jump from the newest sample back to the oldest.
-        int start = _traceCount < TraceCapacity ? 0 : _traceHead;
+        int start = _s.TraceCount < TraceCapacity ? 0 : _s.TraceHead;
         for (int i = 0; i < count; i++)
-            _traceOrdered[i] = _trace[(start + i) % TraceCapacity];
+            _traceOrdered[i] = _s.Trace[(start + i) % TraceCapacity];
 
         DrawCciPolyline(dl, _traceOrdered.AsSpan(0, count), col, 2.0f);
     }

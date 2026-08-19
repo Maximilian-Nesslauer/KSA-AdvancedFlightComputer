@@ -64,12 +64,12 @@ public static partial class PoweredGuidanceWindow
         // upward, radius cot(angle) * height. Drawing it from the SAME angle the
         // solver was configured with is the point — a cone drawn from a separate
         // number would keep looking right while the solver enforced something else.
-        if (_sixDofGlideSlopeDeg > 0.0)
+        if (_s.SixDofGlideSlopeDeg > 0.0)
         {
             var coneCol = new ImColor8(90, 140, 190);
-            double apexZ = _sixDofTargetAltM;
+            double apexZ = _s.SixDofTargetAltM;
             double topZ = Math.Max(px[0 * 14 + 2], apexZ + 1.0);   // up to the plan's start
-            double cot = 1.0 / Math.Tan(Math.Clamp(_sixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
+            double cot = 1.0 / Math.Tan(Math.Clamp(_s.SixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
             double3 apex = f.PosToCci(new double3(0, 0, apexZ));
 
             const int rings = 4, seg = 28;
@@ -138,7 +138,7 @@ public static partial class PoweredGuidanceWindow
                 dl.AddCircleFilled(s, 2.0f, nodeCol);
 
         // --- target and pad ---
-        double3 targetCci = f.PosToCci(new double3(0, 0, _sixDofTargetAltM));
+        double3 targetCci = f.PosToCci(new double3(0, 0, _s.SixDofTargetAltM));
         if (TryProjectCci(targetCci, out float2 tgt))
             dl.AddCircleFilled(tgt, 5.0f, tgtCol);
         OvLine(dl, siteCci, targetCci, padCol, 1.0f);

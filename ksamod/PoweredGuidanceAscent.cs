@@ -18,39 +18,17 @@ using PoweredGuidance.Upfg;
 //                itself); count down to cutoff.
 public static partial class PoweredGuidanceWindow
 {
-    // Target orbit inputs (altitudes in km, angles in degrees). Defaults are an ISS
-    // launch: the 51.6° ISS plane, inserting at a 200 km perigee with apogee at ISS
-    // altitude (~420 km) for the rendezvous transfer. LAN is seeded from the vessel's
-    // current position on the first frame (the plane that passes over the pad right
-    // now) and can be re-seeded with the button next to the input.
-    private static double _peKm = 200.0;
-    private static double _apKm = 420.0;
-    private static double _incDeg = 51.6;
-    private static double _lanDeg = 250;
-
-    // Launch-to-target: pick another vehicle, derive its plane (inc/LAN) and a
-    // co-elliptic chase orbit some km below it, wait (warping, if confirmed) until
-    // the launch site rotates under the target's plane, and launch into it —
-    // shuttle-to-ISS style. Ascending = north-easterly launch at the up-going plane
-    // crossing; descending = south-easterly at the down-going one.
-    private static string _targetId = "";
-    private static double _chaseOffsetKm = 20.0;
-    private static bool _launchDescending;
-    private static bool _autoLaunch;
-
-    // Gravity-turn shaping: at the turn-start altitude the commanded pitch ramps
-    // down from vertical at a fixed rate toward the launch azimuth (open loop —
-    // atmospheric physics is currently too jank to trust prograde-following).
-    private static double _turnStartAltKm = 0.5;
-    private static double _turnRateDegS = 1;
+    // The target orbit, the launch-to-target pick and the gravity-turn shaping all
+    // live on the vehicle now (VehicleAutopilotState): they describe one craft's
+    // mission, and sharing them meant focusing a second vehicle re-aimed the first.
+    // LAN is seeded from the vessel's own position the first time its panel draws,
+    // and can be re-seeded with the button next to the input.
     private const double TerminalTgo = 10.0;
     // Hand over to UPFG no later than this altitude, even if the pitch profiles
     // never crossed — the failsafe against an open-loop runaway vehicle.
     private const double FailsafeAltKm = 50.0;
 
     public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
-
-    // Terminal-phase freeze: the steering at freeze time and the predicted cutoff.
 
     // The Ascent tab body: target orbit, profile tuning, launch-to-target, and the
     // commit controls. Everything the user sets is in this one panel — the profile
@@ -62,7 +40,7 @@ public static partial class PoweredGuidanceWindow
         // Seed the LAN from where the vessel is right now, once a vehicle exists.
         if (!_s.LanSeeded)
         {
-            _lanDeg = LanOverhead(orbit.StateVectors.PositionCci, _incDeg);
+            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
             _s.LanSeeded = true;
         }
 
@@ -71,22 +49,22 @@ public static partial class PoweredGuidanceWindow
         // panel needs to be compact.
         if (ImGui.CollapsingHeader("Target orbit", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            ImGui.InputDouble("Periapsis (km)", ref _peKm);
-            ImGui.InputDouble("Apoapsis (km)", ref _apKm);
-            ImGui.InputDouble("Inclination (deg)", ref _incDeg);
-            ImGui.InputDouble("LAN (deg)", ref _lanDeg);
+            ImGui.InputDouble("Periapsis (km)", ref _s.PeKm);
+            ImGui.InputDouble("Apoapsis (km)", ref _s.ApKm);
+            ImGui.InputDouble("Inclination (deg)", ref _s.IncDeg);
+            ImGui.InputDouble("LAN (deg)", ref _s.LanDeg);
             ImGui.SameLine();
             if (ImGui.Button("From position"))
-                _lanDeg = LanOverhead(orbit.StateVectors.PositionCci, _incDeg);
+                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
         }
 
         if (ImGui.CollapsingHeader("Ascent params", ImGuiTreeNodeFlags.DefaultOpen))
         {
-            ImGui.InputDouble("Turn start alt (km)", ref _turnStartAltKm);
-            ImGui.InputDouble("Turn rate (deg/s)", ref _turnRateDegS);
-            ImGui.Checkbox("G-limit", ref _gLimitEnabled);
+            ImGui.InputDouble("Turn start alt (km)", ref _s.TurnStartAltKm);
+            ImGui.InputDouble("Turn rate (deg/s)", ref _s.TurnRateDegS);
+            ImGui.Checkbox("G-limit", ref _s.GLimitEnabled);
             ImGui.SameLine();
-            ImGui.InputDouble("Max accel (g)", ref _gLimitG);
+            ImGui.InputDouble("Max accel (g)", ref _s.GLimitG);
         }
 
         // --- Launch to target (runs its own launch-window logic, not collapsed) ---
@@ -97,9 +75,9 @@ public static partial class PoweredGuidanceWindow
         // window). EXECUTE is the single commit point — guidance starts and
         // whatever is toggled goes live at once, so you can warp time
         // freely beforehand.
-        ImGui.Checkbox("Engage autopilot", ref _engage);
+        ImGui.Checkbox("Engage autopilot", ref _s.Engage);
         ImGui.SameLine();
-        ImGui.Checkbox("Auto engines/staging", ref _autoStage);
+        ImGui.Checkbox("Auto engines/staging", ref _s.AutoStage);
         ImGui.Checkbox("Show target orbit & track", ref _showAscentOverlay);
 
         if (ImGui.Button("EXECUTE"))
@@ -108,14 +86,15 @@ public static partial class PoweredGuidanceWindow
         if (ImGui.Button("Stop / reset"))
         {
             _s.Running = false;
-            _autoLaunch = false;
+            _s.AutoLaunch = false;
         }
         ImGui.SameLine();
         if (ImGui.Button("Clear track"))
             ResetTrace();
     }
 
-    // Per-frame ascent stepping, run from Draw regardless of the visible tab.
+    // Per-frame ascent stepping, run for this vehicle from ApplyAutopilot (the
+    // PrepareWorker prefix) whether or not it is the one on screen.
     private static void StepAscent(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                    double mu, double bodyRadius)
     {
@@ -135,7 +114,7 @@ public static partial class PoweredGuidanceWindow
         try
         {
             StepGuidance(vehicle, orbit, parent, mu, bodyRadius);
-            if (_engage && _autoStage && !_s.CutoffDone)
+            if (_s.Engage && _s.AutoStage && !_s.CutoffDone)
                 AutoSequence(vehicle);
             _s.FailStreak = 0;
             _s.GuidanceError = "";
@@ -155,8 +134,8 @@ public static partial class PoweredGuidanceWindow
     // The EXECUTE button's action — also fired automatically at the launch window.
     private static void StartGuidance(Orbit orbit, IParentBody parent)
     {
-        _landingPhase = LandingPhase.Idle; // ascent takes over from any landing flow
-        Guidance.Reset();
+        _s.LandingPhase = LandingPhase.Idle; // ascent takes over from any landing flow
+        _s.Upfg.Reset();
         _s.GuidanceError = "";
         _s.Status = "";
         _s.FailStreak = 0;
@@ -175,11 +154,11 @@ public static partial class PoweredGuidanceWindow
     {
         ImGui.SeparatorText("Launch to target");
 
-        Vehicle target = FindVehicleById(_targetId, vehicle);
-        if (ImGui.BeginCombo("Target", _targetId.Length > 0 ? _targetId : "(none)"))
+        Vehicle target = FindVehicleById(_s.TargetId, vehicle);
+        if (ImGui.BeginCombo("Target", _s.TargetId.Length > 0 ? _s.TargetId : "(none)"))
         {
-            if (ImGui.Selectable("(none)", _targetId.Length == 0))
-                _targetId = "";
+            if (ImGui.Selectable("(none)", _s.TargetId.Length == 0))
+                _s.TargetId = "";
             CelestialSystem system = Universe.CurrentSystem;
             if (system != null)
             {
@@ -188,9 +167,9 @@ public static partial class PoweredGuidanceWindow
                 {
                     if (all[i] is Vehicle v && !ReferenceEquals(v, vehicle))
                     {
-                        if (ImGui.Selectable(v.Id, v.Id == _targetId))
+                        if (ImGui.Selectable(v.Id, v.Id == _s.TargetId))
                         {
-                            _targetId = v.Id;
+                            _s.TargetId = v.Id;
                             // Mirror into the game's own targeting, so the map and
                             // rendezvous UI agree with us.
                             Universe.SetTarget(vehicle, v);
@@ -201,17 +180,17 @@ public static partial class PoweredGuidanceWindow
             ImGui.EndCombo();
         }
 
-        ImGui.InputDouble("SMA offset below target (km)", ref _chaseOffsetKm);
-        if (ImGui.RadioButton("Ascending (NE)", !_launchDescending))
-            _launchDescending = false;
+        ImGui.InputDouble("SMA offset below target (km)", ref _s.ChaseOffsetKm);
+        if (ImGui.RadioButton("Ascending (NE)", !_s.LaunchDescending))
+            _s.LaunchDescending = false;
         ImGui.SameLine();
-        if (ImGui.RadioButton("Descending (SE)", _launchDescending))
-            _launchDescending = true;
-        ImGui.Checkbox("Auto warp & launch", ref _autoLaunch);
+        if (ImGui.RadioButton("Descending (SE)", _s.LaunchDescending))
+            _s.LaunchDescending = true;
+        ImGui.Checkbox("Auto warp & launch", ref _s.AutoLaunch);
 
         if (target == null)
         {
-            if (_targetId.Length > 0)
+            if (_s.TargetId.Length > 0)
                 ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Target vehicle not found.");
             return;
         }
@@ -236,12 +215,12 @@ public static partial class PoweredGuidanceWindow
         // target's. A true co-elliptic depends on launch phasing anyway — circular
         // is a clean baseline to correct from once up.
         double targetSmaKm = (targetOrbit.Periapsis + targetOrbit.Apoapsis) / 2000.0;
-        double chaseAltKm = targetSmaKm - bodyRadius / 1000.0 - _chaseOffsetKm;
+        double chaseAltKm = targetSmaKm - bodyRadius / 1000.0 - _s.ChaseOffsetKm;
         double chasePe = chaseAltKm;
         double chaseAp = chaseAltKm;
 
         ImGui.Text($"Target orbit:  {peAltKm,7:F1} x {apAltKm,7:F1} km  inc {UpfgTarget.RadToDeg(incT),6:F2} deg");
-        ImGui.Text($"Chase orbit:   {chaseAltKm,7:F1} km circular  (SMA {_chaseOffsetKm:F0} km below target)");
+        ImGui.Text($"Chase orbit:   {chaseAltKm,7:F1} km circular  (SMA {_s.ChaseOffsetKm:F0} km below target)");
 
         // Launch window: how long until the body's rotation carries the launch site
         // under the target plane, at the requested (ascending/descending) crossing.
@@ -258,27 +237,27 @@ public static partial class PoweredGuidanceWindow
         }
 
         double delta = Math.Asin(Math.Clamp(tanRatio, -1.0, 1.0));
-        double raRequired = _launchDescending ? lanT + Math.PI - delta : lanT + delta;
+        double raRequired = _s.LaunchDescending ? lanT + Math.PI - delta : lanT + delta;
         double omega = parent.GetAngularVelocity();
         double waitSec = omega > 1e-12 ? Wrap2Pi(raRequired - ra) / omega : double.NaN;
-        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_launchDescending ? "descending" : "ascending")} crossing)");
+        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")} crossing)");
 
         bool copyNow = ImGui.Button("Copy chase orbit to target inputs");
-        if (copyNow || _autoLaunch)
+        if (copyNow || _s.AutoLaunch)
         {
-            _incDeg = UpfgTarget.RadToDeg(incT);
-            _lanDeg = UpfgTarget.RadToDeg(lanT);
-            _peKm = chasePe;
-            _apKm = chaseAp;
+            _s.IncDeg = UpfgTarget.RadToDeg(incT);
+            _s.LanDeg = UpfgTarget.RadToDeg(lanT);
+            _s.PeKm = chasePe;
+            _s.ApKm = chaseAp;
             _s.LanSeeded = true;
         }
 
         // Armed: ask to warp to just before the window (the warp itself needs the
         // user's confirmation — see DrawWarpPrompt), then press EXECUTE for them.
         // The engage/auto toggles are respected as configured, not forced.
-        if (_autoLaunch && !_s.Running && !double.IsNaN(waitSec))
+        if (_s.AutoLaunch && !_s.Running && !double.IsNaN(waitSec))
         {
-            if (!_engage || !_autoStage)
+            if (!_s.Engage || !_s.AutoStage)
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                     "Note: engage/auto toggles are off — auto-launch will only start guidance.");
 
@@ -287,7 +266,7 @@ public static partial class PoweredGuidanceWindow
                 if (Universe.IsAutoWarpActive)
                     Universe.AutoWarpStop(true);
                 StartGuidance(orbit, parent);
-                _autoLaunch = false;
+                _s.AutoLaunch = false;
             }
             else if (waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
             {
@@ -298,7 +277,7 @@ public static partial class PoweredGuidanceWindow
                 ? "Auto-warping to the launch window..."
                 : "Armed — will EXECUTE at the window.");
         }
-        else if (_autoLaunch && _s.Running)
+        else if (_s.AutoLaunch && _s.Running)
         {
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                 "Guidance already running — auto-launch is waiting (Stop / reset to clear).");
@@ -327,12 +306,12 @@ public static partial class PoweredGuidanceWindow
             }
             else
             {
-                if (_gLimitEnabled && _gLimitG > 0.1)
-                    ApplyGLimit(live, _gLimitG);
+                if (_s.GLimitEnabled && _s.GLimitG > 0.1)
+                    ApplyGLimit(live, _s.GLimitG);
                 _s.Status = "";
                 _s.UpfgVehicle = live;
-                var target = UpfgTarget.FromOrbit(_peKm, _apKm, _incDeg, _lanDeg, bodyRadius, mu);
-                Guidance.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle);
+                var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu);
+                _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle);
             }
         }
 
@@ -345,13 +324,13 @@ public static partial class PoweredGuidanceWindow
     {
         double3 up = double3.Normalize(r);
         double alt = r.Length() - bodyRadius;
-        double upfgPitch = PitchOf(up, Guidance.Steering);
+        double upfgPitch = PitchOf(up, _s.Upfg.Steering);
         double turnPitch = TurnPitchDeg();
 
         switch (_s.Phase)
         {
             case AscentPhase.Vertical:
-                if (alt >= _turnStartAltKm * 1000.0)
+                if (alt >= _s.TurnStartAltKm * 1000.0)
                 {
                     _s.Phase = AscentPhase.Turn;
                     _s.TurnStartTime = SimNow();
@@ -362,17 +341,17 @@ public static partial class PoweredGuidanceWindow
                 // Pitch ramps down at the fixed rate; hand over to UPFG when it
                 // meets the closed-loop solution — or at the failsafe altitude
                 // regardless, so an open-loop profile can't run away.
-                if ((Guidance.Converged && turnPitch <= upfgPitch)
+                if ((_s.Upfg.Converged && turnPitch <= upfgPitch)
                     || alt >= FailsafeAltKm * 1000.0)
                     _s.Phase = AscentPhase.ClosedLoop;
                 break;
 
             case AscentPhase.ClosedLoop:
-                if (Guidance.Converged && Guidance.Tgo <= TerminalTgo)
+                if (_s.Upfg.Converged && _s.Upfg.Tgo <= TerminalTgo)
                 {
                     _s.Phase = AscentPhase.Terminal;
-                    _s.FrozenDir = Guidance.Steering;
-                    _s.CutoffTime = SimNow() + Guidance.Tgo;
+                    _s.FrozenDir = _s.Upfg.Steering;
+                    _s.CutoffTime = SimNow() + _s.Upfg.Tgo;
                 }
                 break;
         }
@@ -386,7 +365,7 @@ public static partial class PoweredGuidanceWindow
                 _s.CommandDir = TurnDir(up, turnPitch);
                 break;
             case AscentPhase.ClosedLoop:
-                _s.CommandDir = Guidance.Steering;
+                _s.CommandDir = _s.Upfg.Steering;
                 break;
             case AscentPhase.Terminal:
                 _s.CommandDir = _s.FrozenDir;
@@ -402,7 +381,7 @@ public static partial class PoweredGuidanceWindow
         if (_s.Phase != AscentPhase.Turn)
             return 90.0;
         double elapsed = SimNow() - _s.TurnStartTime;
-        return Math.Max(90.0 - _turnRateDegS * elapsed, 0.0);
+        return Math.Max(90.0 - _s.TurnRateDegS * elapsed, 0.0);
     }
 
     // The gravity-turn attitude: the given pitch above the horizon, toward the
@@ -414,17 +393,17 @@ public static partial class PoweredGuidanceWindow
         (double3 east, double3 north) = EnuBasis(up);
 
         double az;
-        double3 steerHoriz = Guidance.Steering - double3.Dot(Guidance.Steering, up) * up;
-        if (Guidance.Converged && steerHoriz.Length() > 1e-3)
+        double3 steerHoriz = _s.Upfg.Steering - double3.Dot(_s.Upfg.Steering, up) * up;
+        if (_s.Upfg.Converged && steerHoriz.Length() > 1e-3)
         {
             az = Math.Atan2(double3.Dot(steerHoriz, east), double3.Dot(steerHoriz, north));
         }
         else
         {
             double lat = Math.Asin(Math.Clamp(up.Z, -1.0, 1.0));
-            double inc = UpfgTarget.DegToRad(_incDeg);
+            double inc = UpfgTarget.DegToRad(_s.IncDeg);
             az = Math.Asin(Math.Clamp(Math.Cos(inc) / Math.Max(Math.Cos(lat), 1e-6), -1.0, 1.0));
-            if (_launchDescending)
+            if (_s.LaunchDescending)
                 az = Math.PI - az; // south-easterly at the descending crossing
         }
 

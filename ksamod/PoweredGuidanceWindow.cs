@@ -98,7 +98,7 @@ public static partial class PoweredGuidanceWindow
         {
             // The TVC override lives outside the flight computer, so a reset would
             // otherwise leave it silently driving the nozzles.
-            _gimbalMode = 0;
+            _s.GimbalMode = 0;
             KsaGimbalControl.Disengage(vehicle);
             ResetFlightComputer();
         }
@@ -106,9 +106,12 @@ public static partial class PoweredGuidanceWindow
         // Any warp the mod wants needs the user's OK first.
         DrawWarpPrompt();
 
-        // --- Run the flows (regardless of visible tab) ---
-        StepLanding(vehicle, orbit, parent, mu, bodyRadius);
-        StepAscent(vehicle, orbit, parent, mu, bodyRadius);
+        // NOTHING IS STEPPED FROM THE DRAW. The ascent and landing flows used to run
+        // here, which quietly made them focused-vehicle-only: the draw happens once
+        // per frame for the craft the player is looking at, so any other vehicle's
+        // guidance froze the moment the camera left it. They run from ApplyAutopilot
+        // now — the per-vehicle PrepareWorker prefix — and this panel is purely a
+        // readout of whichever flight computer is focused.
 
         if (_s.GuidanceError.Length > 0)
             ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Error: " + _s.GuidanceError);
@@ -124,6 +127,12 @@ public static partial class PoweredGuidanceWindow
     // ImGui windows and would otherwise nest inside the panel.
     private static void DrawTrailingWindows(Viewport viewport, Vehicle vehicle)
     {
+        // Claim the ambient state again. DrawBody left it pointing here, but these are
+        // separate ImGui windows drawn after it closed, and every one of them reads
+        // per-vehicle configuration — so they say which vehicle they mean rather than
+        // inheriting it.
+        Use(vehicle);
+
         Orbit orbit = vehicle.Orbit;
         IParentBody parent = orbit.Parent;
         double bodyRadius = parent.MeanRadius;
@@ -158,14 +167,14 @@ public static partial class PoweredGuidanceWindow
     private static void DrawStatusReadout(Vehicle vehicle, Orbit orbit, double bodyRadius)
     {
         ImGui.SeparatorText("Guidance");
-        bool landingActive = _landingPhase != LandingPhase.Idle;
+        bool landingActive = _s.LandingPhase != LandingPhase.Idle;
         if (_s.Running || landingActive)
         {
             double3 r = orbit.StateVectors.PositionCci;
-            double3 steer = _s.HasCommand ? _s.CommandDir : Guidance.Steering;
+            double3 steer = _s.HasCommand ? _s.CommandDir : _s.Upfg.Steering;
 
             ImGui.Text(landingActive
-                ? $"Phase: landing — {_landingPhase} (UPFG mode {Guidance.Mode})"
+                ? $"Phase: landing — {_s.LandingPhase} (UPFG mode {_s.Upfg.Mode})"
                 : $"Phase: {PhaseName(_s.Phase)}");
             if (!landingActive && _s.Phase == AscentPhase.Terminal)
             {
@@ -180,12 +189,12 @@ public static partial class PoweredGuidanceWindow
             else
             {
                 ImGui.TextColored(
-                    Guidance.Converged ? new float4(0.4f, 1f, 0.4f, 1f) : new float4(1f, 0.8f, 0.3f, 1f),
-                    Guidance.Converged ? "CONVERGED" : "converging...");
-                ImGui.Text($"Time-to-go:   {Guidance.Tgo,8:F1} s");
-                ImGui.Text($"dV-to-go:     {Guidance.VgoMag,8:F1} m/s");
-                if (_gLimitEnabled || landingActive)
-                    ImGui.Text($"Throttle:     {Guidance.Throttle * 100,8:F0} %");
+                    _s.Upfg.Converged ? new float4(0.4f, 1f, 0.4f, 1f) : new float4(1f, 0.8f, 0.3f, 1f),
+                    _s.Upfg.Converged ? "CONVERGED" : "converging...");
+                ImGui.Text($"Time-to-go:   {_s.Upfg.Tgo,8:F1} s");
+                ImGui.Text($"dV-to-go:     {_s.Upfg.VgoMag,8:F1} m/s");
+                if (_s.GLimitEnabled || landingActive)
+                    ImGui.Text($"Throttle:     {_s.Upfg.Throttle * 100,8:F0} %");
             }
 
             (double pitchDeg, double headingDeg) = NavballSteerAngles(r, steer);
@@ -251,13 +260,13 @@ public static partial class PoweredGuidanceWindow
         // --- Current vs target ---
         ImGui.SeparatorText("Orbit (altitude)");
         ImGui.Text($"            current     target");
-        ImGui.Text($"Periapsis  {(orbit.Periapsis - bodyRadius) / 1000.0,8:F1}   {_peKm,8:F1} km");
-        ImGui.Text($"Apoapsis   {(orbit.Apoapsis - bodyRadius) / 1000.0,8:F1}   {_apKm,8:F1} km");
-        ImGui.Text($"Inclination{PoweredGuidance.Upfg.UpfgTarget.RadToDeg(orbit.Inclination),8:F2}   {_incDeg,8:F2} deg");
+        ImGui.Text($"Periapsis  {(orbit.Periapsis - bodyRadius) / 1000.0,8:F1}   {_s.PeKm,8:F1} km");
+        ImGui.Text($"Apoapsis   {(orbit.Apoapsis - bodyRadius) / 1000.0,8:F1}   {_s.ApKm,8:F1} km");
+        ImGui.Text($"Inclination{PoweredGuidance.Upfg.UpfgTarget.RadToDeg(orbit.Inclination),8:F2}   {_s.IncDeg,8:F2} deg");
 
         // --- Autopilot ---
         ImGui.SeparatorText("Autopilot");
-        if (_engage && _s.Running && _s.HasCommand)
+        if (_s.Engage && _s.Running && _s.HasCommand)
         {
             // The actual flight-computer writes happen in ApplyAutopilot, from the
             // Harmony prefix just before the sim snapshots the FC (Vehicle.
@@ -265,7 +274,7 @@ public static partial class PoweredGuidanceWindow
             // window where the sim's copy-back erases it.
             float errDeg = (float)(vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / System.Math.PI);
             ImGui.Text($"Flying {PhaseName(_s.Phase)} attitude. Error: {errDeg:F1} deg");
-            ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f), _autoStage
+            ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f), _s.AutoStage
                 ? (_s.CutoffDone
                     ? "(Auto: engines cut off — done.)"
                     : (_s.StagingActive
@@ -273,7 +282,7 @@ public static partial class PoweredGuidanceWindow
                         : "(Auto: engines on, full throttle, staging at burnout.)"))
                 : "(Steering only — throttle and staging are manual.)");
         }
-        else if (_engage && _s.Running)
+        else if (_s.Engage && _s.Running)
         {
             ImGui.Text("Waiting for a steering solution...");
         }
