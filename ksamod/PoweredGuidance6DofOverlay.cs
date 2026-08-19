@@ -16,10 +16,15 @@ public static partial class PoweredGuidanceWindow
 
     private static void Draw6DofOverlay(Viewport vp, IParentBody parent)
     {
-        if (!_show6DofOverlay || !_sixDofActive)
+        // The FOCUSED vehicle's state, resolved here rather than read from the
+        // ambient current. The overlay draws what the player is looking at, and the
+        // draw reaches it through several entry points - relying on one of them having
+        // pointed the ambient at the right vehicle would be a trap.
+        if (!_show6DofOverlay || !SixDofState.TryGet(Program.ControlledVehicle, out SixDofState st)
+            || !st.Active)
             return;
 
-        Ksa6DofGuidance g = _sixDof;
+        Ksa6DofGuidance g = st.Guidance;
         if (g == null || !g.HasPlan)
             return;
         if (!SetupProjection(parent))

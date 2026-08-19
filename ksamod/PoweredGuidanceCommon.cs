@@ -447,47 +447,61 @@ public static partial class PoweredGuidanceWindow
     // erased by the worker copy-back.
     public static void ApplyAutopilot(Vehicle vehicle)
     {
-        // Fast path: this runs on every sim step for every vehicle (thousands of
-        // calls per second under time warp) — do nothing for anything that isn't
-        // the vehicle the player is flying.
-        if (!ReferenceEquals(vehicle, Program.ControlledVehicle))
-            return;
+        bool focused = ReferenceEquals(vehicle, Program.ControlledVehicle);
 
-        // Keep the staging model current even while the autopilot is idle: both
-        // EXECUTE handlers need a stage list the instant they are pressed, and
-        // this is the only point in the frame where it can be built without
-        // racing the game's own recompute on the vehicle worker thread. Gated to
-        // ~4 Hz on the wall clock, so time warp doesn't multiply it.
-        RefreshStageModel(vehicle);
-
-        // Likewise the flown-trajectory trace: sampled off the simulation rather
-        // than the frame rate, and recorded whether or not guidance is running so
-        // the track is already there when the overlay is switched on.
-        RecordTrace(vehicle, vehicle.Orbit);
-
-        // A requested reset runs ahead of the activity bail below: the whole point
-        // of the button is to recover when the mod's own state is wrong, so it must
-        // not depend on that state saying the autopilot is still active.
-        if (_fcResetPending)
+        // FOCUSED-VEHICLE HOUSEKEEPING FIRST, and ahead of the 6-DOF dispatch on
+        // purpose. Both of these used to run before it and must keep doing so: the
+        // trace is what draws the flown trajectory, and losing it the moment guidance
+        // engages would blank the overlay during exactly the descent worth watching.
+        if (focused)
         {
-            ApplyPendingFcReset(vehicle);
+            // Keep the staging model current even while the autopilot is idle: both
+            // EXECUTE handlers need a stage list the instant they are pressed, and
+            // this is the only point in the frame where it can be built without
+            // racing the game's own recompute on the vehicle worker thread. Gated to
+            // ~4 Hz on the wall clock, so time warp doesn't multiply it.
+            RefreshStageModel(vehicle);
+
+            // Likewise the flown-trajectory trace: sampled off the simulation rather
+            // than the frame rate, and recorded whether or not guidance is running so
+            // the track is already there when the overlay is switched on.
+            RecordTrace(vehicle, vehicle.Orbit);
+
+            // A requested reset runs ahead of everything below: the whole point of the
+            // button is to recover when the mod's own state is wrong, so it must not
+            // depend on that state saying the autopilot is still active.
+            if (_fcResetPending)
+            {
+                ApplyPendingFcReset(vehicle);
+                return;
+            }
+        }
+
+        // 6-DOF RUNS FOR EVERY VEHICLE, not just the focused one. That is the whole
+        // point of keying its state per vehicle: a booster flies itself home while the
+        // player watches the upper stage carry on to orbit.
+        //
+        // TryGet rather than For, deliberately. This runs on every sim step for every
+        // vehicle — thousands of calls a second under time warp — so a craft that has
+        // never been engaged must cost a failed lookup and nothing else, no allocation.
+        if (SixDofState.TryGet(vehicle, out SixDofState six) && (six.Active || six.EngagePending))
+        {
+            Step6Dof(vehicle);
             return;
         }
+
+        // Everything below is UI-facing or single-vehicle by nature, so it stays scoped
+        // to the craft the player is flying.
+        if (!focused)
+            return;
 
         // 6-DOF guidance is EXCLUSIVE: it drives attitude through the TVC allocator
         // rather than the flight computer, so it must not be mixed with the UPFG /
         // G-FOLD command path below. Runs ahead of the idle bail because it has its
         // own engage flag and does not set _running.
         //
-        // The PENDING flag must be part of this test, not just the active one. The
-        // engage button can only set pending — it runs in the draw, and draw-time
-        // writes are erased — so gating solely on _sixDofActive deadlocked: the step
-        // that sets active could only run once active was already set.
-        if (_sixDofActive || _sixDofEngagePending)
-        {
-            Step6Dof(vehicle);
-            return;
-        }
+        // The 6-DOF dispatch now happens at the very top of this method, ahead of the
+        // focused-vehicle bail, because it is no longer a focused-vehicle concern.
 
         // Bail before touching the flight computer when the autopilot has nothing
         // to do. Keyed on the mod actually being active (guidance running or a

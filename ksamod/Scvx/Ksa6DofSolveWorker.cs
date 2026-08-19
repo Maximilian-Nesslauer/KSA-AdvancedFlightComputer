@@ -250,7 +250,7 @@ public sealed class Ksa6DofSolveWorker : IDisposable
     /// solve took. Worse, it called Release unconditionally on a semaphore created with
     /// maxCount 1: if a job had been dispatched but not yet picked up, the count was
     /// already at the maximum and Release threw SemaphoreFullException. That escaped
-    /// through Disengage6Dof into the draw, so _sixDofWorker and _sixDof were never
+    /// through Disengage6Dof into the draw, so the worker and the guidance were never
     /// cleared and the ImGui window lost its End - which is what "the disengage button
     /// gets stuck" looked like from outside. Loading a save is exactly the moment to
     /// hit it: a dispatch in flight and a disengage arriving together.

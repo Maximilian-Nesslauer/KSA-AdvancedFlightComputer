@@ -50,11 +50,31 @@ internal static class SixDofLog
     /// <summary>Snapshot the full plan at most this often, in seconds of sim time.</summary>
     internal static double PlanSnapshotInterval = 1.0;
 
-    internal static void Start(string vehicleName, string bodyName)
+    /// <summary>
+    /// The vehicle this log belongs to. One log, one craft: guidance is per-vehicle
+    /// now, so a second craft engaging must not silently take the file over and a
+    /// first craft disengaging must not stop the log of one still flying.
+    /// </summary>
+    internal static object Owner { get; private set; }
+
+    /// <summary>
+    /// Begin a run for this vehicle. Refuses if another craft's run is already open -
+    /// see Owner. Returns true if this call owns the log afterwards.
+    ///
+    /// A refusal is not an error and is not worth surfacing: it means a booster is
+    /// already being recorded and the upper stage will simply not be. Interleaving two
+    /// craft in one CSV would make every column ambiguous, and the log's whole value
+    /// has been that a row means one thing.
+    /// </summary>
+    internal static bool Start(object owner, string vehicleName, string bodyName)
     {
+        if (Enabled && Owner != null && !ReferenceEquals(Owner, owner))
+            return false;
+
         try
         {
             Stop();
+            Owner = owner;
 
             string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             Directory = Path.Combine(docs, "My Games", "Kitten Space Agency", "navbox-logs");
@@ -99,11 +119,22 @@ internal static class SixDofLog
         catch (Exception e)
         {
             Enabled = false;
+            Owner = null;
             LastError = e.Message;
         }
+        return Enabled;
     }
 
     internal static string LastError { get; private set; } = "";
+
+    /// <summary>Close the run. Only the owner may - see Start.</summary>
+    internal static void Stop(object owner)
+    {
+        if (Owner != null && !ReferenceEquals(Owner, owner))
+            return;
+        Owner = null;
+        Stop();
+    }
 
     internal static void Stop()
     {
