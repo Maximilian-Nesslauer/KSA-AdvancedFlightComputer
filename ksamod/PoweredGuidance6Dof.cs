@@ -51,6 +51,13 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private static SixDofState _s = new();
 
+    /// <summary>
+    /// Mass loss in a single step that means a separation rather than a burn. A step is
+    /// milliseconds; even at full flow a burn is a fraction of a percent, so 5% is far
+    /// above anything propellant can do and far below any real separation.
+    /// </summary>
+    private const double StagingMassDropFraction = 0.05;
+
     /// <summary>Point the ambient state at this vehicle for the work that follows.</summary>
     private static SixDofState Use(Vehicle vehicle)
     {
@@ -1244,6 +1251,35 @@ public static partial class PoweredGuidanceWindow
         // the vehicle, so a save load or a vessel switch simply arrives with different
         // state rather than with the wrong state. The old guard existed only because
         // one set of statics had to serve every craft.
+        // STAGING TERMINATES GUIDANCE ON THE STAGE THAT LOST PARTS.
+        //
+        // KSA keeps the SAME Vehicle object through a separation - it calls
+        // UpdateAfterPartTreeModification on it - and the discarded stage becomes a new
+        // one. So keying state on the vehicle already does most of the work: the upper
+        // stage carries its guidance across the event, and the spent booster arrives as
+        // a craft with no state and is simply not flown.
+        //
+        // What that does NOT cover is the vehicle that KEPT the state suddenly being a
+        // different rocket. Tmax, the inertia and the whole trajectory were built for a
+        // stack that no longer exists, and the plan is not merely stale but wrong about
+        // the vehicle. Terminating is the honest default: re-engaging is one button, and
+        // it rebuilds the config against what is actually there.
+        if (_s.Active && _s.LastMass > 0.0)
+        {
+            double m = vehicle.TotalMass;
+            if (m < _s.LastMass * (1.0 - StagingMassDropFraction))
+            {
+                SixDofLog.Event(SimNow(),
+                    $"STAGED: mass {_s.LastMass:F0} -> {m:F0} kg in one step - the plan was " +
+                    "built for a different vehicle. Terminating 6-DOF.");
+                Disengage6Dof(vehicle, cutEngine: false);
+                _s.Error = "staged mid-flight - 6-DOF terminated. Re-engage to plan for " +
+                           "the vehicle that is actually here.";
+                return;
+            }
+        }
+        _s.LastMass = vehicle.TotalMass;
+
         IParentBody parent = vehicle.Orbit.Parent;
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame frame = KsaFrameBridge.BuildSiteFrame(siteCci);

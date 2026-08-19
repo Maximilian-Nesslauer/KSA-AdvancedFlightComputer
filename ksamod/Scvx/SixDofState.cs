@@ -62,6 +62,17 @@ public sealed class SixDofState
     public double OffDiag, Asym;
 
     /// <summary>
+    /// Vehicle mass at the previous step, for spotting a staging event. Zero until the
+    /// first step after engaging.
+    ///
+    /// Mass is the signal because it needs no part-tree API and cannot be fooled: over
+    /// one sim step a burn removes a fraction of a percent even at full flow, while a
+    /// separation removes a large slice at once. Anything past StagingMassDropFraction
+    /// is a part tree change, not propellant.
+    /// </summary>
+    public double LastMass;
+
+    /// <summary>
     /// True when the sim thread may touch this vehicle's guidance: solve on it, rebuild
     /// it, or replace it. While a job is in flight the worker owns it outright — only
     /// Published and Inputs may be crossed, and both are immutable.
