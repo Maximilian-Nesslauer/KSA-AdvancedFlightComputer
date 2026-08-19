@@ -40,6 +40,21 @@ public sealed class Ksa6DofGuidance
     private readonly Scvx6DofSolver _solver;
     private readonly int _n;
 
+    /// <summary>
+    /// The plan as the SIM THREAD sees it — the only guidance state that crosses a
+    /// thread boundary. Written by one reference assignment at the end of a successful
+    /// solve, so a reader gets a whole plan or the previous whole plan, never a
+    /// mixture. See Ksa6DofPlan.
+    ///
+    /// volatile so the publish is not reordered ahead of the array writes that build
+    /// it. Everything else in this class is the solve's own working state and stays
+    /// private to whichever thread is solving.
+    /// </summary>
+    private volatile Ksa6DofPlan _published;
+
+    /// <summary>The plan currently being flown, or null before the first solve lands.</summary>
+    public Ksa6DofPlan Published => _published;
+
     private double[] _planX = [];
     private double[] _planU = [];
     private double _planSigma;
@@ -130,19 +145,47 @@ public sealed class Ksa6DofGuidance
     public bool FellBack { get; private set; }
 
     /// <summary>
-    /// Update the inertia used by the dynamics. KSA's TotalMassPropsBody.Inertia is
-    /// LIVE — it is rebuilt whenever propellant changes — so a value captured at
-    /// engage goes stale over a burn that spends a meaningful fraction of the wet
-    /// mass. That produces a SYSTEMATIC torque error: the plan is computed against a
-    /// heavier vehicle than the one flying, so every commanded torque is wrong in the
-    /// same direction, and MPC cannot correct it because re-anchoring the state does
-    /// not touch the model. Call this each cycle; it is three field writes.
+    /// The measurements this guidance will use on its NEXT solve. Publishing is a
+    /// single reference assignment and the object is immutable, so a solve already
+    /// under way keeps the inputs it started with — see Ksa6DofInputs for why that
+    /// matters once the solve is not on the caller's thread.
+    ///
+    /// Setting this does NOT change the model. CommitInputs does, once, at the entry
+    /// to a solve. That is the whole point: there is exactly one moment at which the
+    /// dynamics can change, and it is a moment when nothing is reading them.
     /// </summary>
-    public void SetInertia(double ixx, double iyy, double izz)
+    public Ksa6DofInputs Inputs { get; set; } = Ksa6DofInputs.None;
+
+    /// <summary>
+    /// Fold the published inputs into the model. Called at the top of every solve
+    /// entry point and nowhere else.
+    ///
+    /// KSA's TotalMassPropsBody.Inertia is LIVE — rebuilt whenever propellant changes
+    /// — so a value captured at engage goes stale over a burn that spends a meaningful
+    /// fraction of the wet mass. That is a SYSTEMATIC torque error: the plan is
+    /// computed against a heavier vehicle than the one flying, so every commanded
+    /// torque is wrong in the same direction, and MPC cannot correct it, because
+    /// re-anchoring the state does not touch the model.
+    /// </summary>
+    private void CommitInputs()
     {
-        if (ixx > 0.0) _dyn.Ixx = ixx;
-        if (iyy > 0.0) _dyn.Iyy = iyy;
-        if (izz > 0.0) _dyn.Izz = izz;
+        Ksa6DofInputs inputs = Inputs;      // one read: it may be replaced at any time
+        if (inputs == null || !inputs.IsUsable)
+            return;
+
+        if (inputs.Ixx > 0.0) _dyn.Ixx = inputs.Ixx;
+        if (inputs.Iyy > 0.0) _dyn.Iyy = inputs.Iyy;
+        if (inputs.Izz > 0.0) _dyn.Izz = inputs.Izz;
+
+        if (!_haveBaseGravity)
+        {
+            _baseGravity = new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
+            _haveBaseGravity = true;
+        }
+        AccelBias = inputs.AccelBias;
+        _dyn.Gx = _baseGravity.X + AccelBias.X;
+        _dyn.Gy = _baseGravity.Y + AccelBias.Y;
+        _dyn.Gz = _baseGravity.Z + AccelBias.Z;
     }
 
     /// <summary>Inertia currently in the model, for the readout.</summary>
@@ -172,23 +215,8 @@ public sealed class Ksa6DofGuidance
     /// responsible, and it picks up drag for free — including the way drag falls off
     /// as speed comes off, since the estimate simply follows it down.
     /// </summary>
+    /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
     public double3 AccelBias { get; private set; }
-
-    public void SetAccelBias(double3 bias)
-    {
-        if (!_haveBaseGravity)
-        {
-            _baseGravity = new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
-            _haveBaseGravity = true;
-        }
-        if (!double.IsFinite(bias.X) || !double.IsFinite(bias.Y) || !double.IsFinite(bias.Z))
-            return;
-
-        AccelBias = bias;
-        _dyn.Gx = _baseGravity.X + bias.X;
-        _dyn.Gy = _baseGravity.Y + bias.Y;
-        _dyn.Gz = _baseGravity.Z + bias.Z;
-    }
 
     /// <summary>Gravity the config was built with, before any bias — for the readout.</summary>
     public double3 BaseGravity => _haveBaseGravity ? _baseGravity : new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
@@ -343,6 +371,12 @@ public sealed class Ksa6DofGuidance
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
     public bool Plan(double[] x0, double[] xf, double sigmaSeed, double simNow, int maxIterations = 25)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
@@ -436,6 +470,12 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public void BeginCold(double[] x0, double[] xf, double sigmaSeed)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
@@ -477,6 +517,12 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public bool StepCold(double[] x0, double simNow, int iterations = 1)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         // PACING. An SCvx iteration is the indivisible unit of work here, so the cost
         // of one is whatever it is; what can be chosen is how close together they land.
         // Back to back on consecutive frames, three iterations read as ONE freeze of
@@ -628,10 +674,15 @@ public sealed class Ksa6DofGuidance
     /// <summary>Distance from the vehicle to the plan's prediction for right now.</summary>
     public double MeasureDrift(double[] x0, double simNow)
     {
-        if (!HasPlan) return double.PositiveInfinity;
-        double dt = _planSigma / (_n - 1);
-        double t = Math.Max(0.0, simNow - _solveTime);
-        double s = Math.Clamp(t / dt, 0.0, _n - 1.001);
+        // The PUBLISHED plan, not the solve's working fields: this is called from the
+        // sim thread every frame, including while a solve is in flight. Reading
+        // _planSigma and _solveTime separately would pair a new burn time with an old
+        // anchor and report drift that is an artefact of the read, not of the vehicle.
+        Ksa6DofPlan plan = _published;
+        if (plan == null) return double.PositiveInfinity;
+        double dt = plan.Sigma / (plan.Nodes - 1);
+        double t = Math.Max(0.0, simNow - plan.SolveTime);
+        double s = Math.Clamp(t / dt, 0.0, plan.Nodes - 1.001);
         int k = (int)s;
         double f = s - k;
         // NOT Lerp() - that one strides by NU because every other caller passes
@@ -639,11 +690,11 @@ public sealed class Ksa6DofGuidance
         // returns velocity and quaternion components as if they were positions. That
         // put ~6% of altitude of fictitious drift on a plan solved milliseconds ago,
         // which tripped the 5%-of-altitude restart limit on literally every plan.
-        int k1 = Math.Min(k + 1, _n - 1);
+        int k1 = Math.Min(k + 1, plan.Nodes - 1);
         double d = 0.0;
         for (int i = 0; i < 3; i++)
         {
-            double px = _planX[k * NX + i] * (1.0 - f) + _planX[k1 * NX + i] * f;
+            double px = plan.X[k * NX + i] * (1.0 - f) + plan.X[k1 * NX + i] * f;
             d += (px - x0[i]) * (px - x0[i]);
         }
         PlanDriftM = Math.Sqrt(d);
@@ -688,6 +739,12 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5)
     {
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
         if (prev == null || !prev.HasPlan)
             return false;
 
@@ -862,6 +919,7 @@ public sealed class Ksa6DofGuidance
         _planX = bestX;
         _planU = bestU;
         _planSigma = bestSigma;
+        _published = new Ksa6DofPlan(bestX, bestU, bestSigma, simNow, _n);
         CommittedSigma = bestSigma;
         _solveTime = simNow;
         PinSigma(bestSigma);
@@ -891,6 +949,13 @@ public sealed class Ksa6DofGuidance
     {
         if (!HasPlan)
             return false;
+
+        // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything
+        // reads it. Deliberately not inside Finish: a single Update can call Finish
+        // twice (the wide-trust-region retry), and committing between them would let
+        // the retry run against a different model than the attempt it is retrying.
+        CommitInputs();
+
 
         // Bounded worst case from here on: this runs inside the guidance loop.
         ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
@@ -1107,6 +1172,10 @@ public sealed class Ksa6DofGuidance
         _planU = (double[])_solver.ReferenceU.Clone();
         _planSigma = _solver.Sigma;
         _solveTime = simNow;
+        // LAST, after every array is fully built. The reference assignment is what
+        // makes the new plan visible to the sim thread, so nothing may still be
+        // half-written when it happens.
+        _published = new Ksa6DofPlan(_planX, _planU, _planSigma, simNow, _n);
         Error = "";
         return true;
     }
@@ -1122,21 +1191,27 @@ public sealed class Ksa6DofGuidance
     {
         torqueModel = default;
         thrustN = 0.0;
-        if (!HasPlan)
+
+        // ONE READ of the published plan, into a local. Re-reading the field would
+        // reintroduce exactly the tear this exists to prevent: a solve landing between
+        // two reads would pair the new controls with the old anchor time, and the
+        // vehicle would be commanded from the wrong point of the right trajectory.
+        Ksa6DofPlan plan = _published;
+        if (plan == null)
             return false;
 
-        double dt = _planSigma / (_n - 1);
-        double t = Math.Max(0.0, simNow - _solveTime);
+        double dt = plan.Sigma / (plan.Nodes - 1);
+        double t = Math.Max(0.0, simNow - plan.SolveTime);
         PlanElapsed = t;
 
-        double sNode = Math.Clamp(t / dt, 0.0, _n - 1.001);
+        double sNode = Math.Clamp(t / dt, 0.0, plan.Nodes - 1.001);
         int k = (int)sNode;
         double f = sNode - k;
 
-        double tdx = Lerp(_planU, 0, k, f);
-        double tdy = Lerp(_planU, 1, k, f);
-        double thrust = Lerp(_planU, 2, k, f);
-        double tauRoll = Lerp(_planU, 3, k, f);
+        double tdx = Lerp(plan.U, 0, k, f);
+        double tdy = Lerp(plan.U, 1, k, f);
+        double thrust = Lerp(plan.U, 2, k, f);
+        double tauRoll = Lerp(plan.U, 3, k, f);
 
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre
         // of mass — the model's own gimbal-torque relation, verbatim.

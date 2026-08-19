@@ -15,11 +15,6 @@ using Scvx;
 // all at once.
 public static partial class PoweredGuidanceWindow
 {
-    private static Ksa6DofGuidance _sixDof;
-    private static bool _sixDofActive;          // read by ApplyAutopilot
-    private static bool _sixDofEngagePending;   // set by the draw, consumed by the step
-    private static string _sixDofError = "";
-    private static double _sixDofLastReplan;
 
     // 50. Measured in CLOSED LOOP (Scvx.Console --mpc, zero dispersion, so any plan
     // movement is the model's own error rather than disturbance):
@@ -39,7 +34,37 @@ public static partial class PoweredGuidanceWindow
     // 20 was the worst point on this curve on ALL THREE reported symptoms at once —
     // most plan jump, longest path, and the MOST ADMM iterations. More nodes does not
     // cost more here: the smoother problem converges in fewer ADMM iterations.
-    private static int _sixDofNodes = 50;
+    /// <summary>
+    /// THE VEHICLE CURRENTLY BEING SERVICED. Set once at every entry point - the sim
+    /// hook before it steps a vehicle, the draw before it renders one - and read by
+    /// everything downstream.
+    ///
+    /// An ambient current rather than a parameter threaded through sixty methods,
+    /// which is what keeps this a rename rather than a rewrite. The invariant it needs
+    /// is that only ONE vehicle is being serviced at a time on a given thread, and
+    /// Vehicle.PrepareWorker gives us that: the hook is called per vehicle, in
+    /// sequence, on the sim thread. The draw runs separately and sets it to the
+    /// focused vehicle before rendering.
+    ///
+    /// Never null once Use() has run. It starts as a detached instance so a stray read
+    /// before the first vehicle arrives reads harmless defaults rather than throwing.
+    /// </summary>
+    private static VehicleAutopilotState _s = new();
+
+    /// <summary>
+    /// Mass loss in a single step that means a separation rather than a burn. A step is
+    /// milliseconds; even at full flow a burn is a fraction of a percent, so 5% is far
+    /// above anything propellant can do and far below any real separation.
+    /// </summary>
+    private const double StagingMassDropFraction = 0.05;
+
+    /// <summary>Point the ambient state at this vehicle for the work that follows.</summary>
+    private static VehicleAutopilotState Use(Vehicle vehicle)
+    {
+        _s = vehicle != null ? VehicleAutopilotState.For(vehicle) : new VehicleAutopilotState();
+        return _s;
+    }
+
 
     // A FIXED COARSE COLD START WAS WRONG. It was chosen from an offline sweep that
     // measured 0.44 m of defect at 10 nodes; the flown vehicle at 10 nodes got 7.87 m
@@ -55,7 +80,7 @@ public static partial class PoweredGuidanceWindow
     // them in ten seconds before it gave up entirely.
     private static int ColdNodesFor(double sigmaSeed)
     {
-        int ideal = (int)Math.Ceiling(sigmaSeed / Math.Max(_sixDofNodeDtTarget, 0.05)) + 1;
+        int ideal = (int)Math.Ceiling(sigmaSeed / Math.Max(_s.SixDofNodeDtTarget, 0.05)) + 1;
         int nodes = MaxNodes;
         for (int i = NodeRungs.Length - 1; i >= 0; i--)
             if (NodeRungs[i] >= ideal) { nodes = NodeRungs[i]; break; }
@@ -66,29 +91,19 @@ public static partial class PoweredGuidanceWindow
     // and has to rotate upright under thrust, so a cap below the ENTRY attitude is not
     // a conservative choice, it is an infeasible one - the cone applies at node 0, and
     // node 0 is pinned by equality to the measured state.
-    private static double _sixDofTiltDeg = 120.0;
-    private static double _sixDofThrottleFloor = 0.40;
-    private static bool _sixDofFloorAuto = true;    // track the vehicle's real minimum throttle
-    private static double _sixDofSigmaSeed = 20.0;
-    private static double _sixDofTargetAltM = 10.0;
     // Approach corridor and climb limit. Both are SOFT — they start at node 1 and
     // carry a penalised slack — which is what makes these otherwise aggressive
     // defaults safe; see Scvx6DofConfig.GlideSlopeWeight for why that is a
     // correctness requirement and not a nicety. 10 degrees above the horizontal is a
     // shallow corridor that mainly stops the trajectory going wide, rather than a
     // tight one the plan would have to ride.
-    private static double _sixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
-    private static bool _sixDofVzEnabled = true;
     // Zero, i.e. "never climb". Safe as a hard-looking number only because the
     // constraint is SOFT: it starts at node 1 and carries a penalised slack, so a
     // vehicle that is already climbing gets an expensive plan rather than no plan.
-    private static double _sixDofVzMaxMs;
 
     // Hand over to the terminal hover controller for the last stretch. Default ON
     // and above the target altitude, so the solver is never asked to fly the part
     // of the trajectory it is worst at — see the handover in Step6DofCore.
-    private static bool _sixDofHoverHandoff = true;
-    private static double _sixDofHoverHandoffAltM = 30.0;
     // Cadence in SECONDS of wall clock. The scale-free quantity is really plan NODES
     // — node spacing is sigma/(N-1), so a fixed interval becomes an ever-larger
     // fraction of a node as sigma shrinks through the burn, drifting toward the
@@ -102,15 +117,12 @@ public static partial class PoweredGuidanceWindow
     // thrashes. At the default 0.1 s and N=80 that bound is far away (a 20 s burn is
     // 0.25 s/node, so 0.1 s is 0.4 of a node) — but it TIGHTENS as sigma falls, so
     // the readout below reports the cadence in nodes as well to keep it visible.
-    private static double _sixDofReplanSec = 0.1;
-    private static double _sixDofThrustFrac = 1.0;   // share of total thrust the burn uses
 
     // Objective regulariser weights. Both were originally the Python test case's
     // (W_DU 0.2, W_W 1.0), where they came to 121% of the fuel term — dominating the
     // objective and, because both shrink as burn time grows, pinning sigma at its
     // upper bound. Turned down twice after flight testing. Exposed because the right
     // value depends on the vehicle and is easiest to find by flying it.
-    private static double _sixDofRateDampShare = 0.002;   // rate penalty as a share of fuel
     // W_DU. Raised back to 0.05 after flight testing: unlike W_W (which was pinning
     // burn time at its upper bound and deserved cutting), THIS term has a distinct
     // job — it is the only thing keeping the control profile CONTINUOUS. Min-fuel
@@ -121,14 +133,11 @@ public static partial class PoweredGuidanceWindow
     //   W_DU 0.050 ->  3.9 deg
     // It also suppresses out-of-plane wandering (15.9 m -> 8.3 m) by discouraging the
     // solver from hopping between local optima. Cost is a slightly longer path.
-    private static double _sixDofControlSmooth = 0.05;    // W_DU
 
     // Proximal conditioning. The regularisers above were also holding P together;
     // turning them down for a correct trajectory tripled the ADMM iteration count.
     // This puts the conditioning back without the bias. 0.05 keeps the answer and is
     // ~3.8x faster; higher is faster still but starts moving the solution.
-    private static double _sixDofProximal = 0.05;
-    private static double _sixDofOffDiag, _sixDofAsym;   // diagonal-approximation validity
 
     // Fixed burn time (see Ksa6DofGuidance.FixedTime). Free final time makes the
     // dynamics bilinear in (sigma, x, u) and is the root of sigma pinning, the
@@ -136,24 +145,25 @@ public static partial class PoweredGuidanceWindow
     // Default back to FREE burn time. Fixing it removed the regulariser/sigma
     // coupling exactly as predicted, but did not fix the kinks, the wandering or the
     // solve times — so it is kept as an option rather than imposed.
-    private static bool _sixDofFixedTime;
 
     // Touchdown latch. A vehicle sitting on the pad ALREADY reports terrain contact
     // (the launch-pad collider counts), so "cut on contact" must not fire until the
     // vehicle has first been observed OFF the ground. Same trap the landing flow hit.
-    private static bool _sixDofTouchdownArmed;
     // Telemetry, default ON. The whole point is to catch a bad run without having to
     // reproduce it, so it needs to already be recording when one happens.
-    private static bool _sixDofLogging = true;
-    private static double _sixDofLastThrottle;
     // Thrust bookkeeping for the readout: what the optimiser asked for against what
     // the vehicle can actually produce right now.
-    private static double _sixDofDemandN, _sixDofCapabilityN;
-    private static bool _sixDofThrustSaturated;
-    private static int _sixDofSigmaSamples = 5;
 
     private static void Draw6DofTab(Vehicle vehicle, IParentBody parent, double bodyRadius)
     {
+        // THE WINDOW SHOWS THE FOCUSED VEHICLE. The draw and the sim step are separate
+        // entry points into the same code, and the step points the ambient state at
+        // whichever craft it is servicing - which, now that a booster can fly itself
+        // home unattended, is routinely not the one on screen. Pointing it here means
+        // the panel reads and writes the focused vehicle's state, so Engage arms the
+        // craft the player is looking at.
+        Use(vehicle);
+
         double3 siteCci = SiteDirCciAt(parent, 0) * (bodyRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame frame = KsaFrameBridge.BuildSiteFrame(siteCci);
         double[] x = KsaFrameBridge.ToModelState(vehicle, frame);
@@ -211,13 +221,13 @@ public static partial class PoweredGuidanceWindow
 
         // KSA knows the real floor; the 0.40 default was the Python test case's value
         // and overstating it is what makes an otherwise fine vehicle "over-powered".
-        if (_sixDofFloorAuto && !_sixDofActive)
-            _sixDofThrottleFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
+        if (_s.SixDofFloorAuto && !_s.Active)
+            _s.SixDofThrottleFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
 
-        if (!_sixDofActive)
+        if (!_s.Active)
         {
             if (ImGui.Button("Engage 6-DOF guidance"))
-                _sixDofEngagePending = true;
+                _s.EngagePending = true;
             ImGui.TextWrapped("Cold solve takes ~1.7 s on the sim thread - engage during a coast.");
             Draw6DofFeasibility(vehicle);
         }
@@ -230,8 +240,12 @@ public static partial class PoweredGuidanceWindow
 
         // Telemetry. Cheap enough to leave on: rows buffer in memory and flush on an
         // interval, so the sim thread never waits on the disk.
-        ImGui.Checkbox("Log telemetry to file", ref _sixDofLogging);
-        if (SixDofLog.Enabled)
+        ImGui.Checkbox("Log telemetry to file", ref _s.SixDofLogging);
+        // The log is one global sink with one owner, so say plainly whether it is
+        // recording THIS craft. Reading SixDofLog.Enabled alone reported "logging" on a
+        // vehicle whose rows were never being written, because a different craft
+        // claimed the run first.
+        if (SixDofLog.Enabled && ReferenceEquals(SixDofLog.Owner, _s))
         {
             ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
                 $"logging {SixDofLog.RunName} - {SixDofLog.RowsWritten} rows");
@@ -239,57 +253,87 @@ public static partial class PoweredGuidanceWindow
             if (ImGui.Button("Flush log now"))
                 SixDofLog.Flush();
         }
-        else if (_sixDofLogging)
+        else if (SixDofLog.Enabled)
+            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
+                $"another vehicle owns the log ({SixDofLog.RunName}) - this one is not being recorded");
+        else if (_s.SixDofLogging)
             ImGui.Text("logging will start when guidance engages");
         if (SixDofLog.LastError.Length > 0)
             ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f), "log error: " + SixDofLog.LastError);
         }
 
-        if (_sixDofError.Length > 0)
-            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f), _sixDofError);
+        if (_s.Error.Length > 0)
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f), _s.Error);
 
         if (ImGui.CollapsingHeader("Parameters"))
         {
-            ImGui.InputInt("Nodes", ref _sixDofNodes);
-            _sixDofNodes = Math.Clamp(_sixDofNodes, MinNodes, MaxNodes);
-            ImGui.InputDouble("Tilt limit (deg)", ref _sixDofTiltDeg);
-            ImGui.Checkbox("Throttle floor from vehicle", ref _sixDofFloorAuto);
-            if (!_sixDofFloorAuto)
-                ImGui.InputDouble("Throttle floor", ref _sixDofThrottleFloor);
-            ImGui.Checkbox("Fixed burn time", ref _sixDofFixedTime);
-            ImGui.InputDouble("Burn time seed (s)", ref _sixDofSigmaSeed);
-            if (_sixDofFixedTime)
-                ImGui.InputInt("Burn-time search samples", ref _sixDofSigmaSamples);
-            ImGui.InputDouble("Target altitude (m)", ref _sixDofTargetAltM);
-            ImGui.InputDouble("Glide slope (deg, 0 = off)", ref _sixDofGlideSlopeDeg);
-            if (_sixDofGlideSlopeDeg > 0.0)
+            ImGui.InputInt("Nodes", ref _s.SixDofNodes);
+            _s.SixDofNodes = Math.Clamp(_s.SixDofNodes, MinNodes, MaxNodes);
+            ImGui.InputDouble("Tilt limit (deg)", ref _s.SixDofTiltDeg);
+            ImGui.Checkbox("Throttle floor from vehicle", ref _s.SixDofFloorAuto);
+            if (!_s.SixDofFloorAuto)
+                ImGui.InputDouble("Throttle floor", ref _s.SixDofThrottleFloor);
+            ImGui.Checkbox("Fixed burn time", ref _s.SixDofFixedTime);
+            ImGui.InputDouble("Burn time seed (s)", ref _s.SixDofSigmaSeed);
+            if (_s.SixDofFixedTime)
+                ImGui.InputInt("Burn-time search samples", ref _s.SixDofSigmaSamples);
+            ImGui.InputDouble("Target altitude (m)", ref _s.SixDofTargetAltM);
+            ImGui.InputDouble("Glide slope (deg, 0 = off)", ref _s.SixDofGlideSlopeDeg);
+            if (_s.SixDofGlideSlopeDeg > 0.0)
                 ImGui.TextWrapped(
                     "Degrees above the horizontal at the target - LARGER is steeper and tighter. " +
                     "The plan respects exactly this, so leave a couple of degrees of margin: a " +
                     "trajectory that rides the boundary is one disturbance away from being outside it.");
-            ImGui.Checkbox("Limit climb rate", ref _sixDofVzEnabled);
-            if (_sixDofVzEnabled)
-                ImGui.InputDouble("Max climb rate (m/s)", ref _sixDofVzMaxMs);
-            ImGui.Checkbox("Reduce nodes on approach", ref _sixDofNodeGates);
-            if (_sixDofNodeGates)
+            ImGui.Checkbox("Limit climb rate", ref _s.SixDofVzEnabled);
+            if (_s.SixDofVzEnabled)
+                ImGui.InputDouble("Max climb rate (m/s)", ref _s.SixDofVzMaxMs);
+            ImGui.Checkbox("Reduce nodes on approach", ref _s.SixDofNodeGates);
+            if (_s.SixDofNodeGates)
                 ImGui.TextWrapped(
                     "Node count is derived from the target SPACING below, not from " +
                     "altitude: collocation error depends on sigma/(N-1), so as burn time " +
                     "counts down the count follows. Snapped to rungs (50/40/30/25/20/15/" +
                     "10/5) and one-way, because each change rebuilds the solver and loses " +
                     "the ADMM warm start; the plan itself carries across by resampling.");
-            if (_sixDofNodeGates)
+            if (_s.SixDofNodeGates)
             {
-                ImGui.InputDouble("Target node spacing (s)", ref _sixDofNodeDtTarget);
-                if (_sixDof != null && _sixDof.HasPlan)
-                    ImGui.Text($"  sigma {_sixDof.Sigma,5:F1} s / {_sixDof.Nodes} nodes = " +
-                               $"{_sixDof.Sigma / Math.Max(_sixDof.Nodes - 1, 1),4:F2} s actual");
+                ImGui.InputDouble("Target node spacing (s)", ref _s.SixDofNodeDtTarget);
+                if (_s.Guidance != null && _s.Guidance.HasPlan)
+                    ImGui.Text($"  sigma {_s.Guidance.Sigma,5:F1} s / {_s.Guidance.Nodes} nodes = " +
+                               $"{_s.Guidance.Sigma / Math.Max(_s.Guidance.Nodes - 1, 1),4:F2} s actual");
             }
-            ImGui.Checkbox("Spread cold solve over frames", ref _sixDofSpreadCold);
-            if (_sixDofSpreadCold)
+            if (ImGui.Checkbox("Solve on a background thread", ref _s.SixDofThreaded))
             {
-                ImGui.InputDouble("Gap between iterations (s)", ref _sixDofColdIntervalS, 0.05, 0.1, "%.2f");
-                _sixDofColdIntervalS = Math.Clamp(_sixDofColdIntervalS, 0.0, 1.0);
+                // Switching mid-flight is the point of having the toggle, so it has to
+                // be safe: stop the worker on the way off, start one on the way on.
+                if (!_s.SixDofThreaded) { _s.Worker?.Dispose(); _s.Worker = null; }
+                else if (_s.Active && _s.Worker == null) _s.Worker = new Ksa6DofSolveWorker();
+            }
+            if (_s.SixDofThreaded)
+            {
+                ImGui.TextWrapped(
+                    "Runs the re-solve off the sim thread, so a solve costs no frame time at " +
+                    "all. The cycle budget already bounds a solve BETWEEN SCvx iterations, but " +
+                    "one iteration is indivisible and measures 43 ms typically and 300 ms at " +
+                    "worst - that floor is the remaining stutter, and threading removes it " +
+                    "rather than lowering it. The plan is one solve older in exchange; a 300 ms " +
+                    "solve becomes a plan refreshing at 3 Hz instead of a 300 ms hitch.");
+                if (_s.Worker != null)
+                    ImGui.Text($"  {_s.Worker.Completed} solves, {_s.Worker.Skipped} ticks skipped " +
+                               $"(worker busy), last {_s.Worker.LastSolveMs:F0} ms" +
+                               (_s.Worker.IsBusy ? "   [solving]" : ""));
+            }
+            else
+                ImGui.TextWrapped(
+                    "Solving inline on the sim thread. Correct, and easier to reason about " +
+                    "from a log, but a solve is frame time - which is what the threaded path " +
+                    "exists to stop paying.");
+
+            ImGui.Checkbox("Spread cold solve over frames", ref _s.SixDofSpreadCold);
+            if (_s.SixDofSpreadCold)
+            {
+                ImGui.InputDouble("Gap between iterations (s)", ref _s.SixDofColdIntervalS, 0.05, 0.1, "%.2f");
+                _s.SixDofColdIntervalS = Math.Clamp(_s.SixDofColdIntervalS, 0.0, 1.0);
                 ImGui.TextWrapped(
                     "Runs the cold solve one SCvx iteration at a time instead of blocking for " +
                     "the whole thing, waiting this long between iterations so they land as " +
@@ -298,72 +342,72 @@ public static partial class PoweredGuidanceWindow
                     "but spread. The vehicle keeps falling meanwhile, which is absorbed " +
                     "because every iteration re-anchors at the measured state.");
             }
-            ImGui.Checkbox("Estimate unmodelled acceleration", ref _sixDofBiasEnabled);
-            if (_sixDofBiasEnabled)
+            ImGui.Checkbox("Estimate unmodelled acceleration", ref _s.SixDofBiasEnabled);
+            if (_s.SixDofBiasEnabled)
                 ImGui.TextWrapped(
                     "Measures what the model is missing - gravity error, thrust calibration, " +
                     "drag - and adds it to the planner's gravity, so the optimiser plans " +
                     "around it. Plain MPC cannot: it corrects the STATE each cycle but keeps " +
                     "planning with the same wrong model, so it meets the same error every time.");
-            ImGui.Checkbox("Hand off to terminal hover", ref _sixDofHoverHandoff);
-            if (_sixDofHoverHandoff)
+            ImGui.Checkbox("Hand off to terminal hover", ref _s.SixDofHoverHandoff);
+            if (_s.SixDofHoverHandoff)
             {
-                ImGui.InputDouble("Handoff altitude (m)", ref _sixDofHoverHandoffAltM);
-                if (_sixDofHoverHandoffAltM <= _sixDofTargetAltM)
+                ImGui.InputDouble("Handoff altitude (m)", ref _s.SixDofHoverHandoffAltM);
+                if (_s.SixDofHoverHandoffAltM <= _s.SixDofTargetAltM)
                     ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                         "handoff is at or below the target altitude - it will never fire, " +
                         "because the plan levels off at the target and never descends past it.");
             }
-            ImGui.InputDouble("Re-solve every (s)", ref _sixDofReplanSec);
-            ImGui.InputDouble("Thrust fraction", ref _sixDofThrustFrac);
-            ImGui.InputDouble("Rate damping (share of fuel)", ref _sixDofRateDampShare);
-            ImGui.InputDouble("Control smoothing (W_DU)", ref _sixDofControlSmooth);
-            ImGui.InputDouble("Proximal conditioning", ref _sixDofProximal);
+            ImGui.InputDouble("Re-solve every (s)", ref _s.SixDofReplanSec);
+            ImGui.InputDouble("Thrust fraction", ref _s.SixDofThrustFrac);
+            ImGui.InputDouble("Rate damping (share of fuel)", ref _s.SixDofRateDampShare);
+            ImGui.InputDouble("Control smoothing (W_DU)", ref _s.SixDofControlSmooth);
+            ImGui.InputDouble("Proximal conditioning", ref _s.SixDofProximal);
         }
 
-        if (_sixDof == null || !_sixDof.HasPlan)
+        if (_s.Guidance == null || !_s.Guidance.HasPlan)
             return;
 
         ImGui.SeparatorText("Plan");
-        ImGui.Text($"status {_sixDof.Status}   solves {_sixDof.SolveCount}   " +
-                   $"last {_sixDof.LastIterations} iters ({_sixDof.AcceptedSteps} accepted) " +
-                   $"in {_sixDof.LastSolveMs:F0} ms");
+        ImGui.Text($"status {_s.Guidance.Status}   solves {_s.Guidance.SolveCount}   " +
+                   $"last {_s.Guidance.LastIterations} iters ({_s.Guidance.AcceptedSteps} accepted) " +
+                   $"in {_s.Guidance.LastSolveMs:F0} ms");
         // Plan age is time since the last SUCCESSFUL solve — the plan's own clock.
         // Under a healthy MPC it sawtooths between 0 and the cadence. If it climbs
         // past that, re-solves are failing and the command is being read further and
         // further along a trajectory that is no longer being refreshed: the plan's
         // time index outruns the vehicle.
-        double age = _sixDof.PlanElapsed;
-        double cadenceS = _sixDofReplanSec;
+        double age = _s.Guidance.PlanElapsed;
+        double cadenceS = _s.SixDofReplanSec;
         bool stale = age > cadenceS * 2.5;
-        double sg = _sixDof.Sigma;
+        double sg = _s.Guidance.Sigma;
         // Solver health. The occasional multi-second solve was an ITERATION cap that
         // did not bound TIME: one ADMM iteration costs ~20x more at N=80 than at
         // N=30, so a fixed 2000-iteration budget was 1.5 s there. The cap is derived
         // from this measured cost each cycle instead.
-        ImGui.Text($"solver {_sixDof.MsPerAdmmIteration * 1000.0,6:F0} us/ADMM-iter   " +
-                   $"budget {_sixDof.SubproblemBudgetMs:F0} ms -> cap " +
-                   $"{(int)(_sixDof.SubproblemBudgetMs / Math.Max(_sixDof.MsPerAdmmIteration, 1e-4))} iters   " +
-                   $"escalations {_sixDof.Escalations}");
-        if (_sixDofFixedTime)
+        ImGui.Text($"solver {_s.Guidance.MsPerAdmmIteration * 1000.0,6:F0} us/ADMM-iter   " +
+                   $"budget {_s.Guidance.SubproblemBudgetMs:F0} ms -> cap " +
+                   $"{(int)(_s.Guidance.SubproblemBudgetMs / Math.Max(_s.Guidance.MsPerAdmmIteration, 1e-4))} iters   " +
+                   $"escalations {_s.Guidance.Escalations}");
+        if (_s.SixDofFixedTime)
         {
-        ImGui.Text($"burn time {sg,6:F1} s   FIXED (committed {_sixDof.CommittedSigma:F1} s, counting down)");
-            if (_sixDof.SearchLog.Length > 0)
-                ImGui.TextWrapped("search: " + _sixDof.SearchLog);
+        ImGui.Text($"burn time {sg,6:F1} s   FIXED (committed {_s.Guidance.CommittedSigma:F1} s, counting down)");
+            if (_s.Guidance.SearchLog.Length > 0)
+                ImGui.TextWrapped("search: " + _s.Guidance.SearchLog);
         }
-        bool atMax = sg >= _sixDof.SigmaMax * 0.999, atMin = sg <= _sixDof.SigmaMin * 1.001;
-        if (_sixDofFixedTime)
+        bool atMax = sg >= _s.Guidance.SigmaMax * 0.999, atMin = sg <= _s.Guidance.SigmaMin * 1.001;
+        if (_s.SixDofFixedTime)
         {
             // sigma is pinned by construction, so the bound warnings below are moot.
         }
         else if (atMax || atMin)
             ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
                 $"burn time {sg:F1} s - PINNED AT {(atMax ? "MAX" : "MIN")} " +
-                $"[{_sixDof.SigmaMin:F1}, {_sixDof.SigmaMax:F1}] s. The bound is dictating the " +
+                $"[{_s.Guidance.SigmaMin:F1}, {_s.Guidance.SigmaMax:F1}] s. The bound is dictating the " +
                 "trajectory, not the physics - if it cannot hover it will loop to burn the time.");
         else
-            ImGui.Text($"burn time {sg,6:F1} s   (bounds {_sixDof.SigmaMin:F1} - {_sixDof.SigmaMax:F1} s)");
-        if (_sixDof.FellBack)
+            ImGui.Text($"burn time {sg,6:F1} s   (bounds {_s.Guidance.SigmaMin:F1} - {_s.Guidance.SigmaMax:F1} s)");
+        if (_s.Guidance.FellBack)
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                 "re-solve needed the WIDE TRUST REGION retry - this is what costs ~500 ms.");
         if (stale)
@@ -375,7 +419,7 @@ public static partial class PoweredGuidanceWindow
             // Cadence in nodes is the number that decides whether the warm start is
             // still fresh, and it moves on its own as sigma shrinks even though the
             // knob is fixed — so show it, and flag the ~2-node cliff.
-            double nodeDt = _sixDof.Sigma / Math.Max(_sixDofNodes - 1, 1);
+            double nodeDt = _s.Guidance.Sigma / Math.Max(_s.SixDofNodes - 1, 1);
             double cadenceNodes = cadenceS / Math.Max(nodeDt, 1e-6);
             ImGui.Text($"plan age  {age,6:F2} s   cadence {cadenceS,5:F2} s = " +
                        $"{cadenceNodes,4:F2} nodes   (node spacing {nodeDt,5:F2} s)");
@@ -388,13 +432,13 @@ public static partial class PoweredGuidanceWindow
         // Node 0 is an equality constraint, so this is ~0 on any usable plan. It is
         // THE check that the MPC re-anchored at the vehicle instead of serving a
         // stale trajectory — which is what "the plan starts a node below" looked like.
-        ImGui.Text($"anchor offset {_sixDof.AnchorOffsetM,8:F2} m");
+        ImGui.Text($"anchor offset {_s.Guidance.AnchorOffsetM,8:F2} m");
 
-        double3 bias = _sixDof.AccelBias;
+        double3 bias = _s.Guidance.AccelBias;
         double biasMag = Math.Sqrt(bias.X * bias.X + bias.Y * bias.Y + bias.Z * bias.Z);
-        if (_sixDofBiasEnabled)
+        if (_s.SixDofBiasEnabled)
         {
-            double3 g0 = _sixDof.BaseGravity;
+            double3 g0 = _s.Guidance.BaseGravity;
             ImGui.Text($"unmodelled accel ({bias.X,6:F2},{bias.Y,6:F2},{bias.Z,6:F2}) m/s2   " +
                        $"|{biasMag,5:F2}|   (model g {-g0.Z:F2} -> {-(g0.Z + bias.Z):F2})");
             if (biasMag > 0.15 * Math.Abs(g0.Z))
@@ -409,27 +453,27 @@ public static partial class PoweredGuidanceWindow
         // error - the plan is deliberately built against the conservative
         // target-altitude figure - but the ratio is the number that used to be
         // silently wrong, so it is on screen.
-        if (_sixDofCapabilityN > 1.0)
+        if (_s.CapabilityN > 1.0)
         {
-            ImGui.Text($"thrust demand {_sixDofDemandN / 1e6,6:F2} MN   " +
-                       $"live capability {_sixDofCapabilityN / 1e6,6:F2} MN   " +
-                       $"(plan Tmax {_sixDof.Tmax / 1e6:F2} MN)   " +
-                       $"throttle {_sixDofLastThrottle * 100.0,3:F0} %");
-            if (_sixDofThrustSaturated)
+            ImGui.Text($"thrust demand {_s.DemandN / 1e6,6:F2} MN   " +
+                       $"live capability {_s.CapabilityN / 1e6,6:F2} MN   " +
+                       $"(plan Tmax {_s.Guidance.Tmax / 1e6:F2} MN)   " +
+                       $"throttle {_s.LastThrottle * 100.0,3:F0} %");
+            if (_s.ThrustSaturated)
                 ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
                     "THRUST SATURATED - the plan is asking for more than the vehicle has, " +
                     "so the trajectory being flown is not the one that was planned.");
         }
-        if (_sixDofNodeGates)
-            ImGui.Text($"nodes {_sixDof.Nodes,5}   gate steps {_sixDofGateChanges}   " +
-                       $"cold restarts {_sixDofRecoveries}");
+        if (_s.SixDofNodeGates)
+            ImGui.Text($"nodes {_s.Guidance.Nodes,5}   gate steps {_s.GateChanges}   " +
+                       $"cold restarts {_s.Recoveries}");
 
         // THE health number. Under a working MPC this is 0 almost always: a refusal
         // means the vehicle is flying the PREVIOUS plan, so a sustained run of them is
         // open-loop flight however healthy everything else looks.
-        if (_sixDofRefusalRun > 0)
+        if (_s.RefusalRun > 0)
             ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f),
-                $"{_sixDofRefusalRun} consecutive re-solves REFUSED - flying a stale plan. " +
+                $"{_s.RefusalRun} consecutive re-solves REFUSED - flying a stale plan. " +
                 $"Cold restart at {RefusalsBeforeRestart}.");
 
         // The physicality check. Virtual control is a SLACK variable in the dynamics
@@ -441,13 +485,13 @@ public static partial class PoweredGuidanceWindow
         // is normalised by the range to the target, so it climbs on an approach even
         // when nothing about the plan changed - it was rejecting centimetre-accurate
         // trajectories inside 100 m. See Ksa6DofGuidance.Finish.
-        double defM = _sixDof.LastDefectM;
-        if (defM <= _sixDof.MaxDefectM)
+        double defM = _s.Guidance.LastDefectM;
+        if (defM <= _s.Guidance.MaxDefectM)
             ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
-                $"dynamics defect {defM:F2} m  (limit {_sixDof.MaxDefectM:F2} m) - plan is physical");
+                $"dynamics defect {defM:F2} m  (limit {_s.Guidance.MaxDefectM:F2} m) - plan is physical");
         else
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                $"dynamics defect {defM:F2} m EXCEEDS {_sixDof.MaxDefectM:F2} m - plan refused. " +
+                $"dynamics defect {defM:F2} m EXCEEDS {_s.Guidance.MaxDefectM:F2} m - plan refused. " +
                 "Almost always too few nodes: the collocation error grows with node spacing.");
 
         // WHICH CHANNEL, because the metres figure above cannot be read on its own.
@@ -456,21 +500,21 @@ public static partial class PoweredGuidanceWindow
         // worst channel is a position. On a body rate, "3900 m" is a rad/s error times
         // a length, and reading it as a spatial error sends the investigation the
         // wrong way entirely.
-        if (_sixDof.LastDefectChannel >= 0)
-            ImGui.Text($"  worst on {_sixDof.LastDefectChannelName} ({_sixDof.LastDefectGroup}) " +
-                       $"at interval {_sixDof.LastDefectNode} of {_sixDof.Nodes - 1} = " +
-                       $"{_sixDof.LastDefectRaw:G3} {_sixDof.LastDefectUnits}");
+        if (_s.Guidance.LastDefectChannel >= 0)
+            ImGui.Text($"  worst on {_s.Guidance.LastDefectChannelName} ({_s.Guidance.LastDefectGroup}) " +
+                       $"at interval {_s.Guidance.LastDefectNode} of {_s.Guidance.Nodes - 1} = " +
+                       $"{_s.Guidance.LastDefectRaw:G3} {_s.Guidance.LastDefectUnits}");
 
         // Pure diagnostics; nothing acts on these. Under MPC, drift between re-solves
         // is expected — what matters is that it RESETS each cycle rather than growing.
-        _sixDof.Diagnostics(x, out double pe, out double ve, out double ae);
+        _s.Guidance.Diagnostics(x, out double pe, out double ve, out double ae);
         ImGui.SeparatorText("Drift since last solve");
         ImGui.Text($"position {pe,8:F1} m   velocity {ve,7:F2} m/s   attitude {ae,6:F2} deg");
 
         // Objective breakdown. Fuel must dominate: both regularisers get CHEAPER as
         // burn time grows, so if either rivals fuel the optimiser is minimising them
         // instead and will push sigma to its upper bound.
-        _sixDof.ObjectiveTerms(out double jFuel, out double jDu, out double jW);
+        _s.Guidance.ObjectiveTerms(out double jFuel, out double jDu, out double jW);
         ImGui.SeparatorText("Objective");
         double denom = Math.Max(jFuel, 1e-12);
         ImGui.Text($"fuel            {jFuel:E3}");
@@ -486,14 +530,14 @@ public static partial class PoweredGuidanceWindow
         // is EXACT rather than approximate — and the arbitrary roll reference that
         // BodyAxes picks becomes harmless, since the transverse inertia is degenerate.
         ImGui.SeparatorText("Inertia (model body axes)");
-        double3 inr = _sixDof.Inertia;
+        double3 inr = _s.Guidance.Inertia;
         ImGui.Text($"Ixx {inr.X:E3}   Iyy {inr.Y:E3}   Izz {inr.Z:E3} kg m2");
-        bool diagOk = _sixDofOffDiag < 0.02, axiOk = _sixDofAsym < 0.05;
+        bool diagOk = _s.OffDiag < 0.02, axiOk = _s.Asym < 0.05;
         ImGui.TextColored(diagOk ? new float4(0.4f, 1f, 0.5f, 1f) : new float4(1f, 0.5f, 0.3f, 1f),
-            $"off-diagonal {_sixDofOffDiag * 100,6:F2}%% of diagonal" +
+            $"off-diagonal {_s.OffDiag * 100,6:F2}%% of diagonal" +
             (diagOk ? " - diagonal model is exact here" : " - REAL COUPLING IS BEING DISCARDED"));
         ImGui.TextColored(axiOk ? new float4(0.4f, 1f, 0.5f, 1f) : new float4(1f, 0.8f, 0.3f, 1f),
-            $"transverse asymmetry {_sixDofAsym * 100,6:F2}%%" +
+            $"transverse asymmetry {_s.Asym * 100,6:F2}%%" +
             (axiOk ? " - axisymmetric" : " - not axisymmetric, roll reference matters"));
 
         // MODEL vs REALITY on lateral force. The model couples lateral force and
@@ -506,12 +550,12 @@ public static partial class PoweredGuidanceWindow
         // ever sits at or below the floor the engine is at its minimum and the plan
         // has no downward authority left.
         ImGui.SeparatorText("Throttle");
-        ImGui.Text($"commanded {_sixDofLastThrottle * 100,5:F1} %   " +
+        ImGui.Text($"commanded {_s.LastThrottle * 100,5:F1} %   " +
                    $"vehicle floor {Ksa6DofSetup.VehicleThrottleFloor(vehicle) * 100,4:F1} %   engine ON while guiding");
 
         ImGui.SeparatorText("Lateral force: model vs allocator");
-        double2 mf = _sixDof.LastLateralForce;
-        TvcAllocationResult al = KsaGimbalControl.LastAllocation;
+        double2 mf = _s.Guidance.LastLateralForce;
+        TvcAllocationResult al = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
         KsaFrameBridge.BodyAxes(vehicle, out double3 bx, out double3 by, out _);
         double afx = al.AchievedForce.X * bx.X + al.AchievedForce.Y * bx.Y + al.AchievedForce.Z * bx.Z;
         double afy = al.AchievedForce.X * by.X + al.AchievedForce.Y * by.Y + al.AchievedForce.Z * by.Z;
@@ -528,8 +572,10 @@ public static partial class PoweredGuidanceWindow
         // Commanded vs delivered torque — the link the drift numbers cannot see. A gap
         // means the plan is asking for torque this vehicle does not have.
         ImGui.SeparatorText("Torque commanded vs delivered (KSA body axes)");
-        TvcAllocationResult a = KsaGimbalControl.LastAllocation;
-        ImGui.Text($"cmd  ({KsaGimbalControl.TorqueXNm / 1000.0,9:F1},{KsaGimbalControl.TorqueYNm / 1000.0,9:F1},{KsaGimbalControl.TorqueZNm / 1000.0,9:F1}) kN-m");
+        KsaGimbalControl.Slot gs = KsaGimbalControl.Diagnostics(vehicle);
+        TvcAllocationResult a = gs?.LastAllocation ?? default;
+        KsaGimbalControl.Command gc = gs?.Cmd ?? KsaGimbalControl.Command.Off;
+        ImGui.Text($"cmd  ({gc.TorqueXNm / 1000.0,9:F1},{gc.TorqueYNm / 1000.0,9:F1},{gc.TorqueZNm / 1000.0,9:F1}) kN-m");
         ImGui.Text($"got  ({a.AchievedTorque.X / 1000.0,9:F1},{a.AchievedTorque.Y / 1000.0,9:F1},{a.AchievedTorque.Z / 1000.0,9:F1}) kN-m");
         ImGui.Text($"max  ({a.MaxTorque.X / 1000.0,9:F1},{a.MaxTorque.Y / 1000.0,9:F1},{a.MaxTorque.Z / 1000.0,9:F1}) kN-m");
         if (a.SaturationScale < 0.999)
@@ -615,7 +661,6 @@ public static partial class PoweredGuidanceWindow
     // or over the 1 m gate and the loop refuses everything it produces, below it there
     // is an order of magnitude of margin. 0.85 s was on the wrong side of that knee,
     // which is why the ladder kept asking for counts whose plans could not be flown.
-    private static double _sixDofNodeDtTarget = 0.60;
 
     /// <summary>
     /// Hard bounds on node count, ladder or configured.
@@ -634,17 +679,12 @@ public static partial class PoweredGuidanceWindow
     // index the ladder may still move to. A refused plan means the vehicle is flying
     // the previous one OPEN LOOP, so a step that causes them has to be undone -
     // one-way stepping on its own cannot recover from a rung that does not work.
-    private static int _sixDofRefusalRun;
-    private static int _sixDofRungFloor = int.MaxValue;
 
     // Speed at which the rung floor was set. A refusal is evidence about the
     // conditions it happened in, NOT about the whole descent, and this is what lets
     // the floor expire once those conditions have gone.
-    private static double _sixDofRungFloorSpeed;
     // Rung index a back-off has already been attempted from, so a failed attempt is
     // not repeated. -1 means none tried yet.
-    private static int _sixDofBackedOffTo = -1;
-    private static int _sixDofRecoveries;
 
     // Refusals tolerated before undoing a node step. Long enough that one awkward
     // cycle does not trigger it, short enough that the vehicle is not open loop for
@@ -661,7 +701,6 @@ public static partial class PoweredGuidanceWindow
     // scales with how much room there is: 20 m matters at 100 m and is noise at 2 km.
     private const double ColdRestartDriftM = 20.0;
 
-    private static bool _sixDofNodeGates = true;
     // Seed the cold solve from a convex 3-DOF G-FOLD solve.
     //
     // OFF, because it was MEASURED not to help (Scvx.Console --seed). The idea is
@@ -674,7 +713,6 @@ public static partial class PoweredGuidanceWindow
     // Kept behind a flag with its test, because it should be revisited if cold-solve
     // cost ever becomes the bottleneck again - at higher node counts, or from a much
     // worse initial state, the balance would be different.
-    private static bool _sixDofGfoldSeed;
 
     // Spread the cold solve over frames instead of blocking on it.
     //
@@ -684,15 +722,9 @@ public static partial class PoweredGuidanceWindow
     // arrives in about three frames and the vehicle falls 1-6 m in the meantime -
     // absorbed automatically, because each frame re-anchors at the measured state
     // exactly as the warm loop does.
-    private static bool _sixDofSpreadCold = true;
     // Gap between cold-solve iterations, in seconds. At 0.25 s the handful of
     // iterations a cold solve needs lands across about a second, as separate short
     // hitches rather than one merged freeze.
-    private static double _sixDofColdIntervalS = 0.25;
-    private static bool _sixDofConverging;      // cold solve in progress, not yet flyable
-    private static int _sixDofColdFrames;
-    private static int _sixDofGateIndex = -1;    // -1 = above every gate
-    private static int _sixDofGateChanges;
 
     /// <summary>
     /// Step the node count down when the vehicle drops past a gate, carrying the
@@ -711,26 +743,26 @@ public static partial class PoweredGuidanceWindow
         // refusing every re-solve thereafter. One-way stepping cannot recover from
         // that on its own, so step BACK UP one rung and refuse to go that coarse
         // again for the rest of the run.
-        if (_sixDofRefusalRun >= RefusalsBeforeBackOff && _sixDofGateIndex > _sixDofBackedOffTo)
+        if (_s.RefusalRun >= RefusalsBeforeBackOff && _s.GateIndex > _s.BackedOffTo)
         {
-            int finer = _sixDofGateIndex - 1;
+            int finer = _s.GateIndex - 1;
             // Record the attempt BEFORE trying, so a rebuild that fails is not retried
             // every five cycles forever. Flight log 20260807-093052 did exactly that:
             // the same back-off to 25 nodes failed and was retried ~40 times, each one
             // a full config build plus a failed cold solve, which is pure added cost
             // on top of an already-failing loop.
-            _sixDofBackedOffTo = _sixDofGateIndex;
-            _sixDofRungFloor = Math.Min(_sixDofRungFloor, finer);
-            _sixDofRungFloorSpeed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
-            _sixDofRefusalRun = 0;
+            _s.BackedOffTo = _s.GateIndex;
+            _s.RungFloor = Math.Min(_s.RungFloor, finer);
+            _s.RungFloorSpeed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+            _s.RefusalRun = 0;
 
             if (RebuildAt(vehicle, parent, siteCci, x, now, NodeRungs[finer]))
             {
                 SixDofLog.Event(now,
-                    $"NODE BACK-OFF at alt {x[2]:F0} m: {NodeRungs[_sixDofGateIndex]} -> " +
+                    $"NODE BACK-OFF at alt {x[2]:F0} m: {NodeRungs[_s.GateIndex]} -> " +
                     $"{NodeRungs[finer]} nodes, and no coarser this run");
-                _sixDofGateIndex = finer;
-                _sixDofBackedOffTo = finer;
+                _s.GateIndex = finer;
+                _s.BackedOffTo = finer;
             }
             else
             {
@@ -745,10 +777,10 @@ public static partial class PoweredGuidanceWindow
         // what sets spacing, and sigma counts down through the descent, so this falls
         // naturally without reference to altitude at all - and it adapts to a fast
         // entry or a slow one, which an altitude ladder cannot.
-        double sigma = _sixDof.Sigma;
+        double sigma = _s.Guidance.Sigma;
         if (sigma <= 0.0)
             return;
-        int ideal = (int)Math.Ceiling(sigma / Math.Max(_sixDofNodeDtTarget, 0.05)) + 1;
+        int ideal = (int)Math.Ceiling(sigma / Math.Max(_s.SixDofNodeDtTarget, 0.05)) + 1;
 
         // Snap to a rung: the COARSEST count that still delivers at least the
         // resolution asked for. Falls back to the FINEST rung, not the coarsest, when
@@ -786,31 +818,31 @@ public static partial class PoweredGuidanceWindow
         // refused reseed, and if conditions really have not eased it just sets the
         // floor again at the new speed.
         double speedNow = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
-        if (_sixDofRungFloor != int.MaxValue && speedNow < 0.67 * _sixDofRungFloorSpeed)
+        if (_s.RungFloor != int.MaxValue && speedNow < 0.67 * _s.RungFloorSpeed)
         {
             SixDofLog.Event(now,
                 $"NODE FLOOR CLEARED at alt {x[2]:F0} m: speed {speedNow:F0} m/s is well below the "
-                + $"{_sixDofRungFloorSpeed:F0} m/s that refused {NodeRungs[Math.Min(_sixDofRungFloor + 1, NodeRungs.Length - 1)]} nodes");
-            _sixDofRungFloor = int.MaxValue;
-            _sixDofBackedOffTo = -1;
+                + $"{_s.RungFloorSpeed:F0} m/s that refused {NodeRungs[Math.Min(_s.RungFloor + 1, NodeRungs.Length - 1)]} nodes");
+            _s.RungFloor = int.MaxValue;
+            _s.BackedOffTo = -1;
         }
 
         // Never move coarser than a rung already shown to be unflyable in CURRENT
         // conditions - see the expiry above.
-        int want = Math.Min(want0, _sixDofRungFloor);
-        if (want <= _sixDofGateIndex)
+        int want = Math.Min(want0, _s.RungFloor);
+        if (want <= _s.GateIndex)
             return;
         nodes = NodeRungs[want];
-        if (nodes >= _sixDof.Nodes)
+        if (nodes >= _s.Guidance.Nodes)
         {
-            _sixDofGateIndex = want;   // already at or below this count, nothing to do
+            _s.GateIndex = want;   // already at or below this count, nothing to do
             return;
         }
 
         if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
         {
-            _sixDofGateChanges++;
-            _sixDofGateIndex = want;
+            _s.GateChanges++;
+            _s.GateIndex = want;
             return;
         }
 
@@ -823,62 +855,153 @@ public static partial class PoweredGuidanceWindow
         // follows how fast the state is changing and not spacing alone. Rather than
         // retune a number that cannot be right for every case, let the rung floor
         // record what this descent will actually take, and stop asking again.
-        _sixDofRungFloor = Math.Min(_sixDofRungFloor, want - 1);
-        _sixDofRungFloorSpeed = speedNow;
+        _s.RungFloor = Math.Min(_s.RungFloor, want - 1);
+        _s.RungFloorSpeed = speedNow;
     }
 
     /// <summary>
-    /// Rebuild the guidance at a different node count, carrying the current plan
-    /// across by resampling. Returns false and leaves the existing guidance untouched
-    /// if anything fails — losing the node change is survivable, losing the plan is
-    /// not.
+    /// Everything a node-count rebuild needs, gathered from the live vehicle. Plain
+    /// data: once this exists the rebuild touches no game state at all.
+    ///
+    /// The split exists because the two halves belong to different threads. Building
+    /// the config reads the vehicle, its parts and the atmosphere, so it can only
+    /// happen where KSA's state is safe to touch. Constructing the guidance and
+    /// seeding it is arithmetic on arrays, and it is the expensive half - SeedFrom
+    /// runs a full solve.
     /// </summary>
-    private static bool RebuildAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
-                                  double[] x, double now, int nodes)
+    private sealed record RebuildRequest(
+        int Nodes, Scvx6DofConfig Cfg, Dynamics6Dof.Params Dyn, Ksa6DofInputs Inputs, double[] Xf);
+
+    /// <summary>
+    /// The GAME-THREAD half of a rebuild: read the vehicle and produce a request.
+    /// Does no solving and mutates nothing, so a failure here costs only the node
+    /// change.
+    /// </summary>
+    private static RebuildRequest PrepareRebuild(Vehicle vehicle, IParentBody parent,
+                                                 double3 siteCci, double[] x, double now, int nodes)
     {
         var xf = new double[14];
-        xf[2] = _sixDofTargetAltM;
+        xf[2] = _s.SixDofTargetAltM;
         TerminalAttitude(x, xf);
 
-        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _sixDofTiltDeg,
-                                   _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
-                                   _sixDofRateDampShare, _sixDofControlSmooth,
-                                   _sixDofProximal,
-                                   _sixDofGlideSlopeDeg, _sixDofVzEnabled ? _sixDofVzMaxMs : -1.0,
+        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _s.SixDofTiltDeg,
+                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed, _s.SixDofThrustFrac,
+                                   _s.SixDofRateDampShare, _s.SixDofControlSmooth,
+                                   _s.SixDofProximal,
+                                   _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _))
         {
             SixDofLog.Event(now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
-            return false;
+            return null;
         }
 
-        var next = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _sixDofFixedTime };
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
-        next.SetInertia(ixx, iyy, izz);
-        next.SetAccelBias(_sixDof.AccelBias);
+        return new RebuildRequest(nodes, cfg, dyn,
+                                  new Ksa6DofInputs(_s.Guidance.AccelBias, ixx, iyy, izz), xf);
+    }
 
-        double sigmaWas = _sixDof.Sigma;
-        if (!next.SeedFrom(_sixDof, x, now))
+    /// <summary>
+    /// The PURE half: construct the new guidance and carry the current plan across by
+    /// resampling. Reads nothing but the request and the outgoing guidance, so this is
+    /// the part that can move off the sim thread wholesale.
+    ///
+    /// Returns null and leaves the existing guidance untouched if the reseed fails —
+    /// losing the node change is survivable, losing the plan is not.
+    /// </summary>
+    private static Ksa6DofGuidance ApplyRebuild(RebuildRequest req, Ksa6DofGuidance from,
+                                                double[] x, double now)
+    {
+        var next = new Ksa6DofGuidance(req.Cfg, req.Dyn) { FixedTime = _s.SixDofFixedTime };
+        next.Inputs = req.Inputs;
+        return next.SeedFrom(from, x, now) ? next : null;
+    }
+
+    /// <summary>
+    /// Rebuild the guidance at a different node count. Prepare on the game thread,
+    /// apply off it — for now both happen here, back to back.
+    /// </summary>
+    private static bool RebuildAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                  double[] x, double now, int nodes)
+    {
+        RebuildRequest req = PrepareRebuild(vehicle, parent, siteCci, x, now, nodes);
+        if (req == null)
+            return false;
+
+        double sigmaWas = _s.Guidance.Sigma;
+        Ksa6DofGuidance next = ApplyRebuild(req, _s.Guidance, x, now);
+        if (next == null)
         {
             SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
-                                 $"nodes ({next.Error}) - staying at {_sixDof.Nodes}");
+                                 $"nodes - staying at {_s.Guidance.Nodes}");
             return false;
         }
 
-        SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m: {_sixDof.Nodes} -> {nodes} nodes " +
+        SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m: {_s.Guidance.Nodes} -> {nodes} nodes " +
                              $"(sigma {sigmaWas:F1} s -> dt {sigmaWas / Math.Max(nodes - 1, 1):F2} s, " +
                              $"defect {next.LastDefectM:F2} m)");
-        _sixDof = next;
-        _sixDofLastReplan = now;
+        _s.Guidance = next;
+        _s.LastReplan = now;
         return true;
     }
+
+    /// <summary>
+    /// What happens after a solve lands, whichever thread produced it. Shared on
+    /// purpose: two copies of this would drift, and the A/B toggle is only worth
+    /// having if both sides are otherwise identical.
+    /// </summary>
+    private static void OnSolveSucceeded(double now, double[] x)
+    {
+        _s.LastReplan = now;
+        _s.Error = "";
+        _s.SolveOk = true;
+        _s.RefusalRun = 0;
+        // Worth an event, not just a column: this fires exactly once per real sign
+        // flip - the plan is stored on the vehicle's branch afterwards, so the next
+        // cycle finds nothing to do - and before the fix each one cost fifteen
+        // refusals and a cold restart.
+        if (_s.Guidance.LastBranchFlips > 0)
+            SixDofLog.Event(now,
+                $"QUATERNION BRANCH FLIP at alt {x[2]:F0} m: re-expressed " +
+                $"{_s.Guidance.LastBranchFlips} of {_s.Guidance.Nodes - 1} plan nodes onto the " +
+                "vehicle's branch (q and -q are the same rotation; the defect is not)");
+        SixDofLog.PlanSnapshot(now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+    }
+
+    private static void OnSolveRefused(double now, string error)
+    {
+        _s.Error = "re-solve failed: " + error;
+        _s.SolveOk = false;
+        _s.RefusalRun++;
+        // Every refusal, with its reason. A refused re-solve silently leaves the
+        // vehicle on a stale open-loop plan, so a run of these in the event log is the
+        // signature to look for first.
+        SixDofLog.Event(now, "RE-SOLVE REFUSED: " + error);
+    }
+
+    // A/B TOGGLE. The synchronous path is kept in full rather than removed, because
+    // every real bug this feature has produced was found in a flight log, and being
+    // able to switch back mid-descent is worth more than the duplicated branch costs.
+
+    /// <summary>Outcome of the last collected cold iteration, so the converging block
+    /// can judge it on the frame it lands rather than the frame it was dispatched.</summary>
+
+    /// <summary>The vehicle this guidance was engaged on, so a save load can be
+    /// detected. Compared by reference only - never dereferenced, because by the time
+    /// it differs the old one may already be destroyed.</summary>
+
+    /// <summary>
+    /// True when it is safe to touch the guidance object from the sim thread: solve on
+    /// it, rebuild it, or replace it. While a solve is in flight the worker owns it
+    /// outright - only Published and Inputs may be crossed, and both are immutable.
+    /// </summary>
+    private static bool GuidanceIdle => _s.Idle(_s.SixDofThreaded);
 
     // Set by the cadence gate so a row can say whether THIS cycle re-solved, rather
     // than only reporting the last solve's result forever. Without that distinction
     // a run of refusals is indistinguishable from a run of cycles that simply were
     // not due to solve.
-    private static bool _sixDofDidSolve, _sixDofSolveOk;
 
     private static void LogCycle(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                  double[] x, double now, double thrustN, double capability,
@@ -890,7 +1013,7 @@ public static partial class PoweredGuidanceWindow
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
         double weight = Math.Max(mass * g, 1.0);
-        double altToGo = x[2] - _sixDofTargetAltM;
+        double altToGo = x[2] - _s.SixDofTargetAltM;
         double descent = -x[5];
         double netDecel = (capability / weight - 1.0) * g;
         double stopDist = descent > 0.0 && netDecel > 0.01
@@ -900,14 +1023,14 @@ public static partial class PoweredGuidanceWindow
         // Signed distance outside the glideslope cone, same convention the solver
         // enforces: positive means outside.
         double glideViol = 0.0;
-        if (_sixDofGlideSlopeDeg > 0.0)
+        if (_s.SixDofGlideSlopeDeg > 0.0)
         {
-            double cot = 1.0 / Math.Tan(Math.Clamp(_sixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
-            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - cot * (x[2] - _sixDofTargetAltM);
+            double cot = 1.0 / Math.Tan(Math.Clamp(_s.SixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
+            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - cot * (x[2] - _s.SixDofTargetAltM);
         }
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
-        TvcAllocationResult a = KsaGimbalControl.LastAllocation;
+        TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
 
         var row = new SixDofLog.CycleRow
         {
@@ -916,38 +1039,34 @@ public static partial class PoweredGuidanceWindow
             Qw = x[6], Qx = x[7], Qy = x[8], Qz = x[9],
             TiltDeg = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI,
             Wx = x[10], Wy = x[11], Wz = x[12], Mass = x[13],
-            Solved = _sixDofDidSolve && _sixDofSolveOk,
-            Status = _sixDofDidSolve ? _sixDof.Status.ToString() : "(no solve this cycle)",
-            ScvxIters = _sixDof.LastIterations, Accepted = _sixDof.AcceptedSteps,
-            SolveMs = _sixDof.LastSolveMs, Admm = 0,
-            DefectM = _sixDof.LastDefectM, DefectLimitM = _sixDof.MaxDefectM,
-            DefectChan = _sixDof.LastDefectChannelName, DefectGroup = _sixDof.LastDefectGroup,
-            DefectRaw = _sixDof.LastDefectRaw, DefectNode = _sixDof.LastDefectNode,
-            QFlips = _sixDof.LastBranchFlips,
-            AnchorM = _sixDof.AnchorOffsetM,
-            FellBack = _sixDof.FellBack, Escalations = _sixDof.Escalations,
-            Nodes = _sixDof.Nodes, Sigma = _sixDof.Sigma, PlanElapsed = _sixDof.PlanElapsed,
+            Solved = _s.DidSolve && _s.SolveOk,
+            Status = _s.DidSolve ? _s.Guidance.Status.ToString() : "(no solve this cycle)",
+            ScvxIters = _s.Guidance.LastIterations, Accepted = _s.Guidance.AcceptedSteps,
+            SolveMs = _s.Guidance.LastSolveMs, Admm = 0,
+            DefectM = _s.Guidance.LastDefectM, DefectLimitM = _s.Guidance.MaxDefectM,
+            DefectChan = _s.Guidance.LastDefectChannelName, DefectGroup = _s.Guidance.LastDefectGroup,
+            DefectRaw = _s.Guidance.LastDefectRaw, DefectNode = _s.Guidance.LastDefectNode,
+            QFlips = _s.Guidance.LastBranchFlips,
+            AnchorM = _s.Guidance.AnchorOffsetM,
+            FellBack = _s.Guidance.FellBack, Escalations = _s.Guidance.Escalations,
+            Nodes = _s.Guidance.Nodes, Sigma = _s.Guidance.Sigma, PlanElapsed = _s.Guidance.PlanElapsed,
             ThrustDemandN = thrustN, CapabilityN = capability, Throttle = throttle,
-            Saturated = _sixDofThrustSaturated,
+            Saturated = _s.ThrustSaturated,
             TauX = torqueModel.X, TauY = torqueModel.Y, TauZ = torqueModel.Z,
             AllocX = a.AchievedTorque.X, AllocY = a.AchievedTorque.Y, AllocZ = a.AchievedTorque.Z,
             AllocSat = a.SaturationScale,
-            Twr = capability / weight, TwrMin = _sixDofThrottleFloor * capability / weight,
+            Twr = capability / weight, TwrMin = _s.SixDofThrottleFloor * capability / weight,
             AmbientPa = ambientPa,
             AltToGo = altToGo, DescentRate = descent, StopDistM = stopDist,
             GlideViolM = glideViol,
-            BiasX = _sixDof.AccelBias.X, BiasY = _sixDof.AccelBias.Y, BiasZ = _sixDof.AccelBias.Z,
-            Error = _sixDofError,
+            BiasX = _s.Guidance.AccelBias.X, BiasY = _s.Guidance.AccelBias.Y, BiasZ = _s.Guidance.AccelBias.Z,
+            Error = _s.Error,
         };
         SixDofLog.Cycle(row);
-        _sixDofDidSolve = false;
+        _s.DidSolve = false;
     }
 
     // Acceleration-bias estimator state. Reset on engage.
-    private static double[] _sixDofPrevV;
-    private static double _sixDofPrevT;
-    private static double3 _sixDofBias;
-    private static bool _sixDofBiasEnabled = true;
 
     /// <summary>
     /// Estimate the acceleration the model does NOT account for, and hand it to the
@@ -970,28 +1089,28 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private static void UpdateAccelBias(double[] x, double now, double thrustDelivered)
     {
-        if (_sixDof == null)
+        if (_s.Guidance == null)
             return;
-        if (!_sixDofBiasEnabled)
+        if (!_s.SixDofBiasEnabled)
         {
-            _sixDof.SetAccelBias(default);
+            _s.Guidance.Inputs = _s.Guidance.Inputs.WithBias(default);
             return;
         }
 
-        double dt = now - _sixDofPrevT;
-        if (_sixDofPrevV == null || dt < 1e-3 || dt > 0.5)
+        double dt = now - _s.PrevT;
+        if (_s.PrevV == null || dt < 1e-3 || dt > 0.5)
         {
-            _sixDofPrevV = [x[3], x[4], x[5]];
-            _sixDofPrevT = now;
+            _s.PrevV = [x[3], x[4], x[5]];
+            _s.PrevT = now;
             return;
         }
 
         // Measured acceleration, site frame.
-        double ax = (x[3] - _sixDofPrevV[0]) / dt;
-        double ay = (x[4] - _sixDofPrevV[1]) / dt;
-        double az = (x[5] - _sixDofPrevV[2]) / dt;
-        _sixDofPrevV = [x[3], x[4], x[5]];
-        _sixDofPrevT = now;
+        double ax = (x[3] - _s.PrevV[0]) / dt;
+        double ay = (x[4] - _s.PrevV[1]) / dt;
+        double az = (x[5] - _s.PrevV[2]) / dt;
+        _s.PrevV = [x[3], x[4], x[5]];
+        _s.PrevT = now;
 
         // Modelled acceleration: thrust along the body +Z axis, plus the gravity the
         // config was built with (NOT the biased value, or the estimate feeds itself).
@@ -1000,7 +1119,7 @@ public static partial class PoweredGuidanceWindow
         double zy = 2.0 * (qy * qz - qw * qx);
         double zz = 1.0 - 2.0 * (qx * qx + qy * qy);
         double m = Math.Max(x[13], 1.0);
-        double3 g0 = _sixDof.BaseGravity;
+        double3 g0 = _s.Guidance.BaseGravity;
 
         double rx = ax - (thrustDelivered / m * zx + g0.X);
         double ry = ay - (thrustDelivered / m * zy + g0.Y);
@@ -1009,16 +1128,19 @@ public static partial class PoweredGuidanceWindow
         // ~2 s time constant at a 0.02 s step: slow enough to ignore per-frame noise,
         // fast enough to follow drag falling away through the descent.
         double alpha = Math.Clamp(dt / 2.0, 0.0, 1.0);
-        _sixDofBias = new double3(
-            _sixDofBias.X + alpha * (rx - _sixDofBias.X),
-            _sixDofBias.Y + alpha * (ry - _sixDofBias.Y),
-            _sixDofBias.Z + alpha * (rz - _sixDofBias.Z));
+        _s.Bias = new double3(
+            _s.Bias.X + alpha * (rx - _s.Bias.X),
+            _s.Bias.Y + alpha * (ry - _s.Bias.Y),
+            _s.Bias.Z + alpha * (rz - _s.Bias.Z));
 
         const double Limit = 5.0;
-        _sixDof.SetAccelBias(new double3(
-            Math.Clamp(_sixDofBias.X, -Limit, Limit),
-            Math.Clamp(_sixDofBias.Y, -Limit, Limit),
-            Math.Clamp(_sixDofBias.Z, -Limit, Limit)));
+        // PUBLISHED, not applied. The guidance folds it into the model at the entry to
+        // its next solve and not before, so a solve already running keeps the model it
+        // started with. See Ksa6DofInputs.
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithBias(new double3(
+            Math.Clamp(_s.Bias.X, -Limit, Limit),
+            Math.Clamp(_s.Bias.Y, -Limit, Limit),
+            Math.Clamp(_s.Bias.Z, -Limit, Limit)));
     }
 
     /// <summary>
@@ -1058,13 +1180,23 @@ public static partial class PoweredGuidanceWindow
 
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
     {
-        SixDofLog.Stop();
-        _sixDofActive = false;
-        _sixDofEngagePending = false;
-        _sixDofConverging = false;
-        _sixDof = null;
-        _gimbalMode = 0;
-        KsaGimbalControl.Disengage();
+        SixDofLog.Stop(_s);
+        _s.Active = false;
+        _s.EngagePending = false;
+        _s.Converging = false;
+
+        // CLEAR THE REFERENCE FIRST, then stop the worker. If stopping ever throws,
+        // the mod must still end up disengaged: leaving a live _s.Worker behind
+        // means the next engage builds a second one and the first keeps solving into
+        // an orphan. Disengage is also reached from the ImGui draw, so nothing here
+        // may block or throw - see Ksa6DofSolveWorker.Dispose.
+        Ksa6DofSolveWorker worker = _s.Worker;
+        _s.Worker = null;
+        _s.Guidance = null;
+        _s.ColdResult = false;
+        try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
+        _s.GimbalMode = 0;
+        KsaGimbalControl.Disengage(vehicle);
         if (vehicle != null && cutEngine)
         {
             ref ManualControlInputs inputs = ref ManualInputs(vehicle);
@@ -1079,6 +1211,8 @@ public static partial class PoweredGuidanceWindow
     // frame later, so the tab only sets flags and every command is issued here.
     internal static void Step6Dof(Vehicle vehicle)
     {
+        Use(vehicle);
+
         // Caught here rather than left to Mod's prefix handler, which logs and
         // swallows — for an engage failure that is indistinguishable from the button
         // doing nothing at all.
@@ -1088,23 +1222,56 @@ public static partial class PoweredGuidanceWindow
         }
         catch (Exception e)
         {
-            _sixDofError = "6-DOF step failed: " + e.Message;
-            _sixDofEngagePending = false;
+            _s.Error = "6-DOF step failed: " + e.Message;
+            _s.EngagePending = false;
             Disengage6Dof(vehicle);
         }
     }
 
     private static void Step6DofCore(Vehicle vehicle)
     {
+        // No vehicle-identity guard any more, and none needed: the state IS keyed on
+        // the vehicle, so a save load or a vessel switch simply arrives with different
+        // state rather than with the wrong state. The old guard existed only because
+        // one set of statics had to serve every craft.
+        // STAGING TERMINATES GUIDANCE ON THE STAGE THAT LOST PARTS.
+        //
+        // KSA keeps the SAME Vehicle object through a separation - it calls
+        // UpdateAfterPartTreeModification on it - and the discarded stage becomes a new
+        // one. So keying state on the vehicle already does most of the work: the upper
+        // stage carries its guidance across the event, and the spent booster arrives as
+        // a craft with no state and is simply not flown.
+        //
+        // What that does NOT cover is the vehicle that KEPT the state suddenly being a
+        // different rocket. Tmax, the inertia and the whole trajectory were built for a
+        // stack that no longer exists, and the plan is not merely stale but wrong about
+        // the vehicle. Terminating is the honest default: re-engaging is one button, and
+        // it rebuilds the config against what is actually there.
+        if (_s.Active && _s.LastMass > 0.0)
+        {
+            double m = vehicle.TotalMass;
+            if (m < _s.LastMass * (1.0 - StagingMassDropFraction))
+            {
+                SixDofLog.Event(SimNow(),
+                    $"STAGED: mass {_s.LastMass:F0} -> {m:F0} kg in one step - the plan was " +
+                    "built for a different vehicle. Terminating 6-DOF.");
+                Disengage6Dof(vehicle, cutEngine: false);
+                _s.Error = "staged mid-flight - 6-DOF terminated. Re-engage to plan for " +
+                           "the vehicle that is actually here.";
+                return;
+            }
+        }
+        _s.LastMass = vehicle.TotalMass;
+
         IParentBody parent = vehicle.Orbit.Parent;
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame frame = KsaFrameBridge.BuildSiteFrame(siteCci);
         double[] x = KsaFrameBridge.ToModelState(vehicle, frame);
         double now = SimNow();
 
-        if (_sixDofEngagePending)
+        if (_s.EngagePending)
         {
-            _sixDofEngagePending = false;
+            _s.EngagePending = false;
             if (!Engage6Dof(vehicle, parent, siteCci, x, now))
                 return;
         }
@@ -1129,47 +1296,83 @@ public static partial class PoweredGuidanceWindow
         // So once drift passes that point there is nothing to be gained by re-solving
         // from it, however many times we try - and waiting for fifteen failures first
         // just means fifteen expensive cycles of flying open loop.
-        double drift = _sixDof != null ? _sixDof.MeasureDrift(x, now) : 0.0;
+        // Reads the PUBLISHED plan, so it is safe while a solve is in flight - see
+        // Ksa6DofGuidance.MeasureDrift.
+        double drift = _s.Guidance != null ? _s.Guidance.MeasureDrift(x, now) : 0.0;
         double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
-        bool driftedOff = _sixDof != null && _sixDof.HasPlan && drift > driftLimit;
+        bool driftedOff = _s.Guidance != null && _s.Guidance.HasPlan && drift > driftLimit;
 
-        if (!_sixDofConverging && _sixDof != null &&
-            (driftedOff || _sixDofRefusalRun >= RefusalsBeforeRestart))
+        // GuidanceIdle: a cold restart calls BeginCold, which reinitialises the solver
+        // out from under anything using it. While a solve is in flight the worker owns
+        // the guidance outright, so this waits - a cycle of delay on a restart that
+        // only fires after fifteen refusals is not a cost worth worrying about.
+        if (!_s.Converging && _s.Guidance != null && GuidanceIdle &&
+            (driftedOff || _s.RefusalRun >= RefusalsBeforeRestart))
         {
             var xfR = new double[14];
-            xfR[2] = _sixDofTargetAltM;
+            xfR[2] = _s.SixDofTargetAltM;
             TerminalAttitude(x, xfR);
             SixDofLog.Event(now,
                 $"COLD RESTART at alt {x[2]:F0} m: " +
                 (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
-                            : $"{_sixDofRefusalRun} refused re-solves") +
-                $" - plan {_sixDof.PlanElapsed:F1} s stale, defect {_sixDof.LastDefectM:F0} m");
-            _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
-            _sixDof.BeginCold(x, xfR, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
-            _sixDofConverging = true;
-            _sixDofColdFrames = 0;
-            _sixDofRefusalRun = 0;
-            _sixDofRecoveries++;
-            _sixDofError = "re-converging...";
+                            : $"{_s.RefusalRun} refused re-solves") +
+                $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.LastDefectM:F0} m");
+            // No pacing when threaded: spacing iterations out exists to keep frames
+            // smooth, and off the sim thread there is no frame to protect - it would
+            // only make the vehicle fall further before it has a plan.
+            _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
+            _s.Guidance.BeginCold(x, xfR, Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed));
+            _s.Converging = true;
+            _s.ColdFrames = 0;
+            _s.RefusalRun = 0;
+            _s.Recoveries++;
+            _s.Error = "re-converging...";
         }
 
         // Advance a spread cold solve. Until it produces a flyable plan there is
         // nothing to command, so this returns without touching the actuators - the
         // vehicle carries on doing whatever it was doing.
-        if (_sixDofConverging)
+        if (_s.Converging && GuidanceIdle)
         {
-            _sixDofColdFrames++;
-            if (_sixDof.StepCold(x, now))
+            _s.ColdFrames++;
+
+            // THE COLD SOLVE IS A SOLVE TOO. Threading Update alone left this running
+            // inline, and flight log 20260809-113132 hitched throughout because of it -
+            // three cold solves of a dozen iterations each, every one on the sim
+            // thread at up to 300 ms a piece.
+            //
+            // Dispatched one iteration at a time rather than looping on the worker, so
+            // the anchor stays as fresh as it was inline: at 126 m/s the vehicle falls
+            // over a hundred metres during a cold solve, and freezing x0 for the whole
+            // of it would seed the first warm cycle from where the vehicle used to be.
+            bool coldDone;
+            if (_s.SixDofThreaded && _s.Worker != null)
             {
-                _sixDofConverging = false;
-                _sixDofError = "";
-                SixDofLog.Event(now,
-                    $"COLD SOLVE CONVERGED in {_sixDof.LastIterations} iterations spread over " +
-                    $"{_sixDofColdFrames} frames, defect {_sixDof.LastDefectM:F2} m, " +
-                    $"sigma {_sixDof.Sigma:F1} s");
-                SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
+                if (_s.Worker.TryCollect(out Ksa6DofJob cJob, out bool cOk, out _, out _))
+                    _s.ColdResult = cJob == Ksa6DofJob.StepCold && cOk;
+                else
+                {
+                    _s.Worker.TryDispatchStepCold(_s.Guidance, x, now);
+                    return;         // nothing to judge until it lands
+                }
+                coldDone = _s.ColdResult;
             }
-            else if (_sixDof.NeedsMoreNodes && _sixDof.Nodes < MaxNodes)
+            else
+            {
+                coldDone = _s.Guidance.StepCold(x, now);
+            }
+
+            if (coldDone)
+            {
+                _s.Converging = false;
+                _s.Error = "";
+                SixDofLog.Event(now,
+                    $"COLD SOLVE CONVERGED in {_s.Guidance.LastIterations} iterations spread over " +
+                    $"{_s.ColdFrames} frames, defect {_s.Guidance.LastDefectM:F2} m, " +
+                    $"sigma {_s.Guidance.Sigma:F1} s");
+                SixDofLog.PlanSnapshot(now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+            }
+            else if (_s.Guidance.NeedsMoreNodes && _s.Guidance.Nodes < MaxNodes)
             {
                 // MORE NODES, NOT MORE TRIES. The cold solve has stopped improving
                 // while still above the gate the warm loop judges by, and repeating it
@@ -1178,21 +1381,21 @@ public static partial class PoweredGuidanceWindow
                 // 7.87 m, hand over, get refused fifteen times, cold restart, repeat.
                 int finer = NodeRungs.Length - 1;
                 for (int i = NodeRungs.Length - 1; i >= 0; i--)
-                    if (NodeRungs[i] > _sixDof.Nodes) { finer = i; break; }
+                    if (NodeRungs[i] > _s.Guidance.Nodes) { finer = i; break; }
                 int nodes = Math.Clamp(NodeRungs[finer], MinNodes, MaxNodes);
 
                 SixDofLog.Event(now,
-                    $"COLD SOLVE stalled at {_sixDof.LastDefectM:F1} m with {_sixDof.Nodes} nodes " +
-                    $"after {_sixDof.LastIterations} iterations - retrying at {nodes} nodes");
+                    $"COLD SOLVE stalled at {_s.Guidance.LastDefectM:F1} m with {_s.Guidance.Nodes} nodes " +
+                    $"after {_s.Guidance.LastIterations} iterations - retrying at {nodes} nodes");
 
                 var xfMore = new double[14];
-                xfMore[2] = _sixDofTargetAltM;
+                xfMore[2] = _s.SixDofTargetAltM;
                 TerminalAttitude(x, xfMore);
                 if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
                 {
-                    _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
-                    _sixDof.BeginCold(x, xfMore, Math.Max(_sixDof.Sigma, _sixDofSigmaSeed));
-                    _sixDofColdFrames = 0;
+                    _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
+                    _s.Guidance.BeginCold(x, xfMore, Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed));
+                    _s.ColdFrames = 0;
                 }
                 else
                 {
@@ -1200,30 +1403,30 @@ public static partial class PoweredGuidanceWindow
                     // Fall back to the loose cold gate rather than never engaging.
                     SixDofLog.Event(now, $"COLD SOLVE cannot rebuild at {nodes} nodes - " +
                                          "accepting the coarse plan against the cold gate");
-                    if (_sixDof.AcceptCold(x, now))
+                    if (_s.Guidance.AcceptCold(x, now))
                     {
-                        _sixDofConverging = false;
-                        _sixDofError = "";
+                        _s.Converging = false;
+                        _s.Error = "";
                     }
                 }
                 return;
             }
             else
             {
-                _sixDofError = $"converging... {_sixDof.LastIterations} iterations, " +
-                               $"defect {_sixDof.LastDefectM:F1} m";
+                _s.Error = $"converging... {_s.Guidance.LastIterations} iterations, " +
+                               $"defect {_s.Guidance.LastDefectM:F1} m";
                 // Give up rather than fall forever if it is not going to converge.
-                if (_sixDofColdFrames > 240)
+                if (_s.ColdFrames > 240)
                 {
-                    SixDofLog.Event(now, "COLD SOLVE gave up after 240 frames: " + _sixDof.Error);
+                    SixDofLog.Event(now, "COLD SOLVE gave up after 240 frames: " + _s.Guidance.Error);
                     Disengage6Dof(vehicle);
-                    _sixDofError = "cold solve failed to converge: " + _sixDof.Error;
+                    _s.Error = "cold solve failed to converge: " + _s.Guidance.Error;
                 }
                 return;
             }
         }
 
-        if (_sixDof == null || !_sixDof.HasPlan)
+        if (_s.Guidance == null || !_s.Guidance.HasPlan)
             return;
 
         // TOUCHDOWN. Without this the guidance kept commanding the plan's terminal
@@ -1235,15 +1438,15 @@ public static partial class PoweredGuidanceWindow
         // is open, and writes from it are erased by the sim copy-back a frame later.
         if (!vehicle.Situation.HasAnyContact())
         {
-            _sixDofTouchdownArmed = true;
+            _s.TouchdownArmed = true;
         }
-        else if (_sixDofTouchdownArmed)
+        else if (_s.TouchdownArmed)
         {
             SixDofLog.Event(now, $"TOUCHDOWN at alt {x[2]:F1} m, vz {x[5]:F2} m/s, " +
                                  $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
-            SixDofLog.Stop();
+            SixDofLog.Stop(_s);
             Disengage6Dof(vehicle);
-            _sixDofError = "touchdown - engine cut, 6-DOF guidance disengaged.";
+            _s.Error = "touchdown - engine cut, 6-DOF guidance disengaged.";
             return;
         }
 
@@ -1258,23 +1461,23 @@ public static partial class PoweredGuidanceWindow
         // then.
         //
         // Handing over ABOVE the target altitude on purpose: the 6-DOF plan aims at
-        // _sixDofTargetAltM and this fires on the way down to it. A handover set
+        // _s.SixDofTargetAltM and this fires on the way down to it. A handover set
         // below the target would simply never trigger, which the UI warns about.
-        if (_sixDofHoverHandoff && x[2] <= _sixDofHoverHandoffAltM)
+        if (_s.SixDofHoverHandoff && x[2] <= _s.SixDofHoverHandoffAltM)
         {
             SixDofLog.Event(now, $"HANDOFF to terminal hover at alt {x[2]:F1} m, " +
                                  $"vz {x[5]:F2} m/s, lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m");
-            SixDofLog.Stop();
+            SixDofLog.Stop(_s);
             Disengage6Dof(vehicle, cutEngine: false);
             StartTerminalHover();
-            _landingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
-            _sixDofError = _landingStatus;
+            _s.LandingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
+            _s.Error = _s.LandingStatus;
             return;
         }
 
         // Estimate what the model is missing BEFORE re-solving, so the optimiser
         // plans around it rather than rediscovering it every cycle.
-        UpdateAccelBias(x, now, _sixDofLastThrottle * _sixDofCapabilityN);
+        UpdateAccelBias(x, now, _s.LastThrottle * _s.CapabilityN);
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -1294,7 +1497,10 @@ public static partial class PoweredGuidanceWindow
         //
         // One-way, too: the ladder never steps back up. Re-crossing a gate during a
         // brief climb would rebuild twice for no benefit.
-        if (_sixDofNodeGates)
+        // Same rule: StepNodeGates can call RebuildAt, which constructs a new guidance
+        // and assigns _s.Guidance. Doing that while the worker holds a reference to the old
+        // one would leave a solve running on an object nothing is going to read.
+        if (_s.SixDofNodeGates && GuidanceIdle)
             StepNodeGates(vehicle, parent, siteCci, x, now);
 
         // THE MPC STEP: re-solve from the MEASURED state on a cadence. This is where
@@ -1306,54 +1512,47 @@ public static partial class PoweredGuidanceWindow
         // index ran on along a trajectory that was never refreshed, which is the
         // "green dot outruns the vehicle" symptom. A failed solve now retries on the
         // next step instead of letting the clock run.
-        double cadence = Math.Clamp(_sixDofReplanSec, 0.02, 5.0);
+        double cadence = Math.Clamp(_s.SixDofReplanSec, 0.02, 5.0);
         // Refresh inertia from the live vehicle before re-solving. It changes as
         // propellant drains, and a stale value is a SYSTEMATIC torque error that MPC
         // structurally cannot correct — re-anchoring the state does not fix the model.
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz,
-                             out _sixDofOffDiag, out _sixDofAsym);
-        _sixDof.SetInertia(ixx, iyy, izz);
+                             out _s.OffDiag, out _s.Asym);
+        _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
 
-        if (now - _sixDofLastReplan >= cadence)
+        if (_s.SixDofThreaded)
         {
-            _sixDofDidSolve = true;
-            if (_sixDof.Update(x, now))
+            // THREADED: collect whatever finished since last frame, then dispatch if
+            // the cadence is due and the worker is free. Never blocks.
+            // Only warm results are handled here. A cold iteration is collected by
+            // the converging block above, which returns before reaching this point, so
+            // the two cannot consume each other's results.
+            if (_s.Worker != null &&
+                _s.Worker.TryCollect(out Ksa6DofJob job, out bool tSolved, out string tError, out _)
+                && job == Ksa6DofJob.Update)
             {
-                _sixDofLastReplan = now;
-                _sixDofError = "";
-                _sixDofSolveOk = true;
-                _sixDofRefusalRun = 0;
-                // Worth an event, not just a column: this fires exactly once per real
-                // sign flip - the plan is stored on the vehicle's branch afterwards, so
-                // the next cycle finds nothing to do - and before the fix each one cost
-                // fifteen refusals and a cold restart.
-                if (_sixDof.LastBranchFlips > 0)
-                    SixDofLog.Event(now,
-                        $"QUATERNION BRANCH FLIP at alt {x[2]:F0} m: re-expressed " +
-                        $"{_sixDof.LastBranchFlips} of {_sixDof.Nodes - 1} plan nodes onto the " +
-                        "vehicle's branch (q and -q are the same rotation; the defect is not)");
-                SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
+                _s.DidSolve = true;
+                if (tSolved) OnSolveSucceeded(now, x); else OnSolveRefused(now, tError);
             }
-            else
-            {
-                _sixDofError = "re-solve failed: " + _sixDof.Error;
-                _sixDofSolveOk = false;
-                _sixDofRefusalRun++;
-                // Every refusal, with its reason. A refused re-solve silently leaves
-                // the vehicle on a stale open-loop plan, so a run of these in the
-                // event log is the signature to look for first.
-                SixDofLog.Event(now, "RE-SOLVE REFUSED: " + _sixDof.Error);
-            }
+
+            if (now - _s.LastReplan >= cadence && _s.Worker != null)
+                _s.Worker.TryDispatchUpdate(_s.Guidance, x, now, 5);
+        }
+        else if (now - _s.LastReplan >= cadence)
+        {
+            _s.DidSolve = true;
+            if (_s.Guidance.Update(x, now)) OnSolveSucceeded(now, x);
+            else OnSolveRefused(now, _s.Guidance.Error);
         }
 
         // Past the end of the plan the node index clamps, so the terminal control is
         // held indefinitely. That is a reasonable hold-in-place fallback, but it is
         // NOT guidance any more and must not look like it.
-        if (_sixDof.PlanElapsed > _sixDof.Sigma)
-            _sixDofError = $"plan expired {_sixDof.PlanElapsed - _sixDof.Sigma:F1} s ago - " +
+        if (_s.Guidance.PlanElapsed > _s.Guidance.Sigma)
+            _s.Error = $"plan expired {_s.Guidance.PlanElapsed - _s.Guidance.Sigma:F1} s ago - " +
                            "holding the terminal command, no longer guiding.";
 
-        if (!_sixDof.Command(now, out double3 torqueModel, out double thrustN))
+        if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN))
             return;
 
         // CLOSE THE LOOP ON THRUST. The optimiser asks for newtons; KSA's throttle is
@@ -1383,28 +1582,26 @@ public static partial class PoweredGuidanceWindow
         double throttle = KsaEnginePerf.ThrottleForThrust(vehicle, thrustN, ambientPa);
         if (throttle < 0.0)
         {
-            double denom = capability > 1.0 ? capability : _sixDof.Tmax;
+            double denom = capability > 1.0 ? capability : _s.Guidance.Tmax;
             throttle = thrustN / denom;
         }
         throttle = Math.Clamp(throttle, 0.0, 1.0);
 
-        _sixDofDemandN = thrustN;
-        _sixDofCapabilityN = capability;
+        _s.DemandN = thrustN;
+        _s.CapabilityN = capability;
         // Saturation is the honest failure signal here: the plan is asking for more
         // than the vehicle physically has, so the trajectory being flown is not the
         // one that was planned, and no amount of feedback recovers it.
-        _sixDofThrustSaturated = capability > 1.0 && thrustN > capability;
+        _s.ThrustSaturated = capability > 1.0 && thrustN > capability;
 
         // Model body axes -> KSA body axes. The allocator works in KSA's frame; a
         // missed conversion here would put roll torque on the pitch axis.
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
         double3 torqueKsa = torqueModel.X * mx + torqueModel.Y * my + torqueModel.Z * mz;
 
-        KsaGimbalControl.SetTarget(vehicle);
-        KsaGimbalControl.TorqueXNm = torqueKsa.X;
-        KsaGimbalControl.TorqueYNm = torqueKsa.Y;
-        KsaGimbalControl.TorqueZNm = torqueKsa.Z;
-        KsaGimbalControl.Mode = GimbalOverrideMode.Lsq;
+        // Published for THIS vehicle. The override used to be a single global target,
+        // so a second guided craft silently stole the first one's gimbals.
+        KsaGimbalControl.SetLsq(vehicle, torqueKsa);
 
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         // ENGINE STAYS LIT WHILE GUIDING. This was `throttle > 0.02`, copied from the
@@ -1420,7 +1617,7 @@ public static partial class PoweredGuidanceWindow
         // attitude control on the very first step.
         manual.EngineOn = true;
         manual.EngineThrottle = (float)throttle;
-        _sixDofLastThrottle = throttle;
+        _s.LastThrottle = throttle;
 
         LogCycle(vehicle, parent, siteCci, x, now, thrustN, capability, throttle,
                  torqueModel, ambientPa);
@@ -1433,30 +1630,30 @@ public static partial class PoweredGuidanceWindow
         // terminal state carries 13 of the 14 components. Built BEFORE the config
         // because the problem scaling is sized from the x0 -> xf extent.
         var xf = new double[14];
-        xf[2] = _sixDofTargetAltM;
+        xf[2] = _s.SixDofTargetAltM;
         TerminalAttitude(x, xf);
 
         // Spread cold solves engage COARSE; everything else uses the configured count.
         // The ladder takes over from the first cycle, so this is a starting point
         // rather than a choice about how the descent is flown.
-        int engageNodes = _sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed
-            ? ColdNodesFor(_sixDofSigmaSeed)
-            : _sixDofNodes;
+        int engageNodes = _s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed
+            ? ColdNodesFor(_s.SixDofSigmaSeed)
+            : _s.SixDofNodes;
 
-        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _sixDofTiltDeg,
-                                   _sixDofThrottleFloor, _sixDofSigmaSeed, _sixDofThrustFrac,
-                                   _sixDofRateDampShare, _sixDofControlSmooth,
-                                   _sixDofProximal,
-                                   _sixDofGlideSlopeDeg, _sixDofVzEnabled ? _sixDofVzMaxMs : -1.0,
+        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _s.SixDofTiltDeg,
+                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed, _s.SixDofThrustFrac,
+                                   _s.SixDofRateDampShare, _s.SixDofControlSmooth,
+                                   _s.SixDofProximal,
+                                   _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out string error))
         {
-            _sixDofError = "cannot plan: " + error;
+            _s.Error = "cannot plan: " + error;
             return false;
         }
 
-        _sixDof = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _sixDofFixedTime };
+        _s.Guidance = new Ksa6DofGuidance(cfg, dyn) { FixedTime = _s.SixDofFixedTime };
 
         // SEED FROM G-FOLD. SCvx refines a reference rather than searching for one,
         // so the seed decides how many iterations the cold solve needs and which local
@@ -1470,86 +1667,88 @@ public static partial class PoweredGuidanceWindow
         // SPREAD: start the cold solve and return. Step6DofCore advances it a
         // bounded slice at a time until the plan is flyable, so engaging costs a
         // few milliseconds of this frame rather than the whole solve.
-        if (_sixDofSpreadCold && !_sixDofFixedTime && !_sixDofGfoldSeed)
+        if (_s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed)
         {
-            _sixDof.ColdIterationIntervalS = _sixDofColdIntervalS;
-            _sixDof.BeginCold(x, xf, _sixDofSigmaSeed);
-            _sixDofConverging = true;
-            _sixDofColdFrames = 0;
-            _sixDofActive = true;
-            _sixDofTouchdownArmed = false;
-            _sixDofGateIndex = -1;
-            _sixDofGateChanges = 0;
-            _sixDofRefusalRun = 0;
-            _sixDofRungFloor = int.MaxValue;
-            _sixDofRungFloorSpeed = 0.0;
-            _sixDofPrevV = null;
-            _sixDofBias = default;
-            _sixDofLastReplan = now;
-            _sixDofError = "converging...";
-            if (_sixDofLogging)
+            _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
+            _s.Guidance.BeginCold(x, xf, _s.SixDofSigmaSeed);
+            _s.Converging = true;
+            _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
+            _s.ColdFrames = 0;
+            _s.Active = true;
+            _s.TouchdownArmed = false;
+            _s.GateIndex = -1;
+            _s.GateChanges = 0;
+            _s.RefusalRun = 0;
+            _s.RungFloor = int.MaxValue;
+            _s.RungFloorSpeed = 0.0;
+            _s.PrevV = null;
+            _s.Bias = default;
+            _s.LastReplan = now;
+            _s.Error = "converging...";
+            if (_s.SixDofLogging)
             {
-                SixDofLog.Start(vehicle.ToString(), parent.ToString());
+                SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
                 SixDofLog.Event(now, $"ENGAGED (spread cold solve)  nodes {engageNodes}  " +
-                                     $"target alt {_sixDofTargetAltM:F0} m  cadence {_sixDofReplanSec:F2} s");
+                                     $"target alt {_s.SixDofTargetAltM:F0} m  cadence {_s.SixDofReplanSec:F2} s");
             }
             return true;
         }
 
         bool ok = false;
         string seedNote = "";
-        if (_sixDofGfoldSeed && !_sixDofFixedTime &&
+        if (_s.SixDofGfoldSeed && !_s.SixDofFixedTime &&
             Ksa6DofGfoldSeed.TryBuild(x, xf, cfg, dyn, engageNodes,
                                       out double[] gx, out double[] gu, out double gSigma,
                                       out seedNote))
         {
-            ok = _sixDof.PlanFromSeed(x, xf, gx, gu, gSigma, now);
+            ok = _s.Guidance.PlanFromSeed(x, xf, gx, gu, gSigma, now);
             if (!ok)
-                seedNote += $" (rejected: {_sixDof.Error}) - retrying from the straight-line seed";
+                seedNote += $" (rejected: {_s.Guidance.Error}) - retrying from the straight-line seed";
         }
 
         if (!ok)
         {
-            ok = _sixDofFixedTime
-                ? _sixDof.PlanSearch(x, xf, _sixDofSigmaSeed, now, Math.Clamp(_sixDofSigmaSamples, 1, 12))
-                : _sixDof.Plan(x, xf, _sixDofSigmaSeed, now);
+            ok = _s.SixDofFixedTime
+                ? _s.Guidance.PlanSearch(x, xf, _s.SixDofSigmaSeed, now, Math.Clamp(_s.SixDofSigmaSamples, 1, 12))
+                : _s.Guidance.Plan(x, xf, _s.SixDofSigmaSeed, now);
         }
         if (!ok)
         {
-            _sixDofError = "cold solve failed: " + _sixDof.Error;
-            _sixDof = null;
+            _s.Error = "cold solve failed: " + _s.Guidance.Error;
+            _s.Guidance = null;
             return false;
         }
 
-        _sixDofError = "";
-        _sixDofActive = true;
-        _sixDofTouchdownArmed = false;
-        _sixDofGateIndex = -1;
-        _sixDofGateChanges = 0;
-        _sixDofLastReplan = now;
-        _sixDofPrevV = null;
-        _sixDofRefusalRun = 0;
-        _sixDofRungFloor = int.MaxValue;
-        _sixDofRungFloorSpeed = 0.0;
-        _sixDofBackedOffTo = -1;
-        _sixDofRecoveries = 0;
-        _sixDofBias = default;
+        _s.Error = "";
+        _s.Active = true;
+        _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
+        _s.TouchdownArmed = false;
+        _s.GateIndex = -1;
+        _s.GateChanges = 0;
+        _s.LastReplan = now;
+        _s.PrevV = null;
+        _s.RefusalRun = 0;
+        _s.RungFloor = int.MaxValue;
+        _s.RungFloorSpeed = 0.0;
+        _s.BackedOffTo = -1;
+        _s.Recoveries = 0;
+        _s.Bias = default;
 
-        if (_sixDofLogging)
+        if (_s.SixDofLogging)
         {
-            SixDofLog.Start(vehicle.ToString(), parent.ToString());
+            SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
             SixDofLog.Event(now,
-                $"ENGAGED  nodes {engageNodes}  tilt {_sixDofTiltDeg:F0} deg  " +
-                $"floor {_sixDofThrottleFloor:F2}  target alt {_sixDofTargetAltM:F0} m  " +
-                $"glideslope {_sixDofGlideSlopeDeg:F0} deg  " +
-                $"vzMax {(_sixDofVzEnabled ? _sixDofVzMaxMs.ToString("F1") : "off")}  " +
-                $"cadence {_sixDofReplanSec:F2} s  gates {(_sixDofNodeGates ? "on" : "off")}");
+                $"ENGAGED  nodes {engageNodes}  tilt {_s.SixDofTiltDeg:F0} deg  " +
+                $"floor {_s.SixDofThrottleFloor:F2}  target alt {_s.SixDofTargetAltM:F0} m  " +
+                $"glideslope {_s.SixDofGlideSlopeDeg:F0} deg  " +
+                $"vzMax {(_s.SixDofVzEnabled ? _s.SixDofVzMaxMs.ToString("F1") : "off")}  " +
+                $"cadence {_s.SixDofReplanSec:F2} s  gates {(_s.SixDofNodeGates ? "on" : "off")}");
             SixDofLog.Event(now,
                 (seedNote.Length > 0 ? seedNote + "  |  " : "") +
-                $"cold solve: {_sixDof.Status}, {_sixDof.LastIterations} iters, " +
-                $"defect {_sixDof.LastDefectM:F2} m, sigma {_sixDof.Sigma:F1} s, " +
-                $"Tmax {_sixDof.Tmax / 1e6:F2} MN");
-            SixDofLog.PlanSnapshot(now, _sixDof.Nodes, _sixDof.PlanState, _sixDof.PlanControl);
+                $"cold solve: {_s.Guidance.Status}, {_s.Guidance.LastIterations} iters, " +
+                $"defect {_s.Guidance.LastDefectM:F2} m, sigma {_s.Guidance.Sigma:F1} s, " +
+                $"Tmax {_s.Guidance.Tmax / 1e6:F2} MN");
+            SixDofLog.PlanSnapshot(now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
         }
         return true;
     }
@@ -1573,15 +1772,15 @@ public static partial class PoweredGuidanceWindow
         // the atmospheric shortfall stayed hidden: "max TWR" looked healthy because
         // it was quoting a number the vehicle could only reach in space.
         double ambientPa = KsaEnginePerf.AmbientPressureAt(
-            parent, siteCci.Length() - parent.MeanRadius + _sixDofTargetAltM);
+            parent, siteCci.Length() - parent.MeanRadius + _s.SixDofTargetAltM);
         (double thrust, _) = KsaEnginePerf.AtPressure(vehicle, ambientPa);
         if (thrust <= 0.0)
             return;
-        thrust *= Math.Clamp(_sixDofThrustFrac, 0.01, 1.0);
+        thrust *= Math.Clamp(_s.SixDofThrustFrac, 0.01, 1.0);
 
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
-        Ksa6DofSetup.ThrottleMargin(thrust, _sixDofThrottleFloor, mass, g,
+        Ksa6DofSetup.ThrottleMargin(thrust, _s.SixDofThrottleFloor, mass, g,
                                     out double twrMin, out double needTilt);
 
         ImGui.SeparatorText("Feasibility");
@@ -1591,7 +1790,7 @@ public static partial class PoweredGuidanceWindow
         // The air, and what it costs. On an airless world this reads 0 Pa / 100%
         // and the whole line is a no-op; anywhere else it is the number that
         // decides whether the plan is flyable.
-        double vac = KsaEnginePerf.VacuumThrust(vehicle) * Math.Clamp(_sixDofThrustFrac, 0.01, 1.0);
+        double vac = KsaEnginePerf.VacuumThrust(vehicle) * Math.Clamp(_s.SixDofThrustFrac, 0.01, 1.0);
         double frac = vac > 0.0 ? thrust / vac : 1.0;
         ImGui.Text($"ambient {ambientPa / 1000.0,6:F1} kPa (at target alt)   " +
                    $"thrust {frac * 100.0,5:F1} % of vacuum {vac / 1e6:F2} MN");
@@ -1600,7 +1799,7 @@ public static partial class PoweredGuidanceWindow
                 $"planning against sea-level performance - vacuum thrust would over-promise by " +
                 $"{(1.0 / Math.Max(frac, 1e-6) - 1.0) * 100.0:F0} %%.");
         ImGui.Text($"TWR at min throttle {twrMin,5:F2}   " +
-                   $"(floor {_sixDofThrottleFloor:F2}, vehicle can do {Ksa6DofSetup.VehicleThrottleFloor(vehicle):F2})");
+                   $"(floor {_s.SixDofThrottleFloor:F2}, vehicle can do {Ksa6DofSetup.VehicleThrottleFloor(vehicle):F2})");
 
         // CAN THIS BE DONE AT ALL? The question the rest of the panel does not ask.
         //
@@ -1620,7 +1819,7 @@ public static partial class PoweredGuidanceWindow
         // A necessary condition, not a sufficient one: it assumes thrust straight up,
         // so any tilt to kill downrange makes it worse.
         double[] xNow = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
-        double altToGo = xNow[2] - _sixDofTargetAltM;
+        double altToGo = xNow[2] - _s.SixDofTargetAltM;
         double descent = -xNow[5];
         if (altToGo > 1.0 && descent > 1.0)
         {
@@ -1641,15 +1840,15 @@ public static partial class PoweredGuidanceWindow
                     $"to stop, leaving almost none to null downrange. Needs TWR {twrNeeded:F2}, has {twrNow:F2}.");
         }
 
-        if (needTilt >= _sixDofTiltDeg)
+        if (needTilt >= _s.SixDofTiltDeg)
         {
-            double feasibleFloor = Math.Cos(_sixDofTiltDeg * Math.PI / 180.0) * mass * g / thrust;
+            double feasibleFloor = Math.Cos(_s.SixDofTiltDeg * Math.PI / 180.0) * mass * g / thrust;
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
                 $"OVER-POWERED - needs {needTilt:F0} deg tilt just to stop climbing " +
-                $"(limit {_sixDofTiltDeg:F0}). No descent exists.");
+                $"(limit {_s.SixDofTiltDeg:F0}). No descent exists.");
             ImGui.TextWrapped(
                 $"Fix: throttle floor below {feasibleFloor:F2}, or thrust fraction " +
-                $"~{feasibleFloor / Math.Max(_sixDofThrottleFloor, 1e-6):F2} to plan on fewer engines.");
+                $"~{feasibleFloor / Math.Max(_s.SixDofThrottleFloor, 1e-6):F2} to plan on fewer engines.");
         }
         else if (twrMin > 1.0)
         {
