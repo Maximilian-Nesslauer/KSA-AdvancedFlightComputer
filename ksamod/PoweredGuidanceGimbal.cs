@@ -39,7 +39,7 @@ public static partial class PoweredGuidanceWindow
             if (_gimbalMode != 0)
             {
                 _gimbalMode = 0;
-                KsaGimbalControl.Disengage();
+                KsaGimbalControl.Disengage(vehicle);
             }
             return;
         }
@@ -54,7 +54,7 @@ public static partial class PoweredGuidanceWindow
         ImGui.RadioButton("Torque (N-m)", ref _gimbalMode, 3);
 
         if (_gimbalMode != previousMode && _gimbalMode == 0)
-            KsaGimbalControl.Disengage();
+            KsaGimbalControl.Disengage(vehicle);
 
         if (_gimbalMode == 0)
         {
@@ -63,9 +63,9 @@ public static partial class PoweredGuidanceWindow
             return;
         }
 
-        // Re-point at the live config every frame: the player can switch vehicles,
-        // and staging rebuilds the part tree underneath us.
-        KsaGimbalControl.SetTarget(vehicle);
+        // No re-pointing any more: the override is keyed on the vehicle's config, so
+        // switching craft or staging simply lands on a different slot rather than
+        // dragging one global target around behind the player.
 
         ImGui.TextWrapped(
             "While engaged the flight computer's own attitude control cannot move these " +
@@ -78,9 +78,7 @@ public static partial class PoweredGuidanceWindow
             if (ImGui.Button("Zero"))
                 _gimbalY = _gimbalZ = 0f;
 
-            KsaGimbalControl.CommandY = _gimbalY;
-            KsaGimbalControl.CommandZ = _gimbalZ;
-            KsaGimbalControl.Mode = GimbalOverrideMode.Direct;
+            KsaGimbalControl.SetDirect(vehicle, _gimbalY, _gimbalZ);
         }
         else if (_gimbalMode == 2)
         {
@@ -94,17 +92,14 @@ public static partial class PoweredGuidanceWindow
             if (ImGui.Button("Zero"))
                 _gimbalRoll = _gimbalPitch = _gimbalYaw = 0f;
 
-            KsaGimbalControl.TorqueRoll = _gimbalRoll;
-            KsaGimbalControl.TorquePitch = _gimbalPitch;
-            KsaGimbalControl.TorqueYaw = _gimbalYaw;
-            KsaGimbalControl.Mode = GimbalOverrideMode.Torque;
+            KsaGimbalControl.SetTorque(vehicle, _gimbalRoll, _gimbalPitch, _gimbalYaw);
         }
         else
         {
-            DrawLsqControls();
+            DrawLsqControls(vehicle);
         }
 
-        int applied = KsaGimbalControl.AppliedCount;
+        int applied = KsaGimbalControl.Diagnostics(vehicle)?.AppliedCount ?? 0;
         if (applied == 0)
             ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f),
                 "Engaged, but reaching 0 gimbals - the override is not landing.");
@@ -119,13 +114,13 @@ public static partial class PoweredGuidanceWindow
     // allocator's own per-axis capability, so what you set is a real N-m demand — and
     // the readout below shows what the allocation actually delivers, including the
     // lateral force that necessarily comes with it.
-    private static void DrawLsqControls()
+    private static void DrawLsqControls(Vehicle vehicle)
     {
         ImGui.TextWrapped(
             "Least-squares allocation: solves for the deflections that deliver the " +
             "commanded torque. This is the interface a guidance mode should use.");
 
-        TvcAllocationResult a = KsaGimbalControl.LastAllocation;
+        TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
         double maxRoll = Math.Abs(a.MaxTorque.X);
         double maxPitch = Math.Abs(a.MaxTorque.Y);
         double maxYaw = Math.Abs(a.MaxTorque.Z);
@@ -136,16 +131,14 @@ public static partial class PoweredGuidanceWindow
         if (ImGui.Button("Zero"))
             _gimbalRoll = _gimbalPitch = _gimbalYaw = 0f;
 
-        KsaGimbalControl.TorqueXNm = _gimbalRoll * maxRoll;
-        KsaGimbalControl.TorqueYNm = _gimbalPitch * maxPitch;
-        KsaGimbalControl.TorqueZNm = _gimbalYaw * maxYaw;
-        KsaGimbalControl.Mode = GimbalOverrideMode.Lsq;
+        var lsq = new double3(_gimbalRoll * maxRoll, _gimbalPitch * maxPitch, _gimbalYaw * maxYaw);
+        KsaGimbalControl.SetLsq(vehicle, lsq);
 
         ImGui.Separator();
         ImGui.Text($"Capability  R {maxRoll / 1000.0,9:F1}  P {maxPitch / 1000.0,9:F1}  Y {maxYaw / 1000.0,9:F1}  kN-m");
-        ImGui.Text($"Commanded   R {KsaGimbalControl.TorqueXNm / 1000.0,9:F1}  " +
-                   $"P {KsaGimbalControl.TorqueYNm / 1000.0,9:F1}  " +
-                   $"Y {KsaGimbalControl.TorqueZNm / 1000.0,9:F1}  kN-m");
+        ImGui.Text($"Commanded   R {lsq.X / 1000.0,9:F1}  " +
+                   $"P {lsq.Y / 1000.0,9:F1}  " +
+                   $"Y {lsq.Z / 1000.0,9:F1}  kN-m");
         ImGui.Text($"Achieved    R {a.AchievedTorque.X / 1000.0,9:F1}  " +
                    $"P {a.AchievedTorque.Y / 1000.0,9:F1}  " +
                    $"Z {a.AchievedTorque.Z / 1000.0,9:F1}  kN-m");
@@ -207,7 +200,8 @@ public static partial class PoweredGuidanceWindow
             {
                 // The Lsq solve is global, not per-gimbal, so there is nothing to
                 // recompute here — show what the worker actually commanded.
-                ReadOnlySpan<double> last = KsaGimbalControl.LastCommands;
+                KsaGimbalControl.Slot lsqSlot = KsaGimbalControl.Diagnostics(vehicle);
+                ReadOnlySpan<double> last = lsqSlot != null ? lsqSlot.LastCommands : default;
                 cmdY = last.Length > 2 * i + 1 ? (float)last[2 * i] : 0f;
                 cmdZ = last.Length > 2 * i + 1 ? (float)last[2 * i + 1] : 0f;
             }

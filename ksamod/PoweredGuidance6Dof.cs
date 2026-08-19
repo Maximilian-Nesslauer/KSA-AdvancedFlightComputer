@@ -567,7 +567,7 @@ public static partial class PoweredGuidanceWindow
 
         ImGui.SeparatorText("Lateral force: model vs allocator");
         double2 mf = _s.Guidance.LastLateralForce;
-        TvcAllocationResult al = KsaGimbalControl.LastAllocation;
+        TvcAllocationResult al = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
         KsaFrameBridge.BodyAxes(vehicle, out double3 bx, out double3 by, out _);
         double afx = al.AchievedForce.X * bx.X + al.AchievedForce.Y * bx.Y + al.AchievedForce.Z * bx.Z;
         double afy = al.AchievedForce.X * by.X + al.AchievedForce.Y * by.Y + al.AchievedForce.Z * by.Z;
@@ -584,8 +584,10 @@ public static partial class PoweredGuidanceWindow
         // Commanded vs delivered torque — the link the drift numbers cannot see. A gap
         // means the plan is asking for torque this vehicle does not have.
         ImGui.SeparatorText("Torque commanded vs delivered (KSA body axes)");
-        TvcAllocationResult a = KsaGimbalControl.LastAllocation;
-        ImGui.Text($"cmd  ({KsaGimbalControl.TorqueXNm / 1000.0,9:F1},{KsaGimbalControl.TorqueYNm / 1000.0,9:F1},{KsaGimbalControl.TorqueZNm / 1000.0,9:F1}) kN-m");
+        KsaGimbalControl.Slot gs = KsaGimbalControl.Diagnostics(vehicle);
+        TvcAllocationResult a = gs?.LastAllocation ?? default;
+        KsaGimbalControl.Command gc = gs?.Cmd ?? KsaGimbalControl.Command.Off;
+        ImGui.Text($"cmd  ({gc.TorqueXNm / 1000.0,9:F1},{gc.TorqueYNm / 1000.0,9:F1},{gc.TorqueZNm / 1000.0,9:F1}) kN-m");
         ImGui.Text($"got  ({a.AchievedTorque.X / 1000.0,9:F1},{a.AchievedTorque.Y / 1000.0,9:F1},{a.AchievedTorque.Z / 1000.0,9:F1}) kN-m");
         ImGui.Text($"max  ({a.MaxTorque.X / 1000.0,9:F1},{a.MaxTorque.Y / 1000.0,9:F1},{a.MaxTorque.Z / 1000.0,9:F1}) kN-m");
         if (a.SaturationScale < 0.999)
@@ -1046,7 +1048,7 @@ public static partial class PoweredGuidanceWindow
         }
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
-        TvcAllocationResult a = KsaGimbalControl.LastAllocation;
+        TvcAllocationResult a = KsaGimbalControl.Diagnostics(vehicle)?.LastAllocation ?? default;
 
         var row = new SixDofLog.CycleRow
         {
@@ -1213,7 +1215,7 @@ public static partial class PoweredGuidanceWindow
         _s.ColdResult = false;
         try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
         _gimbalMode = 0;
-        KsaGimbalControl.Disengage();
+        KsaGimbalControl.Disengage(vehicle);
         if (vehicle != null && cutEngine)
         {
             ref ManualControlInputs inputs = ref ManualInputs(vehicle);
@@ -1616,11 +1618,9 @@ public static partial class PoweredGuidanceWindow
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
         double3 torqueKsa = torqueModel.X * mx + torqueModel.Y * my + torqueModel.Z * mz;
 
-        KsaGimbalControl.SetTarget(vehicle);
-        KsaGimbalControl.TorqueXNm = torqueKsa.X;
-        KsaGimbalControl.TorqueYNm = torqueKsa.Y;
-        KsaGimbalControl.TorqueZNm = torqueKsa.Z;
-        KsaGimbalControl.Mode = GimbalOverrideMode.Lsq;
+        // Published for THIS vehicle. The override used to be a single global target,
+        // so a second guided craft silently stole the first one's gimbals.
+        KsaGimbalControl.SetLsq(vehicle, torqueKsa);
 
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         // ENGINE STAYS LIT WHILE GUIDING. This was `throttle > 0.02`, copied from the

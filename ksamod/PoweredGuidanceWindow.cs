@@ -93,7 +93,7 @@ public static partial class PoweredGuidanceWindow
             // The TVC override lives outside the flight computer, so a reset would
             // otherwise leave it silently driving the nozzles.
             _gimbalMode = 0;
-            KsaGimbalControl.Disengage();
+            KsaGimbalControl.Disengage(vehicle);
             ResetFlightComputer();
         }
 

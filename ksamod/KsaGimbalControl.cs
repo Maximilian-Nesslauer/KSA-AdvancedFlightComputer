@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.CompilerServices;
 using Brutal.Numerics;
 using KSA;
 
@@ -37,88 +38,143 @@ public enum GimbalOverrideMode
 // needing a consistent multi-field snapshot without real synchronisation.
 public static class KsaGimbalControl
 {
-    public static GimbalOverrideMode Mode;
-
-    // Direct mode.
-    public static float CommandY;
-    public static float CommandZ;
-
-    // Torque mode: normalized body-frame demand, X = roll, Y = pitch, Z = yaw,
-    // matching the axis convention of the torque vector KSA builds internally
-    // from its RollRight/PitchUp/YawRight inputs.
-    public static float TorqueRoll;
-    public static float TorquePitch;
-    public static float TorqueYaw;
-
-    // Lsq mode: desired body torque in N·m.
-    public static double TorqueXNm;
-    public static double TorqueYNm;
-    public static double TorqueZNm;
-
-    /// <summary>Gimbals actually written on the last worker pass — 0 means the override isn't reaching anything.</summary>
-    public static int AppliedCount;
-
-    /// <summary>Diagnostics from the last Lsq allocation, for the UI readout.</summary>
-    public static TvcAllocationResult LastAllocation;
-
     /// <summary>
-    /// Commands from the last Lsq allocation, 2 per gimbal (Y then Z). Written by the
-    /// worker, read by the UI for display only — an occasional torn read just means
-    /// one frame of a stale number in a readout.
+    /// One vehicle's gimbal demand, published whole.
+    ///
+    /// A record because the apply side runs on a VehicleSolvers JOB THREAD while the
+    /// demand is written on the sim thread: reading nine loose fields there could pair
+    /// a new mode with an old torque. One reference assignment cannot.
     /// </summary>
-    public static ReadOnlySpan<double> LastCommands => _commands;
-
-    // Scratch reused across worker passes so the allocation stays allocation-free on
-    // the hot path. Only ever touched from the worker thread.
-    private static double[] _commands = [];
-    private static double[] _thrusts = [];
-    private static GimbalController[] _gimbals = [];
-
-    // Which vehicle we are allowed to drive.
-    //
-    // The FlightComputer handed to the postfix is NOT the live one: the worker runs
-    // on VehicleUpdateData.NewFlightComputer, a copy, so reference-comparing the
-    // FlightComputer itself would never match. VehicleConfigInfo is the usable
-    // identity because FlightComputer.CopyFrom assigns it by REFERENCE
-    // (`VehicleConfig = existing.VehicleConfig`) rather than cloning. Without this
-    // check the override would apply to every vehicle being stepped.
-    private static FlightComputer.VehicleConfigInfo _target;
-
-    public static void SetTarget(Vehicle vehicle)
+    public sealed record Command(
+        GimbalOverrideMode Mode,
+        float CommandY, float CommandZ,                         // Direct
+        float TorqueRoll, float TorquePitch, float TorqueYaw,   // Torque (normalised)
+        double TorqueXNm, double TorqueYNm, double TorqueZNm)   // Lsq (N.m)
     {
-        _target = vehicle?.FlightComputer?.VehicleConfig;
+        public static readonly Command Off =
+            new(GimbalOverrideMode.Off, 0, 0, 0, 0, 0, 0, 0, 0);
     }
 
-    public static void Disengage()
+    /// <summary>
+    /// Everything the override holds for ONE vehicle: its demand, its scratch buffers
+    /// and its diagnostics.
+    ///
+    /// THE SCRATCH HAS TO BE PER-VEHICLE, not merely the demand. ApplyLsq runs on a
+    /// job thread, and with two guided vehicles two of those run at once - sharing one
+    /// commands array between them would interleave two allocations into the same
+    /// buffer and then fly the result.
+    /// </summary>
+    public sealed class Slot
     {
-        Mode = GimbalOverrideMode.Off;
-        CommandY = CommandZ = 0f;
-        TorqueRoll = TorquePitch = TorqueYaw = 0f;
-        AppliedCount = 0;
-        _target = null;
+        public volatile Command Cmd = Command.Off;
+
+        // Scratch, reused so the allocation stays allocation-free on the hot path.
+        // Touched only by the job thread servicing THIS vehicle.
+        internal double[] Commands = [];
+        internal double[] Thrusts = [];
+        internal GimbalController[] Gimbals = [];
+
+        /// <summary>Gimbals actually written on the last worker pass - 0 means the override is not reaching anything.</summary>
+        public int AppliedCount;
+
+        /// <summary>Diagnostics from the last Lsq allocation, for the UI readout.</summary>
+        public TvcAllocationResult LastAllocation;
+
+        /// <summary>
+        /// Commands from the last Lsq allocation, 2 per gimbal (Y then Z). Written by
+        /// the worker, read by the UI for display only - an occasional torn read just
+        /// means one frame of a stale number in a readout.
+        /// </summary>
+        public ReadOnlySpan<double> LastCommands => Commands;
+    }
+
+    /// <summary>
+    /// Per-vehicle state, keyed on the identity the apply side can actually see.
+    ///
+    /// The FlightComputer handed to the postfix is NOT the live one - the worker runs
+    /// on a copy - so reference-comparing the FlightComputer would never match.
+    /// VehicleConfigInfo is the usable identity because FlightComputer.CopyFrom assigns
+    /// it by REFERENCE rather than cloning.
+    ///
+    /// This replaces a single _target field, and the gain is not only that two vehicles
+    /// can be driven at once. With one target, a second vehicle engaging silently stole
+    /// the first one's gimbals, and whether the first still flew depended on the order
+    /// KSA happened to interleave prepare and compute across vehicles. A lookup cannot
+    /// be pointed at the wrong vehicle.
+    /// </summary>
+    private static readonly ConditionalWeakTable<FlightComputer.VehicleConfigInfo, Slot> Slots = new();
+
+    private static Slot SlotFor(Vehicle vehicle)
+    {
+        FlightComputer.VehicleConfigInfo cfg = vehicle?.FlightComputer?.VehicleConfig;
+        return cfg == null ? null : Slots.GetOrCreateValue(cfg);
+    }
+
+    /// <summary>This vehicle's diagnostics, or null if it has never been driven.</summary>
+    public static Slot Diagnostics(Vehicle vehicle)
+    {
+        FlightComputer.VehicleConfigInfo cfg = vehicle?.FlightComputer?.VehicleConfig;
+        return cfg != null && Slots.TryGetValue(cfg, out Slot s) ? s : null;
+    }
+
+    /// <summary>Command a body torque in N.m, allocated across this vehicle's gimbals.</summary>
+    public static void SetLsq(Vehicle vehicle, double3 torqueNm)
+    {
+        Slot s = SlotFor(vehicle);
+        if (s != null)
+            s.Cmd = new Command(GimbalOverrideMode.Lsq, 0, 0, 0, 0, 0,
+                                torqueNm.X, torqueNm.Y, torqueNm.Z);
+    }
+
+    /// <summary>Command raw deflections on every gimbal. Manual probe only.</summary>
+    public static void SetDirect(Vehicle vehicle, float y, float z)
+    {
+        Slot s = SlotFor(vehicle);
+        if (s != null)
+            s.Cmd = new Command(GimbalOverrideMode.Direct, y, z, 0, 0, 0, 0, 0, 0);
+    }
+
+    /// <summary>Command a normalised body-frame torque, KSA's own convention.</summary>
+    public static void SetTorque(Vehicle vehicle, float roll, float pitch, float yaw)
+    {
+        Slot s = SlotFor(vehicle);
+        if (s != null)
+            s.Cmd = new Command(GimbalOverrideMode.Torque, 0, 0, roll, pitch, yaw, 0, 0, 0);
+    }
+
+    /// <summary>Hand this vehicle's gimbals back to the game.</summary>
+    public static void Disengage(Vehicle vehicle)
+    {
+        Slot s = Diagnostics(vehicle);
+        if (s == null) return;
+        s.Cmd = Command.Off;
+        s.AppliedCount = 0;
     }
 
     // Harmony postfix body. Kept beside the state it drives.
     internal static void OnComputeControl(FlightComputer flightComputer, ref FlightComputerOutput outputs)
     {
-        GimbalOverrideMode mode = Mode;
-        if (mode == GimbalOverrideMode.Off)
+        FlightComputer.VehicleConfigInfo cfg = flightComputer.VehicleConfig;
+        if (cfg == null || !Slots.TryGetValue(cfg, out Slot st))
             return;
 
-        FlightComputer.VehicleConfigInfo cfg = flightComputer.VehicleConfig;
-        if (cfg == null || !ReferenceEquals(cfg, _target))
+        // ONE read of the demand, into a local. Re-reading the field would let a sim
+        // thread publish land between two reads and mix two demands together.
+        Command cmd = st.Cmd;
+        GimbalOverrideMode mode = cmd.Mode;
+        if (mode == GimbalOverrideMode.Off)
             return;
 
         float3 com = flightComputer.CenterOfMassAsmb;
 
         if (mode == GimbalOverrideMode.Lsq)
         {
-            ApplyLsq(cfg, com, ref outputs);
+            ApplyLsq(st, cmd, cfg, com, ref outputs);
             return;
         }
 
-        float directY = CommandY, directZ = CommandZ;
-        var demand = new double3(TorqueRoll, TorquePitch, TorqueYaw);
+        float directY = cmd.CommandY, directZ = cmd.CommandZ;
+        var demand = new double3(cmd.TorqueRoll, cmd.TorquePitch, cmd.TorqueYaw);
         int applied = 0;
 
         foreach (GimbalController gimbal in cfg.Gimbals)
@@ -153,7 +209,7 @@ public static class KsaGimbalControl
         if (applied > 0)
             outputs.AnyActuatorCommanded = true;
 
-        AppliedCount = applied;
+        st.AppliedCount = applied;
     }
 
     // Physical allocation: solve for the deflections delivering the commanded N·m.
@@ -162,37 +218,37 @@ public static class KsaGimbalControl
     // before it can produce any command. Thrust falls back to the nameplate maximum
     // when the engine is unlit, so the allocation can be inspected on the pad — the
     // resulting commands are then what WOULD be flown at full thrust.
-    private static void ApplyLsq(FlightComputer.VehicleConfigInfo cfg, float3 com,
-                                 ref FlightComputerOutput outputs)
+    private static void ApplyLsq(Slot st, Command cmd, FlightComputer.VehicleConfigInfo cfg,
+                                 float3 com, ref FlightComputerOutput outputs)
     {
         int n = cfg.Gimbals.Count;
         if (n == 0)
         {
-            AppliedCount = 0;
+            st.AppliedCount = 0;
             return;
         }
 
-        if (_gimbals.Length < n)
+        if (st.Gimbals.Length < n)
         {
-            _gimbals = new GimbalController[n];
-            _thrusts = new double[n];
-            _commands = new double[2 * n];
+            st.Gimbals = new GimbalController[n];
+            st.Thrusts = new double[n];
+            st.Commands = new double[2 * n];
         }
 
         for (int i = 0; i < n; i++)
         {
             GimbalController gc = cfg.Gimbals[i];
-            _gimbals[i] = gc;
+            st.Gimbals[i] = gc;
 
             ModuleStateful<GimbalController, GimbalControllerState, EmptyStruct, EmptyStruct>
                 .StateUpdater.ModuleAndNewStateRef slot = outputs.Gimbals.GetModuleAndNewState(gc);
             double thrust = slot.Module != null ? slot.State.TotalThrust : 0.0;
-            _thrusts[i] = thrust > 0.0 ? thrust : gc.Data.MaximumThrust;
+            st.Thrusts[i] = thrust > 0.0 ? thrust : gc.Data.MaximumThrust;
         }
 
-        LastAllocation = KsaTvcAllocator.Solve(
-            _gimbals.AsSpan(0, n), _thrusts.AsSpan(0, n), com,
-            new double3(TorqueXNm, TorqueYNm, TorqueZNm), _commands);
+        st.LastAllocation = KsaTvcAllocator.Solve(
+            st.Gimbals.AsSpan(0, n), st.Thrusts.AsSpan(0, n), com,
+            new double3(cmd.TorqueXNm, cmd.TorqueYNm, cmd.TorqueZNm), st.Commands);
 
         int applied = 0;
         for (int i = 0; i < n; i++)
@@ -202,14 +258,14 @@ public static class KsaGimbalControl
             if (slot.Module == null)
                 continue;
 
-            slot.State.CommandY = (float)_commands[2 * i];
-            slot.State.CommandZ = (float)_commands[2 * i + 1];
+            slot.State.CommandY = (float)st.Commands[2 * i];
+            slot.State.CommandZ = (float)st.Commands[2 * i + 1];
             applied++;
         }
 
         if (applied > 0)
             outputs.AnyActuatorCommanded = true;
-        AppliedCount = applied;
+        st.AppliedCount = applied;
     }
 
     /// <summary>
