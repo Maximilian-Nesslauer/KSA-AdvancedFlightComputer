@@ -95,7 +95,7 @@ public static partial class PoweredGuidanceWindow
             innerW, bigButtonH, spacing);
 
         // --- body ---
-        float bodyTop = headerPos.Y + headerH + spacing + bigButtonH + spacing;
+        float bodyTop = headerPos.Y + headerH + spacing + bigButtonH * 2f + spacing * 2f;
         ImGui.SetCursorScreenPos(new float2(pos.X + margin, bodyTop));
         // AutoResizeY so the child is exactly as tall as its content; that height is
         // what feeds ReportContentExtent below, and so what the window fits itself to.
@@ -192,6 +192,18 @@ public static partial class PoweredGuidanceWindow
             else if (_panelTab == GuidanceTab.Descent)
                 AbortLanding();
         }
+
+        // RETARGET, full width on its own row. It arms a world click that moves the
+        // landing site, so it means nothing on Ascent and stripes out there.
+        bool canRetarget = _panelTab != GuidanceTab.Ascent;
+        float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
+
+        ImGui.SetCursorScreenPos(new float2(origin.X, origin.Y + height + gap));
+        if (ImGauge.Button(_retargetArmed ? "CLICK A SPOT" : "RETARGET",
+                new float2(innerW, height),
+                GaugeButton(_retargetArmed && canRetarget ? amber : ImGaugeStyle.Default.IdleColor, 0.4f)
+                    .WithDisabled(!canRetarget)))
+            _retargetArmed = !_retargetArmed;
     }
 
     // --- Landing ------------------------------------------------------------

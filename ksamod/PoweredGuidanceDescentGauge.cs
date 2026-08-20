@@ -93,12 +93,6 @@ public static partial class PoweredGuidanceWindow
         GaugeRow("Latitude (deg)", "##sitelat", ref _s.SiteLatDeg);
         GaugeRow("Longitude (deg)", "##sitelon", ref _s.SiteLonDeg);
 
-        ImGui.Text("Retarget");
-        ImGui.NextColumn();
-        if (ImGui.Button(_retargetArmed ? "Click the surface (right-click cancels)" : "Click a spot"))
-            _retargetArmed = !_retargetArmed;
-        ImGui.NextColumn();
-
         GaugeRowCheck("Engage autopilot", "##dengage", ref _s.Engage);
         GaugeRowCheck("Auto engines/staging", "##dautostage", ref _s.AutoStage);
 
@@ -170,6 +164,10 @@ public static partial class PoweredGuidanceWindow
             scaleKm = MathF.Max(scaleKm, (float)Math.Abs(_s.Passes[i].crossKm));
             lastT = Math.Max(lastT, _s.Passes[i].tSec);
         }
+        // Quantised, so the axis holds still. Scaling to the exact widest pass meant
+        // every small change in it re-scaled the strip and slid every other block —
+        // motion that looked like the passes moving when it was only the ruler.
+        scaleKm = NiceScale(scaleKm);
 
         dl.AddRectFilled(stripMin, stripMax, SchemTrack, 3f);
         dl.AddRect(stripMin, stripMax, SchemSpent, 3f);
@@ -224,6 +222,15 @@ public static partial class PoweredGuidanceWindow
         dl.AddText(at, index >= 0 ? col : SchemDim, index >= 0
             ? $"{label} {_s.Passes[index].minKm,7:F1} km  in {_s.Passes[index].tSec,6:F0} s"
             : $"{label}     --- km  in    --- s");
+    }
+
+    /// <summary>Round up to a 1-2-5 step, so an auto-scaled axis stops jittering.</summary>
+    private static float NiceScale(float v)
+    {
+        float mag = MathF.Pow(10f, MathF.Floor(MathF.Log10(MathF.Max(v, 1e-3f))));
+        float norm = v / mag;
+        float step = norm <= 1f ? 1f : norm <= 2f ? 2f : norm <= 5f ? 5f : 10f;
+        return step * mag;
     }
 
     /// <summary>

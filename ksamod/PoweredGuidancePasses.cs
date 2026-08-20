@@ -16,6 +16,11 @@ using KSA;
 // revolution costs a handful of trig calls instead of 240 propagations and the whole
 // set can be rebuilt every frame.
 //
+// The passes are then indexed by PHASE — how many times the vehicle has lapped that
+// projection — rather than by revolution number. See RefreshPasses: that is what makes
+// flying over the site advance the list by exactly one, seamlessly, instead of briefly
+// inventing a close approach that is not there.
+//
 // WHAT THIS ASSUMES: that the closest approach sits at the foot of the perpendicular
 // from the site to the orbit plane. That is exact for a non-rotating body; the body
 // does turn during a pass, which the iteration below absorbs by re-evaluating the
@@ -55,53 +60,124 @@ public static partial class PoweredGuidanceWindow
 
         double m0 = MeanFromTrue(Math.Atan2(double3.Dot(r0, w), double3.Dot(r0, u)), ecc);
 
-        for (int k = 0; k < PassesToShow; k++)
+        // PHASE, not position, is what has to be bracketed.
+        //
+        // Let phi(t) = (vehicle mean anomaly) - (mean anomaly of the site PROJECTED
+        // into the orbit plane). The vehicle laps that projection once per revolution,
+        // so phi rises steadily and every crossing is phi = 2*pi*j for an integer j.
+        // Choosing j picks the pass, and j only ever increases.
+        //
+        // Bracketing in vehicle anomaly instead — "the crossing in [0, 2pi)" — is what
+        // produced a false close approach the moment one was flown. The site rotates
+        // roughly 22 degrees of a low orbit's period, so re-evaluating it at the newly
+        // estimated time moved the target enough to land back at the START of that
+        // window, and the solve settled on a crossing a few minutes away that does not
+        // exist. In phi the same event simply increments j.
+        double ms0 = SiteMeanAnomaly(parent, 0.0, n, u, w, ecc, bodyRadius, m0, out _);
+        if (double.IsNaN(ms0))
+            return;   // site on the orbit axis: no perpendicular foot to solve for
+
+        // ms0 was unwrapped toward m0, so phi0 lands in [-pi, pi): a crossing is
+        // imminent when it is just below zero and just flown when it is just above.
+        double phi0 = m0 - ms0;
+
+        // Roughly how fast phi rises: the vehicle's mean motion less the rate the
+        // site's projection drifts. Only ever used to pick a step size — the drift is
+        // strongly non-uniform over a lap, so this is nowhere near good enough to
+        // extrapolate a root from.
+        double probe = period * 0.01;
+        double msProbe = SiteMeanAnomaly(parent, probe, n, u, w, ecc, bodyRadius, ms0, out _);
+        double phiDot = double.IsNaN(msProbe)
+            ? meanMotion
+            : meanMotion - (msProbe - ms0) / probe;
+        if (!(phiDot > 1e-9))
+            phiDot = meanMotion;   // degenerate geometry: fall back to the orbit alone
+
+        double lap = TwoPi / phiDot;
+        double step = Math.Max(lap / 12.0, period / 24.0);
+
+        // BRACKET, then refine. phi is monotonic but distinctly non-linear across a
+        // lap, so walking it in steps and refining inside whichever step contains the
+        // crossing finds every root, in order, and cannot invent or skip one.
+        //
+        // Extrapolating instead — Newton against a single measured slope — was wrong
+        // by about a fifth over several laps, which is comparable to a whole lap by
+        // the fourth pass: it walked into the NEXT root and dropped one entirely.
+        // Still only a few dozen trig evaluations, against 1200 propagations before.
+        long j = (long)Math.Floor(phi0 / TwoPi) + 1;
+        double tA = 0.0, phiA = phi0, msPrev = ms0;
+
+        for (int guard = 0; guard < PassStepBudget && _s.Passes.Count < PassesToShow; guard++)
         {
-            // The site moves while the vehicle coasts round to meet it, so the time of
-            // closest approach and the site's position at that time are solved
-            // together. The body turns slowly against an orbital period, so this is a
-            // contraction and settles in a couple of passes; four is comfortable.
-            double t = k * period;
-            double crossM = double.NaN;
-            double dM = 0.0;
+            double tB = tA + step;
+            double msB = SiteMeanAnomaly(parent, tB, n, u, w, ecc, bodyRadius, msPrev, out _);
+            if (double.IsNaN(msB))
+                break;
+            double phiB = m0 + meanMotion * tB - msB;
 
-            for (int iter = 0; iter < 4; iter++)
+            // A single step can straddle more than one target if the orbit is short
+            // against the step, so drain them all before moving on.
+            while (_s.Passes.Count < PassesToShow && phiB >= TwoPi * j)
             {
-                double3 s = double3.Normalize(SiteDirCciAt(parent, t));
-                double sn = Math.Clamp(double3.Dot(s, n), -1.0, 1.0);
-                crossM = Math.Asin(sn) * bodyRadius;
+                double target = TwoPi * j;
+                double lo = tA, phiLo = phiA, hi = tB, phiHi = phiB;
+                double t = lo + (target - phiLo) * (hi - lo) / (phiHi - phiLo);
 
-                double3 proj = s - sn * n;
-                if (proj.Length() < 1e-9)
-                    break;   // site on the orbit axis: no perpendicular foot to solve for
-                proj = double3.Normalize(proj);
+                // False position: the bracket is kept valid at every step, so this
+                // cannot leave the interval however non-linear phi is inside it.
+                for (int i = 0; i < 4; i++)
+                {
+                    double msT = SiteMeanAnomaly(parent, t, n, u, w, ecc, bodyRadius, msPrev, out _);
+                    if (double.IsNaN(msT))
+                        break;
+                    double phiT = m0 + meanMotion * t - msT;
+                    if (phiT < target) { lo = t; phiLo = phiT; }
+                    else { hi = t; phiHi = phiT; }
+                    if (phiHi - phiLo < 1e-12)
+                        break;
+                    t = lo + (target - phiLo) * (hi - lo) / (phiHi - phiLo);
+                }
 
-                double nuSite = Math.Atan2(double3.Dot(proj, w), double3.Dot(proj, u));
-                double raw = MeanFromTrue(nuSite, ecc) - m0;
-
-                // The first iteration PICKS the crossing - the next one ahead of us -
-                // and every one after it stays on that same crossing by unwrapping
-                // toward the running estimate instead of re-wrapping into [0, 2pi).
-                //
-                // Re-wrapping every time is what made a pass we had just flown briefly
-                // reappear at the front of the list: within a few seconds of closest
-                // approach the answer sits right on the wrap boundary, so successive
-                // iterations flipped between "just happened" and "one revolution away".
-                dM = iter == 0 ? Wrap2Pi(raw) : raw + TwoPi * Math.Round((dM - raw) / TwoPi);
-                t = dM / meanMotion + k * period;
+                SiteMeanAnomaly(parent, t, n, u, w, ecc, bodyRadius, msPrev, out double crossM);
+                if (!double.IsNaN(crossM) && t >= 0.0)
+                    _s.Passes.Add((t, Math.Abs(crossM) / 1000.0, crossM / 1000.0));
+                j++;
             }
 
-            if (double.IsNaN(crossM))
-                continue;
-            // Never behind us: unwrapping can land a hair before now, and a pass in the
-            // past is not a pass. The crossing after it is a full revolution away.
-            if (t < 0.0)
-                t += period;
-            _s.Passes.Add((t, Math.Abs(crossM) / 1000.0, crossM / 1000.0));
+            tA = tB;
+            phiA = phiB;
+            msPrev = msB;
         }
     }
 
+    /// <summary>
+    /// The mean anomaly the vehicle would be at if it sat where the site projects into
+    /// the orbit plane, plus that projection's perpendicular offset from the plane —
+    /// the pass distance. Unwrapped toward <paramref name="near"/> so the caller can
+    /// keep a continuous phase rather than a value that jumps every revolution.
+    /// NaN when the site lies on the orbit's axis and there is no projection to take.
+    /// </summary>
+    private static double SiteMeanAnomaly(IParentBody parent, double t, double3 n, double3 u,
+                                          double3 w, double ecc, double bodyRadius,
+                                          double near, out double crossM)
+    {
+        double3 s = double3.Normalize(SiteDirCciAt(parent, t));
+        double sn = Math.Clamp(double3.Dot(s, n), -1.0, 1.0);
+        crossM = Math.Asin(sn) * bodyRadius;
+
+        double3 proj = s - sn * n;
+        if (proj.Length() < 1e-9)
+            return double.NaN;
+        proj = double3.Normalize(proj);
+
+        double m = MeanFromTrue(Math.Atan2(double3.Dot(proj, w), double3.Dot(proj, u)), ecc);
+        return m + TwoPi * Math.Round((near - m) / TwoPi);
+    }
+
     private const double TwoPi = 2.0 * Math.PI;
+
+    /// <summary>Hard cap on the bracketing walk, so a degenerate orbit cannot spin.</summary>
+    private const int PassStepBudget = 256;
 
     /// <summary>Mean anomaly from true anomaly, through the eccentric anomaly.</summary>
     private static double MeanFromTrue(double trueAnomaly, double ecc)
