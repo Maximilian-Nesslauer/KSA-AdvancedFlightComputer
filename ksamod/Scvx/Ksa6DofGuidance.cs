@@ -334,29 +334,178 @@ public sealed class Ksa6DofGuidance
     public double RecoveryCycleBudgetMs { get; set; } = 120.0;
 
     /// <summary>
-    /// Trust region for the next warm re-solve, CARRIED BETWEEN CYCLES.
+    /// Seconds of plan judged against the FULL defect gate. Beyond this the gate
+    /// loosens smoothly toward <see cref="HorizonFarSlack"/>.
     ///
-    /// Update used to reseed at a hardcoded 0.05 every cycle. Reseed assigns the trust
-    /// region outright, so the shrink that a rejected iteration had just applied was
-    /// thrown away before the next cycle could benefit from it - the one piece of
-    /// information a failed cycle actually produces. Every cycle therefore re-ran the
-    /// identical solve from the identical region and got the identical rejection.
-    ///
-    /// Carrying it makes the loop's own adaptation work across cycles as well as
-    /// within one: a refusal leaves the region where the solver shrank it to, and a
-    /// success grows it back geometrically rather than snapping straight back to the
-    /// value that had just failed.
+    /// The loop flies the first interval or two and then re-solves, so this is the
+    /// only stretch whose accuracy the vehicle actually experiences. One second is
+    /// several re-solves of margin at a 0.10 s cadence - deliberately generous,
+    /// because the cost of being wrong here is flying an unphysical command while the
+    /// cost of being generous is only refusing slightly more often than needed.
     /// </summary>
-    private double _warmTrustRegion = WarmTrustRegion;
+    public double CommitHorizonS { get; set; } = 1.0;
 
-    /// <summary>The healthy warm trust region, and the ceiling recovery grows back to.</summary>
+    /// <summary>
+    /// Defect allowance at the END of the horizon, as a multiple of the gate. 1
+    /// disables the weighting entirely and restores the old flat max.
+    ///
+    /// Sized from flight 20260820-150038, where the terminal flare carried 25-135 on
+    /// the metre-scaled reading against a 1 m gate while the near field was clean and
+    /// the vehicle tracked its plan to 5 m of a 98 m drift limit throughout. Those
+    /// plans were correct everywhere the vehicle was about to be, and were refused for
+    /// an interval eighteen seconds ahead that would be re-solved of the order of a
+    /// hundred times before it was reached.
+    ///
+    /// 25 rather than something larger because this is a safety gate being loosened:
+    /// it should admit the flare's collocation residual and nothing more structural.
+    /// A far tail failing by more than this is a wrong plan, not a coarsely sampled
+    /// one, and should still be refused.
+    /// </summary>
+    public double HorizonFarSlack { get; set; } = 25.0;
+
+    // ------------------------------------------------------------------------
+    // PER-CHANNEL DEFECT TOLERANCES, each in its own SI units.
+    //
+    // The state has four physically unrelated groups in it, and one number cannot
+    // express a tolerance for all of them. Previously it tried: every channel was
+    // divided by its XScale and multiplied by the POSITION scale, so the effective
+    // tolerance on a body rate was MaxDefectM / rangeToTarget - 0.026 deg/s at 2 km,
+    // twenty times looser at 100 m, and never a quantity anyone chose. These are
+    // chosen, they are readable, and they do not move with range.
+    //
+    // Sized against flight 20260820-150038 so the near field stays strict while the
+    // flare's collocation residual passes: the attitude defects at interval 0 (0.049
+    // and 0.015 in quaternion components, i.e. 5.6 and 1.9 degrees) are still refused,
+    // while the rate residuals out at intervals 33-38 (0.03-0.06 rad/s) clear.
+    // ------------------------------------------------------------------------
+
+    /// <summary>Position defect tolerance, metres. This IS <see cref="MaxDefectM"/> -
+    /// the historical gate was already in metres and already meant this.</summary>
+    public double PositionDefectM => MaxDefectM;
+
+    /// <summary>Velocity defect tolerance, m/s.</summary>
+    public double VelocityDefectMs { get; set; } = 0.5;
+
+    /// <summary>
+    /// Attitude defect tolerance, DEGREES - converted to a quaternion-component
+    /// tolerance below. Stated in degrees because a raw quaternion component is not a
+    /// number anyone can size by eye.
+    /// </summary>
+    public double AttitudeDefectDeg { get; set; } = 1.0;
+
+    /// <summary>Body-rate defect tolerance, rad/s. 0.01 is about 0.57 deg/s.</summary>
+    public double RateDefectRadS { get; set; } = 0.01;
+
+    /// <summary>Mass defect tolerance as a FRACTION of vehicle mass - vehicles differ
+    /// by orders of magnitude, so an absolute figure would mean nothing.</summary>
+    public double MassDefectFrac { get; set; } = 1e-3;
+
+    /// <summary>
+    /// The tolerance vector, in the state's own units and order.
+    ///
+    /// A quaternion VECTOR COMPONENT of d corresponds to about 2d radians of rotation
+    /// for small errors, so an attitude tolerance of theta maps to sin(theta/2). The
+    /// scalar part w gets the same figure: it is the component that moves least for a
+    /// given rotation, so this is the conservative direction to be wrong in.
+    /// </summary>
+    private double[] DefectTolerances(bool cold)
+    {
+        // The cold gate has always been a loosened version of the warm one; keeping it
+        // as a RATIO means it stays loosened by the same factor across every channel
+        // rather than only across position.
+        double slack = MaxDefectM > 0.0 ? Math.Max(ColdMaxDefectM / MaxDefectM, 1.0) : 1.0;
+        double k = cold ? slack : 1.0;
+        double q = Math.Sin(0.5 * Math.Max(AttitudeDefectDeg, 1e-6) * Math.PI / 180.0);
+        double mass = Math.Max(_cfg.XScale[Dynamics6Dof.IM], 1.0) * MassDefectFrac;
+
+        var tol = new double[Dynamics6Dof.NX];
+        for (int i = 0; i < 3; i++) tol[Dynamics6Dof.IR + i] = PositionDefectM * k;
+        for (int i = 0; i < 3; i++) tol[Dynamics6Dof.IV + i] = VelocityDefectMs * k;
+        for (int i = 0; i < 4; i++) tol[Dynamics6Dof.IQ + i] = q * k;
+        for (int i = 0; i < 3; i++) tol[Dynamics6Dof.IW + i] = RateDefectRadS * k;
+        tol[Dynamics6Dof.IM] = mass * k;
+        return tol;
+    }
+
+    /// <summary>Tolerance actually applied to the worst gated channel, in its units.</summary>
+    public double LastGatedTolerance { get; private set; } = double.NaN;
+
+    /// <summary>
+    /// The number the gate actually tested: DIMENSIONLESS, the worst multiple of its
+    /// own tolerance any channel reaches on any interval after horizon weighting.
+    /// 1.0 is exactly at tolerance, so the gate is simply "&lt;= 1".
+    /// </summary>
+    public double LastGatedRatio { get; private set; }
+
+    /// <summary>The offending defect in its OWN units, for the report.</summary>
+    public double LastGatedRaw { get; private set; } = double.NaN;
+
+    /// <summary>Where the GATED defect was worst, which need not be where the raw one was.</summary>
+    public int LastGatedDefectChannel { get; private set; } = -1;
+
+    /// <summary>Interval carrying the worst GATED defect, or -1.</summary>
+    public int LastGatedDefectNode { get; private set; } = -1;
+
+    public string LastGatedDefectChannelName => Scvx6DofSolver.ChannelName(LastGatedDefectChannel);
+
+    public string LastGatedDefectGroup => Scvx6DofSolver.ChannelGroup(LastGatedDefectChannel);
+
+    public string LastGatedDefectUnits => Scvx6DofSolver.ChannelGroup(LastGatedDefectChannel) switch
+    {
+        "position" => "m",
+        "velocity" => "m/s",
+        "attitude" => "(quat)",
+        "rate" => "rad/s",
+        "mass" => "kg",
+        _ => "",
+    };
+
+    /// <summary>Intervals judged at full strength last cycle. Moves with dt, so it is
+    /// recorded rather than inferred when reading a log back.</summary>
+    public int LastCommitIntervals { get; private set; }
+
+    /// <summary>
+    /// Trust region every warm re-solve starts from. A CONSTANT, deliberately.
+    ///
+    /// It was briefly carried between cycles, on the reasoning that the shrink a
+    /// rejected iteration applies is the one piece of information a failed cycle
+    /// produces, and resetting it throws that away. That is true, and it was still a
+    /// bad trade: the carry is a ONE-WAY RATCHET. It shrinks on failure but grows back
+    /// only on SUCCESS, and once the region is smaller than the step needed to
+    /// re-anchor the plan, success is impossible - so it never grows again.
+    ///
+    /// Flight 20260820-191435 shows the end state. Two healthy cycles, then interval 0
+    /// starts missing, the region ratchets to TrustRegionMin, and eighteen consecutive
+    /// cycles come back Failed with the defect frozen at 23.5 m because nothing can
+    /// change. At the floor, node 1's position box is 1e-3 * 2405 m = 2.4 m while each
+    /// interval covers 55 m of travel: node 1 is pinned to a stale reference, node 0 is
+    /// pinned by equality to the measurement, and interval 0 cannot close at any
+    /// iteration count. 92% of that descent was flown on a stale open-loop plan.
+    ///
+    /// The wide-trust-region retry is the only thing that resets to TrustRegionMax, and
+    /// it is suppressed after two consecutive failures - so there was no way back up.
+    ///
+    /// Reseeding from a constant cannot get stuck. If the cross-cycle adaptation is
+    /// worth revisiting it needs a floor well above TrustRegionMin and a kick UPWARD on
+    /// repeated failure, because a shrinking region is the right answer to a rejected
+    /// step and the wrong answer to an infeasible one - and this code does not yet
+    /// distinguish them.
+    /// </summary>
     private const double WarmTrustRegion = 0.05;
 
-    /// <summary>Per-success growth factor for the carried region. Recovers in a few cycles.</summary>
-    private const double WarmTrustRegionGrow = 2.0;
+    /// <summary>Trust region this cycle's warm re-solve STARTED from.</summary>
+    public double LastTrustRegionStart { get; private set; } = WarmTrustRegion;
 
-    /// <summary>Trust region the next warm cycle will use, for the readout.</summary>
-    public double WarmTrustRegionNow => _warmTrustRegion;
+    /// <summary>
+    /// Where the trust region ended up. Read live from the solver, so after a solve it
+    /// is the value the last iteration left behind - at TrustRegionMin it has collapsed
+    /// and the cycle can do nothing useful. Logged because the whole 191435 diagnosis
+    /// had to be inferred from a status enum.
+    /// </summary>
+    public double TrustRegionNow => _solver.TrustRegion;
+
+    /// <summary>Floor the region can collapse to, for reading the log against.</summary>
+    public double TrustRegionMin => _solver.TrustRegionMin;
 
     /// <summary>Measured cost of one ADMM iteration, ms. Seeded pessimistically and refined from real solves.</summary>
     public double MsPerAdmmIteration { get; private set; } = 0.05;
@@ -587,9 +736,7 @@ public sealed class Ksa6DofGuidance
         Status = ScvxStatus.IterationLimit;
         Error = "converging";
         _consecutiveFailures = 0;
-        // The warm loop starts again from a healthy region once this lands: whatever
-        // the carried value had shrunk to belongs to the plan being replaced.
-        _warmTrustRegion = WarmTrustRegion;
+        LastTrustRegionStart = _solver.TrustRegionMax;
         _lastColdIterationS = 0.0;
         _coldIterations = 0;
         NeedsMoreNodes = false;
@@ -708,7 +855,9 @@ public sealed class Ksa6DofGuidance
         // act on that; settling cannot.
         bool stalled = _coldIterations >= ColdStallIterations;
         bool ok = Finish(x0, simNow, 0);
-        NeedsMoreNodes = !ok && stalled && LastDefectM > MaxDefectM;
+        // Judged on the SAME quantity the gate uses, or this asks a different question
+        // than the one that refused the plan.
+        NeedsMoreNodes = !ok && stalled && LastGatedRatio > 1.0;
 
         // AFTER Finish, which overwrites both from the solver. The SOLVER's iteration
         // count is useless here - StepCold re-anchors through Reseed before every
@@ -1110,20 +1259,13 @@ public sealed class Ksa6DofGuidance
         double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
 
         FellBack = false;
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: _warmTrustRegion);
+        LastTrustRegionStart = WarmTrustRegion;
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion);
         if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
-            // Grow back toward the healthy region rather than snapping to it: if this
-            // success came from a small region, the value that failed before it is
-            // still the wrong place to restart from.
-            _warmTrustRegion = Math.Min(WarmTrustRegion, _warmTrustRegion * WarmTrustRegionGrow);
             return true;
         }
-
-        // KEEP WHAT THE FAILURE LEARNED. The solver shrank its region on each rejected
-        // iteration; that shrunken value is the seed for the next cycle.
-        _warmTrustRegion = Math.Clamp(_solver.TrustRegion, _solver.TrustRegionMin, WarmTrustRegion);
 
         // WIDE-TRUST-REGION RETRY, but NOT on every failure.
         //
@@ -1151,14 +1293,13 @@ public sealed class Ksa6DofGuidance
         // so the "escalated" retry was the same single iteration from a wider region.
         FellBack = true;
         _consecutiveFailures++;
+        LastTrustRegionStart = _solver.TrustRegionMax;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax);
         if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
             _consecutiveFailures = 0;
-            _warmTrustRegion = Math.Min(WarmTrustRegion, _warmTrustRegion * WarmTrustRegionGrow);
             return true;
         }
-        _warmTrustRegion = Math.Clamp(_solver.TrustRegion, _solver.TrustRegionMin, WarmTrustRegion);
         return false;
     }
 
@@ -1281,14 +1422,44 @@ public sealed class Ksa6DofGuidance
         // trajectory flyable — and the answer no longer depends on how close the
         // target happens to be.
         LastDefectM = LastDefect * _cfg.XScale[Dynamics6Dof.IR];
-        double gate = cold ? ColdMaxDefectM : MaxDefectM;
-        if (!(LastDefectM <= gate))
+
+        // THE GATE IS HORIZON-WEIGHTED; the figure above is not, and both are kept.
+        //
+        // LastDefectM stays the honest full-horizon max, so the logs and the readout
+        // keep meaning exactly what they used to and any analysis of them stays valid.
+        // What the gate TESTS is the weighted figure: full strength over the intervals
+        // about to be flown, loosening to HorizonFarSlack at the end of the horizon.
+        // See Scvx6DofSolver.WeightedDefect for why, and for why it is safe.
+        //
+        // Computed on the accepted REFERENCE, which is the same trajectory the trace's
+        // last accepted iteration reported - one evaluation, so the magnitude and its
+        // location cannot come from different iterations.
+        double dtPlan = _solver.Sigma / Math.Max(_n - 1, 1);
+        int commit = (int)Math.Floor(Math.Max(CommitHorizonS, 0.0) / Math.Max(dtPlan, 1e-6));
+        LastCommitIntervals = commit;
+
+        double[] tol = DefectTolerances(cold);
+        LastGatedRatio = _solver.WeightedDefect(tol, commit, HorizonFarSlack,
+                                                out int gCh, out int gNode, out double gRaw);
+        LastGatedDefectChannel = gCh;
+        LastGatedDefectNode = gNode;
+        LastGatedRaw = gRaw;
+        LastGatedTolerance = gCh >= 0 && gCh < tol.Length ? tol[gCh] : double.NaN;
+
+        // THE GATE IS A RATIO, so it is the same test for every channel: is anything
+        // more than its own tolerance out, once the horizon weighting has been applied.
+        // The cold case is folded into the tolerances themselves rather than compared
+        // against a second number - see DefectTolerances.
+        if (!(LastGatedRatio <= 1.0))
         {
-            Error = $"plan is not physical - dynamics defect {LastDefectM:F2} m " +
-                    $"exceeds {gate:F2} m after {_solver.IterationCount} iters " +
-                    $"({AcceptedSteps} accepted), worst on {LastDefectChannelName} " +
+            Error = $"plan is not physical - {LastGatedDefectChannelName} " +
+                    $"({LastGatedDefectGroup}) is {LastGatedRatio:F1}x its tolerance at " +
+                    $"interval {LastGatedDefectNode} of {_n - 1}: " +
+                    $"{LastGatedRaw:G3} against {LastGatedTolerance:G3} {LastGatedDefectUnits}" +
+                    $" (after {_solver.IterationCount} iters, {AcceptedSteps} accepted)" +
+                    $" [full-horizon max {LastDefectM:F2} m on {LastDefectChannelName} " +
                     $"({LastDefectGroup}) at interval {LastDefectNode} = " +
-                    $"{LastDefectRaw:G3} {LastDefectUnits}. " +
+                    $"{LastDefectRaw:G3} {LastDefectUnits}]. " +
                     "Needs more iterations, or more nodes.";
             return false;
         }

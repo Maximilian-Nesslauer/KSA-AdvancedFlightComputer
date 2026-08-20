@@ -384,6 +384,19 @@ public static partial class PoweredGuidanceWindow
                    $"budget {_s.Guidance.SubproblemBudgetMs:F0} ms -> cap " +
                    $"{(int)(_s.Guidance.SubproblemBudgetMs / Math.Max(_s.Guidance.MsPerAdmmIteration, 1e-4))} iters   " +
                    $"escalations {_s.Guidance.Escalations}");
+
+        // TRUST REGION, and whether it has bottomed out. At the floor the per-node box
+        // is far smaller than one interval of travel, so the plan cannot be re-anchored
+        // and every cycle refuses however long it is given - see the note on
+        // WarmTrustRegion. Worth a colour, because from the outside it looks identical
+        // to a hard problem.
+        double trEnd = _s.Guidance.TrustRegionNow, trMin = _s.Guidance.TrustRegionMin;
+        string trText = $"trust region {_s.Guidance.LastTrustRegionStart:G3} -> {trEnd:G3} " +
+                        $"(floor {trMin:G3})";
+        if (trEnd <= trMin * 1.001)
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f), trText + " - COLLAPSED");
+        else
+            ImGui.Text(trText);
         if (_s.SixDofFixedTime)
         {
         ImGui.Text($"burn time {sg,6:F1} s   FIXED (committed {_s.Guidance.CommittedSigma:F1} s, counting down)");
@@ -480,14 +493,37 @@ public static partial class PoweredGuidanceWindow
         // is normalised by the range to the target, so it climbs on an approach even
         // when nothing about the plan changed - it was rejecting centimetre-accurate
         // trajectories inside 100 m. See Ksa6DofGuidance.Finish.
+        // THE GATED FIGURE IS THE ONE THAT DECIDES, so it is the one shown in the
+        // pass/fail line. It is the same defect judged with a horizon weighting -
+        // full strength over the intervals about to be flown, loosening toward the end
+        // of the plan, which is re-solved many times before the vehicle reaches it.
+        // The full-horizon max is shown underneath, because that is what says whether
+        // the trajectory is good ANYWHERE, and the two disagreeing is informative
+        // rather than alarming. See Scvx6DofSolver.WeightedDefect.
+        // THE GATE IS A DIMENSIONLESS RATIO - worst channel as a multiple of its OWN
+        // tolerance, after horizon weighting - so 1.0 is exactly at tolerance and the
+        // reading means the same thing whether the offender is a position, a velocity,
+        // an attitude or a body rate. The old metre-scaled figure is kept underneath
+        // because it is what the historical logs contain, but it is not what decides.
         double defM = _s.Guidance.LastDefectM;
-        if (defM <= _s.Guidance.MaxDefectM)
+        double ratio = _s.Guidance.LastGatedRatio;
+        if (ratio <= 1.0)
             ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
-                $"dynamics defect {defM:F2} m  (limit {_s.Guidance.MaxDefectM:F2} m) - plan is physical");
+                $"defect {ratio:F2}x tolerance - plan is flyable");
         else
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                $"dynamics defect {defM:F2} m EXCEEDS {_s.Guidance.MaxDefectM:F2} m - plan refused. " +
-                "Almost always too few nodes: the collocation error grows with node spacing.");
+                $"defect {ratio:F1}x tolerance on {_s.Guidance.LastGatedDefectChannelName} - refused. " +
+                $"{_s.Guidance.LastGatedRaw:G3} against {_s.Guidance.LastGatedTolerance:G3} " +
+                _s.Guidance.LastGatedDefectUnits);
+
+        ImGui.Text($"  worst at interval {_s.Guidance.LastGatedDefectNode} of {_s.Guidance.Nodes - 1}; " +
+                   $"first {_s.Guidance.LastCommitIntervals} judged at full strength, " +
+                   $"the last allowed {_s.Guidance.HorizonFarSlack:F0}x");
+        ImGui.Text($"  tolerances: {_s.Guidance.PositionDefectM:G3} m, " +
+                   $"{_s.Guidance.VelocityDefectMs:G3} m/s, " +
+                   $"{_s.Guidance.AttitudeDefectDeg:G3} deg, " +
+                   $"{_s.Guidance.RateDefectRadS:G3} rad/s " +
+                   $"(legacy full-horizon reading {defM:F2} m)");
 
         // WHICH CHANNEL, because the metres figure above cannot be read on its own.
         // It is a max over all fourteen state channels, each divided by its own scale,
@@ -1041,8 +1077,17 @@ public static partial class PoweredGuidanceWindow
             DefectM = _s.Guidance.LastDefectM, DefectLimitM = _s.Guidance.MaxDefectM,
             DefectChan = _s.Guidance.LastDefectChannelName, DefectGroup = _s.Guidance.LastDefectGroup,
             DefectRaw = _s.Guidance.LastDefectRaw, DefectNode = _s.Guidance.LastDefectNode,
+            GatedRatio = _s.Guidance.LastGatedRatio,
+            GatedRaw = _s.Guidance.LastGatedRaw,
+            GatedTolerance = _s.Guidance.LastGatedTolerance,
+            GatedDefectChan = _s.Guidance.LastGatedDefectChannelName,
+            GatedDefectNode = _s.Guidance.LastGatedDefectNode,
+            CommitIntervals = _s.Guidance.LastCommitIntervals,
             QFlips = _s.Guidance.LastBranchFlips,
             AnchorM = _s.Guidance.AnchorOffsetM,
+            TrStart = _s.Guidance.LastTrustRegionStart,
+            TrEnd = _s.Guidance.TrustRegionNow,
+            TrMin = _s.Guidance.TrustRegionMin,
             FellBack = _s.Guidance.FellBack, Escalations = _s.Guidance.Escalations,
             Nodes = _s.Guidance.Nodes, Sigma = _s.Guidance.Sigma, PlanElapsed = _s.Guidance.PlanElapsed,
             ThrustDemandN = thrustN, CapabilityN = capability, Throttle = throttle,

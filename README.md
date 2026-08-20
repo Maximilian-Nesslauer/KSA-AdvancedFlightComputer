@@ -1,5 +1,7 @@
 # Powered Guidance
 
+(docs\logo\pg_logo_blue_header.svg)
+
 Guidance for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency)
 (KSA): guidance for powered ascent and powered descent, allowing accurate orbit targeting and pinpoint landing.
 
