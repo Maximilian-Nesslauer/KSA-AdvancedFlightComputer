@@ -493,6 +493,31 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     private const double WarmTrustRegion = 0.05;
 
+    /// <summary>
+    /// WHY THIS IS A CONSTANT, having twice been tried as a value carried between
+    /// cycles. Both attempts are recorded because the second one looked like a fix for
+    /// the first and was not.
+    ///
+    /// ATTEMPT ONE carried the solver's shrunken region forward, clamped only by
+    /// TrustRegionMin. That is a one-way ratchet: it shrinks on failure but grows back
+    /// only on SUCCESS, and once the region is smaller than the step needed to
+    /// re-anchor the plan, success is impossible. Flight 20260820-191435 shows the end
+    /// state - eighteen consecutive cycles returning Failed with the defect frozen at
+    /// 23.5 m, because at 1e-3 the per-node box is 2.4 m against 55 m of travel per
+    /// interval. 92% of that descent was flown open loop.
+    ///
+    /// ATTEMPT TWO added a floor and a reset-after-N-failures kick, which did make the
+    /// ratchet impossible. It was removed anyway, because the logs showed it was doing
+    /// nothing at all: across 20260820-193307 and -193405 the carried value was used
+    /// twice in 296 cycles. The reason is that a shrink only happens on a REJECTED
+    /// SCvx step, and most refusals here are not that - SCvx accepts its step and the
+    /// flight gate refuses the trajectory afterwards, leaving the region untouched at
+    /// 0.05. There was never anything to carry.
+    ///
+    /// Any third attempt needs to start from that measurement rather than from the
+    /// theory: the loop's problem is not that it re-runs a too-large step, it is that
+    /// the step it takes produces a trajectory the gate will not accept.
+    /// </summary>
     /// <summary>Trust region this cycle's warm re-solve STARTED from.</summary>
     public double LastTrustRegionStart { get; private set; } = WarmTrustRegion;
 
