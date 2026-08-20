@@ -1,5 +1,4 @@
-# Powered Guidance
-
+#
 ![Logo](docs/logo/pg_logo_blue_header.svg)
 
 Guidance for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency)
