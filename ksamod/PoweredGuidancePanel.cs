@@ -108,6 +108,13 @@ public static partial class PoweredGuidanceWindow
         // tab switch would strand whichever flow was waiting on it.
         DrawWarpPrompt();
 
+        // The guidance handed over to a powered descent: follow it, at both levels of
+        // the tab bar, and make the solver shown agree with the one that actually
+        // started. Read here and consumed after the bar, so both levels see it.
+        bool followGfold = _s.GfoldTabSelectPending;
+        if (followGfold)
+            _poweredSolver = PoweredLandingSolver.Gfold;
+
         if (ImGui.BeginTabBar("##panel_tabs"))
         {
             // Width is taken INSIDE each tab: the tab bar insets its content, and a
@@ -128,15 +135,18 @@ public static partial class PoweredGuidanceWindow
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Landing"))
+            if (ImGui.BeginTabItem("Landing", followGfold
+                    ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
             {
                 _panelTab = GuidanceTab.Landing;
-                DrawLandingTabContent(ImGui.GetContentRegionAvail().X);
+                DrawLandingTabContent(ImGui.GetContentRegionAvail().X, followGfold);
                 ImGui.EndTabItem();
             }
 
             ImGui.EndTabBar();
         }
+
+        _s.GfoldTabSelectPending = false;
 
         ImGaugeDressing.PopGaugeWidgetStyle();
         ImGui.EndChild();
@@ -160,9 +170,10 @@ public static partial class PoweredGuidanceWindow
         float3 green = ColorRgbReference.GetIndexedRgb(IndexedColor.Green);
         float3 red = ColorRgbReference.GetIndexedRgb(IndexedColor.Red);
 
-        // Landing has no commit of its own yet — it takes over from a descent already
-        // under way — so its tab leaves the buttons striped rather than pretending.
-        bool wired = _panelTab != GuidanceTab.Landing;
+        // Every tab commits to something now: ascent launches, descent starts the
+        // deorbit flow, landing drops straight into the powered descent from wherever
+        // the vehicle currently is.
+        const bool wired = true;
 
         // EXECUTE lights green while that phase is actually doing something: guidance
         // running or a launch armed and waiting for its window on ascent, any live
@@ -170,7 +181,9 @@ public static partial class PoweredGuidanceWindow
         // same whether or not it currently has anything to stop.
         bool lit = _panelTab == GuidanceTab.Ascent
             ? (_s.Running || _s.LaunchArmed)
-            : _panelTab == GuidanceTab.Descent && DescentLive;
+            : _panelTab == GuidanceTab.Descent ? DescentLive
+            : _s.LandingPhase == LandingPhase.GfoldDescent
+                || _s.LandingPhase == LandingPhase.TerminalHover;
 
         ImGui.SetCursorScreenPos(origin);
         if (ImGauge.Button("EXECUTE", new float2(half, height),
@@ -181,6 +194,8 @@ public static partial class PoweredGuidanceWindow
                 ExecuteAscent(orbit, parent);
             else if (_panelTab == GuidanceTab.Descent)
                 ExecuteLanding(vehicle, orbit, parent, parent.Mu, bodyRadius);
+            else
+                StartGfoldNow();
         }
 
         ImGui.SetCursorScreenPos(new float2(origin.X + half + gap, origin.Y));
@@ -189,7 +204,7 @@ public static partial class PoweredGuidanceWindow
         {
             if (_panelTab == GuidanceTab.Ascent)
                 AbortAscent();
-            else if (_panelTab == GuidanceTab.Descent)
+            else
                 AbortLanding();
         }
 
@@ -212,12 +227,13 @@ public static partial class PoweredGuidanceWindow
     /// PLACEHOLDER. Two sub-tabs: the powered descent to the pad, and the hover the
     /// last few metres are flown on.
     /// </summary>
-    private static void DrawLandingTabContent(float innerW)
+    private static void DrawLandingTabContent(float innerW, bool selectPowered)
     {
         if (!ImGui.BeginTabBar("##landing_tabs"))
             return;
 
-        if (ImGui.BeginTabItem("Powered landing"))
+        if (ImGui.BeginTabItem("Powered landing", selectPowered
+                ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
         {
             DrawPoweredLandingContent(innerW);
             ImGui.EndTabItem();
@@ -238,25 +254,39 @@ public static partial class PoweredGuidanceWindow
         ImGui.EndTabBar();
     }
 
-    private static void DrawPoweredLandingContent(float innerW)
+    /// <summary>
+    /// The powered-descent solver choice. One implementation, called from both the
+    /// Descent and Landing tabs — the whole point is that picking it does not depend
+    /// on which page you happen to be on.
+    /// </summary>
+    private static void DrawSolverRadios()
     {
-        if (!ImGuiHelper.BeginRegion("Solver",
-                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
-            return;
-
-        // The two powered-descent solvers the mod actually has. Nothing reads this
-        // yet — it only records the choice.
-        ImGui.Text("Solver");
-        ImGui.NextColumn();
         if (ImGui.RadioButton("G-FOLD", _poweredSolver == PoweredLandingSolver.Gfold))
             _poweredSolver = PoweredLandingSolver.Gfold;
         ImGui.SameLine();
         if (ImGui.RadioButton("6-DOF", _poweredSolver == PoweredLandingSolver.SixDof))
             _poweredSolver = PoweredLandingSolver.SixDof;
-        ImGui.NextColumn();
+    }
 
-        GaugeRowText("Status", "not built yet");
+    private static void DrawPoweredLandingContent(float innerW)
+    {
+        // Solver choice above the content, since it selects which content follows.
+        ImGui.Text("Solver");
+        ImGui.SameLine();
+        DrawSolverRadios();
+        ImGui.Separator();
 
-        ImGuiHelper.EndRegion();
+        if (_poweredSolver == PoweredLandingSolver.Gfold)
+        {
+            DrawGfoldLandingContent(innerW, ImGui.GetTextLineHeightWithSpacing());
+            return;
+        }
+
+        if (ImGuiHelper.BeginRegion("6-DOF", ImGuiTreeNodeFlags.DefaultOpen
+                | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        {
+            GaugeRowText("Status", "not built yet");
+            ImGuiHelper.EndRegion();
+        }
     }
 }

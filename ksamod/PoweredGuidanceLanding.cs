@@ -44,7 +44,11 @@ public static partial class PoweredGuidanceWindow
             var gfoldFlags = _s.GfoldTabSelectPending
                 ? ImGuiTabItemFlags.SetSelected
                 : ImGuiTabItemFlags.None;
-            _s.GfoldTabSelectPending = false;   // one-shot: the flag selects this frame
+            // One-shot, and this window draws FIRST — so it only consumes the flag
+            // when the gauge panel is not up to act on it. Consuming unconditionally
+            // is why the new panel never followed the handoff to G-FOLD.
+            if (!_showGuidancePanel)
+                _s.GfoldTabSelectPending = false;
             if (ImGui.BeginTabItem("G-FOLD", gfoldFlags))
             {
                 DrawGfoldSubTab(vehicle, orbit, parent, mu, bodyRadius);
@@ -153,22 +157,31 @@ public static partial class PoweredGuidanceWindow
         // Skip straight to G-FOLD from the current state (or restart it after a
         // failure), engaging the autopilot + auto engines so it actually flies.
         if (ImGui.Button("Start G-FOLD now", new float2(360f, 40f)))
-        {
-            _s.Engage = true;
-            _s.AutoStage = true;
-            _s.Running = false;
-            _s.LandingPhase = LandingPhase.GfoldDescent;
-            _s.GfoldHandoffTime = SimNow();
-            _s.GfoldLastSolveTime = double.NegativeInfinity;
-            _s.GfoldPlan = null;
-            _s.GfoldFailStreak = 0;
-            _s.GfoldTrackInit = false;
-            _s.GfoldEngineOn = false;
-            _s.HasCommand = false;
-            _s.LandingStatus = "G-FOLD started from current state.";
-        }
+            StartGfoldNow();
         if (ImGui.Button("Abort landing"))
             AbortLanding();
+    }
+
+    /// <summary>
+    /// Skip straight to G-FOLD from the current state, or restart it after a failure.
+    /// Engages the autopilot and auto engines, because a powered descent that is not
+    /// allowed to steer or throttle is not a descent.
+    /// </summary>
+    private static void StartGfoldNow()
+    {
+        _s.Engage = true;
+        _s.AutoStage = true;
+        _s.Running = false;
+        _s.LandingPhase = LandingPhase.GfoldDescent;
+        ResetGfoldTrace();   // fresh flown path and a fresh axis latch
+        _s.GfoldHandoffTime = SimNow();
+        _s.GfoldLastSolveTime = double.NegativeInfinity;
+        _s.GfoldPlan = null;
+        _s.GfoldFailStreak = 0;
+        _s.GfoldTrackInit = false;
+        _s.GfoldEngineOn = false;
+        _s.HasCommand = false;
+        _s.LandingStatus = "G-FOLD started from current state.";
     }
 
     private static void AbortLanding()
@@ -449,6 +462,7 @@ public static partial class PoweredGuidanceWindow
             if (_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo)
             {
                 _s.LandingPhase = LandingPhase.GfoldDescent;
+            ResetGfoldTrace();   // fresh flown path and a fresh axis latch
                 _s.GfoldHandoffTime = now;
                 _s.GfoldLastSolveTime = double.NegativeInfinity;
                 _s.GfoldPlan = null;

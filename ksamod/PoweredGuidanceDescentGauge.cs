@@ -96,6 +96,13 @@ public static partial class PoweredGuidanceWindow
         GaugeRowCheck("Engage autopilot", "##dengage", ref _s.Engage);
         GaugeRowCheck("Auto engines/staging", "##dautostage", ref _s.AutoStage);
 
+        // The same toggle the Landing tab carries, on the same state: which solver
+        // flies the powered descent is decided while planning it, not after arriving.
+        ImGui.Text("Solver");
+        ImGui.NextColumn();
+        DrawSolverRadios();
+        ImGui.NextColumn();
+
         double3 r = orbit.StateVectors.PositionCci;
         double3 siteDir = SiteDirCciAt(parent, 0);
         GaugeRowText("Ground distance", $"{AngleBetween(r, siteDir) * bodyRadius / 1000.0:F1} km");

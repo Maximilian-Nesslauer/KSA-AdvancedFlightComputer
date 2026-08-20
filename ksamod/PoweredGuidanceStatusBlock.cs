@@ -42,6 +42,9 @@ public static partial class PoweredGuidanceWindow
     // How far a distant pass fades toward the strip: 1 would erase it entirely.
     private const float PassFadeDepth = 0.75f;
 
+    // Length of a thrust tick on the G-FOLD side view, in pixels.
+    private const float GfoldThrustGlyphPx = 12f;
+
     // One colour per stage, cycled. Distinct hues rather than a ramp, because the
     // point is to tell stages apart, not to imply an ordering between them.
     private static readonly ImColor8[] StagePalette =

@@ -301,6 +301,30 @@ public sealed class VehicleAutopilotState
     public bool GfoldTrackInit;
     public bool GfoldEngineOn;             // hysteretic engine state
 
+    // --- G-FOLD side-view plot ---------------------------------------------
+    // The flown path in the pad frame, as (horizontal range to pad, height above
+    // touchdown) in metres. Sampled off the guidance step rather than the draw, so it
+    // stays even under time warp and does not depend on which craft is on screen.
+    public float2[] GfoldTrace;
+    public int GfoldTraceCount;
+    public double GfoldTraceLastTime = double.NegativeInfinity;
+
+    /// <summary>
+    /// The plot's latched axis extents, in metres. LATCHED rather than fitted every
+    /// frame: a descent shrinks continuously, so a fitted plot zooms the whole way
+    /// down and nothing on it holds still long enough to read.
+    /// </summary>
+    public double GfoldAxisRangeM, GfoldAxisAltM;
+    public double GfoldAxisLockedAt = double.NegativeInfinity;
+
+    /// <summary>
+    /// How many times the plot's axes have been latched: 0 none, then start, half the
+    /// flight remaining, a quarter remaining, and the final approach. Each stage fires
+    /// once, in order.
+    /// </summary>
+    public int GfoldAxisStage;
+    public double GfoldFlightTime0;
+
     // ------------------------------------------------------------------ terminal hover
     public double TermTouchdownRate = 0.5; // m/s, constant final descent
     public double TermConstAltM = 0.25;    // constant-rate zone height
