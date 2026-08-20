@@ -250,6 +250,14 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Ask the panel to show this vehicle's G-FOLD / Terminal sub-tab.</summary>
     public bool GfoldTabSelectPending;
+
+    /// <summary>
+    /// Which solver flies the powered descent: G-FOLD by default, or the 6-DOF
+    /// successive-convexification one. Per vehicle rather than a panel-wide setting,
+    /// because the deorbit handoff READS it to decide what to start — so it describes
+    /// how this craft lands, not what the player last clicked.
+    /// </summary>
+    public bool UseSixDofLanding;
     public bool TermTabSelectPending;
 
     /// <summary>

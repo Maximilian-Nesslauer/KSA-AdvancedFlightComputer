@@ -58,7 +58,8 @@ public static partial class PoweredGuidanceWindow
         double3 vSrf = v - double3.Cross(parent.GetAngularVelocityCci(), r);
         _s.GfoldAltM = double3.Dot(r - siteCci, frame.Ex) - _s.VehicleHeightM;
         _s.GfoldSpeedMs = vSrf.Length();
-        RecordGfoldTrace(frame.PointToLocal(r));
+        double3 gfLocal = frame.PointToLocal(r);   // X-up frame
+        RecordGfoldTrace(Math.Sqrt(gfLocal.Y * gfLocal.Y + gfLocal.Z * gfLocal.Z), gfLocal.X);
 
         // Hand off to the terminal hover controller for the last stretch: G-FOLD
         // brings the vehicle down to the handoff height (slow and near-vertical),

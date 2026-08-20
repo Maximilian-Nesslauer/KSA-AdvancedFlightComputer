@@ -27,6 +27,11 @@ public static partial class PoweredGuidanceWindow
         _s.Engage = true;
         _s.AutoStage = true;
         _s.Running = false;
+        // Continue the flown path when hover takes over from G-FOLD - it is the same
+        // descent - but start clean when it is engaged cold, so the plot is not
+        // showing a previous attempt.
+        if (_s.LandingPhase != LandingPhase.GfoldDescent)
+            ResetGfoldTrace();
         _s.LandingPhase = LandingPhase.TerminalHover;
         _s.TermPidUp = _s.TermPidE = _s.TermPidN = default;
         _s.TermInit = false;
@@ -73,6 +78,12 @@ public static partial class PoweredGuidanceWindow
         double h = TerminalHeight(orbit, parent, bodyRadius);
         _s.GfoldAltM = h;
         _s.GfoldSpeedMs = vSrf.Length();
+
+        // Same trace the G-FOLD plot draws: hover is the last stretch of the same
+        // descent, so the flown path carries straight on rather than starting again.
+        double3 padCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double3 padLocal = KsaGfold.BuildFrame(padCci).PointToLocal(r);   // X-up frame
+        RecordGfoldTrace(Math.Sqrt(padLocal.Y * padLocal.Y + padLocal.Z * padLocal.Z), padLocal.X);
 
         double vUp = double3.Dot(vSrf, up);
 

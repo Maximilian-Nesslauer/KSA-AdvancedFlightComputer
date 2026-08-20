@@ -61,7 +61,7 @@ public static partial class PoweredGuidanceWindow
         // decelerating: the marker turns round, because a descent flies its track
         // backwards — thrust opposes travel.
         DrawGuidanceStatusBlock(origin, innerW, rowH, DescentPhaseLabel(), col, live,
-            tgoSec, _s.Upfg.VgoMag, decelerating: true);
+            tgoSec, decelerating: true);
     }
 
     private static void DrawDescentTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
@@ -98,7 +98,7 @@ public static partial class PoweredGuidanceWindow
 
         // The same toggle the Landing tab carries, on the same state: which solver
         // flies the powered descent is decided while planning it, not after arriving.
-        ImGui.Text("Solver");
+        ImGui.Text("Landing solver");
         ImGui.NextColumn();
         DrawSolverRadios();
         ImGui.NextColumn();

@@ -89,6 +89,21 @@ public sealed class ScsWorkspace
     public double LastSolveMs { get; private set; }
     public double LastFinishMs { get; private set; }
 
+    /// <summary>
+    /// Guards every one of the shared statistics below.
+    ///
+    /// These are process-wide, and a solve appends to them from whichever thread ran
+    /// it. That was harmless while one workspace solved at a time, but two vehicles
+    /// each own a solve worker, so two threads reach List.Add concurrently - which
+    /// writes _items[_size++] non-atomically and throws IndexOutOfRangeException. It
+    /// surfaced as "6-DOF step failed: Index was outside the bounds of the array",
+    /// only ever with two craft guiding at once, and cleared as soon as one of them
+    /// disengaged.
+    ///
+    /// Taken once per solve, so the contention is irrelevant next to the solve itself.
+    /// </summary>
+    private static readonly object StatsGate = new();
+
     /// <summary>Totals since the last <see cref="ResetTimers"/>, for sweeps.</summary>
     public static double TotalInitMs, TotalSolveMs, TotalFinishMs;
     public static long TotalCalls, TotalAdmmIterations;
@@ -103,16 +118,23 @@ public sealed class ScsWorkspace
 
     public static void ResetTimers()
     {
-        TotalInitMs = TotalSolveMs = TotalFinishMs = 0;
-        TotalCalls = TotalAdmmIterations = 0;
-        SolveMsSamples.Clear();
+        lock (StatsGate)
+        {
+            TotalInitMs = TotalSolveMs = TotalFinishMs = 0;
+            TotalCalls = TotalAdmmIterations = 0;
+            SolveMsSamples.Clear();
+        }
     }
 
     /// <summary>Percentile of the recorded per-solve times, 0..1. Empty -> 0.</summary>
     public static double SolveMsPercentile(double q)
     {
-        if (SolveMsSamples.Count == 0) return 0.0;
-        var sorted = SolveMsSamples.ToArray();
+        double[] sorted;
+        lock (StatsGate)
+        {
+            if (SolveMsSamples.Count == 0) return 0.0;
+            sorted = SolveMsSamples.ToArray();
+        }
         Array.Sort(sorted);
         int i = (int)Math.Round(q * (sorted.Length - 1));
         return sorted[Math.Clamp(i, 0, sorted.Length - 1)];
@@ -280,12 +302,15 @@ public sealed class ScsWorkspace
                 long t2 = System.Diagnostics.Stopwatch.GetTimestamp();
                 ScsNative.scs_finish(work);
                 LastFinishMs = Ms(t2);
-                TotalInitMs += LastInitMs;
-                TotalSolveMs += LastSolveMs;
-                TotalFinishMs += LastFinishMs;
-                TotalCalls++;
-                TotalAdmmIterations += Iterations;
-                SolveMsSamples.Add(LastInitMs + LastSolveMs + LastFinishMs);
+                lock (StatsGate)
+                {
+                    TotalInitMs += LastInitMs;
+                    TotalSolveMs += LastSolveMs;
+                    TotalFinishMs += LastFinishMs;
+                    TotalCalls++;
+                    TotalAdmmIterations += Iterations;
+                    SolveMsSamples.Add(LastInitMs + LastSolveMs + LastFinishMs);
+                }
             }
         }
         finally

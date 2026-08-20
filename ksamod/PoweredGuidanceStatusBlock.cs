@@ -96,7 +96,7 @@ public static partial class PoweredGuidanceWindow
         double tgoSec = terminal ? Math.Max(0.0, AscentCutoffIn()) : _s.Upfg.Tgo;
 
         DrawGuidanceStatusBlock(origin, innerW, rowH, AscentPhaseLabel(), col, live,
-            tgoSec, _s.Upfg.VgoMag, decelerating: false);
+            tgoSec, decelerating: false);
     }
 
     /// <summary>
@@ -106,22 +106,21 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private static void DrawGuidanceStatusBlock(float2 origin, float innerW, float rowH,
                                                 string phase, ImColor8 phaseCol, bool live,
-                                                double tgoSec, double dvVal, bool decelerating)
+                                                double tgoSec, bool decelerating)
     {
         ImDrawListPtr dl = ImGui.GetWindowDrawList();
 
+        // Phase alone on this line. T-GO has moved into the arc, alongside the two
+        // quantities it is the countdown FOR - and the separate dV readout that used
+        // to sit here is gone: it was VGO under another name.
         dl.AddText(origin, phaseCol, phase);
-        string tgo = live ? $"T-GO {tgoSec,6:F1} s" : "T-GO   --.- s";
-        string dv = live ? $"dV {dvVal,6:F0} m/s" : "dV    --- m/s";
-        dl.AddText(new float2(origin.X + innerW * 0.38f, origin.Y), live ? SchemInk : SchemDim, tgo);
-        dl.AddText(new float2(origin.X + innerW * 0.70f, origin.Y), live ? SchemInk : SchemDim, dv);
 
         // Both displays run the full width: the arc needs the span to stay gentle,
         // and the bar needs it to keep short stages legible.
         float arcH = rowH * 4.2f;
         float gap = rowH * 0.3f;
         DrawGuidanceSchematic(dl, new float2(origin.X, origin.Y + rowH), new float2(innerW, arcH),
-            live, decelerating);
+            live, decelerating, tgoSec);
         // Height depends on the stage count, so the bar reports what it used.
         float barH = DrawStagingBar(dl, new float2(origin.X, origin.Y + rowH + arcH + gap), innerW);
 
@@ -141,7 +140,7 @@ public static partial class PoweredGuidanceWindow
     /// scale against anything else — it is a picture of progress, not geometry.
     /// </summary>
     private static void DrawGuidanceSchematic(ImDrawListPtr dl, float2 min, float2 size,
-                                              bool running, bool decelerating)
+                                              bool running, bool decelerating, double tgoSec)
     {
         dl.AddRect(min, min + size, SchemSpent, 3f);
 
@@ -188,9 +187,18 @@ public static partial class PoweredGuidanceWindow
         DrawStartMarker(dl, ArcPoint(centre, radius + vgoOff + thick * 1.7f, -half), -half,
             MathF.Max(5f, size.Y * 0.11f), decelerating);
 
+        // The three numbers on one line, in the order the bands beneath them run:
+        // what is left to fly, how long it takes, and what it costs.
         string rgoText = live ? $"RGO {_s.Upfg.Rgo.Length() / 1000.0:F0} km" : "RGO  --- km";
+        string tgoText = live ? $"T-GO {tgoSec:F1} s" : "T-GO  --.- s";
         string vgoText = live ? $"VGO {_s.Upfg.VgoMag:F0} m/s" : "VGO  --- m/s";
+
         dl.AddText(new float2(min.X + pad, min.Y + 4f), live ? SchemRgo : SchemDim, rgoText);
+
+        float tgoW = ImGui.CalcTextSize(tgoText).X;
+        dl.AddText(new float2(min.X + (size.X - tgoW) * 0.5f, min.Y + 4f),
+            live ? SchemInk : SchemDim, tgoText);
+
         float vgoW = ImGui.CalcTextSize(vgoText).X;
         dl.AddText(new float2(min.X + size.X - pad - vgoW, min.Y + 4f),
             live ? SchemVgo : SchemDim, vgoText);

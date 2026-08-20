@@ -76,6 +76,12 @@ internal static class SixDofLog
             Stop();
             Owner = owner;
 
+            // A NEW run starts clean. LastError was only ever assigned, never cleared,
+            // so one transient failure - a locked file, a missing folder on a previous
+            // run - was reported as "log error" for the rest of the session even once
+            // logging was working perfectly.
+            LastError = "";
+
             string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             Directory = Path.Combine(docs, "My Games", "Kitten Space Agency", "navbox-logs");
             System.IO.Directory.CreateDirectory(Directory);
@@ -114,7 +120,7 @@ internal static class SixDofLog
             _events.AppendLine("# t(s)  event");
 
             Enabled = true;
-            Event(0.0, "logging started");
+            Event(Owner, 0.0, "logging started");
         }
         catch (Exception e)
         {
@@ -151,9 +157,17 @@ internal static class SixDofLog
         Enabled = false;
     }
 
-    internal static void Event(double t, string message)
+    /// <summary>
+    /// May this caller write? The sink is single-owner by design, but only Start and
+    /// Stop ever checked - so a second craft refused ownership went on appending to
+    /// the same three buffers anyway, interleaving two vehicles' rows in one CSV and
+    /// racing a StringBuilder between their guidance threads. Every write checks now.
+    /// </summary>
+    private static bool Writable(object owner) => Enabled && ReferenceEquals(Owner, owner);
+
+    internal static void Event(object owner, double t, string message)
     {
-        if (!Enabled)
+        if (!Writable(owner))
             return;
         try
         {
@@ -175,9 +189,9 @@ internal static class SixDofLog
     /// this stays a pure sink — nothing here reaches back into guidance state, so it
     /// cannot perturb what it is measuring.
     /// </summary>
-    internal static void Cycle(in CycleRow r)
+    internal static void Cycle(object owner, in CycleRow r)
     {
-        if (!Enabled)
+        if (!Writable(owner))
             return;
         try
         {
@@ -227,10 +241,10 @@ internal static class SixDofLog
     /// distinguish "the plan is a loop and the vehicle followed it" from "the plan
     /// was straight and the vehicle diverged". Those have opposite causes.
     /// </summary>
-    internal static void PlanSnapshot(double t, int nodes, ReadOnlySpan<double> planX,
-                                      ReadOnlySpan<double> planU)
+    internal static void PlanSnapshot(object owner, double t, int nodes,
+                                      ReadOnlySpan<double> planX, ReadOnlySpan<double> planU)
     {
-        if (!Enabled || planX.Length < nodes * 14)
+        if (!Writable(owner) || planX.Length < nodes * 14)
             return;
         if (t - _lastPlanSnapshot < PlanSnapshotInterval)
             return;

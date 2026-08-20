@@ -58,7 +58,10 @@ public static partial class PoweredGuidanceWindow
             var termFlags = _s.TermTabSelectPending
                 ? ImGuiTabItemFlags.SetSelected
                 : ImGuiTabItemFlags.None;
-            _s.TermTabSelectPending = false;    // one-shot
+            // One-shot, and this window draws FIRST — leave it for the gauge panel
+            // when that is up, exactly as with the G-FOLD focus flag above.
+            if (!_showGuidancePanel)
+                _s.TermTabSelectPending = false;
             if (ImGui.BeginTabItem("Terminal", termFlags))
             {
                 DrawTerminalTab(vehicle, orbit, parent, mu, bodyRadius);
@@ -461,16 +464,30 @@ public static partial class PoweredGuidanceWindow
             // UPFG terminal freeze. G-FOLD plans from the current state down.
             if (_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo)
             {
-                _s.LandingPhase = LandingPhase.GfoldDescent;
-            ResetGfoldTrace();   // fresh flown path and a fresh axis latch
-                _s.GfoldHandoffTime = now;
-                _s.GfoldLastSolveTime = double.NegativeInfinity;
-                _s.GfoldPlan = null;
-                _s.GfoldFailStreak = 0;
-                _s.GfoldTrackInit = false;
-                _s.GfoldEngineOn = false;
-                _s.GfoldTabSelectPending = true;   // focus the G-FOLD sub-tab for the descent
-                _s.LandingStatus = "Handoff to G-FOLD descent.";
+                if (_s.UseSixDofLanding)
+                {
+                    // 6-DOF is EXCLUSIVE — it drives attitude through the TVC
+                    // allocator rather than the flight computer — so the UPFG landing
+                    // flow has to let go rather than run alongside it. EngagePending
+                    // is consumed by the next guidance step, which runs the cold solve
+                    // off the draw.
+                    _s.LandingPhase = LandingPhase.Idle;
+                    _s.EngagePending = true;
+                    _s.LandingStatus = "Handoff to 6-DOF descent.";
+                }
+                else
+                {
+                    _s.LandingPhase = LandingPhase.GfoldDescent;
+                    ResetGfoldTrace();   // fresh flown path and a fresh axis latch
+                    _s.GfoldHandoffTime = now;
+                    _s.GfoldLastSolveTime = double.NegativeInfinity;
+                    _s.GfoldPlan = null;
+                    _s.GfoldFailStreak = 0;
+                    _s.GfoldTrackInit = false;
+                    _s.GfoldEngineOn = false;
+                    _s.LandingStatus = "Handoff to G-FOLD descent.";
+                }
+                _s.GfoldTabSelectPending = true;   // focus the powered-landing page
             }
         }
     }

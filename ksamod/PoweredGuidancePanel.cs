@@ -13,7 +13,7 @@ using KSA;
 public static partial class PoweredGuidanceWindow
 {
     public enum GuidanceTab { Ascent, Descent, Landing }
-    public enum PoweredLandingSolver { Gfold, SixDof }
+    public enum LandingSubTab { Powered, Hover }
 
     private static bool _showGuidancePanel = true;
     private static float2 _guidancePanelOffsetUv = new float2(0.012f, 0.06f);
@@ -22,7 +22,7 @@ public static partial class PoweredGuidanceWindow
     // the selection the bar made last frame — a frame's lag on a tab switch, and the
     // alternative is drawing the commit controls below the content they commit.
     private static GuidanceTab _panelTab = GuidanceTab.Ascent;
-    private static PoweredLandingSolver _poweredSolver = PoweredLandingSolver.Gfold;
+    private static LandingSubTab _landingSubTab = LandingSubTab.Powered;
 
     // Height is a floor only: the window is opened with fitContent, so it grows and
     // shrinks as tabs and sections change. Width is authored and stays put.
@@ -112,8 +112,6 @@ public static partial class PoweredGuidanceWindow
         // the tab bar, and make the solver shown agree with the one that actually
         // started. Read here and consumed after the bar, so both levels see it.
         bool followGfold = _s.GfoldTabSelectPending;
-        if (followGfold)
-            _poweredSolver = PoweredLandingSolver.Gfold;
 
         if (ImGui.BeginTabBar("##panel_tabs"))
         {
@@ -135,11 +133,12 @@ public static partial class PoweredGuidanceWindow
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Landing", followGfold
+            if (ImGui.BeginTabItem("Landing", followGfold || _s.TermTabSelectPending
                     ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
             {
                 _panelTab = GuidanceTab.Landing;
-                DrawLandingTabContent(ImGui.GetContentRegionAvail().X, followGfold);
+                DrawLandingTabContent(vehicle, orbit, parent, bodyRadius,
+                    ImGui.GetContentRegionAvail().X, followGfold);
                 ImGui.EndTabItem();
             }
 
@@ -182,8 +181,11 @@ public static partial class PoweredGuidanceWindow
         bool lit = _panelTab == GuidanceTab.Ascent
             ? (_s.Running || _s.LaunchArmed)
             : _panelTab == GuidanceTab.Descent ? DescentLive
-            : _s.LandingPhase == LandingPhase.GfoldDescent
-                || _s.LandingPhase == LandingPhase.TerminalHover;
+            : _landingSubTab == LandingSubTab.Hover
+                ? _s.LandingPhase == LandingPhase.TerminalHover
+                : _s.UseSixDofLanding
+                    ? (_s.Active || _s.EngagePending)
+                    : _s.LandingPhase == LandingPhase.GfoldDescent;
 
         ImGui.SetCursorScreenPos(origin);
         if (ImGauge.Button("EXECUTE", new float2(half, height),
@@ -194,6 +196,12 @@ public static partial class PoweredGuidanceWindow
                 ExecuteAscent(orbit, parent);
             else if (_panelTab == GuidanceTab.Descent)
                 ExecuteLanding(vehicle, orbit, parent, parent.Mu, bodyRadius);
+            else if (_landingSubTab == LandingSubTab.Hover)
+                StartTerminalHover();
+            else if (_s.UseSixDofLanding)
+                // Consumed by the guidance step, not applied here: engaging runs a
+                // cold solve, which belongs on the sim thread rather than the draw.
+                _s.EngagePending = true;
             else
                 StartGfoldNow();
         }
@@ -204,6 +212,9 @@ public static partial class PoweredGuidanceWindow
         {
             if (_panelTab == GuidanceTab.Ascent)
                 AbortAscent();
+            else if (_panelTab == GuidanceTab.Landing
+                     && _landingSubTab == LandingSubTab.Powered && _s.UseSixDofLanding)
+                Disengage6Dof(vehicle);
             else
                 AbortLanding();
         }
@@ -227,7 +238,8 @@ public static partial class PoweredGuidanceWindow
     /// PLACEHOLDER. Two sub-tabs: the powered descent to the pad, and the hover the
     /// last few metres are flown on.
     /// </summary>
-    private static void DrawLandingTabContent(float innerW, bool selectPowered)
+    private static void DrawLandingTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
+                                             double bodyRadius, float innerW, bool selectPowered)
     {
         if (!ImGui.BeginTabBar("##landing_tabs"))
             return;
@@ -235,21 +247,22 @@ public static partial class PoweredGuidanceWindow
         if (ImGui.BeginTabItem("Powered landing", selectPowered
                 ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
         {
-            DrawPoweredLandingContent(innerW);
+            _landingSubTab = LandingSubTab.Powered;
+            DrawPoweredLandingContent(vehicle, innerW);
             ImGui.EndTabItem();
         }
 
-        if (ImGui.BeginTabItem("Hover"))
+        // The hover controller sets its own focus flag when it takes over, the same
+        // way the powered descent does.
+        bool followHover = _s.TermTabSelectPending;
+        if (ImGui.BeginTabItem("Hover", followHover
+                ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
         {
-            if (ImGuiHelper.BeginRegion("Terminal hover",
-                    ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
-            {
-                GaugeRowText("Status", "not built yet");
-                GaugeRowText("Will hold", "setpoints, profile, gains");
-                ImGuiHelper.EndRegion();
-            }
+            _landingSubTab = LandingSubTab.Hover;
+            DrawHoverTabContent(vehicle, orbit, parent, parent.Mu, bodyRadius, innerW);
             ImGui.EndTabItem();
         }
+        _s.TermTabSelectPending = false;
 
         ImGui.EndTabBar();
     }
@@ -261,14 +274,14 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private static void DrawSolverRadios()
     {
-        if (ImGui.RadioButton("G-FOLD", _poweredSolver == PoweredLandingSolver.Gfold))
-            _poweredSolver = PoweredLandingSolver.Gfold;
+        if (ImGui.RadioButton("G-FOLD", !_s.UseSixDofLanding))
+            _s.UseSixDofLanding = false;
         ImGui.SameLine();
-        if (ImGui.RadioButton("6-DOF", _poweredSolver == PoweredLandingSolver.SixDof))
-            _poweredSolver = PoweredLandingSolver.SixDof;
+        if (ImGui.RadioButton("6-DOF", _s.UseSixDofLanding))
+            _s.UseSixDofLanding = true;
     }
 
-    private static void DrawPoweredLandingContent(float innerW)
+    private static void DrawPoweredLandingContent(Vehicle vehicle, float innerW)
     {
         // Solver choice above the content, since it selects which content follows.
         ImGui.Text("Solver");
@@ -276,17 +289,9 @@ public static partial class PoweredGuidanceWindow
         DrawSolverRadios();
         ImGui.Separator();
 
-        if (_poweredSolver == PoweredLandingSolver.Gfold)
-        {
+        if (_s.UseSixDofLanding)
+            Draw6DofLandingContent(vehicle, innerW);
+        else
             DrawGfoldLandingContent(innerW, ImGui.GetTextLineHeightWithSpacing());
-            return;
-        }
-
-        if (ImGuiHelper.BeginRegion("6-DOF", ImGuiTreeNodeFlags.DefaultOpen
-                | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
-        {
-            GaugeRowText("Status", "not built yet");
-            ImGuiHelper.EndRegion();
-        }
     }
 }
