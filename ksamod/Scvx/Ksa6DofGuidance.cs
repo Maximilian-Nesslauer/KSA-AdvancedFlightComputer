@@ -310,6 +310,54 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double CycleBudgetMs { get; set; } = 25.0;
 
+    /// <summary>
+    /// Wall-clock ceiling for a cycle that is RECOVERING - one whose predecessor
+    /// refused. Larger than CycleBudgetMs on purpose.
+    ///
+    /// One SCvx iteration at 30-40 nodes costs more than the 25 ms cycle budget, so
+    /// Solve's deadline fires after the first one, EVERY cycle - flight log
+    /// 20260820-141757 has scvxIters=1 on all 1080 of its rows. That is exactly right
+    /// when the iteration is accepted (the real-time iteration scheme, and measured
+    /// defect over that flight was 0.02-0.13 m against a 1 m gate). It is fatal when
+    /// it is rejected: SCvx responds to a rejected step by SHRINKING the trust region
+    /// and trying again, and with a budget for one iteration there is never an "again".
+    /// The cycle refuses having learned nothing, and the next cycle repeats it.
+    ///
+    /// That is what the 20 identical refusals at 1500 m in that log are. The vehicle
+    /// moved 1.4 m between cycles, nothing about the problem changed, and the loop had
+    /// no way to do anything different until the circuit breaker fired.
+    ///
+    /// This costs nothing on the common path: a healthy cycle accepts on iteration one
+    /// and returns long before any deadline. It is only ever spent by a cycle that had
+    /// already failed, which is precisely when a frame is worth trading.
+    /// </summary>
+    public double RecoveryCycleBudgetMs { get; set; } = 120.0;
+
+    /// <summary>
+    /// Trust region for the next warm re-solve, CARRIED BETWEEN CYCLES.
+    ///
+    /// Update used to reseed at a hardcoded 0.05 every cycle. Reseed assigns the trust
+    /// region outright, so the shrink that a rejected iteration had just applied was
+    /// thrown away before the next cycle could benefit from it - the one piece of
+    /// information a failed cycle actually produces. Every cycle therefore re-ran the
+    /// identical solve from the identical region and got the identical rejection.
+    ///
+    /// Carrying it makes the loop's own adaptation work across cycles as well as
+    /// within one: a refusal leaves the region where the solver shrank it to, and a
+    /// success grows it back geometrically rather than snapping straight back to the
+    /// value that had just failed.
+    /// </summary>
+    private double _warmTrustRegion = WarmTrustRegion;
+
+    /// <summary>The healthy warm trust region, and the ceiling recovery grows back to.</summary>
+    private const double WarmTrustRegion = 0.05;
+
+    /// <summary>Per-success growth factor for the carried region. Recovers in a few cycles.</summary>
+    private const double WarmTrustRegionGrow = 2.0;
+
+    /// <summary>Trust region the next warm cycle will use, for the readout.</summary>
+    public double WarmTrustRegionNow => _warmTrustRegion;
+
     /// <summary>Measured cost of one ADMM iteration, ms. Seeded pessimistically and refined from real solves.</summary>
     public double MsPerAdmmIteration { get; private set; } = 0.05;
 
@@ -460,6 +508,95 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
+    /// The current plan, shifted forward to now and re-anchored at the vehicle - the
+    /// receding-horizon seed. Shared by Update and BeginWarmRestart so the two cannot
+    /// drift apart; the restart's whole point is that it seeds from the SAME
+    /// trajectory the warm loop was using, not a different one.
+    /// </summary>
+    private void BuildShiftedSeed(double[] x0, double simNow,
+                                  out double[] xs, out double[] us, out double elapsed)
+    {
+        double dt = _planSigma / (_n - 1);
+        elapsed = Math.Max(0.0, simNow - _solveTime);
+        int shift = Math.Clamp((int)Math.Round(elapsed / dt), 0, _n - 2);
+
+        xs = new double[_n * NX];
+        us = new double[_n * NU];
+        for (int k = 0; k < _n; k++)
+        {
+            int src = Math.Min(k + shift, _n - 1);
+            Array.Copy(_planX, src * NX, xs, k * NX, NX);
+            Array.Copy(_planU, src * NU, us, k * NU, NU);
+        }
+
+        // Seed node 0 with the MEASURED state. It is what the equality will force
+        // anyway, and starting the reference there means even a cycle that accepts no
+        // step still hands back a plan anchored at the vehicle rather than at the old
+        // plan's node `shift`.
+        Array.Copy(x0, 0, xs, 0, NX);
+
+        // Put the shifted plan on the MEASUREMENT quaternion branch. Without this, a
+        // sign flip in the measured attitude - a no-op physically - lands as ~1.5 of
+        // quaternion defect at interval 0 and gets the plan refused every cycle until
+        // the circuit breaker throws it away. See AlignQuaternionBranch.
+        LastBranchFlips = AlignQuaternionBranch(xs, _n);
+    }
+
+    /// <summary>
+    /// Restart the SCvx loop KEEPING THE CURRENT PLAN as its reference, with the trust
+    /// region opened right up. Spread over frames by StepCold exactly as BeginCold is.
+    ///
+    /// This is the rung that was missing from the escalation ladder. Above it sits the
+    /// warm re-solve; below it, BeginCold, which discards the plan and seeds a
+    /// STRAIGHT LINE from the vehicle to the target. That straight line is the right
+    /// answer when the vehicle has DRIFTED off its plan - the stale trajectory then
+    /// asserts motion the vehicle is not making, and a straight line is at least
+    /// self-consistent. It is the wrong answer when the vehicle is sitting on a
+    /// perfectly good plan and the loop merely cannot take a step: the straight line
+    /// is not even dynamically feasible, so a converged trajectory is being thrown
+    /// away for a worse one.
+    ///
+    /// So: same spread-over-frames machinery, same gates, different seed. What
+    /// actually changes versus a warm cycle is that the solver state is rebuilt from
+    /// scratch (fresh trace, fresh ADMM iterate, wide region) instead of being nudged.
+    ///
+    /// Returns false if there is no plan to restart from, in which case the caller
+    /// should fall back to BeginCold.
+    /// </summary>
+    public bool BeginWarmRestart(double[] x0, double[] xf, double sigmaSeed, double simNow)
+    {
+        if (!HasPlan)
+            return false;
+
+        CommitInputs();
+        BuildShiftedSeed(x0, simNow, out double[] xSeed, out double[] uSeed, out _);
+        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        return true;
+    }
+
+    /// <summary>
+    /// Everything BeginCold and BeginWarmRestart do once their seed is chosen. Shared
+    /// so the two cannot diverge in the state they leave behind for StepCold.
+    /// </summary>
+    private void BeginSpreadSolve(double[] x0, double[] xf, double[] xSeed, double[] uSeed,
+                                  double sigmaSeed)
+    {
+        _xf = (double[])xf.Clone();
+        if (FixedTime) PinSigma(sigmaSeed);
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, trustRegion: _solver.TrustRegionMax);
+        Status = ScvxStatus.IterationLimit;
+        Error = "converging";
+        _consecutiveFailures = 0;
+        // The warm loop starts again from a healthy region once this lands: whatever
+        // the carried value had shrunk to belongs to the plan being replaced.
+        _warmTrustRegion = WarmTrustRegion;
+        _lastColdIterationS = 0.0;
+        _coldIterations = 0;
+        NeedsMoreNodes = false;
+        _solver.SubproblemEps = ColdSubproblemEps;
+    }
+
+    /// <summary>
     /// Begin a cold solve WITHOUT running it, so the iterations can be spread over
     /// several frames by StepCold.
     ///
@@ -477,16 +614,7 @@ public sealed class Ksa6DofGuidance
         CommitInputs();
 
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
-        _xf = (double[])xf.Clone();
-        if (FixedTime) PinSigma(sigmaSeed);
-        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
-        Status = ScvxStatus.IterationLimit;
-        Error = "converging";
-        _consecutiveFailures = 0;
-        _lastColdIterationS = 0.0;
-        _coldIterations = 0;
-        NeedsMoreNodes = false;
-        _solver.SubproblemEps = ColdSubproblemEps;
+        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
     }
 
     /// <summary>
@@ -960,30 +1088,7 @@ public sealed class Ksa6DofGuidance
         // Bounded worst case from here on: this runs inside the guidance loop.
         ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
 
-        double dt = _planSigma / (_n - 1);
-        double elapsed = Math.Max(0.0, simNow - _solveTime);
-        int shift = Math.Clamp((int)Math.Round(elapsed / dt), 0, _n - 2);
-
-        var xs = new double[_n * NX];
-        var us = new double[_n * NU];
-        for (int k = 0; k < _n; k++)
-        {
-            int src = Math.Min(k + shift, _n - 1);
-            Array.Copy(_planX, src * NX, xs, k * NX, NX);
-            Array.Copy(_planU, src * NU, us, k * NU, NU);
-        }
-
-        // Seed node 0 with the MEASURED state. It is what the equality will force
-        // anyway, and starting the reference there means even a cycle that accepts no
-        // step still hands back a plan anchored at the vehicle rather than at the old
-        // plan's node `shift`.
-        Array.Copy(x0, 0, xs, 0, NX);
-
-        // Put the shifted plan on the MEASUREMENT quaternion branch. Without this, a
-        // sign flip in the measured attitude - a no-op physically - lands as ~1.5 of
-        // quaternion defect at interval 0 and gets the plan refused every cycle until
-        // the circuit breaker throws it away. See AlignQuaternionBranch.
-        LastBranchFlips = AlignQuaternionBranch(xs, _n);
+        BuildShiftedSeed(x0, simNow, out double[] xs, out double[] us, out double elapsed);
 
         // FIXED TIME: count the COMMITTED burn time down rather than letting the
         // solver re-choose it every cycle. Re-choosing is what made successive plans
@@ -999,13 +1104,26 @@ public sealed class Ksa6DofGuidance
         {
             sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
         }
+        // A cycle whose predecessor refused gets the larger budget, so it can take the
+        // second and third iterations that let SCvx shrink its way to an accepted
+        // step. A healthy cycle never reaches the deadline at all.
+        double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
+
         FellBack = false;
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: 0.05);
-        if (Finish(x0, simNow, maxIterations))
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: _warmTrustRegion);
+        if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
+            // Grow back toward the healthy region rather than snapping to it: if this
+            // success came from a small region, the value that failed before it is
+            // still the wrong place to restart from.
+            _warmTrustRegion = Math.Min(WarmTrustRegion, _warmTrustRegion * WarmTrustRegionGrow);
             return true;
         }
+
+        // KEEP WHAT THE FAILURE LEARNED. The solver shrank its region on each rejected
+        // iteration; that shrunken value is the seed for the next cycle.
+        _warmTrustRegion = Math.Clamp(_solver.TrustRegion, _solver.TrustRegionMin, WarmTrustRegion);
 
         // WIDE-TRUST-REGION RETRY, but NOT on every failure.
         //
@@ -1027,14 +1145,20 @@ public sealed class Ksa6DofGuidance
             return false;
         }
 
+        // The wide retry needs the TIME as well as the iteration count. Passing
+        // maxIterations * 3 while leaving the 25 ms deadline in place bought nothing
+        // whatsoever - the deadline stopped it after one iteration exactly as before,
+        // so the "escalated" retry was the same single iteration from a wider region.
         FellBack = true;
         _consecutiveFailures++;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax);
-        if (Finish(x0, simNow, maxIterations * 3))
+        if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
             _consecutiveFailures = 0;
+            _warmTrustRegion = Math.Min(WarmTrustRegion, _warmTrustRegion * WarmTrustRegionGrow);
             return true;
         }
+        _warmTrustRegion = Math.Clamp(_solver.TrustRegion, _solver.TrustRegionMin, WarmTrustRegion);
         return false;
     }
 
@@ -1064,10 +1188,11 @@ public sealed class Ksa6DofGuidance
         _solver.EscalatedSubproblemIterations = cap;   // equal, so no retry is issued
     }
 
-    private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false)
+    private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false,
+                        double budgetMs = 0.0)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        Status = _solver.Solve(maxIterations, CycleBudgetMs);
+        Status = _solver.Solve(maxIterations, budgetMs > 0.0 ? budgetMs : CycleBudgetMs);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
 
         // Refine the cost-per-iteration estimate from what this solve actually did.

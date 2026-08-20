@@ -1330,19 +1330,33 @@ public static partial class PoweredGuidanceWindow
         // plan away and cold-start again, spread over frames so it does not stall the
         // sim thread.
         // ESCALATION LADDER. Each rung is only reached when the cheaper one below has
-        // stopped working, and the trigger for the top rung is DRIFT rather than a
-        // failure count - because drift is the cause and failures are the symptom.
+        // stopped working.
         //
-        //   1. warm re-solve, tight trust region        (Update, normal case)
+        //   1. warm re-solve, carried trust region      (Update, normal case)
         //   2. wide trust region, re-linearised         (Update's retry, on divergence)
-        //   3. cold re-seed from the current state      (here, spread over frames)
+        //   3. RESTART ON THE CURRENT PLAN              (here, on a run of refusals)
+        //   4. cold re-seed from a straight line        (here, on drift)
         //
-        // A warm start is an advantage only while the vehicle is NEAR its plan. Past
-        // that, the stale plan is a worse seed than a straight line from where the
-        // vehicle actually is, because the straight line is at least self-consistent.
-        // So once drift passes that point there is nothing to be gained by re-solving
-        // from it, however many times we try - and waiting for fifteen failures first
-        // just means fifteen expensive cycles of flying open loop.
+        // THE TWO TRIGGERS GET DIFFERENT REMEDIES, which is the point. They diagnose
+        // different faults and used to share one answer:
+        //
+        //   DRIFT means the vehicle is not where its plan says. The trajectory itself
+        //   is now a claim about motion the vehicle is not making, so it is a WORSE
+        //   seed than a straight line, which is at least self-consistent. Rung 4.
+        //
+        //   A RUN OF REFUSALS means the plan failed the defect gate. That is a
+        //   statement about the plan's own self-consistency, NOT about whether the
+        //   vehicle is on it - and it is perfectly possible, indeed usual, for the
+        //   geometry to be fine and drift to be nil while the loop simply cannot take
+        //   an accepted step. Answering that with a straight line throws away a
+        //   converged trajectory in favour of one that is not even dynamically
+        //   feasible. Rung 3 keeps the plan and rebuilds the solver around it.
+        //
+        // Flight log 20260820-141757 is the case in point: 20 refusals at 1500 m with
+        // the vehicle moving 1.4 m per cycle and drift nowhere near its limit, ending
+        // in a cold restart whose straight-line solve then converged in 4 iterations.
+        // Nothing was wrong with the plan; the loop was stuck, and the fix for stuck
+        // is to change something about the solve, not about the trajectory.
         // Reads the PUBLISHED plan, so it is safe while a solve is in flight - see
         // Ksa6DofGuidance.MeasureDrift.
         double drift = _s.Guidance != null ? _s.Guidance.MeasureDrift(x, now) : 0.0;
@@ -1359,16 +1373,27 @@ public static partial class PoweredGuidanceWindow
             var xfR = new double[14];
             xfR[2] = _s.SixDofTargetAltM;
             TerminalAttitude(x, xfR);
-            SixDofLog.Event(_s, now,
-                $"COLD RESTART at alt {x[2]:F0} m: " +
-                (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
-                            : $"{_s.RefusalRun} refused re-solves") +
-                $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.LastDefectM:F0} m");
             // No pacing when threaded: spacing iterations out exists to keep frames
             // smooth, and off the sim thread there is no frame to protect - it would
             // only make the vehicle fall further before it has a plan.
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-            _s.Guidance.BeginCold(x, xfR, Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed));
+            double sigmaR = Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed);
+
+            // Refusals keep the plan; drift does not. BeginWarmRestart declines if
+            // there is no plan to keep, in which case there is nothing to choose
+            // between them and the straight line is all that is left.
+            bool keptPlan = !driftedOff && _s.Guidance.BeginWarmRestart(x, xfR, sigmaR, now);
+            if (!keptPlan)
+                _s.Guidance.BeginCold(x, xfR, sigmaR);
+
+            SixDofLog.Event(_s, now,
+                (keptPlan ? "WARM RESTART" : "COLD RESTART") + $" at alt {x[2]:F0} m: " +
+                (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
+                            : $"{_s.RefusalRun} refused re-solves, drift {drift:F0} m of " +
+                              $"{driftLimit:F0} m") +
+                $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.LastDefectM:F0} m" +
+                (keptPlan ? " - reseeding from the existing plan"
+                          : " - reseeding from a straight line"));
             _s.Converging = true;
             _s.ColdFrames = 0;
             _s.RefusalRun = 0;
