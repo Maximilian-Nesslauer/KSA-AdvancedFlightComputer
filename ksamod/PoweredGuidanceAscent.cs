@@ -13,9 +13,9 @@ using PoweredGuidance.Upfg;
 //                (deg/s) toward the launch azimuth, until the commanded pitch
 //                meets UPFG's commanded pitch — or until the failsafe altitude
 //   ClosedLoop — fly the converged UPFG steering
-//   Terminal   — at tgo <= 10 s, freeze the attitude and stop iterating guidance
-//                (re-solving on a near-zero arc just makes the solution chase
-//                itself); count down to cutoff.
+//   Terminal   — at tgo <= 10 s, freeze the commanded ATTITUDE (re-solving on a
+//                near-zero arc just makes the steering chase itself) and count down
+//                to cutoff. UPFG keeps iterating throughout, for the readouts.
 public static partial class PoweredGuidanceWindow
 {
     // The target orbit, the launch-to-target pick and the gravity-turn shaping all
@@ -29,6 +29,9 @@ public static partial class PoweredGuidanceWindow
     private const double FailsafeAltKm = 50.0;
 
     public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
+
+    // Reset at the top of every Draw; see DrawAutoLaunchArming.
+    private static bool _autoLaunchStepped;
 
     // The Ascent tab body: target orbit, profile tuning, launch-to-target, and the
     // commit controls. Everything the user sets is in this one panel — the profile
@@ -81,16 +84,53 @@ public static partial class PoweredGuidanceWindow
         ImGui.Checkbox("Show target orbit & track", ref _showAscentOverlay);
 
         if (ImGui.Button("EXECUTE"))
-            StartGuidance(orbit, parent);
+            ExecuteAscent(orbit, parent);
         ImGui.SameLine();
         if (ImGui.Button("Stop / reset"))
-        {
-            _s.Running = false;
-            _s.AutoLaunch = false;
-        }
+            AbortAscent();
         ImGui.SameLine();
         if (ImGui.Button("Clear track"))
             ResetTrace();
+    }
+
+    /// <summary>
+    /// The single commit point. A TARGET is what decides whether this launches or
+    /// arms: with one, there is a launch window to hit and firing now would miss the
+    /// plane, so EXECUTE arms and guidance starts when the window arrives. Without a
+    /// target — or with a target whose plane the site cannot reach, so there is no
+    /// window at all — EXECUTE means EXECUTE.
+    ///
+    /// The auto-warp setting is deliberately NOT part of this decision. It only says
+    /// whether the mod offers to warp to the window for you or you warp there
+    /// yourself; either way the launch waits for the window.
+    /// </summary>
+    private static void ExecuteAscent(Orbit orbit, IParentBody parent)
+    {
+        if (_s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime))
+        {
+            _s.LaunchArmed = true;
+            return;
+        }
+        StartGuidance(orbit, parent);
+    }
+
+    /// <summary>Stop everything, including a pending armed launch.</summary>
+    private static void AbortAscent() => ReleaseAscent("");
+
+    /// <summary>
+    /// Hand the vehicle back and return the panel to a clean slate: guidance off, no
+    /// pending launch, and the solver reset so nothing downstream reads a stale
+    /// solution as if it were live.
+    /// </summary>
+    private static void ReleaseAscent(string status)
+    {
+        _s.Running = false;
+        _s.LaunchArmed = false;
+        _s.HasCommand = false;
+        _s.Upfg.Reset();
+        _s.RgoPeak = 0.0;
+        _s.VgoPeak = 0.0;
+        _s.Status = status;
     }
 
     // Per-frame ascent stepping, run for this vehicle from ApplyAutopilot (the
@@ -102,10 +142,15 @@ public static partial class PoweredGuidanceWindow
         // releases. Leaving it engaged kept CommandAttitude running on every sim
         // step (thousands/s under warp) and held the flight computer in active
         // attitude tracking — the lag that appeared with warp and lingered after.
-        if (_s.Running && _s.Phase == AscentPhase.Terminal && SimNow() > _s.CutoffTime + 15.0)
+        // Released once the engines are actually out, or on the timeout if auto
+        // staging was never going to cut them. Releasing has to CLEAR the solver as
+        // well as the flag: leaving UPFG's recursive state loaded meant the panel went
+        // on showing the finished ascent's tgo and vgo, which is what made an abort
+        // look mandatory to get back to a clean slate.
+        if (_s.Running && _s.Phase == AscentPhase.Terminal
+            && (SimNow() > _s.CutoffTime + (_s.CutoffDone ? 2.0 : 15.0)))
         {
-            _s.Running = false;
-            _s.Status = "Ascent complete — guidance released.";
+            ReleaseAscent("Ascent complete — guidance released.");
         }
 
         if (!_s.Running)
@@ -145,6 +190,8 @@ public static partial class PoweredGuidanceWindow
         _s.CutoffDone = false;
         _s.StagingActive = false;
         _s.LastSequenceTime = double.NegativeInfinity;
+        _s.RgoPeak = 0.0;
+        _s.VgoPeak = 0.0;
     }
 
     // The launch-to-target panel: target picker, chase-orbit offset, node direction,
@@ -154,130 +201,94 @@ public static partial class PoweredGuidanceWindow
     {
         ImGui.SeparatorText("Launch to target");
 
-        Vehicle target = FindVehicleById(_s.TargetId, vehicle);
-        if (ImGui.BeginCombo("Target", _s.TargetId.Length > 0 ? _s.TargetId : "(none)"))
-        {
-            if (ImGui.Selectable("(none)", _s.TargetId.Length == 0))
-                _s.TargetId = "";
-            CelestialSystem system = Universe.CurrentSystem;
-            if (system != null)
-            {
-                ReadOnlySpan<Astronomical> all = system.All.AsSpan();
-                for (int i = 0; i < all.Length; i++)
-                {
-                    if (all[i] is Vehicle v && !ReferenceEquals(v, vehicle))
-                    {
-                        if (ImGui.Selectable(v.Id, v.Id == _s.TargetId))
-                        {
-                            _s.TargetId = v.Id;
-                            // Mirror into the game's own targeting, so the map and
-                            // rendezvous UI agree with us.
-                            Universe.SetTarget(vehicle, v);
-                        }
-                    }
-                }
-            }
-            ImGui.EndCombo();
-        }
-
+        DrawTargetPicker(vehicle);
         ImGui.InputDouble("SMA offset below target (km)", ref _s.ChaseOffsetKm);
         if (ImGui.RadioButton("Ascending (NE)", !_s.LaunchDescending))
             _s.LaunchDescending = false;
         ImGui.SameLine();
         if (ImGui.RadioButton("Descending (SE)", _s.LaunchDescending))
             _s.LaunchDescending = true;
-        ImGui.Checkbox("Auto warp & launch", ref _s.AutoLaunch);
+        ImGui.Checkbox("Auto warp to window", ref _s.AutoLaunch);
 
-        if (target == null)
+        // The geometry itself lives in PoweredGuidanceChaseOrbit.cs, shared with the
+        // gauge panel so the two can never drift apart.
+        ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
+        switch (status)
         {
-            if (_s.TargetId.Length > 0)
+            case ChaseStatus.NoTarget:
+                return;
+            case ChaseStatus.NotFound:
                 ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Target vehicle not found.");
-            return;
+                return;
+            case ChaseStatus.DifferentBody:
+                ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Target orbits a different body.");
+                return;
         }
 
-        Orbit targetOrbit = target.Orbit;
-        if (!ReferenceEquals(targetOrbit.Parent, orbit.Parent))
-        {
-            ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Target orbits a different body.");
-            return;
-        }
+        ImGui.Text($"Target orbit:  {plan.TargetPeKm,7:F1} x {plan.TargetApKm,7:F1} km  inc {plan.IncDeg,6:F2} deg");
+        ImGui.Text($"Chase orbit:   {plan.PeKm,7:F1} km circular  (SMA {_s.ChaseOffsetKm:F0} km below target)");
 
-        // Target plane straight from its state vectors: n = r × v. With our LAN
-        // convention Normal = (sin i sin Ω, −sin i cos Ω, cos i), so Ω = atan2(nx, −ny).
-        double3 rt = targetOrbit.StateVectors.PositionCci;
-        double3 vt = targetOrbit.StateVectors.VelocityCci;
-        double3 n = double3.Normalize(double3.Cross(rt, vt));
-        double incT = Math.Acos(Math.Clamp(n.Z, -1.0, 1.0));
-        double lanT = Wrap2Pi(Math.Atan2(n.X, -n.Y));
-        double peAltKm = (targetOrbit.Periapsis - bodyRadius) / 1000.0;
-        double apAltKm = (targetOrbit.Apoapsis - bodyRadius) / 1000.0;
-        // Chase orbit: circular, with semi-major axis the chosen offset below the
-        // target's. A true co-elliptic depends on launch phasing anyway — circular
-        // is a clean baseline to correct from once up.
-        double targetSmaKm = (targetOrbit.Periapsis + targetOrbit.Apoapsis) / 2000.0;
-        double chaseAltKm = targetSmaKm - bodyRadius / 1000.0 - _s.ChaseOffsetKm;
-        double chasePe = chaseAltKm;
-        double chaseAp = chaseAltKm;
-
-        ImGui.Text($"Target orbit:  {peAltKm,7:F1} x {apAltKm,7:F1} km  inc {UpfgTarget.RadToDeg(incT),6:F2} deg");
-        ImGui.Text($"Chase orbit:   {chaseAltKm,7:F1} km circular  (SMA {_s.ChaseOffsetKm:F0} km below target)");
-
-        // Launch window: how long until the body's rotation carries the launch site
-        // under the target plane, at the requested (ascending/descending) crossing.
-        double3 r = orbit.StateVectors.PositionCci;
-        double lat = Math.Asin(Math.Clamp(r.Z / r.Length(), -1.0, 1.0));
-        double ra = Math.Atan2(r.Y, r.X);
-        double tanRatio = Math.Tan(lat) / Math.Tan(Math.Max(incT, 1e-6));
-        bool reachable = Math.Abs(tanRatio) <= 1.0;
-        if (!reachable)
+        if (status == ChaseStatus.PlaneUnreachable)
         {
             ImGui.TextColored(new float4(1f, 0.6f, 0.3f, 1f),
                 "Target inclination is below the site latitude — plane unreachable.");
             return;
         }
 
-        double delta = Math.Asin(Math.Clamp(tanRatio, -1.0, 1.0));
-        double raRequired = _s.LaunchDescending ? lanT + Math.PI - delta : lanT + delta;
-        double omega = parent.GetAngularVelocity();
-        double waitSec = omega > 1e-12 ? Wrap2Pi(raRequired - ra) / omega : double.NaN;
+        double waitSec = plan.WaitSec;
         ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")} crossing)");
 
-        bool copyNow = ImGui.Button("Copy chase orbit to target inputs");
-        if (copyNow || _s.AutoLaunch)
-        {
-            _s.IncDeg = UpfgTarget.RadToDeg(incT);
-            _s.LanDeg = UpfgTarget.RadToDeg(lanT);
-            _s.PeKm = chasePe;
-            _s.ApKm = chaseAp;
-            _s.LanSeeded = true;
-        }
+        if (ImGui.Button("Copy chase orbit to target inputs") || _s.AutoLaunch)
+            ApplyChaseOrbit(in plan);
+
+        DrawAutoLaunchArming(orbit, parent);
+    }
+
+    /// <summary>
+    /// The armed auto-launch: warp toward the window, then EXECUTE at it. Guarded to
+    /// run AT MOST ONCE PER FRAME, because both the legacy tab and the gauge panel
+    /// reach it — and it fires real actions (a warp request, and starting guidance),
+    /// which must not happen twice because two panels happen to be open. The first
+    /// caller of the frame wins; the legacy tab draws first when its tab is selected,
+    /// and the gauge panel picks it up when it is not.
+    /// </summary>
+    private static void DrawAutoLaunchArming(Orbit orbit, IParentBody parent)
+    {
+        if (_autoLaunchStepped)
+            return;
+        _autoLaunchStepped = true;
 
         // Armed: ask to warp to just before the window (the warp itself needs the
         // user's confirmation — see DrawWarpPrompt), then press EXECUTE for them.
         // The engage/auto toggles are respected as configured, not forced.
-        if (_s.AutoLaunch && !_s.Running && !double.IsNaN(waitSec))
+        double waitSec = _s.LaunchTargetTime - SimNow();
+        if (_s.LaunchArmed && !_s.Running && !double.IsNaN(waitSec))
         {
             if (!_s.Engage || !_s.AutoStage)
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                     "Note: engage/auto toggles are off — auto-launch will only start guidance.");
 
+            // <= rather than a window: with an absolute target this goes NEGATIVE on
+            // overshoot, so a single large warp step past the window still fires.
             if (waitSec <= 1.0)
             {
                 if (Universe.IsAutoWarpActive)
                     Universe.AutoWarpStop(true);
                 StartGuidance(orbit, parent);
-                _s.AutoLaunch = false;
+                _s.LaunchArmed = false;
             }
-            else if (waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
+            else if (_s.AutoLaunch && waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
             {
-                RequestWarp(SimNow() + waitSec - WarpLeadTime, "the launch window");
+                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, "the launch window");
             }
 
             ImGui.TextColored(new float4(0.5f, 0.9f, 1f, 1f), Universe.IsAutoWarpActive
                 ? "Auto-warping to the launch window..."
-                : "Armed — will EXECUTE at the window.");
+                : (_s.AutoLaunch
+                    ? "Armed — will EXECUTE at the window."
+                    : "Armed — warp to the window yourself; it will EXECUTE there."));
         }
-        else if (_s.AutoLaunch && _s.Running)
+        else if (_s.LaunchArmed && _s.Running)
         {
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                 "Guidance already running — auto-launch is waiting (Stop / reset to clear).");
@@ -290,10 +301,11 @@ public static partial class PoweredGuidanceWindow
         double3 r = orbit.StateVectors.PositionCci;
         double3 v = orbit.StateVectors.VelocityCci;
 
-        // In the terminal phase the solution is frozen: re-running UPFG over a
-        // near-zero remaining arc makes the steering chase itself and destabilizes
-        // the attitude right before cutoff.
-        if (_s.Phase != AscentPhase.Terminal)
+        // The ATTITUDE is frozen in the terminal phase, not the solver. Re-running
+        // UPFG over a near-zero remaining arc makes its steering chase itself, which
+        // is why the command holds _s.FrozenDir below — but the solve itself keeps
+        // running, so tgo, vgo and the stage model stay live in the readouts instead
+        // of freezing on whatever they happened to be ten seconds before cutoff.
         {
             // Rebuild from the live part tree every step so UPFG always sees current
             // masses and the actual remaining staging sequence. No usable thrust is a

@@ -11,6 +11,10 @@ public static partial class PoweredGuidanceWindow
 {
     public static void Draw(Viewport viewport)
     {
+        // One panel per frame gets to act on the armed auto-launch, whichever draws
+        // first — see DrawAutoLaunchArming.
+        _autoLaunchStepped = false;
+
         // The End() is in a finally so that an exception anywhere below cannot leave
         // ImGui inside this window.
         //
@@ -103,8 +107,16 @@ public static partial class PoweredGuidanceWindow
             ResetFlightComputer();
         }
 
-        // Any warp the mod wants needs the user's OK first.
-        DrawWarpPrompt();
+        // The rebuilt panel — see PoweredGuidancePanel.cs. Its own gauge window, so
+        // it is drawn from DrawTrailingWindows rather than here.
+        ImGui.SameLine();
+        ImGui.Checkbox("Guidance panel", ref _showGuidancePanel);
+
+        // Any warp the mod wants needs the user's OK first. Drawn here only when the
+        // gauge panel is not up: it renders the same prompt, and two of them would
+        // both be live at once.
+        if (!_showGuidancePanel)
+            DrawWarpPrompt();
 
         // NOTHING IS STEPPED FROM THE DRAW. The ascent and landing flows used to run
         // here, which quietly made them focused-vehicle-only: the draw happens once
@@ -137,25 +149,36 @@ public static partial class PoweredGuidanceWindow
         IParentBody parent = orbit.Parent;
         double bodyRadius = parent.MeanRadius;
 
+        // FIRST. Everything below can throw, and Mod.DrawGui catches the lot into a
+        // Console.Error that goes nowhere under StarMap — so anything drawn at the
+        // END of this method is starved by an unrelated fault upstream, and looks
+        // exactly like "my window doesn't work".
+        DrawGuidancePanel(vehicle, orbit, parent, bodyRadius);
+
         // Per-domain tuning popups (each no-ops unless opened from its tab) and the
         // G-FOLD debug plots. Ascent tuning is inline in its tab, not a popup.
         DrawGfoldParamsWindow();
         DrawTermParamsWindow();
         DrawGfoldDebugWindow();
 
+        // Are we looking at a descent? Either window can say so — the legacy Landing
+        // tab, or the gauge panel sitting on anything but Ascent. Both the ascent
+        // overlay and the landing-site marker key off this, so that retargeting works
+        // from the new panel and the two overlays don't clutter each other's view.
+        // Guidance itself keeps running regardless of which tab is open.
+        bool descentUi = _landingTabActive
+            || (_showGuidancePanel && _panelTab != GuidanceTab.Ascent);
+
         // World-space overlays (each its own full-screen window, drawn after the
-        // panel so they layer correctly). Each no-ops unless toggled on. The
-        // ascent overlay is also hidden while the Landing tab is open — the same
-        // way the G-FOLD overlay only appears for landing — so the two don't
-        // clutter each other's view. Ascent guidance keeps running regardless.
-        if (!_landingTabActive)
+        // panel so they layer correctly). Each no-ops unless toggled on.
+        if (!descentUi)
             DrawAscentOverlay(viewport, orbit, parent, bodyRadius);
         DrawGfoldOverlay(viewport, vehicle, orbit, parent);
         Draw6DofOverlay(viewport, parent);
 
-        // Landing-site marker: shown whenever the Landing tab is open, so the target is
+        // Landing-site marker: shown whenever a descent is on screen, so the target is
         // visible for planning/UPFG, not only during a G-FOLD descent.
-        if (_landingTabActive)
+        if (descentUi)
             DrawLandingSiteMarker(viewport, parent);
 
         // Clickable retargeting: while armed, a world click sets the new landing site.

@@ -131,6 +131,24 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Guidance is driving the flight computer for this vehicle.</summary>
     public bool Running;
+
+    /// <summary>
+    /// EXECUTE was pressed while <see cref="AutoLaunch"/> was set: warp to the launch
+    /// window and start guidance there. Separate from AutoLaunch because that is a
+    /// MODE the user selects ahead of time, while this is the commit — arming used to
+    /// happen the instant the checkbox was ticked, which meant the panel could start
+    /// warping before anyone had asked it to launch.
+    /// </summary>
+    public bool LaunchArmed;
+
+    /// <summary>
+    /// Largest |rgo| and |vgo| seen since EXECUTE, so the ascent panel can draw each
+    /// as a fraction of where it started rather than an unscaled absolute. Display
+    /// only — nothing in the guidance loop reads them. Latched as a running maximum
+    /// rather than sampled once, because the first solved frame is not reliably the
+    /// largest: UPFG is still converging on it.
+    /// </summary>
+    public double RgoPeak, VgoPeak;
     public bool WasEngaged;
     public string GuidanceError = "";
     public string Status = "";
@@ -183,7 +201,16 @@ public sealed class VehicleAutopilotState
     public string TargetId = "";
     public double ChaseOffsetKm = 20.0;
     public bool LaunchDescending;
-    public bool AutoLaunch;
+    public bool AutoLaunch = true;
+
+    /// <summary>
+    /// Absolute sim time of the launch window, LATCHED when EXECUTE arms the launch.
+    /// An absolute instant rather than a countdown because the countdown is derived
+    /// from a wrapped angle: overshoot the window under time warp and it does not go
+    /// negative, it jumps to a full rotation away. Comparing sim times survives a warp
+    /// step of any size.
+    /// </summary>
+    public double LaunchTargetTime = double.NaN;
 
     /// <summary>Gravity-turn shaping: when the pitchover starts and how fast it ramps.</summary>
     public double TurnStartAltKm = 0.5;
