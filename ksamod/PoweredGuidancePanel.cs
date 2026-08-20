@@ -88,9 +88,9 @@ public static partial class PoweredGuidanceWindow
         ImGauge.DrawDressedBox(pos, size);
 
         // --- header, which doubles as the drag handle ---
+        // The logo stands in for the title, drawn to the band the label used.
         float2 headerPos = pos + new float2(margin, GaugeHeaderTopUv * u);
-        ImGauge.Label(headerPos, new float2(innerW, headerH), Gauge("POWERED GUIDANCE"),
-            GaugeText(ColorRgbReference.GetIndexedRgb(IndexedColor.White), 0.8f));
+        GaugeLogo(headerPos, new float2(innerW, headerH));
         GaugeDrag("##paneldrag", ref _guidancePanelOffsetUv, pos, size,
             pos, new float2(size.X, headerPos.Y + headerH + spacing * 0.5f - pos.Y));
 

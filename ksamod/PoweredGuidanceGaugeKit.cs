@@ -86,6 +86,55 @@ public static partial class PoweredGuidanceWindow
         offsetUv = new float2(offsetUv.X + (x - pos.X) / unit, offsetUv.Y + (y - pos.Y) / unit);
     }
 
+    // --- the logo -----------------------------------------------------------
+    //
+    // The panel header wears the Powered Guidance wordmark rather than its name in
+    // the gauge font: the two words in the artwork's two inks, set in the body font.
+    // Colours come off docs/logo/pg_logo_blue_header.svg.
+
+    private static readonly ImColor8 LogoBlueInk = new ImColor8(0, 130, 255);      // #0082ff
+
+    // The artwork's other ink is a navy (#1b3662) drawn for a white page. Against the
+    // gauge's dark chrome it disappears, so that half of the wordmark takes the near
+    // white the header text used instead.
+    private static readonly ImColor8 LogoPaleInk = new ImColor8(215, 225, 239);
+
+    /// <summary>
+    /// Draws the wordmark centred in a band of the given size with its top-left at
+    /// <paramref name="at"/> — where ImGauge.Label put the title it replaced.
+    /// </summary>
+    private static void GaugeLogo(float2 at, float2 band)
+    {
+        ImDrawListPtr dl = ImGui.GetWindowDrawList();
+        ImFontPtr font = ImGui.GetFont();
+
+        // Set a quarter taller than the band and overhanging it by an eighth top and
+        // bottom: there is dressing above and the gap before the buttons below, and at
+        // the band's own height the wordmark reads as a caption rather than a title.
+        //
+        // AddText's size argument is free-form — 1.92 bakes whatever it is asked for —
+        // but nothing measures at that size, so widths come from the current font and
+        // scale across.
+        float scale = band.Y * 1.25f / ImGui.GetFontSize();
+        float poweredW = ImGui.CalcTextSize("Powered").X;
+        float wordmarkW = poweredW + ImGui.CalcTextSize("Guidance").X;
+
+        // A font wider than the one this was set against would run into the panel
+        // edges. Give up the height rather than the margins.
+        if (wordmarkW * scale > band.X)
+            scale = band.X / wordmarkW;
+
+        float size = ImGui.GetFontSize() * scale;
+        float2 textAt = new float2(at.X + (band.X - wordmarkW * scale) * 0.5f,
+                                   at.Y + (band.Y - size) * 0.5f);
+
+        // The inks are the artwork's the other way round: it puts the blue on
+        // "Guidance", this puts it on "Powered".
+        dl.AddText(font, size, textAt, LogoBlueInk, "Powered");
+        dl.AddText(font, size, new float2(textAt.X + poweredW * scale, textAt.Y),
+            LogoPaleInk, "Guidance");
+    }
+
     // --- two-column rows ----------------------------------------------------
     //
     // ImGuiHelper.BeginRegion puts the body in two columns — label at 33%, control
