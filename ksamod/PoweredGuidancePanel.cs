@@ -1,3 +1,4 @@
+using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
@@ -27,6 +28,12 @@ public static partial class PoweredGuidanceWindow
     // Height is a floor only: the window is opened with fitContent, so it grows and
     // shrinks as tabs and sections change. Width is authored and stays put.
     private static readonly float2 GuidancePanelSizeUv = new float2(0.30f, 0.06f);
+
+    // Body scrolling. The measured content height decides whether the body auto-sizes
+    // or scrolls; the dead band keeps it from flipping between the two.
+    private const float MinBodyHeightPx = 120f;
+    private const float BodyScrollHysteresisPx = 24f;
+    private static float _panelBodyContentH;
 
     private static void DrawGuidancePanel(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                           double bodyRadius)
@@ -96,11 +103,32 @@ public static partial class PoweredGuidanceWindow
 
         // --- body ---
         float bodyTop = headerPos.Y + headerH + spacing + bigButtonH * 2f + spacing * 2f;
+
+        // How much room is left below the header before running off the screen. The
+        // window is opened with fitContent, and ImGauge.EndWindow clamps that fit to
+        // the screen - so past this height the window stops growing whatever the body
+        // does.
+        ImGuiViewportPtr vp = ImGui.GetMainViewport();
+        float maxBodyH = MathF.Max(MinBodyHeightPx,
+            vp.Pos.Y + vp.Size.Y - bodyTop - GaugeBottomMarginUv * u);
+
+        // AutoResizeY while the content fits: the window shrinks and grows with the
+        // sections, which is the whole point of the folds.
+        //
+        // Once it does NOT fit, the child has to become a fixed height and scroll.
+        // AutoResizeY never scrolls - it just keeps growing - so with every section
+        // open the body ran off the bottom of a window that had stopped growing, and
+        // the wheel fell through to whatever was behind it. Measured last frame, with
+        // hysteresis so it cannot flip modes on alternate frames.
+        bool scrollBody = _panelBodyContentH > maxBodyH;
+
         ImGui.SetCursorScreenPos(new float2(pos.X + margin, bodyTop));
-        // AutoResizeY so the child is exactly as tall as its content; that height is
-        // what feeds ReportContentExtent below, and so what the window fits itself to.
-        ImGui.BeginChild("~PanelBody", new float2?(new float2(innerW, 0f)),
-            ImGuiChildFlags.AutoResizeY, ImGuiWindowFlags.NoBackground);
+        if (scrollBody)
+            ImGui.BeginChild("~PanelBody", new float2?(new float2(innerW, maxBodyH)),
+                ImGuiChildFlags.None, ImGuiWindowFlags.NoBackground);
+        else
+            ImGui.BeginChild("~PanelBody", new float2?(new float2(innerW, 0f)),
+                ImGuiChildFlags.AutoResizeY, ImGuiWindowFlags.NoBackground);
         ImGaugeDressing.PushGaugeWidgetStyle();
 
         // Above the tabs because it is not a phase's concern: both the ascent launch
@@ -148,6 +176,15 @@ public static partial class PoweredGuidanceWindow
         _s.GfoldTabSelectPending = false;
 
         ImGaugeDressing.PopGaugeWidgetStyle();
+
+        // Content height, read INSIDE the child where the cursor is content-relative.
+        // Drives next frame's choice of mode; the dead band stops a body sitting right
+        // on the limit from toggling between scrolling and not on alternate frames.
+        float contentH = ImGui.GetCursorPosY();
+        _panelBodyContentH = scrollBody && contentH < maxBodyH - BodyScrollHysteresisPx
+            ? contentH
+            : MathF.Max(contentH, scrollBody ? maxBodyH + 1f : contentH);
+
         ImGui.EndChild();
 
         // Grow/shrink the window to the body. The reserve is the margin the content
