@@ -463,6 +463,30 @@ public static partial class PoweredGuidanceWindow
         else
             return;
 
+        // SWITCHED OFF: hand this vehicle back and stop touching it.
+        //
+        // Deliberately AFTER the state lookup and BEFORE anything that steps guidance.
+        // Simply not running would be the wrong kind of off - a craft mid-descent would
+        // keep the engine lit, keep the TVC override driving the nozzles, and keep the
+        // attitude hold the mod took out, with nothing left running to undo any of it.
+        // Off has to mean handed back, and the hand-back has to happen here because
+        // this prefix is the only place those writes reach the sim.
+        if (!ModActive)
+        {
+            if (!_s.HandedBack)
+            {
+                HandBackVehicle(vehicle);
+                _s.HandedBack = true;
+            }
+            // One more flush in case a reset was already queued when the switch flipped.
+            else if (_s.FcResetPending)
+            {
+                ApplyPendingFcReset(vehicle);
+            }
+            return;
+        }
+        _s.HandedBack = false;
+
         bool sixDof = _s.Active || _s.EngagePending;
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
         bool flying = sixDof || _s.Running || landingActive || _s.WasEngaged || _s.LandingCutPending;
@@ -671,6 +695,57 @@ public static partial class PoweredGuidanceWindow
     // anything the draw writes lands after that snapshot and is overwritten by the
     // next frame's copy-back. The same reason every other FC write in this mod
     // happens from the PrepareWorker prefix.
+
+    /// <summary>
+    /// Whether the mod is doing anything at all. Cleared from the game's menu bar - see
+    /// Mod.OnDrawProgramMenus - so a player who is not using guidance gets their screen
+    /// and their flight computer back completely.
+    ///
+    /// Read from the sim thread (ApplyAutopilot) and written from the draw, hence
+    /// volatile: without it a release build is free to hoist the test out of the
+    /// per-vehicle loop and keep servicing craft after the switch has flipped.
+    /// </summary>
+    internal static volatile bool ModActive = true;
+
+    /// <summary>
+    /// Give one vehicle back to the player, completely. Runs from the PrepareWorker
+    /// prefix, which is the only context where the flight-computer and manual-input
+    /// writes below actually reach the simulation.
+    ///
+    /// Ordered so that nothing is left half-owned: the 6-DOF worker is stopped and its
+    /// TVC override released BEFORE the flight computer is reset, because the override
+    /// lives outside the flight computer and a reset would otherwise leave it driving
+    /// the nozzles of a craft the player now believes they control.
+    /// </summary>
+    private static void HandBackVehicle(Vehicle vehicle)
+    {
+        try
+        {
+            if (_s.Active || _s.EngagePending || _s.Converging)
+                Disengage6Dof(vehicle);
+
+            // Belt and braces: Disengage6Dof does both of these, but it is skipped
+            // entirely when 6-DOF was never engaged and the gimbal tab could still
+            // have left an override running.
+            _s.GimbalMode = 0;
+            KsaGimbalControl.Disengage(vehicle);
+
+            // Clears Running, LandingPhase, AutoLaunch and HasCommand, and queues the
+            // flight-computer reset that actually releases attitude and cuts the engine.
+            ResetFlightComputer();
+            ApplyPendingFcReset(vehicle);
+
+            // The reset's status line is for a player who pressed a button. This one
+            // was not asked for by anyone looking at a panel, and the panel is gone.
+            _s.Status = "";
+        }
+        catch
+        {
+            // A vehicle that throws on the way out must not take the sim step with it,
+            // and must not be retried forever - HandedBack is set by the caller either
+            // way, so a failure here costs this craft its clean release and nothing else.
+        }
+    }
 
     private static void ResetFlightComputer()
     {

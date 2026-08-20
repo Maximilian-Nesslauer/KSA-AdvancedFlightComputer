@@ -175,6 +175,18 @@ public sealed class VehicleAutopilotState
     /// <summary>A flight-computer reset the draw asked for, applied on the sim thread.</summary>
     public bool FcResetPending;
 
+    /// <summary>
+    /// This vehicle has already been handed back after the mod was switched off.
+    ///
+    /// Deactivation cannot be a synchronous sweep: the per-vehicle state lives in a
+    /// ConditionalWeakTable with no enumeration, and the writes that release attitude
+    /// and cut the engine are only legal from the PrepareWorker prefix. So the flag is
+    /// set globally and each vehicle tears itself down the next time that prefix runs
+    /// for it, which is every sim step. This marks the ones already done, so the
+    /// steady-state cost of an inactive mod is one bool test per vehicle.
+    /// </summary>
+    public bool HandedBack;
+
     // ------------------------------------------------------------------ ascent
     public PoweredGuidanceWindow.AscentPhase Phase = PoweredGuidanceWindow.AscentPhase.Vertical;
     public double TurnStartTime;

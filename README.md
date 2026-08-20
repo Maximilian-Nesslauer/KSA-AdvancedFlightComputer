@@ -5,9 +5,14 @@
 Guidance for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency)
 (KSA): guidance for powered ascent and powered descent, allowing accurate orbit targeting and pinpoint landing.
 
+## Features
+
+- Fully automated powered ascent, descent and landing.
+- Implementation of NASA's UPFG, JPL's G-FOLD, and the custom CAT-S algorithm.
+
 ## Feature Demo
 
-## Unified Powered Flight Guidance
+## Unified Powered Flight Guidance - Ascent & Descent
 
 ![UPFG Launch](docs/images/upfg-launch.png)
 
@@ -20,11 +25,11 @@ cutoff position to a desired point by modulating throttle. This can not only be 
 
 https://youtu.be/oTMbm27fYgk
 
-## G-FOLD and Lossless Convexification
+## G-FOLD and Lossless Convexification - Fuel Optimal Landing
 
 ![G-FOLD Landing](docs/images/g-fold-traj.png)
 
-For the terminal landing, we use JPL's G-FOLD Algorithm developed by Blackmore et al. http://larsblackmore.com/iee_tcst13.pdf
+For the terminal landing, we can use JPL's G-FOLD Algorithm developed by Blackmore et al. http://larsblackmore.com/iee_tcst13.pdf
 
 This provides fuel optimal landing at a designated point, subject to constraints on min and max thrust, thrust pointing, glideslope and 
 maximum speed. This is achieved by formulating a second-order cone problem, and solving it  multiple times a second to
@@ -32,12 +37,11 @@ provide a constantly updating solution which is able to cope with disturbances a
 
 The thrust direction and magnitude
 are fed to KSA's autopilot as a euler angle command and a throttle. Therefore, the solver can fail when rapid changes of direction
-are required, as the 6dof dynamics are not accounted for. For this reason, it will likely provide better results with an agile lander using 
-rcs for pointing, rather than the large default rocket with a large coupling between thrust and control rate due to thrust gimballing.
+are required, as the 6dof dynamics are not accounted for. For this reason, it will likely provide better results with an agile lander using rcs for pointing, rather than the large default rocket with a large coupling between thrust and control rate due to thrust gimballing.
 
 ## Successive Convexification - Bellyflops, Chopsticks & CAT-S
 
-![Starship Bellyflop](.png)
+![Starship Bellyflop](docs/images/twin_boosters.png)
 
 G-FOLD is a very clever algorithm, but it has it's limitations. It is fundamentally linear, and is therefore unable to handle nonlinearities such as vehicle rotation or air resistance. For vehicles with high rotational inertia and/or flying in an atmosphere, G-FOLD is insufficient. 
 
@@ -79,6 +83,7 @@ ECOS solver, which is GPLv3; the whole work is therefore distributed under GPLv3
 ## Credits
 
 - [ECOS](https://github.com/embotech/ecos) (embotech) — the conic solver, GPLv3.
+- [SCS](https://github.com/cvxgrp/scs) - splitting conic solver
 - [PEGAS](https://github.com/Noiredd/PEGAS) by Noiredd — reference and foundation for
   the UPFG implementation.
 - G-FOLD — Açıkmeşe & Blackmore, lossless convexification of powered-descent guidance.
