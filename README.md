@@ -10,8 +10,8 @@ Guidance for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-age
 - Fully automated powered ascent, descent and landing.
 - Implementation of NASA's UPFG, JPL's G-FOLD, and the custom CAT-S algorithm.
 
-## Feature Demo
-
+## Feature Demo (Click for Video!) 
+[![Watch the video](docs/images/twin_boosters.png)](https://youtu.be/hSUcV6tx3oY)
 ## Unified Powered Flight Guidance - Ascent & Descent
 
 ![UPFG Launch](docs/images/upfg-launch.png)
@@ -41,7 +41,7 @@ are required, as the 6dof dynamics are not accounted for. For this reason, it wi
 
 ## Successive Convexification - Bellyflops, Chopsticks & CAT-S
 
-![Starship Bellyflop](docs/images/twin_boosters.png)
+![Starship Bellyflop](docs/images/scvx_convergence.png)
 
 G-FOLD is a very clever algorithm, but it has it's limitations. It is fundamentally linear, and is therefore unable to handle nonlinearities such as vehicle rotation or air resistance. For vehicles with high rotational inertia and/or flying in an atmosphere, G-FOLD is insufficient. 
 
