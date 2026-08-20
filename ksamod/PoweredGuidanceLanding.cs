@@ -24,20 +24,8 @@ public static partial class PoweredGuidanceWindow
     // rate) and the whole pass scan live on the vehicle — see VehicleAutopilotState.
     private const double PrepLeadTime = 30.0;      // converge + point before ignition
 
-    // Upcoming site passes (time from now, closest ground distance). The scan is
-    // ~1200 conic propagations, so it is time-sliced: a fixed sample budget per
-    // frame, CSE warm-started between (sequential) samples, and the per-orbit
-    // minimum sharpened by parabolic interpolation instead of a refinement pass.
-    // Refresh gating is WALL clock, not sim time: under time warp a sim-time gate
-    // elapses instantly, which made the scan restart back-to-back every frame and
-    // tanked the frame rate. Scanning is also suspended above MaxScanSimSpeed —
-    // the results are presentation-only, so there is no reason to pay for them
-    // exactly when frames are most expensive.
-    private const long PassRefreshIntervalMs = 5000;
-    private const double MaxScanSimSpeed = 4.0;
+    // Upcoming site passes are computed in closed form — see PoweredGuidancePasses.cs.
     private const int PassesToShow = 5;
-    public const int ScanSamplesPerOrbit = 240;
-    private const int ScanSamplesPerFrame = 48;
 
     // The Landing tab body: a Deorbit sub-tab (UPFG braking to the gate) and a
     // G-FOLD sub-tab (terminal descent). Each carries its own relevant parameters;
@@ -117,25 +105,9 @@ public static partial class PoweredGuidanceWindow
         // Time-sliced: start a scan while idle at normal speed, advance it a fixed
         // sample budget per frame — never a whole-scan hitch in one frame.
         ImGui.SeparatorText("Upcoming passes");
-        bool passesRefreshOk =
-            (_s.LandingPhase == LandingPhase.Idle || _s.LandingPhase == LandingPhase.Done)
-            && !Universe.IsAutoWarpActive
-            && Universe.SimulationSpeed <= MaxScanSimSpeed;
-        if (passesRefreshOk && _s.ScanIndex < 0
-            && Environment.TickCount64 - _s.PassesRefreshedAtMs > PassRefreshIntervalMs)
-            StartPassScan(orbit, mu);
-        StepPassScan(parent, mu, bodyRadius);
-        // Always exactly PassesToShow lines, so the layout (and the EXECUTE button
-        // below) never jumps while a scan is in flight.
-        for (int i = 0; i < PassesToShow; i++)
-        {
-            if (i < _s.Passes.Count && _s.Passes[i].minKm < 1e6)
-                ImGui.Text($"Pass {i + 1}:  closest {_s.Passes[i].minKm,8:F1} km   in {_s.Passes[i].tSec,7:F0} s");
-            else if (i < _s.Passes.Count)
-                ImGui.Text($"Pass {i + 1}:  (no solution)");
-            else
-                ImGui.Text($"Pass {i + 1}:  scanning...");
-        }
+        RefreshPasses(orbit, parent, mu, bodyRadius);
+        for (int i = 0; i < _s.Passes.Count; i++)
+            ImGui.Text($"Pass {i + 1}:  closest {_s.Passes[i].minKm,8:F1} km   in {_s.Passes[i].tSec,7:F0} s");
 
         // --- Commit ---
         ImGui.SeparatorText("Deorbit");
@@ -533,100 +505,6 @@ public static partial class PoweredGuidanceWindow
     }
 
     // ----- Upcoming-passes scan -----
-
-    // Begin an incremental closest-approach scan over the next PassesToShow orbits.
-    private static void StartPassScan(Orbit orbit, double mu)
-    {
-        double sma = (orbit.Periapsis + orbit.Apoapsis) / 2.0;
-        if (sma <= 0 || double.IsNaN(sma))
-            return;
-        double period = 2.0 * Math.PI * Math.Sqrt(sma * sma * sma / mu);
-        _s.ScanR0 = orbit.StateVectors.PositionCci;
-        _s.ScanV0 = orbit.StateVectors.VelocityCci;
-        _s.ScanStep = period / ScanSamplesPerOrbit;
-        _s.ScanCser = CseState.Zero;
-        _s.ScanResults.Clear();
-        _s.ScanIndex = 0;
-    }
-
-    // Advance the scan by at most ScanSamplesPerFrame samples. Sequential sample
-    // times keep the CSE warm-started; each completed orbit's minimum is sharpened
-    // with a parabolic fit through its neighbours before being committed.
-    private static void StepPassScan(IParentBody parent, double mu, double bodyRadius)
-    {
-        // Pause (not abort) while warping — auto OR manual: frames are already
-        // expensive there, and the scan is only a display aid.
-        if (_s.ScanIndex < 0 || Universe.IsAutoWarpActive
-            || Universe.SimulationSpeed > MaxScanSimSpeed)
-            return;
-
-        double period = _s.ScanStep * ScanSamplesPerOrbit;
-        int total = ScanSamplesPerOrbit * PassesToShow;
-        int end = Math.Min(_s.ScanIndex + ScanSamplesPerFrame, total);
-        for (; _s.ScanIndex < end; _s.ScanIndex++)
-        {
-            double t = (_s.ScanIndex + 1) * _s.ScanStep;
-            // Conic position is periodic, so propagate by t mod period — the CSE
-            // port dropped the original's multi-revolution counter (ascent never
-            // needs it), and multi-rev inputs are where it slowed down and went
-            // NaN. Only the site rotation needs the full t.
-            double tProp = t % period;
-            if (_s.ScanIndex % ScanSamplesPerOrbit == 0)
-                _s.ScanCser = CseState.Zero; // warm-start doesn't survive the wrap
-
-            double d;
-            if (tProp < 1e-3)
-            {
-                d = AngleBetween(_s.ScanR0, SiteDirCciAt(parent, t)) * bodyRadius;
-            }
-            else
-            {
-                double3 rr;
-                (rr, _, _s.ScanCser) = CseRoutine.Run(_s.ScanR0, _s.ScanV0, tProp, mu, _s.ScanCser);
-                d = AngleBetween(rr, SiteDirCciAt(parent, t)) * bodyRadius;
-            }
-            if (!double.IsFinite(d))
-            {
-                d = 1e12; // poisoned sample: ignore it and restart the warm chain
-                _s.ScanCser = CseState.Zero;
-            }
-            _s.ScanOrbitD[_s.ScanIndex % ScanSamplesPerOrbit] = d;
-
-            if ((_s.ScanIndex + 1) % ScanSamplesPerOrbit == 0)
-                CommitScanOrbit(_s.ScanIndex + 1 - ScanSamplesPerOrbit);
-        }
-
-        if (_s.ScanIndex >= total)
-        {
-            _s.Passes.Clear();
-            _s.Passes.AddRange(_s.ScanResults);
-            _s.ScanIndex = -1;
-            _s.PassesRefreshedAtMs = Environment.TickCount64;
-        }
-    }
-
-    private static void CommitScanOrbit(int orbitStartIndex)
-    {
-        int jMin = 0;
-        for (int j = 1; j < ScanSamplesPerOrbit; j++)
-            if (_s.ScanOrbitD[j] < _s.ScanOrbitD[jMin])
-                jMin = j;
-
-        double tBest = (orbitStartIndex + jMin + 1) * _s.ScanStep;
-        double dBest = _s.ScanOrbitD[jMin];
-        if (jMin > 0 && jMin < ScanSamplesPerOrbit - 1)
-        {
-            double d0 = _s.ScanOrbitD[jMin - 1], d1 = _s.ScanOrbitD[jMin], d2 = _s.ScanOrbitD[jMin + 1];
-            double denom = d0 - 2.0 * d1 + d2;
-            if (Math.Abs(denom) > 1e-9)
-            {
-                double frac = Math.Clamp(0.5 * (d0 - d2) / denom, -1.0, 1.0);
-                tBest += frac * _s.ScanStep;
-                dBest = d1 - 0.25 * (d0 - d2) * frac;
-            }
-        }
-        _s.ScanResults.Add((tBest, dBest / 1000.0));
-    }
 
     private static double GroundDistanceAt(double3 r0, double3 v0, double t,
                                            IParentBody parent, double mu, double bodyRadius)

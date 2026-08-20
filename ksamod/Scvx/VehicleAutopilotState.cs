@@ -240,14 +240,13 @@ public sealed class VehicleAutopilotState
     public PoweredGuidanceWindow.LandingPhase TouchdownPrevPhase = PoweredGuidanceWindow.LandingPhase.Idle;
 
     /// <summary>Upcoming site passes (time from now, closest ground distance).</summary>
-    public readonly List<(double tSec, double minKm)> Passes = new();
-    public long PassesRefreshedAtMs = long.MinValue;
-    public double3 ScanR0, ScanV0;
-    public double ScanStep;
-    public int ScanIndex = -1;             // -1: no scan in progress
-    public CseState ScanCser = CseState.Zero;
-    public readonly double[] ScanOrbitD = new double[PoweredGuidanceWindow.ScanSamplesPerOrbit];
-    public readonly List<(double tSec, double minKm)> ScanResults = new();
+    /// <summary>
+    /// Upcoming site passes: time from now, closest ground distance, and that distance
+    /// SIGNED by which side of the ground track the site falls on. The sign is what
+    /// lets the pass strip put a pass left or right of the site instead of piling
+    /// every one of them on the same side.
+    /// </summary>
+    public readonly List<(double tSec, double minKm, double crossKm)> Passes = new();
 
     /// <summary>Ask the panel to show this vehicle's G-FOLD / Terminal sub-tab.</summary>
     public bool GfoldTabSelectPending;

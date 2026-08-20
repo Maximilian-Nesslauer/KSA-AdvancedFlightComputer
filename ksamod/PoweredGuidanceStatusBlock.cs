@@ -15,16 +15,32 @@ using KSA;
 // dressed panel. So these sit inside the gauge chrome without fighting it.
 public static partial class PoweredGuidanceWindow
 {
+    // The two ends of the pass strip's distance fade, in components. ImColor8 exposes
+    // no way to read a colour back out once built, so the blend needs the numbers —
+    // and the two swatches below are built from these so there is one source of truth.
+    // Declared first: static initialisers run in textual order.
+    private static readonly (byte R, byte G, byte B) PassNearRgb = (232, 238, 245);
+    private static readonly (byte R, byte G, byte B) PassFarRgb = (48, 53, 60);
+
     // Palette, kept close to the gauge colours so the block doesn't read as foreign.
     private static readonly ImColor8 SchemInk = new ImColor8(205, 215, 225);
     private static readonly ImColor8 SchemDim = new ImColor8(120, 128, 138);
     private static readonly ImColor8 SchemRgo = new ImColor8(90, 190, 255);
     private static readonly ImColor8 SchemVgo = new ImColor8(120, 235, 130);
-    private static readonly ImColor8 SchemBody = new ImColor8(232, 238, 245);
+    private static readonly ImColor8 SchemBody = new ImColor8(PassNearRgb.R, PassNearRgb.G, PassNearRgb.B);
     private static readonly ImColor8 SchemBurn = new ImColor8(255, 176, 64);
     private static readonly ImColor8 SchemSpent = new ImColor8(70, 76, 84);
-    private static readonly ImColor8 SchemTrack = new ImColor8(48, 53, 60);
+    private static readonly ImColor8 SchemTrack = new ImColor8(PassFarRgb.R, PassFarRgb.G, PassFarRgb.B);
     private static readonly ImColor8 SchemAlert = new ImColor8(255, 96, 96);
+
+    // Pass strip: block width, the narrowest axis it will scale to, and the
+    // green/red span for the nearest pass.
+    private const float PassStripBlockW = 7f;
+    private const float PassStripMinScaleKm = 25f;
+    private const double PassGreenKm = 10.0;
+    private const double PassRedKm = 400.0;
+    // How far a distant pass fades toward the strip: 1 would erase it entirely.
+    private const float PassFadeDepth = 0.75f;
 
     // One colour per stage, cycled. Distinct hues rather than a ramp, because the
     // point is to tell stages apart, not to imply an ordering between them.

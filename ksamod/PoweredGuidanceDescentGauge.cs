@@ -71,9 +71,14 @@ public static partial class PoweredGuidanceWindow
             ImGui.GetTextLineHeightWithSpacing());
         ImGui.Separator();
 
+        // Directly under the status block, as a strip rather than a list.
+        DrawPassStrip(orbit, parent, mu, bodyRadius,
+            ImGui.GetCursorScreenPos(), ImGui.GetContentRegionAvail().X,
+            ImGui.GetTextLineHeightWithSpacing());
+        ImGui.Separator();
+
         DrawLandingSiteSection(parent, orbit, bodyRadius, innerW);
         DrawApproachSection(innerW);
-        DrawUpcomingPasses(orbit, parent, mu, bodyRadius);
     }
 
     // --- Landing site -------------------------------------------------------
@@ -128,32 +133,130 @@ public static partial class PoweredGuidanceWindow
     }
 
     // --- Upcoming passes ----------------------------------------------------
-    // Left as plain text on purpose — a display for these is a separate job.
-    private static void DrawUpcomingPasses(Orbit orbit, IParentBody parent, double mu,
-                                           double bodyRadius)
+
+    /// <summary>
+    /// How close each upcoming orbit brings the ground track to the site, as one
+    /// horizontal strip: the site is the centre line, and every pass is a block
+    /// placed left or right of it by its SIGNED closest approach — which side of the
+    /// track the site fell on. Reading down the strip you see the track walking past
+    /// the site orbit by orbit, and whether it is converging on it or drifting away.
+    ///
+    /// The soonest pass is the one you can actually act on, so it is the only one
+    /// coloured: green when it is close enough to be worth committing to, through to
+    /// red when it is not. The rest stay white — they are context, not choices.
+    /// </summary>
+    private static void DrawPassStrip(Orbit orbit, IParentBody parent, double mu,
+                                      double bodyRadius, float2 origin, float width, float rowH)
     {
-        ImGui.SeparatorText("Upcoming passes");
+        // Closed form and cheap enough to rebuild every frame, so the strip tracks the
+        // orbit live instead of lagging a timer - see PoweredGuidancePasses.cs.
+        RefreshPasses(orbit, parent, mu, bodyRadius);
+        int closest = ClosestPassIndex();
+        int next = NextPassIndex();
 
-        // Time-sliced: start a scan while idle at normal speed and advance it a fixed
-        // sample budget per frame, so a ~1200-propagation scan never lands as a hitch.
-        bool refreshOk = !DescentLive
-            && !Universe.IsAutoWarpActive
-            && Universe.SimulationSpeed <= MaxScanSimSpeed;
-        if (refreshOk && _s.ScanIndex < 0
-            && Environment.TickCount64 - _s.PassesRefreshedAtMs > PassRefreshIntervalMs)
-            StartPassScan(orbit, mu);
-        StepPassScan(parent, mu, bodyRadius);
+        ImDrawListPtr dl = ImGui.GetWindowDrawList();
+        float lineH = ImGui.GetTextLineHeight();
+        float stripH = rowH * 1.5f;
+        float2 stripMin = new float2(origin.X, origin.Y + lineH * 2f + 2f);
+        float2 stripMax = new float2(origin.X + width, stripMin.Y + stripH);
+        float midX = origin.X + width * 0.5f;
 
-        // Always exactly PassesToShow lines, so the panel does not resize under a
-        // scan that is still filling in.
-        for (int i = 0; i < PassesToShow; i++)
+        // Scale to the widest pass, with a floor so a single very close pass doesn't
+        // blow one kilometre up to half the panel and imply a precision we don't have.
+        float scaleKm = PassStripMinScaleKm;
+        double lastT = 0.0;
+        for (int i = 0; i < _s.Passes.Count; i++)
         {
-            if (i < _s.Passes.Count && _s.Passes[i].minKm < 1e6)
-                ImGui.Text($"Pass {i + 1}:  closest {_s.Passes[i].minKm,8:F1} km   in {_s.Passes[i].tSec,7:F0} s");
-            else if (i < _s.Passes.Count)
-                ImGui.Text($"Pass {i + 1}:  (no solution)");
-            else
-                ImGui.Text($"Pass {i + 1}:  scanning...");
+            scaleKm = MathF.Max(scaleKm, (float)Math.Abs(_s.Passes[i].crossKm));
+            lastT = Math.Max(lastT, _s.Passes[i].tSec);
         }
+
+        dl.AddRectFilled(stripMin, stripMax, SchemTrack, 3f);
+        dl.AddRect(stripMin, stripMax, SchemSpent, 3f);
+
+        // Both readouts, each coloured to match its own marking on the strip: the next
+        // one white like its border, the closest one in the same red-to-green it is
+        // drawn in. Together they say "this is what is coming, and this is what is
+        // worth waiting for" - which is the whole question the strip exists to answer.
+        DrawPassCaption(dl, origin, "next   ", next, SchemBody);
+        DrawPassCaption(dl, new float2(origin.X, origin.Y + lineH), "closest", closest,
+            closest >= 0 ? PassProximityColour(_s.Passes[closest].minKm) : SchemDim);
+
+        string scaleText = $"+/-{scaleKm:F0} km";
+        dl.AddText(new float2(origin.X + width - ImGui.CalcTextSize(scaleText).X, origin.Y),
+            SchemDim, scaleText);
+
+        // The site.
+        dl.AddLine(new float2(midX, stripMin.Y + 2f), new float2(midX, stripMax.Y - 2f),
+            SchemInk, 1.5f);
+
+        float half = width * 0.5f - PassStripBlockW;
+        for (int i = 0; i < _s.Passes.Count; i++)
+        {
+            var pass = _s.Passes[i];
+            if (pass.minKm >= 1e6)
+                continue;   // no solution for this revolution
+
+            float x = midX + (float)(pass.crossKm / scaleKm) * half;
+            float2 a = new float2(x - PassStripBlockW * 0.5f, stripMin.Y + 3f);
+            float2 b = new float2(x + PassStripBlockW * 0.5f, stripMax.Y - 3f);
+
+            // Brightness carries TIME - soonest solid, later ones fading back - and it
+            // applies to the chosen pass too. Exempting that one made it the brightest
+            // block on the strip regardless of when it arrived, which is exactly the
+            // reading the fade is there to prevent.
+            float timeT = lastT > 1.0 ? (float)(pass.tSec / lastT) : 0f;
+            dl.AddRectFilled(a, b, PassBlockColour(i == closest, pass.minKm, timeT), 2f);
+
+            // The next one to arrive gets a bright border. Position and brightness are
+            // both already spoken for, so being NEXT needs a channel of its own.
+            if (i == next)
+                dl.AddRect(a - new float2(2f, 2f), b + new float2(2f, 2f), SchemBody,
+                    2f, ImDrawFlags.None, 1.5f);
+        }
+
+        ImGui.Dummy(new float2(width, lineH * 2f + 2f + stripH));
+    }
+
+    private static void DrawPassCaption(ImDrawListPtr dl, float2 at, string label, int index,
+                                        ImColor8 col)
+    {
+        dl.AddText(at, index >= 0 ? col : SchemDim, index >= 0
+            ? $"{label} {_s.Passes[index].minKm,7:F1} km  in {_s.Passes[index].tSec,6:F0} s"
+            : $"{label}     --- km  in    --- s");
+    }
+
+    /// <summary>
+    /// A block's colour: the chosen pass in its red-to-green proximity shade, every
+    /// other one plain white, and ALL of them faded toward the strip by how far off
+    /// they are in time. One path, so the fade cannot be skipped for a special case.
+    /// </summary>
+    private static ImColor8 PassBlockColour(bool chosen, double minKm, float timeT)
+    {
+        (byte r, byte g, byte b) = chosen ? PassProximityRgb(minKm) : PassNearRgb;
+        float k = Math.Clamp(timeT, 0f, 1f) * PassFadeDepth;
+        return new ImColor8(
+            (byte)(r + (PassFarRgb.R - r) * k),
+            (byte)(g + (PassFarRgb.G - g) * k),
+            (byte)(b + (PassFarRgb.B - b) * k));
+    }
+
+    /// <summary>
+    /// Green through red by how close a pass comes. The thresholds are a rule of
+    /// thumb for "is this pass worth committing to", not a capability model — nothing
+    /// here knows the vehicle's actual cross-range divert.
+    /// </summary>
+    private static ImColor8 PassProximityColour(double minKm)
+    {
+        (byte r, byte g, byte b) = PassProximityRgb(minKm);
+        return new ImColor8(r, g, b);
+    }
+
+    private static (byte R, byte G, byte B) PassProximityRgb(double minKm)
+    {
+        float t = (float)Math.Clamp((minKm - PassGreenKm) / (PassRedKm - PassGreenKm), 0.0, 1.0);
+        return ((byte)(90 + t * (255 - 90)),
+                (byte)(235 - t * (235 - 70)),
+                (byte)(130 - t * (130 - 70)));
     }
 }
