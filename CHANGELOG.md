@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.0]
+
+Added sequential convex programming and UI updates.
+
+- Implemented Convex Approximation for Trajectories - Sequential Algorithm (CAT-S), allowing accurate control of vehicles with high rotational interia, and paving the way for aerodynamic entries.
+
+- Added new UI designed for the end-user. New UI elements such as UPFG visualiser, landing visualiser and descent pass planner.
+
+- Added multi-vehicle control with independent PoweredGuidance instances.
+
+- Tweaked orbit overlay.
+
+- New logo. 
+
 ## [0.2.1]
 HOTFIX
 

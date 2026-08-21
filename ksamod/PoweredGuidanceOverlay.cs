@@ -28,7 +28,7 @@ public static partial class PoweredGuidanceWindow
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Right))
         {
             _retargetArmed = false;
-            _landingStatus = "Retarget cancelled.";
+            _s.LandingStatus = "Retarget cancelled.";
             return;
         }
         Camera cam = Program.GetMainCamera();
@@ -43,7 +43,7 @@ public static partial class PoweredGuidanceWindow
 
         if (hit && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
-            RetargetGfold(latDeg, lonDeg);
+            RetargetLandingSite(latDeg, lonDeg);
             _retargetArmed = false;
         }
     }
@@ -144,19 +144,37 @@ public static partial class PoweredGuidanceWindow
         ImGui.End();
     }
 
-    // Move the landing site, and (if a descent is live) force a fresh G-FOLD search to
-    // the new spot on the next step rather than reusing the old arrival time.
-    private static void RetargetGfold(double latDeg, double lonDeg)
+    /// <summary>
+    /// Move the landing site, and make whichever solver is flying notice.
+    ///
+    /// Setting the lat/lon alone is not enough for either of them. Both rebuild the
+    /// pad frame from the site every step, so the frame jumps - but each is running a
+    /// plan that was solved against the OLD pad and will not revisit it until its own
+    /// cadence says so. Until then the vehicle flies the previous target through a
+    /// frame that no longer points at it.
+    /// </summary>
+    private static void RetargetLandingSite(double latDeg, double lonDeg)
     {
-        _siteLatDeg = latDeg;
-        _siteLonDeg = lonDeg;
-        _landingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";
-        if (_landingPhase == LandingPhase.GfoldDescent)
+        _s.SiteLatDeg = latDeg;
+        _s.SiteLonDeg = lonDeg;
+        _s.LandingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";
+
+        if (_s.LandingPhase == LandingPhase.GfoldDescent)
         {
-            _gfoldForceSearch = true;
-            _gfoldLastSolveTime = double.NegativeInfinity;
-            _gfoldArrivalTime = SimNow() + 120.0; // out of the terminal-freeze window so it re-solves
-            _gfoldFailStreak = 0;
+            _s.GfoldForceSearch = true;
+            _s.GfoldLastSolveTime = double.NegativeInfinity;
+            _s.GfoldArrivalTime = SimNow() + 120.0; // out of the terminal-freeze window so it re-solves
+            _s.GfoldFailStreak = 0;
+        }
+
+        // 6-DOF had no path here at all, which is why a retarget never reached it: the
+        // frame moved under a warm-started plan and nothing asked for a new one. Force
+        // the next step to replan; SCvx re-anchors at the measured state every solve,
+        // so the stale warm start is a slower first solve rather than a wrong one.
+        if (_s.Active)
+        {
+            _s.LastReplan = double.NegativeInfinity;
+            _s.RefusalRun = 0;
         }
     }
 
@@ -165,8 +183,8 @@ public static partial class PoweredGuidanceWindow
         if (!_showGfoldOverlay)
             return;
 
-        GfoldTrajectory plan = _gfoldPlan;
-        if (plan == null || _landingPhase != LandingPhase.GfoldDescent)
+        GfoldTrajectory plan = _s.GfoldPlan;
+        if (plan == null || _s.LandingPhase != LandingPhase.GfoldDescent)
             return;
         if (!SetupProjection(parent))
             return;
@@ -196,8 +214,8 @@ public static partial class PoweredGuidanceWindow
         // constraint is ||r_horizontal|| <= cot(gs) * height-above-target, i.e. a
         // cone with apex at the target opening upward; rings + a few ribs show it.
         double tx = plan.Position[n - 1][0];                       // target altitude (local up)
-        double topAlt = Math.Max(plan.Position[0][0], _gfoldAltM); // draw up to the start/current
-        double cot = 1.0 / Math.Tan(Math.Max(_gfoldGlideSlopeDeg, 1.0) * Math.PI / 180.0);
+        double topAlt = Math.Max(plan.Position[0][0], _s.GfoldAltM); // draw up to the start/current
+        double cot = 1.0 / Math.Tan(Math.Max(_s.GfoldGlideSlopeDeg, 1.0) * Math.PI / 180.0);
         double3 apex = PlanCci(f, new double3(tx, 0, 0));
         const int rings = 4, seg = 28;
         for (int k = 1; k <= rings; k++)
@@ -268,7 +286,7 @@ public static partial class PoweredGuidanceWindow
         }
 
         // Deviation: current CoM vs. where the plan says it should be now.
-        double elapsed = now - _gfoldPlanStart;
+        double elapsed = now - _s.GfoldPlanStart;
         double sf = Math.Clamp(elapsed / plan.Dt, 0.0, n - 1);
         int s0 = Math.Clamp((int)Math.Floor(sf), 0, n - 2);
         double sfrac = Math.Clamp(sf - s0, 0.0, 1.0);
@@ -277,15 +295,15 @@ public static partial class PoweredGuidanceWindow
         double devM = (refLocal - f.PointToLocal(com)).Length();
 
         // --- Numeric HUD (top-right) ---
-        double tgo = _gfoldArrivalTime - now;
+        double tgo = _s.GfoldArrivalTime - now;
         string[] hud =
         {
-            $"G-FOLD   {_gfoldStatus}",
-            $"phase    {_landingPhase}",
+            $"G-FOLD   {_s.GfoldStatus}",
+            $"phase    {_s.LandingPhase}",
             $"tgo     {tgo,6:F1} s   tf {plan.TimeOfFlight,5:F1} s",
-            $"alt     {_gfoldAltM,7:F0} m",
-            $"speed   {_gfoldSpeedMs,6:F1} / {_gfoldVMaxMs,5:F0} m/s",
-            $"throttle{_gfoldThrottle * 100,5:F0} %",
+            $"alt     {_s.GfoldAltM,7:F0} m",
+            $"speed   {_s.GfoldSpeedMs,6:F1} / {_s.GfoldVMaxMs,5:F0} m/s",
+            $"throttle{_s.GfoldThrottle * 100,5:F0} %",
             $"fuel    {vehicle.PropellantMass,7:F0} kg",
             $"deviation{devM,6:F1} m",
             $"land err{plan.LandingErrorNorm,6:F1} m",
@@ -318,7 +336,7 @@ public static partial class PoweredGuidanceWindow
         ScreenLine(dl, s + new float2(0f, g), s + new float2(0f, r), col, 1.6f);
         ScreenLine(dl, s - new float2(0f, r), s - new float2(0f, g), col, 1.6f);
         dl.AddCircleFilled(s, 2.5f, col);
-        dl.AddText(s + new float2(r + 4f, -6f), col, $"SITE  {_siteLatDeg:F3}, {_siteLonDeg:F3}");
+        dl.AddText(s + new float2(r + 4f, -6f), col, $"SITE  {_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}");
         ImGui.End();
     }
 

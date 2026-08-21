@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="Scvx.Console/Scvx.Console.csproj" />
+  <Project Path="Scvx.Core/Scvx.Core.csproj" />
+</Solution>

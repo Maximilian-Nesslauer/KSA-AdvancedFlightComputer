@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Reflection;
 using HarmonyLib;
+using Brutal.ImGuiApi;
 using KSA;
 using StarMap.API;
 
@@ -44,6 +45,29 @@ public sealed class Mod
                 nameof(OnPrepareWorker), BindingFlags.NonPublic | BindingFlags.Static);
             _harmony.Patch(prepTarget, prefix: new HarmonyMethod(prepPrefix));
 
+            // Direct gimbal control. A POSTFIX on ComputeControl, because that runs
+            // after ComputeTvcControl has already allocated (or zeroed) every
+            // gimbal — so our command is the last write and holds regardless of the
+            // vehicle's attitude mode. See KsaGimbalControl for the details.
+            MethodInfo tvcTarget = typeof(FlightComputer).GetMethod(
+                nameof(FlightComputer.ComputeControl), BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo tvcPostfix = typeof(Mod).GetMethod(
+                nameof(OnComputeControl), BindingFlags.NonPublic | BindingFlags.Static);
+            _harmony.Patch(tvcTarget, postfix: new HarmonyMethod(tvcPostfix));
+
+            // OUR ENTRY IN THE GAME'S MENU BAR. Program.DrawProgramMenusHook is an
+            // empty two-byte stub - literally just a ret - called by Program.DrawMenuBar
+            // as its second-to-last call, immediately before EndMenuBar. That is the
+            // game's own extension point for exactly this, so a postfix on it runs
+            // INSIDE the menu bar and can open a menu without any of the fragility of
+            // patching DrawMenuBar itself (6 KB of IL, and a transpiler would have to
+            // find a spot in it).
+            MethodInfo menuTarget = typeof(Program).GetMethod(
+                nameof(Program.DrawProgramMenusHook), BindingFlags.Public | BindingFlags.Instance);
+            MethodInfo menuPostfix = typeof(Mod).GetMethod(
+                nameof(OnDrawProgramMenus), BindingFlags.NonPublic | BindingFlags.Static);
+            _harmony.Patch(menuTarget, postfix: new HarmonyMethod(menuPostfix));
+
             Console.WriteLine("[PG] loaded via StarMap; mod dir = " + ModDir);
         }
         catch (Exception e)
@@ -67,6 +91,41 @@ public sealed class Mod
         }
     }
 
+    /// <summary>
+    /// Draws the mod's own menu into the game's menu bar. Runs inside
+    /// BeginMenuBar/EndMenuBar via the postfix on Program.DrawProgramMenusHook, so
+    /// BeginMenu is legal here and nowhere else.
+    ///
+    /// The switch is the whole point of the feature: someone who is not flying a guided
+    /// descent should not have a panel over their view, and "off" has to mean the mod
+    /// is not touching their vehicle either. Toggling it back on is non-destructive -
+    /// the panel returns and nothing was thrown away - but the craft has been handed
+    /// back in the meantime, so anything that was engaged has to be engaged again.
+    /// </summary>
+    private static void OnDrawProgramMenus()
+    {
+        try
+        {
+            if (!ImGui.BeginMenu("PoweredGuidance", true))
+                return;
+
+            bool active = PoweredGuidanceWindow.ModActive;
+            if (ImGui.MenuItem("Enabled", "", ref active, true))
+                PoweredGuidanceWindow.SetModActive(active);
+
+            ImGui.EndMenu();
+        }
+        catch (Exception e)
+        {
+            // A throw here would unbalance the game's OWN menu bar, not ours - the
+            // BeginMenuBar above us is theirs - so this must never propagate. If
+            // BeginMenu succeeded and the throw came after, EndMenu is skipped and
+            // ImGui complains for one frame; that is still better than taking the
+            // whole menu bar down every frame.
+            LogErrorThrottled("menu draw failed: ", e);
+        }
+    }
+
     [StarMapUnload]
     public void Unload()
     {
@@ -85,6 +144,28 @@ public sealed class Mod
         catch (Exception e)
         {
             LogErrorThrottled("autopilot apply failed: ", e);
+        }
+    }
+
+    // Runs on a VehicleSolvers job thread, not the main thread — keep it allocation-free
+    // and non-throwing. __instance is the worker's FlightComputer COPY, which is why
+    // KsaGimbalControl identifies the vehicle by VehicleConfig rather than by this.
+    private static void OnComputeControl(FlightComputer __instance, ref FlightComputerOutput outputs)
+    {
+        // Switched off: stop driving the nozzles on the very next control step rather
+        // than waiting for the per-vehicle hand-back. HandBackVehicle disengages the
+        // override properly a step later, but that step runs on a different thread, and
+        // "off" should not leave the mod steering anything for even one of them.
+        if (!PoweredGuidanceWindow.ModActive)
+            return;
+
+        try
+        {
+            KsaGimbalControl.OnComputeControl(__instance, ref outputs);
+        }
+        catch (Exception e)
+        {
+            LogErrorThrottled("gimbal override failed: ", e);
         }
     }
 
