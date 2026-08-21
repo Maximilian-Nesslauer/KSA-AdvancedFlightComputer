@@ -104,7 +104,10 @@ internal static class KsaEnginePerf
                 RocketCore[] cores = engines[i].Cores;
                 if (cores == null || cores.Length == 0)
                     continue;
-                RocketControllerData d = RocketControllerData.ComputeFromCores(cores, com, p);
+                // The throttle argument is ours to pick as of KSA 2026.8.19: ComputeFromCores
+                // used to hardcode ComputeConditions(1f) internally. Pass 1 to keep this a
+                // full-throttle CAPABILITY — the whole point of this routine (see above).
+                RocketControllerData d = RocketControllerData.ComputeFromCores(cores, com, p, 1f);
                 thrust += d.ThrustMax.Length();
                 massFlow += d.MassFlowRateMax;
             }
@@ -124,9 +127,8 @@ internal static class KsaEnginePerf
     // different altitude's figure — delivers the wrong thrust by exactly that ratio.
     //
     // Safe to use as a divisor despite the name: ComputeActivePerformance calls
-    // ComputeFromCores, whose ComputeConditions(1f) hardcodes FULL throttle, so this
-    // is a capability and NOT scaled by the current throttle. There is therefore no
-    // feedback loop in dividing by it. (It does return VacuumData when pressure <= 0,
+    // ComputeFromCores with a throttle of 1, so this is a capability and NOT scaled
+    // by the current throttle. There is therefore no feedback loop in dividing by it. (It does return VacuumData when pressure <= 0,
     // so airless bodies are handled by the same call.) Zero if nothing is lit, which
     // the caller must treat as "no authority" rather than dividing by it.
     internal static double ActiveThrustCapability(Vehicle vehicle, double ambientPressure)

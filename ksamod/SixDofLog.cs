@@ -108,7 +108,8 @@ internal static class SixDofLog
                 "defectM", "defectLimitM", "defectChan", "defectGroup", "defectRaw", "defectNode",
                 "gatedRatio", "gatedRaw", "gatedTol", "gatedDefectChan", "gatedDefectNode",
                 "commitIntervals", "qFlips",
-                "anchorM", "trStart", "trEnd", "trMin", "fellBack", "escalations",
+                "anchorM", "driftM", "driftLimitM", "seedShift",
+                "trStart", "trEnd", "trMin", "fellBack", "escalations",
                 "nodes", "sigma", "planElapsed",
                 "thrustDemandN", "capabilityN", "throttle", "saturated",
                 "tauX", "tauY", "tauZ", "allocX", "allocY", "allocZ", "allocSat",
@@ -218,6 +219,7 @@ internal static class SixDofLog
             sb.Append(Csv(r.GatedDefectChan)).Append(',').Append(r.GatedDefectNode).Append(',');
             sb.Append(r.CommitIntervals).Append(',');
             sb.Append(r.QFlips).Append(','); F(sb, r.AnchorM);
+            F(sb, r.DriftM); F(sb, r.DriftLimitM); sb.Append(r.SeedShift).Append(',');
             F(sb, r.TrStart); F(sb, r.TrEnd); F(sb, r.TrMin);
             sb.Append(r.FellBack ? 1 : 0).Append(',').Append(r.Escalations).Append(',');
             sb.Append(r.Nodes).Append(',');
@@ -358,6 +360,20 @@ internal static class SixDofLog
         //
         // trStart is what the cycle was reseeded from - normally the warm constant,
         // TrustRegionMax after a wide-trust-region retry or a restart.
+        // HOW FAR THE VEHICLE IS FROM ITS PLAN, and how far it is allowed to be.
+        //
+        // anchorM above cannot answer this: it measures ReferenceX[0] - x0 against an
+        // equality the subproblem enforces and a seed that is overwritten with x0, so
+        // it reads 0.000 by construction on exactly the cycles that are going wrong.
+        // DriftM is Ksa6DofGuidance.MeasureDrift - the published plan's prediction for
+        // now, against where the vehicle actually is - and DriftLimitM is the threshold
+        // the cold-restart branch compares it to.
+        //
+        // SeedShift is the whole nodes the warm seed was shifted forward by. The two
+        // together separate "the vehicle left its plan" from "the seed was re-timed",
+        // which the logs so far could only distinguish by inference.
+        public double DriftM, DriftLimitM;
+        public int SeedShift;
         public double TrStart, TrEnd, TrMin;
         public bool FellBack;
         public double ThrustDemandN, CapabilityN, Throttle;

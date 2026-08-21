@@ -55,7 +55,7 @@ public static partial class PoweredGuidanceWindow
     // The mod's clock: elapsed sim time in seconds. Used for everything time-based
     // (turn ramp, staging cooldown, cutoff) so behavior is correct under time
     // warp, unlike the wall-clock-ish player time.
-    private static double SimNow() => Universe.GetElapsedSimTime().Seconds();
+    private static double SimNow() => Universe.GetElapsedSeconds();
 
     // --- Warp confirmation ---
     // Nothing in the mod starts a time warp on its own: flows that want one call
@@ -90,7 +90,7 @@ public static partial class PoweredGuidanceWindow
             $"Warp to {_warpLabel}?  (T-{wait,6:F0} s)");
         if (ImGui.Button("Warp"))
         {
-            Universe.AutoWarpTo(Universe.GetElapsedSimTime() + wait);
+            Universe.AutoWarpTo(Universe.GetElapsedTime() + wait);
             _warpPromptActive = false;
         }
         ImGui.SameLine();

@@ -465,6 +465,20 @@ public sealed class Ksa6DofGuidance
     public int LastCommitIntervals { get; private set; }
 
     /// <summary>
+    /// Whole nodes the warm seed was shifted forward by last cycle.
+    ///
+    /// Worth a column of its own because the flight logs put the entire interval-0
+    /// defect on the wrong side of it: across 20260821-090245 and -090504 the mean
+    /// gated ratio was 0.02-0.35 while this was zero, and 6-34 the moment it reached
+    /// one. Every refusal streak in both runs began on a shifted cycle with no prior
+    /// refusal, so the shift leads and the defect follows.
+    ///
+    /// It was reconstructible from planElapsed and sigma, but only by redoing the
+    /// rounding this does - and the rounding is the part under suspicion.
+    /// </summary>
+    public int LastSeedShift { get; private set; }
+
+    /// <summary>
     /// Trust region every warm re-solve starts from. A CONSTANT, deliberately.
     ///
     /// It was briefly carried between cycles, on the reasoning that the shrink a
@@ -693,6 +707,7 @@ public sealed class Ksa6DofGuidance
         double dt = _planSigma / (_n - 1);
         elapsed = Math.Max(0.0, simNow - _solveTime);
         int shift = Math.Clamp((int)Math.Round(elapsed / dt), 0, _n - 2);
+        LastSeedShift = shift;
 
         xs = new double[_n * NX];
         us = new double[_n * NU];

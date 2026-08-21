@@ -48,9 +48,26 @@ class Program
                 Console.WriteLine($"== TYPE {TypeName(t)}  ({t.Attributes & TypeAttributes.VisibilityMask}) ==");
                 var sp = new SigProv(R);
                 Console.WriteLine("-- methods --");
-                foreach (var mh in t.GetMethods()) { var m=R.GetMethodDefinition(mh); var sig=m.DecodeSignature(sp,null); Console.WriteLine($"  {(m.Attributes&MethodAttributes.MemberAccessMask)} {((m.Attributes&MethodAttributes.Static)!=0?"static ":"")}{((m.Attributes&MethodAttributes.Virtual)!=0?"virtual ":"")}{sig.ReturnType} {R.GetString(m.Name)}({string.Join(", ", sig.ParameterTypes)})"); }
+                foreach (var mh in t.GetMethods()) {
+                    var m=R.GetMethodDefinition(mh); var sig=m.DecodeSignature(sp,null);
+                    var pnames=new System.Collections.Generic.List<string>();
+                    foreach (var ph in m.GetParameters()) {
+                        var pd=R.GetParameter(ph);
+                        if (pd.SequenceNumber==0) continue;
+                        string dflt="";
+                        var dc=pd.GetDefaultValue();
+                        if (!dc.IsNil) { var c=R.GetConstant(dc); var br=R.GetBlobReader(c.Value); dflt=" = <default>"; }
+                        bool isOut=(pd.Attributes & ParameterAttributes.Out)!=0;
+                        while (pnames.Count < pd.SequenceNumber-1) pnames.Add("?");
+                        pnames.Add((isOut?"out ":"")+R.GetString(pd.Name)+dflt);
+                    }
+                    var parts=new System.Collections.Generic.List<string>();
+                    for (int i=0;i<sig.ParameterTypes.Length;i++)
+                        parts.Add(sig.ParameterTypes[i]+" "+(i<pnames.Count?pnames[i]:"?"));
+                    Console.WriteLine($"  {(m.Attributes&MethodAttributes.MemberAccessMask)} {((m.Attributes&MethodAttributes.Static)!=0?"static ":"")}{((m.Attributes&MethodAttributes.Virtual)!=0?"virtual ":"")}{sig.ReturnType} {R.GetString(m.Name)}({string.Join(", ", parts)})");
+                }
                 Console.WriteLine("-- fields --");
-                foreach (var fh in t.GetFields()) { var f=R.GetFieldDefinition(fh); Console.WriteLine($"  {(f.Attributes&FieldAttributes.FieldAccessMask)} static={(f.Attributes&FieldAttributes.Static)!=0} {R.GetString(f.Name)}"); }
+                foreach (var fh in t.GetFields()) { var f=R.GetFieldDefinition(fh); Console.WriteLine($"  {(f.Attributes&FieldAttributes.FieldAccessMask)} static={(f.Attributes&FieldAttributes.Static)!=0} {f.DecodeSignature(sp,null)} {R.GetString(f.Name)}"); }
                 Console.WriteLine("-- events --");
                 foreach (var eh in t.GetEvents()) { var e=R.GetEventDefinition(eh); Console.WriteLine($"  {R.GetString(e.Name)}"); }
                 Console.WriteLine("-- nested --");

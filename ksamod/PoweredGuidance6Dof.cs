@@ -1085,6 +1085,12 @@ public static partial class PoweredGuidanceWindow
             CommitIntervals = _s.Guidance.LastCommitIntervals,
             QFlips = _s.Guidance.LastBranchFlips,
             AnchorM = _s.Guidance.AnchorOffsetM,
+            // MeasureDrift ran earlier in this same step (see the cold-restart branch),
+            // so this is the value that decision was actually taken on rather than a
+            // second, slightly different measurement of the same thing.
+            DriftM = _s.Guidance.PlanDriftM,
+            DriftLimitM = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0)),
+            SeedShift = _s.Guidance.LastSeedShift,
             TrStart = _s.Guidance.LastTrustRegionStart,
             TrEnd = _s.Guidance.TrustRegionNow,
             TrMin = _s.Guidance.TrustRegionMin,
@@ -1524,6 +1530,40 @@ public static partial class PoweredGuidanceWindow
                     {
                         _s.Converging = false;
                         _s.Error = "";
+                    }
+                    else
+                    {
+                        // START A FRESH COLD SOLVE rather than iterating the stalled one.
+                        //
+                        // Reaching here means the solve has stopped improving, a finer
+                        // node count cannot be built, and the result will not pass even
+                        // the loose cold gate. Returning without doing anything leaves
+                        // _s.Converging set, so the next frame walks straight back into
+                        // the same branch - and because "stalled" latches once
+                        // ColdStallIterations is passed, it can never leave.
+                        //
+                        // Flight 20260821-084639 is that loop: one solve iterated from
+                        // 12 to 110 times over 10.5 seconds, logging "retrying at 50
+                        // nodes" a hundred times while the rebuild failed every time.
+                        // Step6Dof deliberately does not touch the actuators while
+                        // converging, so the vehicle flew the LAST accepted plan the
+                        // whole way - a hard deceleration from 725 m that it kept
+                        // executing until it had arrested the descent and was climbing
+                        // through 200 m at 45 degrees of tilt.
+                        //
+                        // A fresh BeginCold is not the same work again: it re-anchors at
+                        // the state the vehicle is in NOW and starts the SCvx loop over,
+                        // which is exactly what converged three times earlier in that
+                        // same run. Cheap, because the iterations are spread over frames.
+                        SixDofLog.Event(_s, now,
+                            $"COLD SOLVE stuck after {_s.Guidance.LastIterations} iterations " +
+                            $"at alt {x[2]:F0} m - starting a FRESH cold solve from the current state");
+                        _s.Guidance.ColdIterationIntervalS =
+                            _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
+                        _s.Guidance.BeginCold(x, xfMore,
+                            Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed));
+                        _s.ColdFrames = 0;
+                        _s.Recoveries++;
                     }
                 }
                 return;

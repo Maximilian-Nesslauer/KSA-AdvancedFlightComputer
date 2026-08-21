@@ -145,10 +145,18 @@ public static class KsaVehicleAdapter
         double deltaThrust = 0.0, deltaFlow = 0.0;
         double solidBurnLeft = double.PositiveInfinity;
 
-        // Hoisted: stackalloc inside the loops below would not be reclaimed until
-        // this method returns. TrySampleThrustCurve only needs somewhere to write
-        // the samples — we want the preview's BurnSeconds, not the curve.
-        Span<float> curve = stackalloc float[2];
+        // We want the preview's BurnSeconds, not the curve. As of KSA 2026.8.19 the samples
+        // are a ThrustCurveSamples of three parallel spans rather than one Span<float>,
+        // and an EMPTY one is explicitly valid (IsValid short-circuits on IsEmpty) — the
+        // resample loop at the end of TrySampleThrustCurve simply runs zero times while
+        // the preview is still filled in. So ask for no samples at all and skip the
+        // buffer entirely, rather than stackallocing one we never read.
+        var curve = new SolidMotor.ThrustCurveSamples
+        {
+            ThrustNewtons = default,
+            IspSeconds = default,
+            ChamberPressurePascals = default,
+        };
 
         Span<EngineController> engines = tree.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)

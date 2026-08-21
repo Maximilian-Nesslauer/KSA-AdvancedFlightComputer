@@ -7,10 +7,15 @@ using KSA;
 // bar that switches between them. The per-tab content lives alongside —
 // PoweredGuidanceAscentGauge.cs for Ascent, and placeholders below for the rest.
 //
-// Layering is stock's own, from KSA.GameSettings: an ImGauge window for the chrome,
-// then an ordinary ImGui body wrapped in ImGaugeDressing.PushGaugeWidgetStyle so
-// plain widgets take the gauge palette, with ImGuiHelper.BeginRegion for the
-// collapsible two-column sections.
+// Layering: an ImGauge window for the chrome, then an ordinary ImGui body wrapped in
+// ConsoleStyle.PushWidgetStyle so plain widgets take the stock palette, with
+// ImGuiHelper.BeginRegion for the collapsible two-column sections.
+//
+// This used to be stock's own layering, copied from KSA.GameSettings. KSA 2026.8.19
+// retired it: ImGaugeDressing is gone entirely and GameSettings now builds on the new
+// ConsoleStyle skin instead. ImGauge itself survives as chrome (DrawDressedBox, Box,
+// Screw, Label, Button), so the shell here is unchanged - but the helper that let
+// plain ImGui widgets sit inside it is now ConsoleStyle's.
 public static partial class PoweredGuidanceWindow
 {
     public enum GuidanceTab { Ascent, Descent, Landing }
@@ -25,9 +30,18 @@ public static partial class PoweredGuidanceWindow
     private static GuidanceTab _panelTab = GuidanceTab.Ascent;
     private static LandingSubTab _landingSubTab = LandingSubTab.Powered;
 
-    // Height is a floor only: the window is opened with fitContent, so it grows and
-    // shrinks as tabs and sections change. Width is authored and stays put.
-    private static readonly float2 GuidancePanelSizeUv = new float2(0.30f, 0.06f);
+    // Width is authored and stays put. Height is measured, not authored - see
+    // _panelHeightUv below - and this is only its floor.
+    private const float GuidancePanelWidthUv = 0.30f;
+    private const float MinPanelHeightUv = 0.06f;
+
+    // The panel's own fit-to-content. ImGauge used to do this for us (BeginWindow took
+    // a fitContent flag and the window grew to whatever ReportContentExtent last said);
+    // KSA 2026.8.19 removed all three, and BeginWindow now sizes the window to exactly
+    // SizeUv. So we measure the body ourselves at the end of the draw and feed the
+    // result back here for the next frame - a frame of lag, which is the same deal the
+    // body-scroll decision below already runs on.
+    private static float _panelHeightUv = MinPanelHeightUv;
 
     // Body scrolling. The measured content height decides whether the body auto-sizes
     // or scrolls; the dead band keeps it from flipping between the two.
@@ -55,15 +69,12 @@ public static partial class PoweredGuidanceWindow
         ImGaugeWindow win = new ImGaugeWindow(
             "NavboxGuidance", "Navbox Guidance",
             new float2(0f, 0f), new float2(0f, 0f),
-            _guidancePanelOffsetUv, GuidancePanelSizeUv);
+            _guidancePanelOffsetUv, new float2(GuidancePanelWidthUv, _panelHeightUv));
 
-        // EndWindow is what uploads the instances, so it runs even on the false
-        // branch — stock's own idiom, see KSA.Popup.BeginGaugeModal.
-        if (!ImGauge.BeginWindow(in win, false, true, out float2 pos, out float2 size))
-        {
-            ImGauge.EndWindow();
-            return;
-        }
+        // Since KSA 2026.8.19 BeginWindow takes no flags and always succeeds, so there
+        // is no early-out to guard any more. EndWindow still has to run whatever the
+        // body does - it is what uploads the gauge instances - hence the try/finally.
+        ImGauge.BeginWindow(in win, out float2 pos, out float2 size);
 
         try
         {
@@ -105,9 +116,11 @@ public static partial class PoweredGuidanceWindow
         float bodyTop = headerPos.Y + headerH + spacing + bigButtonH * 2f + spacing * 2f;
 
         // How much room is left below the header before running off the screen. The
-        // window is opened with fitContent, and ImGauge.EndWindow clamps that fit to
-        // the screen - so past this height the window stops growing whatever the body
-        // does.
+        // window grows to the body (see the fit at the foot of this method), and that
+        // fit is clamped to the screen - so past this height the window stops growing
+        // whatever the body does. ImGauge.EndWindow used to apply that clamp itself;
+        // since KSA 2026.8.19 the clamp is ours, and it has to stay in step with this
+        // number or the body would never switch to scrolling.
         ImGuiViewportPtr vp = ImGui.GetMainViewport();
         float maxBodyH = MathF.Max(MinBodyHeightPx,
             vp.Pos.Y + vp.Size.Y - bodyTop - GaugeBottomMarginUv * u);
@@ -129,7 +142,7 @@ public static partial class PoweredGuidanceWindow
         else
             ImGui.BeginChild("~PanelBody", new float2?(new float2(innerW, 0f)),
                 ImGuiChildFlags.AutoResizeY, ImGuiWindowFlags.NoBackground);
-        ImGaugeDressing.PushGaugeWidgetStyle();
+        ConsoleStyle.PushWidgetStyle();
 
         // Above the tabs because it is not a phase's concern: both the ascent launch
         // window and the deorbit burn request warps, and a prompt that vanished on a
@@ -208,7 +221,7 @@ public static partial class PoweredGuidanceWindow
             ResetFlightComputer();
         }
 
-        ImGaugeDressing.PopGaugeWidgetStyle();
+        ConsoleStyle.PopWidgetStyle();
 
         // Content height, read INSIDE the child where the cursor is content-relative.
         // Drives next frame's choice of mode; the dead band stops a body sitting right
@@ -220,10 +233,19 @@ public static partial class PoweredGuidanceWindow
 
         ImGui.EndChild();
 
-        // Grow/shrink the window to the body. The reserve is the margin the content
-        // extent doesn't include.
-        ImGauge.SetFitReserve(new float2(margin, GaugeBottomMarginUv * u));
-        ImGauge.ReportContentExtent(new float2(pos.X + size.X - margin, ImGui.GetItemRectMax().Y));
+        // Grow/shrink the window to the body, for next frame. GetItemRectMax is the
+        // body child we just ended, and the bottom margin is the reserve the child's
+        // extent doesn't include - the same two numbers SetFitReserve/ReportContentExtent
+        // were handed before KSA 2026.8.19 removed them.
+        //
+        // Clamped to the bottom of the screen, exactly where maxBodyH above assumes the
+        // window stops: without the clamp the panel would keep growing off-screen and
+        // the body would never flip to scrolling. UV here is isotropic in GaugeUnit()
+        // for both orientations (ScreenReference scales the short axis by the aspect
+        // ratio), so one divide converts back the way the rest of the file does.
+        float fitH = ImGui.GetItemRectMax().Y + GaugeBottomMarginUv * u - pos.Y;
+        fitH = MathF.Min(fitH, vp.Pos.Y + vp.Size.Y - pos.Y);
+        _panelHeightUv = MathF.Max(MinPanelHeightUv, fitH / u);
     }
 
     /// <summary>
