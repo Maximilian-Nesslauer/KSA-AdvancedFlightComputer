@@ -55,6 +55,11 @@ public static class KsaVehicleAdapter
     // stage chain stays continuous.
     private const double MinPhaseSeconds = 1e-3;
 
+    // ...and a phase can be long enough to survive that and still be dust: a tank
+    // trickling out its last few grams paces a "burn" of seconds that delivers no
+    // dV worth planning around. A stage under this is dropped rather than shown.
+    private const double MinStageDv = 1.0;   // m/s
+
     public static UpfgVehicle Build(Vehicle vehicle)
     {
         var result = new UpfgVehicle();
@@ -102,6 +107,8 @@ public static class KsaVehicleAdapter
                         MassTotal = mass,
                         MassDry = burnout,
                         GLim = 1e9,
+                        Seq = i,
+                        Engines = phase.ActiveEngineCount,
                     });
                 }
                 mass = burnout;
@@ -109,8 +116,65 @@ public static class KsaVehicleAdapter
         }
 
         CorrectBurningSolids(vehicle, result);
+        Coalesce(result);
         return result;
     }
+
+    // Fold the drain simulation's phase decomposition back into actual STAGES.
+    //
+    // A UPFG stage is a constant-thrust arc that ends in a discontinuity — a jettison,
+    // an engine set changing. The game's phases are not that: they are whatever
+    // intervals its drain simulation happened to break the burn into, and it breaks
+    // one wherever the number of drawing engine cores changes for even a single
+    // iteration. TANKS ARE WHAT DRIVES THAT. Its inner loop steps from one tank
+    // emptying to the next, splitting the demand across the tanks in a level and
+    // spilling what is left to the next level, so a stack with several tanks — a
+    // capsule tank plumbed to the stack, an asymmetric pair, anything that does not
+    // run dry at the same instant — takes several iterations to finish the burn, and
+    // any core that misses its full draw on one of them drops out and comes back.
+    // Each of those became a separate row in the stage table with its own slice of the
+    // stage's dV, which is what "one stage showing up as several" is.
+    //
+    // Two adjacent stages are the same stage if they have the same thrust and the same
+    // exhaust velocity and no mass went overboard between them. Merging is exact —
+    // dV is ve·ln(m0/m1), so ve·ln(m0/mid) + ve·ln(mid/m1) is the same number — and it
+    // leaves every real boundary (a booster drop, an engine cutting out, the g-limit
+    // split applied later) intact, because those all change thrust, Isp or mass.
+    private static void Coalesce(UpfgVehicle vehicle)
+    {
+        List<UpfgStage> stages = vehicle.Stages;
+        for (int i = stages.Count - 2; i >= 0; i--)
+        {
+            UpfgStage a = stages[i], b = stages[i + 1];
+            if (!Close(a.Thrust, b.Thrust) || !Close(a.Isp, b.Isp))
+                continue;
+            // Mass continuity: anything jettisoned between the two is a real stage
+            // boundary however alike the two burns look. The tolerance is loose
+            // enough to absorb the float arithmetic the game's masses arrive in
+            // (10 kg on a 100 t stack) and far tighter than any real separation.
+            if (Math.Abs(a.MassDry - b.MassTotal) > 1e-4 * Math.Max(a.MassTotal, 1.0))
+                continue;
+
+            a.MassDry = b.MassDry;
+            a.Engines = Math.Max(a.Engines, b.Engines);
+            stages.RemoveAt(i + 1);
+        }
+
+        // Whatever survives that and still carries no useful dV is numerical dust from
+        // the drain simulation's fixed iteration budget. Dropping it is safe: UPFG
+        // reads each stage's own four numbers and reconciles stage 0 against the live
+        // mass, so nothing downstream depends on the chain being gapless.
+        for (int i = stages.Count - 1; i >= 0; i--)
+        {
+            UpfgStage s = stages[i];
+            if (!(s.MassTotal > 0.0) || !(s.MassDry > 0.0) || s.MassDry >= s.MassTotal
+                || s.Isp * G0 * Math.Log(s.MassTotal / s.MassDry) < MinStageDv)
+                stages.RemoveAt(i);
+        }
+    }
+
+    private static bool Close(double a, double b) =>
+        Math.Abs(a - b) <= 1e-3 * Math.Max(Math.Abs(a), Math.Abs(b));
 
     // Repairs the one place the game's staging model is wrong for a solid that is
     // already burning.

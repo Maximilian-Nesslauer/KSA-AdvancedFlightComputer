@@ -86,7 +86,21 @@ public static partial class PoweredGuidanceWindow
         double delta = Math.Asin(Math.Clamp(tanRatio, -1.0, 1.0));
         double raRequired = _s.LaunchDescending ? lanT + Math.PI - delta : lanT + delta;
         double omega = parent.GetAngularVelocity();
-        plan.WaitSec = omega > 1e-12 ? Wrap2Pi(raRequired - ra) / omega : double.NaN;
+
+        // LAUNCH EARLY, by the same lead the LAN seeding uses (see LanLeadSeconds).
+        // The instant the site is in the plane is the wrong instant to LIGHT THE
+        // ENGINE: the pad goes on being carried east through the vertical rise and the
+        // turn, so a vehicle that ignites in the plane is already out of it by the time
+        // it is flying, and the guidance yaws to chase a node it has gone past. What we
+        // want is the launch time whose plane crossing lands in the middle of that,
+        // i.e. solve for T where the site's right ascension T + lead from now is the
+        // one the plane needs.
+        //
+        // The lead goes INSIDE the wrap, not subtracted after it. Subtracting after
+        // would turn a window three minutes out into a negative countdown — a window
+        // in the past — where wrapping correctly reports the next revolution's.
+        double raNow = ra + omega * LanLeadSeconds;
+        plan.WaitSec = omega > 1e-12 ? Wrap2Pi(raRequired - raNow) / omega : double.NaN;
         return ChaseStatus.Ok;
     }
 

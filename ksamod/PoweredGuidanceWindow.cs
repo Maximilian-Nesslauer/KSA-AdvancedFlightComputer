@@ -346,7 +346,11 @@ public static partial class PoweredGuidanceWindow
         var stageList = (_s.Running || landingActive) ? _s.UpfgVehicle : _s.StageModel;
         if (stageList != null && stageList.Stages.Count > 0)
         {
-            ImGui.Text("       thrust      Isp      wet      dry     burn        dV");
+            // seq/eng is provenance, not guidance: which staging sequence the arc came
+            // out of and how many engine cores the game had burning across it. Two rows
+            // carrying the same pair are one physical stage the drain simulation sliced
+            // in two, which is worth being able to see at a glance.
+            ImGui.Text("       thrust      Isp      wet      dry     burn        dV  seq/eng");
             double totalDv = 0.0;
             for (int i = 0; i < stageList.Stages.Count; i++)
             {
@@ -357,7 +361,7 @@ public static partial class PoweredGuidanceWindow
                 double stageDv = s.Isp * 9.80665 * System.Math.Log(s.MassTotal / s.MassDry);
                 totalDv += stageDv;
                 string marker = s.Mode == 2 ? " G" : "";
-                ImGui.Text($"S{i + 1}  {s.Thrust / 1000.0,8:F0} kN {s.Isp,5:F0} s {s.MassTotal / 1000.0,7:F1} t {s.MassDry / 1000.0,7:F1} t {burnTime,5:F0} s {stageDv,7:F0}{marker}");
+                ImGui.Text($"S{i + 1}  {s.Thrust / 1000.0,8:F0} kN {s.Isp,5:F0} s {s.MassTotal / 1000.0,7:F1} t {s.MassDry / 1000.0,7:F1} t {burnTime,5:F0} s {stageDv,7:F0}{marker}   {s.Seq,2}/{s.Engines,-2}");
             }
             ImGui.Text($"Total remaining dV: {totalDv,8:F0} m/s");
 

@@ -161,6 +161,30 @@ public sealed class VehicleAutopilotState
     public double3 CommandDir;
     public bool HasCommand;
 
+    /// <summary>
+    /// Sim time of the last UPFG solve, and of the last ascent step. UPFG runs on a
+    /// fixed GUIDANCE CYCLE rather than once per sim step (see
+    /// PoweredGuidanceWindow.GuidanceCycle): it is a recursive once-per-cycle
+    /// algorithm, and calling it every step wound its internal corrections up sixty
+    /// times faster than they are damped for. NegativeInfinity means "never solved",
+    /// which forces a solve on the first step after EXECUTE.
+    ///
+    /// The step time is separate because the phase machine and the commanded attitude
+    /// still update every step; it supplies the interval the command slew limit
+    /// integrates over.
+    /// </summary>
+    public double LastSolveTime = double.NegativeInfinity;
+    public double LastStepTime;
+
+    /// <summary>
+    /// The roll the vehicle had when ascent guidance engaged, as an angle about the
+    /// thrust axis from the target plane's normal, and whether it has been measured
+    /// yet. Held for the whole ascent so the mod commands a thrust DIRECTION and
+    /// nothing else — see PoweredGuidanceWindow.AscentRollRef.
+    /// </summary>
+    public double RollOffset;
+    public bool RollLatched;
+
     public bool CutoffDone;
     public bool StagingActive;
     public double LastSequenceTime = double.NegativeInfinity;
@@ -171,6 +195,13 @@ public sealed class VehicleAutopilotState
     public UpfgVehicle StageModel;
     public bool StageModelDirty = true;
     public long StageModelTick;
+
+    /// <summary>
+    /// KSA's own total dV for the recompute the snapshot above was taken from — the
+    /// figure behind the in-game stage menu. Kept alongside so the panel can show the
+    /// two side by side when they disagree.
+    /// </summary>
+    public double StageModelKsaDv;
 
     /// <summary>A flight-computer reset the draw asked for, applied on the sim thread.</summary>
     public bool FcResetPending;

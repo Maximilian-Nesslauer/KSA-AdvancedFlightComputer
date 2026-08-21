@@ -28,6 +28,47 @@ public static partial class PoweredGuidanceWindow
     // never crossed — the failsafe against an open-loop runaway vehicle.
     private const double FailsafeAltKm = 50.0;
 
+    /// <summary>
+    /// SIM SECONDS BETWEEN UPFG SOLVES. UPFG is a once-per-guidance-cycle algorithm,
+    /// not a per-frame filter: each call is one refinement of a recursive solution,
+    /// and rbias (rgo - rthrust) is an integrator across cycles. This port was calling
+    /// it from the PrepareWorker prefix, i.e. EVERY SIM STEP (~60 Hz, and far more
+    /// under warp), which wound that integrator up sixty times faster than the
+    /// algorithm is damped for and fed the resulting wobble straight to the flight
+    /// computer as a new attitude target every step. The reference implementation this
+    /// was ported from (legacy/navbox) ran its simulator at dt = 1 s, so one call per
+    /// second is the cadence every gain in here was tuned at.
+    ///
+    /// It also makes <see cref="UpfgGuidance.Converged"/> mean something again: the
+    /// test is "tgo settled between calls", which at 60 Hz passes on the second step
+    /// no matter how far from converged the solution is — and the phase machine
+    /// promotes the turn to closed loop on that flag.
+    /// </summary>
+    private const double GuidanceCycle = 1.0;
+
+    /// <summary>
+    /// HOW FAR AHEAD OF THE PAD the LAN is seeded, in seconds.
+    ///
+    /// "The plane overhead right now" is the wrong plane to launch into: the pad is
+    /// carried east at the body's rotation rate the whole time the vehicle is still
+    /// climbing through the vertical rise and the turn, so by the time the ascent is
+    /// actually flying, the site — and the vehicle with it — has moved off the plane
+    /// that was overhead at lift-off, and the guidance yaws to chase a node it has
+    /// already gone past. Seeding the plane over where the pad WILL be instead puts
+    /// the ascent in the plane over the part of the flight that matters.
+    /// </summary>
+    private const double LanLeadSeconds = 180.0;
+
+    /// <summary>
+    /// Ceiling on how fast the COMMANDED direction may rotate, deg/s. The solution
+    /// only moves once per <see cref="GuidanceCycle"/> and a real launch vehicle
+    /// pitches at about 1 deg/s, so this both smooths the once-a-second step into
+    /// continuous motion and keeps a hand-over (or a staging transient) from arriving
+    /// as an instantaneous attitude snap. Well above any rate the trajectory actually
+    /// asks for, so it shapes the command without changing where it ends up.
+    /// </summary>
+    private const double MaxSlewDegS = 5.0;
+
     public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
 
     // Reset at the top of every Draw; see DrawAutoLaunchArming.
@@ -43,7 +84,7 @@ public static partial class PoweredGuidanceWindow
         // Seed the LAN from where the vessel is right now, once a vehicle exists.
         if (!_s.LanSeeded)
         {
-            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             _s.LanSeeded = true;
         }
 
@@ -58,7 +99,7 @@ public static partial class PoweredGuidanceWindow
             ImGui.InputDouble("LAN (deg)", ref _s.LanDeg);
             ImGui.SameLine();
             if (ImGui.Button("From position"))
-                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
         }
 
         if (ImGui.CollapsingHeader("Ascent params", ImGuiTreeNodeFlags.DefaultOpen))
@@ -127,6 +168,8 @@ public static partial class PoweredGuidanceWindow
         _s.Running = false;
         _s.LaunchArmed = false;
         _s.HasCommand = false;
+        _s.CommandDir = default;
+        _s.RollLatched = false;
         _s.Upfg.Reset();
         _s.RgoPeak = 0.0;
         _s.VgoPeak = 0.0;
@@ -187,6 +230,10 @@ public static partial class PoweredGuidanceWindow
         _s.Running = true;
         _s.Phase = AscentPhase.Vertical;
         _s.HasCommand = false;
+        _s.CommandDir = default;   // nothing to be continuous with: the slew starts fresh
+        _s.LastSolveTime = double.NegativeInfinity;
+        _s.LastStepTime = SimNow();
+        _s.RollLatched = false;    // re-measure the vehicle's roll at this engagement
         _s.CutoffDone = false;
         _s.StagingActive = false;
         _s.LastSequenceTime = double.NegativeInfinity;
@@ -236,7 +283,11 @@ public static partial class PoweredGuidanceWindow
         }
 
         double waitSec = plan.WaitSec;
-        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")} crossing)");
+        // The countdown is to IGNITION, which leads the plane crossing — see
+        // LanLeadSeconds — so the lead is named rather than left as an apparent
+        // discrepancy between T-0 and the site being in the plane.
+        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")} crossing, "
+                 + $"{LanLeadSeconds:F0} s lead)");
 
         if (ImGui.Button("Copy chase orbit to target inputs") || _s.AutoLaunch)
             ApplyChaseOrbit(in plan);
@@ -300,17 +351,32 @@ public static partial class PoweredGuidanceWindow
     {
         double3 r = orbit.StateVectors.PositionCci;
         double3 v = orbit.StateVectors.VelocityCci;
+        double now = SimNow();
+
+        // Sim-time step for the command shaping below. Sim time, not wall clock, so a
+        // warp step is treated as the long interval it is; clamped because the first
+        // step after EXECUTE (and any warp jump) would otherwise hand it an interval
+        // that makes the slew limit meaningless in one direction or the other.
+        double stepDt = Math.Clamp(now - _s.LastStepTime, 0.0, GuidanceCycle);
+        _s.LastStepTime = now;
 
         // The ATTITUDE is frozen in the terminal phase, not the solver. Re-running
         // UPFG over a near-zero remaining arc makes its steering chase itself, which
         // is why the command holds _s.FrozenDir below — but the solve itself keeps
         // running, so tgo, vgo and the stage model stay live in the readouts instead
         // of freezing on whatever they happened to be ten seconds before cutoff.
+        //
+        // ONE SOLVE PER GUIDANCE CYCLE, not one per sim step — see GuidanceCycle. The
+        // phase machine and the commanded attitude below still run every step; only
+        // the solve is paced.
+        if (now - _s.LastSolveTime >= GuidanceCycle)
         {
-            // Rebuild from the live part tree every step so UPFG always sees current
+            // Rebuild from the live part tree every cycle so UPFG always sees current
             // masses and the actual remaining staging sequence. No usable thrust is a
             // normal transient during staging (old engine gone, new one not yet
-            // active): hold the last solution and wait rather than stopping.
+            // active): hold the last solution and wait rather than stopping. The cycle
+            // clock is NOT advanced in that case — the next step retries immediately
+            // rather than sitting out a whole cycle on a transient.
             UpfgVehicle live = BuildUpfgVehicle(vehicle);
             if (live == null)
             {
@@ -323,16 +389,21 @@ public static partial class PoweredGuidanceWindow
                 _s.Status = "";
                 _s.UpfgVehicle = live;
                 var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu);
-                _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle);
+                // dt is the interval this solve covers, which is what makes the
+                // convergence test rate-independent (see UpfgGuidance.Step).
+                double solveDt = double.IsNegativeInfinity(_s.LastSolveTime) ? 0.0 : now - _s.LastSolveTime;
+                _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
+                _s.LastSolveTime = now;
             }
         }
 
-        UpdatePhase(r, bodyRadius);
+        UpdatePhase(r, bodyRadius, stepDt);
     }
 
     // Ascent phase state machine. Transitions cascade naturally over successive
     // frames, so initializing mid-flight fast-forwards to the right phase.
-    private static void UpdatePhase(double3 r, double bodyRadius)
+    // stepDt is the sim time since the previous step, for the command slew limit.
+    private static void UpdatePhase(double3 r, double bodyRadius, double stepDt)
     {
         double3 up = double3.Normalize(r);
         double alt = r.Length() - bodyRadius;
@@ -363,27 +434,55 @@ public static partial class PoweredGuidanceWindow
                 {
                     _s.Phase = AscentPhase.Terminal;
                     _s.FrozenDir = _s.Upfg.Steering;
-                    _s.CutoffTime = SimNow() + _s.Upfg.Tgo;
+                    // tgo is measured from the SOLVE, not from now — the solution can
+                    // be most of a guidance cycle old by the time this trips, and
+                    // counting that cycle twice is a whole second of extra burn.
+                    _s.CutoffTime = _s.LastSolveTime + _s.Upfg.Tgo;
                 }
                 break;
         }
 
-        switch (_s.Phase)
+        double3 want = _s.Phase switch
         {
-            case AscentPhase.Vertical:
-                _s.CommandDir = up;
-                break;
-            case AscentPhase.Turn:
-                _s.CommandDir = TurnDir(up, turnPitch);
-                break;
-            case AscentPhase.ClosedLoop:
-                _s.CommandDir = _s.Upfg.Steering;
-                break;
-            case AscentPhase.Terminal:
-                _s.CommandDir = _s.FrozenDir;
-                break;
-        }
+            AscentPhase.Vertical => up,
+            AscentPhase.Turn => TurnDir(up, turnPitch),
+            AscentPhase.ClosedLoop => _s.Upfg.Steering,
+            AscentPhase.Terminal => _s.FrozenDir,
+            _ => default,
+        };
+
+        // The command SLEWS toward the solution rather than jumping to it. Every
+        // discontinuity upstream — a guidance cycle landing, the hand-over from the
+        // open-loop turn, a stage list that changed shape mid-burn — otherwise
+        // arrives at the flight computer as an instantaneous new attitude target,
+        // and that is what the vehicle jerks against.
+        _s.CommandDir = SlewToward(_s.CommandDir, want, UpfgTarget.DegToRad(MaxSlewDegS) * stepDt);
         _s.HasCommand = _s.CommandDir.Length() > 0.5;
+    }
+
+    /// <summary>
+    /// Rotate <paramref name="current"/> toward <paramref name="target"/> by at most
+    /// maxRad, about the axis between them. An uninitialised or degenerate current
+    /// direction snaps straight to the target — there is nothing to be continuous
+    /// with on the first command of a launch.
+    /// </summary>
+    private static double3 SlewToward(double3 current, double3 target, double maxRad)
+    {
+        if (target.Length() < 0.5)
+            return target;                       // nothing commanded
+        target = double3.Normalize(target);
+        if (current.Length() < 0.5 || maxRad <= 0.0)
+            return target;                       // first command, or a zero-length step
+
+        current = double3.Normalize(current);
+        double angle = AngleBetween(current, target);
+        if (angle <= maxRad)
+            return target;
+
+        double3 axis = double3.Cross(current, target);
+        if (axis.Length() < 1e-12)
+            return target;                       // exactly opposed: no axis to turn about
+        return RotateAbout(current, double3.Normalize(axis), maxRad);
     }
 
     // The open-loop turn's commanded pitch: down from vertical at the fixed rate
@@ -396,10 +495,18 @@ public static partial class PoweredGuidanceWindow
         return Math.Max(90.0 - _s.TurnRateDegS * elapsed, 0.0);
     }
 
-    // The gravity-turn attitude: the given pitch above the horizon, toward the
-    // launch azimuth. Azimuth comes from UPFG's converged steering when available
-    // (it knows the target plane), with the classic inclination/latitude formula
-    // as fallback.
+    // The gravity-turn attitude: the given pitch above the horizon, along UPFG's own
+    // launch azimuth once it has converged, with the classic inclination/latitude
+    // formula as the fallback until then.
+    //
+    // TAKING THE AZIMUTH FROM THE SOLVER IS THE POINT, not a shortcut. The turn hands
+    // over to that same steering vector, so flying its azimuth is what makes the
+    // hand-over seamless — the pitch profiles are matched before the switch and the
+    // heading already agrees. Deriving the azimuth from the target plane geometry
+    // instead looks more principled and is not: UPFG's azimuth includes the yaw that
+    // cancels the launch site's own eastward velocity, so a geometric one differs from
+    // it by a few degrees, and the whole of that difference then arrives as a heading
+    // change at the hand-over.
     private static double3 TurnDir(double3 up, double pitchDeg)
     {
         (double3 east, double3 north) = EnuBasis(up);
@@ -424,6 +531,13 @@ public static partial class PoweredGuidanceWindow
              + Math.Cos(pitch) * (Math.Cos(az) * north + Math.Sin(az) * east);
     }
 
+    /// <summary>
+    /// The target orbit plane's normal in CCI — the roll reference the commanded
+    /// attitude is built on (see AscentRollRef).
+    /// </summary>
+    private static double3 AscentPlaneNormal() => UpfgTarget.OrbitNormal(
+        UpfgTarget.DegToRad(_s.IncDeg), UpfgTarget.DegToRad(_s.LanDeg));
+
     private static string PhaseName(AscentPhase p) => p switch
     {
         AscentPhase.Vertical => "vertical rise",
@@ -433,11 +547,19 @@ public static partial class PoweredGuidanceWindow
         _ => "?",
     };
 
-    // The LAN of the plane with inclination incDeg that passes over the given CCI
-    // position right now (ascending-node solution, i.e. a north-easterly launch).
-    // Spherical trig: sin(lat) = sin(inc)·sin(u) on the orbit, and the node sits
-    // asin(tan lat / tan inc) of right ascension behind the site's meridian.
-    private static double LanOverhead(double3 r, double incDeg)
+    /// <summary>
+    /// The LAN of the plane with inclination incDeg that passes over the given CCI
+    /// position — not now, but <see cref="LanLeadSeconds"/> from now.
+    ///
+    /// Spherical trig: sin(lat) = sin(inc)·sin(u) on the orbit, so the node sits
+    /// asin(tan lat / tan inc) of right ascension behind the site's meridian. The
+    /// lead is a straight addition to the answer: turning the site east by an angle
+    /// moves its right ascension by that angle and leaves its latitude alone, and the
+    /// node offset depends only on the latitude.
+    ///
+    /// Ascending-node solution, i.e. a north-easterly launch.
+    /// </summary>
+    private static double LanOverhead(double3 r, double incDeg, IParentBody parent)
     {
         double len = r.Length();
         if (len < 1)
@@ -445,6 +567,11 @@ public static partial class PoweredGuidanceWindow
 
         double lat = Math.Asin(Math.Clamp(r.Z / len, -1.0, 1.0));
         double ra = Math.Atan2(r.Y, r.X);
+
+        // Where the pad will be by the time the vehicle is actually flying the plane.
+        double omega = parent?.GetAngularVelocity() ?? 0.0;
+        if (double.IsFinite(omega))
+            ra += omega * LanLeadSeconds;
 
         double inc = UpfgTarget.DegToRad(incDeg);
         // A plane can only contain the site if |inc| >= |lat|; clamp gives the

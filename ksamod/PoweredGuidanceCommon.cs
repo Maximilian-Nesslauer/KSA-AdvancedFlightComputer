@@ -340,6 +340,14 @@ public static partial class PoweredGuidanceWindow
                 return;
             performance.RecomputeForFlight(0f);
             _s.StageModel = KsaVehicleAdapter.Build(vehicle);
+            // The game's own total for the same recompute, latched for the panel to
+            // check our stage list against. Both are "from here on" — its simulated
+            // mole masses are re-seeded from the live tanks every recompute — so a
+            // disagreement means the adapter is reading the sequence list wrongly,
+            // which is exactly the failure that is invisible in a plausible-looking
+            // stage table. TotalDeltaV is a Volatile.Read of a float, so the draw
+            // thread can have this even though the Lists behind it can tear.
+            _s.StageModelKsaDv = performance.TotalDeltaV;
         }
         catch (Exception)
         {
@@ -369,6 +377,7 @@ public static partial class PoweredGuidanceWindow
                 {
                     Mode = s.Mode, Thrust = s.Thrust, Isp = s.Isp,
                     MassTotal = s.MassTotal, MassDry = s.MassDry, GLim = s.GLim,
+                    Seq = s.Seq, Engines = s.Engines,
                 });
             return copy;
         }
@@ -420,11 +429,13 @@ public static partial class PoweredGuidanceWindow
                 {
                     Mode = 1, Thrust = s.Thrust, Isp = s.Isp, GLim = gLim,
                     MassTotal = s.MassTotal, MassDry = massAtLimit,
+                    Seq = s.Seq, Engines = s.Engines,
                 });
                 limited.Add(new UpfgStage
                 {
                     Mode = 2, Thrust = s.Thrust, Isp = s.Isp, GLim = gLim,
                     MassTotal = massAtLimit, MassDry = s.MassDry,
+                    Seq = s.Seq, Engines = s.Engines,
                 });
             }
         }
@@ -618,7 +629,13 @@ public static partial class PoweredGuidanceWindow
 
         if (shouldCommand)
         {
-            CommandAttitude(vehicle, vehicle.Orbit.Parent, _s.CommandDir, fullEngage: !_s.WasEngaged);
+            // An ascent references its roll to its target plane (see SteerBody2Cci and
+            // AscentRollRef); a landing keeps the stock position-derived reference,
+            // which is well conditioned there because the thrust axis is fighting the
+            // velocity, not lying along the position vector.
+            double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir) : null;
+            CommandAttitude(vehicle, vehicle.Orbit.Parent, _s.CommandDir,
+                            fullEngage: !_s.WasEngaged, rollRef: rollRef);
             _s.WasEngaged = true;
         }
         else if (_s.WasEngaged)
@@ -780,16 +797,23 @@ public static partial class PoweredGuidanceWindow
     // Euler angles in the EclBody frame — the exact inverse of the conversion the
     // flight computer applies when it reads CustomAttitudeTarget.
     //
+    // rollRef, when supplied, replaces the ROLL REFERENCE that ComputeBurnBody2Cci
+    // derives from the position vector — see SteerBody2Cci for why an ascent must not
+    // use the stock one.
+    //
     // fullEngage=true additionally switches the FC into Custom/Auto tracking — done
     // once on engage, exactly like clicking "Apply Euler Target" in the attitude tab.
-    private static void CommandAttitude(Vehicle vehicle, IParentBody parent, double3 dir, bool fullEngage)
+    private static void CommandAttitude(Vehicle vehicle, IParentBody parent, double3 dir,
+                                        bool fullEngage, double3? rollRef = null)
     {
         double3 r = vehicle.Orbit.StateVectors.PositionCci;
 
         float3 posDir = float3.Pack(double3.Normalize(r));
         float3 steerDir = float3.Pack(double3.Normalize(dir));
 
-        doubleQuat desiredBody2Cci = BurnTarget.ComputeBurnBody2Cci(posDir, steerDir);
+        doubleQuat desiredBody2Cci = rollRef.HasValue
+            ? SteerBody2Cci(double3.Normalize(dir), rollRef.Value)
+            : BurnTarget.ComputeBurnBody2Cci(posDir, steerDir);
         doubleQuat frame2Cci = VehicleReferenceFrameEx.GetEclBody2Cci(parent.GetCce2Cci());
 
         // Solve Concatenate(value, frame2Cci) == desired  ->  value = Concatenate(desired, inverse(frame2Cci)).
@@ -803,6 +827,89 @@ public static partial class PoweredGuidanceWindow
             fc.AttitudeFrame = VehicleReferenceFrame.EclBody;
             fc.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
         }
+    }
+
+    /// <summary>
+    /// The ascent's roll reference: the target orbit plane, turned by the roll the
+    /// vehicle ALREADY HAD when guidance engaged.
+    ///
+    /// The plane on its own is what makes the reference continuous — it is
+    /// perpendicular to the steering from the pad to cutoff, where cross(steer,
+    /// position) is degenerate for the whole vertical rise (see SteerBody2Cci). But
+    /// the plane on its own also picks a particular roll, and a vehicle sitting on the
+    /// pad at some other one is then ordered to spin about its long axis the moment it
+    /// can move. Nothing about an ascent needs a specific roll, so this measures the
+    /// vehicle's own at engagement and holds THAT, fixed relative to the plane: no
+    /// roll is ever commanded, and there is still nothing to snap.
+    /// </summary>
+    private static double3 AscentRollRef(Vehicle vehicle, double3 steer)
+    {
+        if (steer.Length() < 0.5)
+            return -AscentPlaneNormal();
+
+        double3 x = double3.Normalize(steer);
+
+        // The plane-referenced frame perpendicular to the thrust axis. MINUS the
+        // normal, so that with the steering along the velocity this is cross(v, r) —
+        // the same direction the stock construction produces where it works.
+        double3 baseRef = -AscentPlaneNormal();
+        double3 yRef = baseRef - double3.Dot(baseRef, x) * x;
+        if (yRef.Length() < 1e-9)
+            return baseRef;                     // SteerBody2Cci substitutes for this
+        yRef = double3.Normalize(yRef);
+        double3 zRef = double3.Cross(x, yRef);
+
+        // Latched once per engagement, from the vehicle's own body Y — the axis
+        // ComputeBurnBody2Cci puts the roll reference on.
+        if (!_s.RollLatched)
+        {
+            double3 bodyY = new double3(0, 1, 0).Transform(KsaFrameBridge.BodyToCci(vehicle));
+            double c = double3.Dot(bodyY, yRef), s = double3.Dot(bodyY, zRef);
+            _s.RollOffset = (Math.Abs(c) > 1e-9 || Math.Abs(s) > 1e-9) ? Math.Atan2(s, c) : 0.0;
+            _s.RollLatched = true;
+        }
+
+        return Math.Cos(_s.RollOffset) * yRef + Math.Sin(_s.RollOffset) * zRef;
+    }
+
+    /// <summary>
+    /// The body→CCI orientation that points thrust along <paramref name="steerDir"/>,
+    /// built exactly as KSA's BurnTarget.ComputeBurnBody2Cci builds it (body X along
+    /// thrust, body Y the roll reference, body Z their cross) but with the roll
+    /// reference supplied instead of derived from the position vector.
+    ///
+    /// WHY NOT THE STOCK ONE, ON AN ASCENT. ComputeBurnBody2Cci takes the roll
+    /// reference from cross(steer, position) — and on an ascent those two vectors are
+    /// THE SAME VECTOR at lift-off and within a fraction of a degree of it through the
+    /// start of the pitch-over. The cross product normalises to zero, the stock code
+    /// substitutes an arbitrary orthogonal direction, and then, the moment the pitch
+    /// program makes the cross product representable in float, the reference SNAPS
+    /// from that substitute to the plane normal. The thrust direction never moved; the
+    /// commanded roll jumped by whatever the angle between them happened to be, and
+    /// the flight computer chased it with everything it had.
+    ///
+    /// The reference passed in by the ascent is the target plane normal, which is
+    /// perpendicular to the steering all the way to orbit and turns as slowly as the
+    /// plane does — i.e. the vehicle flies wings-level to its own orbital plane from
+    /// the pad to cutoff, with no discontinuity anywhere in between.
+    /// </summary>
+    private static doubleQuat SteerBody2Cci(double3 steerDir, double3 rollRef)
+    {
+        double3 x = double3.Normalize(steerDir);
+
+        // Component of the reference perpendicular to the thrust axis. Degenerate only
+        // if the two are parallel, which the plane normal never is on an ascent.
+        double3 y = rollRef - double3.Dot(rollRef, x) * x;
+        y = y.Length() > 1e-9
+            ? double3.Normalize(y)
+            : double3.Normalize(double3.Cross(x, Math.Abs(x.Z) < 0.9 ? new double3(0, 0, 1) : new double3(1, 0, 0)));
+
+        double3 z = double3.Cross(x, y);
+        return doubleQuat.CreateFromRotationMatrix(new double4x4(
+            x.X, x.Y, x.Z, 0.0,
+            y.X, y.Y, y.Z, 0.0,
+            z.X, z.Y, z.Z, 0.0,
+            0.0, 0.0, 0.0, 1.0));
     }
 
     // The steering direction expressed as the same pitch/heading numbers the in-game

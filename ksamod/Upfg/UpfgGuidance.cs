@@ -66,8 +66,14 @@ public sealed class UpfgGuidance
     // r, v: inertial (CCI) state in metres and m/s. vehicle: the staged model,
     // rebuilt by the caller from live data so stage 0 reflects the current mass.
     // mode is latched at setup (after Reset); pass 2/3 for the landing modes.
+    //
+    // dt is the sim interval this call covers. Pass it when the caller runs on a
+    // fixed guidance cycle: convergence is then measured against how far tgo SHOULD
+    // have moved (a converged solution's tgo falls one second per second) rather than
+    // against how far it moved at all, which is a test that any high enough call rate
+    // passes by definition. Zero (the default) keeps the original rate-dependent test.
     public void Step(double3 r, double3 v, double mass, double mu,
-                     UpfgTarget target, UpfgVehicle vehicle, int mode = 1)
+                     UpfgTarget target, UpfgVehicle vehicle, int mode = 1, double dt = 0.0)
     {
         if (!_setup)
         {
@@ -77,7 +83,7 @@ public sealed class UpfgGuidance
         }
         else
         {
-            Run(r, v, mass, mu, target, vehicle);
+            Run(r, v, mass, mu, target, vehicle, dt);
         }
     }
 
@@ -122,7 +128,7 @@ public sealed class UpfgGuidance
     }
 
     private void Run(double3 r, double3 v, double mass, double mu,
-                     UpfgTarget target, UpfgVehicle vehicle)
+                     UpfgTarget target, UpfgVehicle vehicle, double dt)
     {
         double prevTgoForConvergence = _prev.Tgo;
 
@@ -217,7 +223,7 @@ public sealed class UpfgGuidance
             var trimmed = new UpfgVehicle();
             for (int i = 0; i < vehicle.Stages.Count - 1; i++)
                 trimmed.Stages.Add(vehicle.Stages[i]);
-            Run(r, v, mass, mu, target, trimmed);
+            Run(r, v, mass, mu, target, trimmed, dt);
             return;
         }
 
@@ -299,7 +305,7 @@ public sealed class UpfgGuidance
         }
 
         // Convergence: tgo settled between iterations
-        EvaluateConvergence(prevTgoForConvergence, tgo);
+        EvaluateConvergence(prevTgoForConvergence, tgo, dt);
 
         _prev = new State
         {
@@ -432,10 +438,24 @@ public sealed class UpfgGuidance
         vbias = vgo - vthrust;
     }
 
-    private void EvaluateConvergence(double prevTgo, double curTgo)
+    /// <summary>
+    /// "tgo has settled" — the original's convergence test, made rate-independent.
+    ///
+    /// A converged solution's tgo does not stand still, it counts DOWN in real time,
+    /// so the quantity that goes to zero on convergence is the change in tgo net of
+    /// the interval that has passed. The original compared raw successive values,
+    /// which is the same thing when the caller runs one cycle per second (as the
+    /// reference implementation did) and is vacuously true when it runs at 60 Hz.
+    /// Callers that do not pass dt keep the original test.
+    ///
+    /// Latching is deliberate: the phase machine promotes the turn to closed loop on
+    /// this flag and arms the terminal countdown with it, and neither should be given
+    /// back over one noisy cycle mid-ascent.
+    /// </summary>
+    private void EvaluateConvergence(double prevTgo, double curTgo, double dt)
     {
         if (prevTgo <= 0) return;
-        double tgodiff = (curTgo - prevTgo) / prevTgo;
+        double tgodiff = (curTgo - (prevTgo - dt)) / prevTgo;
         if (Math.Abs(tgodiff) < 0.01)
             Converged = true;
     }

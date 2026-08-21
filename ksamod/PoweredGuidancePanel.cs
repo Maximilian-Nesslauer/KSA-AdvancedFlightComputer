@@ -60,7 +60,7 @@ public static partial class PoweredGuidanceWindow
         // toward LAN 0.
         if (!_s.LanSeeded)
         {
-            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, orbit.Parent);
             _s.LanSeeded = true;
         }
 

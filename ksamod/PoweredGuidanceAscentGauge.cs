@@ -63,7 +63,7 @@ public static partial class PoweredGuidanceWindow
             // A new inclination makes the old LAN meaningless — the plane it named
             // no longer passes overhead — so re-seed it from where the vehicle is.
             if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
-                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             GaugeRow("LAN (deg)", "##lan", ref _s.LanDeg);
         }
 
@@ -72,7 +72,7 @@ public static partial class PoweredGuidanceWindow
             ImGui.Text("");
             ImGui.NextColumn();
             if (ImGui.Button("LAN from position"))
-                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             ImGui.NextColumn();
         }
 
@@ -97,8 +97,10 @@ public static partial class PoweredGuidanceWindow
             case ChaseStatus.Ok:
                 GaugeRowText("Target orbit",
                     $"{plan.TargetPeKm:F1} x {plan.TargetApKm:F1} km, inc {plan.IncDeg:F2} deg");
+                // To IGNITION, which leads the plane crossing by LanLeadSeconds.
                 GaugeRowText("Launch window",
-                    $"T-{plan.WaitSec:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")})");
+                    $"T-{plan.WaitSec:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")}, "
+                    + $"{LanLeadSeconds:F0} s lead)");
                 break;
         }
 
