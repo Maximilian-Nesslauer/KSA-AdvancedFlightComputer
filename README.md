@@ -61,7 +61,7 @@ enabled = true
 
 | Package | Purpose | Tested version |
 | --- | --- | --- |
-| [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader, required at runtime (see [Installation](#installation)) | 0.4.5 |
+| [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader, required at runtime (see [Installation](#installation)) | 0.4.6 |
 
 ## Build dependencies
 
@@ -69,7 +69,7 @@ Required only to build the mod from source. Targets **.NET 10**.
 
 | Package | Source | Tested Version |
 | --- | --- | --- |
-| [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.4.6 |
+| [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.3.6 |
 | [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) | NuGet | 2.4.2 |
 
 ## License
