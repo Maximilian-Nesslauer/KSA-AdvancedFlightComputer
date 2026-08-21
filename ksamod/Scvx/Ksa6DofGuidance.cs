@@ -35,6 +35,9 @@ public sealed class Ksa6DofGuidance
     private const int NX = 14;
     private const int NU = 4;
 
+    /// <summary>Quaternion offset in the state vector, for the seed resampling below.</summary>
+    private const int IQ = Dynamics6Dof.IQ;
+
     private readonly Scvx6DofConfig _cfg;
     private readonly Dynamics6Dof.Params _dyn;
     private readonly Scvx6DofSolver _solver;
@@ -696,35 +699,114 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
-    /// The current plan, shifted forward to now and re-anchored at the vehicle - the
-    /// receding-horizon seed. Shared by Update and BeginWarmRestart so the two cannot
-    /// drift apart; the restart's whole point is that it seeds from the SAME
-    /// trajectory the warm loop was using, not a different one.
+    /// The current plan RESAMPLED onto the new horizon and re-anchored at the vehicle -
+    /// the receding-horizon seed. Shared by Update and BeginWarmRestart so the two
+    /// cannot drift apart.
+    ///
+    /// WHAT THIS REPLACED. The previous version shifted by a WHOLE NUMBER OF NODES:
+    /// shift = round(elapsed / dt_old), new node k = old node k+shift, tail clamped to
+    /// the last node. Both halves of that are wrong.
+    ///
+    /// THE TIMING. Node 0 is overwritten with the measured state, so it sits at
+    /// old-plan time `elapsed`. Node 1 was old node 1+shift, sitting at old-plan time
+    /// (1+shift)*dt_old. Interval 0 therefore spanned
+    ///
+    ///     (1 + shift) * dt_old  -  elapsed
+    ///
+    /// of trajectory while its collocation constraint assumes it spans exactly one new
+    /// dt. Because shift is ROUNDED those disagree by up to half a node, and at 80 m/s
+    /// with dt around 0.4 s half a node is 16 m of vertical position that the seed
+    /// asserts and the dynamics do not.
+    ///
+    /// Flights 20260821-090245 and -090504 are that arithmetic: mean gated ratio 0.02
+    /// and 0.35 while shift was zero, 6 to 34 the moment it reached one, the defect on
+    /// rz at interval 0 in 51 of 53 refusals, and every refusal streak beginning on a
+    /// shifted cycle with no prior refusal. Those cycles accepted no SCvx step, so the
+    /// reported figure IS the seed: mean 19.6 m, worst 78.3 m.
+    ///
+    /// THE TAIL. Clamping meant the last `shift` nodes were copies of the old final
+    /// node - intervals joining a state to itself, which the collocation reads as a
+    /// full dt of unexplained stillness.
+    ///
+    /// WHAT IT DOES NOW. Samples the old plan at the times the new grid actually wants,
+    ///
+    ///     t_k = elapsed + k * sigmaNew / (n - 1)
+    ///
+    /// by linear interpolation between the bracketing old nodes. On the normal path
+    /// sigmaNew is the remaining burn time, so t_0 = elapsed and t_(n-1) = the old
+    /// plan's own terminal time: the horizon shrinks onto a FIXED endpoint, the
+    /// terminal node stays the terminal node, and nothing is rounded or duplicated.
+    ///
+    /// Interval 0 then spans exactly one new dt of the old plan, so its collocation is
+    /// consistent by construction. What remains at interval 0 is the genuine drift
+    /// between the measured state and where the plan said the vehicle would be - a real
+    /// thing the solver should answer for, unlike the rounding.
     /// </summary>
-    private void BuildShiftedSeed(double[] x0, double simNow,
+    /// <param name="sigmaNew">
+    /// Burn time the NEW solve will use. The seed is stretched onto it, so this must be
+    /// the same value handed to Reseed or Initialize - a different one re-times the
+    /// whole reference and reintroduces exactly the fault this removes.
+    /// </param>
+    private void BuildShiftedSeed(double[] x0, double simNow, double sigmaNew,
                                   out double[] xs, out double[] us, out double elapsed)
     {
-        double dt = _planSigma / (_n - 1);
+        double dtOld = Math.Max(_planSigma / (_n - 1), 1e-9);
         elapsed = Math.Max(0.0, simNow - _solveTime);
-        int shift = Math.Clamp((int)Math.Round(elapsed / dt), 0, _n - 2);
-        LastSeedShift = shift;
+
+        // Recorded, not used: the seed no longer shifts by whole nodes. Kept because it
+        // is the quantity the refusal correlation was measured against, so logs from
+        // either side of this change stay comparable.
+        LastSeedShift = (int)(elapsed / dtOld);
+
+        double dtNew = sigmaNew / (_n - 1);
 
         xs = new double[_n * NX];
         us = new double[_n * NU];
         for (int k = 0; k < _n; k++)
         {
-            int src = Math.Min(k + shift, _n - 1);
-            Array.Copy(_planX, src * NX, xs, k * NX, NX);
-            Array.Copy(_planU, src * NU, us, k * NU, NU);
+            // Clamped at the old plan's END. Only reachable when the new horizon runs
+            // past what the old plan covered - SigmaMin or MinimumBurnTime holding
+            // sigma up late in a descent, or a warm restart seeding a longer burn. The
+            // old plan has nothing to say beyond its terminal node and holding the
+            // target is the honest answer; on the normal path t_k lands exactly on
+            // _planSigma at k = n-1 and this never binds.
+            double t = Math.Clamp(elapsed + k * dtNew, 0.0, _planSigma);
+            double sNode = Math.Clamp(t / dtOld, 0.0, _n - 1);
+            int i0 = Math.Clamp((int)Math.Floor(sNode), 0, _n - 1);
+            int i1 = Math.Min(i0 + 1, _n - 1);
+            double a = sNode - i0;
+
+            for (int i = 0; i < NX; i++)
+                xs[k * NX + i] = _planX[i0 * NX + i] * (1.0 - a) + _planX[i1 * NX + i] * a;
+            for (int j = 0; j < NU; j++)
+                us[k * NU + j] = _planU[i0 * NU + j] * (1.0 - a) + _planU[i1 * NU + j] * a;
+
+            // THE DOUBLE COVER, between the two nodes being blended. q and -q are the
+            // same rotation, so a sign disagreement across the bracket interpolates
+            // through zero and comes back as a garbage attitude once normalised.
+            // Adjacent nodes of a solved plan are normally on one branch, but nothing
+            // enforces it and the failure would be silent.
+            double dot = 0.0;
+            for (int i = 0; i < 4; i++)
+                dot += _planX[i0 * NX + IQ + i] * _planX[i1 * NX + IQ + i];
+            if (dot < 0.0)
+                for (int i = 0; i < 4; i++)
+                    xs[k * NX + IQ + i] = _planX[i0 * NX + IQ + i] * (1.0 - a)
+                                        - _planX[i1 * NX + IQ + i] * a;
+
+            // Blending two unit quaternions gives a shorter one, and the solver's own
+            // norm constraint is linearised about the reference - a non-unit reference
+            // biases that row rather than merely being imprecise.
+            Normalize(xs.AsSpan(k * NX + IQ, 4));
         }
 
         // Seed node 0 with the MEASURED state. It is what the equality will force
         // anyway, and starting the reference there means even a cycle that accepts no
         // step still hands back a plan anchored at the vehicle rather than at the old
-        // plan's node `shift`.
+        // plan's prediction for now.
         Array.Copy(x0, 0, xs, 0, NX);
 
-        // Put the shifted plan on the MEASUREMENT quaternion branch. Without this, a
+        // Put the resampled plan on the MEASUREMENT quaternion branch. Without this a
         // sign flip in the measured attitude - a no-op physically - lands as ~1.5 of
         // quaternion defect at interval 0 and gets the plan refused every cycle until
         // the circuit breaker throws it away. See AlignQuaternionBranch.
@@ -758,7 +840,7 @@ public sealed class Ksa6DofGuidance
             return false;
 
         CommitInputs();
-        BuildShiftedSeed(x0, simNow, out double[] xSeed, out double[] uSeed, out _);
+        BuildShiftedSeed(x0, simNow, sigmaSeed, out double[] xSeed, out double[] uSeed, out _);
         BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
         return true;
     }
@@ -1277,12 +1359,14 @@ public sealed class Ksa6DofGuidance
         // Bounded worst case from here on: this runs inside the guidance loop.
         ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
 
-        BuildShiftedSeed(x0, simNow, out double[] xs, out double[] us, out double elapsed);
-
+        // SIGMA FIRST, because the seed is stretched onto it rather than shifted by
+        // whole nodes - BuildShiftedSeed needs the horizon it is resampling to.
+        //
         // FIXED TIME: count the COMMITTED burn time down rather than letting the
         // solver re-choose it every cycle. Re-choosing is what made successive plans
         // change shape instead of merely advancing, and it is what let the
         // regularisers stretch sigma to make themselves cheaper.
+        double elapsed = Math.Max(0.0, simNow - _solveTime);
         double sigma;
         if (FixedTime)
         {
@@ -1293,6 +1377,8 @@ public sealed class Ksa6DofGuidance
         {
             sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
         }
+
+        BuildShiftedSeed(x0, simNow, sigma, out double[] xs, out double[] us, out _);
         // A cycle whose predecessor refused gets the larger budget, so it can take the
         // second and third iterations that let SCvx shrink its way to an accepted
         // step. A healthy cycle never reaches the deadline at all.

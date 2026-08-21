@@ -774,7 +774,26 @@ public static partial class PoweredGuidanceWindow
         // refusing every re-solve thereafter. One-way stepping cannot recover from
         // that on its own, so step BACK UP one rung and refuse to go that coarse
         // again for the rest of the run.
-        if (_s.RefusalRun >= RefusalsBeforeBackOff && _s.GateIndex > _s.BackedOffTo)
+        // GateIndex > 0 IS A SEPARATE CONDITION FROM GateIndex > BackedOffTo, and both
+        // are needed. The second asks "have we already backed off from this rung this
+        // run", and BackedOffTo starts at -1 meaning never - so at the FINEST rung
+        // (index 0) it reads 0 > -1, passes, and lets finer become -1. NodeRungs is
+        // ordered finest-first, so index 0 is 50 nodes and there is nothing finer to
+        // step to; NodeRungs[-1] then throws while evaluating the argument to RebuildAt.
+        //
+        // GateIndex reaches 0 on the ordinary path - the ladder asking for 50 while the
+        // guidance already runs at 40 sets it there to record "already finer than
+        // asked" - after which the vehicle sits one refusal run away from the crash for
+        // the rest of the flight. Four flights hit it (6dof-faults.log, gate=0
+        // rungFloor=-1 every time); 20260821-093905 died at 360 m on five consecutive
+        // refusals of 1.1-1.2x tolerance, RefusalsBeforeBackOff being exactly 5.
+        //
+        // The guard also protects RungFloor below: with finer = -1 it was set to -1,
+        // which as an index floor means no rung is permitted at all, and would have
+        // silently disabled the node ladder for the rest of the run had the throw ever
+        // been swallowed rather than ending the flight.
+        if (_s.RefusalRun >= RefusalsBeforeBackOff && _s.GateIndex > 0
+            && _s.GateIndex > _s.BackedOffTo)
         {
             int finer = _s.GateIndex - 1;
             // Record the attempt BEFORE trying, so a rebuild that fails is not retried

@@ -28,6 +28,20 @@ public static partial class PoweredGuidanceWindow
                 | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
         {
             GaugeRow("Target altitude (m)", "##sdtargetalt", ref _s.SixDofTargetAltM);
+
+            // HANDOFF SITS WITH TARGET ALTITUDE, not in the parameter fold, because the
+            // two only mean anything relative to each other: the handoff must be ABOVE
+            // the target or it never fires, and the guidance then flies to the target
+            // and sits there. Separating them by a collapsed section made it possible
+            // to move one and forget the other, which reads in flight as the hover
+            // simply not happening.
+            GaugeRowCheck("Hand off to terminal hover", "##sdhover", ref _s.SixDofHoverHandoff);
+            using (new ImGuiDisabledScope(!_s.SixDofHoverHandoff))
+                GaugeRow("Handoff altitude (m)", "##sdhoveralt", ref _s.SixDofHoverHandoffAltM);
+            if (_s.SixDofHoverHandoff && _s.SixDofHoverHandoffAltM <= _s.SixDofTargetAltM)
+                GaugeRowText("  warning", "at or below target altitude - will never fire",
+                    new float4(1f, 0.8f, 0.3f, 1f));
+
             ImGuiHelper.EndRegion();
         }
 
@@ -167,13 +181,6 @@ public static partial class PoweredGuidanceWindow
         _s.SixDofColdIntervalS = Math.Clamp(_s.SixDofColdIntervalS, 0.0, 1.0);
 
         GaugeRowCheck("Estimate unmodelled accel", "##sdbias", ref _s.SixDofBiasEnabled);
-
-        GaugeRowCheck("Hand off to terminal hover", "##sdhover", ref _s.SixDofHoverHandoff);
-        using (new ImGuiDisabledScope(!_s.SixDofHoverHandoff))
-            GaugeRow("Handoff altitude (m)", "##sdhoveralt", ref _s.SixDofHoverHandoffAltM);
-        if (_s.SixDofHoverHandoff && _s.SixDofHoverHandoffAltM <= _s.SixDofTargetAltM)
-            GaugeRowText("  warning", "at or below target altitude - will never fire",
-                new float4(1f, 0.8f, 0.3f, 1f));
 
         GaugeRow("Re-solve every (s)", "##sdreplan", ref _s.SixDofReplanSec);
         GaugeRow("Thrust fraction", "##sdthrustfrac", ref _s.SixDofThrustFrac);

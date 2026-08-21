@@ -368,12 +368,12 @@ public sealed class VehicleAutopilotState
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;
-    public double SixDofTargetAltM = 10.0;
+    public double SixDofTargetAltM = 3.0;
     public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
     public bool SixDofHoverHandoff = true;
-    public double SixDofHoverHandoffAltM = 30.0;
+    public double SixDofHoverHandoffAltM = 3.5;
     public double SixDofReplanSec = 0.1;
     public double SixDofThrustFrac = 1.0;  // share of total thrust the burn uses
     public double SixDofRateDampShare = 0.002;
@@ -400,7 +400,7 @@ public sealed class VehicleAutopilotState
     /// global sink and grants the first claimant — see SixDofLog.Start, which refuses
     /// a second owner rather than interleaving two craft into one CSV.
     /// </summary>
-    public bool SixDofLogging = true;
+    public bool SixDofLogging = false;
 
     // ------------------------------------------------------------------ flown track
     //
