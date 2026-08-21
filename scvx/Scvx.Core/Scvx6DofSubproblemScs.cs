@@ -13,9 +13,9 @@ namespace Scvx;
 /// Formulated for a solver that takes a quadratic objective directly. The
 /// three sum_squares penalties go into P; there are no epigraph variables and
 /// no epigraph cones, so this problem is smaller (n = N*NX + N*NU + (N-1)*NX +
-/// 1, vs +4 and +3 extra large SOCs for the ECOS port) and the SOC set is just
-/// the N genuine gimbal cones — the ONLY nonlinearity that is actually conic
-/// rather than quadratic.
+/// 1, vs +4 and +3 extra large SOCs for the ECOS port) and every SOC in it is a
+/// genuine conic constraint rather than an epigraph: N gimbal cones, N tilt
+/// cones, and the glideslope cones when enabled.
 ///
 /// SCS stacks equality, inequality and SOC rows into ONE matrix A (its zero
 /// cone is rows [0,z), positive orthant is [z,z+l), SOC blocks follow in q
@@ -104,12 +104,18 @@ public sealed class Scvx6DofSubproblemScs
         _nVars = _oTm + _nTm;
 
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2);
+        // FIVE orthant rows per node, not six. The sixth was the LINEARISED tilt
+        // constraint; it is now an exact second-order cone in the block below, so the
+        // row is gone rather than merely changed. See AssembleCone's tilt block.
         // + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows
         // + _nTm non-negativity rows for the terminal-miss slacks
-        _lDim = _n * 6 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm;
-        _socDims = new int[_n + _nGs];
+        _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm;
+        _socDims = new int[_n + _nGs + _n];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
+        // Tilt cones LAST, so adding them leaves every pre-existing block at the row
+        // offset it already had - anything reading a cone index keeps its meaning.
+        for (int k = 0; k < _n; k++) _socDims[_n + _nGs + k] = 3; // tilt cone per node
         _nCone = _nEq + _lDim + _socDims.Sum();
 
         _A = new CcsAssembler(_nCone, _nVars);
@@ -207,17 +213,22 @@ public sealed class Scvx6DofSubproblemScs
         // equilibration does (apply_limit in scs_matrix.c, "need to bound to 1
         // for rows of all zeros, otherwise blows up").
         //
-        // This is not defensive padding — it is load-bearing here. The TILT row
-        // linearises R22 >= cos(tilt_max) about the reference quaternion, giving
-        // gradient (-4*qx, -4*qy), which is EXACTLY ZERO for a perfectly vertical
-        // booster and tiny for a nearly-vertical one — which is the whole flight.
-        // Its constant term stays O(0.13). Dividing that row by a ~1e-3 norm
-        // amplifies the right-hand side by a thousand and wrecks the conditioning
-        // of an otherwise well-scaled problem. Unbounded, this made every SCvx
-        // iteration past the first fail to converge in 100k ADMM iterations, at
-        // any trust-region size — and shrinking the trust region did not help,
-        // which is what gave it away: a genuinely too-large step would have got
-        // easier as the region shrank.
+        // HISTORY, because this looks like defensive padding and was not. The tilt
+        // constraint used to be an orthant row linearising R22 >= cos(tilt_max)
+        // about the reference quaternion, with gradient (-4*qx, -4*qy) — EXACTLY
+        // ZERO for a perfectly vertical booster and tiny for a nearly-vertical one,
+        // which is the whole flight — against a constant term of O(0.13). Dividing
+        // that row by a ~1e-3 norm amplified the right-hand side by a thousand and
+        // wrecked the conditioning of an otherwise well-scaled problem. Unbounded,
+        // it made every SCvx iteration past the first fail to converge in 100k ADMM
+        // iterations at any trust-region size — and shrinking the trust region did
+        // not help, which is what gave it away.
+        //
+        // That row no longer exists: the tilt limit is an exact SOC now (see
+        // AssembleCone), whose radius row is genuinely empty but takes its block's
+        // shared scale from the two quaternion rows beside it, so it never reaches
+        // the clamp. The clamp stays because SCS applies the same one for the same
+        // reason, and a future row that vanishes should degrade rather than explode.
         // Only the LOWER bound is applied. SCS pairs it with an upper clamp of
         // 1e4, but that is inside its own Ruiz iteration on already-scaled data;
         // imposing it on raw rows here is actively harmful — the mass trust-region
@@ -488,15 +499,6 @@ public sealed class Scvx6DofSubproblemScs
             AddA(row, IU(k, Dynamics6Dof.ITAU), -1.0);
             _b[row++] = _cfg.TauRollMax;
 
-            double qx = xbar[k * NX + Dynamics6Dof.IQ + 1];
-            double qy = xbar[k * NX + Dynamics6Dof.IQ + 2];
-            double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
-            double dqx = -4.0 * qx, dqy = -4.0 * qy;
-            double rhs = _cfg.CosTilt - r22 + dqx * qx + dqy * qy;
-            AddA(row, IX(k, Dynamics6Dof.IQ + 1), -dqx);
-            AddA(row, IX(k, Dynamics6Dof.IQ + 2), -dqy);
-            _b[row++] = -rhs;
-
             AddA(row, IX(k, 2), -1.0);
             _b[row++] = -_cfg.GroundFloor;
         }
@@ -597,6 +599,64 @@ public sealed class Scvx6DofSubproblemScs
 
             AddA(row, IX(node, Dynamics6Dof.IR + 1), -1.0);
             _b[row++] = -xf[Dynamics6Dof.IR + 1];
+        }
+
+        // TILT, as an EXACT second-order cone:  ||(qx[k], qy[k])|| <= sin(tiltMax/2).
+        //
+        // WHAT THIS REPLACED. The tilt limit is tilt <= tiltMax with
+        // tilt = acos(R22) and R22 = 1 - 2(qx^2 + qy^2), and it used to be enforced
+        // by LINEARISING R22 >= cos(tiltMax) about the reference quaternion:
+        //
+        //     r22  = 1 - 2*(qx^2 + qy^2)                 evaluated at the reference
+        //     dqx  = -4*qx,  dqy = -4*qy                 its gradient
+        //     row  : -dqx*qx[k] - dqy*qy[k] <= -(cos(tiltMax) - r22 + dqx*qx + dqy*qy)
+        //
+        // one ORTHANT row per node, rebuilt every SCvx iteration from xbar.
+        //
+        // WHY THAT FAILED, AND ONLY WHEN VERTICAL. The gradient (-4*qx, -4*qy) is
+        // EXACTLY ZERO for a perfectly vertical vehicle and tiny for a nearly
+        // vertical one - so the row degenerated to 0 <= 1 - cos(tiltMax), which is
+        // trivially true and carries no information about qx or qy at all. To first
+        // order the subproblem could not see the tilt limit.
+        //
+        // Worse than merely blind: R22 is CONCAVE in (qx, qy), so its linearisation
+        // OVER-estimates it, and the linearised feasible set is a RELAXATION. The
+        // subproblem would tilt to the trust-region bound believing it free, the
+        // nonlinear defect check would reject the step, and the next iteration -
+        // linearising about a now-tilted reference with a large gradient - would haul
+        // it back. That oscillation is why a descent that was already vertical
+        // converged far worse than a bellyflop, and why nudging the vehicle a few
+        // degrees off vertical fixed it: a non-zero qx, qy restores the gradient.
+        // No amount of proximal weight can help, because the fault is in the
+        // FEASIBLE SET, not in the conditioning of the objective.
+        //
+        // WHY THIS FORM IS EXACT. Squaring out the same inequality:
+        //     1 - 2(qx^2 + qy^2) >= cos(tiltMax)
+        //       <=> qx^2 + qy^2 <= (1 - cos(tiltMax))/2 = sin^2(tiltMax/2)
+        // which is a norm ball of CONSTANT radius on (qx, qy) - already convex, so
+        // it needs no linearisation, has no reference dependence, and is identical
+        // at every iteration including one seeded dead vertical.
+        //
+        // It relies on ||q|| = 1, but so did the expression it replaces: R22 is only
+        // 1 - 2(qx^2 + qy^2) for a unit quaternion. The unit-norm equality is itself
+        // linearised (see the qbar.q = 1 rows in AssembleEqualities), so this cone is
+        // exact to precisely the degree the orthant row already was.
+        //
+        // SOC rows are s = b - Ax with s[0] >= ||s[1:]||, so s[0] is the constant
+        // radius - a row with NO matrix entries at all - and s[1], s[2] are qx, qy.
+        // The all-zero row is harmless: EquilibrateRows gives every row of a SOC
+        // block the block's shared scale, and rows 1 and 2 carry the quaternion
+        // scale, so nothing is divided by a vanishing norm.
+        double tiltRadius = _cfg.SinHalfTilt;
+        for (int k = 0; k < _n; k++)
+        {
+            _b[row++] = tiltRadius;
+
+            AddA(row, IX(k, Dynamics6Dof.IQ + 1), -1.0);
+            _b[row++] = 0.0;
+
+            AddA(row, IX(k, Dynamics6Dof.IQ + 2), -1.0);
+            _b[row++] = 0.0;
         }
 
         if (row != _nCone)

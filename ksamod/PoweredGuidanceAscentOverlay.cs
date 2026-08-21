@@ -20,6 +20,7 @@ public static partial class PoweredGuidanceWindow
     // instead of throwing away whichever one was on screen.
     public const int TraceCapacity = 2400;
     private const double TraceIntervalSec = 0.5;
+    private const double TraceMinAltitude = 1000.0;
 
     // Newest samples are held back from the drawing. The most recent one sits
     // within a sample interval of the vehicle, so drawing it puts a short line
@@ -48,6 +49,13 @@ public static partial class PoweredGuidanceWindow
             _s.TraceParent = parent;
         }
 
+        // ONLY THE POWERED CLIMB. Sampling whenever the vehicle exists filled the
+        // ring with the pad it sat on and the orbit it coasted in afterwards, so the
+        // stretch actually worth looking at — the ascent — was a small part of a
+        // buffer mostly spent on a stationary dot and a closed ellipse.
+        if (!IsAscentTraceWorthy(vehicle, orbit, parent))
+            return;
+
         double now = SimNow();
         if (now - _s.TraceLastTime < TraceIntervalSec)
             return;
@@ -63,6 +71,19 @@ public static partial class PoweredGuidanceWindow
             _s.TraceCount++;
     }
 
+    /// <summary>
+    /// Above a kilometre and under thrust. The altitude floor drops the pad, where a
+    /// lit engine has yet to move the vehicle anywhere; the thrust test drops the
+    /// coast after cutoff. Thrust is the game's own live engine state — lit AND fed —
+    /// which is the same pair the auto-stager trusts.
+    /// </summary>
+    private static bool IsAscentTraceWorthy(Vehicle vehicle, Orbit orbit, IParentBody parent)
+    {
+        if (!vehicle.IsAnyEngineActive() || !vehicle.IsAnyEnginePropellantAvailable())
+            return false;
+        return orbit.StateVectors.PositionCci.Length() - parent.MeanRadius > TraceMinAltitude;
+    }
+
     private static void ResetTrace()
     {
         _s.TraceCount = 0;
@@ -73,7 +94,12 @@ public static partial class PoweredGuidanceWindow
     private static void DrawAscentOverlay(Viewport vp, Orbit orbit, IParentBody parent,
                                           double bodyRadius)
     {
-        if (!_showAscentOverlay || !SetupProjection(parent))
+        // MAP VIEW ONLY. The target orbit is a full ellipse tens of thousands of km
+        // across and the trace is the whole flown arc: from the flight camera they
+        // project to lines sweeping across the screen, over the vehicle you are
+        // trying to fly. There is one camera, not a separate map camera, so the mode
+        // is the only thing distinguishing the two.
+        if (vp.Mode != CameraMode.Map || !_showAscentOverlay || !SetupProjection(parent))
             return;
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##ascent_overlay");

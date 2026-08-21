@@ -310,6 +310,228 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double CycleBudgetMs { get; set; } = 25.0;
 
+    /// <summary>
+    /// Wall-clock ceiling for a cycle that is RECOVERING - one whose predecessor
+    /// refused. Larger than CycleBudgetMs on purpose.
+    ///
+    /// One SCvx iteration at 30-40 nodes costs more than the 25 ms cycle budget, so
+    /// Solve's deadline fires after the first one, EVERY cycle - flight log
+    /// 20260820-141757 has scvxIters=1 on all 1080 of its rows. That is exactly right
+    /// when the iteration is accepted (the real-time iteration scheme, and measured
+    /// defect over that flight was 0.02-0.13 m against a 1 m gate). It is fatal when
+    /// it is rejected: SCvx responds to a rejected step by SHRINKING the trust region
+    /// and trying again, and with a budget for one iteration there is never an "again".
+    /// The cycle refuses having learned nothing, and the next cycle repeats it.
+    ///
+    /// That is what the 20 identical refusals at 1500 m in that log are. The vehicle
+    /// moved 1.4 m between cycles, nothing about the problem changed, and the loop had
+    /// no way to do anything different until the circuit breaker fired.
+    ///
+    /// This costs nothing on the common path: a healthy cycle accepts on iteration one
+    /// and returns long before any deadline. It is only ever spent by a cycle that had
+    /// already failed, which is precisely when a frame is worth trading.
+    /// </summary>
+    public double RecoveryCycleBudgetMs { get; set; } = 120.0;
+
+    /// <summary>
+    /// Seconds of plan judged against the FULL defect gate. Beyond this the gate
+    /// loosens smoothly toward <see cref="HorizonFarSlack"/>.
+    ///
+    /// The loop flies the first interval or two and then re-solves, so this is the
+    /// only stretch whose accuracy the vehicle actually experiences. One second is
+    /// several re-solves of margin at a 0.10 s cadence - deliberately generous,
+    /// because the cost of being wrong here is flying an unphysical command while the
+    /// cost of being generous is only refusing slightly more often than needed.
+    /// </summary>
+    public double CommitHorizonS { get; set; } = 1.0;
+
+    /// <summary>
+    /// Defect allowance at the END of the horizon, as a multiple of the gate. 1
+    /// disables the weighting entirely and restores the old flat max.
+    ///
+    /// Sized from flight 20260820-150038, where the terminal flare carried 25-135 on
+    /// the metre-scaled reading against a 1 m gate while the near field was clean and
+    /// the vehicle tracked its plan to 5 m of a 98 m drift limit throughout. Those
+    /// plans were correct everywhere the vehicle was about to be, and were refused for
+    /// an interval eighteen seconds ahead that would be re-solved of the order of a
+    /// hundred times before it was reached.
+    ///
+    /// 25 rather than something larger because this is a safety gate being loosened:
+    /// it should admit the flare's collocation residual and nothing more structural.
+    /// A far tail failing by more than this is a wrong plan, not a coarsely sampled
+    /// one, and should still be refused.
+    /// </summary>
+    public double HorizonFarSlack { get; set; } = 25.0;
+
+    // ------------------------------------------------------------------------
+    // PER-CHANNEL DEFECT TOLERANCES, each in its own SI units.
+    //
+    // The state has four physically unrelated groups in it, and one number cannot
+    // express a tolerance for all of them. Previously it tried: every channel was
+    // divided by its XScale and multiplied by the POSITION scale, so the effective
+    // tolerance on a body rate was MaxDefectM / rangeToTarget - 0.026 deg/s at 2 km,
+    // twenty times looser at 100 m, and never a quantity anyone chose. These are
+    // chosen, they are readable, and they do not move with range.
+    //
+    // Sized against flight 20260820-150038 so the near field stays strict while the
+    // flare's collocation residual passes: the attitude defects at interval 0 (0.049
+    // and 0.015 in quaternion components, i.e. 5.6 and 1.9 degrees) are still refused,
+    // while the rate residuals out at intervals 33-38 (0.03-0.06 rad/s) clear.
+    // ------------------------------------------------------------------------
+
+    /// <summary>Position defect tolerance, metres. This IS <see cref="MaxDefectM"/> -
+    /// the historical gate was already in metres and already meant this.</summary>
+    public double PositionDefectM => MaxDefectM;
+
+    /// <summary>Velocity defect tolerance, m/s.</summary>
+    public double VelocityDefectMs { get; set; } = 0.5;
+
+    /// <summary>
+    /// Attitude defect tolerance, DEGREES - converted to a quaternion-component
+    /// tolerance below. Stated in degrees because a raw quaternion component is not a
+    /// number anyone can size by eye.
+    /// </summary>
+    public double AttitudeDefectDeg { get; set; } = 1.0;
+
+    /// <summary>Body-rate defect tolerance, rad/s. 0.01 is about 0.57 deg/s.</summary>
+    public double RateDefectRadS { get; set; } = 0.01;
+
+    /// <summary>Mass defect tolerance as a FRACTION of vehicle mass - vehicles differ
+    /// by orders of magnitude, so an absolute figure would mean nothing.</summary>
+    public double MassDefectFrac { get; set; } = 1e-3;
+
+    /// <summary>
+    /// The tolerance vector, in the state's own units and order.
+    ///
+    /// A quaternion VECTOR COMPONENT of d corresponds to about 2d radians of rotation
+    /// for small errors, so an attitude tolerance of theta maps to sin(theta/2). The
+    /// scalar part w gets the same figure: it is the component that moves least for a
+    /// given rotation, so this is the conservative direction to be wrong in.
+    /// </summary>
+    private double[] DefectTolerances(bool cold)
+    {
+        // The cold gate has always been a loosened version of the warm one; keeping it
+        // as a RATIO means it stays loosened by the same factor across every channel
+        // rather than only across position.
+        double slack = MaxDefectM > 0.0 ? Math.Max(ColdMaxDefectM / MaxDefectM, 1.0) : 1.0;
+        double k = cold ? slack : 1.0;
+        double q = Math.Sin(0.5 * Math.Max(AttitudeDefectDeg, 1e-6) * Math.PI / 180.0);
+        double mass = Math.Max(_cfg.XScale[Dynamics6Dof.IM], 1.0) * MassDefectFrac;
+
+        var tol = new double[Dynamics6Dof.NX];
+        for (int i = 0; i < 3; i++) tol[Dynamics6Dof.IR + i] = PositionDefectM * k;
+        for (int i = 0; i < 3; i++) tol[Dynamics6Dof.IV + i] = VelocityDefectMs * k;
+        for (int i = 0; i < 4; i++) tol[Dynamics6Dof.IQ + i] = q * k;
+        for (int i = 0; i < 3; i++) tol[Dynamics6Dof.IW + i] = RateDefectRadS * k;
+        tol[Dynamics6Dof.IM] = mass * k;
+        return tol;
+    }
+
+    /// <summary>Tolerance actually applied to the worst gated channel, in its units.</summary>
+    public double LastGatedTolerance { get; private set; } = double.NaN;
+
+    /// <summary>
+    /// The number the gate actually tested: DIMENSIONLESS, the worst multiple of its
+    /// own tolerance any channel reaches on any interval after horizon weighting.
+    /// 1.0 is exactly at tolerance, so the gate is simply "&lt;= 1".
+    /// </summary>
+    public double LastGatedRatio { get; private set; }
+
+    /// <summary>The offending defect in its OWN units, for the report.</summary>
+    public double LastGatedRaw { get; private set; } = double.NaN;
+
+    /// <summary>Where the GATED defect was worst, which need not be where the raw one was.</summary>
+    public int LastGatedDefectChannel { get; private set; } = -1;
+
+    /// <summary>Interval carrying the worst GATED defect, or -1.</summary>
+    public int LastGatedDefectNode { get; private set; } = -1;
+
+    public string LastGatedDefectChannelName => Scvx6DofSolver.ChannelName(LastGatedDefectChannel);
+
+    public string LastGatedDefectGroup => Scvx6DofSolver.ChannelGroup(LastGatedDefectChannel);
+
+    public string LastGatedDefectUnits => Scvx6DofSolver.ChannelGroup(LastGatedDefectChannel) switch
+    {
+        "position" => "m",
+        "velocity" => "m/s",
+        "attitude" => "(quat)",
+        "rate" => "rad/s",
+        "mass" => "kg",
+        _ => "",
+    };
+
+    /// <summary>Intervals judged at full strength last cycle. Moves with dt, so it is
+    /// recorded rather than inferred when reading a log back.</summary>
+    public int LastCommitIntervals { get; private set; }
+
+    /// <summary>
+    /// Trust region every warm re-solve starts from. A CONSTANT, deliberately.
+    ///
+    /// It was briefly carried between cycles, on the reasoning that the shrink a
+    /// rejected iteration applies is the one piece of information a failed cycle
+    /// produces, and resetting it throws that away. That is true, and it was still a
+    /// bad trade: the carry is a ONE-WAY RATCHET. It shrinks on failure but grows back
+    /// only on SUCCESS, and once the region is smaller than the step needed to
+    /// re-anchor the plan, success is impossible - so it never grows again.
+    ///
+    /// Flight 20260820-191435 shows the end state. Two healthy cycles, then interval 0
+    /// starts missing, the region ratchets to TrustRegionMin, and eighteen consecutive
+    /// cycles come back Failed with the defect frozen at 23.5 m because nothing can
+    /// change. At the floor, node 1's position box is 1e-3 * 2405 m = 2.4 m while each
+    /// interval covers 55 m of travel: node 1 is pinned to a stale reference, node 0 is
+    /// pinned by equality to the measurement, and interval 0 cannot close at any
+    /// iteration count. 92% of that descent was flown on a stale open-loop plan.
+    ///
+    /// The wide-trust-region retry is the only thing that resets to TrustRegionMax, and
+    /// it is suppressed after two consecutive failures - so there was no way back up.
+    ///
+    /// Reseeding from a constant cannot get stuck. If the cross-cycle adaptation is
+    /// worth revisiting it needs a floor well above TrustRegionMin and a kick UPWARD on
+    /// repeated failure, because a shrinking region is the right answer to a rejected
+    /// step and the wrong answer to an infeasible one - and this code does not yet
+    /// distinguish them.
+    /// </summary>
+    private const double WarmTrustRegion = 0.05;
+
+    /// <summary>
+    /// WHY THIS IS A CONSTANT, having twice been tried as a value carried between
+    /// cycles. Both attempts are recorded because the second one looked like a fix for
+    /// the first and was not.
+    ///
+    /// ATTEMPT ONE carried the solver's shrunken region forward, clamped only by
+    /// TrustRegionMin. That is a one-way ratchet: it shrinks on failure but grows back
+    /// only on SUCCESS, and once the region is smaller than the step needed to
+    /// re-anchor the plan, success is impossible. Flight 20260820-191435 shows the end
+    /// state - eighteen consecutive cycles returning Failed with the defect frozen at
+    /// 23.5 m, because at 1e-3 the per-node box is 2.4 m against 55 m of travel per
+    /// interval. 92% of that descent was flown open loop.
+    ///
+    /// ATTEMPT TWO added a floor and a reset-after-N-failures kick, which did make the
+    /// ratchet impossible. It was removed anyway, because the logs showed it was doing
+    /// nothing at all: across 20260820-193307 and -193405 the carried value was used
+    /// twice in 296 cycles. The reason is that a shrink only happens on a REJECTED
+    /// SCvx step, and most refusals here are not that - SCvx accepts its step and the
+    /// flight gate refuses the trajectory afterwards, leaving the region untouched at
+    /// 0.05. There was never anything to carry.
+    ///
+    /// Any third attempt needs to start from that measurement rather than from the
+    /// theory: the loop's problem is not that it re-runs a too-large step, it is that
+    /// the step it takes produces a trajectory the gate will not accept.
+    /// </summary>
+    /// <summary>Trust region this cycle's warm re-solve STARTED from.</summary>
+    public double LastTrustRegionStart { get; private set; } = WarmTrustRegion;
+
+    /// <summary>
+    /// Where the trust region ended up. Read live from the solver, so after a solve it
+    /// is the value the last iteration left behind - at TrustRegionMin it has collapsed
+    /// and the cycle can do nothing useful. Logged because the whole 191435 diagnosis
+    /// had to be inferred from a status enum.
+    /// </summary>
+    public double TrustRegionNow => _solver.TrustRegion;
+
+    /// <summary>Floor the region can collapse to, for reading the log against.</summary>
+    public double TrustRegionMin => _solver.TrustRegionMin;
+
     /// <summary>Measured cost of one ADMM iteration, ms. Seeded pessimistically and refined from real solves.</summary>
     public double MsPerAdmmIteration { get; private set; } = 0.05;
 
@@ -460,6 +682,93 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
+    /// The current plan, shifted forward to now and re-anchored at the vehicle - the
+    /// receding-horizon seed. Shared by Update and BeginWarmRestart so the two cannot
+    /// drift apart; the restart's whole point is that it seeds from the SAME
+    /// trajectory the warm loop was using, not a different one.
+    /// </summary>
+    private void BuildShiftedSeed(double[] x0, double simNow,
+                                  out double[] xs, out double[] us, out double elapsed)
+    {
+        double dt = _planSigma / (_n - 1);
+        elapsed = Math.Max(0.0, simNow - _solveTime);
+        int shift = Math.Clamp((int)Math.Round(elapsed / dt), 0, _n - 2);
+
+        xs = new double[_n * NX];
+        us = new double[_n * NU];
+        for (int k = 0; k < _n; k++)
+        {
+            int src = Math.Min(k + shift, _n - 1);
+            Array.Copy(_planX, src * NX, xs, k * NX, NX);
+            Array.Copy(_planU, src * NU, us, k * NU, NU);
+        }
+
+        // Seed node 0 with the MEASURED state. It is what the equality will force
+        // anyway, and starting the reference there means even a cycle that accepts no
+        // step still hands back a plan anchored at the vehicle rather than at the old
+        // plan's node `shift`.
+        Array.Copy(x0, 0, xs, 0, NX);
+
+        // Put the shifted plan on the MEASUREMENT quaternion branch. Without this, a
+        // sign flip in the measured attitude - a no-op physically - lands as ~1.5 of
+        // quaternion defect at interval 0 and gets the plan refused every cycle until
+        // the circuit breaker throws it away. See AlignQuaternionBranch.
+        LastBranchFlips = AlignQuaternionBranch(xs, _n);
+    }
+
+    /// <summary>
+    /// Restart the SCvx loop KEEPING THE CURRENT PLAN as its reference, with the trust
+    /// region opened right up. Spread over frames by StepCold exactly as BeginCold is.
+    ///
+    /// This is the rung that was missing from the escalation ladder. Above it sits the
+    /// warm re-solve; below it, BeginCold, which discards the plan and seeds a
+    /// STRAIGHT LINE from the vehicle to the target. That straight line is the right
+    /// answer when the vehicle has DRIFTED off its plan - the stale trajectory then
+    /// asserts motion the vehicle is not making, and a straight line is at least
+    /// self-consistent. It is the wrong answer when the vehicle is sitting on a
+    /// perfectly good plan and the loop merely cannot take a step: the straight line
+    /// is not even dynamically feasible, so a converged trajectory is being thrown
+    /// away for a worse one.
+    ///
+    /// So: same spread-over-frames machinery, same gates, different seed. What
+    /// actually changes versus a warm cycle is that the solver state is rebuilt from
+    /// scratch (fresh trace, fresh ADMM iterate, wide region) instead of being nudged.
+    ///
+    /// Returns false if there is no plan to restart from, in which case the caller
+    /// should fall back to BeginCold.
+    /// </summary>
+    public bool BeginWarmRestart(double[] x0, double[] xf, double sigmaSeed, double simNow)
+    {
+        if (!HasPlan)
+            return false;
+
+        CommitInputs();
+        BuildShiftedSeed(x0, simNow, out double[] xSeed, out double[] uSeed, out _);
+        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        return true;
+    }
+
+    /// <summary>
+    /// Everything BeginCold and BeginWarmRestart do once their seed is chosen. Shared
+    /// so the two cannot diverge in the state they leave behind for StepCold.
+    /// </summary>
+    private void BeginSpreadSolve(double[] x0, double[] xf, double[] xSeed, double[] uSeed,
+                                  double sigmaSeed)
+    {
+        _xf = (double[])xf.Clone();
+        if (FixedTime) PinSigma(sigmaSeed);
+        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, trustRegion: _solver.TrustRegionMax);
+        Status = ScvxStatus.IterationLimit;
+        Error = "converging";
+        _consecutiveFailures = 0;
+        LastTrustRegionStart = _solver.TrustRegionMax;
+        _lastColdIterationS = 0.0;
+        _coldIterations = 0;
+        NeedsMoreNodes = false;
+        _solver.SubproblemEps = ColdSubproblemEps;
+    }
+
+    /// <summary>
     /// Begin a cold solve WITHOUT running it, so the iterations can be spread over
     /// several frames by StepCold.
     ///
@@ -477,16 +786,7 @@ public sealed class Ksa6DofGuidance
         CommitInputs();
 
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
-        _xf = (double[])xf.Clone();
-        if (FixedTime) PinSigma(sigmaSeed);
-        _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
-        Status = ScvxStatus.IterationLimit;
-        Error = "converging";
-        _consecutiveFailures = 0;
-        _lastColdIterationS = 0.0;
-        _coldIterations = 0;
-        NeedsMoreNodes = false;
-        _solver.SubproblemEps = ColdSubproblemEps;
+        BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
     }
 
     /// <summary>
@@ -580,7 +880,9 @@ public sealed class Ksa6DofGuidance
         // act on that; settling cannot.
         bool stalled = _coldIterations >= ColdStallIterations;
         bool ok = Finish(x0, simNow, 0);
-        NeedsMoreNodes = !ok && stalled && LastDefectM > MaxDefectM;
+        // Judged on the SAME quantity the gate uses, or this asks a different question
+        // than the one that refused the plan.
+        NeedsMoreNodes = !ok && stalled && LastGatedRatio > 1.0;
 
         // AFTER Finish, which overwrites both from the solver. The SOLVER's iteration
         // count is useless here - StepCold re-anchors through Reseed before every
@@ -960,30 +1262,7 @@ public sealed class Ksa6DofGuidance
         // Bounded worst case from here on: this runs inside the guidance loop.
         ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
 
-        double dt = _planSigma / (_n - 1);
-        double elapsed = Math.Max(0.0, simNow - _solveTime);
-        int shift = Math.Clamp((int)Math.Round(elapsed / dt), 0, _n - 2);
-
-        var xs = new double[_n * NX];
-        var us = new double[_n * NU];
-        for (int k = 0; k < _n; k++)
-        {
-            int src = Math.Min(k + shift, _n - 1);
-            Array.Copy(_planX, src * NX, xs, k * NX, NX);
-            Array.Copy(_planU, src * NU, us, k * NU, NU);
-        }
-
-        // Seed node 0 with the MEASURED state. It is what the equality will force
-        // anyway, and starting the reference there means even a cycle that accepts no
-        // step still hands back a plan anchored at the vehicle rather than at the old
-        // plan's node `shift`.
-        Array.Copy(x0, 0, xs, 0, NX);
-
-        // Put the shifted plan on the MEASUREMENT quaternion branch. Without this, a
-        // sign flip in the measured attitude - a no-op physically - lands as ~1.5 of
-        // quaternion defect at interval 0 and gets the plan refused every cycle until
-        // the circuit breaker throws it away. See AlignQuaternionBranch.
-        LastBranchFlips = AlignQuaternionBranch(xs, _n);
+        BuildShiftedSeed(x0, simNow, out double[] xs, out double[] us, out double elapsed);
 
         // FIXED TIME: count the COMMITTED burn time down rather than letting the
         // solver re-choose it every cycle. Re-choosing is what made successive plans
@@ -999,9 +1278,15 @@ public sealed class Ksa6DofGuidance
         {
             sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
         }
+        // A cycle whose predecessor refused gets the larger budget, so it can take the
+        // second and third iterations that let SCvx shrink its way to an accepted
+        // step. A healthy cycle never reaches the deadline at all.
+        double budget = _consecutiveFailures > 0 ? RecoveryCycleBudgetMs : CycleBudgetMs;
+
         FellBack = false;
-        _solver.Reseed(x0, xs, us, sigma, trustRegion: 0.05);
-        if (Finish(x0, simNow, maxIterations))
+        LastTrustRegionStart = WarmTrustRegion;
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion);
+        if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
             return true;
@@ -1027,10 +1312,15 @@ public sealed class Ksa6DofGuidance
             return false;
         }
 
+        // The wide retry needs the TIME as well as the iteration count. Passing
+        // maxIterations * 3 while leaving the 25 ms deadline in place bought nothing
+        // whatsoever - the deadline stopped it after one iteration exactly as before,
+        // so the "escalated" retry was the same single iteration from a wider region.
         FellBack = true;
         _consecutiveFailures++;
+        LastTrustRegionStart = _solver.TrustRegionMax;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax);
-        if (Finish(x0, simNow, maxIterations * 3))
+        if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
             _consecutiveFailures = 0;
             return true;
@@ -1064,10 +1354,11 @@ public sealed class Ksa6DofGuidance
         _solver.EscalatedSubproblemIterations = cap;   // equal, so no retry is issued
     }
 
-    private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false)
+    private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false,
+                        double budgetMs = 0.0)
     {
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        Status = _solver.Solve(maxIterations, CycleBudgetMs);
+        Status = _solver.Solve(maxIterations, budgetMs > 0.0 ? budgetMs : CycleBudgetMs);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
 
         // Refine the cost-per-iteration estimate from what this solve actually did.
@@ -1156,14 +1447,44 @@ public sealed class Ksa6DofGuidance
         // trajectory flyable — and the answer no longer depends on how close the
         // target happens to be.
         LastDefectM = LastDefect * _cfg.XScale[Dynamics6Dof.IR];
-        double gate = cold ? ColdMaxDefectM : MaxDefectM;
-        if (!(LastDefectM <= gate))
+
+        // THE GATE IS HORIZON-WEIGHTED; the figure above is not, and both are kept.
+        //
+        // LastDefectM stays the honest full-horizon max, so the logs and the readout
+        // keep meaning exactly what they used to and any analysis of them stays valid.
+        // What the gate TESTS is the weighted figure: full strength over the intervals
+        // about to be flown, loosening to HorizonFarSlack at the end of the horizon.
+        // See Scvx6DofSolver.WeightedDefect for why, and for why it is safe.
+        //
+        // Computed on the accepted REFERENCE, which is the same trajectory the trace's
+        // last accepted iteration reported - one evaluation, so the magnitude and its
+        // location cannot come from different iterations.
+        double dtPlan = _solver.Sigma / Math.Max(_n - 1, 1);
+        int commit = (int)Math.Floor(Math.Max(CommitHorizonS, 0.0) / Math.Max(dtPlan, 1e-6));
+        LastCommitIntervals = commit;
+
+        double[] tol = DefectTolerances(cold);
+        LastGatedRatio = _solver.WeightedDefect(tol, commit, HorizonFarSlack,
+                                                out int gCh, out int gNode, out double gRaw);
+        LastGatedDefectChannel = gCh;
+        LastGatedDefectNode = gNode;
+        LastGatedRaw = gRaw;
+        LastGatedTolerance = gCh >= 0 && gCh < tol.Length ? tol[gCh] : double.NaN;
+
+        // THE GATE IS A RATIO, so it is the same test for every channel: is anything
+        // more than its own tolerance out, once the horizon weighting has been applied.
+        // The cold case is folded into the tolerances themselves rather than compared
+        // against a second number - see DefectTolerances.
+        if (!(LastGatedRatio <= 1.0))
         {
-            Error = $"plan is not physical - dynamics defect {LastDefectM:F2} m " +
-                    $"exceeds {gate:F2} m after {_solver.IterationCount} iters " +
-                    $"({AcceptedSteps} accepted), worst on {LastDefectChannelName} " +
+            Error = $"plan is not physical - {LastGatedDefectChannelName} " +
+                    $"({LastGatedDefectGroup}) is {LastGatedRatio:F1}x its tolerance at " +
+                    $"interval {LastGatedDefectNode} of {_n - 1}: " +
+                    $"{LastGatedRaw:G3} against {LastGatedTolerance:G3} {LastGatedDefectUnits}" +
+                    $" (after {_solver.IterationCount} iters, {AcceptedSteps} accepted)" +
+                    $" [full-horizon max {LastDefectM:F2} m on {LastDefectChannelName} " +
                     $"({LastDefectGroup}) at interval {LastDefectNode} = " +
-                    $"{LastDefectRaw:G3} {LastDefectUnits}. " +
+                    $"{LastDefectRaw:G3} {LastDefectUnits}]. " +
                     "Needs more iterations, or more nodes.";
             return false;
         }

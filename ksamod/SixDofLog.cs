@@ -76,6 +76,12 @@ internal static class SixDofLog
             Stop();
             Owner = owner;
 
+            // A NEW run starts clean. LastError was only ever assigned, never cleared,
+            // so one transient failure - a locked file, a missing folder on a previous
+            // run - was reported as "log error" for the rest of the session even once
+            // logging was working perfectly.
+            LastError = "";
+
             string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
             Directory = Path.Combine(docs, "My Games", "Kitten Space Agency", "navbox-logs");
             System.IO.Directory.CreateDirectory(Directory);
@@ -99,8 +105,10 @@ internal static class SixDofLog
                 "cycle", "t", "alt", "rx", "ry", "rz", "vx", "vy", "vz", "speed",
                 "qw", "qx", "qy", "qz", "tiltDeg", "wx", "wy", "wz", "mass",
                 "solved", "status", "scvxIters", "accepted", "solveMs", "admm",
-                "defectM", "defectLimitM", "defectChan", "defectGroup", "defectRaw", "defectNode", "qFlips",
-                "anchorM", "fellBack", "escalations",
+                "defectM", "defectLimitM", "defectChan", "defectGroup", "defectRaw", "defectNode",
+                "gatedRatio", "gatedRaw", "gatedTol", "gatedDefectChan", "gatedDefectNode",
+                "commitIntervals", "qFlips",
+                "anchorM", "trStart", "trEnd", "trMin", "fellBack", "escalations",
                 "nodes", "sigma", "planElapsed",
                 "thrustDemandN", "capabilityN", "throttle", "saturated",
                 "tauX", "tauY", "tauZ", "allocX", "allocY", "allocZ", "allocSat",
@@ -114,7 +122,7 @@ internal static class SixDofLog
             _events.AppendLine("# t(s)  event");
 
             Enabled = true;
-            Event(0.0, "logging started");
+            Event(Owner, 0.0, "logging started");
         }
         catch (Exception e)
         {
@@ -151,9 +159,17 @@ internal static class SixDofLog
         Enabled = false;
     }
 
-    internal static void Event(double t, string message)
+    /// <summary>
+    /// May this caller write? The sink is single-owner by design, but only Start and
+    /// Stop ever checked - so a second craft refused ownership went on appending to
+    /// the same three buffers anyway, interleaving two vehicles' rows in one CSV and
+    /// racing a StringBuilder between their guidance threads. Every write checks now.
+    /// </summary>
+    private static bool Writable(object owner) => Enabled && ReferenceEquals(Owner, owner);
+
+    internal static void Event(object owner, double t, string message)
     {
-        if (!Enabled)
+        if (!Writable(owner))
             return;
         try
         {
@@ -175,9 +191,9 @@ internal static class SixDofLog
     /// this stays a pure sink — nothing here reaches back into guidance state, so it
     /// cannot perturb what it is measuring.
     /// </summary>
-    internal static void Cycle(in CycleRow r)
+    internal static void Cycle(object owner, in CycleRow r)
     {
-        if (!Enabled)
+        if (!Writable(owner))
             return;
         try
         {
@@ -197,7 +213,12 @@ internal static class SixDofLog
             F(sb, r.SolveMs); sb.Append(r.Admm).Append(',');
             F(sb, r.DefectM); F(sb, r.DefectLimitM);
             sb.Append(Csv(r.DefectChan)).Append(',').Append(Csv(r.DefectGroup)).Append(',');
-            F(sb, r.DefectRaw); sb.Append(r.DefectNode).Append(',').Append(r.QFlips).Append(','); F(sb, r.AnchorM);
+            F(sb, r.DefectRaw); sb.Append(r.DefectNode).Append(',');
+            F(sb, r.GatedRatio); F(sb, r.GatedRaw); F(sb, r.GatedTolerance);
+            sb.Append(Csv(r.GatedDefectChan)).Append(',').Append(r.GatedDefectNode).Append(',');
+            sb.Append(r.CommitIntervals).Append(',');
+            sb.Append(r.QFlips).Append(','); F(sb, r.AnchorM);
+            F(sb, r.TrStart); F(sb, r.TrEnd); F(sb, r.TrMin);
             sb.Append(r.FellBack ? 1 : 0).Append(',').Append(r.Escalations).Append(',');
             sb.Append(r.Nodes).Append(',');
             F(sb, r.Sigma); F(sb, r.PlanElapsed);
@@ -227,10 +248,10 @@ internal static class SixDofLog
     /// distinguish "the plan is a loop and the vehicle followed it" from "the plan
     /// was straight and the vehicle diverged". Those have opposite causes.
     /// </summary>
-    internal static void PlanSnapshot(double t, int nodes, ReadOnlySpan<double> planX,
-                                      ReadOnlySpan<double> planU)
+    internal static void PlanSnapshot(object owner, double t, int nodes,
+                                      ReadOnlySpan<double> planX, ReadOnlySpan<double> planU)
     {
-        if (!Enabled || planX.Length < nodes * 14)
+        if (!Writable(owner) || planX.Length < nodes * 14)
             return;
         if (t - _lastPlanSnapshot < PlanSnapshotInterval)
             return;
@@ -309,10 +330,35 @@ internal static class SixDofLog
         public string DefectChan, DefectGroup;
         public double DefectRaw;
         public int DefectNode;
+        // The HORIZON-WEIGHTED figure the gate actually tested, and where it was worst.
+        // DefectM above stays the honest full-horizon max, so the two together say both
+        // "how bad is this plan anywhere" and "how bad is it where we are about to fly".
+        // CommitIntervals is how many intervals were judged at full strength this cycle;
+        // it moves with dt, so it is recorded rather than inferred. See
+        // Scvx6DofSolver.WeightedDefect.
+        // GatedRatio is DIMENSIONLESS - the worst channel as a multiple of its own
+        // tolerance, after horizon weighting - so 1.0 is the gate. GatedRaw and
+        // GatedTolerance are that channel's numbers in its own units, so the row can be
+        // read without knowing the tolerance table. DefectM above stays the legacy
+        // metre-scaled full-horizon max.
+        public double GatedRatio, GatedRaw, GatedTolerance;
+        public string GatedDefectChan;
+        public int GatedDefectNode, CommitIntervals;
         // Nodes re-expressed onto the vehicle's quaternion branch this cycle. Normally
         // zero; non-zero means the double cover was about to inject a defect that has
         // no physical meaning. See Ksa6DofGuidance.AlignQuaternionBranch.
         public int QFlips;
+        // TRUST REGION, start and end of the cycle, with its floor alongside.
+        //
+        // trEnd sitting at trMin means the region has COLLAPSED: the solver shrinks it
+        // on every rejected iteration, and at the floor the per-node box is far smaller
+        // than one interval of travel, so the plan cannot be re-anchored at any
+        // iteration count and the cycle can only fail. That state had to be inferred
+        // from a status enum on flight 20260820-191435; it is a column now.
+        //
+        // trStart is what the cycle was reseeded from - normally the warm constant,
+        // TrustRegionMax after a wide-trust-region retry or a restart.
+        public double TrStart, TrEnd, TrMin;
         public bool FellBack;
         public double ThrustDemandN, CapabilityN, Throttle;
         public bool Saturated;

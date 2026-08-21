@@ -12,7 +12,9 @@ using KSA;
 // here immediately and is not diagnosable from numbers alone.
 public static partial class PoweredGuidanceWindow
 {
-    private static bool _show6DofOverlay = true;
+    // Off by default: it is a debug view, and it draws over the vehicle you are
+    // trying to fly.
+    private static bool _show6DofOverlay;
 
     private static void Draw6DofOverlay(Viewport vp, IParentBody parent)
     {

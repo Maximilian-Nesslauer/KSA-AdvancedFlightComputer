@@ -510,6 +510,105 @@ public sealed class Scvx6DofSolver
         return (Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * sumSq, worst);
     }
 
+    /// <summary>
+    /// The true nonlinear defect of the CURRENT REFERENCE, reduced to ONE
+    /// DIMENSIONLESS NUMBER: the worst "how many times over its own tolerance" any
+    /// interval and channel reaches. 1.0 means exactly at tolerance.
+    ///
+    /// Two things are wrong with the flat DefectNorm that this replaces for gating,
+    /// and they are independent.
+    ///
+    /// ONE - EVERY CHANNEL WAS MEASURED WITH A POSITION RULER. DefectNorm divides each
+    /// channel by its own XScale and then the caller multiplied by the POSITION scale
+    /// to "put it in metres". That is a real distance only when the worst channel is a
+    /// position. XScale's position entry is the RANGE TO THE TARGET, so on flight
+    /// 20260820-150038 (range ~2200 m) a 1 m gate meant a body-rate tolerance of
+    /// 1/2200 rad/s - 0.026 degrees per second - tight purely because the vehicle
+    /// happened to be two kilometres out, and looser as it closed in. Of the refusals
+    /// on that flight that survived horizon weighting, 41 were rate and 11 attitude;
+    /// none were position. The gate was almost never refusing what it was written to
+    /// refuse. Here each channel is divided by a tolerance in ITS OWN UNITS - metres,
+    /// m/s, rad/s, quaternion components, kg - so the answer means the same thing
+    /// whatever the worst channel turns out to be, and does not drift with range.
+    ///
+    /// TWO - EVERY INTERVAL COUNTED EQUALLY. An MPC loop flies the first interval or
+    /// two and re-solves; on that same flight, sigma was 18.8 s at a 0.10 s cadence,
+    /// so the far end of a plan is re-solved of the order of a hundred times before
+    /// the vehicle arrives. And the far end is exactly where the defect lives, for a
+    /// reason that is not the plan being wrong: the collocation grid is uniform in
+    /// time but the trajectory is not - the busiest interval carried 5-50x the
+    /// velocity change of interval 0 across the same dt, because the terminal flare
+    /// drives velocity, attitude and rate to their terminal values at once. So each
+    /// interval is also divided by an ALLOWANCE that grows with how far ahead it is.
+    ///
+    /// THE HORIZON PART IS SELF-TIGHTENING, which is what makes relaxing a safety gate
+    /// defensible. An interval eighteen seconds out today is one second out in
+    /// seventeen seconds, and is then inside the commit window and judged at full
+    /// strength. Nothing unphysical is ever flown; it merely stops being refused long
+    /// before it can matter.
+    ///
+    /// Deliberately NOT used for the solver's own convergence test, which still runs
+    /// on the honest full-horizon DefectNorm - this asks what is safe to FLY, not
+    /// whether SCvx has converged.
+    /// </summary>
+    /// <param name="tol">
+    /// Per-channel tolerance in SI units, NX long. Must be strictly positive: a zero
+    /// entry would make its channel infinitely intolerant and refuse everything.
+    /// </param>
+    /// <param name="commitIntervals">Intervals judged at full strength, from 0.</param>
+    /// <param name="farSlack">Allowance multiplier at the last interval. 1 disables.</param>
+    /// <param name="worstRaw">The offending defect in its OWN units, for the report.</param>
+    public double WeightedDefect(ReadOnlySpan<double> tol, int commitIntervals, double farSlack,
+                                 out int worstChannel, out int worstNode, out double worstRaw)
+    {
+        worstChannel = -1;
+        worstNode = -1;
+        worstRaw = double.NaN;
+        if (_xbar.Length < _n * NX || _ubar.Length < _n * NU || tol.Length < NX)
+            return double.PositiveInfinity;
+
+        int lastInterval = _n - 2;
+        int commit = Math.Clamp(commitIntervals, 0, Math.Max(lastInterval, 0));
+        double span = Math.Max(lastInterval - commit, 1);
+        double slack = Math.Max(farSlack, 1.0);
+
+        Span<double> fk = stackalloc double[NX];
+        Span<double> fk1 = stackalloc double[NX];
+        double half = 0.5 * _dtau * _sigBar;
+        double worst = 0;
+
+        Dynamics6Dof.Eval(_xbar.AsSpan(0, NX), _ubar.AsSpan(0, NU), _dyn, fk);
+        for (int k = 0; k < _n - 1; k++)
+        {
+            Dynamics6Dof.Eval(_xbar.AsSpan((k + 1) * NX, NX), _ubar.AsSpan((k + 1) * NU, NU), _dyn, fk1);
+
+            // Allowance is 1 across the commit window, then rises LINEARLY to slack at
+            // the last interval. Linear in the ALLOWANCE rather than in its reciprocal,
+            // because the allowance is the half with a physical reading: "this interval
+            // may carry N times its tolerance".
+            double frac = k <= commit ? 0.0 : (k - commit) / span;
+            double allowance = 1.0 + frac * (slack - 1.0);
+
+            for (int i = 0; i < NX; i++)
+            {
+                double d = _xbar[(k + 1) * NX + i] - _xbar[k * NX + i] - half * (fk[i] + fk1[i]);
+                double t = tol[i];
+                if (!(t > 0.0))
+                    continue;
+                double ratio = Math.Abs(d) / (t * allowance);
+                if (ratio > worst)
+                {
+                    worst = ratio;
+                    worstChannel = i;
+                    worstNode = k;
+                    worstRaw = d;
+                }
+            }
+            fk1.CopyTo(fk);
+        }
+        return worst;
+    }
+
     private double Fuel(double[] x)
     {
         double mInit = _x0[Dynamics6Dof.IM];

@@ -131,6 +131,24 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Guidance is driving the flight computer for this vehicle.</summary>
     public bool Running;
+
+    /// <summary>
+    /// EXECUTE was pressed while <see cref="AutoLaunch"/> was set: warp to the launch
+    /// window and start guidance there. Separate from AutoLaunch because that is a
+    /// MODE the user selects ahead of time, while this is the commit — arming used to
+    /// happen the instant the checkbox was ticked, which meant the panel could start
+    /// warping before anyone had asked it to launch.
+    /// </summary>
+    public bool LaunchArmed;
+
+    /// <summary>
+    /// Largest |rgo| and |vgo| seen since EXECUTE, so the ascent panel can draw each
+    /// as a fraction of where it started rather than an unscaled absolute. Display
+    /// only — nothing in the guidance loop reads them. Latched as a running maximum
+    /// rather than sampled once, because the first solved frame is not reliably the
+    /// largest: UPFG is still converging on it.
+    /// </summary>
+    public double RgoPeak, VgoPeak;
     public bool WasEngaged;
     public string GuidanceError = "";
     public string Status = "";
@@ -156,6 +174,18 @@ public sealed class VehicleAutopilotState
 
     /// <summary>A flight-computer reset the draw asked for, applied on the sim thread.</summary>
     public bool FcResetPending;
+
+    /// <summary>
+    /// This vehicle has already been handed back after the mod was switched off.
+    ///
+    /// Deactivation cannot be a synchronous sweep: the per-vehicle state lives in a
+    /// ConditionalWeakTable with no enumeration, and the writes that release attitude
+    /// and cut the engine are only legal from the PrepareWorker prefix. So the flag is
+    /// set globally and each vehicle tears itself down the next time that prefix runs
+    /// for it, which is every sim step. This marks the ones already done, so the
+    /// steady-state cost of an inactive mod is one bool test per vehicle.
+    /// </summary>
+    public bool HandedBack;
 
     // ------------------------------------------------------------------ ascent
     public PoweredGuidanceWindow.AscentPhase Phase = PoweredGuidanceWindow.AscentPhase.Vertical;
@@ -183,7 +213,16 @@ public sealed class VehicleAutopilotState
     public string TargetId = "";
     public double ChaseOffsetKm = 20.0;
     public bool LaunchDescending;
-    public bool AutoLaunch;
+    public bool AutoLaunch = true;
+
+    /// <summary>
+    /// Absolute sim time of the launch window, LATCHED when EXECUTE arms the launch.
+    /// An absolute instant rather than a countdown because the countdown is derived
+    /// from a wrapped angle: overshoot the window under time warp and it does not go
+    /// negative, it jumps to a full rotation away. Comparing sim times survives a warp
+    /// step of any size.
+    /// </summary>
+    public double LaunchTargetTime = double.NaN;
 
     /// <summary>Gravity-turn shaping: when the pitchover starts and how fast it ramps.</summary>
     public double TurnStartAltKm = 0.5;
@@ -213,17 +252,24 @@ public sealed class VehicleAutopilotState
     public PoweredGuidanceWindow.LandingPhase TouchdownPrevPhase = PoweredGuidanceWindow.LandingPhase.Idle;
 
     /// <summary>Upcoming site passes (time from now, closest ground distance).</summary>
-    public readonly List<(double tSec, double minKm)> Passes = new();
-    public long PassesRefreshedAtMs = long.MinValue;
-    public double3 ScanR0, ScanV0;
-    public double ScanStep;
-    public int ScanIndex = -1;             // -1: no scan in progress
-    public CseState ScanCser = CseState.Zero;
-    public readonly double[] ScanOrbitD = new double[PoweredGuidanceWindow.ScanSamplesPerOrbit];
-    public readonly List<(double tSec, double minKm)> ScanResults = new();
+    /// <summary>
+    /// Upcoming site passes: time from now, closest ground distance, and that distance
+    /// SIGNED by which side of the ground track the site falls on. The sign is what
+    /// lets the pass strip put a pass left or right of the site instead of piling
+    /// every one of them on the same side.
+    /// </summary>
+    public readonly List<(double tSec, double minKm, double crossKm)> Passes = new();
 
     /// <summary>Ask the panel to show this vehicle's G-FOLD / Terminal sub-tab.</summary>
     public bool GfoldTabSelectPending;
+
+    /// <summary>
+    /// Which solver flies the powered descent: G-FOLD by default, or the 6-DOF
+    /// successive-convexification one. Per vehicle rather than a panel-wide setting,
+    /// because the deorbit handoff READS it to decide what to start — so it describes
+    /// how this craft lands, not what the player last clicked.
+    /// </summary>
+    public bool UseSixDofLanding;
     public bool TermTabSelectPending;
 
     /// <summary>
@@ -274,6 +320,30 @@ public sealed class VehicleAutopilotState
     public double GfoldLastTrackTime;
     public bool GfoldTrackInit;
     public bool GfoldEngineOn;             // hysteretic engine state
+
+    // --- G-FOLD side-view plot ---------------------------------------------
+    // The flown path in the pad frame, as (horizontal range to pad, height above
+    // touchdown) in metres. Sampled off the guidance step rather than the draw, so it
+    // stays even under time warp and does not depend on which craft is on screen.
+    public float2[] GfoldTrace;
+    public int GfoldTraceCount;
+    public double GfoldTraceLastTime = double.NegativeInfinity;
+
+    /// <summary>
+    /// The plot's latched axis extents, in metres. LATCHED rather than fitted every
+    /// frame: a descent shrinks continuously, so a fitted plot zooms the whole way
+    /// down and nothing on it holds still long enough to read.
+    /// </summary>
+    public double GfoldAxisRangeM, GfoldAxisAltM;
+    public double GfoldAxisLockedAt = double.NegativeInfinity;
+
+    /// <summary>
+    /// How many times the plot's axes have been latched: 0 none, then start, half the
+    /// flight remaining, a quarter remaining, and the final approach. Each stage fires
+    /// once, in order.
+    /// </summary>
+    public int GfoldAxisStage;
+    public double GfoldFlightTime0;
 
     // ------------------------------------------------------------------ terminal hover
     public double TermTouchdownRate = 0.5; // m/s, constant final descent

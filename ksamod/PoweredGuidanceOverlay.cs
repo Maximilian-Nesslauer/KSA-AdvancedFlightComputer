@@ -43,7 +43,7 @@ public static partial class PoweredGuidanceWindow
 
         if (hit && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
         {
-            RetargetGfold(latDeg, lonDeg);
+            RetargetLandingSite(latDeg, lonDeg);
             _retargetArmed = false;
         }
     }
@@ -144,19 +144,37 @@ public static partial class PoweredGuidanceWindow
         ImGui.End();
     }
 
-    // Move the landing site, and (if a descent is live) force a fresh G-FOLD search to
-    // the new spot on the next step rather than reusing the old arrival time.
-    private static void RetargetGfold(double latDeg, double lonDeg)
+    /// <summary>
+    /// Move the landing site, and make whichever solver is flying notice.
+    ///
+    /// Setting the lat/lon alone is not enough for either of them. Both rebuild the
+    /// pad frame from the site every step, so the frame jumps - but each is running a
+    /// plan that was solved against the OLD pad and will not revisit it until its own
+    /// cadence says so. Until then the vehicle flies the previous target through a
+    /// frame that no longer points at it.
+    /// </summary>
+    private static void RetargetLandingSite(double latDeg, double lonDeg)
     {
         _s.SiteLatDeg = latDeg;
         _s.SiteLonDeg = lonDeg;
         _s.LandingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";
+
         if (_s.LandingPhase == LandingPhase.GfoldDescent)
         {
             _s.GfoldForceSearch = true;
             _s.GfoldLastSolveTime = double.NegativeInfinity;
             _s.GfoldArrivalTime = SimNow() + 120.0; // out of the terminal-freeze window so it re-solves
             _s.GfoldFailStreak = 0;
+        }
+
+        // 6-DOF had no path here at all, which is why a retarget never reached it: the
+        // frame moved under a warm-started plan and nothing asked for a new one. Force
+        // the next step to replan; SCvx re-anchors at the measured state every solve,
+        // so the stale warm start is a slower first solve rather than a wrong one.
+        if (_s.Active)
+        {
+            _s.LastReplan = double.NegativeInfinity;
+            _s.RefusalRun = 0;
         }
     }
 

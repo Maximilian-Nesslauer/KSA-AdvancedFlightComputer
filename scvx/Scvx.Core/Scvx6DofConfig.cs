@@ -169,6 +169,34 @@ public sealed class Scvx6DofConfig
     public double TanGimbal => Math.Tan(GimbalMaxDeg * Math.PI / 180.0);
     public double CosTilt => Math.Cos(TiltMaxDeg * Math.PI / 180.0);
 
+    /// <summary>
+    /// Radius of the tilt constraint expressed as a NORM BALL on the quaternion's
+    /// (qx, qy), which is what the subproblem actually enforces.
+    ///
+    /// The tilt of the body z-axis from vertical is acos(R22) with
+    /// R22 = 1 - 2(qx^2 + qy^2), so
+    ///
+    ///     tilt &lt;= tiltMax
+    ///       &lt;=&gt;  1 - 2(qx^2 + qy^2) &gt;= cos(tiltMax)
+    ///       &lt;=&gt;  qx^2 + qy^2 &lt;= (1 - cos(tiltMax)) / 2
+    ///       &lt;=&gt;  ||(qx, qy)|| &lt;= sin(tiltMax / 2)
+    ///
+    /// - a CONVEX second-order cone in the original variables, exact, and with no
+    /// dependence on the reference trajectory. See the tilt block in
+    /// Scvx6DofSubproblemScs.AssembleCone for why that matters: the linearisation
+    /// this replaces had a gradient of (-4*qx, -4*qy), which is exactly zero for a
+    /// vertical vehicle.
+    ///
+    /// Written as sin(tiltMax/2) rather than sqrt((1 - cos(tiltMax)) / 2). They are
+    /// the same number, but the half-angle form does not lose precision to
+    /// cancellation in 1 - cos for small angles.
+    ///
+    /// Valid across the whole 0-180 degree range: at 180 it evaluates to 1, and
+    /// ||(qx, qy)|| &lt;= 1 holds for every unit quaternion, so the constraint goes
+    /// vacuous exactly where it should.
+    /// </summary>
+    public double SinHalfTilt => Math.Sin(0.5 * TiltMaxDeg * Math.PI / 180.0);
+
     public double[] ResolvedUScale => UScale ??
         [Tmax * TanGimbal, Tmax * TanGimbal, Tmax, TauRollMax];
 }

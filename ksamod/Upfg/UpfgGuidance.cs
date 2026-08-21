@@ -57,9 +57,11 @@ public sealed class UpfgGuidance
     public double Tgo => _prev.Tgo;
     public double VgoMag { get; private set; }        // remaining delta-v magnitude (m/s)
     public double3 Rd => _prev.Rd;                    // predicted cutoff position, CCI
+    public double3 Vgo { get; private set; }          // velocity-to-go vector, CCI
+    public double3 Rgo { get; private set; }          // position-to-go vector, CCI
     public double Throttle { get; private set; } = 1.0; // commanded throttle (g-limit)
 
-    public void Reset() { _setup = false; Converged = false; Throttle = 1.0; _prev = new State(); }
+    public void Reset() { _setup = false; Converged = false; Throttle = 1.0; Vgo = default; Rgo = default; _prev = new State(); }
 
     // r, v: inertial (CCI) state in metres and m/s. vehicle: the staged model,
     // rebuilt by the caller from live data so stage 0 reflects the current mass.
@@ -228,6 +230,7 @@ public sealed class UpfgGuidance
             out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
             out double3 rthrust, out double3 vbias);
         rbias = rgo - rthrust;
+        Rgo = rgo;   // latched for the panel schematic; not used by the solver
 
         // 7 - External (conic) estimation of gravity over the burn
         double3 rc1 = r - 0.1 * rthrust - (tgo / 30.0) * vthrust;
@@ -312,6 +315,7 @@ public sealed class UpfgGuidance
 
         Steering = double3.Normalize(iF);
         VgoMag = vgo.Length();
+        Vgo = vgo;
 
         // In precision-landing mode the throttle command is K itself (the g-limit
         // block above only applies to constant-acceleration stages).

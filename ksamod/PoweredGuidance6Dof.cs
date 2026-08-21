@@ -219,11 +219,6 @@ public static partial class PoweredGuidanceWindow
             "optimiser's own controls, interpolated along the fresh trajectory. " +
             "There is no trajectory tracking - the feedback IS the re-solve.");
 
-        // KSA knows the real floor; the 0.40 default was the Python test case's value
-        // and overstating it is what makes an otherwise fine vehicle "over-powered".
-        if (_s.SixDofFloorAuto && !_s.Active)
-            _s.SixDofThrottleFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
-
         if (!_s.Active)
         {
             if (ImGui.Button("Engage 6-DOF guidance"))
@@ -389,6 +384,19 @@ public static partial class PoweredGuidanceWindow
                    $"budget {_s.Guidance.SubproblemBudgetMs:F0} ms -> cap " +
                    $"{(int)(_s.Guidance.SubproblemBudgetMs / Math.Max(_s.Guidance.MsPerAdmmIteration, 1e-4))} iters   " +
                    $"escalations {_s.Guidance.Escalations}");
+
+        // TRUST REGION, and whether it has bottomed out. At the floor the per-node box
+        // is far smaller than one interval of travel, so the plan cannot be re-anchored
+        // and every cycle refuses however long it is given - see the note on
+        // WarmTrustRegion. Worth a colour, because from the outside it looks identical
+        // to a hard problem.
+        double trEnd = _s.Guidance.TrustRegionNow, trMin = _s.Guidance.TrustRegionMin;
+        string trText = $"trust region {_s.Guidance.LastTrustRegionStart:G3} -> {trEnd:G3} " +
+                        $"(floor {trMin:G3})";
+        if (trEnd <= trMin * 1.001)
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f), trText + " - COLLAPSED");
+        else
+            ImGui.Text(trText);
         if (_s.SixDofFixedTime)
         {
         ImGui.Text($"burn time {sg,6:F1} s   FIXED (committed {_s.Guidance.CommittedSigma:F1} s, counting down)");
@@ -485,14 +493,37 @@ public static partial class PoweredGuidanceWindow
         // is normalised by the range to the target, so it climbs on an approach even
         // when nothing about the plan changed - it was rejecting centimetre-accurate
         // trajectories inside 100 m. See Ksa6DofGuidance.Finish.
+        // THE GATED FIGURE IS THE ONE THAT DECIDES, so it is the one shown in the
+        // pass/fail line. It is the same defect judged with a horizon weighting -
+        // full strength over the intervals about to be flown, loosening toward the end
+        // of the plan, which is re-solved many times before the vehicle reaches it.
+        // The full-horizon max is shown underneath, because that is what says whether
+        // the trajectory is good ANYWHERE, and the two disagreeing is informative
+        // rather than alarming. See Scvx6DofSolver.WeightedDefect.
+        // THE GATE IS A DIMENSIONLESS RATIO - worst channel as a multiple of its OWN
+        // tolerance, after horizon weighting - so 1.0 is exactly at tolerance and the
+        // reading means the same thing whether the offender is a position, a velocity,
+        // an attitude or a body rate. The old metre-scaled figure is kept underneath
+        // because it is what the historical logs contain, but it is not what decides.
         double defM = _s.Guidance.LastDefectM;
-        if (defM <= _s.Guidance.MaxDefectM)
+        double ratio = _s.Guidance.LastGatedRatio;
+        if (ratio <= 1.0)
             ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
-                $"dynamics defect {defM:F2} m  (limit {_s.Guidance.MaxDefectM:F2} m) - plan is physical");
+                $"defect {ratio:F2}x tolerance - plan is flyable");
         else
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                $"dynamics defect {defM:F2} m EXCEEDS {_s.Guidance.MaxDefectM:F2} m - plan refused. " +
-                "Almost always too few nodes: the collocation error grows with node spacing.");
+                $"defect {ratio:F1}x tolerance on {_s.Guidance.LastGatedDefectChannelName} - refused. " +
+                $"{_s.Guidance.LastGatedRaw:G3} against {_s.Guidance.LastGatedTolerance:G3} " +
+                _s.Guidance.LastGatedDefectUnits);
+
+        ImGui.Text($"  worst at interval {_s.Guidance.LastGatedDefectNode} of {_s.Guidance.Nodes - 1}; " +
+                   $"first {_s.Guidance.LastCommitIntervals} judged at full strength, " +
+                   $"the last allowed {_s.Guidance.HorizonFarSlack:F0}x");
+        ImGui.Text($"  tolerances: {_s.Guidance.PositionDefectM:G3} m, " +
+                   $"{_s.Guidance.VelocityDefectMs:G3} m/s, " +
+                   $"{_s.Guidance.AttitudeDefectDeg:G3} deg, " +
+                   $"{_s.Guidance.RateDefectRadS:G3} rad/s " +
+                   $"(legacy full-horizon reading {defM:F2} m)");
 
         // WHICH CHANNEL, because the metres figure above cannot be read on its own.
         // It is a max over all fourteen state channels, each divided by its own scale,
@@ -758,7 +789,7 @@ public static partial class PoweredGuidanceWindow
 
             if (RebuildAt(vehicle, parent, siteCci, x, now, NodeRungs[finer]))
             {
-                SixDofLog.Event(now,
+                SixDofLog.Event(_s, now,
                     $"NODE BACK-OFF at alt {x[2]:F0} m: {NodeRungs[_s.GateIndex]} -> " +
                     $"{NodeRungs[finer]} nodes, and no coarser this run");
                 _s.GateIndex = finer;
@@ -766,7 +797,7 @@ public static partial class PoweredGuidanceWindow
             }
             else
             {
-                SixDofLog.Event(now,
+                SixDofLog.Event(_s, now,
                     $"NODE BACK-OFF at alt {x[2]:F0} m to {NodeRungs[finer]} nodes FAILED; " +
                     "not retrying - the node count is not what is wrong");
             }
@@ -820,7 +851,7 @@ public static partial class PoweredGuidanceWindow
         double speedNow = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
         if (_s.RungFloor != int.MaxValue && speedNow < 0.67 * _s.RungFloorSpeed)
         {
-            SixDofLog.Event(now,
+            SixDofLog.Event(_s, now,
                 $"NODE FLOOR CLEARED at alt {x[2]:F0} m: speed {speedNow:F0} m/s is well below the "
                 + $"{_s.RungFloorSpeed:F0} m/s that refused {NodeRungs[Math.Min(_s.RungFloor + 1, NodeRungs.Length - 1)]} nodes");
             _s.RungFloor = int.MaxValue;
@@ -893,7 +924,7 @@ public static partial class PoweredGuidanceWindow
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _))
         {
-            SixDofLog.Event(now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
+            SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
         }
 
@@ -933,12 +964,12 @@ public static partial class PoweredGuidanceWindow
         Ksa6DofGuidance next = ApplyRebuild(req, _s.Guidance, x, now);
         if (next == null)
         {
-            SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
+            SixDofLog.Event(_s, now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
                                  $"nodes - staying at {_s.Guidance.Nodes}");
             return false;
         }
 
-        SixDofLog.Event(now, $"NODE STEP at alt {x[2]:F0} m: {_s.Guidance.Nodes} -> {nodes} nodes " +
+        SixDofLog.Event(_s, now, $"NODE STEP at alt {x[2]:F0} m: {_s.Guidance.Nodes} -> {nodes} nodes " +
                              $"(sigma {sigmaWas:F1} s -> dt {sigmaWas / Math.Max(nodes - 1, 1):F2} s, " +
                              $"defect {next.LastDefectM:F2} m)");
         _s.Guidance = next;
@@ -962,11 +993,11 @@ public static partial class PoweredGuidanceWindow
         // cycle finds nothing to do - and before the fix each one cost fifteen
         // refusals and a cold restart.
         if (_s.Guidance.LastBranchFlips > 0)
-            SixDofLog.Event(now,
+            SixDofLog.Event(_s, now,
                 $"QUATERNION BRANCH FLIP at alt {x[2]:F0} m: re-expressed " +
                 $"{_s.Guidance.LastBranchFlips} of {_s.Guidance.Nodes - 1} plan nodes onto the " +
                 "vehicle's branch (q and -q are the same rotation; the defect is not)");
-        SixDofLog.PlanSnapshot(now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+        SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
     }
 
     private static void OnSolveRefused(double now, string error)
@@ -977,7 +1008,7 @@ public static partial class PoweredGuidanceWindow
         // Every refusal, with its reason. A refused re-solve silently leaves the
         // vehicle on a stale open-loop plan, so a run of these in the event log is the
         // signature to look for first.
-        SixDofLog.Event(now, "RE-SOLVE REFUSED: " + error);
+        SixDofLog.Event(_s, now, "RE-SOLVE REFUSED: " + error);
     }
 
     // A/B TOGGLE. The synchronous path is kept in full rather than removed, because
@@ -1046,8 +1077,17 @@ public static partial class PoweredGuidanceWindow
             DefectM = _s.Guidance.LastDefectM, DefectLimitM = _s.Guidance.MaxDefectM,
             DefectChan = _s.Guidance.LastDefectChannelName, DefectGroup = _s.Guidance.LastDefectGroup,
             DefectRaw = _s.Guidance.LastDefectRaw, DefectNode = _s.Guidance.LastDefectNode,
+            GatedRatio = _s.Guidance.LastGatedRatio,
+            GatedRaw = _s.Guidance.LastGatedRaw,
+            GatedTolerance = _s.Guidance.LastGatedTolerance,
+            GatedDefectChan = _s.Guidance.LastGatedDefectChannelName,
+            GatedDefectNode = _s.Guidance.LastGatedDefectNode,
+            CommitIntervals = _s.Guidance.LastCommitIntervals,
             QFlips = _s.Guidance.LastBranchFlips,
             AnchorM = _s.Guidance.AnchorOffsetM,
+            TrStart = _s.Guidance.LastTrustRegionStart,
+            TrEnd = _s.Guidance.TrustRegionNow,
+            TrMin = _s.Guidance.TrustRegionMin,
             FellBack = _s.Guidance.FellBack, Escalations = _s.Guidance.Escalations,
             Nodes = _s.Guidance.Nodes, Sigma = _s.Guidance.Sigma, PlanElapsed = _s.Guidance.PlanElapsed,
             ThrustDemandN = thrustN, CapabilityN = capability, Throttle = throttle,
@@ -1062,7 +1102,7 @@ public static partial class PoweredGuidanceWindow
             BiasX = _s.Guidance.AccelBias.X, BiasY = _s.Guidance.AccelBias.Y, BiasZ = _s.Guidance.AccelBias.Z,
             Error = _s.Error,
         };
-        SixDofLog.Cycle(row);
+        SixDofLog.Cycle(_s, row);
         _s.DidSolve = false;
     }
 
@@ -1222,9 +1262,52 @@ public static partial class PoweredGuidanceWindow
         }
         catch (Exception e)
         {
+            // The MESSAGE alone is not a diagnosis. "Index was outside the bounds of
+            // the array" names neither the array nor the line, and this catch then
+            // disengages - so by the time anyone looks, the state that produced it is
+            // gone. The full exception goes to a file that always exists, with enough
+            // surrounding state to tell which of the several paths through a step was
+            // running when it threw.
             _s.Error = "6-DOF step failed: " + e.Message;
+            LogSixDofFault(vehicle, e);
             _s.EngagePending = false;
             Disengage6Dof(vehicle);
+        }
+    }
+
+    /// <summary>
+    /// Records a 6-DOF fault with its stack, unconditionally - not via SixDofLog,
+    /// which only runs when telemetry is switched on, and not via Console.Error, which
+    /// under StarMap goes nowhere anyone can read.
+    /// </summary>
+    private static void LogSixDofFault(Vehicle vehicle, Exception e)
+    {
+        try
+        {
+            Ksa6DofGuidance g = _s.Guidance;
+            string ctx =
+                $"active={_s.Active} converging={_s.Converging} threaded={_s.SixDofThreaded} " +
+                $"pending={_s.EngagePending} busy={(_s.Worker != null && _s.Worker.IsBusy)} " +
+                $"gate={_s.GateIndex} rungFloor={_s.RungFloor} refusals={_s.RefusalRun} " +
+                $"nodes={(g?.Nodes ?? -1)} planLen={(g == null ? -1 : g.PlanState.Length)} " +
+                $"ctrlLen={(g == null ? -1 : g.PlanControl.Length)} hasPlan={(g?.HasPlan ?? false)} " +
+                $"traceCount={_s.GfoldTraceCount} traceLen={(_s.GfoldTrace?.Length ?? -1)} " +
+                $"seed={_s.SixDofGfoldSeed} spread={_s.SixDofSpreadCold} fixedTime={_s.SixDofFixedTime}";
+
+            string dir = System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+                "My Games", "Kitten Space Agency", "navbox-logs");
+            System.IO.Directory.CreateDirectory(dir);
+            System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "6dof-faults.log"),
+                $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {vehicle}{Environment.NewLine}" +
+                $"  {ctx}{Environment.NewLine}{e}{Environment.NewLine}{Environment.NewLine}");
+
+            if (SixDofLog.Enabled)
+                SixDofLog.Event(_s, SimNow(), "FAULT " + e);
+        }
+        catch
+        {
+            // Diagnostics must never be the thing that breaks the step.
         }
     }
 
@@ -1252,7 +1335,7 @@ public static partial class PoweredGuidanceWindow
             double m = vehicle.TotalMass;
             if (m < _s.LastMass * (1.0 - StagingMassDropFraction))
             {
-                SixDofLog.Event(SimNow(),
+                SixDofLog.Event(_s, SimNow(),
                     $"STAGED: mass {_s.LastMass:F0} -> {m:F0} kg in one step - the plan was " +
                     "built for a different vehicle. Terminating 6-DOF.");
                 Disengage6Dof(vehicle, cutEngine: false);
@@ -1269,6 +1352,15 @@ public static partial class PoweredGuidanceWindow
         double[] x = KsaFrameBridge.ToModelState(vehicle, frame);
         double now = SimNow();
 
+        // Same trace the descent plot draws for G-FOLD and hover, so the 6-DOF page
+        // shows a flown path against its plan too.
+        if (_s.Active)
+        {
+            // KsaFrameBridge's frame is Z-UP, unlike the G-FOLD one.
+            double3 sdLocal = frame.PosToLocal(vehicle.Orbit.StateVectors.PositionCci);
+            RecordGfoldTrace(Math.Sqrt(sdLocal.X * sdLocal.X + sdLocal.Y * sdLocal.Y), sdLocal.Z);
+        }
+
         if (_s.EngagePending)
         {
             _s.EngagePending = false;
@@ -1283,19 +1375,33 @@ public static partial class PoweredGuidanceWindow
         // plan away and cold-start again, spread over frames so it does not stall the
         // sim thread.
         // ESCALATION LADDER. Each rung is only reached when the cheaper one below has
-        // stopped working, and the trigger for the top rung is DRIFT rather than a
-        // failure count - because drift is the cause and failures are the symptom.
+        // stopped working.
         //
-        //   1. warm re-solve, tight trust region        (Update, normal case)
+        //   1. warm re-solve, carried trust region      (Update, normal case)
         //   2. wide trust region, re-linearised         (Update's retry, on divergence)
-        //   3. cold re-seed from the current state      (here, spread over frames)
+        //   3. RESTART ON THE CURRENT PLAN              (here, on a run of refusals)
+        //   4. cold re-seed from a straight line        (here, on drift)
         //
-        // A warm start is an advantage only while the vehicle is NEAR its plan. Past
-        // that, the stale plan is a worse seed than a straight line from where the
-        // vehicle actually is, because the straight line is at least self-consistent.
-        // So once drift passes that point there is nothing to be gained by re-solving
-        // from it, however many times we try - and waiting for fifteen failures first
-        // just means fifteen expensive cycles of flying open loop.
+        // THE TWO TRIGGERS GET DIFFERENT REMEDIES, which is the point. They diagnose
+        // different faults and used to share one answer:
+        //
+        //   DRIFT means the vehicle is not where its plan says. The trajectory itself
+        //   is now a claim about motion the vehicle is not making, so it is a WORSE
+        //   seed than a straight line, which is at least self-consistent. Rung 4.
+        //
+        //   A RUN OF REFUSALS means the plan failed the defect gate. That is a
+        //   statement about the plan's own self-consistency, NOT about whether the
+        //   vehicle is on it - and it is perfectly possible, indeed usual, for the
+        //   geometry to be fine and drift to be nil while the loop simply cannot take
+        //   an accepted step. Answering that with a straight line throws away a
+        //   converged trajectory in favour of one that is not even dynamically
+        //   feasible. Rung 3 keeps the plan and rebuilds the solver around it.
+        //
+        // Flight log 20260820-141757 is the case in point: 20 refusals at 1500 m with
+        // the vehicle moving 1.4 m per cycle and drift nowhere near its limit, ending
+        // in a cold restart whose straight-line solve then converged in 4 iterations.
+        // Nothing was wrong with the plan; the loop was stuck, and the fix for stuck
+        // is to change something about the solve, not about the trajectory.
         // Reads the PUBLISHED plan, so it is safe while a solve is in flight - see
         // Ksa6DofGuidance.MeasureDrift.
         double drift = _s.Guidance != null ? _s.Guidance.MeasureDrift(x, now) : 0.0;
@@ -1312,16 +1418,27 @@ public static partial class PoweredGuidanceWindow
             var xfR = new double[14];
             xfR[2] = _s.SixDofTargetAltM;
             TerminalAttitude(x, xfR);
-            SixDofLog.Event(now,
-                $"COLD RESTART at alt {x[2]:F0} m: " +
-                (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
-                            : $"{_s.RefusalRun} refused re-solves") +
-                $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.LastDefectM:F0} m");
             // No pacing when threaded: spacing iterations out exists to keep frames
             // smooth, and off the sim thread there is no frame to protect - it would
             // only make the vehicle fall further before it has a plan.
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-            _s.Guidance.BeginCold(x, xfR, Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed));
+            double sigmaR = Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed);
+
+            // Refusals keep the plan; drift does not. BeginWarmRestart declines if
+            // there is no plan to keep, in which case there is nothing to choose
+            // between them and the straight line is all that is left.
+            bool keptPlan = !driftedOff && _s.Guidance.BeginWarmRestart(x, xfR, sigmaR, now);
+            if (!keptPlan)
+                _s.Guidance.BeginCold(x, xfR, sigmaR);
+
+            SixDofLog.Event(_s, now,
+                (keptPlan ? "WARM RESTART" : "COLD RESTART") + $" at alt {x[2]:F0} m: " +
+                (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
+                            : $"{_s.RefusalRun} refused re-solves, drift {drift:F0} m of " +
+                              $"{driftLimit:F0} m") +
+                $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.LastDefectM:F0} m" +
+                (keptPlan ? " - reseeding from the existing plan"
+                          : " - reseeding from a straight line"));
             _s.Converging = true;
             _s.ColdFrames = 0;
             _s.RefusalRun = 0;
@@ -1366,11 +1483,11 @@ public static partial class PoweredGuidanceWindow
             {
                 _s.Converging = false;
                 _s.Error = "";
-                SixDofLog.Event(now,
+                SixDofLog.Event(_s, now,
                     $"COLD SOLVE CONVERGED in {_s.Guidance.LastIterations} iterations spread over " +
                     $"{_s.ColdFrames} frames, defect {_s.Guidance.LastDefectM:F2} m, " +
                     $"sigma {_s.Guidance.Sigma:F1} s");
-                SixDofLog.PlanSnapshot(now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+                SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
             }
             else if (_s.Guidance.NeedsMoreNodes && _s.Guidance.Nodes < MaxNodes)
             {
@@ -1384,7 +1501,7 @@ public static partial class PoweredGuidanceWindow
                     if (NodeRungs[i] > _s.Guidance.Nodes) { finer = i; break; }
                 int nodes = Math.Clamp(NodeRungs[finer], MinNodes, MaxNodes);
 
-                SixDofLog.Event(now,
+                SixDofLog.Event(_s, now,
                     $"COLD SOLVE stalled at {_s.Guidance.LastDefectM:F1} m with {_s.Guidance.Nodes} nodes " +
                     $"after {_s.Guidance.LastIterations} iterations - retrying at {nodes} nodes");
 
@@ -1401,7 +1518,7 @@ public static partial class PoweredGuidanceWindow
                 {
                     // The rebuild itself failed, so there is nothing finer to try.
                     // Fall back to the loose cold gate rather than never engaging.
-                    SixDofLog.Event(now, $"COLD SOLVE cannot rebuild at {nodes} nodes - " +
+                    SixDofLog.Event(_s, now, $"COLD SOLVE cannot rebuild at {nodes} nodes - " +
                                          "accepting the coarse plan against the cold gate");
                     if (_s.Guidance.AcceptCold(x, now))
                     {
@@ -1418,7 +1535,7 @@ public static partial class PoweredGuidanceWindow
                 // Give up rather than fall forever if it is not going to converge.
                 if (_s.ColdFrames > 240)
                 {
-                    SixDofLog.Event(now, "COLD SOLVE gave up after 240 frames: " + _s.Guidance.Error);
+                    SixDofLog.Event(_s, now, "COLD SOLVE gave up after 240 frames: " + _s.Guidance.Error);
                     Disengage6Dof(vehicle);
                     _s.Error = "cold solve failed to converge: " + _s.Guidance.Error;
                 }
@@ -1442,7 +1559,7 @@ public static partial class PoweredGuidanceWindow
         }
         else if (_s.TouchdownArmed)
         {
-            SixDofLog.Event(now, $"TOUCHDOWN at alt {x[2]:F1} m, vz {x[5]:F2} m/s, " +
+            SixDofLog.Event(_s, now, $"TOUCHDOWN at alt {x[2]:F1} m, vz {x[5]:F2} m/s, " +
                                  $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
             SixDofLog.Stop(_s);
             Disengage6Dof(vehicle);
@@ -1465,7 +1582,7 @@ public static partial class PoweredGuidanceWindow
         // below the target would simply never trigger, which the UI warns about.
         if (_s.SixDofHoverHandoff && x[2] <= _s.SixDofHoverHandoffAltM)
         {
-            SixDofLog.Event(now, $"HANDOFF to terminal hover at alt {x[2]:F1} m, " +
+            SixDofLog.Event(_s, now, $"HANDOFF to terminal hover at alt {x[2]:F1} m, " +
                                  $"vz {x[5]:F2} m/s, lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m");
             SixDofLog.Stop(_s);
             Disengage6Dof(vehicle, cutEngine: false);
@@ -1626,6 +1743,19 @@ public static partial class PoweredGuidanceWindow
     private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                    double[] x, double now)
     {
+        // THE AUTO THROTTLE FLOOR IS RESOLVED HERE, where it is consumed, and nowhere
+        // else. KSA knows the vehicle's real minimum throttle; the 0.40 default is the
+        // Python test case's value, and overstating it is what makes an otherwise fine
+        // vehicle read as "over-powered" and the cold solve come back infeasible.
+        //
+        // It used to be computed by the 6-DOF TAB'S DRAW, which worked only because
+        // the Engage button lived on that tab - you could not engage without having
+        // drawn it. The gauge panel engages from anywhere, so a craft that never had
+        // that tab opened planned against 0.40 and refused to solve from states it
+        // handles easily. Model values must not depend on which page is on screen.
+        if (_s.SixDofFloorAuto)
+            _s.SixDofThrottleFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
+
         // Target: hover point above the pad, upright and at rest. Mass is free, so the
         // terminal state carries 13 of the 14 components. Built BEFORE the config
         // because the problem scaling is sized from the x0 -> xf extent.
@@ -1688,7 +1818,7 @@ public static partial class PoweredGuidanceWindow
             if (_s.SixDofLogging)
             {
                 SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
-                SixDofLog.Event(now, $"ENGAGED (spread cold solve)  nodes {engageNodes}  " +
+                SixDofLog.Event(_s, now, $"ENGAGED (spread cold solve)  nodes {engageNodes}  " +
                                      $"target alt {_s.SixDofTargetAltM:F0} m  cadence {_s.SixDofReplanSec:F2} s");
             }
             return true;
@@ -1737,18 +1867,18 @@ public static partial class PoweredGuidanceWindow
         if (_s.SixDofLogging)
         {
             SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
-            SixDofLog.Event(now,
+            SixDofLog.Event(_s, now,
                 $"ENGAGED  nodes {engageNodes}  tilt {_s.SixDofTiltDeg:F0} deg  " +
                 $"floor {_s.SixDofThrottleFloor:F2}  target alt {_s.SixDofTargetAltM:F0} m  " +
                 $"glideslope {_s.SixDofGlideSlopeDeg:F0} deg  " +
                 $"vzMax {(_s.SixDofVzEnabled ? _s.SixDofVzMaxMs.ToString("F1") : "off")}  " +
                 $"cadence {_s.SixDofReplanSec:F2} s  gates {(_s.SixDofNodeGates ? "on" : "off")}");
-            SixDofLog.Event(now,
+            SixDofLog.Event(_s, now,
                 (seedNote.Length > 0 ? seedNote + "  |  " : "") +
                 $"cold solve: {_s.Guidance.Status}, {_s.Guidance.LastIterations} iters, " +
                 $"defect {_s.Guidance.LastDefectM:F2} m, sigma {_s.Guidance.Sigma:F1} s, " +
                 $"Tmax {_s.Guidance.Tmax / 1e6:F2} MN");
-            SixDofLog.PlanSnapshot(now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+            SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
         }
         return true;
     }
