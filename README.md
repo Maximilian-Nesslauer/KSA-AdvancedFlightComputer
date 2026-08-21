@@ -22,8 +22,6 @@ by the PEGAS mod for KSP https://github.com/Noiredd/PEGAS-MATLAB/blob/master/doc
 This mod iterates by including mode 2 from the UPFG paper "Ascent to Reference trajectory", which allows us to drive the 
 cutoff position to a desired point by modulating throttle. This can not only be used to target a reference trajectory on launch, but also to fly the vehicle to a precise landing point.
 
-https://youtu.be/oTMbm27fYgk
-
 ## G-FOLD and Lossless Convexification - Fuel Optimal Landing
 
 ![G-FOLD Landing](docs/images/g-fold-traj.png)
@@ -42,9 +40,9 @@ are required, as the 6dof dynamics are not accounted for. For this reason, it wi
 
 ![Starship Bellyflop](docs/images/scvx_convergence.png)
 
-G-FOLD is a very clever algorithm, but it has it's limitations. It is fundamentally linear, and is therefore unable to handle nonlinearities such as vehicle rotation or air resistance. For vehicles with high rotational inertia and/or flying in an atmosphere, G-FOLD is insufficient. 
+G-FOLD is a very clever algorithm, but it has it's limitations. It is fundamentally linear, and is therefore unable to handle nonlinearities such as vehicle rotation or air resistance. For precise control of vehicles with high rotational inertia and/or flying in an atmosphere, G-FOLD is insufficient. 
 
-To solve this problem, this mod uses a method called sequential convex programming. The CAT-S algorithm is a custom written algorithm for this problem, and does not correspond exactly to any published research paper. The guidance loop gets state data from KSA, then guesses a reference trajectory (doesn't have to be a good guess) between our current conditions and our final (terminal) position. We then linearise the system dynamics around this trajectory, and send this convex sub-problem to an external solver (SCS.dll) to be solved. We then repeat this process, linearising around the new slightly improved trajectory, to converge to an optimal trajectory.
+To solve this problem, this mod uses a method called sequential convex programming. The CAT-S (Convex Approximation for Trajectories - Sequential) algorithm is a custom written algorithm for this problem, and does not correspond exactly to any published research paper. The guidance loop gets state data from KSA, then guesses a reference trajectory (doesn't have to be a good guess) between our current conditions and our final (terminal) position. We then linearise the system dynamics around this trajectory, and send this convex sub-problem to an external solver (SCS.dll) to be solved. We then repeat this process, linearising around the new slightly improved trajectory, to converge to an optimal trajectory.
 
 ## Installation
 
