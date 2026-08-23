@@ -5,8 +5,12 @@ using HarmonyLib;
 using KSA;
 using RenderCore.Input;
 using StarMap.API;
+using System.Collections.Generic;
 using System.Collections;
 using static Brutal.Strings.Utf8;
+using System.Linq;
+using CommunityToolkit.HighPerformance;
+
 
 namespace NovaTec.GravityTurnMod
 {
@@ -103,7 +107,10 @@ namespace NovaTec.GravityTurnMod
                     }
                     if (ImGui.MenuItem("Go IDLE"))
                     {
-                        Controller.Phase = GravityController.PhaseEnum.Idle;
+						FlightControlOverride.Active = false;
+						ThrottleOverride.Active = false;
+						PatchRcsPriority.Active = false;
+						Controller.Phase = GravityController.PhaseEnum.Idle;
                     }
                     ImGui.EndMenu();
                 }
@@ -207,9 +214,9 @@ namespace NovaTec.GravityTurnMod
                 ImGui.SetCursorPosX(width - 120 - ImGui.GetStyle().ItemInnerSpacing.X*2);
                 ImGui.SetCursorPosY(y);
                 ImGui.BeginDisabled(isCoasting);
-                if (ImGui.Button(vehicle.Situation == Situation.Landed ? "Launch!" : "Abort", new float2(120, yl - y - ImGui.GetStyle().ItemInnerSpacing.Y)))
+                if (ImGui.Button(Controller.Phase == GravityController.PhaseEnum.Landed ? "Launch!" : "Abort", new float2(120, yl - y - ImGui.GetStyle().ItemInnerSpacing.Y)))
                 {
-                    if (vehicle.Situation == Situation.Landed)
+                    if (Controller.Phase == GravityController.PhaseEnum.Landed)
                     {
                         Controller.SetVehicle(vehicle);
                         Controller.Launch(vehicle);
@@ -275,6 +282,11 @@ namespace NovaTec.GravityTurnMod
             new Harmony("gravityturn.autoload").Patch(
                 AccessTools.Method(typeof(Program), "OnFrame", new[] { typeof(double), typeof(double) }),
                 postfix: new HarmonyMethod(typeof(GravityTurn), nameof(AutoLoad)));
+
+            new Harmony("gravityturn.autoload.program").Patch(
+                AccessTools.Method(typeof(Universe), "OnLoaded" ),
+                prefix: new HarmonyMethod(typeof(GravityTurn), nameof(SkipAutoLoad)));
+
         }
 
         [StarMapUnload]
@@ -283,11 +295,28 @@ namespace NovaTec.GravityTurnMod
             Console.WriteLine("GravityTurn - Unload");
             Patcher.Unload();
         }
+
+
+        // fix for OnLoad Bug: delay console commands until the game and mods are fully loaded
+
+        public static List<string> OnLoad = new List<string>();
+
+        // store OnLoad command list first and delete original list, so game doesn't try
+        private static void SkipAutoLoad()
+        {
+            Console.WriteLine("GravityTurn - Skipped autoload");
+            OnLoad.AddRange<string>(GameSettings.Current.Console.OnLoad.AsSpan<string>());
+            GameSettings.Current.Console.OnLoad.Clear();
+        }
+        // after everything is completed, execute all console commands
         private static void AutoLoad()
         {
             if (_autoLoaded) return;
             _autoLoaded = true;
-            Program.TerminalInterface.Execute("load Launch");
+
+            Program.TerminalInterface.Execute(OnLoad.AsSpan<string>());
+            // resore original settings
+            KSA.GameSettings.Current.Console.OnLoad = OnLoad;
         }
 
     }
