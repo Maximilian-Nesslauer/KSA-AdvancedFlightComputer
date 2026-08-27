@@ -55,6 +55,19 @@ public static class KsaVehicleAdapter
     // stage chain stays continuous.
     private const double MinPhaseSeconds = 1e-3;
 
+    /// <summary>
+    /// How far past the engines' own capability a phase's mass flow has to be before
+    /// <see cref="CorrectDuplicateRegistration"/> treats it as double-counted. The
+    /// real fault is a whole multiple — x2, x3 — so this sits well above anything a
+    /// modelling difference could produce and well below the smallest real case.
+    /// </summary>
+    private const double DuplicateFlowRatio = 1.5;
+
+    // ...and a phase can be long enough to survive that and still be dust: a tank
+    // trickling out its last few grams paces a "burn" of seconds that delivers no
+    // dV worth planning around. A stage under this is dropped rather than shown.
+    private const double MinStageDv = 1.0;   // m/s
+
     public static UpfgVehicle Build(Vehicle vehicle)
     {
         var result = new UpfgVehicle();
@@ -91,6 +104,11 @@ public static class KsaVehicleAdapter
                 if (!(thrust > 0.0) || !(massFlow > 0.0) || !(duration > 0.0))
                     continue;
 
+                // Cross-check the model against the engines that are actually in this
+                // phase, and believe them (see CorrectDuplicateRegistration).
+                CorrectDuplicateRegistration(perf, i, j, sequences[i].Environment,
+                                             ref thrust, ref massFlow, ref duration);
+
                 double burnout = mass - massFlow * duration;
                 if (duration >= MinPhaseSeconds && mass > 0.0 && burnout > 0.0)
                 {
@@ -102,6 +120,8 @@ public static class KsaVehicleAdapter
                         MassTotal = mass,
                         MassDry = burnout,
                         GLim = 1e9,
+                        Seq = i,
+                        Engines = phase.ActiveEngineCount,
                     });
                 }
                 mass = burnout;
@@ -109,7 +129,148 @@ public static class KsaVehicleAdapter
         }
 
         CorrectBurningSolids(vehicle, result);
+        Coalesce(result);
         return result;
+    }
+
+    // Fold the drain simulation's phase decomposition back into actual STAGES.
+    //
+    // A UPFG stage is a constant-thrust arc that ends in a discontinuity — a jettison,
+    // an engine set changing. The game's phases are not that: they are whatever
+    // intervals its drain simulation happened to break the burn into, and it breaks
+    // one wherever the number of drawing engine cores changes for even a single
+    // iteration. TANKS ARE WHAT DRIVES THAT. Its inner loop steps from one tank
+    // emptying to the next, splitting the demand across the tanks in a level and
+    // spilling what is left to the next level, so a stack with several tanks — a
+    // capsule tank plumbed to the stack, an asymmetric pair, anything that does not
+    // run dry at the same instant — takes several iterations to finish the burn, and
+    // any core that misses its full draw on one of them drops out and comes back.
+    // Each of those became a separate row in the stage table with its own slice of the
+    // stage's dV, which is what "one stage showing up as several" is.
+    //
+    // Two adjacent stages are the same stage if they have the same thrust and the same
+    // exhaust velocity and no mass went overboard between them. Merging is exact —
+    // dV is ve·ln(m0/m1), so ve·ln(m0/mid) + ve·ln(mid/m1) is the same number — and it
+    // leaves every real boundary (a booster drop, an engine cutting out, the g-limit
+    // split applied later) intact, because those all change thrust, Isp or mass.
+    private static void Coalesce(UpfgVehicle vehicle)
+    {
+        List<UpfgStage> stages = vehicle.Stages;
+        for (int i = stages.Count - 2; i >= 0; i--)
+        {
+            UpfgStage a = stages[i], b = stages[i + 1];
+            if (!Close(a.Thrust, b.Thrust) || !Close(a.Isp, b.Isp))
+                continue;
+            // Mass continuity: anything jettisoned between the two is a real stage
+            // boundary however alike the two burns look. The tolerance is loose
+            // enough to absorb the float arithmetic the game's masses arrive in
+            // (10 kg on a 100 t stack) and far tighter than any real separation.
+            if (Math.Abs(a.MassDry - b.MassTotal) > 1e-4 * Math.Max(a.MassTotal, 1.0))
+                continue;
+
+            a.MassDry = b.MassDry;
+            a.Engines = Math.Max(a.Engines, b.Engines);
+            stages.RemoveAt(i + 1);
+        }
+
+        // Whatever survives that and still carries no useful dV is numerical dust from
+        // the drain simulation's fixed iteration budget. Dropping it is safe: UPFG
+        // reads each stage's own four numbers and reconciles stage 0 against the live
+        // mass, so nothing downstream depends on the chain being gapless.
+        for (int i = stages.Count - 1; i >= 0; i--)
+        {
+            UpfgStage s = stages[i];
+            if (!(s.MassTotal > 0.0) || !(s.MassDry > 0.0) || s.MassDry >= s.MassTotal
+                || s.Isp * G0 * Math.Log(s.MassTotal / s.MassDry) < MinStageDv)
+                stages.RemoveAt(i);
+        }
+    }
+
+    private static bool Close(double a, double b) =>
+        Math.Abs(a - b) <= 1e-3 * Math.Max(Math.Abs(a), Math.Abs(b));
+
+    /// <summary>
+    /// Repairs a phase whose engines KSA's drain simulation counted more than once.
+    ///
+    /// SINCE MODULE-LEVEL SEQUENCING (KSA 2026.8.22) A PART CAN BE IN SEVERAL
+    /// SEQUENCES. SnapshotSequenceParts used to map one part to one sequence:
+    ///
+    ///     if (part.Sequenceable &amp;&amp; _sequenceIdxByNumber.TryGetValue(part.Sequence, ...))
+    ///         _sequencePartsScratch[value].Add(part);
+    ///
+    /// It now walks each part's sequenced MODULES and adds the part to every sequence
+    /// any of them belongs to. A part carrying an engine module in one sequence and a
+    /// decoupler module in another therefore appears in two lists — and Recompute's
+    /// registration loop, which is unchanged, walks sequences 0..k and registers every
+    /// EngineController of every part it finds, with no de-duplication:
+    ///
+    ///     for (int n = 0; n &lt;= k; n++)
+    ///         foreach (Part item in _sequencePartsScratch[n])
+    ///             ... RegisterDrainCore(item, core2, ...)
+    ///
+    /// So that part's cores are registered once per list it appears in. Thrust and
+    /// mass flow are both multiplied; the MASS RATIO is not, because the same
+    /// propellant is still drained — just faster. Which is why the stock delta-v
+    /// readout looks correct while thrust reads double and the burn time reads half,
+    /// and those two are exactly what UPFG steers on. (The same shape of error as the
+    /// burning-solid pacing below, from an unrelated cause.)
+    ///
+    /// The repair takes the engines the game itself says are in this phase —
+    /// PhaseEngineParts is a HashSet, so it holds each part ONCE however many times it
+    /// was registered — and sums their vacuum capability. If the model claims
+    /// materially more than those engines can produce, the measured figures replace
+    /// it and the duration is stretched to keep the propellant burned unchanged.
+    ///
+    /// Deliberately conservative. It only ever reduces thrust, it needs a discrepancy
+    /// far larger than modelling noise (duplication is a factor of two or more), and
+    /// it stands down where the comparison is not like-for-like: an atmospheric
+    /// sequence is not computed at vacuum, and a solid is deliberately paced away from
+    /// its design flow. Where KSA is behaving, this is a no-op.
+    /// </summary>
+    private static void CorrectDuplicateRegistration(
+        SequencePerformance perf, int seqIdx, int phaseIdx, PerformanceEnvironment environment,
+        ref double thrust, ref double massFlow, ref double duration)
+    {
+        if (environment != PerformanceEnvironment.Vacuum)
+            return;                             // model is at sea level; VacuumData is not
+
+        List<HashSet<Part>> phaseParts = perf.PhaseEngineParts;
+        if (phaseParts == null || phaseIdx >= phaseParts.Count)
+            return;
+        HashSet<Part> parts = phaseParts[phaseIdx];
+        if (parts == null || parts.Count == 0)
+            return;
+
+        double realThrust = 0.0, realFlow = 0.0;
+        foreach (Part part in parts)
+        {
+            Span<EngineController> engines = part.Modules.Get<EngineController>();
+            for (int i = 0; i < engines.Length; i++)
+            {
+                // A solid's modelled flow is paced from the grain remaining, not its
+                // design figure, so it is not comparable — leave the whole phase to
+                // CorrectBurningSolids rather than half-correcting it here.
+                RocketCore[] cores = engines[i].Cores;
+                for (int j = 0; j < cores.Length; j++)
+                    if (cores[j] is SolidMotor)
+                        return;
+
+                realThrust += engines[i].VacuumData.ThrustMax.Length();
+                realFlow += engines[i].VacuumData.MassFlowRateMax;
+            }
+        }
+        if (!(realThrust > 0.0) || !(realFlow > 0.0))
+            return;
+
+        // Duplication is x2 at least. Anything smaller is the difference between a
+        // vector thrust sum and a scalar one, or a throttle, and is not ours to touch.
+        if (massFlow < realFlow * DuplicateFlowRatio)
+            return;
+
+        double burned = massFlow * duration;    // the one figure the model gets right
+        thrust = realThrust;
+        massFlow = realFlow;
+        duration = burned / realFlow;
     }
 
     // Repairs the one place the game's staging model is wrong for a solid that is

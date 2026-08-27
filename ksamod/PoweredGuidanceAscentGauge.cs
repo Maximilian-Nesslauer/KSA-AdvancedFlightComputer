@@ -50,12 +50,6 @@ public static partial class PoweredGuidanceWindow
             GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
         }
 
-        // Track the window until EXECUTE arms, then leave it alone: from that point
-        // the launch instant is fixed, and re-deriving it every frame from a wrapped
-        // angle is exactly what would let a warp step skip straight past it.
-        if (status == ChaseStatus.Ok && (!_s.LaunchArmed || double.IsNaN(_s.LaunchTargetTime)))
-            _s.LaunchTargetTime = SimNow() + plan.WaitSec;
-
         using (new ImGuiDisabledScope(driven))
         {
             GaugeRow("Periapsis (km)", "##pe", ref _s.PeKm);
@@ -63,7 +57,7 @@ public static partial class PoweredGuidanceWindow
             // A new inclination makes the old LAN meaningless — the plane it named
             // no longer passes overhead — so re-seed it from where the vehicle is.
             if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
-                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             GaugeRow("LAN (deg)", "##lan", ref _s.LanDeg);
         }
 
@@ -72,7 +66,7 @@ public static partial class PoweredGuidanceWindow
             ImGui.Text("");
             ImGui.NextColumn();
             if (ImGui.Button("LAN from position"))
-                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+                _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             ImGui.NextColumn();
         }
 
@@ -97,8 +91,10 @@ public static partial class PoweredGuidanceWindow
             case ChaseStatus.Ok:
                 GaugeRowText("Target orbit",
                     $"{plan.TargetPeKm:F1} x {plan.TargetApKm:F1} km, inc {plan.IncDeg:F2} deg");
+                // To IGNITION, which leads the plane crossing by LanLeadSeconds.
                 GaugeRowText("Launch window",
-                    $"T-{plan.WaitSec:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")})");
+                    $"T-{plan.WaitSec:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")}, "
+                    + $"{LanLeadSeconds:F0} s lead)");
                 break;
         }
 
@@ -106,7 +102,7 @@ public static partial class PoweredGuidanceWindow
 
         // Outside the region: it emits plain full-width status text, not column rows.
         if (status == ChaseStatus.Ok)
-            DrawAutoLaunchArming(orbit, parent);
+            DrawAutoLaunchArming();
     }
 
     private static void DrawTargetPicker(Vehicle vehicle)
@@ -156,6 +152,14 @@ public static partial class PoweredGuidanceWindow
 
         GaugeRow("Turn start alt (km)", "##turnalt", ref _s.TurnStartAltKm);
         GaugeRow("Turn rate (deg/s)", "##turnrate", ref _s.TurnRateDegS);
+
+        // Roll is FREE by default — the ascent holds whatever the vehicle lifted off
+        // with and commands a thrust direction only. Ticking this commands a roll as
+        // well, and switches the flight computer out of decoupled roll so it tracks it
+        // (see VehicleAutopilotState.ForceRoll).
+        GaugeRowCheck("Force roll", "##forceroll", ref _s.ForceRoll);
+        using (new ImGuiDisabledScope(!_s.ForceRoll))
+            GaugeRow("Roll angle (deg)", "##rollangle", ref _s.ForceRollDeg);
 
         ImGuiHelper.EndRegion();
     }

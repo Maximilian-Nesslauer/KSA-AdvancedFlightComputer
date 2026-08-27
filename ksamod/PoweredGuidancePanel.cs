@@ -60,7 +60,7 @@ public static partial class PoweredGuidanceWindow
         // toward LAN 0.
         if (!_s.LanSeeded)
         {
-            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg);
+            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, orbit.Parent);
             _s.LanSeeded = true;
         }
 
@@ -69,7 +69,8 @@ public static partial class PoweredGuidanceWindow
         ImGaugeWindow win = new ImGaugeWindow(
             "NavboxGuidance", "Navbox Guidance",
             new float2(0f, 0f), new float2(0f, 0f),
-            _guidancePanelOffsetUv, new float2(GuidancePanelWidthUv, _panelHeightUv));
+            GaugeScreenUv(_guidancePanelOffsetUv),
+            GaugeScreenUv(new float2(GuidancePanelWidthUv, _panelHeightUv)));
 
         // Since KSA 2026.8.19 BeginWindow takes no flags and always succeeds, so there
         // is no early-out to guard any more. EndWindow still has to run whatever the

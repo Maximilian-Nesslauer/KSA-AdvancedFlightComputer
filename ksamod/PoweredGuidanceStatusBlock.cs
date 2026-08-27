@@ -93,7 +93,12 @@ public static partial class PoweredGuidanceWindow
 
         // In the freeze the countdown is the latched one, so it keeps ticking down
         // cleanly while UPFG's own tgo wanders over the near-zero remaining arc.
-        double tgoSec = terminal ? Math.Max(0.0, AscentCutoffIn()) : _s.Upfg.Tgo;
+        // Before that it is the solver's, aged by however long ago the solve was: the
+        // guidance cycle is a second long and a tgo that only moves when a solve lands
+        // reads as a stuck number rather than a countdown.
+        double tgoSec = terminal
+            ? Math.Max(0.0, AscentCutoffIn())
+            : Math.Max(0.0, _s.Upfg.Tgo - Math.Max(0.0, SimNow() - _s.LastSolveTime));
 
         DrawGuidanceStatusBlock(origin, innerW, rowH, AscentPhaseLabel(), col, live,
             tgoSec, decelerating: false);
@@ -287,7 +292,14 @@ public static partial class PoweredGuidanceWindow
             return lineH;
         }
 
-        dl.AddText(min, SchemDim, $"staging   {totalDv:F0} m/s   {total:F0} s total");
+        // KSA's own figure for the same stack, when it disagrees by more than a
+        // percent. The two are computed from the same recompute, so a gap is a real
+        // disagreement about the staging — not a rounding difference — and it is the
+        // one failure a plausible-looking stage list will not otherwise show.
+        double ksaDv = _s.StageModelKsaDv;
+        string cross = ksaDv > 1.0 && Math.Abs(ksaDv - totalDv) > 0.01 * ksaDv
+            ? $"   (KSA {ksaDv:F0})" : "";
+        dl.AddText(min, SchemDim, $"staging   {totalDv:F0} m/s   {total:F0} s total{cross}");
 
         // --- the bar ---
         float barTop = min.Y + lineH + 3f;
@@ -309,15 +321,28 @@ public static partial class PoweredGuidanceWindow
         }
 
         // --- the same stages as text, keyed by colour to the bar above ---
+        //
+        // The trailing seq/eng pair is provenance: which staging sequence the arc came
+        // from and how many engine cores the game's own drain simulation had burning
+        // across it. Two rows carrying the same pair would be one physical stage that
+        // got sliced in two upstream — the adapter coalesces those, so seeing them
+        // here means it found a real difference in thrust, Isp or mass between them.
         float y = barTop + barH + 4f;
         float colDv = width * 0.16f;
         float colBurn = width * 0.42f;
+        float colSeq = width * 0.64f;
         for (int i = 0; i < n; i++)
         {
+            PoweredGuidance.Upfg.UpfgStage st = stages.Stages[i];
             ImColor8 col = StagePalette[i % StagePalette.Length];
             dl.AddText(new float2(min.X, y), col, $"S{i + 1}");
             dl.AddText(new float2(min.X + colDv, y), SchemInk, $"{dv[i]:F0} m/s");
             dl.AddText(new float2(min.X + colBurn, y), SchemInk, $"{burn[i]:F0} s");
+            // Seq < 0 is the fallback model: no usable staging sequences, so the
+            // stack was measured off the live engines instead.
+            string prov = st.Seq < 0 ? "live engines" : $"seq {st.Seq}  {st.Engines} eng";
+            dl.AddText(new float2(min.X + colSeq, y), SchemDim,
+                st.Mode == 2 ? prov + "  G" : prov);
             y += lineH;
         }
 

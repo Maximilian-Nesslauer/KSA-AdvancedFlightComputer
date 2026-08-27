@@ -86,7 +86,39 @@ public static partial class PoweredGuidanceWindow
         double delta = Math.Asin(Math.Clamp(tanRatio, -1.0, 1.0));
         double raRequired = _s.LaunchDescending ? lanT + Math.PI - delta : lanT + delta;
         double omega = parent.GetAngularVelocity();
-        plan.WaitSec = omega > 1e-12 ? Wrap2Pi(raRequired - ra) / omega : double.NaN;
+
+        // LAUNCH EARLY, by the same lead the LAN seeding uses (see LanLeadSeconds).
+        // The instant the site is in the plane is the wrong instant to LIGHT THE
+        // ENGINE: the pad goes on being carried east through the vertical rise and the
+        // turn, so a vehicle that ignites in the plane is already out of it by the time
+        // it is flying, and the guidance yaws to chase a node it has gone past. What we
+        // want is the launch time whose plane crossing lands in the middle of that,
+        // i.e. solve for T where the site's right ascension T + lead from now is the
+        // one the plane needs.
+        //
+        // The lead goes INSIDE the wrap, not subtracted after it: subtracting after
+        // would turn a window two minutes out into a negative countdown.
+        if (omega <= 1e-12)
+        {
+            plan.WaitSec = double.NaN;
+            return ChaseStatus.Ok;
+        }
+
+        double raNow = ra + omega * LanLeadSeconds;
+        double wait = Wrap2Pi(raRequired - raNow) / omega;
+
+        // ... AND THE WRAP IS NOT ALLOWED TO COST A WHOLE REVOLUTION. Inside the lead
+        // window — the ideal ignition is behind us but the plane crossing itself is
+        // still ahead — the wrap reports the NEXT revolution's launch, so pressing
+        // EXECUTE armed a countdown of most of a day and looked like a dead button.
+        // Going now is at most LanLeadSeconds late, which only means the crossing
+        // lands earlier in the ascent than the lead intends; waiting a revolution for
+        // that is absurd.
+        double period = 2.0 * Math.PI / omega;
+        if (wait > period - LanLeadSeconds)
+            wait = 0.0;
+
+        plan.WaitSec = wait;
         return ChaseStatus.Ok;
     }
 

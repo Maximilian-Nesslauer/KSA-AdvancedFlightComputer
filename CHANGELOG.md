@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.1]
+
+Fixed the ascent attitude jerk, aimed the launch plane ahead of the pad, and caught up with KSA 2026.8.22.
+
+- Fixed the attitude jerking on the way up: the commanded roll came from cross(steering, position), which is degenerate on the pad and snapped 18 degrees at pitch-over. An ascent now holds the roll it lifted off with.
+
+- Steering is flown as the linear-tangent law rather than a once-a-second sample of it, and the turning rate it implies is handed to the flight computer as the target's own rate.
+
+- "LAN from position" and launch-to-target now lead the pad by three minutes, so the plane crossing lands inside the ascent rather than at lift-off.
+
+- Fixed EXECUTE arming a launch that never fired while the panel was folded or on another tab.
+
+- Added a Force roll checkbox and roll angle to Ascent settings.
+
+- Stage list no longer splits one physical stage across several rows, and names the sequence, engine count and G-limited segments.
+
+- KSA 2026.8.22 compatibility: fixed the panel drawing at half width, and guarded the stage model against the drain simulation double-counting an engine.
+
 ## [0.3.0]
 
 Added sequential convex programming and UI updates.

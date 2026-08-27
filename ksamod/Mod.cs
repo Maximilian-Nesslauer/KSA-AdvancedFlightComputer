@@ -55,6 +55,21 @@ public sealed class Mod
                 nameof(OnComputeControl), BindingFlags.NonPublic | BindingFlags.Static);
             _harmony.Patch(tvcTarget, postfix: new HarmonyMethod(tvcPostfix));
 
+            // The target's TURNING RATE, into the one window where it can be set:
+            // after UpdateAttitudeTarget has built AttitudeTarget from our
+            // CustomAttitudeTarget, and before UpdateAttitudeError reads it. Private
+            // and instance, hence AccessTools rather than GetMethod. See
+            // KsaAttitudeRate for what goes in and why the FC needs it.
+            MethodInfo rateTarget = AccessTools.Method(
+                typeof(FlightComputer), "UpdateAttitudeTarget");
+            MethodInfo ratePostfix = typeof(Mod).GetMethod(
+                nameof(OnUpdateAttitudeTarget), BindingFlags.NonPublic | BindingFlags.Static);
+            if (rateTarget != null)
+                _harmony.Patch(rateTarget, postfix: new HarmonyMethod(ratePostfix));
+            else
+                Console.Error.WriteLine("[PG] FlightComputer.UpdateAttitudeTarget not found "
+                                      + "- steering rate feedforward is OFF.");
+
             // OUR ENTRY IN THE GAME'S MENU BAR. Program.DrawProgramMenusHook is an
             // empty two-byte stub - literally just a ret - called by Program.DrawMenuBar
             // as its second-to-last call, immediately before EndMenuBar. That is the
@@ -144,6 +159,22 @@ public sealed class Mod
         catch (Exception e)
         {
             LogErrorThrottled("autopilot apply failed: ", e);
+        }
+    }
+
+    // Runs on a VehicleSolvers job thread against the worker's FlightComputer COPY,
+    // like OnComputeControl below. Deliberately does NOT bail when the mod is switched
+    // off: KsaAttitudeRate publishes nothing unless a vehicle is engaged, and the
+    // hand-back clears it, so there is no state here for an off switch to strand.
+    private static void OnUpdateAttitudeTarget(FlightComputer __instance)
+    {
+        try
+        {
+            KsaAttitudeRate.OnUpdateAttitudeTarget(__instance);
+        }
+        catch (Exception e)
+        {
+            LogErrorThrottled("attitude rate feedforward failed: ", e);
         }
     }
 
