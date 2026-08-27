@@ -368,7 +368,7 @@ public sealed class VehicleAutopilotState
     public double GfoldHandoffTime;
     public double GfoldLastSolveTime = double.NegativeInfinity;
     public double GfoldAltM, GfoldSpeedMs;
-    public EcosStatus GfoldStatus = EcosStatus.Optimal;
+    public ConicStatus GfoldStatus = ConicStatus.Optimal;
     public int GfoldFailStreak;
     public bool GfoldForceSearch;
 

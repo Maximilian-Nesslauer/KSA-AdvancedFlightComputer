@@ -26,8 +26,43 @@ public sealed class SparseCcs
         _columns[col].Add((row, value));
     }
 
+    /// <summary>
+    /// Stack two matrices vertically: [top; bottom], with bottom's rows shifted down
+    /// by top.Rows. Both must have the same column count.
+    ///
+    /// This is how the split ECOS form becomes SCS's single constraint matrix — the
+    /// equality block on top, the cone block beneath — and it is the one step of the
+    /// conversion that is easy to get quietly wrong, because CCS is COLUMN-major: a
+    /// vertical stack is not a concatenation of the two arrays but an interleave
+    /// within every column. Working in triplets sidesteps that entirely; Build()
+    /// sorts each column afterwards regardless.
+    /// </summary>
+    public static SparseCcs VStack(SparseCcs top, SparseCcs bottom)
+    {
+        if (top.Cols != bottom.Cols)
+            throw new ArgumentException($"column counts differ: {top.Cols} vs {bottom.Cols}");
+
+        var stacked = new SparseCcs(top.Rows + bottom.Rows, top.Cols);
+        for (int j = 0; j < top.Cols; j++)
+        {
+            foreach ((int row, double value) in top._columns[j])
+                stacked._columns[j].Add((row, value));
+            foreach ((int row, double value) in bottom._columns[j])
+                stacked._columns[j].Add((row + top.Rows, value));
+        }
+        return stacked;
+    }
+
+    /// <summary>Nonzeros as (row, col, value), for tests and dense round-trips.</summary>
+    public IEnumerable<(int Row, int Col, double Value)> Triplets()
+    {
+        for (int j = 0; j < Cols; j++)
+            foreach ((int row, double value) in _columns[j])
+                yield return (row, j, value);
+    }
+
     // (values, column pointers of length Cols+1, row indices), rows sorted
-    // ascending within each column as ECOS requires.
+    // ascending within each column as both ECOS and SCS require.
     public (double[] Pr, int[] Jc, int[] Ir) Build()
     {
         var pr = new List<double>();

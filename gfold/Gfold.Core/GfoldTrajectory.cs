@@ -6,7 +6,7 @@ namespace Gfold;
 // A solved descent trajectory at N discrete nodes, spaced Dt apart.
 public sealed class GfoldTrajectory
 {
-    public required EcosStatus Status { get; init; }
+    public required ConicStatus Status { get; init; }
     public required double Dt { get; init; }
     public required double[][] Position { get; init; }  // [N][3], x = up
     public required double[][] Velocity { get; init; }  // [N][3]
@@ -16,6 +16,15 @@ public sealed class GfoldTrajectory
     public required double[] LandingPoint { get; init; }// [3]
     public required double LandingErrorNorm { get; init; }
     public required int Iterations { get; init; }
+
+    /// <summary>
+    /// The solver returned something worth flying. "Inaccurate" is included on purpose
+    /// — both backends use it for a solution that converged loosely rather than one
+    /// that failed, and the search's own tolerances are far wider than the difference.
+    /// A TRUNCATED solve is not in here: ScsSolver maps that to MaxIterations
+    /// precisely so it lands outside this test.
+    /// </summary>
+    public bool IsUsable => Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate;
 
     public int Nodes => Position.Length;
     public double TimeOfFlight => Dt * (Nodes - 1);

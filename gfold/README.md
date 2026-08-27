@@ -606,3 +606,43 @@ Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices;
 public static class E { [DllImport("native\\ecos.dll")] public static extern IntPtr ECOS_ver(); }'
 [Runtime.InteropServices.Marshal]::PtrToStringAnsi([E]::ECOS_ver())  # -> 2.0.10
 ```
+
+## Solver backends: ECOS and SCS
+
+The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend`
+picks who runs it. This exists to retire ECOS: it is GPLv3 and forces the whole work to
+be GPLv3, whereas SCS is MIT and its two vendored dependencies — AMD (BSD-3) and QDLDL
+(Apache-2.0) — are permissive too, so an SCS-only build can be MIT.
+
+`EcosSolver` and `ScsSolver` take the same problem and differ only in what they do with
+it. ECOS wants the split form verbatim; SCS wants the equalities and the cone rows
+stacked into one matrix with a leading zero cone, which `SparseCcs.VStack` does. That
+stack is the one step of the conversion that can be silently wrong — CCS is
+column-major, so a vertical stack interleaves within every column rather than
+concatenating — and it is checked against a dense reference at the top of `--ab`.
+
+`ScsSolver` is a static function with no state. G-FOLD **always cold starts**: every
+call is a new plan, and the successive solves inside `SearchMinFuel` are different times
+of flight probed by a golden section, related by nothing but their order in the caller's
+cache. (Scvx.Core's `ScsWorkspace` is stateful for the opposite reason — an SCvx
+iteration *is* a perturbation of the last one.)
+
+### Running the comparison
+
+```
+dotnet run --project gfold/Gfold.Console -- --ab
+```
+
+Same assembly, same nondimensionalisation, same extraction, both solvers — so anything
+that differs is the solver. It reports P3, P4, a tolerance sweep, and the full
+`SearchMinFuel`, which is the test that matters: the search gates each time of flight on
+a 10 m landing tolerance and then picks between neighbours on fuel alone, so it reads
+solver accuracy as a *decision* rather than as a number.
+
+Measured on the Mars reference case at N=120, the headline is that **tighter is not
+better**. At eps 1e-5 SCS agrees with ECOS to 0.06 kg of fuel and 0.06 s of flight time
+(inside the search's own 0.25 s resolution) for about 3x the per-solve cost. At 1e-7 the
+individual solves are more accurate and the *search* is far worse — 17 s and 41 kg off —
+because enough solves exhaust the iteration budget to be rejected as infeasible, and the
+search then brackets the minimum somewhere else. A first-order solver degrades by
+returning a worse decision, not a looser number. See `ScsSolver.DefaultEps`.

@@ -62,6 +62,129 @@ if (args.Contains("--stress"))
     return 0;
 }
 
+// --ab: run the SAME assembled problem through ECOS and SCS and compare. This is the
+// whole point of the migration branch — the two backends share GfoldPlanner's assembly,
+// its nondimensionalisation and its extraction, so anything that differs here is the
+// solver and nothing else.
+//
+// Reported per case: status, wall time, iterations (NOT comparable between an interior
+// point method and a first-order one — they count different things), and the
+// trajectory-level quantities the caller actually acts on. Objective agreement is table
+// stakes; what decides whether SCS can replace ECOS is whether SearchMinFuel reaches
+// the same time of flight, because that search gates on a 10 m landing tolerance and
+// then picks between neighbouring tf values on fuel alone.
+if (args.Contains("--ab"))
+{
+    Console.WriteLine($"ECOS {EcosSolver.NativeVersion}   SCS {ScsSolver.NativeVersion}");
+    Console.WriteLine($"case: Mars static, tf={tf}s N={nodes}");
+    Console.WriteLine();
+
+    // Guard the one mechanical step of the conversion before trusting anything below:
+    // a vertical stack in a column-major format is an interleave, not a concatenation,
+    // and getting it wrong would hand SCS a different problem while still solving.
+    if (!VStackSelfTest())
+        return Fail("SparseCcs.VStack disagrees with a dense reference");
+    Console.WriteLine("VStack self-test: ok");
+    Console.WriteLine();
+
+    var abP = new GfoldParams();
+
+    (GfoldTrajectory Traj, long Ms) Run(ConicBackend backend, Func<GfoldTrajectory> f)
+    {
+        GfoldPlanner.Backend = backend;
+        var w = System.Diagnostics.Stopwatch.StartNew();
+        GfoldTrajectory t = f();
+        w.Stop();
+        return (t, w.ElapsedMilliseconds);
+    }
+
+    double MaxDiff(double[][] a, double[][] b) =>
+        a.Zip(b, (x, y) => x.Zip(y, (u, v) => Math.Abs(u - v)).Max()).Max();
+
+    // --- Problem 3, then Problem 4 pinned to each backend's own P3 answer ---
+    var e3 = Run(ConicBackend.Ecos, () => GfoldPlanner.SolveMinError(abP, tf, nodes));
+    var s3 = Run(ConicBackend.Scs, () => GfoldPlanner.SolveMinError(abP, tf, nodes));
+
+    Console.WriteLine("P3 (minimum landing error)");
+    Console.WriteLine($"  ECOS  [{e3.Traj.Status,-18}] {e3.Ms,6} ms  {e3.Traj.Iterations,7} it  " +
+                      $"err {e3.Traj.LandingErrorNorm,8:F3} m  fuel {e3.Traj.FuelUsed,7:F2} kg");
+    Console.WriteLine($"  SCS   [{s3.Traj.Status,-18}] {s3.Ms,6} ms  {s3.Traj.Iterations,7} it  " +
+                      $"err {s3.Traj.LandingErrorNorm,8:F3} m  fuel {s3.Traj.FuelUsed,7:F2} kg");
+    if (e3.Traj.IsUsable && s3.Traj.IsUsable)
+    {
+        Console.WriteLine($"  max |diff|: pos {MaxDiff(e3.Traj.Position, s3.Traj.Position):E2} m, " +
+                          $"vel {MaxDiff(e3.Traj.Velocity, s3.Traj.Velocity):E2} m/s, " +
+                          $"acc {MaxDiff(e3.Traj.AccelCmd, s3.Traj.AccelCmd):E2} m/s^2, " +
+                          $"landing {Dist(e3.Traj.LandingPoint, s3.Traj.LandingPoint):E2} m");
+    }
+
+    var e4 = Run(ConicBackend.Ecos, () => GfoldPlanner.SolveMinFuel(abP, tf, nodes, e3.Traj.LandingPoint));
+    var s4 = Run(ConicBackend.Scs, () => GfoldPlanner.SolveMinFuel(abP, tf, nodes, e3.Traj.LandingPoint));
+    Console.WriteLine();
+    Console.WriteLine("P4 (minimum fuel, both pinned to ECOS's P3 landing point)");
+    Console.WriteLine($"  ECOS  [{e4.Traj.Status,-18}] {e4.Ms,6} ms  {e4.Traj.Iterations,7} it  " +
+                      $"fuel {e4.Traj.FuelUsed,7:F2} kg");
+    Console.WriteLine($"  SCS   [{s4.Traj.Status,-18}] {s4.Ms,6} ms  {s4.Traj.Iterations,7} it  " +
+                      $"fuel {s4.Traj.FuelUsed,7:F2} kg");
+    if (e4.Traj.IsUsable && s4.Traj.IsUsable)
+        Console.WriteLine($"  fuel difference: {Math.Abs(e4.Traj.FuelUsed - s4.Traj.FuelUsed):F4} kg, " +
+                          $"max |acc| diff {MaxDiff(e4.Traj.AccelCmd, s4.Traj.AccelCmd):E2} m/s^2");
+
+    // --- tolerance sweep: what does accuracy cost, and where does it stop buying? ---
+    Console.WriteLine();
+    Console.WriteLine("SCS tolerance sweep (P4, pinned)");
+    Console.WriteLine("      eps    status                 ms      iters      fuel kg   d(fuel) vs ECOS");
+    foreach (double eps in new[] { 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9 })
+    {
+        GfoldPlanner.Backend = ConicBackend.Scs;
+        GfoldPlanner.ScsEps = eps;
+        var w = System.Diagnostics.Stopwatch.StartNew();
+        GfoldTrajectory t = GfoldPlanner.SolveMinFuel(abP, tf, nodes, e3.Traj.LandingPoint);
+        w.Stop();
+        double dFuel = t.FuelUsed - e4.Traj.FuelUsed;
+        Console.WriteLine($"  {eps,7:E0}    {t.Status,-18} {w.ElapsedMilliseconds,6}  {t.Iterations,9}  " +
+                          $"{t.FuelUsed,10:F3}   {dFuel,10:F4}");
+    }
+    GfoldPlanner.ScsEps = null;
+
+    // --- the decision-level test: does the tf search land in the same place? ---
+    Console.WriteLine();
+    Console.WriteLine("SearchMinFuel (the test that actually matters)");
+    // Swept for SCS as well, because the search is where tolerance stops being an
+    // accuracy question and becomes a pass/fail one: every tf is gated on Problem 3
+    // clearing a 10 m landing tolerance and on the solve being usable at all, so a
+    // tolerance tight enough to truncate rejects EVERY tf and the search reports no
+    // feasible time of flight — a total failure produced purely by a settings choice.
+    GfoldPlanner.Backend = ConicBackend.Ecos;
+    var ew = System.Diagnostics.Stopwatch.StartNew();
+    GfoldPlanner.SearchResult? eRes = GfoldPlanner.SearchMinFuel(abP, nodes);
+    ew.Stop();
+    Console.WriteLine(eRes == null
+        ? $"  ECOS            -> no feasible tf ({ew.ElapsedMilliseconds} ms)"
+        : $"  ECOS            -> tf {eRes.TimeOfFlight,6:F2} s  fuel {eRes.FuelUsed,8:F2} kg  " +
+          $"{eRes.Solves,3} solves  {ew.ElapsedMilliseconds,6} ms");
+
+    GfoldPlanner.Backend = ConicBackend.Scs;
+    foreach (double eps in new[] { 1e-4, 1e-5, 1e-6, 1e-7 })
+    {
+        GfoldPlanner.ScsEps = eps;
+        var w = System.Diagnostics.Stopwatch.StartNew();
+        GfoldPlanner.SearchResult? r = GfoldPlanner.SearchMinFuel(abP, nodes);
+        w.Stop();
+        string tail = eRes != null && r != null
+            ? $"   d(tf) {r.TimeOfFlight - eRes.TimeOfFlight,+6:F2} s  d(fuel) {r.FuelUsed - eRes.FuelUsed,+7:F2} kg"
+            : "";
+        Console.WriteLine(r == null
+            ? $"  SCS eps {eps,7:E0} -> no feasible tf ({w.ElapsedMilliseconds} ms)"
+            : $"  SCS eps {eps,7:E0} -> tf {r.TimeOfFlight,6:F2} s  fuel {r.FuelUsed,8:F2} kg  " +
+              $"{r.Solves,3} solves  {w.ElapsedMilliseconds,6} ms{tail}");
+    }
+    GfoldPlanner.ScsEps = null;
+
+    GfoldPlanner.Backend = ConicBackend.Ecos;
+    return 0;
+}
+
 // --degen: a near-target, descending state where min-error is degenerate. Show
 // that plain min-error dumps thrust sideways at the floor, while the regularized
 // version (RealTime) points it up and throttles toward hover.
@@ -145,7 +268,7 @@ Console.WriteLine($"P3 [{p3.Status}] {sw.ElapsedMilliseconds} ms, {p3.Iterations
 Console.WriteLine($"   landing point: ({p3.LandingPoint[0]:F2}, {p3.LandingPoint[1]:F2}, {p3.LandingPoint[2]:F2})  " +
                   $"error {p3.LandingErrorNorm:F3} m");
 Console.WriteLine($"   fuel used: {p3.FuelUsed:F1} kg");
-if (p3.Status is not (EcosStatus.Optimal or EcosStatus.OptimalInaccurate))
+if (p3.Status is not (ConicStatus.Optimal or ConicStatus.OptimalInaccurate))
     return Fail("P3 did not solve");
 File.WriteAllText("gfold_p3.csv", p3.ToCsv());
 
@@ -155,7 +278,7 @@ GfoldTrajectory p4 = GfoldPlanner.SolveMinFuel(p, tf, nodes, p3.LandingPoint, ve
 sw.Stop();
 Console.WriteLine($"P4 [{p4.Status}] {sw.ElapsedMilliseconds} ms, {p4.Iterations} iters");
 Console.WriteLine($"   fuel used: {p4.FuelUsed:F1} kg (P3 used {p3.FuelUsed:F1})");
-if (p4.Status is not (EcosStatus.Optimal or EcosStatus.OptimalInaccurate))
+if (p4.Status is not (ConicStatus.Optimal or ConicStatus.OptimalInaccurate))
     return Fail("P4 did not solve");
 File.WriteAllText("gfold_p4.csv", p4.ToCsv());
 
@@ -245,6 +368,71 @@ static bool Check(string what, bool pass)
 {
     Console.WriteLine($"   {(pass ? "ok  " : "FAIL")} {what}");
     return pass;
+}
+
+/// <summary>
+/// Checks SparseCcs.VStack against a dense reference, INCLUDING the Build() that
+/// follows it, because that is the pair the SCS path actually depends on.
+///
+/// This exists because the failure it guards against is silent. A vertical stack in a
+/// column-major format is an interleave within every column, not a concatenation of two
+/// arrays, and getting it wrong produces a well-formed matrix describing a DIFFERENT
+/// problem — which SCS will then solve, successfully, to the wrong answer. Comparing
+/// backends would show a disagreement and blame the solver.
+///
+/// The pattern is deliberately awkward: overlapping sparsity, empty columns, an empty
+/// trailing row in the top block, and out-of-order Add() calls, since Build() is what
+/// sorts rows within a column and that ordering is a hard requirement of both solvers.
+/// </summary>
+static bool VStackSelfTest()
+{
+    const int pRows = 3, gRows = 4, cols = 5;
+    var top = new SparseCcs(pRows, cols);
+    var bottom = new SparseCcs(gRows, cols);
+
+    // (row, col, value) triplets, added out of row order on purpose.
+    (int R, int C, double V)[] topT =
+        [(2, 0, 1.5), (0, 0, -2.0), (1, 2, 3.25), (0, 4, 7.0), (2, 2, -0.5)];
+    (int R, int C, double V)[] botT =
+        [(3, 0, 9.0), (0, 0, 4.0), (2, 1, -6.5), (1, 4, 0.125), (3, 4, 2.0), (0, 2, 11.0)];
+    foreach ((int r, int c, double v) in topT) top.Add(r, c, v);
+    foreach ((int r, int c, double v) in botT) bottom.Add(r, c, v);
+
+    var expected = new double[pRows + gRows, cols];
+    foreach ((int r, int c, double v) in topT) expected[r, c] += v;
+    foreach ((int r, int c, double v) in botT) expected[r + pRows, c] += v;
+
+    (double[] pr, int[] jc, int[] ir) = SparseCcs.VStack(top, bottom).Build();
+
+    var actual = new double[pRows + gRows, cols];
+    for (int j = 0; j < cols; j++)
+    {
+        int lastRow = -1;
+        for (int k = jc[j]; k < jc[j + 1]; k++)
+        {
+            if (ir[k] <= lastRow)
+            {
+                Console.WriteLine($"  rows not ascending in column {j}: {lastRow} then {ir[k]}");
+                return false;
+            }
+            lastRow = ir[k];
+            actual[ir[k], j] += pr[k];
+        }
+    }
+    if (jc[cols] != pr.Length)
+    {
+        Console.WriteLine($"  column pointer end {jc[cols]} != nnz {pr.Length}");
+        return false;
+    }
+
+    for (int i = 0; i < pRows + gRows; i++)
+        for (int j = 0; j < cols; j++)
+            if (Math.Abs(expected[i, j] - actual[i, j]) > 1e-12)
+            {
+                Console.WriteLine($"  ({i},{j}): expected {expected[i, j]}, got {actual[i, j]}");
+                return false;
+            }
+    return true;
 }
 
 static int Fail(string why)

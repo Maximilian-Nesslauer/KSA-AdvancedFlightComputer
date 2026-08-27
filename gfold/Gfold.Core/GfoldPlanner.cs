@@ -78,8 +78,34 @@ public sealed record GfoldOptions
     { FreeInitialThrust = true, RelaxInitialPath = true };
 }
 
+/// <summary>Which conic solver <see cref="GfoldPlanner"/> hands its problems to.</summary>
+public enum ConicBackend
+{
+    /// <summary>ECOS: interior point, GPLv3, on its way out.</summary>
+    Ecos,
+    /// <summary>SCS: first-order ADMM, MIT — the reason this switch exists.</summary>
+    Scs,
+}
+
 public static class GfoldPlanner
 {
+    /// <summary>
+    /// TEMPORARY, for the ECOS-to-SCS migration. Both backends are fed the identical
+    /// assembled problem, so flipping this is the whole A/B experiment (see
+    /// Gfold.Console --ab). It is a process-wide static because it selects a BUILD's
+    /// solver rather than anything per-call — and it goes away with ECOS, along with
+    /// the enum, once the switch is made.
+    /// </summary>
+    public static ConicBackend Backend = ConicBackend.Ecos;
+
+    /// <summary>
+    /// TEMPORARY, alongside <see cref="Backend"/>: overrides SCS's convergence
+    /// tolerance so the A/B harness can sweep it. Null uses ScsSolver.DefaultEps.
+    /// Once a tolerance has been chosen from the measurements it becomes that default
+    /// and this goes away with the rest of the switch.
+    /// </summary>
+    public static double? ScsEps;
+
     public static GfoldTrajectory SolveMinError(GfoldParams p, double tf, int nodes,
                                                 bool verbose = false, GfoldOptions? options = null)
         => Solve(p, tf, nodes, fixedLanding: null, verbose, options ?? GfoldOptions.Reference);
@@ -190,8 +216,8 @@ public static class GfoldPlanner
         return new SearchResult(all.Value.Traj!, all.Key, all.Value.Fuel, solves);
     }
 
-    private static bool IsUsable(EcosStatus s) =>
-        s is EcosStatus.Optimal or EcosStatus.OptimalInaccurate;
+    private static bool IsUsable(ConicStatus s) =>
+        s is ConicStatus.Optimal or ConicStatus.OptimalInaccurate;   // see GfoldTrajectory.IsUsable
 
     private static GfoldTrajectory Solve(GfoldParams P, double tf, int N,
                                          double[]? fixedLanding, bool verbose, GfoldOptions opt)
@@ -493,7 +519,7 @@ public static class GfoldPlanner
         if (smooth)
             c[IQ] = opt.SlewReg;                // penalize the thrust-slew L2 norm
 
-        var problem = new EcosProblem
+        var problem = new ConicProblem
         {
             C = c,
             G = G,
@@ -504,11 +530,13 @@ public static class GfoldPlanner
             SocDims = soc.ToArray(),
         };
 
-        EcosResult result = EcosSolver.Solve(problem, verbose);
+        ConicResult result = Backend == ConicBackend.Scs
+            ? ScsSolver.Solve(problem, verbose, eps: ScsEps ?? ScsSolver.DefaultEps)
+            : EcosSolver.Solve(problem, verbose);
         return Extract(result, N, dtPhys, P.Rf, lenScale, velScale, accScale);
     }
 
-    private static GfoldTrajectory Extract(EcosResult result, int N, double dt, double[] rf,
+    private static GfoldTrajectory Extract(ConicResult result, int N, double dt, double[] rf,
                                            double lenScale, double velScale, double accScale)
     {
         var position = new double[N][];

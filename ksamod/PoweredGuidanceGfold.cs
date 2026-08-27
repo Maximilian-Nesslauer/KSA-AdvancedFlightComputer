@@ -122,7 +122,7 @@ public static partial class PoweredGuidanceWindow
                 GfoldTrajectory t = GfoldPlanner.SolveMinFuel(
                     p, remaining, _s.GfoldNodes, [GfoldSolverTargetAltM, 0.0, 0.0],
                     options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg });
-                if (t.Status is EcosStatus.Optimal or EcosStatus.OptimalInaccurate)
+                if (t.Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate)
                     traj = t;
             }
             if (traj == null)

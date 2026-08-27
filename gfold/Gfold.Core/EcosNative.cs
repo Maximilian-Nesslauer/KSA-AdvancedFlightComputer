@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
 namespace Gfold;
@@ -16,27 +15,6 @@ internal static partial class EcosNative
 {
     private const string Lib = "ecos";
 
-    // CA2255 discourages ModuleInitializer in libraries, but registering the
-    // DllImport resolver before the first P/Invoke is exactly the advanced
-    // scenario it exists for — there is no other hook that runs early enough
-    // in every host (console, tests, the game with the mod loaded).
-#pragma warning disable CA2255
-    [ModuleInitializer]
-#pragma warning restore CA2255
-    internal static void Init()
-    {
-        // Resolve ecos.dll from next to Gfold.Core.dll regardless of host
-        // process working directory (console runner, test host, or the game
-        // with Gfold.Core.dll + ecos.dll in the mod folder).
-        NativeLibrary.SetDllImportResolver(typeof(EcosNative).Assembly, (name, asm, _) =>
-        {
-            if (name != Lib)
-                return IntPtr.Zero;
-            string dir = Path.GetDirectoryName(asm.Location) ?? ".";
-            string candidate = Path.Combine(dir, "ecos.dll");
-            return NativeLibrary.TryLoad(candidate, out IntPtr handle) ? handle : IntPtr.Zero;
-        });
-    }
 
     [DllImport(Lib, CallingConvention = CallingConvention.Cdecl)]
     internal static extern IntPtr ECOS_setup(

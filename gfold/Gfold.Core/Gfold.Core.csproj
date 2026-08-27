@@ -12,6 +12,11 @@
          references Gfold.Core gets ecos.dll in its output directory, and the
          DllImport resolver loads it from next to Gfold.Core.dll. -->
     <None Include="..\native\ecos.dll" Link="ecos.dll" CopyToOutputDirectory="PreserveNewest" />
+    <!-- SCS lives with the 6-DOF solver that vendored it (scvx/scs, built by
+         scvx/build-scs.ps1). Gfold.Core does not reference Scvx.Core - it only needs
+         the same native library - so the DLL is picked up by path. Both projects
+         copying it into a shared output directory is harmless: it is the same file. -->
+    <None Include="..\..\scvx\native\scs.dll" Link="scs.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

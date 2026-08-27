@@ -2,52 +2,13 @@ using System.Runtime.InteropServices;
 
 namespace Gfold;
 
-// A conic problem in ECOS standard form:
-//
-//   minimize    c'x
-//   subject to  A x = b
-//               G x + s = h,   s in K
-//
-// where K = R+^l x SOC(q[0]) x SOC(q[1]) x ... (no exponential cones).
-public sealed class EcosProblem
-{
-    public required double[] C { get; init; }            // length n
-    public required SparseCcs G { get; init; }           // m x n
-    public required double[] H { get; init; }            // length m
-    public SparseCcs? A { get; init; }                   // p x n, optional
-    public double[]? B { get; init; }                    // length p, optional
-    public int PositiveOrthantDim { get; init; }         // l
-    public int[] SocDims { get; init; } = [];            // q
-}
-
-public enum EcosStatus
-{
-    Optimal = 0,
-    PrimalInfeasible = 1,
-    DualInfeasible = 2,
-    OptimalInaccurate = 10,
-    PrimalInfeasibleInaccurate = 11,
-    DualInfeasibleInaccurate = 12,
-    MaxIterations = -1,
-    Numerics = -2,
-    OutsideCone = -3,
-    Interrupted = -4,
-    SetupFailed = -5,
-    Fatal = -7,
-}
-
-public sealed record EcosResult(EcosStatus Status, double[] X, double PrimalCost, int Iterations)
-{
-    public bool IsOptimal => Status is EcosStatus.Optimal or EcosStatus.OptimalInaccurate;
-}
-
 public static class EcosSolver
 {
     public static string NativeVersion => EcosNative.Version();
 
     // Solves the problem. The input arrays are treated as consumed: ECOS
     // equilibrates (scales) them in place during setup.
-    public static EcosResult Solve(EcosProblem problem, bool verbose = false, int maxIterations = 100)
+    public static ConicResult Solve(ConicProblem problem, bool verbose = false, int maxIterations = 100)
     {
         (double[] gpr, int[] gjc, int[] gir) = problem.G.Build();
         int n = problem.G.Cols;
@@ -95,7 +56,7 @@ public static class EcosSolver
                 Pin(apr), Pin(ajc), Pin(air),
                 Pin(problem.C), Pin(problem.H), Pin(problem.B));
             if (work == IntPtr.Zero)
-                return new EcosResult(EcosStatus.SetupFailed, [], double.NaN, 0);
+                return new ConicResult(ConicStatus.SetupFailed, [], double.NaN, 0);
 
             try
             {
@@ -111,8 +72,8 @@ public static class EcosSolver
 
                 var x = new double[n];
                 Marshal.Copy(EcosNative.ecsh_x(work), x, 0, n);
-                return new EcosResult(
-                    Enum.IsDefined(typeof(EcosStatus), exit) ? (EcosStatus)exit : EcosStatus.Fatal,
+                return new ConicResult(
+                    Enum.IsDefined(typeof(ConicStatus), exit) ? (ConicStatus)exit : ConicStatus.Fatal,
                     x, EcosNative.ecsh_pcost(work), EcosNative.ecsh_iter(work));
             }
             finally
