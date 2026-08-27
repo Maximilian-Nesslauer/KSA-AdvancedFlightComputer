@@ -162,6 +162,14 @@ public sealed class VehicleAutopilotState
     public bool HasCommand;
 
     /// <summary>
+    /// The TURNING RATE that command is moving at, rad/s in CCI — the "turning rate
+    /// implied" by the steering law, published to the flight computer as the target's
+    /// own rate (see KsaAttitudeRate). Without it the FC is told every guidance update
+    /// is a stationary target and nulls the error instead of tracking the motion.
+    /// </summary>
+    public double3 CommandRate;
+
+    /// <summary>
     /// Sim time of the last UPFG solve, and of the last ascent step. UPFG runs on a
     /// fixed GUIDANCE CYCLE rather than once per sim step (see
     /// PoweredGuidanceWindow.GuidanceCycle): it is a recursive once-per-cycle
@@ -184,6 +192,23 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double RollOffset;
     public bool RollLatched;
+
+    /// <summary>
+    /// FORCE A SPECIFIC ROLL instead of holding the one the vehicle lifted off with.
+    /// The angle is about the thrust axis, measured in the same plane-referenced frame
+    /// RollOffset uses: 0 puts the vehicle's body Y along the target plane's normal
+    /// (wings level with the orbital plane) and positive turns right-handed about the
+    /// thrust direction.
+    ///
+    /// Forcing it takes MORE than writing the angle into the commanded quaternion.
+    /// KSA's UpdateAttitudeTrackError branches on RollMode.IsDecoupled(), and the
+    /// default IS decoupled — in that branch the roll term is never computed and the
+    /// target's roll is discarded, so the vehicle would keep whatever roll it had and
+    /// the box would do nothing. Ticking this therefore also puts the flight computer
+    /// into a roll-tracking mode; see PoweredGuidanceWindow.CommandAttitude.
+    /// </summary>
+    public bool ForceRoll;
+    public double ForceRollDeg;
 
     public bool CutoffDone;
     public bool StagingActive;
@@ -254,6 +279,13 @@ public sealed class VehicleAutopilotState
     /// step of any size.
     /// </summary>
     public double LaunchTargetTime = double.NaN;
+
+    /// <summary>
+    /// Wall-clock tick of the last unarmed launch-window derivation, throttling the
+    /// target search behind it. Not used once armed — the instant above is absolute by
+    /// then, and re-deriving it is what would let a warp step skip the window.
+    /// </summary>
+    public long LaunchWindowTick;
 
     /// <summary>Gravity-turn shaping: when the pitchover starts and how fast it ramps.</summary>
     public double TurnStartAltKm = 0.5;

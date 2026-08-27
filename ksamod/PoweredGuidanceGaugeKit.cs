@@ -29,7 +29,37 @@ public static partial class PoweredGuidanceWindow
     private const float GaugeBottomMarginUv = 0.019f;
 
     /// <summary>One canvas unit in pixels — the screen width, for both axes.</summary>
-    private static float GaugeUnit() => ScreenReference.UvToPixels(new float2(1f, 0f)).X;
+    /// <summary>
+    /// THE PANEL'S UV UNIT, in pixels: the window WIDTH.
+    ///
+    /// Every authored dimension in the gauge — margins, spacings, button heights, the
+    /// panel width — is a fraction of this one number, and the measured height fit
+    /// divides by it to convert back, so it only has to be self-consistent.
+    ///
+    /// It used to be ScreenReference.UvToPixels(1,0).X, which was the same thing.
+    /// KSA 2026.8.22 changed ScreenReference to normalise BOTH axes by the window
+    /// HEIGHT (see UvToPixelsNormalized, and the LEGACY_REFERENCE_ASPECT constant left
+    /// behind next to it), so that call started returning the height instead — every
+    /// authored dimension shrank by the aspect ratio at a stroke, which on 16:9 is the
+    /// panel at 56% of the width it was drawn for. Reading the width directly keeps
+    /// this independent of which axis KSA normalises to; GaugeScreenUv converts at the
+    /// one boundary that still has to speak ScreenReference's convention. Taken off the
+    /// main viewport rather than Program.GetWindow(), whose GlfwWindow type lives in an
+    /// assembly the mod does not reference.
+    /// </summary>
+    private static float GaugeUnit() => ImGui.GetMainViewport().Size.X;
+
+    /// <summary>
+    /// Convert a UV authored against <see cref="GaugeUnit"/> (i.e. width-normalised)
+    /// into the height-normalised UV ImGauge now expects. Isotropic — ScreenReference
+    /// scales both axes by the same number — so one factor does both components.
+    /// </summary>
+    private static float2 GaugeScreenUv(float2 authoredUv)
+    {
+        float2 screen = ImGui.GetMainViewport().Size;
+        float aspect = screen.Y > 0f ? screen.X / screen.Y : ScreenReference.LEGACY_REFERENCE_ASPECT;
+        return authoredUv * aspect;
+    }
 
     /// <summary>Clamps to what the gauge font can pack. Label throws past 16.</summary>
     private static string Gauge(string s)

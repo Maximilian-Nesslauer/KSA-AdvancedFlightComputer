@@ -96,11 +96,29 @@ public static partial class PoweredGuidanceWindow
         // i.e. solve for T where the site's right ascension T + lead from now is the
         // one the plane needs.
         //
-        // The lead goes INSIDE the wrap, not subtracted after it. Subtracting after
-        // would turn a window three minutes out into a negative countdown — a window
-        // in the past — where wrapping correctly reports the next revolution's.
+        // The lead goes INSIDE the wrap, not subtracted after it: subtracting after
+        // would turn a window two minutes out into a negative countdown.
+        if (omega <= 1e-12)
+        {
+            plan.WaitSec = double.NaN;
+            return ChaseStatus.Ok;
+        }
+
         double raNow = ra + omega * LanLeadSeconds;
-        plan.WaitSec = omega > 1e-12 ? Wrap2Pi(raRequired - raNow) / omega : double.NaN;
+        double wait = Wrap2Pi(raRequired - raNow) / omega;
+
+        // ... AND THE WRAP IS NOT ALLOWED TO COST A WHOLE REVOLUTION. Inside the lead
+        // window — the ideal ignition is behind us but the plane crossing itself is
+        // still ahead — the wrap reports the NEXT revolution's launch, so pressing
+        // EXECUTE armed a countdown of most of a day and looked like a dead button.
+        // Going now is at most LanLeadSeconds late, which only means the crossing
+        // lands earlier in the ascent than the lead intends; waiting a revolution for
+        // that is absurd.
+        double period = 2.0 * Math.PI / omega;
+        if (wait > period - LanLeadSeconds)
+            wait = 0.0;
+
+        plan.WaitSec = wait;
         return ChaseStatus.Ok;
     }
 

@@ -500,7 +500,12 @@ public static partial class PoweredGuidanceWindow
 
         bool sixDof = _s.Active || _s.EngagePending;
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
-        bool flying = sixDof || _s.Running || landingActive || _s.WasEngaged || _s.LandingCutPending;
+        // LaunchArmed counts as flying: a vehicle waiting for its launch window has a
+        // window to re-derive and an EXECUTE to fire (StepLaunchWindow), and without
+        // it here the step that does both was skipped for exactly the state that
+        // needs it.
+        bool flying = sixDof || _s.Running || landingActive || _s.WasEngaged
+                   || _s.LandingCutPending || _s.LaunchArmed;
 
         // Nothing engaged and nobody looking: an unfocused idle craft is not worth a
         // stage-model rebuild or a trace sample.
@@ -523,6 +528,13 @@ public static partial class PoweredGuidanceWindow
         // guidance engages would blank the overlay during exactly the descent worth
         // watching.
         RecordTrace(vehicle, vehicle.Orbit);
+
+        // Likewise the launch window: tracked, and FIRED, from here rather than from
+        // the panel. It is housekeeping in the same sense the two above are — it has
+        // to run for a focused vehicle that is not flying yet, which is precisely the
+        // state an armed launch sits in. See StepLaunchWindow.
+        StepLaunchWindow(vehicle, vehicle.Orbit, vehicle.Orbit.Parent,
+                         vehicle.Orbit.Parent.MeanRadius);
 
         // A requested reset runs ahead of everything below: the whole point of the
         // button is to recover when the mod's own state is wrong, so it must not
@@ -636,6 +648,13 @@ public static partial class PoweredGuidanceWindow
             double3? rollRef = _s.Running ? AscentRollRef(vehicle, _s.CommandDir) : null;
             CommandAttitude(vehicle, vehicle.Orbit.Parent, _s.CommandDir,
                             fullEngage: !_s.WasEngaged, rollRef: rollRef);
+
+            // AND THE RATE THAT ATTITUDE IS TURNING AT, published in the same breath
+            // so the pair can never describe different instants. Only the ascent
+            // produces one — it is the steering law's own implied turning rate — so a
+            // landing publishes zero, which is exactly what the flight computer
+            // assumed before this existed.
+            KsaAttitudeRate.Set(vehicle, _s.Running ? _s.CommandRate : default);
             _s.WasEngaged = true;
         }
         else if (_s.WasEngaged)
@@ -680,6 +699,13 @@ public static partial class PoweredGuidanceWindow
     // selective one.
     private static void ReleaseAttitude(Vehicle vehicle)
     {
+        // Before the swap, while the OLD VehicleConfig this vehicle's rate is keyed on
+        // is still reachable. The new flight computer brings a new config and so a new
+        // (unengaged) slot regardless, but a feedforward is a standing instruction to
+        // keep rotating and is not a thing to leave lying around on the strength of an
+        // object becoming unreachable.
+        KsaAttitudeRate.Clear(vehicle);
+
         var fresh = new FlightComputer();
         if (SetVehicleFlightComputer != null)
         {
@@ -822,6 +848,22 @@ public static partial class PoweredGuidanceWindow
 
         var fc = vehicle.FlightComputer;
         fc.CustomAttitudeTarget = euler;
+
+        // WHETHER THE FLIGHT COMPUTER LOOKS AT THE ROLL WE JUST COMMANDED.
+        // UpdateAttitudeTrackError computes a roll term only when RollMode is not
+        // Decoupled; decoupled is the default and discards the target's roll entirely,
+        // tracking pointing alone. That is the right behaviour for an ascent — roll is
+        // the axis a launch vehicle has least authority about and nothing in the
+        // trajectory needs a particular one — so it stays decoupled unless the roll is
+        // being forced deliberately.
+        //
+        // Written every step, not only on engagement: the box can be ticked mid-ascent,
+        // and un-ticking it has to give the roll freedom back.
+        if (_s.Running)
+            fc.RollMode = _s.ForceRoll
+                ? FlightComputerRollMode.Up
+                : FlightComputerRollMode.Decoupled;
+
         if (fullEngage)
         {
             fc.AttitudeFrame = VehicleReferenceFrame.EclBody;
@@ -858,6 +900,19 @@ public static partial class PoweredGuidanceWindow
             return baseRef;                     // SteerBody2Cci substitutes for this
         yRef = double3.Normalize(yRef);
         double3 zRef = double3.Cross(x, yRef);
+
+        // Forced: the angle the user asked for, in this same frame. Read live rather
+        // than latched, so turning the dial moves the vehicle.
+        //
+        // The latch is deliberately NOT taken while forcing. Un-ticking the box has to
+        // leave the vehicle holding the roll it is in AT THAT MOMENT, and latching an
+        // engagement-time measurement would instead roll it back to lift-off.
+        if (_s.ForceRoll)
+        {
+            _s.RollLatched = false;
+            double forced = UpfgTarget.DegToRad(_s.ForceRollDeg);
+            return Math.Cos(forced) * yRef + Math.Sin(forced) * zRef;
+        }
 
         // Latched once per engagement, from the vehicle's own body Y — the axis
         // ComputeBurnBody2Cci puts the roll reference on.

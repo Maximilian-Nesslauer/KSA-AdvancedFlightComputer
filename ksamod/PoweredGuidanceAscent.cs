@@ -43,6 +43,11 @@ public static partial class PoweredGuidanceWindow
     /// test is "tgo settled between calls", which at 60 Hz passes on the second step
     /// no matter how far from converged the solution is — and the phase machine
     /// promotes the turn to closed loop on that flag.
+    ///
+    /// THE CADENCE IS NOT WHAT KEEPS THE ATTITUDE SMOOTH — the steering LAW is
+    /// evaluated every step between solves (UpfgGuidance.SteeringAt), so the command
+    /// is continuous whatever this is set to. All this decides is how often the
+    /// solution behind that law is re-derived.
     /// </summary>
     private const double GuidanceCycle = 1.0;
 
@@ -60,14 +65,20 @@ public static partial class PoweredGuidanceWindow
     private const double LanLeadSeconds = 180.0;
 
     /// <summary>
-    /// Ceiling on how fast the COMMANDED direction may rotate, deg/s. The solution
-    /// only moves once per <see cref="GuidanceCycle"/> and a real launch vehicle
-    /// pitches at about 1 deg/s, so this both smooths the once-a-second step into
-    /// continuous motion and keeps a hand-over (or a staging transient) from arriving
-    /// as an instantaneous attitude snap. Well above any rate the trajectory actually
-    /// asks for, so it shapes the command without changing where it ends up.
+    /// Ceiling on how fast the COMMANDED direction may rotate, deg/s.
+    ///
+    /// A GUARD, NOT THE SMOOTHING. The steering law is evaluated continuously now, and
+    /// a launch vehicle pitches at about 1 deg/s, so in normal flight nothing should
+    /// come near this. What is left for it is the genuine discontinuities — the
+    /// hand-over out of the open-loop turn, and a stage list changing shape mid-burn —
+    /// where it turns an instantaneous attitude snap into a maneuver. The number is
+    /// chosen to sit well above any rate the trajectory legitimately asks for, so
+    /// binding it at all is a signal that something upstream jumped.
     /// </summary>
     private const double MaxSlewDegS = 5.0;
+
+    /// <summary>Wall-clock gate on re-deriving an unarmed launch window, ms.</summary>
+    private const long LaunchWindowIntervalMs = 250;
 
     public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
 
@@ -109,6 +120,13 @@ public static partial class PoweredGuidanceWindow
             ImGui.Checkbox("G-limit", ref _s.GLimitEnabled);
             ImGui.SameLine();
             ImGui.InputDouble("Max accel (g)", ref _s.GLimitG);
+
+            // See the gauge panel's copy of this pair, and ForceRoll for what ticking
+            // it does to the flight computer's roll mode.
+            ImGui.Checkbox("Force roll", ref _s.ForceRoll);
+            ImGui.SameLine();
+            using (new ImGuiDisabledScope(!_s.ForceRoll))
+                ImGui.InputDouble("Roll angle (deg)", ref _s.ForceRollDeg);
         }
 
         // --- Launch to target (runs its own launch-window logic, not collapsed) ---
@@ -174,6 +192,73 @@ public static partial class PoweredGuidanceWindow
         _s.RgoPeak = 0.0;
         _s.VgoPeak = 0.0;
         _s.Status = status;
+    }
+
+    /// <summary>
+    /// THE ARMED LAUNCH, STEPPED. Tracks the launch window, keeps the chase orbit
+    /// pointed at the target, and fires EXECUTE when the window arrives.
+    ///
+    /// THIS CANNOT LIVE IN A DRAW, which is where all of it used to be. Every one of
+    /// those jobs was gated on the panel being open, on the Ascent tab being the
+    /// selected one, and on the "Target orbit" fold being expanded — so collapsing a
+    /// section, or looking at the Descent tab while waiting, meant the window was
+    /// never re-derived and the armed launch never fired. EXECUTE lit green and the
+    /// countdown sat there, which is indistinguishable from a dead button.
+    ///
+    /// Runs from the sim step for the vehicle it belongs to, so the only thing the
+    /// draw decides now is whether the status TEXT is visible.
+    /// </summary>
+    private static void StepLaunchWindow(Vehicle vehicle, Orbit orbit, IParentBody parent,
+                                         double bodyRadius)
+    {
+        if (_s.TargetId.Length == 0 || _s.Running)
+            return;
+
+        // ARMED: the launch instant is already latched and absolute, so this needs no
+        // geometry at all — and MUST not re-derive it. Checked every step, ahead of
+        // everything else here, because a single warp step can cross the window whole.
+        if (_s.LaunchArmed && !double.IsNaN(_s.LaunchTargetTime))
+        {
+            // Ask to warp to just before the window (the warp itself needs the user's
+            // confirmation — see DrawWarpPrompt), then press EXECUTE for them. The
+            // engage/auto toggles are respected as configured, not forced.
+            double waitSec = _s.LaunchTargetTime - SimNow();
+
+            // <= rather than a window: with an absolute target this goes NEGATIVE on
+            // overshoot, so a single large warp step past the window still fires.
+            if (waitSec <= 1.0)
+            {
+                if (Universe.IsAutoWarpActive)
+                    Universe.AutoWarpStop(true);
+                StartGuidance(orbit, parent);
+                _s.LaunchArmed = false;
+            }
+            else if (_s.AutoLaunch && waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
+            {
+                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, "the launch window");
+            }
+            return;
+        }
+
+        // NOT ARMED: track the target's plane and the next window. Wall-clock gated
+        // like the stage model, and for the same two reasons — TryChaseOrbit searches
+        // the system for the target vehicle, which is not a per-sim-step cost, and
+        // under warp a sim-time gate would not throttle it at all.
+        long now = Environment.TickCount64;
+        if (now - _s.LaunchWindowTick < LaunchWindowIntervalMs)
+            return;
+        _s.LaunchWindowTick = now;
+
+        ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
+
+        // The chase orbit is an OUTPUT of the target pick, recomputed continuously —
+        // it has to keep tracking while the fold that displays it is shut, or the
+        // launch would fly to whatever plane was last on screen.
+        if (status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable)
+            ApplyChaseOrbit(in plan);
+
+        if (status == ChaseStatus.Ok)
+            _s.LaunchTargetTime = SimNow() + plan.WaitSec;
     }
 
     // Per-frame ascent stepping, run for this vehicle from ApplyAutopilot (the
@@ -292,46 +377,32 @@ public static partial class PoweredGuidanceWindow
         if (ImGui.Button("Copy chase orbit to target inputs") || _s.AutoLaunch)
             ApplyChaseOrbit(in plan);
 
-        DrawAutoLaunchArming(orbit, parent);
+        DrawAutoLaunchArming();
     }
 
     /// <summary>
-    /// The armed auto-launch: warp toward the window, then EXECUTE at it. Guarded to
-    /// run AT MOST ONCE PER FRAME, because both the legacy tab and the gauge panel
-    /// reach it — and it fires real actions (a warp request, and starting guidance),
-    /// which must not happen twice because two panels happen to be open. The first
-    /// caller of the frame wins; the legacy tab draws first when its tab is selected,
-    /// and the gauge panel picks it up when it is not.
+    /// The armed auto-launch's STATUS TEXT. Guarded to run at most once per frame
+    /// because both the legacy tab and the gauge panel reach it and it would otherwise
+    /// print twice with both open.
+    ///
+    /// It used to fire the launch as well. That made a flight action depend on the
+    /// panel being open, the Ascent tab being selected and a fold being expanded —
+    /// see StepLaunchWindow, which owns it now.
     /// </summary>
-    private static void DrawAutoLaunchArming(Orbit orbit, IParentBody parent)
+    private static void DrawAutoLaunchArming()
     {
         if (_autoLaunchStepped)
             return;
         _autoLaunchStepped = true;
 
-        // Armed: ask to warp to just before the window (the warp itself needs the
-        // user's confirmation — see DrawWarpPrompt), then press EXECUTE for them.
-        // The engage/auto toggles are respected as configured, not forced.
+        // TEXT ONLY. The launch itself is fired by StepLaunchWindow, from the sim
+        // step — see there for why it cannot live in a draw.
         double waitSec = _s.LaunchTargetTime - SimNow();
         if (_s.LaunchArmed && !_s.Running && !double.IsNaN(waitSec))
         {
             if (!_s.Engage || !_s.AutoStage)
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                     "Note: engage/auto toggles are off — auto-launch will only start guidance.");
-
-            // <= rather than a window: with an absolute target this goes NEGATIVE on
-            // overshoot, so a single large warp step past the window still fires.
-            if (waitSec <= 1.0)
-            {
-                if (Universe.IsAutoWarpActive)
-                    Universe.AutoWarpStop(true);
-                StartGuidance(orbit, parent);
-                _s.LaunchArmed = false;
-            }
-            else if (_s.AutoLaunch && waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
-            {
-                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, "the launch window");
-            }
 
             ImGui.TextColored(new float4(0.5f, 0.9f, 1f, 1f), Universe.IsAutoWarpActive
                 ? "Auto-warping to the launch window..."
@@ -407,8 +478,21 @@ public static partial class PoweredGuidanceWindow
     {
         double3 up = double3.Normalize(r);
         double alt = r.Length() - bodyRadius;
-        double upfgPitch = PitchOf(up, _s.Upfg.Steering);
         double turnPitch = TurnPitchDeg();
+
+        // THE STEERING LAW EVALUATED ONCE, HERE, and used for everything downstream:
+        // the pitch the turn hands over at, the azimuth it flies, the closed-loop
+        // command, and the direction the terminal phase freezes. UpfgGuidance.Steering
+        // is the tau = 0 sample from the last solve — up to a cycle old — and mixing
+        // the two would have the phase machine deciding against one direction while
+        // the vehicle flew another.
+        //
+        // tau is clamped to one cycle: past that the solve is overdue (a staging
+        // transient holding the last solution, say) and extrapolating a linearisation
+        // nobody has refreshed is how a small rate becomes a large angle.
+        double tau = Math.Clamp(SimNow() - _s.LastSolveTime, 0.0, GuidanceCycle);
+        double3 steerNow = _s.Upfg.SteeringAt(tau, out double3 steerRate);
+        double upfgPitch = PitchOf(up, steerNow);
 
         switch (_s.Phase)
         {
@@ -433,7 +517,7 @@ public static partial class PoweredGuidanceWindow
                 if (_s.Upfg.Converged && _s.Upfg.Tgo <= TerminalTgo)
                 {
                     _s.Phase = AscentPhase.Terminal;
-                    _s.FrozenDir = _s.Upfg.Steering;
+                    _s.FrozenDir = steerNow;
                     // tgo is measured from the SOLVE, not from now — the solution can
                     // be most of a guidance cycle old by the time this trips, and
                     // counting that cycle twice is a whole second of extra burn.
@@ -442,21 +526,70 @@ public static partial class PoweredGuidanceWindow
                 break;
         }
 
-        double3 want = _s.Phase switch
+        // WHERE TO POINT, AND HOW FAST THAT POINT IS MOVING. Both, every step: the
+        // flight computer tracks a target's rate as well as its angle (see
+        // KsaAttitudeRate), and handing it only the angle declares a moving target
+        // stationary, which is the difference between tracking and chasing.
+        double3 want;
+        double3 wantRate = default;
+        switch (_s.Phase)
         {
-            AscentPhase.Vertical => up,
-            AscentPhase.Turn => TurnDir(up, turnPitch),
-            AscentPhase.ClosedLoop => _s.Upfg.Steering,
-            AscentPhase.Terminal => _s.FrozenDir,
-            _ => default,
-        };
+            case AscentPhase.Vertical:
+                want = up;                       // holds still in inertial terms
+                break;
 
-        // The command SLEWS toward the solution rather than jumping to it. Every
-        // discontinuity upstream — a guidance cycle landing, the hand-over from the
-        // open-loop turn, a stage list that changed shape mid-burn — otherwise
-        // arrives at the flight computer as an instantaneous new attitude target,
-        // and that is what the vehicle jerks against.
-        _s.CommandDir = SlewToward(_s.CommandDir, want, UpfgTarget.DegToRad(MaxSlewDegS) * stepDt);
+            case AscentPhase.Turn:
+                want = TurnDir(up, turnPitch, steerNow);
+                // The ramp's own rate: pitching down at TurnRateDegS about the axis
+                // the turn plane turns about, and zero once it has bottomed out on the
+                // horizon. The axis is up x want — a right-handed rotation about it
+                // carries the command AWAY from vertical and toward down-range, which
+                // is the direction this ramp goes. (up x down-range, the same axis:
+                // with up = Z and down-range = X that is +Y, and +Y turns Z toward X.)
+                if (turnPitch > 0.0)
+                {
+                    double3 axis = double3.Cross(up, want);
+                    if (axis.Length() > 1e-9)
+                        wantRate = double3.Normalize(axis) * UpfgTarget.DegToRad(_s.TurnRateDegS);
+                }
+                break;
+
+            case AscentPhase.ClosedLoop:
+                // The law and the rate it implies, both from the evaluation above.
+                // i_f(tau) is continuous between cycles, so the guidance cadence stops
+                // being something the attitude has to be protected from.
+                want = steerNow;
+                wantRate = steerRate;
+                break;
+
+            case AscentPhase.Terminal:
+                want = _s.FrozenDir;             // frozen: no angle change, no rate
+                break;
+
+            default:
+                want = default;
+                break;
+        }
+
+        // The command SLEWS toward the solution rather than jumping to it. With the
+        // law evaluated continuously above this should never bind in flight — what is
+        // left for it is the hand-over out of the open-loop turn and whatever a stage
+        // list changing shape mid-burn does to the solution. When it DOES bind, the
+        // commanded rate is the slew's own, not the law's: publishing a feedforward
+        // the command is not actually following would have the flight computer drive
+        // toward one rate while the target moved at another.
+        double maxRad = UpfgTarget.DegToRad(MaxSlewDegS) * stepDt;
+        double3 slewed = SlewToward(_s.CommandDir, want, maxRad, out bool clamped);
+        if (clamped && stepDt > 1e-9)
+        {
+            double3 axis = double3.Cross(_s.CommandDir, slewed);
+            wantRate = axis.Length() > 1e-12
+                ? double3.Normalize(axis) * (maxRad / stepDt)
+                : default;
+        }
+
+        _s.CommandDir = slewed;
+        _s.CommandRate = wantRate;
         _s.HasCommand = _s.CommandDir.Length() > 0.5;
     }
 
@@ -466,8 +599,10 @@ public static partial class PoweredGuidanceWindow
     /// direction snaps straight to the target — there is nothing to be continuous
     /// with on the first command of a launch.
     /// </summary>
-    private static double3 SlewToward(double3 current, double3 target, double maxRad)
+    private static double3 SlewToward(double3 current, double3 target, double maxRad,
+                                      out bool clamped)
     {
+        clamped = false;
         if (target.Length() < 0.5)
             return target;                       // nothing commanded
         target = double3.Normalize(target);
@@ -482,6 +617,7 @@ public static partial class PoweredGuidanceWindow
         double3 axis = double3.Cross(current, target);
         if (axis.Length() < 1e-12)
             return target;                       // exactly opposed: no axis to turn about
+        clamped = true;
         return RotateAbout(current, double3.Normalize(axis), maxRad);
     }
 
@@ -507,12 +643,12 @@ public static partial class PoweredGuidanceWindow
     // cancels the launch site's own eastward velocity, so a geometric one differs from
     // it by a few degrees, and the whole of that difference then arrives as a heading
     // change at the hand-over.
-    private static double3 TurnDir(double3 up, double pitchDeg)
+    private static double3 TurnDir(double3 up, double pitchDeg, double3 steerNow)
     {
         (double3 east, double3 north) = EnuBasis(up);
 
         double az;
-        double3 steerHoriz = _s.Upfg.Steering - double3.Dot(_s.Upfg.Steering, up) * up;
+        double3 steerHoriz = steerNow - double3.Dot(steerNow, up) * up;
         if (_s.Upfg.Converged && steerHoriz.Length() > 1e-3)
         {
             az = Math.Atan2(double3.Dot(steerHoriz, east), double3.Dot(steerHoriz, north));

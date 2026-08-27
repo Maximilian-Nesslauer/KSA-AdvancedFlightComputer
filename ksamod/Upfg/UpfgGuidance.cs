@@ -61,7 +61,28 @@ public sealed class UpfgGuidance
     public double3 Rgo { get; private set; }          // position-to-go vector, CCI
     public double Throttle { get; private set; } = 1.0; // commanded throttle (g-limit)
 
-    public void Reset() { _setup = false; Converged = false; Throttle = 1.0; Vgo = default; Rgo = default; _prev = new State(); }
+    // --- The steering LAW, not just its value at the solve instant ---
+    //
+    // i_f(tau) = unit[ lambda + lambdadot * (tau - J/L) ],  tau = seconds since this
+    // solve. The original document is explicit that this block "will receive the
+    // vectors lambda and lambdadot" and that "during active guidance calls a turning
+    // rate may be implied" — the law is a function of time and the caller is meant to
+    // evaluate it, not to hold the tau = 0 sample until the next cycle.
+    //
+    // lambdadot is PERPENDICULAR to lambda by construction: rgo is built to satisfy
+    // dot(lambda, rgo) = S, so dot(lambda, rgo - S*lambda) = 0. That is what makes it
+    // a pure turning rate, and what makes the law a linear TANGENT law — the angle off
+    // lambda is atan(|lambdadot| * (tau - J/L)), so its tangent is linear in time.
+    public double3 Lambda { get; private set; }       // unit primer direction at tau = J/L
+    public double3 LambdaDot { get; private set; }    // its turning rate, rad/s, CCI
+    public double TLambda { get; private set; }       // J/L, s: when lambda is the direction
+
+    public void Reset()
+    {
+        _setup = false; Converged = false; Throttle = 1.0; Vgo = default; Rgo = default;
+        Lambda = default; LambdaDot = default; TLambda = 0.0;
+        _prev = new State();
+    }
 
     // r, v: inertial (CCI) state in metres and m/s. vehicle: the staged model,
     // rebuilt by the caller from live data so stage 0 reflects the current mass.
@@ -234,9 +255,16 @@ public sealed class UpfgGuidance
         // 5 - Guidance vectors
         ComputeGuidanceVectors(vgo, rd, r, v, tgo, _prev.Tgo, rgrav, iy, S, L, J, Q, H, P, rbias,
             out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
-            out double3 rthrust, out double3 vbias);
+            out double3 rthrust, out double3 vbias, out double3 lambdadot);
         rbias = rgo - rthrust;
         Rgo = rgo;   // latched for the panel schematic; not used by the solver
+
+        // The steering law's terms, for SteeringAt. Latched before the finite check
+        // below only in the sense that the check discards the whole step on failure —
+        // a non-finite solution resets and these are never read against it.
+        Lambda = lambda;
+        LambdaDot = lambdadot;
+        TLambda = Math.Abs(L) > 1e-9 ? J / L : 0.0;
 
         // 7 - External (conic) estimation of gravity over the burn
         double3 rc1 = r - 0.1 * rthrust - (tgo / 30.0) * vthrust;
@@ -329,6 +357,48 @@ public sealed class UpfgGuidance
             Throttle = K;
     }
 
+    /// <summary>
+    /// THE STEERING LAW EVALUATED AT A TIME, with the turning rate it implies.
+    ///
+    ///     u(tau)   = lambda + lambdadot * (tau - J/L)
+    ///     i_f(tau) = u / |u|
+    ///     omega    = i_f x d(i_f)/dtau  =  (i_f x lambdadot) / |u|
+    ///
+    /// tau is seconds since the solve that produced these terms. At tau = 0 this
+    /// returns exactly <see cref="Steering"/> — the tau = 0 sample the solver already
+    /// latched — so evaluating it every step costs nothing but continuity.
+    ///
+    /// Because lambdadot is perpendicular to lambda, |u| = sqrt(1 + |lambdadot|^2 s^2)
+    /// with s = tau - J/L, the angle off lambda is atan(|lambdadot| s), and the rate
+    /// reduces to |lambdadot| / (1 + |lambdadot|^2 s^2) — the derivative of that
+    /// arctangent, as it must be.
+    ///
+    /// EXTRAPOLATION IS BOUNDED BY THE CALLER. This is a local linearisation about one
+    /// solve; run it far enough past its cycle and it turns the vehicle on the
+    /// strength of a rate nobody has re-derived since. Callers clamp tau.
+    /// </summary>
+    /// <param name="tau">Seconds since the solve. Clamp before calling.</param>
+    /// <param name="rateCci">Implied turning rate, rad/s, CCI. Zero when unavailable.</param>
+    /// <returns>Unit thrust direction, CCI. Falls back to the latched Steering.</returns>
+    public double3 SteeringAt(double tau, out double3 rateCci)
+    {
+        rateCci = default;
+        if (!_setup || !IsFinite(Lambda) || !IsFinite(LambdaDot) || Lambda.Length() < 0.5)
+            return Steering;
+
+        double s = tau - TLambda;
+        double3 u = Lambda + LambdaDot * s;
+        double len = u.Length();
+        if (!IsFinite(len) || len < 1e-9)
+            return Steering;
+
+        double3 iF = u * (1.0 / len);
+        rateCci = double3.Cross(iF, LambdaDot) * (1.0 / len);
+        if (!IsFinite(rateCci))
+            rateCci = default;
+        return iF;
+    }
+
     private static void ComputeBurnTimes(
         List<int> stageModes, List<double> accelLimits, List<double> exhaustVel,
         List<double> charTimes, List<double> burnTimes, double3 vgo,
@@ -413,7 +483,7 @@ public sealed class UpfgGuidance
         double3 vgo, double3 rd, double3 r, double3 v, double tgo, double prevTgo, double3 rgrav,
         double3 iy, double S, double L, double J, double Q, double H, double P, double3 rbias,
         out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
-        out double3 rthrust, out double3 vbias)
+        out double3 rthrust, out double3 vbias, out double3 lambdadotOut)
     {
         lambda = double3.Normalize(vgo);
         if (prevTgo > 0)
@@ -427,6 +497,7 @@ public sealed class UpfgGuidance
 
         double lambdade = Q - S * J / L;
         double3 lambdadot = (rgo - S * lambda) * (1.0 / lambdade);
+        lambdadotOut = lambdadot;
         iF = lambda - lambdadot * (J / L);
         iF = double3.Normalize(iF);
 
