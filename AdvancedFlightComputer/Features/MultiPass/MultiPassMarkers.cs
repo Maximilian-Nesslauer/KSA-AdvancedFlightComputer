@@ -53,7 +53,11 @@ internal static class MultiPassMarkers
 
         Camera camera = viewport.GetCamera();
         float2 vpPos = viewport.Position;
-        ImDrawListPtr drawList = ImGui.GetBackgroundDrawList();
+        // Not the bare GetBackgroundDrawList(): that leaves the viewport
+        // argument null instead of naming the main one. Stock routes every
+        // overlay through this helper since it fixed orbit lines bleeding into
+        // the crew portrait views.
+        ImDrawListPtr drawList = ImGuiHelper.GetOverlayDrawList(viewport);
         float2 mousePos = ImGui.GetIO().MousePos;
 
         // Special case at PassIndex == N-2: the cache contains only the

@@ -30,7 +30,7 @@ internal readonly record struct PlanningBasis(
         if (finalBurn == null)
             return new PlanningBasis(source.Orbit, source.FlightPlan.TryFindPatch(now), now, false, null);
 
-        FlightPlan plan = source.FindFinalFlightPlan();
+        FlightPlan plan = finalBurn.FlightPlan;
         if (plan.Patches.Count == 0)
             return new PlanningBasis(source.Orbit, source.FlightPlan.TryFindPatch(now), now, false, null);
 

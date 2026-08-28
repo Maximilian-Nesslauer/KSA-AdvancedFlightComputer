@@ -30,16 +30,20 @@ internal static class Patch_DrawPlanWindow
     private const string WindowId = "transfer-planning";
     private const string WindowTitle = "TRANSFER PLANNING";
     private const string WindowSignature = "KSA-TRJ";
-    private const float MainWindowOffsetX = 440f;
-    private const float MainWindowOffsetY = 50f;
-    private const float MainWindowWidth = 400f;
-    private const float MainWindowHeight = 1050f;
     private const string FlightPlanWindowId = "afc-maneuver-flightplan";
     private const string FlightPlanWindowTitle = "MANEUVER FLIGHT PLAN";
-    private const float FlightPlanWindowOffsetX = 620f;
-    private const float FlightPlanWindowOffsetY = 40f;
-    private const float FlightPlanWindowWidth = 460f;
-    private const float FlightPlanWindowHeight = 620f;
+
+    // Base values are stock's, scaled the way stock scales its own, so the
+    // window keeps the size and position of a stock plan type at any interface
+    // scale setting.
+    private static float MainWindowOffsetXPx => 440f * ImGuiHelper.InterfaceScale;
+    private static float MainWindowOffsetYPx => 50f * ImGuiHelper.InterfaceScale;
+    private static float MainWindowWidthPx => 400f * ImGuiHelper.InterfaceScale;
+    private static float MainWindowHeightPx => 1050f * ImGuiHelper.InterfaceScale;
+    private static float FlightPlanWindowOffsetXPx => 620f * ImGuiHelper.InterfaceScale;
+    private static float FlightPlanWindowOffsetYPx => 40f * ImGuiHelper.InterfaceScale;
+    private static float FlightPlanWindowWidthPx => 460f * ImGuiHelper.InterfaceScale;
+    private static float FlightPlanWindowHeightPx => 620f * ImGuiHelper.InterfaceScale;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -102,14 +106,14 @@ internal static class Patch_DrawPlanWindow
     private static void DrawWindow(Viewport inViewport, TransferType transferType)
     {
         ImGui.SetNextWindowPos(
-            inViewport.Position + new float2(inViewport.Size.X - MainWindowOffsetX, MainWindowOffsetY),
+            inViewport.Position + new float2(inViewport.Size.X - MainWindowOffsetXPx, MainWindowOffsetYPx),
             ImGuiCond.Appearing, (float2?)null);
 
         bool open = StockPlanner.ShowPlanWindow;
         // BeginWindow ends the underlying ImGui window itself when it returns
         // false, so only the true branch owes an EndWindow.
         if (!ConsoleStyle.BeginWindow(WindowId, WindowTitle, WindowSignature, ref open,
-                new float2(MainWindowWidth, MainWindowHeight), ImGuiWindowFlags.NoScrollbar))
+                new float2(MainWindowWidthPx, MainWindowHeightPx), ImGuiWindowFlags.NoScrollbar))
             return;
 
         Commit commit = default;
@@ -335,13 +339,13 @@ internal static class Patch_DrawPlanWindow
         if (fp == null) return;
 
         ImGui.SetNextWindowPos(
-            inViewport.Position + new float2(FlightPlanWindowOffsetX, FlightPlanWindowOffsetY),
+            inViewport.Position + new float2(FlightPlanWindowOffsetXPx, FlightPlanWindowOffsetYPx),
             ImGuiCond.Appearing, (float2?)null);
 
         // Mirrors stock's own DrawSelectedTransferFlightPlan shell, footer included.
         if (!ConsoleStyle.BeginWindow(FlightPlanWindowId, FlightPlanWindowTitle, WindowSignature,
                 ref _showFlightPlanPreview,
-                new float2(FlightPlanWindowWidth, FlightPlanWindowHeight),
+                new float2(FlightPlanWindowWidthPx, FlightPlanWindowHeightPx),
                 ImGuiWindowFlags.NoFocusOnAppearing))
             return;
 
