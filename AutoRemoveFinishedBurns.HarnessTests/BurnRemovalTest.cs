@@ -18,13 +18,13 @@ namespace AutoRemoveFinishedBurns.HarnessTests;
 //
 // The burn is placed far in the future on purpose: in Auto mode the flight computer waits for
 // IgnitionTime commanding a zero burn duration, so no engine fires, the vehicle coasts, no
-// propellant is spent, and Auto survives from one step to the next (the mode only holds while an
-// active engine has propellant, so the spawned copy's engines are activated first).
+// propellant is spent, and Auto survives from one step to the next. The spawned copy's engines are
+// activated up front so the engines-off scenario has something to take away.
 //
 // Scenarios (each starts from a fresh burn and a cleared previous-mode table):
 //   1. completed:    Auto armed, completion injected -> the burn is removed from the plan.
-//   2. no-propellant: Auto armed, engines deactivated -> Auto flips to Manual without the reversal
-//                     (the out-of-fuel code path) -> the burn stays.
+//   2. engines-off:  Auto armed, every engine deactivated -> stock keeps Auto for a burn that is
+//                    still waiting for ignition -> no transition, so the mod removes nothing.
 //   3. disabled:     Config.Enabled = false, completed -> the burn stays; re-enabling afterwards
 //                     does not retroactively remove it.
 //   4. manual:       completion injected while in Manual mode -> the burn stays.
@@ -42,6 +42,7 @@ public sealed class BurnRemovalTest : IHarnessTest
     private const double BurnDvMps = 100.0;
     private const int SettleSteps = 5;                     // update task assignment + flight plan before the first burn
     private const int MaxEngineFeedSteps = 10;             // activation drains next step, propellant state one later
+    private const int AutoHoldSteps = 6;                   // margin over the 2 steps a denied-ignition fallback needs
 
     public string Name => "arfb-burn-removal";
 
@@ -88,15 +89,8 @@ public sealed class BurnRemovalTest : IHarnessTest
             SimDriver driver = session.CreateDriver();
             driver.Step(StepDt, SettleSteps);
 
-            if (!EnsureEnginesFed(vehicle, driver))
-            {
-                HarnessLog.Line($"{Prefix} SKIP: no engine on the copied vehicle ever became active and fed; " +
-                                "the Auto burn mode cannot be held on this content.");
-                return 0;
-            }
-
             ok = ScenarioCompletedRemoves(vehicle, driver);
-            ok &= ScenarioNoPropellantKeeps(vehicle, driver);
+            ok &= ScenarioEnginesOffKeeps(vehicle, driver);
             ok &= ScenarioDisabledKeeps(vehicle, driver);
             ok &= ScenarioManualKeeps(vehicle, driver);
             ok &= ScenarioZeroDeltaVKeeps(vehicle, driver);
@@ -133,24 +127,42 @@ public sealed class BurnRemovalTest : IHarnessTest
         return ok;
     }
 
-    private static bool ScenarioNoPropellantKeeps(Vehicle vehicle, SimDriver driver)
+    // A vehicle that cannot burn must not lose its plan. Stock only leaves Auto here through the
+    // denied-ignition latch, which needs the flight computer to actually attempt ignition, so a burn
+    // still counting down to its ignition time keeps Auto however long it sits without an engine.
+    // That leaves the mod with no Auto -> Manual transition to react to, which is the behavior under
+    // test: it must not read "cannot burn" as "burn finished".
+    //
+    // The held-Auto check pins stock, not the mod, so a failure there reports that the game changed
+    // its mind about dropping Auto rather than that the mod regressed. The burn-kept check below is
+    // the mod verdict. This is the only scenario that needs engines, and it needs them only as
+    // something to deactivate.
+    private static bool ScenarioEnginesOffKeeps(Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        bool ok = BeginScenario("no-propellant", vehicle, driver);
-        ok = ok && Arm("no-propellant", vehicle, driver);
+        if (!EnsureEnginesFed(vehicle, driver))
+        {
+            HarnessLog.Line($"{Prefix} engines-off: SKIP, no engine on the copied vehicle ever became " +
+                            "active and fed, so there is nothing to take away.");
+            return true;
+        }
+
+        bool ok = BeginScenario("engines-off", vehicle, driver);
+        ok = ok && Arm("engines-off", vehicle, driver);
 
         if (ok)
         {
             SetAllEngines(vehicle, active: false);
-            driver.Step(StepDt);
-            ok &= Check("no-propellant", "flight computer fell back to Manual", fc.BurnMode == FlightComputerBurnMode.Manual);
-            ok &= Check("no-propellant", "burn kept in the plan", fc.BurnPlan.HasActiveBurns);
+            ok &= Check("engines-off", "Auto held with no engine to ignite",
+                StepsHoldBurnModeAuto("engines-off", vehicle, driver));
+            ok &= Check("engines-off", "burn kept in the plan", fc.BurnPlan.HasActiveBurns);
 
-            // Restore for the later scenarios; failing here is an environment problem, not a
-            // verdict on the no-propellant behavior asserted above.
+            // Putting the engines back is setup for the later scenarios rather than a verdict on the
+            // behavior above, but leaving them off would run the rest of the suite on state it never
+            // asked for, so a failure here still fails the run.
             bool refed = EnsureEnginesFed(vehicle, driver);
             if (!refed)
-                HarnessLog.Line($"{Prefix} no-propellant: could not re-feed the engines for the following scenarios.");
+                HarnessLog.Line($"{Prefix} engines-off: could not re-feed the engines for the following scenarios.");
             ok &= refed;
         }
         CleanupBurn(fc);
@@ -223,10 +235,10 @@ public sealed class BurnRemovalTest : IHarnessTest
         Program.ControlledVehicle = null;
         bool ok = BeginScenario("uncontrolled", vehicle, driver);
 
+        ok = ok && Arm("uncontrolled", vehicle, driver);
+
         if (ok)
         {
-            fc.BurnMode = FlightComputerBurnMode.Auto;
-            driver.Step(StepDt);
             InjectCompletion(fc);
             driver.Step(StepDt);
             ok &= Check("uncontrolled", "burn kept on a vehicle that is not controlled", fc.BurnPlan.HasActiveBurns);
@@ -268,8 +280,9 @@ public sealed class BurnRemovalTest : IHarnessTest
     }
 
     // Puts the flight computer into Auto and proves it survived a full step (the postfix can only
-    // observe a transition out of a mode it saw recorded). Requires fed engines: without propellant
-    // the game flips straight back to Manual within the same step.
+    // observe a transition out of a mode it saw recorded). Engine state does not decide this: the burn
+    // sits far enough out that ignition is never attempted, and zeroing DeltaVAccumCci rules out the
+    // delta-V reversal, which together are every way stock leaves Auto on its own.
     private static bool Arm(string scenario, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
@@ -314,6 +327,25 @@ public sealed class BurnRemovalTest : IHarnessTest
         }
         HarnessLog.Line($"{Prefix} no active engine reported propellant after {MaxEngineFeedSteps} steps.");
         return false;
+    }
+
+    // True while the flight computer stays in Auto for the whole window. Several steps rather than one,
+    // because the fallback this guards against is latched: stock arms BurnTarget.LastIgnitionDenied on
+    // a denied ignition and only leaves Auto if the next step is denied too, so a single step cannot
+    // tell "never falls back" from "has not fallen back yet".
+    private static bool StepsHoldBurnModeAuto(string scenario, Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        for (int i = 0; i < AutoHoldSteps; i++)
+        {
+            driver.Step(StepDt);
+            if (fc.BurnMode != FlightComputerBurnMode.Auto)
+            {
+                HarnessLog.Line($"{Prefix} {scenario}: left Auto for {fc.BurnMode} on step {i + 1} of {AutoHoldSteps}.");
+                return false;
+            }
+        }
+        return true;
     }
 
     private static bool Check(string scenario, string what, bool pass)
