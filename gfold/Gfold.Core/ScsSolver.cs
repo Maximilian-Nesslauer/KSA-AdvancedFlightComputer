@@ -17,9 +17,8 @@ namespace Gfold;
 /// also makes it safe to call from the mod's solver thread without a per-vehicle
 /// instance — the mistake the UPFG port had to be rescued from.
 ///
-/// scs_init deep-copies everything handed to it (unlike ECOS_setup, which retains raw
-/// pointers into the caller's arrays for the workspace's life), so the pins here only
-/// have to survive the init call. They are held to the end of the solve anyway, which
+/// scs_init deep-copies everything handed to it, so the pins here only have to survive
+/// the init call. They are held to the end of the solve anyway, which
 /// costs nothing and is one less lifetime to reason about.
 /// </summary>
 public static class ScsSolver
@@ -35,15 +34,17 @@ public static class ScsSolver
 
     /// <summary>
     /// Convergence tolerance, absolute and relative. MEASURED, not chosen — see
-    /// Gfold.Console --ab, whose sweep on the Mars reference case (N=120) gives:
+    /// Gfold.Console --ab. The sweep below was taken on the Mars reference case
+    /// (N=120) against the interior-point answer, which Clarabel now supplies:
     ///
-    ///     eps     P4 solve    fuel error vs ECOS      full tf search
+    ///     eps     P4 solve    fuel error vs IPM       full tf search
     ///     1e-4      33 ms          2.41 kg            1.7 s, tf +0.24 s, fuel +4.03 kg
     ///     1e-5      78 ms          0.05 kg            7.8 s, tf -0.06 s, fuel +0.06 kg
     ///     1e-6     358 ms          0.01 kg           50.5 s, tf -0.06 s, fuel -0.14 kg
     ///     1e-7    2784 ms          0.00 kg           69.0 s, tf +17.3 s, fuel +41.5 kg
     ///
-    /// (ECOS, for scale: 23 ms per solve, 0.7 s for the whole search.)
+    /// (Clarabel, for scale: 22 ms per solve, 0.7 s for the whole search — and it is
+    /// the reference the "error" column is measured against.)
     ///
     /// TIGHTER IS NOT BETTER, AND PAST A POINT IT IS MUCH WORSE. The 1e-7 row is not
     /// noise: individual solves still converge there, but enough of them exhaust the
@@ -53,7 +54,7 @@ public static class ScsSolver
     /// away from the right answer. A first-order solver degrades by returning a WORSE
     /// DECISION, not a looser number, and that is the failure mode to design against.
     ///
-    /// 1e-5 is the knee: fuel agrees with ECOS to 0.06 kg out of ~316 (0.02%) and the
+    /// 1e-5 is the knee: fuel agrees to 0.06 kg out of ~316 (0.02%) and the
     /// chosen time of flight to 0.06 s, which is well inside the search's own 0.25 s
     /// resolution. Everything tighter buys accuracy the search cannot use and pays for
     /// it in the only currency that matters here.
@@ -70,13 +71,29 @@ public static class ScsSolver
 
     public static ConicResult Solve(ConicProblem problem, bool verbose = false,
                                     int maxIterations = DefaultMaxIterations,
-                                    double eps = DefaultEps)
-        => Solve(problem, out _, verbose, maxIterations, eps);
+                                    double eps = DefaultEps,
+                                    double timeLimitS = 0.0)
+        => Solve(problem, out _, verbose, maxIterations, eps, timeLimitS);
 
+    /// <param name="timeLimitS">
+    /// Wall-clock ceiling for this solve, seconds, or 0 for none.
+    ///
+    /// NOT OPTIONAL FOR ANYTHING ON A FRAME BUDGET. SCS's own default is NO limit
+    /// (glbopts.h: TIME_LIMIT_SECS 0.) and its iteration cap is 100000, so a problem it
+    /// converges on slowly simply runs — and GfoldPlanner is called SYNCHRONOUSLY ON
+    /// THE SIM THREAD. Leaving this unset is what froze the game: on a descent state
+    /// SCS found hard, every solve ground to the iteration cap, came back unusable, and
+    /// the caller responded to the failure by running a 35-solve search, then another —
+    /// minutes of blocked sim thread, retried every quarter second. An interior-point
+    /// method never needed the guard, its iteration count being bounded in practice; a
+    /// first-order method has no such bound, which makes this the difference between a
+    /// slow solve and a hung process.
+    /// </param>
     public static ConicResult Solve(ConicProblem problem, out ScsSolveInfo info,
                                     bool verbose = false,
                                     int maxIterations = DefaultMaxIterations,
-                                    double eps = DefaultEps)
+                                    double eps = DefaultEps,
+                                    double timeLimitS = 0.0)
     {
         int n = problem.Vars;
         int p = problem.EqualityRows;
@@ -95,7 +112,7 @@ public static class ScsSolver
         if (problem.A != null && problem.B?.Length != p)
             throw new ArgumentException($"b has length {problem.B?.Length}, expected p={p}");
 
-        // ECOS's split form -> SCS's single matrix. The equalities go on TOP, because
+        // The split assembly form -> SCS's single matrix. Equalities go on TOP, because
         // SCS's cone ordering is fixed: zero cone first, then the positive orthant,
         // then the second-order cones, and the rows of A must appear in that order.
         // A zero cone pins s = 0 over those rows, so "A x + s = b with s in {0}" is
@@ -150,6 +167,7 @@ public static class ScsSolver
             settings.EpsAbs = eps;
             settings.EpsRel = eps;
             settings.WarmStart = 0;
+            settings.TimeLimitSecs = timeLimitS;
 
             long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
             IntPtr work = ScsNative.scs_init(ref data, ref cone, ref settings);
@@ -179,10 +197,20 @@ public static class ScsSolver
 
                 var exit = Enum.IsDefined(typeof(ScsExit), exitCode)
                     ? (ScsExit)exitCode : ScsExit.Failed;
-                bool truncated = raw.Iter >= maxIterations;
+                string statusText = System.Text.Encoding.ASCII.GetString(raw.Status)
+                    .TrimEnd('\0').Trim();
+
+                // Ran out of BUDGET rather than converging — of either budget. SCS
+                // reports both the same way (SolvedInaccurate, with the reason only in
+                // the status string), and a time-limited iterate is exactly as
+                // untrustworthy as an iteration-limited one: ADMM can be far from
+                // feasible when it stops. Reading only the iteration count would let
+                // every time-limited solve through as a good answer, which is a worse
+                // failure than the freeze the limit exists to prevent.
+                bool truncated = raw.Iter >= maxIterations
+                              || statusText.Contains("time_limit_secs", StringComparison.Ordinal);
                 info = new ScsSolveInfo(
-                    exit,
-                    System.Text.Encoding.ASCII.GetString(raw.Status).TrimEnd('\0').Trim(),
+                    exit, statusText,
                     raw.Iter, truncated, raw.Pobj, raw.Dobj, raw.Gap,
                     raw.ResPri, raw.ResDual, initMs, solveMs);
 
@@ -204,17 +232,16 @@ public static class ScsSolver
     /// SCS's exit code onto the shared status.
     ///
     /// The one judgement call is SolvedInaccurate. SCS reports it both for a solution
-    /// that converged loosely and for one that merely ran out of iterations, and those
-    /// are not the same thing: a truncated ADMM iterate can violate constraints by
+    /// that converged loosely and for one that merely ran out of budget, and those are
+    /// not the same thing: a truncated ADMM iterate can violate constraints by
     /// orders of magnitude and still be returned. Truncation is therefore reported as
     /// MaxIterations — which GfoldPlanner.IsUsable rejects — while a genuinely loose
-    /// convergence maps to OptimalInaccurate, which it accepts, exactly as ECOS's own
-    /// inaccurate exit does.
+    /// convergence maps to OptimalInaccurate, which it accepts.
     /// </summary>
-    private static ConicStatus MapStatus(ScsExit exit, bool hitIterationLimit) => exit switch
+    private static ConicStatus MapStatus(ScsExit exit, bool truncated) => exit switch
     {
         ScsExit.Solved => ConicStatus.Optimal,
-        ScsExit.SolvedInaccurate => hitIterationLimit
+        ScsExit.SolvedInaccurate => truncated
             ? ConicStatus.MaxIterations
             : ConicStatus.OptimalInaccurate,
         ScsExit.Infeasible => ConicStatus.PrimalInfeasible,

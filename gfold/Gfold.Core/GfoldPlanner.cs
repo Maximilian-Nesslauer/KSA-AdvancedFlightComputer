@@ -1,7 +1,7 @@
 namespace Gfold;
 
 // The G-FOLD powered-descent problems (Açıkmeşe & Ploen; Blackmore), ported
-// from the reference Python (GFOLD_static_p3p4.py) into ECOS standard conic
+// from the reference Python (GFOLD_static_p3p4.py) into standard conic
 // form. Time of flight is an input — wrap with a search over tf if needed.
 //
 //   Problem 3 (minimum landing error): minimize ||r(tf) - rf||, final
@@ -81,30 +81,43 @@ public sealed record GfoldOptions
 /// <summary>Which conic solver <see cref="GfoldPlanner"/> hands its problems to.</summary>
 public enum ConicBackend
 {
-    /// <summary>ECOS: interior point, GPLv3, on its way out.</summary>
-    Ecos,
-    /// <summary>SCS: first-order ADMM, MIT — the reason this switch exists.</summary>
+    /// <summary>
+    /// Clarabel: interior point, Apache-2.0. The default, and what the planner is tuned
+    /// for — small, banded, cold-started problems on a frame budget.
+    /// </summary>
+    Clarabel,
+    /// <summary>
+    /// SCS: first-order ADMM, MIT. Kept as a cross-check rather than for flying: it
+    /// agrees with Clarabel to a fraction of a kilogram but costs several times as much
+    /// on a problem this shape (see ScsSolver.DefaultEps for the measurements).
+    /// </summary>
     Scs,
 }
 
 public static class GfoldPlanner
 {
     /// <summary>
-    /// TEMPORARY, for the ECOS-to-SCS migration. Both backends are fed the identical
-    /// assembled problem, so flipping this is the whole A/B experiment (see
-    /// Gfold.Console --ab). It is a process-wide static because it selects a BUILD's
-    /// solver rather than anything per-call — and it goes away with ECOS, along with
-    /// the enum, once the switch is made.
+    /// Which solver runs the assembled problem. Both are fed the identical problem, so
+    /// switching this is a controlled A/B (see Gfold.Console --ab). Process-wide because
+    /// it selects a build's solver rather than anything per-call; the mod sets it
+    /// immediately before each synchronous solve.
     /// </summary>
-    public static ConicBackend Backend = ConicBackend.Ecos;
+    public static ConicBackend Backend = ConicBackend.Clarabel;
 
     /// <summary>
-    /// TEMPORARY, alongside <see cref="Backend"/>: overrides SCS's convergence
-    /// tolerance so the A/B harness can sweep it. Null uses ScsSolver.DefaultEps.
-    /// Once a tolerance has been chosen from the measurements it becomes that default
-    /// and this goes away with the rest of the switch.
+    /// Overrides SCS's convergence tolerance so the A/B harness can sweep it; null uses
+    /// ScsSolver.DefaultEps. SCS only — an interior-point method's cost scales with
+    /// log(1/eps), so Clarabel needs no equivalent knob.
     /// </summary>
     public static double? ScsEps;
+
+    /// <summary>
+    /// Wall-clock ceiling per solve, seconds; null or 0 means none. Applies to both
+    /// backends, and is what keeps one pathological state from blocking the sim thread
+    /// indefinitely. Note a SEARCH is tens of solves, so the worst case it bounds is
+    /// that multiple, not this.
+    /// </summary>
+    public static double? SolveTimeLimitS;
 
     public static GfoldTrajectory SolveMinError(GfoldParams p, double tf, int nodes,
                                                 bool verbose = false, GfoldOptions? options = null)
@@ -233,7 +246,7 @@ public static class GfoldPlanner
 
         // Nondimensionalize: solve in units where lengths, velocities and
         // accelerations are all O(1) (length scale ~ the problem size, time
-        // scale such that gravity is ~1). ECOS's interior point breaks down
+        // scale such that gravity is ~1). An interior-point solver breaks down
         // ("unreliable search direction") on the raw SI problem — metre-scale
         // coordinates against unit-scale ln-mass rows condition the KKT system
         // badly — and returns visibly suboptimal iterates. In scaled units it
@@ -531,8 +544,9 @@ public static class GfoldPlanner
         };
 
         ConicResult result = Backend == ConicBackend.Scs
-            ? ScsSolver.Solve(problem, verbose, eps: ScsEps ?? ScsSolver.DefaultEps)
-            : EcosSolver.Solve(problem, verbose);
+            ? ScsSolver.Solve(problem, verbose, eps: ScsEps ?? ScsSolver.DefaultEps,
+                              timeLimitS: SolveTimeLimitS ?? 0.0)
+            : ClarabelSolver.Solve(problem, verbose, timeLimitS: SolveTimeLimitS ?? 0.0);
         return Extract(result, N, dtPhys, P.Rf, lenScale, velScale, accScale);
     }
 

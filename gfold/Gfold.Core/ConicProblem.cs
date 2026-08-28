@@ -9,12 +9,13 @@ namespace Gfold;
 ///
 /// where K = R+^l x SOC(q[0]) x SOC(q[1]) x ... (no exponential cones).
 ///
-/// This is ECOS's native input shape and is kept as the assembly target because it
-/// separates equalities from cone rows, which is how <see cref="GfoldPlanner"/> builds
-/// them. SCS wants the two stacked into a single matrix with the equalities expressed
-/// as a leading ZERO cone; <see cref="ScsSolver"/> does that conversion, which is a
-/// concatenation and nothing more — the algebra is identical either way, since a zero
-/// cone forces s = 0 and leaves A x = b.
+/// The SPLIT form is kept as the assembly target because it is how
+/// <see cref="GfoldPlanner"/> naturally builds the problem — equalities and cone rows
+/// are different constraints and are emitted separately. Both solvers want the two
+/// stacked into a single matrix with the equalities expressed as a leading ZERO cone;
+/// <see cref="SparseCcs.VStack"/> does that conversion, which is a concatenation and
+/// nothing more — the algebra is identical either way, since a zero cone forces s = 0
+/// and leaves A x = b.
 /// </summary>
 public sealed class ConicProblem
 {
@@ -34,11 +35,16 @@ public sealed class ConicProblem
 /// <summary>
 /// Solver outcome, normalised across backends.
 ///
-/// The values are ECOS's exit codes because this started as ECOS's own enum, and
-/// keeping them means the ECOS path needs no mapping at all; <see cref="ScsSolver"/>
-/// translates SCS's status onto the nearest member. The distinctions that matter
-/// downstream are only "usable", "infeasible" and "failed" — see
-/// <see cref="ConicResult.IsOptimal"/> and GfoldPlanner.IsUsable.
+/// The numeric values are historical and arbitrary — each backend maps its own status
+/// onto the nearest member. The distinctions that matter downstream are only "usable",
+/// "infeasible" and "failed"; see <see cref="ConicResult.IsOptimal"/> and
+/// GfoldPlanner.IsUsable.
+///
+/// OptimalInaccurate is a RECOVERY status, not a gentler convergence: both solvers
+/// reach it by stopping early — numerical trouble, no further progress, or out of
+/// iterations/time — and finding that the best iterate they held still met a RELAXED
+/// tolerance set (Clarabel: check_convergence_almost; SCS: its inaccurate exits). It is
+/// counted as usable deliberately, but it means the residuals are looser than nominal.
 /// </summary>
 public enum ConicStatus
 {

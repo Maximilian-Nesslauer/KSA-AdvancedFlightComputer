@@ -8,15 +8,25 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The native solver travels with the managed library: anything that
-         references Gfold.Core gets ecos.dll in its output directory, and the
-         DllImport resolver loads it from next to Gfold.Core.dll. -->
-    <None Include="..\native\ecos.dll" Link="ecos.dll" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The native solvers travel with the managed library: anything that references
+         Gfold.Core gets them in its output directory, and the DllImport resolver loads
+         them from next to Gfold.Core.dll. -->
     <!-- SCS lives with the 6-DOF solver that vendored it (scvx/scs, built by
          scvx/build-scs.ps1). Gfold.Core does not reference Scvx.Core - it only needs
          the same native library - so the DLL is picked up by path. Both projects
          copying it into a shared output directory is harmless: it is the same file. -->
     <None Include="..\..\scvx\native\scs.dll" Link="scs.dll" CopyToOutputDirectory="PreserveNewest" />
+    <!-- Clarabel, built by gfold/build-clarabel.ps1 (needs a Rust toolchain; see the
+         script for why cargo alone is enough and CMake is not involved). Conditioned
+         because NO native is checked in - both gfold/native/ and scvx/native/ are
+         gitignored and produced by their build scripts - and a missing file would
+         otherwise fail the build outright. scs.dll is NOT conditioned, deliberately:
+         it is required, so its absence should fail loudly and point at build-scs.ps1.
+         Clarabel's is optional only in the sense that a build can succeed without it;
+         selecting that backend then raises DllNotFoundException at the first solve. -->
+    <None Include="..\native\clarabel_c.dll" Link="clarabel_c.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\native\clarabel_c.dll')" />
   </ItemGroup>
 
 </Project>

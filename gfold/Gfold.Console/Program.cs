@@ -75,7 +75,7 @@ if (args.Contains("--stress"))
 // then picks between neighbouring tf values on fuel alone.
 if (args.Contains("--ab"))
 {
-    Console.WriteLine($"ECOS {EcosSolver.NativeVersion}   SCS {ScsSolver.NativeVersion}");
+    Console.WriteLine($"Clarabel {ClarabelSolver.NativeVersion}   SCS {ScsSolver.NativeVersion}");
     Console.WriteLine($"case: Mars static, tf={tf}s N={nodes}");
     Console.WriteLine();
 
@@ -102,11 +102,11 @@ if (args.Contains("--ab"))
         a.Zip(b, (x, y) => x.Zip(y, (u, v) => Math.Abs(u - v)).Max()).Max();
 
     // --- Problem 3, then Problem 4 pinned to each backend's own P3 answer ---
-    var e3 = Run(ConicBackend.Ecos, () => GfoldPlanner.SolveMinError(abP, tf, nodes));
+    var e3 = Run(ConicBackend.Clarabel, () => GfoldPlanner.SolveMinError(abP, tf, nodes));
     var s3 = Run(ConicBackend.Scs, () => GfoldPlanner.SolveMinError(abP, tf, nodes));
 
     Console.WriteLine("P3 (minimum landing error)");
-    Console.WriteLine($"  ECOS  [{e3.Traj.Status,-18}] {e3.Ms,6} ms  {e3.Traj.Iterations,7} it  " +
+    Console.WriteLine($"  CLBL  [{e3.Traj.Status,-18}] {e3.Ms,6} ms  {e3.Traj.Iterations,7} it  " +
                       $"err {e3.Traj.LandingErrorNorm,8:F3} m  fuel {e3.Traj.FuelUsed,7:F2} kg");
     Console.WriteLine($"  SCS   [{s3.Traj.Status,-18}] {s3.Ms,6} ms  {s3.Traj.Iterations,7} it  " +
                       $"err {s3.Traj.LandingErrorNorm,8:F3} m  fuel {s3.Traj.FuelUsed,7:F2} kg");
@@ -118,11 +118,12 @@ if (args.Contains("--ab"))
                           $"landing {Dist(e3.Traj.LandingPoint, s3.Traj.LandingPoint):E2} m");
     }
 
-    var e4 = Run(ConicBackend.Ecos, () => GfoldPlanner.SolveMinFuel(abP, tf, nodes, e3.Traj.LandingPoint));
+
+    var e4 = Run(ConicBackend.Clarabel, () => GfoldPlanner.SolveMinFuel(abP, tf, nodes, e3.Traj.LandingPoint));
     var s4 = Run(ConicBackend.Scs, () => GfoldPlanner.SolveMinFuel(abP, tf, nodes, e3.Traj.LandingPoint));
     Console.WriteLine();
-    Console.WriteLine("P4 (minimum fuel, both pinned to ECOS's P3 landing point)");
-    Console.WriteLine($"  ECOS  [{e4.Traj.Status,-18}] {e4.Ms,6} ms  {e4.Traj.Iterations,7} it  " +
+    Console.WriteLine("P4 (minimum fuel, both pinned to Clarabel's P3 landing point)");
+    Console.WriteLine($"  CLBL  [{e4.Traj.Status,-18}] {e4.Ms,6} ms  {e4.Traj.Iterations,7} it  " +
                       $"fuel {e4.Traj.FuelUsed,7:F2} kg");
     Console.WriteLine($"  SCS   [{s4.Traj.Status,-18}] {s4.Ms,6} ms  {s4.Traj.Iterations,7} it  " +
                       $"fuel {s4.Traj.FuelUsed,7:F2} kg");
@@ -133,7 +134,7 @@ if (args.Contains("--ab"))
     // --- tolerance sweep: what does accuracy cost, and where does it stop buying? ---
     Console.WriteLine();
     Console.WriteLine("SCS tolerance sweep (P4, pinned)");
-    Console.WriteLine("      eps    status                 ms      iters      fuel kg   d(fuel) vs ECOS");
+    Console.WriteLine("      eps    status                 ms      iters      fuel kg   d(fuel) vs IPM");
     foreach (double eps in new[] { 1e-4, 1e-5, 1e-6, 1e-7, 1e-8, 1e-9 })
     {
         GfoldPlanner.Backend = ConicBackend.Scs;
@@ -148,6 +149,7 @@ if (args.Contains("--ab"))
     GfoldPlanner.ScsEps = null;
 
     // --- the decision-level test: does the tf search land in the same place? ---
+
     Console.WriteLine();
     Console.WriteLine("SearchMinFuel (the test that actually matters)");
     // Swept for SCS as well, because the search is where tolerance stops being an
@@ -155,13 +157,13 @@ if (args.Contains("--ab"))
     // clearing a 10 m landing tolerance and on the solve being usable at all, so a
     // tolerance tight enough to truncate rejects EVERY tf and the search reports no
     // feasible time of flight — a total failure produced purely by a settings choice.
-    GfoldPlanner.Backend = ConicBackend.Ecos;
+    GfoldPlanner.Backend = ConicBackend.Clarabel;
     var ew = System.Diagnostics.Stopwatch.StartNew();
     GfoldPlanner.SearchResult? eRes = GfoldPlanner.SearchMinFuel(abP, nodes);
     ew.Stop();
     Console.WriteLine(eRes == null
-        ? $"  ECOS            -> no feasible tf ({ew.ElapsedMilliseconds} ms)"
-        : $"  ECOS            -> tf {eRes.TimeOfFlight,6:F2} s  fuel {eRes.FuelUsed,8:F2} kg  " +
+        ? $"  CLARABEL        -> no feasible tf ({ew.ElapsedMilliseconds} ms)"
+        : $"  CLARABEL        -> tf {eRes.TimeOfFlight,6:F2} s  fuel {eRes.FuelUsed,8:F2} kg  " +
           $"{eRes.Solves,3} solves  {ew.ElapsedMilliseconds,6} ms");
 
     GfoldPlanner.Backend = ConicBackend.Scs;
@@ -181,7 +183,163 @@ if (args.Contains("--ab"))
     }
     GfoldPlanner.ScsEps = null;
 
-    GfoldPlanner.Backend = ConicBackend.Ecos;
+
+    GfoldPlanner.Backend = ConicBackend.Clarabel;
+    return 0;
+}
+
+// --clarabel-layout: print the marshalled struct layouts for the Clarabel binding.
+//
+// Runnable WITHOUT clarabel_c.dll — Marshal.SizeOf/OffsetOf are pure reflection over
+// the managed declarations and load nothing native. That matters, because struct layout
+// is the part of a P/Invoke binding that fails SILENTLY, and this is the only check on
+// it available before the DLL exists. Diff the output against
+// gfold/clarabel/include/c/*.h by hand.
+// --clarabel-smoke: solve a problem whose answer is known by hand, and print the raw
+// solution struct. Isolates "is the binding wired correctly" from "is the G-FOLD
+// problem being built correctly" — with a real G-FOLD problem a wrong answer could be
+// either, and this one cannot.
+//
+//   minimize  x
+//   s.t.      x >= 1      written as  -x + s = -1,  s >= 0
+//
+// so x* = 1 and the objective is 1.
+if (args.Contains("--clarabel-smoke"))
+{
+    var smokeG = new SparseCcs(1, 1);
+    smokeG.Add(0, 0, -1.0);
+    ConicResult r = ClarabelSolver.Solve(
+        new ConicProblem { C = [1.0], G = smokeG, H = [-1.0], PositiveOrthantDim = 1, SocDims = [] },
+        out ClarabelSolver.ClarabelSolveInfo si, verbose: args.Contains("--verbose"));
+    Console.WriteLine($"status   {r.Status}  (clarabel: {si.Status})");
+    Console.WriteLine($"iters    {si.Iterations}");
+    Console.WriteLine($"x        [{string.Join(", ", r.X.Select(v => v.ToString("G6")))}]   expected [1]");
+    Console.WriteLine($"obj      {r.PrimalCost:G6}   expected 1");
+    Console.WriteLine($"resid    prim {si.ResPrimal:E2}  dual {si.ResDual:E2}");
+    bool smokeOk = r.IsOptimal && r.X.Length == 1 && Math.Abs(r.X[0] - 1.0) < 1e-6;
+    Console.WriteLine(smokeOk ? "SMOKE TEST PASSED" : "SMOKE TEST FAILED");
+    return smokeOk ? 0 : 1;
+}
+
+if (args.Contains("--clarabel-layout"))
+{
+    Console.WriteLine(ClarabelSolver.DumpLayouts());
+    Console.WriteLine("--- values returned by clarabel_DefaultSettings_f64_default() ---");
+    try { Console.WriteLine(ClarabelSolver.DumpDefaultSettings()); }
+    catch (Exception e) { Console.WriteLine("(needs clarabel_c.dll) " + e.Message); }
+    return 0;
+}
+
+// --ab-rt: the A/B at the shape the MOD actually solves, which is not the shape --ab
+// measures. In flight the planner runs on the SIM THREAD, synchronously, every 0.25 s,
+// at GfoldNodes = 50 with GfoldOptions.Descent — so the question is not "how close is
+// SCS" but "does a solve fit in a frame", and the answer at N=120 offline says nothing
+// about it. Both in-flight call shapes are timed separately:
+//
+//   cadence  - one SolveMinFuel at the remaining flight time (the common path)
+//   fallback - a bracketed SearchMinFuel (when the cadence solve fails or there is no
+//              plan yet), which is tens of solves and the one that can stall a frame
+if (args.Contains("--ab-rt"))
+{
+    Console.WriteLine($"Clarabel {ClarabelSolver.NativeVersion}   SCS {ScsSolver.NativeVersion}");
+    Console.WriteLine($"in-flight shape: N={nodes}, GfoldOptions.Descent, "
+                    + $"solve cadence 0.25 s on the sim thread");
+    Console.WriteLine("  (pass node count as the SECOND positional arg: --ab-rt 0 50)");
+    Console.WriteLine();
+
+    var rtP = new GfoldParams();
+    GfoldOptions rtOpt = GfoldOptions.Descent;
+    const int reps = 5;
+
+    // Derive a FEASIBLE case to time, rather than picking a flight time and hoping.
+    // A tf the vehicle cannot fly returns PrimalInfeasible in a fraction of the time a
+    // real solve takes, so timing one measures how fast each solver says "no" — which
+    // is not the number in question.
+    GfoldPlanner.Backend = ConicBackend.Clarabel;
+    GfoldPlanner.SearchResult? seed = GfoldPlanner.SearchMinFuel(rtP, nodes, options: rtOpt);
+    if (seed == null)
+        return Fail("no feasible tf for the real-time case");
+    double rtTf = seed.TimeOfFlight;
+    double[] rtLanding = seed.Trajectory.LandingPoint;
+    Console.WriteLine($"feasible case from a Clarabel search: tf {rtTf:F2} s, fuel {seed.FuelUsed:F2} kg");
+    Console.WriteLine();
+
+    static (double Mean, double Worst) Time(int reps, Action body)
+    {
+        double total = 0, worst = 0;
+        for (int i = 0; i < reps; i++)
+        {
+            var w = System.Diagnostics.Stopwatch.StartNew();
+            body();
+            w.Stop();
+            double ms = w.Elapsed.TotalMilliseconds;
+            total += ms;
+            worst = Math.Max(worst, ms);
+        }
+        return (total / reps, worst);
+    }
+
+    Console.WriteLine("cadence path: one SolveMinFuel at the remaining tf");
+    Console.WriteLine("  backend          mean ms   worst ms   status            fuel kg");
+    foreach ((string label, ConicBackend backend, double? eps) in new (string, ConicBackend, double?)[]
+             {                ("SCS 1e-4", ConicBackend.Scs, 1e-4),
+               ("SCS 1e-5", ConicBackend.Scs, 1e-5),
+               ("SCS 1e-6", ConicBackend.Scs, 1e-6),
+               ("Clarabel", ConicBackend.Clarabel, null) })
+    {
+        GfoldPlanner.Backend = backend;
+        GfoldPlanner.ScsEps = eps;
+        GfoldTrajectory? last = null;
+        (double mean, double worst) = Time(reps, () =>
+            last = GfoldPlanner.SolveMinFuel(rtP, rtTf, nodes, rtLanding, options: rtOpt));
+        Console.WriteLine($"  {label,-14} {mean,9:F1} {worst,10:F1}   {last!.Status,-16}  {last.FuelUsed,8:F2}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("fallback path: bracketed SearchMinFuel (this is what can stall a frame)");
+    Console.WriteLine("  backend          mean ms   worst ms   tf s     fuel kg   solves");
+    foreach ((string label, ConicBackend backend, double? eps) in new (string, ConicBackend, double?)[]
+             {                ("SCS 1e-4", ConicBackend.Scs, 1e-4),
+               ("SCS 1e-5", ConicBackend.Scs, 1e-5),
+               ("Clarabel", ConicBackend.Clarabel, null) })
+    {
+        GfoldPlanner.Backend = backend;
+        GfoldPlanner.ScsEps = eps;
+        GfoldPlanner.SearchResult? last = null;
+        (double mean, double worst) = Time(reps, () =>
+            last = GfoldPlanner.SearchMinFuel(rtP, nodes, tfLo: rtTf * 0.6, tfHi: rtTf * 1.6,
+                                              options: rtOpt));
+        Console.WriteLine(last == null
+            ? $"  {label,-14} {mean,9:F1} {worst,10:F1}   no feasible tf"
+            : $"  {label,-14} {mean,9:F1} {worst,10:F1}   {last.TimeOfFlight,5:F2}  {last.FuelUsed,9:F2}   {last.Solves,4}");
+    }
+
+    // The freeze guard, exercised. eps 1e-6 at this size takes seconds and truncates
+    // on iterations; with a time limit it must come back inside the budget AND report
+    // itself unusable, because a time-limited ADMM iterate is not a solution. If this
+    // ever prints Optimal, the mapping in ScsSolver.MapStatus has regressed and the
+    // caller will fly a half-converged plan.
+    Console.WriteLine();
+    Console.WriteLine("time-limit guard (the fix for the sim-thread freeze)");
+    Console.WriteLine("  limit      eps      ms   status            usable");
+    GfoldPlanner.Backend = ConicBackend.Scs;
+    foreach ((double limit, double eps) in new[] { (0.0, 1e-6), (0.040, 1e-6), (0.040, 1e-4) })
+    {
+        GfoldPlanner.ScsEps = eps;
+        GfoldPlanner.SolveTimeLimitS = limit > 0 ? limit : null;
+        var w = System.Diagnostics.Stopwatch.StartNew();
+        GfoldTrajectory t = GfoldPlanner.SolveMinFuel(rtP, rtTf, nodes, rtLanding, options: rtOpt);
+        w.Stop();
+        Console.WriteLine($"  {(limit > 0 ? $"{limit * 1000:F0} ms" : "none"),-8} {eps,7:E0} {w.ElapsedMilliseconds,7}   " +
+                          $"{t.Status,-16}  {(t.IsUsable ? "yes" : "no")}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("budget: the sim step this runs on has ~16 ms at 60 Hz. A solve longer");
+    Console.WriteLine("than that stalls the frame it lands on, once every 0.25 s.");
+
+    GfoldPlanner.Backend = ConicBackend.Clarabel;
+    GfoldPlanner.ScsEps = null;
     return 0;
 }
 
@@ -239,7 +397,7 @@ if (args.Contains("--realtime"))
 if (args.Contains("--search"))
 {
     var sp = new GfoldParams();
-    Console.WriteLine($"ECOS {EcosSolver.NativeVersion} | tf search in [{sp.TfMin:F1}, {sp.TfMax:F1}] s, N={nodes}");
+    Console.WriteLine($"Clarabel {ClarabelSolver.NativeVersion} | tf search in [{sp.TfMin:F1}, {sp.TfMax:F1}] s, N={nodes}");
     var ssw = System.Diagnostics.Stopwatch.StartNew();
     GfoldPlanner.SearchResult? best = GfoldPlanner.SearchMinFuel(sp, nodes);
     ssw.Stop();
@@ -256,7 +414,7 @@ if (args.Contains("--search"))
 }
 
 var p = new GfoldParams();
-Console.WriteLine($"ECOS {EcosSolver.NativeVersion} | tf={tf}s N={nodes} dt={tf / (nodes - 1):F3}s");
+Console.WriteLine($"Clarabel {ClarabelSolver.NativeVersion} | tf={tf}s N={nodes} dt={tf / (nodes - 1):F3}s");
 Console.WriteLine($"tf bounds: [{p.TfMin:F1}, {p.TfMax:F1}] s | wet {p.WetMass} kg dry {p.DryMass} kg");
 Console.WriteLine();
 
@@ -435,6 +593,31 @@ static bool VStackSelfTest()
     return true;
 }
 
+/// <summary>
+/// Is clarabel_c.dll present? Probed by attempting a solve of a trivial problem and
+/// catching the load failure, because the DLL is deliberately NOT checked in — it has
+/// to be built locally with a Rust toolchain — and the A/B has to degrade to a note
+/// rather than a crash for everyone who has not built it.
+/// </summary>
+static bool HasClarabel()
+{
+    if (ClarabelProbe.Result.HasValue) return ClarabelProbe.Result.Value;
+    try
+    {
+        // A one-variable, one-row LP: minimize x subject to x >= 0.
+        var g = new SparseCcs(1, 1);
+        g.Add(0, 0, -1.0);
+        ClarabelSolver.Solve(new ConicProblem
+        {
+            C = [1.0], G = g, H = [0.0], PositiveOrthantDim = 1, SocDims = [],
+        });
+        ClarabelProbe.Result = true;
+    }
+    catch (DllNotFoundException) { ClarabelProbe.Result = false; }
+    catch (EntryPointNotFoundException) { ClarabelProbe.Result = false; }
+    return ClarabelProbe.Result.Value;
+}
+
 static int Fail(string why)
 {
     Console.WriteLine($"FAIL: {why}");
@@ -497,4 +680,10 @@ static int CheckCsv(string path, double tf, GfoldParams p)
     return 0;
 
     static double D(string s) => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>Cache for HasClarabel — a static local function cannot close over a top-level local.</summary>
+static class ClarabelProbe
+{
+    internal static bool? Result;
 }

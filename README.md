@@ -74,13 +74,19 @@ Required only to build the mod from source. Targets **.NET 10**.
 
 ## License
 
-GPLv3 — see [`LICENSE`](LICENSE). This is required because the mod links the vendored
-ECOS solver, which is GPLv3; the whole work is therefore distributed under GPLv3.
+MIT — see [`LICENSE`](LICENSE), with vendored third-party attributions in
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md).
+
+Versions up to and including **v0.3.1** linked ECOS, which is GPLv3, and were therefore
+distributed under GPLv3 as a whole. ECOS has been replaced by Clarabel (Apache-2.0), and
+every remaining dependency is permissive, so the project is MIT from v0.4.0 onward. The
+older releases remain available under GPLv3.
 
 ## Credits
 
-- [ECOS](https://github.com/embotech/ecos) (embotech) — the conic solver, GPLv3.
-- [SCS](https://github.com/cvxgrp/scs) - splitting conic solver
+- [Clarabel](https://github.com/oxfordcontrol/Clarabel.rs) (Goulart & Chen) — the
+  interior-point conic solver behind G-FOLD, Apache-2.0.
+- [SCS](https://github.com/cvxgrp/scs) - splitting conic solver, MIT
 - [PEGAS](https://github.com/Noiredd/PEGAS) by Noiredd — reference and foundation for
   the UPFG implementation.
 - G-FOLD — Açıkmeşe & Blackmore, lossless convexification of powered-descent guidance.

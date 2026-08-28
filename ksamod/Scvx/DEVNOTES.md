@@ -10,7 +10,7 @@ and finding out.
 | Reference maths | [`scvx/README.md`](../../scvx/README.md), `scvx/python_ref/` | The algorithm, in JAX, as a spec |
 | Solver | `scvx/Scvx.Core/` | SCvx loop, subproblem assembly, SCS bindings |
 | **Bridge (here)** | `ksamod/Scvx/` | Frames, vehicle measurement, MPC, actuator commands |
-| Host | `ksamod/PoweredGuidance6Dof.cs` | UI, stepping, telemetry, hand-off |
+| Host | `ksamod/Guidance/SixDof.cs` | UI, stepping, telemetry, hand-off |
 
 **Files here**
 

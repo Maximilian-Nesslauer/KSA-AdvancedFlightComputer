@@ -1,5 +1,0 @@
-﻿Vendored from https://github.com/embotech/ecos
-branch: develop
-commit: 5d3aa62ef437e41c0314b4a16427d5d06a90b7e6
-ECOS version: 2.0.10
-License: GPLv3 (see COPYING)

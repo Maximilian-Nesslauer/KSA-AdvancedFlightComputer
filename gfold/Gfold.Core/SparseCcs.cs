@@ -1,7 +1,7 @@
 namespace Gfold;
 
-// Builds a sparse matrix in the column-compressed storage (CCS) format ECOS
-// expects, from arbitrary-order (row, col, value) triplets. Duplicate entries
+// Builds a sparse matrix in the column-compressed storage (CCS) format both solvers
+// expect, from arbitrary-order (row, col, value) triplets. Duplicate entries
 // at the same position are summed; explicit zeros are kept (harmless).
 public sealed class SparseCcs
 {
@@ -30,8 +30,8 @@ public sealed class SparseCcs
     /// Stack two matrices vertically: [top; bottom], with bottom's rows shifted down
     /// by top.Rows. Both must have the same column count.
     ///
-    /// This is how the split ECOS form becomes SCS's single constraint matrix — the
-    /// equality block on top, the cone block beneath — and it is the one step of the
+    /// This is how the split assembly form becomes the solvers' single constraint
+    /// matrix — the equality block on top, the cone block beneath — and it is the one step of the
     /// conversion that is easy to get quietly wrong, because CCS is COLUMN-major: a
     /// vertical stack is not a concatenation of the two arrays but an interleave
     /// within every column. Working in triplets sidesteps that entirely; Build()
@@ -62,7 +62,7 @@ public sealed class SparseCcs
     }
 
     // (values, column pointers of length Cols+1, row indices), rows sorted
-    // ascending within each column as both ECOS and SCS require.
+    // ascending within each column as both solvers require.
     public (double[] Pr, int[] Jc, int[] Ir) Build()
     {
         var pr = new List<double>();

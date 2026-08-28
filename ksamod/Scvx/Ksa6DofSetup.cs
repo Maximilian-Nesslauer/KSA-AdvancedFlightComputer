@@ -429,7 +429,7 @@ public static class Ksa6DofSetup
         // constraint failure.
         //
         // Gfold learned this already (GfoldPlanner: "length scale ~ the problem size,
-        // time scale such that gravity is ~1... ECOS breaks down on the raw SI
+        // time scale such that gravity is ~1... an interior-point solver breaks down on the raw SI
         // problem"). Same lesson, applied here.
         //
         // One length scale for all three position axes rather than per-axis: it is

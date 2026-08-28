@@ -11,7 +11,7 @@ namespace Gfold;
 /// resolver. A second [ModuleInitializer] registering its own is an
 /// InvalidOperationException at assembly load — before Main, with a
 /// TypeInitializationException for &lt;Module&gt; as the only clue — which is exactly
-/// what adding ScsNative alongside EcosNative did, and how this file came to exist.
+/// what adding a second native binding once did, and how this file came to exist.
 /// (Scvx.Core has the same file for the same reason.) Add new natives to the switch,
 /// never as a new initializer.
 ///
@@ -30,8 +30,8 @@ internal static class NativeLibraries
         {
             string? fileName = name switch
             {
-                "ecos" => "ecos.dll",
                 "scs" => "scs.dll",
+                "clarabel_c" => "clarabel_c.dll",
                 _ => null,
             };
             if (fileName == null)
