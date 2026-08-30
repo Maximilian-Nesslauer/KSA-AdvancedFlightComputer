@@ -6,7 +6,7 @@
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>PoweredGuidance</AssemblyName>
-    <Version>0.3.1</Version>
+    <Version>0.4.0</Version>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <!-- Path to the installed game. Override on the command line with -p:KsaDir=... -->
     <KsaDir Condition="'$(KsaDir)' == ''">C:\Program Files\Kitten Space Agency</KsaDir>
@@ -23,17 +23,19 @@
   </ItemGroup>
 
   <ItemGroup>
-    <!-- Our convex-optimization terminal-guidance library + its native ecos.dll. The
-         managed DLL comes across the project reference; ecos.dll is a None copy
-         (native, doesn't flow across references). Both are shipped into the mod
-         folder by the CopyToMods target below. -->
+    <!-- Our convex-optimization terminal-guidance library. The managed DLL comes
+         across the project reference; its native solvers are None copies made by
+         Gfold.Core itself and are shipped on by CopyToMods below. -->
     <ProjectReference Include="..\gfold\Gfold.Core\Gfold.Core.csproj" />
-    <None Include="..\gfold\native\ecos.dll" CopyToOutputDirectory="PreserveNewest" />
 
     <!-- 6-DOF successive-convexification guidance. Like Gfold.Core it references
          no game assembly, so the solve stays pure computation that can run off
          the main thread. Currently dynamics + AD only; nothing calls it yet. -->
     <ProjectReference Include="..\scvx\Scvx.Core\Scvx.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ThirdPartyLicense Include="licenses\*.txt" />
   </ItemGroup>
 
   <ItemGroup>
@@ -66,7 +68,7 @@
   </ItemGroup>
 
   <!-- After build, install into the game's mods folder: the mod DLL, the manifest,
-       and our private deps (managed Gfold.Core + native ecos.dll). StarMap discovers
+       and our private deps (managed Gfold.Core + its native solvers). StarMap discovers
        the folder via mod.toml and loads PoweredGuidance as the EntryAssembly. -->
   <Target Name="CopyToMods" AfterTargets="Build">
     <MakeDir Directories="$(ModDir)" />
@@ -78,17 +80,20 @@
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ModDir)" />
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
-    <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ModDir)" />
-    <!-- Scvx.Core P/Invokes scs.dll; shipping it without would fail at the first
-         SCS call with a DllNotFoundException, not at load. (ecos.dll above is for
-         Gfold.Core, which still uses it — Scvx's ECOS port was removed.) -->
+    <!-- Both Scvx.Core and Gfold.Core P/Invoke scs.dll. Shipping without it would fail
+         at the first SCS call with a DllNotFoundException, not at load. -->
     <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ModDir)" />
+    <!-- Clarabel: interior point like ECOS, Apache-2.0 like nothing else here, and the
+         descent's default solver. Conditioned because it is built on demand rather
+         than checked in - see gfold/build-clarabel.ps1. -->
+    <Copy SourceFiles="$(OutputPath)clarabel_c.dll" DestinationFolder="$(ModDir)"
+          Condition="Exists('$(OutputPath)clarabel_c.dll')" />
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
   </Target>
 
   <!-- Release builds also produce a distributable zip: a top-level PoweredGuidance\ folder the
-       user extracts into their game's mods\ directory. LICENSE is bundled because the
-       shipped ecos.dll is GPLv3 (and so is this work). -->
+       user extracts into their game's mods\ directory. LICENSE (MIT) is bundled along
+       with THIRD-PARTY-NOTICES for the vendored solvers' attribution requirements. -->
   <Target Name="PackageRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
       <ReleaseDir>$(OutputPath)release\$(ModName)\</ReleaseDir>
@@ -100,9 +105,17 @@
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ReleaseDir)" />
-    <Copy SourceFiles="$(OutputPath)ecos.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)clarabel_c.dll" DestinationFolder="$(ReleaseDir)"
+          Condition="Exists('$(OutputPath)clarabel_c.dll')" />
     <Copy SourceFiles="..\LICENSE" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="..\THIRD-PARTY-NOTICES.md" DestinationFolder="$(ReleaseDir)" />
+    <!-- The vendored solvers' own licence texts, shipped ALONGSIDE the binaries that
+         carry their terms. Apache-2.0 s.4(a) requires giving recipients a copy of the
+         licence, and MIT and BSD-3 both require the notice to travel with the copy;
+         THIRD-PARTY-NOTICES.md attributes them but pointing at a source path is not
+         the same as including the text in a binary package. -->
+    <Copy SourceFiles="@(ThirdPartyLicense)" DestinationFolder="$(ReleaseDir)licenses\" />
     <!-- The changelog lives at the REPO ROOT, not beside the csproj: it covers the
          whole of navbox, of which this mod is one part. -->
     <Copy SourceFiles="..\CHANGELOG.md" DestinationFolder="$(ReleaseDir)" />

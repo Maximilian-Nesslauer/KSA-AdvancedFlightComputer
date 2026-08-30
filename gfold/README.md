@@ -2,7 +2,7 @@
 
 G-FOLD (convex powered-descent guidance, Açıkmeşe/Blackmore) in C#, intended as
 the terminal-guidance trajectory generator for the KSA mod (`../ksamod`). The
-mod consumes this as compiled artifacts only — `Gfold.Core.dll` + `ecos.dll`
+mod consumes this as compiled artifacts only — `Gfold.Core.dll` + `clarabel_c.dll`
 dropped next to the mod DLL — so none of the optimization machinery leaks into
 the mod project.
 
@@ -24,7 +24,7 @@ where $`x \in \mathbb{R}^n`$ is the decision vector and there are $`k`$ conic
 constraints. Each one confines $`(A_i x + b_i,\ c_i^\top x + d_i)`$ to a
 second-order cone $`\mathcal{Q} = \lbrace (y, \tau) : \lVert y \rVert_2 \le \tau \rbrace`$.
 
-The problem is assembled and then solved by the ECOS solver; its output is the
+The problem is assembled and then solved by Clarabel; its output is the
 decision vector $`x`$, which stacks every per-node variable — position, velocity,
 thrust acceleration $`\mathbf{u}`$, log-mass $`z`$, and slack $`\sigma`$ — into one
 vector (see Notation).
@@ -182,10 +182,10 @@ are not the same kind of constraint:
   affine constraint to *make it convex*.
 - **Lower** $`\sigma \ge \rho_1 e^{-z}`$ is the region *above* a convex curve (an
   epigraph) — already **convex**, so it needs no fixing for convexity. It is
-  expanded only because it is an *exponential-cone* shape, and ECOS handles only
+  expanded only because it is an *exponential-cone* shape, and the solvers here take only
   linear and second-order cones. A second-order Taylor cut,
   $`\sigma \ge \mu_{1,n}(1 - w + \tfrac{1}{2} w^2)`$ with $`w = z - z_{0,n} \ge 0`$,
-  turns it into a quadratic — a rotated second-order cone ECOS *can* take.
+  turns it into a quadratic — a rotated second-order cone they *can* take.
   Truncating the alternating series after the $`+\tfrac{1}{2}w^2`$ term
   over-estimates $`e^{-w}`$, so the cut stays conservative (never under-thrusts).
   This bound is optional (`EnforceLowerThrust`).
@@ -254,7 +254,7 @@ dynamics that link one node to another.
 ### What GfoldPlanner hands the solver
 
 `GfoldPlanner.Solve` turns the formulation above into the arrays
-`EcosSolver.Solve` expects — an objective `c`, equality matrices `A, b`,
+`ConicProblem` carries — an objective `c`, equality matrices `A, b`,
 inequality matrices `G, h`, and the cone-size declarations `PositiveOrthantDim`
 and `SocDims` — then reads the answer back. Here is what each piece is and where
 it comes from.
@@ -334,11 +334,11 @@ sequence.
 
 **Sparse format and the call.** `A` and `G` are accumulated as
 `(row, col, value)` triplets and converted to compressed-column form by
-`SparseCcs` (the layout the native solver reads). Arrays are pinned across the
-P/Invoke boundary because ECOS keeps the caller's pointers alive from setup
-through cleanup.
+`SparseCcs` (the layout the native solvers read). Arrays are pinned across the
+P/Invoke boundary for the duration of the call; note Clarabel's index arrays are
+`uintptr_t`, so `ClarabelSolver` widens the 32-bit ones `SparseCcs` produces.
 
-**Reading the result.** `EcosSolver.Solve` returns the optimal `x`; `Extract`
+**Reading the result.** the solver returns the optimal `x`; `Extract`
 pulls each block out by the same indices and converts back to physical quantities
 (`m = e^z`, and un-scaling — see below).
 
@@ -572,37 +572,127 @@ altitude row `IX(4,0):p | r_fx`, and append a 4-row `SOC(4)` epigraph block
 
 ## Layout
 
-- `ecos/` — vendored ECOS conic solver sources (embotech/ecos, develop branch;
-  see `ecos/ECOS-VERSION.txt` for the pinned commit). GPLv3.
-- `build-ecos.ps1` — compiles `native/ecos.dll` with Zig as a drop-in C
-  compiler (`zig cc`, no MSVC needed). Expects `zig` on PATH; pass
-  `-ZigExe <path>` to point at a portable copy.
+- `clarabel/` — vendored Clarabel sources (oxfordcontrol/Clarabel.cpp plus its
+  Clarabel.rs submodule). Apache-2.0.
+- `build-clarabel.ps1` — builds `native/clarabel_c.dll` with cargo. Needs a Rust
+  toolchain; no CMake (see the script for why).
 - `native/` — build output (gitignored). Rebuild with the script.
-- `shim/ecos_shim.c` — accessors for `pwork` internals compiled into
-  ecos.dll, so managed code never depends on the struct layout.
-- `Gfold.Core/` — the managed library: `EcosSolver.Solve(EcosProblem)`
+- `Gfold.Core/` — the managed library: `ClarabelSolver.Solve(ConicProblem)`
   (standard conic form: min c'x s.t. Ax=b, Gx+s=h, s in R+^l x SOC(q...)),
   `SparseCcs` triplet->CCS builder, P/Invoke bindings with pinned-array
-  lifetime management (ECOS retains caller pointers from setup to cleanup).
+  lifetime management.
 - `Gfold.Console/` — runs the P3 -> P4 flow on the reference "Numerical
   Example 1" case, verifies the result physically (dynamics replay, bounds),
   writes CSVs. `--check <csv>` audits any trajectory against the constraint
-  set; `--verbose` shows ECOS iterations.
+  set; `--ab` compares the two backends; `--ab-rt` times them at the shape the
+  mod flies; `--clarabel-smoke` and `--clarabel-layout` check the binding.
 - `python_ref/` — CVXPY/Clarabel replica of the original Python for
   cross-validation (`gfold_ref.py [tf] [N] [--scaled] [--feascheck csv]`).
 
 
 ## Build notes
 
-ECOS is built without `DLONG`, so the C `idxint` is a 32-bit `int` — the C#
-interop maps `idxint -> int`, `pfloat -> double`. `CTRLC=0` keeps console
-signal handlers out of the game process. Verbosity is a runtime setting
-(`settings.verbose`), not a compile-time one.
-[README.md](../README.md)
-Smoke test (PowerShell):
+Clarabel is a Rust crate exposing a C ABI, so `native/clarabel_c.dll` is built with
+cargo (`build-clarabel.ps1`) and is **not checked in** — it is the one native dependency
+that cannot be built with the portable C compiler the rest of the tree uses. SCS is
+built by `../scvx/build-scs.ps1` with `zig cc`.
 
-```powershell
-Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices;
-public static class E { [DllImport("native\\ecos.dll")] public static extern IntPtr ECOS_ver(); }'
-[Runtime.InteropServices.Marshal]::PtrToStringAnsi([E]::ECOS_ver())  # -> 2.0.10
+Interop notes worth knowing: Clarabel's CSC indices are `uintptr_t` (64-bit) where SCS
+uses 32-bit ints, and its `time_limit` of `0` means *zero seconds*, not "no limit" —
+infinity is the value for none. Both are documented at their call sites, and
+`--clarabel-layout` prints the marshalled struct offsets for checking against
+`clarabel/include/c/*.h`.
+
+## Solver backends: Clarabel and SCS
+
+The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend`
+picks who runs it. Clarabel flies; SCS is kept as an independent cross-check on the
+answer. Both are permissively licensed, which is what let the project move to MIT — the
+ECOS backend that preceded them was GPLv3 and forced the whole work to be GPLv3.
+
+`ClarabelSolver` and `ScsSolver` take the same problem and differ only in what they do
+with it. Both want the equalities and the cone rows stacked into one matrix with a
+leading zero cone, which `SparseCcs.VStack` does. That
+stack is the one step of the conversion that can be silently wrong — CCS is
+column-major, so a vertical stack interleaves within every column rather than
+concatenating — and it is checked against a dense reference at the top of `--ab`.
+
+`ScsSolver` is a static function with no state. G-FOLD **always cold starts**: every
+call is a new plan, and the successive solves inside `SearchMinFuel` are different times
+of flight probed by a golden section, related by nothing but their order in the caller's
+cache. (Scvx.Core's `ScsWorkspace` is stateful for the opposite reason — an SCvx
+iteration *is* a perturbation of the last one.)
+
+### Running the comparison
+
 ```
+dotnet run --project gfold/Gfold.Console -- --ab
+```
+
+Same assembly, same nondimensionalisation, same extraction, both solvers — so anything
+that differs is the solver. It reports P3, P4, a tolerance sweep, and the full
+`SearchMinFuel`, which is the test that matters: the search gates each time of flight on
+a 10 m landing tolerance and then picks between neighbours on fuel alone, so it reads
+solver accuracy as a *decision* rather than as a number.
+
+Measured on the Mars reference case at N=120, the headline is that **tighter is not
+better**. At eps 1e-5 SCS agrees with the interior-point answer to 0.06 kg of fuel and 0.06 s
+(inside the search's own 0.25 s resolution) for about 3x the per-solve cost. At 1e-7 the
+individual solves are more accurate and the *search* is far worse — 17 s and 41 kg off —
+because enough solves exhaust the iteration budget to be rejected as infeasible, and the
+search then brackets the minimum somewhere else. A first-order solver degrades by
+returning a worse decision, not a looser number. See `ScsSolver.DefaultEps`.
+
+### Result: Clarabel replaced ECOS at parity
+
+*Historical — ECOS has since been removed. Kept as the record of why.*
+
+Measured on the Mars reference case, all three fed the identical assembled problem:
+
+| | P4 solve | full tf search | tf | fuel vs ECOS |
+|---|---|---|---|---|
+| ECOS (GPLv3) | 23 ms | 599 ms | 57.02 s | — |
+| **Clarabel (Apache-2.0)** | **22 ms** | **693 ms** | **57.02 s** | **0.0000 kg** |
+| SCS 1e-5 (MIT) | 65 ms | 6663 ms | 56.97 s | 0.06 kg |
+
+And at the shape the mod actually flies (N=50, Descent options, sim thread, 16.7 ms
+frame budget):
+
+| | cadence solve | worst | bracketed search |
+|---|---|---|---|
+| ECOS | 8.2 ms | 8.3 ms | 226 ms |
+| **Clarabel** | **10.3 ms** | **13.2 ms** | **256 ms** |
+| SCS 1e-4 | 19.7 ms | 23.6 ms | 1244 ms |
+
+Clarabel reproduces ECOS's answer exactly and fits inside a frame; SCS does not, at any
+tolerance worth flying. That is not a tuning difference — Clarabel is an interior-point
+method like ECOS, while SCS is first-order, and G-FOLD is small, banded, cold-started
+and on a deadline, which is the profile ADMM is worst at. Clarabel is therefore the
+default for the descent, and ECOS can go, which takes GPLv3 with it.
+
+The licence chain for an MIT release: Clarabel Apache-2.0, its AMD BSD-3 and QDLDL
+Apache-2.0, SCS MIT, and the BLAS shim is ours. Nothing left forces a copyleft.
+
+### Building Clarabel
+
+`clarabel_c.dll` is **not checked in** — unlike scs.dll it needs a Rust
+toolchain, so it is built on demand:
+
+```
+pwsh gfold/build-clarabel.ps1
+```
+
+Cargo alone; no CMake. Clarabel.cpp's README asks for CMake, but that layer only builds
+the optional C++/Eigen interface and the tests — the C ABI comes from the `rust_wrapper`
+crate, which already declares `crate-type = ["cdylib"]`.
+
+Two traps the binding had to handle, both worth knowing if it is ever revisited:
+
+- **CSC indices are `uintptr_t`, i.e. 64-bit**, where ECOS and SCS both use 32-bit ints.
+  `ClarabelSolver` widens them; passing the int arrays through would be read at twice
+  the stride.
+- **`time_limit = 0` means zero seconds, not "no limit."** SCS guards its equivalent
+  with `if (stgs->time_limit_secs)` so 0 there means unset; Clarabel takes the number
+  literally and uses infinity for none. Carrying SCS's convention across made every
+  solve exit immediately with `MaxTime` after 0 iterations — while still returning the
+  correct answer, because it had already been computed.

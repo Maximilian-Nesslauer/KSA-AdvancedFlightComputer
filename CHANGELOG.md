@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.0]
+
+Relicensed to MIT. ECOS is gone, replaced by Clarabel.
+
+- Replaced the ECOS conic solver with [Clarabel](https://github.com/oxfordcontrol/Clarabel.rs) for the G-FOLD powered descent. Clarabel is an interior-point method like ECOS and reproduces its answer exactly — same time of flight to 0.01 s, same fuel to 0.01 kg, offline and at the shape the mod flies — while being Apache-2.0 rather than GPLv3.
+
+- **The project is now MIT licensed.** ECOS was the only copyleft dependency and forced the whole work to be GPLv3. Every remaining vendored component is permissive: Clarabel Apache-2.0, SCS MIT, their shared AMD BSD-3 and QDLDL Apache-2.0. Attributions are in THIRD-PARTY-NOTICES.md. Releases up to and including v0.3.1 remain GPLv3.
+
+- Added an SCS backend alongside Clarabel, selectable per vehicle, as an independent cross-check on the descent solution. It agrees to a fraction of a kilogram but costs several times as much on a problem this shape, and is not the default.
+
+- Added a solve time limit and a solve-cost readout to the descent. G-FOLD runs synchronously on the sim thread every 0.25 s, so a solve that outruns its frame is visible now rather than felt.
+
+- `Gfold.Console` gained `--ab` and `--ab-rt` to compare the backends on the identical assembled problem, offline and at the in-flight problem size.
+
 ## [0.3.1]
 
 Fixed the ascent attitude jerk, aimed the launch plane ahead of the pad, and caught up with KSA 2026.8.22.

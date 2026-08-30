@@ -1,7 +1,7 @@
 namespace Gfold;
 
 // The G-FOLD powered-descent problems (Açıkmeşe & Ploen; Blackmore), ported
-// from the reference Python (GFOLD_static_p3p4.py) into ECOS standard conic
+// from the reference Python (GFOLD_static_p3p4.py) into standard conic
 // form. Time of flight is an input — wrap with a search over tf if needed.
 //
 //   Problem 3 (minimum landing error): minimize ||r(tf) - rf||, final
@@ -78,8 +78,47 @@ public sealed record GfoldOptions
     { FreeInitialThrust = true, RelaxInitialPath = true };
 }
 
+/// <summary>Which conic solver <see cref="GfoldPlanner"/> hands its problems to.</summary>
+public enum ConicBackend
+{
+    /// <summary>
+    /// Clarabel: interior point, Apache-2.0. The default, and what the planner is tuned
+    /// for — small, banded, cold-started problems on a frame budget.
+    /// </summary>
+    Clarabel,
+    /// <summary>
+    /// SCS: first-order ADMM, MIT. Kept as a cross-check rather than for flying: it
+    /// agrees with Clarabel to a fraction of a kilogram but costs several times as much
+    /// on a problem this shape (see ScsSolver.DefaultEps for the measurements).
+    /// </summary>
+    Scs,
+}
+
 public static class GfoldPlanner
 {
+    /// <summary>
+    /// Which solver runs the assembled problem. Both are fed the identical problem, so
+    /// switching this is a controlled A/B (see Gfold.Console --ab). Process-wide because
+    /// it selects a build's solver rather than anything per-call; the mod sets it
+    /// immediately before each synchronous solve.
+    /// </summary>
+    public static ConicBackend Backend = ConicBackend.Clarabel;
+
+    /// <summary>
+    /// Overrides SCS's convergence tolerance so the A/B harness can sweep it; null uses
+    /// ScsSolver.DefaultEps. SCS only — an interior-point method's cost scales with
+    /// log(1/eps), so Clarabel needs no equivalent knob.
+    /// </summary>
+    public static double? ScsEps;
+
+    /// <summary>
+    /// Wall-clock ceiling per solve, seconds; null or 0 means none. Applies to both
+    /// backends, and is what keeps one pathological state from blocking the sim thread
+    /// indefinitely. Note a SEARCH is tens of solves, so the worst case it bounds is
+    /// that multiple, not this.
+    /// </summary>
+    public static double? SolveTimeLimitS;
+
     public static GfoldTrajectory SolveMinError(GfoldParams p, double tf, int nodes,
                                                 bool verbose = false, GfoldOptions? options = null)
         => Solve(p, tf, nodes, fixedLanding: null, verbose, options ?? GfoldOptions.Reference);
@@ -190,8 +229,8 @@ public static class GfoldPlanner
         return new SearchResult(all.Value.Traj!, all.Key, all.Value.Fuel, solves);
     }
 
-    private static bool IsUsable(EcosStatus s) =>
-        s is EcosStatus.Optimal or EcosStatus.OptimalInaccurate;
+    private static bool IsUsable(ConicStatus s) =>
+        s is ConicStatus.Optimal or ConicStatus.OptimalInaccurate;   // see GfoldTrajectory.IsUsable
 
     private static GfoldTrajectory Solve(GfoldParams P, double tf, int N,
                                          double[]? fixedLanding, bool verbose, GfoldOptions opt)
@@ -207,7 +246,7 @@ public static class GfoldPlanner
 
         // Nondimensionalize: solve in units where lengths, velocities and
         // accelerations are all O(1) (length scale ~ the problem size, time
-        // scale such that gravity is ~1). ECOS's interior point breaks down
+        // scale such that gravity is ~1). An interior-point solver breaks down
         // ("unreliable search direction") on the raw SI problem — metre-scale
         // coordinates against unit-scale ln-mass rows condition the KKT system
         // badly — and returns visibly suboptimal iterates. In scaled units it
@@ -493,7 +532,7 @@ public static class GfoldPlanner
         if (smooth)
             c[IQ] = opt.SlewReg;                // penalize the thrust-slew L2 norm
 
-        var problem = new EcosProblem
+        var problem = new ConicProblem
         {
             C = c,
             G = G,
@@ -504,11 +543,14 @@ public static class GfoldPlanner
             SocDims = soc.ToArray(),
         };
 
-        EcosResult result = EcosSolver.Solve(problem, verbose);
+        ConicResult result = Backend == ConicBackend.Scs
+            ? ScsSolver.Solve(problem, verbose, eps: ScsEps ?? ScsSolver.DefaultEps,
+                              timeLimitS: SolveTimeLimitS ?? 0.0)
+            : ClarabelSolver.Solve(problem, verbose, timeLimitS: SolveTimeLimitS ?? 0.0);
         return Extract(result, N, dtPhys, P.Rf, lenScale, velScale, accScale);
     }
 
-    private static GfoldTrajectory Extract(EcosResult result, int N, double dt, double[] rf,
+    private static GfoldTrajectory Extract(ConicResult result, int N, double dt, double[] rf,
                                            double lenScale, double velScale, double accScale)
     {
         var position = new double[N][];

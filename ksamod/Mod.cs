@@ -11,7 +11,7 @@ using StarMap.API;
 // the lifecycle methods below.
 //
 // StarMap (a Harmony-based loader) provides Harmony at runtime, so we don't ship it;
-// our only private deps are Gfold.Core.dll + native ecos.dll, copied into the mod
+// our only private deps are Gfold.Core.dll + its native solvers, copied into the mod
 // folder beside this DLL and resolved by ResolveFromModDir / Gfold.Core's own
 // DllImport resolver.
 [StarMapMod]
@@ -29,7 +29,7 @@ public sealed class Mod
     public void OnLoaded()
     {
         // Resolve our private managed dependency (Gfold.Core) from the mod folder;
-        // ecos.dll is found by Gfold.Core's own DllImport resolver next to it.
+        // The native solvers are found by Gfold.Core's own DllImport resolver next to it.
         AppDomain.CurrentDomain.AssemblyResolve += ResolveFromModDir;
 
         try
@@ -209,7 +209,7 @@ public sealed class Mod
 
     // Where this DLL (and its siblings) live. Prefer the loaded assembly's location;
     // fall back to the known install path if StarMap loaded us from bytes (Location
-    // empty), so Gfold.Core/ecos still resolve.
+    // empty), so Gfold.Core and its natives still resolve.
     private static string ResolveModDir()
     {
         string dir = Path.GetDirectoryName(typeof(Mod).Assembly.Location);
