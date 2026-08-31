@@ -1,5 +1,24 @@
 # Changelog
 
+## [Unreleased]
+
+- Removed the SCS backend from the G-FOLD descent. It was added in 0.4.0 as a
+  cross-check while Clarabel was unproven; Clarabel has since been the only
+  backend that flies, and carrying a second solver cost a per-vehicle selector,
+  a tolerance knob that only one of them used, and two comparison harnesses.
+  `Gfold.Console --ab` is gone with it, and `--ab-rt` is now `--frame` — the
+  question it answers, whether a solve fits in a sim frame, was never about the
+  A/B. The `SparseCcs.VStack` self-test it used to run has moved to
+  `--clarabel-smoke`, since that conversion is on Clarabel's path too. SCS is
+  still vendored and still shipped: Scvx.Core uses it for the 6-DOF subproblem.
+
+- Added a tabulated aero surrogate: `lib/Navbox.Numerics` holds an N-d
+  tensor-product cubic B-spline with analytic gradients, and `Navbox.Flight.AeroTable`
+  fits Cd(Mach, alpha) to it. It composes with the existing forward-mode AD, so
+  aero can be written inline in Dual-valued dynamics rather than differentiated
+  by hand. `Dual` and the aero model moved into the new shared library; nothing
+  consumes the table in flight yet. `Scvx.Console --aero` checks it.
+
 ## [0.4.0]
 
 Relicensed to MIT. ECOS is gone, replaced by Clarabel.

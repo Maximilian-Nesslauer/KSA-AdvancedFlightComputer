@@ -584,8 +584,8 @@ altitude row `IX(4,0):p | r_fx`, and append a 4-row `SOC(4)` epigraph block
 - `Gfold.Console/` — runs the P3 -> P4 flow on the reference "Numerical
   Example 1" case, verifies the result physically (dynamics replay, bounds),
   writes CSVs. `--check <csv>` audits any trajectory against the constraint
-  set; `--ab` compares the two backends; `--ab-rt` times them at the shape the
-  mod flies; `--clarabel-smoke` and `--clarabel-layout` check the binding.
+  set; `--frame` times a solve at the shape the mod flies; `--clarabel-smoke`
+  and `--clarabel-layout` check the binding.
 - `python_ref/` — CVXPY/Clarabel replica of the original Python for
   cross-validation (`gfold_ref.py [tf] [N] [--scaled] [--feascheck csv]`).
 
@@ -606,42 +606,45 @@ infinity is the value for none. Both are documented at their call sites, and
 ## Solver backends: Clarabel and SCS
 
 The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend`
-picks who runs it. Clarabel flies; SCS is kept as an independent cross-check on the
-answer. Both are permissively licensed, which is what let the project move to MIT — the
-ECOS backend that preceded them was GPLv3 and forced the whole work to be GPLv3.
+runs it. Clarabel is permissively licensed, which is what let the project move to MIT —
+the ECOS backend that preceded it was GPLv3 and forced the whole work to be GPLv3. (An
+SCS backend was carried alongside it for a while as a cross-check; it has since been
+removed. Scvx.Core still uses SCS for the 6-DOF subproblem.)
 
-`ClarabelSolver` and `ScsSolver` take the same problem and differ only in what they do
-with it. Both want the equalities and the cone rows stacked into one matrix with a
+`ClarabelSolver` wants the equalities and the cone rows stacked into one matrix with a
 leading zero cone, which `SparseCcs.VStack` does. That
 stack is the one step of the conversion that can be silently wrong — CCS is
 column-major, so a vertical stack interleaves within every column rather than
-concatenating — and it is checked against a dense reference at the top of `--ab`.
+concatenating — and it is checked against a dense reference at the top of
+`--clarabel-smoke`.
 
-`ScsSolver` is a static function with no state. G-FOLD **always cold starts**: every
+`ClarabelSolver` is a static function with no state. G-FOLD **always cold starts**: every
 call is a new plan, and the successive solves inside `SearchMinFuel` are different times
 of flight probed by a golden section, related by nothing but their order in the caller's
 cache. (Scvx.Core's `ScsWorkspace` is stateful for the opposite reason — an SCvx
 iteration *is* a perturbation of the last one.)
 
-### Running the comparison
+### Running the frame-budget check
 
 ```
-dotnet run --project gfold/Gfold.Console -- --ab
+dotnet run --project gfold/Gfold.Console -- --frame
 ```
 
-Same assembly, same nondimensionalisation, same extraction, both solvers — so anything
-that differs is the solver. It reports P3, P4, a tolerance sweep, and the full
-`SearchMinFuel`, which is the test that matters: the search gates each time of flight on
-a 10 m landing tolerance and then picks between neighbours on fuel alone, so it reads
-solver accuracy as a *decision* rather than as a number.
+Times both in-flight call shapes at the size the mod actually solves: the cadence
+solve (one `SolveMinFuel` at the remaining flight time) and the fallback
+(`SearchMinFuel`, tens of solves, the one that can stall a frame). It also exercises
+the time-limit guard, which must come back inside its budget *and* report itself
+unusable — a time-limited iterate is not a solution, and a run that reported both
+Optimal and usable would mean the caller flies a half-converged plan.
 
-Measured on the Mars reference case at N=120, the headline is that **tighter is not
-better**. At eps 1e-5 SCS agrees with the interior-point answer to 0.06 kg of fuel and 0.06 s
-(inside the search's own 0.25 s resolution) for about 3x the per-solve cost. At 1e-7 the
-individual solves are more accurate and the *search* is far worse — 17 s and 41 kg off —
-because enough solves exhaust the iteration budget to be rejected as infeasible, and the
-search then brackets the minimum somewhere else. A first-order solver degrades by
-returning a worse decision, not a looser number. See `ScsSolver.DefaultEps`.
+*Historical, on tolerance:* when SCS was carried as a second backend, the headline from
+the N=120 Mars case was that **tighter is not better**. At eps 1e-5 it agreed with the
+interior-point answer to 0.06 kg and 0.06 s for about 3x the per-solve cost; at 1e-7 the
+individual solves were more accurate and the *search* was far worse — 17 s and 41 kg off
+— because enough solves exhausted the iteration budget to be rejected as infeasible and
+the search bracketed the minimum elsewhere. A first-order solver degrades by returning a
+worse decision, not a looser number. Clarabel needs no equivalent knob: an IPM's cost
+scales with log(1/eps), so accuracy is nearly free.
 
 ### Result: Clarabel replaced ECOS at parity
 

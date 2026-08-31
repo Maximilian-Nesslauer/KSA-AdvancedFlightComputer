@@ -352,39 +352,6 @@ public sealed class VehicleAutopilotState
     public int GfoldNodes = 50;
 
     /// <summary>
-    /// WHICH CONIC SOLVER THE DESCENT PLANS WITH, and SCS's tolerance.
-    ///
-    /// Both are permissively licensed, so this is a performance choice rather than a
-    /// licensing one. What decides it is that SolveGfoldPlan runs SYNCHRONOUSLY ON THE
-    /// SIM THREAD every GfoldIntervalS, so a solve has to fit in a frame — which an
-    /// offline accuracy comparison cannot tell you.
-    ///
-    /// Measured at the in-flight shape (N=50, Descent options, Gfold.Console --ab-rt),
-    /// with the now-removed ECOS included because it was the reference at the time:
-    ///
-    ///     backend       cadence solve      bracketed search   fuel vs ECOS
-    ///     ECOS               8.2 ms              226 ms              —
-    ///     Clarabel          10.3 ms              256 ms           0.00 kg
-    ///     SCS 1e-4          19.7 ms             1244 ms           1.21 kg
-    ///     SCS 1e-5         133.1 ms             3126 ms          -0.13 kg
-    ///     SCS 1e-6        truncates             (unusable)
-    ///
-    /// A 60 Hz step is 16.7 ms. Clarabel fits (13.2 ms worst case); SCS does not at any
-    /// tolerance worth flying. CLARABEL IS THE DEFAULT for that reason — and it
-    /// reproduced ECOS's answer exactly (same tf to 0.01 s, same fuel to 0.01 kg,
-    /// offline and in flight), being the same algorithm class, an interior-point
-    /// method, where SCS is first-order and pays for it here.
-    ///
-    /// Note the SCS tolerance that is right offline (1e-5, the knee at N=120) costs
-    /// eight frames at N=50, and 1e-6 TRUNCATES at N=50 where it converged at N=120 —
-    /// so that number does not transfer between problem sizes and has to be measured at
-    /// the size actually flown. Clarabel needs no such tuning: an IPM's cost scales with
-    /// log(1/eps), so accuracy is nearly free.
-    /// </summary>
-    public ConicBackend GfoldBackend = ConicBackend.Clarabel;
-    public double GfoldScsEps = 1e-4;
-
-    /// <summary>
     /// WALL-CLOCK CEILING PER SOLVE, seconds. The guard that stops a hard descent
     /// state from hanging the game.
     ///

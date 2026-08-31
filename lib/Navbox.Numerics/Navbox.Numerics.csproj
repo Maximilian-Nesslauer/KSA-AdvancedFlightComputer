@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Navbox.Numerics</RootNamespace>
+  </PropertyGroup>
+
+  <!-- Shared numerical primitives. References nothing - not the game, not a
+       solver, not a native library - so anything here can be used from the
+       main thread, a worker thread, or a headless harness without dragging a
+       dependency along. Keep it that way: this is the bottom of the stack. -->
+
+</Project>

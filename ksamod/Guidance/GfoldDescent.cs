@@ -110,14 +110,11 @@ public static partial class PoweredGuidanceWindow
         // normal cadence rather than every frame while we keep flying the last plan.
         _s.GfoldLastSolveTime = now;
 
-        // Point the planner at this vehicle's chosen backend. GfoldPlanner.Backend is
-        // process-wide, which is safe ONLY because the solve below is synchronous and
-        // on this thread: each vehicle sets it immediately before its own call and the
-        // call has returned before any other vehicle is serviced. Move the solve to a
-        // worker and this becomes a race — see GfoldSolveMs for why that move is
-        // worth making anyway.
-        GfoldPlanner.Backend = _s.GfoldBackend;
-        GfoldPlanner.ScsEps = _s.GfoldScsEps > 0 ? _s.GfoldScsEps : null;
+        // GfoldPlanner.SolveTimeLimitS is process-wide, which is safe ONLY because the
+        // solve below is synchronous and on this thread: each vehicle sets it
+        // immediately before its own call and the call has returned before any other
+        // vehicle is serviced. Move the solve to a worker and this becomes a race —
+        // see GfoldSolveMs for why that move is worth making anyway.
         GfoldPlanner.SolveTimeLimitS = _s.GfoldSolveTimeLimitS > 0 ? _s.GfoldSolveTimeLimitS : null;
         var solveClock = System.Diagnostics.Stopwatch.StartNew();
 
@@ -336,25 +333,13 @@ public static partial class PoweredGuidanceWindow
         // is GPLv3; SCS is MIT and is what an MIT release needs. They are fed the
         // identical assembled problem, so switching mid-descent compares like with
         // like — and the solve time beside the status is the number that decides it.
-        // Two solvers, one assembled problem, switchable mid-descent so they can be
-        // compared like with like. Clarabel is the one that flies — interior point, and
-        // the only one inside the frame budget; SCS is kept as a cross-check.
-        // Radio buttons rather than a Combo: ImGui.Combo's overload here wants Ptr<>
-        // from Brutal.Core.Common, and one widget is not worth another game-assembly
-        // reference. DrawLaunchToTarget picks its node direction the same way.
-        ImGui.Text("Solver");
-        ImGui.SameLine();
-        if (ImGui.RadioButton("SCS", _s.GfoldBackend == ConicBackend.Scs))
-            _s.GfoldBackend = ConicBackend.Scs;
-        ImGui.SameLine();
-        if (ImGui.RadioButton("Clarabel", _s.GfoldBackend == ConicBackend.Clarabel))
-            _s.GfoldBackend = ConicBackend.Clarabel;
-
-        // The tolerance and time limit are SCS's alone. Clarabel needs neither tuned:
-        // an interior-point method's cost scales with log(1/eps) rather than 1/eps, so
-        // accuracy is nearly free, and it reports a time limit as a first-class status.
-        using (new ImGuiDisabledScope(_s.GfoldBackend != ConicBackend.Scs))
-            ImGui.InputDouble("SCS tolerance", ref _s.GfoldScsEps);
+        //
+        // The solver selector that used to sit here is gone: Clarabel is the only
+        // backend now. There is no tolerance knob either, and that is a property of the
+        // algorithm rather than an omission — an interior-point method's cost scales
+        // with log(1/eps) rather than 1/eps, so accuracy is nearly free and the
+        // tolerance stops being something a pilot should be tuning. The time limit
+        // stays, because Clarabel reports hitting it as a first-class status.
         ImGui.InputDouble("Solve time limit (s, 0=none)", ref _s.GfoldSolveTimeLimitS);
 
         ImGui.InputDouble("Hover handoff alt (m)", ref _s.GfoldHoverHandoffAltM);
@@ -396,8 +381,8 @@ public static partial class PoweredGuidanceWindow
         // thread, so anything past a frame time (16.7 ms at 60 Hz) is a stutter the
         // player feels once every re-solve interval.
         ImGui.Text($"status {_s.GfoldStatus}   nodes {n}   dt {plan.Dt:F2} s   tf {plan.TimeOfFlight:F1} s");
-        ImGui.Text($"solver {_s.GfoldBackend}   " +
-                   $"last solve {_s.GfoldSolveMs:F1} ms   ({_s.GfoldSolveMs / 16.7:F1} frames at 60 Hz)");
+        ImGui.Text($"last solve {_s.GfoldSolveMs:F1} ms   " +
+                   $"({_s.GfoldSolveMs / 16.7:F1} frames at 60 Hz)");
         ImGui.Text($"fuel used {plan.FuelUsed:F0} kg   landing err {plan.LandingErrorNorm:F1} m   plan t+{elapsed:F1} s");
 
         // Two plots per row to keep the window a sane height.

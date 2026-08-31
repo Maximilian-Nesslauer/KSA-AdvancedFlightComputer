@@ -33,6 +33,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --sub-scs       one subproblem against the reference solution
           --loop          the full SCvx loop against the reference trajectory
           --scs-layout    P/Invoke struct layouts against the native SCS build
+          --aero          tabulated Cd(Mach, alpha) and its slopes under forward-mode AD
 
         BEHAVIOUR - properties the guidance depends on
           --path          path constraints bind, and stay solvable when violated
@@ -169,6 +170,9 @@ if (args.Contains("--rh") && args.Contains("--cadence"))
 
 if (args.Contains("--rh"))
     return RecedingHorizonCheck();
+
+if (args.Contains("--aero"))
+    return AeroCheck.Run();
 
 if (args.Contains("--scs-layout"))
 {

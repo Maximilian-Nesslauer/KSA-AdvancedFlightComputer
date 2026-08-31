@@ -78,42 +78,11 @@ public sealed record GfoldOptions
     { FreeInitialThrust = true, RelaxInitialPath = true };
 }
 
-/// <summary>Which conic solver <see cref="GfoldPlanner"/> hands its problems to.</summary>
-public enum ConicBackend
-{
-    /// <summary>
-    /// Clarabel: interior point, Apache-2.0. The default, and what the planner is tuned
-    /// for — small, banded, cold-started problems on a frame budget.
-    /// </summary>
-    Clarabel,
-    /// <summary>
-    /// SCS: first-order ADMM, MIT. Kept as a cross-check rather than for flying: it
-    /// agrees with Clarabel to a fraction of a kilogram but costs several times as much
-    /// on a problem this shape (see ScsSolver.DefaultEps for the measurements).
-    /// </summary>
-    Scs,
-}
-
 public static class GfoldPlanner
 {
     /// <summary>
-    /// Which solver runs the assembled problem. Both are fed the identical problem, so
-    /// switching this is a controlled A/B (see Gfold.Console --ab). Process-wide because
-    /// it selects a build's solver rather than anything per-call; the mod sets it
-    /// immediately before each synchronous solve.
-    /// </summary>
-    public static ConicBackend Backend = ConicBackend.Clarabel;
-
-    /// <summary>
-    /// Overrides SCS's convergence tolerance so the A/B harness can sweep it; null uses
-    /// ScsSolver.DefaultEps. SCS only — an interior-point method's cost scales with
-    /// log(1/eps), so Clarabel needs no equivalent knob.
-    /// </summary>
-    public static double? ScsEps;
-
-    /// <summary>
-    /// Wall-clock ceiling per solve, seconds; null or 0 means none. Applies to both
-    /// backends, and is what keeps one pathological state from blocking the sim thread
+    /// Wall-clock ceiling per solve, seconds; null or 0 means none. This is what
+    /// keeps one pathological state from blocking the sim thread
     /// indefinitely. Note a SEARCH is tens of solves, so the worst case it bounds is
     /// that multiple, not this.
     /// </summary>
@@ -543,10 +512,8 @@ public static class GfoldPlanner
             SocDims = soc.ToArray(),
         };
 
-        ConicResult result = Backend == ConicBackend.Scs
-            ? ScsSolver.Solve(problem, verbose, eps: ScsEps ?? ScsSolver.DefaultEps,
-                              timeLimitS: SolveTimeLimitS ?? 0.0)
-            : ClarabelSolver.Solve(problem, verbose, timeLimitS: SolveTimeLimitS ?? 0.0);
+        ConicResult result =
+            ClarabelSolver.Solve(problem, verbose, timeLimitS: SolveTimeLimitS ?? 0.0);
         return Extract(result, N, dtPhys, P.Rf, lenScale, velScale, accScale);
     }
 

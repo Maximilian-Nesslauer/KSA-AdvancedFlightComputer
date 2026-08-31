@@ -30,7 +30,6 @@ internal static class NativeLibraries
         {
             string? fileName = name switch
             {
-                "scs" => "scs.dll",
                 "clarabel_c" => "clarabel_c.dll",
                 _ => null,
             };

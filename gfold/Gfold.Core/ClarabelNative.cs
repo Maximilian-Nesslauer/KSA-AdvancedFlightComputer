@@ -7,8 +7,8 @@ namespace Gfold;
 ///
 /// Clarabel is an INTERIOR-POINT conic solver under Apache-2.0 — the same algorithm
 /// class as ECOS, with a licence that can be redistributed under MIT. That pairing is
-/// the entire reason it is here: SCS is permissively licensed but first-order, and the
-/// measurements in ScsSolver.DefaultEps show what that costs on a problem this shape.
+/// the entire reason it is here: the first-order backend it replaced was permissively
+/// licensed but cost 2.4x per solve on a problem this shape.
 ///
 /// LAYOUTS ARE TAKEN FROM THE VENDORED HEADERS, NOT FROM DOCUMENTATION. Every struct
 /// below mirrors gfold/clarabel/include/c/*.h, and those in turn match the Rust side's
@@ -244,7 +244,7 @@ internal static partial class ClarabelNative
 
 /// <summary>
 /// Clarabel's own solver status, as returned in ClarabelDefaultSolution.status.
-/// Public for the same reason ScsExit is: the A/B harness reports the backend's native
+/// Public so the harness can report the backend's native
 /// outcome, not just the normalised one, because "almost solved" and "max time" are
 /// different diagnoses that both map to the same shared status.
 /// </summary>

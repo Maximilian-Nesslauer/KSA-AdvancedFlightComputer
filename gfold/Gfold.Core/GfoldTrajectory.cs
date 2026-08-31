@@ -19,9 +19,9 @@ public sealed class GfoldTrajectory
 
     /// <summary>
     /// The solver returned something worth flying. "Inaccurate" is included on purpose
-    /// — both backends use it for a solution that converged loosely rather than one
-    /// that failed, and the search's own tolerances are far wider than the difference.
-    /// A TRUNCATED solve is not in here: ScsSolver maps that to MaxIterations
+    /// — Clarabel uses it for a solution that converged loosely rather than one that
+    /// failed, and the search's own tolerances are far wider than the difference.
+    /// A solve that ran out of iterations is not in here: it maps to MaxIterations
     /// precisely so it lands outside this test.
     /// </summary>
     public bool IsUsable => Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate;

@@ -1,3 +1,5 @@
+using Navbox.Numerics;
+
 namespace Scvx;
 
 /// <summary>

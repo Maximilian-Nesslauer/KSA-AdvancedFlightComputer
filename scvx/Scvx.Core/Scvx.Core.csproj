@@ -14,7 +14,14 @@
     <None Include="..\native\scs.dll" Link="scs.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
-  <!-- Deliberately references no other project and no game assembly. The SCvx
+  <ItemGroup>
+    <!-- Shared numerical primitives (the tensor-product spline behind the aero
+         surrogate). Navbox.Numerics itself references nothing, so this does not
+         weaken the no-game-assembly rule below. -->
+    <ProjectReference Include="..\..\lib\Navbox.Numerics\Navbox.Numerics.csproj" />
+  </ItemGroup>
+
+  <!-- Deliberately references no game assembly, and no project that does. The SCvx
        solve must be pure computation over plain data so it can run off the main
        thread, and keeping that out at project level makes a violation a compile
        error rather than a review comment. -->

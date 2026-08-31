@@ -8,7 +8,7 @@ namespace Gfold;
 /// WHY A THIRD BACKEND. ECOS is interior-point and fast on this problem but GPLv3,
 /// which forces the whole work to GPLv3. SCS is MIT but first-order, and G-FOLD is the
 /// shape ADMM is worst at — small, banded, cold-started, on a frame budget — which
-/// costs 2.4x per solve and 5x per search (see ScsSolver.DefaultEps). Clarabel is
+/// cost 2.4x per solve and 5x per search when it was measured against ECOS. Clarabel is
 /// Apache-2.0 AND interior-point: the licence of the one and the algorithm class of the
 /// other. If it performs like ECOS, it is the answer to the whole migration.
 ///
@@ -18,19 +18,19 @@ namespace Gfold;
 ///     subject to  Ax + s = b,  s in K
 ///
 /// which is the single stacked matrix with a leading zero cone — exactly what
-/// <see cref="SparseCcs.VStack"/> already builds for SCS, so that conversion is reused
-/// verbatim. P is null here: the G-FOLD objective is linear.
+/// <see cref="SparseCcs.VStack"/> builds. That stacking was originally written for the
+/// SCS binding, which took the same form; it outlived it. P is null here: the G-FOLD
+/// objective is linear.
 ///
-/// Cold start, no persistent state, for the same reasons as ScsSolver: every G-FOLD
+/// Cold start, no persistent state: every G-FOLD
 /// call is a new plan, and a static function with no fields is safe to call from the
 /// mod's solver thread without a per-vehicle instance.
 ///
-/// NOT YET RUN. clarabel_c.dll has to be built first (gfold/build-clarabel.ps1, needs
-/// a Rust toolchain), and until it has been, every layout in ClarabelNative is a
-/// careful reading of the vendored headers rather than a verified one. Gfold.Console
-/// --ab is what verifies it: a layout error will show up there as a wrong answer or a
-/// crash, immediately, on a problem whose answer is already known from two other
-/// solvers.
+/// clarabel_c.dll has to be built first (gfold/build-clarabel.ps1, needs a Rust
+/// toolchain). Every layout in ClarabelNative is a reading of the vendored headers, and
+/// struct layout is the part of a P/Invoke binding that fails silently, so verify with
+/// Gfold.Console --clarabel-layout (pure reflection, needs no DLL) and
+/// --clarabel-smoke (a problem whose answer is known by hand).
 /// </summary>
 public static class ClarabelSolver
 {
@@ -45,8 +45,8 @@ public static class ClarabelSolver
     /// Convergence tolerance, applied to Clarabel's absolute and relative gap and to
     /// its feasibility tolerance.
     ///
-    /// Left tight on purpose. The reason ScsSolver's equivalent had to be measured and
-    /// loosened is that ADMM's cost scales like 1/eps; an IPM's scales like log(1/eps),
+    /// Left tight on purpose. A first-order method's tolerance has to be measured and
+    /// loosened because ADMM's cost scales like 1/eps; an IPM's scales like log(1/eps),
     /// so accuracy is nearly free here and the tolerance stops being a tuning knob.
     /// Clarabel's own defaults are 1e-8, which is the same order as ECOS's.
     /// </summary>
@@ -58,8 +58,8 @@ public static class ClarabelSolver
         double ResPrimal, double ResDual, double SolverSolveTimeS, double TotalMs);
 
     /// <summary>
-    /// The vendored Clarabel version, for parity with ScsSolver.NativeVersion in the
-    /// harness output. A CONSTANT, not a query: Clarabel's C API exposes no version
+    /// The vendored Clarabel version, for the harness banner.
+    /// A CONSTANT, not a query: Clarabel's C API exposes no version
     /// entry point (unlike scs_version), so this tracks gfold/clarabel/Clarabel.rs's
     /// Cargo.toml by hand and must be bumped when that is updated.
     /// </summary>
@@ -98,7 +98,7 @@ public static class ClarabelSolver
     /// <param name="timeLimitS">
     /// Wall-clock ceiling, seconds, or 0 for none. Clarabel reports hitting it as
     /// MaxTime, a first-class status rather than something to be recovered from a
-    /// status string — which is what SCS forced (see ScsSolver.Solve's timeLimitS).
+    /// status string — which is what the first-order backend it replaced forced.
     /// </param>
     public static ConicResult Solve(ConicProblem problem, out ClarabelSolveInfo info,
                                     bool verbose = false,

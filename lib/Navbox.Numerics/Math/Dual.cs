@@ -1,4 +1,4 @@
-namespace Scvx;
+namespace Navbox.Numerics;
 
 /// <summary>
 /// Forward-mode automatic differentiation number: a value paired with its
@@ -54,6 +54,21 @@ public readonly struct Dual
     {
         double s = Math.Sqrt(a.V);
         return new Dual(s, a.D / (2.0 * s));
+    }
+
+    /// <summary>
+    /// Four-quadrant arctangent. Added for angle of attack, which is the angle
+    /// between the body axis and the relative wind: atan2 of the cross-flow speed
+    /// against the axial speed is well conditioned everywhere except at zero
+    /// speed, where acos of a normalised dot product would already have lost
+    /// precision near alpha = 0.
+    ///
+    ///   d/dt atan2(y, x) = (x*y' - y*x') / (x^2 + y^2)
+    /// </summary>
+    public static Dual Atan2(Dual y, Dual x)
+    {
+        double denom = x.V * x.V + y.V * y.V;
+        return new Dual(Math.Atan2(y.V, x.V), (x.V * y.D - y.V * x.D) / denom);
     }
 
     public override string ToString() => $"{V:G6} (d={D:G6})";
