@@ -2,6 +2,39 @@
 
 ## [Unreleased]
 
+- Added a **Boostback** tab to the guidance panel, next to Ascent. It is an aero
+  workbench rather than a guidance mode for now: opening it samples the focused
+  vehicle's drag off KSA's *own* `BoundingBoxCdA.ComputeCdA`, adds the skin term
+  the game applies separately, averages over roll azimuth, and fits the
+  `Cd(Mach, alpha)` surrogate. Nothing is re-derived, so the table cannot drift
+  from what the vehicle actually flies through. It resamples only when the
+  bounding box changes, which is the only thing that can change the answer.
+  EXECUTE/ABORT stripe out on this tab — there is no boostback guidance behind
+  them yet, and the 6-DOF dynamics still have no aero term.
+
+- **Angle of attack is now retrograde-first**: alpha = 0 is flying tail-first
+  with the engine into the wind, 180 is nose-first. Every phase the surrogate
+  exists to serve is flown engine-first, so this puts the small angles where the
+  vehicle actually sits instead of at the far edge of the table. The alpha axis
+  now spans the full 0–180 rather than stopping at 30, and the placeholder table
+  was regenerated on the new convention — leaving prograde 0–30 data under a
+  retrograde label would have been silently wrong.
+
+- Added `Navbox.Flight.ExponentialAtmosphere`, a self-contained mirror of KSA's
+  atmosphere — `rho0 exp(-h/H)` above *mean* radius, the same hard cutoff, the
+  same sub-sea-level clamp — so a solve can plan through the air without
+  referencing the game. Speed of sound is *derived* rather than assumed: the
+  model is isothermal, so `a = sqrt(gamma P0/rho0)` is constant with altitude
+  (340.3 m/s for Earth). The Boostback tab re-verifies the mirror against KSA's
+  own `GetAtmosphericDensityAtAltitude` on every resample. `Dual` gained `Exp`.
+
+  Two findings worth recording, both from the game rather than from us: KSA has
+  **no Mach dependence at all**, so the surrogate's Mach axis is flat and kept
+  only as the interface the solver wants; and KSA's isotropic skin term
+  (`0.1 x bounding-box surface area`) *dominates* form drag for a slender stack,
+  roughly 33:1 nose-on — so drag is nearly attitude-independent near alpha = 0
+  while still varying ~4x across the full range.
+
 - Removed the SCS backend from the G-FOLD descent. It was added in 0.4.0 as a
   cross-check while Clarabel was unproven; Clarabel has since been the only
   backend that flies, and carrying a second solver cost a per-vehicle selector,

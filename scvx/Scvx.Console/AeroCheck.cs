@@ -35,36 +35,76 @@ internal static class AeroCheck
         const double Deg = Math.PI / 180.0;
 
         // ---- the table itself ------------------------------------------
-        Console.WriteLine("  table shape (Cd, alpha in degrees)");
-        Console.WriteLine($"    {"Mach",6} {"a=0",8} {"a=5",8} {"a=10",8} {"a=20",8} {"a=30",8}");
+        Console.WriteLine("  table shape (Cd, alpha in degrees, RETROGRADE-FIRST:");
+        Console.WriteLine("  a=0 is engine into the wind, a=180 is nose-first)");
+        Console.WriteLine($"    {"Mach",6} {"a=0",8} {"a=30",8} {"a=90",8} {"a=150",8} {"a=180",8}");
         foreach (double m in new[] { 0.3, 0.8, 0.95, 1.05, 1.25, 1.6, 2.0, 3.0, 5.0 })
         {
-            Console.WriteLine($"    {m,6:F2} {tab.Cd(m, 0),8:F4} {tab.Cd(m, 5 * Deg),8:F4} "
-                            + $"{tab.Cd(m, 10 * Deg),8:F4} {tab.Cd(m, 20 * Deg),8:F4} "
-                            + $"{tab.Cd(m, 30 * Deg),8:F4}");
+            Console.WriteLine($"    {m,6:F2} {tab.Cd(m, 0),8:F4} {tab.Cd(m, 30 * Deg),8:F4} "
+                            + $"{tab.Cd(m, 90 * Deg),8:F4} {tab.Cd(m, 150 * Deg),8:F4} "
+                            + $"{tab.Cd(m, 180 * Deg),8:F4}");
         }
         Console.WriteLine();
 
-        // Physical sanity: the drag rise must peak transonically, and Cd must
-        // increase with alpha everywhere. A fit that rings would break the second.
+        // Physical sanity: the drag rise must peak transonically, and Cd must rise
+        // from the tail-first attitude toward broadside. A fit that rings breaks the
+        // second.
         bool risePeaks = tab.Cd(1.2, 0) > tab.Cd(0.5, 0) && tab.Cd(1.2, 0) > tab.Cd(4.0, 0);
         Check("transonic drag rise peaks near M=1.2", risePeaks,
               $"Cd(0.5)={tab.Cd(0.5, 0):F3} Cd(1.2)={tab.Cd(1.2, 0):F3} Cd(4.0)={tab.Cd(4.0, 0):F3}");
 
+        // Alpha is retrograde-first and spans the full 0 - 180, so Cd is NOT
+        // monotone: it climbs from the tail-first value to a maximum near broadside
+        // and falls away to the nose-first value. The rise is the half a boostback
+        // actually flies, so that is the half checked.
+        //
+        // The peak is NOT at exactly 90. The base term blends tail-first drag into
+        // nose-first drag as w = (1 + cos alpha)/2, so it is still falling at 90 while
+        // the sin^2 cross-flow term has already flattened - which puts the maximum at
+        // 80 - 83 degrees depending on Mach. That is a property of the generator, not
+        // a fitting artefact, so the monotone window stops short of it rather than
+        // the check tolerating a reversal.
+        const double RiseTo = 75.0;
         bool monotoneAlpha = true;
         double worstDip = 0;
         for (double m = 0.05; m <= 5.0; m += 0.05)
         {
             double prev = tab.Cd(m, 0);
-            for (double a = 0.5; a <= 30.0; a += 0.5)
+            for (double a = 0.5; a <= RiseTo; a += 0.5)
             {
                 double c = tab.Cd(m, a * Deg);
                 if (c < prev) { monotoneAlpha = false; worstDip = Math.Max(worstDip, prev - c); }
                 prev = c;
             }
         }
-        Check("Cd increases with alpha at every Mach", monotoneAlpha,
+        Check($"Cd increases from tail-first to alpha {RiseTo:F0}", monotoneAlpha,
               monotoneAlpha ? "" : $"worst reversal {worstDip:E2}");
+
+        // And the peak really is near broadside rather than somewhere the fit put it.
+        bool peakPlaced = true;
+        double worstPeak = 0;
+        for (double m = 0.1; m <= 5.0; m += 0.1)
+        {
+            double bestA = 0, bestC = -1;
+            for (double a = 0; a <= 180.0; a += 0.25)
+            {
+                double c = tab.Cd(m, a * Deg);
+                if (c > bestC) { bestC = c; bestA = a; }
+            }
+            if (bestA < 70.0 || bestA > 95.0) { peakPlaced = false; worstPeak = bestA; }
+        }
+        Check("Cd peaks near broadside (70 - 95 deg)", peakPlaced,
+              peakPlaced ? "" : $"peak at {worstPeak:F1} deg");
+
+        // The ordering that makes the convention legible: a blunt base into the wind
+        // costs more than a nose does, and broadside costs most of all. If this ever
+        // inverts, the alpha axis has been flipped somewhere.
+        bool ordering = true;
+        for (double m = 0.1; m <= 5.0; m += 0.1)
+            ordering &= tab.Cd(m, 90 * Deg) > tab.Cd(m, 0)
+                     && tab.Cd(m, 0) > tab.Cd(m, 180 * Deg);
+        Check("Cd(broadside) > Cd(tail-first) > Cd(nose-first)", ordering,
+              $"at M=1: {tab.Cd(1, 90 * Deg):F3} / {tab.Cd(1, 0):F3} / {tab.Cd(1, 180 * Deg):F3}");
 
         // Fidelity BETWEEN the breakpoints, which is the only part the fit is
         // responsible for. Note that a fit SHOULD exceed the largest sampled value
@@ -96,7 +136,7 @@ internal static class AeroCheck
             for (int i = 0; i < 20000; i++)
             {
                 double m = 0.05 + rnd.NextDouble() * 4.9;
-                double a = rnd.NextDouble() * 29.5 * Deg;
+                double a = rnd.NextDouble() * 179.5 * Deg;
                 tab.Cd(m, a, out double dM, out double dA);
                 const double h = 1e-6;
                 double fdM = (tab.Cd(m + h, a) - tab.Cd(m - h, a)) / (2 * h);
@@ -114,7 +154,7 @@ internal static class AeroCheck
             for (int i = 0; i < 20000; i++)
             {
                 double m = 0.05 + rnd.NextDouble() * 4.9;
-                double a = rnd.NextDouble() * 29.5 * Deg;
+                double a = rnd.NextDouble() * 179.5 * Deg;
                 tab.Cd(m, a, out double dM, out double dA);
 
                 Dual seedM = tab.Cd(Dual.Seed(m), new Dual(a));
@@ -266,6 +306,68 @@ internal static class AeroCheck
             Console.WriteLine("  arithmetic, which caching does not touch. Left out for now.");
         }
 
+        // ---- the atmosphere ---------------------------------------------
+        // The other half of a self-contained aero model: rho(h) with no game behind
+        // it. The mirror against KSA's own function can only be checked in the mod -
+        // it needs the game loaded - so what is checkable here is that the formula is
+        // the one we think it is, and that it differentiates.
+        Console.WriteLine();
+        Console.WriteLine("  atmosphere (KSA Earth: 1.225 kg/m^3, 1 atm, 8 km)");
+        {
+            var atm = ExponentialAtmosphere.Earth;
+
+            Console.WriteLine($"    top          {atm.TopAltitude / 1000.0,8:F2} km");
+            Console.WriteLine($"    a            {atm.SpeedOfSound,8:F2} m/s");
+
+            Check("rho(0) == rho0", Math.Abs(atm.Density(0) - 1.225) < 1e-12);
+            Check("rho(H) == rho0/e",
+                  Math.Abs(atm.Density(8000) - 1.225 / Math.E) < 1e-12,
+                  $"{atm.Density(8000):F6}");
+
+            // KSA's boundary is the LAST of the two floors to be reached. For Earth
+            // density is the binding one (1.225 -> 1e-9 takes longer than 101325 ->
+            // 1e-4), so rho at the top should be exactly the density floor.
+            Check("top is set by the density floor",
+                  Math.Abs(atm.Density(atm.TopAltitude - 1e-6) - 1e-9) < 1e-15,
+                  $"rho(top) = {atm.Density(atm.TopAltitude - 1e-6):E3}");
+            Check("rho is exactly zero above the top", atm.Density(atm.TopAltitude) == 0.0
+                                                    && atm.Density(1e9) == 0.0);
+
+            // The clamp below mean radius, mirrored from the game deliberately. It is
+            // checked rather than merely commented so that removing it is a test
+            // failure and therefore a decision.
+            Check("rho is clamped below mean radius (mirrors KSA)",
+                  atm.Density(-5000) == atm.Density(0));
+
+            // Isothermal means one speed of sound everywhere; the value is derived
+            // from P0/rho0, not assumed. 340.3 m/s is the right answer for Earth.
+            Check("speed of sound == sqrt(gamma P0 / rho0)",
+                  Math.Abs(atm.SpeedOfSound - Math.Sqrt(1.4 * 101325.0 / 1.225)) < 1e-12,
+                  $"{atm.SpeedOfSound:F2} m/s");
+
+            // The Dual bridge. Away from the two kinks the slope must be exact.
+            double worstRho = 0;
+            for (double h = 500; h < atm.TopAltitude - 500; h += 250)
+            {
+                Dual d = atm.Density(Dual.Seed(h));
+                const double step = 1e-3;
+                double fd = (atm.Density(h + step) - atm.Density(h - step)) / (2 * step);
+                worstRho = Math.Max(worstRho, Math.Abs(d.D - fd) / (1 + Math.Abs(fd)));
+            }
+            Check("d(rho)/dh == finite differences", worstRho < 1e-9, $"max rel {worstRho:E2}");
+
+            // Value agreement between the two overloads, which is what stops the
+            // differentiable path from quietly drifting from the plain one.
+            double worstVal = 0;
+            for (double h = -2000; h < atm.TopAltitude + 2000; h += 137)
+                worstVal = Math.Max(worstVal,
+                    Math.Abs(atm.Density(new Dual(h)).V - atm.Density(h)));
+            // EXACT equality, not a tolerance. The two overloads run the same
+            // arithmetic on purpose - see the note in Density(Dual) - so any
+            // difference at all means they have drifted apart.
+            Check("Dual and double overloads agree", worstVal == 0.0, $"max {worstVal:E2}");
+        }
+
         Console.WriteLine();
         Console.WriteLine(fails == 0 ? "AERO: all checks passed" : $"AERO: {fails} check(s) FAILED");
         return fails == 0 ? 0 : 1;
@@ -277,14 +379,14 @@ internal static class AeroCheck
     // points that measure the fit.
     private static readonly double[,] OffNodeReference =
     {
-        { 0.100, 1.0, 0.315551 },  { 0.350, 7.0, 0.342011 },  { 0.550, 3.0, 0.320976 },
-        { 0.750, 13.0, 0.427665 }, { 0.825, 5.0, 0.369869 },  { 0.875, 22.0, 0.675383 },
-        { 0.925, 9.0, 0.495808 },  { 0.975, 17.0, 0.705213 }, { 1.025, 1.5, 0.609818 },
-        { 1.075, 11.0, 0.767596 }, { 1.125, 27.0, 1.216957 }, { 1.175, 4.0, 0.786743 },
-        { 1.250, 19.0, 1.046042 }, { 1.350, 8.0, 0.828808 },  { 1.500, 25.0, 1.204499 },
-        { 1.700, 14.0, 0.868863 }, { 1.900, 2.5, 0.692482 },  { 2.250, 29.0, 1.235952 },
-        { 2.750, 6.0, 0.603624 },  { 3.250, 21.0, 0.853860 }, { 3.750, 10.5, 0.571018 },
-        { 4.500, 16.0, 0.633775 },
+        { 0.100, 1.0, 1.050435 },  { 0.350, 7.0, 1.070814 },  { 0.550, 35.0, 1.502399 },
+        { 0.750, 13.0, 1.224246 },  { 0.825, 55.0, 2.270155 },  { 0.875, 22.0, 1.697413 },
+        { 0.925, 95.0, 3.077561 },  { 0.975, 17.0, 2.127845 },  { 1.025, 1.5, 2.202798 },
+        { 1.075, 115.0, 3.268670 },  { 1.125, 27.0, 2.928830 },  { 1.175, 4.0, 2.561061 },
+        { 1.250, 19.0, 2.832451 },  { 1.350, 145.0, 1.826839 },  { 1.500, 25.0, 2.969418 },
+        { 1.700, 68.0, 4.248681 },  { 1.900, 2.5, 2.467070 },  { 2.250, 29.0, 2.784467 },
+        { 2.750, 178.0, 0.613752 },  { 3.250, 21.0, 2.013068 },  { 3.750, 10.5, 1.655940 },
+        { 4.500, 160.0, 0.681829 },
     };
 
     internal struct DragParams

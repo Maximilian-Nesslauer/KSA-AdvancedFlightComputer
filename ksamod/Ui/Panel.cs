@@ -18,7 +18,7 @@ using KSA;
 // plain ImGui widgets sit inside it is now ConsoleStyle's.
 public static partial class PoweredGuidanceWindow
 {
-    public enum GuidanceTab { Ascent, Descent, Landing }
+    public enum GuidanceTab { Ascent, Boostback, Descent, Landing }
     public enum LandingSubTab { Powered, Hover }
 
     private static bool _showGuidancePanel = true;
@@ -167,6 +167,17 @@ public static partial class PoweredGuidanceWindow
                 ImGui.EndTabItem();
             }
 
+            // Next to Ascent because that is the order they are flown in: a booster
+            // separates, turns round, and boosts back. Its content is the aero
+            // workbench for now - see Ui/Gauges/BoostbackGauge.cs.
+            if (ImGui.BeginTabItem("Boostback"))
+            {
+                _panelTab = GuidanceTab.Boostback;
+                DrawBoostbackTabContent(vehicle, orbit, parent,
+                    ImGui.GetContentRegionAvail().X);
+                ImGui.EndTabItem();
+            }
+
             if (ImGui.BeginTabItem("Descent"))
             {
                 _panelTab = GuidanceTab.Descent;
@@ -262,10 +273,13 @@ public static partial class PoweredGuidanceWindow
         float3 green = ColorRgbReference.GetIndexedRgb(IndexedColor.Green);
         float3 red = ColorRgbReference.GetIndexedRgb(IndexedColor.Red);
 
-        // Every tab commits to something now: ascent launches, descent starts the
-        // deorbit flow, landing drops straight into the powered descent from wherever
-        // the vehicle currently is.
-        const bool wired = true;
+        // Every tab commits to something EXCEPT Boostback: ascent launches, descent
+        // starts the deorbit flow, landing drops straight into the powered descent
+        // from wherever the vehicle currently is. Boostback is an aero workbench with
+        // no guidance behind it yet, so its buttons stripe out rather than
+        // disappearing - the panel keeps one fixed shape across a tab switch, which is
+        // the same reason the unwired tabs used to.
+        bool wired = _panelTab != GuidanceTab.Boostback;
 
         // EXECUTE lights green while that phase is actually doing something: guidance
         // running or a launch armed and waiting for its window on ascent, any live
@@ -273,6 +287,7 @@ public static partial class PoweredGuidanceWindow
         // same whether or not it currently has anything to stop.
         bool lit = _panelTab == GuidanceTab.Ascent
             ? (_s.Running || _s.LaunchArmed)
+            : _panelTab == GuidanceTab.Boostback ? false
             : _panelTab == GuidanceTab.Descent ? DescentLive
             : _landingSubTab == LandingSubTab.Hover
                 ? _s.LandingPhase == LandingPhase.TerminalHover
@@ -285,7 +300,9 @@ public static partial class PoweredGuidanceWindow
                 GaugeButton(lit ? green : ImGaugeStyle.Default.IdleColor, 0.4f)
                     .WithDisabled(!wired)))
         {
-            if (_panelTab == GuidanceTab.Ascent)
+            if (_panelTab == GuidanceTab.Boostback)
+                { /* nothing to commit yet - the button is disabled above */ }
+            else if (_panelTab == GuidanceTab.Ascent)
                 ExecuteAscent(orbit, parent);
             else if (_panelTab == GuidanceTab.Descent)
                 ExecuteLanding(vehicle, orbit, parent, parent.Mu, bodyRadius);
@@ -303,7 +320,9 @@ public static partial class PoweredGuidanceWindow
         if (ImGauge.Button("ABORT", new float2(half, height),
                 GaugeButton(red, 0.4f).WithDisabled(!wired)))
         {
-            if (_panelTab == GuidanceTab.Ascent)
+            if (_panelTab == GuidanceTab.Boostback)
+                { /* nothing to abort yet - the button is disabled above */ }
+            else if (_panelTab == GuidanceTab.Ascent)
                 AbortAscent();
             else if (_panelTab == GuidanceTab.Landing
                      && _landingSubTab == LandingSubTab.Powered && _s.UseSixDofLanding)
@@ -313,8 +332,10 @@ public static partial class PoweredGuidanceWindow
         }
 
         // RETARGET, full width on its own row. It arms a world click that moves the
-        // landing site, so it means nothing on Ascent and stripes out there.
-        bool canRetarget = _panelTab != GuidanceTab.Ascent;
+        // landing site, so it means nothing on Ascent or Boostback and stripes out
+        // on both.
+        bool canRetarget = _panelTab != GuidanceTab.Ascent
+                        && _panelTab != GuidanceTab.Boostback;
         float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
 
         ImGui.SetCursorScreenPos(new float2(origin.X, origin.Y + height + gap));

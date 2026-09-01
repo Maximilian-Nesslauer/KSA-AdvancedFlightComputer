@@ -57,6 +57,19 @@ public readonly struct Dual
     }
 
     /// <summary>
+    /// Exponential. Added for the atmosphere: density is rho0 * exp(-h/H), and a
+    /// solver that plans through the air needs d(rho)/d(altitude) to come out of
+    /// the same sweep as every other slope rather than being special-cased.
+    ///
+    ///   d/dt exp(x) = exp(x) * x'
+    /// </summary>
+    public static Dual Exp(Dual a)
+    {
+        double e = Math.Exp(a.V);
+        return new Dual(e, e * a.D);
+    }
+
+    /// <summary>
     /// Four-quadrant arctangent. Added for angle of attack, which is the angle
     /// between the body axis and the relative wind: atan2 of the cross-flow speed
     /// against the axial speed is well conditioned everywhere except at zero

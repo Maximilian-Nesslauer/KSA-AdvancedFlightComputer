@@ -270,12 +270,17 @@ public static partial class PoweredGuidanceWindow
         DrawGfoldDebugWindow();
 
         // Are we looking at a descent? Either window can say so — the legacy Landing
-        // tab, or the gauge panel sitting on anything but Ascent. Both the ascent
-        // overlay and the landing-site marker key off this, so that retargeting works
-        // from the new panel and the two overlays don't clutter each other's view.
-        // Guidance itself keeps running regardless of which tab is open.
+        // tab, or the gauge panel sitting on a descent tab. Both the ascent overlay
+        // and the landing-site marker key off this, so that retargeting works from the
+        // new panel and the two overlays don't clutter each other's view. Guidance
+        // itself keeps running regardless of which tab is open.
+        //
+        // Named rather than inverted: this used to read "anything but Ascent", which
+        // silently made every tab added afterwards a descent. Boostback is not one —
+        // it has no landing site to mark and no retarget click to arm.
         bool descentUi = _landingTabActive
-            || (_showGuidancePanel && _panelTab != GuidanceTab.Ascent);
+            || (_showGuidancePanel && (_panelTab == GuidanceTab.Descent
+                                    || _panelTab == GuidanceTab.Landing));
 
         // World-space overlays (each its own full-screen window, drawn after the
         // panel so they layer correctly). Each no-ops unless toggled on.

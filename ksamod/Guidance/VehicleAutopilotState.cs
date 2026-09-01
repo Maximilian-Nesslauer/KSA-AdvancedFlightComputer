@@ -517,6 +517,42 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool Idle(bool threaded) => !threaded || Worker == null || !Worker.IsBusy;
 
+    // ---------------------------------------------------------------- boostback
+
+    /// <summary>
+    /// This vehicle's aero surrogate: the Cd(Mach, alpha) table sampled off KSA's own
+    /// aerodynamics, and the atmosphere that goes with it. Null until the Boostback
+    /// tab has sampled it.
+    ///
+    /// PER VEHICLE, not global, for the same reason everything else here is: the table
+    /// is a property of one craft's bounding box, so sharing it would silently hand a
+    /// booster's drag model to an upper stage. It is also why the sweep survives a tab
+    /// switch - resampling on every draw would re-fit a spline sixty times a second
+    /// to answer a question whose inputs only change when the part tree does.
+    /// </summary>
+    public KsaAeroSweep.Result Aero;
+
+    /// <summary>Why the last sweep failed, empty if it did not.</summary>
+    public string AeroError = "";
+
+    /// <summary>
+    /// Resample when the vehicle's geometry changes, not merely when it is looked at.
+    ///
+    /// KSA recomputes AerodynamicCdABody only in UpdateAfterPartTreeModification, so
+    /// the table is exactly as stale as the bounding box is - which staging changes and
+    /// nothing else does. Comparing the box the sweep was taken from against the live
+    /// one catches that without hooking anything.
+    /// </summary>
+    public bool AeroStale(double3 liveExtents)
+    {
+        if (Aero == null) return true;
+        double3 was = Aero.SampledExtents;
+        double tol = 1e-3;
+        return System.Math.Abs(was.X - liveExtents.X) > tol
+            || System.Math.Abs(was.Y - liveExtents.Y) > tol
+            || System.Math.Abs(was.Z - liveExtents.Z) > tol;
+    }
+
     /// <summary>
     /// Per-vehicle state, held WEAKLY so a destroyed or unloaded vehicle takes its
     /// autopilot state with it. A Dictionary would keep every craft the player ever
