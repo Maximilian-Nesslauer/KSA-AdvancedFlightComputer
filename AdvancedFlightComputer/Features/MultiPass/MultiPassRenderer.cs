@@ -15,7 +15,7 @@ internal static class MultiPassRenderer
     /// trajectory). The dim ramp keeps the unrendered last pass's slot
     /// so intermediate brightness still slopes correctly.</summary>
     public static void RenderPassOrbits(
-        Viewport viewport, Vehicle source, PassPreview[] passes,
+        IViewport viewport, Vehicle source, PassPreview[] passes,
         bool skipFirst = false, bool skipLast = false)
     {
         int start = skipFirst ? 1 : 0;

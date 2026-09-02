@@ -1,6 +1,6 @@
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
-using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 
@@ -20,7 +20,7 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
 internal static class Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers
 {
-    static void Postfix(Viewport inViewport)
+    static void Postfix(IGameViewport inViewport)
     {
         try
         {
@@ -29,7 +29,8 @@ internal static class Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning(
+            // Deduped: runs per frame.
+            LogHelper.WarnOnce("hohmann-markers:" + ex.GetType().Name,
                 $"[AFC] Hohmann DrawPlanWindow marker postfix: {ex}");
         }
     }

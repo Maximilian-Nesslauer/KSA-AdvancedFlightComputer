@@ -270,7 +270,7 @@ internal static class HohmannMultiPassUI
     /// close+reopen of the plan window; in that state we must draw the
     /// final pass ourselves or it disappears entirely (visible at low
     /// N=2,3 where skipFirst already eats the queued pass).</summary>
-    public static void RenderOrbits(Viewport viewport, Vehicle source)
+    public static void RenderOrbits(IViewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
         if (source.Id != _cachedKey.SourceId) return;
@@ -291,7 +291,7 @@ internal static class HohmannMultiPassUI
     /// stock's selected-transfer-marker availability (gated on
     /// <c>_transferCalculated</c>) for the same reason as
     /// <see cref="RenderOrbits"/>.</summary>
-    public static void RenderMarkers(Viewport viewport, Vehicle source)
+    public static void RenderMarkers(IViewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
         if (source.Id != _cachedKey.SourceId) return;

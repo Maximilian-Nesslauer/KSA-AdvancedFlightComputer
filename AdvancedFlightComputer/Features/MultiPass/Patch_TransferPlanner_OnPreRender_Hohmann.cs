@@ -1,7 +1,7 @@
 using System;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
 using Brutal.ImGuiApi;
-using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 
@@ -23,7 +23,7 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender))]
 internal static class Patch_TransferPlanner_OnPreRender_Hohmann
 {
-    static void Postfix(Viewport inViewport)
+    static void Postfix(IViewport inViewport)
     {
         try
         {
@@ -40,7 +40,8 @@ internal static class Patch_TransferPlanner_OnPreRender_Hohmann
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning(
+            // Deduped: runs per frame per viewport.
+            LogHelper.WarnOnce("hohmann-onprerender:" + ex.GetType().Name,
                 $"[AFC] Hohmann OnPreRender postfix: {ex}");
         }
     }

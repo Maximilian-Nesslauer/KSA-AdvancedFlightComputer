@@ -14,7 +14,7 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender))]
 internal static class Patch_OnPreRender
 {
-    static void Postfix(Viewport inViewport)
+    static void Postfix(IViewport inViewport)
     {
         try
         {
@@ -26,7 +26,9 @@ internal static class Patch_OnPreRender
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] ManeuverTools OnPreRender: {ex}");
+            // Deduped: runs per frame per viewport.
+            LogHelper.WarnOnce("maneuvertools-onprerender:" + ex.GetType().Name,
+                $"[AFC] ManeuverTools OnPreRender: {ex}");
         }
     }
 }

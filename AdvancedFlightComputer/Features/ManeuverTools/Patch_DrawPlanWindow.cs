@@ -55,7 +55,7 @@ internal static class Patch_DrawPlanWindow
     private static bool _showFlightPlanPreview;
     private static bool _showOrbitPreview;
 
-    static bool Prefix(Viewport inViewport)
+    static bool Prefix(IGameViewport inViewport)
     {
         TransferType transferType;
         try
@@ -103,7 +103,7 @@ internal static class Patch_DrawPlanWindow
         return false;
     }
 
-    private static void DrawWindow(Viewport inViewport, TransferType transferType)
+    private static void DrawWindow(IViewport inViewport, TransferType transferType)
     {
         ImGui.SetNextWindowPos(
             inViewport.Position + new float2(inViewport.Size.X - MainWindowOffsetXPx, MainWindowOffsetYPx),
@@ -330,7 +330,7 @@ internal static class Patch_DrawPlanWindow
         }
     }
 
-    private static void DrawFlightPlanWindow(Viewport inViewport)
+    private static void DrawFlightPlanWindow(IViewport inViewport)
     {
         // Multi-pass: show the final-pass trajectory.
         FlightPlan? fp = MultiPassUI.HasMultiPassPreview
@@ -530,7 +530,7 @@ internal static class Patch_DrawPlanWindow
 
     /// <summary>Background-drawlist markers (encounter, escape, impact,
     /// closest approach, Ap/Pe) for the preview orbit.</summary>
-    private static void DrawOrbitMarkers(Viewport inViewport)
+    private static void DrawOrbitMarkers(IViewport inViewport)
     {
         var uiContext = new Astronomical.UiContext(
             inViewport, _lastSource!, Color.Green,
@@ -541,7 +541,7 @@ internal static class Patch_DrawPlanWindow
 
     /// <summary>3D-view post-burn orbit (single-burn or multi-pass), drawn
     /// from Patch_OnPreRender when "Preview Orbit" is on.</summary>
-    internal static void RenderOrbitPreview(Viewport inViewport)
+    internal static void RenderOrbitPreview(IViewport inViewport)
     {
         // Program.OnDrawUiThreadSafe calls DrawPlanWindow only while
         // TransferPlanner.ShowPlanWindow is true, so neither the prefix nor

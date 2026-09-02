@@ -199,7 +199,7 @@ internal static class MultiPassUI
             label));
     }
 
-    public static void Render(Viewport viewport, Vehicle source)
+    public static void Render(IViewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
         if (source == null || source.Id != MultiPassPreviewCache.PreviewSourceId) return;
@@ -214,7 +214,7 @@ internal static class MultiPassUI
     /// <summary>Per-pass Ap/Pe/AN/DN/SOI/closest markers with first /
     /// final / intermediate styling. ImGui-phase counterpart of
     /// <see cref="Render"/>.</summary>
-    public static void RenderMarkers(Viewport viewport, Vehicle source)
+    public static void RenderMarkers(IViewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
         if (source == null || source.Id != MultiPassPreviewCache.PreviewSourceId) return;

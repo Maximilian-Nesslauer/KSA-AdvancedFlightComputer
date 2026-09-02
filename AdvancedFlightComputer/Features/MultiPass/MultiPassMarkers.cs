@@ -38,7 +38,7 @@ internal static class MultiPassMarkers
     /// number (e.g. "Ap Pass 4" mid-execution instead of restarting
     /// at 1).</summary>
     public static void Draw(
-        Viewport viewport, Vehicle source, PassPreview[] passes,
+        IViewport viewport, Vehicle source, PassPreview[] passes,
         int firstPassDisplayNumber = 1,
         bool skipFirst = false, bool skipLast = false)
     {

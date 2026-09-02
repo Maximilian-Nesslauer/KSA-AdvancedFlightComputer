@@ -462,7 +462,7 @@ internal static class HohmannFlybyUI
     /// "Preview Selected Transfer" overlay shows the center-aimed (impact) plan it
     /// selected from the porkchop, so without this the preview contradicts what
     /// Create would actually fly.</summary>
-    public static void RenderPreview(Viewport viewport, Vehicle source)
+    public static void RenderPreview(IViewport viewport, Vehicle source)
     {
         FlightPlan? fp = _previewPlan;
         if (fp == null || fp.Patches.Count == 0) return;

@@ -1,6 +1,7 @@
 using System;
+using System.Reflection;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
-using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 
@@ -16,12 +17,22 @@ namespace AdvancedFlightComputer.Features.Flyby;
 /// with the center-aimed plan's markers, which describe the impact the flyby
 /// replaced.
 /// </summary>
-[HarmonyPatch(typeof(TransferPlanner), "DrawSelectedTransferUi", new[] { typeof(Viewport) })]
+[HarmonyPatch]
 internal static class Patch_TransferPlanner_DrawSelectedTransferUi_Flyby
 {
-    public static bool IsAnchorPresent =>
-        AccessTools.Method(typeof(TransferPlanner), "DrawSelectedTransferUi",
-            new[] { typeof(Viewport) }) != null;
+    // IGameViewport here, IViewport on the DrawSelectedTransfer sibling.
+    // The wrong one resolves to null and the patch never binds.
+    private static readonly Type[] Signature = { typeof(IGameViewport) };
+
+    private static MethodInfo? Anchor =>
+        AccessTools.Method(typeof(TransferPlanner), "DrawSelectedTransferUi", Signature);
+
+    public static bool IsAnchorPresent => Anchor != null;
+
+    static MethodBase TargetMethod() =>
+        Anchor ?? throw new InvalidOperationException(
+            "[AFC] TransferPlanner.DrawSelectedTransferUi(IGameViewport) not found; "
+            + "patching this class requires an IsAnchorPresent check first.");
 
     static bool Prefix()
     {
@@ -31,7 +42,8 @@ internal static class Patch_TransferPlanner_DrawSelectedTransferUi_Flyby
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning(
+            // Deduped: runs per frame.
+            LogHelper.WarnOnce("flyby-suppress-markers:" + ex.GetType().Name,
                 $"[AFC] Flyby DrawSelectedTransferUi prefix: {ex}; leaving stock markers on.");
             return true;
         }
