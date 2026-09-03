@@ -214,6 +214,60 @@ public sealed class VehicleAutopilotState
     public bool StagingActive;
     public double LastSequenceTime = double.NegativeInfinity;
 
+    // --- ascent propellant reserve, for a returning booster ---
+
+    /// <summary>
+    /// dV to leave in the first stage for its own return, m/s. Zero switches it off.
+    ///
+    /// MEASURED AGAINST THE BOOSTER, NOT THE STACK, which is the whole point of
+    /// expressing it as dV rather than as kilograms. The propellant a given dV costs is
+    /// m_boosterDry * (exp(dv/ve) - 1) - the upper stage cancels out of the rocket
+    /// equation entirely - and sizing it against the stack instead over-reserves by the
+    /// ratio of the two masses. On a 20 t booster under a 40 t upper stage that is
+    /// three times too much propellant and 2.6 times the dV asked for. See
+    /// PoweredGuidanceWindow.ReservePropellantKg.
+    /// </summary>
+    public double AscentReserveDvMs;
+
+    /// <summary>What that dV costs at the current staging geometry, kg. Recomputed with
+    /// the stage model; zero when the reserve is not armed.</summary>
+    public double ReserveKg;
+
+    /// <summary>The booster's own dry mass, kg - the mass the next separation drops.
+    /// Shown because it is the number the reserve is sized against and a wrong-looking
+    /// reserve is nearly always a wrong-looking booster.</summary>
+    public double ReserveBoosterDryKg;
+
+    /// <summary>
+    /// True when the next separation drops EVERY engine now producing thrust, so the
+    /// vehicle that separates really is the booster doing the flying.
+    ///
+    /// This is what keeps the reserve off a strap-on stack. While boosters burn
+    /// alongside a core, the next separation drops the boosters and the core keeps
+    /// firing - reserving propellant there would stage the whole first stage early to
+    /// leave fuel in casings that are about to be thrown away. Once the strap-ons are
+    /// gone and the next separation is the core's own, this goes true and the reserve
+    /// arms itself.
+    /// </summary>
+    public bool ReserveArmed;
+
+    /// <summary>Why the reserve is not armed, empty when it is.</summary>
+    public string ReserveNote = "";
+
+    /// <summary>Set once the reserve has fired its staging, so it fires once.</summary>
+    public bool ReserveStaged;
+
+    /// <summary>
+    /// Sim time until which this vehicle is a booster waiting for boostback to engage.
+    ///
+    /// Set when the sweep adopts a craft that separated under an ascent reserve, cleared
+    /// when boostback takes or the window runs out. It exists because the engage cannot
+    /// happen on the frame the adoption does - the part tree is still settling and the
+    /// aero sweep has nothing to fit - so the attempt is retried, and something has to
+    /// keep the sweep interested in a vehicle that is not yet flying anything.
+    /// </summary>
+    public double HandoverPendingUntil = double.NegativeInfinity;
+
     // The stage model cache. VehicleStageModel used to carry the vehicle it was built
     // for, purely so a switch could invalidate it; the key is the vehicle now, so that
     // field is gone.

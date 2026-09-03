@@ -323,6 +323,7 @@ public static partial class PoweredGuidanceWindow
         _s.LastStepTime = SimNow();
         _s.RollLatched = false;    // re-measure the vehicle's roll at this engagement
         _s.CutoffDone = false;
+        _s.ReserveStaged = false;   // a fresh ascent gets its reserve staging back
         _s.StagingActive = false;
         _s.LastSequenceTime = double.NegativeInfinity;
         _s.RgoPeak = 0.0;
@@ -458,6 +459,12 @@ public static partial class PoweredGuidanceWindow
             }
             else
             {
+                // The reserve BEFORE the g-limit split, so a stage that gets divided
+                // is divided at the masses it will actually fly through. Applied to
+                // this copy only - the cached model stays the vehicle as it is, which
+                // is what the stage table and the staging cue both need it to be.
+                if (_s.ReserveArmed)
+                    ApplyAscentReserve(live, _s.ReserveKg);
                 if (_s.GLimitEnabled && _s.GLimitG > 0.1)
                     ApplyGLimit(live, _s.GLimitG);
                 _s.Status = "";

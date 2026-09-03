@@ -2,6 +2,51 @@
 
 ## [Unreleased]
 
+- **Ascent leaves the booster propellant to come home with**, and hands it over.
+  A new per-vehicle **Booster reserve dV (m/s)** on the ascent tab; at zero nothing
+  changes.
+
+  **A dV rather than a mass, because the arithmetic is the whole point.** The
+  propellant a reserve costs is `m_dry · (exp(dv/ve) − 1)` — the *booster's* dry
+  mass — and the upper stage is not in it. That is exact, not an approximation, and
+  it is why sizing against the mass actually to hand at staging is a trap. On a 20 t
+  booster under a 40 t upper stage, a 500 m/s reserve is 3.63 t; measured against the
+  60 t stack it is 10.88 t, which is 7.25 t of ascent propellant given up for nothing
+  and 1303 m/s where 500 was asked for. `m_dry` is read straight off the stage model:
+  the mass that goes overboard at the first jettison, the same discontinuity
+  `Coalesce` already uses to decide a stage boundary is one.
+
+  **Two levers, and both are needed.** UPFG never commands staging — it plans around
+  boundaries, but the event is fired by the tanks running dry. So the reserve (1)
+  raises stage 0's `MassDry` on the ascent's *copy* of the model, which shrinks
+  `burnTimes[0]` and with it `L`, the dV UPFG believes is aboard, so it hands the
+  difference to the upper stage; and (2) adds a third cue to `AutoSequence`. Where
+  the existing two wait for propellant to run out, this one fires while the stage is
+  still perfectly able to burn, because what is left is spoken for. Lever 1 alone
+  makes UPFG plan a shorter stage and then burn straight through the reserve.
+
+  **The guard that keeps it off a strap-on stack.** "The next thing that separates"
+  is not the same as "the booster": while solids burn beside a core, the next
+  separation is the casings, and reserving there would end the whole first stage
+  early to leave propellant in something about to be thrown away. The reserve arms
+  only when the next separation takes *every* engine currently producing thrust with
+  it, which becomes true on its own once the strap-ons are gone. It also will not
+  fire during the vertical rise, so a reserve larger than the stage holds stages the
+  vehicle early rather than on the pad — and the readout says so before it bites.
+
+  **Auto hand-over.** A separated booster is a *new* `Vehicle` with no entry in the
+  state table, and the sweep drops unknown unfocused craft on the floor — correct for
+  every other vehicle in the universe and exactly wrong for this one. So the parts the
+  decoupler is about to detach are recorded *before* the split, and the first unknown
+  vehicle carrying one of them is adopted: given state, given the ascent's landing
+  site, and started on boostback. The engage is retried rather than done on the
+  adoption frame, because that is the frame the part tree is least settled and the
+  aero sweep has nothing to fit a surrogate to.
+
+  One at a time: the hand-over record is a static, because it has to be read from a
+  vehicle that does not exist yet and so cannot live on either party. A pair of side
+  boosters separating together would need one record each. It expires after 30 s.
+
 - **`Navbox.Numerics` is `PoweredGuidance.Numerics`**, and `Navbox.Flight` is
   `PoweredGuidance.Flight`. The name predates the mod and named nothing that still
   exists; the shipped assembly, the mod folder and the `PoweredGuidance.Upfg`

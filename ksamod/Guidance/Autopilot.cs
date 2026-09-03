@@ -132,6 +132,15 @@ public static partial class PoweredGuidanceWindow
 
         bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
 
+        // LEVER TWO: the reserve's own staging cue.
+        //
+        // The other two cues both wait for propellant to run out - "nothing is producing
+        // thrust" and ShouldDropSpentEngines. This one is the opposite: it fires while
+        // the stage is still perfectly capable of burning, because the propellant left
+        // in it is spoken for. Without it the reserve does nothing at all, since UPFG
+        // plans stage boundaries but never commands one.
+        bool reserveDone = ShouldStageForReserve(vehicle);
+
         // EVALUATED UNCONDITIONALLY, not short-circuited behind thrustOn. Its real
         // output is not just the bool: it refills _spentEngineParts, and the
         // activation below records that set as "already staged for". Skipping the
@@ -140,7 +149,7 @@ public static partial class PoweredGuidanceWindow
         // one's SpentStagedFor. Harmless while one vehicle was ever serviced; not
         // once the hook runs every craft in sequence.
         bool dropSpent = ShouldDropSpentEngines(vehicle, sequenceList);
-        if (thrustOn && !dropSpent)
+        if (thrustOn && !dropSpent && !reserveDone)
         {
             _s.StagingActive = false;
             return;
@@ -156,6 +165,12 @@ public static partial class PoweredGuidanceWindow
                 _s.Status = "Auto-staging held: the next sequence would separate the control module.";
                 return;
             }
+            // Everything the booster needs to be recognised and flown, recorded BEFORE
+            // the split - afterwards the parts have moved to a vehicle we have no
+            // handle on and the decoupler that named them is gone.
+            if (reserveDone)
+                ArmBoosterHandover(vehicle, sequenceList, now);
+
             sequenceList.ActivateNextSequence(vehicle);
             vehicle.UpdateAfterPartTreeModification();
             _s.LastSequenceTime = now;
@@ -163,6 +178,179 @@ public static partial class PoweredGuidanceWindow
             _s.SpentStagedFor.Clear();
             _s.SpentStagedFor.UnionWith(_spentEngineParts);
         }
+    }
+
+    /// <summary>
+    /// True when the stage now burning has come down to its reserve and should be
+    /// staged even though it could keep going.
+    ///
+    /// Remaining propellant is taken as live mass minus the CACHED model's burnout
+    /// mass, not minus Vehicle.PropellantMass - that figure includes the upper stage's
+    /// tanks, and reserving against it would stage almost immediately. The cached model
+    /// is the unreserved one (ApplyAscentReserve only ever touches the ascent's copy),
+    /// which is what makes this subtraction mean "propellant left in this stage".
+    /// </summary>
+    private static bool ShouldStageForReserve(Vehicle vehicle)
+    {
+        if (!_s.Running || _s.ReserveStaged || !_s.ReserveArmed || !(_s.ReserveKg > 0.0))
+            return false;
+
+        // NOT ON THE PAD. A reserve bigger than the stage can give would otherwise stage
+        // the vehicle where it stands, and a booster dropped at zero altitude is a
+        // sillier failure than the one being guarded against. Past the vertical rise the
+        // test means what it says.
+        if (_s.Phase == AscentPhase.Vertical)
+            return false;
+
+        UpfgVehicle model = _s.StageModel;
+        if (model == null || model.Stages.Count < 2)
+            return false;
+
+        double remaining = vehicle.TotalMass - model.Stages[0].MassDry;
+        return remaining <= _s.ReserveKg;
+    }
+
+    // --- the hand-over to boostback -----------------------------------------
+    //
+    // ONE PENDING HAND-OVER AT A TIME, in statics rather than per-vehicle state, and
+    // that is a real limitation rather than an oversight. The record has to be read
+    // from a vehicle that does not exist yet and has no state of its own, so it cannot
+    // live on either party; and a pair of side boosters separating together would need
+    // one record each. A returning first stage is one vehicle, which is the case this
+    // is for. It expires either way, so a hand-over that finds nothing does not linger.
+    private static readonly HashSet<uint> _handoverParts = new HashSet<uint>();
+    private static double _handoverSiteLat, _handoverSiteLon;
+    private static double _handoverExpiry = double.NegativeInfinity;
+
+    /// <summary>How long a hand-over waits for its booster to show up, s. The split
+    /// happens inside the same activation, so this only has to survive a frame or two;
+    /// it is generous because the cost of waiting is nothing and the cost of expiring
+    /// early is a booster nobody flies.</summary>
+    private const double HandoverWindowS = 30.0;
+
+    /// <summary>
+    /// Record what the imminent separation is about to throw overboard, so the vehicle
+    /// it becomes can be recognised and handed the landing site.
+    /// </summary>
+    private static void ArmBoosterHandover(Vehicle vehicle, SequenceList sequenceList,
+                                           double now)
+    {
+        _handoverParts.Clear();
+        _s.ReserveStaged = true;
+
+        Sequence next = null;
+        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
+        for (int i = 0; i < sequences.Length; i++)
+        {
+            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+            {
+                next = sequences[i];
+                break;
+            }
+        }
+        if (next == null)
+            return;
+
+        _stagingDropped.Clear();
+        ReadOnlySpan<Part> parts = next.Parts;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
+            for (int j = 0; j < decouplers.Length; j++)
+            {
+                Part root = DetachedRoot(decouplers[j]);
+                if (root != null)
+                    CollectSubtree(root, _stagingDropped);
+            }
+        }
+        foreach (Part part in _stagingDropped)
+            _handoverParts.Add(part.InstanceId);
+
+        if (_handoverParts.Count == 0)
+            return;
+
+        // The site travels with the booster. It is the ascent vehicle's site because
+        // that is where the player set it, and the booster has no state to have set one
+        // of its own - which is the whole reason this is carried rather than defaulted.
+        _handoverSiteLat = _s.SiteLatDeg;
+        _handoverSiteLon = _s.SiteLonDeg;
+        _handoverExpiry = now + HandoverWindowS;
+    }
+
+    /// <summary>
+    /// A vehicle the sweep has never seen before: is it the booster we just staged?
+    /// If so, give it state, the landing site, and a running boostback.
+    ///
+    /// This is where the hand-over has to happen. A separated booster is a NEW Vehicle
+    /// object with no entry in the state table, and the sweep drops unknown unfocused
+    /// craft on the floor - which is correct for every other vehicle in the universe and
+    /// exactly wrong for this one. Matching on the parts recorded before the split is
+    /// what tells the two apart.
+    /// </summary>
+    private static bool TryAdoptBooster(Vehicle vehicle)
+    {
+        if (_handoverParts.Count == 0 || SimNow() > _handoverExpiry)
+            return false;
+
+        PartTree tree = vehicle?.Parts;
+        if (tree == null)
+            return false;
+
+        bool mine = false;
+        ReadOnlySpan<Part> parts = tree.Parts;
+        for (int i = 0; i < parts.Length && !mine; i++)
+            mine = _handoverParts.Contains(parts[i].InstanceId);
+        if (!mine)
+            return false;
+
+        // Consumed on the first match: the record describes one separation, and a second
+        // vehicle claiming it would be the upper stage or debris taking the booster's
+        // guidance with it.
+        _handoverParts.Clear();
+        _handoverExpiry = double.NegativeInfinity;
+
+        _s = VehicleAutopilotState.For(vehicle);
+        _s.SiteLatDeg = _handoverSiteLat;
+        _s.SiteLonDeg = _handoverSiteLon;
+
+        // NOT engaged here, deliberately. This runs on the frame the split happened,
+        // which is the frame the part tree is least settled - and ExecuteBoostback needs
+        // an aero surrogate fitted to a bounding box that may not exist yet. It refuses
+        // rather than throwing, and refusing here would leave a booster that had been
+        // adopted and would never be flown, with the hand-over record already consumed.
+        // So the engage is retried from the sweep until it takes.
+        _s.HandoverPendingUntil = SimNow() + HandoverWindowS;
+        return true;
+    }
+
+    /// <summary>
+    /// Engage boostback on an adopted booster, retrying until the part tree has settled
+    /// enough for the aero sweep to fit a surrogate to it. Gives up at the window rather
+    /// than retrying a fault forever.
+    /// </summary>
+    private static void StepBoosterHandover(Vehicle vehicle)
+    {
+        if (!(_s.HandoverPendingUntil > double.NegativeInfinity))
+            return;
+
+        if (BoostbackLive)
+        {
+            _s.HandoverPendingUntil = double.NegativeInfinity;
+            return;
+        }
+
+        if (SimNow() > _s.HandoverPendingUntil)
+        {
+            _s.HandoverPendingUntil = double.NegativeInfinity;
+            _s.BoostbackStatus = "Hand-over failed: " + (_s.AeroError.Length > 0
+                ? _s.AeroError : "no aero surrogate for the separated booster.");
+            return;
+        }
+
+        Orbit orbit = vehicle.Orbit;
+        IParentBody parent = orbit?.Parent;
+        if (parent != null)
+            ExecuteBoostback(vehicle, orbit, parent);
     }
 
     private static readonly HashSet<Part> _stagingDropped = new HashSet<Part>();
@@ -348,6 +536,11 @@ public static partial class PoweredGuidanceWindow
             // stage table. TotalDeltaV is a Volatile.Read of a float, so the draw
             // thread can have this even though the Lists behind it can tear.
             _s.StageModelKsaDv = performance.TotalDeltaV;
+
+            // The reserve rides the same tick: both of its inputs - the stage model and
+            // the part tree the separation walk reads - only change when staging does,
+            // and StageModelDirty is already set exactly then.
+            RefreshReserve(vehicle);
         }
         catch (Exception)
         {
@@ -399,6 +592,248 @@ public static partial class PoweredGuidanceWindow
             GLim = 1e9,
         });
         return upfgVehicle;
+    }
+
+    // --- Ascent propellant reserve -----------------------------------------
+    //
+    // WHAT THIS IS FOR. A booster that flies itself home cannot spend every drop of its
+    // propellant reaching staging velocity: boostback, entry and landing all have to
+    // come out of the same tanks. So the ascent stops the first stage early, leaving a
+    // dV reserve behind, and hands the booster over with a landing site.
+    //
+    // TWO LEVERS, AND BOTH ARE NEEDED. UPFG never commands staging - it plans around
+    // stage boundaries, but the event itself is fired by the tanks running dry (see
+    // AutoSequence). So the reserve raises the stage's MassDry, which is what makes
+    // UPFG believe the stage is shorter and hand the difference to the upper stage; and
+    // it adds a staging CUE, which is what actually cuts the burn. Doing only the first
+    // makes UPFG plan a shorter stage and then burn straight through the reserve
+    // anyway.
+
+    /// <summary>
+    /// The propellant a dV reserve costs, kg, and the booster dry mass it is measured
+    /// against. Zero when there is no separation to reserve for.
+    ///
+    /// THE ARITHMETIC IS THE POINT. For a reserve dv left in a booster of dry mass
+    /// m_dry, the rocket equation gives ve*ln((m_dry + m_p)/m_dry) = dv, so
+    ///
+    ///     m_p = m_dry * (exp(dv/ve) - 1)
+    ///
+    /// and the UPPER STAGE IS NOT IN IT. That is not an approximation, it is the whole
+    /// reason the knob is a dV: the propellant only ever has to lift the booster, so
+    /// sizing it against the mass at staging - booster plus upper stage, the number
+    /// that is actually to hand - over-reserves by the ratio of the two. On a 20 t
+    /// booster under a 40 t upper stage, a 500 m/s reserve is 3.6 t; measured against
+    /// the 60 t stack it is 10.9 t, which is 7.3 t the ascent gave up for nothing and
+    /// 1303 m/s where 500 was asked for.
+    ///
+    /// m_dry is read straight off the stage model: the mass that goes overboard at the
+    /// first real jettison is the booster, and Coalesce has already used exactly that
+    /// discontinuity to decide the boundary is a boundary (KsaVehicleAdapter).
+    ///
+    /// ve is the stage's VACUUM exhaust velocity, which is what the model carries.
+    /// Staging happens high enough that the boostback burn is very nearly a vacuum burn,
+    /// so this is close - but it is optimistic, not conservative, and a reserve flown
+    /// low would deliver less dV than the knob says.
+    /// </summary>
+    private static double ReservePropellantKg(UpfgVehicle model, double dvMs,
+                                              out double boosterDryKg)
+    {
+        boosterDryKg = 0.0;
+        if (model == null || dvMs <= 0.0 || model.Stages.Count < 2)
+            return 0.0;
+
+        UpfgStage first = model.Stages[0], next = model.Stages[1];
+
+        // A real jettison, not a g-limit split or an engine cutting out: those leave
+        // the mass continuous and are not a booster going anywhere.
+        double dropped = first.MassDry - next.MassTotal;
+        if (dropped <= 1e-4 * Math.Max(first.MassTotal, 1.0))
+            return 0.0;
+
+        double ve = first.Isp * 9.80665;
+        if (!(ve > 0.0))
+            return 0.0;
+
+        boosterDryKg = dropped;
+
+        // DELIBERATELY UNCAPPED. Capping it against the propellant still in the stage
+        // looks prudent and is in fact self-defeating: MassTotal is re-seeded from the
+        // live tanks every refresh, so "what is left" shrinks as the ascent burns, and a
+        // reserve capped at a fraction of it shrinks with it - which makes the staging
+        // test (propellant left <= reserve) one the burn can never reach. The cue has to
+        // compare a shrinking quantity against a FIXED one, so this is the fixed one.
+        //
+        // A reserve larger than the stage can give is a question the vehicle answers by
+        // staging as soon as guidance is flying, and the readout says so before it does.
+        return dropped * (Math.Exp(dvMs / ve) - 1.0);
+    }
+
+    // Scratch for the separation walk. Same contract as _stagingDropped: filled and
+    // consumed inside one call, never read across calls.
+    private static readonly HashSet<Part> _separationDrops = new HashSet<Part>();
+
+    /// <summary>
+    /// True when the next separation drops every engine currently producing thrust.
+    ///
+    /// THIS IS THE GUARD THAT KEEPS THE RESERVE OFF A STRAP-ON STACK. "The next thing
+    /// that separates" is not the same as "the booster": while solids burn beside a
+    /// core, the next separation is the casings, and reserving against that would end
+    /// the whole first stage early to leave propellant in something about to be thrown
+    /// away. Requiring the separation to take ALL the live engines with it says the
+    /// thing that leaves is the thing doing the flying, which is what a boostback needs
+    /// to be true. Once the strap-ons are gone it becomes true on its own.
+    /// </summary>
+    private static bool NextSeparationDropsAllEngines(Vehicle vehicle, out string why)
+    {
+        why = "";
+        PartTree tree = vehicle?.Parts;
+        SequenceList sequenceList = tree?.SequenceList;
+        if (tree == null || sequenceList == null)
+        {
+            why = "no part tree";
+            return false;
+        }
+
+        Sequence next = null;
+        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
+        for (int i = 0; i < sequences.Length; i++)
+        {
+            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+            {
+                next = sequences[i];
+                break;
+            }
+        }
+        if (next == null)
+        {
+            why = "no staging sequence left to fire";
+            return false;
+        }
+
+        _separationDrops.Clear();
+        ReadOnlySpan<Part> parts = next.Parts;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
+            for (int j = 0; j < decouplers.Length; j++)
+            {
+                Part root = DetachedRoot(decouplers[j]);
+                if (root != null)
+                    CollectSubtree(root, _separationDrops);
+            }
+        }
+        if (_separationDrops.Count == 0)
+        {
+            // An ignition-only sequence, say. Not a fault - the reserve simply has
+            // nothing to stage into yet, and this becomes true further down the list.
+            why = "the next sequence separates nothing";
+            return false;
+        }
+
+        if (!ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
+                .TryGetFrom(tree.States, out var engineStates))
+        {
+            why = "no engine states";
+            return false;
+        }
+
+        bool anyLit = false;
+        foreach (var engine in engineStates.ModulesAndStates)
+        {
+            if (!engine.Module.IsActive || !engine.State.IsPropellantAvailable)
+                continue;
+            anyLit = true;
+            if (!_separationDrops.Contains(engine.Module.Parent.FullPart))
+            {
+                why = "the next separation leaves an engine burning - not a booster";
+                return false;
+            }
+        }
+        if (!anyLit)
+            why = "nothing is burning";
+        return anyLit;
+    }
+
+    /// <summary>
+    /// Size the reserve and decide whether it is armed. Runs with the stage model, on
+    /// its 4 Hz tick, because both inputs - the model and the part tree - only change
+    /// when staging does, and StageModelDirty already marks that.
+    /// </summary>
+    private static void RefreshReserve(Vehicle vehicle)
+    {
+        _s.ReserveKg = 0.0;
+        _s.ReserveBoosterDryKg = 0.0;
+        _s.ReserveArmed = false;
+
+        if (!(_s.AscentReserveDvMs > 0.0))
+        {
+            _s.ReserveNote = "";
+            return;
+        }
+
+        // ONCE ONLY, and this is not just belt-and-braces. After the booster is gone the
+        // next separation is a perfectly good one - an upper stage over a payload, say -
+        // and re-arming there would reserve propellant in a stage that is never coming
+        // back. The reserve belongs to the first separation of an ascent.
+        if (_s.ReserveStaged)
+        {
+            _s.ReserveNote = "already staged";
+            return;
+        }
+
+        double kg = ReservePropellantKg(_s.StageModel, _s.AscentReserveDvMs,
+                                        out double boosterDry);
+        if (!(kg > 0.0))
+        {
+            _s.ReserveNote = "no separation in the stage model to reserve for";
+            return;
+        }
+        if (!NextSeparationDropsAllEngines(vehicle, out string why))
+        {
+            _s.ReserveNote = why;
+            return;
+        }
+
+        _s.ReserveKg = kg;
+        _s.ReserveBoosterDryKg = boosterDry;
+        _s.ReserveArmed = true;
+
+        // Not a refusal - the vehicle will stage the moment it is flying, which is the
+        // right answer to "leave more behind than this stage holds" - but it is not what
+        // anyone means to ask for, so it is said out loud rather than discovered.
+        double left = Math.Max(_s.StageModel.Stages[0].MassTotal
+                             - _s.StageModel.Stages[0].MassDry, 0.0);
+        _s.ReserveNote = kg >= left
+            ? $"reserve is more than the {left / 1000.0:F1} t left in this stage"
+            : "";
+    }
+
+    /// <summary>
+    /// LEVER ONE: tell UPFG the stage is shorter than it is.
+    ///
+    /// Raising MassDry is the whole model change, because every other stage quantity is
+    /// derived from it - burnTimes[0] = (MassTotal - MassDry)/massflow, and through it
+    /// charTimes, tgoi, the thrust integrals, and L, the dV believed to be aboard.
+    /// A smaller L is what makes UPFG hand the difference to the upper stage rather
+    /// than quietly plan to fly the reserve.
+    ///
+    /// Applied to the COPY the ascent step gets, never to the cached snapshot: the
+    /// stage table and the landing flows read the same cache and should see the vehicle
+    /// as it is.
+    /// </summary>
+    private static void ApplyAscentReserve(UpfgVehicle live, double reserveKg)
+    {
+        if (live == null || live.Stages.Count == 0 || !(reserveKg > 0.0))
+            return;
+
+        UpfgStage s0 = live.Stages[0];
+
+        // burnTimes goes NEGATIVE if MassDry passes MassTotal, and a negative burn time
+        // propagates into tgo without complaint. Once the live mass is already inside
+        // the reserve there is nothing left to plan on this stage anyway - the staging
+        // cue is about to fire - so the floor here is a guard, not a policy.
+        double floor = s0.MassTotal - 0.02 * (s0.MassTotal - s0.MassDry);
+        s0.MassDry = Math.Min(s0.MassDry + reserveKg, floor);
     }
 
     // Vehicle-wide acceleration limit, applied to the freshly built stage list each
@@ -471,7 +906,7 @@ public static partial class PoweredGuidanceWindow
             Use(vehicle);
         else if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
             _s = state;
-        else
+        else if (!TryAdoptBooster(vehicle))
             return;
 
         // SWITCHED OFF: hand this vehicle back and stop touching it.
@@ -504,8 +939,12 @@ public static partial class PoweredGuidanceWindow
         // window to re-derive and an EXECUTE to fire (StepLaunchWindow), and without
         // it here the step that does both was skipped for exactly the state that
         // needs it.
+        // A booster adopted at separation counts as flying before boostback engages:
+        // the engage is retried from here, and without this the sweep would drop the
+        // vehicle on the floor between adoption and the retry that starts it.
+        bool handingOver = _s.HandoverPendingUntil > SimNow();
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || _s.WasEngaged
-                   || _s.LandingCutPending || _s.LaunchArmed;
+                   || _s.LandingCutPending || _s.LaunchArmed || handingOver;
 
         // Nothing engaged and nobody looking: an unfocused idle craft is not worth a
         // stage-model rebuild or a trace sample.
@@ -521,6 +960,11 @@ public static partial class PoweredGuidanceWindow
         // own recompute on the vehicle worker thread. Gated to ~4 Hz on the wall
         // clock, per vehicle, so time warp doesn't multiply it.
         RefreshStageModel(vehicle);
+
+        // After the stage model, because both want a part tree that has finished
+        // settling after a separation and this is the first point in the frame where
+        // that is true.
+        StepBoosterHandover(vehicle);
 
         // Likewise the flown-trajectory trace: sampled off the simulation rather than
         // the frame rate, and recorded whether or not guidance is running so the track

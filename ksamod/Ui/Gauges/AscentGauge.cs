@@ -161,7 +161,52 @@ public static partial class PoweredGuidanceWindow
         using (new ImGuiDisabledScope(!_s.ForceRoll))
             GaugeRow("Roll angle (deg)", "##rollangle", ref _s.ForceRollDeg);
 
+        DrawBoosterReserve();
+
         ImGuiHelper.EndRegion();
+    }
+
+    // --- Booster reserve ----------------------------------------------------
+
+    /// <summary>
+    /// Stage the first stage EARLY, leaving it the dV it needs to fly itself home, and
+    /// hand it to boostback with the landing site. Zero switches it off.
+    ///
+    /// A dV RATHER THAN A MASS, and the readout shows both numbers for the same reason:
+    /// what a reserve costs depends on what it has to lift, and that is the booster
+    /// alone - m_dry * (exp(dv/ve) - 1), with the upper stage cancelling out of the
+    /// rocket equation entirely. So a reserve that looks wrong is nearly always a
+    /// booster dry mass that looks wrong, and the booster mass is the one worth
+    /// checking against the vehicle in the editor.
+    /// </summary>
+    private static void DrawBoosterReserve()
+    {
+        GaugeRow("Booster reserve dV", "##reservedv", ref _s.AscentReserveDvMs);
+        if (_s.AscentReserveDvMs < 0.0)
+            _s.AscentReserveDvMs = 0.0;
+        if (!(_s.AscentReserveDvMs > 0.0))
+            return;
+
+        float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
+        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
+
+        if (!_s.ReserveArmed)
+        {
+            // Idle is the normal state for most of a flight - a strap-on stack does not
+            // arm until the solids are gone - so it says WHY rather than just going
+            // quiet. See PoweredGuidanceWindow.NextSeparationDropsAllEngines.
+            GaugeRowText("Reserve", _s.ReserveNote.Length > 0 ? _s.ReserveNote
+                                                              : "waiting for a stage model", warn);
+            return;
+        }
+
+        GaugeRowText("Reserve",
+            $"{_s.ReserveKg / 1000.0,8:F2} t   ({_s.ReserveBoosterDryKg / 1000.0:F1} t booster)",
+            _s.ReserveStaged ? dim : new float4(0.4f, 1f, 0.4f, 1f));
+        if (_s.ReserveNote.Length > 0)
+            GaugeRowText("", _s.ReserveNote, warn);
+        if (_s.ReserveStaged)
+            GaugeRowText("", "staged - booster handed to boostback", dim);
     }
 
     // --- Expert settings ----------------------------------------------------
