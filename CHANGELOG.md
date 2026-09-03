@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+- **`Navbox.Numerics` is `PoweredGuidance.Numerics`**, and `Navbox.Flight` is
+  `PoweredGuidance.Flight`. The name predates the mod and named nothing that still
+  exists; the shipped assembly, the mod folder and the `PoweredGuidance.Upfg`
+  namespace were already the other name, so this just stops the bottom of the stack
+  disagreeing with the rest of it. Project, directory, root namespace, both solution
+  files and the packaging targets moved with it, `git mv` so the history follows.
+
+  The guidance panel moved too: id `"NavboxGuidance"` → `"PoweredGuidance"`, title
+  "Powered Guidance". The id is what a persisted window layout is filed under, so
+  **this panel's saved position resets once** — drag it back and it stays.
+
+  `legacy/navbox/` deliberately did not move: that is the actual old navbox, a
+  different program and correctly named.
+
+  If you have deployed the mod before, an orphaned `Navbox.Numerics.dll` will be left
+  in `Documents\My Games\Kitten Space Agency\mods\PoweredGuidance\`. Nothing
+  references it, so it is clutter rather than a fault, but it can go.
+
 - **Boostback is a guidance mode now**, not just a workbench: EXECUTE on the
   Boostback tab starts a four-phase machine (`Guidance/Boostback.cs`) that runs
   from the per-vehicle sim step, so a booster flies itself home whether or not
@@ -22,16 +40,15 @@
     attitude **and the rate it is turning at** (`KsaAttitudeRate`), so it tracks
     the slew instead of nulling a sequence of stationary targets. It hands over
     when both the command and the vehicle are inside 2°, not just the command.
-  - *Boostback* — full throttle along the **shot plan** (`BoostbackShooter`),
-    re-solved every 2 s on a receding horizon: each solve plans a burn starting
-    *now* from the live state, and the vehicle flies the head of the freshest one.
-    Cutoff is the plan's own clock, not a threshold on a shrinking vector. At T-5 s
-    the plan **freezes** and the linear tangent law is evaluated out to cutoff —
-    so the command goes on turning as the optimised burn intended, where the
-    steering lock this replaces held a fixed vector. The last seconds are where
-    the low-passed terrain height under a moving impact point is noisiest, so
-    re-solving there is chasing numerical noise at the moment precision matters
-    most.
+  - *Boostback* — full throttle in three stages. Most of it flies the **shot plan**
+    (`BoostbackShooter`), re-solved every 2 s on a receding horizon: each solve
+    plans a burn starting *now* from the live state, and the vehicle flies the head
+    of the freshest one. At T-5 s the plan **hands over to the impulsive
+    correction**, re-solved at 10 Hz; at T-2 s that command **freezes** and the
+    rest runs open loop, cutting off on sensed dV against the dV owed at the
+    freeze. The two laws swap jobs because the impulsive model's error scales with
+    burn *duration* — over five seconds it is nearly exact, and it is cheap enough
+    to keep the loop closed where the plan is not.
   - *Entry orientation* — slews to **surface** retrograde and holds. Surface, not
     inertial, because KSA's atmosphere co-rotates rigidly with the body.
 
@@ -54,7 +71,7 @@
   site is what the correction aims at), and the landing-site marker is drawn
   alongside the impact marker so the miss line has both ends.
 
-- **Direct shooting on the boostback burn** (`Navbox.Flight.BoostbackShooter`,
+- **Direct shooting on the boostback burn** (`PoweredGuidance.Flight.BoostbackShooter`,
   `Scvx.Console --shoot`). A burn is five numbers — pitch, yaw, pitch rate, yaw
   rate, duration — flown as a linear tangent law `unit(lambda + lambdadot*tau)`
   through the real powered arc (mass depletion, drag at the angle of attack the
@@ -106,18 +123,27 @@
   optimum already clears it.
 
   Measured closed loop, against an engine 3% down on the thrust the plan was built
-  on (`--shoot`):
+  on (`--shoot` now flies all three stages):
 
   | | miss | burn |
   |---|---|---|
   | one plan, open loop | 6.91 km | 48.1 s |
-  | re-solved every 2 s | 0.87 km | 49.4 s |
-  | re-solved to cutoff | 0.24 km | 49.5 s |
+  | plan, frozen for the last 5 s | 0.87 km | 49.4 s |
+  | **plan → impulsive at T-5, froze T-2** | **0.54 km** | 49.5 s |
+  | … and no freeze at all | 0.52 km | 49.5 s |
+  | *[ref]* plan re-solved to cutoff | 0.24 km | 49.5 s |
 
-  So the loop absorbs the modelling error and what remains is the price of the
-  freeze window — worth stating plainly, because the check has a *perfect*
-  prediction and therefore prices what the freeze costs without reproducing what
-  it buys.
+  So the loop absorbs the modelling error, and the terminal handover recovers about
+  **half** of what freezing the plan cost — 337 m of 635, not all of it. Two
+  seconds of open-loop tail costs 15 m where five cost 337.
+
+  The reference row is the honest ceiling and is recorded rather than omitted: the
+  impulsive law is an approximation and the plan is not, so re-solving the plan
+  straight through to cutoff is *more* accurate than any terminal scheme here. What
+  it is not is flyable, for a reason this check cannot reproduce — its prediction is
+  perfect, so it prices what an open-loop tail costs without reproducing the
+  low-passed terrain height and the ratio-of-two-small-numbers correction that are
+  the reason for having one.
 
   Cost on the sim thread: a warm re-solve is **2.3 ms in Release**, which is what
   the packaged mod is built as, against 24.6 ms in Debug — a tenfold gap worth
@@ -204,8 +230,8 @@
   against the landing site. The drawn track is de-rotated by the body's spin, so
   it ends on the marker rather than tens of kilometres away from it.
 
-- Added `Navbox.Numerics.Rk4`, a shared fourth-order integrator generic over an
-  `IOdeSystem` struct, and `Navbox.Flight.ImpactPredictor` on top of it. Both
+- Added `PoweredGuidance.Numerics.Rk4`, a shared fourth-order integrator generic over an
+  `IOdeSystem` struct, and `PoweredGuidance.Flight.ImpactPredictor` on top of it. Both
   carry `Dual`s throughout, so `d(impact point, time of flight)/d(initial state)`
   comes out of a seeded sweep — verified against central differences by
   `Scvx.Console --impact`, along with fourth-order convergence and energy
@@ -264,7 +290,7 @@
   was regenerated on the new convention — leaving prograde 0–30 data under a
   retrograde label would have been silently wrong.
 
-- Added `Navbox.Flight.ExponentialAtmosphere`, a self-contained mirror of KSA's
+- Added `PoweredGuidance.Flight.ExponentialAtmosphere`, a self-contained mirror of KSA's
   atmosphere — `rho0 exp(-h/H)` above *mean* radius, the same hard cutoff, the
   same sub-sea-level clamp — so a solve can plan through the air without
   referencing the game. Speed of sound is *derived* rather than assumed: the
@@ -289,8 +315,8 @@
   `--clarabel-smoke`, since that conversion is on Clarabel's path too. SCS is
   still vendored and still shipped: Scvx.Core uses it for the 6-DOF subproblem.
 
-- Added a tabulated aero surrogate: `lib/Navbox.Numerics` holds an N-d
-  tensor-product cubic B-spline with analytic gradients, and `Navbox.Flight.AeroTable`
+- Added a tabulated aero surrogate: `lib/PoweredGuidance.Numerics` holds an N-d
+  tensor-product cubic B-spline with analytic gradients, and `PoweredGuidance.Flight.AeroTable`
   fits Cd(Mach, alpha) to it. It composes with the existing forward-mode AD, so
   aero can be written inline in Dual-valued dynamics rather than differentiated
   by hand. `Dual` and the aero model moved into the new shared library; nothing

@@ -1,6 +1,6 @@
-using Navbox.Numerics;
+using PoweredGuidance.Numerics;
 
-namespace Navbox.Flight;
+namespace PoweredGuidance.Flight;
 
 /// <summary>
 /// Tabulated axial drag coefficient Cd(Mach, alpha), fitted once to a

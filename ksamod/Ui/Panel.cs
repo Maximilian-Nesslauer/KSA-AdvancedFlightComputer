@@ -66,8 +66,13 @@ public static partial class PoweredGuidanceWindow
 
         // Rebuilt each frame so the dragged offset takes effect; BeginWindow keys its
         // Vulkan resources off the Id, not this struct.
+        //
+        // The Id is an IDENTITY rather than a label - it is what any persisted window
+        // layout is filed under - so changing it is a one-off reset of this panel's
+        // saved position, not a cosmetic edit. Done once, deliberately, to finish moving
+        // off the obsolete "Navbox" name; it should not move again.
         ImGaugeWindow win = new ImGaugeWindow(
-            "NavboxGuidance", "Navbox Guidance",
+            "PoweredGuidance", "Powered Guidance",
             new float2(0f, 0f), new float2(0f, 0f),
             GaugeScreenUv(_guidancePanelOffsetUv),
             GaugeScreenUv(new float2(GuidancePanelWidthUv, _panelHeightUv)));

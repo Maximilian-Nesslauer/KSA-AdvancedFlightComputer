@@ -1,5 +1,5 @@
 <Solution>
   <Project Path="Scvx.Console/Scvx.Console.csproj" />
   <Project Path="Scvx.Core/Scvx.Core.csproj" />
-  <Project Path="../lib/Navbox.Numerics/Navbox.Numerics.csproj" />
+  <Project Path="../lib/PoweredGuidance.Numerics/PoweredGuidance.Numerics.csproj" />
 </Solution>

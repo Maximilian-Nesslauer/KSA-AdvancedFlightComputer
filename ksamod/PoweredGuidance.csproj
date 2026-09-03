@@ -82,7 +82,7 @@
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
     <!-- Scvx.Core's own managed dependency (the aero surrogate's spline). Missing it
          would fail at the first AeroTable use with a FileNotFoundException, not at load. -->
-    <Copy SourceFiles="$(OutputPath)Navbox.Numerics.dll" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)PoweredGuidance.Numerics.dll" DestinationFolder="$(ModDir)" />
     <!-- Scvx.Core P/Invokes scs.dll for the 6-DOF subproblem. (Gfold.Core used to as
          well; it is Clarabel-only now.) Shipping without it would fail at the first
          SCS call with a DllNotFoundException, not at load. -->
@@ -109,7 +109,7 @@
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ReleaseDir)" />
-    <Copy SourceFiles="$(OutputPath)Navbox.Numerics.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)PoweredGuidance.Numerics.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)clarabel_c.dll" DestinationFolder="$(ReleaseDir)"
           Condition="Exists('$(OutputPath)clarabel_c.dll')" />

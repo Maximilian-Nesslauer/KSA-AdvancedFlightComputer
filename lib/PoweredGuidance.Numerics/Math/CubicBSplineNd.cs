@@ -1,4 +1,4 @@
-namespace Navbox.Numerics;
+namespace PoweredGuidance.Numerics;
 
 /// <summary>How the surrogate behaves outside the fitted domain.</summary>
 public enum EdgeMode

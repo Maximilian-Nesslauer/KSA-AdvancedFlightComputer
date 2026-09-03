@@ -1,4 +1,4 @@
-using Navbox.Numerics;
+using PoweredGuidance.Numerics;
 
 namespace Scvx;
 

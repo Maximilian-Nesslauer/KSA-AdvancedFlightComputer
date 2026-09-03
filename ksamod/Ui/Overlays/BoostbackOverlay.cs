@@ -2,8 +2,8 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using Navbox.Flight;
-using Navbox.Numerics;
+using PoweredGuidance.Flight;
+using PoweredGuidance.Numerics;
 
 // World-space overlay for the drag-integrated impact point, matching the G-FOLD and
 // 6-DOF overlays so all three read the same way. Shares the projection plumbing in

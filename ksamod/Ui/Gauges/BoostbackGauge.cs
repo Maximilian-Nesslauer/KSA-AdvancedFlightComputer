@@ -2,7 +2,7 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using Navbox.Flight;
+using PoweredGuidance.Flight;
 
 // The Boostback tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT
 // buttons live in Ui/Panel.cs; everything here draws inside the body child that panel
@@ -100,15 +100,17 @@ public static partial class PoweredGuidanceWindow
                     GaugeRowText("Burn time left",
                         double.IsFinite(_s.BoostbackTgo) ? $"{_s.BoostbackTgo,8:F1} s" : "  no plan",
                         double.IsFinite(_s.BoostbackTgo) ? dim : warn);
-                    GaugeRowText("Plan",
-                        _s.BoostbackPlanFrozen ? "FROZEN - flying the law out"
-                                               : $"re-solved every {BoostbackPlanIntervalS:F0} s",
-                        _s.BoostbackPlanFrozen ? warn : good);
-                    // Sensed against planned. Not a cutoff - the plan clock is - but it
-                    // is the one number that says whether the engine model the plan was
-                    // built on matches the engine, and a large gap is the first thing
-                    // that would explain a burn that ends off target.
-                    if (_s.BoostbackPlanFrozen)
+                    // WHICH LAW IS FLYING, because the burn passes through three and
+                    // they behave differently enough that the readout has to say.
+                    GaugeRowText("Steering",
+                        _s.BoostbackLocked ? "FROZEN - open loop to cutoff"
+                        : _s.BoostbackTerminal ? "terminal - impulsive, 10 Hz"
+                        : $"plan - re-solved every {BoostbackPlanIntervalS:F0} s",
+                        _s.BoostbackLocked ? warn : good);
+                    // Over the tail this IS the cutoff: sensed dV against what was owed
+                    // at the freeze. A large gap between them at cutoff is the first
+                    // thing that would explain a burn ending off target.
+                    if (_s.BoostbackLocked)
                         GaugeRowText("Flown since freeze",
                             $"{_s.BoostbackAccumDv,8:F1} / {_s.BoostbackLockDv:F1} m/s", dim);
                     break;
@@ -183,8 +185,9 @@ public static partial class PoweredGuidanceWindow
         ImGui.NextColumn();
         ImGui.TextWrapped($"EXECUTE starts at separation. The burn flies an optimised "
                         + $"plan - pitch, yaw and duration shot for minimum propellant "
-                        + $"- re-solved every {BoostbackPlanIntervalS:F0} s and frozen "
-                        + $"at T-{BoostbackPlanFreezeS:F0} s.");
+                        + $"- re-solved every {BoostbackPlanIntervalS:F0} s, hands over "
+                        + $"to the impulsive correction at T-{BoostbackTerminalS:F0} s, "
+                        + $"and freezes at T-{BoostbackLockTgo:F0} s.");
         ImGui.NextColumn();
 
         ImGuiHelper.EndRegion();

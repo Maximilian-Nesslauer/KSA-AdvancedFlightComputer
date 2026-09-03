@@ -1,4 +1,4 @@
-namespace Navbox.Numerics;
+namespace PoweredGuidance.Numerics;
 
 /// <summary>
 /// An ODE right-hand side, written in <see cref="Dual"/> so that integrating it

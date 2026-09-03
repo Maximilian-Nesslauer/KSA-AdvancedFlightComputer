@@ -604,16 +604,33 @@ The difference is not academic. On the reference arc the impulsive correction po
 go. The nose-down answer was an artefact of pretending a 48-second burn is an impulse.
 
 `Guidance/Boostback.cs` flies the plan on a **receding horizon**: re-solve from the live
-state every 2 s, fly the head of the freshest plan, freeze inside T-5 s and evaluate the
-law out to cutoff. Against an engine 3% down on thrust, `--shoot` measures the burn
-missing by **6.91 km** flown open loop, **875 m** re-solved every 2 s, and **240 m**
-re-solved right through to cutoff — so the loop absorbs the modelling error and the
-remaining residue is the price of the freeze window.
+state every 2 s and fly the head of the freshest plan.
 
-The impulsive law did not go away, because it answers a question the shot does not:
-*is there anything worth lighting an engine for, and is there anything left to correct.*
-It is cheap, it is re-solved at 10 Hz, and it starts and ends the burn. What it no
-longer does is say which way to point.
+**And then hands back.** The impulsive law's error scales with burn *duration*, so over
+the last five seconds it is very nearly exact — and unlike the plan it is cheap enough to
+re-solve at 10 Hz, so handing over keeps the loop *closed* through a window the plan
+would have to fly open. At T-2 s the command freezes and the rest runs on sensed dV
+against the dV owed at the freeze. Against an engine 3% down on thrust, `--shoot`
+measures:
+
+| | miss |
+|---|---|
+| one plan, open loop | 6.91 km |
+| plan, frozen for the last 5 s | 875 m |
+| **plan → impulsive at T-5, froze T-2** | **538 m** |
+| … and no freeze at all | 523 m |
+| *[ref]* plan re-solved to cutoff | 240 m |
+
+The reference row is the ceiling, and it says something worth not hiding: the impulsive
+law is an approximation and the plan is not, so re-solving the plan straight through
+would be more accurate still. What buys the handover its place is the one thing the
+check cannot model — its prediction is perfect, where the real terrain height under a
+moving impact point is low-passed and $J^{+}m$ is the ratio of two small numbers.
+
+So the impulsive law did not go away. It answers a question the shot does not — *is
+there anything worth lighting an engine for, and is there anything left to correct* —
+and it flies the end of the burn, where being an impulse is barely an approximation at
+all. What it no longer does is fly the *long* part.
 
 ---
 
@@ -621,10 +638,10 @@ longer does is say which way to point.
 
 | | |
 |---|---|
-| `lib/Navbox.Numerics/Math/Rk4.cs` | RK4 over `IOdeSystem`, dual-valued throughout |
-| `lib/Navbox.Numerics/Flight/ImpactPredictor.cs` | `DragCoastSystem`, `Predict`, `VelocityJacobian` |
-| `lib/Navbox.Numerics/Flight/ImpactSteering.cs` | `Correction`, `FreeDirection` — both laws |
-| `lib/Navbox.Numerics/Flight/PoweredBurn.cs` | `BoostbackShooter` — the burn that actually flies |
+| `lib/PoweredGuidance.Numerics/Math/Rk4.cs` | RK4 over `IOdeSystem`, dual-valued throughout |
+| `lib/PoweredGuidance.Numerics/Flight/ImpactPredictor.cs` | `DragCoastSystem`, `Predict`, `VelocityJacobian` |
+| `lib/PoweredGuidance.Numerics/Flight/ImpactSteering.cs` | `Correction`, `FreeDirection` — both laws |
+| `lib/PoweredGuidance.Numerics/Flight/PoweredBurn.cs` | `BoostbackShooter` — the burn that actually flies |
 | `ksamod/Guidance/Boostback.cs` | the four-phase machine and the receding horizon |
 | `scvx/Scvx.Console/ImpactCheck.cs` | `--impact`, every number in §1–§6 |
 | `scvx/Scvx.Console/ShootCheck.cs` | `--shoot`, every number in §7 |

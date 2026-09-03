@@ -1,4 +1,4 @@
-namespace Navbox.Flight;
+namespace PoweredGuidance.Flight;
 
 /// <summary>
 /// Turning d(impact)/d(v) into a velocity correction that moves the landing point

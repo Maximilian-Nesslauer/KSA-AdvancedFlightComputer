@@ -1,6 +1,6 @@
-using Navbox.Numerics;
+using PoweredGuidance.Numerics;
 
-namespace Navbox.Flight;
+namespace PoweredGuidance.Flight;
 
 /// <summary>Why an impact prediction stopped.</summary>
 public enum ImpactStatus

@@ -1,8 +1,8 @@
 using System;
 using Brutal.Numerics;
 using KSA;
-using Navbox.Flight;
-using Navbox.Numerics;
+using PoweredGuidance.Flight;
+using PoweredGuidance.Numerics;
 
 // THE BOOSTBACK STATE MACHINE: separate, turn round, burn back, and set up for entry.
 //
@@ -19,12 +19,14 @@ using Navbox.Numerics;
 //                  AND the rate the attitude is turning at (see KsaAttitudeRate), so
 //                  the FC tracks the slew instead of nulling a sequence of stationary
 //                  targets.
-//   Boostback      full throttle along the PLAN, re-solved every two seconds. The
-//                  plan is a shot: an integrated powered arc whose pitch, yaw and
-//                  duration were optimised for propellant (see BoostbackShooter), and
-//                  what is flown is its steering law evaluated at the elapsed time.
-//                  At tgo <= 5 s the plan FREEZES and the rest is open loop - see
-//                  BoostbackPlanFreezeS.
+//   Boostback      full throttle, in three stages. Most of it flies the PLAN - a shot:
+//                  an integrated powered arc whose pitch, yaw and duration were
+//                  optimised for propellant (see BoostbackShooter) - re-solved every
+//                  two seconds, steering along its law evaluated at the elapsed time.
+//                  At tgo <= 5 s the plan HANDS OVER to the impulsive correction, which
+//                  is nearly exact at that timescale and is re-solved at 10 Hz. At
+//                  tgo <= 2 s that command FREEZES and the rest runs open loop, cutting
+//                  off on sensed dV. See BoostbackTerminalS and BoostbackLockTgo.
 //   EntryOrient    slew to surface retrograde and HOLD there. Terminal: nothing ends
 //                  it but an abort or another mode taking the vehicle.
 //
@@ -62,16 +64,24 @@ using Navbox.Numerics;
 // nothing is being predicted through it. If the burn ever became a large plane change,
 // that assumption would stop holding and the prediction would need the flown alpha.
 //
-// AND WHY THE PLAN STOPS BEING RE-SOLVED AT THE END. Both laws degrade the same way as
-// the miss goes to zero: the answer is the ratio of two small numbers, and the last few
-// seconds of a burn are exactly where the prediction is noisiest (the terrain height
-// under a moving impact point is low-passed, not exact). Re-solving there makes the
-// vehicle chase its own numerical noise at the moment precision matters most.
+// AND THE TWO LAWS SWAP JOBS AT THE END, which is not a compromise but a consequence of
+// where each one is wrong. The impulsive law's error scales with burn DURATION, so over
+// the last five seconds it is very nearly exact - and it is cheap enough to re-solve at
+// 10 Hz where the plan is not. Handing over therefore keeps the loop CLOSED through the
+// window the plan would have had to fly open.
 //
-// What is frozen is the PLAN, not a direction, and that is strictly better than the
-// lock it replaces: the linear tangent law goes on being evaluated, so the command
-// keeps turning through cutoff exactly as the optimised burn intended, instead of
-// holding whatever vector it happened to have at the freeze.
+// The earlier arrangement froze the plan at T-5 and evaluated its law out to cutoff.
+// That reads well - the linear tangent law goes on turning, where a frozen direction
+// would not - but it is still five seconds of open-loop tracking, and --shoot measured
+// the price: against an engine 3% down on thrust, 875 m frozen against 538 m handed
+// over. Reading nicely is not the same as flying well.
+//
+// There is still an open-loop tail, just two seconds of one. Both laws degrade the same
+// way as the miss goes to zero - the answer is the ratio of two small numbers - and the
+// last seconds are also where the prediction is noisiest, since the terrain height under
+// a moving impact point is low-passed rather than exact. Steering on it there is chasing
+// numerical noise at the moment precision matters most. Two seconds of it costs 15 m in
+// the same measurement, against 337 m for five.
 public static partial class PoweredGuidanceWindow
 {
     // Public because VehicleAutopilotState holds a vehicle's phase - every craft runs
@@ -100,28 +110,52 @@ public static partial class PoweredGuidanceWindow
     private const double BoostbackPlanIntervalS = 2.0;
 
     /// <summary>
-    /// Burn time remaining at which the plan stops being re-solved, s.
+    /// Burn time remaining at which the PLAN HANDS OVER to the impulsive correction, s.
     ///
-    /// The same argument as the steering lock it replaces: the last seconds are where
-    /// the prediction is noisiest - the terrain height under a moving impact point is
-    /// low-passed, not exact - and where a changed answer buys least. What is frozen is
-    /// different, though, and better: the old lock froze a DIRECTION and flew a fixed
-    /// vector, whereas freezing the plan keeps evaluating the linear tangent law, so
-    /// the command goes on turning through cutoff exactly as the optimised burn
-    /// intended.
+    /// THE TWO LAWS SWAP JOBS HERE, and which is better depends entirely on how much
+    /// burn is left. The plan is right about a long burn because it integrates one; the
+    /// impulsive correction is wrong about a long burn for exactly that reason. But the
+    /// error in treating a burn as an impulse scales with its DURATION, so over the
+    /// last five seconds the impulsive law is very nearly exact - and unlike the plan it
+    /// is re-solved at 10 Hz, so it is closing the loop where the plan would be running
+    /// open.
     ///
-    /// AND IT IS NOT FREE. --shoot flies the loop against an engine 3% down on thrust:
-    /// open loop the burn misses by 6.91 km, re-solved every two seconds by 875 m, and
-    /// re-solved right through to cutoff by 240 m. So five seconds of open loop costs
-    /// about 600 m of that residue, because a thrust error persisting through the
-    /// window is by definition unabsorbed.
+    /// That is the trade the earlier arrangement got backwards. Freezing the plan and
+    /// evaluating its law out to cutoff was five seconds of open-loop tracking, and
+    /// --shoot prices the whole ladder against an engine 3% down on thrust:
     ///
-    /// It is still the right trade, but the measurement does not show that, and should
-    /// not be read as though it did: the check has a perfect prediction, so it prices
-    /// what the freeze COSTS without reproducing what it BUYS. If the terrain filter
-    /// were ever made exact, this number would deserve revisiting.
+    ///   one plan, open loop                 6.91 km
+    ///   plan frozen for the last 5 s          875 m
+    ///   plan -> impulsive at T-5, froze T-2   538 m
+    ///   [ref] plan re-solved to cutoff        240 m
+    ///
+    /// So the handover recovers about half of what the freeze cost - 337 m of 635 - and
+    /// NOT all of it. The reference row is the honest ceiling: the impulsive law is an
+    /// approximation and the plan is not, so re-solving the plan straight through would
+    /// be more accurate still. What it is not is flyable, and for a reason this check
+    /// cannot reproduce, since its prediction is perfect. See BoostbackLockTgo.
     /// </summary>
-    private const double BoostbackPlanFreezeS = 5.0;
+    private const double BoostbackTerminalS = 5.0;
+
+    /// <summary>
+    /// Burn time remaining at which the terminal command FREEZES and the rest runs open
+    /// loop, s.
+    ///
+    /// There still has to be an open-loop tail, and this is it - just two seconds of one
+    /// rather than five. The correction is J^+ m: as the miss goes to zero the direction
+    /// of the answer is the ratio of two small numbers, and these are also the seconds
+    /// where the prediction is noisiest, since the terrain height under a moving impact
+    /// point is low-passed rather than exact. Steering on it here is chasing numerical
+    /// noise at the moment precision matters most.
+    ///
+    /// Cutoff over this window is SENSED dV against the dV outstanding at the freeze,
+    /// not a clock - which is what makes the tail self-correcting about thrust and mass
+    /// even though nothing is being re-solved. That is most of why two seconds of it are
+    /// nearly free where five seconds of frozen PLAN were not: --shoot measures 538 m
+    /// with this window against 523 m without one at all, a 15 m price, where the
+    /// five-second version cost 337 m.
+    /// </summary>
+    private const double BoostbackLockTgo = 2.0;
 
     /// <summary>
     /// Coast step sizes for the in-flight solve, s, against the overlay's 1 and 8.
@@ -148,7 +182,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>Alignment, in degrees, at which the rotation is called complete. Both
     /// the COMMAND and the vehicle have to be inside it - the command reaching the
     /// target only means the slew has finished issuing, not that anything turned.</summary>
-    private const double BoostbackAlignDeg = 2.0;
+    private const double BoostbackAlignDeg = 10.0;
 
     /// <summary>
     /// Below this much correction there is nothing worth lighting an engine for, m/s.
@@ -216,7 +250,7 @@ public static partial class PoweredGuidanceWindow
         _s.BoostbackLastStep = SimNow();
         _s.BoostbackLocked = false;
         _s.BoostbackHasPlan = false;
-        _s.BoostbackPlanFrozen = false;
+        _s.BoostbackTerminal = false;
         _s.BoostbackPlanTime = double.NegativeInfinity;
         _s.BoostbackPlanAttemptTime = double.NegativeInfinity;
         _s.BoostbackPlanError = "";
@@ -245,7 +279,7 @@ public static partial class PoweredGuidanceWindow
     {
         _s.BoostbackPhase = BoostbackPhase.Done;
         _s.BoostbackHasPlan = false;
-        _s.BoostbackPlanFrozen = false;
+        _s.BoostbackTerminal = false;
         _s.BoostbackLocked = false;
         _s.BoostbackThrottle = 0.0;
         _s.BoostbackEngineOn = false;
@@ -319,11 +353,11 @@ public static partial class PoweredGuidanceWindow
         _s.BoostbackTgo = BoostbackBurnTime(vehicle, parent, altAsl, _s.BoostbackDvGo);
 
         // SENSED dV through the open-loop tail, integrated from the thrust the lit
-        // engines are actually producing at this altitude. Not a cutoff - the plan
-        // clock is - but it is the one measurement that says whether the engine model
-        // the plan was built on matches the engine, which is the first thing that would
-        // explain a burn ending off target. Compared against BoostbackLockDv on the tab.
-        if (_s.BoostbackPlanFrozen)
+        // engines are ACTUALLY producing at this altitude rather than from any plan.
+        // That is what makes the tail self-correcting about pressure and mass: a burn
+        // sized on vacuum thrust and flown at sea level would otherwise cut off early by
+        // the whole thrust deficit. This is the cutoff over the last two seconds.
+        if (_s.BoostbackLocked)
         {
             double paNow = KsaEnginePerf.AmbientPressureAt(parent, altAsl);
             double thrustNow = KsaEnginePerf.ActiveThrustCapability(vehicle, paNow);
@@ -338,39 +372,39 @@ public static partial class PoweredGuidanceWindow
         // solve planning a burn from a state the settling thrust is still changing, and
         // the entry phase has no burn to plan.
         //
-        // The freeze is checked BEFORE the re-solve so the last plan is never replaced
-        // inside the window it is supposed to be flown out over.
+        // The handover is checked BEFORE the re-solve, so nothing is spent planning a
+        // burn the plan is about to stop flying.
         if (_s.BoostbackPhase == BoostbackPhase.Rotation
             || _s.BoostbackPhase == BoostbackPhase.Boostback)
         {
-            if (!_s.BoostbackPlanFrozen
+            if (!_s.BoostbackTerminal
                 && _s.BoostbackPhase == BoostbackPhase.Boostback
                 && _s.BoostbackHasPlan
-                && BoostbackPlanTgo(now) <= BoostbackPlanFreezeS)
-            {
-                _s.BoostbackPlanFrozen = true;
-                _s.BoostbackLocked = true;
-                _s.BoostbackLockDv = BoostbackPlanDvGo(vehicle, parent, altAsl,
-                                                       BoostbackPlanTgo(now));
-                _s.BoostbackAccumDv = 0.0;
-            }
+                && BoostbackPlanTgo(now) <= BoostbackTerminalS)
+                _s.BoostbackTerminal = true;
 
-            if (!_s.BoostbackPlanFrozen)
+            if (!_s.BoostbackTerminal)
                 UpdateBoostbackPlan(vehicle, orbit, parent, now, force: false);
         }
 
         double planTgo = BoostbackPlanTgo(now);
         double3 planDir = BoostbackPlanDirection(now);
 
-        // With a plan in hand it is the plan clock that says how much burn is left, not
-        // the rocket equation over an impulsive dV. The two disagree by whatever the
-        // impulsive model gets wrong about a finite burn, which is the entire reason
-        // the shooter is here.
-        if (_s.BoostbackHasPlan)
-        {
-            _s.BoostbackTgo = planTgo;
+        // WHICH LAW OWNS THE NUMBERS. Before the handover it is the plan clock that says
+        // how much burn is left, not the rocket equation over an impulsive dV - the two
+        // disagree by whatever the impulsive model gets wrong about a finite burn, which
+        // is the entire reason the shooter is here. After it, the impulsive law is
+        // flying and its own dV is the honest figure; the plan clock is stale by then
+        // and deliberately not consulted.
+        if (_s.BoostbackLocked)
+            _s.BoostbackDvGo = Math.Max(_s.BoostbackLockDv - _s.BoostbackAccumDv, 0.0);
+        else if (!_s.BoostbackTerminal && _s.BoostbackHasPlan)
             _s.BoostbackDvGo = BoostbackPlanDvGo(vehicle, parent, altAsl, planTgo);
-        }
+        // else: terminal and unlocked, so BoostbackDvGo is the impulsive dvMag set above.
+
+        _s.BoostbackTgo = !_s.BoostbackTerminal && _s.BoostbackHasPlan
+            ? planTgo
+            : BoostbackBurnTime(vehicle, parent, altAsl, _s.BoostbackDvGo);
 
         // --- transitions ------------------------------------------------------
         // Written as a cascade over successive steps, like the ascent's: each one only
@@ -440,10 +474,23 @@ public static partial class PoweredGuidanceWindow
 
             case BoostbackPhase.Boostback:
             {
-                // The plan runs out. This is the primary cutoff and it is a CLOCK, not
-                // a threshold on a shrinking vector: the shot answered "burn for this
-                // long" and the burn is over when it has.
-                bool done = _s.BoostbackHasPlan && planTgo <= 0.0;
+                // FREEZE the terminal command with two seconds left, latching the
+                // direction to hold and the dV still owed. Sized off the impulsive law,
+                // because by now that is the law flying the vehicle.
+                if (_s.BoostbackTerminal && !_s.BoostbackLocked
+                    && double.IsFinite(_s.BoostbackTgo) && _s.BoostbackTgo <= BoostbackLockTgo
+                    && _s.HasSteer && dvMag > 1e-6)
+                {
+                    _s.BoostbackLocked = true;
+                    _s.BoostbackFrozenDir = double3.Normalize(dvVec);
+                    _s.BoostbackLockDv = dvMag;
+                    _s.BoostbackAccumDv = 0.0;
+                    _s.BoostbackDvGo = dvMag;
+                }
+
+                // Cutoff over the open-loop tail: the latched dV has been flown off,
+                // measured rather than timed.
+                bool done = _s.BoostbackLocked && _s.BoostbackDvGo <= 0.0;
                 bool overrun = now >= _s.BoostbackBurnLimit;
 
                 // Propellant, but not for the first second. The engine has only just
@@ -455,12 +502,12 @@ public static partial class PoweredGuidanceWindow
                 bool dry = now - _s.BoostbackPhaseStart > 1.0
                         && !vehicle.IsAnyEnginePropellantAvailable();
 
-                // The independent cutoff: the ballistic impact is already ON the site,
-                // so whatever the plan clock still says, continuing would take it back
-                // off. Targeting only, not the commanded total - shaping would hold
-                // this number up after the miss was nulled. Disabled inside the freeze
-                // window, where the whole point is that nothing new is listened to.
-                bool nulled = !_s.BoostbackPlanFrozen && _s.HasSteer
+                // The closed-loop cutoff: the ballistic impact is already ON the site,
+                // so continuing would take it back off. Targeting only, not the
+                // commanded total - shaping would hold this number up after the miss was
+                // nulled and the burn would never end on its own. Disabled once locked,
+                // where the whole point is that nothing new is listened to.
+                bool nulled = !_s.BoostbackLocked && _s.HasSteer
                            && missDv < BoostbackMinDvMs;
 
                 if (done || nulled || dry || overrun)
@@ -498,11 +545,14 @@ public static partial class PoweredGuidanceWindow
                 break;
 
             case BoostbackPhase.Boostback:
-                // The steering law, evaluated at the time elapsed since the plan was
-                // solved. Frozen or not, this GOES ON TURNING - which is the difference
-                // between flying the linear tangent law out and holding the direction
-                // it happened to have at the freeze.
-                want = planDir.Length() > 0.5 ? planDir : _s.CommandDir;
+                // Three sources, in the order the burn passes through them: the plan's
+                // steering law evaluated at the elapsed time, then the impulsive
+                // correction re-solved at 10 Hz for the last five seconds, then the
+                // direction latched at T-2 s. See BoostbackTerminalS for why the middle
+                // one is not simply more of the first.
+                want = _s.BoostbackLocked ? _s.BoostbackFrozenDir
+                     : _s.BoostbackTerminal ? (dvMag > 1e-6 ? dvVec / dvMag : _s.CommandDir)
+                     : (planDir.Length() > 0.5 ? planDir : _s.CommandDir);
                 break;
 
             case BoostbackPhase.EntryOrient:
@@ -795,7 +845,7 @@ public static partial class PoweredGuidanceWindow
         if (phase != BoostbackPhase.Rotation && phase != BoostbackPhase.Boostback)
         {
             _s.BoostbackHasPlan = false;
-            _s.BoostbackPlanFrozen = false;
+            _s.BoostbackTerminal = false;
             _s.BoostbackLocked = false;
             _s.BoostbackPlanTime = double.NegativeInfinity;
             _s.BoostbackPlanAttemptTime = double.NegativeInfinity;

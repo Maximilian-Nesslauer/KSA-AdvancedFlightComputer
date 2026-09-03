@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using Navbox.Flight;
-using Navbox.Numerics;
+using PoweredGuidance.Flight;
+using PoweredGuidance.Numerics;
 
 /// <summary>
 /// Does the tabulated aero surrogate actually compose with our forward-mode AD?

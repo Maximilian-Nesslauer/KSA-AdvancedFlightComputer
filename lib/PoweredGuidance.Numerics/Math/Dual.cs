@@ -1,4 +1,4 @@
-namespace Navbox.Numerics;
+namespace PoweredGuidance.Numerics;
 
 /// <summary>
 /// Forward-mode automatic differentiation number: a value paired with its

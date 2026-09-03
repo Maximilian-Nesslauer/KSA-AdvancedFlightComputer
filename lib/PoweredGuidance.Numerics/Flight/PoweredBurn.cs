@@ -1,6 +1,6 @@
-using Navbox.Numerics;
+using PoweredGuidance.Numerics;
 
-namespace Navbox.Flight;
+namespace PoweredGuidance.Flight;
 
 /// <summary>
 /// A boostback burn described by five numbers, flown with a linear tangent steering

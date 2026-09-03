@@ -2,7 +2,7 @@ using System;
 using System.Text;
 using Brutal.Numerics;
 using KSA;
-using Navbox.Flight;
+using PoweredGuidance.Flight;
 
 /// <summary>
 /// Samples KSA's own aerodynamics onto a Cd(Mach, alpha) grid for the current

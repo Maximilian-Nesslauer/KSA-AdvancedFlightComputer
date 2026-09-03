@@ -1,5 +1,5 @@
-using Navbox.Flight;
-using Navbox.Numerics;
+using PoweredGuidance.Flight;
+using PoweredGuidance.Numerics;
 
 /// <summary>
 /// Direct shooting on a boostback burn: does the finite-burn optimum agree with what
@@ -295,38 +295,73 @@ internal static class ShootCheck
             truth.Thrust = sys.Thrust * 0.97;
 
             double openMiss = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
-                                      replanS: double.PositiveInfinity, freezeS: 0.0,
-                                      out int openSolves, out double openBurn);
-            double closedMiss = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
-                                        replanS: 2.0, freezeS: 5.0,
-                                        out int closedSolves, out double closedBurn);
-            double warmMiss = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
-                                      replanS: 2.0, freezeS: 0.0,
-                                      out int warmSolves, out double warmBurn);
+                                      replanS: double.PositiveInfinity, terminalS: 0.0,
+                                      lockS: 0.0, out int openSolves, out double openBurn);
+            double planOnly = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                      replanS: 2.0, terminalS: 5.0, lockS: 5.0,
+                                      out int planSolves, out double planBurn);
+            double handover = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                      replanS: 2.0, terminalS: 5.0, lockS: 2.0,
+                                      out int handSolves, out double handBurn);
+            double noLock = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                    replanS: 2.0, terminalS: 5.0, lockS: 0.0,
+                                    out int noLockSolves, out double noLockBurn);
+            // The upper bound on any terminal scheme: no handover and no freeze, the
+            // PLAN re-solved right through to cutoff. Not flyable as it stands - it puts
+            // a 2.3 ms solve in the seconds where the prediction is least trustworthy -
+            // but it is the number every other row should be read against.
+            double planToCut = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                       replanS: 2.0, terminalS: 0.0, lockS: 0.0,
+                                       out int cutSolves, out double cutBurn);
 
-            Console.WriteLine($"    open loop, one plan   miss {openMiss / 1000.0,8:F2} km"
+            Console.WriteLine($"    {"one plan, open loop",-34} miss {openMiss / 1000.0,7:F2} km"
                             + $"   burn {openBurn:F1} s   {openSolves} solve");
-            Console.WriteLine($"    re-solved every 2 s   miss {closedMiss / 1000.0,8:F2} km"
-                            + $"   burn {closedBurn:F1} s   {closedSolves} solves");
-            Console.WriteLine($"      ... and no freeze   miss {warmMiss / 1000.0,8:F2} km"
-                            + $"   burn {warmBurn:F1} s   {warmSolves} solves");
+            Console.WriteLine($"    {"plan, frozen for the last 5 s",-34} miss {planOnly / 1000.0,7:F2} km"
+                            + $"   burn {planBurn:F1} s   {planSolves} solves");
+            Console.WriteLine($"    {"plan -> impulsive at T-5, froze T-2",-34} miss {handover / 1000.0,7:F2} km"
+                            + $"   burn {handBurn:F1} s   {handSolves} solves");
+            Console.WriteLine($"    {"... and no freeze at all",-34} miss {noLock / 1000.0,7:F2} km"
+                            + $"   burn {noLockBurn:F1} s   {noLockSolves} solves");
+            Console.WriteLine($"    {"[ref] plan re-solved to cutoff",-34} miss {planToCut / 1000.0,7:F2} km"
+                            + $"   burn {cutBurn:F1} s   {cutSolves} solves");
 
             Check("flying one plan open loop misses", openMiss > 1000.0,
                   $"{openMiss / 1000.0:F2} km off a 3% thrust error");
-            Check("re-solving every 2 s absorbs most of it", closedMiss < openMiss / 5.0,
-                  $"{closedMiss:F0} m against {openMiss / 1000.0:F2} km");
+            Check("re-solving the plan absorbs most of it", planOnly < openMiss / 5.0,
+                  $"{planOnly:F0} m against {openMiss / 1000.0:F2} km");
             Check("and it costs a longer burn, not a worse one",
-                  closedBurn > openBurn && closedBurn < openBurn * 1.2,
-                  $"{closedBurn:F1} s against the planned {openBurn:F1} s");
+                  handBurn > openBurn && handBurn < openBurn * 1.2,
+                  $"{handBurn:F1} s against the planned {openBurn:F1} s");
 
-            // WHAT THE FREEZE COSTS, priced rather than assumed. The last five seconds
-            // are flown on a plan built before them, so a thrust error that persists
-            // through them is not absorbed - and that residue is most of what is left
-            // after the loop has done its work. It is bought deliberately: re-solving
-            // there is where the prediction is noisiest and the answer least stable.
-            Check("what is left is the freeze window, not the loop",
-                  warmMiss < closedMiss / 2.0,
-                  $"{warmMiss:F0} m without the freeze against {closedMiss:F0} m with it");
+            // THE HANDOVER, priced. Freezing the plan for five seconds is five seconds
+            // of open-loop tracking, and a thrust error persisting through them is by
+            // definition unabsorbed. Handing over to the impulsive correction instead
+            // keeps the loop closed for three of those five: the impulsive model's error
+            // scales with burn DURATION, so at this timescale it is nearly exact, and it
+            // is re-solved at 10 Hz where the plan would not be re-solved at all.
+            Check("handing over to the impulsive law beats freezing the plan",
+                  handover < planOnly,
+                  $"{handover:F0} m against {planOnly:F0} m");
+
+            // WHAT THE REMAINING TAIL COSTS. Two seconds of open loop rather than five,
+            // and the price falls with it. Worth stating that this check cannot show the
+            // tail is worth having: it has a PERFECT prediction, so it prices what the
+            // freeze costs without reproducing the low-passed terrain height and the
+            // ratio-of-two-small-numbers correction that are the reason for it.
+            Check("the tail still costs something, and less than it did",
+                  noLock < handover && handover - noLock < planOnly - handover,
+                  $"{noLock:F0} m with no freeze, {handover:F0} m at T-2, {planOnly:F0} m at T-5");
+
+            // AND THE HANDOVER IS NOT FREE EITHER, which is worth recording rather than
+            // leaving implied by a comparison that only ever ran against the worse
+            // option. Re-solving the PLAN to cutoff is more accurate than any terminal
+            // scheme here, because the impulsive law is an approximation and the plan is
+            // not. What buys the handover its place is the thing this check cannot
+            // model: the last seconds are where the terrain height under a moving impact
+            // point is noisiest and where J^+ m is the ratio of two small numbers.
+            Check("the impulsive terminal law is an approximation, and it shows",
+                  planToCut < noLock,
+                  $"{planToCut:F0} m for the plan against {noLock:F0} m for the impulsive law");
         }
 
         Console.WriteLine();
@@ -338,20 +373,32 @@ internal static class ShootCheck
     /// Fly a plan against a DIFFERENT system from the one it was planned on, coast to
     /// the ground, and report the miss - the receding horizon Guidance/Boostback.cs runs.
     ///
-    /// The loop is deliberately the same shape as the mod's: solve from the live state,
-    /// fly the head of that plan for replanS seconds, solve again from wherever that got
-    /// to. Inside freezeS of cutoff the plan stops being re-solved and is flown out,
-    /// which is the open-loop tail. An infinite replanS with no freeze is the control:
+    /// The loop is deliberately the same shape as the mod's, all three stages of it:
+    ///
+    ///   plan       solve from the live state, fly the head of that plan for replanS
+    ///              seconds, solve again from wherever that got to.
+    ///   terminal   inside terminalS of cutoff the plan stops and the IMPULSIVE
+    ///              correction takes over, re-solved every 100 ms.
+    ///   locked     inside lockS the terminal command freezes and the rest is flown on
+    ///              sensed dV against the dV owed at the freeze.
+    ///
+    /// terminalS == lockS is the older arrangement - the plan frozen and evaluated out,
+    /// no impulsive stage at all - and an infinite replanS with neither is the control:
     /// one plan, flown to completion.
     ///
     /// The truth is integrated at a quarter-second step, far finer than the sixteen
     /// nodes the plan is optimised on, so a discretisation error would show up here as a
     /// miss rather than hiding inside a shared approximation.
+    ///
+    /// The one thing NOT modelled is the flight-path-angle shaping the mod adds to the
+    /// terminal command. It is a null-space nudge - by construction it moves the impact
+    /// point nowhere - and its purpose is to stop a long burn diving, which is not what
+    /// the last five seconds are about.
     /// </summary>
     private static double FlyPlan(in PoweredBurnSystem model, in PoweredBurnSystem truth,
                                   double[] x0, double mass0, double[] target,
                                   in ImpactOptions opt,
-                                  double replanS, double freezeS,
+                                  double replanS, double terminalS, double lockS,
                                   out int solves, out double burnFlown)
     {
         const int N = PoweredBurnSystem.N;
@@ -374,7 +421,14 @@ internal static class ShootCheck
         for (int seg = 0; seg < 200; seg++)
         {
             double tgo = have ? plan.Duration : 0.0;
-            bool frozen = have && tgo <= freezeS;
+
+            // Two different things happen at the end of the plan depending on the
+            // arrangement being flown. With a terminal window the plan hands over and
+            // the impulsive law takes it from here; without one there is nothing to hand
+            // over to, so the plan simply stops being re-solved and is flown out.
+            if (have && tgo <= terminalS && terminalS > lockS)
+                break;
+            bool frozen = have && tgo <= lockS;
 
             if (!frozen)
             {
@@ -403,7 +457,10 @@ internal static class ShootCheck
             if (tgo <= 1e-6)
                 break;
 
-            double seg_s = Math.Min(replanS, tgo);
+            // Never overshoot the handover: the plan owns the burn right up to it, and
+            // not a step past it. With no handover there is nothing to stop short of.
+            double upTo = terminalS > lockS ? Math.Max(tgo - terminalS, 0.05) : tgo;
+            double seg_s = Math.Min(Math.Min(replanS, tgo), upTo);
             PoweredBurnSystem flying = BoostbackShooter.WithSteering(in truth, in planFrame, in plan);
 
             int steps = Math.Max((int)Math.Ceiling(seg_s / 0.25), 1);
@@ -433,6 +490,94 @@ internal static class ShootCheck
 
             if (mass <= 0.0 || !double.IsFinite(mass))
                 return double.PositiveInfinity;
+        }
+
+        // ---- terminal: the impulsive correction, re-solved at 10 Hz ----------
+        //
+        // Only when there is a window for it. terminalS == lockS means the plan was
+        // meant to be frozen and evaluated out, and the loop above already did that.
+        if (terminalS > lockS)
+        {
+            Span<double> dG = stackalloc double[9];
+            Span<double> miss = stackalloc double[3];
+            Span<double> nrm = stackalloc double[3];
+            Span<double> dv = stackalloc double[3];
+            Span<double> greedy = stackalloc double[3];
+            Span<Dual> jscratch = stackalloc Dual[ImpactPredictor.ScratchLength];
+            Span<Dual> js = stackalloc Dual[ImpactPredictor.N];
+
+            double ve = truth.Thrust / truth.MassFlow;
+            double[] frozenDir = null;
+            double lockDv = 0.0, accumDv = 0.0;
+
+            for (int tick = 0; tick < 2000; tick++)
+            {
+                double[] dir;
+
+                if (frozenDir != null)
+                {
+                    if (accumDv >= lockDv) break;
+                    dir = frozenDir;
+                }
+                else
+                {
+                    var jsys = new DragCoastSystem
+                    {
+                        Mu = truth.Mu, OmegaZ = truth.OmegaZ, MeanRadius = truth.MeanRadius,
+                        AreaOverMass = truth.ReferenceArea / mass, Alpha = 0.0,
+                        Table = truth.Table, Atmosphere = truth.Atmosphere,
+                    };
+                    for (int i = 0; i < 6; i++) js[i] = new Dual(state[i]);
+                    ImpactPrediction nom = ImpactPredictor.VelocityJacobian(
+                        jsys, state, opt, jscratch, dG, default, default);
+                    if (!nom.Hit) break;
+
+                    double[] hitF = { nom.Fx.V, nom.Fy.V, nom.Fz.V };
+                    double hlen = Math.Sqrt(hitF[0] * hitF[0] + hitF[1] * hitF[1] + hitF[2] * hitF[2]);
+                    if (!(hlen > 0.0)) break;
+                    for (int i = 0; i < 3; i++)
+                    {
+                        miss[i] = hitF[i] - target[i];
+                        nrm[i] = hitF[i] / hlen;
+                    }
+                    if (!ImpactSteering.Correction(dG, miss, nrm, ImpactSteering.DefaultLambda,
+                                                   dv, greedy))
+                        break;
+
+                    double dvLen = Math.Sqrt(dv[0] * dv[0] + dv[1] * dv[1] + dv[2] * dv[2]);
+                    if (dvLen < 5.0) break;          // the miss is nulled - BoostbackMinDvMs
+
+                    dir = new[] { dv[0] / dvLen, dv[1] / dvLen, dv[2] / dvLen };
+
+                    // Freeze with lockS of burn left, sized off the rocket equation at
+                    // the thrust the engine is ACTUALLY producing - which is what makes
+                    // the tail self-correcting even though nothing is re-solved in it.
+                    double burnLeft = mass * (1.0 - Math.Exp(-dvLen / ve)) / truth.MassFlow;
+                    if (burnLeft <= lockS)
+                    {
+                        frozenDir = dir;
+                        lockDv = dvLen;
+                        accumDv = 0.0;
+                    }
+                }
+
+                var flying = truth;
+                flying.Lx = new Dual(dir[0]); flying.Ly = new Dual(dir[1]); flying.Lz = new Dual(dir[2]);
+                flying.Dx = default; flying.Dy = default; flying.Dz = default;
+
+                const double Tick = 0.1;
+                var h2 = new Dual(Tick);
+                for (int i = 0; i < 6; i++) a[i] = new Dual(state[i]);
+                a[6] = new Dual(mass);
+                Rk4.Step(in flying, new Dual(0.0), a, h2, b, work);
+                for (int i = 0; i < 6; i++) state[i] = b[i].V;
+                accumDv += truth.Thrust / mass * Tick;
+                mass = b[6].V;
+                burnFlown += Tick;
+
+                if (mass <= 0.0 || !double.IsFinite(mass))
+                    return double.PositiveInfinity;
+            }
         }
 
         // Flip retrograde and coast, exactly as the shot assumes.

@@ -561,7 +561,7 @@ public sealed class VehicleAutopilotState
     // recomputed per frame because a prediction is milliseconds, not microseconds.
 
     /// <summary>Last impact prediction, or default if there is none yet.</summary>
-    public Navbox.Flight.ImpactPrediction Impact;
+    public PoweredGuidance.Flight.ImpactPrediction Impact;
 
     /// <summary>Whether <see cref="Impact"/> holds anything at all.</summary>
     public bool HasImpact;
@@ -613,7 +613,7 @@ public sealed class VehicleAutopilotState
     public bool ImpactTerrainValid;
 
     /// <summary>Scratch for the integrator, so a prediction allocates nothing.</summary>
-    public Navbox.Numerics.Dual[] ImpactScratch;
+    public PoweredGuidance.Numerics.Dual[] ImpactScratch;
 
     /// <summary>Wall-clock tick of the last prediction, throttling it. Wall clock and
     /// not sim time, for the same reason the launch-window scan uses it: under warp a
@@ -633,7 +633,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// The optimised burn - pitch, yaw, turn rates and duration - from
-    /// <see cref="Navbox.Flight.BoostbackShooter"/>. This is what the boostback phase
+    /// <see cref="PoweredGuidance.Flight.BoostbackShooter"/>. This is what the boostback phase
     /// FLIES, in place of the impulsive correction.
     ///
     /// WHY A PLAN RATHER THAN A DIRECTION. <see cref="SteerDv"/> answers "what is the
@@ -647,7 +647,7 @@ public sealed class VehicleAutopilotState
     /// The impulsive correction is still computed, because it is what says whether
     /// there is any targeting work left at all - see SteerShape for that split.
     /// </summary>
-    public Navbox.Flight.BurnParameters BoostbackPlan;
+    public PoweredGuidance.Flight.BurnParameters BoostbackPlan;
 
     /// <summary>
     /// The frame the plan's angles are measured in, captured at the solve.
@@ -658,7 +658,7 @@ public sealed class VehicleAutopilotState
     /// number means a different direction a few seconds later. That drift is exactly
     /// what the re-solve is for.
     /// </summary>
-    public Navbox.Flight.BoostbackShooter.Frame BoostbackPlanFrame;
+    public PoweredGuidance.Flight.BoostbackShooter.Frame BoostbackPlanFrame;
 
     /// <summary>
     /// Sim time the plan was SOLVED at. The steering law is a function of time since
@@ -676,9 +676,12 @@ public sealed class VehicleAutopilotState
     /// <summary>True once a plan has been solved and not invalidated.</summary>
     public bool BoostbackHasPlan;
 
-    /// <summary>Set once the plan stops being re-solved and is flown out open loop -
-    /// see PoweredGuidanceWindow.BoostbackPlanFreezeS.</summary>
-    public bool BoostbackPlanFrozen;
+    /// <summary>
+    /// Set once the plan has HANDED OVER to the impulsive correction for the last few
+    /// seconds of the burn - see PoweredGuidanceWindow.BoostbackTerminalS. Past this the
+    /// plan is neither re-solved nor flown, and the plan clock is stale.
+    /// </summary>
+    public bool BoostbackTerminal;
 
     /// <summary>Why the last plan attempt failed, empty if it did not. The previous
     /// plan is kept when one fails, so this can be set while a good plan flies.</summary>
@@ -696,7 +699,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Scratch for the shooter, kept per vehicle so the solve allocates
     /// nothing - same arrangement as ImpactScratch.</summary>
-    public Navbox.Numerics.Dual[] BoostbackPlanScratch;
+    public PoweredGuidance.Numerics.Dual[] BoostbackPlanScratch;
 
     // --- steering on the impact point ---
 
@@ -839,7 +842,7 @@ public sealed class VehicleAutopilotState
     /// actually fly the flip at, so it wants to be inside what the RCS and gimbals can
     /// hold rather than merely above what guidance asks for.
     /// </summary>
-    public double BoostbackSlewDegS = 8.0;
+    public double BoostbackSlewDegS = 30.0;
 
     // --- live ---
 
@@ -855,17 +858,17 @@ public sealed class VehicleAutopilotState
     public double BoostbackTgo;
 
     /// <summary>
-    /// The plan has frozen and the rest of the burn is open loop - the readout face of
-    /// <see cref="BoostbackPlanFrozen"/>. See Guidance/Boostback.cs for why the last few
-    /// seconds are flown that way.
+    /// The terminal command has frozen and the last two seconds run open loop. See
+    /// Guidance/Boostback.cs (BoostbackLockTgo) for why there is a tail at all.
     ///
-    /// The two dV figures beside it are a MEASUREMENT, not a cutoff: BoostbackLockDv is
-    /// what the plan said was left at the freeze, BoostbackAccumDv is the dV actually
-    /// sensed since, integrated from the thrust the lit engines are producing at this
-    /// altitude. Cutoff is the plan clock; what these two show is how well the engine
-    /// model the plan was built on matches the engine.
+    /// The two dV figures beside it ARE the cutoff, not a readout: BoostbackLockDv is
+    /// what was owed at the freeze, BoostbackAccumDv is the dV sensed since, integrated
+    /// from the thrust the lit engines are actually producing at this altitude, and the
+    /// engine stops when the second catches the first. Sensed rather than timed, so the
+    /// tail self-corrects about pressure and mass with nothing being re-solved.
     /// </summary>
     public bool BoostbackLocked;
+    public double3 BoostbackFrozenDir;
     public double BoostbackLockDv;
     public double BoostbackAccumDv;
 

@@ -1,5 +1,5 @@
-using Navbox.Flight;
-using Navbox.Numerics;
+using PoweredGuidance.Flight;
+using PoweredGuidance.Numerics;
 
 /// <summary>
 /// Does the impact predictor integrate the right physics, and does its answer

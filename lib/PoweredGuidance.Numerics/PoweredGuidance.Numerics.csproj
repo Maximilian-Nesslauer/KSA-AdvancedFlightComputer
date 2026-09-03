@@ -4,7 +4,7 @@
     <TargetFramework>net10.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <RootNamespace>Navbox.Numerics</RootNamespace>
+    <RootNamespace>PoweredGuidance.Numerics</RootNamespace>
   </PropertyGroup>
 
   <!-- Shared numerical primitives. References nothing - not the game, not a

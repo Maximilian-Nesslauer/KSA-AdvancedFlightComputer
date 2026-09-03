@@ -16,9 +16,9 @@
 
   <ItemGroup>
     <!-- Shared numerical primitives (the tensor-product spline behind the aero
-         surrogate). Navbox.Numerics itself references nothing, so this does not
+         surrogate). PoweredGuidance.Numerics itself references nothing, so this does not
          weaken the no-game-assembly rule below. -->
-    <ProjectReference Include="..\..\lib\Navbox.Numerics\Navbox.Numerics.csproj" />
+    <ProjectReference Include="..\..\lib\PoweredGuidance.Numerics\PoweredGuidance.Numerics.csproj" />
   </ItemGroup>
 
   <!-- Deliberately references no game assembly, and no project that does. The SCvx

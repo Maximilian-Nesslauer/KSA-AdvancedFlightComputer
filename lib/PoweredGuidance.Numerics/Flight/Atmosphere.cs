@@ -1,6 +1,6 @@
-using Navbox.Numerics;
+using PoweredGuidance.Numerics;
 
-namespace Navbox.Flight;
+namespace PoweredGuidance.Flight;
 
 /// <summary>
 /// A single-layer isothermal exponential atmosphere, written to MIRROR the one the
