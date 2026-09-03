@@ -288,10 +288,18 @@ public static partial class PoweredGuidanceWindow
             DrawAscentOverlay(viewport, orbit, parent, bodyRadius);
         DrawGfoldOverlay(viewport, vehicle, orbit, parent);
         Draw6DofOverlay(viewport, parent);
+        // Not gated on descentUi: an impact prediction is worth seeing on the way UP
+        // as well, and it no-ops unless its own toggle is on.
+        DrawBoostbackOverlay(viewport, vehicle, orbit, parent);
 
         // Landing-site marker: shown whenever a descent is on screen, so the target is
         // visible for planning/UPFG, not only during a G-FOLD descent.
-        if (descentUi)
+        //
+        // AND ON BOOSTBACK, which the comment above used to say it had no business on.
+        // That was true while the tab was only an aero workbench; the burn aims the
+        // predicted impact point at this same site, so the marker is the other half of
+        // the miss line the overlay draws and the thing RETARGET moves.
+        if (descentUi || (_showGuidancePanel && _panelTab == GuidanceTab.Boostback))
             DrawLandingSiteMarker(viewport, parent);
 
         // Clickable retargeting: while armed, a world click sets the new landing site.

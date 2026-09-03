@@ -70,6 +70,54 @@ public static partial class PoweredGuidanceWindow
         return true;
     }
 
+    // Project a BODY-FIXED point. Cheaper than routing through CCI (it skips the
+    // Ccf->Cci->Ccf round trip that would cancel out) and, more to the point, it is
+    // what anything glued to the ground should use: a CCF point does not move between
+    // frames just because time passed, so a marker drawn this way stays put on the
+    // terrain instead of drifting with the body's rotation.
+    private static bool TryProjectCcf(double3 ccf, out float2 screen)
+    {
+        double3 ecl = _ovBodyEcl + ccf.Transform(_ovCcf2Ecl);
+        float4 clip = _ovCam.EgoToClip(_ovCam.EclToEgo(ecl));
+        if (clip.W <= 0.001f) { screen = default; return false; } // behind the camera
+        screen = _ovCam.EclToScreen(ecl, false);
+        return true;
+    }
+
+    // A run of BODY-FIXED points as one batched polyline. Same breaking rule as
+    // DrawCciPolyline; see TryProjectCcf for why a ground track wants this one.
+    private static void DrawCcfPolyline(ImDrawListPtr dl, ReadOnlySpan<double3> points,
+                                        ImColor8 col, float thick)
+    {
+        if (_ovPoly.Length < points.Length)
+            _ovPoly = new float2[Math.Max(points.Length, _ovPoly.Length * 2)];
+
+        int run = 0;
+        for (int i = 0; i < points.Length; i++)
+        {
+            if (TryProjectCcf(points[i], out float2 s))
+            {
+                _ovPoly[run++] = s;
+                continue;
+            }
+            if (run >= 2)
+                dl.AddPolyline(_ovPoly.AsSpan(0, run), col, ImDrawFlags.None, thick);
+            run = 0;
+        }
+        if (run >= 2)
+            dl.AddPolyline(_ovPoly.AsSpan(0, run), col, ImDrawFlags.None, thick);
+    }
+
+    // Overlay text with a drop shadow. ImGui has no outlined text and the overlays
+    // draw over terrain, cloud and ocean without a depth test, so plain coloured text
+    // is routinely unreadable against a bright background. Drawing it black first,
+    // offset by a pixel, costs one extra AddText and makes it legible over anything.
+    private static void OvText(ImDrawListPtr dl, float2 at, ImColor8 col, string text)
+    {
+        dl.AddText(at + new float2(1f, 1f), new ImColor8(0, 0, 0, 200), text);
+        dl.AddText(at, col, text);
+    }
+
     private static void OvLine(ImDrawListPtr dl, double3 cciA, double3 cciB, ImColor8 col, float thick)
     {
         if (TryProjectCci(cciA, out float2 a) && TryProjectCci(cciB, out float2 b))
@@ -78,6 +126,27 @@ public static partial class PoweredGuidanceWindow
             _ovSeg[1] = b;
             dl.AddPolyline(_ovSeg, col, ImDrawFlags.None, thick);
         }
+    }
+
+    // An arrow between two CCI points: the shaft, plus a head sized in SCREEN pixels
+    // rather than in world units. The head has to be screen-sized or it vanishes at
+    // map zoom and swamps the view up close - the shaft already carries the scale.
+    private static void OvArrow(ImDrawListPtr dl, double3 cciFrom, double3 cciTo,
+                                ImColor8 col, float thick, float head = 11f)
+    {
+        if (!TryProjectCci(cciFrom, out float2 a) || !TryProjectCci(cciTo, out float2 b))
+            return;
+
+        ScreenLine(dl, a, b, col, thick);
+
+        float2 d = b - a;
+        float len = MathF.Sqrt(d.X * d.X + d.Y * d.Y);
+        if (len < 1e-3f)
+            return;
+        d /= len;
+        float2 n = new float2(-d.Y, d.X);
+        ScreenLine(dl, b, b - d * head + n * (head * 0.45f), col, thick);
+        ScreenLine(dl, b, b - d * head - n * (head * 0.45f), col, thick);
     }
 
     private static void ScreenLine(ImDrawListPtr dl, float2 a, float2 b, ImColor8 col, float thick)

@@ -70,6 +70,20 @@ public readonly struct Dual
     }
 
     /// <summary>
+    /// Sine and cosine. Added for the rotation that carries an impact point from the
+    /// inertial frame into the one co-rotating with the body: that rotation is through
+    /// omega * (time of flight), and the time of flight is itself a differentiated
+    /// quantity, so the angle carries a derivative and the trig has to as well.
+    ///
+    ///   d/dt sin(x) =  cos(x) x'
+    ///   d/dt cos(x) = -sin(x) x'
+    /// </summary>
+    public static Dual Sin(Dual a) => new(Math.Sin(a.V), Math.Cos(a.V) * a.D);
+
+    /// <inheritdoc cref="Sin"/>
+    public static Dual Cos(Dual a) => new(Math.Cos(a.V), -Math.Sin(a.V) * a.D);
+
+    /// <summary>
     /// Four-quadrant arctangent. Added for angle of attack, which is the angle
     /// between the body axis and the relative wind: atan2 of the cross-flow speed
     /// against the axial speed is well conditioned everywhere except at zero

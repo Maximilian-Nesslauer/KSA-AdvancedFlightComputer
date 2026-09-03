@@ -175,6 +175,7 @@ public static partial class PoweredGuidanceWindow
         _s.Engage = true;
         _s.AutoStage = true;
         _s.Running = false;
+        _s.BoostbackPhase = BoostbackPhase.Idle;   // the descent takes the vehicle over
         _s.LandingPhase = LandingPhase.GfoldDescent;
         ResetGfoldTrace();   // fresh flown path and a fresh axis latch
         _s.GfoldHandoffTime = SimNow();
@@ -269,6 +270,7 @@ public static partial class PoweredGuidanceWindow
 
         _s.BurnStartTime = SimNow() + wait;
         _s.Running = false;          // landing owns guidance and the autopilot now
+        _s.BoostbackPhase = BoostbackPhase.Idle;
         _s.AutoLaunch = false;
         _s.CutoffDone = false;
         _s.StagingActive = false;

@@ -272,7 +272,22 @@ internal static class AeroCheck
                 acc += outp[2].V;
             }
             sw.Stop();
-            double nsOne = sw.Elapsed.TotalMilliseconds * 1e6 / N;
+            double nsPlain = sw.Elapsed.TotalMilliseconds * 1e6 / N;
+
+            // The same function with an input SEEDED, which is what a Jacobian column
+            // costs. The difference between the two is the unseeded fast path in
+            // AeroTable.Cd(Dual, Dual) - the branch that skips the spline's gradient
+            // when nothing downstream could use it.
+            sw.Restart();
+            double accs = 0;
+            for (int i = 0; i < N; i++)
+            {
+                DragAccelBody(tab, new Dual(10), new Dual(5), Dual.Seed(-400 - i % 500),
+                              new Dual(30000), p, outp);
+                accs += outp[2].V;
+            }
+            sw.Stop();
+            double nsSeeded = sw.Elapsed.TotalMilliseconds * 1e6 / N;
 
             // Decompose it: how much of the drag call is the table, and how much is
             // the surrounding arithmetic? That decides whether caching is worth anything.
@@ -290,18 +305,22 @@ internal static class AeroCheck
             double nsGrad = swv.Elapsed.TotalMilliseconds * 1e6 / N;
 
             Console.WriteLine($"  table, value only        : {nsValue,7:F0} ns");
-            Console.WriteLine($"  table, value + gradient  : {nsGrad,7:F0} ns   (what the Dual bridge uses)");
-            Console.WriteLine($"  one Dual drag evaluation : {nsOne,7:F0} ns   "
-                            + $"({100 * nsGrad / nsOne:F0}% of it is the table)");
-            Console.WriteLine($"  (checksums {accv:F0} {accg:F0})");
-            Console.WriteLine($"  an 18-column sweep       : {nsOne * 18,7:F0} ns per node");
-            Console.WriteLine($"  at 30 nodes              : {nsOne * 18 * 30 / 1000.0,7:F1} us per Jacobian pass");
+            Console.WriteLine($"  table, value + gradient  : {nsGrad,7:F0} ns");
+            Console.WriteLine($"  drag eval, unseeded      : {nsPlain,7:F0} ns   "
+                            + $"(value only - the impact predictor's path)");
+            Console.WriteLine($"  drag eval, seeded        : {nsSeeded,7:F0} ns   "
+                            + $"({100 * nsGrad / nsSeeded:F0}% of it is the table)");
+            Console.WriteLine($"  (checksums {accv:F0} {accg:F0} {accs:F0})");
+            Console.WriteLine($"  the unseeded fast path saves {100 * (1 - nsPlain / nsSeeded):F0}% "
+                            + "on a prediction that wants no slopes");
+            Console.WriteLine($"  an 18-column sweep       : {nsSeeded * 18,7:F0} ns per node");
+            Console.WriteLine($"  at 30 nodes              : {nsSeeded * 18 * 30 / 1000.0,7:F1} us per Jacobian pass");
             Console.WriteLine($"  (checksum {acc:F1})");
             Console.WriteLine();
             Console.WriteLine("  Every column of the sweep re-queries the table at the SAME Mach and");
             Console.WriteLine("  alpha, because only the seed differs, so one cached (M, alpha) result");
             Console.WriteLine($"  per node would remove ~18 of every 19 table calls. That caps the win at");
-            Console.WriteLine($"  the table's share above - about {100 * nsGrad / nsOne:F0}% - so it is worth roughly a third");
+            Console.WriteLine($"  the table's share above - about {100 * nsGrad / nsSeeded:F0}% - so it is worth roughly a third");
             Console.WriteLine("  of the sweep, not all of it. The rest is Atan2, Sqrt and the Dual");
             Console.WriteLine("  arithmetic, which caching does not touch. Left out for now.");
         }

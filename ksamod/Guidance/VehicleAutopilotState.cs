@@ -553,6 +553,338 @@ public sealed class VehicleAutopilotState
             || System.Math.Abs(was.Z - liveExtents.Z) > tol;
     }
 
+    // --- impact prediction ---
+    //
+    // Per vehicle, not static, and for a reason that bit the older overlays: the
+    // prediction is a property of ONE craft's state and drag model, so a booster and
+    // the upper stage it just dropped must not share one. Cached rather than
+    // recomputed per frame because a prediction is milliseconds, not microseconds.
+
+    /// <summary>Last impact prediction, or default if there is none yet.</summary>
+    public Navbox.Flight.ImpactPrediction Impact;
+
+    /// <summary>Whether <see cref="Impact"/> holds anything at all.</summary>
+    public bool HasImpact;
+
+    /// <summary>The predictor's raw output buffer: four doubles per sample, x,y,z in
+    /// CCI and the time from now at which the vehicle is there. Allocated once and
+    /// reused - a per-frame array here would be several MB a second of garbage.</summary>
+    public double[] ImpactPath;
+
+    /// <summary>
+    /// The same path converted to BODY-FIXED coordinates, once, at prediction time.
+    ///
+    /// Stored in CCF rather than CCI so the drawn track is glued to the ground. In CCI
+    /// the correct de-rotation angle for each sample depends on how long ago the
+    /// prediction was made, so a cached inertial path slides across the terrain
+    /// between recalculations - about 90 m per 200 ms at Earth's equator - and then
+    /// snaps back on the next one. In CCF nothing moves until the prediction actually
+    /// changes.
+    /// </summary>
+    public double3[] ImpactPathCcf;
+
+    /// <summary>Samples actually written to <see cref="ImpactPathCcf"/>.</summary>
+    public int ImpactPathCount;
+
+    /// <summary>Predicted impact point, body-fixed: the raw latest answer, and the
+    /// smoothed one that is actually drawn. See the note on the smoothing in
+    /// BoostbackOverlay - the raw point steps at the recalculation rate.</summary>
+    public double3 ImpactCcfRaw, ImpactCcfShown;
+
+    /// <summary>True once <see cref="ImpactCcfShown"/> holds something to blend from.</summary>
+    public bool ImpactShownValid;
+
+    /// <summary>Wall-clock tick of the last display blend, for a frame-rate
+    /// independent smoothing factor.</summary>
+    public long ImpactSmoothTick;
+
+    /// <summary>
+    /// Low-passed terrain height under the predicted impact, m.
+    ///
+    /// Low-passed because it is sampled at a point that MOVES: each recalculation
+    /// looks up the height wherever the first pass landed, and over rough ground a
+    /// few hundred metres of lateral movement can change it by hundreds of metres.
+    /// Fed straight back into the target radius that produces a shallow-angle impact
+    /// point, that is a multiplier - at a 20 degree descent a 500 m height change
+    /// moves the impact 1.4 km sideways - and it was the largest single source of the
+    /// marker jumping about.
+    /// </summary>
+    public double ImpactTerrainH;
+    public bool ImpactTerrainValid;
+
+    /// <summary>Scratch for the integrator, so a prediction allocates nothing.</summary>
+    public Navbox.Numerics.Dual[] ImpactScratch;
+
+    /// <summary>Wall-clock tick of the last prediction, throttling it. Wall clock and
+    /// not sim time, for the same reason the launch-window scan uses it: under warp a
+    /// sim-time gate would not throttle at all.</summary>
+    public long ImpactTick;
+
+    /// <summary>Impact latitude and longitude in degrees, body-fixed AT THE IMPACT
+    /// TIME - not at the time of the prediction. The body turns under a coasting
+    /// booster by roughly a degree per two minutes of flight, so the difference is
+    /// tens of kilometres and it is the whole point of storing them separately.</summary>
+    public double ImpactLatDeg, ImpactLonDeg;
+
+    /// <summary>Downrange from the vehicle to the predicted impact, m.</summary>
+    public double ImpactDownrangeM;
+
+    // --- the shot boostback plan ---
+
+    /// <summary>
+    /// The optimised burn - pitch, yaw, turn rates and duration - from
+    /// <see cref="Navbox.Flight.BoostbackShooter"/>. This is what the boostback phase
+    /// FLIES, in place of the impulsive correction.
+    ///
+    /// WHY A PLAN RATHER THAN A DIRECTION. <see cref="SteerDv"/> answers "what is the
+    /// smallest push, applied NOW". Over a real burn that answer points at the ground -
+    /// measured 33 degrees below the horizon on the reference arc - because treating a
+    /// fifty-second burn as an impulse hides the falling that happens during it. The
+    /// shot integrates the powered arc instead, and comes out 25 degrees ABOVE the
+    /// horizon for 18% less propellant; below the horizon the burn is not merely dear
+    /// but impossible for this vehicle. Scvx.Console --shoot measures both.
+    ///
+    /// The impulsive correction is still computed, because it is what says whether
+    /// there is any targeting work left at all - see SteerShape for that split.
+    /// </summary>
+    public Navbox.Flight.BurnParameters BoostbackPlan;
+
+    /// <summary>
+    /// The frame the plan's angles are measured in, captured at the solve.
+    ///
+    /// Stored rather than rebuilt, because rebuilding it from the current state would
+    /// silently re-datum the angles: the frame's axes are local vertical and
+    /// retrograde-horizontal, both of which turn through a burn, so the same pitch
+    /// number means a different direction a few seconds later. That drift is exactly
+    /// what the re-solve is for.
+    /// </summary>
+    public Navbox.Flight.BoostbackShooter.Frame BoostbackPlanFrame;
+
+    /// <summary>
+    /// Sim time the plan was SOLVED at. The steering law is a function of time since
+    /// this and the duration is measured from it, so it is half of what the plan means
+    /// - which is why it moves only when a solve succeeds. Advancing it on a failed
+    /// attempt would silently rewind the burn clock by the interval and hand the law a
+    /// tau that had already been flown.
+    /// </summary>
+    public double BoostbackPlanTime = double.NegativeInfinity;
+
+    /// <summary>Sim time the last solve was ATTEMPTED at, successful or not. Separate
+    /// from BoostbackPlanTime purely so a failing solve is still rate-limited.</summary>
+    public double BoostbackPlanAttemptTime = double.NegativeInfinity;
+
+    /// <summary>True once a plan has been solved and not invalidated.</summary>
+    public bool BoostbackHasPlan;
+
+    /// <summary>Set once the plan stops being re-solved and is flown out open loop -
+    /// see PoweredGuidanceWindow.BoostbackPlanFreezeS.</summary>
+    public bool BoostbackPlanFrozen;
+
+    /// <summary>Why the last plan attempt failed, empty if it did not. The previous
+    /// plan is kept when one fails, so this can be set while a good plan flies.</summary>
+    public string BoostbackPlanError = "";
+
+    /// <summary>Miss the plan converged to, m, and what it costs in propellant.</summary>
+    public double BoostbackPlanMissM, BoostbackPlanPropellantKg;
+
+    /// <summary>How long the last plan solve took, ms. Surfaced on the tab because the
+    /// solve runs on the sim thread: this is the number that says whether the cadence
+    /// is still affordable on the vehicle actually being flown. The reference arc
+    /// measures 2.3 ms warm in Release and 24.6 in Debug, so read it against the build
+    /// rather than against a remembered figure.</summary>
+    public double BoostbackPlanSolveMs;
+
+    /// <summary>Scratch for the shooter, kept per vehicle so the solve allocates
+    /// nothing - same arrangement as ImpactScratch.</summary>
+    public Navbox.Numerics.Dual[] BoostbackPlanScratch;
+
+    // --- steering on the impact point ---
+
+    /// <summary>
+    /// The velocity correction that moves the predicted impact onto the landing site,
+    /// in CCI, m/s. This is the damped Gauss-Newton step -J^+ m: the direction that
+    /// NULLS the miss, which is not the same as the direction that reduces it
+    /// fastest. See <see cref="SteerGreedy"/>.
+    /// </summary>
+    public double3 SteerDv;
+
+    /// <summary>
+    /// The greedy direction, -J^T m, normalised. Kept alongside the real correction
+    /// because the two are easy to confuse and genuinely differ: they coincide only
+    /// when the miss happens to lie along one of J's singular directions, and part
+    /// company by ten degrees or so otherwise - which costs about a factor of two in
+    /// residual per unit of dv. Drawn as the second arrow so the difference is
+    /// visible rather than asserted.
+    /// </summary>
+    public double3 SteerGreedy;
+
+    /// <summary>
+    /// The FLIGHT-PATH-ANGLE shaping nudge, in CCI, m/s: a push along the free
+    /// direction that changes the trajectory's shape without moving the impact point.
+    ///
+    /// Separate from <see cref="SteerDv"/> and not folded into it, because the two are
+    /// used for different things and conflating them breaks the burn's termination.
+    /// SteerDv is the TARGETING correction and its magnitude is what says how much
+    /// targeting work is left - Boostback ends the burn when it drops below a floor. A
+    /// shaping term added into that number would hold the magnitude up after the miss
+    /// was nulled and the burn would never end on its own.
+    ///
+    /// So: <see cref="SteerCommand"/> is what to point along and how long to burn for,
+    /// SteerDv alone is what says whether there is anything left to correct.
+    /// </summary>
+    public double3 SteerShape;
+
+    /// <summary>What the vehicle should actually fly: the targeting correction plus
+    /// the shaping nudge. Both have to be imparted, so this is also what sizes the
+    /// burn.</summary>
+    public double3 SteerCommand => SteerDv + SteerShape;
+
+    /// <summary>How much vertical authority the free direction has, as the cosine
+    /// between it and the local vertical. Near zero means shaping is not available on
+    /// this geometry however much dv is spent - see ImpactSteering.FreeDirection.</summary>
+    public double SteerFreeVertical;
+
+    /// <summary>
+    /// Pitch of the COMMANDED burn relative to the local horizon, degrees. Positive is
+    /// above the horizon, negative is into the ground.
+    ///
+    /// Deliberately about the command and not the vehicle's flight path angle: a
+    /// booster past apogee is descending regardless, and cancelling that is not the
+    /// boostback's job. Thrusting further into it is what shaping prevents.
+    /// </summary>
+    public double SteerCmdPitchDeg;
+
+    /// <summary>True when the requested pitch is above what the geometry can reach,
+    /// so the command is short of <see cref="BoostbackPitchDeg"/>. Surfaced because a
+    /// knob that silently fails to do what it says is worse than one that does
+    /// nothing. See <see cref="SteerMaxPitchDeg"/>.</summary>
+    public bool SteerPitchUnreachable;
+
+    /// <summary>
+    /// The highest pitch the free direction can reach, degrees - the pitch of the free
+    /// direction itself.
+    ///
+    /// The commanded burn is (targeting dv + t * free direction), so as t grows the
+    /// direction asymptotes to the free direction and the pitch asymptotes to ITS
+    /// pitch. Everything below that is reachable and the cost runs to infinity at it.
+    /// This is the real limit on the knob, and it is geometry rather than policy.
+    /// </summary>
+    public double SteerMaxPitchDeg;
+
+    /// <summary>
+    /// MINIMUM PITCH ABOVE THE HORIZON for the boostback burn, degrees. The one knob
+    /// for flight-path-angle shaping, and it is honoured whatever it costs.
+    ///
+    /// Zero means "never thrust below the horizon". Positive lofts the burn, which is
+    /// what buys flight time for a low-thrust vehicle. Set it very negative to switch
+    /// shaping off entirely.
+    ///
+    /// THERE IS NO dV CAP, deliberately. The commanded burn is the targeting
+    /// correction plus some multiple of the free direction, and moving along that
+    /// direction does not change where the vehicle lands - so any pitch is reachable
+    /// by simply moving further along it. The only limit is geometric: the command
+    /// asymptotes to the free direction, so pitches at or above
+    /// <see cref="SteerMaxPitchDeg"/> cost unbounded dV and are refused. An earlier
+    /// version capped the spend at 60 m/s, which silently pinned the achievable pitch
+    /// near -15 degrees whatever this was set to.
+    ///
+    /// It does still fade out with the burn without a cap, because the dv needed for a
+    /// given pitch is PROPORTIONAL to the targeting correction - the ratio depends only
+    /// on the angle and the geometry. So as the miss is nulled the shaping goes with it.
+    ///
+    /// A FLOOR, not a setpoint: shaping only ever raises the command, never pushes a
+    /// burn that is already pointing high enough back down. There is no correct value
+    /// to derive - the paper this follows (Jo, Han and Ahn) likewise picks its
+    /// equivalent threshold by offline trajectory optimisation and says so. Tune it
+    /// against flight results, watching total dV rather than the angle.
+    /// </summary>
+    public double BoostbackPitchDeg;
+
+    /// <summary>Miss distance the correction was computed against, m.</summary>
+    public double SteerMissM;
+
+    /// <summary>True when the two above hold a usable answer.</summary>
+    public bool HasSteer;
+
+    /// <summary>Wall-clock tick of the last Jacobian, throttling it separately from
+    /// the prediction: three seeded sweeps cost about four times one prediction.</summary>
+    public long SteerTick;
+
+    // --- the boostback state machine ---
+    //
+    // Separation -> Rotation -> Boostback -> EntryOrient, per vehicle like every other
+    // phase machine here. See Guidance/Boostback.cs for what each phase does.
+
+    public PoweredGuidanceWindow.BoostbackPhase BoostbackPhase =
+        PoweredGuidanceWindow.BoostbackPhase.Idle;
+
+    /// <summary>Sim time the current phase began, and of the previous step. The step
+    /// time supplies the interval the slew limit and the sensed-dV integration run
+    /// over; sim time rather than wall clock, so a warp step is the interval it
+    /// really is.</summary>
+    public double BoostbackPhaseStart;
+    public double BoostbackLastStep;
+
+    public string BoostbackStatus = "";
+
+    // --- tuning (per vehicle: these describe one booster's airframe and mission) ---
+
+    /// <summary>Settling burn at minimum throttle after separation, s.</summary>
+    public double BoostbackSeparationS = 2.0;
+
+    /// <summary>
+    /// How fast the commanded attitude turns during the rotation and entry slews,
+    /// deg/s. Unlike the ascent's MaxSlewDegS this is not a guard against a
+    /// discontinuity - it IS the manoeuvre, and it is the rate the vehicle will
+    /// actually fly the flip at, so it wants to be inside what the RCS and gimbals can
+    /// hold rather than merely above what guidance asks for.
+    /// </summary>
+    public double BoostbackSlewDegS = 8.0;
+
+    // --- live ---
+
+    /// <summary>Attitude held through the settling burn, latched at EXECUTE. A fixed
+    /// inertial direction rather than a live reading, so the hold is a hold and the
+    /// rotation has something continuous to slew from.</summary>
+    public double3 BoostbackHoldDir;
+
+    /// <summary>Correction still to fly, m/s, and the rocket-equation burn time that
+    /// buys it at full throttle and the current ambient pressure. Tgo is NaN when the
+    /// vehicle has no usable engine model.</summary>
+    public double BoostbackDvGo;
+    public double BoostbackTgo;
+
+    /// <summary>
+    /// The plan has frozen and the rest of the burn is open loop - the readout face of
+    /// <see cref="BoostbackPlanFrozen"/>. See Guidance/Boostback.cs for why the last few
+    /// seconds are flown that way.
+    ///
+    /// The two dV figures beside it are a MEASUREMENT, not a cutoff: BoostbackLockDv is
+    /// what the plan said was left at the freeze, BoostbackAccumDv is the dV actually
+    /// sensed since, integrated from the thrust the lit engines are producing at this
+    /// altitude. Cutoff is the plan clock; what these two show is how well the engine
+    /// model the plan was built on matches the engine.
+    /// </summary>
+    public bool BoostbackLocked;
+    public double BoostbackLockDv;
+    public double BoostbackAccumDv;
+
+    /// <summary>Sim time the burn is abandoned at regardless, sized off the burn time
+    /// predicted at ignition. The closed loop has no convergence guarantee, and nothing
+    /// else in it ever says stop.</summary>
+    public double BoostbackBurnLimit = double.PositiveInfinity;
+
+    /// <summary>Previous step's target direction and the low-passed rate differenced
+    /// from it — the feedforward published to the flight computer.</summary>
+    public double3 BoostbackPrevWant;
+    public bool BoostbackPrevWantValid;
+    public double3 BoostbackWantRate;
+
+    /// <summary>What the step wants the engine at. Applied in ApplyAutopilot, which is
+    /// where writes to _manualControlInputs reach the sim.</summary>
+    public double BoostbackThrottle;
+    public bool BoostbackEngineOn;
+
     /// <summary>
     /// Per-vehicle state, held WEAKLY so a destroyed or unloaded vehicle takes its
     /// autopilot state with it. A Dictionary would keep every craft the player ever

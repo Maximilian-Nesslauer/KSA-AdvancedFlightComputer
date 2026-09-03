@@ -504,7 +504,7 @@ public static partial class PoweredGuidanceWindow
         // window to re-derive and an EXECUTE to fire (StepLaunchWindow), and without
         // it here the step that does both was skipped for exactly the state that
         // needs it.
-        bool flying = sixDof || _s.Running || landingActive || _s.WasEngaged
+        bool flying = sixDof || _s.Running || landingActive || BoostbackLive || _s.WasEngaged
                    || _s.LandingCutPending || _s.LaunchArmed;
 
         // Nothing engaged and nobody looking: an unfocused idle craft is not worth a
@@ -562,6 +562,7 @@ public static partial class PoweredGuidanceWindow
         IParentBody stepParent = orbit.Parent;
         StepLanding(vehicle, orbit, stepParent, stepParent.Mu, stepParent.MeanRadius);
         StepAscent(vehicle, orbit, stepParent, stepParent.Mu, stepParent.MeanRadius);
+        StepBoostback(vehicle, orbit, stepParent);
 
         // Read straight off _s, not off the values the bail above was computed from:
         // the flows just ran, and a touchdown, an abort or a handoff can have changed
@@ -575,7 +576,13 @@ public static partial class PoweredGuidanceWindow
             || _s.LandingPhase == LandingPhase.Burn
             || _s.LandingPhase == LandingPhase.GfoldDescent
             || _s.LandingPhase == LandingPhase.TerminalHover;
-        bool shouldCommand = _s.Engage && (_s.Running || landingGuides) && _s.HasCommand;
+        // Every live boostback phase steers, including the settling burn (which holds a
+        // latched attitude) and the entry hold (which tracks surface retrograde
+        // indefinitely) — so unlike the landing machine there is no sub-phase here that
+        // wants the vehicle back.
+        bool boostbackGuides = BoostbackLive;
+        bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides)
+                          && _s.HasCommand;
 
         // Auto engine control: master switch on at full throttle while flying, off
         // for good once the terminal countdown expires. Written here — the prefix
@@ -622,6 +629,18 @@ public static partial class PoweredGuidanceWindow
                     inputs.EngineOn = false; // Prep (pre-ignition)
                 }
             }
+            else if (boostbackGuides)
+            {
+                // The phase decides; the step recorded it. Deliberately NOT paired with
+                // AutoSequence: the machine cuts the engine at boostback cutoff and
+                // coasts to entry from there, and the auto-stager reads "no thrust" as
+                // a cue to fire the next sequence — so it would work its way down a
+                // returning booster's staging list one activation per second, and the
+                // sequences left on a first stage are the ones that separate it.
+                ref ManualControlInputs inputs = ref ManualInputs(vehicle);
+                inputs.EngineOn = _s.BoostbackEngineOn;
+                inputs.EngineThrottle = (float)_s.BoostbackThrottle;
+            }
             else if (_s.Running)
             {
                 ref ManualControlInputs inputs = ref ManualInputs(vehicle);
@@ -650,11 +669,12 @@ public static partial class PoweredGuidanceWindow
                             fullEngage: !_s.WasEngaged, rollRef: rollRef);
 
             // AND THE RATE THAT ATTITUDE IS TURNING AT, published in the same breath
-            // so the pair can never describe different instants. Only the ascent
-            // produces one — it is the steering law's own implied turning rate — so a
-            // landing publishes zero, which is exactly what the flight computer
-            // assumed before this existed.
-            KsaAttitudeRate.Set(vehicle, _s.Running ? _s.CommandRate : default);
+            // so the pair can never describe different instants. The ascent produces
+            // one from the steering law's own implied turning rate, and the boostback
+            // from its slew and its moving targets; a landing publishes zero, which is
+            // exactly what the flight computer assumed before this existed.
+            KsaAttitudeRate.Set(vehicle,
+                _s.Running || boostbackGuides ? _s.CommandRate : default);
             _s.WasEngaged = true;
         }
         else if (_s.WasEngaged)
@@ -794,6 +814,7 @@ public static partial class PoweredGuidanceWindow
     {
         _s.Running = false;
         _s.LandingPhase = LandingPhase.Idle;
+        _s.BoostbackPhase = BoostbackPhase.Idle;
         _s.AutoLaunch = false;
         _s.HasCommand = false;
         _s.FcResetPending = true;

@@ -231,6 +231,19 @@ public sealed class AeroTable
     /// </summary>
     public Dual Cd(Dual mach, Dual alpha)
     {
+        // UNSEEDED FAST PATH. If neither input carries a derivative then the chain
+        // rule below produces exactly zero whatever the gradient is, so computing the
+        // gradient is pure waste - and it is not cheap: EvaluateWithGradient costs
+        // roughly 2.2x Evaluate (see --aero). This is not an approximation; the two
+        // branches return bit-identical results.
+        //
+        // It matters because the same integrator serves both jobs. A Jacobian sweep
+        // seeds one input and needs the slope; an impact prediction for the overlay
+        // seeds nothing and needs only the value, and that path calls this four times
+        // per RK4 step for hundreds of steps, several times a second.
+        if (mach.D == 0.0 && alpha.D == 0.0)
+            return new Dual(Cd(mach.V, alpha.V), 0.0);
+
         double value = Cd(mach.V, alpha.V, out double dM, out double dA);
         return new Dual(value, dM * mach.D + dA * alpha.D);
     }

@@ -37,14 +37,274 @@ public static partial class PoweredGuidanceWindow
         //
         // "When the tab is selected" is exactly here: this method only runs while the
         // tab is open, so an unopened tab costs nothing and an open one re-fits only
-        // when staging has actually invalidated the table.
-        double3 live = LiveBoxExtents(vehicle);
-        if (_s.AeroStale(live))
-            ResampleBoostbackAero(vehicle, parent);
+        // when staging has actually invalidated the table. The guidance step calls the
+        // same helper, so a boostback flown with the panel shut uses the same table.
+        EnsureBoostbackAero(vehicle, parent);
 
+        DrawBoostbackGuidanceSection(vehicle, innerW);
+        DrawBoostbackImpactSection(vehicle, orbit, parent, innerW);
         DrawBoostbackSurrogateSection(vehicle, parent, innerW);
         DrawBoostbackProfileSection(innerW);
         DrawBoostbackAtmosphereSection(vehicle, orbit, parent, innerW);
+    }
+
+    // --- Guidance -----------------------------------------------------------
+    // The state machine: which phase, what it is waiting for, and the two numbers the
+    // burn is flown on. First, because it is the only thing on this tab that commands
+    // the vehicle - everything below it is the model the commands are derived from.
+    private static void DrawBoostbackGuidanceSection(Vehicle vehicle, float innerW)
+    {
+        if (!ImGuiHelper.BeginRegion("Boostback guidance",
+                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+            return;
+
+        float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
+        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
+        float4 live = new float4(0.5f, 0.9f, 1f, 1f);
+        float4 good = new float4(0.4f, 1f, 0.4f, 1f);
+
+        GaugeRowText("Phase", BoostbackPhaseName(_s.BoostbackPhase),
+            BoostbackLive ? live : dim);
+
+        if (BoostbackLive)
+        {
+            double inPhase = SimNow() - _s.BoostbackPhaseStart;
+
+            switch (_s.BoostbackPhase)
+            {
+                case BoostbackPhase.Separation:
+                    GaugeRowText("Settling", $"{inPhase,8:F1} / {_s.BoostbackSeparationS:F1} s");
+                    GaugeRowText("Throttle", $"{_s.BoostbackThrottle * 100.0,8:F0} %  (vehicle floor)");
+                    break;
+
+                case BoostbackPhase.Rotation:
+                {
+                    // Both errors, because both gate the transition: the command has to
+                    // finish issuing AND the vehicle has to have followed it.
+                    double3 aim = BoostbackPlanDirection(SimNow());
+                    double cmdErr = aim.Length() > 0.5
+                        ? AngleBetween(_s.CommandDir, aim) * 180.0 / Math.PI
+                        : double.NaN;
+                    double fcErr = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
+                    GaugeRowText("Command to plan",
+                        double.IsFinite(cmdErr) ? $"{cmdErr,8:F1} deg" : "  no plan yet",
+                        cmdErr <= BoostbackAlignDeg ? good : dim);
+                    GaugeRowText("Vehicle error", $"{fcErr,8:F1} deg",
+                        fcErr <= BoostbackAlignDeg ? good : dim);
+                    GaugeRowText("Slew rate", $"{_s.BoostbackSlewDegS,8:F1} deg/s", dim);
+                    break;
+                }
+
+                case BoostbackPhase.Boostback:
+                    GaugeRowText("dV to go", $"{_s.BoostbackDvGo,8:F1} m/s");
+                    GaugeRowText("Burn time left",
+                        double.IsFinite(_s.BoostbackTgo) ? $"{_s.BoostbackTgo,8:F1} s" : "  no plan",
+                        double.IsFinite(_s.BoostbackTgo) ? dim : warn);
+                    GaugeRowText("Plan",
+                        _s.BoostbackPlanFrozen ? "FROZEN - flying the law out"
+                                               : $"re-solved every {BoostbackPlanIntervalS:F0} s",
+                        _s.BoostbackPlanFrozen ? warn : good);
+                    // Sensed against planned. Not a cutoff - the plan clock is - but it
+                    // is the one number that says whether the engine model the plan was
+                    // built on matches the engine, and a large gap is the first thing
+                    // that would explain a burn that ends off target.
+                    if (_s.BoostbackPlanFrozen)
+                        GaugeRowText("Flown since freeze",
+                            $"{_s.BoostbackAccumDv,8:F1} / {_s.BoostbackLockDv:F1} m/s", dim);
+                    break;
+
+                case BoostbackPhase.EntryOrient:
+                    // The whole point of the phase, so it is the number shown: how far
+                    // the vehicle still is from engine-first into the relative wind.
+                    GaugeRowText("Vehicle error",
+                        $"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg");
+                    GaugeRowText("Holding", "surface retrograde (alpha 0)", dim);
+                    break;
+            }
+        }
+
+        // THE PLAN. Its own rows because this is what the vehicle is flying, and
+        // because the solve time is the number that says whether the cadence is still
+        // affordable - it runs on the sim thread, so a plan that starts costing
+        // hundreds of milliseconds is a stutter every two seconds and wants moving to
+        // the worker thread rather than being left alone.
+        if (_s.BoostbackHasPlan)
+        {
+            GaugeRowText("Burn plan",
+                $"{_s.BoostbackPlan.PitchDeg,8:F1} deg pitch, {_s.BoostbackPlan.Duration:F1} s");
+            if (Math.Abs(_s.BoostbackPlan.YawDeg) >= 0.05)
+                GaugeRowText("Plan yaw", $"{_s.BoostbackPlan.YawDeg,8:F1} deg", dim);
+            GaugeRowText("Plan cost",
+                $"{_s.BoostbackPlanPropellantKg,8:F0} kg   (miss {_s.BoostbackPlanMissM:F0} m)", dim);
+            GaugeRowText("Solve time", $"{_s.BoostbackPlanSolveMs,8:F1} ms", dim);
+        }
+        if (_s.BoostbackPlanError.Length > 0 && BoostbackLive)
+            GaugeRowText("Plan", _s.BoostbackPlanError
+                + (_s.BoostbackHasPlan ? " (flying the previous one)" : ""), warn);
+
+        if (_s.BoostbackStatus.Length > 0)
+        {
+            ImGui.Text("");
+            ImGui.NextColumn();
+            ImGui.TextColored(warn, _s.BoostbackStatus);
+            ImGui.NextColumn();
+        }
+
+        GaugeRow("Settling burn (s)", "##bbsep", ref _s.BoostbackSeparationS);
+        GaugeRow("Slew rate (deg/s)", "##bbslew", ref _s.BoostbackSlewDegS);
+
+        // Flight-path-angle shaping. A FLOOR on how far the burn may point below the
+        // horizon, bought with the free direction - the velocity change that moves the
+        // impact point nowhere - so it costs dV but not accuracy. Any pitch below the
+        // geometric ceiling is reachable and is honoured whatever it costs; see
+        // ShapeFlightPathAngle. Lofting the burn is what buys flight time for a
+        // low-thrust vehicle. Very negative switches shaping off.
+        GaugeRow("Min pitch (deg)", "##bbpitch", ref _s.BoostbackPitchDeg);
+
+        if (_s.HasSteer)
+        {
+            double shaped = _s.SteerShape.Length();
+            GaugeRowText("Burn pitch", $"{_s.SteerCmdPitchDeg,8:F1} deg"
+                + (shaped > 0.05 ? $"   +{shaped:F0} m/s" : ""),
+                _s.SteerPitchUnreachable ? warn : dim);
+
+            if (_s.SteerPitchUnreachable)
+                GaugeRowText("", $"ceiling is {_s.SteerMaxPitchDeg:F1} deg - the burn "
+                               + "direction cannot pitch above the free direction", warn);
+            else if (shaped <= 0.05 && _s.SteerFreeVertical != 0.0
+                     && Math.Abs(_s.SteerFreeVertical) < 0.05)
+                GaugeRowText("", "no vertical authority on this geometry", warn);
+            else if (shaped > 0.05)
+                GaugeRowText("", $"ceiling {_s.SteerMaxPitchDeg:F0} deg; total "
+                               + $"{_s.SteerCommand.Length():F0} m/s", dim);
+        }
+
+        ImGui.Text("");
+        ImGui.NextColumn();
+        ImGui.TextWrapped($"EXECUTE starts at separation. The burn flies an optimised "
+                        + $"plan - pitch, yaw and duration shot for minimum propellant "
+                        + $"- re-solved every {BoostbackPlanIntervalS:F0} s and frozen "
+                        + $"at T-{BoostbackPlanFreezeS:F0} s.");
+        ImGui.NextColumn();
+
+        ImGuiHelper.EndRegion();
+    }
+
+    // --- Impact prediction --------------------------------------------------
+    // The drag landing point: where this vehicle touches down if it does nothing
+    // more. First because it is the one thing on this tab that is about the flight
+    // rather than about the model.
+    private static void DrawBoostbackImpactSection(Vehicle vehicle, Orbit orbit,
+                                                   IParentBody parent, float innerW)
+    {
+        if (!ImGuiHelper.BeginRegion("Impact prediction",
+                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+            return;
+
+        bool wasOn = _showImpactOverlay;
+        GaugeRowCheck("Show impact overlay", "##impactoverlay", ref _showImpactOverlay);
+
+        // The OVERLAY owns the prediction - see DrawBoostbackOverlay for why it must,
+        // rather than this tab. All that happens here is that switching the toggle on
+        // clears the throttle, so the first prediction lands on the next frame instead
+        // of up to 200 ms later.
+        if (_showImpactOverlay && !wasOn)
+        {
+            _s.ImpactTick = 0;
+            UpdateImpactPrediction(vehicle, orbit, parent, force: true);
+        }
+
+        float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
+        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
+
+        if (!_showImpactOverlay)
+        {
+            GaugeRowText("Prediction", "off", dim);
+        }
+        else if (_s.Aero?.Table == null)
+        {
+            GaugeRowText("Prediction", "no aero surrogate", warn);
+        }
+        else if (!_s.HasImpact)
+        {
+            // Not an error: an orbiting stage genuinely has no impact point inside the
+            // horizon, and saying so is more useful than a blank.
+            string why = _s.Impact.Status == ImpactStatus.NoImpactWithinHorizon
+                ? $"none within {ImpactHorizonMinutes:F0} min"
+                : _s.Impact.Status.ToString();
+            GaugeRowText("Impact", why, warn);
+            if (_s.Impact.Status == ImpactStatus.NoImpactWithinHorizon)
+                GaugeRowText("Closest approach", $"{_s.Impact.MinAltitude / 1000.0,8:F1} km", dim);
+        }
+        else
+        {
+            GaugeRowText("Impact lat/lon",
+                $"{_s.ImpactLatDeg,8:F3}, {_s.ImpactLonDeg:F3}");
+            GaugeRowText("Time to impact", $"{_s.Impact.TimeOfFlight.V,8:F1} s");
+            GaugeRowText("Downrange", $"{_s.ImpactDownrangeM / 1000.0,8:F1} km");
+            GaugeRowText("Impact speed", $"{ImpactSpeed(_s),8:F0} m/s");
+
+            // Miss distance against the landing site, which is what a boostback is
+            // actually trying to null. Great-circle, so it is the number a map would
+            // give rather than a chord.
+            double miss = ImpactMissDistance(parent);
+            if (double.IsFinite(miss))
+                GaugeRowText("Miss vs site", $"{miss / 1000.0,8:F1} km",
+                    miss < 5000.0 ? new float4(0.4f, 1f, 0.4f, 1f) : dim);
+
+            GaugeRowText("Integration", $"{_s.Impact.Steps,8} steps");
+        }
+
+        // The steering arrows and the correction behind them. Its own toggle because
+        // the Jacobian is three seeded sweeps - about four times the cost of the
+        // prediction - and it is only meaningful once there is a site to aim at.
+        GaugeRowCheck("Show steering arrow", "##steerarrow", ref _showSteerArrow);
+        if (_showSteerArrow && _s.HasSteer)
+        {
+            GaugeRowText("Correction dV", $"{_s.SteerDv.Length(),8:F1} m/s");
+            // How far the greedy direction is from the one that actually nulls the
+            // miss. Zero when the miss lies along one of J's singular directions,
+            // which is why it reads zero for a purely downrange or purely crossrange
+            // miss and grows for anything in between.
+            GaugeRowText("Greedy offset",
+                $"{AngleBetweenDeg(_s.SteerDv, _s.SteerGreedy),8:F1} deg", dim);
+
+            // The shaping split out: how much of the commanded dv is targeting and
+            // how much is buying pitch. The pitch itself is up in the guidance
+            // section, next to the knob that sets it.
+            double shape = _s.SteerShape.Length();
+            if (shape > 0.05)
+                GaugeRowText("Shaping dV", $"{shape,8:F1} m/s  (free direction)", dim);
+            GaugeRowText("Commanded dV", $"{_s.SteerCommand.Length(),8:F1} m/s");
+        }
+        else if (_showSteerArrow)
+        {
+            GaugeRowText("Correction", "no solution", warn);
+        }
+
+        // The assumption, stated where the numbers are rather than only in the code:
+        // it is the model's biggest simplification and the first thing to doubt if a
+        // prediction disagrees with what the vehicle does.
+        ImGui.Text("");
+        ImGui.NextColumn();
+        ImGui.TextWrapped("Assumes retrograde attitude (alpha 0) for the whole coast, "
+                        + "and no further thrust.");
+        ImGui.NextColumn();
+
+        ImGuiHelper.EndRegion();
+    }
+
+    /// <summary>Great-circle distance from the predicted impact to the landing site,
+    /// or NaN if there is no prediction.</summary>
+    private static double ImpactMissDistance(IParentBody parent)
+    {
+        if (!_s.HasImpact)
+            return double.NaN;
+        double3 siteDir = SiteDirCciAt(parent, _s.Impact.TimeOfFlight.V).NormalizeOrZero();
+        double3 hitDir = new double3(_s.Impact.Rx.V, _s.Impact.Ry.V, _s.Impact.Rz.V)
+            .NormalizeOrZero();
+        double dot = Math.Clamp(double3.Dot(siteDir, hitDir), -1.0, 1.0);
+        return parent.MeanRadius * Math.Acos(dot);
     }
 
     /// <summary>The live bounding box, in the same terms the sweep records it.</summary>

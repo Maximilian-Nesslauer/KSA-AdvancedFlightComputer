@@ -307,7 +307,10 @@ public static partial class PoweredGuidanceWindow
     // The EXECUTE button's action — also fired automatically at the launch window.
     private static void StartGuidance(Orbit orbit, IParentBody parent)
     {
-        _s.LandingPhase = LandingPhase.Idle; // ascent takes over from any landing flow
+        // Ascent takes over from any landing or boostback flow: all three drive the
+        // same flight-computer command path, and two of them writing it would fight.
+        _s.LandingPhase = LandingPhase.Idle;
+        _s.BoostbackPhase = BoostbackPhase.Idle;
         _s.Upfg.Reset();
         _s.GuidanceError = "";
         _s.Status = "";
