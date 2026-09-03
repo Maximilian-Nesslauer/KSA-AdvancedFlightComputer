@@ -2,6 +2,42 @@
 
 ## [Unreleased]
 
+- **Returnable stages**, listed on the ascent tab with independent landing sites and
+  a live return cost (`Guidance/ReturnableStages.cs`).
+
+  **Controllability is the test.** A stage is worth returning if it can be *flown*,
+  and it can be flown if the subtree that separates carries a **command pod** — the
+  same thing `Vehicle.IsControllable` asks, and what every attitude profile in the
+  flight computer gates on. An interstage does not qualify however large it is; a
+  booster with avionics does. Each separating sequence's decoupler subtree is walked
+  and tested for a `Control` module.
+
+  **Independent targets.** Each listed stage gets a **Set target** button that arms
+  the existing world-click retarget *bound to that stage*, so the click writes that
+  stage's site instead of the vehicle's. Targets are keyed on the detached subtree
+  root's `InstanceId` — stable for the life of the craft, where a sequence index
+  shifts as sequences activate — so a target set on the pad is still attached to the
+  right stage at separation, and the auto hand-over now hands the booster *its* site
+  rather than the vehicle's.
+
+  **The cost, solved through the climb.** At 1 Hz: the impulse that would put the
+  ballistic impact on that stage's site if it separated now, plus the great-circle
+  distance it is buying. It starts enormous, falls as the trajectory bends over, and
+  is the number that says when staging is affordable — read against **Booster reserve
+  dV**, which is what has to buy it. Warned when the reserve is short.
+
+  **One Jacobian serves the whole list.** The impact prediction and its velocity
+  Jacobian depend only on where the vehicle is and how it flies — not on where anyone
+  wants to land. Only the miss depends on the target. So each extra stage is a 3×3
+  solve, and listing five costs what listing one does.
+
+  Two approximations, named rather than buried: the coast is integrated on the
+  **stack's** ballistic coefficient, because a subtree that has not separated has no
+  bounding box of its own to sweep (KSA computes CdA from the live assembly); and it
+  is an **impulse**, where a real burn is ~18% dearer and points elsewhere entirely.
+  It is the number that says whether to stage yet, not the one that flies the burn —
+  `BoostbackShooter` does that once the booster exists.
+
 - **Ascent leaves the booster propellant to come home with**, and hands it over.
   A new per-vehicle **Booster reserve dV (m/s)** on the ascent tab; at zero nothing
   changes.

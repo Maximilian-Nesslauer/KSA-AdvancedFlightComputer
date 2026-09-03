@@ -252,6 +252,7 @@ public static partial class PoweredGuidanceWindow
             return;
 
         _stagingDropped.Clear();
+        Part detached = null;
         ReadOnlySpan<Part> parts = next.Parts;
         for (int i = 0; i < parts.Length; i++)
         {
@@ -259,21 +260,31 @@ public static partial class PoweredGuidanceWindow
             for (int j = 0; j < decouplers.Length; j++)
             {
                 Part root = DetachedRoot(decouplers[j]);
-                if (root != null)
-                    CollectSubtree(root, _stagingDropped);
+                if (root == null)
+                    continue;
+                detached ??= root;       // FIRST decoupler's root - see below
+                CollectSubtree(root, _stagingDropped);
             }
         }
         foreach (Part part in _stagingDropped)
             _handoverParts.Add(part.InstanceId);
 
-        if (_handoverParts.Count == 0)
+        if (_handoverParts.Count == 0 || detached == null)
             return;
 
-        // The site travels with the booster. It is the ascent vehicle's site because
-        // that is where the player set it, and the booster has no state to have set one
-        // of its own - which is the whole reason this is carried rather than defaulted.
-        _handoverSiteLat = _s.SiteLatDeg;
-        _handoverSiteLon = _s.SiteLonDeg;
+        // The site travels with the booster, and it is THIS STAGE'S site when one was
+        // set for it - which is the point of setting them independently. The vehicle's
+        // own site is the fallback, because a booster with no state of its own would
+        // otherwise separate with no target at all.
+        //
+        // The id is taken with the SAME RULE RefreshReturnableStages uses - the first
+        // decoupler's detached root - and that has to stay true, because the two only
+        // agree by construction. Deriving it here instead by scanning the dropped set
+        // for a part whose parent stayed behind looks equivalent and is not: a sequence
+        // with several decouplers has several such roots, and a HashSet does not
+        // promise which comes out first. The lookup would then miss and fall back to
+        // the vehicle site without a word.
+        ResolveStageTarget(detached.InstanceId, out _handoverSiteLat, out _handoverSiteLon);
         _handoverExpiry = now + HandoverWindowS;
     }
 
@@ -539,8 +550,10 @@ public static partial class PoweredGuidanceWindow
 
             // The reserve rides the same tick: both of its inputs - the stage model and
             // the part tree the separation walk reads - only change when staging does,
-            // and StageModelDirty is already set exactly then.
+            // and StageModelDirty is already set exactly then. So does the returnable
+            // stage list, which reads the same part tree for the same reason.
             RefreshReserve(vehicle);
+            RefreshReturnableStages(vehicle);
         }
         catch (Exception)
         {
@@ -965,6 +978,21 @@ public static partial class PoweredGuidanceWindow
         // settling after a separation and this is the first point in the frame where
         // that is true.
         StepBoosterHandover(vehicle);
+
+        // What it would cost each returnable stage to come home from here. Housekeeping
+        // rather than guidance, and deliberately so: the whole value of the number is
+        // watching it through the climb, which means it has to be solved before anything
+        // has been staged and whether or not the tab is open. It is throttled to 1 Hz
+        // and shares one Jacobian across every stage - see Guidance/ReturnableStages.cs.
+        // Gated on a stage actually having a TARGET, not merely on one being returnable.
+        // The surrogate is a 72-azimuth sweep of the game's own CdA and it is refitted
+        // at every staging; paying for it on a craft nobody has asked to bring back
+        // would be a launch-time cost for a number nothing displays.
+        if (AnyStageTargeted() && vehicle.Orbit?.Parent != null)
+        {
+            EnsureBoostbackAero(vehicle, vehicle.Orbit.Parent);
+            UpdateReturnDv(vehicle, vehicle.Orbit, vehicle.Orbit.Parent);
+        }
 
         // Likewise the flown-trajectory trace: sampled off the simulation rather than
         // the frame rate, and recorded whether or not guidance is running so the track

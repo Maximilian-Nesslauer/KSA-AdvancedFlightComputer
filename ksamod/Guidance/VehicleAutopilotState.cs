@@ -268,6 +268,41 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double HandoverPendingUntil = double.NegativeInfinity;
 
+    // --- returnable stages ---
+
+    /// <summary>
+    /// The separable stages that carry a command pod, in staging order, with what it
+    /// would cost each to come home from here. Rebuilt with the stage model; see
+    /// Guidance/ReturnableStages.cs.
+    /// </summary>
+    public readonly System.Collections.Generic.List<PoweredGuidanceWindow.ReturnableStage>
+        ReturnableStages = new();
+
+    /// <summary>
+    /// Each stage's own landing site, keyed by the detached subtree root's InstanceId
+    /// and holding (lat, lon) in degrees.
+    ///
+    /// SEPARATE FROM THE LIST because the list is rebuilt whenever the part tree
+    /// changes and a target set before launch has to survive that. The InstanceId is
+    /// the identity that does: it is stable for the life of the craft, where a
+    /// sequence index shifts as sequences are activated.
+    /// </summary>
+    public readonly System.Collections.Generic.Dictionary<uint, double2> StageTargets = new();
+
+    /// <summary>Live stage objects by root id, so the 4 Hz rebuild reuses them and the
+    /// 1 Hz costs written into them survive it.</summary>
+    public readonly System.Collections.Generic.Dictionary<uint, PoweredGuidanceWindow.ReturnableStage>
+        ReturnableStageCache = new();
+
+    /// <summary>Wall-clock tick for the return-cost solve, and why the last one
+    /// produced nothing.</summary>
+    public long ReturnDvTick;
+    public string ReturnDvNote = "";
+
+    /// <summary>Scratch for the return-cost Jacobian, per vehicle so the solve
+    /// allocates nothing - same arrangement as ImpactScratch.</summary>
+    public PoweredGuidance.Numerics.Dual[] ReturnScratch;
+
     // The stage model cache. VehicleStageModel used to carry the vehicle it was built
     // for, purely so a switch could invalidate it; the key is the vehicle now, so that
     // field is gone.

@@ -336,7 +336,11 @@ public static partial class PoweredGuidanceWindow
         // landing site, so it means nothing on Ascent and stripes out there. It DOES
         // mean something on Boostback: the site is what the correction aims the
         // predicted impact point at, so moving it is how the burn is retargeted.
-        bool canRetarget = _panelTab != GuidanceTab.Ascent;
+        // Retarget means nothing on Ascent - the site is what a LANDING aims at - with
+        // one exception: a returnable stage's Set button arms a click for that stage,
+        // and that is set from the Ascent tab. So the gate follows the binding rather
+        // than the tab alone.
+        bool canRetarget = _panelTab != GuidanceTab.Ascent || _retargetStageId != 0;
         float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
 
         ImGui.SetCursorScreenPos(new float2(origin.X, origin.Y + height + gap));

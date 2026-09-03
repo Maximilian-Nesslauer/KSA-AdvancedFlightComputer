@@ -26,6 +26,7 @@ public static partial class PoweredGuidanceWindow
 
         DrawTargetOrbitSection(vehicle, orbit, parent, bodyRadius, innerW);
         DrawAscentSettingsSection(innerW);
+        DrawReturnableStagesSection(innerW);
         DrawExpertSettingsSection(innerW);
     }
 
@@ -207,6 +208,101 @@ public static partial class PoweredGuidanceWindow
             GaugeRowText("", _s.ReserveNote, warn);
         if (_s.ReserveStaged)
             GaugeRowText("", "staged - booster handed to boostback", dim);
+    }
+
+    // --- Returnable stages --------------------------------------------------
+
+    /// <summary>
+    /// The stages that could fly themselves home, each with its own landing site and
+    /// what coming back would cost it from where the vehicle is right now.
+    ///
+    /// CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that
+    /// separates carries a command pod, which is the same thing Vehicle.IsControllable
+    /// asks. An interstage does not qualify however large it is.
+    ///
+    /// THE COST IS LIVE THROUGH THE CLIMB, which is the point of it. It is the impulse
+    /// that would put the ballistic impact on the site if the stage separated NOW, so
+    /// it starts enormous, falls as the trajectory bends over, and is the number that
+    /// says when staging is affordable. Read it against Booster reserve dV above: that
+    /// is what the reserve has to buy.
+    /// </summary>
+    private static void DrawReturnableStagesSection(float innerW)
+    {
+        var list = _s.ReturnableStages;
+        if (list.Count == 0)
+            return;      // nothing separating carries a pod - most upper stages
+
+        if (!ImGuiHelper.BeginRegion("Returnable stages",
+                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+            return;
+
+        float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
+        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
+        float4 live = new float4(0.5f, 0.9f, 1f, 1f);
+
+        for (int i = 0; i < list.Count; i++)
+        {
+            PoweredGuidanceWindow.ReturnableStage stage = list[i];
+
+            // The name row carries the Set button, because the button is about the
+            // stage rather than about any one of its numbers.
+            ImGui.Text(stage.Name + (stage.IsNext ? "  (next)" : ""));
+            ImGui.NextColumn();
+            bool arming = _retargetStageId == stage.RootId;
+            if (ImGui.Button(arming ? $"click a spot##set{stage.RootId}"
+                                    : $"Set target##set{stage.RootId}"))
+            {
+                // Arms the world click for THIS stage. Same click handler the landing
+                // retarget uses; the binding is what sends the answer somewhere else.
+                _retargetStageId = arming ? 0u : stage.RootId;
+                _retargetArmed = !arming;
+            }
+            if (stage.HasTarget)
+            {
+                ImGui.SameLine();
+                if (ImGui.Button($"x##clr{stage.RootId}"))
+                {
+                    _s.StageTargets.Remove(stage.RootId);
+                    _s.StageModelDirty = true;
+                }
+            }
+            ImGui.NextColumn();
+
+            if (!stage.HasTarget)
+            {
+                GaugeRowText("", "no target set", dim);
+                continue;
+            }
+
+            GaugeRowText("", $"lat {stage.TargetLatDeg,8:F3}, lon {stage.TargetLonDeg:F3}", dim);
+
+            if (double.IsNaN(stage.RequiredDvMs))
+            {
+                // Normal for most of a climb: a vehicle still going up has no ballistic
+                // impact to drag anywhere, so there is no cost to quote yet.
+                GaugeRowText("Return dV", _s.ReturnDvNote.Length > 0 ? _s.ReturnDvNote
+                                                                     : "not solved yet", dim);
+                continue;
+            }
+
+            GaugeRowText("Return dV", $"{stage.RequiredDvMs,8:F0} m/s", stage.IsNext ? live : dim);
+            if (!double.IsNaN(stage.MissM))
+                GaugeRowText("", $"{stage.MissM / 1000.0,8:F0} km back to the site", dim);
+
+            // The one thing the reserve knob needs to hear, said where it is being read.
+            if (stage.IsNext && _s.AscentReserveDvMs > 0.0
+                && stage.RequiredDvMs > _s.AscentReserveDvMs)
+                GaugeRowText("", $"reserve is {_s.AscentReserveDvMs:F0} m/s - short by "
+                               + $"{stage.RequiredDvMs - _s.AscentReserveDvMs:F0}", warn);
+        }
+
+        ImGui.Text("");
+        ImGui.NextColumn();
+        ImGui.TextWrapped("Cost of an impulse from HERE, on the stack's own drag. "
+                        + "A real burn is dearer - the shooter plans that one.");
+        ImGui.NextColumn();
+
+        ImGuiHelper.EndRegion();
     }
 
     // --- Expert settings ----------------------------------------------------

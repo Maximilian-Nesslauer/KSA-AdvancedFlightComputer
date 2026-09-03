@@ -15,6 +15,16 @@ public static partial class PoweredGuidanceWindow
 {
     private static bool _showGfoldOverlay;
     private static bool _retargetArmed;
+
+    /// <summary>
+    /// When non-zero, the armed retarget click sets THAT returnable stage's own landing
+    /// site rather than the vehicle's. The id is the detached subtree root's
+    /// InstanceId - see VehicleAutopilotState.StageTargets for why that is the identity.
+    ///
+    /// A UI mode rather than per-vehicle state, like _retargetArmed beside it: it lasts
+    /// from pressing Set to the click that answers it, and there is one mouse.
+    /// </summary>
+    private static uint _retargetStageId;
     private static bool _landingTabActive;   // set while the Landing tab is the open tab
 
     // Clickable retargeting: while armed, each frame we ray-cast the cursor onto the
@@ -155,6 +165,19 @@ public static partial class PoweredGuidanceWindow
     /// </summary>
     private static void RetargetLandingSite(double latDeg, double lonDeg)
     {
+        // BOUND TO A STAGE, when the click was armed from a stage's own Set button. It
+        // writes that stage's target and nothing else: the vehicle's site is what the
+        // craft being flown aims at, and a booster two separations away has no business
+        // moving it. Everything below is about the live guidance and is skipped.
+        if (_retargetStageId != 0)
+        {
+            _s.StageTargets[_retargetStageId] = new double2(latDeg, lonDeg);
+            _s.LandingStatus = $"Stage target set to lat {latDeg:F3}, lon {lonDeg:F3}.";
+            _retargetStageId = 0;
+            _s.StageModelDirty = true;   // so the list picks the new target up at once
+            return;
+        }
+
         _s.SiteLatDeg = latDeg;
         _s.SiteLonDeg = lonDeg;
         _s.LandingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";
