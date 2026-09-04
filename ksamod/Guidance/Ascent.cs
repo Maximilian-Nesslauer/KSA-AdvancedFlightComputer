@@ -143,7 +143,7 @@ public static partial class PoweredGuidanceWindow
         ImGui.Checkbox("Show target orbit & track", ref _showAscentOverlay);
 
         if (ImGui.Button("EXECUTE"))
-            ExecuteAscent(orbit, parent);
+            ExecuteAscent(vehicle, orbit, parent);
         ImGui.SameLine();
         if (ImGui.Button("Stop / reset"))
             AbortAscent();
@@ -163,14 +163,19 @@ public static partial class PoweredGuidanceWindow
     /// whether the mod offers to warp to the window for you or you warp there
     /// yourself; either way the launch waits for the window.
     /// </summary>
-    private static void ExecuteAscent(Orbit orbit, IParentBody parent)
+    private static void ExecuteAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         if (_s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime))
         {
+            // ARMING TAKES THE VEHICLE TOO. It is a commit - the craft is now waiting
+            // to launch and will fire itself at the window - so leaving another mode
+            // running underneath it would have that mode flying right up to the
+            // moment StepLaunchWindow claimed it out from under itself.
+            ClaimVehicle(GuidanceMode.Ascent, vehicle);
             _s.LaunchArmed = true;
             return;
         }
-        StartGuidance(orbit, parent);
+        StartGuidance(vehicle, orbit, parent);
     }
 
     /// <summary>Stop everything, including a pending armed launch.</summary>
@@ -230,7 +235,7 @@ public static partial class PoweredGuidanceWindow
             {
                 if (Universe.IsAutoWarpActive)
                     Universe.AutoWarpStop(true);
-                StartGuidance(orbit, parent);
+                StartGuidance(vehicle, orbit, parent);
                 _s.LaunchArmed = false;
             }
             else if (_s.AutoLaunch && waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
@@ -305,12 +310,12 @@ public static partial class PoweredGuidanceWindow
     }
 
     // The EXECUTE button's action — also fired automatically at the launch window.
-    private static void StartGuidance(Orbit orbit, IParentBody parent)
+    private static void StartGuidance(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
-        // Ascent takes over from any landing or boostback flow: all three drive the
-        // same flight-computer command path, and two of them writing it would fight.
-        _s.LandingPhase = LandingPhase.Idle;
-        _s.BoostbackPhase = BoostbackPhase.Idle;
+        // Ascent takes over from every other mode: all four drive the same
+        // flight-computer command path, and two of them writing it would fight.
+        ClaimVehicle(GuidanceMode.Ascent, vehicle);
+        // Ours to reset, not the claim's - the deorbit burn flies this same instance.
         _s.Upfg.Reset();
         _s.GuidanceError = "";
         _s.Status = "";

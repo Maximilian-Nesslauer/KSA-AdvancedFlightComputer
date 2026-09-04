@@ -891,6 +891,76 @@ public static partial class PoweredGuidanceWindow
         vehicle.Stages.AddRange(limited);
     }
 
+    /// <summary>
+    /// The four things that contend for one vehicle. Not the same list as
+    /// <see cref="GuidanceTab"/>, which is a UI concept: Descent and Landing are
+    /// separate tabs but one machine (<see cref="LandingPhase"/>), and 6-DOF is a
+    /// sub-tab of Landing but a wholly separate mode.
+    /// </summary>
+    private enum GuidanceMode { Ascent, Landing, Boostback, SixDof }
+
+    /// <summary>
+    /// TAKE THE VEHICLE FOR ONE MODE, releasing every other.
+    ///
+    /// All four drive the same commanded attitude and the same engine, and two of them
+    /// stepping at once means both write <see cref="VehicleAutopilotState.CommandDir"/>
+    /// in the same step - whichever is dispatched last in ApplyAutopilot silently wins.
+    /// So exactly one may be live, and this is the single place that is true.
+    ///
+    /// IT REPLACES FIVE HAND-WRITTEN CLEAR-LISTS, and they had already drifted apart -
+    /// which is the argument for this existing at all rather than a tidiness one:
+    ///
+    ///   StartGuidance       cleared landing + boostback, not 6-DOF
+    ///   ExecuteLanding      cleared ascent + boostback, not 6-DOF
+    ///   ExecuteBoostback    cleared ascent + landing,   not 6-DOF
+    ///   StartGfoldNow       cleared Running + boostback, NOT LaunchArmed
+    ///   StartTerminalHover  cleared Running only - NOT boostback, NOT LaunchArmed
+    ///   6-DOF engage        cleared NOTHING
+    ///
+    /// The last two are the live bug. Taking terminal hover while a boostback was
+    /// running left both machines stepping: LandingPhase.TerminalHover and a live
+    /// BoostbackPhase both pass their guard in ApplyAutopilot, both write CommandDir,
+    /// and StepBoostback runs after StepLanding - so the hover controller computed a
+    /// command every step and the boostback overwrote it, with nothing anywhere saying
+    /// the hover was not flying the vehicle. Engaging 6-DOF over a running ascent was
+    /// benign only by dispatch order (Step6Dof returns before the others run), but it
+    /// left _s.Running latched true, so the ascent gauge went on reporting a live climb
+    /// for a vehicle under 6-DOF control.
+    ///
+    /// WHAT RELEASING DOES NOT DO is reset the shared UPFG solver. Ascent and the
+    /// deorbit burn are two modes on one <see cref="VehicleAutopilotState.Upfg"/>
+    /// instance, so a reset belongs to whichever mode is claiming (StartGuidance does
+    /// its own) and never to the release.
+    ///
+    /// 6-DOF is the one release with real work behind it - it owns a solver thread and
+    /// the TVC override - so it goes through Disengage6Dof, gated on actually being
+    /// engaged. Ungated, every EXECUTE press would cut the engine and stop the log of a
+    /// vehicle that was never flying 6-DOF at all.
+    /// </summary>
+    private static void ClaimVehicle(GuidanceMode mode, Vehicle vehicle)
+    {
+        if (mode != GuidanceMode.Ascent)
+        {
+            _s.Running = false;
+            _s.LaunchArmed = false;
+        }
+
+        if (mode != GuidanceMode.Landing)
+            _s.LandingPhase = LandingPhase.Idle;
+
+        if (mode != GuidanceMode.Boostback)
+            _s.BoostbackPhase = BoostbackPhase.Idle;
+
+        // The engine cut is deliberate and is NOT redundant with the incoming mode's
+        // own engine handling. A mode can claim the vehicle in a phase that commands
+        // nothing yet - LandingPhase.Coast is the case, coasting to a burn point - and
+        // in that phase nothing in ApplyAutopilot writes EngineOn at all. Without the
+        // cut, a 6-DOF descent handing over to a deorbit coast would leave the engine
+        // lit and throttled the whole way round.
+        if (mode != GuidanceMode.SixDof && (_s.Active || _s.EngagePending))
+            Disengage6Dof(vehicle);
+    }
+
     // Called from the Harmony prefix on Vehicle.PrepareWorker (see Mod) — i.e.
     // immediately before the sim snapshots the flight computer for this step, the one
     // place where our writes are guaranteed to reach the control loop instead of being

@@ -67,7 +67,7 @@ public static partial class PoweredGuidanceWindow
         // G-FOLD descent now — G-FOLD never lands the vehicle itself.
         if (_s.GfoldAltM <= _s.GfoldHoverHandoffAltM)
         {
-            StartTerminalHover();
+            StartTerminalHover(vehicle);
             _s.LandingStatus = $"G-FOLD handoff to terminal hover at {_s.GfoldAltM:F0} m.";
             return;
         }

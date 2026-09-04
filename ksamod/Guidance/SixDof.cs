@@ -40,16 +40,75 @@ public static partial class PoweredGuidanceWindow
     /// everything downstream.
     ///
     /// An ambient current rather than a parameter threaded through sixty methods,
-    /// which is what keeps this a rename rather than a rewrite. The invariant it needs
-    /// is that only ONE vehicle is being serviced at a time on a given thread, and
-    /// Vehicle.PrepareWorker gives us that: the hook is called per vehicle, in
-    /// sequence, on the sim thread. The draw runs separately and sets it to the
-    /// focused vehicle before rendering.
+    /// which is what keeps this a rename rather than a rewrite.
+    ///
+    /// THE INVARIANT IS NOT "one vehicle at a time per thread", which is what this
+    /// said and which the field does not provide. It is a PLAIN static, not
+    /// [ThreadStatic], so what it actually requires is stronger and narrower:
+    ///
+    ///   EVERY WRITER AND EVERY READER OF _s RUNS ON ONE THREAD.
+    ///
+    /// Two of them do. Vehicle.PrepareWorker is called per vehicle, in sequence, on
+    /// the main thread - Universe.PrepareVehicleWorkers runs after VehicleSolvers.Wait()
+    /// and before the tasks are re-queued, so no job thread is in flight (see
+    /// RefreshStageModel). StarMap's GUI hook draws on that same main thread, after the
+    /// step. So the sim step and the draw interleave rather than overlap, and one
+    /// pointer between them is safe WITHOUT synchronisation.
+    ///
+    /// IF THAT EVER STOPS BEING TRUE the failure is silent and total: the draw would
+    /// re-point _s mid-step and the sim would fly one vehicle's plan onto another. It
+    /// would not throw, and it would not look like a threading bug. Hence AssertOwner
+    /// in Use() below, which turns that into one line in the log instead. The invariant
+    /// is a property of how KSA schedules its hooks, so it is the game - not this mod -
+    /// that can invalidate it, which is exactly why it is checked rather than assumed.
+    ///
+    /// This is also why the two Harmony postfixes that DO run on VehicleSolvers job
+    /// threads (KsaGimbalControl, KsaAttitudeRate) never touch _s: they carry their own
+    /// per-vehicle slots keyed on VehicleConfigInfo, and read a published immutable
+    /// snapshot rather than the ambient current.
     ///
     /// Never null once Use() has run. It starts as a detached instance so a stray read
     /// before the first vehicle arrives reads harmless defaults rather than throwing.
     /// </summary>
     private static VehicleAutopilotState _s = new();
+
+    /// <summary>
+    /// The thread every _s access is expected on, latched on first use. Zero until
+    /// then, because there is no point in the mod's lifecycle where "the main thread"
+    /// can be captured more reliably than simply taking the first one that arrives.
+    /// </summary>
+    private static int _ownerThreadId;
+
+    /// <summary>Set once when the invariant above is first seen to be violated, so the
+    /// panel can say so rather than leaving it to a console nobody has open.</summary>
+    internal static string OwnerThreadViolation = "";
+
+    /// <summary>
+    /// Check the single-thread invariant _s depends on. One integer compare against a
+    /// static on the per-vehicle path, which is nothing next to a guidance step, and it
+    /// reports ONCE - a violation would otherwise be a violation every step for the
+    /// rest of the session.
+    ///
+    /// It does not throw. By the time this could fire the state is already shared, and
+    /// taking the game down over it would be worse than flying the frame and saying so.
+    /// </summary>
+    private static void AssertOwner()
+    {
+        int id = Environment.CurrentManagedThreadId;
+        if (_ownerThreadId == 0)
+        {
+            _ownerThreadId = id;
+            return;
+        }
+        if (id == _ownerThreadId || OwnerThreadViolation.Length > 0)
+            return;
+
+        OwnerThreadViolation =
+            $"ambient state touched from thread {id}, expected {_ownerThreadId} - "
+          + "the sim step and the draw are no longer on one thread, and per-vehicle "
+          + "state is now racing. See PoweredGuidanceWindow._s.";
+        Console.Error.WriteLine("[PG] " + OwnerThreadViolation);
+    }
 
     /// <summary>
     /// Mass loss in a single step that means a separation rather than a burn. A step is
@@ -61,6 +120,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>Point the ambient state at this vehicle for the work that follows.</summary>
     private static VehicleAutopilotState Use(Vehicle vehicle)
     {
+        AssertOwner();
         _s = vehicle != null ? VehicleAutopilotState.For(vehicle) : new VehicleAutopilotState();
         return _s;
     }
@@ -222,7 +282,7 @@ public static partial class PoweredGuidanceWindow
         if (!_s.Active)
         {
             if (ImGui.Button("Engage 6-DOF guidance"))
-                _s.EngagePending = true;
+                Engage6Dof(vehicle);
             ImGui.TextWrapped("Cold solve takes ~1.7 s on the sim thread - engage during a coast.");
             Draw6DofFeasibility(vehicle);
         }
@@ -1243,6 +1303,23 @@ public static partial class PoweredGuidanceWindow
         xf[9] = qz / m;
     }
 
+    /// <summary>
+    /// ENGAGE 6-DOF. A helper rather than the bare flag it replaced, because there are
+    /// two buttons for this (the sub-tab and the gauge panel's EXECUTE) and a bare
+    /// `_s.EngagePending = true` at each was the one commit point in the mod that
+    /// released nothing at all - see ClaimVehicle.
+    ///
+    /// The flag itself is still only a REQUEST. Engaging runs a cold solve, which
+    /// belongs on the sim thread rather than in a draw; the claim is what can and must
+    /// happen here, so that whatever was flying the vehicle stops on this frame rather
+    /// than getting one more step in before the cold solve lands.
+    /// </summary>
+    private static void Engage6Dof(Vehicle vehicle)
+    {
+        ClaimVehicle(GuidanceMode.SixDof, vehicle);
+        _s.EngagePending = true;
+    }
+
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
     {
         SixDofLog.Stop(_s);
@@ -1645,7 +1722,7 @@ public static partial class PoweredGuidanceWindow
                                  $"vz {x[5]:F2} m/s, lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m");
             SixDofLog.Stop(_s);
             Disengage6Dof(vehicle, cutEngine: false);
-            StartTerminalHover();
+            StartTerminalHover(vehicle);
             _s.LandingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
             _s.Error = _s.LandingStatus;
             return;

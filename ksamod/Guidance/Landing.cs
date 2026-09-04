@@ -149,7 +149,7 @@ public static partial class PoweredGuidanceWindow
         if (ImGui.Checkbox("Terminal hover (take over)", ref termActive))
         {
             if (termActive)
-                StartTerminalHover();
+                StartTerminalHover(vehicle);
             else
                 AbortLanding();
         }
@@ -160,7 +160,7 @@ public static partial class PoweredGuidanceWindow
         // Skip straight to G-FOLD from the current state (or restart it after a
         // failure), engaging the autopilot + auto engines so it actually flies.
         if (ImGui.Button("Start G-FOLD now", new float2(360f, 40f)))
-            StartGfoldNow();
+            StartGfoldNow(vehicle);
         if (ImGui.Button("Abort landing"))
             AbortLanding();
     }
@@ -170,12 +170,11 @@ public static partial class PoweredGuidanceWindow
     /// Engages the autopilot and auto engines, because a powered descent that is not
     /// allowed to steer or throttle is not a descent.
     /// </summary>
-    private static void StartGfoldNow()
+    private static void StartGfoldNow(Vehicle vehicle)
     {
+        ClaimVehicle(GuidanceMode.Landing, vehicle);   // the descent takes the vehicle over
         _s.Engage = true;
         _s.AutoStage = true;
-        _s.Running = false;
-        _s.BoostbackPhase = BoostbackPhase.Idle;   // the descent takes the vehicle over
         _s.LandingPhase = LandingPhase.GfoldDescent;
         ResetGfoldTrace();   // fresh flown path and a fresh axis latch
         _s.GfoldHandoffTime = SimNow();
@@ -269,8 +268,10 @@ public static partial class PoweredGuidanceWindow
         _s.BurnDownrangeKm = downrange / 1000.0;
 
         _s.BurnStartTime = SimNow() + wait;
-        _s.Running = false;          // landing owns guidance and the autopilot now
-        _s.BoostbackPhase = BoostbackPhase.Idle;
+        ClaimVehicle(GuidanceMode.Landing, vehicle);   // landing owns the vehicle now
+        // Not part of the claim: AutoLaunch is a SETTING (offer to warp to the window)
+        // rather than a live mode, and clearing it here stops the ascent panel offering
+        // a launch warp to a craft that is now committed to coming down.
         _s.AutoLaunch = false;
         _s.CutoffDone = false;
         _s.StagingActive = false;
@@ -470,11 +471,16 @@ public static partial class PoweredGuidanceWindow
                 {
                     // 6-DOF is EXCLUSIVE — it drives attitude through the TVC
                     // allocator rather than the flight computer — so the UPFG landing
-                    // flow has to let go rather than run alongside it. EngagePending
-                    // is consumed by the next guidance step, which runs the cold solve
+                    // flow has to let go rather than run alongside it. Engage6Dof is
+                    // that let-go (ClaimVehicle) and the request in one; the request is
+                    // consumed by the next guidance step, which runs the cold solve
                     // off the draw.
-                    _s.LandingPhase = LandingPhase.Idle;
-                    _s.EngagePending = true;
+                    //
+                    // Reached from the sim step rather than a button, which changes
+                    // nothing: the claim releases the landing machine that got us here
+                    // and finds no 6-DOF engaged, so it touches neither the engine nor
+                    // the gimbals on the way through.
+                    Engage6Dof(vehicle);
                     _s.LandingStatus = "Handoff to 6-DOF descent.";
                 }
                 else

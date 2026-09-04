@@ -304,17 +304,15 @@ public static partial class PoweredGuidanceWindow
             if (_panelTab == GuidanceTab.Boostback)
                 ExecuteBoostback(vehicle, orbit, parent);
             else if (_panelTab == GuidanceTab.Ascent)
-                ExecuteAscent(orbit, parent);
+                ExecuteAscent(vehicle, orbit, parent);
             else if (_panelTab == GuidanceTab.Descent)
                 ExecuteLanding(vehicle, orbit, parent, parent.Mu, bodyRadius);
             else if (_landingSubTab == LandingSubTab.Hover)
-                StartTerminalHover();
+                StartTerminalHover(vehicle);
             else if (_s.UseSixDofLanding)
-                // Consumed by the guidance step, not applied here: engaging runs a
-                // cold solve, which belongs on the sim thread rather than the draw.
-                _s.EngagePending = true;
+                Engage6Dof(vehicle);
             else
-                StartGfoldNow();
+                StartGfoldNow(vehicle);
         }
 
         ImGui.SetCursorScreenPos(new float2(origin.X + half + gap, origin.Y));

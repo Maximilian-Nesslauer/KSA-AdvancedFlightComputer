@@ -270,11 +270,9 @@ public static partial class PoweredGuidanceWindow
             return;
         }
 
-        // Boostback owns the vehicle now. Ascent and the landing machine both drive the
-        // same flight-computer command path, and two of them writing it would fight.
-        _s.Running = false;
-        _s.LaunchArmed = false;
-        _s.LandingPhase = LandingPhase.Idle;
+        // Boostback owns the vehicle now. Every mode drives the same flight-computer
+        // command path, and two of them writing it would fight.
+        ClaimVehicle(GuidanceMode.Boostback, vehicle);
 
         _s.BoostbackPhase = BoostbackPhase.Separation;
         _s.BoostbackPhaseStart = SimNow();

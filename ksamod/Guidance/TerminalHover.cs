@@ -22,11 +22,14 @@ public static partial class PoweredGuidanceWindow
     // Public because the per-vehicle state holds three of these.
     public struct Pid { public double I, PrevErr; }
 
-    private static void StartTerminalHover()
+    private static void StartTerminalHover(Vehicle vehicle)
     {
+        // BEFORE the phase is read below, because the claim does not touch
+        // LandingPhase - hover is the same machine - and the trace decision depends on
+        // what that phase was.
+        ClaimVehicle(GuidanceMode.Landing, vehicle);
         _s.Engage = true;
         _s.AutoStage = true;
-        _s.Running = false;
         // Continue the flown path when hover takes over from G-FOLD - it is the same
         // descent - but start clean when it is engaged cold, so the plot is not
         // showing a previous attempt.
@@ -158,7 +161,7 @@ public static partial class PoweredGuidanceWindow
         if (!active)
         {
             if (ImGui.Button("Start terminal hover now", new float2(360f, 40f)))
-                StartTerminalHover();
+                StartTerminalHover(vehicle);
             ImGui.Text("Hover takes over from G-FOLD (checkbox there) or right here.");
         }
         else
