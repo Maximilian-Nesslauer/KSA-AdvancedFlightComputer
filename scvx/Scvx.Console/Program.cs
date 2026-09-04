@@ -33,6 +33,9 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --sub-scs       one subproblem against the reference solution
           --loop          the full SCvx loop against the reference trajectory
           --scs-layout    P/Invoke struct layouts against the native SCS build
+          --aero          tabulated Cd(Mach, alpha) and its slopes under forward-mode AD
+          --impact        RK4 impact prediction: convergence, and d(impact)/d(x0)
+          --shoot         direct shooting on a boostback burn: is there an optimal pitch
 
         BEHAVIOUR - properties the guidance depends on
           --path          path constraints bind, and stay solvable when violated
@@ -117,6 +120,16 @@ if (args.Contains("--defect"))
     return DefectCheck.Run();
 }
 
+if (args.Contains("--impact"))
+{
+    return ImpactCheck.Run();
+}
+
+if (args.Contains("--shoot"))
+{
+    return ShootCheck.Run();
+}
+
 if (args.Contains("--gates"))
 {
     return NodeGateCheck.Run(FindFile("loop_ref.csv"));
@@ -169,6 +182,9 @@ if (args.Contains("--rh") && args.Contains("--cadence"))
 
 if (args.Contains("--rh"))
     return RecedingHorizonCheck();
+
+if (args.Contains("--aero"))
+    return AeroCheck.Run();
 
 if (args.Contains("--scs-layout"))
 {

@@ -20,8 +20,8 @@ CoverageReport/
 
 # Native build output — the .dll/.lib/.pdb are rebuilt from the vendored C
 # sources, which ARE committed. (scs.pdb alone is 1.4 MB.)
-#   gfold/native/ <- gfold/build-ecos.ps1 from gfold/ecos/
-#   scvx/native/  <- scvx/build-scs.ps1  from scvx/scs/
+#   gfold/native/ <- gfold/build-clarabel.ps1 from gfold/clarabel/  (needs Rust)
+#   scvx/native/  <- scvx/build-scs.ps1       from scvx/scs/       (needs Zig)
 gfold/native/
 scvx/native/
 
@@ -52,3 +52,7 @@ scvx/python_ref/loop_cs.csv
 gfold/python_ref/.venv/
 __pycache__/
 *.pyc
+
+# Cargo's build tree for the vendored Clarabel crate. (The DLL it produces lands in
+# gfold/native/, already ignored above along with every other built native.)
+gfold/clarabel/rust_wrapper/target/

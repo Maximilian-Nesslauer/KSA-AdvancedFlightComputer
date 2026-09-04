@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+## [0.4.0]
+
+Boosters fly themselves home. Returnable stages with their own landing sites, and a move to MIT.
+
+- Added **boostback guidance**. EXECUTE on the new Boostback tab flies a separated booster back toward its landing site — settling burn, flip, boostback burn, then entry attitude — and it keeps flying whether or not you are watching it. RETARGET works there, so the site can be moved mid-flight.
+
+- Boosters hand themselves over at separation: the stage that drops away starts its own boostback with its own landing site while you stay with the upper stage.
+
+- Added **returnable stages** to the Ascent tab. Any stage that separates carrying a command pod is listed with its own **Set target** button and a live return cost that falls as you climb, so you can see when bringing it back becomes affordable.
+
+- Added **Booster reserve dV**, per vehicle. Ascent leaves that much propellant in the booster and stages on it, rather than burning the stage dry and leaving nothing to come home on.
+
+- The Boostback tab draws where the vehicle will actually hit the ground — through the atmosphere rather than in vacuum — with time to impact, impact speed, and the miss against your landing site.
+
+- **The project is now MIT licensed.** ECOS was the only copyleft dependency and forced the whole work to be GPLv3. It has been replaced by [Clarabel](https://github.com/oxfordcontrol/Clarabel.rs), which reproduces its landing solutions exactly. Attributions are in THIRD-PARTY-NOTICES.md; releases up to and including v0.3.1 remain GPLv3.
+
+- KSA 2026.9.7.5402 compatibility.
+
 ## [0.3.1]
 
 Fixed the ascent attitude jerk, aimed the launch plane ahead of the pad, and caught up with KSA 2026.8.22.

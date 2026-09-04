@@ -8,10 +8,18 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- The native solver travels with the managed library: anything that
-         references Gfold.Core gets ecos.dll in its output directory, and the
-         DllImport resolver loads it from next to Gfold.Core.dll. -->
-    <None Include="..\native\ecos.dll" Link="ecos.dll" CopyToOutputDirectory="PreserveNewest" />
+    <!-- The native solvers travel with the managed library: anything that references
+         Gfold.Core gets them in its output directory, and the DllImport resolver loads
+         them from next to Gfold.Core.dll. -->
+    <!-- Clarabel, built by gfold/build-clarabel.ps1 (needs a Rust toolchain; see the
+         script for why cargo alone is enough and CMake is not involved). Conditioned
+         because NO native is checked in - both gfold/native/ and scvx/native/ are
+         gitignored and produced by their build scripts - and a missing file would
+         otherwise fail the build outright. Optional only in the sense that a build can
+         succeed without it; the first solve then raises DllNotFoundException. -->
+    <None Include="..\native\clarabel_c.dll" Link="clarabel_c.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\native\clarabel_c.dll')" />
   </ItemGroup>
 
 </Project>

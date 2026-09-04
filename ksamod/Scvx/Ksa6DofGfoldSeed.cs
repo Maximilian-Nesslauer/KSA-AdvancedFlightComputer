@@ -50,7 +50,7 @@ public static class Ksa6DofGfoldSeed
     /// <summary>
     /// Search over time of flight, or take a single solve at an estimated duration?
     ///
-    /// The search costs an ECOS solve pair per sample and dominates the seed's cost,
+    /// The search costs a conic solve pair per sample and dominates the seed's cost,
     /// while the SEED does not need the optimal burn time - SCvx re-optimises sigma
     /// anyway. Measured by Scvx.Console --seed.
     /// </summary>

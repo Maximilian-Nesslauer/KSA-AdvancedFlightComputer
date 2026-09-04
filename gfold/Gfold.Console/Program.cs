@@ -62,6 +62,154 @@ if (args.Contains("--stress"))
     return 0;
 }
 
+// --clarabel-layout: print the marshalled struct layouts for the Clarabel binding.
+//
+// Runnable WITHOUT clarabel_c.dll — Marshal.SizeOf/OffsetOf are pure reflection over
+// the managed declarations and load nothing native. That matters, because struct layout
+// is the part of a P/Invoke binding that fails SILENTLY, and this is the only check on
+// it available before the DLL exists. Diff the output against
+// gfold/clarabel/include/c/*.h by hand.
+// --clarabel-smoke: solve a problem whose answer is known by hand, and print the raw
+// solution struct. Isolates "is the binding wired correctly" from "is the G-FOLD
+// problem being built correctly" — with a real G-FOLD problem a wrong answer could be
+// either, and this one cannot.
+//
+//   minimize  x
+//   s.t.      x >= 1      written as  -x + s = -1,  s >= 0
+//
+// so x* = 1 and the objective is 1.
+if (args.Contains("--clarabel-smoke"))
+{
+    // Guard the one mechanical step of the problem conversion first: a vertical stack
+    // in a column-major format is an interleave, not a concatenation, and getting it
+    // wrong hands the solver a DIFFERENT problem that it will still solve, happily and
+    // wrongly. This used to run at the top of --ab; it lives here now because
+    // SparseCcs.VStack is on Clarabel's path too, and the check outlived the A/B.
+    if (!VStackSelfTest())
+        return Fail("SparseCcs.VStack disagrees with a dense reference");
+    Console.WriteLine("VStack self-test: ok");
+    Console.WriteLine();
+
+    var smokeG = new SparseCcs(1, 1);
+    smokeG.Add(0, 0, -1.0);
+    ConicResult r = ClarabelSolver.Solve(
+        new ConicProblem { C = [1.0], G = smokeG, H = [-1.0], PositiveOrthantDim = 1, SocDims = [] },
+        out ClarabelSolver.ClarabelSolveInfo si, verbose: args.Contains("--verbose"));
+    Console.WriteLine($"status   {r.Status}  (clarabel: {si.Status})");
+    Console.WriteLine($"iters    {si.Iterations}");
+    Console.WriteLine($"x        [{string.Join(", ", r.X.Select(v => v.ToString("G6")))}]   expected [1]");
+    Console.WriteLine($"obj      {r.PrimalCost:G6}   expected 1");
+    Console.WriteLine($"resid    prim {si.ResPrimal:E2}  dual {si.ResDual:E2}");
+    bool smokeOk = r.IsOptimal && r.X.Length == 1 && Math.Abs(r.X[0] - 1.0) < 1e-6;
+    Console.WriteLine(smokeOk ? "SMOKE TEST PASSED" : "SMOKE TEST FAILED");
+    return smokeOk ? 0 : 1;
+}
+
+if (args.Contains("--clarabel-layout"))
+{
+    Console.WriteLine(ClarabelSolver.DumpLayouts());
+    Console.WriteLine("--- values returned by clarabel_DefaultSettings_f64_default() ---");
+    try { Console.WriteLine(ClarabelSolver.DumpDefaultSettings()); }
+    catch (Exception e) { Console.WriteLine("(needs clarabel_c.dll) " + e.Message); }
+    return 0;
+}
+
+// --frame: does a solve fit in a frame, at the shape the MOD actually solves? In
+// flight the planner runs on the SIM THREAD, synchronously, every 0.25 s, at
+// GfoldNodes = 50 with GfoldOptions.Descent, and a timing taken at N=120 offline says
+// nothing about it. Both in-flight call shapes are timed separately:
+//
+//   cadence  - one SolveMinFuel at the remaining flight time (the common path)
+//   fallback - a bracketed SearchMinFuel (when the cadence solve fails or there is no
+//              plan yet), which is tens of solves and the one that can stall a frame
+if (args.Contains("--frame"))
+{
+    Console.WriteLine($"Clarabel {ClarabelSolver.NativeVersion}");
+    Console.WriteLine($"in-flight shape: N={nodes}, GfoldOptions.Descent, "
+                    + $"solve cadence 0.25 s on the sim thread");
+    Console.WriteLine("  (pass node count as the SECOND positional arg: --frame 0 50)");
+    Console.WriteLine();
+
+    var rtP = new GfoldParams();
+    GfoldOptions rtOpt = GfoldOptions.Descent;
+    const int reps = 5;
+
+    // Derive a FEASIBLE case to time, rather than picking a flight time and hoping.
+    // A tf the vehicle cannot fly returns PrimalInfeasible in a fraction of the time a
+    // real solve takes, so timing one measures how fast the solver says "no" — which
+    // is not the number in question.
+    GfoldPlanner.SearchResult? seed = GfoldPlanner.SearchMinFuel(rtP, nodes, options: rtOpt);
+    if (seed == null)
+        return Fail("no feasible tf for the real-time case");
+    double rtTf = seed.TimeOfFlight;
+    double[] rtLanding = seed.Trajectory.LandingPoint;
+    Console.WriteLine($"feasible case from a Clarabel search: tf {rtTf:F2} s, fuel {seed.FuelUsed:F2} kg");
+    Console.WriteLine();
+
+    static (double Mean, double Worst) Time(int reps, Action body)
+    {
+        double total = 0, worst = 0;
+        for (int i = 0; i < reps; i++)
+        {
+            var w = System.Diagnostics.Stopwatch.StartNew();
+            body();
+            w.Stop();
+            double ms = w.Elapsed.TotalMilliseconds;
+            total += ms;
+            worst = Math.Max(worst, ms);
+        }
+        return (total / reps, worst);
+    }
+
+    Console.WriteLine("cadence path: one SolveMinFuel at the remaining tf");
+    Console.WriteLine("  solver           mean ms   worst ms   status            fuel kg");
+    {
+        const string label = "Clarabel";
+        GfoldTrajectory? last = null;
+        (double mean, double worst) = Time(reps, () =>
+            last = GfoldPlanner.SolveMinFuel(rtP, rtTf, nodes, rtLanding, options: rtOpt));
+        Console.WriteLine($"  {label,-14} {mean,9:F1} {worst,10:F1}   {last!.Status,-16}  {last.FuelUsed,8:F2}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("fallback path: bracketed SearchMinFuel (this is what can stall a frame)");
+    Console.WriteLine("  solver           mean ms   worst ms   tf s     fuel kg   solves");
+    {
+        const string label = "Clarabel";
+        GfoldPlanner.SearchResult? last = null;
+        (double mean, double worst) = Time(reps, () =>
+            last = GfoldPlanner.SearchMinFuel(rtP, nodes, tfLo: rtTf * 0.6, tfHi: rtTf * 1.6,
+                                              options: rtOpt));
+        Console.WriteLine(last == null
+            ? $"  {label,-14} {mean,9:F1} {worst,10:F1}   no feasible tf"
+            : $"  {label,-14} {mean,9:F1} {worst,10:F1}   {last.TimeOfFlight,5:F2}  {last.FuelUsed,9:F2}   {last.Solves,4}");
+    }
+
+    // The freeze guard, exercised. A solve that hits the ceiling must come back inside
+    // the budget AND report itself unusable, because a time-limited iterate is not a
+    // solution. If a limited run ever prints Optimal AND usable, the status mapping has
+    // regressed and the caller will fly a half-converged plan.
+    Console.WriteLine();
+    Console.WriteLine("time-limit guard (the fix for the sim-thread freeze)");
+    Console.WriteLine("  limit           ms   status            usable");
+    foreach (double limit in new[] { 0.0, 0.040, 0.002 })
+    {
+        GfoldPlanner.SolveTimeLimitS = limit > 0 ? limit : null;
+        var w = System.Diagnostics.Stopwatch.StartNew();
+        GfoldTrajectory t = GfoldPlanner.SolveMinFuel(rtP, rtTf, nodes, rtLanding, options: rtOpt);
+        w.Stop();
+        Console.WriteLine($"  {(limit > 0 ? $"{limit * 1000:F0} ms" : "none"),-10} {w.ElapsedMilliseconds,7}   " +
+                          $"{t.Status,-16}  {(t.IsUsable ? "yes" : "no")}");
+    }
+
+    Console.WriteLine();
+    Console.WriteLine("budget: the sim step this runs on has ~16 ms at 60 Hz. A solve longer");
+    Console.WriteLine("than that stalls the frame it lands on, once every 0.25 s.");
+
+    GfoldPlanner.SolveTimeLimitS = null;
+    return 0;
+}
+
 // --degen: a near-target, descending state where min-error is degenerate. Show
 // that plain min-error dumps thrust sideways at the floor, while the regularized
 // version (RealTime) points it up and throttles toward hover.
@@ -116,7 +264,7 @@ if (args.Contains("--realtime"))
 if (args.Contains("--search"))
 {
     var sp = new GfoldParams();
-    Console.WriteLine($"ECOS {EcosSolver.NativeVersion} | tf search in [{sp.TfMin:F1}, {sp.TfMax:F1}] s, N={nodes}");
+    Console.WriteLine($"Clarabel {ClarabelSolver.NativeVersion} | tf search in [{sp.TfMin:F1}, {sp.TfMax:F1}] s, N={nodes}");
     var ssw = System.Diagnostics.Stopwatch.StartNew();
     GfoldPlanner.SearchResult? best = GfoldPlanner.SearchMinFuel(sp, nodes);
     ssw.Stop();
@@ -133,7 +281,7 @@ if (args.Contains("--search"))
 }
 
 var p = new GfoldParams();
-Console.WriteLine($"ECOS {EcosSolver.NativeVersion} | tf={tf}s N={nodes} dt={tf / (nodes - 1):F3}s");
+Console.WriteLine($"Clarabel {ClarabelSolver.NativeVersion} | tf={tf}s N={nodes} dt={tf / (nodes - 1):F3}s");
 Console.WriteLine($"tf bounds: [{p.TfMin:F1}, {p.TfMax:F1}] s | wet {p.WetMass} kg dry {p.DryMass} kg");
 Console.WriteLine();
 
@@ -145,7 +293,7 @@ Console.WriteLine($"P3 [{p3.Status}] {sw.ElapsedMilliseconds} ms, {p3.Iterations
 Console.WriteLine($"   landing point: ({p3.LandingPoint[0]:F2}, {p3.LandingPoint[1]:F2}, {p3.LandingPoint[2]:F2})  " +
                   $"error {p3.LandingErrorNorm:F3} m");
 Console.WriteLine($"   fuel used: {p3.FuelUsed:F1} kg");
-if (p3.Status is not (EcosStatus.Optimal or EcosStatus.OptimalInaccurate))
+if (p3.Status is not (ConicStatus.Optimal or ConicStatus.OptimalInaccurate))
     return Fail("P3 did not solve");
 File.WriteAllText("gfold_p3.csv", p3.ToCsv());
 
@@ -155,7 +303,7 @@ GfoldTrajectory p4 = GfoldPlanner.SolveMinFuel(p, tf, nodes, p3.LandingPoint, ve
 sw.Stop();
 Console.WriteLine($"P4 [{p4.Status}] {sw.ElapsedMilliseconds} ms, {p4.Iterations} iters");
 Console.WriteLine($"   fuel used: {p4.FuelUsed:F1} kg (P3 used {p3.FuelUsed:F1})");
-if (p4.Status is not (EcosStatus.Optimal or EcosStatus.OptimalInaccurate))
+if (p4.Status is not (ConicStatus.Optimal or ConicStatus.OptimalInaccurate))
     return Fail("P4 did not solve");
 File.WriteAllText("gfold_p4.csv", p4.ToCsv());
 
@@ -247,6 +395,96 @@ static bool Check(string what, bool pass)
     return pass;
 }
 
+/// <summary>
+/// Checks SparseCcs.VStack against a dense reference, INCLUDING the Build() that
+/// follows it, because that is the pair the SCS path actually depends on.
+///
+/// This exists because the failure it guards against is silent. A vertical stack in a
+/// column-major format is an interleave within every column, not a concatenation of two
+/// arrays, and getting it wrong produces a well-formed matrix describing a DIFFERENT
+/// problem — which SCS will then solve, successfully, to the wrong answer. Comparing
+/// backends would show a disagreement and blame the solver.
+///
+/// The pattern is deliberately awkward: overlapping sparsity, empty columns, an empty
+/// trailing row in the top block, and out-of-order Add() calls, since Build() is what
+/// sorts rows within a column and that ordering is a hard requirement of both solvers.
+/// </summary>
+static bool VStackSelfTest()
+{
+    const int pRows = 3, gRows = 4, cols = 5;
+    var top = new SparseCcs(pRows, cols);
+    var bottom = new SparseCcs(gRows, cols);
+
+    // (row, col, value) triplets, added out of row order on purpose.
+    (int R, int C, double V)[] topT =
+        [(2, 0, 1.5), (0, 0, -2.0), (1, 2, 3.25), (0, 4, 7.0), (2, 2, -0.5)];
+    (int R, int C, double V)[] botT =
+        [(3, 0, 9.0), (0, 0, 4.0), (2, 1, -6.5), (1, 4, 0.125), (3, 4, 2.0), (0, 2, 11.0)];
+    foreach ((int r, int c, double v) in topT) top.Add(r, c, v);
+    foreach ((int r, int c, double v) in botT) bottom.Add(r, c, v);
+
+    var expected = new double[pRows + gRows, cols];
+    foreach ((int r, int c, double v) in topT) expected[r, c] += v;
+    foreach ((int r, int c, double v) in botT) expected[r + pRows, c] += v;
+
+    (double[] pr, int[] jc, int[] ir) = SparseCcs.VStack(top, bottom).Build();
+
+    var actual = new double[pRows + gRows, cols];
+    for (int j = 0; j < cols; j++)
+    {
+        int lastRow = -1;
+        for (int k = jc[j]; k < jc[j + 1]; k++)
+        {
+            if (ir[k] <= lastRow)
+            {
+                Console.WriteLine($"  rows not ascending in column {j}: {lastRow} then {ir[k]}");
+                return false;
+            }
+            lastRow = ir[k];
+            actual[ir[k], j] += pr[k];
+        }
+    }
+    if (jc[cols] != pr.Length)
+    {
+        Console.WriteLine($"  column pointer end {jc[cols]} != nnz {pr.Length}");
+        return false;
+    }
+
+    for (int i = 0; i < pRows + gRows; i++)
+        for (int j = 0; j < cols; j++)
+            if (Math.Abs(expected[i, j] - actual[i, j]) > 1e-12)
+            {
+                Console.WriteLine($"  ({i},{j}): expected {expected[i, j]}, got {actual[i, j]}");
+                return false;
+            }
+    return true;
+}
+
+/// <summary>
+/// Is clarabel_c.dll present? Probed by attempting a solve of a trivial problem and
+/// catching the load failure, because the DLL is deliberately NOT checked in — it has
+/// to be built locally with a Rust toolchain — and the A/B has to degrade to a note
+/// rather than a crash for everyone who has not built it.
+/// </summary>
+static bool HasClarabel()
+{
+    if (ClarabelProbe.Result.HasValue) return ClarabelProbe.Result.Value;
+    try
+    {
+        // A one-variable, one-row LP: minimize x subject to x >= 0.
+        var g = new SparseCcs(1, 1);
+        g.Add(0, 0, -1.0);
+        ClarabelSolver.Solve(new ConicProblem
+        {
+            C = [1.0], G = g, H = [0.0], PositiveOrthantDim = 1, SocDims = [],
+        });
+        ClarabelProbe.Result = true;
+    }
+    catch (DllNotFoundException) { ClarabelProbe.Result = false; }
+    catch (EntryPointNotFoundException) { ClarabelProbe.Result = false; }
+    return ClarabelProbe.Result.Value;
+}
+
 static int Fail(string why)
 {
     Console.WriteLine($"FAIL: {why}");
@@ -309,4 +547,10 @@ static int CheckCsv(string path, double tf, GfoldParams p)
     return 0;
 
     static double D(string s) => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
+}
+
+/// <summary>Cache for HasClarabel — a static local function cannot close over a top-level local.</summary>
+static class ClarabelProbe
+{
+    internal static bool? Result;
 }

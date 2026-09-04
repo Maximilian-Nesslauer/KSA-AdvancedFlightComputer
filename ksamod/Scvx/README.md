@@ -439,9 +439,9 @@ Optimising a descent is the wrong question by then, so the guidance hands over.
 | `ksamod/Scvx/KsaFrameBridge.cs` | Frame, body-axis and quaternion conversions |
 | `ksamod/Scvx/Ksa6DofSetup.cs` | Measures the live vehicle into a solver configuration |
 | `ksamod/Scvx/Ksa6DofGuidance.cs` | The MPC loop and the command interface |
-| `ksamod/KsaTvcAllocator.cs` | Body torque → per-gimbal deflections |
-| `ksamod/KsaEnginePerf.cs` | Engine capability and the thrust-curve inversion |
-| `ksamod/PoweredGuidance6Dof.cs` | UI, stepping, telemetry, hand-off |
+| `ksamod/Control/TvcAllocator.cs` | Body torque → per-gimbal deflections |
+| `ksamod/Control/EnginePerf.cs` | Engine capability and the thrust-curve inversion |
+| `ksamod/Guidance/SixDof.cs` | UI, stepping, telemetry, hand-off |
 
 ### Validation
 
