@@ -35,7 +35,7 @@ public static partial class PoweredGuidanceWindow
 
     // Open a full-screen, click-through overlay window and hand back its draw list.
     // Callers must ImGui.End() when done.
-    private static ImDrawListPtr BeginOverlayWindow(Viewport vp, string name)
+    private static ImDrawListPtr BeginOverlayWindow(IGameViewport vp, string name)
     {
         ImGui.SetNextWindowPos(new float2(0f, 0f));
         ImGui.SetNextWindowSize(new float2(vp.Width, vp.Height));

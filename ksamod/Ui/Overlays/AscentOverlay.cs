@@ -91,7 +91,7 @@ public static partial class PoweredGuidanceWindow
         _s.TraceLastTime = double.NegativeInfinity;
     }
 
-    private static void DrawAscentOverlay(Viewport vp, Orbit orbit, IParentBody parent,
+    private static void DrawAscentOverlay(IGameViewport vp, Orbit orbit, IParentBody parent,
                                           double bodyRadius)
     {
         // MAP VIEW ONLY. The target orbit is a full ellipse tens of thousands of km

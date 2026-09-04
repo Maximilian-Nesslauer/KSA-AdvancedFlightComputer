@@ -31,7 +31,7 @@ public static partial class PoweredGuidanceWindow
     // body, draw a live preview marker (projected back through the validated forward
     // EclToScreen, so it should sit under the cursor), and commit the new site on a
     // left-click. Right-click cancels.
-    private static void HandleRetargetClick(Viewport vp, IParentBody parent)
+    private static void HandleRetargetClick(IGameViewport vp, IParentBody parent)
     {
         if (!_retargetArmed)
             return;
@@ -60,7 +60,7 @@ public static partial class PoweredGuidanceWindow
 
     // Cast a ray from the camera through the cursor and intersect the body sphere.
     // Returns the hit (ECL) and its lat/lon (CCF), or false if the cursor misses.
-    private static bool RaycastSurface(Camera cam, Viewport vp, IParentBody parent,
+    private static bool RaycastSurface(Camera cam, IGameViewport vp, IParentBody parent,
                                        out double3 hitEcl, out double latDeg, out double lonDeg)
     {
         hitEcl = default;
@@ -134,7 +134,7 @@ public static partial class PoweredGuidanceWindow
 
     // Live preview while armed: a marker at the projected hit (should track the cursor
     // if the inverse projection is correct) plus the lat/lon it would set.
-    private static void DrawRetargetPreview(Viewport vp, Camera cam, bool hit,
+    private static void DrawRetargetPreview(IGameViewport vp, Camera cam, bool hit,
                                             double3 hitEcl, double latDeg, double lonDeg)
     {
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##retarget_preview");
@@ -201,7 +201,7 @@ public static partial class PoweredGuidanceWindow
         }
     }
 
-    private static void DrawGfoldOverlay(Viewport vp, Vehicle vehicle, Orbit orbit, IParentBody parent)
+    private static void DrawGfoldOverlay(IGameViewport vp, Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         if (!_showGfoldOverlay)
             return;
@@ -343,7 +343,7 @@ public static partial class PoweredGuidanceWindow
 
     // The landing-site marker, drawn in the world whenever the Landing tab is open
     // (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
-    private static void DrawLandingSiteMarker(Viewport vp, IParentBody parent)
+    private static void DrawLandingSiteMarker(IGameViewport vp, IParentBody parent)
     {
         if (!SetupProjection(parent))
             return;

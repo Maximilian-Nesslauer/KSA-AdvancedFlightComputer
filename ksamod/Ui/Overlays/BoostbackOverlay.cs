@@ -486,7 +486,7 @@ public static partial class PoweredGuidanceWindow
     private static double3 GroundCcf(IParentBody parent, in ImpactPrediction p)
         => new double3(p.Fx.V, p.Fy.V, p.Fz.V).Transform(parent.GetCci2Ccf());
 
-    private static void DrawBoostbackOverlay(Viewport vp, Vehicle vehicle, Orbit orbit,
+    private static void DrawBoostbackOverlay(IGameViewport vp, Vehicle vehicle, Orbit orbit,
                                              IParentBody parent)
     {
         // The FOCUSED vehicle's prediction, resolved here rather than read from the

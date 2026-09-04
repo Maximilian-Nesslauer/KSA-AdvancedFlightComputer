@@ -73,7 +73,7 @@ public static partial class PoweredGuidanceWindow
             _retargetArmed = false;
     }
 
-    public static void Draw(Viewport viewport)
+    public static void Draw(IGameViewport viewport)
     {
         // SWITCHED OFF: draw nothing at all - no window, no panel, no overlays, no
         // warp prompt. The menu entry that turns it back on lives in the game's own
@@ -161,7 +161,7 @@ public static partial class PoweredGuidanceWindow
         return vehicle;
     }
 
-    private static Vehicle DrawBody(Viewport viewport)
+    private static Vehicle DrawBody(IGameViewport viewport)
     {
         ImGui.Begin("Powered Guidance", ImGuiWindowFlags.AlwaysAutoResize);
 
@@ -245,7 +245,7 @@ public static partial class PoweredGuidanceWindow
     // Everything that must be drawn AFTER the panel's window has closed: the
     // per-domain tuning popups and the world-space overlays, which are their own
     // ImGui windows and would otherwise nest inside the panel.
-    private static void DrawTrailingWindows(Viewport viewport, Vehicle vehicle)
+    private static void DrawTrailingWindows(IGameViewport viewport, Vehicle vehicle)
     {
         // Claim the ambient state again. DrawBody left it pointing here, but these are
         // separate ImGui windows drawn after it closed, and every one of them reads

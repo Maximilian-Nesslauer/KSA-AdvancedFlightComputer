@@ -16,7 +16,7 @@ public static partial class PoweredGuidanceWindow
     // trying to fly.
     private static bool _show6DofOverlay;
 
-    private static void Draw6DofOverlay(Viewport vp, IParentBody parent)
+    private static void Draw6DofOverlay(IGameViewport vp, IParentBody parent)
     {
         // The FOCUSED vehicle's state, resolved here rather than read from the
         // ambient current. The overlay draws what the player is looking at, and the
