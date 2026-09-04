@@ -121,15 +121,12 @@
     attitude **and the rate it is turning at** (`KsaAttitudeRate`), so it tracks
     the slew instead of nulling a sequence of stationary targets. It hands over
     when both the command and the vehicle are inside 2°, not just the command.
-  - *Boostback* — full throttle in three stages. Most of it flies the **shot plan**
-    (`BoostbackShooter`), re-solved every 2 s on a receding horizon: each solve
-    plans a burn starting *now* from the live state, and the vehicle flies the head
-    of the freshest one. At T-5 s the plan **hands over to the impulsive
-    correction**, re-solved at 10 Hz; at T-2 s that command **freezes** and the
-    rest runs open loop, cutting off on sensed dV against the dV owed at the
-    freeze. The two laws swap jobs because the impulsive model's error scales with
-    burn *duration* — over five seconds it is nearly exact, and it is cheap enough
-    to keep the loop closed where the plan is not.
+  - *Boostback* — full throttle along the **shot plan** (`BoostbackShooter`) the
+    whole way, on a receding horizon: each solve plans a burn starting *now* from
+    the live state, and the vehicle flies the head of the freshest one. What
+    changes at the end is the **cadence**, not the law — every 2 s, then every
+    0.2 s inside T-5 s, then open loop for the last 1 s, with the plan's own clock
+    ending the burn.
   - *Entry orientation* — slews to **surface** retrograde and holds. Surface, not
     inertial, because KSA's atmosphere co-rotates rigidly with the body.
 
@@ -209,22 +206,72 @@
   | | miss | burn |
   |---|---|---|
   | one plan, open loop | 6.91 km | 48.1 s |
-  | plan, frozen for the last 5 s | 0.87 km | 49.4 s |
-  | **plan → impulsive at T-5, froze T-2** | **0.54 km** | 49.5 s |
-  | … and no freeze at all | 0.52 km | 49.5 s |
-  | *[ref]* plan re-solved to cutoff | 0.24 km | 49.5 s |
+  | plan frozen for the last 5 s | 886 m | 49.4 s |
+  | plan → impulsive T-5, froze T-2 | 549 m | 49.5 s |
+  | plan at 5 Hz from T-5, open loop T-2 | 341 m | 49.5 s |
+  | plan at 5 Hz from T-5, no tail | 22 m | 49.6 s |
+  | **plan at 5 Hz from T-5, standing law T-1** | **182 m** | 49.6 s |
 
-  So the loop absorbs the modelling error, and the terminal handover recovers about
-  **half** of what freezing the plan cost — 337 m of 635, not all of it. Two
-  seconds of open-loop tail costs 15 m where five cost 337.
+  **Two earlier arrangements flew something other than the plan at the end, and both
+  were worse.** Freezing it is five seconds of open-loop tracking. Handing over to
+  the impulsive correction closes the loop again — that law is nearly exact over a
+  short burn — but closes it around an *approximation* where the plan is not one,
+  and pays 361 m for the privilege. Simply re-solving the real thing faster is both
+  simpler and better. The two changes split cleanly: the cadence is worth 538 → 308 m,
+  the shorter tail the remaining 308 → 177 m.
 
-  The reference row is the honest ceiling and is recorded rather than omitted: the
-  impulsive law is an approximation and the plan is not, so re-solving the plan
-  straight through to cutoff is *more* accurate than any terminal scheme here. What
-  it is not is flyable, for a reason this check cannot reproduce — its prediction is
-  perfect, so it prices what an open-loop tail costs without reproducing the
-  low-passed terrain height and the ratio-of-two-small-numbers correction that are
-  the reason for having one.
+  **The last second stops listening** — the plan is not re-solved inside T-1, its
+  linear tangent law is simply evaluated out to cutoff, still turning, on the plan's
+  own clock.
+
+  **This hedges model mismatch, not numerical noise**, and the table above cannot
+  see that. A 3% thrust scale is a *benign* disturbance: the model still has the
+  right shape, the solver can drive the miss to nothing, every extra look helps, and
+  the tail reads as a pure 160 m cost. The real mismatch is not a scale on one term —
+  the aero surrogate is fitted to a bounding box, the atmosphere is exponential, the
+  coast assumes alpha 0, the attitude is assumed to be where it was commanded — and
+  what that leaves is a bias the solver *cannot* null, so re-solving into the last
+  second chases a miss that moves every time it looks.
+
+  `--shoot` now measures both, and the sign flips:
+
+  | disturbance | no tail | standing law T-1 | tail worth |
+  |---|---|---|---|
+  | thrust 3% (nullable) | 22 m | 182 m | −160 m |
+  | drag 25% off (bias) | 410 m | 91 m | **+321 m** |
+
+  Recorded because the thrust-only table talked this to zero once, and it flew
+  worse.
+
+- **The steering frame no longer flips mid-burn** (`BoostbackShooter.Frame.FromState`
+  takes a continuity hint). The frame's zero is retrograde-horizontal, built from
+  `h = r × v` — and a boostback exists to *reverse* the horizontal velocity. As it
+  passes through zero, `h` collapses and comes out pointing the other way; the frame
+  turns 180°, and every angle measured in it means the reflection of what it meant a
+  moment before. A plan warm-started across that instant seeds a 25° retrograde burn
+  as a 25° **prograde** one.
+
+  Not a corner case: it happens on every boostback that actually turns the vehicle
+  round. On the reference arc it lands 0.6 s before cutoff — inside the open-loop
+  tail only by luck. Passing the previous frame's orbit normal fixes the sign and
+  covers the collapse, and it is a better estimate of the plane anyway, since a
+  boostback's thrust is very nearly in-plane.
+
+  This also **corrected a wrong diagnosis**: re-solving right to cutoff used to run
+  the burn 59.0 s against a planned 48.1 and land 414 m out, which was written up as
+  the receding horizon being unable to terminate. It was the frame flipping. The
+  same run is now 49.6 s and 22 m.
+
+- **Boostback targeting aims at the site's own surface**, on both sides of the miss.
+  The prediction that *draws* the impact marker terminates on the terrain under the
+  impact point, which is right for drawing — that is where the vehicle would touch.
+  It was wrong for targeting twice over: it put the hit and the target on two
+  different spheres, so the miss carried a radial component that was a difference of
+  terrain heights rather than a distance to fly; and that height *moves* as the
+  impact point walks across the terrain, so the surface the solve was converging onto
+  wandered under it, low-passed and therefore lagging. At a steep impact the downrange
+  error from a wrong landing radius is `dh/tan(γ)` — a couple of hundred metres of
+  terrain is over a hundred metres of miss, the same size as the miss itself.
 
   Cost on the sim thread: a warm re-solve is **2.3 ms in Release**, which is what
   the packaged mod is built as, against 24.6 ms in Debug — a tenfold gap worth

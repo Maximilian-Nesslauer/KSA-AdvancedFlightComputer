@@ -100,19 +100,18 @@ public static partial class PoweredGuidanceWindow
                     GaugeRowText("Burn time left",
                         double.IsFinite(_s.BoostbackTgo) ? $"{_s.BoostbackTgo,8:F1} s" : "  no plan",
                         double.IsFinite(_s.BoostbackTgo) ? dim : warn);
-                    // WHICH LAW IS FLYING, because the burn passes through three and
-                    // they behave differently enough that the readout has to say.
-                    GaugeRowText("Steering",
-                        _s.BoostbackLocked ? "FROZEN - open loop to cutoff"
-                        : _s.BoostbackTerminal ? "terminal - impulsive, 10 Hz"
-                        : $"plan - re-solved every {BoostbackPlanIntervalS:F0} s",
+                    // HOW OFTEN THE PLAN IS BEING RE-SOLVED. The same law flies the
+                    // whole burn; what changes at the end is the cadence behind it, and
+                    // that is what the readout tracks.
+                    GaugeRowText("Plan",
+                        _s.BoostbackLocked ? "open loop to cutoff"
+                        : _s.BoostbackTerminal ? $"re-solved every {BoostbackTerminalIntervalS:F1} s"
+                        : $"re-solved every {BoostbackPlanIntervalS:F0} s",
                         _s.BoostbackLocked ? warn : good);
-                    // Over the tail this IS the cutoff: sensed dV against what was owed
-                    // at the freeze. A large gap between them at cutoff is the first
-                    // thing that would explain a burn ending off target.
+                    // Only ever shown when a tail is configured - BoostbackLockTgo is
+                    // zero, so normally the plan runs to cutoff and this never appears.
                     if (_s.BoostbackLocked)
-                        GaugeRowText("Flown since freeze",
-                            $"{_s.BoostbackAccumDv,8:F1} / {_s.BoostbackLockDv:F1} m/s", dim);
+                        GaugeRowText("Flown open loop", $"{_s.BoostbackAccumDv,8:F1} m/s", dim);
                     break;
 
                 case BoostbackPhase.EntryOrient:
@@ -185,9 +184,11 @@ public static partial class PoweredGuidanceWindow
         ImGui.NextColumn();
         ImGui.TextWrapped($"EXECUTE starts at separation. The burn flies an optimised "
                         + $"plan - pitch, yaw and duration shot for minimum propellant "
-                        + $"- re-solved every {BoostbackPlanIntervalS:F0} s, hands over "
-                        + $"to the impulsive correction at T-{BoostbackTerminalS:F0} s, "
-                        + $"and freezes at T-{BoostbackLockTgo:F0} s.");
+                        + $"- re-solved every {BoostbackPlanIntervalS:F0} s, then every "
+                        + $"{BoostbackTerminalIntervalS:F1} s inside T-{BoostbackTerminalS:F0} s"
+                        + (BoostbackLockTgo > 0.0
+                            ? $", and open loop for the last {BoostbackLockTgo:F0} s."
+                            : ", all the way to cutoff."));
         ImGui.NextColumn();
 
         ImGuiHelper.EndRegion();

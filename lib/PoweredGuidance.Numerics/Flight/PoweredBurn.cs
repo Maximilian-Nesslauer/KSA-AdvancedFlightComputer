@@ -242,6 +242,36 @@ public static class BoostbackShooter
         public double Sx, Sy, Sz;      // out of plane
 
         public static Frame FromState(ReadOnlySpan<double> x)
+            => FromState(x, 0.0, 0.0, 0.0);
+
+        /// <summary>
+        /// As <see cref="FromState(ReadOnlySpan{double})"/>, with a previous frame's
+        /// orbit normal as a CONTINUITY HINT. Pass the last frame's S axis whenever one
+        /// exists; a zero hint means there is none.
+        ///
+        /// WHY THIS IS NOT OPTIONAL DURING A BOOSTBACK. The frame's zero is
+        /// retrograde-horizontal, built from h = r x v - and a boostback exists to
+        /// REVERSE the horizontal velocity. As it passes through zero, h passes through
+        /// zero with it: its length collapses, its direction is ill-conditioned, and
+        /// then it comes out the other side pointing the opposite way. The frame flips
+        /// 180 degrees, and every angle measured in it means the reflection of what it
+        /// meant a moment earlier - so a plan warm-started across that instant seeds a
+        /// 25-degree retrograde burn as a 25-degree PROGRADE one.
+        ///
+        /// It is not a corner case on the way to somewhere else: it happens on every
+        /// boostback that actually turns the vehicle round, which is the ones that fly
+        /// back to the launch site. On the --shoot reference arc it happens 0.6 s before
+        /// cutoff, which is inside the open-loop tail only by luck.
+        ///
+        /// The hint fixes both halves: the sign is chosen to agree with the previous
+        /// frame, and when h has collapsed far enough to carry no direction at all the
+        /// hint is used outright. The orbit normal barely moves through a boostback
+        /// anyway - the thrust is very nearly in-plane - so the previous one is a better
+        /// estimate of the plane than a freshly computed and nearly singular cross
+        /// product.
+        /// </summary>
+        public static Frame FromState(ReadOnlySpan<double> x,
+                                      double hintX, double hintY, double hintZ)
         {
             double rl = System.Math.Sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2]);
             double ux = x[0] / rl, uy = x[1] / rl, uz = x[2] / rl;
@@ -251,8 +281,32 @@ public static class BoostbackShooter
             double hy = x[2] * x[3] - x[0] * x[5];
             double hz = x[0] * x[4] - x[1] * x[3];
             double hl = System.Math.Sqrt(hx * hx + hy * hy + hz * hz);
-            if (hl <= 0.0) { hx = 0; hy = 0; hz = 1; hl = 1; }
+
+            double hintLen = System.Math.Sqrt(hintX * hintX + hintY * hintY + hintZ * hintZ);
+            bool haveHint = hintLen > 0.5;   // it is a unit vector or it is nothing
+
+            // Collapsed: |r x v| is |r||v|sin(angle), so this is the angle between the
+            // position and the velocity coming within a milliradian of zero or pi - the
+            // vehicle flying straight up or straight down, with no horizontal velocity
+            // left to define a downrange direction with.
+            double vl = System.Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
+            bool collapsed = hl <= 1e-3 * rl * vl;
+
+            if (collapsed && haveHint)
+            {
+                hx = hintX; hy = hintY; hz = hintZ; hl = hintLen;
+            }
+            else if (hl <= 0.0)
+            {
+                hx = 0; hy = 0; hz = 1; hl = 1;
+            }
             hx /= hl; hy /= hl; hz /= hl;
+
+            // Sign continuity. Done AFTER normalising so the test is a plain cosine.
+            if (haveHint && hx * hintX + hy * hintY + hz * hintZ < 0.0)
+            {
+                hx = -hx; hy = -hy; hz = -hz;
+            }
 
             // Forward horizontal = h x up; retrograde horizontal is its negative.
             double fx = hy * uz - hz * uy;
@@ -697,9 +751,13 @@ public static class BoostbackShooter
                                     double maxDuration = double.PositiveInfinity,
                                     bool searchRates = true,
                                     int maxSweeps = 12,
-                                    double initialPitchStepDeg = 8.0)
+                                    double initialPitchStepDeg = 8.0,
+                                    double hintX = 0.0, double hintY = 0.0, double hintZ = 0.0)
     {
-        Frame frame = Frame.FromState(x0);
+        // The hint is what keeps a warm start meaningful across the moment the burn
+        // reverses the horizontal velocity - see Frame.FromState. Callers holding a
+        // previous plan should always pass its frame's S axis.
+        Frame frame = Frame.FromState(x0, hintX, hintY, hintZ);
         var res = new SolveResult { Parameters = guess };
 
         double pitch = System.Math.Max(guess.PitchDeg, minPitchDeg);

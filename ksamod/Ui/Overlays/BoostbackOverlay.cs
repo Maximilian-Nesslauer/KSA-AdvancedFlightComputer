@@ -273,11 +273,31 @@ public static partial class PoweredGuidanceWindow
             Atmosphere = aero.Atmosphere,
         };
 
+        // THE SITE'S SURFACE, ON BOTH SIDES OF THE MISS.
+        //
+        // The prediction that DRAWS the impact marker terminates on the terrain under
+        // the impact point, which is right for drawing: that is where the vehicle would
+        // actually touch. It is wrong for TARGETING, twice over. It puts the hit and the
+        // target on two different spheres, so the miss carries a radial component that
+        // is a difference of terrain heights rather than a distance to fly; and that
+        // height MOVES as the impact point walks across the terrain, so the surface the
+        // solution is converging onto wanders under it - a low-passed wander, at that,
+        // which is worse than a noisy one because it lags.
+        //
+        // Aiming both at the site's own radius makes the miss purely tangential and
+        // makes it mean what it says: how far along the ground the impact is from the
+        // pad. The site's terrain is cached per lat/lon, so it is also a constant, and
+        // the burn converges onto a surface that is standing still.
+        //
+        // It matters more than it looks. At a steep impact the downrange error from a
+        // wrong landing radius is dh/tan(gamma) - a couple of hundred metres of terrain
+        // is over a hundred metres of miss, which is the same size as the miss itself.
+        double siteRadius = parent.MeanRadius + SiteTerrainHeight(parent);
+
         var opt = ImpactOptions.Default(parent.MeanRadius);
         opt.MaxTime = ImpactHorizonMinutes * 60.0;
         opt.PathStride = 0;
-        if (_s.ImpactTerrainValid)
-            opt.TargetRadius = parent.MeanRadius + _s.ImpactTerrainH;
+        opt.TargetRadius = siteRadius;
 
         double3 r0 = orbit.StateVectors.PositionCci;
         double3 v0 = orbit.StateVectors.VelocityCci;
@@ -297,7 +317,7 @@ public static partial class PoweredGuidanceWindow
         // which is the current body-fixed frame turned back into CCI axes. The site is
         // body-fixed, so it converts with Ccf2Cci; getting this backwards would give a
         // correction that is right in magnitude and wrong by the body's rotation.
-        double3 siteCcf = SiteDirCcf() * (parent.MeanRadius + SiteTerrainHeight(parent));
+        double3 siteCcf = SiteDirCcf() * siteRadius;
         double3 siteF = siteCcf.Transform(parent.GetCcf2Cci());
         double3 hitF = new double3(nom.Fx.V, nom.Fy.V, nom.Fz.V);
         double3 missF = hitF - siteF;

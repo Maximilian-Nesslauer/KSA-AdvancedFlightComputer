@@ -947,18 +947,17 @@ public sealed class VehicleAutopilotState
     public double BoostbackTgo;
 
     /// <summary>
-    /// The terminal command has frozen and the last two seconds run open loop. See
+    /// The plan has stopped being re-solved and the last second runs open loop. See
     /// Guidance/Boostback.cs (BoostbackLockTgo) for why there is a tail at all.
     ///
-    /// The two dV figures beside it ARE the cutoff, not a readout: BoostbackLockDv is
-    /// what was owed at the freeze, BoostbackAccumDv is the dV sensed since, integrated
-    /// from the thrust the lit engines are actually producing at this altitude, and the
-    /// engine stops when the second catches the first. Sensed rather than timed, so the
-    /// tail self-corrects about pressure and mass with nothing being re-solved.
+    /// NOTHING IS LATCHED WITH IT. The last plan's steering law is still evaluated at
+    /// the elapsed time, so the command keeps turning through cutoff, and the plan's own
+    /// clock ends the burn. BoostbackAccumDv beside it is the dV actually SENSED over
+    /// the tail, integrated from the thrust the lit engines are producing at this
+    /// altitude - a measurement of whether the engine matches the model the plan was
+    /// built on, which is the first thing that would explain a burn ending off target.
     /// </summary>
     public bool BoostbackLocked;
-    public double3 BoostbackFrozenDir;
-    public double BoostbackLockDv;
     public double BoostbackAccumDv;
 
     /// <summary>Sim time the burn is abandoned at regardless, sized off the burn time

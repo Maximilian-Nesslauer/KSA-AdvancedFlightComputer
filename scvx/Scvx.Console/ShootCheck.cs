@@ -296,72 +296,131 @@ internal static class ShootCheck
 
             double openMiss = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
                                       replanS: double.PositiveInfinity, terminalS: 0.0,
-                                      lockS: 0.0, out int openSolves, out double openBurn);
-            double planOnly = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
-                                      replanS: 2.0, terminalS: 5.0, lockS: 5.0,
-                                      out int planSolves, out double planBurn);
-            double handover = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
-                                      replanS: 2.0, terminalS: 5.0, lockS: 2.0,
-                                      out int handSolves, out double handBurn);
-            double noLock = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
-                                    replanS: 2.0, terminalS: 5.0, lockS: 0.0,
-                                    out int noLockSolves, out double noLockBurn);
-            // The upper bound on any terminal scheme: no handover and no freeze, the
-            // PLAN re-solved right through to cutoff. Not flyable as it stands - it puts
-            // a 2.3 ms solve in the seconds where the prediction is least trustworthy -
-            // but it is the number every other row should be read against.
-            double planToCut = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
-                                       replanS: 2.0, terminalS: 0.0, lockS: 0.0,
-                                       out int cutSolves, out double cutBurn);
+                                      lockS: 0.0, terminalReplanS: 0.0,
+                                      out int openSolves, out double openBurn, out int openSolvesShots);
+            double frozen5 = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                     replanS: 2.0, terminalS: 5.0, lockS: 5.0,
+                                     terminalReplanS: 0.0,
+                                     out int frozenSolves, out double frozenBurn, out int frozenSolvesShots);
+            double impulsive = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                       replanS: 2.0, terminalS: 5.0, lockS: 2.0,
+                                       terminalReplanS: 0.0,
+                                       out int impSolves, out double impBurn, out int impSolvesShots);
+            // WHAT IS FLOWN NOW: the plan all the way down, re-solved faster where
+            // staleness costs most, and the last second flown on the standing law.
+            double fast = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                  replanS: 2.0, terminalS: 5.0, lockS: 1.0,
+                                  terminalReplanS: 0.2,
+                                  out int fastSolves, out double fastBurn, out int fastSolvesShots);
+            // The same fast cadence but the OLD two-second tail, so the two changes can
+            // be priced apart rather than credited together.
+            double fastLongTail = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                          replanS: 2.0, terminalS: 5.0, lockS: 2.0,
+                                          terminalReplanS: 0.2,
+                                          out int fltSolves, out double fltBurn, out int fltSolvesShots);
+            // No tail at all, kept because this check RECOMMENDS it and the vehicle
+            // does not - see the drag-mismatch block below for why.
+            double tail0 = FlyPlan(in sys, in truth, x0, Mass0, target, in opt,
+                                   replanS: 2.0, terminalS: 5.0, lockS: 0.0,
+                                   terminalReplanS: 0.2,
+                                   out int tail0Solves, out double tail0Burn, out int tail0Shots);
 
-            Console.WriteLine($"    {"one plan, open loop",-34} miss {openMiss / 1000.0,7:F2} km"
+            Console.WriteLine($"    {"one plan, open loop",-37} miss {openMiss / 1000.0,7:F2} km"
                             + $"   burn {openBurn:F1} s   {openSolves} solve");
-            Console.WriteLine($"    {"plan, frozen for the last 5 s",-34} miss {planOnly / 1000.0,7:F2} km"
-                            + $"   burn {planBurn:F1} s   {planSolves} solves");
-            Console.WriteLine($"    {"plan -> impulsive at T-5, froze T-2",-34} miss {handover / 1000.0,7:F2} km"
-                            + $"   burn {handBurn:F1} s   {handSolves} solves");
-            Console.WriteLine($"    {"... and no freeze at all",-34} miss {noLock / 1000.0,7:F2} km"
-                            + $"   burn {noLockBurn:F1} s   {noLockSolves} solves");
-            Console.WriteLine($"    {"[ref] plan re-solved to cutoff",-34} miss {planToCut / 1000.0,7:F2} km"
-                            + $"   burn {cutBurn:F1} s   {cutSolves} solves");
+            Console.WriteLine($"    {"plan frozen for the last 5 s",-37} miss {frozen5 / 1000.0,7:F2} km"
+                            + $"   burn {frozenBurn:F1} s   {frozenSolves} solves");
+            Console.WriteLine($"    {"plan -> impulsive T-5, froze T-2",-37} miss {impulsive / 1000.0,7:F2} km"
+                            + $"   burn {impBurn:F1} s   {impSolves} solves");
+            Console.WriteLine($"    {"plan at 5 Hz from T-5, open loop T-2",-37} miss {fastLongTail / 1000.0,7:F2} km"
+                            + $"   burn {fltBurn:F1} s   {fltSolves} solves");
+            Console.WriteLine($"    {"plan at 5 Hz from T-5, no tail",-37} miss {tail0 / 1000.0,7:F2} km"
+                            + $"   burn {tail0Burn:F1} s   {tail0Solves} solves");
+            Console.WriteLine($"    {"plan at 5 Hz from T-5, standing law T-1",-38}miss {fast / 1000.0,7:F2} km"
+                            + $"   burn {fastBurn:F1} s  {fastSolves} solves, {fastSolvesShots} shots");
 
             Check("flying one plan open loop misses", openMiss > 1000.0,
                   $"{openMiss / 1000.0:F2} km off a 3% thrust error");
-            Check("re-solving the plan absorbs most of it", planOnly < openMiss / 5.0,
-                  $"{planOnly:F0} m against {openMiss / 1000.0:F2} km");
+            Check("re-solving the plan absorbs most of it", frozen5 < openMiss / 5.0,
+                  $"{frozen5:F0} m against {openMiss / 1000.0:F2} km");
             Check("and it costs a longer burn, not a worse one",
-                  handBurn > openBurn && handBurn < openBurn * 1.2,
-                  $"{handBurn:F1} s against the planned {openBurn:F1} s");
+                  fastBurn > openBurn && fastBurn < openBurn * 1.2,
+                  $"{fastBurn:F1} s against the planned {openBurn:F1} s");
 
-            // THE HANDOVER, priced. Freezing the plan for five seconds is five seconds
-            // of open-loop tracking, and a thrust error persisting through them is by
-            // definition unabsorbed. Handing over to the impulsive correction instead
-            // keeps the loop closed for three of those five: the impulsive model's error
-            // scales with burn DURATION, so at this timescale it is nearly exact, and it
-            // is re-solved at 10 Hz where the plan would not be re-solved at all.
-            Check("handing over to the impulsive law beats freezing the plan",
-                  handover < planOnly,
-                  $"{handover:F0} m against {planOnly:F0} m");
+            // THE POINT OF THE ARRANGEMENT. Both earlier versions flew something OTHER
+            // than the plan at the end - one froze it, the other handed over to the
+            // impulsive correction - and both are beaten by simply re-solving the real
+            // thing faster. The impulsive law was closing the loop with an APPROXIMATION
+            // where the plan is not one, and paying for the difference.
+            Check("re-solving the plan beats freezing it", fast < frozen5,
+                  $"{fast:F0} m against {frozen5:F0} m");
+            Check("and beats handing over to the impulsive law", fast < impulsive,
+                  $"{fast:F0} m against {impulsive:F0} m");
 
-            // WHAT THE REMAINING TAIL COSTS. Two seconds of open loop rather than five,
-            // and the price falls with it. Worth stating that this check cannot show the
-            // tail is worth having: it has a PERFECT prediction, so it prices what the
-            // freeze costs without reproducing the low-passed terrain height and the
-            // ratio-of-two-small-numbers correction that are the reason for it.
-            Check("the tail still costs something, and less than it did",
-                  noLock < handover && handover - noLock < planOnly - handover,
-                  $"{noLock:F0} m with no freeze, {handover:F0} m at T-2, {planOnly:F0} m at T-5");
+            // WHAT THE TAIL COSTS, and a correction worth keeping.
+            //
+            // Before Frame.FromState took a continuity hint, re-solving to the very end
+            // ran the burn 59.0 s against a planned 48.1 and landed 414 m out, and that
+            // was read here as the receding horizon failing to terminate. It was not. It
+            // was the frame's zero flipping 180 degrees as the burn reversed the
+            // horizontal velocity, which made every solve after the flip garbage. With
+            // the hint the same run is 49.6 s and 22 m.
+            //
+            // So the tail is a COST in this check, not a necessity: it gives up about
+            // 160 m of accuracy. What it buys is not modelled here - a perfect
+            // prediction has none of the low-passed terrain height or the
+            // ratio-of-two-small-numbers conditioning that the last second of a real
+            // burn does - so this prices one side only, and the number to weigh it
+            // against is not in this file.
+            Check("the burn terminates on its own",
+                  fastBurn < openBurn * 1.15,
+                  $"{fastBurn:F1} s against the planned {openBurn:F1} s, over {fastSolves} solves");
 
-            // AND THE HANDOVER IS NOT FREE EITHER, which is worth recording rather than
-            // leaving implied by a comparison that only ever ran against the worse
-            // option. Re-solving the PLAN to cutoff is more accurate than any terminal
-            // scheme here, because the impulsive law is an approximation and the plan is
-            // not. What buys the handover its place is the thing this check cannot
-            // model: the last seconds are where the terrain height under a moving impact
-            // point is noisiest and where J^+ m is the ratio of two small numbers.
-            Check("the impulsive terminal law is an approximation, and it shows",
-                  planToCut < noLock,
-                  $"{planToCut:F0} m for the plan against {noLock:F0} m for the impulsive law");
+            // WHERE THIS CHECK IS WRONG ABOUT THE TAIL, recorded because it recommended
+            // dropping it and the vehicle disagreed.
+            //
+            // A 3% thrust scale is a BENIGN disturbance: the model still has the right
+            // shape, so the solver can drive the miss to nothing and every extra look
+            // helps. Under it the tail is pure cost and this check says drop it. It was
+            // dropped, and flew worse.
+            //
+            // The real mismatch is not a scale on one term. The aero surrogate is fitted
+            // to a bounding box, the atmosphere is exponential, the coast assumes alpha
+            // zero, the attitude is assumed to be where it was commanded. What that
+            // leaves is a bias the solver CANNOT null, and re-solving into the last
+            // second chases a miss that moves every time it looks.
+            Console.WriteLine();
+            Console.WriteLine("  the same, against a model whose DRAG is 25% off");
+            var wrongDrag = truth;
+            wrongDrag.ReferenceArea = sys.ReferenceArea * 1.25;
+
+            double dragTail0 = FlyPlan(in sys, in wrongDrag, x0, Mass0, target, in opt,
+                                       replanS: 2.0, terminalS: 5.0, lockS: 0.0,
+                                       terminalReplanS: 0.2,
+                                       out int dt0Solves, out double dt0Burn, out int dt0Shots);
+            double dragTail1 = FlyPlan(in sys, in wrongDrag, x0, Mass0, target, in opt,
+                                       replanS: 2.0, terminalS: 5.0, lockS: 1.0,
+                                       terminalReplanS: 0.2,
+                                       out int dt1Solves, out double dt1Burn, out int dt1Shots);
+            Console.WriteLine($"    {"no tail",-37} miss {dragTail0 / 1000.0,7:F2} km"
+                            + $"   burn {dt0Burn:F1} s   {dt0Solves} solves");
+            Console.WriteLine($"    {"standing law for the last second",-37} miss {dragTail1 / 1000.0,7:F2} km"
+                            + $"   burn {dt1Burn:F1} s   {dt1Solves} solves");
+            Console.WriteLine($"    -> the tail is worth {dragTail0 - dragTail1:+0;-0} m here, "
+                            + $"against {tail0 - fast:+0;-0} m on the thrust-only case");
+
+            // THE SIGN FLIPS, and that is the whole finding. Against a disturbance the
+            // solver can null, every extra look helps and the tail is a cost. Against one
+            // it cannot, the extra looks chase a bias and the tail is what stops them.
+            // The real vehicle is the second kind, which is why BoostbackLockTgo is not
+            // zero however good the first table looks.
+            Check("the tail is a cost against a nullable error and a saving against a bias",
+                  fast > tail0 && dragTail1 < dragTail0,
+                  $"thrust-only: {tail0 - fast:+0;-0} m, drag 25% off: {dragTail0 - dragTail1:+0;-0} m");
+
+            // Which of the two changes did the work, since they landed together.
+            Check("the faster cadence is most of the gain",
+                  fastLongTail < impulsive,
+                  $"5 Hz with the same 2 s tail: {fastLongTail:F0} m against {impulsive:F0} m");
         }
 
         Console.WriteLine();
@@ -377,13 +436,13 @@ internal static class ShootCheck
     ///
     ///   plan       solve from the live state, fly the head of that plan for replanS
     ///              seconds, solve again from wherever that got to.
-    ///   terminal   inside terminalS of cutoff the plan stops and the IMPULSIVE
-    ///              correction takes over, re-solved every 100 ms.
-    ///   locked     inside lockS the terminal command freezes and the rest is flown on
-    ///              sensed dV against the dV owed at the freeze.
+    ///   terminal   inside terminalS of cutoff, keep flying the plan but re-solve it
+    ///              every terminalReplanS instead - or, with terminalReplanS <= 0, hand
+    ///              over to the IMPULSIVE correction at 100 ms.
+    ///   locked     inside lockS nothing is re-solved and the rest runs open loop.
     ///
-    /// terminalS == lockS is the older arrangement - the plan frozen and evaluated out,
-    /// no impulsive stage at all - and an infinite replanS with neither is the control:
+    /// terminalS == lockS is the oldest arrangement - the plan frozen and evaluated out,
+    /// no terminal stage at all - and an infinite replanS with neither is the control:
     /// one plan, flown to completion.
     ///
     /// The truth is integrated at a quarter-second step, far finer than the sixteen
@@ -399,7 +458,8 @@ internal static class ShootCheck
                                   double[] x0, double mass0, double[] target,
                                   in ImpactOptions opt,
                                   double replanS, double terminalS, double lockS,
-                                  out int solves, out double burnFlown)
+                                  double terminalReplanS,
+                                  out int solves, out double burnFlown, out int shots)
     {
         const int N = PoweredBurnSystem.N;
         Span<Dual> scratch = stackalloc Dual[BoostbackShooter.ScratchLength];
@@ -411,6 +471,7 @@ internal static class ShootCheck
         for (int i = 0; i < 6; i++) state[i] = x0[i];
         double mass = mass0;
         solves = 0;
+        shots = 0;
         burnFlown = 0.0;
 
         var guess = new BurnParameters { PitchDeg = 10.0, Duration = 40.0 };
@@ -426,7 +487,10 @@ internal static class ShootCheck
             // arrangement being flown. With a terminal window the plan hands over and
             // the impulsive law takes it from here; without one there is nothing to hand
             // over to, so the plan simply stops being re-solved and is flown out.
-            if (have && tgo <= terminalS && terminalS > lockS)
+            // The impulsive hand-over, when one was asked for. With a terminal REPLAN
+            // rate instead, the plan keeps flying and only its cadence changes - handled
+            // by the step length below.
+            if (have && tgo <= terminalS && terminalS > lockS && terminalReplanS <= 0.0)
                 break;
             bool frozen = have && tgo <= lockS;
 
@@ -436,8 +500,14 @@ internal static class ShootCheck
                     in model, state, mass, target, in guess, in opt, scratch,
                     minPitchDeg: 0.0, searchRates: false,
                     maxSweeps: have ? 4 : 10,
-                    initialPitchStepDeg: have ? 2.0 : 8.0);
+                    initialPitchStepDeg: have ? 2.0 : 8.0,
+                    // Continuity for the frame's zero across the moment the burn
+                    // reverses the horizontal velocity - see Frame.FromState.
+                    hintX: have ? planFrame.Sx : 0.0,
+                    hintY: have ? planFrame.Sy : 0.0,
+                    hintZ: have ? planFrame.Sz : 0.0);
                 solves++;
+                shots += sol.Shots;
                 if (!sol.Converged)
                 {
                     // The mod keeps flying the previous plan here. With none, there is
@@ -447,7 +517,10 @@ internal static class ShootCheck
                 else
                 {
                     plan = sol.Parameters;
-                    planFrame = BoostbackShooter.Frame.FromState(state);
+                    planFrame = BoostbackShooter.Frame.FromState(state,
+                        have ? planFrame.Sx : 0.0,
+                        have ? planFrame.Sy : 0.0,
+                        have ? planFrame.Sz : 0.0);
                     guess = plan;
                     have = true;
                 }
@@ -459,8 +532,14 @@ internal static class ShootCheck
 
             // Never overshoot the handover: the plan owns the burn right up to it, and
             // not a step past it. With no handover there is nothing to stop short of.
-            double upTo = terminalS > lockS ? Math.Max(tgo - terminalS, 0.05) : tgo;
-            double seg_s = Math.Min(Math.Min(replanS, tgo), upTo);
+            // The cadence in force right now. Inside the terminal window the plan is
+            // re-solved faster; outside it, the segment stops short of the window so the
+            // boundary is not overshot.
+            bool terminal = terminalReplanS > 0.0 && tgo <= terminalS;
+            double cadence = terminal ? terminalReplanS : replanS;
+            double upTo = terminalS > lockS && !terminal
+                ? Math.Max(tgo - terminalS, 0.05) : tgo;
+            double seg_s = Math.Min(Math.Min(cadence, tgo), upTo);
             PoweredBurnSystem flying = BoostbackShooter.WithSteering(in truth, in planFrame, in plan);
 
             int steps = Math.Max((int)Math.Ceiling(seg_s / 0.25), 1);
@@ -486,7 +565,14 @@ internal static class ShootCheck
             plan.PitchDeg += plan.PitchRateDegS * seg_s;
             plan.YawDeg += plan.YawRateDegS * seg_s;
             plan.Duration = tgo - seg_s;
-            planFrame = BoostbackShooter.Frame.FromState(state);
+            planFrame = BoostbackShooter.Frame.FromState(state,
+                                                        planFrame.Sx, planFrame.Sy, planFrame.Sz);
+
+            // AND THE SEED MOVES WITH IT. The next solve is warm-started from the last
+            // plan, and the last plan's duration was measured from when it was SOLVED -
+            // so handing it over unchanged seeds the inner Newton a whole re-plan
+            // interval too long, every time.
+            guess = plan;
 
             if (mass <= 0.0 || !double.IsFinite(mass))
                 return double.PositiveInfinity;
