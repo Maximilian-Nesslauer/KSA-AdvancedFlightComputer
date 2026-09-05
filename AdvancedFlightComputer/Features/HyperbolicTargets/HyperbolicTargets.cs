@@ -34,9 +34,6 @@ internal static class HyperbolicTargets
         harmony.CreateClassProcessor(typeof(Patch_SetTransferInfo)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_AlignmentTime)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_TryFindIntercept)).Patch();
-#if DEBUG
-        harmony.CreateClassProcessor(typeof(Patch_DiagnosticLog)).Patch();
-#endif
 
         if (DebugConfig.HyperbolicTargets)
             DefaultCategory.Log.Debug("[AFC] HyperbolicTargets: all patches applied.");
