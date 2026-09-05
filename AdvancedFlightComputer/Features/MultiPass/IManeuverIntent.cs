@@ -4,43 +4,33 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// What the multi-pass plan is trying to achieve. RecomputePass is
-/// called per-pass against the vehicle's current state, so execution
-/// drift from earlier passes is corrected on each commit.
-///
-/// Concrete implementations are self-serializable: WriteToToml plus a
-/// static FromToml factory, dispatched on <see cref="Kind"/>.
-/// </summary>
+// Each intent keeps its goal while RecomputePass adjusts the next burn to the current vehicle state.
 internal interface IManeuverIntent
 {
-    /// <summary>Discriminator for TOML serialization (e.g. "set-ap").
-    /// Stable across versions or saved games fail to deserialize.</summary>
+    // Keep Kind stable across releases so saved intents can still be loaded.
     string Kind { get; }
 
-    /// <summary>The TransferPlanner plan-type key this intent corresponds
-    /// to (e.g. <see cref="ManeuverTools.ManeuverTools.KeySetApoapsis"/>).
-    /// Used by MultiPassUI to detect when the user has switched the Plan
-    /// Type dropdown to a different type while another exec is still
-    /// running, so the inline UI can refuse to render the wrong
-    /// planner's preview against the exec's locked maneuver.</summary>
+    // TypeKey prevents the UI from showing a preview for a different maneuver while this intent is active.
     string TypeKey { get; }
 
-    /// <summary>Maneuver from <paramref name="vehicle"/>'s current orbit
-    /// toward this intent's locked goal. Independent of any live UI
-    /// input. Null when the goal is unreachable from the current state.</summary>
+    // Compute from the saved goal rather than current UI input.
+    // Return null when the goal is unreachable.
     OrbitManeuvers.ManeuverResult? ComputeManeuver(Vehicle vehicle);
 
-    /// <summary>True when the goal is already met. Distinguishes
-    /// "rotated to within tolerance" from "cannot make progress" so the
-    /// postfix can complete the execution instead of warning-cancelling
-    /// on RecomputePass failures during the converging tail of a
-    /// multi-pass plan (common when the splitter over-allocates dV per
-    /// pass relative to the asymptotically-shrinking remaining angle).</summary>
+    // Distinguish a completed goal from an unreachable one so execution can finish without reporting a failure.
     bool IsSatisfied(Vehicle vehicle);
 
     PassPlanResult RecomputePass(
         Vehicle vehicle, int passIndex, int passCountTotal, SplitMode mode);
 
     void WriteToToml(TextWriter w);
+}
+
+internal static class IntentPlanning
+{
+    // A failed preview can still supply the first valid pass.
+    // Execution checks the next pass again before scheduling it.
+    public static PassPlanResult FirstPass(PassPreviewResult result) => result.Passes.Length == 0
+        ? PassPlanResult.Failure(result.FailureReason ?? "planner produced no passes")
+        : PassPlanResult.Success(result.Passes[0]);
 }

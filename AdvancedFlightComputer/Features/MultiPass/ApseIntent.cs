@@ -9,16 +9,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// "Set the opposite apse to <see cref="TargetRadiusMeters"/> by
-/// burning at this apse." Covers both Set Apoapsis (burn at periapsis,
-/// burnTa=0) and Set Periapsis (burn at apoapsis, burnTa=Pi) via
-/// <see cref="IsSetApoapsis"/>.
-///
-/// TargetRadiusMeters is absolute (from the parent's center) so it
-/// stays meaningful as the orbit changes. If the vehicle SOI-
-/// transitions, ParentId no longer matches and RecomputePass aborts.
-/// </summary>
+// TargetRadiusMeters is measured from the locked parent center.
 internal sealed class ApseIntent : IManeuverIntent
 {
     public const string SetApoapsisKind = "set-ap";
@@ -39,8 +30,6 @@ internal sealed class ApseIntent : IManeuverIntent
         if (vehicle?.Orbit?.Parent == null) return false;
         if (vehicle.Orbit.Parent.Id != ParentId) return false;
         double currentRadius = IsSetApoapsis ? vehicle.Orbit.Apoapsis : vehicle.Orbit.Periapsis;
-        // 1m tolerance: vis-viva precision on the relevant apsis is well
-        // below that for any practical orbit.
         return Math.Abs(currentRadius - TargetRadiusMeters) < 1.0;
     }
 
@@ -84,7 +73,7 @@ internal sealed class ApseIntent : IManeuverIntent
 
         TrueAnomaly burnTa = IsSetApoapsis ? TrueAnomaly.Zero : new TrueAnomaly(Math.PI);
         var result = ApseBurnPlanner.Plan(
-            vehicle, maneuver.Value.DvVlf, burnTa, allocations, now);
+            vehicle, maneuver.Value.DvVlf, burnTa, allocations, now, execution: true);
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
@@ -97,9 +86,7 @@ internal sealed class ApseIntent : IManeuverIntent
                 result.Failed,
                 result.FailureReason ?? "-"));
 
-        if (result.Passes.Length == 0)
-            return PassPlanResult.Failure(result.FailureReason ?? "planner produced no passes");
-        return PassPlanResult.Success(result.Passes[0]);
+        return IntentPlanning.FirstPass(result);
     }
 
     public void WriteToToml(TextWriter w)
