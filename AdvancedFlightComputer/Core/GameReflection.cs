@@ -94,6 +94,46 @@ internal static class GameReflection
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
+    // Typed accessors over the handles above for the plan-window state StockPlanner reads per
+    // frame, one delegate each and no boxing per read. An accessor is null when its handle is
+    // null or the field no longer holds the expected type, so the validation reports it like any
+    // other missing handle.
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<TransferObject>? TransferPlanner_sourceBodyRef =
+        StaticFieldRef<TransferObject>(TransferPlanner_sourceBody);
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<OrbitalTransfers.TransferInfo?>? TransferPlanner_transferInfoRef =
+        StaticFieldRef<OrbitalTransfers.TransferInfo?>(TransferPlanner_transferInfo);
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<OrbitalTransfers.PorkChopEntry?>? TransferPlanner_selectedEntryRef =
+        StaticFieldRef<OrbitalTransfers.PorkChopEntry?>(TransferPlanner_selectedEntry);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<TransferType>? TransferPlanner_transferTypeRef =
+        StaticFieldRef<TransferType>(TransferPlanner_transferType);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_transferCalculatedRef =
+        StaticFieldRef<bool>(TransferPlanner_transferCalculated);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_transferBeingCalculatedRef =
+        StaticFieldRef<bool>(TransferPlanner_transferBeingCalculated);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<Burn?>? TransferPlanner_transferBurnRef =
+        StaticFieldRef<Burn?>(TransferPlanner_transferBurn);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_showPlanWindowRef =
+        StaticFieldRef<bool>(TransferPlanner_showPlanWindow);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_displaySelectedTransferRef =
+        StaticFieldRef<bool>(TransferPlanner_displaySelectedTransfer);
+
     #endregion
 
     #region Save, tick and vehicle lifetime
@@ -203,6 +243,22 @@ internal static class GameReflection
         if (member.EndsWith("Ref", StringComparison.Ordinal))
             member = member[..^3];
         return $"{owner}._{member}";
+    }
+
+    private static AccessTools.FieldRef<F>? StaticFieldRef<F>(FieldInfo? field)
+    {
+        if (field == null)
+            return null;
+        try
+        {
+            return AccessTools.StaticFieldRefAccess<F>(field);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Error(
+                $"[AFC] {field.DeclaringType?.Name}.{field.Name} is not a {typeof(F).Name}: {ex.Message}");
+            return null;
+        }
     }
 
     #endregion
