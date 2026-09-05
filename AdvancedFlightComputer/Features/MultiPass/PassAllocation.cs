@@ -1,7 +1,6 @@
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>Per-pass dV budget plus estimated firing time (0 when
-/// the vehicle has no usable stage data).</summary>
+// EstimatedBurnTimeSec is zero when no usable engine data is available.
 internal readonly record struct PassAllocation(
     double DvCapacityMs,
     double EstimatedBurnTimeSec);

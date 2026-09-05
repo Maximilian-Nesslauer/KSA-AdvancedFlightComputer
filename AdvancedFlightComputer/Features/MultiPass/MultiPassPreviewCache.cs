@@ -7,20 +7,17 @@ using static AdvancedFlightComputer.Features.ManeuverTools.ManeuverTools;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>Per-frame cache for the two expensive UI computations:
-/// <see cref="SequenceBurnState.Analyze"/> and
-/// <see cref="ApseBurnPlanner.Plan"/>. Continuous inputs are quantized
-/// in the cache keys so per-frame drift does not invalidate.</summary>
+// Cache sequence performance and planner previews using quantized inputs to limit recalculation during small changes in the orbit.
 internal static class MultiPassPreviewCache
 {
-    // Rocket equation is logarithmic in mass; 100 kg is fine resolution.
+    // Mass is grouped in 100 kg intervals because the rocket equation varies logarithmically with mass.
     private const double MassQuantumKg = 100.0;
     private const double SmaQuantumM = 100.0;
 
     #region SequenceBurnState cache
 
     private readonly record struct StateKey(
-        string VehicleId,
+        Vehicle Source,
         long MassBucket,
         int ActiveEngineSignature);
 
@@ -30,14 +27,13 @@ internal static class MultiPassPreviewCache
     public static SequenceBurnState GetSequenceState(Vehicle source)
     {
         var key = new StateKey(
-            source.Id,
+            source,
             (long)(source.TotalMass / MassQuantumKg),
             ComputeActiveEngineSignature(source));
 
         if (_cachedState != null && key == _cachedStateKey)
             return _cachedState;
 
-        // Cache miss path: measured. Steady-state hits are unmeasured.
 #if DEBUG
         using var _perf = new PerfTracker.Scope("SequenceBurnState.Analyze");
 #endif
@@ -47,16 +43,14 @@ internal static class MultiPassPreviewCache
         return _cachedState;
     }
 
-    // Catches state changes that can move the SequenceBurnState result
-    // without moving MassBucket: staging state, a sequence's ATM/VAC toggle
-    // (selects the stock model's evaluation pressure), engine and flow-rule
-    // reconfiguration, and tank PropellantUseEnabled toggles. Some entries
-    // over-invalidate under the stock-model adapter (it ignores IsActive
-    // outside the live active sequence), which only costs a spare recompute.
+    // Sequence assignments, decoupler settings, engine settings, and tank permissions can change performance without changing total mass.
+    // Include these settings even when stock ignores one in a particular sequence.
     private static int ComputeActiveEngineSignature(Vehicle source)
     {
         if (source.Parts == null) return 0;
         var hc = new HashCode();
+        hc.Add(source.Parts);
+        hc.Add(source.Parts.SequenceList.ActiveSequence);
 
         ReadOnlySpan<Sequence> sequences = source.Parts.SequenceList.Sequences;
         for (int i = 0; i < sequences.Length; i++)
@@ -69,21 +63,24 @@ internal static class MultiPassPreviewCache
         ReadOnlySpan<Part> parts = source.Parts.Parts;
         for (int i = 0; i < parts.Length; i++)
         {
+            hc.Add(parts[i].InstanceId);
+            foreach (ISequenced module in parts[i].GetSubtreeSequencedModules())
+            {
+                hc.Add(module.Sequence);
+                if (module is Decoupler decoupler) hc.Add(decoupler.IsEnabled);
+            }
             Span<EngineController> engines = parts[i].Modules.Get<EngineController>();
             for (int e = 0; e < engines.Length; e++)
             {
                 hc.Add(parts[i].InstanceId);
                 hc.Add(engines[e].IsActive);
-                // Only a Combustor carries a player-selected FlowRule; a
-                // SolidMotor has none, so it folds in as a constant.
+                // Only a liquid combustor has a FlowRule that the player can change.
                 foreach (RocketCore core in engines[e].Cores)
                     hc.Add(core is Combustor c && c.ResourceManager != null ? (int)c.ResourceManager.FlowRule : -1);
             }
         }
 
-        // The stock drain skips propellant-disabled tanks (the game filters on
-        // PropellantUseEnabled), so a toggle changes burnable fuel while the
-        // vehicle's total mass is unchanged.
+        // Stock excludes tanks with PropellantUseEnabled disabled even though their fuel still contributes to vehicle mass.
         Span<Tank> tanks = source.Parts.Tanks.Modules;
         for (int i = 0; i < tanks.Length; i++)
             hc.Add(tanks[i].PropellantUseEnabled);
@@ -95,12 +92,8 @@ internal static class MultiPassPreviewCache
 
     #region PassPreviewResult cache
 
-    /// <summary>Cache key. Quantized in <see cref="From"/> so per-frame
-    /// drift on continuous fields does not bust the cache. BurnTime is
-    /// intentionally absent (advances every frame). Intent-side fields
-    /// (UseDescendingNode etc.) are included because UI toggles for
-    /// plane-change types can leave the dV bucket unchanged - e.g.
-    /// AN vs DN on a near-circular orbit has identical speed.</summary>
+    // BurnTime is omitted because it advances each frame.
+    // Keep node and inclination inputs in the key because they can change the maneuver without changing its delta v magnitude.
     private readonly record struct PreviewKey(
         string TypeKey,
         string VehicleId,
@@ -112,11 +105,12 @@ internal static class MultiPassPreviewCache
         bool UseDescendingNode,
         long TargetIncMilliRad,
         OrbitManeuvers.InclinationReference Reference,
-        string TargetId)
+        string TargetId,
+        int SequenceSignature)
     {
         public static PreviewKey From(
             Vehicle source, string typeKey, int passCount,
-            SplitMode mode, double totalDv)
+            SplitMode mode, double totalDv, SequenceBurnState state)
         {
             IOrbiter? target = ManeuverToolsWindow.GetSelectedTargetOrbiter();
             return new(
@@ -130,15 +124,21 @@ internal static class MultiPassPreviewCache
                 ManeuverToolsWindow.UseDescendingNode,
                 (long)(ManeuverToolsWindow.TargetInclinationRad * 1000.0),
                 ManeuverToolsWindow.InclinationRef,
-                target?.Id ?? string.Empty);
+                target?.Id ?? string.Empty,
+                ComputeSequenceSignature(state));
         }
 
-        /// <summary>The key with its drift-derived fields zeroed. Thrust
-        /// walks dV, SMA and mass through their quantization buckets with
-        /// no user input; every other field only changes on real intent
-        /// (type, pass count, split mode, target, inclination inputs).</summary>
+        // Exclude orbit, mass, delta v, and sequence performance changes when comparing intent during thrust.
         public PreviewKey WithoutDrift() =>
-            this with { DvBucket = 0, SmaBucket = 0, MassBucket = 0 };
+            this with { DvBucket = 0, SmaBucket = 0, MassBucket = 0, SequenceSignature = 0 };
+    }
+
+    private static int ComputeSequenceSignature(SequenceBurnState state)
+    {
+        var hash = new HashCode();
+        hash.Add(state.HasUsableEngines);
+        for (int i = 0; i < state.Sequences.Count; i++) hash.Add(state.Sequences[i]);
+        return hash.ToHashCode();
     }
 
     private static PassPreviewResult? _cachedPreview;
@@ -159,40 +159,23 @@ internal static class MultiPassPreviewCache
     public static bool LastPreviewFailed => _cachedPreview?.Failed ?? false;
     public static string? LastPreviewFailureReason => _cachedPreview?.FailureReason;
 
-    /// <summary>Sum of DvCapacityMs from the most recent allocation;
-    /// NaN if nothing has been cached yet.</summary>
+    // Return NaN until an allocation has been cached.
     public static double CachedAllocationsSum =>
         _cachedAllocations != null ? _cachedAllocationsSum : double.NaN;
 
-    /// <summary>Recomputes preview when the cache key changes.</summary>
     public static void UpdatePreviewIfStale(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
         int passCount, SplitMode splitMode, SequenceBurnState state, double totalDv)
     {
-        var key = PreviewKey.From(source, typeKey, passCount, splitMode, totalDv);
+        var key = PreviewKey.From(source, typeKey, passCount, splitMode, totalDv, state);
 
         if (_hasPreviewKey && _cachedPreview != null && key == _cachedPreviewKey)
             return;
 
-        // Mid-burn state is intrinsically unstable: thrust (a stock Auto
-        // engine burn, or an AFC RCS burn, which keeps BurnMode at Manual)
-        // walks orbit, mass and remaining dV through their quantization
-        // buckets every physics tick. While thrust is active, ignore key
-        // changes confined to those drift fields instead of replanning per
-        // frame; any other key change is real user input and replans
-        // immediately. The freeze lifts when stock drops BurnMode back to
-        // Manual or the RCS execution ends; the accumulated drift then
-        // busts the key. Allow the initial build so a user who opens the
-        // window mid-burn still sees a (slightly stale) preview. Known
-        // trade: TargetAltitude reaches the key only through DvBucket, so
-        // during thrust an altitude edit stays frozen with the drift.
         if (_hasPreviewKey && _cachedPreview != null
-            && (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
-                || RcsExecutor.IsActive(source))
-            && key.WithoutDrift() == _cachedPreviewKey.WithoutDrift())
+            && ShouldFreezeForThrust(source, key.WithoutDrift() == _cachedPreviewKey.WithoutDrift()))
             return;
 
-        // Cache miss path: times Splitter + per-type planner together.
 #if DEBUG
         using var _perf = new PerfTracker.Scope("MultiPassPreviewCache.Plan");
 #endif
@@ -208,14 +191,16 @@ internal static class MultiPassPreviewCache
         _hasPreviewKey = true;
     }
 
-    /// <summary>Per-type planner dispatch for the preview chain. Apse
-    /// types feed ApseBurnPlanner; inclination types route to the
-    /// PlaneChangeBurnPlanner so the per-pass node, rotation axis and
-    /// dV->angle math match what execution will actually do. Without
-    /// this dispatch, plane-change previews would walk through
-    /// ApseBurnPlanner and re-apply the full single-burn dV direction
-    /// at each apoapsis - dropping SMA every pass because the original
-    /// vector carries a retrograde component.</summary>
+    // Use this only when a preview exists and the comparison excludes inputs that drift during thrust.
+    // A failed RCS driver can leave IsActive set until cancellation.
+    // Manual engine thrust does not freeze the preview.
+    // Target altitude is represented only through drift inputs, so altitude changes also stay frozen during thrust.
+    internal static bool ShouldFreezeForThrust(Vehicle source, bool sameIntent) =>
+        (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto || RcsExecutor.IsActive(source))
+        && sameIntent;
+
+    // Use the same planner for preview and execution.
+    // Plane changes need their own planner because repeating the original burn vector would also change orbital energy.
     private static PassPreviewResult PlanForType(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
         PassAllocation[] allocations, UniverseTime now)
@@ -240,9 +225,7 @@ internal static class MultiPassPreviewCache
                 ManeuverToolsWindow.InclinationRef,
                 ManeuverToolsWindow.UseDescendingNode, allocations, now);
         }
-        // Circularize at the chosen apse is mechanically an apse burn: a
-        // tangential kick that leaves the burn-radius apse invariant and
-        // moves the opposite apse toward it. burnTa matches the burn point.
+        // Circularization is a tangential burn that preserves the chosen apsis and moves the opposite apsis toward it.
         if (typeKey == KeyStockCircularizeApoapsis)
             return ApseBurnPlanner.Plan(source, maneuver.DvVlf, new TrueAnomaly(Math.PI), allocations, now);
         if (typeKey == KeyStockCircularizePeriapsis)

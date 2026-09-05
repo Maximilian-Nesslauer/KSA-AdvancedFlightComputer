@@ -8,14 +8,6 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// "Set the orbit's inclination against <see cref="Reference"/> to
-/// <see cref="TargetInclinationRad"/>, burning at the AN or DN of the
-/// vehicle's orbit relative to the reference plane." The reference
-/// plane and target angle are locked at Start; the maneuver is
-/// recomputed against the live orbit each pass so partial rotations
-/// converge correctly.
-/// </summary>
 internal sealed class SetInclinationIntent : IManeuverIntent
 {
     public const string SetInclinationKind = "set-inc";
@@ -34,8 +26,7 @@ internal sealed class SetInclinationIntent : IManeuverIntent
         if (vehicle?.Orbit?.Parent == null) return false;
         if (vehicle.Orbit.Parent.Id != ParentId) return false;
         double currentInc = OrbitManeuvers.GetInclinationAgainst(vehicle.Orbit, Reference);
-        // Matches the incDiff < 0.001 short-circuit inside
-        // OrbitManeuvers.ComputeSetInclination.
+        // Use the same tolerance as OrbitManeuvers.ComputeSetInclination.
         return System.Math.Abs(TargetInclinationRad - currentInc) < 0.001;
     }
 
@@ -72,7 +63,7 @@ internal sealed class SetInclinationIntent : IManeuverIntent
             maneuver.Value.DvCci.Length(), remainingCount, mode, state);
 
         var result = PlaneChangeBurnPlanner.PlanForSet(
-            vehicle, TargetInclinationRad, Reference, UseDescendingNode, allocations, now);
+            vehicle, TargetInclinationRad, Reference, UseDescendingNode, allocations, now, execution: true);
 
         if (DebugConfig.MultiPass)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
@@ -84,9 +75,7 @@ internal sealed class SetInclinationIntent : IManeuverIntent
                 maneuver.Value.DvCci.Length(), remainingCount,
                 result.Passes.Length, result.Failed, result.FailureReason ?? "-"));
 
-        if (result.Passes.Length == 0)
-            return PassPlanResult.Failure(result.FailureReason ?? "planner produced no passes");
-        return PassPlanResult.Success(result.Passes[0]);
+        return IntentPlanning.FirstPass(result);
     }
 
     public void WriteToToml(TextWriter w)
