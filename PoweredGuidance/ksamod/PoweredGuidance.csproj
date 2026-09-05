@@ -113,7 +113,7 @@
     <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="$(OutputPath)clarabel_c.dll" DestinationFolder="$(ReleaseDir)"
           Condition="Exists('$(OutputPath)clarabel_c.dll')" />
-    <Copy SourceFiles="..\LICENSE" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="..\..\LICENSE" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="..\THIRD-PARTY-NOTICES.md" DestinationFolder="$(ReleaseDir)" />
     <!-- The vendored solvers' own licence texts, shipped ALONGSIDE the binaries that
          carry their terms. Apache-2.0 s.4(a) requires giving recipients a copy of the
@@ -121,8 +121,9 @@
          THIRD-PARTY-NOTICES.md attributes them but pointing at a source path is not
          the same as including the text in a binary package. -->
     <Copy SourceFiles="@(ThirdPartyLicense)" DestinationFolder="$(ReleaseDir)licenses\" />
-    <!-- The changelog lives at the REPO ROOT, not beside the csproj: it covers the
-         whole of navbox, of which this mod is one part. -->
+    <!-- The changelog lives at the PoweredGuidance subtree root, not beside the csproj:
+         it covers the whole of that subtree, of which this mod is one part. LICENSE is
+         the containing repo's and sits one level further up. -->
     <Copy SourceFiles="..\CHANGELOG.md" DestinationFolder="$(ReleaseDir)" />
     <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />
     <RemoveDir Directories="$(OutputPath)release" />

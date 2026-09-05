@@ -1,4 +1,18 @@
 <Solution>
   <Project Path="AdvancedFlightComputer/AdvancedFlightComputer.csproj" />
   <Project Path="AdvancedFlightComputer.HarnessTests/AdvancedFlightComputer.HarnessTests.csproj" />
+  <!-- The PoweredGuidance subtree, merged in whole from its own repo and parked under one
+       top-level folder. Its own solutions (PoweredGuidance/ksamod/PoweredGuidance.slnx and
+       the per-subsystem ones beside it) still exist for working on that stack alone; this
+       view exists so both mods build from one place. Listed bottom of the stack up:
+       Numerics depends on nothing, the two Cores sit on it, the mod sits on the Cores, and
+       the Consoles are headless validation harnesses that reference the Cores directly. -->
+  <Folder Name="/PoweredGuidance/">
+    <Project Path="PoweredGuidance/lib/PoweredGuidance.Numerics/PoweredGuidance.Numerics.csproj" />
+    <Project Path="PoweredGuidance/gfold/Gfold.Core/Gfold.Core.csproj" />
+    <Project Path="PoweredGuidance/scvx/Scvx.Core/Scvx.Core.csproj" />
+    <Project Path="PoweredGuidance/ksamod/PoweredGuidance.csproj" />
+    <Project Path="PoweredGuidance/gfold/Gfold.Console/Gfold.Console.csproj" />
+    <Project Path="PoweredGuidance/scvx/Scvx.Console/Scvx.Console.csproj" />
+  </Folder>
 </Solution>
