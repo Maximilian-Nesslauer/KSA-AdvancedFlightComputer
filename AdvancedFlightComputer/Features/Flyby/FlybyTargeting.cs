@@ -109,31 +109,41 @@ internal static class FlybyTargeting
 
     #endregion
 
-    #region Impact-parameter closed forms (also the unit-test oracle base)
+    #region Impact parameter closed forms
 
-    /// <summary>Impact parameter b that yields flyby periapsis
-    /// <paramref name="rpRadius"/> for hyperbolic excess speed
-    /// <paramref name="vInf"/> about a body of gravitational parameter
-    /// <paramref name="muTarget"/>. NaN on non-physical inputs.</summary>
-    public static double ImpactParameterForPeriapsis(double vInf, double rpRadius, double muTarget)
+    /// <summary>Impact parameter b that yields flyby periapsis <paramref name="rpRadius"/>
+    /// for the speed <paramref name="vSoi"/> relative to the target, measured at
+    /// radius <paramref name="soiRadius"/> about a body of gravitational parameter
+    /// <paramref name="muTarget"/>. With an infinite SOI radius vSoi is the
+    /// asymptotic excess and this is the textbook relation. NaN on inputs that are
+    /// not physical. The retarget solves with this form, so a test of it tests what
+    /// flies.</summary>
+    public static double ImpactParameterForPeriapsis(
+        double vSoi, double rpRadius, double muTarget, double soiRadius = double.PositiveInfinity)
     {
-        if (!(vInf > 0.0) || !(rpRadius > 0.0) || !(muTarget > 0.0))
+        if (!(vSoi > 0.0) || !(rpRadius > 0.0) || !(muTarget > 0.0) || !(soiRadius > 0.0))
             return double.NaN;
-        double vP = Math.Sqrt(vInf * vInf + 2.0 * muTarget / rpRadius);
-        return rpRadius * vP / vInf;
+        double vpSquared = vSoi * vSoi - 2.0 * muTarget / soiRadius + 2.0 * muTarget / rpRadius;
+        if (!(vpSquared > 0.0))
+            return double.NaN;
+        return rpRadius * Math.Sqrt(vpSquared) / vSoi;
     }
 
-    /// <summary>Inverse of <see cref="ImpactParameterForPeriapsis"/>: the flyby
-    /// periapsis produced by impact parameter <paramref name="b"/>. Used by the
-    /// tests to close the loop against the game's own orbit propagation.</summary>
-    public static double PeriapsisForImpactParameter(double vInf, double b, double muTarget)
+    /// <summary>Inverse of <see cref="ImpactParameterForPeriapsis"/>. From
+    /// (b v_soi)^2 = r_p^2 w^2 + 2 mu r_p with w^2 = v_soi^2 - 2 mu / r_soi, the
+    /// positive root is written as (b v_soi)^2 / (mu + sqrt(mu^2 + w^2 (b v_soi)^2)),
+    /// which stays accurate when mu dominates and needs no special case at w = 0.</summary>
+    public static double PeriapsisForImpactParameter(
+        double vSoi, double b, double muTarget, double soiRadius = double.PositiveInfinity)
     {
-        if (!(vInf > 0.0) || !(b > 0.0) || !(muTarget > 0.0))
+        if (!(vSoi > 0.0) || !(b > 0.0) || !(muTarget > 0.0) || !(soiRadius > 0.0))
             return double.NaN;
-        // From b = r_p * sqrt(v_inf^2 + 2 mu / r_p) / v_inf, solving for r_p:
-        //   r_p = -mu/v_inf^2 + sqrt((mu/v_inf^2)^2 + b^2).
-        double k = muTarget / (vInf * vInf);
-        return -k + Math.Sqrt(k * k + b * b);
+        double wSquared = vSoi * vSoi - 2.0 * muTarget / soiRadius;
+        double bv = b * vSoi;
+        double discriminant = muTarget * muTarget + wSquared * bv * bv;
+        if (!(discriminant >= 0.0))
+            return double.NaN;
+        return bv * bv / (muTarget + Math.Sqrt(discriminant));
     }
 
     #endregion
@@ -338,16 +348,8 @@ internal static class FlybyTargeting
             double3 vRelSoi = transfer.GetStateVectorsAt(soiTime).VelocityCci
                               - targetOrbit.GetStateVectorsAt(soiTime).VelocityCci;
             double vInf = vRelSoi.Length();
-            if (!(vInf > 0.0)) return null;
-
-            // Patched-conic flyby speed at r_p, matching CorrectionBurnTask's form
-            // but with the target body's own mu. b is the impact parameter.
-            double energy = 0.5 * vInf * vInf - muTarget / soiTarget;
-            double vpArg = 2.0 * (energy + muTarget / rpRadius);
-            if (!(vpArg > 0.0)) return null;
-            double vP = Math.Sqrt(vpArg);
-            double b = rpRadius * vP / vInf;
-            if (!(b > 0.0) || double.IsNaN(b)) return null;
+            double b = ImpactParameterForPeriapsis(vInf, rpRadius, muTarget, soiTarget);
+            if (!(b > 0.0)) return null;
 
             // Named sides live in the TARGET's orbital frame: radial is the target's
             // own radius from its parent, normal its orbit normal. The offset has to
