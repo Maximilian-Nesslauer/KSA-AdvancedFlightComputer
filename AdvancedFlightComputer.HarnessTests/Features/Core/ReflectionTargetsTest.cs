@@ -1,5 +1,6 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
+using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -27,6 +28,7 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("BurnContextMenu.Draw anchor", Patch_BurnContextMenu_Launcher.IsAnchorPresent);
         t.Check("DrawSelectedTransfer anchor", Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent);
         t.Check("DrawSelectedTransferUi anchor", Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent);
+        t.Check("FindClosestApproaches anchor", Patch_FindClosestApproaches.IsAnchorPresent);
 
         // Stock initialises _transferType to its first entry, so a null key means the accessor did
         // not read through.

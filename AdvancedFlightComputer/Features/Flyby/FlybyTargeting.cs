@@ -8,68 +8,58 @@ using KSA;
 namespace AdvancedFlightComputer.Features.Flyby;
 
 /// <summary>
-/// Retargets a stock Hohmann/Lambert transfer so the arrival is a flyby at a
-/// chosen periapsis instead of a center-aimed impact. The stock planner aims
-/// the Lambert solve at the target body's center
-/// (<see cref="OrbitalTransfers.SolveLambert"/> uses
-/// <c>Target.Orbit.GetStateVectorsAt(arrival).PositionCci</c>), which is why a
-/// well-timed transfer intersects the body. We instead aim at
-/// <c>center + b * n_hat</c>, where b is the hyperbolic impact parameter that
-/// produces the requested flyby periapsis and n_hat is perpendicular to the
-/// approach relative velocity, then re-solve the departure so the burn itself
-/// yields the flyby (no separate mid-course correction).
+/// Retargets a stock transfer so the arrival is a flyby at a chosen periapsis
+/// instead of an impact aimed at the center. Stock's
+/// <see cref="OrbitalTransfers.SolveLambert"/> aims at the target's center at
+/// arrival. This aims at center + b * n_hat instead, where b is the impact
+/// parameter that produces the requested periapsis and n_hat is perpendicular to
+/// the approach relative velocity, then solves the departure again so the burn
+/// itself yields the flyby.
 ///
-/// Two gravitational parameters are involved and must not be conflated:
-///   * The Lambert departure/arrival solve is around the SHARED PARENT of the
-///     transfer (Earth for LEO -&gt; Luna, the Sun for LEO -&gt; Mars). All
-///     <see cref="OrbitalTransfers.SuperiorLambert"/> calls use that parent mu.
-///   * The impact parameter and periapsis speed use the TARGET BODY's OWN mu
-///     (Luna's / Mars's), read via <see cref="IParentBody.Mu"/>. Note the stock
-///     course-correction (<c>CorrectionBurnTask.CourseCorrectCci</c>) reads
-///     <c>target.Orbit.Mu</c>, which resolves to the target's PARENT mu, so this
-///     re-derivation deliberately does not follow it there.
+/// Two gravitational parameters are in play and must not be conflated. The
+/// Lambert solve is about the shared parent of the transfer, which is Earth for
+/// LEO to Luna and the Sun for LEO to Mars. The impact parameter and the
+/// periapsis speed use the target's own mu from <see cref="IParentBody.Mu"/>.
+/// Stock's course correction reads <c>target.Orbit.Mu</c>, which resolves to the
+/// parent's mu, and is deliberately not followed here.
 ///
-/// Impact-parameter relations (standard patched-conic B-plane targeting):
-///   v_p = sqrt(v_inf^2 + 2 mu_target / r_p),  b = r_p * v_p / v_inf.
-/// v_inf is taken at the SOI boundary (energy corrected by -mu_target/SOI) so the
-/// achieved patched-conic periapsis matches r_p, matching the game's own model.
+/// The B plane relation takes the relative speed at the SOI boundary so the
+/// achieved patched conic periapsis matches the game's own model. It reads
+/// v_p^2 = v_soi^2 - 2 mu / r_soi + 2 mu / r_p and b = r_p v_p / v_soi.
 /// </summary>
 internal static class FlybyTargeting
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    // Coarse samples for the transfer-vs-target closest-approach bracket before
-    // Brent refinement. 48 over the arrival window resolves the minimum well
-    // below the Brent tolerance for Earth-Luna and Earth-Mars geometries.
+    // Coarse samples over the arrival window before Brent refinement. 48 resolves
+    // the minimum well below the Brent tolerance for Earth to Luna and Earth to
+    // Mars.
     private const int ClosestApproachCoarseSteps = 48;
 
-    // Fixed-point iterations for v_inf convergence. The offset moves the aim
-    // point by ~b (a few thousand km for a moon, tiny against the transfer
-    // scale), so v_inf shifts by well under 1% and 3 passes over-converge.
+    // Fixed point passes for v_soi. The aim offset is about b, a few thousand km
+    // for a moon, so v_soi shifts by well under one percent per pass and three
+    // passes converge with margin.
     private const int DefaultIterations = 3;
 
-    /// <summary>Smallest usable axis alignment (sine of the angle between a side's
-    /// axis and the approach relative velocity). Below roughly 9 degrees the
-    /// projected offset direction is dominated by numerical noise rather than the
-    /// requested side, so the UI disables that side instead of aiming blindly.</summary>
+    /// <summary>Smallest usable axis alignment, which is the sine of the angle
+    /// between a side's axis and the approach relative velocity. Below roughly 9
+    /// degrees the projected offset direction is numerical noise rather than the
+    /// requested side, so the solver refuses and the UI disables that side.</summary>
     public const double MinAxisAlignment = 0.15;
 
-    /// <summary>Result of a flyby retarget: the departure burn (VLF and CCI) plus
-    /// the geometry used, so the UI can show v_inf / impact parameter and the
-    /// caller can build a preview. <see cref="BurnTime"/> equals the transfer
-    /// Start for same-parent; for cross-parent it carries the hyperbolic-escape
-    /// true-anomaly nudge the stock planner applies.
+    /// <summary>The departure burn in VLF and CCI plus the geometry it was built
+    /// from. <see cref="BurnTime"/> is the transfer Start when the target shares
+    /// the vehicle's parent. When it does not, it carries the true anomaly shift
+    /// stock applies to a hyperbolic escape.
     ///
-    /// <see cref="PlannerVInfMs"/> and <see cref="PlannerApoTargetMeters"/> are the
-    /// parking-frame energy descriptors the multi-pass planner locks (the
-    /// hyperbolic ejection excess for cross-parent, the post-burn apoapsis for
-    /// same-parent) so a flyby departure can be split into perigee kicks. These
-    /// are distinct from <see cref="VInfMs"/>, which is the target-relative speed at
-    /// the SOI boundary (v_soi) that the impact parameter b = r_p * v_p / v_soi
-    /// divides by. That is NOT the asymptotic excess sqrt(2E) (a few percent lower);
-    /// the divisor must be the SOI-boundary speed because the aim point is the
-    /// parent-frame closest approach, which is where the game builds the flyby
-    /// conic from the relative state.</summary>
+    /// <see cref="VInfMs"/> is the speed relative to the target at the SOI
+    /// boundary, which is the divisor in b = r_p v_p / v_soi. It is a few percent
+    /// above the asymptotic excess sqrt(2E). <see cref="PlannerVInfMs"/> and
+    /// <see cref="PlannerApoTargetMeters"/> are the energy descriptors in the
+    /// parking frame that a split into several passes locks. A departure to
+    /// another parent carries the ejection excess and a NaN apoapsis. A departure
+    /// within the same parent carries the apoapsis after the burn and a NaN
+    /// excess.</summary>
     public readonly record struct FlybyResult(
         double3 DvVlf,
         double3 DvCci,
@@ -81,10 +71,10 @@ internal static class FlybyTargeting
         double PlannerVInfMs,
         double PlannerApoTargetMeters);
 
-    #region Reference-radius resolution
+    #region Reference radius resolution
 
-    /// <summary>Turns a user-entered value + reference into a periapsis radius
-    /// measured from the target center.</summary>
+    /// <summary>Turns the value the user entered and its reference into a
+    /// periapsis radius measured from the target center.</summary>
     public static double ResolvePeriapsisRadius(
         IParentBody target, double value, FlybyReference reference)
     {
@@ -96,11 +86,11 @@ internal static class FlybyTargeting
         };
     }
 
-    /// <summary>Lowest periapsis radius the game treats as clear of the body: the
-    /// terrain ceiling for an airless body, but the top of the atmosphere for one
-    /// with an atmosphere (<see cref="Astronomical.GetNearSurfaceRadius"/> and the
-    /// <c>AtmosphericBody</c> override). Below it a flyby would impact or enter the
-    /// atmosphere, so the UI blocks Create.</summary>
+    /// <summary>Lowest periapsis radius the game treats as clear of the body. That
+    /// is the terrain ceiling on an airless body and the top of the atmosphere on
+    /// one with an atmosphere, see <see cref="Astronomical.GetNearSurfaceRadius"/>
+    /// and the <c>AtmosphericBody</c> override. Below it a flyby impacts or enters
+    /// the atmosphere, so the UI blocks Create.</summary>
     public static double MinFlybyRadius(IParentBody target) => target.GetNearSurfaceRadius();
 
     /// <summary><see cref="IParentBody.GetAtmosphereRadius"/> returns 0 for airless
@@ -109,42 +99,53 @@ internal static class FlybyTargeting
 
     #endregion
 
-    #region Impact-parameter closed forms (also the unit-test oracle base)
+    #region Impact parameter closed forms
 
-    /// <summary>Impact parameter b that yields flyby periapsis
-    /// <paramref name="rpRadius"/> for hyperbolic excess speed
-    /// <paramref name="vInf"/> about a body of gravitational parameter
-    /// <paramref name="muTarget"/>. NaN on non-physical inputs.</summary>
-    public static double ImpactParameterForPeriapsis(double vInf, double rpRadius, double muTarget)
+    /// <summary>Impact parameter b that yields flyby periapsis <paramref name="rpRadius"/>
+    /// for the speed <paramref name="vSoi"/> relative to the target, measured at
+    /// radius <paramref name="soiRadius"/> about a body of gravitational parameter
+    /// <paramref name="muTarget"/>. With an infinite SOI radius vSoi is the
+    /// asymptotic excess and this is the textbook relation. NaN on inputs that are
+    /// not physical. The retarget solves with this form, so a test of it tests what
+    /// flies.</summary>
+    public static double ImpactParameterForPeriapsis(
+        double vSoi, double rpRadius, double muTarget, double soiRadius = double.PositiveInfinity)
     {
-        if (!(vInf > 0.0) || !(rpRadius > 0.0) || !(muTarget > 0.0))
+        if (!(vSoi > 0.0) || !(rpRadius > 0.0) || !(muTarget > 0.0) || !(soiRadius > 0.0))
             return double.NaN;
-        double vP = Math.Sqrt(vInf * vInf + 2.0 * muTarget / rpRadius);
-        return rpRadius * vP / vInf;
+        double vpSquared = vSoi * vSoi - 2.0 * muTarget / soiRadius + 2.0 * muTarget / rpRadius;
+        if (!(vpSquared > 0.0))
+            return double.NaN;
+        return rpRadius * Math.Sqrt(vpSquared) / vSoi;
     }
 
-    /// <summary>Inverse of <see cref="ImpactParameterForPeriapsis"/>: the flyby
-    /// periapsis produced by impact parameter <paramref name="b"/>. Used by the
-    /// tests to close the loop against the game's own orbit propagation.</summary>
-    public static double PeriapsisForImpactParameter(double vInf, double b, double muTarget)
+    /// <summary>Inverse of <see cref="ImpactParameterForPeriapsis"/>. From
+    /// (b v_soi)^2 = r_p^2 w^2 + 2 mu r_p with w^2 = v_soi^2 - 2 mu / r_soi, the
+    /// positive root is written as (b v_soi)^2 / (mu + sqrt(mu^2 + w^2 (b v_soi)^2)),
+    /// which stays accurate when mu dominates and needs no special case at w = 0.</summary>
+    public static double PeriapsisForImpactParameter(
+        double vSoi, double b, double muTarget, double soiRadius = double.PositiveInfinity)
     {
-        if (!(vInf > 0.0) || !(b > 0.0) || !(muTarget > 0.0))
+        if (!(vSoi > 0.0) || !(b > 0.0) || !(muTarget > 0.0) || !(soiRadius > 0.0))
             return double.NaN;
-        // From b = r_p * sqrt(v_inf^2 + 2 mu / r_p) / v_inf, solving for r_p:
-        //   r_p = -mu/v_inf^2 + sqrt((mu/v_inf^2)^2 + b^2).
-        double k = muTarget / (vInf * vInf);
-        return -k + Math.Sqrt(k * k + b * b);
+        double wSquared = vSoi * vSoi - 2.0 * muTarget / soiRadius;
+        double bv = b * vSoi;
+        double discriminant = muTarget * muTarget + wSquared * bv * bv;
+        if (!(discriminant >= 0.0))
+            return double.NaN;
+        return bv * bv / (muTarget + Math.Sqrt(discriminant));
     }
 
     #endregion
 
-    #region Cross-parent detection
+    #region Cross parent detection
 
-    /// <summary>True when the departure is a hyperbolic escape (target orbits a
-    /// different parent than the vehicle, e.g. LEO -&gt; Mars). Uses a direct
-    /// parent-id compare rather than <see cref="OrbitalTransfers.SameSoiTransfer"/>
-    /// because stock rewrites the transfer source to the vehicle for same-SOI
-    /// transfers, which makes a re-check unreliable.</summary>
+    /// <summary>True when the departure is a hyperbolic escape, which means the
+    /// target orbits a different parent than the vehicle, for example LEO to Mars.
+    /// A direct compare of the parent ids rather than
+    /// <see cref="OrbitalTransfers.SameSoiTransfer"/>, because stock rewrites the
+    /// transfer source to the vehicle for transfers inside one SOI, which makes a
+    /// second check through it unreliable.</summary>
     public static bool IsCrossParentTransfer(Vehicle source, IOrbiter target)
     {
         string? sp = source.Orbit.Parent?.Id;
@@ -156,22 +157,21 @@ internal static class FlybyTargeting
 
     #region Retarget
 
-    /// <summary>Retargets the departure of a stock transfer (identified by its
-    /// Start and Transit, e.g. from a selected porkchop entry) so it flies by
-    /// <paramref name="target"/> at <paramref name="targetPeRadius"/> instead of
-    /// impacting, placing the periapsis on the requested <paramref name="side"/>.
+    /// <summary>Retargets the departure of a stock transfer, given as its Start and
+    /// Transit from a selected porkchop entry, so it flies by <paramref name="target"/>
+    /// at <paramref name="targetPeRadius"/> on the requested <paramref name="side"/>.
     ///
-    /// <see cref="FlybyOutcome.Result"/> is null on a degenerate geometry (the
-    /// requested side's axis is near-parallel to the approach velocity, or the
-    /// solve is non-physical); the caller should then fall back to the stock
-    /// center-aimed burn and warn. The axis alignments are reported either way so
-    /// the UI can show which sides this approach can actually reach.</summary>
+    /// <see cref="FlybyOutcome.Result"/> is null on a degenerate geometry, which
+    /// means the requested side's axis is nearly parallel to the approach or the
+    /// solve is not physical. The caller then falls back to the stock burn aimed at
+    /// the center and warns. The axis alignments are reported either way so the UI
+    /// can show which sides this approach can reach.</summary>
     public static FlybyOutcome ComputeFlybyDeparture(
         Vehicle source, IOrbiter target, UniverseTime start, UniverseTime transit,
         double targetPeRadius, FlybySide side, int iterations = DefaultIterations)
     {
-        // Vehicle.Orbit is non-nullable (it throws on an empty plan rather than
-        // returning null), so only the target orbit / parent needs a null guard.
+        // Vehicle.Orbit throws on an empty plan rather than returning null, so only
+        // the target orbit and parent need a null guard.
         if (target.Orbit?.Parent == null) return FlybyOutcome.Unavailable;
         if (target is not IParentBody targetBody) return FlybyOutcome.Unavailable;
         if (!(targetPeRadius > 0.0)) return FlybyOutcome.Unavailable;
@@ -185,16 +185,15 @@ internal static class FlybyTargeting
 
         bool isCross = IsCrossParentTransfer(source, target);
 
-        // OrbitalTransfers.SingleImpulseHyperbolicEscape throws outright on a
-        // hyperbolic parking orbit, and the offset solve below runs on the parking
-        // celestial's orbit, so nothing downstream would catch it. Stock guards the
-        // same way at its own call sites.
+        // OrbitalTransfers.SingleImpulseHyperbolicEscape throws on a hyperbolic
+        // parking orbit and nothing downstream would catch it. Stock guards the same
+        // way at its own call sites.
         if (isCross && source.Orbit.Eccentricity >= 1.0) return FlybyOutcome.Unavailable;
 
-        // The Lambert is solved in the target-parent CCI frame. For same-parent
-        // the departure body is the vehicle itself; for cross-parent it is the
-        // vehicle's parking-parent celestial, whose (heliocentric) orbit shares
-        // the target's parent, matching the frame stock's SolveLambert uses.
+        // The Lambert is solved in the CCI frame of the target's parent. When the
+        // vehicle shares that parent the departure body is the vehicle. Otherwise it
+        // is the celestial the vehicle is parked at, whose orbit shares the target's
+        // parent, as in stock's SolveLambert.
         Orbit sourceInFrame;
         if (isCross)
         {
@@ -226,41 +225,16 @@ internal static class FlybyTargeting
             return new FlybyOutcome(null, radialAlign, normalAlign);
 
         if (DebugConfig.Flyby)
-        {
-            // Offset direction in the target's own orbital frame, so the flyby side
-            // is readable as physics instead of a raw CCI vector: radial is
-            // toward/away from the parent, along-track is leading/trailing on the
-            // target's path, normal is out of its orbital plane. The offset is
-            // always perpendicular to the approach relative velocity, so a purely
-            // along-track offset is generally not reachable.
-            StateVectors tsv = target.Orbit.GetStateVectorsAt(s.CaTime);
-            double3 radial = tsv.PositionCci.NormalizeOrZero();
-            double3 alongTrack = tsv.VelocityCci.NormalizeOrZero();
-            double3 normal = double3.Cross(tsv.PositionCci, tsv.VelocityCci).NormalizeOrZero();
-
-            DefaultCategory.Log.Debug(string.Format(Inv,
-                "[AFC] FlybyTargeting.ComputeFlybyDeparture: vehicle='{0}' target='{1}' " +
-                "cross={2} rp={3:F0}m b={4:F0}m vInf={5:F1}m/s side={6} " +
-                "|dvVlf|={7:F1}m/s burnT={8:F0}s offsetDir[radial={9:F2} alongTrack={10:F2} " +
-                "normal={11:F2}] axisAlign[radial={12:F2} normal={13:F2}]",
-                source.Id, (target as Astronomical)?.Id ?? "?", isCross, targetPeRadius,
-                s.ImpactParameter, s.VInf, side, result.DvVlf.Length(),
-                result.BurnTime.Seconds(),
-                double3.Dot(s.OffsetDir, radial),
-                double3.Dot(s.OffsetDir, alongTrack),
-                double3.Dot(s.OffsetDir, normal),
-                radialAlign, normalAlign));
-        }
+            LogDeparture(source, target, isCross, targetPeRadius, side, s, result, radialAlign, normalAlign);
 
         return new FlybyOutcome(result, radialAlign, normalAlign);
     }
 
     /// <summary>Result of a retarget attempt plus how well each named side axis can
     /// be reached for this approach. An alignment is the sine of the angle between
-    /// the axis and the approach relative velocity: at 1 the axis is fully usable,
-    /// near 0 the offset would have to point along the approach, which cannot move
-    /// the periapsis. <see cref="MinAxisAlignment"/> is the cutoff the UI uses to
-    /// disable a side.</summary>
+    /// the axis and the approach relative velocity. At 1 the axis is fully usable,
+    /// and near 0 the offset would have to point along the approach, which cannot
+    /// move the periapsis. <see cref="MinAxisAlignment"/> is the cutoff the UI uses.</summary>
     public readonly record struct FlybyOutcome(
         FlybyResult? Result,
         double RadialAxisAlignment,
@@ -269,8 +243,8 @@ internal static class FlybyTargeting
         public static FlybyOutcome Unavailable => new(null, 0.0, 0.0);
 
         /// <summary>Whether the solve got far enough to measure the axes. It bails
-        /// out before that for reasons unrelated to the side (bad target, no SOI,
-        /// an approach energy too low for the requested periapsis), and reporting
+        /// out earlier for reasons unrelated to the side, such as a bad target, no
+        /// SOI, or an approach too slow for the requested periapsis, and reporting
         /// those as "no side is reachable" would disable the whole picker.</summary>
         public bool HasAxisData => RadialAxisAlignment > 0.0 || NormalAxisAlignment > 0.0;
 
@@ -283,11 +257,11 @@ internal static class FlybyTargeting
                 : NormalAxisAlignment;
     }
 
-    /// <summary>Departure state from the offset-aim Lambert solve, in the
-    /// target-parent CCI frame. <see cref="DepartureDeltaCci"/> is
-    /// <c>vDeparture - sourceInFrame.velocity(start)</c>: the injection dV for
-    /// same-parent, or the hyperbolic excess relative to the parking parent for
-    /// cross-parent (the quantity stock names DepartureVelocityCci).</summary>
+    /// <summary>Departure state from the Lambert solve at the offset aim point, in
+    /// the CCI frame of the target's parent. <see cref="DepartureDeltaCci"/> is the
+    /// injection dV when the vehicle shares that parent, and otherwise the
+    /// hyperbolic excess relative to the parking parent, which stock names
+    /// DepartureVelocityCci.</summary>
     private readonly record struct OffsetSolve(
         double3 DepartureDeltaCci,
         UniverseTime Transit,
@@ -304,22 +278,22 @@ internal static class FlybyTargeting
     {
         radialAlign = 0.0;
         normalAlign = 0.0;
-        double3 departurePos = sourceInFrame.GetStateVectorsAt(start).PositionCci;
-        double3 departureVel = sourceInFrame.GetStateVectorsAt(start).VelocityCci;
+        StateVectors departure = sourceInFrame.GetStateVectorsAt(start);
+        double3 departurePos = departure.PositionCci;
         byte4 lineColor = sourceInFrame.OrbitLineColor;
 
-        // Seed with the stock center-aimed solve.
+        // Seed with the stock solve aimed at the center.
         double3 arrivalCenter = targetOrbit.GetStateVectorsAt(start + transit).PositionCci;
         OrbitalTransfers.SuperiorLambert(
             muParent, departurePos, arrivalCenter, transit, out double3 vDeparture, out _);
 
         UniverseTime lastTransit = transit;
         double lastB = double.NaN;
-        double lastVInf = double.NaN;
+        double lastVSoi = double.NaN;
         double3 lastOffsetDir = double3.Zero;
         UniverseTime lastCaTime = default;
 
-        for (int iter = 0; iter < iterations; iter++)
+        for (int iter = 0; iter < Math.Max(1, iterations); iter++)
         {
             Orbit transfer = Orbit.CreateFromStateCci(
                 targetOrbit.Parent, start, departurePos, vDeparture, lineColor);
@@ -327,60 +301,25 @@ internal static class FlybyTargeting
             UniverseTime caTime = FindClosestApproach(
                 transfer, targetOrbit, start, start + lastTransit);
 
-            // Relative velocity at closest approach (offset direction) and, a
-            // little earlier, at the SOI boundary (energy for the flyby speed).
+            // The relative velocity at closest approach sets the offset plane. A
+            // little earlier, at the SOI boundary, it sets the flyby energy.
             double3 vRelCa = transfer.GetStateVectorsAt(caTime).VelocityCci
                              - targetOrbit.GetStateVectorsAt(caTime).VelocityCci;
             double vRelCaLen = vRelCa.Length();
             if (!(vRelCaLen > 0.0)) return null;
 
             UniverseTime soiTime = caTime - soiTarget / vRelCaLen;
-            double3 vRelSoi = transfer.GetStateVectorsAt(soiTime).VelocityCci
-                              - targetOrbit.GetStateVectorsAt(soiTime).VelocityCci;
-            double vInf = vRelSoi.Length();
-            if (!(vInf > 0.0)) return null;
+            double vSoi = (transfer.GetStateVectorsAt(soiTime).VelocityCci
+                           - targetOrbit.GetStateVectorsAt(soiTime).VelocityCci).Length();
+            double b = ImpactParameterForPeriapsis(vSoi, rpRadius, muTarget, soiTarget);
+            if (!(b > 0.0)) return null;
 
-            // Patched-conic flyby speed at r_p, matching CorrectionBurnTask's form
-            // but with the target body's own mu. b is the impact parameter.
-            double energy = 0.5 * vInf * vInf - muTarget / soiTarget;
-            double vpArg = 2.0 * (energy + muTarget / rpRadius);
-            if (!(vpArg > 0.0)) return null;
-            double vP = Math.Sqrt(vpArg);
-            double b = rpRadius * vP / vInf;
-            if (!(b > 0.0) || double.IsNaN(b)) return null;
+            StateVectors targetAtCa = targetOrbit.GetStateVectorsAt(caTime);
+            if (!TryResolveSideOffset(targetAtCa, vRelCa / vRelCaLen, side,
+                    out double3 offsetDir, out radialAlign, out normalAlign))
+                return null;
 
-            // Named sides live in the TARGET's orbital frame: radial is the target's
-            // own radius from its parent, normal its orbit normal. The offset has to
-            // be perpendicular to the approach relative velocity, so the requested
-            // axis is projected into that plane; how much survives the projection is
-            // the alignment the UI gates on.
-            StateVectors tsvCa = targetOrbit.GetStateVectorsAt(caTime);
-            double3 radialAxis = tsvCa.PositionCci.NormalizeOrZero();
-            double3 normalAxis = double3.Cross(
-                tsvCa.PositionCci, tsvCa.VelocityCci).NormalizeOrZero();
-            double3 vRelHat = vRelCa / vRelCaLen;
-
-            radialAlign = PerpendicularComponent(radialAxis, vRelHat).Length();
-            normalAlign = PerpendicularComponent(normalAxis, vRelHat).Length();
-
-            double3 wantedAxis = side switch
-            {
-                FlybySide.Inner => -radialAxis,
-                FlybySide.Outer => radialAxis,
-                FlybySide.North => normalAxis,
-                _ => -normalAxis,
-            };
-
-            // Axis too close to the approach direction: the surviving perpendicular
-            // component is noise rather than the requested side, so refuse instead of
-            // aiming at a direction the user did not ask for. Same cutoff the picker
-            // greys the side out with, so UI and solver agree.
-            double3 wantedPerp = PerpendicularComponent(wantedAxis, vRelHat);
-            if (wantedPerp.Length() < MinAxisAlignment) return null;
-            double3 offsetDir = wantedPerp.NormalizeOrZero();
-            if (offsetDir.LengthSquared() < 1e-12) return null;
-
-            double3 aim = tsvCa.PositionCci + b * offsetDir;
+            double3 aim = targetAtCa.PositionCci + b * offsetDir;
 
             UniverseTime newTransit = caTime - start;
             if (!(newTransit > 0.0)) return null;
@@ -390,30 +329,56 @@ internal static class FlybyTargeting
 
             lastTransit = newTransit;
             lastB = b;
-            lastVInf = vInf;
+            lastVSoi = vSoi;
             lastOffsetDir = offsetDir;
             lastCaTime = caTime;
         }
 
-        double3 departureDelta = vDeparture - departureVel;
+        double3 departureDelta = vDeparture - departure.VelocityCci;
         if (!IsFinite(departureDelta)) return null;
         return new OffsetSolve(
-            departureDelta, lastTransit, lastB, lastVInf, lastOffsetDir, lastCaTime);
+            departureDelta, lastTransit, lastB, lastVSoi, lastOffsetDir, lastCaTime);
+    }
+
+    /// <summary>Named sides live in the target's orbital frame, where radial is the
+    /// target's radius from its parent and normal is its orbit normal. The offset
+    /// has to stay perpendicular to the approach relative velocity, so the requested
+    /// axis is projected into that plane, and how much survives the projection is
+    /// the alignment the UI gates on. False when the wanted axis lies too close to
+    /// the approach, where the surviving component is noise rather than the side.</summary>
+    private static bool TryResolveSideOffset(
+        StateVectors targetAtCa, double3 vRelHat, FlybySide side,
+        out double3 offsetDir, out double radialAlign, out double normalAlign)
+    {
+        double3 radialAxis = targetAtCa.PositionCci.NormalizeOrZero();
+        double3 normalAxis = double3.Cross(
+            targetAtCa.PositionCci, targetAtCa.VelocityCci).NormalizeOrZero();
+
+        radialAlign = PerpendicularComponent(radialAxis, vRelHat).Length();
+        normalAlign = PerpendicularComponent(normalAxis, vRelHat).Length();
+
+        double3 wantedAxis = side switch
+        {
+            FlybySide.Inner => -radialAxis,
+            FlybySide.Outer => radialAxis,
+            FlybySide.North => normalAxis,
+            _ => -normalAxis,
+        };
+
+        double3 wantedPerp = PerpendicularComponent(wantedAxis, vRelHat);
+        offsetDir = wantedPerp.NormalizeOrZero();
+        return wantedPerp.Length() >= MinAxisAlignment;
     }
 
     private static FlybyResult BuildSameParentDeparture(
         Vehicle source, UniverseTime start, OffsetSolve s, double rpRadius)
     {
-        // Same-parent: DepartureDeltaCci is the geocentric injection dV directly
-        // (matches OrbitalTransfers.FinalizeLambert's Source == Vehicle branch, magnitude
-        // preserved through the VLF rotation). Departs at the transfer Start,
-        // no true-anomaly nudge.
+        // DepartureDeltaCci is the injection dV directly, as in FinalizeLambert's
+        // Source == Vehicle branch. The burn is at the transfer Start.
         double3 dvCci = s.DepartureDeltaCci;
         StateVectors sv = source.Orbit.GetStateVectorsAt(start);
         double3 dvVlf = ToVlf(sv, dvCci);
 
-        // Post-burn apoapsis is the energy descriptor the multi-pass planner
-        // targets for same-parent transfers.
         Orbit postBurn = Orbit.CreateFromStateCci(
             source.Orbit.Parent, start, sv.PositionCci, sv.VelocityCci + dvCci,
             source.Orbit.OrbitLineColor);
@@ -428,10 +393,10 @@ internal static class FlybyTargeting
         Vehicle source, IParentBody lambertParent, UniverseTime start,
         OffsetSolve s, double rpRadius)
     {
-        // Cross-parent: DepartureDeltaCci is the heliocentric excess relative to the
-        // parking parent. Convert it to the parking-parent frame and solve the
-        // single-impulse hyperbolic escape, mirroring OrbitalTransfers.FinalizeLambert's
-        // Source != Vehicle branch (including its true-anomaly start nudge).
+        // DepartureDeltaCci is the heliocentric excess relative to the parking
+        // parent. Rotate it into the parking parent's frame and solve the single
+        // impulse escape, as FinalizeLambert's Source != Vehicle branch does,
+        // including its true anomaly shift of the burn.
         IParentBody parkingParent = source.Orbit.Parent!;
         double muParking = parkingParent.Mu;
 
@@ -441,9 +406,8 @@ internal static class FlybyTargeting
         double3 velSoiExit = s.DepartureDeltaCci.Transform(toParking);
 
         StateVectors sv = source.Orbit.GetStateVectorsAt(start);
-        // Null when the requested SOI-exit velocity has no hyperbolic excess the
-        // parking orbit can reach, which is the departure stock now reports as
-        // infeasible rather than solving for an asymptote it cannot fly.
+        // Null when the parking orbit cannot reach the requested velocity at the
+        // SOI exit, which stock reports as an infeasible departure.
         if (OrbitalTransfers.SingleImpulseHyperbolicEscape(
                 muParking, source.Orbit, sv.PositionCci, sv.VelocityCci, velSoiExit)
             is not OrbitalTransfers.SingleImpulseTransfer impulse)
@@ -451,14 +415,11 @@ internal static class FlybyTargeting
 
         double3 dvCci = impulse.VelocityDeparture - impulse.VelParking;
 
-        // Shift the burn to the escape true anomaly the impulse solver chose.
         UniverseTime toBurnTa = source.Orbit.GetTimeFromPeTo(impulse.BurnTrueAnomaly);
         UniverseTime toCurrentTa = source.Orbit.GetTimeFromPeTo(sv.TrueAnomaly);
         UniverseTime burnTime = start + (toBurnTa - toCurrentTa);
 
         double3 dvVlf = ToVlf(source.Orbit.GetStateVectorsAt(burnTime), dvCci);
-        // The hyperbolic ejection excess relative to the parking parent is the
-        // energy descriptor the multi-pass planner targets for cross-parent.
         double plannerVInf = s.DepartureDeltaCci.Length();
         return new FlybyResult(dvVlf, dvCci, burnTime,
             s.ImpactParameter, s.VInf, rpRadius, IsCrossParent: true,
@@ -476,22 +437,21 @@ internal static class FlybyTargeting
     }
 
     /// <summary>Time of closest approach of <paramref name="transfer"/> to
-    /// <paramref name="target"/> within [<paramref name="tStart"/>,
-    /// <paramref name="tEnd"/>]: a coarse scan to bracket the minimum, then
-    /// Brent refinement (same shape as the stock closest-approach search).
+    /// <paramref name="target"/> between <paramref name="tStart"/> and
+    /// <paramref name="tEnd"/>. A coarse scan brackets the minimum, then Brent
+    /// refinement takes over, which is the shape of the stock closest approach
+    /// search.
     ///
-    /// The scan runs on seconds measured from <paramref name="tStart"/> rather
-    /// than on absolute sim seconds. A UniverseTime carries 128-bit nanoseconds,
-    /// so flattening an absolute instant into the minimiser's double would spend
-    /// most of the mantissa on the epoch offset instead of on the window being
-    /// searched.</summary>
+    /// The scan runs on seconds from <paramref name="tStart"/> rather than absolute
+    /// sim seconds, because a UniverseTime holds 128 bit nanoseconds and an absolute
+    /// double would spend most of its mantissa on the epoch instead of on the window.</summary>
     private static UniverseTime FindClosestApproach(
         Orbit transfer, Orbit target, UniverseTime tStart, UniverseTime tEnd)
     {
         // Skip the first second so the search never latches onto the departure
-        // point itself (distance is small there for a low parking orbit), and
-        // widen the window past the seed arrival so an offset transfer's true
-        // closest approach (a touch later or earlier) stays bracketed.
+        // point, where the distance is small from a low parking orbit, and widen
+        // past the seed arrival so an offset transfer's true closest approach, a
+        // touch later or earlier, stays bracketed.
         double span = (tEnd - tStart).Seconds();
         double a = 1.0;
         double bEnd = span * 1.25;
@@ -518,7 +478,7 @@ internal static class FlybyTargeting
         double lo = Math.Max(a, bestT - step);
         double hi = Math.Min(bEnd, bestT + step);
         double refined = MathEx.BrentMin(Dist, lo, hi, 1e-06);
-        // A degenerate propagation makes Dist NaN and Brent can carry that out;
+        // A degenerate propagation makes Dist NaN and Brent can carry that out.
         // UniverseTime rejects NaN, so fall back to the bracketed coarse sample.
         return tStart + (double.IsFinite(refined) ? refined : bestT);
     }
@@ -531,6 +491,33 @@ internal static class FlybyTargeting
 
     private static bool IsFinite(double3 v) =>
         double.IsFinite(v.X) && double.IsFinite(v.Y) && double.IsFinite(v.Z);
+
+    /// <summary>Offset direction in the target's own orbital frame, so the flyby
+    /// side reads as physics instead of a raw CCI vector. The offset is always
+    /// perpendicular to the approach, so an offset purely along the track is
+    /// generally not reachable.</summary>
+    private static void LogDeparture(
+        Vehicle source, IOrbiter target, bool isCross, double targetPeRadius, FlybySide side,
+        OffsetSolve s, FlybyResult result, double radialAlign, double normalAlign)
+    {
+        StateVectors tsv = target.Orbit.GetStateVectorsAt(s.CaTime);
+        double3 radial = tsv.PositionCci.NormalizeOrZero();
+        double3 alongTrack = tsv.VelocityCci.NormalizeOrZero();
+        double3 normal = double3.Cross(tsv.PositionCci, tsv.VelocityCci).NormalizeOrZero();
+
+        DefaultCategory.Log.Debug(string.Format(Inv,
+            "[AFC] FlybyTargeting.ComputeFlybyDeparture: vehicle='{0}' target='{1}' " +
+            "cross={2} rp={3:F0}m b={4:F0}m vSoi={5:F1}m/s side={6} " +
+            "|dvVlf|={7:F1}m/s burnT={8:F0}s offsetDir[radial={9:F2} alongTrack={10:F2} " +
+            "normal={11:F2}] axisAlign[radial={12:F2} normal={13:F2}]",
+            source.Id, (target as Astronomical)?.Id ?? "?", isCross, targetPeRadius,
+            s.ImpactParameter, s.VInf, side, result.DvVlf.Length(),
+            result.BurnTime.Seconds(),
+            double3.Dot(s.OffsetDir, radial),
+            double3.Dot(s.OffsetDir, alongTrack),
+            double3.Dot(s.OffsetDir, normal),
+            radialAlign, normalAlign));
+    }
 
     #endregion
 }

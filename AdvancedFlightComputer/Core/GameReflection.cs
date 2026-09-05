@@ -43,7 +43,7 @@ internal static class GameReflection
     public static readonly FieldInfo? TransferPlanner_transferInfo =
         AccessTools.Field(typeof(TransferPlanner), "_transferInfo");
 
-    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_selectedEntry =
         AccessTools.Field(typeof(TransferPlanner), "_selectedEntry");
 
@@ -90,7 +90,8 @@ internal static class GameReflection
     public static readonly FieldInfo? TransferPlanner_displaySelectedTransfer =
         AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
 
-    [UsedBy(Feature.ManeuverTools)]
+    // HyperbolicTargets binds its finalizer to the same method by name.
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
@@ -106,7 +107,7 @@ internal static class GameReflection
     public static readonly AccessTools.FieldRef<OrbitalTransfers.TransferInfo?>? TransferPlanner_transferInfoRef =
         StaticFieldRef<OrbitalTransfers.TransferInfo?>(TransferPlanner_transferInfo);
 
-    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly AccessTools.FieldRef<OrbitalTransfers.PorkChopEntry?>? TransferPlanner_selectedEntryRef =
         StaticFieldRef<OrbitalTransfers.PorkChopEntry?>(TransferPlanner_selectedEntry);
 

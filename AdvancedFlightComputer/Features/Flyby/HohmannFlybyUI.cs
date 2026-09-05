@@ -12,30 +12,23 @@ using KSA;
 namespace AdvancedFlightComputer.Features.Flyby;
 
 /// <summary>
-/// Inline "Target flyby periapsis" section drawn inside the stock Transfer
-/// Planning window, above the multi-pass controls. When enabled, the Hohmann
-/// departure is retargeted so the arrival is a flyby at the chosen periapsis
-/// instead of a center-aimed impact, removing the manual impact-to-flyby
-/// correction step. Works for moon flybys (same parent) and interplanetary
-/// flybys (cross parent); the retarget math lives in <see cref="FlybyTargeting"/>.
-///
-/// Holds its own UI state and a small result cache keyed on the porkchop entry
-/// plus the flyby inputs. <see cref="HohmannMultiPassUI"/> reads the live request
-/// (periapsis radius + side) via <see cref="TryGetRequest"/> to bake the flyby
-/// into a multi-pass plan; <see cref="MultiPass.HohmannCreateInterceptor"/> reads
-/// the cached solve via <see cref="TryGetArmed"/> to fire a single flyby burn
-/// when N == 1.
+/// Inline "Target flyby periapsis" section inside the stock Transfer Planning
+/// window, above the multi pass controls. The retarget math lives in
+/// <see cref="FlybyTargeting"/>. This holds the UI state and a result cache keyed
+/// on the porkchop entry and the flyby inputs. <see cref="HohmannMultiPassUI"/>
+/// reads the live request through <see cref="TryGetRequest"/> to bake the flyby
+/// into a multi pass plan, and <see cref="HohmannCreateInterceptor"/> reads the
+/// cached solve through <see cref="TryGetArmed"/> to fire a single flyby burn.
 /// </summary>
 internal static class HohmannFlybyUI
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
     private static readonly string[] ReferenceLabels = { "Surface", "Center", "Atmosphere" };
-    // Index-aligned with FlybySide.
+    // Same order as FlybySide.
     private static readonly string[] SideLabels =
     {
         "Inner (toward parent)", "Outer (away from parent)", "North", "South",
     };
-    private static readonly float[] SingleColumnWidths = { 0.9f };
 
     public static bool Enabled { get; set; }
 
@@ -44,45 +37,57 @@ internal static class HohmannFlybyUI
     private static double _inputValueKm = 100.0;
     private static FlybySide _side = FlybySide.Inner;
 
-    // Keyed on what the retarget actually consumes: the transfer window, the
-    // requested periapsis / side, and the departure orbit. Vehicle mass is NOT a
-    // field - the retarget is pure orbital mechanics (state vectors plus mu), so
-    // keying on mass would rebuild the whole solve on every gram of propellant
-    // drained.
-    //
-    // The orbit-changed signal is periapsis plus eccentricity, NOT the semi-major
-    // axis: on the near-parabolic departure ellipse this feature creates, da/dv is
-    // of order 1e6 m per m/s, so millimetre-per-second integrator jitter would move
-    // the SMA by kilometres and bust the cache every frame. Periapsis and
-    // eccentricity stay put while coasting and still jump hard once a burn runs.
-    private readonly record struct FlybyKey(
+    // What the retarget consumes, split into the inputs a user or a porkchop click
+    // changes and the departure orbit, which drifts on its own during a burn. A
+    // changed input always recomputes, while orbit drift is frozen under thrust,
+    // see UpdateCacheIfStale. Vehicle mass is not a key, because the retarget is
+    // orbital mechanics only and keying on mass would rebuild the solve per gram
+    // burned.
+    private readonly record struct FlybyInputs(
         string SourceId,
         string TargetId,
         long StartBucketSec,
         long TransitBucketSec,
         FlybyReference Reference,
         long ValueBucketM,
-        FlybySide Side,
-        long PeriapsisBucketKm,
-        long EccentricityBucket);
+        FlybySide Side);
 
-    private static FlybyKey _cachedKey;
+    // Periapsis and eccentricity rather than the semi major axis, because on the
+    // nearly parabolic departure ellipse this feature creates da/dv is of order
+    // 1e6 m per m/s, so integrator jitter would move the SMA by kilometres and bust
+    // the cache every frame. Periapsis and eccentricity hold while coasting and
+    // still jump once a burn runs.
+    private readonly record struct DepartureOrbit(long PeriapsisBucketKm, long EccentricityBucket);
+
+    private static FlybyInputs _cachedInputs;
+    private static DepartureOrbit _cachedOrbit;
     private static bool _hasCached;
     private static FlybyTargeting.FlybyOutcome _cachedOutcome;
-    private static FlybyTargeting.FlybyResult? _cachedResult;
     private static bool _belowFloor;
+    // Readouts are formatted once per cache update, not per frame. The departure
+    // dV line is the exception, because stock's refine worker rewrites the selected
+    // entry's dV in place after the click, so its baseline is read again every
+    // frame and the line is formatted again only when that value moves.
+    private static string _approachSpeedText = string.Empty;
+    private static string _impactParameterText = string.Empty;
+    private static string _departureDvText = string.Empty;
+    private static string? _predictedPeText;
+    private static double _cachedFlybyDv = double.NaN;
+    private static double _cachedStockDv = double.NaN;
     private static double _predictedPeAlt = double.NaN;
-    // Propagated periapsis measured from the target's center, plus the floor it is
-    // judged against. The requested radius alone is not enough: the achieved
-    // periapsis comes out of the patched-conic propagation and can land below the
-    // body even when the input was above it.
+    // Propagated periapsis from the target's center, and the floor it is judged
+    // against. The requested radius is not enough, because the achieved periapsis
+    // comes out of the patched conic propagation and can land below the body even
+    // when the input was above it.
     private static double _predictedPeRadius = double.NaN;
     private static double _minFlybyRadius = double.NaN;
     private static bool _previewHasEncounter;
     private static FlightPlan? _previewPlan;
     private static string? _lastSourceId;
 
-    /// <summary>The propagated flyby would hit the body (or its atmosphere), so the
+    private static FlybyTargeting.FlybyResult? CachedResult => _hasCached ? _cachedOutcome.Result : null;
+
+    /// <summary>The propagated flyby would hit the body or its atmosphere, so the
     /// departure must not be armed however sane the requested altitude looked.</summary>
     private static bool PredictedFlybyBelowFloor =>
         _previewHasEncounter
@@ -90,9 +95,8 @@ internal static class HohmannFlybyUI
         && _predictedPeRadius < _minFlybyRadius;
 
     /// <summary>Draws the flyby section. <paramref name="entry"/> and
-    /// <paramref name="info"/> come from the stock selected porkchop entry, so no
-    /// reflection here. Called from <see cref="HohmannMultiPassUI"/> which already
-    /// resolved them.</summary>
+    /// <paramref name="info"/> are the stock selected porkchop entry, resolved by
+    /// the calling <see cref="HohmannMultiPassUI"/>.</summary>
     public static void DrawInline(
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info)
@@ -111,7 +115,9 @@ internal static class HohmannFlybyUI
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] HohmannFlybyUI.DrawInline: {ex}");
+            LogHelper.WarnOnce("flyby-draw-inline:" + ex.GetType().Name,
+                $"[AFC] HohmannFlybyUI.DrawInline: vehicle='{source.Id}' " +
+                $"target='{(info.Target as Astronomical)?.Id ?? "?"}': {ex}");
         }
     }
 
@@ -140,7 +146,7 @@ internal static class HohmannFlybyUI
         }
 
         DrawReferenceDropdown(target);
-        DrawValueInput(target);
+        DrawValueInput();
         DrawSidePicker();
 
         double peRadius = FlybyTargeting.ResolvePeriapsisRadius(target, _inputValueKm * 1000.0, _reference);
@@ -152,8 +158,8 @@ internal static class HohmannFlybyUI
 
         if (_belowFloor)
         {
-            // The floor is the terrain ceiling on an airless body and the top of the
-            // atmosphere on one with an atmosphere, so it is not always "the surface".
+            // The floor is the terrain ceiling on an airless body and the top of
+            // the atmosphere on one with an atmosphere, so it is not "the surface".
             ConsoleUi.WarningWrapped(string.Format(Inv,
                 "Periapsis is below the safe flyby floor ({0} from center). Raise the altitude.",
                 ManeuverToolsWindow.FormatDistance(minRadius)));
@@ -161,13 +167,13 @@ internal static class HohmannFlybyUI
         }
 
         UpdateCacheIfStale(source, entry, info, target, peRadius);
-        DrawResult(source, entry);
+        RefreshDepartureDvText(entry);
+        DrawResult();
     }
 
     private static void DrawReferenceDropdown(IParentBody target)
     {
         bool hasAtmo = FlybyTargeting.HasAtmosphere(target);
-        // Drop the Atmosphere option for airless bodies (e.g. Luna).
         if (!hasAtmo && _reference == FlybyReference.Atmosphere)
         {
             _reference = FlybyReference.Surface;
@@ -194,10 +200,8 @@ internal static class HohmannFlybyUI
         ConsoleWidgets.EndRow();
     }
 
-    private static void DrawValueInput(IParentBody target)
+    private static void DrawValueInput()
     {
-        // The Reference dropdown directly above states what the value is
-        // measured from, so the label only has to name the quantity.
         double prev = _inputValueKm;
         ConsoleUi.InputDoubleRow(
             _reference == FlybyReference.Center ? "RADIUS (KM)".AsSpan() : "ALTITUDE (KM)".AsSpan(),
@@ -206,9 +210,9 @@ internal static class HohmannFlybyUI
         if (Math.Abs(_inputValueKm - prev) > 1e-9) InvalidateCache();
     }
 
-    /// <summary>Side picker in the target's orbital frame. A side whose axis is
-    /// near-parallel to the approach is unreachable (no perpendicular offset puts
-    /// the periapsis there), so it is drawn disabled rather than silently aimed at.</summary>
+    /// <summary>A side whose axis is nearly parallel to the approach cannot be
+    /// reached, because no perpendicular offset puts the periapsis there, so it is
+    /// drawn disabled rather than silently aimed at.</summary>
     private static void DrawSidePicker()
     {
         ConsoleWidgets.BeginRow("FLYBY SIDE".AsSpan());
@@ -232,27 +236,19 @@ internal static class HohmannFlybyUI
         ConsoleWidgets.EndRow();
     }
 
-    private static void DrawResult(Vehicle source, OrbitalTransfers.PorkChopEntry entry)
+    private static void DrawResult()
     {
-        if (!_hasCached || _cachedResult == null)
+        if (CachedResult == null)
         {
             ConsoleUi.WarningWrapped("Flyby retarget failed for this geometry; the stock burn would still impact. Try a different transfer window or side.");
             return;
         }
 
-        FlybyTargeting.FlybyResult r = _cachedResult.Value;
-        double stockDv = entry.TransferData.TransferDvVlf.Length();
-        double flybyDv = r.DvVlf.Length();
-
-        ConsoleWidgets.Readout("APPROACH SPEED".AsSpan(),
-            string.Format(Inv, "{0:F1} m/s", r.VInfMs).AsSpan());
-        ConsoleWidgets.Readout("IMPACT PARAMETER".AsSpan(),
-            ManeuverToolsWindow.FormatDistance(r.ImpactParameterMeters).AsSpan());
-        ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(),
-            string.Format(Inv, "{0:F1} m/s ({1:+0.0;-0.0} vs impact)", flybyDv, flybyDv - stockDv).AsSpan());
-        if (!double.IsNaN(_predictedPeAlt))
-            ConsoleWidgets.Readout("PREDICTED PERIAPSIS".AsSpan(),
-                ManeuverToolsWindow.FormatDistance(_predictedPeAlt).AsSpan());
+        ConsoleWidgets.Readout("APPROACH SPEED".AsSpan(), _approachSpeedText.AsSpan());
+        ConsoleWidgets.Readout("IMPACT PARAMETER".AsSpan(), _impactParameterText.AsSpan());
+        ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(), _departureDvText.AsSpan());
+        if (_predictedPeText != null)
+            ConsoleWidgets.Readout("PREDICTED PERIAPSIS".AsSpan(), _predictedPeText.AsSpan());
 
         if (IsCacheExpired())
         {
@@ -271,9 +267,9 @@ internal static class HohmannFlybyUI
 
         if (!_previewHasEncounter)
         {
-            // Advisory rather than a block: the propagation is best-effort and has
-            // been seen to miss an encounter that a later recompute resolves, so
-            // refusing here could strand a valid plan.
+            // Advisory rather than a block, because the propagation is best effort
+            // and has been seen to miss an encounter that a later recompute
+            // resolves, so refusing here could strand a valid plan.
             ConsoleUi.WarningWrapped("No encounter resolved in the preview; the flyby periapsis could not be confirmed.");
             return;
         }
@@ -289,52 +285,80 @@ internal static class HohmannFlybyUI
     {
         if (info.Target is not IOrbiter targetOrbiter) return;
 
-        var key = new FlybyKey(
+        var inputs = new FlybyInputs(
             SourceId: source.Id,
             TargetId: (target as Astronomical)?.Id ?? string.Empty,
             StartBucketSec: (long)entry.TransferData.Start.Seconds(),
             TransitBucketSec: (long)entry.TransferData.Transit.Seconds(),
             Reference: _reference,
             ValueBucketM: (long)peRadius,
-            Side: _side,
+            Side: _side);
+        var orbit = new DepartureOrbit(
             PeriapsisBucketKm: (long)(source.Orbit.Periapsis / 1000.0),
             EccentricityBucket: (long)(source.Orbit.Eccentricity * 10000.0));
 
-        if (_hasCached && key == _cachedKey) return;
-
-        // Freeze while thrusting: the departure orbit changes every tick, and each
-        // recompute is three Lambert solves plus a full preview FlightPlan, so an
-        // unfrozen cache rebuilds all of that per frame for the whole burn. Covers
-        // both an Auto burn and a manual throttle. The displayed numbers go
-        // slightly stale for the duration and refresh once thrust stops.
-        //
-        // An expired result deliberately does NOT force a recompute here: the
-        // recompute would return the same past burn time and loop every frame.
-        // TryGetArmed refuses expired results instead, and DrawResult says so.
-        if (_hasCached && IsThrusting(source))
-            return;
+        if (_hasCached && inputs == _cachedInputs)
+        {
+            if (orbit == _cachedOrbit) return;
+            // The departure orbit changes every tick under thrust, and a recompute
+            // is three Lambert solves plus a preview FlightPlan, so drift is frozen
+            // for the burn and refreshed once thrust stops, and the readouts go
+            // slightly stale meanwhile. An expired result is not recomputed either,
+            // because the same inputs give the same past burn time. TryGetArmed
+            // refuses it and DrawResult says so.
+            if (IsThrusting(source)) return;
+        }
 
         _cachedOutcome = FlybyTargeting.ComputeFlybyDeparture(
             source, targetOrbiter, entry.TransferData.Start, entry.TransferData.Transit,
             peRadius, _side);
-        _cachedResult = _cachedOutcome.Result;
-        _cachedKey = key;
+        _cachedInputs = inputs;
+        _cachedOrbit = orbit;
         _hasCached = true;
-        BuildPreview(source, targetOrbiter, target, _cachedResult);
+        BuildPreview(source, targetOrbiter, target, _cachedOutcome.Result);
+        FormatReadouts(entry);
 
         if (DebugConfig.Flyby)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannFlybyUI.UpdateCacheIfStale: vehicle='{0}' target='{1}' " +
                 "rp={2:F0}m side={3} -> {4} predictedPeAlt={5:F0}m",
-                source.Id, key.TargetId, peRadius, _side,
-                _cachedResult == null ? "FAILED" : "ok",
+                source.Id, inputs.TargetId, peRadius, _side,
+                _cachedOutcome.Result == null ? "FAILED" : "ok",
                 _predictedPeAlt));
     }
 
-    /// <summary>Propagates the flyby departure through the target SOI and stores
-    /// the resulting plan for both the predicted-periapsis readout and the 3D
-    /// preview overlay. Leaves the plan null / the altitude NaN when the departure
-    /// could not be propagated; both consumers degrade quietly.</summary>
+    private static void FormatReadouts(OrbitalTransfers.PorkChopEntry entry)
+    {
+        _predictedPeText = null;
+        _cachedFlybyDv = double.NaN;
+        _cachedStockDv = double.NaN;
+        if (CachedResult is not FlybyTargeting.FlybyResult r) return;
+        _approachSpeedText = string.Format(Inv, "{0:F1} m/s", r.VInfMs);
+        _impactParameterText = ManeuverToolsWindow.FormatDistance(r.ImpactParameterMeters);
+        _predictedPeText = double.IsNaN(_predictedPeAlt)
+            ? null
+            : ManeuverToolsWindow.FormatDistance(_predictedPeAlt);
+        _cachedFlybyDv = r.DvVlf.Length();
+        RefreshDepartureDvText(entry);
+    }
+
+    private static void RefreshDepartureDvText(OrbitalTransfers.PorkChopEntry entry)
+    {
+        if (double.IsNaN(_cachedFlybyDv)) return;
+        double stockDv = entry.TransferData.TransferDvVlf.Length();
+        if (stockDv == _cachedStockDv) return;
+        _cachedStockDv = stockDv;
+        _departureDvText = string.Format(Inv,
+            "{0:F1} m/s ({1:+0.0;-0.0} vs impact)", _cachedFlybyDv, _cachedFlybyDv - stockDv);
+    }
+
+    /// <summary>Propagates the flyby departure through the target SOI and keeps the
+    /// plan for the predicted periapsis readout and the 3D preview. Leaves the plan
+    /// null and the altitude NaN when the departure could not be propagated, and
+    /// both consumers degrade quietly. Both NaN branches log unconditionally,
+    /// because the readout has been seen to come back NaN on the first compute and
+    /// resolve on the next, and which branch was taken is what a log from the game
+    /// has to show.</summary>
     private static void BuildPreview(
         Vehicle source, IOrbiter targetOrbiter, IParentBody target,
         FlybyTargeting.FlybyResult? result)
@@ -351,11 +375,6 @@ internal static class HohmannFlybyUI
             PatchedConic? prePatch = source.FlightPlan.TryFindPatch(r.BurnTime);
             if (prePatch == null)
             {
-                // One of the two ways the predicted-periapsis readout comes back NaN.
-                // Logged unconditionally, like the catch below: the readout has been
-                // seen to come back NaN on the first compute for an input and resolve
-                // on the next one, so which branch was taken is the thing worth
-                // knowing after an in-game run.
                 DefaultCategory.Log.Warning(string.Format(Inv,
                     "[AFC] HohmannFlybyUI.BuildPreview: no flight-plan patch covers burn time " +
                     "{0:F1}s for vehicle='{1}' (live plan has {2} patches).",
@@ -363,10 +382,10 @@ internal static class HohmannFlybyUI
                 return;
             }
 
-            // Propagate with stock FlightPlan machinery (kept local so the flyby
-            // feature does not couple back to the multi-pass planner). The target
-            // is the encounter filter so the SOI patch is resolved; 8/8 are ample
-            // patch / precision limits for one short departure.
+            // Stock FlightPlan machinery, kept local so the flyby does not couple
+            // back to the multi pass planner. The target is the encounter filter so
+            // its SOI patch is resolved, and 8 patches at order 8 match stock's own
+            // porkchop propagation for one short departure.
             UniverseTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(r.BurnTime);
             FlightPlan fp = FlightPlan.CreateUninitialized(source.Hash);
             fp.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
@@ -375,8 +394,8 @@ internal static class HohmannFlybyUI
             fp.ComputeCompleteTrajectory(out _, 8, 8, targetOrbiter, resolveImpactsCompletely: true);
             _previewPlan = fp;
 
-            // The flyby patch inside the target SOI is hyperbolic; Orbit.Periapsis
-            // still gives a(1-e) = the periapsis radius, so no IsBound gate.
+            // The flyby patch inside the target SOI is hyperbolic, and Orbit.Periapsis
+            // still gives a(1-e), so there is no IsBound gate.
             foreach (PatchedConic patch in fp.Patches)
                 if (patch.Orbit.Parent?.Id == target.Id)
                 {
@@ -386,11 +405,8 @@ internal static class HohmannFlybyUI
                     return;
                 }
 
-            // The other NaN branch: the propagation resolved no patch inside the
-            // target's SOI, so the readout is omitted and the arming guard falls back
-            // to a caution. Dump what the propagation did produce rather than guessing
-            // at it. Bounded by the 8-patch limit above, and only reached on a cache
-            // miss, so this cannot flood the log.
+            // Bounded by the patch limit above and reached only on a cache miss, so
+            // the dump of every patch cannot flood the log.
             DefaultCategory.Log.Warning(string.Format(Inv,
                 "[AFC] HohmannFlybyUI.BuildPreview: no patch inside target '{0}' SOI for " +
                 "vehicle='{1}' burnTime={2:F1}s; prePatch parent='{3}', preview plan has " +
@@ -410,47 +426,43 @@ internal static class HohmannFlybyUI
         }
         catch (Exception ex)
         {
-            // Display-only, so a failure is non-fatal, but log unconditionally
-            // (not gated on the debug flag) so a post-update break is diagnosable.
             DefaultCategory.Log.Warning($"[AFC] HohmannFlybyUI.BuildPreview: {ex}");
         }
     }
 
-    /// <summary>True when the single-burn flyby overlay should draw: a flyby is
-    /// armed with a propagated plan, stock's plan window is showing a Hohmann for
-    /// the cached vehicle, and the user has "Preview Selected Transfer" on. The
-    /// multi-pass overlay is checked by the caller and takes precedence, because
-    /// with N &gt; 1 its own preview already contains the flyby-retargeted
-    /// departure.</summary>
+    /// <summary>True when the single burn flyby overlay should draw, which needs a
+    /// flyby armed with a propagated plan, stock's plan window showing a Hohmann
+    /// for the cached vehicle, and "Preview Selected Transfer" on. The multi pass
+    /// overlay is checked by the caller and takes precedence, because with N &gt; 1
+    /// its own preview already contains the retargeted departure.</summary>
     public static bool ShouldRenderPreview(out Vehicle? source)
     {
         source = null;
         if (!Enabled || !_flybyOn || _belowFloor) return false;
-        if (!_hasCached || _cachedResult == null || _previewPlan == null) return false;
+        if (CachedResult == null || _previewPlan == null) return false;
         // An elapsed departure cannot be flown, so neither draw it nor keep stock's
         // preview hidden for it.
         if (IsCacheExpired()) return false;
         if (!StockPlanner.ShowPlanWindow) return false;
         if (!StockPlanner.DisplaySelectedTransfer) return false;
-        // Stock clears _transferCalculated on a source / destination change and once
-        // the created burn's time passes, while keeping _selectedEntry. Without this
-        // the cached plan (which only tracks the source id) would keep painting the
-        // previous target's flyby over the live trajectory.
+        // Stock clears _transferCalculated on a source or destination change and
+        // once the created burn's time passes, while keeping _selectedEntry. Without
+        // this gate the cached plan, which only tracks the source id, would keep
+        // painting the previous target's flyby over the live trajectory.
         if (!StockPlanner.TransferCalculated) return false;
 
         if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
             return false;
 
         source = StockPlanner.SourceVehicle;
-        return source != null && source.Id == _cachedKey.SourceId;
+        return source != null && source.Id == _cachedInputs.SourceId;
     }
 
-    /// <summary>True when stock's center-aimed preview should be skipped because the
-    /// trajectory Create will fly is drawn elsewhere. With a flyby armed that also
-    /// covers multi-pass: the flyby is baked into its plan input, so stock's entry is
-    /// the impact the retarget replaced there too, and
-    /// <see cref="HohmannMultiPassUI"/> draws its own final pass instead of
-    /// delegating it to stock.</summary>
+    /// <summary>True when stock's preview aimed at the center should be skipped
+    /// because the trajectory Create will fly is drawn elsewhere. With a flyby armed
+    /// that also covers multi pass, because the flyby is baked into its plan input,
+    /// so stock's entry is the impact the retarget replaced there too, and
+    /// <see cref="HohmannMultiPassUI"/> draws its own final pass.</summary>
     public static bool SuppressesStockTransferPreview()
     {
         if (!FlybyRequested) return false;
@@ -458,10 +470,8 @@ internal static class HohmannFlybyUI
         return ShouldRenderPreview(out _);
     }
 
-    /// <summary>Draws the retargeted flyby trajectory in the 3D view. Stock's own
-    /// "Preview Selected Transfer" overlay shows the center-aimed (impact) plan it
-    /// selected from the porkchop, so without this the preview contradicts what
-    /// Create would actually fly.</summary>
+    /// <summary>Draws the retargeted flyby trajectory in the 3D view in place of
+    /// stock's preview aimed at the center, which would contradict what Create flies.</summary>
     public static void RenderPreview(IViewport viewport, Vehicle source)
     {
         FlightPlan? fp = _previewPlan;
@@ -487,63 +497,63 @@ internal static class HohmannFlybyUI
         || source.GetManualThrottle() > 0f;
 
     /// <summary>True when the cached departure can no longer be flown because its
-    /// burn time is in the past (the window elapsed, or the departure already
-    /// fired). Consumers refuse it; it deliberately does not trigger a recompute,
-    /// see <see cref="UpdateCacheIfStale"/>.</summary>
+    /// burn time is in the past. Consumers refuse it, and it does not trigger a
+    /// recompute, see <see cref="UpdateCacheIfStale"/>.</summary>
     private static bool IsCacheExpired()
     {
-        if (!_hasCached || _cachedResult == null) return false;
-        return _cachedResult.Value.BurnTime.Seconds()
-               <= Universe.GetElapsedTime().Seconds();
+        if (CachedResult is not FlybyTargeting.FlybyResult r) return false;
+        return r.BurnTime.Seconds() <= Universe.GetElapsedTime().Seconds();
     }
 
     private static void InvalidateCache()
     {
         _hasCached = false;
-        _cachedResult = null;
         _cachedOutcome = default;
-        _cachedKey = default;
+        _cachedInputs = default;
+        _cachedOrbit = default;
         _belowFloor = false;
         _predictedPeAlt = double.NaN;
         _predictedPeRadius = double.NaN;
         _minFlybyRadius = double.NaN;
         _previewHasEncounter = false;
         _previewPlan = null;
+        _predictedPeText = null;
+        _cachedFlybyDv = double.NaN;
+        _cachedStockDv = double.NaN;
     }
 
     #endregion
 
-    #region Interceptor / coupling handoff
+    #region Interceptor and multi pass handoff
 
-    /// <summary>True when the user has the flyby option on. Multi-pass and the
-    /// create interceptor gate the flyby retarget on this.</summary>
+    /// <summary>True when the user has the flyby option on.</summary>
     public static bool FlybyRequested => Enabled && _flybyOn;
 
-    /// <summary>Returns the retargeted single flyby departure for
-    /// <paramref name="vehicle"/> when the flyby is on, valid, above the surface
-    /// and matches the cached source. Used by the create interceptor for the
-    /// N == 1 path.</summary>
+    /// <summary>The retargeted single flyby departure for <paramref name="vehicle"/>
+    /// when the flyby is on, valid, above the floor and matches the cached source.
+    /// Used by the create interceptor for the single burn path.</summary>
     public static bool TryGetArmed(
         Vehicle vehicle, out FlybyTargeting.FlybyResult result)
     {
         result = default;
         if (!FlybyRequested || _belowFloor) return false;
-        if (!_hasCached || _cachedResult == null) return false;
-        if (_cachedKey.SourceId != vehicle.Id) return false;
-        // Never hand a past burn time to Burn.Create: no patch covers it, and the
-        // interceptor would fall back to the stock impact-aimed burn.
+        if (CachedResult is not FlybyTargeting.FlybyResult cached) return false;
+        if (_cachedInputs.SourceId != vehicle.Id) return false;
+        // A past burn time has no patch for Burn.Create, and the interceptor would
+        // fall back to the stock burn aimed at the center.
         if (IsCacheExpired()) return false;
         // The propagated trajectory, not the typed altitude, decides whether this is
-        // a flyby at all. A no-encounter preview is only advisory (see DrawResult).
+        // a flyby at all. A preview without an encounter is only advisory, see
+        // DrawResult.
         if (PredictedFlybyBelowFloor) return false;
-        result = _cachedResult.Value;
+        result = cached;
         return true;
     }
 
-    /// <summary>The current flyby request (periapsis radius from center + side)
-    /// for <paramref name="target"/>, or false when the flyby is off / invalid.
-    /// Used by <see cref="HohmannMultiPassUI"/> to bake the flyby into a
-    /// multi-pass plan input.</summary>
+    /// <summary>The current flyby request for <paramref name="target"/>, which is
+    /// the periapsis radius from the center and the side, or false when the flyby
+    /// is off or invalid. Used by <see cref="HohmannMultiPassUI"/> to bake the flyby
+    /// into a multi pass plan input.</summary>
     public static bool TryGetRequest(IParentBody target, out double peRadius, out FlybySide side)
     {
         peRadius = 0.0;
