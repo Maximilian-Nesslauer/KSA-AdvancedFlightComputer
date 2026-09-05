@@ -115,14 +115,19 @@ Required only to build the mod from source. Targets **.NET 10**.
 - `afc-set-periapsis` / `afc-set-apoapsis` assert that a computed apse burn reaches the requested altitude and leaves the opposite apse untouched, and that impossible requests yield no maneuver.
 - `afc-circularize` asserts circularization at both apses and the "nothing to do" contract for circular and unbound orbits.
 - `afc-set-inclination` / `afc-match-inclination` assert node burns against the ecliptic and equatorial references, partial-fraction burns, and the coplanar and hyperbolic edge cases.
+- `afc-target-identity` asserts that a Match Inclination target selection keeps naming the same body while vehicles are spawned and despawned around it, because the game's lookup swap-removes on deregister and a held index would drift.
 - `afc-flyby-targeting` asserts the flyby impact-parameter closed forms against the game's own hyperbolic orbit elements, the periapsis reference resolution, and the airless-body case where no atmosphere reference is offered.
 - `afc-flyby-departure` builds a departure toward a real moon: the center-aimed baseline must impact, the retargeted one must clear the body at the requested periapsis, and Inner / Outer must land on opposite sides of it.
+- `afc-sequence-burnstate` asserts the per-sequence burn-state adapter (burnable fuel, mass flow, exhaust velocity, start mass) against the game's own SequencePerformanceList on real vehicles, including a disabled tank and a non-default engine flow rule.
 - `afc-rcs-allocator` asserts the RCS translation allocation math: per-axis pulse shaping (control-period cap, minimum-impulse floor), per-thruster group pulses, the Hold-strategy performance model, the burn-duration countdown mirror, and the capability helpers.
 - `afc-rcs-estimates` asserts the Auto attitude decision: the propellant a strategy needs and the Hold-vs-Align resolution, including the preference margin that keeps Auto from slewing for a marginal saving.
 - `afc-rcs-registry` asserts the persistence round-trip (TOML write/parse, including escaped ids and the active-execution fields) and the per-burn options keying that follows a burn as it is nudged.
 - `afc-rcs-lp-solver` asserts the LP allocator's simplex on hand-checkable problems: cost optimality, zero-torque constraint satisfaction, support selection, and clean infeasibility.
 - `afc-rcs-translation` flies a full RCS translation burn on the live simulation: a planned burn armed for RCS must reach its delta-V target within the minimum-impulse bound, consume thruster propellant, and never command a main engine. Also covers the align-slew, deferred-align, and RCS-toggle scenarios. It sweeps the present RCS test-vehicle saves (override with `KSA_HEADLESS_VEHICLES`); without one the test skips.
 - `afc-rcs-lp` flies the same burn with both allocators on one vehicle (A/B), asserts both complete with quiet engines, and logs the propellant comparison.
+- `afc-save-scoped-reset` asserts that the save-scoped reset list runs cold, populated and twice in a row without throwing, and clears the plan-window inputs it covers.
+- `afc-stock-pin-guard` asserts the guard that decides whether stock's selected-transfer block can index the porkchop array, against fresh, in-flight, populated, zero-sized and out-of-range TransferInfo states.
+- `afc-reflection-targets` asserts that every reflection key, transpiler anchor and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature.
 
 The oracle is always the game's own orbit propagation, never a re-derivation of the math under test.
 
