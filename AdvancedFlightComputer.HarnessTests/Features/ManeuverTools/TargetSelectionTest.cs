@@ -7,25 +7,14 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Validates that a Match Inclination target selection keeps naming the same body while vehicles
-// come and go. The hazard is the game's, not the mod's arithmetic: a TransferObject stores only a
-// LookupIndex, and LookupCollection.Deregister swap-removes (moving the last entry into the freed
-// slot and rewriting its LookupIndex), so an index held from one frame to the next either resolves
-// to a different body or, once it is past the end, makes CelestialSystem.GetIndex throw. The mod
-// therefore holds an id and re-resolves it, which is what TargetSelection.Resolve does and what
-// this test pins down.
-//
-// The oracle is object identity against the Vehicle instances the test spawned itself, never a
-// re-derivation of the lookup.
+// Object identity is the oracle when LookupCollection.Deregister moves a target index.
 public sealed class TargetSelectionTest : AfcTest
 {
     private const double SourceAltitudeM = 400_000.0;
     private const double FillerAltitudeM = 600_000.0;
     private const double TargetAltitudeM = 800_000.0;
 
-    // Any shipped vehicle will do: the selection logic reads Id, Parent and the lookup, never parts
-    // or performance. "Rocket" ships in Content/Core/defaultvehicles, so this needs no
-    // machine-specific save.
+    // Only Id, Parent and lookup membership matter, so the shipped Rocket is sufficient and needs no local save.
     private const string SpawnFrom = "Rocket";
 
     public override string Name => "afc-target-identity";
@@ -48,24 +37,14 @@ public sealed class TargetSelectionTest : AfcTest
         Vehicle? target = null;
         try
         {
-            // Spawned inside the try because Astronomical's constructor calls
-            // CelestialSystem.Register before the Vehicle constructor's own validation can throw,
-            // so a failed spawn leaves the earlier ones registered. HarnessRunner catches per test
-            // and carries on, and HeadlessHarness's own spawn test copies the first live Vehicle in
-            // the system, so a leak would reach later tests.
-            //
-            // Spawn order decides what the swap-remove below moves: the deregistered filler is not
-            // the last entry, so LookupCollection.Deregister moves the target into the filler's slot
-            // and rewrites the target's LookupIndex. That is exactly the case a held index gets
-            // wrong, and the case an id has to survive.
+            // Spawn inside the cleanup scope. Removing the filler moves the later target into its lookup slot.
             source = Spawn(t, home, design, "TargetIdentity_Source", SourceAltitudeM);
             filler = Spawn(t, home, design, "TargetIdentity_Filler", FillerAltitudeM);
             target = Spawn(t, home, design, "TargetIdentity_Target", TargetAltitudeM);
             string targetId = target.Id;
             string? parentId = home.Id;
 
-            // BuildList reads Program.VehiclesInFrame, which only the frame loop and
-            // Universe.DeserializeSave refresh, so refresh it here after spawning.
+            // Refresh the frame list after changing registered vehicles.
             Program.RefreshVehiclesInFrame();
 
             List<TransferObject> list = new();
@@ -87,7 +66,6 @@ public sealed class TargetSelectionTest : AfcTest
             t.Info($"target LookupIndex {indexBefore} -> {indexAfter} " +
                    "after an unrelated vehicle was deregistered.");
 
-            // The regression guard: an unrelated deregistration must not re-point the selection.
             t.Check("survives an unrelated deregistration",
                 ReferenceEquals(TargetSelection.Resolve(targetId, parentId), target));
 
@@ -96,26 +74,20 @@ public sealed class TargetSelectionTest : AfcTest
             t.Check("reconcile still finds the target after the deregistration",
                 TargetSelection.Reconcile(list, ref selectedId) != null && selectedId == targetId);
 
-            // A target in a different SOI must not be planned against: Orbit.GetRelativeInclination
-            // compares orbit normals without a parent check, so the numbers would silently be taken
-            // across two different CCI frames.
+            // Reject different parents because Orbit.GetRelativeInclination does not check CCI frames.
             t.Check("refuses a target under a different parent",
                 TargetSelection.Resolve(targetId, "not-the-source-parent") == null);
             t.Check("refuses an unknown id",
                 TargetSelection.Resolve("TargetIdentity_NoSuchVehicle", parentId) == null);
             t.Check("refuses a null id", TargetSelection.Resolve(null, parentId) == null);
 
-            // Deregistering the target itself must drop the selection, not slide it onto whichever
-            // body the swap-remove moved into the freed slot.
             VehicleSpawner.Despawn(target);
             target = null;
             Program.RefreshVehiclesInFrame();
             t.Check("drops a deregistered target instead of re-pointing",
                 TargetSelection.Resolve(targetId, parentId) == null);
 
-            // An empty list has to clear the stored id: a selection kept past it would leave the
-            // relative inclination, the AN/DN times and an enabled Create button live for a body
-            // the UI has just reported as unavailable.
+            // Clear an unavailable target so readouts and Create cannot use it.
             List<TransferObject> empty = new();
             selectedId = targetId;
             t.Check("empty list clears the selection",
@@ -123,9 +95,7 @@ public sealed class TargetSelectionTest : AfcTest
         }
         finally
         {
-            // The two nulled above are already gone; the rest cover a throw part-way through.
-            // A throw inside a Vehicle constructor is not recoverable here, since no local holds
-            // the half-built vehicle that its base constructor already registered.
+            // A constructor failure can register a partial vehicle before a local reference is assigned.
             foreach (Vehicle? spawned in new[] { source, filler, target })
             {
                 if (spawned != null) VehicleSpawner.Despawn(spawned);

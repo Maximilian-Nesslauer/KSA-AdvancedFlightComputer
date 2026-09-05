@@ -11,31 +11,16 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
-/// <summary>
-/// Prefix on TransferPlanner.DrawPlanWindow that takes over the entire window
-/// when one of our plan types is selected. Draws the Plan Type dropdown, Source
-/// dropdown and type-specific controls in the window body, with Create in the
-/// footer where stock's own Create button sits.
-///
-/// Returns false (skip original) for our types, true for stock types.
-/// </summary>
-[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
+[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow), new[] { typeof(IGameViewport) })]
 internal static class Patch_DrawPlanWindow
 {
-    // Window placement and identity, kept to match stock
-    // TransferPlanner.DrawPlanWindow and DrawSelectedTransferFlightPlan. The
-    // id, title and signature are stock's own: this prefix replaces that window
-    // for our plan types, so sharing them keeps the position and size the player
-    // set when they switch between a stock and an AFC plan type.
+    // Share the stock window identity and dimensions so changing plan type preserves its placement.
     private const string WindowId = "transfer-planning";
     private const string WindowTitle = "TRANSFER PLANNING";
     private const string WindowSignature = "KSA-TRJ";
     private const string FlightPlanWindowId = "afc-maneuver-flightplan";
     private const string FlightPlanWindowTitle = "MANEUVER FLIGHT PLAN";
 
-    // Base values are stock's, scaled the way stock scales its own, so the
-    // window keeps the size and position of a stock plan type at any interface
-    // scale setting.
     private static float MainWindowOffsetXPx => 440f * ImGuiHelper.InterfaceScale;
     private static float MainWindowOffsetYPx => 50f * ImGuiHelper.InterfaceScale;
     private static float MainWindowWidthPx => 400f * ImGuiHelper.InterfaceScale;
@@ -66,9 +51,6 @@ internal static class Patch_DrawPlanWindow
         }
         catch (Exception ex)
         {
-            // Deduped: this runs per ImGui frame, and a persistent throw would
-            // otherwise write a stack trace at frame rate into a log the next
-            // game start overwrites.
             LogHelper.WarnOnce("maneuvertools-type-lookup:" + ex.GetType().Name,
                 $"[AFC] ManeuverTools Prefix (type lookup): {ex}");
             return true;
@@ -90,15 +72,12 @@ internal static class Patch_DrawPlanWindow
         }
         catch (Exception ex)
         {
-            // Keyed by plan type as well as exception type: one plan type
-            // throwing must not silence a different one for the rest of the
-            // session, and the type is the first thing to reproduce with.
+            // Separate plan types must not silence each other after a draw failure.
             string typeKey = transferType.GetKey();
             LogHelper.WarnOnce($"maneuvertools-draw:{typeKey}:{ex.GetType().Name}",
                 $"[AFC] ManeuverTools Prefix (plan type '{typeKey}', "
                 + $"source '{_lastSource?.Id ?? "none"}'): {ex}");
-            // ImGui state may be partially set; do not let stock also Begin the
-            // same window this frame, that produces ID-stack conflicts.
+            // Do not let stock begin the same window after a partial AFC draw.
         }
         return false;
     }
@@ -110,8 +89,7 @@ internal static class Patch_DrawPlanWindow
             ImGuiCond.Appearing, (float2?)null);
 
         bool open = StockPlanner.ShowPlanWindow;
-        // BeginWindow ends the underlying ImGui window itself when it returns
-        // false, so only the true branch owes an EndWindow.
+        // ConsoleStyle.BeginWindow closes the ImGui window itself when it returns false.
         if (!ConsoleStyle.BeginWindow(WindowId, WindowTitle, WindowSignature, ref open,
                 new float2(MainWindowWidthPx, MainWindowHeightPx), ImGuiWindowFlags.NoScrollbar))
             return;
@@ -143,11 +121,7 @@ internal static class Patch_DrawPlanWindow
             bool create = DrawFooter(commit.State);
             ConsoleStyle.EndFooter();
 
-            // Outside the footer, matching stock: the commit runs ImGui-free
-            // work and queues a burn, which has no business happening between
-            // BeginFooter and EndFooter. DrawFooter only returns true for
-            // CommitState.Ready, which DrawBody produces only with a resolved
-            // source, so the source is non-null here.
+            // Commit after EndFooter, as TransferPlanner.DrawPlanWindow does. Ready implies a resolved source.
             if (create)
                 CreateSingleOrMultiPass(commit);
         }
@@ -168,9 +142,6 @@ internal static class Patch_DrawPlanWindow
             DrawFlightPlanWindow(inViewport);
     }
 
-    /// <summary>Window body. Returns what the footer needs to offer the commit
-    /// action, so the primary button can sit in the footer where stock's own
-    /// Create button sits.</summary>
     private static Commit DrawBody(TransferType transferType)
     {
         if (!DrawPlanTypeDropdown(ref transferType))
@@ -184,10 +155,7 @@ internal static class Patch_DrawPlanWindow
 
         ImGui.Separator();
 
-        // Resolved once per frame and threaded through: the window, the maneuver
-        // math and the preview all have to agree on which trajectory is being
-        // planned against, or the readout describes a different orbit than the
-        // Create button would burn on.
+        // The controls, calculation and preview must use the same planning trajectory.
         PlanningBasis basis = PlanningBasis.For(source);
         string typeKey = transferType.GetKey();
 
@@ -214,10 +182,7 @@ internal static class Patch_DrawPlanWindow
             MultiPassController.DrawStatus(source);
         }
 
-        // Hidden only when a single-burn maneuver node has been
-        // created (stock then owns the rendering); during active
-        // multi-pass execution the checkboxes stay visible so
-        // the user can toggle the future-passes overlay.
+        // Stock renders committed single burns, while execution across several passes keeps its preview controls.
         if (_ourBurn == null)
         {
             ConsoleWidgets.Rule();
@@ -257,30 +222,20 @@ internal static class Patch_DrawPlanWindow
     {
         TransferObject sourceBody = StockPlanner.SourceBody;
 
-        // Rebuild every frame, as stock's own PopulateWithVehicles does: a
-        // TransferObject holds only a LookupIndex, and LookupCollection.Deregister
-        // swap-removes, so an entry kept across frames can resolve to a different
-        // vehicle once one is destroyed. Program.VehiclesInFrame is every vehicle in
-        // the current system (Program.RefreshVehiclesInFrame applies no filter
-        // beyond the type), which is the same set stock offers as a source.
+        // Rebuild from Program.VehiclesInFrame because lookup indices can move after deregistration.
         ReadOnlySpan<Vehicle> vehiclesInFrame = Program.VehiclesInFrame;
-        Span<TransferObject> list = stackalloc TransferObject[vehiclesInFrame.Length];
-        for (int i = 0; i < vehiclesInFrame.Length; i++)
-            list[i] = new TransferObject(vehiclesInFrame[i]);
+        _sourceListBuffer.Clear();
+        foreach (Vehicle vehicle in vehiclesInFrame)
+            _sourceListBuffer.Add(new TransferObject(vehicle));
+        List<TransferObject> list = _sourceListBuffer;
 
         if (ImGui.IsWindowAppearing() || sourceBody.GetKey() == "N/A")
         {
-            // new TransferObject(-1), not default: a TransferObject holds one int, so
-            // default is LookupIndex 0 and resolves to the first registered
-            // astronomical (normally the star), whose key is its Id and never "N/A".
-            // With default here the "N/A" fallback below would be dead, an unrelated
-            // body would end up in stock's _sourceBody, and stock's own re-pick could
-            // not repair it either, since that is keyed on "N/A" too. Only a negative
-            // index is the none sentinel.
+            // Use a negative lookup index for no selection because default(TransferObject) names index zero.
             sourceBody = new TransferObject(-1);
             if (Program.ControlledVehicle != null)
             {
-                for (int i = 0; i < list.Length; i++)
+                for (int i = 0; i < list.Count; i++)
                 {
                     if (list[i].GetKey() == Program.ControlledVehicle.Id)
                     {
@@ -289,18 +244,13 @@ internal static class Patch_DrawPlanWindow
                     }
                 }
             }
-            if (sourceBody.GetKey() == "N/A" && list.Length > 0)
+            if (sourceBody.GetKey() == "N/A" && list.Count > 0)
                 sourceBody = list[0];
 
             StockPlanner.SourceBody = sourceBody;
         }
 
         TransferObject prev = sourceBody;
-        // A stack Span cannot cross into the helper's IReadOnlyList parameter, so
-        // the per-frame list is copied into a reusable buffer for the combo.
-        _sourceListBuffer.Clear();
-        for (int i = 0; i < list.Length; i++)
-            _sourceListBuffer.Add(list[i]);
         if (ConsoleUi.ComboRow("SOURCE".AsSpan(), "Source".AsSpan(), ref sourceBody, _sourceListBuffer)
             && sourceBody.GetKey() != prev.GetKey())
         {
@@ -332,7 +282,6 @@ internal static class Patch_DrawPlanWindow
 
     private static void DrawFlightPlanWindow(IViewport inViewport)
     {
-        // Multi-pass: show the final-pass trajectory.
         FlightPlan? fp = MultiPassUI.HasMultiPassPreview
             ? MultiPassUI.LastPassFlightPlan
             : _lastEntry?.FlightPlan;
@@ -342,7 +291,6 @@ internal static class Patch_DrawPlanWindow
             inViewport.Position + new float2(FlightPlanWindowOffsetXPx, FlightPlanWindowOffsetYPx),
             ImGuiCond.Appearing, (float2?)null);
 
-        // Mirrors stock's own DrawSelectedTransferFlightPlan shell, footer included.
         if (!ConsoleStyle.BeginWindow(FlightPlanWindowId, FlightPlanWindowTitle, WindowSignature,
                 ref _showFlightPlanPreview,
                 new float2(FlightPlanWindowWidthPx, FlightPlanWindowHeightPx),
@@ -373,12 +321,10 @@ internal static class Patch_DrawPlanWindow
 
     private enum CommitState
     {
-        /// <summary>No maneuver to commit (no source, no solution).</summary>
         None,
         MultiPassRunning,
         NodeCreated,
-        /// <summary>Multi-pass selected but its preview failed. Offering Create
-        /// would silently fall back to a full-dV single burn.</summary>
+        // A failed preview for several passes must not produce a single burn with the full delta V.
         Blocked,
         Ready,
     }
@@ -387,9 +333,6 @@ internal static class Patch_DrawPlanWindow
         CommitState State, Vehicle? Source, OrbitManeuvers.ManeuverResult Maneuver,
         string TypeKey, PlanningBasis Basis);
 
-    /// <summary>Decides what the footer may offer. Also retires an expired
-    /// <see cref="_ourBurn"/>, which is what lets the Create button come back
-    /// once the node it created is in the past.</summary>
     private static CommitState ResolveCommitState(Vehicle source, string typeKey)
     {
         if (MultiPassRegistry.Has(source.Id))
@@ -408,7 +351,6 @@ internal static class Patch_DrawPlanWindow
             : CommitState.Ready;
     }
 
-    /// <summary>Returns true when the player clicked Create.</summary>
     private static bool DrawFooter(CommitState state)
     {
         switch (state)
@@ -436,9 +378,7 @@ internal static class Patch_DrawPlanWindow
     {
         if (MultiPassUI.IsArmed(commit.TypeKey))
         {
-            // The intents recompute every pass from the vehicle's live orbit,
-            // so a multi-pass started on a chained basis would execute against
-            // a different trajectory than the window just displayed.
+            // The intents for several passes use the live orbit, so they cannot execute a chained planning basis.
             if (commit.Basis.IsChained)
                 TimedAlert.Create(
                     "Multi-pass cannot start on a pending burn's trajectory; " +
@@ -450,13 +390,7 @@ internal static class Patch_DrawPlanWindow
             CreateSingleBurn(commit.Source!, commit.Maneuver, commit.Basis);
     }
 
-    /// <summary>Drops the "we already created this node" marker because the user is
-    /// now configuring a different maneuver. The marker only exists to stop a second
-    /// click duplicating the same node across the frame gap between queueing a burn
-    /// and it appearing in the plan, so holding it past a plan-type change would
-    /// suppress the Create button, both preview checkboxes and the orbit preview for
-    /// a maneuver that has not been created at all - which is what chaining a second
-    /// tool onto a pending burn does.</summary>
+    // A new maneuver context must permit a new node even while the preceding node is pending.
     internal static void OnManeuverContextChanged()
     {
         _ourBurn = null;
@@ -465,8 +399,6 @@ internal static class Patch_DrawPlanWindow
     private static void CreateSingleBurn(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, PlanningBasis basis)
     {
-        // Routed through MultiPassCommitter so single-burn and the first
-        // multi-pass pass take the same Burn.Create -> buffer-Add path.
         Burn? burn = MultiPassCommitter.QueueAddBurn(
             source, maneuver.BurnTime, maneuver.DvVlf, basis.Plan);
         if (burn == null) return;
@@ -474,12 +406,6 @@ internal static class Patch_DrawPlanWindow
         _ourBurn = burn;
     }
 
-    /// <summary>
-    /// Builds a PorkChopEntry for <paramref name="maneuver"/> so the
-    /// flight-plan preview / orbit-marker rendering pipelines (which
-    /// expect a PorkChopEntry like the stock Hohmann path produces)
-    /// can run unchanged.
-    /// </summary>
     private static OrbitalTransfers.PorkChopEntry BuildTransferEntry(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, PlanningBasis basis)
     {
@@ -491,9 +417,7 @@ internal static class Patch_DrawPlanWindow
             TransferDvVlf = maneuver.DvVlf
         };
 
-        // Chained: propagate off the patch the preceding burn produces. The stock
-        // BuildFlightPlan path below starts from the vehicle's live state, which for
-        // a chained maneuver is the orbit before that burn.
+        // A chained preview starts on the preceding burn's patch, not on the live vehicle orbit.
         if (basis.IsChained && basis.Patch != null)
         {
             var (chainedPlan, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
@@ -502,21 +426,15 @@ internal static class Patch_DrawPlanWindow
         }
 
         FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
-        // Committed burns get this margin stamped by Burn.Create, so the preview's
-        // impact test agrees with what the created burn's plan will compute.
+        // Match the impact clearance that Burn.Create assigns to committed plans.
         flightPlan.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
         var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false);
-        // BuildFlightPlan forwards info.Target as encounterFilter, which restricts
-        // SOI-encounter detection to that one body. Apse / inclination maneuvers
-        // have no target, so null it to detect all high-SOI siblings.
+        // A null encounter filter lets an untargeted maneuver detect all sibling bodies with a high SOI.
         info.Target = null!;
         OrbitalTransfers.BuildFlightPlan(
             ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,
             out _, out _);
-        // BuildFlightPlan leaves the terrain-impact search incremental and nothing
-        // ever advances a detached preview plan's frontier, so finish the search here
-        // or the preview can omit an impact the created burn's plan will find. 5/8
-        // match the limits BuildFlightPlan itself computed the plan with.
+        // Detached previews have no worker to advance impact searches. Finish with the limits used by OrbitalTransfers.BuildFlightPlan.
         if (flightPlan.ImpactSearchUnresolved)
             flightPlan.ComputeCompleteTrajectory(out _, 5, 8, null,
                 resolveImpactsCompletely: true);
@@ -528,8 +446,6 @@ internal static class Patch_DrawPlanWindow
 
     #region Visual Orbit Preview
 
-    /// <summary>Background-drawlist markers (encounter, escape, impact,
-    /// closest approach, Ap/Pe) for the preview orbit.</summary>
     private static void DrawOrbitMarkers(IViewport inViewport)
     {
         var uiContext = new Astronomical.UiContext(
@@ -539,24 +455,10 @@ internal static class Patch_DrawPlanWindow
         _lastEntry!.FlightPlan.DrawUi(inViewport, uiContext, tintDanger: true);
     }
 
-    /// <summary>3D-view post-burn orbit (single-burn or multi-pass), drawn
-    /// from Patch_OnPreRender when "Preview Orbit" is on.</summary>
     internal static void RenderOrbitPreview(IViewport inViewport)
     {
-        // Program.OnDrawUiThreadSafe calls DrawPlanWindow only while
-        // TransferPlanner.ShowPlanWindow is true, so neither the prefix nor
-        // HandleWindowClose runs once the window is closed from the
-        // ToggleTransferPlan keybind or the View menu - both of which flip the
-        // property and notify nobody. CelestialSystem.OnPreRender keeps calling
-        // TransferPlanner.OnPreRender either way, which is why stock re-tests
-        // ShowPlanWindow on both of its own overlay branches. Drop the plan state
-        // rather than only skipping the draw, so a closed window cannot leave a
-        // burn reference or a previous world's plan behind for the reopen.
-        if (!StockPlanner.ShowPlanWindow)
-        {
-            DropPlanState();
+        if (!TransferPlanner.ShowPlanWindow)
             return;
-        }
 
         if (_ourBurn != null || _lastSource == null) return;
         if (!_showOrbitPreview) return;
@@ -597,8 +499,7 @@ internal static class Patch_DrawPlanWindow
     {
         Orbit orbit = basis.Orbit;
         double parentRadius = source.Parent?.MeanRadius ?? 0.0;
-        // Not "now": on a chained maneuver every apsis and node has to be sought
-        // after the burn this one follows, or the result lands before it.
+        // Search after the preceding burn when chaining maneuvers.
         UniverseTime now = basis.Earliest;
 
         if (key == ManeuverTools.KeySetPeriapsis)
@@ -634,22 +535,7 @@ internal static class Patch_DrawPlanWindow
         return null;
     }
 
-    /// <summary>Drops <see cref="_ourBurn"/> unless it is still a live burn on the
-    /// vehicle currently selected as the source.
-    ///
-    /// Anchoring on the current source is what stock does: the first thing
-    /// <c>TransferPlanner.DrawPlanWindow</c> does is clear its own
-    /// <c>_transferBurn</c> when <c>Source.FlightComputer.BurnPlan.TryGetBurn</c>
-    /// says it is gone, where Source is the selected source, not the burn's own
-    /// vehicle. Asking the burn's own vehicle instead keeps answering "still
-    /// there" after the source dropdown moves to a different vehicle, and after a
-    /// save load, because <c>Vehicle.Dispose</c> leaves the destroyed vehicle's
-    /// FlightComputer and BurnPlan fully intact.
-    ///
-    /// The id comparison is not redundant with the plan lookup:
-    /// <c>Burn.Equals</c> compares Time and DeltaVVlf only, so
-    /// <c>BurnPlan.TryGetBurn</c> also matches an unrelated burn that happens to
-    /// coincide in both.</summary>
+    // Burn.Equals compares time and delta V, so plan membership alone does not prove that the burn belongs to the selected vehicle.
     private static void CleanupStaleBurn(Vehicle source)
     {
         if (_ourBurn == null) return;
@@ -658,10 +544,13 @@ internal static class Patch_DrawPlanWindow
             _ourBurn = null;
     }
 
-    /// <summary>The cross-frame state a drawn window rebuilds every frame: the
-    /// burn we created, the porkchop entry the preview renders, and the vehicle
-    /// both are about. Every path that stops drawing the window clears all three
-    /// together, so none of them can outlive the world they describe.</summary>
+    // The keybind and View menu close the window without drawing its body.
+    internal static void TickWindowState()
+    {
+        if (!TransferPlanner.ShowPlanWindow)
+            DropPlanState();
+    }
+
     private static void DropPlanState()
     {
         _ourBurn = null;
@@ -671,9 +560,7 @@ internal static class Patch_DrawPlanWindow
 
     private static void HandleWindowClose()
     {
-        // Use the public setter so stock state (_transferBurn, _correctionBurn,
-        // _selectedEntry, _lambertPatch, _transferCalculated) is cleared too;
-        // setting only _showPlanWindow via reflection would leak that state.
+        // The public setter also clears stock transfer state.
         TransferPlanner.ShowPlanWindow = false;
         DropPlanState();
     }
@@ -685,10 +572,7 @@ internal static class Patch_DrawPlanWindow
         _showOrbitPreview = false;
     }
 
-    /// <summary>Called from PassCompletionPatch when a multi-pass execution
-    /// finishes all passes cleanly (not on user cancel). Auto-disables the
-    /// preview toggles since the goal orbit has been reached and the
-    /// overlay is no longer informative.</summary>
+    // Keep the preview toggles when execution is cancelled and disable them when it completes successfully.
     internal static void OnMultiPassCompleted()
     {
         _showOrbitPreview = false;

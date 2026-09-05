@@ -8,16 +8,6 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
-/// <summary>
-/// Type-specific UI controls for maneuver quick-tools. Drawn inline within the
-/// Transfer Planning window by DrawPlanWindowPatch.
-///
-/// - Set Periapsis / Set Apoapsis: altitude input, current orbit info, post-burn orbit
-/// - Match Inclination: target matching with AN/DN selection
-/// - Set Inclination: arbitrary angle with AN/DN relative to equatorial plane
-///
-/// Static state is read by DrawPlanWindowPatch to compute the maneuver in the same frame.
-/// </summary>
 internal static class ManeuverToolsWindow
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -35,7 +25,6 @@ internal static class ManeuverToolsWindow
     private static readonly string[] InclinationRefLabels = { "Ecliptic", "Equatorial" };
     private static readonly string[] NodeLabels = { "ASCENDING", "DESCENDING" };
 
-    /// <summary>Min separation in km between target apsis input and the opposite apsis.</summary>
     private const double MinApseSeparationKm = 1.0;
 
     #region Internal State
@@ -46,10 +35,7 @@ internal static class ManeuverToolsWindow
     private static bool _nodeDefaultInitialized;
     private static string? _lastSourceId;
 
-    // The target is held by id, never as a TransferObject: that struct stores only
-    // a LookupIndex, and LookupCollection.Deregister swap-removes, so an index kept
-    // across frames either resolves to a different body or, once it is past the end
-    // of the collection, makes CelestialSystem.GetIndex throw.
+    // Store target identity by id because LookupCollection.Deregister can move lookup indices.
     private static string? _selectedTargetId;
     private static readonly List<TransferObject> _targetListBuffer = new();
     private static string? _lastTargetParentId;
@@ -343,19 +329,11 @@ internal static class ManeuverToolsWindow
         DrawNodeSelection(orbit, anTime, dnTime, anResult, dnResult);
     }
 
-    /// <summary>
-    /// Draws the AN/DN radio buttons with time, dV, and speed info.
-    /// Shared between Match Target and Set Angle modes.
-    /// </summary>
     private static void DrawNodeSelection(Orbit orbit,
         UniverseTime? anTime, UniverseTime? dnTime,
         OrbitManeuvers.ManeuverResult? anResult, OrbitManeuvers.ManeuverResult? dnResult)
     {
-        // A node the orbit never reaches again yields no time from
-        // Orbit.TimeOfTrueAnomaly and no maneuver, and every number about it is
-        // then meaningless rather than zero. NaN carries that through the
-        // readouts, which is also what keeps it from winning the default below:
-        // every comparison against NaN is false.
+        // Unreachable nodes use NaN in readouts and cannot win a cost comparison.
         UniverseTime now = Universe.GetElapsedTime();
         double timeToAn = anTime.HasValue ? (anTime.Value - now).Seconds() : double.NaN;
         double timeToDn = dnTime.HasValue ? (dnTime.Value - now).Seconds() : double.NaN;
@@ -368,16 +346,11 @@ internal static class ManeuverToolsWindow
 
         if (!_nodeDefaultInitialized)
         {
-            // Prefer the cheaper node, but never an unreachable one: with dvDn
-            // NaN the compare is false and ascending wins, and the explicit
-            // second test covers the mirror case.
             UseDescendingNode = dvDn < dvAn || double.IsNaN(dvAn);
             _nodeDefaultInitialized = true;
         }
 
-        // Inside a row, and hover-tested through RowHovered: Segmented ends by
-        // rewinding the cursor and emitting a zero-width Dummy, so an
-        // IsItemHovered after it can never report the segments as hovered.
+        // Segmented ends with a Dummy of zero width, so use RowHovered to test the whole row.
         ConsoleWidgets.BeginRow("BURN NODE".AsSpan());
         int picked = ConsoleWidgets.Segmented("AfcMtNode".AsSpan(), NodeLabels,
             UseDescendingNode ? 1 : 0);
@@ -388,8 +361,6 @@ internal static class ManeuverToolsWindow
         if (picked >= 0)
             UseDescendingNode = picked == 1;
 
-        // Both nodes stay on screen: picking between them is the whole decision
-        // this section supports, and it is made on the dV and the time to burn.
         double timeToSel = UseDescendingNode ? timeToDn : timeToAn;
         double dvSel = UseDescendingNode ? dvDn : dvAn;
         double speedSel = UseDescendingNode ? speedAtDn : speedAtAn;
@@ -406,8 +377,6 @@ internal static class ManeuverToolsWindow
                 FormatHelper.FormatDuration(timeToAlt)).AsSpan());
     }
 
-    /// <summary>A speed readout that says "N/A" for an unreachable node instead
-    /// of printing "NaN m/s".</summary>
     private static string FormatSpeed(double metersPerSecond)
         => double.IsNaN(metersPerSecond)
             ? "N/A"
@@ -418,8 +387,6 @@ internal static class ManeuverToolsWindow
         string? parentId = source.Parent?.Id;
         if (parentId != _lastTargetParentId)
         {
-            // After SOI transition the previous selection is in a different
-            // context, so re-pick from the fresh list.
             _lastTargetParentId = parentId;
             _selectedTargetId = null;
         }
@@ -445,8 +412,7 @@ internal static class ManeuverToolsWindow
 
     private static void QueueTargetChange(Vehicle source, IOrbiter? target)
     {
-        // Stock pattern from DrawPlanWindow's "Set Target" checkbox: mutations
-        // from the ImGui pass go through the queue, applied at frame boundary.
+        // Queue target changes as TransferPlanner.DrawPlanWindow does because workers remain active while the UI runs.
         InputEvents.ChangeTargetBuffer.Add(new InputEvents.ChangeTargetData
         {
             Vehicle = source,

@@ -4,23 +4,13 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
-/// <summary>
-/// Pure dV calculations for maneuver planning. All methods are stateless
-/// and return nullable results to signal invalid inputs (hyperbolic orbit
-/// for any tool, coplanar orbits for inclination matching, etc.).
-/// </summary>
 internal static class OrbitManeuvers
 {
     public record struct ManeuverResult(double3 DvCci, double3 DvVlf, UniverseTime BurnTime);
 
-    /// <summary>Reference plane for inclination measurement.</summary>
     public enum InclinationReference { Ecliptic, Equatorial }
 
-    /// <summary>
-    /// Returns the reference plane normal in the CCI frame for the given orbit.
-    /// CCI Z-axis is the ecliptic normal in KSA; the equatorial normal is the
-    /// parent body's rotation axis (CCE Z-axis transformed to CCI).
-    /// </summary>
+    // CCI +Z is the ecliptic normal. The equatorial normal is CCE +Z transformed to CCI.
     public static double3 GetReferenceNormalCci(Orbit orbit, InclinationReference reference)
     {
         if (reference == InclinationReference.Ecliptic)
@@ -28,10 +18,6 @@ internal static class OrbitManeuvers
         return double3.UnitZ.Transform(orbit.Parent.GetCce2Cci());
     }
 
-    /// <summary>
-    /// Returns the orbit's inclination relative to the chosen reference plane.
-    /// For Ecliptic this equals Orbit.Inclination.
-    /// </summary>
     public static double GetInclinationAgainst(Orbit orbit, InclinationReference reference)
     {
         double3 referenceNormal = GetReferenceNormalCci(orbit, reference);
@@ -39,10 +25,6 @@ internal static class OrbitManeuvers
         return MathEx.SafeAcos(double3.Dot(referenceNormal, orbitNormal));
     }
 
-    /// <summary>
-    /// Computes a prograde/retrograde burn at the next apoapsis to set periapsis
-    /// to a target altitude above the parent body's surface.
-    /// </summary>
     public static ManeuverResult? ComputeSetPeriapsis(
         Orbit orbit, double targetAltitudeMeters, double parentRadius, UniverseTime now)
     {
@@ -60,10 +42,6 @@ internal static class OrbitManeuvers
         return ComputeApseBurn(orbit, burnTime, currentApRadius, newPeRadius);
     }
 
-    /// <summary>
-    /// Computes a prograde/retrograde burn at the next periapsis to set apoapsis
-    /// to a target altitude above the parent body's surface.
-    /// </summary>
     public static ManeuverResult? ComputeSetApoapsis(
         Orbit orbit, double targetAltitudeMeters, double parentRadius, UniverseTime now)
     {
@@ -81,16 +59,7 @@ internal static class OrbitManeuvers
         return ComputeApseBurn(orbit, burnTime, currentPeRadius, newApRadius);
     }
 
-    /// <summary>
-    /// Computes a tangential burn at the next apoapsis (useApoapsis = true) or
-    /// periapsis (false) that circularizes the orbit at the burn radius.
-    /// Delegates to stock <see cref="OrbitalTransfers.DvCciToCircularize"/> so the
-    /// math tracks any future tweak to KSA's circularization formula. Returns
-    /// null if the orbit is unbound or already nearly circular (mirrors the
-    /// 0.001 tolerance <see cref="MultiPass.CircularizeIntent"/> uses for
-    /// IsSatisfied so the UI's "already circular" message and the missing
-    /// Create button line up).
-    /// </summary>
+    // The 0.001 eccentricity tolerance matches CircularizeIntent.IsSatisfied and the UI.
     public static ManeuverResult? ComputeCircularize(
         Orbit orbit, bool useApoapsis, UniverseTime now)
     {
@@ -113,19 +82,12 @@ internal static class OrbitManeuvers
         return new ManeuverResult(dvCci, dvVlf, burnTime);
     }
 
-    /// <summary>
-    /// Computes a plane-change burn at the ascending or descending node to match
-    /// a target orbit's inclination. Preserves orbital speed, only rotates the
-    /// velocity vector into the target's orbital plane. <paramref name="fraction"/>
-    /// scales the rotation angle for multi-pass partial plane changes (1.0 =
-    /// full match, 0.5 = halve the relative inclination).
-    /// </summary>
+    // Preserve speed and rotate velocity into the target plane. The fraction scales the rotation angle for partial plane changes.
     public static ManeuverResult? ComputeMatchInclination(
         Orbit vehicleOrbit, Orbit targetOrbit, bool useDescendingNode, UniverseTime now,
         double fraction = 1.0)
     {
-        // GetNextPeriapsisTime / TimeOfTrueAnomaly behaviour for hyperbolic
-        // vehicles is past-times-not-corrected, so the burn would be in the past.
+        // Orbit.TimeOfTrueAnomaly does not advance past node times for an unbound orbit.
         if (vehicleOrbit.Eccentricity >= 1.0)
             return null;
 
@@ -156,13 +118,7 @@ internal static class OrbitManeuvers
         return new ManeuverResult(dvCci, dvVlf, nodeTime);
     }
 
-    /// <summary>
-    /// Computes a plane-change burn at the ascending or descending node (relative
-    /// to the chosen reference plane) to set the orbit's inclination to a specific
-    /// angle. Preserves orbital speed. <paramref name="fraction"/> scales the
-    /// rotation angle for multi-pass partial plane changes (1.0 = full set,
-    /// 0.5 = halve the remaining inclination delta).
-    /// </summary>
+    // Preserve speed and the node line. The fraction scales the rotation angle for partial plane changes.
     public static ManeuverResult? ComputeSetInclination(
         Orbit orbit, double targetInclinationRad, bool useDescendingNode, UniverseTime now,
         InclinationReference reference, double fraction = 1.0)
@@ -182,9 +138,7 @@ internal static class OrbitManeuvers
 
         double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
         if (nodeDir.LengthSquared() < 1e-12)
-            // Vehicle is coplanar with the reference plane: every point on the
-            // orbit is a valid node, the AN line is undefined. Pick CCI +X so
-            // the new orbit's AN ends up at a stable, repeatable direction.
+            // Use CCI +X when the orbit is coplanar because its node line is undefined.
             nodeDir = new double3(1, 0, 0);
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
@@ -196,9 +150,7 @@ internal static class OrbitManeuvers
             return null;
         StateVectors sv = orbit.GetStateVectorsAt(nodeTime);
 
-        // Target normal: rotate reference normal around the node line by target
-        // inclination. This preserves the AN/DN line and sets the inclination
-        // relative to the reference plane directly.
+        // Rotate about the node line to preserve it while setting the target inclination.
         doubleQuat tilt = QuaternionEx.AngleAxis(targetInclinationRad, nodeDir);
         double3 targetNormal = referenceNormal.Transform(tilt);
 
@@ -215,11 +167,7 @@ internal static class OrbitManeuvers
         return new ManeuverResult(dvCci, dvVlf, nodeTime);
     }
 
-    /// <summary>
-    /// Computes AN/DN true anomalies and times relative to the chosen reference
-    /// plane. Used by the UI to display both node options for Set Inclination.
-    /// A node time is null when the orbit never reaches that anomaly again.
-    /// </summary>
+    // An unreachable node has no time.
     public static (TrueAnomaly anTa, TrueAnomaly dnTa, UniverseTime? anTime, UniverseTime? dnTime)
         GetReferenceNodes(Orbit orbit, UniverseTime now, InclinationReference reference)
     {
@@ -228,9 +176,7 @@ internal static class OrbitManeuvers
         double3 nodeDir = double3.Cross(referenceNormal, vehicleNormal).NormalizeOrZero();
 
         if (nodeDir.LengthSquared() < 1e-12)
-            // Coplanar with the reference plane: AN is undefined. Match the
-            // CCI +X convention used in ComputeSetInclination so the UI and
-            // the actual burn agree on which point counts as the node.
+            // Use the same coplanar node convention as ComputeSetInclination.
             nodeDir = new double3(1, 0, 0);
 
         TrueAnomaly anTa = orbit.GetTrueAnomaly(nodeDir);
@@ -243,12 +189,7 @@ internal static class OrbitManeuvers
 
     #region Helpers
 
-    /// <summary>
-    /// Generic apse burn: given the burn radius and the opposite apse radius,
-    /// compute the dV needed to create an orbit passing through both. Caller
-    /// must pass burnTime equal to the apsis-time matching burnRadius (so the
-    /// vis-viva radius and the actual position radius agree).
-    /// </summary>
+    // Place the burn at the apse with burnRadius so the radius in the vis viva equation matches the position radius.
     private static ManeuverResult? ComputeApseBurn(
         Orbit orbit, UniverseTime burnTime, double burnRadius, double oppositeRadius)
     {
@@ -265,10 +206,6 @@ internal static class OrbitManeuvers
         return new ManeuverResult(dvCci, dvVlf, burnTime);
     }
 
-    /// <summary>
-    /// Converts a dV vector from CCI frame to VLF frame (same transform stock
-    /// Circularize uses to populate TransferData.TransferDvVlf).
-    /// </summary>
     private static double3 CciToVlf(double3 dvCci, Orbit orbit, UniverseTime time)
     {
         doubleQuat parentCci2Vlf = orbit.GetStateVectorsAt(time).GetVlf2ParentCci().OrIdentity().Inverse();

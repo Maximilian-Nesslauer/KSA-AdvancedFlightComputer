@@ -5,31 +5,22 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Validates OrbitManeuvers.ComputeMatchInclination: a node burn must rotate the orbit into the
-// target's plane (relative inclination to zero) without changing the orbital speed, a partial
-// fraction must shrink the relative inclination proportionally, and coplanar or unbound inputs
-// must yield no maneuver.
 public sealed class MatchInclinationTest : AfcTest
 {
     private const double VehicleInclinationRad = 10.0 * Math.PI / 180.0;
     private const double TargetInclinationRad = 30.0 * Math.PI / 180.0;
 
-    // With the default builder geometry the mutual node sits exactly on the vehicle's periapsis;
-    // this second vehicle orbit rotates the periapsis off the node line so a node/apse mix-up in
-    // the code under test cannot slip through.
+    // Place periapsis away from the node so the test detects a calculation that uses the wrong point.
     private const double OffApseArgumentOfPeriapsisRad = 35.0 * Math.PI / 180.0;
 
-    // Test orbits, in meters above the home body's mean radius. The target is circular so its
-    // plane is the only thing that matters.
+    // Test orbits, in meters above the home body's mean radius. The target is circular so its plane is the only thing that matters.
     private const double VehiclePeriapsisAltitudeM = 400_000.0;
     private const double VehicleApoapsisAltitudeM = 1_200_000.0;
     private const double TargetAltitudeM = 800_000.0;
     private const double CoplanarAltitudeM = 900_000.0;
 
     private const double HalfFraction = 0.5;
-    // A half rotation halves the relative inclination exactly when the burn sits on the mutual
-    // node line, and the burn state comes from a closed-form node solve, so only floating-point
-    // error remains; 1e-6 leaves generous headroom over that.
+    // Only numerical rounding affects this exact partial rotation.
     private const double FractionRelTol = 1e-6;
 
     public override string Name => "afc-match-inclination";
