@@ -6,27 +6,19 @@ using Brutal.Logging;
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// Lightweight per-method Stopwatch accumulator for debug builds.
-/// Tracks call count and total/min/max elapsed ticks; reports a per-
-/// window summary every <see cref="ReportIntervalSeconds"/> seconds and
-/// then resets the counters.
-///
-/// Call site:
-/// <code>
-/// #if DEBUG
-/// using var _ = new PerfTracker.Scope("MethodName");
-/// #endif
-/// </code>
+/// Per-method Stopwatch accumulator for debug builds. It keeps the call count and the total, min
+/// and max elapsed ticks per name and reports them every <see cref="ReportIntervalSeconds"/> and
+/// on <see cref="Reset"/>. A call site is <c>using var _ = new PerfTracker.Scope("MethodName");</c>
+/// inside <c>#if DEBUG</c>.
 /// </summary>
 internal static class PerfTracker
 {
-    // 30s keeps the regression signal while the plan window is open
-    // without the summary dominating the session log.
+    // Long enough that the summary does not dominate the session log while the plan window is open.
     private const double ReportIntervalSeconds = 30.0;
 
     private static readonly Dictionary<string, PerfData> _entries = new();
     private static readonly List<string> _orderedKeys = new();
-    private static long _lastReportTimestamp = Stopwatch.GetTimestamp();
+    private static long _windowStart = Stopwatch.GetTimestamp();
 
     private struct PerfData
     {
@@ -36,9 +28,7 @@ internal static class PerfTracker
         public long MaxTicks;
     }
 
-    /// <summary>Stack-allocated scope: ctor takes the start timestamp
-    /// (or -1 if <see cref="DebugConfig.Performance"/> is off, making
-    /// Dispose a no-op).</summary>
+    /// <summary>Dispose is a no-op when <see cref="DebugConfig.Performance"/> is off.</summary>
     internal readonly ref struct Scope
     {
         private readonly string _name;
@@ -79,47 +69,37 @@ internal static class PerfTracker
             _orderedKeys.Add(name);
         }
 
-        MaybeReport();
+        if (WindowSeconds() >= ReportIntervalSeconds)
+            Report();
     }
 
-    private static void MaybeReport()
+    /// <summary>Flushes the current window so a short session or a teardown still reports.</summary>
+    public static void Reset() => Report();
+
+    private static void Report()
     {
-        long now = Stopwatch.GetTimestamp();
-        double elapsed = (now - _lastReportTimestamp) / (double)Stopwatch.Frequency;
-        if (elapsed < ReportIntervalSeconds)
-            return;
-
-        _lastReportTimestamp = now;
-
+        double elapsed = WindowSeconds();
         foreach (string key in _orderedKeys)
         {
             if (!_entries.TryGetValue(key, out var data) || data.Count == 0)
                 continue;
 
-            double avgMs = TicksToMs(data.TotalTicks / data.Count);
-            double minMs = TicksToMs(data.MinTicks);
-            double maxMs = TicksToMs(data.MaxTicks);
-
             DefaultCategory.Log.Debug(string.Format(
                 CultureInfo.InvariantCulture,
                 "[AFC] Perf ({0:F1}s): {1} avg={2:F3}ms min={3:F3}ms max={4:F3}ms ({5} calls)",
-                elapsed, key, avgMs, minMs, maxMs, data.Count));
+                elapsed, key, TicksToMs(data.TotalTicks / data.Count), TicksToMs(data.MinTicks),
+                TicksToMs(data.MaxTicks), data.Count));
         }
 
         _entries.Clear();
         _orderedKeys.Clear();
+        _windowStart = Stopwatch.GetTimestamp();
     }
+
+    private static double WindowSeconds()
+        => (Stopwatch.GetTimestamp() - _windowStart) / (double)Stopwatch.Frequency;
 
     private static double TicksToMs(long ticks)
-    {
-        return ticks * 1000.0 / Stopwatch.Frequency;
-    }
-
-    public static void Reset()
-    {
-        _entries.Clear();
-        _orderedKeys.Clear();
-        _lastReportTimestamp = Stopwatch.GetTimestamp();
-    }
+        => ticks * 1000.0 / Stopwatch.Frequency;
 }
 #endif

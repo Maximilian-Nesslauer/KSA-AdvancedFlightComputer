@@ -7,205 +7,258 @@ using KSA;
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// Centralized registry of all reflection targets for game internals.
-/// Resolved once at assembly load. Per-feature validation methods check
-/// that all targets for a feature resolved successfully so each feature
-/// can degrade independently across game versions.
+/// Every string-keyed handle into game internals, resolved once at assembly load. A feature
+/// validates the handles it needs before it patches anything, so a game-side rename disables that
+/// feature and leaves the others running. Method lookups pin the parameter list so a new
+/// same-named overload cannot be picked up by accident.
 ///
-/// Method lookups pin the parameter list to keep us bound to the intended
-/// overload if the game introduces a new same-named method.
+/// The <see cref="UsedByAttribute"/> on each handle is what the validation reads, and a handle
+/// without one fails every validation, so a key cannot be added without being validated for the
+/// features that use it.
 /// </summary>
 internal static class GameReflection
 {
-    #region HyperbolicTargets
+    [Flags]
+    private enum Feature
+    {
+        HyperbolicTargets = 1,
+        ManeuverTools = 2,
+        MultiPass = 4,
+        RcsTranslation = 8,
+    }
 
+    [AttributeUsage(AttributeTargets.Field)]
+    private sealed class UsedByAttribute(Feature features) : Attribute
+    {
+        public Feature Features { get; } = features;
+    }
+
+    #region TransferPlanner
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_sourceBody =
         AccessTools.Field(typeof(TransferPlanner), "_sourceBody");
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_transferInfo =
         AccessTools.Field(typeof(TransferPlanner), "_transferInfo");
-    public static readonly FieldInfo? TransferPlanner_selectedMinTime =
-        AccessTools.Field(typeof(TransferPlanner), "_selectedMinTime");
-    public static readonly FieldInfo? TransferPlanner_selectedMaxTime =
-        AccessTools.Field(typeof(TransferPlanner), "_selectedMaxTime");
-    public static readonly FieldInfo? TransferPlanner_selectedTimeUnit =
-        AccessTools.Field(typeof(TransferPlanner), "_selectedTimeUnit");
-    public static readonly FieldInfo? TransferPlanner_timeUnits =
-        AccessTools.Field(typeof(TransferPlanner), "_timeUnits");
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_selectedEntry =
         AccessTools.Field(typeof(TransferPlanner), "_selectedEntry");
 
-    #endregion
+    // The transfer-window time bounds HyperbolicTargets writes as inputs.
+    [UsedBy(Feature.HyperbolicTargets)]
+    public static readonly FieldInfo? TransferPlanner_selectedMinTime =
+        AccessTools.Field(typeof(TransferPlanner), "_selectedMinTime");
 
-    #region ManeuverTools
+    [UsedBy(Feature.HyperbolicTargets)]
+    public static readonly FieldInfo? TransferPlanner_selectedMaxTime =
+        AccessTools.Field(typeof(TransferPlanner), "_selectedMaxTime");
 
+    [UsedBy(Feature.HyperbolicTargets)]
+    public static readonly FieldInfo? TransferPlanner_selectedTimeUnit =
+        AccessTools.Field(typeof(TransferPlanner), "_selectedTimeUnit");
+
+    [UsedBy(Feature.HyperbolicTargets)]
+    public static readonly FieldInfo? TransferPlanner_timeUnits =
+        AccessTools.Field(typeof(TransferPlanner), "_timeUnits");
+
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_transferType =
         AccessTools.Field(typeof(TransferPlanner), "_transferType");
+
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_transferCalculated =
         AccessTools.Field(typeof(TransferPlanner), "_transferCalculated");
+
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_transferBeingCalculated =
         AccessTools.Field(typeof(TransferPlanner), "_transferBeingCalculated");
+
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_transferBurn =
         AccessTools.Field(typeof(TransferPlanner), "_transferBurn");
-    public static readonly FieldInfo? TransferPlanner_correctionTime =
-        AccessTools.Field(typeof(TransferPlanner), "_correctionTime");
+
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_showPlanWindow =
         AccessTools.Field(typeof(TransferPlanner), "_showPlanWindow");
-    public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
-        AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
-    // "Preview Selected Transfer" checkbox in stock's plan window. Gates
-    // OnPreRender's DrawSelectedTransfer call. Our Hohmann multi-pass
-    // overlay piggybacks on the same toggle so the user only manages one
-    // preview switch for both stock single-burn and multi-pass.
+    // Stock's "Preview Selected Transfer" checkbox. The Hohmann multi-pass overlay rides the same
+    // toggle, so the user manages one preview switch for stock's single burn and the passes.
+    [UsedBy(Feature.ManeuverTools)]
     public static readonly FieldInfo? TransferPlanner_displaySelectedTransfer =
         AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
 
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
+        AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
+
+    // Typed accessors over the handles above for the plan-window state StockPlanner reads per
+    // frame, one delegate each and no boxing per read. An accessor is null when its handle is
+    // null or the field no longer holds the expected type, so the validation reports it like any
+    // other missing handle.
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<TransferObject>? TransferPlanner_sourceBodyRef =
+        StaticFieldRef<TransferObject>(TransferPlanner_sourceBody);
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<OrbitalTransfers.TransferInfo?>? TransferPlanner_transferInfoRef =
+        StaticFieldRef<OrbitalTransfers.TransferInfo?>(TransferPlanner_transferInfo);
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<OrbitalTransfers.PorkChopEntry?>? TransferPlanner_selectedEntryRef =
+        StaticFieldRef<OrbitalTransfers.PorkChopEntry?>(TransferPlanner_selectedEntry);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<TransferType>? TransferPlanner_transferTypeRef =
+        StaticFieldRef<TransferType>(TransferPlanner_transferType);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_transferCalculatedRef =
+        StaticFieldRef<bool>(TransferPlanner_transferCalculated);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_transferBeingCalculatedRef =
+        StaticFieldRef<bool>(TransferPlanner_transferBeingCalculated);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<Burn?>? TransferPlanner_transferBurnRef =
+        StaticFieldRef<Burn?>(TransferPlanner_transferBurn);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_showPlanWindowRef =
+        StaticFieldRef<bool>(TransferPlanner_showPlanWindow);
+
+    [UsedBy(Feature.ManeuverTools)]
+    public static readonly AccessTools.FieldRef<bool>? TransferPlanner_displaySelectedTransferRef =
+        StaticFieldRef<bool>(TransferPlanner_displaySelectedTransfer);
+
     #endregion
 
-    #region MultiPass
+    #region Save, tick and vehicle lifetime
 
-    // The per-frame tick both this feature and RcsTranslation drive their state
-    // machines from. It runs on the main thread between the solver results being
-    // applied to every vehicle and InputEvents.ApplyInputEvents, which is what
-    // lets a driver read the fresh FlightComputer state and still queue burn
-    // mutations for the same frame's drain.
-    //
-    // Neither per-vehicle half of the solver apply is a sound host for a driver
-    // that mutates process-global registries: Vehicle.UpdateFromTaskResultsUnsynchronized
-    // runs one worker per physics bubble and so can execute for two vehicles at
-    // once, and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined,
-    // which a Harmony detour on the callee cannot survive.
+    // The per-frame tick MultiPass and RcsTranslation drive their state machines from. It runs on
+    // the main thread after the solver results are applied to every vehicle and before
+    // InputEvents.ApplyInputEvents, so a driver reads fresh FlightComputer state and can still queue
+    // burn mutations for the same frame's drain. Neither per-vehicle half of the apply is a sound
+    // host, because Vehicle.UpdateFromTaskResultsUnsynchronized runs one worker per physics bubble
+    // and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined, which a Harmony detour
+    // on the callee cannot survive.
+    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
-        AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers),
-            Type.EmptyTypes);
+        AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers), Type.EmptyTypes);
 
-    // UncompressedSave is the concrete path that calls Universe.DeserializeSave;
-    // VehicleSave.Load is per-vehicle, not world-state. We use UncompressedSave.Id
-    // as the save-game discriminator for registry scoping.
+    // UncompressedSave is the concrete path that calls Universe.DeserializeSave, and its Id is the
+    // save-game discriminator the registries scope their entries by.
+    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? UncompressedSave_Load =
-        AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Load),
-            Type.EmptyTypes);
-    public static readonly MethodInfo? UncompressedSave_Write =
-        AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Write),
-            Type.EmptyTypes);
+        AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Load), Type.EmptyTypes);
 
-    // Drop registry entries when their vehicle is destroyed; otherwise
-    // a recycled vehicle id could pick up an orphaned execution.
+    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
+    public static readonly MethodInfo? UncompressedSave_Write =
+        AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Write), Type.EmptyTypes);
+
+    // Registry entries drop with their vehicle, or a recycled vehicle id could pick up an orphaned
+    // execution.
+    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? Vehicle_Dispose =
-        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose),
-            new[] { typeof(bool) });
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
 
     #endregion
 
     #region RcsTranslation
 
-    // The gauge button stores its bound enum privately; the RCS gauge
-    // patches need it to recognize the BurnMode/Auto button instance.
+    // The gauge button keeps its bound enum private, and the RCS gauge patches need it to recognize
+    // the BurnMode button instance.
+    [UsedBy(Feature.RcsTranslation)]
     public static readonly FieldInfo? GaugeButtonFlightComputer_enumValue =
         AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumValue");
 
-    // Private tooltip hook for the Auto button; replaced with the RCS
-    // explanation when a burn resolves to RCS execution.
+    // Private tooltip hook for the Auto button, replaced with the RCS explanation when a burn
+    // resolves to RCS execution.
+    [UsedBy(Feature.RcsTranslation)]
     public static readonly MethodInfo? Vehicle_Hovered_BurnMode =
-        AccessTools.Method(typeof(Vehicle), "Hovered",
-            new Type[] { typeof(FlightComputerBurnMode) });
+        AccessTools.Method(typeof(Vehicle), "Hovered", new[] { typeof(FlightComputerBurnMode) });
 
-    // The 4980 flight burn editor draws through this static gauge-canvas
-    // host; the RCS burn panel postfixes it. Validated so a game-side rework
-    // degrades the panel gracefully instead of aborting the mod's patching.
+    // The flight burn editor draws through this static gauge-canvas host, which the RCS burn panel
+    // postfixes.
+    [UsedBy(Feature.RcsTranslation)]
     public static readonly MethodInfo? BurnCanvasHost_Draw =
         AccessTools.Method(typeof(BurnCanvasHost), "Draw",
-            new Type[] { typeof(GaugeCanvas), typeof(Brutal.Numerics.float2), typeof(Brutal.Numerics.float2) });
+            new[] { typeof(GaugeCanvas), typeof(Brutal.Numerics.float2), typeof(Brutal.Numerics.float2) });
 
     #endregion
 
     #region Validation
 
-    public static bool ValidateHyperbolicTargets()
-    {
-        var targets = new (string name, object? target)[]
-        {
-            ("TransferPlanner._sourceBody",       TransferPlanner_sourceBody),
-            ("TransferPlanner._transferInfo",      TransferPlanner_transferInfo),
-            ("TransferPlanner._selectedMinTime",   TransferPlanner_selectedMinTime),
-            ("TransferPlanner._selectedMaxTime",   TransferPlanner_selectedMaxTime),
-            ("TransferPlanner._selectedTimeUnit",  TransferPlanner_selectedTimeUnit),
-            ("TransferPlanner._timeUnits",         TransferPlanner_timeUnits),
-            ("TransferPlanner._selectedEntry",     TransferPlanner_selectedEntry),
-        };
-        return ValidateTargets("HyperbolicTargets", targets);
-    }
+    public static bool ValidateHyperbolicTargets() => Validate(Feature.HyperbolicTargets);
 
-    public static bool ValidateManeuverTools()
-    {
-        var targets = new (string name, object? target)[]
-        {
-            ("TransferPlanner._sourceBody",              TransferPlanner_sourceBody),
-            ("TransferPlanner._transferInfo",             TransferPlanner_transferInfo),
-            ("TransferPlanner._selectedEntry",            TransferPlanner_selectedEntry),
-            ("TransferPlanner._transferType",             TransferPlanner_transferType),
-            ("TransferPlanner._transferCalculated",       TransferPlanner_transferCalculated),
-            ("TransferPlanner._transferBeingCalculated",  TransferPlanner_transferBeingCalculated),
-            ("TransferPlanner._transferBurn",             TransferPlanner_transferBurn),
-            ("TransferPlanner._correctionTime",           TransferPlanner_correctionTime),
-            ("TransferPlanner._showPlanWindow",           TransferPlanner_showPlanWindow),
-            ("TransferPlanner.SetTransferInfo",            TransferPlanner_SetTransferInfo),
-            ("TransferPlanner._displaySelectedTransfer",   TransferPlanner_displaySelectedTransfer),
-        };
-        return ValidateTargets("ManeuverTools", targets);
-    }
+    public static bool ValidateManeuverTools() => Validate(Feature.ManeuverTools);
 
-    /// <summary>Separate from ManeuverTools so a missing
-    /// ApplyVehicleSolvers disables only multi-pass execution, leaving
-    /// the maneuver quick-tools functional. Without UncompressedSave
-    /// hooks we cannot scope registry entries to a save game.
-    ///
-    /// The stock plan-window fields multi-pass also reads are not listed here:
-    /// <c>Mod.OnFullyLoaded</c> nests this block inside
-    /// <see cref="ValidateManeuverTools"/>, which already covers them.</summary>
-    public static bool ValidateMultiPass()
-    {
-        var targets = new (string name, object? target)[]
-        {
-            ("Universe.ApplyVehicleSolvers",  Universe_ApplyVehicleSolvers),
-            ("UncompressedSave.Load",         UncompressedSave_Load),
-            ("UncompressedSave.Write",        UncompressedSave_Write),
-            ("Vehicle.Dispose",               Vehicle_Dispose),
-        };
-        return ValidateTargets("MultiPass", targets);
-    }
+    /// <summary>The plan-window handles MultiPass also reads are not tagged for it, because
+    /// <c>Mod</c> nests the MultiPass block inside the ManeuverTools gate, which already covers
+    /// them.</summary>
+    public static bool ValidateMultiPass() => Validate(Feature.MultiPass);
 
-    /// <summary>Shares the save/load and per-tick hooks with MultiPass on
-    /// purpose: both features scope their registries by save id and drive
-    /// their state machines from Universe.ApplyVehicleSolvers.</summary>
-    public static bool ValidateRcsTranslation()
-    {
-        var targets = new (string name, object? target)[]
-        {
-            ("Universe.ApplyVehicleSolvers",               Universe_ApplyVehicleSolvers),
-            ("UncompressedSave.Load",                      UncompressedSave_Load),
-            ("UncompressedSave.Write",                     UncompressedSave_Write),
-            ("Vehicle.Dispose",                            Vehicle_Dispose),
-            ("GaugeButtonFlightComputer._enumValue",       GaugeButtonFlightComputer_enumValue),
-            ("Vehicle.Hovered(FlightComputerBurnMode)",    Vehicle_Hovered_BurnMode),
-            ("BurnCanvasHost.Draw",                        BurnCanvasHost_Draw),
-        };
-        return ValidateTargets("RcsTranslation", targets);
-    }
+    public static bool ValidateRcsTranslation() => Validate(Feature.RcsTranslation);
 
-    private static bool ValidateTargets(string feature, (string name, object? target)[] targets)
+    private static bool Validate(Feature feature)
     {
         bool allOk = true;
-        foreach (var (name, target) in targets)
+        HashSet<string>? reported = null;
+        foreach (FieldInfo handle in typeof(GameReflection).GetFields(BindingFlags.Public | BindingFlags.Static))
         {
-            if (target == null)
+            if (handle.GetCustomAttribute<UsedByAttribute>() is not { } tag)
             {
-                DefaultCategory.Log.Error(
-                    $"[AFC] {feature}: {name} not found - game version may have changed.");
+                DefaultCategory.Log.Error($"[AFC] {handle.Name} carries no UsedBy tag, so no feature validates it.");
                 allOk = false;
+                continue;
             }
+            if ((tag.Features & feature) == 0 || handle.GetValue(null) != null)
+                continue;
+
+            // A handle and its typed twin name the same field, so both get one line.
+            string name = DisplayName(handle);
+            if ((reported ??= new HashSet<string>()).Add(name))
+                DefaultCategory.Log.Error($"[AFC] {feature}: {name} not found - game version may have changed.");
+            allOk = false;
         }
         return allOk;
+    }
+
+    // "TransferPlanner_sourceBody" and "TransferPlanner_sourceBodyRef" both read as
+    // "TransferPlanner._sourceBody". A method handle keeps its name, so "Vehicle_Hovered_BurnMode"
+    // reads as "Vehicle.Hovered_BurnMode".
+    private static string DisplayName(FieldInfo handle)
+    {
+        string name = handle.Name;
+        int split = name.IndexOf('_');
+        if (split < 0)
+            return name;
+        string owner = name[..split];
+        string member = name[(split + 1)..];
+        if (handle.FieldType == typeof(MethodInfo))
+            return $"{owner}.{member}";
+        if (member.EndsWith("Ref", StringComparison.Ordinal))
+            member = member[..^3];
+        return $"{owner}._{member}";
+    }
+
+    private static AccessTools.FieldRef<F>? StaticFieldRef<F>(FieldInfo? field)
+    {
+        if (field == null)
+            return null;
+        try
+        {
+            return AccessTools.StaticFieldRefAccess<F>(field);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Error(
+                $"[AFC] {field.DeclaringType?.Name}.{field.Name} is not a {typeof(F).Name}: {ex.Message}");
+            return null;
+        }
     }
 
     #endregion

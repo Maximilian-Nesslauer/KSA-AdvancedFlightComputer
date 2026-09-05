@@ -32,7 +32,7 @@ public sealed class ThingTest : AfcTest
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
 
-        Orbit orbit = OrbitFixtures.EllipticalAt(home, 300_000.0, 2_000_000.0, Universe.GetElapsedSimTime());
+        Orbit orbit = OrbitFixtures.EllipticalAt(home, 300_000.0, 2_000_000.0, Universe.GetElapsedTime());
         t.Check("does the thing", Thing.Compute(orbit) > 0.0, "detail the reader needs");
     }
 }
@@ -46,7 +46,7 @@ Two things to get right: do not catch exceptions to turn them into failures, bec
 
 Build this solution and HeadlessHarness, checked out as a sibling, in the same configuration; the `CopyToMods` targets deploy both. Then run the harness's `scripts/run-headless.ps1`.
 
-`-Tests` filters on exact `Name` values, so renaming a test breaks the invocations that use it. All 17, each listed once:
+`-Tests` filters on exact `Name` values, so renaming a test breaks the invocations that use it. Each listed once:
 
 | Feature | Filter |
 | --- | --- |
@@ -55,6 +55,6 @@ Build this solution and HeadlessHarness, checked out as a sibling, in the same c
 | Multi-pass | `afc-sequence-burnstate` |
 | RCS translation (pure) | `afc-rcs-allocator,afc-rcs-estimates,afc-rcs-registry,afc-rcs-lp-solver` |
 | RCS translation (flight) | `afc-rcs-translation,afc-rcs-lp` |
-| Core | `afc-save-scoped-reset,afc-stock-pin-guard` |
+| Core | `afc-save-scoped-reset,afc-stock-pin-guard,afc-reflection-targets` |
 
 The flight tests fly whichever of `RcsTestVehicles.Candidates` the machine has (override with `KSA_HEADLESS_VEHICLES`); without one they skip.
