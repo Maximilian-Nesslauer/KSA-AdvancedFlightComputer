@@ -6,23 +6,17 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// What every ManeuverResult has to satisfy whichever quick-tool produced it, plus the tolerances the
-// maneuver tests share.
 internal static class ManeuverAssertions
 {
-    // Relative tolerance for radii and semi-major axes reached after an applied maneuver.
+    // This relative tolerance applies to the radii and semimajor axes reached after a maneuver.
     public const double RelTol = 1e-3;
 
-    // Absolute tolerance in radians for reached inclinations (about 0.06 deg, the same bar the
-    // maneuver computations use to report "nothing to do").
+    // Absolute tolerance in radians for reached inclinations (about 0.06 deg, the same bar the maneuver computations use to report "nothing to do").
     public const double IncTolRad = 1e-3;
 
-    // Pure floating-point headroom for exact invariants (frame-transform round trips, the speed a
-    // plane-change rotation preserves).
+    // Allow for numerical rounding when a frame conversion is reversed or a plane change preserves speed.
     public const double TransformRelTol = 1e-9;
 
-    // The burn is not in the past, and DvVlf is DvCci in the VLF frame at the burn point (the
-    // transform the mod uses to fill the stock transfer UI, via StateVectors.GetVlf2ParentCci).
     public static bool ResultShapeHolds(
         TestContext t, string label, Orbit orbit, in OrbitManeuvers.ManeuverResult maneuver, UniverseTime now)
     {
@@ -31,8 +25,7 @@ internal static class ManeuverAssertions
         double scale = Math.Max(1.0, maneuver.DvCci.Length());
         bool vlfOk = roundTrip / scale < TransformRelTol;
         bool timeOk = maneuver.BurnTime.Seconds() >= now.Seconds();
-        // When only the shape breaks, every number on the subcase's FAIL line is inside tolerance,
-        // so this is the only line that says why.
+        // Report transform and time failures separately from the orbital tolerance checks.
         if (!vlfOk)
             t.Info($"{label}: SHAPE VIOLATION: DvVlf->CCI round-trip error {roundTrip:E3}m/s.");
         if (!timeOk)
@@ -41,7 +34,6 @@ internal static class ManeuverAssertions
         return vlfOk && timeOk;
     }
 
-    // An input that is invalid or already satisfied, so the tool must return nothing.
     public static bool CheckNone(TestContext t, string label, OrbitManeuvers.ManeuverResult? result)
         => t.Check(label, result == null,
             result == null
