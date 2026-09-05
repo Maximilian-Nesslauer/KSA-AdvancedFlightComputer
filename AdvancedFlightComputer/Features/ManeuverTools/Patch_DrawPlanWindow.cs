@@ -11,7 +11,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
-[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow))]
+[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow), new[] { typeof(IGameViewport) })]
 internal static class Patch_DrawPlanWindow
 {
     // Share the stock window identity and dimensions so changing plan type preserves its placement.

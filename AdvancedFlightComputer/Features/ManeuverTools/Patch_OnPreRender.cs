@@ -11,7 +11,7 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// Postfix on TransferPlanner.OnPreRender to render the visual orbit preview
 /// in the 3D view when one of our plan types is active.
 /// </summary>
-[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender))]
+[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender), new[] { typeof(IViewport) })]
 internal static class Patch_OnPreRender
 {
     static void Postfix(IViewport inViewport)
