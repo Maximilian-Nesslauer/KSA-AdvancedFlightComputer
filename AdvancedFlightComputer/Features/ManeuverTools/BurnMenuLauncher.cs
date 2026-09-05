@@ -83,7 +83,7 @@ internal static class BurnMenuLauncher
         }
     }
 
-    private static void OpenPlanner(string typeKey, Vehicle vehicle)
+    internal static void OpenPlanner(string typeKey, Vehicle vehicle)
     {
         if (FindType(typeKey) is not TransferType type)
             return;

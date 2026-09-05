@@ -457,11 +457,8 @@ internal static class Patch_DrawPlanWindow
 
     internal static void RenderOrbitPreview(IViewport inViewport)
     {
-        if (!StockPlanner.ShowPlanWindow)
-        {
-            DropPlanState();
+        if (!TransferPlanner.ShowPlanWindow)
             return;
-        }
 
         if (_ourBurn != null || _lastSource == null) return;
         if (!_showOrbitPreview) return;
@@ -545,6 +542,13 @@ internal static class Patch_DrawPlanWindow
         if (_ourBurn.Vehicle.Id != source.Id
             || !source.FlightComputer.BurnPlan.TryGetBurn(_ourBurn))
             _ourBurn = null;
+    }
+
+    // The keybind and View menu close the window without drawing its body.
+    internal static void TickWindowState()
+    {
+        if (!TransferPlanner.ShowPlanWindow)
+            DropPlanState();
     }
 
     private static void DropPlanState()
