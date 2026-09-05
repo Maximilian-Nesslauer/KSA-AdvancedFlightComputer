@@ -7,18 +7,13 @@ using KSA;
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// Label-and-control rows built on the game's ConsoleWidgets, mirroring the
-/// private row helpers stock uses in TransferPlanner. The mod's UI is drawn
-/// inside stock windows (or windows shaped like them), so it lays out through
-/// the same widgets rather than raw ImGui, which would render at a different
-/// size, color and column position than everything around it.
-///
-/// Labels are passed through as given; stock writes them upper case.
+/// Label-and-control rows built on the game's ConsoleWidgets, mirroring the private row helpers
+/// stock uses in TransferPlanner. The mod draws inside stock windows, so raw ImGui would render at
+/// a different size, colour and column position than everything around it. Labels are passed
+/// through as given, and stock writes them upper case.
 /// </summary>
 internal static class ConsoleUi
 {
-    /// <summary>One-line status text in the muted body colour, for the
-    /// "nothing to do here" cases that are not a row.</summary>
     public static void Muted(ReadOnlySpan<char> text)
     {
         ConsoleStyle.PushValueFont();
@@ -116,8 +111,8 @@ internal static class ConsoleUi
         return changed;
     }
 
-    /// <summary>String-list combo for options that are not IComboable. Returns
-    /// the newly selected index, or -1 when nothing was picked this frame.</summary>
+    /// <summary>String-list combo. Returns the newly selected index, or -1 when nothing was picked
+    /// this frame.</summary>
     public static int ComboRow(ReadOnlySpan<char> label, ReadOnlySpan<char> id,
         int activeIndex, IReadOnlyList<string> options)
     {
@@ -138,9 +133,8 @@ internal static class ConsoleUi
         return picked;
     }
 
-    /// <summary>InputDouble hosted in a row. Kept an InputDouble rather than a
-    /// ConsoleWidgets drag control because these fields take typed absolute
-    /// values (altitudes, angles) that a drag range cannot express.</summary>
+    /// <summary>An InputDouble rather than a ConsoleWidgets drag control, because these fields take
+    /// typed absolute values (altitudes, angles) that a drag range cannot express.</summary>
     public static bool InputDoubleRow(ReadOnlySpan<char> label, ImString id, ref double value,
         double step, double stepFast, ImString format)
     {
@@ -148,16 +142,6 @@ internal static class ConsoleUi
         ImGui.SetNextItemWidth(ConsoleWidgets.RowControlWidth);
         bool changed = ImGui.InputDouble(id, ref value, step, stepFast, format,
             ImGuiInputTextFlags.CharsDecimal);
-        ConsoleWidgets.EndRow();
-        return changed;
-    }
-
-    public static bool InputIntRow(ReadOnlySpan<char> label, ImString id, ref int value,
-        int step, int stepFast)
-    {
-        ConsoleWidgets.BeginRow(label);
-        ImGui.SetNextItemWidth(ConsoleWidgets.RowControlWidth);
-        bool changed = ImGui.InputInt(id, ref value, step, stepFast, ImGuiInputTextFlags.CharsDecimal);
         ConsoleWidgets.EndRow();
         return changed;
     }

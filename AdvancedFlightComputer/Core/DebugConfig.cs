@@ -1,10 +1,8 @@
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// Per-feature debug toggles. In DEBUG builds all flags default to true;
-/// set individual flags to false at the top of this file to reduce log
-/// noise while debugging a specific feature. In Release builds everything
-/// defaults to off.
+/// Per-feature debug logging switches. They are on in DEBUG builds and off in Release. Flip one
+/// here to quiet a feature while debugging another.
 /// </summary>
 internal static class DebugConfig
 {
@@ -23,7 +21,4 @@ internal static class DebugConfig
     public static bool Flyby = false;
     public static bool Performance = false;
 #endif
-
-    public static bool Any => HyperbolicTargets || ManeuverTools || MultiPass
-        || RcsTranslation || Flyby || Performance;
 }
