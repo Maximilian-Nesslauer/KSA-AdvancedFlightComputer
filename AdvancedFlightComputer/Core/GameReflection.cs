@@ -90,7 +90,8 @@ internal static class GameReflection
     public static readonly FieldInfo? TransferPlanner_displaySelectedTransfer =
         AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
 
-    [UsedBy(Feature.ManeuverTools)]
+    // HyperbolicTargets binds its finalizer to the same method by name.
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 

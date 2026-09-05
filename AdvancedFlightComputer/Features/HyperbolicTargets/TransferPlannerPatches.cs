@@ -128,60 +128,93 @@ internal static class Patch_HohmannFlight
 }
 
 /// <summary>
-/// SetTransferInfo derives Min/MaxTransferTimeOfFlight from the target's
-/// orbital Period, which is NaN for unbound orbits. We replace the NaN
-/// values with ratios of our Hohmann estimate; stock's own time-unit
-/// auto-pick already runs against the patched (finite) Hohmann ToF, so
-/// no extra unit selection is needed here.
+/// Replaces the transfer window stock derives from the target's Period, which
+/// is NaN on an unbound orbit, with ratios of the Hohmann estimate.
+///
+/// A finalizer rather than a postfix, because <c>UniverseTime.NanosecondsFromSeconds</c>
+/// throws on NaN and <c>TransferPlanner.SetTransferInfo</c> subtracts the NaN Period
+/// from a UniverseTime, so the original never completes for these targets and a
+/// postfix would never run. By the time it throws, stock has already stored the new
+/// TransferInfo with the patched Hohmann estimate, which is everything the window
+/// needs. Only the lines after the throw are replayed here, namely the window, the
+/// two selected time fields and the time unit pick.
+///
+/// <c>SetTransferInfo</c> is called from <c>TransferPlanner.DrawPlanWindow</c>
+/// only, so this runs on the draw thread and may raise the player alert.
 /// </summary>
 [HarmonyPatch(typeof(TransferPlanner), "SetTransferInfo", new Type[0])]
 internal static class Patch_SetTransferInfo
 {
-    /// <summary>Targets already alerted about this mod load, so re-selecting a
-    /// destination does not re-announce the same thing.</summary>
     private static readonly HashSet<string> _alertedTargets = new();
 
     public static void Reset() => _alertedTargets.Clear();
 
-    static void Postfix()
+    static Exception? Finalizer(Exception? __exception)
     {
         try
         {
             OrbitalTransfers.TransferInfo? info = StockPlanner.TransferInfo;
-            if (info?.Target?.Orbit == null) return;
-            if (info.Target.Orbit.IsBound()) return;
+            if (info?.Target?.Orbit == null || info.Target.Orbit.IsBound())
+                return __exception;
+            if (__exception != null && __exception is not ArgumentException)
+                return __exception;
 
-            UniverseTime hohmann = info.HohmannTimeOfFlight;
-            double hohmannSec = hohmann.Seconds();
+            double hohmannSec = info.HohmannTimeOfFlight.Seconds();
             if (!(hohmannSec > 0.0))
-                return;
+            {
+                // No estimate to size a window from. A null TransferInfo is stock's
+                // own "nothing selected" state, so the window degrades instead of
+                // throwing out of the draw every frame.
+                if (GameReflection.TransferPlanner_transferInfoRef is { } infoRef)
+                    infoRef() = null;
+                LogHelper.WarnOnce(
+                    $"transfer-window-degenerate-{(info.Target as Astronomical)?.Id ?? "?"}",
+                    "[AFC] SetTransferInfo: no Hohmann estimate for the unbound target; " +
+                    "transfer cleared.");
+                return null;
+            }
 
             info.MinTransferTimeOfFlight = new UniverseTime(hohmannSec * HyperbolicTargets.MinTofRatio);
             info.MaxTransferTimeOfFlight = new UniverseTime(hohmannSec * HyperbolicTargets.MaxTofRatio);
+            GameReflection.TransferPlanner_selectedMinTime!.SetValue(null, info.MinTransferTimeOfFlight);
+            GameReflection.TransferPlanner_selectedMaxTime!.SetValue(null, info.MaxTransferTimeOfFlight);
+            SelectTimeUnit(hohmannSec);
 
-            GameReflection.TransferPlanner_selectedMinTime!
-                .SetValue(null, info.MinTransferTimeOfFlight);
-            GameReflection.TransferPlanner_selectedMaxTime!
-                .SetValue(null, info.MaxTransferTimeOfFlight);
-
-            MaybeAlertDepartureWindowPast(info, hohmann);
+            MaybeAlertDepartureWindowPast(info, info.HohmannTimeOfFlight);
+            return null;
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] SetTransferInfo postfix: {ex}");
+            DefaultCategory.Log.Warning($"[AFC] SetTransferInfo finalizer: {ex}");
+            return __exception;
         }
     }
 
-    /// <summary>Says once per target that the ideal departure - one transfer time
-    /// before the target's periapsis - is already behind the current sim time,
-    /// which is why the porkchop window looks degenerate.
-    ///
-    /// This lives here rather than in <see cref="Patch_AlignmentTime"/>, which
-    /// evaluates the same condition but also runs on the porkchop worker thread.
-    /// <c>TransferPlanner.SetTransferInfo</c> is only ever called from
-    /// <c>TransferPlanner.DrawPlanWindow</c>, so this postfix is draw-thread only
-    /// and both <c>TimedAlert.Create</c> and the plain dedup set above are safe
-    /// here.</summary>
+    /// <summary>Stock's own unit pick, replayed because it sits after the line
+    /// that throws. It takes the first unit whose formatted estimate has at most
+    /// three integer digits.</summary>
+    private static void SelectTimeUnit(double hohmannSec)
+    {
+        if (GameReflection.TransferPlanner_timeUnits!.GetValue(null) is not List<TimeObject> units)
+            return;
+        foreach (TimeObject unit in units)
+        {
+            ReadOnlySpan<char> text = TimeSpanReference.AllocateNearestString(unit.Unit, hohmannSec);
+            int end = text.IndexOfAny(' ', '.');
+            int integerDigits = end < 0 ? text.Length : end;
+            if (integerDigits <= 3)
+            {
+                GameReflection.TransferPlanner_selectedTimeUnit!.SetValue(null, unit);
+                return;
+            }
+        }
+    }
+
+    /// <summary>Says once per target that the ideal departure, one transfer time
+    /// before the target's periapsis, is already behind the sim time, which is
+    /// why the porkchop window looks degenerate. <see cref="Patch_AlignmentTime"/>
+    /// evaluates the same condition but also runs on the porkchop worker, and
+    /// <c>TimedAlert.Create</c> mutates an unsynchronized list the draw thread walks.</summary>
     private static void MaybeAlertDepartureWindowPast(
         OrbitalTransfers.TransferInfo info, UniverseTime hohmannToF)
     {
@@ -191,10 +224,9 @@ internal static class Patch_SetTransferInfo
         string targetId = (info.Target as Astronomical)?.Id ?? "?";
         if (!_alertedTargets.Add(targetId)) return;
 
-        // Deliberately does not claim the transfer falls back to a later window:
-        // an unbound target has a single periapsis passage, and TransferTask.Run
-        // builds its start sweep from the current sim time regardless of what
-        // AlignmentTime returned.
+        // An unbound target has one periapsis passage, and TransferTask.Run sweeps
+        // from the current sim time whatever AlignmentTime returned, so this does
+        // not promise a later window.
         TimedAlert.Create(
             $"{targetId}: the ideal departure, one transfer time before its periapsis, " +
             "has already passed. The porkchop window starts from the current time.",
