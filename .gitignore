@@ -66,11 +66,29 @@ PoweredGuidance/scvx/python_ref/loop_cs.csv
 Thumbs.db
 Desktop.ini
 .DS_Store
-# Python virtualenv / cache (PoweredGuidance/gfold/python_ref)
-PoweredGuidance/gfold/python_ref/.venv/
+# Python virtualenv / cache. Anywhere under the imported subtree, not just
+# gfold/python_ref: scvx/python_ref grows one the moment anyone regenerates the
+# JAX/CVXPY oracles the C# checks diff against.
+PoweredGuidance/**/.venv/
 __pycache__/
 *.pyc
 
 # Cargo's build tree for the vendored Clarabel crate. (The DLL it produces lands in
 # PoweredGuidance/gfold/native/, already ignored above with every other built native.)
 PoweredGuidance/gfold/clarabel/rust_wrapper/target/
+
+# CMake out-of-source build dir in the vendored Clarabel tree. build-clarabel.ps1 uses
+# cargo directly and never invokes CMake, but clarabel/CMakeLists.txt is checked in, so
+# a manual `cmake -B build` there would otherwise land untracked. (scs/.gitignore
+# already covers the equivalent for SCS, along with its *.o/*.a/out.)
+PoweredGuidance/gfold/clarabel/build/
+
+# Vendored upstream CI. GitHub only ever reads .github/workflows at the REPO ROOT, so
+# these never ran here - they were removed after the import, and this keeps re-vendoring
+# Clarabel or SCS from quietly bringing 17 dead workflow files back.
+PoweredGuidance/**/.github/workflows/
+
+## Scratch
+# No .log or .tmp is tracked anywhere in this repo; both are output by definition.
+*.log
+*.tmp

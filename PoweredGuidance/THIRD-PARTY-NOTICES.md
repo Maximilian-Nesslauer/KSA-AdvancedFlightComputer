@@ -1,10 +1,10 @@
 # Third-party notices
 
-navbox is MIT licensed (see [`LICENSE`](LICENSE)). It vendors and redistributes the
-following third-party components, each under its own permissive licence. Their terms
-require the copyright and permission notices to travel with any distribution; none of
-them impose copyleft on this work, and none of them make this work Apache or BSD — a
-permissive dependency does not relicense its dependent.
+The PoweredGuidance subtree is MIT licensed (see [`LICENSE`](../LICENSE), at the repo
+root). It vendors and redistributes the following third-party components, each under its
+own permissive licence. Their terms require the copyright and permission notices to
+travel with any distribution; none of them impose copyleft on this work, and none of them
+make this work Apache or BSD — a permissive dependency does not relicense its dependent.
 
 **Binary releases** carry the full licence texts in `licenses/` alongside the DLLs they
 apply to. In the source tree they live at the paths given below.
