@@ -52,6 +52,7 @@ Build this solution and HeadlessHarness, checked out as a sibling, in the same c
 | --- | --- |
 | Maneuver quick-tools | `afc-set-periapsis,afc-set-apoapsis,afc-circularize,afc-set-inclination,afc-match-inclination,afc-target-identity` |
 | Flyby targeting | `afc-flyby-targeting,afc-flyby-departure` |
+| Hyperbolic targets | `afc-hyperbolic-targets` |
 | Multi-pass | `afc-sequence-burnstate` |
 | RCS translation (pure) | `afc-rcs-allocator,afc-rcs-estimates,afc-rcs-registry,afc-rcs-lp-solver` |
 | RCS translation (flight) | `afc-rcs-translation,afc-rcs-lp` |
