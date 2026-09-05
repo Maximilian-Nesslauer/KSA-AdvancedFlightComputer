@@ -18,6 +18,16 @@ New plan types in the stock Transfer Planner dropdown:
 - **Match Inclination** - plane-change burn at AN or DN to align with a target orbit's plane.
 - **Set Inclination** - plane-change burn at AN or DN to set an absolute inclination angle. The reference plane is selectable: **Ecliptic** (matches `Orbit.Inclination`, KSA's system-wide inertial Z) or **Equatorial** (parent body's equator, standard astrodynamics convention). For Earth the two differ by the ~23.4 degree obliquity.
 
+Right-click the controlled vehicle's orbit and open **Advanced Flight Computer** to select a quick-tool.
+The **At Periapsis** submenu offers **AFC: Set Apoapsis...**, and **At Apoapsis** offers **AFC: Set Periapsis...**.
+These shortcuts open the planner and they do not place a burn at the clicked point.
+
+Quick-tools can plan a single burn after the last planned burn that changes the trajectory.
+For example, plan a burn to raise apoapsis, then use **Set Periapsis** on the resulting orbit.
+The preview and created node use that post-burn trajectory.
+Multi-pass cannot start on a pending burn's trajectory.
+Shortcuts wait until a stock transfer calculation or active multi-pass execution has finished.
+
 ### Flyby Targeting
 
 The stock planner aims every transfer at the target body's center, so a well-timed Hohmann arrives as an impact and the flyby has to be set up afterwards as a separate correction. Tick **Target flyby periapsis** in the Transfer Planning window and the departure burn is aimed to arrive at a periapsis you choose instead, so **Create** fires the flyby directly.
@@ -115,6 +125,8 @@ Required only to build the mod from source. Targets **.NET 10**.
 - `afc-set-periapsis` / `afc-set-apoapsis` assert that a computed apse burn reaches the requested altitude and leaves the opposite apse untouched, and that impossible requests yield no maneuver.
 - `afc-circularize` asserts circularization at both apses and the "nothing to do" contract for circular and unbound orbits.
 - `afc-set-inclination` / `afc-match-inclination` assert node burns against the ecliptic and equatorial references, partial-fraction burns, and the coplanar and hyperbolic edge cases.
+- `afc-burn-menu-launcher` checks that the four orbit-menu shortcuts select the requested tool and source, reset input defaults, and leave the planner unchanged when a shortcut type is removed. It also checks closed-window cleanup before the plan-type gate.
+- `afc-maneuver-transpilers` checks the shortcut and create-button injections against the current game IL and verifies exception boundaries with Harmony-patched test methods.
 - `afc-target-identity` asserts that a Match Inclination target selection keeps naming the same body while vehicles are spawned and despawned around it, because the game's lookup swap-removes on deregister and a held index would drift.
 - `afc-flyby-targeting` asserts the flyby impact-parameter closed forms against the game's own hyperbolic orbit elements, the periapsis reference resolution, and the airless-body case where no atmosphere reference is offered.
 - `afc-flyby-departure` builds a departure toward a real moon: the center-aimed baseline must impact, the retargeted one must clear the body at the requested periapsis, and Inner / Outer must land on opposite sides of it.

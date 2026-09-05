@@ -50,7 +50,7 @@ Build this solution and HeadlessHarness, checked out as a sibling, in the same c
 
 | Feature | Filter |
 | --- | --- |
-| Maneuver quick-tools | `afc-set-periapsis,afc-set-apoapsis,afc-circularize,afc-set-inclination,afc-match-inclination,afc-target-identity` |
+| Maneuver quick-tools | `afc-set-periapsis,afc-set-apoapsis,afc-circularize,afc-set-inclination,afc-match-inclination,afc-target-identity,afc-burn-menu-launcher,afc-maneuver-transpilers` |
 | Flyby targeting | `afc-flyby-targeting,afc-flyby-departure` |
 | Hyperbolic targets | `afc-hyperbolic-targets` |
 | Multi-pass | `afc-sequence-burnstate` |
