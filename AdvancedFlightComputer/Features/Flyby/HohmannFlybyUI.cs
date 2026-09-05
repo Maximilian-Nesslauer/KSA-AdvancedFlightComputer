@@ -44,29 +44,30 @@ internal static class HohmannFlybyUI
     private static double _inputValueKm = 100.0;
     private static FlybySide _side = FlybySide.Inner;
 
-    // Keyed on what the retarget actually consumes: the transfer window, the
-    // requested periapsis / side, and the departure orbit. Vehicle mass is NOT a
-    // field - the retarget is pure orbital mechanics (state vectors plus mu), so
-    // keying on mass would rebuild the whole solve on every gram of propellant
-    // drained.
-    //
-    // The orbit-changed signal is periapsis plus eccentricity, NOT the semi-major
-    // axis: on the near-parabolic departure ellipse this feature creates, da/dv is
-    // of order 1e6 m per m/s, so millimetre-per-second integrator jitter would move
-    // the SMA by kilometres and bust the cache every frame. Periapsis and
-    // eccentricity stay put while coasting and still jump hard once a burn runs.
-    private readonly record struct FlybyKey(
+    // What the retarget consumes, split into the inputs a user or a porkchop click
+    // changes and the departure orbit, which drifts on its own during a burn. A
+    // changed input always recomputes, while orbit drift is frozen under thrust,
+    // see UpdateCacheIfStale. Vehicle mass is not a key, because the retarget is
+    // orbital mechanics only and keying on mass would rebuild the solve per gram
+    // burned.
+    private readonly record struct FlybyInputs(
         string SourceId,
         string TargetId,
         long StartBucketSec,
         long TransitBucketSec,
         FlybyReference Reference,
         long ValueBucketM,
-        FlybySide Side,
-        long PeriapsisBucketKm,
-        long EccentricityBucket);
+        FlybySide Side);
 
-    private static FlybyKey _cachedKey;
+    // Periapsis and eccentricity rather than the semi major axis, because on the
+    // nearly parabolic departure ellipse this feature creates da/dv is of order
+    // 1e6 m per m/s, so integrator jitter would move the SMA by kilometres and bust
+    // the cache every frame. Periapsis and eccentricity hold while coasting and
+    // still jump once a burn runs.
+    private readonly record struct DepartureOrbit(long PeriapsisBucketKm, long EccentricityBucket);
+
+    private static FlybyInputs _cachedInputs;
+    private static DepartureOrbit _cachedOrbit;
     private static bool _hasCached;
     private static FlybyTargeting.FlybyOutcome _cachedOutcome;
     private static FlybyTargeting.FlybyResult? _cachedResult;
@@ -289,36 +290,36 @@ internal static class HohmannFlybyUI
     {
         if (info.Target is not IOrbiter targetOrbiter) return;
 
-        var key = new FlybyKey(
+        var inputs = new FlybyInputs(
             SourceId: source.Id,
             TargetId: (target as Astronomical)?.Id ?? string.Empty,
             StartBucketSec: (long)entry.TransferData.Start.Seconds(),
             TransitBucketSec: (long)entry.TransferData.Transit.Seconds(),
             Reference: _reference,
             ValueBucketM: (long)peRadius,
-            Side: _side,
+            Side: _side);
+        var orbit = new DepartureOrbit(
             PeriapsisBucketKm: (long)(source.Orbit.Periapsis / 1000.0),
             EccentricityBucket: (long)(source.Orbit.Eccentricity * 10000.0));
 
-        if (_hasCached && key == _cachedKey) return;
-
-        // Freeze while thrusting: the departure orbit changes every tick, and each
-        // recompute is three Lambert solves plus a full preview FlightPlan, so an
-        // unfrozen cache rebuilds all of that per frame for the whole burn. Covers
-        // both an Auto burn and a manual throttle. The displayed numbers go
-        // slightly stale for the duration and refresh once thrust stops.
-        //
-        // An expired result deliberately does NOT force a recompute here: the
-        // recompute would return the same past burn time and loop every frame.
-        // TryGetArmed refuses expired results instead, and DrawResult says so.
-        if (_hasCached && IsThrusting(source))
-            return;
+        if (_hasCached && inputs == _cachedInputs)
+        {
+            if (orbit == _cachedOrbit) return;
+            // The departure orbit changes every tick under thrust, and a recompute
+            // is three Lambert solves plus a preview FlightPlan, so drift is frozen
+            // for the burn and refreshed once thrust stops, and the readouts go
+            // slightly stale meanwhile. An expired result is not recomputed either,
+            // because the same inputs give the same past burn time. TryGetArmed
+            // refuses it and DrawResult says so.
+            if (IsThrusting(source)) return;
+        }
 
         _cachedOutcome = FlybyTargeting.ComputeFlybyDeparture(
             source, targetOrbiter, entry.TransferData.Start, entry.TransferData.Transit,
             peRadius, _side);
         _cachedResult = _cachedOutcome.Result;
-        _cachedKey = key;
+        _cachedInputs = inputs;
+        _cachedOrbit = orbit;
         _hasCached = true;
         BuildPreview(source, targetOrbiter, target, _cachedResult);
 
@@ -326,7 +327,7 @@ internal static class HohmannFlybyUI
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannFlybyUI.UpdateCacheIfStale: vehicle='{0}' target='{1}' " +
                 "rp={2:F0}m side={3} -> {4} predictedPeAlt={5:F0}m",
-                source.Id, key.TargetId, peRadius, _side,
+                source.Id, inputs.TargetId, peRadius, _side,
                 _cachedResult == null ? "FAILED" : "ok",
                 _predictedPeAlt));
     }
@@ -442,7 +443,7 @@ internal static class HohmannFlybyUI
             return false;
 
         source = StockPlanner.SourceVehicle;
-        return source != null && source.Id == _cachedKey.SourceId;
+        return source != null && source.Id == _cachedInputs.SourceId;
     }
 
     /// <summary>True when stock's center-aimed preview should be skipped because the
@@ -502,7 +503,8 @@ internal static class HohmannFlybyUI
         _hasCached = false;
         _cachedResult = null;
         _cachedOutcome = default;
-        _cachedKey = default;
+        _cachedInputs = default;
+        _cachedOrbit = default;
         _belowFloor = false;
         _predictedPeAlt = double.NaN;
         _predictedPeRadius = double.NaN;
@@ -529,7 +531,7 @@ internal static class HohmannFlybyUI
         result = default;
         if (!FlybyRequested || _belowFloor) return false;
         if (!_hasCached || _cachedResult == null) return false;
-        if (_cachedKey.SourceId != vehicle.Id) return false;
+        if (_cachedInputs.SourceId != vehicle.Id) return false;
         // Never hand a past burn time to Burn.Create: no patch covers it, and the
         // interceptor would fall back to the stock impact-aimed burn.
         if (IsCacheExpired()) return false;
