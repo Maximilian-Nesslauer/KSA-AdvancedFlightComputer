@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Scvx</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- The native solver travels with the managed library, same pattern as
+         Gfold.Core. scs.dll is built by build-scs.ps1 into scvx/native, and
+         NativeLibraries.cs loads it from beside this assembly. -->
+    <None Include="..\native\scs.dll" Link="scs.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared numerical primitives (the tensor-product spline behind the aero
+         surrogate). PoweredGuidance.Numerics itself references nothing, so this does not
+         weaken the no-game-assembly rule below. -->
+    <ProjectReference Include="..\..\lib\PoweredGuidance.Numerics\PoweredGuidance.Numerics.csproj" />
+  </ItemGroup>
+
+  <!-- Deliberately references no game assembly, and no project that does. The SCvx
+       solve must be pure computation over plain data so it can run off the main
+       thread, and keeping that out at project level makes a violation a compile
+       error rather than a review comment. -->
+
+</Project>

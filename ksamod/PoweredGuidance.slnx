@@ -1,0 +1,12 @@
+<Solution>
+  <!-- The whole shipped product in one view: the mod, everything it links, and the
+       convtest harness. The per-subsystem solutions (gfold/Gfold.slnx, scvx/Scvx.slnx,
+       lib/Lib.slnx) still exist and are the place to work on those alone - a solution
+       is a view, not ownership. The Consoles are deliberately NOT here: they are
+       validation harnesses that live beside their reference data and build scripts. -->
+  <Project Path="PoweredGuidance.csproj" />
+  <Project Path="../gfold/Gfold.Core/Gfold.Core.csproj" />
+  <Project Path="../scvx/Scvx.Core/Scvx.Core.csproj" />
+  <Project Path="../lib/PoweredGuidance.Numerics/PoweredGuidance.Numerics.csproj" />
+  <Project Path="../tools/convtest/convtest.csproj" />
+</Solution>

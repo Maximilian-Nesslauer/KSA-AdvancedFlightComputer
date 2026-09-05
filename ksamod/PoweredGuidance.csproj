@@ -1,0 +1,132 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>PoweredGuidance</AssemblyName>
+    <Version>0.4.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <!-- Path to the installed game. Override on the command line with -p:KsaDir=... -->
+    <KsaDir Condition="'$(KsaDir)' == ''">C:\Program Files\Kitten Space Agency</KsaDir>
+    <!-- The mod is loaded by StarMap from the game's mods folder. -->
+    <ModName>PoweredGuidance</ModName>
+    <ModDir>$(USERPROFILE)\Documents\My Games\Kitten Space Agency\mods\$(ModName)\</ModDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- StarMap loads the mod and provides Harmony + this marker API at runtime, so
+         neither package is shipped into the mod folder (compile-time references). -->
+    <PackageReference Include="StarMap.API" Version="0.3.6" />
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Our convex-optimization terminal-guidance library. The managed DLL comes
+         across the project reference; its native solvers are None copies made by
+         Gfold.Core itself and are shipped on by CopyToMods below. -->
+    <ProjectReference Include="..\gfold\Gfold.Core\Gfold.Core.csproj" />
+
+    <!-- 6-DOF successive-convexification guidance. Like Gfold.Core it references
+         no game assembly, so the solve stays pure computation that can run off
+         the main thread. Currently dynamics + AD only; nothing calls it yet. -->
+    <ProjectReference Include="..\scvx\Scvx.Core\Scvx.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ThirdPartyLicense Include="licenses\*.txt" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- StarMap mod manifest. -->
+    <None Update="mod.toml" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Game assemblies: referenced for compile only, never copied to output. -->
+    <Reference Include="KSA">
+      <HintPath>$(KsaDir)\KSA.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.ImGui">
+      <HintPath>$(KsaDir)\Brutal.ImGui.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Numerics">
+      <HintPath>$(KsaDir)\Brutal.Core.Numerics.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="BepuUtilities">
+      <HintPath>$(KsaDir)\BepuUtilities.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Strings">
+      <HintPath>$(KsaDir)\Brutal.Core.Strings.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <!-- After build, install into the game's mods folder: the mod DLL, the manifest,
+       and our private deps (managed Gfold.Core + its native solvers). StarMap discovers
+       the folder via mod.toml and loads PoweredGuidance as the EntryAssembly. -->
+  <Target Name="CopyToMods" AfterTargets="Build">
+    <MakeDir Directories="$(ModDir)" />
+    <!-- Dependencies FIRST, entry assembly LAST. The game holds a lock on the entry
+         assembly whenever it is running, and MSBuild aborts the target at the first
+         failed Copy — so with the entry assembly first, a running game silently left
+         every dependency stale. That shipped new mod code against an hour-old
+         Scvx.Core.dll and looked like "the mod stopped working". -->
+    <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ModDir)" />
+    <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ModDir)" />
+    <!-- Scvx.Core's own managed dependency (the aero surrogate's spline). Missing it
+         would fail at the first AeroTable use with a FileNotFoundException, not at load. -->
+    <Copy SourceFiles="$(OutputPath)PoweredGuidance.Numerics.dll" DestinationFolder="$(ModDir)" />
+    <!-- Scvx.Core P/Invokes scs.dll for the 6-DOF subproblem. (Gfold.Core used to as
+         well; it is Clarabel-only now.) Shipping without it would fail at the first
+         SCS call with a DllNotFoundException, not at load. -->
+    <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ModDir)" />
+    <!-- Clarabel: interior point like ECOS, Apache-2.0 like nothing else here, and the
+         descent's default solver. Conditioned because it is built on demand rather
+         than checked in - see gfold/build-clarabel.ps1. -->
+    <Copy SourceFiles="$(OutputPath)clarabel_c.dll" DestinationFolder="$(ModDir)"
+          Condition="Exists('$(OutputPath)clarabel_c.dll')" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ModDir)" />
+  </Target>
+
+  <!-- Release builds also produce a distributable zip: a top-level PoweredGuidance\ folder the
+       user extracts into their game's mods\ directory. LICENSE (MIT) is bundled along
+       with THIRD-PARTY-NOTICES for the vendored solvers' attribution requirements. -->
+  <Target Name="PackageRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <ReleaseDir>$(OutputPath)release\$(ModName)\</ReleaseDir>
+      <ZipPath>$(OutputPath)$(ModName)-$(Version).zip</ZipPath>
+    </PropertyGroup>
+    <RemoveDir Directories="$(OutputPath)release" />
+    <MakeDir Directories="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)Gfold.Core.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)Scvx.Core.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)PoweredGuidance.Numerics.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)scs.dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)clarabel_c.dll" DestinationFolder="$(ReleaseDir)"
+          Condition="Exists('$(OutputPath)clarabel_c.dll')" />
+    <Copy SourceFiles="..\LICENSE" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="..\THIRD-PARTY-NOTICES.md" DestinationFolder="$(ReleaseDir)" />
+    <!-- The vendored solvers' own licence texts, shipped ALONGSIDE the binaries that
+         carry their terms. Apache-2.0 s.4(a) requires giving recipients a copy of the
+         licence, and MIT and BSD-3 both require the notice to travel with the copy;
+         THIRD-PARTY-NOTICES.md attributes them but pointing at a source path is not
+         the same as including the text in a binary package. -->
+    <Copy SourceFiles="@(ThirdPartyLicense)" DestinationFolder="$(ReleaseDir)licenses\" />
+    <!-- The changelog lives at the REPO ROOT, not beside the csproj: it covers the
+         whole of navbox, of which this mod is one part. -->
+    <Copy SourceFiles="..\CHANGELOG.md" DestinationFolder="$(ReleaseDir)" />
+    <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />
+    <RemoveDir Directories="$(OutputPath)release" />
+    <Message Importance="high" Text="Release packaged: $(ZipPath)" />
+  </Target>
+
+</Project>

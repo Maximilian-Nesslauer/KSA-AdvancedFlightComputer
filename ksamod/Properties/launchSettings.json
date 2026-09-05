@@ -1,0 +1,9 @@
+{
+  "profiles": {
+    "KSA (StarMap loads Powered Guidance from mods folder)": {
+      "commandName": "Executable",
+      "executablePath": "C:\\Users\\Oliver\\StarMap\\StarMap.Loader.exe",
+      "workingDirectory": "C:\\Users\\Oliver\\StarMap"
+    }
+  }
+}
