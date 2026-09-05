@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -143,5 +144,67 @@ internal static class Patch_TryFindIntercept
         var posShip = patch.Orbit.GetStateVectorsAt(t).PositionCci;
         var posTarget = targetOrbit.GetStateVectorsAt(t).PositionCci;
         return (posTarget - posShip).Length();
+    }
+}
+
+/// <summary>
+/// Skips stock's closest approach search in the one case where it throws, which
+/// is a patch with a finite end time against a second body on an unbound orbit.
+/// That branch sizes its time window as the smaller of the patch length and the
+/// second body's Period, which is NaN there, and it builds a UniverseTime from
+/// the window before its own finiteness check, which is where the NaN throws.
+/// The end of time branch sizes the window from the asymptotic speeds instead
+/// and never reads Period, so it runs as stock wrote it. The search is reached
+/// from every flight plan's encounter scan once a comet has an SOI, which
+/// HyperbolicBodies.xml gives it, and from the target node computation when a
+/// comet is the vehicle's target. Finding nothing is what the finiteness check
+/// would settle on, and the transfer's own closest approach comes from
+/// <see cref="Patch_TryFindIntercept"/>.
+/// </summary>
+[HarmonyPatch]
+internal static class Patch_FindClosestApproaches
+{
+    private static readonly Type[] Signature =
+    {
+        typeof(Span<Encounter>),
+        typeof(int).MakeByRefType(),
+        typeof(IOrbiter),
+        typeof(UniverseTime).MakeByRefType(),
+    };
+
+    private static MethodInfo? Anchor =>
+        AccessTools.Method(typeof(PatchedConic), "FindClosestApproaches", Signature);
+
+    /// <summary>Whether the private stock method still exists in this build, so
+    /// the feature can report the gap instead of failing to patch.</summary>
+    public static bool IsAnchorPresent => Anchor != null;
+
+    static MethodBase TargetMethod() =>
+        Anchor ?? throw new InvalidOperationException(
+            "[AFC] PatchedConic.FindClosestApproaches not found; "
+            + "patching this class requires an IsAnchorPresent check first.");
+
+    static bool Prefix(PatchedConic __instance, IOrbiter secondBody)
+    {
+        try
+        {
+            // Mirrors the branch selection in the original. The window comes from
+            // the second body's Period only when neither eccentricity is below 1
+            // and the patch has a finite end time.
+            Orbit? target = secondBody?.Orbit;
+            if (target == null || target.IsBound()) return true;
+            if (__instance.EndTime.IsEndOfTime()) return true;
+            if (__instance.Orbit.Eccentricity < 1.0 && target.Eccentricity < 1.0) return true;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Fails open, because the original reads the same orbit right away and
+            // reports its own failure. Deduped because the scan runs per patch per
+            // frame.
+            LogHelper.WarnOnce("find-closest-approaches:" + ex.GetType().Name,
+                $"[AFC] FindClosestApproaches prefix: {ex}; running stock search.");
+            return true;
+        }
     }
 }

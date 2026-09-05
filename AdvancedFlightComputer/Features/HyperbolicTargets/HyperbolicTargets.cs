@@ -35,6 +35,17 @@ internal static class HyperbolicTargets
         harmony.CreateClassProcessor(typeof(Patch_AlignmentTime)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_TryFindIntercept)).Patch();
 
+        // The XML patch gives the comets an SOI whether or not this guard applies,
+        // and without the guard stock's encounter scan throws on them, so a missing
+        // anchor is an error rather than a quiet degrade.
+        if (Patch_FindClosestApproaches.IsAnchorPresent)
+            harmony.CreateClassProcessor(typeof(Patch_FindClosestApproaches)).Patch();
+        else
+            DefaultCategory.Log.Error(
+                "[AFC] HyperbolicTargets: PatchedConic.FindClosestApproaches not found. " +
+                "Stock's encounter search may throw on a comet that has an SOI; " +
+                "re-verify this feature before flying with HyperbolicBodies.xml enabled.");
+
         if (DebugConfig.HyperbolicTargets)
             DefaultCategory.Log.Debug("[AFC] HyperbolicTargets: all patches applied.");
     }
