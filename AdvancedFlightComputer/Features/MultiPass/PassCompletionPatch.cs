@@ -31,10 +31,6 @@ internal static class PassCompletionPatch
         if (!MultiPassRegistry.TryGet(vehicle.Id, out var exec))
             return;
 
-#if DEBUG
-        using var _perf = new PerfTracker.Scope("PassCompletionPatch.TickVehicle");
-#endif
-
         FlightComputer fc = vehicle.FlightComputer;
 
         // Keep active execution controls available after ignition clears the stock calculated flag.
