@@ -1,7 +1,6 @@
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using KSA;
@@ -65,7 +64,7 @@ internal sealed class SetInclinationIntent : IManeuverIntent
         var result = PlaneChangeBurnPlanner.PlanForSet(
             vehicle, TargetInclinationRad, Reference, UseDescendingNode, allocations, now, execution: true);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] SetInclinationIntent.RecomputePass: vehicle='{0}' targetInc={1:F2}deg " +
                 "passIndex={2}/{3} totalDv={4:F1}m/s remaining={5} -> {6} pass(es) " +

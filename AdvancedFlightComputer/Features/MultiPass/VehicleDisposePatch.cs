@@ -1,5 +1,4 @@
 using System;
-using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using KSA;
 
@@ -15,11 +14,6 @@ internal static class VehicleDisposePatch
             string vehicleId = vehicle.Id;
             if (string.IsNullOrEmpty(vehicleId)) return;
             if (!MultiPassRegistry.Has(vehicleId)) return;
-
-            if (DebugConfig.MultiPass)
-                DefaultCategory.Log.Debug(
-                    $"[AFC] VehicleDisposePatch: vehicle='{vehicleId}' disposed, " +
-                    "removing multi-pass execution.");
 
             MultiPassRegistry.Remove(vehicleId);
             PassCompletionPatch.OnRegistryRemovedExternally(vehicleId);

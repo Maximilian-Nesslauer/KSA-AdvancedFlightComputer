@@ -1,5 +1,4 @@
 using System;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using KSA;
@@ -33,10 +32,6 @@ internal static class MultiPassPreviewCache
 
         if (_cachedState != null && key == _cachedStateKey)
             return _cachedState;
-
-#if DEBUG
-        using var _perf = new PerfTracker.Scope("SequenceBurnState.Analyze");
-#endif
 
         _cachedState = SequenceBurnState.Analyze(source);
         _cachedStateKey = key;
@@ -175,10 +170,6 @@ internal static class MultiPassPreviewCache
         if (_hasPreviewKey && _cachedPreview != null
             && ShouldFreezeForThrust(source, key.WithoutDrift() == _cachedPreviewKey.WithoutDrift()))
             return;
-
-#if DEBUG
-        using var _perf = new PerfTracker.Scope("MultiPassPreviewCache.Plan");
-#endif
 
         PassAllocation[] allocations = Splitter.Allocate(totalDv, passCount, splitMode, state);
         PassPreviewResult result = PlanForType(

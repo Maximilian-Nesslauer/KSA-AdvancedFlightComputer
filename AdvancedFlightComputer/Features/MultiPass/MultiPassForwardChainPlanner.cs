@@ -71,7 +71,7 @@ internal static class MultiPassForwardChainPlanner
                 DvVlf: step.Value.DvVlf,
                 EstimatedBurnTimeSec: allocations[i].EstimatedBurnTimeSec,
                 FlightPlan: fp));
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 logPasses ??= execution || LogHelper.ThrottleAllows(
                     "forward-chain-passes", PassDiagnosticMinIntervalSec);
             if (logPasses == true)

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -91,7 +90,7 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
             vehicle, input, passCountTotal, passIndex,
             ParkingPeriodSec, state, now, mode);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannTransferIntent.RecomputePass: vehicle='{0}' target='{1}' " +
                 "passIndex={2}/{3} remaining={4} -> {5} pass(es) " +

@@ -37,7 +37,7 @@ internal static class MultiPassController
             PassIndex = 0,
         };
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPassController.StartWith: vehicle='{source.Id}' kind='{intent.Kind}' " +
                 $"passes={passCount} mode={mode} saveId='{exec.SaveId}'");
@@ -80,7 +80,7 @@ internal static class MultiPassController
                 DeleteBurn = true,
             });
         }
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={source.Id} user cancelled at pass " +
                 $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");

@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -107,7 +106,7 @@ internal static class PlaneChangeBurnPlanner
 
         OrbitManeuvers.ManeuverResult? m = computeWithFraction(fraction);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
         {
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] PlaneChange.{0}: " +
