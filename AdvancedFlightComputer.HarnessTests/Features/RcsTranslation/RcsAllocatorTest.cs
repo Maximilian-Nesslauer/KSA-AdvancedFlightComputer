@@ -17,6 +17,7 @@ public sealed class RcsAllocatorTest : AfcTest
     protected override void Execute(TestContext t)
     {
         CheckSharedThrusterPulse(t);
+        CheckMixedSharedThrusters(t);
         CheckShapeAxis(t);
         CheckMaxAxisPulse(t);
         CheckHoldPerformance(t);
@@ -34,7 +35,52 @@ public sealed class RcsAllocatorTest : AfcTest
         pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, 100f, 100f, 100f, 0f);
         t.CheckAbs("shared thruster fires once for two axes", pulse, 1.0, FloatTol);
         t.CheckAbs("shared thruster yaw impulse", pulse * 10f, 10.0, FloatTol);
-        t.Skip("Combined-axis Hold estimates still add shared thrusters per group. A per-thruster estimate requires an executor model change.");
+        CheckSharedEstimate(t, new float3(100f, 100f, 0f), new double3(Math.Sqrt(0.5), Math.Sqrt(0.5), 0));
+        CheckSharedEstimate(t, new float3(-100f, 100f, -100f), new double3(-1 / Math.Sqrt(3), 1 / Math.Sqrt(3), -1 / Math.Sqrt(3)));
+        CheckSharedEstimate(t, new float3(100f, 100f, 0f), new double3(0.8, 0.6, 0));
+        CheckSharedEstimate(t, new float3(100f, 100f, 0f), double3.UnitX);
+    }
+
+    private static void CheckSharedEstimate(TestContext t, float3 force, double3 direction)
+    {
+        RcsCapabilitySnapshot cap = default;
+        RcsCapability.AccumulateTranslation(ref cap, force, force, 1f, new float3(0, 0, 10), 0.01f);
+        cap.HasAnyTranslation = true;
+        cap.RotationMassFlowKgS = new float3(0, 0, 0.5f);
+        cap.RotationTorqueNm = new float3(0, 0, 50f);
+        float pulse = RcsComputeControlPatch.MaxAxisPulse(0f, (float)direction.X, force.X, cap.Ax0.ForceN, cap.Ax1.ForceN);
+        pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Y, force.Y, cap.Ax2.ForceN, cap.Ax3.ForceN);
+        pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Z, force.Z, cap.Ax4.ForceN, cap.Ax5.ForceN);
+        t.CheckMixed("shared flow matches worker pulse", RcsExecutor.GroupCostPerNs(in cap, direction), pulse, 1e-9, 1e-6);
+        t.CheckMixed("shared torque cost matches worker pulse", RcsExecutor.GroupAttitudeFightPerImpulse(in cap, direction), pulse * 10 * 0.01, 1e-9, 1e-6);
+        if (t.Check("shared direction feasible", RcsExecutor.TryHoldPerformance(in cap, direction, out double netForce, out double flow)))
+            t.CheckMixed("Hold flow uses the shared pulse once", flow, netForce * pulse, 1e-6, 1e-6);
+    }
+
+    private static void CheckMixedSharedThrusters(TestContext t)
+    {
+        float3[] forces = [new(100, 100, 0), new(50, 50, 0), new(0, 100, -100), new(50, 0, 0)];
+        float3[] torques = [new(0, 0, 10), new(0, 0, -20), new(0, 0, 5), new(0, 0, 3)];
+        float[] flows = [1f, 2f, 0.5f, 0.25f];
+        RcsCapabilitySnapshot cap = default;
+        for (int i = 0; i < forces.Length; i++)
+            RcsCapability.AccumulateTranslation(ref cap, forces[i], forces[i], flows[i], torques[i], 0.01f);
+        cap.RotationMassFlowKgS = new float3(0, 0, 0.5f);
+        cap.RotationTorqueNm = new float3(0, 0, 50f);
+        double3 direction = new(0.6, 0.48, -0.64);
+        double flow = 0.0;
+        double torque = 0.0;
+        for (int i = 0; i < forces.Length; i++)
+        {
+            float pulse = RcsComputeControlPatch.MaxAxisPulse(0f, (float)direction.X, forces[i].X, cap.Ax0.ForceN, cap.Ax1.ForceN);
+            pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Y, forces[i].Y, cap.Ax2.ForceN, cap.Ax3.ForceN);
+            pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Z, forces[i].Z, cap.Ax4.ForceN, cap.Ax5.ForceN);
+            flow += flows[i] * pulse;
+            torque += torques[i].Z * pulse;
+        }
+        t.CheckMixed("mixed membership flow matches worker", RcsExecutor.GroupCostPerNs(in cap, direction), flow, 1e-9, 1e-6);
+        t.CheckMixed("opposing shared torque is combined before pricing",
+            RcsExecutor.GroupAttitudeFightPerImpulse(in cap, direction), Math.Abs(torque) * 0.01, 1e-9, 1e-6);
     }
 
     private static void CheckShapeAxis(TestContext t)
