@@ -75,6 +75,15 @@ internal static partial class Patch_DrawPlanWindow
         return false;
     }
 
+    [HarmonyTranspiler]
+    static IEnumerable<CodeInstruction> Transpiler(
+        IEnumerable<CodeInstruction> instructions)
+        => PlanWindowPatchPipeline.Rewrite(instructions);
+
+    [HarmonyPostfix]
+    static void Postfix(IGameViewport inViewport)
+        => Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers.Draw(inViewport);
+
     private static void DrawWindow(IViewport inViewport, TransferType transferType)
     {
         ImGui.SetNextWindowPos(

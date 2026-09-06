@@ -17,6 +17,7 @@ internal static class HohmannCreateInterceptor
     public static bool ShouldAllowCreateClick(bool wasClicked)
     {
         if (!wasClicked) return false;
+        if (!HohmannMultiPassUI.Enabled && !HohmannFlybyUI.Enabled) return true;
         try
         {
             if (StockPlanner.SourceVehicle is not Vehicle source) return true;
@@ -44,6 +45,9 @@ internal static class HohmannCreateInterceptor
     {
         try
         {
+            if (!HohmannMultiPassUI.Enabled && !HohmannFlybyUI.Enabled)
+                return Burn.Create(point, time, deltaVVlf, patch, vehicle);
+
             // A failed gate must return a separate stock burn, never a reference to the active pass.
             if (MultiPassRegistry.Has(vehicle.Id))
             {
