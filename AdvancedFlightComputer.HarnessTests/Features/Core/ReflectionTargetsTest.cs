@@ -3,6 +3,7 @@ using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.HarnessTests.Framework;
 
 namespace AdvancedFlightComputer.HarnessTests;
@@ -20,12 +21,13 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("Core keys resolve", GameReflection.ValidateCore());
         t.Check("HyperbolicTargets keys resolve", GameReflection.ValidateHyperbolicTargets());
         t.Check("ManeuverTools keys resolve", GameReflection.ValidateManeuverTools());
+        t.Check("PlanWindow keys resolve", GameReflection.ValidatePlanWindow());
         t.Check("MultiPass keys resolve", GameReflection.ValidateMultiPass());
         t.Check("RcsTranslation keys resolve", GameReflection.ValidateRcsTranslation());
 
-        t.Check("DrawCorrectionTransfer anchor", Patch_DrawPlanWindow_HohmannMultiPass.IsAnchorPresent);
-        t.Check("Burn.Create anchor", Patch_DrawPlanWindow_CreateInterceptor.IsAnchorPresent);
-        t.Check("ConsoleStyle.PopWidgetStyle anchor", Patch_DrawPlanWindow_HohmannFallback.IsAnchorPresent);
+        t.Check("DrawCorrectionTransfer anchor", PlanWindowPatchPipeline.HasCalculatedControlsAnchor);
+        t.Check("Burn.Create anchor", PlanWindowPatchPipeline.HasCreateAnchor);
+        t.Check("ConsoleStyle.PopWidgetStyle anchor", PlanWindowPatchPipeline.HasFallbackControlsAnchor);
         t.Check("BurnContextMenu.Draw anchor", Patch_BurnContextMenu_Launcher.IsAnchorPresent);
         t.Check("DrawSelectedTransfer anchor", Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent);
         t.Check("DrawSelectedTransferUi anchor", Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent);

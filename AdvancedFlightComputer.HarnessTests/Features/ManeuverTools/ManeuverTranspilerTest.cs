@@ -2,8 +2,10 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Collections.ObjectModel;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using HarmonyLib;
 using KSA;
@@ -47,13 +49,9 @@ public sealed class ManeuverTranspilerTest : AfcTest
             typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender), [typeof(IViewport)]);
         try
         {
-            Patch(harmony, typeof(Patch_DrawPlanWindow));
-            Patch(harmony, typeof(Patch_DrawPlanWindow_HohmannMultiPass));
-            Patch(harmony, typeof(Patch_DrawPlanWindow_CreateInterceptor));
-            Patch(harmony, typeof(Patch_DrawPlanWindow_HohmannFallback));
-            Patch(harmony, typeof(Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers));
-            Patch(harmony, typeof(Patch_OnPreRender));
-            Patch(harmony, typeof(Patch_TransferPlanner_OnPreRender_Hohmann));
+            MethodInfo apply = typeof(AdvancedFlightComputer.Mod).GetMethod(
+                "PatchPlanWindow", BindingFlags.Static | BindingFlags.NonPublic)!;
+            apply.Invoke(null, [harmony]);
 
             Patches? drawPatches = Harmony.GetPatchInfo(draw);
             t.Check("DrawPlanWindow has one patch of each kind",
@@ -66,15 +64,20 @@ public sealed class ManeuverTranspilerTest : AfcTest
                 CountOwned(preRenderPatches?.Prefixes, id) == 0
                 && CountOwned(preRenderPatches?.Transpilers, id) == 0
                 && CountOwned(preRenderPatches?.Postfixes, id) == 1);
+
+            MethodInfo selectedTransfer = AccessTools.Method(
+                typeof(TransferPlanner), "DrawSelectedTransfer", [typeof(IViewport)]);
+            MethodInfo selectedTransferUi = AccessTools.Method(
+                typeof(TransferPlanner), "DrawSelectedTransferUi", [typeof(IGameViewport)]);
+            t.Check("PlanWindow owns both flyby suppression hooks",
+                CountOwned(Harmony.GetPatchInfo(selectedTransfer)?.Prefixes, id) == 1
+                && CountOwned(Harmony.GetPatchInfo(selectedTransferUi)?.Prefixes, id) == 1);
         }
         finally
         {
             harmony.UnpatchAll(id);
         }
     }
-
-    private static void Patch(Harmony harmony, Type patchType)
-        => harmony.CreateClassProcessor(patchType).Patch();
 
     private static int CountOwned(ReadOnlyCollection<Patch>? patches, string owner)
         => patches?.Count(patch => patch.owner == owner) ?? 0;
