@@ -74,15 +74,15 @@ internal static class MultiPassRegistry
     public static void Add(MultiPassExecution exec)
     {
         _byKey[(exec.SaveId, exec.VehicleId)] = exec;
-        if (DebugConfig.MultiPass)
-            MultiPassDebug.LogExec($"MultiPassRegistry.Add", exec);
+        if (MultiPassDebug.Enabled)
+            MultiPassDebug.LogExec("MultiPassRegistry.Add", exec);
     }
 
     public static void Remove(string vehicleId)
     {
         string saveId = SaveLoadObserver.CurrentSaveId;
         bool removed = _byKey.Remove((saveId, vehicleId));
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPassRegistry.Remove: save='{saveId}' vehicle='{vehicleId}' " +
                 $"-> {(removed ? "removed" : "not found")}");
@@ -109,7 +109,7 @@ internal static class MultiPassRegistry
         foreach (var key in stale)
         {
             _byKey.Remove(key);
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPassRegistry: dropped stale exec for " +
                     $"vehicle={key.Item2} of overwritten save '{newSaveId}'.");
@@ -121,7 +121,7 @@ internal static class MultiPassRegistry
             exec.SaveId = newSaveId;
             _byKey[(newSaveId, exec.VehicleId)] = exec;
 
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPassRegistry: rekeyed exec for " +
                     $"vehicle={exec.VehicleId} from save='{oldSaveId}' to '{newSaveId}'.");
@@ -141,7 +141,7 @@ internal static class MultiPassRegistry
         try
         {
             ParseFile(_configPath, _byKey);
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPassRegistry: loaded {_byKey.Count} entries from {_configPath}");
         }
@@ -174,7 +174,7 @@ internal static class MultiPassRegistry
             using (var writer = new StreamWriter(tempPath))
             {
                 int written = WriteToml(writer, _byKey.Values);
-                if (DebugConfig.MultiPass)
+                if (MultiPassDebug.Enabled)
                     DefaultCategory.Log.Debug($"[AFC] MultiPassRegistry: saved {written} persistent entries");
             }
 
