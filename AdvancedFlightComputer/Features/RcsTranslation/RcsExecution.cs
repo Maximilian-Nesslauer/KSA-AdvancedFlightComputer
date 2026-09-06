@@ -63,6 +63,8 @@ internal sealed class RcsExecution
     /// <summary>One shot guard for the ignition crossing debug log.</summary>
     public bool FiringLogged;
 
+    public RcsWorkerCommand? LastPublishedCommand;
+    public double LastWorkerReadAtSec = double.NaN;
 
     #region Fuel telemetry (accumulated by the driver, reported at Complete/Cancel)
 
@@ -181,6 +183,8 @@ internal sealed class RcsExecution
         SlewAccumSec = 0.0;
         LastTickSimSec = double.NaN;
         FiringLogged = false;
+        LastPublishedCommand = null;
+        LastWorkerReadAtSec = double.NaN;
         AlignCommanded = false;
         ForcedRcsOn = false;
         StartMassKg = 0.0;

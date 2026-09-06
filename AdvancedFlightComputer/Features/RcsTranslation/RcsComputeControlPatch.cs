@@ -6,7 +6,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>This postfix runs on the vehicle worker after FlightComputer.ComputeControl. It reads the published command and converts the remaining delta V into thruster pulses without allocating memory or taking locks.</summary>
+/// <summary>This postfix runs on the vehicle worker after FlightComputer.ComputeControl. It reads the published command and converts the remaining delta V into thruster pulses without allocating memory or taking locks. The worker also records that it read the command.</summary>
 [HarmonyPatch(typeof(FlightComputer), nameof(FlightComputer.ComputeControl))]
 internal static class RcsComputeControlPatch
 {
@@ -15,6 +15,8 @@ internal static class RcsComputeControlPatch
         // Only active executions may override stock engine commands and burn timing.
         if (!RcsCommandChannel.TryGet(__instance.BurnPlan, out RcsWorkerCommand cmd) || !cmd.Active)
             return;
+
+        cmd.MarkConsumed();
 
         // Suppress engine commands even if another caller changed BurnMode directly.
         ZeroEngineCommands(ref outputs);

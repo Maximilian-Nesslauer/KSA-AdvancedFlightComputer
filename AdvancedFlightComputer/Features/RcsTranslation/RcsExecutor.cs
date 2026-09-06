@@ -603,6 +603,8 @@ internal static partial class RcsExecutor
             ? 0.0
             : Math.Max(0.0, nowSec - exec.LastTickSimSec);
         exec.LastTickSimSec = nowSec;
+        if (double.IsNaN(exec.LastWorkerReadAtSec) || exec.LastPublishedCommand?.WasConsumed == true)
+            exec.LastWorkerReadAtSec = nowSec;
         return tickDt;
     }
 
@@ -645,6 +647,7 @@ internal static partial class RcsExecutor
             {
                 Alert($"RCS burn stalled: no progress on '{vehicle.Id}' " +
                       $"({togoMs:F2}m/s to go). Check thruster coverage for the burn direction.");
+                WarnUnreadCommand(vehicle, exec, nowSec);
                 Cancel(vehicle, exec, "no progress");
                 return false;
             }
@@ -658,12 +661,21 @@ internal static partial class RcsExecutor
             {
                 Alert($"RCS burn cancelled: '{vehicle.Id}' cannot reach the burn attitude " +
                       $"(slewing for {AlignTimeoutSec:F0}s without progress).");
+                WarnUnreadCommand(vehicle, exec, nowSec);
                 Cancel(vehicle, exec, "cannot reach burn attitude");
                 return false;
             }
         }
 
         return true;
+    }
+
+    private static void WarnUnreadCommand(Vehicle vehicle, RcsExecution exec, double nowSec)
+    {
+        if (nowSec - exec.LastWorkerReadAtSec > NoProgressTimeoutSec)
+            LogHelper.WarnOnce($"rcs-worker-unread-{vehicle.Id}",
+                $"[AFC] RCS burn stalled on '{vehicle.Id}': no worker command read observed " +
+                $"for {nowSec - exec.LastWorkerReadAtSec:F1}s. Check the burn-plan command channel.");
     }
 
     private static void LogFiringWindow(
@@ -938,6 +950,7 @@ internal static partial class RcsExecutor
             LpDirCtrl = exec.LpDirCtrl,
             LpImpulseCapNs = exec.LpImpulseCapNs,
         };
+        exec.LastPublishedCommand = command;
         RcsCommandChannel.Publish(fc.BurnPlan, command);
     }
 

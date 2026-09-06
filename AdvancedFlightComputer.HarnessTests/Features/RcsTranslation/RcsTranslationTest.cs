@@ -20,6 +20,7 @@ public sealed class RcsTranslationTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
+        CheckCommandReceipt(t);
         if (!TestWorld.RequireHome(t, out IParentBody home))
             return;
 
@@ -44,6 +45,21 @@ public sealed class RcsTranslationTest : AfcTest
                     FlyRcsToggleScenario(t, vehicle, driver, watcher);
                 });
         }
+    }
+
+    private static void CheckCommandReceipt(TestContext t)
+    {
+        RcsWorkerCommand first = new() { Active = true };
+        t.Check("command unread", !first.WasConsumed);
+        first.MarkConsumed();
+        t.Check("command consumed", first.WasConsumed);
+        RcsWorkerCommand next = new() { Active = true };
+        t.Check("receipt belongs to one command", !next.WasConsumed);
+        RcsExecution exec = new() { SaveId = string.Empty, VehicleId = "receipt-test" };
+        exec.LastPublishedCommand = first;
+        exec.LastWorkerReadAtSec = 12.0;
+        exec.ClearActive();
+        t.Check("receipt cleared at teardown", exec.LastPublishedCommand == null && double.IsNaN(exec.LastWorkerReadAtSec));
     }
 
     // An Align burn can spend its ignition lead slewing without delivering delta V. The progress watchdog must allow this slew and let the burn complete.

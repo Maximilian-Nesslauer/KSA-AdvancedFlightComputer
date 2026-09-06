@@ -4,9 +4,12 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>The driver publishes one command payload for the worker each tick while execution is active. The payload is immutable.</summary>
+/// <summary>The driver publishes one command payload for the worker each tick while execution is active. The payload is immutable. Only its consumption receipt can change.</summary>
 internal sealed class RcsWorkerCommand
 {
+    private int _consumed;
+    internal bool WasConsumed => Volatile.Read(ref _consumed) != 0;
+    internal void MarkConsumed() => Volatile.Write(ref _consumed, 1);
 
     /// <summary>The driver has taken over and translation pulses should fire once the ignition time and attitude gate allow.</summary>
     public required bool Active { get; init; }
