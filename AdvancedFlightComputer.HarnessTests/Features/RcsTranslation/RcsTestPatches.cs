@@ -23,8 +23,29 @@ internal static class RcsTestPatches
         _harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
         SharedVehicleHooks.ApplyPatches(_harmony);
         _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
+        _harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
+        _harmony.CreateClassProcessor(typeof(RcsWarpObservationPatch)).Patch();
         _harmony.CreateClassProcessor(typeof(RcsCancelLogPatch)).Patch();
         SharedVehicleHooks.RcsEnabled = true;
+    }
+}
+
+[HarmonyPatch(typeof(Universe), nameof(Universe.AutoWarpTo))]
+internal static class RcsWarpObservationPatch
+{
+    internal static UniverseTime? LastEndTime;
+    internal static double LastMargin = double.NaN;
+
+    internal static void Reset()
+    {
+        LastEndTime = null;
+        LastMargin = double.NaN;
+    }
+
+    static void Postfix(UniverseTime endTime, double simTimeMargin)
+    {
+        LastEndTime = endTime;
+        LastMargin = simTimeMargin;
     }
 }
 

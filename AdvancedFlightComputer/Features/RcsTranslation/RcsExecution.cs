@@ -30,7 +30,7 @@ internal sealed class RcsExecution
     /// <summary>Persist this flag because the game saves the attitude tracker. Cancellation must release a tracker that was commanded before the save, while an execution still coasting must leave the user target alone.</summary>
     public bool AlignCommanded { get; set; }
 
-    /// <summary>Persist whether the executor enabled RCS after the pilot disabled it. Completion and cancellation restore the disabled setting, including after a save and load.</summary>
+    /// <summary>Persist whether RCS was disabled when control was taken. Completion and cancellation restore that setting, including after a save and load.</summary>
     public bool ForcedRcsOn { get; set; }
 
     #endregion
@@ -41,6 +41,9 @@ internal sealed class RcsExecution
 
     /// <summary>Set once the driver has re resolved ActiveBurn after a load.</summary>
     public bool ReconciledAfterLoad;
+
+    /// <summary>Latch the lead window after takeover so a refreshed slew estimate cannot return control during the same burn.</summary>
+    public bool ControlTaken;
 
     public RcsCapabilitySnapshot Capability;
     public double CapabilityProbedAtSec = double.NegativeInfinity;
@@ -185,6 +188,7 @@ internal sealed class RcsExecution
         FiringLogged = false;
         LastPublishedCommand = null;
         LastWorkerReadAtSec = double.NaN;
+        ControlTaken = false;
         AlignCommanded = false;
         ForcedRcsOn = false;
         StartMassKg = 0.0;

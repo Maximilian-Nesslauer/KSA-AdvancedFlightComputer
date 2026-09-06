@@ -131,6 +131,7 @@ public sealed class Mod
     {
         harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
+        harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.IsDisabledPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.PackDataPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.HoveredPatch)).Patch();

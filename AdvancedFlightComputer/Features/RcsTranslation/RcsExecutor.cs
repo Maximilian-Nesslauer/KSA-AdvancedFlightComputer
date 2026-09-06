@@ -239,6 +239,7 @@ internal static partial class RcsExecutor
         exec.ActiveBurnDvMs = dvMs;
         exec.ResolvedStrategy = strategy;
         exec.ResolvedAxis = axis;
+        exec.ControlTaken = false;
 
         exec.BaselineFuel(fc, exec.CapabilityProbedAtSec);
 
@@ -274,21 +275,7 @@ internal static partial class RcsExecutor
         fc.BurnMode = FlightComputerBurnMode.Manual;
         vehicle.SetNavBallFrame(VehicleReferenceFrame.BurnBody);
 
-        // The stock attitude controller needs RCS authority even when translation is commanded here.
-        if (ForceRcsOn(fc, exec) && DebugConfig.RcsTranslation)
-            DefaultCategory.Log.Debug(
-                $"[AFC] RCS: forced RCSMode=Enabled for the burn on vehicle='{vehicle.Id}' (pilot had RCS off).");
-
-        // Rate hold counters residual torque from off center translation thrusters.
-        if (fc.AttitudeMode == FlightComputerAttitudeMode.Manual)
-        {
-            fc.RateHold(vehicle.NavBallData.Frame);
-            if (DebugConfig.RcsTranslation)
-                DefaultCategory.Log.Debug(
-                    $"[AFC] RCS: engaged rate hold for vehicle='{vehicle.Id}' (attitude was Manual).");
-        }
-        // Keep the existing attitude target until the align lead window opens.
-        if (!EnsureAlignCommanded(fc, exec, exec.CapabilityProbedAtSec))
+        if (!EnsureBurnControl(vehicle, fc, exec, exec.CapabilityProbedAtSec))
         {
             Alert($"RCS burn not engaged: cannot align or hold for the burn direction on '{vehicle.Id}'.");
             EndExecution(fc, exec);
@@ -327,13 +314,14 @@ internal static partial class RcsExecutor
         LogFuel(vehicle, in fuel);
     }
 
-    // FlightComputer.UpdateActiveControlSystems requires RCSMode.Enabled for rotation authority. Restore a forced toggle at teardown.
-    private static bool ForceRcsOn(FlightComputer fc, RcsExecution exec)
+    // FlightComputer.UpdateActiveControlSystems requires RCSMode.Enabled for rotation authority.
+    private static bool ForceRcsOn(FlightComputer fc, RcsExecution exec, bool captureSetting)
     {
+        if (captureSetting)
+            exec.ForcedRcsOn = fc.RCSMode == FlightComputerRCSMode.Disabled;
         if (fc.RCSMode != FlightComputerRCSMode.Disabled)
             return false;
         fc.RCSMode = FlightComputerRCSMode.Enabled;
-        exec.ForcedRcsOn = true;
         return true;
     }
 
@@ -509,6 +497,7 @@ internal static partial class RcsExecutor
             return;
         }
         exec.ActiveBurn = burn;
+        exec.ControlTaken = exec.AlignCommanded || exec.ForcedRcsOn;
         // The next driver tick applies the same align lead gate after load.
 
         // Restart telemetry at load so the summary covers only the observed portion.
@@ -532,11 +521,6 @@ internal static partial class RcsExecutor
             return;
         }
 
-        // Re enable a mid burn RCS toggle so translation retains attitude control. Restore it at teardown.
-        if (ForceRcsOn(fc, exec) && DebugConfig.RcsTranslation)
-            DefaultCategory.Log.Debug(
-                $"[AFC] RCS: re-enabled RCSMode after a mid-burn toggle on vehicle='{vehicle.Id}'.");
-
         double tickDt = ObserveWorker(exec, nowSec);
 
         bool ctrlFrameSettled = RefreshCapability(vehicle, exec, nowSec);
@@ -548,7 +532,7 @@ internal static partial class RcsExecutor
             return;
         }
 
-        if (!EnsureAlignCommanded(fc, exec, nowSec))
+        if (!EnsureBurnControl(vehicle, fc, exec, nowSec))
         {
             Alert($"RCS burn cancelled: cannot align or hold for the burn direction on '{vehicle.Id}'.");
             Cancel(vehicle, exec, "cannot align or hold");
@@ -563,7 +547,8 @@ internal static partial class RcsExecutor
         bool slewing = exec.ResolvedStrategy == RcsAttitudeStrategy.Align
             && exec.AlignCommanded
             && OutsideAlignGate(fc);
-        bool firingEligible = !slewing && nowSec >= bt.IgnitionTime.Seconds();
+        bool firingEligible = ControlCommandDue(exec, bt, nowSec)
+            && !slewing && nowSec >= bt.IgnitionTime.Seconds();
 
         // Do not solve patterns while the frame rotates and the attitude gate prevents firing.
         if (exec.ResolvedAllocator == RcsAllocator.Lp && !slewing)
@@ -683,6 +668,7 @@ internal static partial class RcsExecutor
         float3 impulseCtrl, float togoMs, double nowSec)
     {
         if (DebugConfig.RcsTranslation && !exec.FiringLogged
+            && ControlCommandDue(exec, bt, nowSec)
             && nowSec >= bt.IgnitionTime.Seconds())
         {
             exec.FiringLogged = true;
@@ -856,21 +842,52 @@ internal static partial class RcsExecutor
 
     #endregion
 
-    // Stock UpdateBurnTarget still supplies engine timing at activation. Anchor on the impulsive instant instead.
-    private static bool AlignCommandDue(RcsExecution exec, BurnTarget bt, double nowSec)
-        => nowSec >= bt.ImpulsiveInstant.Seconds()
-           - (AlignLeadFactor * exec.Estimates.AlignSlewDurationSec + AlignLeadMarginSec);
+    internal static double AlignLeadSeconds(in RcsEstimates estimates)
+    {
+        double slewSec = estimates.AlignSlewDurationSec;
+        if (!double.IsFinite(slewSec) || slewSec < 0.0)
+            slewSec = 0.0;
+        return AlignLeadFactor * slewSec + AlignLeadMarginSec;
+    }
 
-    // Delay tracking until the lead window. A failed target command falls back to Hold only if Hold is feasible.
-    private static bool EnsureAlignCommanded(FlightComputer fc, RcsExecution exec, double nowSec)
+    // Stock UpdateBurnTarget still supplies engine timing at activation. Anchor on the impulsive instant instead.
+    private static bool ControlCommandDue(RcsExecution exec, BurnTarget bt, double nowSec)
+        => exec.ControlTaken
+           || nowSec >= bt.ImpulsiveInstant.Seconds() - AlignLeadSeconds(in exec.Estimates);
+
+    private static bool EnsureBurnControl(
+        Vehicle vehicle, FlightComputer fc, RcsExecution exec, double nowSec)
+    {
+        BurnTarget? bt = fc.Burn;
+        if (bt == null || !ControlCommandDue(exec, bt, nowSec))
+            return true;
+        bool takingControl = !exec.ControlTaken;
+        exec.ControlTaken = true;
+
+        // FlightComputer.UpdateActiveControlSystems needs enabled RCS before it scans rotation authority.
+        if (ForceRcsOn(fc, exec, takingControl) && DebugConfig.RcsTranslation)
+            DefaultCategory.Log.Debug(
+                $"[AFC] RCS: enabled RCSMode inside the control lead window on vehicle='{vehicle.Id}'.");
+
+        // Rate hold counters residual torque from off center translation thrusters.
+        if (fc.AttitudeMode == FlightComputerAttitudeMode.Manual)
+        {
+            fc.RateHold(vehicle.NavBallData.Frame);
+            if (DebugConfig.RcsTranslation)
+                DefaultCategory.Log.Debug(
+                    $"[AFC] RCS: engaged rate hold inside the control lead window on vehicle='{vehicle.Id}'.");
+        }
+
+        return EnsureAlignCommanded(fc, exec);
+    }
+
+    // A failed target command falls back to Hold only if Hold is feasible.
+    private static bool EnsureAlignCommanded(FlightComputer fc, RcsExecution exec)
     {
         if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
             return true;
-        BurnTarget? bt = fc.Burn;
         if (!exec.AlignCommanded)
         {
-            if (bt == null || !AlignCommandDue(exec, bt, nowSec))
-                return true;
             if (CommandAlignAttitude(fc, exec.ResolvedAxis))
             {
                 exec.AlignCommanded = true;
@@ -938,7 +955,7 @@ internal static partial class RcsExecutor
         ref readonly RcsCapabilitySnapshot cap = ref exec.Capability;
         RcsWorkerCommand command = new()
         {
-            Active = true,
+            Active = exec.ControlTaken,
             IgnitionTime = bt.ImpulsiveInstant - ignitionLead,
             RequireAttitude = align,
             MaxPulseSec = MaxPulseSec,

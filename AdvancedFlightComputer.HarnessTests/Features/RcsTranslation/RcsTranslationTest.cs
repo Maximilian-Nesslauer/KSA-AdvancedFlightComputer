@@ -180,13 +180,17 @@ public sealed class RcsTranslationTest : AfcTest
         FlightComputer fc = vehicle.FlightComputer;
         RcsFlightSupport.CleanupBurns(fc);
         vehicle.RefillConsumables();
-        fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
-        fc.SetNullRot(VehicleReferenceFrame.EclBody);
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        fc.RCSMode = FlightComputerRCSMode.Disabled;
         driver.Step(StepSec, 10);
 
         RcsCapabilitySnapshot cap = RcsCapability.Probe(vehicle);
         int bestAxis = cap.BestAxis();
-        double3 dvDirCci = RcsFlightSupport.AxisDirCci(vehicle, bestAxis);
+        double3 axisCci = RcsFlightSupport.AxisDirCci(vehicle, bestAxis);
+        double3 dvDirCci = double3.Cross(axisCci, double3.UnitZ);
+        if (dvDirCci.IsNearlyZero())
+            dvDirCci = double3.Cross(axisCci, double3.UnitY);
+        dvDirCci = dvDirCci.Normalized();
         RcsFlightSupport.BurnSetup? setup =
             RcsFlightSupport.AddBurn(vehicle, driver, dvDirCci, BurnDvMs, DeferredLeadSec);
         if (setup == null)
@@ -213,8 +217,7 @@ public sealed class RcsTranslationTest : AfcTest
             return;
         }
         // A slew estimate so long that the lead window is already open at engage makes deferral unobservable. That is a save property, not a bug.
-        double leadSec = RcsExecutor.AlignLeadFactor * exec.Estimates.AlignSlewDurationSec
-            + RcsExecutor.AlignLeadMarginSec;
+        double leadSec = RcsExecutor.AlignLeadSeconds(in exec.Estimates);
         if (leadSec >= DeferredLeadSec - 10.0)
         {
             t.Skip($"deferred align: slew estimate " +
@@ -224,12 +227,38 @@ public sealed class RcsTranslationTest : AfcTest
             return;
         }
 
+        bool untouchedAtEngage = fc.RCSMode == FlightComputerRCSMode.Disabled
+            && fc.AttitudeMode == FlightComputerAttitudeMode.Manual
+            && !exec.ForcedRcsOn
+            && !exec.AlignCommanded
+            && !exec.ControlTaken
+            && exec.LastPublishedCommand?.Active == false;
+
+        // Reconcile the same transient state that registry loading rebuilds, while the game control state remains loaded.
+        exec.ActiveBurn = null;
+        exec.ReconciledAfterLoad = false;
+        driver.Step(StepSec);
+        bool untouchedAfterLoad = RcsExecRegistry.TryGet(vehicle.Id, out exec!)
+            && exec.IsActive
+            && ReferenceEquals(exec.ActiveBurn, burn)
+            && fc.RCSMode == FlightComputerRCSMode.Disabled
+            && fc.AttitudeMode == FlightComputerAttitudeMode.Manual
+            && !exec.ForcedRcsOn
+            && !exec.AlignCommanded
+            && !exec.ControlTaken
+            && exec.LastPublishedCommand?.Active == false;
+        CheckWarpMargin(t, vehicle, exec);
+
+        // The setting at the lead window boundary is the one teardown must restore.
+        fc.RCSMode = FlightComputerRCSMode.Enabled;
         double engageSec = driver.Elapsed.Seconds();
         driver.Step(StepSec, 40);
-        bool idleDuringCoast = fc.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.None;
+        bool idleDuringCoast = fc.AttitudeMode == FlightComputerAttitudeMode.Manual
+            && fc.RCSMode == FlightComputerRCSMode.Enabled;
 
         bool commanded = false;
         double commandedElapsed = 0.0;
+        bool forcedAtTakeover = false;
         int steps = (int)(DeferredLeadSec / StepSec);
         for (int i = 0; i < steps; i++)
         {
@@ -240,19 +269,27 @@ public sealed class RcsTranslationTest : AfcTest
             {
                 commanded = true;
                 commandedElapsed = driver.Elapsed.Seconds() - engageSec;
+                forcedAtTakeover = exec.ForcedRcsOn;
                 break;
             }
         }
 
         // Commanded well after engage (the deferral) but still before ignition (the lead window).
         t.Check("deferred align",
-            idleDuringCoast && commanded && commandedElapsed > 20.0
+            untouchedAtEngage && untouchedAfterLoad && idleDuringCoast
+                && commanded && !forcedAtTakeover && commandedElapsed > 20.0
+                && exec.ControlTaken
+                && exec.LastPublishedCommand?.Active == true
                 && engageSec + commandedElapsed < burnTimeSec,
+            $"untouched engage/load={untouchedAtEngage}/{untouchedAfterLoad} " +
             $"idle during coast={idleDuringCoast} commanded at T+{commandedElapsed:F0}s " +
+            $"forced at takeover={forcedAtTakeover} " +
             $"of {DeferredLeadSec:F0}s lead (window opens ~T+{DeferredLeadSec - leadSec:F0}s)");
 
         if (RcsExecRegistry.TryGet(vehicle.Id, out exec!) && exec.IsActive)
             RcsExecutor.Cancel(vehicle, exec, "test cleanup");
+        t.Check("deferred align restore", fc.RCSMode == FlightComputerRCSMode.Enabled,
+            $"RCSMode after cancel={fc.RCSMode}");
         RcsFuelSummary fuel = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? done)
             ? done.LastFuel : default;
         t.Info($"deferred align fuel: total={fuel.TotalKg * 1000.0:F1}g " +
@@ -267,8 +304,7 @@ public sealed class RcsTranslationTest : AfcTest
         FlightComputer fc = vehicle.FlightComputer;
         RcsFlightSupport.CleanupBurns(fc);
         vehicle.RefillConsumables();
-        fc.AttitudeMode = FlightComputerAttitudeMode.Auto;
-        fc.SetNullRot(VehicleReferenceFrame.EclBody);
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
         driver.Step(StepSec, 10);
         watcher.Reset();
 
@@ -304,9 +340,16 @@ public sealed class RcsTranslationTest : AfcTest
             return;
         }
 
-        t.Check("rcs toggle A engage",
-            fc.RCSMode == FlightComputerRCSMode.Enabled && exec.ForcedRcsOn,
-            $"RCSMode={fc.RCSMode} forcedFlag={exec.ForcedRcsOn}");
+        bool deferredAtEngage = fc.RCSMode == FlightComputerRCSMode.Disabled
+            && fc.AttitudeMode == FlightComputerAttitudeMode.Manual
+            && !exec.ForcedRcsOn;
+        bool tookControl = AdvanceUntilControlTaken(vehicle, driver, out exec);
+        bool rateHolding = fc.IsRateHolding(vehicle.NavBallData.Frame);
+        bool forcedAtTakeover = tookControl && exec.ForcedRcsOn;
+        t.Check("rcs toggle A engage", deferredAtEngage && tookControl
+            && rateHolding && forcedAtTakeover,
+            $"deferred={deferredAtEngage} tookControl={tookControl} " +
+            $"rateHold={rateHolding} forcedFlag={forcedAtTakeover}");
 
         int steps = (int)((BurnLeadSec + 200.0) / StepSec);
         RcsFlightSupport.RunResult result = RcsFlightSupport.RunUntilInactive(vehicle, driver, StepSec, steps);
@@ -349,6 +392,7 @@ public sealed class RcsTranslationTest : AfcTest
         optionsB.Attitude = RcsAttitudeStrategy.Hold;
 
         fc.RCSMode = FlightComputerRCSMode.Enabled;
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
         vehicle.SetEnum(FlightComputerBurnMode.Auto);
         if (!RcsExecRegistry.TryGet(vehicle.Id, out execB!) || !execB.IsActive)
         {
@@ -356,21 +400,23 @@ public sealed class RcsTranslationTest : AfcTest
             RcsFlightSupport.CleanupBurns(fc);
             return;
         }
-        bool notForcedAtActivation = !execB.ForcedRcsOn && fc.RCSMode == FlightComputerRCSMode.Enabled;
+        bool notForcedAtActivation = !execB.ForcedRcsOn
+            && fc.RCSMode == FlightComputerRCSMode.Enabled
+            && fc.AttitudeMode == FlightComputerAttitudeMode.Manual;
 
-        // Simulate a mid burn R press and let one driver tick react.
+        // Simulate an R press during coast. The lead gate must leave it off until takeover.
         fc.RCSMode = FlightComputerRCSMode.Disabled;
         driver.Step(StepSec);
-        bool reEnabled = false;
-        bool forcedFlag = false;
-        if (RcsExecRegistry.TryGet(vehicle.Id, out execB!) && execB.IsActive)
-        {
-            reEnabled = fc.RCSMode == FlightComputerRCSMode.Enabled;
-            forcedFlag = execB.ForcedRcsOn;
-        }
-        t.Check("rcs toggle B guard", notForcedAtActivation && reEnabled && forcedFlag,
-            $"notForcedAtActivation={notForcedAtActivation} reEnabledMidBurn={reEnabled} " +
-            $"forcedFlag={forcedFlag}");
+        bool leftOffDuringCoast = fc.RCSMode == FlightComputerRCSMode.Disabled
+            && execB.IsActive && !execB.ForcedRcsOn;
+        bool reEnabled = AdvanceUntilControlTaken(vehicle, driver, out execB)
+            && fc.RCSMode == FlightComputerRCSMode.Enabled;
+        bool forcedAfterToggle = reEnabled && execB.ForcedRcsOn;
+        t.Check("rcs toggle B guard", notForcedAtActivation && leftOffDuringCoast
+            && reEnabled && forcedAfterToggle,
+            $"notForcedAtActivation={notForcedAtActivation} " +
+            $"leftOffDuringCoast={leftOffDuringCoast} reEnabledAtTakeover={reEnabled} " +
+            $"forcedFlag={forcedAfterToggle}");
 
         if (RcsExecRegistry.TryGet(vehicle.Id, out execB!) && execB.IsActive)
             RcsExecutor.Cancel(vehicle, execB, "test cleanup");
@@ -378,6 +424,129 @@ public sealed class RcsTranslationTest : AfcTest
             $"RCSMode after cancel={fc.RCSMode}");
 
         RcsFlightSupport.CleanupBurns(fc);
+
+        // Keep the setting captured at takeover when the active burn re-enables a later user toggle.
+        vehicle.RefillConsumables();
+        driver.Step(StepSec, 10);
+        RcsFlightSupport.BurnSetup? setupC = BuildStrongAxisBurn(vehicle, driver, bestAxis);
+        if (setupC == null)
+        {
+            t.Fail("rcs toggle C", "could not set up the burn");
+            return;
+        }
+        Burn burnC = setupC.Burn;
+        RcsExecution execC = RcsExecRegistry.GetOrCreate(vehicle.Id);
+        RcsBurnOptions optionsC = execC.GetOrCreateOptions(burnC.Time.Seconds(), burnC.DeltaVVlf.Length());
+        optionsC.Mode = RcsExecutionMode.Rcs;
+        optionsC.Attitude = RcsAttitudeStrategy.Hold;
+
+        fc.RCSMode = FlightComputerRCSMode.Enabled;
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        vehicle.SetEnum(FlightComputerBurnMode.Auto);
+        bool tookControlC = RcsExecRegistry.TryGet(vehicle.Id, out execC!)
+            && execC.IsActive
+            && AdvanceUntilControlTaken(vehicle, driver, out execC);
+        bool capturedEnabled = tookControlC && !execC.ForcedRcsOn
+            && fc.RCSMode == FlightComputerRCSMode.Enabled;
+
+        fc.RCSMode = FlightComputerRCSMode.Disabled;
+        driver.Step(StepSec);
+        bool reEnabledActive = RcsExecRegistry.TryGet(vehicle.Id, out execC!)
+            && execC.IsActive
+            && fc.RCSMode == FlightComputerRCSMode.Enabled
+            && !execC.ForcedRcsOn;
+        if (execC.IsActive)
+            RcsExecutor.Cancel(vehicle, execC, "test cleanup");
+        bool restoredEnabled = fc.RCSMode == FlightComputerRCSMode.Enabled;
+        t.Check("rcs toggle C guard", capturedEnabled && reEnabledActive && restoredEnabled,
+            $"capturedEnabled={capturedEnabled} reEnabledActive={reEnabledActive} " +
+            $"restoredEnabled={restoredEnabled}");
+
+        RcsFlightSupport.CleanupBurns(fc);
+    }
+
+    private static bool AdvanceUntilControlTaken(
+        Vehicle vehicle, SimDriver driver, out RcsExecution exec)
+    {
+        int steps = (int)(BurnLeadSec / StepSec);
+        for (int i = 0; i < steps; i++)
+        {
+            driver.Step(StepSec);
+            if (!RcsExecRegistry.TryGet(vehicle.Id, out exec!) || !exec.IsActive)
+                return false;
+            if (exec.ControlTaken)
+                return true;
+        }
+        exec = null!;
+        return false;
+    }
+
+    private static void CheckWarpMargin(TestContext t, Vehicle vehicle, RcsExecution exec)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        BurnTarget bt = fc.Burn!;
+        UniverseTime originalIgnition = bt.IgnitionTime;
+        Vehicle? previousControlled = Program.ControlledVehicle;
+        try
+        {
+            const double CallerMarginSec = 3.0;
+            double controlLeadSec = RcsExecutor.AlignLeadSeconds(in exec.Estimates);
+            double expected = Math.Max(CallerMarginSec,
+                (originalIgnition - (bt.ImpulsiveInstant - controlLeadSec)).Seconds());
+
+            Program.ControlledVehicle = null;
+            RcsWarpObservationPatch.Reset();
+            Universe.AutoWarpTo(originalIgnition, CallerMarginSec);
+            t.Check("RCS warp controlled vehicle",
+                Math.Abs(RcsWarpObservationPatch.LastMargin - CallerMarginSec) < 1e-6,
+                $"margin without controlled vehicle={RcsWarpObservationPatch.LastMargin:F3}s");
+            Universe.AutoWarpStop(resetSimulationSpeed: true);
+
+            Program.ControlledVehicle = vehicle;
+            RcsWarpObservationPatch.Reset();
+            Universe.AutoWarpTo(originalIgnition, CallerMarginSec);
+            t.Check("RCS warp margin",
+                RcsWarpObservationPatch.LastEndTime == originalIgnition
+                && Math.Abs(RcsWarpObservationPatch.LastMargin - expected) < 1e-6,
+                $"target={RcsWarpObservationPatch.LastEndTime?.Seconds():F3}s " +
+                $"margin={RcsWarpObservationPatch.LastMargin:F3}s expected={expected:F3}s");
+            t.Check("RCS warp identity", Universe.AutoWarpTime == originalIgnition,
+                $"target={Universe.AutoWarpTime?.Seconds():F3}s ignition={originalIgnition.Seconds():F3}s");
+
+            fc.ToggleAction(FlightComputerAction.WarpToNextBurn);
+            t.Check("RCS warp cancellation", !Universe.IsAutoWarpActive);
+
+            bt.IgnitionTime = originalIgnition + 1.0;
+            RcsWarpObservationPatch.Reset();
+            Universe.AutoWarpTo(originalIgnition, CallerMarginSec);
+            t.Check("RCS warp stale ignition",
+                Math.Abs(RcsWarpObservationPatch.LastMargin - CallerMarginSec) < 1e-6,
+                $"margin={RcsWarpObservationPatch.LastMargin:F3}s");
+            Universe.AutoWarpStop(resetSimulationSpeed: true);
+
+            UniverseTime changedIgnition = bt.IgnitionTime;
+            double changedExpected = Math.Max(CallerMarginSec,
+                (changedIgnition - (bt.ImpulsiveInstant - controlLeadSec)).Seconds());
+            RcsWarpObservationPatch.Reset();
+            Universe.AutoWarpTo(changedIgnition, CallerMarginSec);
+            t.Check("RCS warp changed ignition",
+                Math.Abs(RcsWarpObservationPatch.LastMargin - changedExpected) < 1e-6,
+                $"margin={RcsWarpObservationPatch.LastMargin:F3}s expected={changedExpected:F3}s");
+            Universe.AutoWarpStop(resetSimulationSpeed: true);
+
+            double largerMargin = changedExpected + 5.0;
+            RcsWarpObservationPatch.Reset();
+            Universe.AutoWarpTo(changedIgnition, largerMargin);
+            t.Check("RCS warp caller margin",
+                Math.Abs(RcsWarpObservationPatch.LastMargin - largerMargin) < 1e-6,
+                $"margin={RcsWarpObservationPatch.LastMargin:F3}s caller={largerMargin:F3}s");
+        }
+        finally
+        {
+            Universe.AutoWarpStop(resetSimulationSpeed: true);
+            bt.IgnitionTime = originalIgnition;
+            Program.ControlledVehicle = previousControlled;
+        }
     }
 
     // Adds a small burn along the strongest translation axis at BurnLeadSec in the future (Hold is fully feasible on a single strong axis for any layout) and returns the setup with the loaded BurnTarget.
