@@ -1,4 +1,5 @@
 using Brutal.Numerics;
+using HeadlessHarness.Harness;
 using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests.Fixtures;
@@ -15,11 +16,21 @@ public static class VehicleFixtures
     public static Vehicle SpawnDesign(
         CelestialSystem system, IParentBody parent, PartInstance design, string id, Orbit orbit)
     {
+        EnsureIdAvailable(system, id);
         PartTree tree = PartTree.Deserialize(design);
-        Vehicle vehicle = Vehicle.CreateVehicle(
-            system, doubleQuat.Identity, double3.Zero, parent, id, tree.Root, orbit);
-        parent.Children.Add(vehicle);
-        return vehicle;
+        Vehicle? vehicle = null;
+        try
+        {
+            vehicle = Vehicle.CreateVehicle(
+                system, doubleQuat.Identity, double3.Zero, parent, id, tree.Root, orbit);
+            parent.Children.Add(vehicle);
+            return vehicle;
+        }
+        catch
+        {
+            RollBackSpawn(system, id, vehicle, tree);
+            throw;
+        }
     }
 
     // Adds the staged-state restore VehicleTemplate.CreateInto performs, so engine state and
@@ -29,13 +40,45 @@ public static class VehicleFixtures
     {
         PartInstance design = data.RootPartInstance
             ?? throw new InvalidOperationException($"vehicle '{data.Id}' has no root part instance.");
+        EnsureIdAvailable(system, id);
         PartTree tree = PartTree.Deserialize(design);
-        Vehicle vehicle = Vehicle.CreateVehicle(
-            system, doubleQuat.Identity, double3.Zero, parent, id, tree.Root, orbit);
-        vehicle.Parts.SequenceList.SetActiveSequence(data.ActiveSequence);
-        vehicle.Parts.SequenceList.ApplyEnvironments(data.SequenceEnvironments);
-        vehicle.Parts.FuelLinks.ApplySaveData(data.FuelLinks, design);
-        parent.Children.Add(vehicle);
-        return vehicle;
+        Vehicle? vehicle = null;
+        try
+        {
+            vehicle = Vehicle.CreateVehicle(
+                system, doubleQuat.Identity, double3.Zero, parent, id, tree.Root, orbit);
+            vehicle.Parts.SequenceList.SetActiveSequence(data.ActiveSequence);
+            vehicle.Parts.SequenceList.ApplyEnvironments(data.SequenceEnvironments);
+            vehicle.Parts.FuelLinks.ApplySaveData(data.FuelLinks, design);
+            parent.Children.Add(vehicle);
+            return vehicle;
+        }
+        catch
+        {
+            RollBackSpawn(system, id, vehicle, tree);
+            throw;
+        }
+    }
+
+    private static void EnsureIdAvailable(CelestialSystem system, string id)
+    {
+        if (system.All.Get(id) != null)
+            throw new InvalidOperationException($"cannot spawn vehicle '{id}' because the id is already registered.");
+    }
+
+    private static void RollBackSpawn(
+        CelestialSystem system, string id, Vehicle? vehicle, PartTree tree)
+    {
+        if (vehicle != null)
+        {
+            if (ReferenceEquals(system.All.Get(id), vehicle))
+                VehicleSpawner.Despawn(vehicle);
+            return;
+        }
+
+        Astronomical? registered = system.All.Get(id);
+        if (registered != null)
+            system.All.Deregister(registered);
+        tree.Dispose();
     }
 }
