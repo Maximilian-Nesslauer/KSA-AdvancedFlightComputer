@@ -6,10 +6,26 @@ internal static class RcsLpSolver
 {
     private const double Eps = 1e-9;
 
-    // Columns are column-major. Return null for infeasible or unbounded inputs.
+    // Columns are column-major. Return null for invalid, infeasible, or unbounded inputs.
     public static double[]? Solve(int rows, int n, double[] columns, double[] cost, double[] b)
     {
+        if (!HasValidInputs(rows, n, columns, cost, b))
+            return null;
         return SolveValid(rows, n, columns, cost, b);
+    }
+
+    private static bool HasValidInputs(int rows, int n, double[] columns, double[] cost, double[] b)
+    {
+        if (rows < 0 || n < 0 || columns == null || cost == null || b == null
+            || (long)rows * n != columns.Length || cost.Length != n || b.Length != rows)
+            return false;
+        foreach (double value in columns)
+            if (!double.IsFinite(value)) return false;
+        foreach (double value in cost)
+            if (!double.IsFinite(value)) return false;
+        foreach (double value in b)
+            if (!double.IsFinite(value)) return false;
+        return true;
     }
 
     private static double[]? SolveValid(int rows, int n, double[] columns, double[] cost, double[] b)
@@ -17,7 +33,12 @@ internal static class RcsLpSolver
         if (!ScaleRows(rows, n, columns, b, out double[] rowScale, out bool[] rowActive, out int activeRows))
             return null;
         if (activeRows == 0)
-            return new double[n];
+        {
+            foreach (double value in cost)
+                if (value < 0.0) return null;
+            double[] zero = new double[n];
+            return SatisfiesConstraints(rows, n, columns, b, zero) ? zero : null;
+        }
 
         BuildTableau(rows, n, columns, b, rowScale, rowActive, activeRows,
             out double[] t, out int[] basis, out int width);
@@ -37,7 +58,7 @@ internal static class RcsLpSolver
         for (int r = 0; r < m; r++)
             if (basis[r] < n)
                 x[basis[r]] = Math.Max(0.0, t[r * width + width - 1]);
-        return x;
+        return SatisfiesConstraints(rows, n, columns, b, x) ? x : null;
     }
 
     private static bool ScaleRows(int rows, int n, double[] columns, double[] b,
@@ -139,6 +160,28 @@ internal static class RcsLpSolver
                     t[r2 * width + c] = 0.0;
         }
 
+        return true;
+    }
+
+    private static bool SatisfiesConstraints(int rows, int n, double[] columns, double[] b, double[] x)
+    {
+        foreach (double value in x)
+            if (!double.IsFinite(value)) return false;
+        // Check the original units because a small scaled residual can hide a large unmet demand.
+        for (int r = 0; r < rows; r++)
+        {
+            double sum = 0.0;
+            double magnitude = 0.0;
+            for (int i = 0; i < n; i++)
+            {
+                double term = columns[i * rows + r] * x[i];
+                sum += term;
+                magnitude += Math.Abs(term);
+            }
+            double tolerance = 1e-10 + 1e-6 * Math.Max(Math.Abs(b[r]), magnitude);
+            if (!double.IsFinite(sum) || !double.IsFinite(magnitude) || Math.Abs(sum - b[r]) > tolerance)
+                return false;
+        }
         return true;
     }
 
