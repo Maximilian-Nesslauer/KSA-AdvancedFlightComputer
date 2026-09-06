@@ -130,9 +130,11 @@ internal static class RcsBurnUi
             return;
         }
 
-        if (!HasEstimatesFor(burn.Time.Seconds(), flightComputer.Burn, exec))
+        if (!RcsBurnPreview.TryGetEstimates(burn, vehicle, flightComputer, exec,
+                out RcsEstimates est, out bool currentVehicle))
             return;
-        ref readonly RcsEstimates est = ref exec!.Estimates;
+        if (currentVehicle)
+            ConsoleWidgets.Readout("ESTIMATE BASIS".AsSpan(), "Current vehicle".AsSpan());
         if (est.HoldFeasible)
             ConsoleWidgets.Readout("HOLD EST.".AsSpan(),
                 $"{est.HoldPropellantKg:F1} kg, {est.HoldDurationSec:F0} s".AsSpan());
