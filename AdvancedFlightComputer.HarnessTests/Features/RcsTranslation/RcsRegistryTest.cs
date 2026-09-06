@@ -1,3 +1,4 @@
+using System.Reflection;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.HarnessTests.Framework;
 
@@ -15,6 +16,9 @@ public sealed class RcsRegistryTest : AfcTest
         CheckTomlRoundTrip(t);
         CheckOptionsKeying(t);
         CheckUnknownEnumFallback(t);
+        CheckStructuralParseFailures(t);
+        CheckFailedLoadPreservesState(t);
+        CheckInvalidActiveState(t);
     }
 
     private static RcsExecution Entry(string saveId, string vehicleId)
@@ -132,7 +136,8 @@ public sealed class RcsRegistryTest : AfcTest
         string[] lines = writer.ToString().Split('\n');
 
         var parsed = new Dictionary<(string SaveId, string VehicleId), RcsExecution>();
-        RcsExecRegistry.ParseLines(lines, "round-trip", parsed);
+        bool parsedCleanly = RcsExecRegistry.ParseLines(lines, "round-trip", parsed);
+        t.Check("RCS round-trip parse succeeds", parsedCleanly);
 
         t.Check("single entry", parsed.Count == 1);
         if (!parsed.TryGetValue(("save-1", "veh \"q\" id"), out RcsExecution? back))
@@ -215,7 +220,8 @@ public sealed class RcsRegistryTest : AfcTest
             "allocator = \"7\"",       // out-of-range ordinal -> Groups (the default)
         };
         var parsed = new Dictionary<(string SaveId, string VehicleId), RcsExecution>();
-        RcsExecRegistry.ParseLines(lines, "unknown-enum", parsed);
+        bool parsedCleanly = RcsExecRegistry.ParseLines(lines, "unknown-enum", parsed);
+        t.Check("unknown option enums recover safely", parsedCleanly);
 
         if (!t.Check("unknown-enum block kept",
                 parsed.TryGetValue(("s", "v"), out RcsExecution? e) && e.Options.Count == 1))
@@ -226,6 +232,149 @@ public sealed class RcsRegistryTest : AfcTest
         t.Check("bad attitude falls back", o.Attitude == RcsAttitudeStrategy.Auto);
         t.Check("out-of-range allocator falls back", o.Allocator == RcsAllocator.Groups);
     }
+
+    private static void CheckStructuralParseFailures(TestContext t)
+    {
+        var parsed = new Dictionary<(string SaveId, string VehicleId), RcsExecution>();
+        t.Check("unknown RCS header fails parse",
+            !RcsExecRegistry.ParseLines(["[broken]"], "bad-header", parsed));
+        parsed.Clear();
+        t.Check("invalid RCS assignment fails parse",
+            !RcsExecRegistry.ParseLines(
+                ["[[rcs_burn]]", "not an assignment"], "bad-assignment", parsed));
+        parsed.Clear();
+        t.Check("missing RCS fields fail parse",
+            !RcsExecRegistry.ParseLines(
+                ["[[rcs_burn]]", "save_id = \"broken\""], "missing-fields", parsed));
+    }
+
+    private static void CheckFailedLoadPreservesState(TestContext t)
+    {
+        FieldInfo configPath = Field(typeof(RcsExecRegistry), "_configPath");
+        FieldInfo entriesField = Field(typeof(RcsExecRegistry), "_byKey");
+        object? oldPath = configPath.GetValue(null);
+        var entries = (Dictionary<(string SaveId, string VehicleId), RcsExecution>)entriesField.GetValue(null)!;
+        var oldEntries = new Dictionary<(string SaveId, string VehicleId), RcsExecution>(entries);
+        string temp = Path.Combine(Path.GetTempPath(), "afc-rcs-load-" + Guid.NewGuid().ToString("N"));
+        string file = Path.Combine(temp, "rcs-exec.toml");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            RcsExecRegistry.WriteFile(file, [Entry("disk", "disk-vehicle")]);
+            configPath.SetValue(null, file);
+            entries.Clear();
+            RcsExecution live = Entry("live", "live-vehicle");
+            entries[("live", "live-vehicle")] = live;
+
+            using (new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+                RcsExecRegistry.Load();
+
+            t.Check("failed RCS load preserves live state",
+                entries.TryGetValue(("live", "live-vehicle"), out RcsExecution? preserved)
+                && ReferenceEquals(preserved, live)
+                && !entries.ContainsKey(("disk", "disk-vehicle")));
+
+            File.Delete(file);
+            RcsExecRegistry.Load();
+            t.Check("missing RCS file preserves live state",
+                entries.TryGetValue(("live", "live-vehicle"), out preserved)
+                && ReferenceEquals(preserved, live));
+
+            RcsExecRegistry.WriteFile(file, [Entry("disk", "disk-vehicle")]);
+            File.AppendAllLines(file, ["[[rcs_burn]]", "save_id = \"broken\""]);
+            RcsExecRegistry.Load();
+            t.Check("partial RCS parse preserves live state",
+                entries.TryGetValue(("live", "live-vehicle"), out preserved)
+                && ReferenceEquals(preserved, live)
+                && !entries.ContainsKey(("disk", "disk-vehicle")));
+
+            RcsExecRegistry.WriteFile(file, [Entry("disk", "disk-vehicle")]);
+            RcsExecRegistry.Load();
+            t.Check("successful RCS load replaces live state",
+                entries.ContainsKey(("disk", "disk-vehicle"))
+                && !entries.ContainsKey(("live", "live-vehicle")));
+        }
+        finally
+        {
+            configPath.SetValue(null, oldPath);
+            entries.Clear();
+            foreach (var entry in oldEntries) entries.Add(entry.Key, entry.Value);
+            if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    private static void CheckInvalidActiveState(TestContext t)
+    {
+        CheckRejectedActive(t, "undefined strategy", "resolved_strategy = \"99\"");
+        CheckRejectedActive(t, "undefined allocator", "resolved_allocator = \"99\"");
+        CheckRejectedActive(t, "undefined mode", "mode = \"99\"");
+        CheckRejectedActive(t, "unresolved strategy", "resolved_strategy = \"Auto\"");
+        CheckRejectedActive(t, "engine mode", "mode = \"Engine\"");
+        CheckRejectedActive(t, "allocator mismatch", "resolved_allocator = \"Lp\"");
+        CheckRejectedActive(t, "Align axis outside range", "resolved_axis = 99");
+        CheckRejectedActive(t, "Hold axis mismatch",
+            "resolved_strategy = \"Hold\"", "resolved_axis = 0");
+        CheckRejectedActive(t, "Hold command mismatch",
+            "resolved_strategy = \"Hold\"", "resolved_axis = -1", "align_commanded = true");
+        CheckRejectedActive(t, "missing ownership flag", "forced_rcs_on =");
+        CheckAcceptedActive(t, "Align after Hold fallback",
+            "attitude = \"Hold\"", "resolved_strategy = \"Align\"", "resolved_axis = 3");
+        CheckAcceptedActive(t, "Hold after Align fallback",
+            "attitude = \"Align\"", "resolved_strategy = \"Hold\"", "resolved_axis = -1");
+    }
+
+    private static void CheckRejectedActive(TestContext t, string label, params string[] replacements)
+    {
+        RcsExecution? exec = ParseActive(replacements);
+        bool keptOption = exec?.Options.Count == 1;
+        t.Check(label + " keeps safe option", keptOption);
+        t.Check(label + " does not restore activity", keptOption && !exec!.IsActive);
+    }
+
+    private static void CheckAcceptedActive(TestContext t, string label, params string[] replacements)
+    {
+        RcsExecution? exec = ParseActive(replacements);
+        t.Check(label + " restores activity", exec is { IsActive: true });
+    }
+
+    private static RcsExecution? ParseActive(params string[] replacements)
+    {
+        string[] lines =
+        {
+            "[[rcs_burn]]",
+            "save_id = \"s\"",
+            "vehicle_id = \"v\"",
+            "burn_time_sec = 10",
+            "burn_dv_ms = 1",
+            "mode = \"Rcs\"",
+            "attitude = \"Align\"",
+            "allocator = \"Groups\"",
+            "active = true",
+            "resolved_strategy = \"Align\"",
+            "resolved_axis = 3",
+            "resolved_allocator = \"Groups\"",
+            "align_commanded = false",
+            "forced_rcs_on = false",
+        };
+        foreach (string replacement in replacements)
+        {
+            int separator = replacement.IndexOf('=');
+            string key = separator >= 0 ? replacement.Substring(0, separator).Trim() : replacement;
+            int index = Array.FindIndex(lines,
+                line => line.StartsWith(key + " =", StringComparison.Ordinal));
+            if (index >= 0)
+                lines[index] = replacement;
+        }
+
+        var parsed = new Dictionary<(string SaveId, string VehicleId), RcsExecution>();
+        if (!RcsExecRegistry.ParseLines(lines, "invalid-active", parsed))
+            return null;
+        return parsed.GetValueOrDefault(("s", "v"));
+    }
+
+    private static FieldInfo Field(Type type, string name)
+        => type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+           ?? throw new MissingFieldException(type.FullName, name);
 
     private static void Near(TestContext t, string label, double actual, double expected)
         => t.CheckRel(label, actual, expected, 1e-6, floor: 1.0);
