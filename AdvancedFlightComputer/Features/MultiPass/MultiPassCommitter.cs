@@ -5,19 +5,9 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// Shared "plan the next pass and put it in the BurnPlan" mechanics
-/// for both <see cref="PassCompletionPatch"/> (after a pass completes)
-/// and StartMultiPass (the user-driven first pass).
-/// </summary>
+// Initial and later passes use the same scheduling path.
 internal static class MultiPassCommitter
 {
-    /// <summary>
-    /// Plans pass <c>exec.PassIndex</c> via the intent, queues the
-    /// burn through <see cref="InputEvents.BurnUpdateBuffer"/>, and
-    /// attaches it to <paramref name="exec"/>. Returns null on
-    /// success, or a short failure reason.
-    /// </summary>
     public static string? TryCommitNext(Vehicle vehicle, MultiPassExecution exec)
     {
         var plan = exec.Intent.RecomputePass(
@@ -34,23 +24,11 @@ internal static class MultiPassCommitter
         return null;
     }
 
-    /// <summary>
-    /// Builds a Burn at <paramref name="burnTime"/> and queues it via
-    /// <see cref="InputEvents.BurnUpdateBuffer"/> (stock pattern: the
-    /// BurnPlan mutation applies at the next frame boundary, sequenced
-    /// with any other queued deletes / updates). Returns the Burn so
-    /// the caller can hold a reference, or null if no patch covers
-    /// <paramref name="burnTime"/>.
-    /// </summary>
+    // Buffer additions with other input changes. No burn can be created if the flight plan has no patch at the requested time.
     public static Burn? QueueAddBurn(
         Vehicle source, UniverseTime burnTime, double3 dvVlf, FlightPlan? chainPlan = null)
     {
-        // chainPlan is the trajectory a chained maneuver was planned against (the
-        // pending burn's flight plan); without it the burn anchors on the vehicle's
-        // live plan. Pass commits deliberately stay on the live plan: at commit time
-        // the vehicle IS on the previous pass's post-burn orbit, while the plan of
-        // the just-fired burn may still linger in the BurnPlan and describe that
-        // orbit only as well as the pre-burn prediction did.
+        // A supplied chain plan anchors the maneuver after another pending burn. Normal pass commits use the live plan because the vehicle has already flown the previous pass and its prediction can be stale.
         PatchedConic? patch = chainPlan?.TryFindPatch(burnTime)
                               ?? source.FlightPlan.TryFindPatch(burnTime);
         if (patch == null)

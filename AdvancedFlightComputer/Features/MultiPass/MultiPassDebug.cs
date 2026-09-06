@@ -7,11 +7,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// Diagnostic logging helpers for the multi-pass state machine. All
-/// methods short-circuit when <see cref="DebugConfig.MultiPass"/> is
-/// off, so call sites do not need to gate themselves.
-/// </summary>
+// Callers must also guard interpolated arguments so disabled logging does not allocate strings.
 internal static class MultiPassDebug
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
@@ -37,9 +33,6 @@ internal static class MultiPassDebug
             exec.ConsecutiveScheduleFailures));
     }
 
-    /// <summary>Dumps all burns currently in <paramref name="plan"/>
-    /// with their fingerprints (Time + DvMagnitude). Used to diagnose
-    /// "registry says X but BurnPlan disagrees" states.</summary>
     public static void LogBurnPlan(string context, BurnPlan plan)
     {
         if (!DebugConfig.MultiPass) return;

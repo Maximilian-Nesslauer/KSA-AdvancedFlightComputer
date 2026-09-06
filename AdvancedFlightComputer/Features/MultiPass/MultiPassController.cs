@@ -8,25 +8,10 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// Orchestration entry points called from the plan-window UI when the
-/// user commits or cancels a multi-pass execution. Splitting these out
-/// keeps Patch_DrawPlanWindow focused on Harmony glue and ImGui layout
-/// while this file owns the lifecycle.
-/// </summary>
 internal static class MultiPassController
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    private static readonly ImColor8 StatusGrey = new(120, 120, 120, 255);
 
-    /// <summary>
-    /// Commits pass 0 as a real Burn and registers the execution so
-    /// PassCompletionPatch picks up the rest. SaveId comes from
-    /// <see cref="SaveLoadObserver.CurrentSaveId"/>; an empty value
-    /// makes the entry transient (in-memory only) until the user
-    /// first saves the game, at which point SaveLoadObserver rekeys
-    /// it to that save.
-    /// </summary>
     public static void Start(Vehicle source, string typeKey)
     {
         if (source.Orbit?.Parent == null) return;
@@ -37,12 +22,6 @@ internal static class MultiPassController
         StartWith(source, intent, MultiPassUI.PassCount, MultiPassUI.CurrentSplitMode);
     }
 
-    /// <summary>
-    /// Overload that takes a pre-built intent and explicit (passCount,
-    /// mode). Used by the Hohmann pipeline where the intent is built from
-    /// the stock porkchop entry, not from <see cref="MultiPassUI"/>
-    /// global state. Same execution-start semantics otherwise.
-    /// </summary>
     internal static void StartWith(
         Vehicle source, IManeuverIntent intent, int passCount, SplitMode mode)
     {
@@ -75,10 +54,6 @@ internal static class MultiPassController
         MultiPassRegistry.Add(exec);
     }
 
-    /// <summary>
-    /// Renders the "pass i of N" status line plus the Cancel button
-    /// when an execution is active for <paramref name="source"/>.
-    /// </summary>
     public static void DrawStatus(Vehicle source)
     {
         if (!MultiPassRegistry.TryGet(source.Id, out var exec))
@@ -94,8 +69,7 @@ internal static class MultiPassController
 
     private static void CancelExecution(Vehicle source, MultiPassExecution exec)
     {
-        // Already-fired passes stay applied to the trajectory; only
-        // the still-queued burn (if any) gets removed.
+        // Retain the completed trajectory and remove only the queued burn.
         Burn? pending = exec.TryResolveCurrentBurn(source.FlightComputer.BurnPlan);
         if (pending != null)
         {
