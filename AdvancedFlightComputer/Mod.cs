@@ -18,7 +18,6 @@ public sealed class Mod
 
     private static Harmony? _harmony;
     private static bool _maneuverTypesInjected;
-    private static bool _saveObserverPatched;
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
@@ -29,25 +28,35 @@ public sealed class Mod
             DefaultCategory.Log.Warning(
                 $"[AFC] Tested against {TestedGameVersion}, current is {gameVersion}. Some features may not work correctly.");
 
-        Harmony harmony = new Harmony("com.maxi.advancedflightcomputer");
+        Harmony harmony = new("com.maxi.advancedflightcomputer");
         _harmony = harmony;
 
+        bool coreReady = Validated("Core", GameReflection.ValidateCore)
+            && TryPatchBlock(harmony, "Core", PatchCore);
+
         if (Validated("HyperbolicTargets", GameReflection.ValidateHyperbolicTargets))
-            TryPatchBlock("HyperbolicTargets", () => HyperbolicTargets.ApplyPatches(harmony));
+            TryPatchBlock(harmony, "HyperbolicTargets", HyperbolicTargets.ApplyPatches);
 
         if (Validated("ManeuverTools", GameReflection.ValidateManeuverTools))
         {
             // The quick-tools and MultiPass are separate blocks so that a MultiPass failure does
             // not roll back the quick-tools.
-            if (!TryPatchBlock("ManeuverTools", () => PatchManeuverTools(harmony)))
+            if (!TryPatchBlock(harmony, "ManeuverTools", PatchManeuverTools))
                 DisableManeuverTools();
-            else if (Validated("MultiPass", GameReflection.ValidateMultiPass)
-                     && !TryPatchBlock("MultiPass", () => PatchMultiPass(harmony)))
-                DisableMultiPass();
+            else if (coreReady && Validated("MultiPass", GameReflection.ValidateMultiPass))
+            {
+                SharedVehicleHooks.MultiPassEnabled = TryPatchBlock(harmony, "MultiPass", PatchMultiPass);
+                if (!SharedVehicleHooks.MultiPassEnabled)
+                    DisableMultiPass();
+            }
         }
 
-        if (Validated("RcsTranslation", GameReflection.ValidateRcsTranslation))
-            TryPatchBlock("RcsTranslation", () => PatchRcsTranslation(harmony));
+        if (coreReady && Validated("RcsTranslation", GameReflection.ValidateRcsTranslation))
+        {
+            SharedVehicleHooks.RcsEnabled = TryPatchBlock(harmony, "RcsTranslation", PatchRcsTranslation);
+            if (!SharedVehicleHooks.RcsEnabled)
+                DisableRcsTranslation();
+        }
 
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
@@ -58,6 +67,12 @@ public sealed class Mod
             return true;
         DefaultCategory.Log.Warning($"[AFC] {feature} disabled - reflection targets not found.");
         return false;
+    }
+
+    private static void PatchCore(Harmony harmony)
+    {
+        SharedVehicleHooks.ApplyPatches(harmony);
+        SaveLoadObserver.ApplyPatches(harmony);
     }
 
     private static void PatchManeuverTools(Harmony harmony)
@@ -78,9 +93,6 @@ public sealed class Mod
     private static void PatchMultiPass(Harmony harmony)
     {
         MultiPassRegistry.Init();
-        harmony.CreateClassProcessor(typeof(PassCompletionPatch)).Patch();
-        harmony.CreateClassProcessor(typeof(VehicleDisposePatch)).Patch();
-        PatchSaveObserverOnce(harmony);
         MultiPassUI.Enabled = true;
 
         // The inline Hohmann UI, the flyby targeting drawn inside it, and the fallback injection all
@@ -123,9 +135,7 @@ public sealed class Mod
     private static void PatchRcsTranslation(Harmony harmony)
     {
         harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
-        harmony.CreateClassProcessor(typeof(RcsDriverPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
-        harmony.CreateClassProcessor(typeof(RcsVehicleDisposePatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.IsDisabledPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.PackDataPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.HoveredPatch)).Patch();
@@ -133,20 +143,16 @@ public sealed class Mod
         harmony.CreateClassProcessor(typeof(RcsBurnCanvasUi)).Patch();
 
         RcsExecRegistry.Init();
-        PatchSaveObserverOnce(harmony);
         SaveLoadObserver.SaveLoaded += RcsExecRegistry.Load;
         SaveLoadObserver.SaveWritten += OnRcsSaveWritten;
     }
 
-    // MultiPass and RcsTranslation share one patch pair on UncompressedSave. The flag is set before
-    // the call on purpose, so a half-applied pair is not retried by the second feature and
-    // SaveLoadObserver keeps its one-pair contract.
-    private static void PatchSaveObserverOnce(Harmony harmony)
+    private static void DisableRcsTranslation()
     {
-        if (_saveObserverPatched)
-            return;
-        _saveObserverPatched = true;
-        SaveLoadObserver.ApplyPatches(harmony);
+        SaveLoadObserver.SaveLoaded -= RcsExecRegistry.Load;
+        SaveLoadObserver.SaveWritten -= OnRcsSaveWritten;
+        RcsExecRegistry.Reset();
+        RcsCommandChannel.Reset();
     }
 
     private static bool PatchIfAnchored(Harmony harmony, Type patch, bool anchorPresent, string feature, string anchor)
@@ -160,24 +166,17 @@ public sealed class Mod
         return true;
     }
 
-    /// <summary>Contains a patching failure to one feature. Several targets are attribute-bound
-    /// and outside the reflection validation, so a game-side rename throws out of Patch() where
-    /// the validation gate cannot catch it, and StarMap invokes every mod's AllModsLoaded hook
-    /// from one loop, so an escaping exception would also skip every later mod's hook. Harmony
-    /// applies patches one by one, so everything before the failing call stays live, and there is
-    /// no rollback.</summary>
-    private static bool TryPatchBlock(string feature, Action apply)
+    private static bool TryPatchBlock(Harmony harmony, string feature, Action<Harmony> apply)
     {
         try
         {
-            apply();
+            apply(harmony);
             return true;
         }
         catch (Exception ex)
         {
             DefaultCategory.Log.Warning(
-                $"[AFC] {feature} patching failed (game version may have changed); " +
-                $"patches applied before the failure stay live: {ex}");
+                $"[AFC] {feature} patching failed. Earlier patches remain active: {ex}");
             return false;
         }
     }
@@ -193,9 +192,9 @@ public sealed class Mod
     [StarMapUnload]
     public void Unload()
     {
+        SharedVehicleHooks.Reset();
         _harmony?.UnpatchAll(_harmony.Id);
         _harmony = null;
-        _saveObserverPatched = false;
         RemoveTransferTypes();
 
         // Persistence is driven by UncompressedSave.Write, so a quit without saving drops

@@ -5,7 +5,7 @@ namespace AdvancedFlightComputer.Core;
 
 /// <summary>
 /// The vehicles the per-frame drivers walk. They hang off <see cref="Universe.ApplyVehicleSolvers"/>,
-/// which carries no vehicle argument, so each enumerates the world itself.
+/// which carries no vehicle argument, so the shared hook enumerates the world.
 ///
 /// This is the live registry rather than <see cref="Program.VehiclesInFrame"/>, because
 /// <c>Program.PrepareFrame</c> refreshes that cache only after the solver apply, which makes it one

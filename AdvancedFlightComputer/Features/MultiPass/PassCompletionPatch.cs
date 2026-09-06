@@ -4,13 +4,11 @@ using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
-using HarmonyLib;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
 // Run on the main thread before input events are drained. Stock completion changes Auto to Manual when the target dot product reaches zero. Fuel exhaustion can leave a positive dot product.
-[HarmonyPatch(typeof(Universe), nameof(Universe.ApplyVehicleSolvers))]
 internal static class PassCompletionPatch
 {
     private const int MaxAwaitingMaterializationTicks = 4;
@@ -27,16 +25,7 @@ internal static class PassCompletionPatch
     public static void OnRegistryRemovedExternally(string vehicleId)
         => _lastBurnMode.Remove(vehicleId);
 
-    static void Postfix()
-    {
-        foreach (Astronomical astro in LoadedVehicles.All)
-        {
-            if (astro is Vehicle vehicle && !vehicle.IsDisposed)
-                TickVehicle(vehicle);
-        }
-    }
-
-    private static void TickVehicle(Vehicle vehicle)
+    internal static void TickVehicle(Vehicle vehicle)
     {
         if (!MultiPassRegistry.TryGet(vehicle.Id, out var exec))
             return;

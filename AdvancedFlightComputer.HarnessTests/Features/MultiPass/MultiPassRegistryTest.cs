@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Reflection;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
