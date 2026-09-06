@@ -7,36 +7,31 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>Per-pass marker overlays for the multi-pass preview.
-/// First (next-to-execute) pass uses plain labels ("Ap", "Pe"), final
-/// pass prefixes "Final", intermediate passes collapse to an inverted
-/// triangle with the same info on hover. With skipLast=true (Hohmann),
-/// the second-to-last pass uses PreFinalRaise mode to call out its
-/// apoapsis as "Pre-SOI-escape AP" - the highest orbit reached before
-/// the final ejection burn.</summary>
+// The first pass uses plain apsis labels and the final pass adds Final. Intermediate passes use triangles with hover details. When the final orbit is hidden, keep the highest preceding apoapsis marker.
 internal static class MultiPassMarkers
 {
     private enum MarkerMode { Full, FinalFull, Triangle, PreFinalRaise }
 
-    // Special-case label for the pre-final raising pass's apoapsis. Spelt
-    // out in caps to stand visually apart from the standard Ap / Pe. The
-    // embedded newline triggers the centered multi-line render path in
-    // DrawMarker so the long label doesn't shoot off to the right of the
-    // dot anchor like a single-line render would.
+    // Center the fixed multiline label on its marker.
     private const string PreFinalRaiseApLabel = "Pre-SOI-\nescape AP";
+
+    private static readonly string[] PreFinalRaiseApLines = { "Pre-SOI-", "escape AP" };
+
+    private enum DetailKind { None, Distance, Inclination }
+
+    private readonly record struct MarkerDetail(DetailKind Kind, double Value)
+    {
+        public string? Format() => Kind switch
+        {
+            DetailKind.Distance => ManeuverToolsWindow.FormatDistance(Value),
+            DetailKind.Inclination => string.Format(CultureInfo.InvariantCulture, "{0:F2} deg", Value),
+            _ => null,
+        };
+    }
 
     private const float HoverRadiusPx = 100f;
 
-    /// <summary>When <paramref name="skipFirst"/> is true, passes[0] is
-    /// omitted; the first shown pass starts as Triangle (stock owns the
-    /// "next" position). When <paramref name="skipLast"/> is true, the
-    /// last pass is omitted - Hohmann uses this because stock renders
-    /// the selected-entry markers ("Escape 0", "Ap" etc.) for the final
-    /// pass trajectory via <c>FlightPlan.DrawUi</c>.
-    /// <paramref name="firstPassDisplayNumber"/> is the 1-based pass
-    /// number for passes[0] so hover labels reflect the absolute pass
-    /// number (e.g. "Ap Pass 4" mid-execution instead of restarting
-    /// at 1).</summary>
+    // Hidden passes retain their positions in the color and label sequence.
     public static void Draw(
         IViewport viewport, Vehicle source, PassPreview[] passes,
         int firstPassDisplayNumber = 1,
@@ -45,28 +40,16 @@ internal static class MultiPassMarkers
         int start = skipFirst ? 1 : 0;
         int end = passes.Length - (skipLast ? 1 : 0);
 
-        // rampCount includes any skipped-last slot so FinalFull mapping
-        // still refers to the actual final pass; with skipLast=true no
-        // rendered pass is at rel == rampCount - 1, so no FinalFull is
-        // produced (stock's own marker labels the final pass instead).
+        // Include the hidden final pass in the color ramp so the preceding pass does not become fully bright.
         int rampCount = passes.Length - start;
 
         Camera camera = viewport.GetCamera();
         float2 vpPos = viewport.Position;
-        // Not the bare GetBackgroundDrawList(): that leaves the viewport
-        // argument null instead of naming the main one. Stock routes every
-        // overlay through this helper since it fixed orbit lines bleeding into
-        // the crew portrait views.
+        // Use the overlay viewport so markers do not appear over a portrait viewport.
         ImDrawListPtr drawList = ImGuiHelper.GetOverlayDrawList(viewport);
         float2 mousePos = ImGui.GetIO().MousePos;
 
-        // Special case at PassIndex == N-2: the cache contains only the
-        // queued pre-final-raise pass (passes[0]) and the final ejection
-        // (passes[1]). Both are skipped by skipFirst / skipLast for orbit
-        // rendering, but the user is now coasting toward exactly the
-        // pre-final-raise apoapsis - the most informative moment of the
-        // sequence. Draw passes[0]'s PreFinalRaise marker (label only,
-        // stock's BurnPlan integration is rendering the orbit itself).
+        // With two passes, both orbit overlays can be hidden while stock draws them. Keep the apoapsis label for the raise before the final pass.
         if (skipFirst && skipLast && passes.Length == 2)
         {
             DrawPass(passes[0], MarkerMode.PreFinalRaise,
@@ -79,10 +62,7 @@ internal static class MultiPassMarkers
         for (int i = start; i < end; i++)
         {
             int rel = i - start;
-            // PreFinalRaise takes precedence over Full when both apply
-            // (N=2 init: pass 0 is both "first rendered" and "the only
-            // raising pass before escape"; the latter is the more
-            // informative label).
+            // The raise before the final pass takes priority over the full marker style when there are only two passes.
             MarkerMode mode =
                 skipLast && rel == rampCount - 2 ? MarkerMode.PreFinalRaise
                 : rel == rampCount - 1 ? MarkerMode.FinalFull
@@ -102,15 +82,11 @@ internal static class MultiPassMarkers
         Orbit firstOrbit = fp.Patches[0].Orbit;
         byte4 color = firstOrbit.OrbitLineColor;
 
-        // PreFinalRaise highlights only this orbit's apoapsis (the
-        // "highest pre-escape" point). Everything else on this pass
-        // collapses to Triangle to keep the overlay tidy and avoid
-        // pulling attention from the actual key marker.
+        // Highlight only the apoapsis before the final pass. Other markers remain triangles.
         bool isPreFinalRaise = mode == MarkerMode.PreFinalRaise;
         MarkerMode secondaryMode = isPreFinalRaise ? MarkerMode.Triangle : mode;
 
-        // Ap / Pe of the immediate post-burn orbit; unbound passes skip
-        // (planner already flagged the result as Failed).
+        // Only bound orbits have both apsides immediately after the burn.
         if (firstOrbit.IsBound() && firstOrbit.Parent != null)
         {
             double parentRadius = firstOrbit.Parent.MeanRadius;
@@ -120,14 +96,13 @@ internal static class MultiPassMarkers
             MarkerMode apMode = isPreFinalRaise ? MarkerMode.Full : mode;
 
             DrawAt(firstOrbit.Parent, firstOrbit.GetApoapsisPositionOrb().Transform(orb2Cce),
-                apLabel, ManeuverToolsWindow.FormatDistance(firstOrbit.Apoapsis - parentRadius),
+                apLabel, new MarkerDetail(DetailKind.Distance, firstOrbit.Apoapsis - parentRadius),
                 color, apMode, passNumber, drawList, camera, vpPos, mousePos);
             DrawAt(firstOrbit.Parent, firstOrbit.GetPeriapsisPositionOrb().Transform(orb2Cce),
-                "Pe", ManeuverToolsWindow.FormatDistance(firstOrbit.Periapsis - parentRadius),
+                "Pe", new MarkerDetail(DetailKind.Distance, firstOrbit.Periapsis - parentRadius),
                 color, secondaryMode, passNumber, drawList, camera, vpPos, mousePos);
         }
 
-        // Per-patch markers: SOI transitions, AN/DN, closest approaches.
         foreach (PatchedConic patch in fp.Patches)
         {
             Orbit o = patch.Orbit;
@@ -159,7 +134,7 @@ internal static class MultiPassMarkers
 
         Orbit o = patch.Orbit;
         double3 posCce = o.GetPositionOrb(patch.EndTrueAnomaly).Transform(patchOrb2Cce);
-        DrawAt(o.Parent, posCce, label, null,
+        DrawAt(o.Parent, posCce, label, default,
             color, mode, passNumber, drawList, camera, vpPos, mousePos);
     }
 
@@ -170,15 +145,14 @@ internal static class MultiPassMarkers
     {
         if (!patch.TargetData.HasValue) return;
         TargetData td = patch.TargetData.Value;
-        string relIncStr = string.Format(CultureInfo.InvariantCulture,
-            "{0:F2} deg", td.RelativeInclination);
+        var detail = new MarkerDetail(DetailKind.Inclination, td.RelativeInclination);
         Orbit o = patch.Orbit;
 
         if (PatchedConic.TrueAnomalyInPatch(td.AnTrueAnomaly,
                 patch.StartTrueAnomaly, patch.EndTrueAnomaly))
         {
             double3 anCce = o.GetPositionOrb(td.AnTrueAnomaly).Transform(patchOrb2Cce);
-            DrawAt(o.Parent, anCce, "AN", relIncStr,
+            DrawAt(o.Parent, anCce, "AN", detail,
                 color, mode, passNumber, drawList, camera, vpPos, mousePos);
         }
 
@@ -186,7 +160,7 @@ internal static class MultiPassMarkers
                 patch.StartTrueAnomaly, patch.EndTrueAnomaly))
         {
             double3 dnCce = o.GetPositionOrb(td.DnTrueAnomaly).Transform(patchOrb2Cce);
-            DrawAt(o.Parent, dnCce, "DN", relIncStr,
+            DrawAt(o.Parent, dnCce, "DN", detail,
                 color, mode, passNumber, drawList, camera, vpPos, mousePos);
         }
     }
@@ -205,28 +179,30 @@ internal static class MultiPassMarkers
             double3 encCce = o.GetPositionOrb(enc.TaMainOrbit).Transform(patchOrb2Cce);
             DrawAt(o.Parent, encCce,
                 "Closest",
-                ManeuverToolsWindow.FormatDistance(enc.ClosestDistance),
+                new MarkerDetail(DetailKind.Distance, enc.ClosestDistance),
                 color, mode, passNumber, drawList, camera, vpPos, mousePos);
         }
     }
 
     private static void DrawAt(
-        IParentBody parent, double3 posCce, string label, string? hoverExtra,
+        IParentBody parent, double3 posCce, string label, MarkerDetail detail,
         byte4 color, MarkerMode mode, int passNumber,
         ImDrawListPtr drawList, Camera camera, float2 vpPos, float2 mousePos)
     {
         double3 posEcl = parent.GetPositionEclFromCce(posCce);
         float2 screen = vpPos + camera.EgoToScreen(camera.EclToEgo(posEcl));
         if (float.IsNaN(screen.X) || float.IsNaN(screen.Y)) return;
-        DrawMarker(drawList, screen, mousePos, color, label, hoverExtra, mode, passNumber);
+        DrawMarker(drawList, screen, mousePos, color, label, detail, mode, passNumber);
     }
 
     private static void DrawMarker(
         ImDrawListPtr drawList, float2 screen, float2 mousePos, byte4 color,
-        string label, string? hoverExtra, MarkerMode mode, int passNumber)
+        string label, MarkerDetail detail, MarkerMode mode, int passNumber)
     {
         bool hovered = Math.Abs(screen.X - mousePos.X) < HoverRadiusPx
                     && Math.Abs(screen.Y - mousePos.Y) < HoverRadiusPx;
+
+        string? hoverExtra = hovered ? detail.Format() : null;
 
         if (mode == MarkerMode.Triangle)
         {
@@ -238,7 +214,7 @@ internal static class MultiPassMarkers
                 color);
             if (hovered)
             {
-                // Hover label disambiguates which intermediate pass.
+                // Include the pass number in hover labels so overlapping markers remain identifiable.
                 string hoverLabel = string.Format(CultureInfo.InvariantCulture,
                     "{0} Pass {1}", label, passNumber);
                 float2 textPos = new float2(screen.X, screen.Y + s + 4f);
@@ -252,7 +228,6 @@ internal static class MultiPassMarkers
             return;
         }
 
-        // Full / FinalFull: text marker, hover adds extra below.
         string display = mode == MarkerMode.FinalFull ? "Final " + label : label;
         int lineCount = DrawLabel(drawList, screen, color, display);
         if (hovered && hoverExtra != null)
@@ -263,15 +238,7 @@ internal static class MultiPassMarkers
         }
     }
 
-    /// <summary>Renders <paramref name="text"/> at <paramref name="screen"/>.
-    /// Single-line labels (no embedded newline) keep the historical
-    /// top-left anchor used by stock orbit markers so short tags like
-    /// "Ap" / "Pe" sit in the same place they always have. Labels with
-    /// an embedded newline are split, each line horizontally centered on
-    /// the anchor X - this is how the long "Pre-SOI-escape AP" tag stays
-    /// visually pinned to its dot instead of trailing off to the right.
-    /// Returns the number of lines drawn so callers can offset any
-    /// follow-up text (e.g. the hover-extra row).</summary>
+    // Stock anchors a single line at its upper left corner. Center multiline text around the marker instead.
     private static int DrawLabel(
         ImDrawListPtr drawList, float2 anchor, byte4 color, string text)
     {
@@ -282,7 +249,7 @@ internal static class MultiPassMarkers
             return 1;
         }
 
-        string[] lines = text.Split('\n');
+        string[] lines = text == PreFinalRaiseApLabel ? PreFinalRaiseApLines : text.Split('\n');
         float lineHeight = ImGui.GetTextLineHeight();
         for (int i = 0; i < lines.Length; i++)
         {
