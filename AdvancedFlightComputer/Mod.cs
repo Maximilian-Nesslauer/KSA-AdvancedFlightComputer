@@ -105,6 +105,7 @@ public sealed class Mod
     private static void PatchMultiPass(Harmony harmony)
     {
         MultiPassRegistry.Init();
+        RcsBurnCompletions.Completed += PassCompletionPatch.OnRcsBurnCompleted;
         MultiPassUI.Enabled = true;
 
         if (PlanWindowPatchPipeline.HasCalculatedControlsAnchor)
@@ -122,6 +123,7 @@ public sealed class Mod
     // belongs to that block, so clearing them wholesale is safe.
     private static void DisableMultiPass()
     {
+        RcsBurnCompletions.Completed -= PassCompletionPatch.OnRcsBurnCompleted;
         MultiPassUI.Enabled = false;
         HohmannMultiPassUI.Enabled = false;
         HohmannFlybyUI.Enabled = false;
