@@ -27,7 +27,7 @@ namespace AdvancedFlightComputer.Features.Flyby;
 /// achieved patched conic periapsis matches the game's own model. It reads
 /// v_p^2 = v_soi^2 - 2 mu / r_soi + 2 mu / r_p and b = r_p v_p / v_soi.
 /// </summary>
-internal static class FlybyTargeting
+internal static partial class FlybyTargeting
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 

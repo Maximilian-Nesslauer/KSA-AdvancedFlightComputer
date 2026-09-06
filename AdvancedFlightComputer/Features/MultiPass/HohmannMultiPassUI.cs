@@ -3,7 +3,6 @@ using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
-using AdvancedFlightComputer.Features.RcsTranslation;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -40,11 +39,13 @@ internal static class HohmannMultiPassUI
         long MassBucket,
         bool FlybyOn,
         long FlybyRpBucket,
-        FlybySide FlybySide)
+        FlybySide FlybySide,
+        FlybyTargeting.DepartureKey? FlybyDeparture = null)
     {
         // Thrust changes mass and can shift the final time through the parking period. Ignore those fields while thrust is active, but retain changes to the transfer, flyby request, and pass index.
         public PreviewKey WithoutDrift() =>
-            this with { TFinalBucketSec = 0, MassBucket = 0 };
+            this with { TFinalBucketSec = 0, MassBucket = 0,
+                FlybyDeparture = FlybyDeparture?.WithoutParkingDrift() };
     }
 
     private static PreviewKey _cachedKey;
@@ -63,6 +64,7 @@ internal static class HohmannMultiPassUI
 
     // A failed flyby retarget leaves the departure aimed at the center of the body. Keep this state so the UI can warn the user.
     private static bool _flybyRetargetFailed;
+    private static FlybyTargeting.DepartureSolution? _plannedFlybyDeparture;
 
     private static int _lastFrameDrawn = -1;
 
@@ -157,6 +159,13 @@ internal static class HohmannMultiPassUI
         _autoClampKind = PassPlanFailure.None;
         _lastShiftKShift = 0;
         _flybyRetargetFailed = false;
+        _plannedFlybyDeparture = null;
+    }
+
+    internal static void ClearFlybyPreview()
+    {
+        if (_cachedKey.FlybyDeparture != null || _plannedFlybyDeparture != null)
+            InvalidatePreview();
     }
 
     // Clear the preview before registry removal can leave an overlay on the orbit after the burn.
@@ -300,7 +309,7 @@ internal static class HohmannMultiPassUI
             string.Format(Inv, "{0:F1} m/s", entry.TransferData.TransferDvVlf.Length()).AsSpan());
 
         // Apply flyby targeting before splitting the departure so all passes use the requested aim.
-        HohmannFlybyUI.DrawInline(source, entry, info);
+        HohmannFlybyUI.DrawControls(source, info);
 
         ImGui.Spacing();
 
@@ -310,6 +319,7 @@ internal static class HohmannMultiPassUI
         {
             DrawSplitModeSelector();
             UpdatePreviewIfStale(source, entry, info);
+            ShowFlybyDeparture(source, entry, info);
             DrawSpanInfo(source);
             DrawPreviewFailureIfApplicable();
             DrawInsufficientFuelIfApplicable();
@@ -320,6 +330,10 @@ internal static class HohmannMultiPassUI
                 DrawTotalsAndSavings(source, _cachedPreview.Passes,
                     entry.TransferData.TransferDvVlf.Length(),
                     source.Orbit?.Period ?? 0.0);
+        }
+        else
+        {
+            ShowFlybyDeparture(source, entry, info);
         }
 
         // Keep the clamp message visible even when only one pass remains. Clear it when the user changes the pass count or split mode.
@@ -342,6 +356,20 @@ internal static class HohmannMultiPassUI
                     : "Click Create to start the {0}-pass execution.",
                 _passCount));
         }
+    }
+
+    private static void ShowFlybyDeparture(
+        Vehicle source, OrbitalTransfers.PorkChopEntry entry, OrbitalTransfers.TransferInfo info)
+    {
+        if (_passCount <= 1)
+            HohmannFlybyUI.ShowSingleDeparture(source, entry, info);
+        else if (info.Target is IParentBody target)
+        {
+            PassPreview[] passes = _hasCachedPreview ? _cachedPreview.Passes : Array.Empty<PassPreview>();
+            FlightPlan? finalPlan = !_cachedPreview.Failed && passes.Length > 0 ? passes[^1].FlightPlan : null;
+            HohmannFlybyUI.ShowMultiPassDeparture(_plannedFlybyDeparture, finalPlan, target, entry);
+        }
+        HohmannFlybyUI.DrawSelectedResult(entry);
     }
 
     private static void DrawSpanInfo(Vehicle source)
@@ -533,7 +561,8 @@ internal static class HohmannMultiPassUI
         SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
         var shift = HohmannMultiPassPlanner.PrepareShiftedInput(
             raw, source, info, _passCount, parkingPeriodSec, now, _splitMode, state);
-        var key = BuildKey(source, shift.Input, _passCount, _splitMode, 0);
+        var key = BuildKey(source, shift.Input, _passCount, _splitMode, 0,
+            ResolveFlybyTransit(shift, entry));
         if (_hasCachedPreview && key == _cachedKey)
         {
             _lastShiftKShift = shift.KShift;
@@ -543,15 +572,16 @@ internal static class HohmannMultiPassUI
 
         shift = ClampPassCount(source, info, raw, shift, state, parkingPeriodSec, now);
         // The cache key describes the shifted input and requested flyby. The retargeted result is derived from them.
-        key = BuildKey(source, shift.Input, _passCount, _splitMode, 0);
+        key = BuildKey(source, shift.Input, _passCount, _splitMode, 0,
+            ResolveFlybyTransit(shift, entry));
         PlanPreview(source, entry, info, shift, key, state, parkingPeriodSec, now);
     }
 
     // Freeze drift from mass and time while thrust is active. Changes to other inputs or the pass index still invalidate the preview.
     private static bool CanKeepPreviewDuringThrust(Vehicle source, PreviewKey key)
         => _hasCachedPreview
-           && (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto || RcsExecutor.IsActive(source))
-           && key.WithoutDrift() == _cachedKey.WithoutDrift();
+           && MultiPassPreviewCache.ShouldFreezeForThrust(
+               source, key.WithoutDrift() == _cachedKey.WithoutDrift());
 
     private static HohmannMultiPassPlanner.ShiftResult ClampPassCount(
         Vehicle source, OrbitalTransfers.TransferInfo info,
@@ -924,18 +954,22 @@ internal static class HohmannMultiPassUI
 
     private static PreviewKey BuildKey(
         Vehicle source, HohmannMultiPassPlanner.HohmannPlanInput input,
-        int passCount, SplitMode mode, int startPassIndex)
+        int passCount, SplitMode mode, int startPassIndex, UniverseTime? transit = null)
     {
         // Changing the flyby altitude or side must invalidate the preview.
         bool flybyOn = false;
         long flybyRpBucket = 0;
         FlybySide flybySide = FlybySide.Inner;
+        FlybyTargeting.DepartureKey? departureKey = null;
         if (input.Target is IParentBody target
             && HohmannFlybyUI.TryGetRequest(target, out double rp, out FlybySide side))
         {
             flybyOn = true;
             flybyRpBucket = (long)(rp / 1000.0);
             flybySide = side;
+            if (transit is UniverseTime duration)
+                departureKey = FlybyTargeting.CaptureDepartureKey(
+                    source, input.Target, input.TFinal, duration, rp, side);
         }
 
         return new PreviewKey(
@@ -952,7 +986,8 @@ internal static class HohmannMultiPassUI
             MassBucket: (long)(source.TotalMass / 100.0),
             FlybyOn: flybyOn,
             FlybyRpBucket: flybyRpBucket,
-            FlybySide: flybySide);
+            FlybySide: flybySide,
+            FlybyDeparture: departureKey);
     }
 
     // Preview and commit must use the same shifted transit.
@@ -961,18 +996,21 @@ internal static class HohmannMultiPassUI
         => shift.KShift > 0 ? shift.ShiftedTransit : entry.TransferData.Transit;
 
     // Transfers between different parent systems lock hyperbolic excess. Transfers within one parent system lock apoapsis radius. A failed retarget preserves the input and sets the failure flag.
-    private static HohmannMultiPassPlanner.HohmannPlanInput MaybeApplyFlyby(
+    internal static HohmannMultiPassPlanner.HohmannPlanInput MaybeApplyFlyby(
         Vehicle source, OrbitalTransfers.TransferInfo info,
         HohmannMultiPassPlanner.HohmannPlanInput center, UniverseTime transit, out bool failed)
     {
         failed = false;
+        _plannedFlybyDeparture = null;
         if (info.Target is not IParentBody target) return center;
         if (info.Target is not IOrbiter targetOrbiter) return center;
         if (!HohmannFlybyUI.TryGetRequest(target, out double rp, out FlybySide side))
             return center;
 
-        var outcome = FlybyTargeting.ComputeFlybyDeparture(
+        var key = FlybyTargeting.CaptureDepartureKey(
             source, targetOrbiter, center.TFinal, transit, rp, side);
+        _plannedFlybyDeparture = FlybyTargeting.GetDeparture(key);
+        var outcome = _plannedFlybyDeparture.Outcome;
         if (outcome.Result == null)
         {
             failed = true;

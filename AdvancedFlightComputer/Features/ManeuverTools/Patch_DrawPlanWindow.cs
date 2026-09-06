@@ -2,33 +2,27 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
-using CommunityToolkit.HighPerformance.Buffers;
 using HarmonyLib;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow), new[] { typeof(IGameViewport) })]
-internal static class Patch_DrawPlanWindow
+internal static partial class Patch_DrawPlanWindow
 {
     // Share the stock window identity and dimensions so changing plan type preserves its placement.
     private const string WindowId = "transfer-planning";
     private const string WindowTitle = "TRANSFER PLANNING";
     private const string WindowSignature = "KSA-TRJ";
-    private const string FlightPlanWindowId = "afc-maneuver-flightplan";
-    private const string FlightPlanWindowTitle = "MANEUVER FLIGHT PLAN";
 
     private static float MainWindowOffsetXPx => 440f * ImGuiHelper.InterfaceScale;
     private static float MainWindowOffsetYPx => 50f * ImGuiHelper.InterfaceScale;
     private static float MainWindowWidthPx => 400f * ImGuiHelper.InterfaceScale;
     private static float MainWindowHeightPx => 1050f * ImGuiHelper.InterfaceScale;
-    private static float FlightPlanWindowOffsetXPx => 620f * ImGuiHelper.InterfaceScale;
-    private static float FlightPlanWindowOffsetYPx => 40f * ImGuiHelper.InterfaceScale;
-    private static float FlightPlanWindowWidthPx => 460f * ImGuiHelper.InterfaceScale;
-    private static float FlightPlanWindowHeightPx => 620f * ImGuiHelper.InterfaceScale;
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -81,6 +75,15 @@ internal static class Patch_DrawPlanWindow
         }
         return false;
     }
+
+    [HarmonyTranspiler]
+    static IEnumerable<CodeInstruction> Transpiler(
+        IEnumerable<CodeInstruction> instructions)
+        => PlanWindowPatchPipeline.Rewrite(instructions);
+
+    [HarmonyPostfix]
+    static void Postfix(IGameViewport inViewport)
+        => Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers.Draw(inViewport);
 
     private static void DrawWindow(IViewport inViewport, TransferType transferType)
     {
@@ -280,216 +283,6 @@ internal static class Patch_DrawPlanWindow
         }
     }
 
-    private static void DrawFlightPlanWindow(IViewport inViewport)
-    {
-        FlightPlan? fp = MultiPassUI.HasMultiPassPreview
-            ? MultiPassUI.LastPassFlightPlan
-            : _lastEntry?.FlightPlan;
-        if (fp == null) return;
-
-        ImGui.SetNextWindowPos(
-            inViewport.Position + new float2(FlightPlanWindowOffsetXPx, FlightPlanWindowOffsetYPx),
-            ImGuiCond.Appearing, (float2?)null);
-
-        if (!ConsoleStyle.BeginWindow(FlightPlanWindowId, FlightPlanWindowTitle, WindowSignature,
-                ref _showFlightPlanPreview,
-                new float2(FlightPlanWindowWidthPx, FlightPlanWindowHeightPx),
-                ImGuiWindowFlags.NoFocusOnAppearing))
-            return;
-
-        try
-        {
-            ConsoleStyle.BeginBody();
-            ConsoleStyle.PushWidgetStyle();
-            try
-            {
-                fp.DrawPatchInfo();
-            }
-            finally
-            {
-                ConsoleStyle.PopWidgetStyle();
-                ConsoleStyle.EndBody();
-            }
-            ConsoleStyle.BeginFooter();
-            ConsoleStyle.EndFooter();
-        }
-        finally
-        {
-            ConsoleStyle.EndWindow();
-        }
-    }
-
-    private enum CommitState
-    {
-        None,
-        MultiPassRunning,
-        NodeCreated,
-        // A failed preview for several passes must not produce a single burn with the full delta V.
-        Blocked,
-        Ready,
-    }
-
-    private readonly record struct Commit(
-        CommitState State, Vehicle? Source, OrbitManeuvers.ManeuverResult Maneuver,
-        string TypeKey, PlanningBasis Basis);
-
-    private static CommitState ResolveCommitState(Vehicle source, string typeKey)
-    {
-        if (MultiPassRegistry.Has(source.Id))
-            return CommitState.MultiPassRunning;
-
-        if (_ourBurn != null)
-        {
-            if (_ourBurn.Time < Universe.GetElapsedTime())
-                _ourBurn = null;
-            else
-                return CommitState.NodeCreated;
-        }
-
-        return MultiPassUI.WantsMultiPassButCannot(typeKey)
-            ? CommitState.Blocked
-            : CommitState.Ready;
-    }
-
-    private static bool DrawFooter(CommitState state)
-    {
-        switch (state)
-        {
-            case CommitState.MultiPassRunning:
-                ConsoleStyle.FooterStatus("MULTI-PASS RUNNING".AsSpan(), pending: true);
-                return false;
-            case CommitState.NodeCreated:
-                ConsoleStyle.FooterStatus("NODE CREATED".AsSpan(), pending: false);
-                return false;
-            case CommitState.Blocked:
-                ConsoleStyle.FooterWarning("MULTI-PASS PREVIEW FAILED".AsSpan());
-                return false;
-            case CommitState.Ready:
-                ConsoleStyle.FooterStatus("MANEUVER READY".AsSpan(), pending: true);
-                ConsoleStyle.FooterRightAlign(ConsoleWidgets.ButtonWidth("CREATE".AsSpan()));
-                return ConsoleWidgets.PrimaryButton("CREATE".AsSpan());
-            default:
-                ConsoleStyle.FooterStatus("NO MANEUVER".AsSpan(), pending: false);
-                return false;
-        }
-    }
-
-    private static void CreateSingleOrMultiPass(in Commit commit)
-    {
-        if (MultiPassUI.IsArmed(commit.TypeKey))
-        {
-            // The intents for several passes use the live orbit, so they cannot execute a chained planning basis.
-            if (commit.Basis.IsChained)
-                TimedAlert.Create(
-                    "Multi-pass cannot start on a pending burn's trajectory; " +
-                    "use a single pass or clear the plan first.", Color.Yellow, 4.0);
-            else
-                MultiPassController.Start(commit.Source!, commit.TypeKey);
-        }
-        else
-            CreateSingleBurn(commit.Source!, commit.Maneuver, commit.Basis);
-    }
-
-    // A new maneuver context must permit a new node even while the preceding node is pending.
-    internal static void OnManeuverContextChanged()
-    {
-        _ourBurn = null;
-    }
-
-    private static void CreateSingleBurn(
-        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, PlanningBasis basis)
-    {
-        Burn? burn = MultiPassCommitter.QueueAddBurn(
-            source, maneuver.BurnTime, maneuver.DvVlf, basis.Plan);
-        if (burn == null) return;
-
-        _ourBurn = burn;
-    }
-
-    private static OrbitalTransfers.PorkChopEntry BuildTransferEntry(
-        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, PlanningBasis basis)
-    {
-        var transferData = new OrbitalTransfers.TransferData
-        {
-            Start = maneuver.BurnTime,
-            Point = basis.Orbit.GetPointAt(maneuver.BurnTime),
-            DeltaVelocityCci = maneuver.DvCci,
-            TransferDvVlf = maneuver.DvVlf
-        };
-
-        // A chained preview starts on the preceding burn's patch, not on the live vehicle orbit.
-        if (basis.IsChained && basis.Patch != null)
-        {
-            var (chainedPlan, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
-                source, basis.Patch, maneuver.BurnTime, maneuver.DvVlf);
-            return new OrbitalTransfers.PorkChopEntry(transferData, chainedPlan);
-        }
-
-        FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);
-        // Match the impact clearance that Burn.Create assigns to committed plans.
-        flightPlan.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
-        var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false);
-        // A null encounter filter lets an untargeted maneuver detect all sibling bodies with a high SOI.
-        info.Target = null!;
-        OrbitalTransfers.BuildFlightPlan(
-            ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,
-            out _, out _);
-        // Detached previews have no worker to advance impact searches. Finish with the limits used by OrbitalTransfers.BuildFlightPlan.
-        if (flightPlan.ImpactSearchUnresolved)
-            flightPlan.ComputeCompleteTrajectory(out _, 5, 8, null,
-                resolveImpactsCompletely: true);
-
-        return new OrbitalTransfers.PorkChopEntry(transferData, flightPlan);
-    }
-
-    #endregion
-
-    #region Visual Orbit Preview
-
-    private static void DrawOrbitMarkers(IViewport inViewport)
-    {
-        var uiContext = new Astronomical.UiContext(
-            inViewport, _lastSource!, Color.Green,
-            TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0),
-            ManeuverToolsWindow.GetSelectedTargetOrbiter());
-        _lastEntry!.FlightPlan.DrawUi(inViewport, uiContext, tintDanger: true);
-    }
-
-    internal static void RenderOrbitPreview(IViewport inViewport)
-    {
-        if (!TransferPlanner.ShowPlanWindow)
-            return;
-
-        if (_ourBurn != null || _lastSource == null) return;
-        if (!_showOrbitPreview) return;
-
-        if (MultiPassUI.HasMultiPassPreview)
-        {
-            MultiPassUI.Render(inViewport, _lastSource);
-            return;
-        }
-
-        if (_lastEntry == null) return;
-
-        FlightPlan fp = _lastEntry.FlightPlan;
-        if (fp.Patches.Count == 0)
-            return;
-
-        if (fp.Patches[0].Orbit.IsMissingPoints())
-        {
-            foreach (PatchedConic patch in fp.Patches)
-            {
-                patch.HidePatch = false;
-                MemoryOwner<OrbitPointCce> points = UpdateTaskUtils.GenerateSpacedPoints(patch);
-                patch.Orbit.UpdateCachedPoints(points);
-            }
-        }
-
-        fp.AddLineInstances(inViewport, _lastSource, isActive: true,
-            drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN,
-            isPostBurnOrbit: true);
-    }
-
     #endregion
 
     #region Helpers
@@ -548,7 +341,11 @@ internal static class Patch_DrawPlanWindow
     internal static void TickWindowState()
     {
         if (!TransferPlanner.ShowPlanWindow)
+        {
             DropPlanState();
+            HohmannFlybyUI.ClearPreview();
+            HohmannMultiPassUI.ClearFlybyPreview();
+        }
     }
 
     private static void DropPlanState()

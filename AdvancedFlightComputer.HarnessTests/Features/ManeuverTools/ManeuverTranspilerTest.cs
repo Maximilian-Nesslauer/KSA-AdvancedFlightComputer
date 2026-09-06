@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
+using System.Collections.ObjectModel;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -17,23 +18,66 @@ public sealed class ManeuverTranspilerTest : AfcTest
     {
         MethodInfo draw = AccessTools.Method(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow), [typeof(IGameViewport)]);
         List<CodeInstruction> original = PatchProcessor.GetOriginalInstructions(draw);
-        List<CodeInstruction> multiPass = Run(typeof(Patch_DrawPlanWindow_HohmannMultiPass), original);
+        List<CodeInstruction> patched = Run(typeof(Patch_DrawPlanWindow), original);
         MethodInfo inline = AccessTools.Method(typeof(HohmannMultiPassUI), nameof(HohmannMultiPassUI.DrawInline));
         MethodInfo correction = AccessTools.Method(typeof(TransferPlanner), "DrawCorrectionTransfer", Type.EmptyTypes);
-        int inlineIndex = multiPass.FindIndex(ins => ins.Calls(inline));
-        t.Check("multi-pass is inserted before correction",
-            CountCalls(multiPass, inline) == 1 && inlineIndex >= 0 && multiPass[inlineIndex + 1].Calls(correction));
+        MethodInfo popStyle = AccessTools.Method(typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
+        int correctionIndex = patched.FindIndex(ins => ins.Calls(correction));
+        int popStyleIndex = patched.FindIndex(ins => ins.Calls(popStyle));
+        t.Check("one pipeline inserts both multi-pass draw callbacks",
+            CountCalls(patched, inline) == 2
+            && correctionIndex > 0 && patched[correctionIndex - 1].Calls(inline)
+            && popStyleIndex > 0 && patched[popStyleIndex - 1].Calls(inline));
 
-        List<CodeInstruction> intercepted = Run(typeof(Patch_DrawPlanWindow_CreateInterceptor), multiPass);
         MethodInfo replacement = AccessTools.Method(typeof(HohmannCreateInterceptor), nameof(HohmannCreateInterceptor.CreateMaybeMultiPass));
         MethodInfo gate = AccessTools.Method(typeof(HohmannCreateInterceptor), nameof(HohmannCreateInterceptor.ShouldAllowCreateClick));
-        t.Check("create interception composes with inline injection",
-            CountCalls(intercepted, replacement) == 1 && CountCalls(intercepted, gate) == 1
-            && CountCalls(intercepted, inline) == 1);
+        t.Check("the same pipeline installs create interception",
+            CountCalls(patched, replacement) == 1 && CountCalls(patched, gate) == 1);
 
         CheckMenu(t);
         CheckExceptionRegions(t);
+        CheckInstalledPatchCounts(t, draw);
     }
+
+    private static void CheckInstalledPatchCounts(TestContext t, MethodInfo draw)
+    {
+        const string id = "afc.tests.plan-window-patch-counts";
+        var harmony = new Harmony(id);
+        MethodInfo preRender = AccessTools.Method(
+            typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender), [typeof(IViewport)]);
+        try
+        {
+            Patch(harmony, typeof(Patch_DrawPlanWindow));
+            Patch(harmony, typeof(Patch_DrawPlanWindow_HohmannMultiPass));
+            Patch(harmony, typeof(Patch_DrawPlanWindow_CreateInterceptor));
+            Patch(harmony, typeof(Patch_DrawPlanWindow_HohmannFallback));
+            Patch(harmony, typeof(Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers));
+            Patch(harmony, typeof(Patch_OnPreRender));
+            Patch(harmony, typeof(Patch_TransferPlanner_OnPreRender_Hohmann));
+
+            Patches? drawPatches = Harmony.GetPatchInfo(draw);
+            t.Check("DrawPlanWindow has one patch of each kind",
+                CountOwned(drawPatches?.Prefixes, id) == 1
+                && CountOwned(drawPatches?.Transpilers, id) == 1
+                && CountOwned(drawPatches?.Postfixes, id) == 1);
+
+            Patches? preRenderPatches = Harmony.GetPatchInfo(preRender);
+            t.Check("OnPreRender has one AFC hook",
+                CountOwned(preRenderPatches?.Prefixes, id) == 0
+                && CountOwned(preRenderPatches?.Transpilers, id) == 0
+                && CountOwned(preRenderPatches?.Postfixes, id) == 1);
+        }
+        finally
+        {
+            harmony.UnpatchAll(id);
+        }
+    }
+
+    private static void Patch(Harmony harmony, Type patchType)
+        => harmony.CreateClassProcessor(patchType).Patch();
+
+    private static int CountOwned(ReadOnlyCollection<Patch>? patches, string owner)
+        => patches?.Count(patch => patch.owner == owner) ?? 0;
 
     private static void CheckMenu(TestContext t)
     {

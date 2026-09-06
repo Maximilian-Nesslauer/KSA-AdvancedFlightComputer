@@ -17,6 +17,7 @@ internal static class HohmannCreateInterceptor
     public static bool ShouldAllowCreateClick(bool wasClicked)
     {
         if (!wasClicked) return false;
+        if (!HohmannMultiPassUI.Enabled && !HohmannFlybyUI.Enabled) return true;
         try
         {
             if (StockPlanner.SourceVehicle is not Vehicle source) return true;
@@ -44,6 +45,9 @@ internal static class HohmannCreateInterceptor
     {
         try
         {
+            if (!HohmannMultiPassUI.Enabled && !HohmannFlybyUI.Enabled)
+                return Burn.Create(point, time, deltaVVlf, patch, vehicle);
+
             // A failed gate must return a separate stock burn, never a reference to the active pass.
             if (MultiPassRegistry.Has(vehicle.Id))
             {
@@ -55,59 +59,7 @@ internal static class HohmannCreateInterceptor
                 return Burn.Create(point, time, deltaVVlf, patch, vehicle);
             }
 
-            if (HohmannMultiPassUI.TryGetArmedState(vehicle,
-                    out int passCount, out HohmannTransferIntent? intent,
-                    out SplitMode mode))
-            {
-                Burn? multiPassBurn = TryStartMultiPass(vehicle, intent!, passCount, mode);
-                if (multiPassBurn != null) return multiPassBurn;
-                TimedAlert.Create(
-                    "Multi-pass setup failed, falling back to single burn",
-                    Color.Yellow, 4.0);
-                return Burn.Create(point, time, deltaVVlf, patch, vehicle);
-            }
-
-            if (HohmannFlybyUI.TryGetArmed(vehicle, out FlybyTargeting.FlybyResult flyby))
-            {
-                // Alert the user if the requested split falls back to a single burn.
-                if (HohmannMultiPassUI.WantsMultiPass)
-                {
-                    TimedAlert.Create(
-                        "Multi-pass could not be armed; firing a single flyby burn instead.",
-                        Color.Yellow, 4.0);
-                    DefaultCategory.Log.Warning(
-                        $"[AFC] HohmannCreateInterceptor: vehicle={vehicle.Id} requested a split " +
-                        "but multi-pass was not armed; falling back to a single flyby burn.");
-                }
-
-                Burn? flybyBurn = TryCreateFlybyBurn(vehicle, flyby);
-                if (flybyBurn != null) return flybyBurn;
-                TimedAlert.Create(
-                    "Flyby retarget failed; firing the stock (impact-aimed) burn.",
-                    Color.Yellow, 4.0);
-                return Burn.Create(point, time, deltaVVlf, patch, vehicle);
-            }
-
-            if (HohmannMultiPassUI.WantedMultiPassButPreviewFailed())
-                TimedAlert.Create(
-                    "Multi-pass preview failed; firing single burn instead.",
-                    Color.Yellow, 4.0);
-            else if (HohmannFlybyUI.FlybyRequested)
-            {
-                TimedAlert.Create(
-                    "Flyby not applied (no valid retarget); firing the stock impact-aimed burn.",
-                    Color.Yellow, 4.0);
-                DefaultCategory.Log.Warning(
-                    $"[AFC] HohmannCreateInterceptor: flyby requested for vehicle={vehicle.Id} " +
-                    "but TryGetArmed returned false; stock center-aimed burn created.");
-            }
-
-            if (DebugConfig.Flyby)
-                DefaultCategory.Log.Debug(
-                    $"[AFC] HohmannCreateInterceptor: stock single burn for vehicle={vehicle.Id} " +
-                    $"t={time:F0}s dv={deltaVVlf.Length():F1}m/s " +
-                    $"(flybyRequested={HohmannFlybyUI.FlybyRequested}).");
-            return Burn.Create(point, time, deltaVVlf, patch, vehicle);
+            return CreateRequestedBurn(point, time, deltaVVlf, patch, vehicle);
         }
         catch (Exception ex)
         {
@@ -115,6 +67,80 @@ internal static class HohmannCreateInterceptor
                 $"[AFC] HohmannCreateInterceptor: {ex}; falling back to stock single burn.");
             return Burn.Create(point, time, deltaVVlf, patch, vehicle);
         }
+    }
+
+    private static Burn CreateRequestedBurn(
+        OrbitPointCce point, double time, double3 deltaVVlf,
+        PatchedConic patch, Vehicle vehicle)
+    {
+        if (HohmannMultiPassUI.TryGetArmedState(vehicle,
+                out int passCount, out HohmannTransferIntent? intent,
+                out SplitMode mode))
+        {
+            Burn? multiPassBurn = TryStartMultiPass(vehicle, intent!, passCount, mode);
+            if (multiPassBurn != null) return multiPassBurn;
+
+            if (HohmannFlybyUI.TryGetSingleDeparture(
+                    vehicle, out FlybyTargeting.FlybyResult singleFlyby))
+            {
+                Burn? flybyBurn = TryCreateFlybyBurn(vehicle, singleFlyby);
+                if (flybyBurn != null)
+                {
+                    TimedAlert.Create(
+                        "Multi-pass setup failed; firing a single flyby burn instead.",
+                        Color.Yellow, 4.0);
+                    return flybyBurn;
+                }
+            }
+
+            TimedAlert.Create(HohmannFlybyUI.FlybyRequested
+                    ? "Multi-pass and flyby setup failed; firing the stock impact-aimed burn."
+                    : "Multi-pass setup failed, falling back to single burn",
+                Color.Yellow, 4.0);
+            return Burn.Create(point, time, deltaVVlf, patch, vehicle);
+        }
+
+        if (HohmannFlybyUI.TryGetArmed(vehicle, out FlybyTargeting.FlybyResult flyby))
+        {
+            // Alert the user if the requested split falls back to a single burn.
+            if (HohmannMultiPassUI.WantsMultiPass)
+            {
+                TimedAlert.Create(
+                    "Multi-pass could not be armed; firing a single flyby burn instead.",
+                    Color.Yellow, 4.0);
+                DefaultCategory.Log.Warning(
+                    $"[AFC] HohmannCreateInterceptor: vehicle={vehicle.Id} requested a split " +
+                    "but multi-pass was not armed; falling back to a single flyby burn.");
+            }
+
+            Burn? flybyBurn = TryCreateFlybyBurn(vehicle, flyby);
+            if (flybyBurn != null) return flybyBurn;
+            TimedAlert.Create(
+                "Flyby retarget failed; firing the stock (impact-aimed) burn.",
+                Color.Yellow, 4.0);
+            return Burn.Create(point, time, deltaVVlf, patch, vehicle);
+        }
+
+        if (HohmannMultiPassUI.WantedMultiPassButPreviewFailed())
+            TimedAlert.Create(
+                "Multi-pass preview failed; firing single burn instead.",
+                Color.Yellow, 4.0);
+        else if (HohmannFlybyUI.FlybyRequested)
+        {
+            TimedAlert.Create(
+                "Flyby not applied (no valid retarget); firing the stock impact-aimed burn.",
+                Color.Yellow, 4.0);
+            DefaultCategory.Log.Warning(
+                $"[AFC] HohmannCreateInterceptor: flyby requested for vehicle={vehicle.Id} " +
+                "but TryGetArmed returned false; stock center-aimed burn created.");
+        }
+
+        if (DebugConfig.Flyby)
+            DefaultCategory.Log.Debug(
+                $"[AFC] HohmannCreateInterceptor: stock single burn for vehicle={vehicle.Id} " +
+                $"t={time:F0}s dv={deltaVVlf.Length():F1}m/s " +
+                $"(flybyRequested={HohmannFlybyUI.FlybyRequested}).");
+        return Burn.Create(point, time, deltaVVlf, patch, vehicle);
     }
 
     // Stock adds the returned burn, so adding it here would queue it twice.
