@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
@@ -21,7 +22,6 @@ namespace AdvancedFlightComputer.HarnessTests;
 public sealed class HyperbolicTargetsTest : AfcTest
 {
     private const double SpawnAltitudeM = 400_000.0;
-    private const int RefineWaitMs = 60_000;
 
     private static readonly string[] SpawnableVehicles = { "Rocket", "Gemini7", "Polaris" };
 
@@ -277,8 +277,7 @@ public sealed class HyperbolicTargetsTest : AfcTest
     }
 
     // The refine step for an unbound target builds the plan from the Lambert dV and
-    // reports the sampled closest approach. RefineBurnTask runs on the ThreadPool, so
-    // this waits for its result flag.
+    // reports the sampled closest approach.
     private static void CheckRefineIntercept(
         TestContext t, Celestial home, Celestial comet, Vehicle vehicle, UniverseTime hohmann)
     {
@@ -299,25 +298,16 @@ public sealed class HyperbolicTargetsTest : AfcTest
         }
 
         var entry = new OrbitalTransfers.PorkChopEntry(transferData, FlightPlan.CreateUninitialized(vehicle.Hash));
-        var task = new RefineBurnTask(info, ref entry);
-        int waited = 0;
-        while (!task.IsResultsReady && waited < RefineWaitMs)
-        {
-            Thread.Sleep(20);
-            waited += 20;
-        }
-        if (!task.IsResultsReady)
-        {
-            t.Fail("refine intercept", $"no result after {RefineWaitMs} ms");
-            return;
-        }
-
-        OrbitalTransfers.PorkChopEntry refined = task.PorkChopEntry;
+        // The constructor queues a worker with no cancellation or join API.
+        // TryFindIntercept reads only its arguments, so bypass the constructor and call it here to keep the vehicle and patches alive until the solve ends.
+        var task = (RefineBurnTask)RuntimeHelpers.GetUninitializedObject(typeof(RefineBurnTask));
+        bool success = task.TryFindIntercept(info, ref entry);
+        OrbitalTransfers.PorkChopEntry refined = entry;
         double closest = refined.TransferData.ClosestApproachDistance;
         bool hasPlan = refined.FlightPlan != null && refined.FlightPlan.Patches.Count > 0;
         bool closestOk = double.IsFinite(closest) && closest < double.MaxValue;
-        t.Check("refine intercept", task.Success && hasPlan && closestOk,
-            $"success={task.Success} patches={(hasPlan ? refined.FlightPlan!.Patches.Count : 0)} " +
+        t.Check("refine intercept", success && hasPlan && closestOk,
+            $"success={success} patches={(hasPlan ? refined.FlightPlan!.Patches.Count : 0)} " +
             $"closest={closest / 1000.0:F0}km dv={transferData.TransferDvVlf.Length():F1}m/s");
     }
 
