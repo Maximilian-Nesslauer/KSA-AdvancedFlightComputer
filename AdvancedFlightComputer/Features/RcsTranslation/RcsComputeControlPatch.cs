@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 [HarmonyPatch(typeof(FlightComputer), nameof(FlightComputer.ComputeControl))]
 internal static class RcsComputeControlPatch
 {
-    static void Postfix(FlightComputer __instance, ref FlightComputerNavigation nav, ref FlightComputerOutput outputs)
+    static void Postfix(FlightComputer __instance, in FlightComputerNavigation nav, ref FlightComputerOutput outputs)
     {
         // Only active executions may override stock engine commands and burn timing.
         if (!RcsCommandChannel.TryGet(__instance.BurnPlan, out RcsWorkerCommand cmd) || !cmd.Active)
