@@ -55,6 +55,8 @@ public sealed class SequenceBurnStateTest : AfcTest
                 CrossCheck(t, "SRB baseline", v, state);
                 CheckAllocations(t, state);
                 CheckHohmannSchedule(t, v);
+                ActiveEngineSubQuantumDrainCacheCase(t, v);
+                EngineDesignCacheCase(t, v);
             },
             afterSpawn: v => v.RefillConsumables());
 
@@ -63,6 +65,7 @@ public sealed class SequenceBurnStateTest : AfcTest
             WithVehicle(t, driver, home, rocket.VehicleSaveData, v => DisabledTankCase(t, v));
             WithVehicle(t, driver, home, rocket.VehicleSaveData, v => FlowRuleCase(t, v));
             WithVehicle(t, driver, home, rocket.VehicleSaveData, v => DecouplerCacheCase(t, v));
+            WithVehicle(t, driver, home, rocket.VehicleSaveData, v => PropellantDistributionCacheCase(t, v));
         }
     }
 
@@ -103,6 +106,7 @@ public sealed class SequenceBurnStateTest : AfcTest
                   <Rotation X="0" Y="0" Z="0" />
                   <Scale X="1" Y="1" Z="1" />
                 </Transform>
+                <EngineController InstanceOf="SRBMotor" LocalInstanceId="2" ActiveInStage="true" />
               </RootPartRef>
             </VehicleSaveData>
             """;
@@ -251,11 +255,7 @@ public sealed class SequenceBurnStateTest : AfcTest
                     SequenceBurnState cached = MultiPassPreviewCache.GetSequenceState(vehicle);
                     SequenceBurnState fresh = SequenceBurnState.Analyze(vehicle);
                     t.Check("decoupler toggle invalidates sequence snapshot", !ReferenceEquals(before, cached));
-                    bool matches = cached.HasUsableEngines == fresh.HasUsableEngines
-                        && cached.Sequences.Count == fresh.Sequences.Count;
-                    for (int i = 0; matches && i < fresh.Sequences.Count; i++)
-                        matches = cached.Sequences[i] == fresh.Sequences[i];
-                    t.Check("decoupler cache matches fresh stock analysis", matches);
+                    t.Check("decoupler cache matches fresh stock analysis", SameState(cached, fresh));
                 }
                 finally
                 {
@@ -266,6 +266,273 @@ public sealed class SequenceBurnStateTest : AfcTest
             }
         }
         t.Skip("decoupler cache: no enabled connected decoupler in fixture.");
+    }
+
+    private static void PropellantDistributionCacheCase(TestContext t, Vehicle vehicle)
+    {
+        var disabledDecouplers = new List<Decoupler>();
+        foreach (Part part in vehicle.Parts.Parts)
+        {
+            foreach (ISequenced module in part.GetSubtreeSequencedModules())
+            {
+                if (module is Decoupler { IsEnabled: true } decoupler)
+                {
+                    decoupler.SetIsEnabled(false);
+                    disabledDecouplers.Add(decoupler);
+                }
+            }
+        }
+
+        try
+        {
+            if (!TryFindTransfer(vehicle, out Tank donorTank, out Mole donor,
+                    out Tank receiverTank, out Mole receiver, out float transferKg))
+            {
+                t.Skip("propellant distribution cache: no connected donor and compatible receiver.");
+                return;
+            }
+
+            bool receiverWasEnabled = receiverTank.PropellantUseEnabled;
+            receiverTank.PropellantUseEnabled = false;
+            var donorState = vehicle.Parts.Moles.GetModuleAndAllMutableStatesForInitialization(donor);
+            var receiverState = vehicle.Parts.Moles.GetModuleAndAllMutableStatesForInitialization(receiver);
+            float donorMass = donorState.State.Mass;
+            float receiverMass = receiverState.State.Mass;
+            try
+            {
+                MultiPassPreviewCache.Reset();
+                SequenceBurnState before = MultiPassPreviewCache.GetSequenceState(vehicle);
+                float totalBefore = TotalMoleMass(vehicle);
+
+                donorState.State.Mass -= transferKg;
+                receiverState.State.Mass += transferKg;
+
+                SequenceBurnState cached = MultiPassPreviewCache.GetSequenceState(vehicle);
+                SequenceBurnState fresh = SequenceBurnState.Analyze(vehicle);
+                float totalAfter = TotalMoleMass(vehicle);
+                t.Check("propellant redistribution keeps total mole mass",
+                    Approx.Mixed(totalAfter, totalBefore, 1e-3, 1e-7),
+                    $"moved {transferKg:F3}kg from tank {donorTank.InstanceId} to disabled tank {receiverTank.InstanceId}");
+                t.Check("propellant redistribution changes stock performance", !SameState(before, fresh));
+                t.Check("propellant redistribution invalidates sequence snapshot", !ReferenceEquals(before, cached));
+                t.Check("propellant redistribution cache matches fresh stock analysis", SameState(cached, fresh));
+            }
+            finally
+            {
+                donorState.State.Mass = donorMass;
+                receiverState.State.Mass = receiverMass;
+                receiverTank.PropellantUseEnabled = receiverWasEnabled;
+                MultiPassPreviewCache.Reset();
+            }
+        }
+        finally
+        {
+            foreach (Decoupler decoupler in disabledDecouplers)
+                decoupler.SetIsEnabled(true);
+        }
+    }
+
+    private static bool TryFindTransfer(
+        Vehicle vehicle, out Tank donorTank, out Mole donor,
+        out Tank receiverTank, out Mole receiver, out float transferKg)
+    {
+        donorTank = null!;
+        donor = null!;
+        receiverTank = null!;
+        receiver = null!;
+        transferKg = 0f;
+        ReadOnlySpan<MoleState> states = vehicle.Parts.Moles.States;
+        Span<Tank> tanks = vehicle.Parts.Tanks.Modules;
+
+        ReadOnlySpan<Part> parts = vehicle.Parts.Parts;
+        for (int p = 0; p < parts.Length; p++)
+        {
+            Span<EngineController> engines = parts[p].Modules.Get<EngineController>();
+            for (int e = 0; e < engines.Length; e++)
+            {
+                foreach (RocketCore core in engines[e].Cores)
+                {
+                    if (core is not Combustor { ResourceManager: not null } combustor)
+                        continue;
+                    Tank[][]? levels = combustor.ResourceManager.ConsumptionOrder;
+                    if (levels == null) continue;
+                    foreach (Tank[]? level in levels)
+                    {
+                        if (level == null) continue;
+                        foreach (Tank? candidateDonor in level)
+                        {
+                            if (candidateDonor == null || !candidateDonor.PropellantUseEnabled)
+                                continue;
+                            foreach (Mole candidateMole in candidateDonor.Moles)
+                            {
+                                float donorMass = states[candidateMole.StatesIdx].Mass;
+                                if (!(donorMass > 0f)) continue;
+                                for (int t = 0; t < tanks.Length; t++)
+                                {
+                                    Tank candidateReceiver = tanks[t];
+                                    if (candidateReceiver == candidateDonor
+                                        || !candidateReceiver.TryGetMole(candidateMole.SubstancePhase, out Mole receiverMole))
+                                        continue;
+                                    float receiverMass = states[receiverMole.StatesIdx].Mass;
+                                    float capacity = receiverMole.GetStoredMass(receiverMole.ContainerVolume) - receiverMass;
+                                    float amount = TransferAcrossMassBucket(donorMass, receiverMass, capacity);
+                                    if (!(amount > 0f)) continue;
+                                    donorTank = candidateDonor;
+                                    donor = candidateMole;
+                                    receiverTank = candidateReceiver;
+                                    receiver = receiverMole;
+                                    transferKg = amount;
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
+    private static float TransferAcrossMassBucket(float donorMass, float receiverMass, float capacity)
+    {
+        const float quantumKg = 100f;
+        const float marginKg = 0.01f;
+        float donorBoundary = donorMass - MathF.Floor(donorMass / quantumKg) * quantumKg + marginKg;
+        if (donorBoundary < donorMass && donorBoundary <= capacity)
+            return donorBoundary;
+        float receiverBoundary = (MathF.Floor(receiverMass / quantumKg) + 1f) * quantumKg
+            - receiverMass + marginKg;
+        return receiverBoundary < donorMass && receiverBoundary <= capacity ? receiverBoundary : 0f;
+    }
+
+    private static void EngineDesignCacheCase(TestContext t, Vehicle vehicle)
+    {
+        SolidMotor? motor = null;
+        foreach (RocketCore core in vehicle.Parts.RocketCores.Modules)
+        {
+            if (core is SolidMotor candidate)
+            {
+                motor = candidate;
+                break;
+            }
+        }
+        if (motor == null || !(motor.MaxAreaRatioBound > motor.MinAreaRatioBound))
+        {
+            t.Skip("engine design cache: no adjustable solid motor.");
+            return;
+        }
+
+        float? original = motor.ManualAreaRatio;
+        float current = motor.AreaRatio;
+        float replacement = MathF.Abs(current - motor.MinAreaRatioBound)
+            > MathF.Abs(current - motor.MaxAreaRatioBound)
+            ? motor.MinAreaRatioBound
+            : motor.MaxAreaRatioBound;
+        try
+        {
+            MultiPassPreviewCache.Reset();
+            SequenceBurnState before = MultiPassPreviewCache.GetSequenceState(vehicle);
+            long massBucket = (long)(vehicle.TotalMass / 100.0);
+
+            motor.ManualAreaRatio = replacement;
+            vehicle.Parts.RecomputeAllDerivedData();
+
+            SequenceBurnState cached = MultiPassPreviewCache.GetSequenceState(vehicle);
+            SequenceBurnState fresh = SequenceBurnState.Analyze(vehicle);
+            t.Check("engine design keeps vehicle mass bucket",
+                (long)(vehicle.TotalMass / 100.0) == massBucket);
+            t.Check("engine design changes stock performance", !SameState(before, fresh));
+            t.Check("engine design invalidates sequence snapshot", !ReferenceEquals(before, cached));
+            t.Check("engine design cache matches fresh stock analysis", SameState(cached, fresh));
+        }
+        finally
+        {
+            motor.ManualAreaRatio = original;
+            vehicle.Parts.RecomputeAllDerivedData();
+            MultiPassPreviewCache.Reset();
+        }
+    }
+
+    private static void ActiveEngineSubQuantumDrainCacheCase(TestContext t, Vehicle vehicle)
+    {
+        SolidMotor? motor = null;
+        foreach (RocketCore core in vehicle.Parts.RocketCores.Modules)
+        {
+            if (core is SolidMotor candidate)
+            {
+                motor = candidate;
+                break;
+            }
+        }
+        if (motor == null || motor.Controller is not EngineController { IsActive: true }
+            || motor.Stack.Segments.Length == 0 || motor.Rocket.Nozzles.Length == 0)
+        {
+            t.Skip("sub-quantum drain cache: no active solid motor state.");
+            return;
+        }
+
+        Mole? grain = motor.Stack.Segments[0].Grain;
+        if (grain == null)
+        {
+            t.Skip("sub-quantum drain cache: solid motor has no grain state.");
+            return;
+        }
+        var grainState = vehicle.Parts.Moles.GetModuleAndAllMutableStatesForInitialization(grain);
+        RocketNozzle nozzle = motor.Rocket.Nozzles[0];
+        var nozzleState = vehicle.Parts.RocketNozzles.GetModuleAndAllMutableStatesForInitialization(nozzle);
+        float originalMass = grainState.State.Mass;
+        RocketPerformance originalPerformance = nozzleState.State.Performance;
+        float roomInBucket = originalMass - MathF.Floor(originalMass / 100f) * 100f;
+        float drainKg = MathF.Min(1f, roomInBucket * 0.5f);
+        if (!(drainKg > 0.01f))
+        {
+            t.Skip("sub-quantum drain cache: grain mass is on a cache boundary.");
+            return;
+        }
+
+        try
+        {
+            MultiPassPreviewCache.Reset();
+            SequenceBurnState before = MultiPassPreviewCache.GetSequenceState(vehicle);
+            long moleBucket = (long)(originalMass / 100f);
+
+            grainState.State.Mass -= drainKg;
+            nozzleState.State.Performance.MassFlowRate += MathF.Max(
+                MathF.Abs(nozzleState.State.Performance.MassFlowRate) * 1e-4f, 1e-6f);
+
+            SequenceBurnState cached = MultiPassPreviewCache.GetSequenceState(vehicle);
+            t.Check("sub-quantum drain keeps grain mass bucket",
+                (long)(grainState.State.Mass / 100f) == moleBucket);
+            t.Check("sub-quantum active drain keeps sequence snapshot", ReferenceEquals(before, cached));
+        }
+        finally
+        {
+            grainState.State.Mass = originalMass;
+            nozzleState.State.Performance = originalPerformance;
+            MultiPassPreviewCache.Reset();
+        }
+    }
+
+    private static bool SameState(SequenceBurnState left, SequenceBurnState right)
+    {
+        if (left.HasUsableEngines != right.HasUsableEngines
+            || left.Sequences.Count != right.Sequences.Count)
+            return false;
+        for (int i = 0; i < left.Sequences.Count; i++)
+        {
+            if (left.Sequences[i] != right.Sequences[i])
+                return false;
+        }
+        return true;
+    }
+
+    private static float TotalMoleMass(Vehicle vehicle)
+    {
+        float total = 0f;
+        ReadOnlySpan<MoleState> states = vehicle.Parts.Moles.States;
+        for (int i = 0; i < states.Length; i++)
+            total += states[i].Mass;
+        return total;
     }
 
     private static void CheckAllocations(TestContext t, SequenceBurnState state)
