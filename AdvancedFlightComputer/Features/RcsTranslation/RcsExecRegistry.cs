@@ -83,22 +83,24 @@ internal static class RcsExecRegistry
     {
         if (string.IsNullOrEmpty(_configPath)) return;
 
-        _byKey.Clear();
-        if (!File.Exists(_configPath))
-            return;
-
         try
         {
-            ParseFile(_configPath);
+            var loaded = new Dictionary<(string SaveId, string VehicleId), RcsExecution>();
+            if (!ParseFile(_configPath, loaded))
+                return;
+            _byKey.Clear();
+            foreach (var entry in loaded)
+                _byKey.Add(entry.Key, entry.Value);
             if (DebugConfig.RcsTranslation)
                 DefaultCategory.Log.Debug(
                     $"[AFC] RcsExecRegistry: loaded {_byKey.Count} vehicle entries from {_configPath}");
         }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
         catch (Exception ex)
         {
             LogHelper.WarnOnce($"rcs-registry-load-{ex.GetType().FullName}",
                 $"[AFC] RcsExecRegistry failed to load '{_configPath}' for save '{SaveLoadObserver.CurrentSaveId}': {ex}");
-            _byKey.Clear();
         }
     }
 
@@ -193,15 +195,18 @@ internal static class RcsExecRegistry
         }
     }
 
-    private static void ParseFile(string path)
-        => ParseLines(File.ReadAllLines(path), Path.GetFileName(path), _byKey);
+    private static bool ParseFile(
+        string path,
+        Dictionary<(string SaveId, string VehicleId), RcsExecution> into)
+        => ParseLines(File.ReadAllLines(path), Path.GetFileName(path), into);
 
-    internal static void ParseLines(
+    internal static bool ParseLines(
         string[] lines, string sourceName,
         Dictionary<(string SaveId, string VehicleId), RcsExecution> into)
     {
         Dictionary<string, string>? current = null;
         int headerLine = 0;
+        bool success = true;
 
         for (int li = 0; li < lines.Length; li++)
         {
@@ -211,7 +216,7 @@ internal static class RcsExecRegistry
 
             if (line == "[[rcs_burn]]")
             {
-                FlushBlock(current, headerLine, sourceName, into);
+                success &= FlushBlock(current, headerLine, sourceName, into);
                 current = new Dictionary<string, string>();
                 headerLine = lineNumber;
                 continue;
@@ -221,16 +226,29 @@ internal static class RcsExecRegistry
                 DefaultCategory.Log.Warning(
                     $"[AFC] RcsExecRegistry: {sourceName}:{lineNumber} " +
                     $"unrecognised TOML header '{line}', skipping until next [[rcs_burn]].");
-                FlushBlock(current, headerLine, sourceName, into);
+                success = false;
+                success &= FlushBlock(current, headerLine, sourceName, into);
                 current = null;
                 continue;
             }
             if (current == null)
+            {
+                DefaultCategory.Log.Warning(
+                    $"[AFC] RcsExecRegistry: {sourceName}:{lineNumber} " +
+                    $"key '{line}' outside any [[rcs_burn]] block, ignoring.");
+                success = false;
                 continue;
+            }
 
             int eq = line.IndexOf('=');
             if (eq < 1)
+            {
+                DefaultCategory.Log.Warning(
+                    $"[AFC] RcsExecRegistry: {sourceName}:{lineNumber} " +
+                    "expected 'key = value' assignment, ignoring.");
+                success = false;
                 continue;
+            }
             string key = line.Substring(0, eq).Trim();
             string val = line.Substring(eq + 1).Trim();
             if (val.Length >= 2 && val[0] == '"')
@@ -238,7 +256,13 @@ internal static class RcsExecRegistry
                 // Skip escaped quotes so an embedded quote does not truncate a vehicle ID.
                 int close = FindClosingQuote(val, openAt: 0);
                 if (close < 0)
+                {
+                    DefaultCategory.Log.Warning(
+                        $"[AFC] RcsExecRegistry: {sourceName}:{lineNumber} " +
+                        $"unterminated string for key '{key}', ignoring.");
+                    success = false;
                     continue;
+                }
                 val = TomlIo.Unescape(val.Substring(1, close - 1));
             }
             else
@@ -248,24 +272,27 @@ internal static class RcsExecRegistry
             }
             current[key] = val;
         }
-        FlushBlock(current, headerLine, sourceName, into);
+        success &= FlushBlock(current, headerLine, sourceName, into);
+        return success;
     }
 
-    private static void FlushBlock(
+    private static bool FlushBlock(
         Dictionary<string, string>? block, int headerLine, string sourceName,
         Dictionary<(string SaveId, string VehicleId), RcsExecution> into)
     {
-        if (block == null) return;
+        if (block == null) return true;
 
         if (!block.TryGetValue("save_id", out string? saveId) || string.IsNullOrEmpty(saveId)
             || !block.TryGetValue("vehicle_id", out string? vehicleId) || string.IsNullOrEmpty(vehicleId)
             || !TryParseDouble(block, "burn_time_sec", out double timeSec)
-            || !TryParseDouble(block, "burn_dv_ms", out double dvMs))
+            || !TryParseDouble(block, "burn_dv_ms", out double dvMs)
+            || !double.IsFinite(timeSec) || timeSec < 0.0
+            || !double.IsFinite(dvMs) || dvMs < 0.0)
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] RcsExecRegistry: dropping block at line {headerLine} of " +
                 $"{sourceName} (missing required fields).");
-            return;
+            return false;
         }
 
         RcsExecutionMode mode = ParseEnumField(
@@ -292,24 +319,82 @@ internal static class RcsExecRegistry
         if (block.TryGetValue("active", out string? activeStr)
             && bool.TryParse(activeStr, out bool active) && active)
         {
+            if (!TryParseActiveState(block, mode, attitude, allocator, timeSec, dvMs,
+                    out RcsAttitudeStrategy resolved, out int axis,
+                    out RcsAllocator resolvedAllocator, out bool alignCommanded,
+                    out bool forcedRcs))
+            {
+                DefaultCategory.Log.Warning(
+                    $"[AFC] RcsExecRegistry: dropping invalid active state at line " +
+                    $"{headerLine} of {sourceName}.");
+                return true;
+            }
+
             exec.ActiveBurnTimeSec = timeSec;
             exec.ActiveBurnDvMs = dvMs;
-            if (block.TryGetValue("resolved_strategy", out string? strategyStr)
-                && Enum.TryParse(strategyStr, out RcsAttitudeStrategy resolved))
-                exec.ResolvedStrategy = resolved;
-            if (block.TryGetValue("resolved_axis", out string? axisStr)
-                && int.TryParse(axisStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int axis))
-                exec.ResolvedAxis = axis;
-            if (block.TryGetValue("resolved_allocator", out string? resAllocStr)
-                && Enum.TryParse(resAllocStr, out RcsAllocator resolvedAllocator))
-                exec.ResolvedAllocator = resolvedAllocator;
-            if (block.TryGetValue("align_commanded", out string? alignStr)
-                && bool.TryParse(alignStr, out bool alignCommanded))
-                exec.AlignCommanded = alignCommanded;
-            if (block.TryGetValue("forced_rcs_on", out string? forcedRcsStr)
-                && bool.TryParse(forcedRcsStr, out bool forcedRcs))
-                exec.ForcedRcsOn = forcedRcs;
+            exec.ResolvedStrategy = resolved;
+            exec.ResolvedAxis = axis;
+            exec.ResolvedAllocator = resolvedAllocator;
+            exec.AlignCommanded = alignCommanded;
+            exec.ForcedRcsOn = forcedRcs;
         }
+        return true;
+    }
+
+    private static bool TryParseActiveState(
+        Dictionary<string, string> block,
+        RcsExecutionMode mode,
+        RcsAttitudeStrategy attitude,
+        RcsAllocator allocator,
+        double timeSec,
+        double dvMs,
+        out RcsAttitudeStrategy resolved,
+        out int axis,
+        out RcsAllocator resolvedAllocator,
+        out bool alignCommanded,
+        out bool forcedRcs)
+    {
+        resolved = default;
+        axis = default;
+        resolvedAllocator = default;
+        alignCommanded = default;
+        forcedRcs = default;
+
+        if (!(timeSec >= 0.0) || !(dvMs > 0.0)
+            || !TryParseDefinedEnum(block, "mode", out RcsExecutionMode storedMode)
+            || !TryParseDefinedEnum(block, "attitude", out RcsAttitudeStrategy storedAttitude)
+            || !TryParseDefinedEnum(block, "allocator", out RcsAllocator storedAllocator)
+            || !TryParseDefinedEnum(block, "resolved_strategy", out resolved)
+            || !TryParseDefinedEnum(block, "resolved_allocator", out resolvedAllocator)
+            || !block.TryGetValue("resolved_axis", out string? axisStr)
+            || !int.TryParse(axisStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out axis)
+            || !block.TryGetValue("align_commanded", out string? alignStr)
+            || !bool.TryParse(alignStr, out alignCommanded)
+            || !block.TryGetValue("forced_rcs_on", out string? forcedRcsStr)
+            || !bool.TryParse(forcedRcsStr, out forcedRcs))
+            return false;
+
+        if (storedMode != mode || storedAttitude != attitude || storedAllocator != allocator
+            || mode == RcsExecutionMode.Engine || resolvedAllocator != allocator)
+            return false;
+
+        return resolved switch
+        {
+            RcsAttitudeStrategy.Align => axis is >= 0 and < 6,
+            RcsAttitudeStrategy.Hold => axis == -1 && !alignCommanded,
+            _ => false,
+        };
+    }
+
+    private static bool TryParseDefinedEnum<TEnum>(
+        Dictionary<string, string> block,
+        string key,
+        out TEnum value) where TEnum : struct, Enum
+    {
+        value = default;
+        return block.TryGetValue(key, out string? raw)
+            && Enum.TryParse(raw, out value)
+            && Enum.IsDefined(value);
     }
 
     private static bool TryParseDouble(Dictionary<string, string> block, string key, out double value)
