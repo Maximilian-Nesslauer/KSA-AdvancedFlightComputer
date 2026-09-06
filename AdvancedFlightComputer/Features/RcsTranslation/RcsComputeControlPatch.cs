@@ -74,11 +74,11 @@ internal static class RcsComputeControlPatch
         FlightComputer fc, ref FlightComputerOutput outputs, RcsWorkerCommand cmd, float3 impulse)
     {
         impulse.X = ShapeAxis(impulse.X, cmd.AxisForcePos.X, cmd.AxisForceNeg.X,
-            cmd.AxisMinImpulsePos.X, cmd.AxisMinImpulseNeg.X, cmd.MaxPulseSec);
+            cmd.AxisMinCorrectingImpulsePos.X, cmd.AxisMinCorrectingImpulseNeg.X, cmd.MaxPulseSec);
         impulse.Y = ShapeAxis(impulse.Y, cmd.AxisForcePos.Y, cmd.AxisForceNeg.Y,
-            cmd.AxisMinImpulsePos.Y, cmd.AxisMinImpulseNeg.Y, cmd.MaxPulseSec);
+            cmd.AxisMinCorrectingImpulsePos.Y, cmd.AxisMinCorrectingImpulseNeg.Y, cmd.MaxPulseSec);
         impulse.Z = ShapeAxis(impulse.Z, cmd.AxisForcePos.Z, cmd.AxisForceNeg.Z,
-            cmd.AxisMinImpulsePos.Z, cmd.AxisMinImpulseNeg.Z, cmd.MaxPulseSec);
+            cmd.AxisMinCorrectingImpulsePos.Z, cmd.AxisMinCorrectingImpulseNeg.Z, cmd.MaxPulseSec);
         if (impulse.IsExactlyZero())
         {
             outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
@@ -184,20 +184,21 @@ internal static class RcsComputeControlPatch
         return false;
     }
 
-    /// <summary>Limit each pulse to one control period. Suppress an impulse below half the group minimum because firing would overshoot more than it corrects.</summary>
+    /// <summary>Limit each pulse to one control period. Suppress an impulse below the group correction threshold because firing would overshoot more than it corrects.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static float ShapeAxis(
-        float j, float forcePos, float forceNeg, float minImpPos, float minImpNeg, float maxPulse)
+        float j, float forcePos, float forceNeg,
+        float minCorrectingImpPos, float minCorrectingImpNeg, float maxPulse)
     {
         if (j > 0f)
         {
-            if (forcePos <= 0f || j < RcsExecutor.MinImpulseSuppressionFactor * minImpPos)
+            if (forcePos <= 0f || j < minCorrectingImpPos)
                 return 0f;
             return Math.Min(j, forcePos * maxPulse);
         }
         if (j < 0f)
         {
-            if (forceNeg <= 0f || -j < RcsExecutor.MinImpulseSuppressionFactor * minImpNeg)
+            if (forceNeg <= 0f || -j < minCorrectingImpNeg)
                 return 0f;
             return Math.Max(j, -forceNeg * maxPulse);
         }

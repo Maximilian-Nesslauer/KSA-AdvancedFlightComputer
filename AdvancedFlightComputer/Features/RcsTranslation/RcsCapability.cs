@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
 using KSA;
@@ -11,10 +12,16 @@ internal struct RcsAxisGroup
     public float MassFlowKgS;
     public float MinImpulseNs;
 
+    /// <summary>The smallest target impulse that makes a common group pulse reduce the residual after each core applies its own minimum pulse time.</summary>
+    public float MinCorrectingImpulseNs;
+
     /// <summary>Net torque in N m in the control frame when this group fires at ForceN. Off-center thrusters require attitude control to counter it.</summary>
     public float3 TorqueNm;
 
-    public readonly bool IsUsable => ForceN > 0f && MassFlowKgS > 0f;
+    public readonly bool IsUsable
+        => float.IsFinite(ForceN) && ForceN > 0f
+           && float.IsFinite(MassFlowKgS) && MassFlowKgS > 0f
+           && float.IsFinite(MinCorrectingImpulseNs);
 
     /// <summary>Effective exhaust speed along the group axis in m/s. Off-axis force consumes propellant without adding axis delta V.</summary>
     public readonly float AxisVeMs => MassFlowKgS > 0f ? ForceN / MassFlowKgS : 0f;
@@ -24,6 +31,21 @@ internal struct RcsSharedContribution
 {
     public float MassFlowKgS;
     public float3 TorqueNm;
+}
+
+internal struct RcsPulseContribution : IComparable<RcsPulseContribution>
+{
+    public int GroupIndex;
+    public float ForceN;
+    public float MinimumPulseTimeSec;
+
+    public int CompareTo(RcsPulseContribution other)
+    {
+        int groupOrder = GroupIndex.CompareTo(other.GroupIndex);
+        return groupOrder != 0
+            ? groupOrder
+            : MinimumPulseTimeSec.CompareTo(other.MinimumPulseTimeSec);
+    }
 }
 
 // Base 3 digits identify each signed axis as absent, positive, or negative.
@@ -114,38 +136,80 @@ internal static class RcsCapability
         RcsCtrlFrame ctrl = new(stateList.GlobalState.CachedCtrl2Body);
         snap.Ctrl2Body = ctrl.Ctrl2Body;
 
-        var enumerator = new ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
-            .StateList.ModuleAndStateEnumerator(stateList);
-        while (enumerator.MoveNext())
+        Span<ThrusterController> thrusters = vehicle.Parts.Modules.Get<ThrusterController>();
+        int contributionCapacity = 1;
+        for (int i = 0; i < thrusters.Length; i++)
+            contributionCapacity += thrusters[i].Cores.Length * 3;
+        RcsPulseContribution[] contributionBuffer =
+            ArrayPool<RcsPulseContribution>.Shared.Rent(contributionCapacity);
+        int contributionCount = 0;
+
+        try
         {
-            var current = enumerator.Current;
-            ThrusterController thruster = current.Module;
-            ref readonly ThrusterControllerState state = ref current.State;
-            if (!thruster.IsActive || !state.IsPropellantAvailable)
-                continue;
-
-            RcsWrenchTable.ComputeLive(thruster, coreStates, com, ambientPressure, in ctrl,
-                out float3 force, out float3 torque, out float massFlow);
-            if (massFlow <= 0f)
-                continue;
-
-            AccumulateTranslation(ref snap, state.IntendedForce, force, massFlow, torque, thruster.MinimumPulseTime);
-
-            if (!state.IntendedTorque.X.IsExactlyZero())
+            var enumerator = new ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
+                .StateList.ModuleAndStateEnumerator(stateList);
+            while (enumerator.MoveNext())
             {
-                snap.RotationMassFlowKgS.X += massFlow;
-                snap.RotationTorqueNm.X += Math.Abs(torque.X);
+                var current = enumerator.Current;
+                ThrusterController thruster = current.Module;
+                ref readonly ThrusterControllerState state = ref current.State;
+                if (!thruster.IsActive || !state.IsPropellantAvailable)
+                    continue;
+
+                int contributionStart = contributionCount;
+                float3 forceAsmb = float3.Zero;
+                float3 torqueAsmb = float3.Zero;
+                float massFlow = 0f;
+                foreach (RocketCore core in thruster.Cores)
+                {
+                    if (!coreStates[core.StatesIdx].IsPropellantAvailable)
+                        continue;
+                    RcsWrenchTable.ComputeLiveCoreAsmb(core, com, ambientPressure,
+                        out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
+                    forceAsmb += coreForce;
+                    torqueAsmb += coreTorque;
+                    massFlow += coreMassFlow;
+                    AddCorePulseContributions(
+                        contributionBuffer, ref contributionCount,
+                        ctrl.ToCtrl(coreForce), core.MinimumPulseTime);
+                }
+                if (massFlow <= 0f)
+                {
+                    contributionCount = contributionStart;
+                    continue;
+                }
+
+                float3 force = ctrl.ToCtrl(forceAsmb);
+                float3 torque = ctrl.ToCtrl(torqueAsmb);
+                AccumulateTranslation(ref snap, state.IntendedForce, force, massFlow, torque,
+                    thruster.MinimumPulseTime, out int x, out int y, out int z);
+                AssignPulseGroups(
+                    contributionBuffer.AsSpan(contributionStart, contributionCount - contributionStart),
+                    x, y, z);
+
+                if (!state.IntendedTorque.X.IsExactlyZero())
+                {
+                    snap.RotationMassFlowKgS.X += massFlow;
+                    snap.RotationTorqueNm.X += Math.Abs(torque.X);
+                }
+                if (!state.IntendedTorque.Y.IsExactlyZero())
+                {
+                    snap.RotationMassFlowKgS.Y += massFlow;
+                    snap.RotationTorqueNm.Y += Math.Abs(torque.Y);
+                }
+                if (!state.IntendedTorque.Z.IsExactlyZero())
+                {
+                    snap.RotationMassFlowKgS.Z += massFlow;
+                    snap.RotationTorqueNm.Z += Math.Abs(torque.Z);
+                }
             }
-            if (!state.IntendedTorque.Y.IsExactlyZero())
-            {
-                snap.RotationMassFlowKgS.Y += massFlow;
-                snap.RotationTorqueNm.Y += Math.Abs(torque.Y);
-            }
-            if (!state.IntendedTorque.Z.IsExactlyZero())
-            {
-                snap.RotationMassFlowKgS.Z += massFlow;
-                snap.RotationTorqueNm.Z += Math.Abs(torque.Z);
-            }
+
+            FinalizeMinimumImpulseModel(
+                ref snap, contributionBuffer.AsSpan(0, contributionCount));
+        }
+        finally
+        {
+            ArrayPool<RcsPulseContribution>.Shared.Return(contributionBuffer);
         }
 
         for (int i = 0; i < 6; i++)
@@ -162,9 +226,17 @@ internal static class RcsCapability
     internal static void AccumulateTranslation(ref RcsCapabilitySnapshot snap, float3 intendedForce,
         float3 liveForce, float massFlow, float3 torque, float minPulse)
     {
-        int x = AccumulateComponent(ref snap, 0, intendedForce.X, liveForce.X, massFlow, torque, minPulse);
-        int y = AccumulateComponent(ref snap, 2, intendedForce.Y, liveForce.Y, massFlow, torque, minPulse);
-        int z = AccumulateComponent(ref snap, 4, intendedForce.Z, liveForce.Z, massFlow, torque, minPulse);
+        AccumulateTranslation(ref snap, intendedForce, liveForce, massFlow, torque, minPulse,
+            out _, out _, out _);
+    }
+
+    private static void AccumulateTranslation(ref RcsCapabilitySnapshot snap, float3 intendedForce,
+        float3 liveForce, float massFlow, float3 torque, float minPulse,
+        out int x, out int y, out int z)
+    {
+        x = AccumulateComponent(ref snap, 0, intendedForce.X, liveForce.X, massFlow, torque, minPulse);
+        y = AccumulateComponent(ref snap, 2, intendedForce.Y, liveForce.Y, massFlow, torque, minPulse);
+        z = AccumulateComponent(ref snap, 4, intendedForce.Z, liveForce.Z, massFlow, torque, minPulse);
         int axes = (x != 0 ? 1 : 0) + (y != 0 ? 1 : 0) + (z != 0 ? 1 : 0);
         if (axes < 2)
             return;
@@ -200,5 +272,122 @@ internal static class RcsCapability
         g.TorqueNm += torque;
         snap.Set(idx, g);
         return true;
+    }
+
+    private static void AddCorePulseContributions(
+        Span<RcsPulseContribution> contributions, ref int count,
+        float3 force, float minimumPulseTime)
+    {
+        if (count > contributions.Length - 3)
+            throw new InvalidOperationException("The RCS pulse contribution buffer is too small.");
+        contributions[count++] = new RcsPulseContribution { GroupIndex = 0, ForceN = force.X, MinimumPulseTimeSec = minimumPulseTime };
+        contributions[count++] = new RcsPulseContribution { GroupIndex = 2, ForceN = force.Y, MinimumPulseTimeSec = minimumPulseTime };
+        contributions[count++] = new RcsPulseContribution { GroupIndex = 4, ForceN = force.Z, MinimumPulseTimeSec = minimumPulseTime };
+    }
+
+    private static void AssignPulseGroups(
+        Span<RcsPulseContribution> contributions, int x, int y, int z)
+    {
+        for (int i = 0; i < contributions.Length; i++)
+        {
+            ref RcsPulseContribution contribution = ref contributions[i];
+            int sign = contribution.GroupIndex switch { 0 => x, 2 => y, _ => z };
+            if (sign == 0)
+            {
+                contribution.GroupIndex = -1;
+                continue;
+            }
+            contribution.GroupIndex += sign - 1;
+            if (sign == 2)
+                contribution.ForceN = -contribution.ForceN;
+        }
+    }
+
+    internal static void FinalizeMinimumImpulseModel(
+        ref RcsCapabilitySnapshot snap, Span<RcsPulseContribution> contributions)
+    {
+        contributions.Sort();
+        int start = 0;
+        for (int groupIndex = 0; groupIndex < 6; groupIndex++)
+        {
+            while (start < contributions.Length && contributions[start].GroupIndex < groupIndex)
+                start++;
+            int end = start;
+            while (end < contributions.Length && contributions[end].GroupIndex == groupIndex)
+                end++;
+
+            RcsAxisGroup group = snap.Get(groupIndex);
+            group.MinCorrectingImpulseNs = ComputeMinimumCorrectingImpulse(
+                group.ForceN, contributions[start..end]);
+            snap.Set(groupIndex, in group);
+            start = end;
+        }
+    }
+
+    private static float ComputeMinimumCorrectingImpulse(
+        float totalForce, ReadOnlySpan<RcsPulseContribution> sortedContributions)
+    {
+        if (!float.IsFinite(totalForce))
+            return float.PositiveInfinity;
+        if (!(totalForce > 0f))
+            return 0f;
+        if (sortedContributions.IsEmpty)
+            return float.PositiveInfinity;
+
+        double highForce = 0.0;
+        double highImpulse = 0.0;
+        bool hasOpposingForce = false;
+        for (int i = 0; i < sortedContributions.Length; i++)
+        {
+            ref readonly RcsPulseContribution contribution = ref sortedContributions[i];
+            if (!float.IsFinite(contribution.ForceN)
+                || !float.IsFinite(contribution.MinimumPulseTimeSec)
+                || contribution.MinimumPulseTimeSec < 0f)
+                return float.PositiveInfinity;
+            if (contribution.ForceN < 0f)
+                hasOpposingForce = true;
+            highForce += contribution.ForceN;
+            highImpulse += contribution.ForceN * contribution.MinimumPulseTimeSec;
+        }
+        if (hasOpposingForce)
+        {
+            double cappedImpulse = 0.0;
+            for (int i = 0; i < sortedContributions.Length; i++)
+            {
+                ref readonly RcsPulseContribution contribution = ref sortedContributions[i];
+                cappedImpulse += contribution.ForceN
+                    * Math.Max(RcsExecutor.MaxPulseSec, contribution.MinimumPulseTimeSec);
+            }
+            // A mixed group can be nonmonotonic below the cap, so every accepted residual commands the cap and is compared with its actual rounded response.
+            if (!(cappedImpulse > 0.0) || !double.IsFinite(cappedImpulse))
+                return float.PositiveInfinity;
+            double threshold = Math.Max(
+                totalForce * RcsExecutor.MaxPulseSec,
+                RcsExecutor.MinImpulseSuppressionFactor * cappedImpulse);
+            return double.IsFinite(threshold) && threshold <= float.MaxValue
+                ? (float)threshold
+                : float.PositiveInfinity;
+        }
+
+        int next = 0;
+        while (next < sortedContributions.Length)
+        {
+            double lowForce = totalForce - highForce;
+            double duration = RcsExecutor.MinImpulseSuppressionFactor * highImpulse
+                / (totalForce - RcsExecutor.MinImpulseSuppressionFactor * lowForce);
+            if (duration < sortedContributions[next].MinimumPulseTimeSec)
+            {
+                double threshold = duration * totalForce;
+                return double.IsFinite(threshold) && threshold >= 0.0 && threshold <= float.MaxValue
+                    ? (float)threshold
+                    : float.PositiveInfinity;
+            }
+
+            RcsPulseContribution contribution = sortedContributions[next++];
+            highForce -= contribution.ForceN;
+            highImpulse -= contribution.ForceN * contribution.MinimumPulseTimeSec;
+        }
+
+        return 0f;
     }
 }

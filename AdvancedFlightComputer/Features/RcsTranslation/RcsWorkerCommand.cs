@@ -23,11 +23,11 @@ internal sealed class RcsWorkerCommand
     /// <summary>Limit each pulse in seconds to the stock burn control period.</summary>
     public float MaxPulseSec { get; init; }
 
-    /// <summary>Pass separate forces and minimum impulses for each signed axis. Stock authority uses the smaller value of both signs and can report zero for a vehicle that has thrusters in only one direction.</summary>
+    /// <summary>Pass separate forces and minimum correcting impulses for each signed axis. Stock authority uses the smaller value of both signs and can report zero for a vehicle that has thrusters in only one direction.</summary>
     public float3 AxisForcePos { get; init; }
     public float3 AxisForceNeg { get; init; }
-    public float3 AxisMinImpulsePos { get; init; }
-    public float3 AxisMinImpulseNeg { get; init; }
+    public float3 AxisMinCorrectingImpulsePos { get; init; }
+    public float3 AxisMinCorrectingImpulseNeg { get; init; }
 
     /// <summary>Store seconds of firing per N s of net impulse along LpDirCtrl. Indices match VehicleConfig.Thrusters. The worker checks the length because staging can replace that list between driver ticks. Null selects axis groups.</summary>
     public float[]? LpSecondsPerImpulse { get; init; }
