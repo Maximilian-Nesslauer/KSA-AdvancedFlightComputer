@@ -9,23 +9,17 @@ using static AdvancedFlightComputer.Features.ManeuverTools.ManeuverTools;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// Inline section in the Transfer Planning window when an apse-burn
-/// type is selected: pass-count stepper, split-mode radio, finite-
-/// burn-loss advisory. Cache lives in <see cref="MultiPassPreviewCache"/>.
-/// </summary>
+// These controls keep the selected pass count, split mode, and advisory preview together.
 internal static class MultiPassUI
 {
     private const int MinPasses = 1;
 
-    /// <summary>UI renders only when true; lets a future safety gate
-    /// (e.g. missing reflection target) hide it cleanly.</summary>
     public static bool Enabled { get; set; }
 
-    // Burn-time / period above which we advise splitting.
+    // The burn duration relative to the orbital period determines whether to suggest splitting.
     private const double SuggestThreshold = 0.15;
 
-    private const double SuggestPerPassLossCeiling = 0.005;   // 0.5% per-pass fractional finite-burn loss
+    private const double SuggestPerPassLossCeiling = 0.005;   // Allow 0.5 percent loss from finite burn duration per pass.
     private const double SuggestMarginalSavingCeiling = 0.001; // 0.1% of total dV gained per added pass
 
     private const int SuggestMinN = 2;
@@ -47,9 +41,6 @@ internal static class MultiPassUI
     public static bool HasMultiPassPreview =>
         Enabled && _passCount > 1 && MultiPassPreviewCache.HasPreview;
 
-    /// <summary>Types that the multi-pass pipeline can plan and execute:
-    /// the four AFC-injected quick-tools plus the two stock circularize
-    /// entries AFC claims via Patch_DrawPlanWindow.</summary>
     private static bool IsMultiPassSupportedType(string typeKey) =>
         typeKey == KeySetApoapsis
         || typeKey == KeySetPeriapsis
@@ -58,15 +49,12 @@ internal static class MultiPassUI
         || typeKey == KeyStockCircularizeApoapsis
         || typeKey == KeyStockCircularizePeriapsis;
 
-    /// <summary>Multi-pass selected and preview is usable.</summary>
     public static bool IsArmed(string typeKey) =>
         Enabled
         && _passCount > 1
         && IsMultiPassSupportedType(typeKey)
         && MultiPassPreviewCache.HasPreview;
 
-    /// <summary>Multi-pass selected but planner could not produce a
-    /// preview; Create should be disabled rather than fall back.</summary>
     public static bool WantsMultiPassButCannot(string typeKey) =>
         Enabled
         && _passCount > 1
@@ -81,29 +69,14 @@ internal static class MultiPassUI
 
         MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec);
 
-        // User switched the Plan Type dropdown while a multi-pass is
-        // still running on this vehicle, to a different handled type
-        // than the running exec. Refuse to render: without this gate,
-        // DrawActive would feed the exec's locked dV magnitude into the
-        // new typeKey's planner (e.g. apse dV redistributed across
-        // plane-change nodes) and show a misleading pass list.
-        // DrawCreateButton already blocks the actual Start in this
-        // state, so this is purely a UI-correctness gate.
-        //
-        // Placed before the cache-reset block on purpose: the reset
-        // sets _passCount=1 and ClearPreview, but HasMultiPassPreview
-        // gates the 3D overlay and flight-plan preview on _passCount>1.
-        // Gating first keeps both alive across the blocked frame so the
-        // user sees the running exec's actual markers instead of a one-
-        // frame blink to the new-typeKey's single-burn preview.
+        // Block another active intent before resetting the cache. This preserves its markers and prevents the selected planner from using its locked delta v.
         if (exec != null && exec.Intent.TypeKey != typeKey)
         {
             DrawBlockedByOtherExecution(exec);
             return;
         }
 
-        // Reset on plan-type / source change so the cache does not
-        // briefly render against the wrong vehicle.
+        // Reset when the transfer type or source changes so another maneuver cannot reuse this preview.
         if (_lastTypeKey != typeKey || _lastSourceId != source.Id)
         {
             _lastTypeKey = typeKey;
@@ -115,9 +88,7 @@ internal static class MultiPassUI
 
         SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
 
-        // Active execution: pass count and split mode are locked at Start
-        // time, and only the still-pending passes are meaningful to split
-        // the remaining dV across.
+        // An active execution locks its pass count and split mode. Preview only the remaining passes.
         if (exec != null)
         {
             DrawActive(source, typeKey, state, exec);
@@ -156,9 +127,7 @@ internal static class MultiPassUI
         int remaining = exec.PassCountTotal - exec.PassIndex;
         if (remaining <= 0) return;
 
-        // Re-derive the maneuver from the locked intent (not from the
-        // user-editable ManeuverToolsWindow.TargetAltitude): the displayed
-        // pass list must match what the execution is actually targeting.
+        // Use the locked intent rather than an editable target while execution is active.
         OrbitManeuvers.ManeuverResult? lockedManeuver = exec.Intent.ComputeManeuver(source);
         if (lockedManeuver == null) return;
 
@@ -172,13 +141,7 @@ internal static class MultiPassUI
             source.Orbit?.Period ?? 0.0, MultiPassPreviewCache.PreviewPasses);
     }
 
-    // Looks the display name up in TransferPlanner.TransferTypes rather
-    // than relying on the "AFC " prefix as a strip target: keeps the
-    // banner in sync with whatever the dropdown actually renders, with
-    // no implicit dependency on the AFC-side naming convention. Pass
-    // count + Cancel button are intentionally omitted - the
-    // immediately-following MultiPassController.DrawStatus call in
-    // Patch_DrawPlanWindow.DrawCreateButton renders both already.
+    // Use the display name from TransferTypes. The caller draws execution status and cancellation controls separately.
     private static void DrawBlockedByOtherExecution(MultiPassExecution exec)
     {
         string typeKey = exec.Intent.TypeKey;
@@ -204,16 +167,12 @@ internal static class MultiPassUI
         if (!HasMultiPassPreview) return;
         if (source == null || source.Id != MultiPassPreviewCache.PreviewSourceId) return;
 
-        // Active execution: stock renders the queued burn's orbit, so we
-        // skip passes[0] and draw only the future-passes overlay.
+        // Stock already draws the queued burn orbit.
         bool skipFirst = MultiPassRegistry.Has(source.Id);
         MultiPassRenderer.RenderPassOrbits(
             viewport, source, MultiPassPreviewCache.PreviewPasses, skipFirst);
     }
 
-    /// <summary>Per-pass Ap/Pe/AN/DN/SOI/closest markers with first /
-    /// final / intermediate styling. ImGui-phase counterpart of
-    /// <see cref="Render"/>.</summary>
     public static void RenderMarkers(IViewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
@@ -231,8 +190,6 @@ internal static class MultiPassUI
             firstPassDisplayNumber, skipFirst);
     }
 
-    /// <summary>Final-pass FlightPlan; what "Preview Flight Plan"
-    /// shows in multi-pass mode.</summary>
     public static FlightPlan? LastPassFlightPlan
     {
         get
@@ -314,8 +271,7 @@ internal static class MultiPassUI
             reason));
     }
 
-    // Warns when allocation sum < requested dV (vehicle is fuel-short).
-    // Reads the cached sum so we do not re-run Splitter per frame.
+    // Cache the allocated delta v total so fuel checks do not run the splitter each frame.
     private static void DrawInsufficientFuelIfApplicable(
         double totalDv, SequenceBurnState state)
     {
@@ -324,8 +280,7 @@ internal static class MultiPassUI
         double sum = MultiPassPreviewCache.CachedAllocationsSum;
         if (double.IsNaN(sum)) return;
 
-        // 0.5% tolerance to absorb floating-point drift from the
-        // multi-stage Tsiolkovsky walk.
+        // Allow a 0.5 percent tolerance for floating point differences in the staged Tsiolkovsky calculation.
         if (sum >= totalDv * 0.995) return;
 
         ImGui.Spacing();
@@ -358,11 +313,7 @@ internal static class MultiPassUI
             totalBurnTime, burnRatio * 100.0, suggestedN, estimatedSavings));
     }
 
-    // Smallest N where per-pass loss is below the ceiling AND one more
-    // split would save under 0.1% of total dV. Hard-capped at
-    // SuggestMaxN to bound real-time wait; for very long burns this
-    // may return SuggestMaxN with per-pass loss still above the
-    // ceiling.
+    // Choose the smallest pass count that meets the loss threshold and saves less than 0.1 percent with another pass. The maximum count can still leave the loss above the threshold.
     private static int ComputeSuggestedPassCount(double burnRatio)
     {
         double lossN = MultiPassLoss.FiniteBurnLossFraction(burnRatio / SuggestMinN);
@@ -377,20 +328,14 @@ internal static class MultiPassUI
         return SuggestMaxN;
     }
 
-    // Loss-frame cumulative savings: sums per-pass dv * FBL(burnTime/period)
-    // against the equivalent single-burn loss. Per-pass burn time and dV
-    // come from the cached preview so EqualDv vs EqualBurnTime splits both
-    // get accurate per-pass loss (not just the EqualBurnTime simplification).
-    // Hidden when savings < 1 m/s: signals to the user that the chosen N
-    // does not buy meaningful Oberth improvement (e.g. overkill N).
+    // Compare losses using each pass delta v and burn time so both split modes are supported. Hide savings below one meter per second.
     private static void DrawSavingsLine(
         double totalDv, double singleBurnTime, double period, PassPreview[] passes)
     {
         if (passes.Length == 0) return;
         if (!(period > 0.0) || !(singleBurnTime > 0.0) || !(totalDv > 0.0)) return;
 
-        // When fuel-short, singleLoss uses totalDv (unreachable) while
-        // splitLoss uses the fuel-limited per-pass dV, inflating savings.
+        // Do not compare unreachable requested delta v with a split limited by available fuel. That would inflate savings.
         double allocSum = MultiPassPreviewCache.CachedAllocationsSum;
         if (!double.IsNaN(allocSum) && allocSum < totalDv * 0.995) return;
 
@@ -412,8 +357,7 @@ internal static class MultiPassUI
 
     #endregion
 
-    // Total burn time for totalDv via multi-stage Tsiolkovsky.
-    // Returns 0 when stage data is missing.
+    // Use the staged Tsiolkovsky calculation for total burn time. Missing propulsion data produces zero.
     private static double EstimateBurnTime(double totalDv, SequenceBurnState state)
     {
         if (totalDv <= 0.0 || !state.HasUsableEngines) return 0.0;

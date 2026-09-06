@@ -6,11 +6,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Validates OrbitManeuvers.ComputeSetInclination: a node burn must set the inclination against the
-// chosen reference plane while keeping the orbital speed and the node line, the coplanar special
-// case must fall back to the CCI +X node convention, and already-satisfied or unbound inputs must
-// yield no maneuver. The ecliptic checks read stock Orbit.Inclination (the classical element
-// against the CCI Z plane) as an oracle independent of the reference-normal path under test.
+// Use stock Orbit.Inclination as the ecliptic oracle because it is independent of the reference normal calculation.
 public sealed class SetInclinationTest : AfcTest
 {
     private const double StartInclinationRad = 5.0 * Math.PI / 180.0;
@@ -19,9 +15,7 @@ public sealed class SetInclinationTest : AfcTest
     private const double EquatorialTargetRad = 15.0 * Math.PI / 180.0;
     private const double CoplanarTargetRad = 10.0 * Math.PI / 180.0;
 
-    // With the default builder geometry the node sits exactly on the periapsis; this second orbit
-    // rotates the periapsis off the node line so a node/apse mix-up in the code under test cannot
-    // slip through.
+    // Place periapsis away from the node so the test detects a calculation that uses the wrong point.
     private const double OffApseArgumentOfPeriapsisRad = 35.0 * Math.PI / 180.0;
 
     // Test orbit, in meters above the home body's mean radius.
@@ -29,9 +23,7 @@ public sealed class SetInclinationTest : AfcTest
     private const double ApoapsisAltitudeM = 1_500_000.0;
 
     private const double HalfFraction = 0.5;
-    // A half rotation splits the inclination change exactly (both plane normals are perpendicular
-    // to the node line), and the burn state comes from a closed-form node solve, so only
-    // floating-point error remains; 1e-6 leaves generous headroom over that.
+    // Only numerical rounding affects this exact partial rotation.
     private const double FractionRelTol = 1e-6;
     private const double NodeLineDotMin = 0.9999;
 
@@ -90,9 +82,7 @@ public sealed class SetInclinationTest : AfcTest
             $"(target {OrbitFixtures.Deg(targetRad):F3}deg)");
     }
 
-    // The plane change must tilt the orbit about its own node line, not move the node: the line
-    // where the plane crosses the ecliptic has to stay put (up to sign, which flips with the
-    // rotation direction).
+    // The node line must stay fixed, up to sign.
     private static bool NodeLinePreserved(Orbit before, Orbit after)
     {
         double3 lineBefore = double3.Cross(double3.UnitZ, before.GetOrbitNormalCci()).NormalizeOrZero();
@@ -125,8 +115,7 @@ public sealed class SetInclinationTest : AfcTest
 
         bool ok = ManeuverAssertions.ResultShapeHolds(t, "equatorial", orbit, result!.Value, now);
         Orbit after = ManeuverAssertions.Apply(orbit, result.Value);
-        // Measure against the equator directly from the body's rotation axis (the CCE Z axis in
-        // CCI, via IParentBody.GetCce2Cci), not through the GetInclinationAgainst path under test.
+        // Use the parent rotation axis as an oracle independent of GetInclinationAgainst.
         double3 equatorNormal = double3.UnitZ.Transform(home.GetCce2Cci());
         double incAfter = MathEx.SafeAcos(double3.Dot(equatorNormal, after.GetOrbitNormalCci()));
         double obliquity = MathEx.SafeAcos(double3.Dot(equatorNormal, double3.UnitZ));
@@ -139,8 +128,7 @@ public sealed class SetInclinationTest : AfcTest
 
     private static void CheckCoplanarStart(TestContext t, IParentBody home, UniverseTime now)
     {
-        // An orbit in the ecliptic plane has no defined node against the ecliptic; the tool picks
-        // CCI +X by convention. The set must still work and must put the node line on X.
+        // Use CCI +X by convention because an ecliptic orbit has no defined node.
         Orbit planar = OrbitFixtures.EllipticalAt(home, PeriapsisAltitudeM, ApoapsisAltitudeM, now);
         OrbitManeuvers.ManeuverResult? result = OrbitManeuvers.ComputeSetInclination(
             planar, CoplanarTargetRad, false, now, OrbitManeuvers.InclinationReference.Ecliptic);

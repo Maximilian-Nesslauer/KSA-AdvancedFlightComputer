@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -10,22 +9,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// "Depart toward <see cref="TargetId"/> via the Lambert-optimal Hohmann
-/// solution captured at intent creation, split into N perigee kicks with
-/// the final pass landing at <see cref="TFinalSec"/>."
-///
-/// The Lambert inputs (T_final, D_final direction, v_inf magnitude) are
-/// locked at Start so the asymptote phasing is preserved across N passes;
-/// otherwise re-planning each pass would chase a moving target window
-/// and drift the encounter geometry, which is how a cross-parent transfer
-/// loses its encounter entirely.
-///
-/// Per-pass dV is recomputed against the live orbit each commit. Prior
-/// passes share the splitter's equal-time / equal-dV allocation; the
-/// final pass's magnitude is whatever brings periapsis speed to
-/// <c>sqrt(v_inf^2 + 2 mu / r_p)</c> from the live pre-final orbit.
-/// </summary>
+// The transfer goal stays fixed while each pass is recalculated from the live orbit.
 internal sealed class HohmannTransferIntent : IManeuverIntent
 {
     public const string HohmannTransferKind = "hohmann";
@@ -34,58 +18,20 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
 
     public required string TargetId { get; init; }
     public required string ParentId { get; init; }
-
-    /// <summary>Stock-Lambert burn time at which the final pass fires.
-    /// Serialised as raw seconds.</summary>
     public required double TFinalSec { get; init; }
-
-    /// <summary>Stock-Lambert dV vector at <see cref="TFinalSec"/> in
-    /// the parking orbit's VLF frame. Direction is preserved across all
-    /// passes; the magnitude is rescaled by RecomputePass for the final
-    /// pass to hit the locked target.</summary>
+    // The delta v uses the VLF frame of the original parking orbit.
     public required double3 DFinalVlf { get; init; }
-
-    /// <summary>True for cross-parent transfers (Earth -> Mars):
-    /// post-burn orbit is hyperbolic relative to the parking parent,
-    /// target tracked via <see cref="VInfMs"/>. False for same-parent
-    /// transfers (Earth -> Luna): post-burn orbit is bound, target
-    /// tracked via <see cref="ApoTargetRadiusMeters"/>.</summary>
     public required bool IsCrossParent { get; init; }
-
-    /// <summary>Hyperbolic excess velocity magnitude at the parking
-    /// radius, derived from the stock Lambert DepartureVelocityCci.
-    /// Used iff <see cref="IsCrossParent"/>.</summary>
     public required double VInfMs { get; init; }
-
-    /// <summary>Target apoapsis radius (m, from parent center) the stock
-    /// Hohmann was aiming for. Used iff !<see cref="IsCrossParent"/>.</summary>
     public required double ApoTargetRadiusMeters { get; init; }
-
-    /// <summary>Original parking orbit period locked at intent creation.
-    /// Critical: the integer-K-sum scheduling uses this fixed value as the
-    /// "anchor period" for all passes. Per-pass K values are real, only
-    /// the sum is rounded to an integer at initial-plan time so that the
-    /// vehicle at pass-0 firing and at T_final share the same parking-orbit
-    /// CCI direction. Reading <c>vehicle.Orbit.Period</c> at recompute time
-    /// would give the chained orbit's period, breaking the chain alignment
-    /// and causing subsequent passes to fire at apoapsis instead of
-    /// periapsis.</summary>
+    // The original parking period anchors phasing even after prior burns change the live period.
     public required double ParkingPeriodSec { get; init; }
 
     public string Kind => HohmannTransferKind;
-
-    // Shown verbatim by MultiPassUI.DrawBlockedByOtherExecution when the
-    // user opens an AFC-handled plan type while a Hohmann exec is still
-    // running on this vehicle.
     public string TypeKey => ManeuverTools.ManeuverTools.KeyStockHohmann;
 
     public bool IsSatisfied(Vehicle vehicle)
     {
-        // Live periapsis speed already meets / exceeds v_p_target: priors
-        // over-shot the locked goal and any further pass would push past
-        // v_inf. The postfix uses this to complete the execution cleanly
-        // instead of accumulating MaxConsecutiveScheduleFailures on a
-        // "dV non-positive" planner failure.
         if (vehicle?.Orbit?.Parent == null) return false;
         if (vehicle.Orbit.Parent.Id != ParentId) return false;
 
@@ -96,15 +42,10 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         double a = o.SemiMajorAxis;
         double vpNow = Math.Sqrt(mu * (2.0 / rp - 1.0 / a));
         double vpTarget = ComputeVpTargetAt(rp, mu);
-
-        // 1 m/s tolerance soaks up finite-burn / numerical noise without
-        // letting a genuinely under-shot plan flip to "satisfied".
         return vpNow + 1.0 >= vpTarget;
     }
 
-    // Null forces MultiPassUI.DrawActive (apse / inclination plan window)
-    // to early-exit when a Hohmann execution is active; HohmannMultiPassUI
-    // owns the user-facing status for this intent kind.
+    // Return null because HohmannMultiPassUI draws this intent rather than the generic active plan UI.
     public OrbitManeuvers.ManeuverResult? ComputeManeuver(Vehicle vehicle) => null;
 
     public PassPlanResult RecomputePass(
@@ -130,11 +71,6 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         IOrbiter? target = ResolveTarget();
         if (target == null)
         {
-            // Player-visible: silently cancelling a half-finished
-            // departure would leave the vehicle in a strange in-between
-            // state with no obvious reason; the postfix's
-            // MaxConsecutiveScheduleFailures path triggers via the
-            // returned Failure too, so this alert fires once per attempt.
             TimedAlert.Create(
                 $"Hohmann multi-pass: target '{TargetId}' lost, cancelling.",
                 Color.Red, 5.0);
@@ -150,22 +86,11 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
             IsCrossParent: IsCrossParent,
             VInfMs: VInfMs,
             ApoTargetRadiusMeters: ApoTargetRadiusMeters);
-
-        // Critical: pass the LOCKED parking period (not vehicle.Orbit.Period
-        // which is the chained orbit at this point) so the K-schedule
-        // remains anchored to the original parking-orbit geometry. The
-        // planner re-derives the real-K schedule for the remaining passes
-        // each call, anchoring times[0] to the vehicle's next chained
-        // periapsis time (computed from live state). SplitMode comes from
-        // MultiPassExecution.Mode (locked at intent creation): the planner
-        // re-applies the same allocation policy to the live remaining dV
-        // and current fuel state each recompute - so the policy is
-        // consistent but per-pass dV evolves as fuel drains.
         var result = HohmannMultiPassPlanner.Plan(
             vehicle, input, passCountTotal, passIndex,
             ParkingPeriodSec, state, now, mode);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(Inv,
                 "[AFC] HohmannTransferIntent.RecomputePass: vehicle='{0}' target='{1}' " +
                 "passIndex={2}/{3} remaining={4} -> {5} pass(es) " +
@@ -174,10 +99,7 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
                 result.Passes.Length, result.Failed,
                 result.FailureReason ?? "-"));
 
-        if (result.Passes.Length == 0)
-            return PassPlanResult.Failure(
-                result.FailureReason ?? "planner produced no passes");
-        return PassPlanResult.Success(result.Passes[0]);
+        return IntentPlanning.FirstPass(result);
     }
 
     private double ComputeVpTargetAt(double rp, double mu)
@@ -227,9 +149,6 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         bool isCrossParent = kv.TryGetValue("is_cross_parent", out string? cp) && cp == "true";
         if (!TryParseDouble(kv, "v_inf_ms", out double vInf)) return null;
         if (!TryParseDouble(kv, "apo_target_radius_m", out double apoTarget)) return null;
-        // parking_period_sec anchors the K-schedule, and a 0.0 fallback would
-        // break recompute scheduling, so an entry without it is rejected rather
-        // than defaulted.
         if (!TryParseDouble(kv, "parking_period_sec", out double parkingPeriod)
             || !(parkingPeriod > 0.0))
             return null;
@@ -246,10 +165,7 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         };
     }
 
-    /// <summary>Rejects a non-finite value as well as an unparsable one:
-    /// <c>t_final_sec</c> becomes a UniverseTime, which throws on NaN, so a
-    /// hand-edited or truncated multipass.toml has to drop the entry here rather
-    /// than take the mod down on the first recompute.</summary>
+    // UniverseTime rejects NaN, so corrupt saved values must be rejected before recompute.
     private static bool TryParseDouble(
         IReadOnlyDictionary<string, string> kv, string key, out double value)
     {

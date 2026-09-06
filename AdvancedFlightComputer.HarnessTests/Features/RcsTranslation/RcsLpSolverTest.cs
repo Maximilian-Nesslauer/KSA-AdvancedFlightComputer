@@ -19,12 +19,54 @@ public sealed class RcsLpSolverTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
+        CheckDegenerateInputs(t);
+        CheckDependentRows(t);
         CheckCheapThrusterWins(t);
         CheckTorqueNullingPair(t);
         CheckSupportSelection(t);
         CheckPricedTorqueSlack(t);
         CheckInfeasibleDirection(t);
         CheckUnnullableTorque(t);
+    }
+
+    private static void CheckDegenerateInputs(TestContext t)
+    {
+        double[]? x = RcsLpSolver.Solve(0, 2, [], [1.0, 0.0], []);
+        t.Check("unconstrained nonnegative cost has zero solution", x is [0.0, 0.0]);
+        t.Check("unconstrained negative cost is unbounded",
+            RcsLpSolver.Solve(0, 1, [], [-1.0], []) == null);
+        t.Check("empty zero demand is feasible", RcsLpSolver.Solve(1, 0, [], [], [0.0]) is []);
+        t.Check("empty nonzero demand is infeasible", RcsLpSolver.Solve(1, 0, [], [], [1.0]) == null);
+        t.Check("negative dimensions rejected", RcsLpSolver.Solve(-1, 0, [], [], []) == null);
+        t.Check("incomplete columns rejected", RcsLpSolver.Solve(2, 1, [1.0], [1.0], [1.0, 0.0]) == null);
+        foreach (double invalid in new[] { double.NaN, double.PositiveInfinity, double.NegativeInfinity })
+        {
+            t.Check($"invalid coefficient {invalid} rejected",
+                RcsLpSolver.Solve(1, 1, [invalid], [1.0], [1.0]) == null);
+            t.Check($"invalid cost {invalid} rejected",
+                RcsLpSolver.Solve(1, 1, [1.0], [invalid], [1.0]) == null);
+            t.Check($"invalid demand {invalid} rejected",
+                RcsLpSolver.Solve(1, 1, [1.0], [1.0], [invalid]) == null);
+        }
+    }
+
+    private static void CheckDependentRows(TestContext t)
+    {
+        double[]? x = RcsLpSolver.Solve(3, 2, [2.0, 4.0, 0.0, 2.0, 4.0, 0.0],
+            [1.0, 2.0], [1.0, 2.0, 0.0]);
+        if (t.Check("dependent rows and duplicate columns solved", x != null))
+        {
+            t.CheckAbs("dependent rows choose cheaper column", x![0], 0.5, SolutionTol);
+            t.CheckAbs("dependent rows leave expensive column idle", x[1], 0.0, SolutionTol);
+        }
+        x = RcsLpSolver.Solve(2, 1, [1e8, 1e8], [1.0], [1.0, 2.0]);
+        t.Check("scaling does not hide inconsistent demand", x == null);
+        x = RcsLpSolver.Solve(2, 1, [1e8, 1e8], [1.0], [1.0, 1.0]);
+        if (t.Check("large coefficients with consistent demand solved", x != null))
+            t.CheckRel("large coefficient solution", x![0], 1e-8, 1e-6);
+        x = RcsLpSolver.Solve(1, 1, [-2.0], [1.0], [-1.0]);
+        if (t.Check("negative demand row solved", x != null))
+            t.CheckAbs("negative demand row solution", x![0], 0.5, SolutionTol);
     }
 
     private static void CheckCheapThrusterWins(TestContext t)

@@ -5,9 +5,6 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Validates OrbitManeuvers.ComputeCircularize at both apses: the applied burn must produce a
-// near-circular orbit at the burn radius, and an already-circular or unbound orbit must yield no
-// maneuver (the tool's "nothing to do" contract).
 public sealed class CircularizeTest : AfcTest
 {
     // Test orbit, in meters above the home body's mean radius.

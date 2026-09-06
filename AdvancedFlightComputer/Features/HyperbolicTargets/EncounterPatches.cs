@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -8,27 +9,17 @@ using KSA;
 namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 
 /// <summary>
-/// For hyperbolic targets, replaces TryFindIntercept entirely: builds
-/// the flight plan from the Lambert-optimal dV and computes the actual
-/// patched-conic closest approach distance for honest reporting.
+/// Replaces <c>RefineBurnTask.TryFindIntercept</c> for unbound targets. Stock
+/// sweeps the departure dV by five percent either way and probes each trajectory
+/// for an SOI encounter, but its encounter search cannot resolve one against an
+/// unbound body, see <see cref="Patch_FindClosestApproaches"/>, and at the dV a
+/// comet intercept needs the impulsive patched conic trajectory diverges from the
+/// Lambert solution by a large fraction of an AU anyway. So the flight plan is
+/// built from the Lambert dV as is, and the closest approach is measured by
+/// sampling the heliocentric patch, which tells the user how much correction to
+/// expect on the way. Bound targets run the stock sweep.
 ///
-/// The game's RefineBurnTask sweeps dV +/-5% and probes each trajectory
-/// for SOI intercepts via OrbitalTransfers.InterceptsBody, which calls
-/// PatchedConic.TryFindClosestEncounter. Encounters are populated by
-/// PatchedConic.FindClosestApproaches; for a hyperbolic target on a
-/// heliocentric patch with finite EndTime its time-window gate
-/// multiplies in secondBody.Orbit.Period (NaN), hits the
-/// `!num2.IsFinite() return;` early-out, and no encounter is found.
-/// Even with a finite gate the patched-conic trajectory diverges
-/// ~0.3 AU from the Lambert solution because the impulsive
-/// approximation breaks down at extreme dV (~26 km/s).
-///
-/// Instead we build the flight plan with the Lambert-optimal dV directly
-/// and sweep the trajectory in two passes (coarse then refined) for an
-/// honest closest-approach distance, so users see how much mid-course
-/// correction will be needed.
-///
-/// For bound targets, runs the original dV sweep + encounter detection.
+/// Runs on the ThreadPool thread <c>RefineBurnTask</c> queues itself on.
 /// </summary>
 [HarmonyPatch(typeof(RefineBurnTask), nameof(RefineBurnTask.TryFindIntercept))]
 internal static class Patch_TryFindIntercept
@@ -40,12 +31,6 @@ internal static class Patch_TryFindIntercept
     {
         try
         {
-            // Bound targets (or any with no resolvable orbit) fall through to
-            // the stock dV sweep. The guard lives inside the try so a null
-            // Target / Orbit degrades to "run original" instead of throwing on
-            // the ThreadPool thread RefineBurnTask runs us on. IsBound(), not
-            // an eccentricity compare, so the game-parabolic band around
-            // e = 1.0 (Period NaN) is handled here too.
             if (transferInfo.Target?.Orbit == null
                 || transferInfo.Target.Orbit.IsBound())
                 return true;
@@ -66,16 +51,11 @@ internal static class Patch_TryFindIntercept
                 selectedEntry.TransferData.ClosestApproachDistance = patchedConicDist;
                 __result = true;
 
-                // bool reads are atomic in the CLR memory model, and this flag is
-                // only flipped at startup, so a plain read is sufficient even on
-                // the ThreadPool thread RefineBurnTask runs us on.
                 if (DebugConfig.HyperbolicTargets)
-                {
                     DefaultCategory.Log.Debug(
                         $"[AFC] RefineBurnTask: hyperbolic target, " +
                         $"Lambert dV={dv.Length():F1} m/s, " +
                         $"patched conic miss={patchedConicDist / 1000:F0} km");
-                }
             }
             else
             {
@@ -91,11 +71,8 @@ internal static class Patch_TryFindIntercept
         }
     }
 
-    /// <summary>
-    /// Sweeps the heliocentric patch in a coarse pass (1-day step) to find
-    /// a rough minimum, then refines around it (1-minute step) so fast
-    /// flybys aren't aliased between coarse samples.
-    /// </summary>
+    /// <summary>Coarse pass at one day, then one minute around the coarse minimum
+    /// so a fast flyby is not aliased between coarse samples.</summary>
     private static double FindPatchedConicClosestApproach(
         FlightPlan flightPlan, IOrbiter target, double transitSeconds)
     {
@@ -103,8 +80,8 @@ internal static class Patch_TryFindIntercept
         double minTime = double.NaN;
         Orbit targetOrbit = target.Orbit;
 
-        const double CoarseStep = 86400.0;   // 1 day
-        const double RefineStep = 60.0;      // 1 minute
+        const double CoarseStep = 86400.0;
+        const double RefineStep = 60.0;
         const double RefineHalfWindow = CoarseStep;
 
         foreach (var patch in flightPlan.Patches)
@@ -112,9 +89,9 @@ internal static class Patch_TryFindIntercept
             if (patch.PrimaryBody?.Hash != targetOrbit.Parent.Hash)
                 continue;
 
-            // Offsets from the patch start, not absolute sim seconds: a
-            // UniverseTime is 128-bit nanoseconds, so sampling it through
-            // absolute doubles would throw away resolution the sweep needs.
+            // Offsets from the patch start rather than absolute sim seconds, because
+            // a UniverseTime holds 128 bit nanoseconds and an absolute double would
+            // spend its mantissa on the epoch instead of on the window.
             UniverseTime patchStart = patch.StartTime;
             double end = Math.Min(transitSeconds * 2.0, (patch.EndTime - patchStart).Seconds());
 
@@ -143,5 +120,67 @@ internal static class Patch_TryFindIntercept
         var posShip = patch.Orbit.GetStateVectorsAt(t).PositionCci;
         var posTarget = targetOrbit.GetStateVectorsAt(t).PositionCci;
         return (posTarget - posShip).Length();
+    }
+}
+
+/// <summary>
+/// Skips stock's closest approach search in the one case where it throws, which
+/// is a patch with a finite end time against a second body on an unbound orbit.
+/// That branch sizes its time window as the smaller of the patch length and the
+/// second body's Period, which is NaN there, and it builds a UniverseTime from
+/// the window before its own finiteness check, which is where the NaN throws.
+/// The end of time branch sizes the window from the asymptotic speeds instead
+/// and never reads Period, so it runs as stock wrote it. The search is reached
+/// from every flight plan's encounter scan once a comet has an SOI, which
+/// HyperbolicBodies.xml gives it, and from the target node computation when a
+/// comet is the vehicle's target. Finding nothing is what the finiteness check
+/// would settle on, and the transfer's own closest approach comes from
+/// <see cref="Patch_TryFindIntercept"/>.
+/// </summary>
+[HarmonyPatch]
+internal static class Patch_FindClosestApproaches
+{
+    private static readonly Type[] Signature =
+    {
+        typeof(Span<Encounter>),
+        typeof(int).MakeByRefType(),
+        typeof(IOrbiter),
+        typeof(UniverseTime).MakeByRefType(),
+    };
+
+    private static MethodInfo? Anchor =>
+        AccessTools.Method(typeof(PatchedConic), "FindClosestApproaches", Signature);
+
+    /// <summary>Whether the private stock method still exists in this build, so
+    /// the feature can report the gap instead of failing to patch.</summary>
+    public static bool IsAnchorPresent => Anchor != null;
+
+    static MethodBase TargetMethod() =>
+        Anchor ?? throw new InvalidOperationException(
+            "[AFC] PatchedConic.FindClosestApproaches not found; "
+            + "patching this class requires an IsAnchorPresent check first.");
+
+    static bool Prefix(PatchedConic __instance, IOrbiter secondBody)
+    {
+        try
+        {
+            // Mirrors the branch selection in the original. The window comes from
+            // the second body's Period only when neither eccentricity is below 1
+            // and the patch has a finite end time.
+            Orbit? target = secondBody?.Orbit;
+            if (target == null || target.IsBound()) return true;
+            if (__instance.EndTime.IsEndOfTime()) return true;
+            if (__instance.Orbit.Eccentricity < 1.0 && target.Eccentricity < 1.0) return true;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Fails open, because the original reads the same orbit right away and
+            // reports its own failure. Deduped because the scan runs per patch per
+            // frame.
+            LogHelper.WarnOnce("find-closest-approaches:" + ex.GetType().Name,
+                $"[AFC] FindClosestApproaches prefix: {ex}; running stock search.");
+            return true;
+        }
     }
 }

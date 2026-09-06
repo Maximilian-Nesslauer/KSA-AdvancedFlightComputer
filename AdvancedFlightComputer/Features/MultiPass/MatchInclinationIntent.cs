@@ -2,21 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// "Match the orbital plane of <see cref="TargetId"/>, burning at the
-/// chosen node (AN or DN of the vehicle's orbit relative to the target)."
-/// The target is resolved live each pass: a moving vehicle target keeps
-/// its current plane, a celestial target stays Keplerian-stable. If the
-/// vehicle SOI-transitions away from <see cref="ParentId"/> or the target
-/// disappears, RecomputePass aborts.
-/// </summary>
 internal sealed class MatchInclinationIntent : IManeuverIntent
 {
     public const string MatchInclinationKind = "match-inc";
@@ -33,10 +24,9 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
     {
         if (vehicle?.Orbit?.Parent == null) return false;
         if (vehicle.Orbit.Parent.Id != ParentId) return false;
-        Orbit? targetOrbit = ResolveTargetOrbit(vehicle);
+        Orbit? targetOrbit = ResolveTargetOrbit();
         if (targetOrbit == null) return false;
-        // Matches the relInc < 0.001 short-circuit inside
-        // OrbitManeuvers.ComputeMatchInclination.
+        // Use the same tolerance as OrbitManeuvers.ComputeMatchInclination.
         return vehicle.Orbit.GetRelativeInclination(targetOrbit).Value() < 0.001;
     }
 
@@ -45,7 +35,7 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
         if (vehicle?.Orbit?.Parent == null) return null;
         if (vehicle.Orbit.Parent.Id != ParentId) return null;
 
-        Orbit? targetOrbit = ResolveTargetOrbit(vehicle);
+        Orbit? targetOrbit = ResolveTargetOrbit();
         if (targetOrbit == null) return null;
 
         return OrbitManeuvers.ComputeMatchInclination(
@@ -61,7 +51,7 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
             return PassPlanResult.Failure(
                 $"parent changed: was {ParentId}, now {vehicle.Orbit.Parent.Id}");
 
-        Orbit? targetOrbit = ResolveTargetOrbit(vehicle);
+        Orbit? targetOrbit = ResolveTargetOrbit();
         if (targetOrbit == null)
             return PassPlanResult.Failure($"target '{TargetId}' no longer in system");
 
@@ -80,9 +70,9 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
             maneuver.Value.DvCci.Length(), remainingCount, mode, state);
 
         var result = PlaneChangeBurnPlanner.PlanForMatch(
-            vehicle, targetOrbit, UseDescendingNode, allocations, now);
+            vehicle, targetOrbit, UseDescendingNode, allocations, now, execution: true);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] MatchInclinationIntent.RecomputePass: vehicle='{0}' target='{1}' " +
                 "passIndex={2}/{3} totalDv={4:F1}m/s remaining={5} -> {6} pass(es) " +
@@ -91,18 +81,10 @@ internal sealed class MatchInclinationIntent : IManeuverIntent
                 maneuver.Value.DvCci.Length(), remainingCount,
                 result.Passes.Length, result.Failed, result.FailureReason ?? "-"));
 
-        if (result.Passes.Length == 0)
-            return PassPlanResult.Failure(result.FailureReason ?? "planner produced no passes");
-        return PassPlanResult.Success(result.Passes[0]);
+        return IntentPlanning.FirstPass(result);
     }
 
-    /// <summary>Finds the target IOrbiter (Vehicle or Celestial) by id,
-    /// restricted to bodies sharing this intent's locked ParentId so a
-    /// cross-SOI target doesn't accidentally match. Uses the system-wide
-    /// lookup so we still resolve out-of-frame vehicles after a long
-    /// warp. Reads <see cref="ParentId"/> directly (rather than the
-    /// live vehicle.Parent) so the lock is explicit in the call.</summary>
-    private Orbit? ResolveTargetOrbit(Vehicle vehicle)
+    private Orbit? ResolveTargetOrbit()
     {
         if (Universe.CurrentSystem == null) return null;
         if (!Universe.CurrentSystem.All.TryGet(TargetId, out Astronomical? target))

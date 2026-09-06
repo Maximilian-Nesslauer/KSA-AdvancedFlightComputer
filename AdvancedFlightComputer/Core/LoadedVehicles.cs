@@ -4,24 +4,18 @@ using KSA;
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// The vehicles the per-frame drivers walk. Both of them hang off
-/// <see cref="Universe.ApplyVehicleSolvers"/>, which carries no vehicle
-/// argument, so each has to enumerate the world itself.
+/// The vehicles the per-frame drivers walk. They hang off <see cref="Universe.ApplyVehicleSolvers"/>,
+/// which carries no vehicle argument, so the shared hook enumerates the world.
 ///
-/// Deliberately the live registry rather than <see cref="Program.VehiclesInFrame"/>:
-/// that cache is filled from this very collection by
-/// <c>Program.RefreshVehiclesInFrame</c>, which runs AFTER the solver apply in the
-/// game's frame (so it is one frame stale here) and never runs at all under the
-/// headless harness, whose SimDriver drives the solvers directly instead of going
-/// through <c>Program.PrepareFrame</c>. Reading the registry gives the drivers one
-/// rule that holds in both.
+/// This is the live registry rather than <see cref="Program.VehiclesInFrame"/>, because
+/// <c>Program.PrepareFrame</c> refreshes that cache only after the solver apply, which makes it one
+/// frame stale here, and the headless harness drives the solvers without PrepareFrame, which
+/// leaves it never refreshed at all.
 /// </summary>
 internal static class LoadedVehicles
 {
-    /// <summary>A disposed vehicle is normally gone from here already, because
-    /// <c>Vehicle.Dispose(bool)</c> deregisters it from the system. It sets
-    /// IsDisposed first though, so callers still test the flag rather than rely
-    /// on the two staying in that order.</summary>
+    /// <summary><c>Vehicle.Dispose(bool)</c> sets IsDisposed before it deregisters, so callers test
+    /// the flag rather than rely on a disposed vehicle being gone from here.</summary>
     public static ReadOnlySpan<Astronomical> All
     {
         get

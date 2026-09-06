@@ -3,18 +3,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// The vehicle's control frame expressed as three assembly-frame axes, the
-/// same decomposition <see cref="ThrusterController.RecomputeDynamicData"/>
-/// builds. Everything this feature computes lives in the control frame, not
-/// the assembly frame: the stock actuator data it reads back
-/// (<c>ThrusterControllerState.IntendedForce</c>, <c>ControlMap</c>,
-/// <c>FlightComputer.RcsTorqueAuthority</c>, <c>ErrorAngles</c>) is expressed
-/// there, and so are the translation commands the player issues. The two
-/// frames coincide until a control point is selected through "Control From
-/// Here", at which point an assembly-frame impulse would name different
-/// thrusters than the ones stock would fire.
-/// </summary>
+/// <summary>Project assembly-frame vectors onto the control axes used by ThrusterController.RecomputeDynamicData. Control From Here can rotate these axes relative to the assembly.</summary>
 internal readonly struct RcsCtrlFrame
 {
     public readonly floatQuat Ctrl2Body;
@@ -30,11 +19,7 @@ internal readonly struct RcsCtrlFrame
         _zAsmb = float3.UnitZ.Transform(ctrl2Body);
     }
 
-    /// <summary>Reads the frame off the vehicle, not off its FlightComputer:
-    /// <c>FlightComputer.Ctrl2Asmb</c> is set by the worker inside
-    /// <c>ComputeControl</c> and <c>CopyFrom</c> does not carry it back, so the
-    /// vehicle's own FlightComputer holds a stale identity on the main
-    /// thread.</summary>
+    /// <summary>Read Vehicle.Ctrl2Body because FlightComputer.ComputeControl sets its own frame on the worker and FlightComputer.CopyFrom does not copy that frame back.</summary>
     public static RcsCtrlFrame For(Vehicle vehicle)
         => new(floatQuat.Pack(vehicle.Ctrl2Body));
 

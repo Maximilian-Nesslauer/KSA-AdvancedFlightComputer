@@ -1,22 +1,14 @@
 using System;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
-/// <summary>
-/// AFC shortcuts inside stock's orbit right-click menu.
-///
-/// The four quick-tools cannot be point-anchored the way stock's own Manual and
-/// Circularize entries are: each one derives its own burn time (the opposite apse
-/// for the apse tools, an ascending or descending node for the inclination tools)
-/// and needs a typed input the menu has no room for. These entries therefore open
-/// the Transfer Planning window on the matching plan type instead of creating a
-/// burn at the clicked point.
-/// </summary>
+// Each quick tool calculates its own burn time and needs input from the user, so the shortcut opens the planner instead of placing a burn at the clicked point.
 internal static class BurnMenuLauncher
 {
     public const int PeriapsisSubmenu = 0;
@@ -24,10 +16,7 @@ internal static class BurnMenuLauncher
 
     public static bool Enabled;
 
-    /// <summary>Injected before the EndMenu of stock's "At Periapsis" and "At
-    /// Apoapsis" submenus. The tool offered is the one that actually BURNS there:
-    /// raising apoapsis is cheapest at periapsis and vice versa, so AFC's apse tools
-    /// cross over relative to the submenu they appear under.</summary>
+    // An apse burn changes the opposite apse. The periapsis submenu therefore offers Set Apoapsis, and the apoapsis submenu offers Set Periapsis.
     public static void DrawApsisEntry(int submenu)
     {
         if (!Enabled)
@@ -57,12 +46,6 @@ internal static class BurnMenuLauncher
         }
     }
 
-    /// <summary>Injected before the final EndPopup of
-    /// <see cref="BurnContextMenu.Draw"/>. The state check is the real gate rather
-    /// than the anchor: the IL may share one EndPopup epilogue across the menu's
-    /// modes, and a later build could move the last one into a different branch, so
-    /// a misplaced anchor has to degrade to a shortcut in the wrong menu instead of
-    /// to a wrong action.</summary>
     public static void DrawInline()
     {
         if (!Enabled)
@@ -91,9 +74,7 @@ internal static class BurnMenuLauncher
             }
             finally
             {
-                // BeginMenu returned true, so the matching EndMenu is owed even if
-                // an item handler throws; skipping it would nest every later menu
-                // inside this one.
+                // Balance the menu even if an item handler throws.
                 ImGui.EndMenu();
             }
         }
@@ -103,52 +84,38 @@ internal static class BurnMenuLauncher
         }
     }
 
-    private static void OpenPlanner(string typeKey, Vehicle vehicle)
+    internal static void OpenPlanner(string typeKey, Vehicle vehicle)
     {
         if (FindType(typeKey) is not TransferType type)
             return;
 
-        // Stock cancels a running porkchop whenever its own combo changes the plan
-        // type, and its polling block lives in the window body that AFC's prefix
-        // replaces for AFC types. Switching here instead would leave the worker
-        // unobserved, and the eventual resolution restores the TransferInfo it was
-        // built with over whatever source is selected by then. AFC holds no handle
-        // on stock's CancellationTokenSource, so refuse the switch rather than
-        // strand the calculation.
+        // TransferPlanner.DrawPlanWindow polls the stock worker only in its own body. Do not switch to an AFC body while that worker is running.
         if (StockPlanner.TransferBeingCalculated)
         {
             TimedAlert.Create("Transfer calculating; wait for it to finish.", Color.Yellow, 3.0);
             return;
         }
 
-        // During a multi-pass execution the only committed trajectory is the
-        // current pass's, and the next pass commit will replace it; the true
-        // final orbit exists only as a preview no burn can anchor on. Chaining
-        // reopens once the run has finished or been cancelled.
+        // The next pass replaces the committed trajectory, so another maneuver can be planned only after all passes finish.
         if (MultiPassRegistry.Has(vehicle.Id))
         {
             TimedAlert.Create("Multi-pass running; cancel it or let it finish first.", Color.Yellow, 3.0);
             return;
         }
 
-        // Only the false path of stock's setter touches its selection state, so
-        // setting it true here does not clear a calculated transfer by itself.
+        // TransferPlanner.ShowPlanWindow clears stock selection state only when set to false.
         TransferPlanner.ShowPlanWindow = true;
         StockPlanner.SourceBody = new TransferObject(vehicle);
         StockPlanner.TransferType = type;
         StockPlanner.TransferCalculated = false;
 
-        // The window body keys its per-type input defaults off these notifications,
-        // not off the values, so a type switched from outside the dropdown would
-        // otherwise reopen holding the previous tool's altitude or angle.
+        // Reset input defaults when a shortcut changes the source or type outside the dropdown.
         ManeuverToolsWindow.OnTypeChanged();
         ManeuverToolsWindow.OnSourceChanged();
         Patch_DrawPlanWindow.OnManeuverContextChanged();
     }
 
-    /// <summary>Resolves a plan type from the live dropdown list. Returns null once
-    /// <see cref="ManeuverTools.RemoveTransferTypes"/> has run, which is what makes
-    /// a click during unload a no-op rather than a window with no body.</summary>
+    // Resolve from the live list so a shortcut cannot reopen a removed plan type.
     private static TransferType? FindType(string key)
     {
         foreach (TransferType candidate in TransferPlanner.TransferTypes)

@@ -1,5 +1,4 @@
 using System;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using KSA;
@@ -7,22 +6,19 @@ using static AdvancedFlightComputer.Features.ManeuverTools.ManeuverTools;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>Per-frame cache for the two expensive UI computations:
-/// <see cref="SequenceBurnState.Analyze"/> and
-/// <see cref="ApseBurnPlanner.Plan"/>. Continuous inputs are quantized
-/// in the cache keys so per-frame drift does not invalidate.</summary>
+// Cache sequence performance and planner previews using quantized inputs to limit recalculation during small changes in the orbit.
 internal static class MultiPassPreviewCache
 {
-    // Rocket equation is logarithmic in mass; 100 kg is fine resolution.
+    // Mass is grouped in 100 kg intervals because the rocket equation varies logarithmically with mass.
     private const double MassQuantumKg = 100.0;
     private const double SmaQuantumM = 100.0;
 
     #region SequenceBurnState cache
 
     private readonly record struct StateKey(
-        string VehicleId,
+        Vehicle Source,
         long MassBucket,
-        int ActiveEngineSignature);
+        int PerformanceInputSignature);
 
     private static SequenceBurnState? _cachedState;
     private static StateKey _cachedStateKey;
@@ -30,77 +26,229 @@ internal static class MultiPassPreviewCache
     public static SequenceBurnState GetSequenceState(Vehicle source)
     {
         var key = new StateKey(
-            source.Id,
+            source,
             (long)(source.TotalMass / MassQuantumKg),
-            ComputeActiveEngineSignature(source));
+            ComputePerformanceInputSignature(source));
 
         if (_cachedState != null && key == _cachedStateKey)
             return _cachedState;
-
-        // Cache miss path: measured. Steady-state hits are unmeasured.
-#if DEBUG
-        using var _perf = new PerfTracker.Scope("SequenceBurnState.Analyze");
-#endif
 
         _cachedState = SequenceBurnState.Analyze(source);
         _cachedStateKey = key;
         return _cachedState;
     }
 
-    // Catches state changes that can move the SequenceBurnState result
-    // without moving MassBucket: staging state, a sequence's ATM/VAC toggle
-    // (selects the stock model's evaluation pressure), engine and flow-rule
-    // reconfiguration, and tank PropellantUseEnabled toggles. Some entries
-    // over-invalidate under the stock-model adapter (it ignores IsActive
-    // outside the live active sequence), which only costs a spare recompute.
-    private static int ComputeActiveEngineSignature(Vehicle source)
+    // SequencePerformanceList.Recompute reads live store contents and engine design data in addition to the vehicle mass.
+    // Keep the same mass quantum for each store so ordinary propellant drain does not rebuild the snapshot every frame.
+    private static int ComputePerformanceInputSignature(Vehicle source)
     {
         if (source.Parts == null) return 0;
         var hc = new HashCode();
+        hc.Add(source.Parts);
+        hc.Add(source.Parts.SequenceList.ActiveSequence);
 
-        ReadOnlySpan<Sequence> sequences = source.Parts.SequenceList.Sequences;
+        AddSequenceInputs(source.Parts, ref hc);
+        AddPartInputs(source.Parts, ref hc);
+        AddMoleInputs(source.Parts, ref hc);
+        AddTankInputs(source.Parts, ref hc);
+        return hc.ToHashCode();
+    }
+
+    private static void AddSequenceInputs(PartTree tree, ref HashCode hc)
+    {
+        ReadOnlySpan<Sequence> sequences = tree.SequenceList.Sequences;
+        hc.Add(sequences.Length);
         for (int i = 0; i < sequences.Length; i++)
         {
             hc.Add(sequences[i].Number);
             hc.Add(sequences[i].Activated);
             hc.Add((int)sequences[i].Environment);
         }
+    }
 
-        ReadOnlySpan<Part> parts = source.Parts.Parts;
+    private static void AddPartInputs(PartTree tree, ref HashCode hc)
+    {
+        ReadOnlySpan<Part> parts = tree.Parts;
+        hc.Add(parts.Length);
         for (int i = 0; i < parts.Length; i++)
         {
-            Span<EngineController> engines = parts[i].Modules.Get<EngineController>();
-            for (int e = 0; e < engines.Length; e++)
+            Part part = parts[i];
+            hc.Add(part.InstanceId);
+            hc.Add(part.SequenceOrder);
+            hc.Add(part.InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f);
+
+            ReadOnlySpan<Part> subParts = part.SubParts;
+            for (int s = 0; s < subParts.Length; s++)
             {
-                hc.Add(parts[i].InstanceId);
-                hc.Add(engines[e].IsActive);
-                // Only a Combustor carries a player-selected FlowRule; a
-                // SolidMotor has none, so it folds in as a constant.
-                foreach (RocketCore core in engines[e].Cores)
-                    hc.Add(core is Combustor c && c.ResourceManager != null ? (int)c.ResourceManager.FlowRule : -1);
+                hc.Add(subParts[s].InstanceId);
+                hc.Add(subParts[s].InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f);
             }
+
+            foreach (ISequenced module in part.GetSubtreeSequencedModules())
+            {
+                hc.Add(module);
+                hc.Add(module.Sequence);
+                if (module is Decoupler decoupler)
+                {
+                    hc.Add(decoupler.IsEnabled);
+                    hc.Add(decoupler.Connector.Connection);
+                }
+            }
+
+            Span<EngineController> engines = part.Modules.Get<EngineController>();
+            for (int e = 0; e < engines.Length; e++)
+                AddEngineInputs(tree, engines[e], ref hc);
+        }
+    }
+
+    private static void AddMoleInputs(PartTree tree, ref HashCode hc)
+    {
+        Span<Mole> moles = tree.Moles.Modules;
+        ReadOnlySpan<MoleState> states = tree.Moles.States;
+        hc.Add(moles.Length);
+        for (int i = 0; i < moles.Length; i++)
+        {
+            Mole mole = moles[i];
+            hc.Add(mole);
+            hc.Add(mole.SubstancePhase);
+            hc.Add(mole.ContainerVolume);
+            hc.Add((long)(states[mole.StatesIdx].Mass / MassQuantumKg));
+        }
+    }
+
+    private static void AddTankInputs(PartTree tree, ref HashCode hc)
+    {
+        Span<Tank> tanks = tree.Tanks.Modules;
+        hc.Add(tanks.Length);
+        for (int i = 0; i < tanks.Length; i++)
+        {
+            hc.Add(tanks[i]);
+            hc.Add(tanks[i].PropellantUseEnabled);
+            hc.Add(tanks[i].Moles.Count);
+            foreach (Mole mole in tanks[i].Moles)
+                hc.Add(mole);
+        }
+    }
+
+    private static void AddEngineInputs(PartTree tree, EngineController engine, ref HashCode hc)
+    {
+        hc.Add(engine);
+        hc.Add(engine.IsActive);
+        hc.Add(engine.Cores.Length);
+        foreach (RocketCore core in engine.Cores)
+        {
+            hc.Add(core);
+            hc.Add(core.Reaction);
+            hc.Add(core.MinimumThrottle);
+            hc.Add(core.MinimumPulseTime);
+            AddCoreInputs(core, ref hc);
+            AddNozzleInputs(core, ref hc);
+        }
+    }
+
+    private static void AddCoreInputs(RocketCore core, ref HashCode hc)
+    {
+        if (core is Combustor combustor)
+        {
+            hc.Add(combustor.Config.Lut);
+            hc.Add(combustor.Config.CombustionPressureMax);
+            hc.Add(combustor.Config.ThermalEfficiency);
+            AddReactants(combustor.DesiredMix, ref hc);
+            AddConsumptionOrder(combustor.ResourceManager, ref hc);
+            return;
         }
 
-        // The stock drain skips propellant-disabled tanks (the game filters on
-        // PropellantUseEnabled), so a toggle changes burnable fuel while the
-        // vehicle's total mass is unchanged.
-        Span<Tank> tanks = source.Parts.Tanks.Modules;
-        for (int i = 0; i < tanks.Length; i++)
-            hc.Add(tanks[i].PropellantUseEnabled);
+        if (core is not SolidMotor solid) return;
+        hc.Add(solid.Lut);
+        hc.Add(solid.ThermalEfficiency);
+        hc.Add(solid.BurnRate.CoefficientMPerS);
+        hc.Add(solid.BurnRate.Exponent);
+        hc.Add(solid.Propellant);
+        hc.Add(solid.AuthoredChamberPressure);
+        hc.Add(solid.ManualAreaRatio);
+        hc.Add(solid.AreaRatio);
+        hc.Add(solid.PeakChamberPressure);
+        hc.Add(solid.Stack);
+        hc.Add(solid.Stack.IsValid);
+        hc.Add(solid.Stack.Segments.Length);
+        foreach (SolidGrainSegment segment in solid.Stack.Segments)
+        {
+            hc.Add(segment);
+            hc.Add(segment.Geometry);
+            hc.Add(segment.CasingInnerRadius);
+            hc.Add(segment.Length);
+            hc.Add(segment.GrainVolume);
+            hc.Add(segment.UnburnableGrainMass);
+            hc.Add(segment.Grain);
+        }
+    }
 
-        return hc.ToHashCode();
+    private static void AddReactants(ReactantMix mix, ref HashCode hc)
+    {
+        ReadOnlySpan<Reactant> reactants = mix.Reactants;
+        hc.Add(reactants.Length);
+        for (int i = 0; i < reactants.Length; i++)
+        {
+            hc.Add(reactants[i].SubstancePhase);
+            hc.Add(reactants[i].MassFraction);
+        }
+    }
+
+    private static void AddConsumptionOrder(ResourceManager? manager, ref HashCode hc)
+    {
+        hc.Add(manager);
+        if (manager == null) return;
+        hc.Add((int)manager.FlowRule);
+        Tank[][]? levels = manager.ConsumptionOrder;
+        hc.Add(levels?.Length ?? -1);
+        if (levels == null) return;
+        for (int i = 0; i < levels.Length; i++)
+        {
+            Tank[]? level = levels[i];
+            hc.Add(level?.Length ?? -1);
+            if (level == null) continue;
+            for (int j = 0; j < level.Length; j++)
+                hc.Add(level[j]);
+        }
+    }
+
+    // The active sequence reads live nozzle performance and direction, but physics rewrites both values each solver step.
+    // Sample that state only when another key input changes. The per-mole mass buckets set the ordinary drain cadence.
+    private static void AddNozzleInputs(RocketCore core, ref HashCode hc)
+    {
+        RocketNozzle[] nozzles = core.Rocket.Nozzles;
+        hc.Add(nozzles.Length);
+        foreach (RocketNozzle nozzle in nozzles)
+        {
+            hc.Add(nozzle);
+            hc.Add(nozzle.GetType());
+            hc.Add(nozzle.ThroatArea);
+
+            if (nozzle is DeLavalNozzle liquid)
+                AddNozzleConfig(liquid.Config, ref hc);
+            else if (nozzle is SolidMotorNozzle solid)
+            {
+                AddNozzleConfig(solid.Config, ref hc);
+                hc.Add(solid.AreaRatioMultiplier);
+                hc.Add(solid.TwoPhaseEfficiency);
+            }
+        }
+    }
+
+    private static void AddNozzleConfig(DeLavalNozzleConfig config, ref HashCode hc)
+    {
+        hc.Add(config.ThroatArea);
+        hc.Add(config.ExitArea);
+        hc.Add(config.FlowEfficiency);
+        hc.Add(config.ExpansionEfficiency);
     }
 
     #endregion
 
     #region PassPreviewResult cache
 
-    /// <summary>Cache key. Quantized in <see cref="From"/> so per-frame
-    /// drift on continuous fields does not bust the cache. BurnTime is
-    /// intentionally absent (advances every frame). Intent-side fields
-    /// (UseDescendingNode etc.) are included because UI toggles for
-    /// plane-change types can leave the dV bucket unchanged - e.g.
-    /// AN vs DN on a near-circular orbit has identical speed.</summary>
+    // BurnTime is omitted because it advances each frame.
+    // Keep node and inclination inputs in the key because they can change the maneuver without changing its delta v magnitude.
     private readonly record struct PreviewKey(
         string TypeKey,
         string VehicleId,
@@ -112,11 +260,12 @@ internal static class MultiPassPreviewCache
         bool UseDescendingNode,
         long TargetIncMilliRad,
         OrbitManeuvers.InclinationReference Reference,
-        string TargetId)
+        string TargetId,
+        int SequenceSignature)
     {
         public static PreviewKey From(
             Vehicle source, string typeKey, int passCount,
-            SplitMode mode, double totalDv)
+            SplitMode mode, double totalDv, SequenceBurnState state)
         {
             IOrbiter? target = ManeuverToolsWindow.GetSelectedTargetOrbiter();
             return new(
@@ -130,15 +279,21 @@ internal static class MultiPassPreviewCache
                 ManeuverToolsWindow.UseDescendingNode,
                 (long)(ManeuverToolsWindow.TargetInclinationRad * 1000.0),
                 ManeuverToolsWindow.InclinationRef,
-                target?.Id ?? string.Empty);
+                target?.Id ?? string.Empty,
+                ComputeSequenceSignature(state));
         }
 
-        /// <summary>The key with its drift-derived fields zeroed. Thrust
-        /// walks dV, SMA and mass through their quantization buckets with
-        /// no user input; every other field only changes on real intent
-        /// (type, pass count, split mode, target, inclination inputs).</summary>
+        // Exclude orbit, mass, delta v, and sequence performance changes when comparing intent during thrust.
         public PreviewKey WithoutDrift() =>
-            this with { DvBucket = 0, SmaBucket = 0, MassBucket = 0 };
+            this with { DvBucket = 0, SmaBucket = 0, MassBucket = 0, SequenceSignature = 0 };
+    }
+
+    private static int ComputeSequenceSignature(SequenceBurnState state)
+    {
+        var hash = new HashCode();
+        hash.Add(state.HasUsableEngines);
+        for (int i = 0; i < state.Sequences.Count; i++) hash.Add(state.Sequences[i]);
+        return hash.ToHashCode();
     }
 
     private static PassPreviewResult? _cachedPreview;
@@ -159,43 +314,22 @@ internal static class MultiPassPreviewCache
     public static bool LastPreviewFailed => _cachedPreview?.Failed ?? false;
     public static string? LastPreviewFailureReason => _cachedPreview?.FailureReason;
 
-    /// <summary>Sum of DvCapacityMs from the most recent allocation;
-    /// NaN if nothing has been cached yet.</summary>
+    // Return NaN until an allocation has been cached.
     public static double CachedAllocationsSum =>
         _cachedAllocations != null ? _cachedAllocationsSum : double.NaN;
 
-    /// <summary>Recomputes preview when the cache key changes.</summary>
     public static void UpdatePreviewIfStale(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
         int passCount, SplitMode splitMode, SequenceBurnState state, double totalDv)
     {
-        var key = PreviewKey.From(source, typeKey, passCount, splitMode, totalDv);
+        var key = PreviewKey.From(source, typeKey, passCount, splitMode, totalDv, state);
 
         if (_hasPreviewKey && _cachedPreview != null && key == _cachedPreviewKey)
             return;
 
-        // Mid-burn state is intrinsically unstable: thrust (a stock Auto
-        // engine burn, or an AFC RCS burn, which keeps BurnMode at Manual)
-        // walks orbit, mass and remaining dV through their quantization
-        // buckets every physics tick. While thrust is active, ignore key
-        // changes confined to those drift fields instead of replanning per
-        // frame; any other key change is real user input and replans
-        // immediately. The freeze lifts when stock drops BurnMode back to
-        // Manual or the RCS execution ends; the accumulated drift then
-        // busts the key. Allow the initial build so a user who opens the
-        // window mid-burn still sees a (slightly stale) preview. Known
-        // trade: TargetAltitude reaches the key only through DvBucket, so
-        // during thrust an altitude edit stays frozen with the drift.
         if (_hasPreviewKey && _cachedPreview != null
-            && (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
-                || RcsExecutor.IsActive(source))
-            && key.WithoutDrift() == _cachedPreviewKey.WithoutDrift())
+            && ShouldFreezeForThrust(source, key.WithoutDrift() == _cachedPreviewKey.WithoutDrift()))
             return;
-
-        // Cache miss path: times Splitter + per-type planner together.
-#if DEBUG
-        using var _perf = new PerfTracker.Scope("MultiPassPreviewCache.Plan");
-#endif
 
         PassAllocation[] allocations = Splitter.Allocate(totalDv, passCount, splitMode, state);
         PassPreviewResult result = PlanForType(
@@ -208,14 +342,16 @@ internal static class MultiPassPreviewCache
         _hasPreviewKey = true;
     }
 
-    /// <summary>Per-type planner dispatch for the preview chain. Apse
-    /// types feed ApseBurnPlanner; inclination types route to the
-    /// PlaneChangeBurnPlanner so the per-pass node, rotation axis and
-    /// dV->angle math match what execution will actually do. Without
-    /// this dispatch, plane-change previews would walk through
-    /// ApseBurnPlanner and re-apply the full single-burn dV direction
-    /// at each apoapsis - dropping SMA every pass because the original
-    /// vector carries a retrograde component.</summary>
+    // Use this only when a preview exists and the comparison excludes inputs that drift during thrust.
+    // A failed RCS driver can leave IsActive set until cancellation.
+    // Manual engine thrust does not freeze the preview.
+    // Target altitude is represented only through drift inputs, so altitude changes also stay frozen during thrust.
+    internal static bool ShouldFreezeForThrust(Vehicle source, bool sameIntent) =>
+        (source.FlightComputer.BurnMode == FlightComputerBurnMode.Auto || RcsExecutor.IsActive(source))
+        && sameIntent;
+
+    // Use the same planner for preview and execution.
+    // Plane changes need their own planner because repeating the original burn vector would also change orbital energy.
     private static PassPreviewResult PlanForType(
         Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey,
         PassAllocation[] allocations, UniverseTime now)
@@ -240,9 +376,7 @@ internal static class MultiPassPreviewCache
                 ManeuverToolsWindow.InclinationRef,
                 ManeuverToolsWindow.UseDescendingNode, allocations, now);
         }
-        // Circularize at the chosen apse is mechanically an apse burn: a
-        // tangential kick that leaves the burn-radius apse invariant and
-        // moves the opposite apse toward it. burnTa matches the burn point.
+        // Circularization is a tangential burn that preserves the chosen apsis and moves the opposite apsis toward it.
         if (typeKey == KeyStockCircularizeApoapsis)
             return ApseBurnPlanner.Plan(source, maneuver.DvVlf, new TrueAnomaly(Math.PI), allocations, now);
         if (typeKey == KeyStockCircularizePeriapsis)

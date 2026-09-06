@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -8,21 +7,16 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// Forward-chains N plane-change burns via
-/// <see cref="MultiPassForwardChainPlanner"/>. Two entry points:
-/// PlanForMatch (target = another orbit's plane) and PlanForSet
-/// (target = absolute inclination against Ecliptic/Equatorial). Both
-/// share the same dV -> rotation-fraction conversion: the splitter
-/// hands the planner a per-pass dV budget; the planner converts that
-/// to a fraction of the remaining angle using the velocity component
-/// perpendicular to the rotation axis at the chosen node.
-/// </summary>
 internal static class PlaneChangeBurnPlanner
 {
     public static PassPreviewResult PlanForMatch(
         Vehicle source, Orbit targetOrbit, bool useDescendingNode,
-        PassAllocation[] allocations, UniverseTime now)
+        PassAllocation[] allocations, UniverseTime now) =>
+        PlanForMatch(source, targetOrbit, useDescendingNode, allocations, now, false);
+
+    public static PassPreviewResult PlanForMatch(
+        Vehicle source, Orbit targetOrbit, bool useDescendingNode,
+        PassAllocation[] allocations, UniverseTime now, bool execution)
     {
         return MultiPassForwardChainPlanner.PlanForwardChain(source, allocations, now,
             (orbit, dvCap, earliestTime) =>
@@ -46,13 +40,19 @@ internal static class PlaneChangeBurnPlanner
                     f => OrbitManeuvers.ComputeMatchInclination(
                         orbit, targetOrbit, useDescendingNode, earliestTime, f),
                     "Match");
-            });
+            }, execution);
     }
 
     public static PassPreviewResult PlanForSet(
         Vehicle source, double targetInclinationRad,
         OrbitManeuvers.InclinationReference reference, bool useDescendingNode,
-        PassAllocation[] allocations, UniverseTime now)
+        PassAllocation[] allocations, UniverseTime now) =>
+        PlanForSet(source, targetInclinationRad, reference, useDescendingNode, allocations, now, false);
+
+    public static PassPreviewResult PlanForSet(
+        Vehicle source, double targetInclinationRad,
+        OrbitManeuvers.InclinationReference reference, bool useDescendingNode,
+        PassAllocation[] allocations, UniverseTime now, bool execution)
     {
         return MultiPassForwardChainPlanner.PlanForwardChain(source, allocations, now,
             (orbit, dvCap, earliestTime) =>
@@ -75,10 +75,6 @@ internal static class PlaneChangeBurnPlanner
                     : anTa;
                 if (orbit.TimeOfTrueAnomaly(nodeTa, earliestTime) is not UniverseTime nodeTime)
                     return null;
-
-                // Reconstruct the same target normal that ComputeSetInclination
-                // will compute so rotAxis / fullAngle here match what the actual
-                // maneuver will rotate by.
                 doubleQuat tilt = QuaternionEx.AngleAxis(clampedTargetInc, nodeDir);
                 double3 targetNormal = referenceNormal.Transform(tilt);
                 double3 rotAxis = double3.Cross(vehicleNormal, targetNormal).NormalizeOrZero();
@@ -89,14 +85,9 @@ internal static class PlaneChangeBurnPlanner
                     f => OrbitManeuvers.ComputeSetInclination(
                         orbit, clampedTargetInc, useDescendingNode, earliestTime, reference, f),
                     "Set");
-            });
+            }, execution);
     }
 
-    /// <summary>Shared dV -> fraction conversion + maneuver invocation.
-    /// The caller supplies how to derive the rotation geometry; this
-    /// helper does the v_perp calc and the fraction clamp.
-    /// <paramref name="logLabel"/> is included in the per-pass debug log
-    /// to distinguish Match vs Set entries.</summary>
     private static PassStep? BuildStep(
         Orbit orbit, UniverseTime nodeTime, double3 rotAxis, double fullAngle,
         double dvCapMs,
@@ -106,11 +97,7 @@ internal static class PlaneChangeBurnPlanner
         StateVectors sv = orbit.GetStateVectorsAt(nodeTime);
         double3 vPerpVec = sv.VelocityCci - double3.Dot(sv.VelocityCci, rotAxis) * rotAxis;
         double vPerp = vPerpVec.Length();
-
-        // theta = 2 * asin(dv / (2 * v_perp)), where v_perp is the velocity
-        // component perpendicular to the
-        // rotation axis at the node (NOT the full |v|; the radial-velocity
-        // component lies along the node line and does not rotate).
+        // Use theta = 2 * asin(deltaV / (2 * vPerp)) because velocity along the node axis does not rotate.
         double sinHalfTheta = vPerp >= 1e-3
             ? Math.Min(dvCapMs / (2.0 * vPerp), 0.9999)
             : 0.0;
@@ -119,7 +106,7 @@ internal static class PlaneChangeBurnPlanner
 
         OrbitManeuvers.ManeuverResult? m = computeWithFraction(fraction);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
         {
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] PlaneChange.{0}: " +

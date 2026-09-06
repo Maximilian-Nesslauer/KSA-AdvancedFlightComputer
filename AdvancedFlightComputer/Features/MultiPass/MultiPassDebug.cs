@@ -7,18 +7,16 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// Diagnostic logging helpers for the multi-pass state machine. All
-/// methods short-circuit when <see cref="DebugConfig.MultiPass"/> is
-/// off, so call sites do not need to gate themselves.
-/// </summary>
+// Callers must also guard interpolated arguments so disabled logging does not allocate strings.
 internal static class MultiPassDebug
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
+    public static bool Enabled => DebugConfig.MultiPass;
+
     public static void LogExec(string context, MultiPassExecution exec)
     {
-        if (!DebugConfig.MultiPass) return;
+        if (!Enabled) return;
         DefaultCategory.Log.Debug(string.Format(Inv,
             "[AFC] {0}: save='{1}' vehicle='{2}' kind='{3}' mode={4} " +
             "passIndex={5}/{6} burn=(t={7} dv={8} ms={9}) await={10}/{11} fails={12}",
@@ -37,12 +35,9 @@ internal static class MultiPassDebug
             exec.ConsecutiveScheduleFailures));
     }
 
-    /// <summary>Dumps all burns currently in <paramref name="plan"/>
-    /// with their fingerprints (Time + DvMagnitude). Used to diagnose
-    /// "registry says X but BurnPlan disagrees" states.</summary>
     public static void LogBurnPlan(string context, BurnPlan plan)
     {
-        if (!DebugConfig.MultiPass) return;
+        if (!Enabled) return;
         int n = plan.BurnCount;
         var sb = new StringBuilder();
         sb.AppendFormat(Inv, "[AFC] {0}: BurnPlan has {1} burn(s)", context, n);
@@ -61,7 +56,7 @@ internal static class MultiPassDebug
 
     public static void LogRegistry(string context, IReadOnlyDictionary<(string, string), MultiPassExecution> snapshot)
     {
-        if (!DebugConfig.MultiPass) return;
+        if (!Enabled) return;
         var sb = new StringBuilder();
         sb.AppendFormat(Inv, "[AFC] {0}: registry has {1} entry(ies)", context, snapshot.Count);
         foreach (var kv in snapshot)

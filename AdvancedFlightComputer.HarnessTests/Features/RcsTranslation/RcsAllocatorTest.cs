@@ -16,7 +16,13 @@ public sealed class RcsAllocatorTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
+        CheckSharedThrusterPulse(t);
+        CheckMixedSharedThrusters(t);
         CheckShapeAxis(t);
+        CheckHeterogeneousMinimumPulse(t);
+        CheckMixedDirectionMinimumPulse(t);
+        CheckSharedPulseGroups(t);
+        CheckInvalidPulseModel(t);
         CheckMaxAxisPulse(t);
         CheckHoldPerformance(t);
         CheckCompletionFloor(t);
@@ -25,23 +31,212 @@ public sealed class RcsAllocatorTest : AfcTest
         CheckAttitudeFight(t);
     }
 
+    private static void CheckSharedThrusterPulse(TestContext t)
+    {
+        // One nozzle can serve +X and +Y under ThrusterController.ComputeControlMap.
+        // A one-second pulse supplies 100 N s on both axes and 10 N m s of yaw impulse once.
+        float pulse = RcsComputeControlPatch.MaxAxisPulse(0f, 100f, 100f, 100f, 0f);
+        pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, 100f, 100f, 100f, 0f);
+        t.CheckAbs("shared thruster fires once for two axes", pulse, 1.0, FloatTol);
+        t.CheckAbs("shared thruster yaw impulse", pulse * 10f, 10.0, FloatTol);
+        CheckSharedEstimate(t, new float3(100f, 100f, 0f), new double3(Math.Sqrt(0.5), Math.Sqrt(0.5), 0));
+        CheckSharedEstimate(t, new float3(-100f, 100f, -100f), new double3(-1 / Math.Sqrt(3), 1 / Math.Sqrt(3), -1 / Math.Sqrt(3)));
+        CheckSharedEstimate(t, new float3(100f, 100f, 0f), new double3(0.8, 0.6, 0));
+        CheckSharedEstimate(t, new float3(100f, 100f, 0f), double3.UnitX);
+    }
+
+    private static void CheckSharedEstimate(TestContext t, float3 force, double3 direction)
+    {
+        RcsCapabilitySnapshot cap = default;
+        RcsCapability.AccumulateTranslation(ref cap, force, force, 1f, new float3(0, 0, 10), 0.01f);
+        cap.HasAnyTranslation = true;
+        cap.RotationMassFlowKgS = new float3(0, 0, 0.5f);
+        cap.RotationTorqueNm = new float3(0, 0, 50f);
+        float pulse = RcsComputeControlPatch.MaxAxisPulse(0f, (float)direction.X, force.X, cap.Ax0.ForceN, cap.Ax1.ForceN);
+        pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Y, force.Y, cap.Ax2.ForceN, cap.Ax3.ForceN);
+        pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Z, force.Z, cap.Ax4.ForceN, cap.Ax5.ForceN);
+        t.CheckMixed("shared flow matches worker pulse", RcsExecutor.GroupCostPerNs(in cap, direction), pulse, 1e-9, 1e-6);
+        t.CheckMixed("shared torque cost matches worker pulse", RcsExecutor.GroupAttitudeFightPerImpulse(in cap, direction), pulse * 10 * 0.01, 1e-9, 1e-6);
+        if (t.Check("shared direction feasible", RcsExecutor.TryHoldPerformance(in cap, direction, out double netForce, out double flow)))
+            t.CheckMixed("Hold flow uses the shared pulse once", flow, netForce * pulse, 1e-6, 1e-6);
+    }
+
+    private static void CheckMixedSharedThrusters(TestContext t)
+    {
+        float3[] forces = [new(100, 100, 0), new(50, 50, 0), new(0, 100, -100), new(50, 0, 0)];
+        float3[] torques = [new(0, 0, 10), new(0, 0, -20), new(0, 0, 5), new(0, 0, 3)];
+        float[] flows = [1f, 2f, 0.5f, 0.25f];
+        RcsCapabilitySnapshot cap = default;
+        for (int i = 0; i < forces.Length; i++)
+            RcsCapability.AccumulateTranslation(ref cap, forces[i], forces[i], flows[i], torques[i], 0.01f);
+        cap.RotationMassFlowKgS = new float3(0, 0, 0.5f);
+        cap.RotationTorqueNm = new float3(0, 0, 50f);
+        double3 direction = new(0.6, 0.48, -0.64);
+        double flow = 0.0;
+        double torque = 0.0;
+        for (int i = 0; i < forces.Length; i++)
+        {
+            float pulse = RcsComputeControlPatch.MaxAxisPulse(0f, (float)direction.X, forces[i].X, cap.Ax0.ForceN, cap.Ax1.ForceN);
+            pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Y, forces[i].Y, cap.Ax2.ForceN, cap.Ax3.ForceN);
+            pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, (float)direction.Z, forces[i].Z, cap.Ax4.ForceN, cap.Ax5.ForceN);
+            flow += flows[i] * pulse;
+            torque += torques[i].Z * pulse;
+        }
+        t.CheckMixed("mixed membership flow matches worker", RcsExecutor.GroupCostPerNs(in cap, direction), flow, 1e-9, 1e-6);
+        t.CheckMixed("opposing shared torque is combined before pricing",
+            RcsExecutor.GroupAttitudeFightPerImpulse(in cap, direction), Math.Abs(torque) * 0.01, 1e-9, 1e-6);
+    }
+
     private static void CheckShapeAxis(TestContext t)
     {
         // Cap at one control period of group force.
         t.CheckAbs("cap positive", RcsComputeControlPatch.ShapeAxis(
-            50f, forcePos: 100f, forceNeg: 0f, minImpPos: 10f, minImpNeg: 0f, maxPulse: 0.1f), 10f, FloatTol);
-        // Below half the minimum impulse: suppressed.
+            50f, forcePos: 100f, forceNeg: 0f,
+            minCorrectingImpPos: 5f, minCorrectingImpNeg: 0f, maxPulse: 0.1f), 10f, FloatTol);
+        // Below the supplied correction threshold: suppressed.
         t.CheckAbs("min impulse floor", RcsComputeControlPatch.ShapeAxis(
-            4f, 100f, 0f, 10f, 0f, 0.1f), 0f, FloatTol);
-        // At/above half the minimum impulse: passes through uncapped.
+            4f, 100f, 0f, 5f, 0f, 0.1f), 0f, FloatTol);
+        // At or above the correction threshold: passes through uncapped.
         t.CheckAbs("small but usable", RcsComputeControlPatch.ShapeAxis(
-            6f, 100f, 0f, 10f, 0f, 0.1f), 6f, FloatTol);
+            6f, 100f, 0f, 5f, 0f, 0.1f), 6f, FloatTol);
         // No group in the demanded direction: nothing to fire.
         t.CheckAbs("missing negative group", RcsComputeControlPatch.ShapeAxis(
             -50f, 100f, 0f, 10f, 0f, 0.1f), 0f, FloatTol);
         // Negative direction with its own group.
         t.CheckAbs("cap negative", RcsComputeControlPatch.ShapeAxis(
-            -50f, 0f, 100f, 0f, 10f, 0.1f), -10f, FloatTol);
+            -50f, 0f, 100f, 0f, 5f, 0.1f), -10f, FloatTol);
+    }
+
+    private static void CheckHeterogeneousMinimumPulse(TestContext t)
+    {
+        RcsCapabilitySnapshot cap = default;
+        cap.Set(0, new RcsAxisGroup
+        {
+            ForceN = 2f,
+            MassFlowKgS = 1f,
+            MinImpulseNs = 0.5455f,
+        });
+        Span<RcsPulseContribution> contributions = stackalloc RcsPulseContribution[2]
+        {
+            new() { GroupIndex = 0, ForceN = 1f, MinimumPulseTimeSec = 0.001f },
+            new() { GroupIndex = 0, ForceN = 1f, MinimumPulseTimeSec = 0.5445f },
+        };
+        RcsCapability.FinalizeMinimumImpulseModel(ref cap, contributions);
+
+        RcsAxisGroup group = cap.Ax0;
+        t.CheckAbs("heterogeneous correction threshold", group.MinCorrectingImpulseNs, 0.363, FloatTol);
+        float unshapedDuration = 0.323f / group.ForceN;
+        float unshapedDelivery = Math.Max(unshapedDuration, 0.001f)
+            + Math.Max(unshapedDuration, 0.5445f);
+        t.CheckAbs("heterogeneous unshaped residual", 0.323f - unshapedDelivery, -0.383, FloatTol);
+        cap.HasAnyTranslation = true;
+        t.Check("heterogeneous completion floor", RcsExecutor.IsBelowImpulseFloor(
+            new float3(0.323f, 0f, 0f), in cap));
+        t.CheckAbs("heterogeneous reversal suppressed", RcsComputeControlPatch.ShapeAxis(
+            0.323f, group.ForceN, 0f, group.MinCorrectingImpulseNs, 0f, 0.1f), 0f, FloatTol);
+        t.CheckAbs("heterogeneous boundary suppressed", RcsComputeControlPatch.ShapeAxis(
+            0.3629f, group.ForceN, 0f, group.MinCorrectingImpulseNs, 0f, 1f), 0f, FloatTol);
+        t.CheckAbs("heterogeneous boundary fires", RcsComputeControlPatch.ShapeAxis(
+            0.363f, group.ForceN, 0f, group.MinCorrectingImpulseNs, 0f, 1f), 0.363, FloatTol);
+
+        cap = default;
+        cap.Set(0, new RcsAxisGroup
+        {
+            ForceN = 2f,
+            MassFlowKgS = 1f,
+            MinImpulseNs = 0.2f,
+        });
+        contributions[0] = new RcsPulseContribution
+        {
+            GroupIndex = 0,
+            ForceN = 1f,
+            MinimumPulseTimeSec = 0.1f,
+        };
+        contributions[1] = contributions[0];
+        RcsCapability.FinalizeMinimumImpulseModel(ref cap, contributions);
+        t.CheckAbs("homogeneous floor unchanged", cap.Ax0.MinCorrectingImpulseNs, 0.1, FloatTol);
+    }
+
+    private static void CheckMixedDirectionMinimumPulse(TestContext t)
+    {
+        RcsCapabilitySnapshot cap = default;
+        cap.Set(0, new RcsAxisGroup { ForceN = 0.5f, MassFlowKgS = 1f });
+        Span<RcsPulseContribution> contributions = stackalloc RcsPulseContribution[2]
+        {
+            new() { GroupIndex = 0, ForceN = 1f, MinimumPulseTimeSec = 1f },
+            new() { GroupIndex = 0, ForceN = -0.5f, MinimumPulseTimeSec = 0.001f },
+        };
+        RcsCapability.FinalizeMinimumImpulseModel(ref cap, contributions);
+
+        RcsAxisGroup group = cap.Ax0;
+        t.Check("mixed positive capped response usable", group.IsUsable);
+        t.CheckAbs("mixed capped response threshold", group.MinCorrectingImpulseNs, 0.475, FloatTol);
+        t.CheckAbs("mixed threshold shaping uses cap", RcsComputeControlPatch.ShapeAxis(
+            0.476f, group.ForceN, 0f, group.MinCorrectingImpulseNs, 0f, 0.1f), 0.05, FloatTol);
+        float cappedDelivery = 1f * Math.Max(0.1f, 1f)
+            - 0.5f * Math.Max(0.1f, 0.001f);
+        t.Check("mixed capped response reduces magnitude",
+            Math.Abs(0.476f - cappedDelivery) < 0.476f);
+        cap.HasAnyTranslation = true;
+        t.Check("mixed floor completes below threshold", RcsExecutor.IsBelowImpulseFloor(
+            new float3(0.474f, 0f, 0f), in cap));
+
+        cap = default;
+        cap.Set(0, new RcsAxisGroup { ForceN = 0.1f, MassFlowKgS = 1f });
+        contributions[0] = new RcsPulseContribution
+        {
+            GroupIndex = 0,
+            ForceN = 1f,
+            MinimumPulseTimeSec = 0.001f,
+        };
+        contributions[1] = new RcsPulseContribution
+        {
+            GroupIndex = 0,
+            ForceN = -0.9f,
+            MinimumPulseTimeSec = 1f,
+        };
+        RcsCapability.FinalizeMinimumImpulseModel(ref cap, contributions);
+        group = cap.Ax0;
+        t.Check("mixed wrong sign capped response rejected", !group.IsUsable);
+        t.Check("mixed wrong sign threshold is infinite",
+            float.IsPositiveInfinity(group.MinCorrectingImpulseNs));
+        t.CheckAbs("mixed wrong sign shaping suppressed", RcsComputeControlPatch.ShapeAxis(
+            10f, group.ForceN, 0f, group.MinCorrectingImpulseNs, 0f, 0.1f), 0.0, FloatTol);
+        t.Check("mixed wrong sign completion consistent", RcsExecutor.IsBelowImpulseFloor(
+            new float3(10f, 0f, 0f), in cap));
+    }
+
+    private static void CheckSharedPulseGroups(TestContext t)
+    {
+        RcsCapabilitySnapshot cap = default;
+        cap.Set(0, new RcsAxisGroup { ForceN = 2f, MassFlowKgS = 1f });
+        cap.Set(2, new RcsAxisGroup { ForceN = 4f, MassFlowKgS = 1f });
+        Span<RcsPulseContribution> contributions = stackalloc RcsPulseContribution[4]
+        {
+            new() { GroupIndex = 2, ForceN = 2f, MinimumPulseTimeSec = 0.1f },
+            new() { GroupIndex = 0, ForceN = 1f, MinimumPulseTimeSec = 0.1f },
+            new() { GroupIndex = 2, ForceN = 2f, MinimumPulseTimeSec = 0.1f },
+            new() { GroupIndex = 0, ForceN = 1f, MinimumPulseTimeSec = 0.1f },
+        };
+        RcsCapability.FinalizeMinimumImpulseModel(ref cap, contributions);
+        t.CheckAbs("shared core X group floor", cap.Ax0.MinCorrectingImpulseNs, 0.1, FloatTol);
+        t.CheckAbs("shared core Y group floor", cap.Ax2.MinCorrectingImpulseNs, 0.2, FloatTol);
+    }
+
+    private static void CheckInvalidPulseModel(TestContext t)
+    {
+        RcsCapabilitySnapshot cap = default;
+        cap.Set(0, new RcsAxisGroup { ForceN = 1f, MassFlowKgS = 1f });
+        Span<RcsPulseContribution> contributions = stackalloc RcsPulseContribution[1]
+        {
+            new() { GroupIndex = 0, ForceN = 1f, MinimumPulseTimeSec = float.NaN },
+        };
+        RcsCapability.FinalizeMinimumImpulseModel(ref cap, contributions);
+        t.Check("invalid pulse data rejects group", !cap.Ax0.IsUsable);
+        t.CheckAbs("invalid pulse data suppresses shaping", RcsComputeControlPatch.ShapeAxis(
+            1f, cap.Ax0.ForceN, 0f, cap.Ax0.MinCorrectingImpulseNs, 0f, 0.1f), 0.0, FloatTol);
+        t.Check("invalid pulse data completes", RcsExecutor.IsBelowImpulseFloor(
+            new float3(1f, 0f, 0f), in cap));
     }
 
     private static void CheckMaxAxisPulse(TestContext t)
@@ -100,8 +295,8 @@ public sealed class RcsAllocatorTest : AfcTest
     private static void CheckCompletionFloor(TestContext t)
     {
         RcsCapabilitySnapshot cap = default;
-        cap.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 10f });
-        cap.Set(2, new RcsAxisGroup { ForceN = 2f, MassFlowKgS = 0.01f, MinImpulseNs = 0.2f });
+        cap.Set(0, new RcsAxisGroup { ForceN = 100f, MassFlowKgS = 0.1f, MinImpulseNs = 10f, MinCorrectingImpulseNs = 5f });
+        cap.Set(2, new RcsAxisGroup { ForceN = 2f, MassFlowKgS = 0.01f, MinImpulseNs = 0.2f, MinCorrectingImpulseNs = 0.1f });
         cap.HasAnyTranslation = true;
 
         // X component under the X floor (5), Y component under the Y floor

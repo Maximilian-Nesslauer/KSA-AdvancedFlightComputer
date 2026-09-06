@@ -3,20 +3,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// Per-thruster wrench data for the LP allocator, index-aligned with
-/// FlightComputer.VehicleConfig.Thrusters (the list the worker enumerates).
-/// Built on the main thread from the raw nozzle geometry, the same math
-/// ThrusterController.RecomputeDynamicData runs - deliberately NOT the
-/// axis-projected IntendedForce/IntendedTorque state values, because those
-/// drop every component the stock ControlMap thresholds gate out, and
-/// exploiting exactly those off-axis components is the LP's point.
-///
-/// Wrenches are in the control frame (see <see cref="RcsCtrlFrame"/>). The
-/// moment arm stays measured from the centre of mass, as stock's own thruster
-/// data does: the control point moves the origin the pilot steers about, not
-/// the point the vehicle rotates about.
-/// </summary>
+/// <summary>Control-frame wrenches follow FlightComputer.VehicleConfig.Thrusters by index. Keep the full nozzle wrench because intended-action values omit components excluded by the stock control map. Moment arms are measured from the center of mass.</summary>
 internal sealed class RcsWrenchTable
 {
     public int Count;
@@ -28,11 +15,7 @@ internal sealed class RcsWrenchTable
     public int UsableCount;
     public floatQuat Ctrl2Body = floatQuat.Identity;
 
-    /// <summary>True while the table still describes the live thruster
-    /// list and the control frame it was built in. Compares module references
-    /// because the VehicleConfig object itself ping-pongs between the
-    /// vehicle's FlightComputer and its worker copy every tick, and staging
-    /// can swap the list without changing its count.</summary>
+    /// <summary>Compare module references because the flight-computer configuration swaps with its worker copy and staging can replace a list without changing its count.</summary>
     public bool Matches(List<ThrusterController> thrusters, in RcsCtrlFrame ctrl)
     {
         if (Count != thrusters.Count || Ctrl2Body != ctrl.Ctrl2Body)
@@ -80,17 +63,7 @@ internal sealed class RcsWrenchTable
         }
     }
 
-    /// <summary>Live wrench (control frame) and mass flow of one thruster from
-    /// nozzle performance at the current ambient pressure. Thrust and flow come
-    /// from the SAME performance evaluation, matching the physics exactly
-    /// (ActiveNozzle applies Performance.TotalThrust and consumes
-    /// Performance.MassFlowRate through one ComputeThrustMod). The cached
-    /// state values are not a substitute: the game's thruster cache
-    /// revalidates only on 0.1 percent mass, CoM, 100 Pa pressure drift or a
-    /// control-frame change (ThrusterControllerGlobalState.IsCacheValid), so
-    /// IntendedForce can carry spawn-time conditions through a whole burn while
-    /// a fresh MaxConsumptionRate does not, and force over flow then misstates
-    /// the real exhaust velocity.</summary>
+    /// <summary>Compute thrust and mass flow from the same full-throttle nozzle performance, as ThrusterController.RecomputeDynamicData does for force. Use live conditions because the stock cache tolerates pressure and mass drift.</summary>
     public static void ComputeLive(
         ThrusterController thruster, ReadOnlySpan<RocketCoreState> coreStates,
         float3 com, float ambientPressure, in RcsCtrlFrame ctrl,
@@ -105,22 +78,39 @@ internal sealed class RcsWrenchTable
             {
                 if (!coreStates[core.StatesIdx].IsPropellantAvailable)
                     continue;
-                // Full-throttle probe; thruster pulses always command throttle 1.
-                RocketCoreConditions combustion = core.ComputeConditions(1f);
-                foreach (RocketNozzle nozzle in core.Rocket.Nozzles)
-                {
-                    float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);
-                    floatQuat rotation = floatQuat.Pack(nozzle.Parent.Asmb2VehicleAsmb);
-                    NozzlePerformance perf = nozzle.ComputePerformance(in combustion, ambientPressure);
-                    float3 f = perf.GetTotalThrust() * (-nozzle.ExhaustDirectionAsmb).Transform(rotation);
-                    float3 r = nozzle.LocationAsmb.Transform(matrix) - com;
-                    forceAsmb += f;
-                    torqueAsmb += float3.Cross(r, f);
-                    massFlow += perf.MassFlowRate;
-                }
+                ComputeLiveCoreAsmb(core, com, ambientPressure,
+                    out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
+                forceAsmb += coreForce;
+                torqueAsmb += coreTorque;
+                massFlow += coreMassFlow;
             }
         }
         force = ctrl.ToCtrl(forceAsmb);
         torque = ctrl.ToCtrl(torqueAsmb);
+    }
+
+    internal static void ComputeLiveCoreAsmb(
+        RocketCore core, float3 com, float ambientPressure,
+        out float3 force, out float3 torque, out float massFlow)
+    {
+        float3 forceAsmb = float3.Zero;
+        float3 torqueAsmb = float3.Zero;
+        massFlow = 0f;
+        // Full-throttle probe because thruster pulses always command throttle 1.
+        RocketCoreConditions combustion = core.ComputeConditions(1f);
+        foreach (RocketNozzle nozzle in core.Rocket.Nozzles)
+        {
+            float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);
+            floatQuat rotation = floatQuat.Pack(nozzle.Parent.Asmb2VehicleAsmb);
+            NozzlePerformance perf = nozzle.ComputePerformance(in combustion, ambientPressure);
+            float3 nozzleForce = perf.GetTotalThrust()
+                * (-nozzle.ExhaustDirectionAsmb).Transform(rotation);
+            float3 offset = nozzle.LocationAsmb.Transform(matrix) - com;
+            forceAsmb += nozzleForce;
+            torqueAsmb += float3.Cross(offset, nozzleForce);
+            massFlow += perf.MassFlowRate;
+        }
+        force = forceAsmb;
+        torque = torqueAsmb;
     }
 }

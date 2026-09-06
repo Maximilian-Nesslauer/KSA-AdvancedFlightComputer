@@ -3,54 +3,34 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// Per-vehicle RCS translation state, owned by <see cref="RcsExecRegistry"/>.
-/// Persisted fields round-trip through rcs-exec.toml; everything else is
-/// rebuilt by the driver after a save load.
-/// </summary>
+/// <summary>RcsExecRegistry owns this state for one vehicle. The persisted fields survive a save and load. The driver rebuilds the transient fields after loading.</summary>
 internal sealed class RcsExecution
 {
     #region Persisted state (serialised to rcs-exec.toml)
 
-    /// <summary>Empty while running in an unsaved session;
-    /// <see cref="RcsExecRegistry.RekeyTo"/> moves the session's entries
-    /// whenever a save is written under a different id, same policy as the
-    /// multi-pass registry.</summary>
+    /// <summary>An unsaved session uses an empty SaveId. RcsExecRegistry.RekeyTo moves its entries when the save is written under another id.</summary>
     public required string SaveId { get; set; }
 
     public required string VehicleId { get; init; }
 
     public List<RcsBurnOptions> Options { get; } = new();
 
-    /// <summary>Identity of the burn an active execution is running, null
-    /// when no execution is in flight. Reattached after load by time + dV.</summary>
+    /// <summary>A null value means no execution is active. After loading, the driver identifies the burn by its time and delta V.</summary>
     public double? ActiveBurnTimeSec { get; set; }
     public double? ActiveBurnDvMs { get; set; }
 
-    /// <summary>Resolved at activation so a save/load mid-burn does not
-    /// re-decide the strategy with half-burned geometry.</summary>
+    /// <summary>Keep the strategy selected at activation so loading a save does not select another strategy from a partly completed burn.</summary>
     public RcsAttitudeStrategy ResolvedStrategy { get; set; } = RcsAttitudeStrategy.Hold;
 
-    /// <summary>Group index (+X,-X,+Y,-Y,+Z,-Z) the Align strategy points at
-    /// the burn vector; -1 for Hold.</summary>
+    /// <summary>Align uses the group order of positive X, negative X, positive Y, negative Y, positive Z, and negative Z. Hold uses minus one.</summary>
     public int ResolvedAxis { get; set; } = -1;
 
     public RcsAllocator ResolvedAllocator { get; set; } = RcsAllocator.Groups;
 
-    /// <summary>True once the Align tracker has been commanded. Deliberately
-    /// deferred until the ignition lead window opens; before that the coast
-    /// keeps whatever attitude the user had. Persisted because the game
-    /// round-trips the attitude tracker through its save: after a mid-align
-    /// load the restored tracker is still driving the burn attitude, and
-    /// the handback on Cancel/Complete must know that.</summary>
+    /// <summary>Persist this flag because the game saves the attitude tracker. Cancellation must release a tracker that was commanded before the save, while an execution still coasting must leave the user target alone.</summary>
     public bool AlignCommanded { get; set; }
 
-    /// <summary>The executor forced FlightComputer.RCSMode to Enabled for
-    /// this burn because the pilot had the stock RCS toggle (default key R)
-    /// off, either at activation or via a mid-burn press. Restored to
-    /// Disabled at Complete/Cancel. Persisted because the game round-trips
-    /// RCSMode through its save, so a mid-burn load followed by completion
-    /// must still hand the toggle back to off.</summary>
+    /// <summary>Persist whether RCS was disabled when control was taken. Completion and cancellation restore that setting, including after a save and load.</summary>
     public bool ForcedRcsOn { get; set; }
 
     #endregion
@@ -59,8 +39,11 @@ internal sealed class RcsExecution
 
     public Burn? ActiveBurn;
 
-    /// <summary>Set once the driver has re-resolved ActiveBurn after a load.</summary>
+    /// <summary>Set once the driver has re resolved ActiveBurn after a load.</summary>
     public bool ReconciledAfterLoad;
+
+    /// <summary>Latch the lead window after takeover so a refreshed slew estimate cannot return control during the same burn.</summary>
+    public bool ControlTaken;
 
     public RcsCapabilitySnapshot Capability;
     public double CapabilityProbedAtSec = double.NegativeInfinity;
@@ -68,82 +51,57 @@ internal sealed class RcsExecution
     public RcsEstimates Estimates;
     public double EstimatesComputedAtSec = double.NegativeInfinity;
 
-    /// <summary>No-progress watchdog baseline: the smallest to-go seen while
-    /// firing was eligible. Infinity until the first eligible tick.</summary>
+    /// <summary>The smallest remaining delta V observed while firing was eligible is the progress baseline. It stays infinite until the first eligible tick.</summary>
     public float WatchdogTogoMs = float.PositiveInfinity;
 
-    /// <summary>Accumulated firing-eligible sim seconds without a to-go
-    /// reduction. Accumulated rather than a rebased timestamp, so ticks that
-    /// are merely ineligible (slewing, pre-ignition) pause the clock instead
-    /// of resetting it; only actual progress resets it.</summary>
+    /// <summary>Count simulation seconds only while firing is eligible. Coast and slew pause the timeout. Delivered progress resets it.</summary>
     public double NoProgressAccumSec;
 
-    /// <summary>Accumulated slewing sim seconds since the last delivered
-    /// progress; feeds the cannot-reach-attitude bound. Accumulated so an
-    /// attitude chattering across the align gate cannot clear the clock with
-    /// a single in-gate tick.</summary>
+    /// <summary>Count slew time since the last delivered progress across all attitude gate crossings. A single tick inside the gate must not clear the timeout.</summary>
     public double SlewAccumSec;
 
-    /// <summary>Sim time of the previous active driver tick, the delta source
-    /// for the two accumulators above. NaN until the first active tick.</summary>
+    /// <summary>The previous active tick supplies elapsed simulation time for both watchdogs. NaN identifies the first tick.</summary>
     public double LastTickSimSec = double.NaN;
 
-    /// <summary>One-shot guard for the ignition-crossing debug log.</summary>
+    /// <summary>One shot guard for the ignition crossing debug log.</summary>
     public bool FiringLogged;
+
+    public RcsWorkerCommand? LastPublishedCommand;
+    public double LastWorkerReadAtSec = double.NaN;
 
     #region Fuel telemetry (accumulated by the driver, reported at Complete/Cancel)
 
-    /// <summary>Vehicle mass when the execution engaged (or re-baselined
-    /// after a save load), kg. Zero means no baseline exists and the fuel
-    /// line is skipped.</summary>
+    /// <summary>Record mass in kg at activation or after loading. Zero means no baseline exists and no fuel summary can be produced.</summary>
     public double StartMassKg;
 
-    /// <summary>Mass at the previous driver tick; feeds the per-tick burn
-    /// deltas below.</summary>
+    /// <summary>Mass at the previous driver tick. Feeds the per tick burn deltas below.</summary>
     public double LastTickMassKg;
 
-    /// <summary>Total propellant spent, accumulated from per-tick mass
-    /// LOSSES only. Not start-minus-now: a mid-burn mass gain (the stock
-    /// refill action, resource transfer, docking) would turn that difference
-    /// negative and invert the whole fuel report, while a clamped per-tick
-    /// sum just ignores the gain and keeps counting real drain.</summary>
+    /// <summary>Accumulate mass losses only. Refills, transfers, and docking can increase vehicle mass but must not subtract propellant already consumed.</summary>
     public double BurnedPropellantKg;
 
-    /// <summary>Propellant spent while the Align slew held firing back, kg
-    /// (mass delta over slewing ticks, which is all attitude by construction).</summary>
+    /// <summary>Measure mass lost in kg while the Align gate prevents translation. This is attributed to the slew.</summary>
     public double SlewPropellantKg;
 
-    /// <summary>Propellant spent before the firing window opened while not
-    /// slewing, kg: the attitude/rate hold cost of the pre-ignition coast.</summary>
+    /// <summary>Measure mass lost in kg before ignition while the vehicle is not slewing. This is attributed to coast attitude control.</summary>
     public double CoastPropellantKg;
 
-    /// <summary>Model-attributed translation propellant, kg: delivered
-    /// delta-V (game accounting) times the active allocator's cost per
-    /// newton-second. The gap to the total is attitude hold plus pulse
-    /// quantization plus model error.</summary>
+    /// <summary>Estimate translation propellant in kg from delivered delta V and allocator cost. The remaining measured consumption includes attitude control, pulse rounding, and model error.</summary>
     public double TranslationPropellantKg;
 
-    /// <summary>DeltaVAccumCci at the previous driver tick, so each tick
-    /// attributes only its own delivered delta-V.</summary>
+    /// <summary>DeltaVAccumCci at the previous driver tick, so each tick attributes only its own delivered delta V.</summary>
     public float3 LastAccumCci;
 
-    /// <summary>DeltaVAccumCci at the baseline. Nonzero when a mid-burn
-    /// save load re-baselined the telemetry: the effective-ve number must
-    /// pair the post-load delta-V with the post-load propellant, not the
-    /// whole burn's delta-V.</summary>
+    /// <summary>Record the accumulated delta V at the baseline so a loaded execution pairs only the observed delta V with the observed propellant.</summary>
     public float3 StartAccumCci;
 
-    /// <summary>Sim time of the baseline; feeds the fuel line's elapsed.</summary>
+    /// <summary>Sim time of the baseline. Feeds the fuel line's elapsed.</summary>
     public double EngagedAtSec;
 
-    /// <summary>Breakdown of the last finished execution (completed or
-    /// cancelled); survives ClearActive so consumers can read it after
-    /// the execution ends.</summary>
+    /// <summary>Keep the last fuel summary after ClearActive so consumers can read it when execution ends.</summary>
     public RcsFuelSummary LastFuel;
 
-    /// <summary>(Re)starts the fuel accumulators from the current state.
-    /// Called at activation and after a save-load reattach, so the fuel
-    /// line always covers exactly the window this process observed.</summary>
+    /// <summary>Start fuel accounting at activation and restart it after loading so the summary covers only the observed interval.</summary>
     public void BaselineFuel(FlightComputer fc, double engagedAtSec)
     {
         StartMassKg = fc.TotalMassPropsBody.Mass;
@@ -164,35 +122,25 @@ internal sealed class RcsExecution
     public RcsWrenchTable? Wrench;
     public double WrenchBuiltAtSec = double.NegativeInfinity;
 
-    /// <summary>Seconds of firing per newton-second of net impulse along
-    /// <see cref="LpDirCtrl"/>, index-aligned with the wrench table (and
-    /// with VehicleConfig.Thrusters). Null while no valid solution exists.</summary>
+    /// <summary>Store seconds of firing per N s of impulse along LpDirCtrl. Indices match the wrench table and VehicleConfig.Thrusters. Null means no valid solution is available.</summary>
     public float[]? LpSecondsPerImpulse;
     public float3 LpDirCtrl;
     public float LpImpulseCapNs;
     public double LpSolvedAtSec = double.NegativeInfinity;
 
-    /// <summary>Propellant per newton-second of net impulse for the current
-    /// solution, thruster columns only; feeds the LP-honest sufficiency
-    /// numbers and the fuel telemetry's translation attribution.</summary>
+    /// <summary>Measure the thruster pattern cost in kg per N s of impulse. Attitude control cost is accounted for separately.</summary>
     public double LpCostPerImpulse;
 
-    /// <summary>Decision price paid to the torque-slack columns, kg per
-    /// newton-second. The attitude hold spends this, not the pattern, so
-    /// it joins the sufficiency numbers but never the translation
-    /// attribution (the hold's real cost lands in the attitude bucket).</summary>
+    /// <summary>Measure the estimated attitude control cost in kg per N s of impulse. Include it in the sufficiency warning but not in the translation fuel bucket.</summary>
     public double LpSlackCostPerImpulse;
 
-    /// <summary>The pattern's own net torque per newton-second of impulse
-    /// (N m s per N s), i.e. what the attitude hold must counter.</summary>
+    /// <summary>Record the angular impulse that attitude control must counter, measured in N m s per N s of translation impulse.</summary>
     public float3 LpResidualTorquePerNs;
 
-    /// <summary>Signature of the last logged firing pattern (support
-    /// indices), so the solve log fires on pattern changes instead of
-    /// every cadence re-solve.</summary>
+    /// <summary>Log a pattern only when its thruster support changes so repeated solves do not flood the log.</summary>
     public int LpLoggedSupportSignature;
 
-    /// <summary>One-shot guard for the LP-infeasible fallback warning.</summary>
+    /// <summary>One shot guard for the LP infeasible fallback warning.</summary>
     public bool LpFallbackLogged;
 
     #endregion
@@ -216,8 +164,7 @@ internal sealed class RcsExecution
         RcsBurnOptions? found = FindOptions(timeSec, dvMs);
         if (found != null)
         {
-            // The user may have nudged the burn since arming; keep the key in
-            // sync so the metadata follows the burn instead of orphaning.
+            // Keep the key aligned with user edits so the options continue to identify the same burn.
             found.BurnTimeSec = timeSec;
             found.BurnDvMs = dvMs;
             return found;
@@ -239,6 +186,9 @@ internal sealed class RcsExecution
         SlewAccumSec = 0.0;
         LastTickSimSec = double.NaN;
         FiringLogged = false;
+        LastPublishedCommand = null;
+        LastWorkerReadAtSec = double.NaN;
+        ControlTaken = false;
         AlignCommanded = false;
         ForcedRcsOn = false;
         StartMassKg = 0.0;
@@ -264,9 +214,7 @@ internal sealed class RcsExecution
         LpFallbackLogged = false;
     }
 
-    /// <summary>Drops per-burn options whose burn no longer exists in the
-    /// plan, so stale entries cannot attach to a future unrelated burn at a
-    /// coincidentally similar time.</summary>
+    /// <summary>Remove options for missing burns so they cannot attach to a later burn with a similar time and delta V.</summary>
     public void PruneOrphanedOptions(BurnPlan plan)
     {
         for (int i = Options.Count - 1; i >= 0; i--)
@@ -293,18 +241,7 @@ internal sealed class RcsExecution
     }
 }
 
-/// <summary>Fuel breakdown of one finished execution. Total is the sum of
-/// per-tick mass losses (mass gains like a mid-burn refill are ignored, not
-/// subtracted). Translation is model-attributed (delivered delta-V times the
-/// allocator's cost model), so Attitude, the residual, also absorbs pulse
-/// quantization and model error; Slew is the measured mass delta while the
-/// Align slew held firing back, Coast the measured mass delta before the
-/// firing window opened (attitude and rate hold through the wait). A
-/// NEGATIVE Attitude therefore means the model over-attributed translation
-/// relative to the measured drain; the known case is a partially present
-/// reactant mix (dev-save territory), where ResourceManager.MassChange
-/// withdraws only the available reactants' share while the nozzle keeps
-/// firing at full thrust.</summary>
+/// <summary>Total fuel is the sum of measured mass losses. Translation is estimated from delivered delta V, while slew and coast use measured losses. The attitude bucket holds the remainder and can be negative when the translation model exceeds measured consumption.</summary>
 internal struct RcsFuelSummary
 {
     public bool Valid;
@@ -314,20 +251,16 @@ internal struct RcsFuelSummary
     public double CoastKg;
     public double AttitudeKg;
 
-    /// <summary>Overall economy: start mass times accumulated delta-V over
-    /// total propellant, m/s. A first-order proxy, not the rocket-equation
-    /// Ve. Zero when no matching burn was loaded.</summary>
+    /// <summary>Estimate effective exhaust speed in m/s from baseline mass, observed delta V, and consumed propellant. This approximation returns zero when no matching burn is loaded.</summary>
     public double EffectiveVeMs;
 
-    /// <summary>Angle between the accumulated and the target delta-V
-    /// vectors, degrees: did the burn push in the right direction.</summary>
+    /// <summary>Measure the angle between accumulated and target delta V in degrees.</summary>
     public double DvAngleDeg;
 
     public double ElapsedSec;
 }
 
-/// <summary>Propellant/duration estimates for the two attitude strategies,
-/// recomputed periodically for the UI and the Auto decision.</summary>
+/// <summary>Propellant/duration estimates for the two attitude strategies, recomputed periodically for the UI and the Auto decision.</summary>
 internal struct RcsEstimates
 {
     public bool Valid;
@@ -345,10 +278,7 @@ internal struct RcsEstimates
 
     public readonly double AlignTotalPropellantKg => AlignPropellantKg + AlignSlewPropellantKg;
 
-    /// <summary>Propellant the given attitude selection would consume; Auto
-    /// takes the cheaper feasible strategy, zero when nothing is feasible.
-    /// Shared by the sufficiency warning in the burn editor and the
-    /// activation-time alert so the two cannot drift.</summary>
+    /// <summary>Auto selects the cheaper feasible propellant estimate. Return zero when neither strategy is feasible. The editor and activation warning share this calculation.</summary>
     public readonly double RequiredPropellantKg(RcsAttitudeStrategy attitude) => attitude switch
     {
         RcsAttitudeStrategy.Hold => HoldFeasible ? HoldPropellantKg : 0.0,

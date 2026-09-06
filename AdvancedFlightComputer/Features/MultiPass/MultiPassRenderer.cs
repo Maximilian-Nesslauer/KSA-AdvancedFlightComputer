@@ -3,17 +3,10 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>Draws multi-pass preview orbit lines. Earlier passes
-/// are dimmer; the final pass keeps full BurnPatchColor.</summary>
+// Earlier passes are dimmer so the final trajectory remains distinct.
 internal static class MultiPassRenderer
 {
-    /// <summary>When <paramref name="skipFirst"/> is true, passes[0] is
-    /// omitted - used during active execution where stock already
-    /// renders the queued burn's post-burn orbit. When <paramref name="skipLast"/>
-    /// is true, the last pass is omitted - used for Hohmann where stock
-    /// already renders the selected-entry's flight plan (= final pass
-    /// trajectory). The dim ramp keeps the unrendered last pass's slot
-    /// so intermediate brightness still slopes correctly.</summary>
+    // Hidden passes retain their positions in the brightness sequence.
     public static void RenderPassOrbits(
         IViewport viewport, Vehicle source, PassPreview[] passes,
         bool skipFirst = false, bool skipLast = false)
@@ -22,9 +15,7 @@ internal static class MultiPassRenderer
         int end = passes.Length - (skipLast ? 1 : 0);
         if (end - start <= 0) return;
 
-        // rampCount includes the skipped-last slot so intermediate passes
-        // get the same brightness they would in the full ramp; without
-        // this the second-to-last pass would jump to full BurnPatchColor.
+        // Include the hidden final pass in the ramp so the preceding pass does not jump to full brightness.
         int rampCount = passes.Length - start;
 
         for (int i = start; i < end; i++)
@@ -36,11 +27,7 @@ internal static class MultiPassRenderer
             ApplyPassColor(fp, i - start, rampCount);
             EnsurePatchPointsCached(fp);
 
-            // isActive=true matches stock's selected-porkchop rendering;
-            // without it the lines look ghosted. Ground-track danger markers go on
-            // the final trajectory only, as stock does for its own burn plan; the
-            // index is unreachable while skipLast holds, where stock renders the
-            // final pass itself and every pass shown here is an intermediate one.
+            // Use the selected stock orbit style. Restrict danger ground tracks to the final pass, which stock draws when it is hidden here.
             fp.AddLineInstances(viewport, source, isActive: true,
                 drawVehiclePosition: false,
                 TrueAnomaly.NaN, TrueAnomaly.NaN,
@@ -49,9 +36,7 @@ internal static class MultiPassRenderer
         }
     }
 
-    // 40-100% brightness ramp; final shown pass at full BurnPatchColor.
-    // Skip Darken at the final pass: it is NOT identity at factor=1.0
-    // (HSL roundtrip with sat/lightness floor at 0.1).
+    // Scale brightness from 40 to 100 percent. Do not darken the final pass because the HSL floor makes Darken change some colors even at a factor of one.
     private static void ApplyPassColor(FlightPlan fp, int shownIndex, int shownCount)
     {
         byte4 color = BurnPlan.BurnPatchColor;
@@ -64,8 +49,7 @@ internal static class MultiPassRenderer
             patch.Orbit.OrbitLineColor = color;
     }
 
-    // Freshly built patches have no cached points; AddLineInstances
-    // would draw nothing without this.
+    // AddLineInstances needs cached points. Generate them if the preview has not done so yet.
     private static void EnsurePatchPointsCached(FlightPlan fp)
     {
         foreach (PatchedConic patch in fp.Patches)

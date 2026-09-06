@@ -5,15 +5,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// The per-burn RCS block (execution/attitude/allocator selectors, strategy
-/// estimates, live status + cancel), drawn inside whatever ImGui window the
-/// caller has open: the stock rendezvous infobox
-/// (<see cref="RcsBurnWindowUi"/>), and the detached-canvas fallback in
-/// <see cref="RcsBurnCanvasUi"/> where ImGauge cannot follow the viewport.
-/// The docked flight burn editor draws the gauge-styled
-/// <see cref="RcsGaugePanel"/> instead.
-/// </summary>
+// The docked burn editor uses RcsGaugePanel. Rendezvous and detached editors use this ImGui block.
 internal static class RcsBurnUi
 {
     internal static void DrawBlock(Burn burn, Vehicle vehicle, FlightComputer flightComputer)
@@ -35,30 +27,32 @@ internal static class RcsBurnUi
         RcsExecutionMode mode = options?.Mode ?? RcsExecutionMode.Default;
         RcsExecutionMode resolved = RcsExecutor.ResolveMode(vehicle, options);
 
-        // The selectors freeze during execution; a running burn must not
-        // re-resolve mid-flight.
+        DrawSelectors(vehicle, timeSec, dvMs, options, mode, resolved, isActiveBurn);
+        if (resolved == RcsExecutionMode.Rcs || isActiveBurn)
+            DrawEstimatesAndStatus(burn, vehicle, flightComputer, exec,
+                options?.Attitude ?? RcsAttitudeStrategy.Auto, isActiveBurn);
+    }
+
+    private static void DrawSelectors(Vehicle vehicle, double timeSec, double dvMs,
+        RcsBurnOptions? options, RcsExecutionMode mode, RcsExecutionMode resolved, bool isActiveBurn)
+    {
+        // Freeze selectors while the executor holds the resolved strategy.
+        Span<char> id = stackalloc char[64];
         using (new ImGuiDisabledScope(isActiveBurn))
         {
             ConsoleWidgets.BeginRow("EXECUTION".AsSpan());
             string modeLabel = mode == RcsExecutionMode.Default
-                ? $"DEFAULT ({resolved})"
-                : mode.ToString().ToUpperInvariant();
+                ? (resolved == RcsExecutionMode.Rcs ? "DEFAULT (RCS)" : "DEFAULT (ENGINE)")
+                : ModeLabel(mode);
             bool modeClicked = ConsoleWidgets.Button(
-                modeLabel.AsSpan(), $"rcsmode{timeSec:R}".AsSpan(),
+                modeLabel.AsSpan(), ControlId(id, "rcsmode", timeSec),
                 new float2(ConsoleWidgets.RowControlWidth, ConsoleWidgets.ButtonHeight));
             ConsoleWidgets.EndRow();
             if (modeClicked && !isActiveBurn)
             {
                 RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
                 RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
-                // Default <-> RCS only. Explicit Engine is never usefully
-                // different from Default: Default already picks the engine
-                // when an active, fueled one exists, and forcing Engine
-                // without one cannot fire. Any stale Engine value (e.g. from
-                // an older save) folds back to RCS on the next click.
-                o.Mode = o.Mode == RcsExecutionMode.Rcs
-                    ? RcsExecutionMode.Default
-                    : RcsExecutionMode.Rcs;
+                CycleMode(o);
             }
 
             if (resolved == RcsExecutionMode.Rcs || isActiveBurn)
@@ -66,42 +60,31 @@ internal static class RcsBurnUi
                 RcsAttitudeStrategy attitude = options?.Attitude ?? RcsAttitudeStrategy.Auto;
                 ConsoleWidgets.BeginRow("ATTITUDE".AsSpan());
                 bool attClicked = ConsoleWidgets.Button(
-                    attitude.ToString().ToUpperInvariant().AsSpan(), $"rcsatt{timeSec:R}".AsSpan(),
+                    AttitudeLabel(attitude).AsSpan(), ControlId(id, "rcsatt", timeSec),
                     new float2(ConsoleWidgets.RowControlWidth, ConsoleWidgets.ButtonHeight));
                 ConsoleWidgets.EndRow();
                 if (attClicked && !isActiveBurn)
                 {
                     RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
                     RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
-                    o.Attitude = o.Attitude switch
-                    {
-                        RcsAttitudeStrategy.Auto => RcsAttitudeStrategy.Hold,
-                        RcsAttitudeStrategy.Hold => RcsAttitudeStrategy.Align,
-                        _ => RcsAttitudeStrategy.Auto,
-                    };
+                    CycleAttitude(o);
                 }
 
-                // Per-burn allocator choice; see RcsAllocator for the tradeoff.
                 RcsAllocator allocator = options?.Allocator ?? RcsAllocator.Groups;
                 ConsoleWidgets.BeginRow("ALLOCATOR".AsSpan());
                 bool allocClicked = ConsoleWidgets.Button(
-                    allocator.ToString().ToUpperInvariant().AsSpan(), $"rcsalloc{timeSec:R}".AsSpan(),
+                    AllocatorLabel(allocator).AsSpan(), ControlId(id, "rcsalloc", timeSec),
                     new float2(ConsoleWidgets.RowControlWidth, ConsoleWidgets.ButtonHeight));
                 ConsoleWidgets.EndRow();
                 if (allocClicked && !isActiveBurn)
                 {
                     RcsExecution target = RcsExecRegistry.GetOrCreate(vehicle.Id);
                     RcsBurnOptions o = target.GetOrCreateOptions(timeSec, dvMs);
-                    o.Allocator = o.Allocator == RcsAllocator.Groups
-                        ? RcsAllocator.Lp
-                        : RcsAllocator.Groups;
+                    CycleAllocator(o);
                 }
             }
         }
 
-        if (resolved == RcsExecutionMode.Rcs || isActiveBurn)
-            DrawEstimatesAndStatus(burn, vehicle, flightComputer, exec,
-                options?.Attitude ?? RcsAttitudeStrategy.Auto, isActiveBurn);
     }
 
     private static void DrawEstimatesAndStatus(
@@ -139,9 +122,7 @@ internal static class RcsBurnUi
             return;
         }
 
-        // Guard warnings come before the estimate gating: a vehicle with no
-        // usable translation has no estimates to show, and silence here is
-        // exactly the confusion the warning exists to prevent.
+        // Show unavailable translation even when no estimates exist.
         RcsCapabilitySnapshot cap = RcsExecutor.ProbeCached(vehicle);
         if (!cap.HasAnyTranslation)
         {
@@ -149,17 +130,11 @@ internal static class RcsBurnUi
             return;
         }
 
-        // The estimates are computed against the loaded first burn only (stock
-        // loads BurnPlan.FindFirstExecutableBurn exclusively); showing them on
-        // a later burn's editor would be someone else's numbers.
-        if (exec == null || !exec.Estimates.Valid)
+        if (!RcsBurnPreview.TryGetEstimates(burn, vehicle, flightComputer, exec,
+                out RcsEstimates est, out bool currentVehicle))
             return;
-        BurnTarget? loaded = flightComputer.Burn;
-        if (loaded == null
-            || Math.Abs((loaded.ImpulsiveInstant - burn.Time).Seconds())
-               > RcsExecutor.BurnIdentityToleranceSec)
-            return;
-        ref readonly RcsEstimates est = ref exec.Estimates;
+        if (currentVehicle)
+            ConsoleWidgets.Readout("ESTIMATE BASIS".AsSpan(), "Current vehicle".AsSpan());
         if (est.HoldFeasible)
             ConsoleWidgets.Readout("HOLD EST.".AsSpan(),
                 $"{est.HoldPropellantKg:F1} kg, {est.HoldDurationSec:F0} s".AsSpan());
@@ -172,6 +147,55 @@ internal static class RcsBurnUi
         double availableKg = RcsExecutor.AvailablePropellantCached(vehicle);
         if (neededKg > availableKg)
             DrawWarning($"Propellant short: needs ~{neededKg:F0} kg, {availableKg:F0} kg available");
+    }
+
+    internal static bool HasEstimatesFor(double timeSec, BurnTarget? loaded, RcsExecution? exec)
+        // FlightComputer loads only the first executable burn. A later editor must not show its estimates.
+        => exec != null && exec.Estimates.Valid && loaded != null
+            && Math.Abs(loaded.ImpulsiveInstant.Seconds() - timeSec) <= RcsExecutor.BurnIdentityToleranceSec;
+
+    internal static void CycleMode(RcsBurnOptions options)
+        => options.Mode = options.Mode == RcsExecutionMode.Rcs ? RcsExecutionMode.Default : RcsExecutionMode.Rcs;
+
+    internal static void CycleAttitude(RcsBurnOptions options)
+        => options.Attitude = options.Attitude switch
+        {
+            RcsAttitudeStrategy.Auto => RcsAttitudeStrategy.Hold,
+            RcsAttitudeStrategy.Hold => RcsAttitudeStrategy.Align,
+            _ => RcsAttitudeStrategy.Auto,
+        };
+
+    internal static void CycleAllocator(RcsBurnOptions options)
+        => options.Allocator = options.Allocator == RcsAllocator.Groups ? RcsAllocator.Lp : RcsAllocator.Groups;
+
+    internal static string ModeLabel(RcsExecutionMode mode) => mode switch
+    {
+        RcsExecutionMode.Default => "DEFAULT",
+        RcsExecutionMode.Engine => "ENGINE",
+        RcsExecutionMode.Rcs => "RCS",
+        _ => mode.ToString(),
+    };
+
+    internal static string AttitudeLabel(RcsAttitudeStrategy attitude) => attitude switch
+    {
+        RcsAttitudeStrategy.Auto => "AUTO",
+        RcsAttitudeStrategy.Hold => "HOLD",
+        RcsAttitudeStrategy.Align => "ALIGN",
+        _ => attitude.ToString(),
+    };
+
+    internal static string AllocatorLabel(RcsAllocator allocator) => allocator switch
+    {
+        RcsAllocator.Groups => "GROUPS",
+        RcsAllocator.Lp => "LP",
+        _ => allocator.ToString(),
+    };
+
+    private static ReadOnlySpan<char> ControlId(Span<char> buffer, string prefix, double timeSec)
+    {
+        prefix.AsSpan().CopyTo(buffer);
+        timeSec.TryFormat(buffer[prefix.Length..], out int written, "R");
+        return buffer[..(prefix.Length + written)];
     }
 
     private static void DrawWarning(string text) => ConsoleUi.DangerWrapped(text);

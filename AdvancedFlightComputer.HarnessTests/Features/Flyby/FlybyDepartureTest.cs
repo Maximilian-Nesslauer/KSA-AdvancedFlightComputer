@@ -7,14 +7,14 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// End-to-end geometry check for the flyby departure retarget against a real moon.
-// A Lambert solve reaches its aim point at the arrival time by construction, so:
-//   * the stock center-aimed transfer passes through the moon center (an impact),
-//   * the flyby-retargeted transfer misses the moon center by ~b (the impact
-//     parameter) and clears the surface,
-//   * flipping the side reverses the miss direction.
-// This exercises the same-parent (moon) retarget path without needing SOI
-// propagation: the two-body closest approach to the moon center is the oracle.
+// Geometry check for the flyby departure retarget against a real moon, from the
+// departure burn to the closest approach. A Lambert solve reaches its aim point at
+// the arrival time by construction. So the stock transfer aimed at the center
+// passes through the moon center, which is an impact. The retargeted transfer
+// misses the moon center by about b, the impact parameter, and clears the
+// surface. And flipping the side reverses the miss direction. This exercises the
+// retarget path within one parent without SOI propagation, because the two body
+// closest approach to the moon center is the oracle.
 public sealed class FlybyDepartureTest : AfcTest
 {
     private const double SpawnAltitudeM = 400_000.0;
@@ -74,7 +74,8 @@ public sealed class FlybyDepartureTest : AfcTest
         double rp = moonBody.MeanRadius + FlybyAltitudeM;
         double surface = moonBody.GetNearSurfaceRadius();
 
-        // Baseline: the stock center-aimed transfer impacts (passes through center).
+        // The baseline is the stock transfer aimed at the center, which impacts by
+        // passing through the center.
         StateVectors sv = vehicle.Orbit.GetStateVectorsAt(start);
         double3 moonAtArrival = moon.Orbit.GetStateVectorsAt(start + transit).PositionCci;
         OrbitalTransfers.SuperiorLambert(
@@ -85,11 +86,11 @@ public sealed class FlybyDepartureTest : AfcTest
         t.Check("baseline center-aim impacts", centerCa < moonBody.MeanRadius,
             $"closest approach {centerCa:E6} (moon radius {moonBody.MeanRadius:E6})");
 
-        // Outer: the periapsis must sit on the far side of the moon from the parent.
+        // Outer puts the periapsis on the far side of the moon from the parent.
         CheckFlybySide(t, home, moon, vehicle, start, transit, rp, surface,
             FlybySide.Outer, out double3 missOuter);
 
-        // Inner: same clearance, opposite side.
+        // Inner has the same clearance on the opposite side.
         CheckFlybySide(t, home, moon, vehicle, start, transit, rp, surface,
             FlybySide.Inner, out double3 missInner);
 
@@ -112,7 +113,7 @@ public sealed class FlybyDepartureTest : AfcTest
             FlybyTargeting.ComputeFlybyDeparture(vehicle, moon, start, transit, rp, side);
         if (outcome.Result == null)
         {
-            // An axis nearly along the approach cannot be aimed at; that is a
+            // An axis nearly along the approach cannot be aimed at. That is a
             // property of the geometry, not a failure of the retarget.
             if (!outcome.CanReach(side))
                 t.Skip($"side {side}: unreachable for this approach " +
@@ -130,16 +131,18 @@ public sealed class FlybyDepartureTest : AfcTest
         double ca = ClosestApproach(transfer, moon.Orbit, f.BurnTime, transit, out missVec);
 
         bool clears = ca > surface;
-        // Invert the parent-frame miss distance back through the impact-parameter
-        // relation: that is the periapsis this approach actually buys, and it must
-        // land on the requested one. Asserting on b alone would accept a miss
-        // distance that still maps to an impact.
-        double achievedRp = FlybyTargeting.PeriapsisForImpactParameter(f.VInfMs, ca, moonBody.Mu);
+        // Invert the miss distance in the parent frame back through the impact
+        // parameter relation the retarget solved with, where VInfMs is the speed at
+        // the SOI boundary. That is the periapsis this approach actually buys, and
+        // it must land on the requested one. Asserting on b alone would accept a
+        // miss distance that still maps to an impact.
+        double achievedRp = FlybyTargeting.PeriapsisForImpactParameter(
+            f.VInfMs, ca, moonBody.Mu, moonBody.SphereOfInfluence);
         bool rpOk = Approx.Rel(achievedRp, rp, 0.15);
 
-        // The named side has to hold: the miss must lean along the requested axis
-        // of the moon's own orbital frame (Outer away from the parent, Inner
-        // toward it), which is the whole point of picking a side.
+        // The named side has to hold. The miss must lean along the requested axis of
+        // the moon's own orbital frame, Outer away from the parent and Inner toward
+        // it, which is the whole point of picking a side.
         double3 caMissHat = missVec.NormalizeOrZero();
         double3 moonRadialHat = moon.Orbit
             .GetStateVectorsAt(f.BurnTime).PositionCci.NormalizeOrZero();
@@ -152,8 +155,9 @@ public sealed class FlybyDepartureTest : AfcTest
             $"radialLean={radialLean:F3} sideOk={sideOk} vInf={f.VInfMs:F1}");
     }
 
-    // Minimum center-to-center distance between the transfer and the moon over
-    // [start, start + 1.3*transit], plus the miss vector (transfer - moon) at that time.
+    // Minimum distance between the centers of the transfer and the moon over the
+    // window from start to start plus 1.3 transit, plus the miss vector from the
+    // moon to the transfer at that time.
     private static double ClosestApproach(
         Orbit transfer, Orbit moon, UniverseTime start, UniverseTime transit, out double3 missVec)
     {

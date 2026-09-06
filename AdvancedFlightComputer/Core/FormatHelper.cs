@@ -2,18 +2,15 @@ namespace AdvancedFlightComputer.Core;
 
 internal static class FormatHelper
 {
-    /// <summary>
-    /// Formats a duration in seconds as a human-readable string with the
-    /// largest fitting unit (s, m, h, d). Negative durations are returned
-    /// with a leading "-"; NaN/Infinity returns "N/A".
-    /// </summary>
+    /// <summary>Seconds as a short duration in the largest fitting unit (s, m, h, d), with a
+    /// leading "-" for negative values and "N/A" for NaN or infinity.</summary>
     public static string FormatDuration(double seconds)
     {
         if (double.IsNaN(seconds) || double.IsInfinity(seconds))
             return "N/A";
 
         string sign = seconds < 0 ? "-" : "";
-        double abs = System.Math.Abs(seconds);
+        double abs = Math.Abs(seconds);
 
         if (abs < 60.0)
             return $"{sign}{abs:F0}s";

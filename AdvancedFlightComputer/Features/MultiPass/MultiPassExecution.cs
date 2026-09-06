@@ -3,31 +3,16 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// In-flight state for one vehicle's multi-pass plan. One per vehicle,
-/// owned by <see cref="MultiPassRegistry"/>.
-///
-/// Two state buckets, separated visually below:
-///   * Persisted: written to / read from multipass.toml. Mutating any
-///     of these mid-execution must keep the on-disk format in mind.
-///   * Transient: in-memory only. Reset to default after a save load
-///     and rebuilt by the postfix.
-/// </summary>
+// Live burn references and control flags are transient. Persisted time and delta v support reattachment after load.
 internal sealed class MultiPassExecution
 {
-    // Persisted with :R round-trip format, and a UniverseTime is integer
-    // nanoseconds, so a reloaded burn time compares exactly. The tolerance is
-    // there for the burn being nudged and for dV transform drift, while staying
-    // tight enough to disambiguate adjacent burns.
+    // The round trip format preserves burn time exactly. These tolerances allow small time edits and drift from delta v frame transforms while distinguishing adjacent burns.
     private const double BurnTimeMatchToleranceSec = 0.05;
     private const double BurnDvMatchToleranceMs = 0.1;
 
     #region Persisted state (serialised to multipass.toml)
 
-    /// <summary>The KSA save-game id this execution belongs to. Empty
-    /// while running in an unsaved session; <see cref="MultiPassRegistry.RekeyTo"/>
-    /// moves the session's entries whenever a save is written under a
-    /// different id (first save, Save-As, overwrite of another save).</summary>
+    // The ID stays empty until the first save. RekeyTo follows Save As and overwrite operations.
     public required string SaveId { get; internal set; }
 
     public required string VehicleId { get; init; }
@@ -37,9 +22,7 @@ internal sealed class MultiPassExecution
 
     public int PassIndex { get; set; }
 
-    /// <summary>Persisted burn time + dV magnitude let
-    /// <see cref="TryResolveCurrentBurn"/> reattach to the same burn
-    /// after a save load (when the live reference is gone).</summary>
+    // Time and delta v identify the restored burn after loading a save.
     public double? CurrentBurnTimeSec { get; set; }
     public double? CurrentBurnDvMagnitudeMs { get; set; }
 
@@ -47,47 +30,22 @@ internal sealed class MultiPassExecution
 
     #region Transient state (in-memory only)
 
-    /// <summary>Live reference to the burn currently in the BurnPlan;
-    /// null between passes and immediately after load.</summary>
+    // The reference is null between passes and before reattachment after load.
     public Burn? CurrentBurn { get; set; }
 
-    /// <summary>Suppresses external-delete detection during the
-    /// deferred-apply gap of InputEvents.BurnUpdateBuffer. We queue
-    /// the Add on tick N; it materializes on tick N+1. Without this
-    /// flag the postfix would briefly see "burn missing from plan"
-    /// on tick N and cancel by mistake.</summary>
+    // Suppress deletion detection while the buffered addition is pending.
     public bool AwaitingMaterialization { get; set; }
 
-    /// <summary>Tick budget for AwaitingMaterialization; the postfix
-    /// cancels rather than wait forever if the queued Add is dropped.</summary>
     public int AwaitingMaterializationTicks { get; set; }
 
-    /// <summary>Tick budget for retrying a failing
-    /// <c>intent.RecomputePass</c>; the postfix cancels with a warning
-    /// after the budget so persistent failures surface instead of
-    /// looping silently.</summary>
     public int ConsecutiveScheduleFailures { get; set; }
 
-    /// <summary>True between passes: the prior pass completed in Auto
-    /// and another pass is queued. The postfix re-engages BurnMode=Auto
-    /// once the queued burn materialises in the BurnPlan so the user
-    /// does not have to toggle Auto between every pass.</summary>
+    // Restore Auto only after FlightComputer.LoadBurn has reset the new pass to Manual.
     public bool ReengageAutoOnNextBurn { get; set; }
 
-    /// <summary>True once <see cref="FlightComputer.BurnMode"/> was
-    /// observed as <c>Auto</c> while the current pass burn was loaded.
-    /// PassCompletionPatch sets this each tick the engine is firing
-    /// under Auto control; DetectImplicitCompletion uses it to
-    /// distinguish "burn fired and was cleaned up naturally" (e.g.,
-    /// AutoRemoveFinishedBurns mod racing with our Auto->Manual
-    /// detection) from "burn deleted externally before firing".
-    /// Cleared on each new pass via AssignCurrentBurn.</summary>
+    // Auto includes alignment before ignition. Observing it does not prove that thrust occurred.
     public bool BurnAutoEngagedThisPass { get; set; }
 
-    /// <summary>One-shot guard for the stalled-pass hint (engine stopped
-    /// mid-pass with dV remaining). Set when the hint fires; cleared on each
-    /// new pass and whenever Auto is observed re-engaged, so a re-engage-then-
-    /// stall-again cycle re-alerts the player.</summary>
     public bool StallHintShown { get; set; }
 
     #endregion
@@ -114,23 +72,11 @@ internal sealed class MultiPassExecution
         StallHintShown = false;
     }
 
-    /// <summary>
-    /// Records a post-load reattachment. CurrentBurnTimeSec /
-    /// CurrentBurnDvMagnitudeMs are already populated from the loaded
-    /// TOML, and AwaitingMaterialization is irrelevant because the
-    /// burn is already in the BurnPlan.
-    /// </summary>
     public void ReattachAfterLoad(Burn burn)
     {
         CurrentBurn = burn;
     }
 
-    /// <summary>
-    /// Returns the burn that represents this execution's currently
-    /// queued pass: live <see cref="CurrentBurn"/> when available,
-    /// otherwise a time+dV match against <paramref name="plan"/> for
-    /// the post-load case.
-    /// </summary>
     public Burn? TryResolveCurrentBurn(BurnPlan plan)
     {
         if (CurrentBurn != null && plan.TryGetBurn(CurrentBurn))

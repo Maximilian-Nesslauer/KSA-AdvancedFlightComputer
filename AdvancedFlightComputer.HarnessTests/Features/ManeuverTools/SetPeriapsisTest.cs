@@ -5,9 +5,6 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Validates OrbitManeuvers.ComputeSetPeriapsis: a single burn at apoapsis must move the periapsis
-// to the requested altitude and leave the apoapsis where it was, and impossible requests (target
-// at or above the apoapsis, unbound orbit) must yield no maneuver.
 public sealed class SetPeriapsisTest : AfcTest
 {
     // Test orbit and targets, in meters above the home body's mean radius.
@@ -28,9 +25,7 @@ public sealed class SetPeriapsisTest : AfcTest
 
         CheckReaches(t, orbit, home, RaiseTargetAltitudeM, "raise Pe", now);
         CheckReaches(t, orbit, home, LowerTargetAltitudeM, "lower Pe", now);
-        // Clearly above the apoapsis: exact equality is a floating-point knife edge on
-        // Orbit.Apoapsis, and the plan window blocks targets within 1 km of the opposite apse
-        // anyway.
+        // Avoid exact equality with the apoapsis because of numerical rounding. The UI also requires 1 km separation.
         ManeuverAssertions.CheckNone(t, "target above Ap",
             OrbitManeuvers.ComputeSetPeriapsis(orbit, ApoapsisAltitudeM + 100_000.0, home.MeanRadius, now));
         ManeuverAssertions.CheckNone(t, "hyperbolic orbit",

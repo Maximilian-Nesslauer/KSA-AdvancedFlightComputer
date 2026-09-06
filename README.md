@@ -18,6 +18,16 @@ New plan types in the stock Transfer Planner dropdown:
 - **Match Inclination** - plane-change burn at AN or DN to align with a target orbit's plane.
 - **Set Inclination** - plane-change burn at AN or DN to set an absolute inclination angle. The reference plane is selectable: **Ecliptic** (matches `Orbit.Inclination`, KSA's system-wide inertial Z) or **Equatorial** (parent body's equator, standard astrodynamics convention). For Earth the two differ by the ~23.4 degree obliquity.
 
+Right-click the controlled vehicle's orbit and open **Advanced Flight Computer** to select a quick-tool.
+The **At Periapsis** submenu offers **AFC: Set Apoapsis...**, and **At Apoapsis** offers **AFC: Set Periapsis...**.
+These shortcuts open the planner and they do not place a burn at the clicked point.
+
+Quick-tools can plan a single burn after the last planned burn that changes the trajectory.
+For example, plan a burn to raise apoapsis, then use **Set Periapsis** on the resulting orbit.
+The preview and created node use that post-burn trajectory.
+Multi-pass cannot start on a pending burn's trajectory.
+Shortcuts wait until a stock transfer calculation or active multi-pass execution has finished.
+
 ### Flyby Targeting
 
 The stock planner aims every transfer at the target body's center, so a well-timed Hohmann arrives as an impact and the flyby has to be set up afterwards as a separate correction. Tick **Target flyby periapsis** in the Transfer Planning window and the departure burn is aimed to arrive at a periapsis you choose instead, so **Create** fires the flyby directly.
@@ -26,6 +36,8 @@ The stock planner aims every transfer at the target body's center, so a well-tim
 - **Flyby side** picks which side of the body you pass, named in the target's own orbital frame: **Inner** (toward its parent), **Outer** (away from it), **North**, or **South**. The aim offset has to stay perpendicular to the approach, so a side whose axis lies along the approach direction cannot be reached and is greyed out. That is also why there is no leading/trailing option for a Hohmann-style arrival.
 - Works for moon flybys and for interplanetary targets, either as a single burn or split across multi-pass passes.
 - The section reports the approach speed, the impact parameter, the departure delta-V next to the impact-aimed one, and the periapsis the propagated trajectory actually reaches. While a flyby is armed the preview shows that retargeted trajectory in place of stock's center-aimed one.
+- For multiple passes, the readout uses the selected departure after any schedule shift and the periapsis from the final preview trajectory.
+- If propagation cannot confirm a periapsis, the readout shows **No prediction** and its reason, such as a departure time outside the flight plan or no resolved target encounter.
 
 **Limitations:**
 - The plan is impulsive, the burn is not. On a near-escape departure the apoapsis moves by thousands of km per m/s of periapsis velocity, so the periapsis actually flown drifts from the requested one by roughly the finite-burn loss (order of one percent of a multi-km/s injection). Expect to trim it with a small correction burn, or split the departure across several passes to cut the loss.
@@ -45,7 +57,7 @@ Instead of one long burn that sweeps a large arc away from periapsis, the engine
 
 **How to use:**
 1. Select a plan type and configure the maneuver as usual.
-2. Use the **< >** pass count selector to choose how many passes (2-10).
+2. Use the **PASSES** slider to choose how many passes (2-10).
 3. Click **Create**. The first pass burn is placed in the burn plan.
 4. Enable **Auto** burn mode. Each pass fires automatically, and the next pass is scheduled after completion.
 5. The plan window shows "Multi-pass active: pass X of N" with remaining pass details and a **Cancel remaining passes** button.
@@ -58,7 +70,9 @@ This is the same technique used by real missions: lunar kick stages that perform
 Multi-pass works best together with [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) (handles staging between passes) and [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) (cleans up completed burns automatically). With all three installed, a multi-pass execution runs hands-free from first ignition to final departure.
 
 **Limitations:**
+- Automatic pass advancement currently requires stock engine Auto mode. RCS translation completion does not advance the multi-pass sequence.
 - Same-parent transfers (e.g., LEO to Luna) shift the final burn forward by a few parking periods to fit the K-schedule. The shift is shown in the plan window.
+- A change to the flyby side or altitude updates the selected departure even during thrust.
 - Very high-energy departures from small SOIs (e.g., low Mars orbit to Saturn) may auto-clamp to fewer passes because intermediate orbits would escape the SOI.
 
 ### RCS Translation Burns
@@ -71,9 +85,10 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 - Two attitude strategies, selectable per burn: **Hold** (keep the current attitude, fire the axis mix that points at the burn vector) and **Align** (rotate the strongest thruster axis onto the burn vector first). **Auto** (default) compares propellant estimates for both, including the slew cost, and picks the cheaper one. The estimates derive from the bang-off-bang slew cost model standard in the attitude control literature.
 - Execution is closed-loop against the game's own delta-V accounting: pulses shrink as the remaining delta-V approaches zero, and the burn stops inside the thrusters' minimum impulse of the target. The engine autopilot is suppressed for the whole run, so a misclick can never ignite the main engine on an RCS-armed burn.
 - Burns themselves stay in the stock save format; removing the mod keeps every planned burn. The RCS arming metadata lives in `mods/AdvancedFlightComputer/rcs-exec.toml` next to the mod and survives save/load, including mid-burn.
-- The burn editor warns when a burn resolves to RCS but no thruster can translate (no propellant, none active) and when the estimated propellant exceeds what the thrusters can actually reach.
+- The burn editor warns when a burn resolves to RCS but no thruster can translate (no propellant, none active) and when the estimated propellant exceeds what the thrusters can actually reach. Auto also shows an alert and refuses the burn before it creates execution state or changes the controls when the burn has no delta-V, no usable translation, or no axis that can serve its direction.
+- Estimates for a later planned burn use the current vehicle as an approximation and show **Estimate basis: Current vehicle** in the burn editor or **Current vehicle** in the gauge. Stock only loads the first executable burn as its active burn target, so these estimates do not forecast earlier burns or staging.
 - Completed RCS burns raise a public event (`RcsBurnCompletions.Completed`) other mods can consume; [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) uses it to clean up finished RCS burns the same way it cleans up engine auto-burns.
-- The **allocator** is selectable per burn (default **Groups**). Groups fires stock-consistent signed-axis groups and lets the attitude hold null the residual torque - robust on every layout. **LP** solves the classic fuel-optimal jet-select linear program over the raw per-thruster wrenches with zero net torque folded into the constraints (the Bergmann/Draper formulation, flown on ATV and Orion); it is fuel-par and puffs cleaner on balanced layouts, but can cost more where a thruster axis is far off the centre of mass (it fires opposed counter-thrust for exact zero torque), so it is an opt-in. LP falls back to Groups automatically when the constraint set is infeasible.
+- The **allocator** is selectable per burn (default **Groups**). Groups fires signed-axis groups and uses attitude control to counter residual torque. **LP** solves a fuel-optimal jet-selection problem over individual thruster forces and torques (the Bergmann/Draper formulation). It prices residual torque on axes with rotation authority and requires zero net torque on the other axes. LP can require costly counter-thrust, so it is opt-in. It falls back to Groups when the constraints are infeasible.
 
 ### Hyperbolic Targets
 
@@ -107,28 +122,6 @@ Required only to build the mod from source. Targets **.NET 10**.
 | --- | --- | --- |
 | [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.3.6 |
 | [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) | NuGet | 2.4.2 |
-
-## Testing
-
-`AdvancedFlightComputer.HarnessTests/` is a developer-only test suite for [HeadlessHarness](https://github.com/Maximilian-Nesslauer/KSA-HeadlessHarness), which brings the real game up GPU-free and runs plug-in tests against the live simulation:
-
-- `afc-set-periapsis` / `afc-set-apoapsis` assert that a computed apse burn reaches the requested altitude and leaves the opposite apse untouched, and that impossible requests yield no maneuver.
-- `afc-circularize` asserts circularization at both apses and the "nothing to do" contract for circular and unbound orbits.
-- `afc-set-inclination` / `afc-match-inclination` assert node burns against the ecliptic and equatorial references, partial-fraction burns, and the coplanar and hyperbolic edge cases.
-- `afc-flyby-targeting` asserts the flyby impact-parameter closed forms against the game's own hyperbolic orbit elements, the periapsis reference resolution, and the airless-body case where no atmosphere reference is offered.
-- `afc-flyby-departure` builds a departure toward a real moon: the center-aimed baseline must impact, the retargeted one must clear the body at the requested periapsis, and Inner / Outer must land on opposite sides of it.
-- `afc-rcs-allocator` asserts the RCS translation allocation math: per-axis pulse shaping (control-period cap, minimum-impulse floor), per-thruster group pulses, the Hold-strategy performance model, the burn-duration countdown mirror, and the capability helpers.
-- `afc-rcs-estimates` asserts the Auto attitude decision: the propellant a strategy needs and the Hold-vs-Align resolution, including the preference margin that keeps Auto from slewing for a marginal saving.
-- `afc-rcs-registry` asserts the persistence round-trip (TOML write/parse, including escaped ids and the active-execution fields) and the per-burn options keying that follows a burn as it is nudged.
-- `afc-rcs-lp-solver` asserts the LP allocator's simplex on hand-checkable problems: cost optimality, zero-torque constraint satisfaction, support selection, and clean infeasibility.
-- `afc-rcs-translation` flies a full RCS translation burn on the live simulation: a planned burn armed for RCS must reach its delta-V target within the minimum-impulse bound, consume thruster propellant, and never command a main engine. Also covers the align-slew, deferred-align, and RCS-toggle scenarios. It sweeps the present RCS test-vehicle saves (override with `KSA_HEADLESS_VEHICLES`); without one the test skips.
-- `afc-rcs-lp` flies the same burn with both allocators on one vehicle (A/B), asserts both complete with quiet engines, and logs the propellant comparison.
-
-The oracle is always the game's own orbit propagation, never a re-derivation of the math under test.
-
-Tests are grouped under `Features/<Feature>/` over a shared `Framework/` and `Fixtures/`; see [the suite README](AdvancedFlightComputer.HarnessTests/README.md) for the layout and the per-feature `-Tests` filters.
-
-To run it: build this solution and the HeadlessHarness repo, checked out as a sibling of this one (their `CopyToMods` targets deploy everything), then run the harness's `scripts/run-headless.ps1` (optionally with a `-Tests` name filter). Leave the deployed test mod disabled for normal play; it only does anything inside a harness run and is not part of the released mod.
 
 ## Mod compatibility
 

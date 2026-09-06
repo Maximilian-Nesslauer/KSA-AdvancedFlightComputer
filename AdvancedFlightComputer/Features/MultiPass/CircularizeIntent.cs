@@ -2,30 +2,17 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
-using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// "Circularize the orbit at the chosen apse, burning at that apse."
-/// IsAtApoapsis = true burns at apoapsis to raise periapsis; false burns
-/// at periapsis to lower apoapsis. The goal radius is not stored: burns
-/// at one apse do not move that apse to first order, so re-deriving the
-/// circular target from the live orbit each pass is both simpler and
-/// more robust than locking a radius at start.
-/// </summary>
 internal sealed class CircularizeIntent : IManeuverIntent
 {
     public const string CircularizeApoapsisKind = "circularize-ap";
     public const string CircularizePeriapsisKind = "circularize-pe";
-
-    // User-visible "circular enough" bar, shared with
-    // OrbitManeuvers.ComputeCircularize so the planner stops producing
-    // burns and IsSatisfied flips at the same threshold. Matches the
-    // 0.001-radian inclination tolerance for symmetry across intents.
+    // Use the same tolerance as OrbitManeuvers.ComputeCircularize.
     private const double CircularToleranceEcc = 0.001;
 
     public required bool IsAtApoapsis { get; init; }
@@ -77,9 +64,9 @@ internal sealed class CircularizeIntent : IManeuverIntent
 
         TrueAnomaly burnTa = IsAtApoapsis ? new TrueAnomaly(Math.PI) : TrueAnomaly.Zero;
         var result = ApseBurnPlanner.Plan(
-            vehicle, maneuver.Value.DvVlf, burnTa, allocations, now);
+            vehicle, maneuver.Value.DvVlf, burnTa, allocations, now, execution: true);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] CircularizeIntent.RecomputePass: vehicle='{0}' kind='{1}' " +
                 "passIndex={2}/{3} totalDv={4:F1}m/s remaining={5} -> {6} pass(es) " +
@@ -88,9 +75,7 @@ internal sealed class CircularizeIntent : IManeuverIntent
                 maneuver.Value.DvCci.Length(), remainingCount,
                 result.Passes.Length, result.Failed, result.FailureReason ?? "-"));
 
-        if (result.Passes.Length == 0)
-            return PassPlanResult.Failure(result.FailureReason ?? "planner produced no passes");
-        return PassPlanResult.Success(result.Passes[0]);
+        return IntentPlanning.FirstPass(result);
     }
 
     public void WriteToToml(TextWriter w)

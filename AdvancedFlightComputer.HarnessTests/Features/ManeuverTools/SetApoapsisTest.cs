@@ -5,9 +5,6 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Validates OrbitManeuvers.ComputeSetApoapsis: a single burn at periapsis must move the apoapsis
-// to the requested altitude and leave the periapsis where it was, and impossible requests (target
-// at or below the periapsis, unbound orbit) must yield no maneuver.
 public sealed class SetApoapsisTest : AfcTest
 {
     // Test orbit and targets, in meters above the home body's mean radius.
