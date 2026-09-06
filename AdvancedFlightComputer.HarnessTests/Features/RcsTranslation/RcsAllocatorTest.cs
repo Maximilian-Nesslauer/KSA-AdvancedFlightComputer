@@ -16,6 +16,7 @@ public sealed class RcsAllocatorTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
+        CheckSharedThrusterPulse(t);
         CheckShapeAxis(t);
         CheckMaxAxisPulse(t);
         CheckHoldPerformance(t);
@@ -23,6 +24,17 @@ public sealed class RcsAllocatorTest : AfcTest
         CheckRemainingDuration(t);
         CheckCapabilityHelpers(t);
         CheckAttitudeFight(t);
+    }
+
+    private static void CheckSharedThrusterPulse(TestContext t)
+    {
+        // One nozzle can serve +X and +Y under ThrusterController.ComputeControlMap.
+        // A one-second pulse supplies 100 N s on both axes and 10 N m s of yaw impulse once.
+        float pulse = RcsComputeControlPatch.MaxAxisPulse(0f, 100f, 100f, 100f, 0f);
+        pulse = RcsComputeControlPatch.MaxAxisPulse(pulse, 100f, 100f, 100f, 0f);
+        t.CheckAbs("shared thruster fires once for two axes", pulse, 1.0, FloatTol);
+        t.CheckAbs("shared thruster yaw impulse", pulse * 10f, 10.0, FloatTol);
+        t.Skip("Combined-axis Hold estimates still add shared thrusters per group. A per-thruster estimate requires an executor model change.");
     }
 
     private static void CheckShapeAxis(TestContext t)

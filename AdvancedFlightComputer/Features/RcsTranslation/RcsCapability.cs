@@ -3,31 +3,19 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// Main-thread probe of a vehicle's RCS translation capability, grouped
-/// by the six signed control-frame axes the stock ControlMap flags cover.
-/// Axis order: +X, -X, +Y, -Y, +Z, -Z (+X forward, +Y right, +Z down,
-/// matching ThrusterController.ComputeControlMap).
-/// </summary>
+/// <summary>Signed control-frame groups use the order +X, -X, +Y, -Y, +Z, -Z. ThrusterController.ComputeControlMap uses +X forward, +Y right, and +Z down.</summary>
 internal struct RcsAxisGroup
 {
     public float ForceN;
     public float MassFlowKgS;
     public float MinImpulseNs;
 
-    /// <summary>Net torque (N m, control frame) the whole group produces when it
-    /// fires at the force <see cref="ForceN"/>: the sum of the member
-    /// thrusters' live torques. Near zero on a balanced layout, nonzero when
-    /// the group's thrusters sit off the CoM. Divided by <see cref="ForceN"/>
-    /// it is the torque per unit axis force the attitude hold must null, which
-    /// is what makes a Hold burn cost more than its bare translation.</summary>
+    /// <summary>Net torque in N m in the control frame when this group fires at ForceN. Off-center thrusters require attitude control to counter it.</summary>
     public float3 TorqueNm;
 
     public readonly bool IsUsable => ForceN > 0f && MassFlowKgS > 0f;
 
-    /// <summary>Effective exhaust speed of the group along its axis. Off-axis
-    /// thrust components are spent but produce no axis dV, so this is the
-    /// fuel-per-axis-dV number, not the physical nozzle exhaust speed.</summary>
+    /// <summary>Effective exhaust speed along the group axis in m/s. Off-axis force consumes propellant without adding axis delta V.</summary>
     public readonly float AxisVeMs => MassFlowKgS > 0f ? ForceN / MassFlowKgS : 0f;
 }
 
@@ -35,24 +23,16 @@ internal struct RcsCapabilitySnapshot
 {
     public bool HasAnyTranslation;
 
-    /// <summary>The control frame this snapshot describes, taken from the
-    /// thruster cache it was built against. A snapshot outlives a control-point
-    /// change, so the driver compares this against the live cache to know when
-    /// the axis groups stopped describing the frame the worker fires in.</summary>
+    /// <summary>Use the cached control frame so membership and live magnitudes refer to the same axes until Rocket.UpdateThrusterCache catches a control-point change.</summary>
     public floatQuat Ctrl2Body;
 
-    /// <summary>Indexed +X,-X,+Y,-Y,+Z,-Z.</summary>
+    /// <summary>Indexed +X, -X, +Y, -Y, +Z, -Z.</summary>
     public RcsAxisGroup Ax0, Ax1, Ax2, Ax3, Ax4, Ax5;
 
-    /// <summary>Per rotation axis (roll, pitch, yaw): combined mass flow of the
-    /// thrusters that produce torque about it, both signs. Feeds the
-    /// slew-cost estimate and, together with RotationTorqueNm, the LP's
-    /// torque-slack price.</summary>
+    /// <summary>Combined mass flow in kg/s for both signs of each rotation axis. Used for slew estimates and torque cost.</summary>
     public float3 RotationMassFlowKgS;
 
-    /// <summary>Per rotation axis: combined live torque magnitude of the
-    /// same thrusters, N m. Flow over torque is what the attitude hold
-    /// pays per newton-meter-second of residual angular impulse.</summary>
+    /// <summary>Combined live torque magnitude in N m for the same rotation thrusters. Flow divided by torque prices residual angular impulse.</summary>
     public float3 RotationTorqueNm;
 
     public RcsAxisGroup Get(int idx) => idx switch
@@ -73,7 +53,6 @@ internal struct RcsCapabilitySnapshot
         }
     }
 
-    /// <summary>Signed-axis unit direction in the control frame for a group index.</summary>
     public static float3 AxisDirection(int idx) => idx switch
     {
         0 => new float3(1f, 0f, 0f),
@@ -84,7 +63,6 @@ internal struct RcsCapabilitySnapshot
         _ => new float3(0f, 0f, -1f),
     };
 
-    /// <summary>Group index with the highest axis force, -1 when none is usable.</summary>
     public int BestAxis()
     {
         int best = -1;
@@ -104,27 +82,7 @@ internal struct RcsCapabilitySnapshot
 
 internal static class RcsCapability
 {
-    /// <summary>
-    /// Builds the capability snapshot from the vehicle's live thruster
-    /// modules and states. Read-only over the applied state buffer, which
-    /// is safe even while solver jobs are in flight: workers stage their
-    /// writes into a separate new-state buffer that is applied back on the
-    /// main thread.
-    ///
-    /// Membership comes from the cached state (IsPropellantAvailable and
-    /// the IntendedForce/IntendedTorque signs are exactly what the worker
-    /// and the stock attitude control fire by), but magnitudes are
-    /// recomputed live via RcsWrenchTable.ComputeLive: the game's thruster
-    /// cache revalidates only on 0.1 percent mass, CoM, 100 Pa pressure drift or
-    /// a control-frame change, so a cached IntendedForce can carry a different
-    /// vintage than a fresh mass-flow read and misstate force per flow.
-    ///
-    /// The control frame comes from that same cache rather than from the live
-    /// vehicle, because the sign test in AccumulateAxis pairs a cached
-    /// IntendedForce component with a freshly computed one: reading the live
-    /// frame would compare across frames for the tick between a control-point
-    /// change and the worker refreshing the cache, and silently drop thrusters.
-    /// </summary>
+    /// <summary>Membership follows cached intended-action signs. Recompute force and mass flow together because ThrusterControllerGlobalState.IsCacheValid tolerates pressure and mass drift.</summary>
     public static RcsCapabilitySnapshot Probe(Vehicle vehicle)
     {
         RcsCapabilitySnapshot snap = default;
@@ -188,10 +146,7 @@ internal static class RcsCapability
         return snap;
     }
 
-    /// <summary>Adds one thruster to a signed-axis group. The cached
-    /// intendedForce component gates membership (matching the worker's
-    /// MaxAxisPulse selection); the live component supplies the magnitude.
-    /// Both must agree in sign, else the thruster is skipped for the axis.</summary>
+    /// <summary>Cached and live force must agree in sign so group membership matches the worker in the cached control frame.</summary>
     private static void AccumulateAxis(
         ref RcsCapabilitySnapshot snap, int idx, float intendedForce, float liveForce,
         float massFlow, float3 torque, float minPulse, bool positive)
@@ -205,10 +160,7 @@ internal static class RcsCapability
         g.ForceN += f;
         g.MassFlowKgS += massFlow;
         g.MinImpulseNs += minPulse * f;
-        // The group fires all its members at one duty, so its net torque at
-        // full group force is the plain sum of the member torques. A thruster
-        // serving several axes adds its torque to each group it joins - the
-        // same cross-feed the force/flow accumulation already carries.
+        // Each group contains the full member torque. Combined-axis estimates must account for shared thrusters.
         g.TorqueNm += torque;
         snap.Set(idx, g);
     }
