@@ -17,12 +17,12 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 /// </summary>
 internal static class RcsGaugePatches
 {
-    /// <summary>The bound enum is fixed after gauge XML load, and these
-    /// patches run per rendered frame; cache the reflective read per
-    /// button instance.</summary>
+    // GaugeButtonFlightComputer.DrawEditor reloads the binding when either selector changes.
     private sealed class BoundEnum
     {
         public Enum? Value;
+        public string? EnumType;
+        public string? ValueName;
     }
 
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<GaugeButtonFlightComputer, BoundEnum>
@@ -30,10 +30,13 @@ internal static class RcsGaugePatches
 
     private static bool IsAutoBurnButton(GaugeButtonFlightComputer button)
     {
-        BoundEnum bound = _boundEnums.GetValue(button, static b => new BoundEnum
+        BoundEnum bound = _boundEnums.GetValue(button, static _ => new BoundEnum());
+        if (bound.Value == null || bound.EnumType != button.EnumType || bound.ValueName != button.Value)
         {
-            Value = GameReflection.GaugeButtonFlightComputer_enumValue?.GetValue(b) as Enum,
-        });
+            bound.Value = GameReflection.GaugeButtonFlightComputer_enumValue?.GetValue(button) as Enum;
+            bound.EnumType = button.EnumType;
+            bound.ValueName = button.Value;
+        }
         return bound.Value is FlightComputerBurnMode mode && mode == FlightComputerBurnMode.Auto;
     }
 
