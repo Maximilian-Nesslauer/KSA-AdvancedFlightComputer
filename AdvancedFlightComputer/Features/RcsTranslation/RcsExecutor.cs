@@ -738,7 +738,7 @@ internal static partial class RcsExecutor
         for (int i = 0; i < 6; i++)
         {
             RcsAxisGroup g = cap.Get(i);
-            if (g.IsUsable && components[i] >= MinImpulseSuppressionFactor * g.MinImpulseNs)
+            if (g.IsUsable && components[i] >= g.MinCorrectingImpulseNs)
                 return false;
         }
         return true;
@@ -961,8 +961,8 @@ internal static partial class RcsExecutor
             MaxPulseSec = MaxPulseSec,
             AxisForcePos = new float3(cap.Ax0.ForceN, cap.Ax2.ForceN, cap.Ax4.ForceN),
             AxisForceNeg = new float3(cap.Ax1.ForceN, cap.Ax3.ForceN, cap.Ax5.ForceN),
-            AxisMinImpulsePos = new float3(cap.Ax0.MinImpulseNs, cap.Ax2.MinImpulseNs, cap.Ax4.MinImpulseNs),
-            AxisMinImpulseNeg = new float3(cap.Ax1.MinImpulseNs, cap.Ax3.MinImpulseNs, cap.Ax5.MinImpulseNs),
+            AxisMinCorrectingImpulsePos = new float3(cap.Ax0.MinCorrectingImpulseNs, cap.Ax2.MinCorrectingImpulseNs, cap.Ax4.MinCorrectingImpulseNs),
+            AxisMinCorrectingImpulseNeg = new float3(cap.Ax1.MinCorrectingImpulseNs, cap.Ax3.MinCorrectingImpulseNs, cap.Ax5.MinCorrectingImpulseNs),
             LpSecondsPerImpulse = exec.LpSecondsPerImpulse,
             LpDirCtrl = exec.LpDirCtrl,
             LpImpulseCapNs = exec.LpImpulseCapNs,

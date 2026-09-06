@@ -78,22 +78,39 @@ internal sealed class RcsWrenchTable
             {
                 if (!coreStates[core.StatesIdx].IsPropellantAvailable)
                     continue;
-                // Full-throttle probe; thruster pulses always command throttle 1.
-                RocketCoreConditions combustion = core.ComputeConditions(1f);
-                foreach (RocketNozzle nozzle in core.Rocket.Nozzles)
-                {
-                    float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);
-                    floatQuat rotation = floatQuat.Pack(nozzle.Parent.Asmb2VehicleAsmb);
-                    NozzlePerformance perf = nozzle.ComputePerformance(in combustion, ambientPressure);
-                    float3 f = perf.GetTotalThrust() * (-nozzle.ExhaustDirectionAsmb).Transform(rotation);
-                    float3 r = nozzle.LocationAsmb.Transform(matrix) - com;
-                    forceAsmb += f;
-                    torqueAsmb += float3.Cross(r, f);
-                    massFlow += perf.MassFlowRate;
-                }
+                ComputeLiveCoreAsmb(core, com, ambientPressure,
+                    out float3 coreForce, out float3 coreTorque, out float coreMassFlow);
+                forceAsmb += coreForce;
+                torqueAsmb += coreTorque;
+                massFlow += coreMassFlow;
             }
         }
         force = ctrl.ToCtrl(forceAsmb);
         torque = ctrl.ToCtrl(torqueAsmb);
+    }
+
+    internal static void ComputeLiveCoreAsmb(
+        RocketCore core, float3 com, float ambientPressure,
+        out float3 force, out float3 torque, out float massFlow)
+    {
+        float3 forceAsmb = float3.Zero;
+        float3 torqueAsmb = float3.Zero;
+        massFlow = 0f;
+        // Full-throttle probe because thruster pulses always command throttle 1.
+        RocketCoreConditions combustion = core.ComputeConditions(1f);
+        foreach (RocketNozzle nozzle in core.Rocket.Nozzles)
+        {
+            float4x4 matrix = float4x4.Pack(nozzle.Parent.MatrixAsmb2VehicleAsmb);
+            floatQuat rotation = floatQuat.Pack(nozzle.Parent.Asmb2VehicleAsmb);
+            NozzlePerformance perf = nozzle.ComputePerformance(in combustion, ambientPressure);
+            float3 nozzleForce = perf.GetTotalThrust()
+                * (-nozzle.ExhaustDirectionAsmb).Transform(rotation);
+            float3 offset = nozzle.LocationAsmb.Transform(matrix) - com;
+            forceAsmb += nozzleForce;
+            torqueAsmb += float3.Cross(offset, nozzleForce);
+            massFlow += perf.MassFlowRate;
+        }
+        force = forceAsmb;
+        torque = torqueAsmb;
     }
 }
