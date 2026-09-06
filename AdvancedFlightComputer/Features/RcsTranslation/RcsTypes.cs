@@ -25,22 +25,14 @@ internal enum RcsAttitudeStrategy
 /// <summary>How the demanded impulse is turned into thruster pulses.</summary>
 internal enum RcsAllocator
 {
-    /// <summary>Default. Stock-consistent signed-axis groups; residual torque
-    /// is corrected by the attitude hold. Also the automatic fallback when the
-    /// LP is infeasible for a layout.</summary>
+    /// <summary>Use signed axis groups with attitude control to counter residual torque. This is also the fallback when the LP is infeasible.</summary>
     Groups,
 
-    /// <summary>Fuel-optimal LP over the raw per-thruster wrenches with the
-    /// zero-net-torque constraint folded in. Fuel-par and cleaner (torque-
-    /// nulled) on balanced layouts, but can cost far more where a thruster
-    /// axis is strongly off the CoM, since it fires opposed counter-thrust for
-    /// exact zero torque. Falls back to Groups when the constraint set is
-    /// infeasible for the current layout.</summary>
+    /// <summary>Minimize thruster propellant with priced torque slack on controllable axes. Fall back to Groups when the constraints are infeasible.</summary>
     Lp,
 }
 
-/// <summary>Per-burn RCS configuration, keyed by burn identity (time + dV magnitude)
-/// because stock burns carry no stable id across save/load.</summary>
+/// <summary>Identify burn options by time and delta V because stock burns have no stable id across saves.</summary>
 internal sealed class RcsBurnOptions
 {
     public const double TimeMatchToleranceSec = 0.05;
@@ -51,10 +43,7 @@ internal sealed class RcsBurnOptions
     public RcsExecutionMode Mode { get; set; } = RcsExecutionMode.Default;
     public RcsAttitudeStrategy Attitude { get; set; } = RcsAttitudeStrategy.Auto;
 
-    /// <summary>Defaults to Groups: stock-consistent and robust on every
-    /// layout. LP is fuel-par and cleaner on balanced layouts but can cost far
-    /// more where an axis is strongly off the CoM, so it is a per-burn opt-in.
-    /// See <see cref="RcsAllocator"/>.</summary>
+    /// <summary>LP requires an explicit selection because its torque constraints can require costly opposing thrust.</summary>
     public RcsAllocator Allocator { get; set; } = RcsAllocator.Groups;
 
     public bool Matches(double timeSec, double dvMs)
