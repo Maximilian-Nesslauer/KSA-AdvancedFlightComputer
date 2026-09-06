@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;

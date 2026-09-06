@@ -1,11 +1,12 @@
 using System;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Flyby;
 using Brutal.ImGuiApi;
 using HarmonyLib;
 using KSA;
 
-namespace AdvancedFlightComputer.Features.Flyby;
+namespace AdvancedFlightComputer.Features.PlanWindow;
 
 /// <summary>
 /// Skips stock's 3D preview of the selected transfer while a single burn flyby is

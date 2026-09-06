@@ -1,11 +1,12 @@
 using System;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using CommunityToolkit.HighPerformance.Buffers;
 using KSA;
 
-namespace AdvancedFlightComputer.Features.ManeuverTools;
+namespace AdvancedFlightComputer.Features.PlanWindow;
 
 internal static partial class Patch_DrawPlanWindow
 {

@@ -1,20 +1,12 @@
 using System;
 using AdvancedFlightComputer.Core;
-using Brutal.ImGuiApi;
-using HarmonyLib;
+using AdvancedFlightComputer.Features.MultiPass;
 using KSA;
 
-namespace AdvancedFlightComputer.Features.MultiPass;
+namespace AdvancedFlightComputer.Features.PlanWindow;
 
-[HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow), new[] { typeof(IGameViewport) })]
-internal static class Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers
+internal static class PlanWindowMarkers
 {
-    [HarmonyPrepare]
-    static bool Prepare() => false;
-
-    static void Postfix(IGameViewport inViewport)
-        => Draw(inViewport);
-
     internal static void Draw(IGameViewport inViewport)
     {
         try

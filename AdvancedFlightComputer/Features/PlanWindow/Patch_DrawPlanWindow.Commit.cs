@@ -1,8 +1,9 @@
+using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.Numerics;
 using KSA;
 
-namespace AdvancedFlightComputer.Features.ManeuverTools;
+namespace AdvancedFlightComputer.Features.PlanWindow;
 
 internal static partial class Patch_DrawPlanWindow
 {

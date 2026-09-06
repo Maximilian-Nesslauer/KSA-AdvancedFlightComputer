@@ -26,6 +26,7 @@ internal static class GameReflection
         MultiPass = 4,
         RcsTranslation = 8,
         Core = 16,
+        PlanWindow = 32,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -36,15 +37,15 @@ internal static class GameReflection
 
     #region TransferPlanner
 
-    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_sourceBody =
         AccessTools.Field(typeof(TransferPlanner), "_sourceBody");
 
-    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_transferInfo =
         AccessTools.Field(typeof(TransferPlanner), "_transferInfo");
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_selectedEntry =
         AccessTools.Field(typeof(TransferPlanner), "_selectedEntry");
 
@@ -65,34 +66,34 @@ internal static class GameReflection
     public static readonly FieldInfo? TransferPlanner_timeUnits =
         AccessTools.Field(typeof(TransferPlanner), "_timeUnits");
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_transferType =
         AccessTools.Field(typeof(TransferPlanner), "_transferType");
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_transferCalculated =
         AccessTools.Field(typeof(TransferPlanner), "_transferCalculated");
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_transferBeingCalculated =
         AccessTools.Field(typeof(TransferPlanner), "_transferBeingCalculated");
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_transferBurn =
         AccessTools.Field(typeof(TransferPlanner), "_transferBurn");
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_showPlanWindow =
         AccessTools.Field(typeof(TransferPlanner), "_showPlanWindow");
 
     // Stock's "Preview Selected Transfer" checkbox. The Hohmann multi-pass overlay rides the same
     // toggle, so the user manages one preview switch for stock's single burn and the passes.
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_displaySelectedTransfer =
         AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
 
     // HyperbolicTargets binds its finalizer to the same method by name.
-    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.PlanWindow)]
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
@@ -100,39 +101,39 @@ internal static class GameReflection
     // frame, one delegate each and no boxing per read. An accessor is null when its handle is
     // null or the field no longer holds the expected type, so the validation reports it like any
     // other missing handle.
-    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<TransferObject>? TransferPlanner_sourceBodyRef =
         StaticFieldRef<TransferObject>(TransferPlanner_sourceBody);
 
-    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<OrbitalTransfers.TransferInfo?>? TransferPlanner_transferInfoRef =
         StaticFieldRef<OrbitalTransfers.TransferInfo?>(TransferPlanner_transferInfo);
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<OrbitalTransfers.PorkChopEntry?>? TransferPlanner_selectedEntryRef =
         StaticFieldRef<OrbitalTransfers.PorkChopEntry?>(TransferPlanner_selectedEntry);
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<TransferType>? TransferPlanner_transferTypeRef =
         StaticFieldRef<TransferType>(TransferPlanner_transferType);
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<bool>? TransferPlanner_transferCalculatedRef =
         StaticFieldRef<bool>(TransferPlanner_transferCalculated);
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<bool>? TransferPlanner_transferBeingCalculatedRef =
         StaticFieldRef<bool>(TransferPlanner_transferBeingCalculated);
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<Burn?>? TransferPlanner_transferBurnRef =
         StaticFieldRef<Burn?>(TransferPlanner_transferBurn);
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<bool>? TransferPlanner_showPlanWindowRef =
         StaticFieldRef<bool>(TransferPlanner_showPlanWindow);
 
-    [UsedBy(Feature.ManeuverTools)]
+    [UsedBy(Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<bool>? TransferPlanner_displaySelectedTransferRef =
         StaticFieldRef<bool>(TransferPlanner_displaySelectedTransfer);
 
@@ -200,9 +201,10 @@ internal static class GameReflection
 
     public static bool ValidateManeuverTools() => Validate(Feature.ManeuverTools);
 
-    /// <summary>The plan-window handles MultiPass also reads are not tagged for it, because
-    /// <c>Mod</c> nests the MultiPass block inside the ManeuverTools gate, which already covers
-    /// them.</summary>
+    public static bool ValidatePlanWindow() => Validate(Feature.PlanWindow);
+
+    /// <summary>The plan-window handles MultiPass also reads are not tagged for it because
+    /// <c>Mod</c> enables MultiPass only after the PlanWindow gate validates them.</summary>
     public static bool ValidateMultiPass() => Validate(Feature.MultiPass);
 
     public static bool ValidateRcsTranslation() => Validate(Feature.RcsTranslation);
