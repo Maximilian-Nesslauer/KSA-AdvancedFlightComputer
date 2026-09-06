@@ -54,11 +54,14 @@ public sealed class HyperbolicTargetsTest : AfcTest
         }
 
         SimDriver driver = t.Session.CreateDriver();
-        Vehicle vehicle = VehicleFixtures.SpawnFromSaveData(
-            t.System, home, save.VehicleSaveData, "HyperbolicTargets",
-            OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedTime()));
+        var harmony = new Harmony("com.maxi.afc.harnesstests.hyperbolic-targets");
+        Vehicle? vehicle = null;
         try
         {
+            HyperbolicTargets.ApplyPatches(harmony);
+            vehicle = VehicleFixtures.SpawnFromSaveData(
+                t.System, home, save.VehicleSaveData, "HyperbolicTargets",
+                OrbitFixtures.CircularAt(home, SpawnAltitudeM, Universe.GetElapsedTime()));
             driver.Step(1e-3, 2);
 
             UniverseTime hohmann = CheckHohmannFlight(t, homeCelestial, star, comet);
@@ -70,7 +73,16 @@ public sealed class HyperbolicTargetsTest : AfcTest
         }
         finally
         {
-            VehicleSpawner.Despawn(vehicle);
+            try
+            {
+                if (vehicle != null)
+                    VehicleSpawner.Despawn(vehicle);
+            }
+            finally
+            {
+                harmony.UnpatchAll(harmony.Id);
+                Patch_SetTransferInfo.Reset();
+            }
         }
     }
 
