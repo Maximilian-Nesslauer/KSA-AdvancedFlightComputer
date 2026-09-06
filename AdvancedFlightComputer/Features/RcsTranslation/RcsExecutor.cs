@@ -187,7 +187,6 @@ internal static partial class RcsExecutor
         if (burn == null || fc.Burn == null)
             return;
 
-        RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
         double timeSec = burn.Time.Seconds();
         double dvMs = burn.DeltaVVlf.Length();
 
@@ -198,23 +197,26 @@ internal static partial class RcsExecutor
             return;
         }
 
-        RcsBurnOptions options = exec.GetOrCreateOptions(timeSec, dvMs);
-        exec.Capability = RcsCapability.Probe(vehicle);
-        exec.CapabilityProbedAtSec = Universe.GetElapsedTime().Seconds();
-        if (!exec.Capability.HasAnyTranslation)
+        RcsCapabilitySnapshot capability = RcsCapability.Probe(vehicle);
+        if (!capability.HasAnyTranslation)
+        {
+            Alert($"RCS burn not engaged: no usable RCS translation on '{vehicle.Id}'.");
             return;
+        }
 
-        exec.Estimates = ComputeEstimates(vehicle, fc.Burn, in exec.Capability);
-        exec.EstimatesComputedAtSec = exec.CapabilityProbedAtSec;
-        (RcsAttitudeStrategy strategy, int axis) = ResolveStrategy(options.Attitude, in exec.Estimates);
+        RcsEstimates estimates = ComputeEstimates(vehicle, fc.Burn, in capability);
+        RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? existing);
+        RcsBurnOptions? requested = existing?.FindOptions(timeSec, dvMs);
+        (RcsAttitudeStrategy strategy, int axis) = ResolveStrategy(
+            requested?.Attitude ?? RcsAttitudeStrategy.Auto, in estimates);
 
         // Hold requires every demanded group. Align requires a feasible slew.
-        if (strategy == RcsAttitudeStrategy.Hold && !exec.Estimates.HoldFeasible)
+        if (strategy == RcsAttitudeStrategy.Hold && !estimates.HoldFeasible)
         {
-            if (exec.Estimates.AlignFeasible && exec.Estimates.AlignAxis >= 0)
+            if (estimates.AlignFeasible && estimates.AlignAxis >= 0)
             {
                 strategy = RcsAttitudeStrategy.Align;
-                axis = exec.Estimates.AlignAxis;
+                axis = estimates.AlignAxis;
             }
             else
             {
@@ -222,6 +224,13 @@ internal static partial class RcsExecutor
                 return;
             }
         }
+
+        RcsExecution exec = existing ?? RcsExecRegistry.GetOrCreate(vehicle.Id);
+        RcsBurnOptions options = exec.GetOrCreateOptions(timeSec, dvMs);
+        exec.Capability = capability;
+        exec.CapabilityProbedAtSec = Universe.GetElapsedTime().Seconds();
+        exec.Estimates = estimates;
+        exec.EstimatesComputedAtSec = exec.CapabilityProbedAtSec;
 
         PrepareAllocation(vehicle, fc, fc.Burn, exec, options, strategy, dvMs);
 

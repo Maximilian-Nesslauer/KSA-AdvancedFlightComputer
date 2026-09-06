@@ -389,6 +389,7 @@ public sealed class RcsTranslationTest : AfcTest
                    "Save a vehicle with RCS in the Vehicles window to run this test.");
             return;
         }
+        CheckEmptyBurnRefusal(t, vehicle, driver);
         int bestAxis = cap.BestAxis();
         t.Info($"capability: best axis {RcsExecutor.AxisName(bestAxis)} " +
                $"F={cap.Get(bestAxis).ForceN:F1}N mdot={cap.Get(bestAxis).MassFlowKgS * 1000.0:F2}g/s, " +
@@ -505,6 +506,32 @@ public sealed class RcsTranslationTest : AfcTest
 
         RcsOrbitCheck.Assert(t, "orbit", vehicle.Orbit, setup.Predicted,
             setup.InitialSma, setup.InitialEcc);
+    }
+
+    private static void CheckEmptyBurnRefusal(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        bool hadEntry = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? before);
+        int optionCount = before?.Options.Count ?? 0;
+        RcsFlightSupport.BurnSetup? setup = RcsFlightSupport.AddBurn(
+            vehicle, driver, double3.UnitX, 0.0, BurnLeadSec);
+        if (setup == null)
+        {
+            t.Fail("empty burn setup", "stock did not load the zero-dV burn");
+            return;
+        }
+        try
+        {
+            RcsExecutor.Activate(vehicle);
+            bool hasEntry = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? after);
+            t.Check("empty burn preserves registry",
+                hasEntry == hadEntry && ReferenceEquals(before, after)
+                && (after?.Options.Count ?? 0) == optionCount);
+            t.Check("empty burn stays inactive", after?.IsActive != true);
+        }
+        finally
+        {
+            RcsFlightSupport.CleanupBurns(vehicle.FlightComputer);
+        }
     }
 
     private static double PriceMg(in RcsCapabilitySnapshot cap, int axis)
