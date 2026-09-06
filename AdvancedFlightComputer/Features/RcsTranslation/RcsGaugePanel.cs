@@ -5,32 +5,16 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// The per-burn RCS block in the stock gauge look, drawn flush under the
-/// flight burn editor's gauge and exactly as wide.
-///
-/// Metrics are fractions of that gauge's rect rather than fixed sizes: the
-/// player can drag the gauge to any scale and the block has to follow. Gauge
-/// text is sized relative to its row, so it follows too.
-///
-/// Gauge glyphs (GaugeLabel.Pack4) cover only A-Z, 0-9, space and . - + / \;
-/// anything else renders blank, and Label/Button throw above 16 characters.
-/// Dynamic text goes through <see cref="Fit"/>; the literals below are held to
-/// the same rules by hand. A decimal point does not survive the atlas intact,
-/// so the formatters trade tenths for a coarser unit.
-/// </summary>
+// Scale rows with the stock gauge rectangle. GaugeLabel.Pack4 requires uppercase text of at most 16 glyphs.
+// Use whole values with smaller units because decimal points are not clear in the gauge atlas.
 internal static class RcsGaugePanel
 {
     private const int MaxChars = 16;
 
-    /// <summary>The stock button text scale. ImGauge sizes glyphs relative to
-    /// their row, so this stays a ratio.</summary>
+    // ImGauge sizes glyphs relative to their row.
     private const float TextScale = 0.34f;
 
-    // Fractions of the burn gauge's rect. RowHeightFrac and RowGapFrac copy
-    // the stock editor rows (0.0545 high on a 0.0818 pitch) so the block
-    // continues their rhythm; they are private consts in BurnCanvasHost, so a
-    // stock layout change needs them re-checked.
+    // Match the row height and pitch in BurnCanvasHost.Draw.
     #region Layout fractions
 
     private const float RowHeightFrac = 0.0545f;
@@ -61,8 +45,6 @@ internal static class RcsGaugePanel
         RcsExecutionMode resolved = RcsExecutor.ResolveMode(vehicle, options);
         bool rcsRows = resolved == RcsExecutionMode.Rcs || isActiveBurn;
 
-        // Gated exactly like RcsBurnUi.DrawBlock, so a burn offers the same
-        // rows on either surface.
         bool noTranslation = false;
         bool showEstimates = false;
         bool holdEst = false;
@@ -72,12 +54,10 @@ internal static class RcsGaugePanel
         if (rcsRows && !isActiveBurn)
         {
             noTranslation = !RcsExecutor.ProbeCached(vehicle).HasAnyTranslation;
-            if (!noTranslation && exec != null && exec.Estimates.Valid
-                && bt != null
-                && Math.Abs(bt.ImpulsiveInstant.Seconds() - timeSec) <= RcsExecutor.BurnIdentityToleranceSec)
+            if (!noTranslation && RcsBurnUi.HasEstimatesFor(timeSec, bt, exec))
             {
                 showEstimates = true;
-                holdEst = exec.Estimates.HoldFeasible;
+                holdEst = exec!.Estimates.HoldFeasible;
                 alignEst = exec.Estimates.AlignFeasible;
                 double neededKg = exec.Estimates.RequiredPropellantKg(
                     options?.Attitude ?? RcsAttitudeStrategy.Auto);
@@ -85,7 +65,6 @@ internal static class RcsGaugePanel
             }
         }
 
-        // Names what the estimate cells hold; the bare numbers do not say.
         bool estHeader = holdEst || alignEst;
 
         int rows = 2;                                   // header + execution
@@ -134,8 +113,7 @@ internal static class RcsGaugePanel
             ImGaugeStyle text = ImGaugeStyle.Default.WithText(new float3(1f, 1f, 1f), TextScale);
             ImGaugeStyle warn = ImGaugeStyle.Default.WithText(new float3(1f, 0.45f, 0.3f), TextScale);
             ImGaugeStyle dim = ImGaugeStyle.Default.WithText(new float3(0.6f, 0.62f, 0.65f), TextScale);
-            // A disabled style is what freezes the selectors mid-execution:
-            // ImGauge.Button reports no click for one. Cancel keeps its own.
+            // ImGauge.Button rejects clicks through its disabled style. Cancel stays enabled.
             ImGaugeStyle button = ImGaugeStyle.Default.WithText(new float3(0f, 0f, 0f), TextScale)
                 .WithDisabled(isActiveBurn);
             ImGaugeStyle cancelButton = ImGaugeStyle.Default.WithText(new float3(0f, 0f, 0f), TextScale);
@@ -172,45 +150,31 @@ internal static class RcsGaugePanel
 
             if (ButtonRow("EXECUTION".AsSpan(), Fit(ExecutionLabel(mode, resolved)), in button))
             {
-                // Default <-> RCS only; explicit Engine is never usefully
-                // different from Default (which already picks a fueled engine),
-                // and a stale Engine value folds back to RCS on the next click.
                 RcsBurnOptions o = Options();
-                o.Mode = o.Mode == RcsExecutionMode.Rcs
-                    ? RcsExecutionMode.Default
-                    : RcsExecutionMode.Rcs;
+                RcsBurnUi.CycleMode(o);
             }
 
             if (rcsRows)
             {
-                // While running these report what the executor resolved, not
-                // what was asked: Auto picks Hold or Align, and LP can fall
-                // back to groups, neither visible from the request.
+                // Show the resolved strategy and allocator fallback during execution.
                 RcsAttitudeStrategy attitude = options?.Attitude ?? RcsAttitudeStrategy.Auto;
                 string attitudeText = isActiveBurn && exec != null
                     ? ResolvedAttitude(exec)
-                    : attitude.ToString();
+                    : RcsBurnUi.AttitudeLabel(attitude);
                 if (ButtonRow("ATTITUDE".AsSpan(), Fit(attitudeText), in button))
                 {
                     RcsBurnOptions o = Options();
-                    o.Attitude = o.Attitude switch
-                    {
-                        RcsAttitudeStrategy.Auto => RcsAttitudeStrategy.Hold,
-                        RcsAttitudeStrategy.Hold => RcsAttitudeStrategy.Align,
-                        _ => RcsAttitudeStrategy.Auto,
-                    };
+                    RcsBurnUi.CycleAttitude(o);
                 }
 
                 RcsAllocator allocator = options?.Allocator ?? RcsAllocator.Groups;
                 string allocatorText = isActiveBurn && exec != null
                     ? ResolvedAllocator(exec)
-                    : allocator.ToString();
+                    : RcsBurnUi.AllocatorLabel(allocator);
                 if (ButtonRow("ALLOCATOR".AsSpan(), Fit(allocatorText), in button))
                 {
                     RcsBurnOptions o = Options();
-                    o.Allocator = o.Allocator == RcsAllocator.Groups
-                        ? RcsAllocator.Lp
-                        : RcsAllocator.Groups;
+                    RcsBurnUi.CycleAllocator(o);
                 }
             }
 
@@ -242,9 +206,7 @@ internal static class RcsGaugePanel
             }
 
 #if DEBUG
-            // The row count and the draw sequence are parallel lists, and a
-            // mismatch is silent: the window rect is fixed before drawing, so
-            // a surplus row is scissored away.
+            // Extra rows are clipped because the rectangle is fixed before drawing.
             float drawnRows = (y - posPixels.Y - margin) / (rowH + gap);
             if (Math.Abs(drawnRows - rows) > 0.01f)
                 LogHelper.WarnOnce("rcs-gauge-rows",
@@ -261,12 +223,12 @@ internal static class RcsGaugePanel
     private static string ExecutionLabel(RcsExecutionMode mode, RcsExecutionMode resolved)
         => mode == RcsExecutionMode.Default
             ? (resolved == RcsExecutionMode.Rcs ? "DEF RCS" : "DEF ENGINE")
-            : mode.ToString();
+            : RcsBurnUi.ModeLabel(mode);
 
     private static string ResolvedAttitude(RcsExecution exec)
         => exec.ResolvedStrategy == RcsAttitudeStrategy.Align && exec.ResolvedAxis >= 0
             ? $"ALIGN {RcsExecutor.AxisName(exec.ResolvedAxis)}"
-            : exec.ResolvedStrategy.ToString();
+            : RcsBurnUi.AttitudeLabel(exec.ResolvedStrategy);
 
     /// <summary>LP-GRP is the LP allocator running on its group fallback,
     /// which is a different state from having asked for groups.</summary>
@@ -305,11 +267,16 @@ internal static class RcsGaugePanel
             : sec >= 90.0 ? $"{sec / 60.0:F0} MIN"
             : $"{sec:F0} S";
 
-    /// <summary>Upper-cases and clamps to the 16-glyph label budget: ImGauge
-    /// throws above it, and the atlas has no lowercase glyphs.</summary>
     private static ReadOnlySpan<char> Fit(string text)
     {
-        string upper = text.ToUpperInvariant();
-        return upper.Length <= MaxChars ? upper.AsSpan() : upper.AsSpan(0, MaxChars);
+        // Normal labels are already uppercase. Keep unusual numeric text readable in the gauge atlas too.
+        foreach (char c in text)
+        {
+            if (!char.IsLower(c))
+                continue;
+            text = text.ToUpperInvariant();
+            break;
+        }
+        return text.AsSpan(0, Math.Min(text.Length, MaxChars));
     }
 }

@@ -3,21 +3,99 @@ using AdvancedFlightComputer.HarnessTests.Framework;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Pure persistence tests for the RCS registry: the TOML write/parse round-trip
-// (including the escape-aware quoting that keeps a vehicle id containing a
-// double quote from mis-keying, and the active-execution fields) plus the
-// per-burn options keying that follows a burn as the user nudges it. No
-// vehicle and no filesystem: WriteToml/ParseLines are exercised directly
-// through in-memory buffers.
+// Persistence checks use isolated dictionaries and a unique temporary directory.
 public sealed class RcsRegistryTest : AfcTest
 {
     public override string Name => "afc-rcs-registry";
 
     protected override void Execute(TestContext t)
     {
+        CheckSaveScopeChanges(t);
+        CheckAtomicWrite(t);
         CheckTomlRoundTrip(t);
         CheckOptionsKeying(t);
         CheckUnknownEnumFallback(t);
+    }
+
+    private static RcsExecution Entry(string saveId, string vehicleId)
+    {
+        var execution = new RcsExecution { SaveId = saveId, VehicleId = vehicleId };
+        execution.GetOrCreateOptions(100.0, 1.0).Mode = RcsExecutionMode.Rcs;
+        return execution;
+    }
+
+    private static void CheckSaveScopeChanges(TestContext t)
+    {
+        RcsExecution source = Entry("", "ship");
+        RcsExecution other = Entry("other", "ship");
+        var entries = new Dictionary<(string SaveId, string VehicleId), RcsExecution>
+        {
+            [("", "ship")] = source,
+            [("first", "stale")] = Entry("first", "stale"),
+            [("other", "ship")] = other,
+        };
+        RcsExecRegistry.RekeyEntries(entries, "", "first");
+        t.Check("first save promotes transient entry", source.SaveId == "first"
+            && entries.TryGetValue(("first", "ship"), out var moved) && ReferenceEquals(source, moved));
+        t.Check("first save removes previous destination entries", !entries.ContainsKey(("first", "stale")));
+        RcsExecRegistry.RekeyEntries(entries, "first", "save-as");
+        t.Check("Save-As moves source", source.SaveId == "save-as" && !entries.ContainsKey(("first", "ship")));
+        entries[("overwrite", "old-ship")] = Entry("overwrite", "old-ship");
+        RcsExecRegistry.RekeyEntries(entries, "save-as", "overwrite");
+        t.Check("overwrite removes destination and moves source", source.SaveId == "overwrite"
+            && !entries.ContainsKey(("overwrite", "old-ship")) && !entries.ContainsKey(("save-as", "ship")));
+        t.Check("unrelated save preserved", ReferenceEquals(entries[("other", "ship")], other));
+        RcsExecRegistry.RekeyEntries(entries, "overwrite", "overwrite");
+        RcsExecRegistry.RekeyEntries(entries, "overwrite", "");
+        t.Check("same or empty destination leaves state intact", entries.Count == 2
+            && ReferenceEquals(entries[("overwrite", "ship")], source));
+    }
+
+    private static void CheckAtomicWrite(TestContext t)
+    {
+        string directory = Path.Combine(Path.GetTempPath(), "afc-rcs-registry-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, "state.toml");
+        try
+        {
+            RcsExecution first = Entry("first", "ship");
+            RcsExecRegistry.WriteFile(path, [first]);
+            string original = File.ReadAllText(path);
+            bool failed = false;
+            try
+            {
+                RcsExecRegistry.WriteFile(path, FailingEntries(first));
+            }
+            catch (InvalidOperationException)
+            {
+                failed = true;
+            }
+            t.Check("failed write keeps previous file", failed && File.ReadAllText(path) == original);
+            t.Check("failed write removes its temporary file", Directory.GetFiles(directory, "*.tmp").Length == 0);
+
+            RcsExecRegistry.WriteFile(path, InterleavedEntries(path, first));
+            t.Check("overlapping writes keep separate temporary files", File.ReadAllText(path) == original);
+            t.Check("successful write removes its temporary file", Directory.GetFiles(directory, "*.tmp").Length == 0);
+        }
+        finally
+        {
+            // Only this test creates files in its unique temporary directory.
+            foreach (string file in Directory.GetFiles(directory))
+                File.Delete(file);
+            Directory.Delete(directory);
+        }
+    }
+
+    private static IEnumerable<RcsExecution> FailingEntries(RcsExecution entry)
+    {
+        yield return entry;
+        throw new InvalidOperationException("Test serialization failure");
+    }
+
+    private static IEnumerable<RcsExecution> InterleavedEntries(string path, RcsExecution entry)
+    {
+        yield return entry;
+        RcsExecRegistry.WriteFile(path, [Entry("second", "other-ship")]);
     }
 
     private static void CheckTomlRoundTrip(TestContext t)

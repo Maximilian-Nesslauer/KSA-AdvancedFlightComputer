@@ -2,19 +2,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// Estimates the propellant mass currently reachable by the vehicle's
-/// active RCS thrusters. Reads each Combustor core's resource-manager
-/// ConsumptionOrder (the flow-rule-selected reachable tank levels the
-/// game's own consumption path walks), sums reactant masses over the
-/// distinct reachable tanks, and bounds the usable total by the reactant
-/// mix's mass fractions.
-///
-/// Approximations, acceptable for a warning: all thrusters are assumed to
-/// share one reactant mix (the first one found), and reachability ignores
-/// depletion order, so this is an upper bound on what the thrusters can
-/// actually burn.
-/// </summary>
+/// <summary>Estimate reachable liquid RCS propellant from ResourceManagerBase.ConsumptionOrder. Assume one reactant mix and ignore depletion order, so this is an upper bound used for a warning.</summary>
 internal static class RcsPropellant
 {
     public static double AvailableKg(Vehicle vehicle)
@@ -29,9 +17,7 @@ internal static class RcsPropellant
                 continue;
             foreach (RocketCore core in thruster.Cores)
             {
-                // Only a liquid core (Combustor) carries a reactant mix and a
-                // resource-manager tank graph; solid motors carry neither, so
-                // any non-Combustor core is skipped. RCS thrusters are liquid.
+                // This estimate covers liquid reactants. Solid cores have no tank graph.
                 if (core is not Combustor combustor)
                     continue;
                 mix ??= combustor.DesiredMix;
@@ -60,10 +46,7 @@ internal static class RcsPropellant
 
     private static void CollectReachableTanks(ResourceManager? rm, HashSet<Tank> tanks)
     {
-        // ConsumptionOrder selects the flow-rule's reachable tank levels the
-        // same way the game's own consumption path does (ResourceManagerBase),
-        // so it stays correct if the flow-rule set changes; null before the
-        // manager's graph is built.
+        // ConsumptionOrder is null until the resource graph exists.
         Tank[][]? groups = rm?.ConsumptionOrder;
         if (groups == null)
             return;

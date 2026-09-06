@@ -3,15 +3,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>
-/// Public interop surface: raised on the main thread after an RCS
-/// translation burn completes, before the burn node is touched. Consumers
-/// (AutoRemoveFinishedBurns) bind this via reflection soft-dependency, so
-/// the type name, event name, and signature are a cross-mod API - renaming
-/// any of them breaks consumers silently. The parameter types are
-/// deliberately all from KSA.dll so a consumer never needs an
-/// AdvancedFlightComputer reference to build a matching delegate.
-/// </summary>
+/// <summary>Raised on the main thread after execution teardown and before the burn node is changed. Keep the type, event name, and signature stable for consumers that bind by reflection. KSA parameter types let consumers bind without an AFC reference.</summary>
 public static class RcsBurnCompletions
 {
     public static event Action<Vehicle, Burn>? Completed;
@@ -21,8 +13,7 @@ public static class RcsBurnCompletions
         Delegate[]? subscribers = Completed?.GetInvocationList();
         if (subscribers == null)
             return;
-        // Per-subscriber isolation: a plain multicast invoke would let one
-        // throwing subscriber deny delivery to every later one.
+        // One failed subscriber must not prevent delivery to the remaining subscribers.
         foreach (Delegate subscriber in subscribers)
         {
             try
