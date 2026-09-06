@@ -8,16 +8,7 @@ using Brutal.Logging;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-/// <summary>
-/// One-multi-pass-per-(save, vehicle) registry, persisted to a TOML
-/// file in the mod's user folder. Keyed by <c>(SaveId, VehicleId)</c>
-/// so a Vehicle.Id collision across saves is harmless: lookups always
-/// implicitly scope to <see cref="SaveLoadObserver.CurrentSaveId"/>.
-///
-/// New intent types register a (kind -> factory) pair in
-/// <see cref="IntentDeserializers"/>; nothing else in the registry
-/// needs to change.
-/// </summary>
+// Entries belong to one vehicle in one save. Lookups use the current save, and the intent reader map permits additional intent types.
 internal static class MultiPassRegistry
 {
     private static readonly IReadOnlyDictionary<string, Func<IReadOnlyDictionary<string, string>, IManeuverIntent?>>
@@ -45,18 +36,12 @@ internal static class MultiPassRegistry
             "mods", "AdvancedFlightComputer");
         _configPath = Path.Combine(_modDir, "multipass.toml");
 
-        // The game never runs UncompressedSave.Load for the default starting
-        // universe, so without this eager load a session that starts fresh
-        // and then saves would rewrite the file from an empty registry and
-        // wipe every other save's persisted entries.
+        // Load at initialization because the default world may never call UncompressedSave.Load. Otherwise its first save could overwrite entries from other saves.
         Load();
     }
 
-    /// <summary>Total entries across all saves (diagnostics only).</summary>
     public static int Count => _byKey.Count;
 
-    /// <summary>Entries that match <see cref="SaveLoadObserver.CurrentSaveId"/>.
-    /// User-facing count.</summary>
     public static int CountForCurrentSave
     {
         get
@@ -71,10 +56,7 @@ internal static class MultiPassRegistry
         }
     }
 
-    /// <summary>Looks up by vehicleId in the active save context.
-    /// With no save loaded the lookup uses the transient bucket
-    /// (SaveId="") so a multi-pass started in an unsaved session
-    /// stays visible to the postfix.</summary>
+    // The default world has no save ID until its first write.
     public static bool TryGet(string vehicleId,
         [MaybeNullWhen(false)] out MultiPassExecution exec)
     {
@@ -88,9 +70,7 @@ internal static class MultiPassRegistry
         return _byKey.ContainsKey((saveId, vehicleId));
     }
 
-    /// <summary>Add / Remove mutate in-memory only. Persistence is
-    /// the caller's job; <see cref="SaveLoadObserver"/> drives it
-    /// from KSA save events.</summary>
+    // Keep execution changes in memory until the game is saved.
     public static void Add(MultiPassExecution exec)
     {
         _byKey[(exec.SaveId, exec.VehicleId)] = exec;
@@ -108,24 +88,10 @@ internal static class MultiPassRegistry
                 $"-> {(removed ? "removed" : "not found")}");
     }
 
-    /// <summary>Read-only snapshot for debug logging.</summary>
     public static IReadOnlyDictionary<(string, string), MultiPassExecution> Snapshot
         => _byKey;
 
-    /// <summary>
-    /// Moves the session's entries to <paramref name="newSaveId"/> when a
-    /// save is written under a different id than the one the world came
-    /// from: Save-As, the first save of an unsaved session (old id ""), and
-    /// overwriting a different save from the saves list all write with an id
-    /// that does not match <see cref="SaveLoadObserver.CurrentSaveId"/>.
-    /// Without the move the active execution stays keyed to the old id,
-    /// where the CurrentSaveId-scoped lookups (and Remove) can no longer
-    /// reach it, so it silently stops advancing and leaks.
-    ///
-    /// Entries already keyed to <paramref name="newSaveId"/> belong to the
-    /// save being overwritten, whose world this write replaces wholesale,
-    /// so they are dropped rather than kept beside the moved ones.
-    /// </summary>
+    // Move the current world to its written save ID and discard entries from an overwritten destination.
     public static void RekeyTo(string oldSaveId, string newSaveId)
     {
         if (string.IsNullOrEmpty(newSaveId) || oldSaveId == newSaveId) return;
@@ -164,11 +130,6 @@ internal static class MultiPassRegistry
 
     public static void Reset() => _byKey.Clear();
 
-    /// <summary>
-    /// Loads entries from disk. Drops entries with unknown kind,
-    /// missing required fields, or empty save_id - only saved-game-
-    /// scoped entries persist.
-    /// </summary>
     public static void Load()
     {
         if (string.IsNullOrEmpty(_configPath)) return;
@@ -196,9 +157,7 @@ internal static class MultiPassRegistry
     {
         if (string.IsNullOrEmpty(_configPath)) return;
 
-        // Skip the write entirely when there is nothing persistable
-        // and no file to overwrite. Avoids touching disk on every KSA
-        // save for users who never opened the multi-pass UI.
+        // Avoid creating a file when no saved execution exists and the feature has never written one.
         bool hasPersistable = false;
         foreach (var exec in _byKey.Values)
         {
@@ -207,55 +166,16 @@ internal static class MultiPassRegistry
         if (!hasPersistable && !File.Exists(_configPath))
             return;
 
-        // Atomic write: serialize to .tmp first, then rename over the
-        // real file. A crash mid-Write leaves the previous good
-        // registry intact rather than a half-truncated TOML.
-        string tempPath = _configPath + ".tmp";
+        // Write a temporary file before replacement so an interrupted write leaves the previous file intact.
+        string tempPath = _configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
             Directory.CreateDirectory(_modDir);
             using (var writer = new StreamWriter(tempPath))
             {
-                writer.WriteLine("# AdvancedFlightComputer multi-pass execution state.");
-                writer.WriteLine("# Auto-managed; manual edits are overwritten on the next save.");
-                writer.WriteLine();
-
-                int written = 0;
-                foreach (var (key, exec) in _byKey)
-                {
-                    // Skip transient entries: they have no save scope
-                    // so persisting them would just clutter the file.
-                    if (string.IsNullOrEmpty(exec.SaveId)) continue;
-
-                    writer.WriteLine("[[execution]]");
-                    writer.WriteLine($"save_id = \"{TomlIo.Escape(exec.SaveId)}\"");
-                    writer.WriteLine($"vehicle_id = \"{TomlIo.Escape(exec.VehicleId)}\"");
-                    writer.WriteLine($"kind = \"{TomlIo.Escape(exec.Intent.Kind)}\"");
-                    writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                        "mode = \"{0}\"", exec.Mode));
-                    writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                        "pass_count_total = {0}", exec.PassCountTotal));
-                    writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                        "pass_index = {0}", exec.PassIndex));
-                    if (exec.CurrentBurnTimeSec.HasValue)
-                    {
-                        writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                            "current_burn_time_sec = {0:R}", exec.CurrentBurnTimeSec.Value));
-                    }
-                    if (exec.CurrentBurnDvMagnitudeMs.HasValue)
-                    {
-                        writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                            "current_burn_dv_ms = {0:R}", exec.CurrentBurnDvMagnitudeMs.Value));
-                    }
-                    exec.Intent.WriteToToml(writer);
-                    writer.WriteLine();
-                    written++;
-                }
-
+                int written = WriteToml(writer, _byKey.Values);
                 if (DebugConfig.MultiPass)
-                    DefaultCategory.Log.Debug(
-                        $"[AFC] MultiPassRegistry: saved {written} persistent entries " +
-                        $"({_byKey.Count - written} transient skipped)");
+                    DefaultCategory.Log.Debug($"[AFC] MultiPassRegistry: saved {written} persistent entries");
             }
 
             File.Move(tempPath, _configPath, overwrite: true);
@@ -265,7 +185,7 @@ internal static class MultiPassRegistry
             DefaultCategory.Log.Error(
                 $"[AFC] MultiPassRegistry: failed to save {_configPath}: {ex}");
 
-            // Best-effort cleanup of the half-written temp file.
+            // Cleanup must not hide the original write failure.
             try
             {
                 if (File.Exists(tempPath)) File.Delete(tempPath);
@@ -274,14 +194,49 @@ internal static class MultiPassRegistry
         }
     }
 
+    internal static int WriteToml(TextWriter writer, IEnumerable<MultiPassExecution> executions)
+    {
+        writer.WriteLine("# AdvancedFlightComputer multi-pass execution state.");
+        writer.WriteLine("# Auto-managed; manual edits are overwritten on the next save.");
+        writer.WriteLine();
+
+        int written = 0;
+        foreach (var exec in executions)
+        {
+            // Transient entries have no saved scope and must not be written.
+            if (string.IsNullOrEmpty(exec.SaveId)) continue;
+
+            writer.WriteLine("[[execution]]");
+            writer.WriteLine($"save_id = \"{TomlIo.Escape(exec.SaveId)}\"");
+            writer.WriteLine($"vehicle_id = \"{TomlIo.Escape(exec.VehicleId)}\"");
+            writer.WriteLine($"kind = \"{TomlIo.Escape(exec.Intent.Kind)}\"");
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "mode = \"{0}\"", exec.Mode));
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "pass_count_total = {0}", exec.PassCountTotal));
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                "pass_index = {0}", exec.PassIndex));
+            if (exec.CurrentBurnTimeSec.HasValue)
+            {
+                writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "current_burn_time_sec = {0:R}", exec.CurrentBurnTimeSec.Value));
+            }
+            if (exec.CurrentBurnDvMagnitudeMs.HasValue)
+            {
+                writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
+                    "current_burn_dv_ms = {0:R}", exec.CurrentBurnDvMagnitudeMs.Value));
+            }
+            exec.Intent.WriteToToml(writer);
+            writer.WriteLine();
+            written++;
+        }
+
+        return written;
+    }
+
     #region TOML parser
 
-    /// <summary>
-    /// One entry block under construction during parsing, plus the
-    /// line number where its <c>[[execution]]</c> header was seen. The
-    /// line number is used in skip warnings so users can locate the
-    /// offending block in their <c>multipass.toml</c>.
-    /// </summary>
+    // Keep the table header line so parse errors can identify the affected entry.
     private sealed class PendingBlock
     {
         public readonly Dictionary<string, string> Fields = new();
@@ -292,8 +247,14 @@ internal static class MultiPassRegistry
         string path,
         Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink)
     {
+        ParseLines(File.ReadAllLines(path), path, sink);
+    }
+
+    internal static void ParseLines(
+        string[] lines, string path,
+        Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink)
+    {
         PendingBlock? current = null;
-        string[] lines = File.ReadAllLines(path);
 
         for (int li = 0; li < lines.Length; li++)
         {
@@ -308,10 +269,7 @@ internal static class MultiPassRegistry
                 continue;
             }
 
-            // An unknown table header (e.g. typo "[[exection]]") would
-            // otherwise be silently swallowed and every subsequent
-            // key/value would attach to the previous block. Warn and
-            // close out the current block so the typo is visible.
+            // An unknown table still ends the previous block. Otherwise its fields could corrupt a known entry.
             if (line.Length > 0 && line[0] == '[')
             {
                 DefaultCategory.Log.Warning(
@@ -341,8 +299,7 @@ internal static class MultiPassRegistry
             string key = line.Substring(0, eq).Trim();
             string val = line.Substring(eq + 1).Trim();
 
-            // Skip comment-stripping inside quoted strings so a
-            // vehicle named "Ariane#5" is not truncated to "Ariane".
+            // A hash inside a quoted vehicle ID is literal text.
             if (val.Length >= 2 && val[0] == '"')
             {
                 int closeIdx = FindClosingQuote(val, openAt: 0);
@@ -375,8 +332,7 @@ internal static class MultiPassRegistry
         if (pending == null) return;
         var block = pending.Fields;
 
-        // save_id is required: an entry without one cannot be scoped to a save
-        // game, so it would collide with the default starting situation.
+        // Require a save ID so malformed entries cannot enter the default world scope.
         if (!block.TryGetValue("save_id", out string? saveId) || string.IsNullOrEmpty(saveId))
         {
             DefaultCategory.Log.Warning(
@@ -459,11 +415,6 @@ internal static class MultiPassRegistry
         return null;
     }
 
-    /// <summary>
-    /// Index of the closing <c>"</c> for a TOML basic string opened at
-    /// <paramref name="openAt"/>. Honours \\ and \" escapes. -1 on
-    /// no match.
-    /// </summary>
     private static int FindClosingQuote(string s, int openAt)
     {
         for (int i = openAt + 1; i < s.Length; i++)
