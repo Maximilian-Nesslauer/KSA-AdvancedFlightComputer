@@ -15,6 +15,8 @@ public sealed class MultiPassRegistryTest : AfcTest
     {
         CheckRoundTrip(t);
         CheckSaveScope(t);
+        CheckStructuralParseFailures(t);
+        CheckFailedLoadPreservesState(t);
     }
 
     private static MultiPassExecution Make(string save, string vehicle, IManeuverIntent? intent = null)
@@ -56,7 +58,9 @@ public sealed class MultiPassRegistryTest : AfcTest
         int written = MultiPassRegistry.WriteToml(writer,
             [apse, Make("other", "ship", hohmann), Make("", "transient")]);
         var parsed = new Dictionary<(string SaveId, string VehicleId), MultiPassExecution>();
-        MultiPassRegistry.ParseLines(writer.ToString().Split('\n'), "round-trip", parsed);
+        bool parsedCleanly = MultiPassRegistry.ParseLines(
+            writer.ToString().Split('\n'), "round-trip", parsed);
+        t.Check("round-trip parse succeeds", parsedCleanly);
         t.Check("transient execution is not persisted", written == 2 && parsed.Count == 2);
         if (t.Check("escaped identity survives", parsed.TryGetValue((apse.SaveId, apse.VehicleId), out var back)))
         {
@@ -138,6 +142,82 @@ public sealed class MultiPassRegistryTest : AfcTest
 
     private static MultiPassExecution? Get(string vehicle)
         => MultiPassRegistry.TryGet(vehicle, out var exec) ? exec : null;
+
+    private static void CheckStructuralParseFailures(TestContext t)
+    {
+        var parsed = new Dictionary<(string SaveId, string VehicleId), MultiPassExecution>();
+        t.Check("unknown MultiPass header fails parse",
+            !MultiPassRegistry.ParseLines(["[broken]"], "bad-header", parsed));
+        parsed.Clear();
+        t.Check("invalid MultiPass assignment fails parse",
+            !MultiPassRegistry.ParseLines(
+                ["[[execution]]", "not an assignment"], "bad-assignment", parsed));
+        parsed.Clear();
+        t.Check("missing MultiPass fields fail parse",
+            !MultiPassRegistry.ParseLines(
+                ["[[execution]]", "save_id = \"broken\""], "missing-fields", parsed));
+    }
+
+    private static void CheckFailedLoadPreservesState(TestContext t)
+    {
+        FieldInfo configPath = Field(typeof(MultiPassRegistry), "_configPath");
+        FieldInfo modDir = Field(typeof(MultiPassRegistry), "_modDir");
+        object? oldPath = configPath.GetValue(null);
+        object? oldDir = modDir.GetValue(null);
+        var oldEntries = new List<MultiPassExecution>(MultiPassRegistry.Snapshot.Values);
+        string temp = Path.Combine(Path.GetTempPath(), "afc-multipass-load-" + Guid.NewGuid().ToString("N"));
+        string file = Path.Combine(temp, "multipass.toml");
+        Directory.CreateDirectory(temp);
+        try
+        {
+            using (var writer = new StreamWriter(file))
+                MultiPassRegistry.WriteToml(writer, [Make("disk", "disk-vehicle")]);
+
+            configPath.SetValue(null, file);
+            modDir.SetValue(null, temp);
+            MultiPassRegistry.Reset();
+            MultiPassExecution live = Make("live", "live-vehicle");
+            MultiPassRegistry.Add(live);
+
+            using (new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.None))
+                MultiPassRegistry.Load();
+
+            t.Check("failed load preserves live state",
+                MultiPassRegistry.Snapshot.TryGetValue(("live", "live-vehicle"), out var preserved)
+                && ReferenceEquals(preserved, live)
+                && !MultiPassRegistry.Snapshot.ContainsKey(("disk", "disk-vehicle")));
+
+            File.Delete(file);
+            MultiPassRegistry.Load();
+            t.Check("missing file preserves live state",
+                MultiPassRegistry.Snapshot.TryGetValue(("live", "live-vehicle"), out preserved)
+                && ReferenceEquals(preserved, live));
+
+            using (var writer = new StreamWriter(file))
+                MultiPassRegistry.WriteToml(writer, [Make("disk", "disk-vehicle")]);
+            File.AppendAllLines(file, ["[[execution]]", "save_id = \"broken\""]);
+            MultiPassRegistry.Load();
+            t.Check("partial MultiPass parse preserves live state",
+                MultiPassRegistry.Snapshot.TryGetValue(("live", "live-vehicle"), out preserved)
+                && ReferenceEquals(preserved, live)
+                && !MultiPassRegistry.Snapshot.ContainsKey(("disk", "disk-vehicle")));
+
+            using (var writer = new StreamWriter(file))
+                MultiPassRegistry.WriteToml(writer, [Make("disk", "disk-vehicle")]);
+            MultiPassRegistry.Load();
+            t.Check("successful load replaces live state",
+                MultiPassRegistry.Snapshot.ContainsKey(("disk", "disk-vehicle"))
+                && !MultiPassRegistry.Snapshot.ContainsKey(("live", "live-vehicle")));
+        }
+        finally
+        {
+            configPath.SetValue(null, oldPath);
+            modDir.SetValue(null, oldDir);
+            MultiPassRegistry.Reset();
+            foreach (MultiPassExecution entry in oldEntries) MultiPassRegistry.Add(entry);
+            if (Directory.Exists(temp)) Directory.Delete(temp, recursive: true);
+        }
+    }
 
     private static FieldInfo Field(Type type, string name)
         => type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)

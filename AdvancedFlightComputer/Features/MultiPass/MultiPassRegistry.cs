@@ -134,22 +134,24 @@ internal static class MultiPassRegistry
     {
         if (string.IsNullOrEmpty(_configPath)) return;
 
-        _byKey.Clear();
-        if (!File.Exists(_configPath))
-            return;
-
         try
         {
-            ParseFile(_configPath, _byKey);
+            var loaded = new Dictionary<(string SaveId, string VehicleId), MultiPassExecution>();
+            if (!ParseFile(_configPath, loaded))
+                return;
+            _byKey.Clear();
+            foreach (var entry in loaded)
+                _byKey.Add(entry.Key, entry.Value);
             if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPassRegistry: loaded {_byKey.Count} entries from {_configPath}");
         }
+        catch (FileNotFoundException) { }
+        catch (DirectoryNotFoundException) { }
         catch (Exception ex)
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: failed to load {_configPath}: {ex}");
-            _byKey.Clear();
         }
     }
 
@@ -243,18 +245,17 @@ internal static class MultiPassRegistry
         public int HeaderLine;
     }
 
-    private static void ParseFile(
+    private static bool ParseFile(
         string path,
         Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink)
-    {
-        ParseLines(File.ReadAllLines(path), path, sink);
-    }
+        => ParseLines(File.ReadAllLines(path), path, sink);
 
-    internal static void ParseLines(
+    internal static bool ParseLines(
         string[] lines, string path,
         Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink)
     {
         PendingBlock? current = null;
+        bool success = true;
 
         for (int li = 0; li < lines.Length; li++)
         {
@@ -264,7 +265,7 @@ internal static class MultiPassRegistry
 
             if (line == "[[execution]]")
             {
-                FlushBlock(current, sink);
+                success &= FlushBlock(current, sink);
                 current = new PendingBlock { HeaderLine = lineNumber };
                 continue;
             }
@@ -275,7 +276,8 @@ internal static class MultiPassRegistry
                 DefaultCategory.Log.Warning(
                     $"[AFC] MultiPassRegistry: {Path.GetFileName(path)}:{lineNumber} " +
                     $"unrecognised TOML header '{line}', skipping until next [[execution]].");
-                FlushBlock(current, sink);
+                success = false;
+                success &= FlushBlock(current, sink);
                 current = null;
                 continue;
             }
@@ -285,6 +287,7 @@ internal static class MultiPassRegistry
                 DefaultCategory.Log.Warning(
                     $"[AFC] MultiPassRegistry: {Path.GetFileName(path)}:{lineNumber} " +
                     $"key '{line}' outside any [[execution]] block, ignoring.");
+                success = false;
                 continue;
             }
 
@@ -294,6 +297,7 @@ internal static class MultiPassRegistry
                 DefaultCategory.Log.Warning(
                     $"[AFC] MultiPassRegistry: {Path.GetFileName(path)}:{lineNumber} " +
                     "expected 'key = value' assignment, ignoring.");
+                success = false;
                 continue;
             }
             string key = line.Substring(0, eq).Trim();
@@ -310,6 +314,7 @@ internal static class MultiPassRegistry
                     DefaultCategory.Log.Warning(
                         $"[AFC] MultiPassRegistry: {Path.GetFileName(path)}:{lineNumber} " +
                         $"unterminated string for key '{key}', ignoring.");
+                    success = false;
                     continue;
                 }
             }
@@ -322,14 +327,15 @@ internal static class MultiPassRegistry
             current.Fields[key] = val;
         }
 
-        FlushBlock(current, sink);
+        success &= FlushBlock(current, sink);
+        return success;
     }
 
-    private static void FlushBlock(
+    private static bool FlushBlock(
         PendingBlock? pending,
         Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink)
     {
-        if (pending == null) return;
+        if (pending == null) return true;
         var block = pending.Fields;
 
         // Require a save ID so malformed entries cannot enter the default world scope.
@@ -337,56 +343,56 @@ internal static class MultiPassRegistry
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing save_id).");
-            return;
+            return false;
         }
         if (!block.TryGetValue("vehicle_id", out string? vehicleId)
             || string.IsNullOrEmpty(vehicleId))
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or empty vehicle_id).");
-            return;
+            return false;
         }
         if (!block.TryGetValue("kind", out string? kind)
             || string.IsNullOrEmpty(kind))
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or empty kind).");
-            return;
+            return false;
         }
         if (!block.TryGetValue("mode", out string? modeStr) ||
-            !Enum.TryParse(modeStr, out SplitMode mode))
+            !Enum.TryParse(modeStr, out SplitMode mode) || !Enum.IsDefined(mode))
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or invalid mode '{modeStr ?? "<null>"}').");
-            return;
+            return false;
         }
         if (!block.TryGetValue("pass_count_total", out string? totalStr) ||
             !int.TryParse(totalStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int total))
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or invalid pass_count_total).");
-            return;
+            return false;
         }
         if (!block.TryGetValue("pass_index", out string? idxStr) ||
             !int.TryParse(idxStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int idx))
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or invalid pass_index).");
-            return;
+            return false;
         }
 
         if (!IntentDeserializers.TryGetValue(kind, out var deserializer))
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (unknown intent kind '{kind}').");
-            return;
+            return false;
         }
         IManeuverIntent? intent = deserializer(block);
         if (intent == null)
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (intent '{kind}' deserialiser failed).");
-            return;
+            return false;
         }
 
         double? currentBurnTimeSec = ParseOptionalDouble(block, "current_burn_time_sec");
@@ -404,6 +410,7 @@ internal static class MultiPassRegistry
             CurrentBurnTimeSec = currentBurnTimeSec,
             CurrentBurnDvMagnitudeMs = currentBurnDvMs,
         };
+        return true;
     }
 
     private static double? ParseOptionalDouble(
