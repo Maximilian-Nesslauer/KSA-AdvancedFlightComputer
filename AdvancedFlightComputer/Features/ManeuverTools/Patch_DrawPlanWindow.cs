@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -340,7 +341,11 @@ internal static partial class Patch_DrawPlanWindow
     internal static void TickWindowState()
     {
         if (!TransferPlanner.ShowPlanWindow)
+        {
             DropPlanState();
+            HohmannFlybyUI.ClearPreview();
+            HohmannMultiPassUI.ClearFlybyPreview();
+        }
     }
 
     private static void DropPlanState()

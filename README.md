@@ -36,6 +36,8 @@ The stock planner aims every transfer at the target body's center, so a well-tim
 - **Flyby side** picks which side of the body you pass, named in the target's own orbital frame: **Inner** (toward its parent), **Outer** (away from it), **North**, or **South**. The aim offset has to stay perpendicular to the approach, so a side whose axis lies along the approach direction cannot be reached and is greyed out. That is also why there is no leading/trailing option for a Hohmann-style arrival.
 - Works for moon flybys and for interplanetary targets, either as a single burn or split across multi-pass passes.
 - The section reports the approach speed, the impact parameter, the departure delta-V next to the impact-aimed one, and the periapsis the propagated trajectory actually reaches. While a flyby is armed the preview shows that retargeted trajectory in place of stock's center-aimed one.
+- For multiple passes, the readout uses the selected departure after any schedule shift and the periapsis from the final preview trajectory.
+- If propagation cannot confirm a periapsis, the readout shows **No prediction** and its reason, such as a departure time outside the flight plan or no resolved target encounter.
 
 **Limitations:**
 - The plan is impulsive, the burn is not. On a near-escape departure the apoapsis moves by thousands of km per m/s of periapsis velocity, so the periapsis actually flown drifts from the requested one by roughly the finite-burn loss (order of one percent of a multi-km/s injection). Expect to trim it with a small correction burn, or split the departure across several passes to cut the loss.
@@ -70,6 +72,7 @@ Multi-pass works best together with [AutoStage](https://github.com/Maximilian-Ne
 **Limitations:**
 - Automatic pass advancement currently requires stock engine Auto mode. RCS translation completion does not advance the multi-pass sequence.
 - Same-parent transfers (e.g., LEO to Luna) shift the final burn forward by a few parking periods to fit the K-schedule. The shift is shown in the plan window.
+- A change to the flyby side or altitude updates the selected departure even during thrust.
 - Very high-energy departures from small SOIs (e.g., low Mars orbit to Saturn) may auto-clamp to fewer passes because intermediate orbits would escape the SOI.
 
 ### RCS Translation Burns
