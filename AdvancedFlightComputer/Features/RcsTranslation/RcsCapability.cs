@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Brutal.Numerics;
 using KSA;
 
@@ -19,9 +20,26 @@ internal struct RcsAxisGroup
     public readonly float AxisVeMs => MassFlowKgS > 0f ? ForceN / MassFlowKgS : 0f;
 }
 
+internal struct RcsSharedContribution
+{
+    public float MassFlowKgS;
+    public float3 TorqueNm;
+}
+
+// Base 3 digits identify each signed axis as absent, positive, or negative.
+// Thrusters with the same membership receive the same maximum axis pulse, so their flow and torque can share a bucket.
+[InlineArray(27)]
+internal struct RcsSharedContributions
+{
+    private RcsSharedContribution _first;
+}
+
 internal struct RcsCapabilitySnapshot
 {
     public bool HasAnyTranslation;
+
+    // Store only membership for multiple axes. Inline storage avoids allocations when the capability is probed each tick.
+    public RcsSharedContributions SharedContributions;
 
     /// <summary>Use the cached control frame so membership and live magnitudes refer to the same axes until Rocket.UpdateThrusterCache catches a control-point change.</summary>
     public floatQuat Ctrl2Body;
@@ -111,12 +129,7 @@ internal static class RcsCapability
             if (massFlow <= 0f)
                 continue;
 
-            AccumulateAxis(ref snap, 0, state.IntendedForce.X, force.X, massFlow, torque, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 1, state.IntendedForce.X, force.X, massFlow, torque, thruster.MinimumPulseTime, positive: false);
-            AccumulateAxis(ref snap, 2, state.IntendedForce.Y, force.Y, massFlow, torque, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 3, state.IntendedForce.Y, force.Y, massFlow, torque, thruster.MinimumPulseTime, positive: false);
-            AccumulateAxis(ref snap, 4, state.IntendedForce.Z, force.Z, massFlow, torque, thruster.MinimumPulseTime, positive: true);
-            AccumulateAxis(ref snap, 5, state.IntendedForce.Z, force.Z, massFlow, torque, thruster.MinimumPulseTime, positive: false);
+            AccumulateTranslation(ref snap, state.IntendedForce, force, massFlow, torque, thruster.MinimumPulseTime);
 
             if (!state.IntendedTorque.X.IsExactlyZero())
             {
@@ -146,15 +159,38 @@ internal static class RcsCapability
         return snap;
     }
 
+    internal static void AccumulateTranslation(ref RcsCapabilitySnapshot snap, float3 intendedForce,
+        float3 liveForce, float massFlow, float3 torque, float minPulse)
+    {
+        int x = AccumulateComponent(ref snap, 0, intendedForce.X, liveForce.X, massFlow, torque, minPulse);
+        int y = AccumulateComponent(ref snap, 2, intendedForce.Y, liveForce.Y, massFlow, torque, minPulse);
+        int z = AccumulateComponent(ref snap, 4, intendedForce.Z, liveForce.Z, massFlow, torque, minPulse);
+        int axes = (x != 0 ? 1 : 0) + (y != 0 ? 1 : 0) + (z != 0 ? 1 : 0);
+        if (axes < 2)
+            return;
+        ref RcsSharedContribution shared = ref snap.SharedContributions[x + 3 * y + 9 * z];
+        shared.MassFlowKgS += massFlow;
+        shared.TorqueNm += torque;
+    }
+
+    private static int AccumulateComponent(ref RcsCapabilitySnapshot snap, int positiveGroup,
+        float intendedForce, float liveForce, float massFlow, float3 torque, float minPulse)
+    {
+        if (AccumulateAxis(ref snap, positiveGroup, intendedForce, liveForce, massFlow, torque, minPulse, true))
+            return 1;
+        return AccumulateAxis(ref snap, positiveGroup + 1, intendedForce, liveForce, massFlow, torque, minPulse, false)
+            ? 2 : 0;
+    }
+
     /// <summary>Cached and live force must agree in sign so group membership matches the worker in the cached control frame.</summary>
-    private static void AccumulateAxis(
+    private static bool AccumulateAxis(
         ref RcsCapabilitySnapshot snap, int idx, float intendedForce, float liveForce,
         float massFlow, float3 torque, float minPulse, bool positive)
     {
         if (positive ? intendedForce <= 0f : intendedForce >= 0f)
-            return;
+            return false;
         if (positive ? liveForce <= 0f : liveForce >= 0f)
-            return;
+            return false;
         float f = Math.Abs(liveForce);
         RcsAxisGroup g = snap.Get(idx);
         g.ForceN += f;
@@ -163,5 +199,6 @@ internal static class RcsCapability
         // Each group contains the full member torque. Combined-axis estimates must account for shared thrusters.
         g.TorqueNm += torque;
         snap.Set(idx, g);
+        return true;
     }
 }

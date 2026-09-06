@@ -7,8 +7,15 @@ internal static partial class RcsExecutor
 {
     #region Estimates
 
-    /// <summary>The cost is measured in kg per N s of net impulse along uCtrl. Each demanded group contributes its direction weight multiplied by its mass flow per unit force. Unusable groups are excluded to match worker suppression.</summary>
-    private static double GroupCostPerNs(in RcsCapabilitySnapshot cap, double3 uCtrl)
+    // Price the worker's continuous pulse demand in kg per N s of requested translation impulse.
+    internal static double GroupCostPerNs(in RcsCapabilitySnapshot cap, double3 uCtrl)
+    {
+        GroupDemand(in cap, uCtrl, out double cost, out _);
+        return cost;
+    }
+
+    private static void GroupDemand(in RcsCapabilitySnapshot cap, double3 uCtrl,
+        out double costPerNs, out double3 torquePerNs)
     {
         Span<double> weight = stackalloc double[6]
         {
@@ -16,17 +23,42 @@ internal static partial class RcsExecutor
             Math.Max(uCtrl.Y, 0.0), Math.Max(-uCtrl.Y, 0.0),
             Math.Max(uCtrl.Z, 0.0), Math.Max(-uCtrl.Z, 0.0),
         };
-        double cost = 0.0;
+        Span<double> seconds = stackalloc double[6];
+        seconds.Clear();
+        costPerNs = 0.0;
+        torquePerNs = default;
         for (int i = 0; i < 6; i++)
         {
-            // Use the same component threshold as TryHoldPerformance.
-            if (weight[i] < 1e-4)
+            RcsAxisGroup group = cap.Get(i);
+            if (weight[i] < 1e-4 || !group.IsUsable)
                 continue;
-            RcsAxisGroup g = cap.Get(i);
-            if (g.IsUsable)
-                cost += weight[i] * g.MassFlowKgS / g.ForceN;
+            seconds[i] = weight[i] / group.ForceN;
+            costPerNs += group.MassFlowKgS * seconds[i];
+            torquePerNs += double3.Unpack(group.TorqueNm) * seconds[i];
         }
-        return cost;
+        // Remove repeated flow and torque because a shared thruster fires at the maximum requested axis pulse.
+        for (int membership = 1; membership < 27; membership++)
+        {
+            ref readonly RcsSharedContribution shared = ref cap.SharedContributions[membership];
+            if (shared.MassFlowKgS <= 0f)
+                continue;
+            int digits = membership;
+            double sum = 0.0;
+            double maximum = 0.0;
+            for (int axis = 0; axis < 3; axis++, digits /= 3)
+            {
+                int sign = digits % 3;
+                if (sign == 0)
+                    continue;
+                double pulse = seconds[2 * axis + sign - 1];
+                sum += pulse;
+                maximum = Math.Max(maximum, pulse);
+            }
+            double duplicate = sum - maximum;
+            costPerNs -= shared.MassFlowKgS * duplicate;
+            torquePerNs -= double3.Unpack(shared.TorqueNm) * duplicate;
+        }
+        costPerNs = Math.Max(0.0, costPerNs);
     }
 
     public static RcsEstimates ComputeEstimates(
@@ -122,38 +154,14 @@ internal static partial class RcsExecutor
             return false;
 
         netForce = maxNet;
-        for (int i = 0; i < 6; i++)
-        {
-            if (weight[i] < 1e-4)
-                continue;
-            RcsAxisGroup g = cap.Get(i);
-            massFlow += g.MassFlowKgS * (weight[i] * maxNet / g.ForceN);
-        }
+        massFlow = maxNet * GroupCostPerNs(in cap, uCtrl);
         return true;
     }
 
-    /// <summary>Each demanded group contributes residual torque in proportion to its direction weight and force. The rotation groups supply the propellant cost per unit torque. The result is measured in kg per N s of net impulse. Axes without usable rotation authority currently contribute no estimated cost.</summary>
+    /// <summary>Price residual angular impulse in kg per N s of requested translation impulse. Axes without usable rotation authority currently contribute no estimated cost.</summary>
     internal static double GroupAttitudeFightPerImpulse(in RcsCapabilitySnapshot cap, double3 uCtrl)
     {
-        Span<double> weight = stackalloc double[6]
-        {
-            Math.Max(uCtrl.X, 0.0), Math.Max(-uCtrl.X, 0.0),
-            Math.Max(uCtrl.Y, 0.0), Math.Max(-uCtrl.Y, 0.0),
-            Math.Max(uCtrl.Z, 0.0), Math.Max(-uCtrl.Z, 0.0),
-        };
-        double3 torquePerForce = default;
-        for (int i = 0; i < 6; i++)
-        {
-            if (weight[i] < 1e-4)
-                continue;
-            RcsAxisGroup g = cap.Get(i);
-            if (!g.IsUsable)
-                continue;
-            double s = weight[i] / g.ForceN;
-            torquePerForce.X += g.TorqueNm.X * s;
-            torquePerForce.Y += g.TorqueNm.Y * s;
-            torquePerForce.Z += g.TorqueNm.Z * s;
-        }
+        GroupDemand(in cap, uCtrl, out _, out double3 torquePerForce);
         double cost =
             AxisAttitudeCost(Math.Abs(torquePerForce.X), cap.RotationMassFlowKgS.X, cap.RotationTorqueNm.X)
             + AxisAttitudeCost(Math.Abs(torquePerForce.Y), cap.RotationMassFlowKgS.Y, cap.RotationTorqueNm.Y)

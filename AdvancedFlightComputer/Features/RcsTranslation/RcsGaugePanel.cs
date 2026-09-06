@@ -47,6 +47,8 @@ internal static class RcsGaugePanel
 
         bool noTranslation = false;
         bool showEstimates = false;
+        bool currentVehicle = false;
+        RcsEstimates est = default;
         bool holdEst = false;
         bool alignEst = false;
         bool shortOfPropellant = false;
@@ -54,12 +56,13 @@ internal static class RcsGaugePanel
         if (rcsRows && !isActiveBurn)
         {
             noTranslation = !RcsExecutor.ProbeCached(vehicle).HasAnyTranslation;
-            if (!noTranslation && RcsBurnUi.HasEstimatesFor(timeSec, bt, exec))
+            if (!noTranslation && RcsBurnPreview.TryGetEstimates(burn, vehicle, fc, exec,
+                    out est, out currentVehicle))
             {
                 showEstimates = true;
-                holdEst = exec!.Estimates.HoldFeasible;
-                alignEst = exec.Estimates.AlignFeasible;
-                double neededKg = exec.Estimates.RequiredPropellantKg(
+                holdEst = est.HoldFeasible;
+                alignEst = est.AlignFeasible;
+                double neededKg = est.RequiredPropellantKg(
                     options?.Attitude ?? RcsAttitudeStrategy.Auto);
                 shortOfPropellant = neededKg > RcsExecutor.AvailablePropellantCached(vehicle);
             }
@@ -72,6 +75,7 @@ internal static class RcsGaugePanel
         if (isActiveBurn) rows += 3;                    // status, to go, cancel
         if (noTranslation) rows += 1;
         if (estHeader) rows += 1;
+        if (showEstimates && currentVehicle) rows += 1;
         if (holdEst) rows += 1;
         if (alignEst) rows += 1;
         if (shortOfPropellant) rows += 1;
@@ -192,7 +196,8 @@ internal static class RcsGaugePanel
                 FullRow("NO RCS TRANSLATE".AsSpan(), in warn);
             if (showEstimates)
             {
-                ref readonly RcsEstimates est = ref exec!.Estimates;
+                if (currentVehicle)
+                    FullRow("CURRENT VEHICLE".AsSpan(), in dim);
                 if (estHeader)
                     FullRow("PROPELLANT/TIME".AsSpan(), in dim);
                 if (holdEst)
