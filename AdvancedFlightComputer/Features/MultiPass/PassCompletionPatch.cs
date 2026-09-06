@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.RcsTranslation;
 using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
@@ -26,6 +27,28 @@ internal static class PassCompletionPatch
     public static void OnRegistryRemovedExternally(string vehicleId)
         => _lastBurnMode.Remove(vehicleId);
 
+    internal static void OnRcsBurnCompleted(Vehicle vehicle, Burn completedBurn)
+    {
+        if (!MultiPassRegistry.TryGet(vehicle.Id, out MultiPassExecution? exec)
+            || !ReferenceEquals(exec.CurrentBurn, completedBurn))
+            return;
+
+        try
+        {
+            if (MultiPassDebug.Enabled)
+                DefaultCategory.Log.Debug(
+                    $"[AFC] MultiPass: vehicle='{vehicle.Id}' received RCS completion " +
+                    $"for pass {exec.PassIndex + 1}/{exec.PassCountTotal}.");
+            CommitCompletion(vehicle.Id, exec, vehicle.FlightComputer, removeBurnImmediately: true);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Error(
+                $"[AFC] MultiPass: vehicle={vehicle.Id} RCS completion threw, cancelling execution: {ex}");
+            CancelExecution(vehicle.Id, reason: null);
+        }
+    }
+
     internal static void TickVehicle(Vehicle vehicle)
     {
         if (!MultiPassRegistry.TryGet(vehicle.Id, out var exec))
@@ -48,7 +71,7 @@ internal static class PassCompletionPatch
             UpdateBurnModeTracking(vehicle.Id, fc, out var prevMode, out var hadPrev);
             ObserveAutoEngagement(vehicle, exec, fc, prevMode, hadPrev);
 
-            if (UpdateMaterializationTracking(vehicle.Id, exec, fc) == MaterializationResult.Cancelled)
+            if (UpdateMaterializationTracking(vehicle, exec, fc) == MaterializationResult.Cancelled)
                 return;
 
             AdvanceExecution(vehicle, exec, fc, prevMode, hadPrev);
@@ -171,8 +194,9 @@ internal static class PassCompletionPatch
 
     // A buffered addition can be absent for several ticks. Limit this grace period before treating the absence as deletion.
     private static MaterializationResult UpdateMaterializationTracking(
-        string vehicleId, MultiPassExecution exec, FlightComputer fc)
+        Vehicle vehicle, MultiPassExecution exec, FlightComputer fc)
     {
+        string vehicleId = vehicle.Id;
         if (!exec.AwaitingMaterialization || exec.CurrentBurn == null)
             return MaterializationResult.Proceed;
 
@@ -188,11 +212,11 @@ internal static class PassCompletionPatch
             // Carry Auto into the next pass after FlightComputer.LoadBurn resets the mode to Manual.
             if (exec.ReengageAutoOnNextBurn)
             {
-                fc.BurnMode = FlightComputerBurnMode.Auto;
+                vehicle.SetEnum(FlightComputerBurnMode.Auto);
                 exec.ReengageAutoOnNextBurn = false;
                 if (MultiPassDebug.Enabled)
                     DefaultCategory.Log.Debug(
-                        $"[AFC] MultiPass: vehicle={vehicleId} re-engaged Auto " +
+                        $"[AFC] MultiPass: vehicle={vehicleId} re-engaged execution " +
                         $"for pass {exec.PassIndex + 1}/{exec.PassCountTotal}");
             }
 
@@ -239,22 +263,31 @@ internal static class PassCompletionPatch
         return isOurBurn && dot <= 0f;
     }
 
-    private static void CommitCompletion(string vehicleId, MultiPassExecution exec, FlightComputer fc)
+    private static void CommitCompletion(
+        string vehicleId, MultiPassExecution exec, FlightComputer fc,
+        bool removeBurnImmediately = false)
     {
-        // Buffer removal so it stays ordered with user input. Direct removal here would precede the buffer drain.
         if (exec.CurrentBurn != null && fc.BurnPlan.TryGetBurn(exec.CurrentBurn))
         {
             if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPass.CommitCompletion: vehicle='{vehicleId}' " +
-                    $"queueing delete of burn t={exec.CurrentBurn.Time.Seconds():F1}s " +
+                    $"{(removeBurnImmediately ? "removing" : "queueing delete of")} " +
+                    $"burn t={exec.CurrentBurn.Time.Seconds():F1}s " +
                     $"dv={exec.CurrentBurn.DeltaVVlf.Length():F2}m/s");
-            InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
+
+            if (removeBurnImmediately)
+                fc.RemoveBurn(exec.CurrentBurn);
+            else
             {
-                Burn = exec.CurrentBurn,
-                FlightComputer = fc,
-                DeleteBurn = true,
-            });
+                // Buffer stock completion removal so it stays ordered with user input. RCS completion removes immediately so a later event subscriber cannot also remove a burn that AFC queued for deletion.
+                InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
+                {
+                    Burn = exec.CurrentBurn,
+                    FlightComputer = fc,
+                    DeleteBurn = true,
+                });
+            }
         }
         else if (MultiPassDebug.Enabled)
         {
@@ -268,7 +301,7 @@ internal static class PassCompletionPatch
         exec.ConsecutiveScheduleFailures = 0;
         exec.PassIndex++;
 
-        // Both completion paths carry the observed Auto mode into the next pass.
+        // Completion carries automatic execution into the next pass after the new burn loads.
         if (exec.PassIndex < exec.PassCountTotal)
             exec.ReengageAutoOnNextBurn = true;
 
