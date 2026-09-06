@@ -1,5 +1,3 @@
-using AdvancedFlightComputer.Core;
-using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
 
@@ -33,10 +31,6 @@ internal static class MultiPassCommitter
                               ?? source.FlightPlan.TryFindPatch(burnTime);
         if (patch == null)
         {
-            if (DebugConfig.MultiPass)
-                DefaultCategory.Log.Debug(
-                    $"[AFC] MultiPassCommitter.QueueAddBurn: vehicle='{source.Id}' " +
-                    $"no patch for t={burnTime.Seconds():F1}s; cannot create burn");
             return null;
         }
 
@@ -51,11 +45,6 @@ internal static class MultiPassCommitter
             AddBurn = true,
         });
 
-        if (DebugConfig.MultiPass)
-            DefaultCategory.Log.Debug(
-                $"[AFC] MultiPassCommitter.QueueAddBurn: vehicle='{source.Id}' " +
-                $"queued burn t={burnTime.Seconds():F1}s dv={dvVlf.Length():F2}m/s " +
-                $"on patch (orbit Pe={patch.Orbit.Periapsis:F0} Ap={patch.Orbit.Apoapsis:F0})");
         return burn;
     }
 }

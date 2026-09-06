@@ -82,14 +82,14 @@ internal static class PassCompletionPatch
             && !exec.BurnAutoEngagedThisPass)
         {
             exec.BurnAutoEngagedThisPass = true;
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPass: vehicle='{vehicle.Id}' pass " +
                     $"{exec.PassIndex + 1}/{exec.PassCountTotal} Auto engaged " +
                     $"(burn t={exec.CurrentBurn.Time.Seconds():F1}s).");
         }
 
-        if (DebugConfig.MultiPass && hadPrev && prevMode != fc.BurnMode)
+        if (MultiPassDebug.Enabled && hadPrev && prevMode != fc.BurnMode)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle='{vehicle.Id}' BurnMode " +
                 $"{prevMode} -> {fc.BurnMode} (passIndex={exec.PassIndex}/" +
@@ -147,14 +147,14 @@ internal static class PassCompletionPatch
         if (matched != null)
         {
             exec.ReattachAfterLoad(matched);
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPass.Reconcile: vehicle='{vehicleId}' reattached to " +
                     $"burn t={matched.Time.Seconds():F1}s dv={matched.DeltaVVlf.Length():F2}m/s");
             return ReconcileResult.Proceed;
         }
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
         {
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass.Reconcile: vehicle='{vehicleId}' could not match " +
@@ -194,7 +194,7 @@ internal static class PassCompletionPatch
             {
                 fc.BurnMode = FlightComputerBurnMode.Auto;
                 exec.ReengageAutoOnNextBurn = false;
-                if (DebugConfig.MultiPass)
+                if (MultiPassDebug.Enabled)
                     DefaultCategory.Log.Debug(
                         $"[AFC] MultiPass: vehicle={vehicleId} re-engaged Auto " +
                         $"for pass {exec.PassIndex + 1}/{exec.PassCountTotal}");
@@ -232,7 +232,7 @@ internal static class PassCompletionPatch
                          < BurnIdentityToleranceSec;
         float dot = float3.Dot(fc.Burn.DeltaVToGoCci, fc.Burn.DeltaVTargetCci);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(
                 System.Globalization.CultureInfo.InvariantCulture,
                 "[AFC] MultiPass.DetectCompletion: vehicle='{0}' Auto->Manual, " +
@@ -245,14 +245,10 @@ internal static class PassCompletionPatch
 
     private static void CommitCompletion(string vehicleId, MultiPassExecution exec, FlightComputer fc)
     {
-        if (DebugConfig.MultiPass)
-            MultiPassDebug.LogBurnPlan(
-                $"CommitCompletion vehicle='{vehicleId}' pre-delete", fc.BurnPlan);
-
         // Buffer removal so it stays ordered with user input. Direct removal here would precede the buffer drain.
         if (exec.CurrentBurn != null && fc.BurnPlan.TryGetBurn(exec.CurrentBurn))
         {
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPass.CommitCompletion: vehicle='{vehicleId}' " +
                     $"queueing delete of burn t={exec.CurrentBurn.Time.Seconds():F1}s " +
@@ -264,7 +260,7 @@ internal static class PassCompletionPatch
                 DeleteBurn = true,
             });
         }
-        else if (DebugConfig.MultiPass)
+        else if (MultiPassDebug.Enabled)
         {
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass.CommitCompletion: vehicle='{vehicleId}' no live burn " +
@@ -285,7 +281,7 @@ internal static class PassCompletionPatch
             && exec.PassIndex == exec.PassCountTotal - 1)
             DisableStockHohmannOrbitPreview();
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicleId} pass {exec.PassIndex}/{exec.PassCountTotal} completed");
     }
@@ -304,7 +300,7 @@ internal static class PassCompletionPatch
         if (simNow < exec.CurrentBurn.Time - 1.0)
             return false;
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass.DetectImplicitCompletion: vehicle='{vehicleId}' " +
                 $"burn t={exec.CurrentBurn.Time.Seconds():F1}s removed from BurnPlan " +
@@ -320,7 +316,7 @@ internal static class PassCompletionPatch
             && !exec.AwaitingMaterialization
             && !fc.BurnPlan.TryGetBurn(exec.CurrentBurn);
 
-        if (fired && DebugConfig.MultiPass)
+        if (fired && MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass.DetectExternalDelete: vehicle='{exec.VehicleId}' " +
                 $"burn t={exec.CurrentBurn!.Time.Seconds():F1}s removed at sim t=" +
@@ -357,7 +353,7 @@ internal static class PassCompletionPatch
 
     private static void CompleteExecution(string vehicleId, MultiPassExecution exec)
     {
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicleId} multi-pass complete ({exec.PassCountTotal} passes)");
         CancelExecution(vehicleId, reason: null);
@@ -366,7 +362,7 @@ internal static class PassCompletionPatch
 
     private static void CancelExecution(string vehicleId, string? reason)
     {
-        if (reason != null && DebugConfig.MultiPass)
+        if (reason != null && MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug($"[AFC] MultiPass: vehicle={vehicleId} {reason}");
         MultiPassRegistry.Remove(vehicleId);
         _lastBurnMode.Remove(vehicleId);
@@ -382,7 +378,7 @@ internal static class PassCompletionPatch
             // An intent already met is successful completion. Do not count it as a planning failure and retry.
             if (exec.Intent.IsSatisfied(vehicle))
             {
-                if (DebugConfig.MultiPass)
+                if (MultiPassDebug.Enabled)
                     DefaultCategory.Log.Debug(
                         $"[AFC] MultiPass: vehicle={vehicle.Id} intent already " +
                         $"satisfied at pass {exec.PassIndex + 1}/{exec.PassCountTotal} " +
@@ -392,7 +388,7 @@ internal static class PassCompletionPatch
             }
 
             exec.ConsecutiveScheduleFailures++;
-            if (DebugConfig.MultiPass)
+            if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPass: vehicle={vehicle.Id} schedule attempt " +
                     $"{exec.ConsecutiveScheduleFailures}/{MaxConsecutiveScheduleFailures} " +
@@ -410,7 +406,7 @@ internal static class PassCompletionPatch
         }
 
         exec.ConsecutiveScheduleFailures = 0;
-        if (DebugConfig.MultiPass && exec.CurrentBurn != null)
+        if (MultiPassDebug.Enabled && exec.CurrentBurn != null)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicle.Id} scheduled pass {exec.PassIndex + 1}/{exec.PassCountTotal} dV={exec.CurrentBurn.DeltaVVlf.Length():F1} m/s at t={exec.CurrentBurn.Time.Seconds():F0}s");
 

@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
@@ -66,7 +65,7 @@ internal static class HohmannMultiPassPlanner
         double[] burnTimes = EstimateBurnTimes(dvMagSeq, vehicleState);
         var result = BuildPreviewChain(source, input, startPassIndex, times, dvVlfSeq, burnTimes);
         if (result.Failed) return result;
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] HohmannMultiPassPlanner.Plan: total={0} startIdx={1} remaining={2} " +
                 "mode={3} sumK={4:F2} T_park={5:F1}s T_final={6:F0}s T_0={7:F0}s span={8:F0}s " +
@@ -334,13 +333,6 @@ internal static class HohmannMultiPassPlanner
         {
             var probe = Plan(source, input, n, 0, parkingPeriodSec, state, now, mode);
 
-            if (DebugConfig.MultiPass)
-                DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
-                    "[AFC] HohmannMultiPassPlanner.LargestFeasibleN: probe N={0} mode={1} -> " +
-                    "failed={2} kind={3} reason='{4}' passes={5}",
-                    n, mode, probe.Failed, probe.FailureKind, probe.FailureReason ?? "-",
-                    probe.Passes.Length));
-
             if (firstFailureReason == null && probe.Failed)
             {
                 firstFailureReason = probe.FailureReason;
@@ -407,7 +399,7 @@ internal static class HohmannMultiPassPlanner
             ApoTargetRadiusMeters = apoTargetRadiusM,
         };
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] HohmannMultiPassPlanner.PrepareShiftedInput: vehicle='{0}' " +
                 "target='{1}' passCount={2} K_total={3} K_shift={4} " +
@@ -843,7 +835,7 @@ internal static class HohmannMultiPassPlanner
                 "priors already over-shot Lambert target",
                 source.Id, dvFinalMag), PassPlanFailure.ParabolicVp);
 
-        if (DebugConfig.MultiPass)
+        if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(string.Format(CultureInfo.InvariantCulture,
                 "[AFC] HohmannMultiPassPlanner.PlanSinglePass: vehicle='{0}' " +
                 "burnTime={1:F0}s (input.TFinal={2:F0}s, drift={3:F0}s) " +
