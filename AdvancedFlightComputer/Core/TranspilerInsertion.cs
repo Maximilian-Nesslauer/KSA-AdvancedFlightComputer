@@ -1,6 +1,6 @@
 using HarmonyLib;
 
-namespace AdvancedFlightComputer.Features.ManeuverTools;
+namespace AdvancedFlightComputer.Core;
 
 internal static class TranspilerInsertion
 {

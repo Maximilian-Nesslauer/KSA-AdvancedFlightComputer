@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Reflection.Emit;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using HarmonyLib;
 using KSA;
@@ -43,9 +44,5 @@ public sealed class MultiPassFallbackTest : AfcTest
     }
 
     private static List<CodeInstruction> Run(IEnumerable<CodeInstruction> instructions)
-    {
-        MethodInfo method = typeof(Patch_DrawPlanWindow_HohmannFallback)
-            .GetMethod("Transpiler", BindingFlags.Static | BindingFlags.NonPublic)!;
-        return new List<CodeInstruction>((IEnumerable<CodeInstruction>)method.Invoke(null, [instructions])!);
-    }
+        => new(PlanWindowPatchPipeline.InjectFallbackControls(instructions));
 }

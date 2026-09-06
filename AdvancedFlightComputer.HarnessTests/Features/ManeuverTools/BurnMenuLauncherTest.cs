@@ -2,6 +2,7 @@ using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using KSA;
 

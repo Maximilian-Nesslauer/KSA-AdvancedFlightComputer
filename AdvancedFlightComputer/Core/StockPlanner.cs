@@ -9,8 +9,8 @@ namespace AdvancedFlightComputer.Core;
 /// places, drives, so the surface a game update can move is enumerable in one file.
 ///
 /// A missing handle yields a neutral value rather than throwing.
-/// <see cref="GameReflection.ValidateManeuverTools"/> resolves every handle before a feature sets
-/// Enabled, so the case only arises for a feature reading a field outside its own validation set,
+/// <c>Mod</c> validates each feature's handles before it applies the feature patch block, so the
+/// case only arises for a feature reading a field outside its own validation set,
 /// and there it degrades instead of throwing out of a draw or physics callback. For
 /// <see cref="SourceBody"/> the neutral value is <c>new TransferObject(-1)</c>, stock's own "none"
 /// sentinel from the destination handling in <see cref="TransferPlanner.DrawPlanWindow"/>, whose

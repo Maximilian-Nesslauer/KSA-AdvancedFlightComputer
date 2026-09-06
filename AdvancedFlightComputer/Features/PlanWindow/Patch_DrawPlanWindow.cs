@@ -3,13 +3,15 @@ using System.Collections.Generic;
 using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
+using ManeuverToolsFeature = AdvancedFlightComputer.Features.ManeuverTools.ManeuverTools;
 
-namespace AdvancedFlightComputer.Features.ManeuverTools;
+namespace AdvancedFlightComputer.Features.PlanWindow;
 
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.DrawPlanWindow), new[] { typeof(IGameViewport) })]
 internal static partial class Patch_DrawPlanWindow
@@ -50,7 +52,7 @@ internal static partial class Patch_DrawPlanWindow
             return true;
         }
 
-        if (!ManeuverTools.IsHandledType(transferType.GetKey()))
+        if (!ManeuverToolsFeature.IsHandledType(transferType.GetKey()))
         {
             DropPlanState();
             return true;
@@ -83,7 +85,7 @@ internal static partial class Patch_DrawPlanWindow
 
     [HarmonyPostfix]
     static void Postfix(IGameViewport inViewport)
-        => Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers.Draw(inViewport);
+        => PlanWindowMarkers.Draw(inViewport);
 
     private static void DrawWindow(IViewport inViewport, TransferType transferType)
     {
@@ -212,7 +214,7 @@ internal static partial class Patch_DrawPlanWindow
             ManeuverToolsWindow.OnTypeChanged();
             OnManeuverContextChanged();
 
-            if (!ManeuverTools.IsHandledType(transferType.GetKey()))
+            if (!ManeuverToolsFeature.IsHandledType(transferType.GetKey()))
             {
                 GameReflection.TransferPlanner_SetTransferInfo!.Invoke(null, null);
                 return false;
@@ -295,15 +297,15 @@ internal static partial class Patch_DrawPlanWindow
         // Search after the preceding burn when chaining maneuvers.
         UniverseTime now = basis.Earliest;
 
-        if (key == ManeuverTools.KeySetPeriapsis)
+        if (key == ManeuverToolsFeature.KeySetPeriapsis)
             return OrbitManeuvers.ComputeSetPeriapsis(
                 orbit, ManeuverToolsWindow.TargetAltitude, parentRadius, now);
 
-        if (key == ManeuverTools.KeySetApoapsis)
+        if (key == ManeuverToolsFeature.KeySetApoapsis)
             return OrbitManeuvers.ComputeSetApoapsis(
                 orbit, ManeuverToolsWindow.TargetAltitude, parentRadius, now);
 
-        if (key == ManeuverTools.KeyMatchInclination)
+        if (key == ManeuverToolsFeature.KeyMatchInclination)
         {
             Orbit? targetOrbit = ManeuverToolsWindow.GetSelectedTargetOrbit();
             if (targetOrbit == null) return null;
@@ -311,7 +313,7 @@ internal static partial class Patch_DrawPlanWindow
                 orbit, targetOrbit, ManeuverToolsWindow.UseDescendingNode, now);
         }
 
-        if (key == ManeuverTools.KeySetInclination)
+        if (key == ManeuverToolsFeature.KeySetInclination)
         {
             return OrbitManeuvers.ComputeSetInclination(
                 orbit, ManeuverToolsWindow.TargetInclinationRad,
@@ -319,10 +321,10 @@ internal static partial class Patch_DrawPlanWindow
                 ManeuverToolsWindow.InclinationRef);
         }
 
-        if (key == ManeuverTools.KeyStockCircularizeApoapsis)
+        if (key == ManeuverToolsFeature.KeyStockCircularizeApoapsis)
             return OrbitManeuvers.ComputeCircularize(orbit, useApoapsis: true, now);
 
-        if (key == ManeuverTools.KeyStockCircularizePeriapsis)
+        if (key == ManeuverToolsFeature.KeyStockCircularizePeriapsis)
             return OrbitManeuvers.ComputeCircularize(orbit, useApoapsis: false, now);
 
         return null;

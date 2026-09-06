@@ -1,6 +1,7 @@
 using System;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;

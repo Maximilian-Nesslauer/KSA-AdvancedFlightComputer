@@ -66,9 +66,6 @@ internal static class ManeuverTools
 
     public static void ApplyPatches(Harmony harmony)
     {
-        harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow)).Patch();
-        harmony.CreateClassProcessor(typeof(Patch_OnPreRender)).Patch();
-
         // If the shortcut patch fails, the quick tools must remain available in the planner.
         if (Patch_BurnContextMenu_Launcher.IsAnchorPresent)
         {

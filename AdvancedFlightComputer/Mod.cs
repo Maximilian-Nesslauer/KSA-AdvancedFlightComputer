@@ -3,6 +3,7 @@ using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using Brutal.Logging;
 using HarmonyLib;
@@ -36,9 +37,10 @@ public sealed class Mod
 
         if (Validated("ManeuverTools", GameReflection.ValidateManeuverTools))
         {
-            // The quick-tools and MultiPass are separate blocks so that a MultiPass failure does
-            // not roll back the quick-tools.
             if (!_patches.TryApply("ManeuverTools", PatchManeuverTools))
+                DisableManeuverTools();
+            else if (!Validated("PlanWindow", GameReflection.ValidatePlanWindow)
+                     || !_patches.TryApply("PlanWindow", PatchPlanWindow))
                 DisableManeuverTools();
             else if (coreReady && Validated("MultiPass", GameReflection.ValidateMultiPass))
             {
@@ -79,6 +81,19 @@ public sealed class Mod
         ManeuverTools.ApplyPatches(harmony);
     }
 
+    private static void PatchPlanWindow(Harmony harmony)
+    {
+        harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow)).Patch();
+        harmony.CreateClassProcessor(typeof(Patch_OnPreRender)).Patch();
+
+        PatchIfAnchored(harmony, typeof(Patch_TransferPlanner_DrawSelectedTransfer_Flyby),
+            Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent,
+            "Flyby stock-preview suppression", "DrawSelectedTransfer");
+        PatchIfAnchored(harmony, typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Flyby),
+            Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent,
+            "Flyby stock-marker suppression", "DrawSelectedTransferUi");
+    }
+
     // With the DrawPlanWindow prefix possibly missing, the injected types would sit in stock's
     // dropdown with no window body.
     private static void DisableManeuverTools()
@@ -92,32 +107,15 @@ public sealed class Mod
         MultiPassRegistry.Init();
         MultiPassUI.Enabled = true;
 
-        // The inline Hohmann UI, the flyby targeting drawn inside it, and the fallback injection all
-        // hang off the one transpiler anchor.
-        if (PatchIfAnchored(harmony, typeof(Patch_DrawPlanWindow_HohmannMultiPass),
-                Patch_DrawPlanWindow_HohmannMultiPass.IsAnchorPresent, "HohmannMultiPass", "DrawCorrectionTransfer"))
+        if (PlanWindowPatchPipeline.HasCalculatedControlsAnchor)
         {
             HohmannMultiPassUI.Enabled = true;
             HohmannFlybyUI.Enabled = true;
             DefaultCategory.Log.Info("[AFC] Flyby targeting enabled (Hohmann plan window).");
-
-            // Stock's center-aimed preview is two draws on one toggle, hence two patches, and the
-            // flyby itself works without either.
-            PatchIfAnchored(harmony, typeof(Patch_TransferPlanner_DrawSelectedTransfer_Flyby),
-                Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent,
-                "Flyby stock-preview suppression", "DrawSelectedTransfer");
-            PatchIfAnchored(harmony, typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Flyby),
-                Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent,
-                "Flyby stock-marker suppression", "DrawSelectedTransferUi");
-            PatchIfAnchored(harmony, typeof(Patch_DrawPlanWindow_HohmannFallback),
-                Patch_DrawPlanWindow_HohmannFallback.IsAnchorPresent,
-                "HohmannFallback", "ConsoleStyle.PopWidgetStyle");
         }
-
-        PatchIfAnchored(harmony, typeof(Patch_DrawPlanWindow_CreateInterceptor),
-            Patch_DrawPlanWindow_CreateInterceptor.IsAnchorPresent, "HohmannCreateInterceptor", "Burn.Create");
-        harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_OnPreRender_Hohmann)).Patch();
-        harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawPlanWindow_HohmannMarkers)).Patch();
+        else
+            DefaultCategory.Log.Warning(
+                "[AFC] HohmannMultiPass disabled - DrawCorrectionTransfer anchor not found.");
     }
 
     // A mid-block failure can leave a flag set for a patch that never applied. Every flag here

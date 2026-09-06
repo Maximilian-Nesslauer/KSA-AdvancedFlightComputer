@@ -1,6 +1,7 @@
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.RcsTranslation;
 
 namespace AdvancedFlightComputer.Core;

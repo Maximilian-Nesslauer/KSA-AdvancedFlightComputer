@@ -5,7 +5,7 @@ using AdvancedFlightComputer.Features.MultiPass;
 using HarmonyLib;
 using KSA;
 
-namespace AdvancedFlightComputer.Features.ManeuverTools;
+namespace AdvancedFlightComputer.Features.PlanWindow;
 
 internal static class PlanWindowPatchPipeline
 {
@@ -16,6 +16,15 @@ internal static class PlanWindowPatchPipeline
     ];
 
     private const int MaxIlGapPrimaryButtonToBurnCreate = 160;
+
+    internal static bool HasCalculatedControlsAnchor =>
+        AccessTools.Method(typeof(TransferPlanner), "DrawCorrectionTransfer", Type.EmptyTypes) != null;
+
+    internal static bool HasFallbackControlsAnchor =>
+        AccessTools.Method(typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes) != null;
+
+    internal static bool HasCreateAnchor =>
+        AccessTools.Method(typeof(Burn), nameof(Burn.Create), BurnCreateSignature) != null;
 
     internal static IEnumerable<CodeInstruction> Rewrite(
         IEnumerable<CodeInstruction> instructions)

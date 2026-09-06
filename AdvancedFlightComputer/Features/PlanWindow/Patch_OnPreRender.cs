@@ -1,11 +1,13 @@
 using System;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
+using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using HarmonyLib;
 using KSA;
+using ManeuverToolsFeature = AdvancedFlightComputer.Features.ManeuverTools.ManeuverTools;
 
-namespace AdvancedFlightComputer.Features.ManeuverTools;
+namespace AdvancedFlightComputer.Features.PlanWindow;
 
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.OnPreRender), new[] { typeof(IViewport) })]
 internal static class Patch_OnPreRender
@@ -16,7 +18,7 @@ internal static class Patch_OnPreRender
         {
             Patch_DrawPlanWindow.TickWindowState();
             string? typeKey = StockPlanner.TransferTypeKey;
-            if (typeKey != null && ManeuverTools.IsHandledType(typeKey))
+            if (typeKey != null && ManeuverToolsFeature.IsHandledType(typeKey))
                 Patch_DrawPlanWindow.RenderOrbitPreview(inViewport);
             else
                 RenderHohmannOverlay(inViewport);
