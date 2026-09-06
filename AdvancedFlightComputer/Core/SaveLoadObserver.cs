@@ -1,10 +1,10 @@
 using System;
-using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
 
-namespace AdvancedFlightComputer.Features.MultiPass;
+namespace AdvancedFlightComputer.Core;
 
 // Loading restores the saved registry. Writing moves entries to the written save ID before persisting them. Execution changes between saves stay in memory.
 internal static class SaveLoadObserver

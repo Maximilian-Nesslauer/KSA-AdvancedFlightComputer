@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using HarmonyLib;
 using HeadlessHarness.Core;
@@ -20,9 +21,10 @@ internal static class RcsTestPatches
         RcsExecRegistry.Init();
         _harmony = new Harmony("com.maxi.afc.harnesstests.rcs");
         _harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
-        _harmony.CreateClassProcessor(typeof(RcsDriverPatch)).Patch();
+        SharedVehicleHooks.ApplyPatches(_harmony);
         _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
         _harmony.CreateClassProcessor(typeof(RcsCancelLogPatch)).Patch();
+        SharedVehicleHooks.RcsEnabled = true;
     }
 }
 

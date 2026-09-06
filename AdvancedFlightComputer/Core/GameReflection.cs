@@ -25,6 +25,7 @@ internal static class GameReflection
         ManeuverTools = 2,
         MultiPass = 4,
         RcsTranslation = 8,
+        Core = 16,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -146,23 +147,23 @@ internal static class GameReflection
     // host, because Vehicle.UpdateFromTaskResultsUnsynchronized runs one worker per physics bubble
     // and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined, which a Harmony detour
     // on the callee cannot survive.
-    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
         AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers), Type.EmptyTypes);
 
     // UncompressedSave is the concrete path that calls Universe.DeserializeSave, and its Id is the
     // save-game discriminator the registries scope their entries by.
-    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? UncompressedSave_Load =
         AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Load), Type.EmptyTypes);
 
-    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? UncompressedSave_Write =
         AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Write), Type.EmptyTypes);
 
     // Registry entries drop with their vehicle, or a recycled vehicle id could pick up an orphaned
     // execution.
-    [UsedBy(Feature.MultiPass | Feature.RcsTranslation)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? Vehicle_Dispose =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
 
@@ -192,6 +193,8 @@ internal static class GameReflection
     #endregion
 
     #region Validation
+
+    public static bool ValidateCore() => Validate(Feature.Core);
 
     public static bool ValidateHyperbolicTargets() => Validate(Feature.HyperbolicTargets);
 

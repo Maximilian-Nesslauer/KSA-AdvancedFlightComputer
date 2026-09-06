@@ -17,6 +17,7 @@ public sealed class ReflectionTargetsTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
+        t.Check("Core keys resolve", GameReflection.ValidateCore());
         t.Check("HyperbolicTargets keys resolve", GameReflection.ValidateHyperbolicTargets());
         t.Check("ManeuverTools keys resolve", GameReflection.ValidateManeuverTools());
         t.Check("MultiPass keys resolve", GameReflection.ValidateMultiPass());
