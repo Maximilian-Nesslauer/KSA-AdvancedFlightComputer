@@ -16,7 +16,7 @@ public sealed class Mod
 {
     private const string TestedGameVersion = "v2026.9.7.5402";
 
-    private static Harmony? _harmony;
+    private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
     private static bool _maneuverTypesInjected;
 
     [StarMapAllModsLoaded]
@@ -28,24 +28,21 @@ public sealed class Mod
             DefaultCategory.Log.Warning(
                 $"[AFC] Tested against {TestedGameVersion}, current is {gameVersion}. Some features may not work correctly.");
 
-        Harmony harmony = new("com.maxi.advancedflightcomputer");
-        _harmony = harmony;
-
         bool coreReady = Validated("Core", GameReflection.ValidateCore)
-            && TryPatchBlock(harmony, "Core", PatchCore);
+            && _patches.TryApply("Core", PatchCore);
 
         if (Validated("HyperbolicTargets", GameReflection.ValidateHyperbolicTargets))
-            TryPatchBlock(harmony, "HyperbolicTargets", HyperbolicTargets.ApplyPatches);
+            _patches.TryApply("HyperbolicTargets", HyperbolicTargets.ApplyPatches);
 
         if (Validated("ManeuverTools", GameReflection.ValidateManeuverTools))
         {
             // The quick-tools and MultiPass are separate blocks so that a MultiPass failure does
             // not roll back the quick-tools.
-            if (!TryPatchBlock(harmony, "ManeuverTools", PatchManeuverTools))
+            if (!_patches.TryApply("ManeuverTools", PatchManeuverTools))
                 DisableManeuverTools();
             else if (coreReady && Validated("MultiPass", GameReflection.ValidateMultiPass))
             {
-                SharedVehicleHooks.MultiPassEnabled = TryPatchBlock(harmony, "MultiPass", PatchMultiPass);
+                SharedVehicleHooks.MultiPassEnabled = _patches.TryApply("MultiPass", PatchMultiPass);
                 if (!SharedVehicleHooks.MultiPassEnabled)
                     DisableMultiPass();
             }
@@ -53,7 +50,7 @@ public sealed class Mod
 
         if (coreReady && Validated("RcsTranslation", GameReflection.ValidateRcsTranslation))
         {
-            SharedVehicleHooks.RcsEnabled = TryPatchBlock(harmony, "RcsTranslation", PatchRcsTranslation);
+            SharedVehicleHooks.RcsEnabled = _patches.TryApply("RcsTranslation", PatchRcsTranslation);
             if (!SharedVehicleHooks.RcsEnabled)
                 DisableRcsTranslation();
         }
@@ -166,21 +163,6 @@ public sealed class Mod
         return true;
     }
 
-    private static bool TryPatchBlock(Harmony harmony, string feature, Action<Harmony> apply)
-    {
-        try
-        {
-            apply(harmony);
-            return true;
-        }
-        catch (Exception ex)
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] {feature} patching failed. Earlier patches remain active: {ex}");
-            return false;
-        }
-    }
-
     private static void RemoveTransferTypes()
     {
         if (!_maneuverTypesInjected)
@@ -193,8 +175,7 @@ public sealed class Mod
     public void Unload()
     {
         SharedVehicleHooks.Reset();
-        _harmony?.UnpatchAll(_harmony.Id);
-        _harmony = null;
+        _patches.UnpatchAll();
         RemoveTransferTypes();
 
         // Persistence is driven by UncompressedSave.Write, so a quit without saving drops
