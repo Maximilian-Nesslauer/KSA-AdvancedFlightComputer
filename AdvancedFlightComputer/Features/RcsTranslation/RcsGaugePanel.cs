@@ -184,7 +184,7 @@ internal static class RcsGaugePanel
                 LabelRow("TO GO".AsSpan(), Fit(bt != null ? ToGo(bt.DeltaVToGoCci.Length()) : "-"));
                 if (ButtonRow(ReadOnlySpan<char>.Empty, "CANCEL".AsSpan(), in cancelButton))
                 {
-                    RcsExecutor.Cancel(vehicle, exec, "user request");
+                    RcsExecutor.RequestCancel(exec, "user request");
                 }
             }
 

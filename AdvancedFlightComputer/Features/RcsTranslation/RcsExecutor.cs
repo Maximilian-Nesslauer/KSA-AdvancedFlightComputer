@@ -311,6 +311,10 @@ internal static partial class RcsExecutor
         }
     }
 
+    /// <summary>Ask the driver to cancel on its next tick. A direct cancellation from the draw pass can race with the vehicle solver and lose the restored flight computer modes.</summary>
+    public static void RequestCancel(RcsExecution exec, string reason)
+        => exec.CancelRequestReason = reason;
+
     public static void Cancel(Vehicle vehicle, RcsExecution exec, string reason)
     {
         RcsFuelSummary fuel = ComputeFuelSummary(vehicle.FlightComputer, exec);
@@ -470,6 +474,12 @@ internal static partial class RcsExecutor
 
         if (hasExec && exec!.IsActive)
         {
+            if (exec.CancelRequestReason is string requested)
+            {
+                exec.CancelRequestReason = null;
+                Cancel(vehicle, exec, requested);
+                return;
+            }
             TickActive(vehicle, fc, exec, nowSec);
             return;
         }
@@ -534,6 +544,14 @@ internal static partial class RcsExecutor
             || Math.Abs((bt.ImpulsiveInstant - burn.Time).Seconds()) > BurnIdentityToleranceSec)
         {
             Cancel(vehicle, exec, "burn no longer loaded");
+            return;
+        }
+
+        // A zero target satisfies the completion dot product without delivering delta-V. Treat it as a withdrawn burn instead of a completed pass.
+        if (bt.DeltaVTargetCci.IsExactlyZero())
+        {
+            Alert($"RCS burn cancelled: the burn on '{vehicle.Id}' no longer has delta-V.");
+            Cancel(vehicle, exec, "burn target has no delta-V");
             return;
         }
 
