@@ -12,7 +12,8 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 /// moved to the gauge canvas - see <see cref="RcsBurnCanvasUi"/>), so this
 /// surface now covers the rendezvous case only.
 /// </summary>
-[HarmonyPatch(typeof(Burn), nameof(Burn.DrawBurnEditorWindowContent))]
+[HarmonyPatch(typeof(Burn), nameof(Burn.DrawBurnEditorWindowContent),
+    new Type[] { typeof(Vehicle), typeof(FlightComputer), typeof(bool), typeof(bool) })]
 internal static class RcsBurnWindowUi
 {
     static void Postfix(Burn __instance, Vehicle vehicle, FlightComputer flightComputer)
@@ -25,7 +26,7 @@ internal static class RcsBurnWindowUi
         {
             // Once per load: this runs every frame the editor is open, and a
             // persistent draw failure would otherwise flood the log.
-            LogHelper.WarnOnce("rcs-burn-window",
+            LogHelper.WarnOnce("rcs-burn-window:" + ex.GetType().Name,
                 $"[AFC] RcsBurnWindowUi failed for vehicle='{vehicle.Id}': {ex}");
         }
     }

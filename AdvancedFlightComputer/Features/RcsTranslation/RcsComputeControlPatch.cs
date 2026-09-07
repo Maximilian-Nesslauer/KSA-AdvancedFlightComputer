@@ -7,7 +7,9 @@ using KSA;
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
 /// <summary>This postfix runs on the vehicle worker after FlightComputer.ComputeControl. It reads the published command and converts the remaining delta V into thruster pulses without allocating memory or taking locks. The worker also records that it read the command.</summary>
-[HarmonyPatch(typeof(FlightComputer), nameof(FlightComputer.ComputeControl))]
+[HarmonyPatch(typeof(FlightComputer), nameof(FlightComputer.ComputeControl),
+    new Type[] { typeof(FlightComputerNavigation), typeof(ManualControlInputs), typeof(FlightComputerOutput) },
+    new ArgumentType[] { ArgumentType.Ref, ArgumentType.Ref, ArgumentType.Ref })]
 internal static class RcsComputeControlPatch
 {
     static void Postfix(FlightComputer __instance, in FlightComputerNavigation nav, ref FlightComputerOutput outputs)

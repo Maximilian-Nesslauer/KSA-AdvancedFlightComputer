@@ -50,7 +50,8 @@ internal static class RcsGaugePatches
         return active || RcsExecutor.WouldExecuteRcsCached(vehicle);
     }
 
-    [HarmonyPatch(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.IsDisabled))]
+    [HarmonyPatch(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.IsDisabled),
+        new Type[0])]
     internal static class IsDisabledPatch
     {
         static void Postfix(GaugeButtonFlightComputer __instance, ref bool __result)
@@ -67,7 +68,8 @@ internal static class RcsGaugePatches
     /// armed or running, stock computes "disabled + unlit" (BurnMode stays
     /// Manual internally); rewrite the bits so the button reads enabled and,
     /// while running, lit.</summary>
-    [HarmonyPatch(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.PackData))]
+    [HarmonyPatch(typeof(GaugeButtonFlightComputer), nameof(GaugeButtonFlightComputer.PackData),
+        new Type[0])]
     internal static class PackDataPatch
     {
         static void Postfix(GaugeButtonFlightComputer __instance, ref uint2 __result)
