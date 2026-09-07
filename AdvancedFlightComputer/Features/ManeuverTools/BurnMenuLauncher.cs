@@ -42,7 +42,8 @@ internal static class BurnMenuLauncher
         }
         catch (Exception ex)
         {
-            LogHelper.WarnOnce("burn-menu-apsis", $"[AFC] BurnMenuLauncher apsis entry: {ex}");
+            LogHelper.WarnOnce("burn-menu-apsis:" + ex.GetType().Name,
+                $"[AFC] BurnMenuLauncher apsis entry: {ex}");
         }
     }
 
@@ -80,7 +81,8 @@ internal static class BurnMenuLauncher
         }
         catch (Exception ex)
         {
-            LogHelper.WarnOnce("burn-menu-launcher", $"[AFC] BurnMenuLauncher: {ex}");
+            LogHelper.WarnOnce("burn-menu-launcher:" + ex.GetType().Name,
+                $"[AFC] BurnMenuLauncher: {ex}");
         }
     }
 

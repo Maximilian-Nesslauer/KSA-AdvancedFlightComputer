@@ -41,6 +41,20 @@ public sealed class MultiPassFallbackTest : AfcTest
         var noAnchor = new CodeInstruction(OpCodes.Ret);
         List<CodeInstruction> unchanged = Run([noAnchor]);
         t.Check("missing anchor leaves IL unchanged", unchanged.Count == 1 && unchanged[0] == noAnchor);
+
+        // The fallback must remain because stock skips the calculated block on some frames.
+        MethodInfo? correction = AccessTools.Method(
+            typeof(TransferPlanner), "DrawCorrectionTransfer", Type.EmptyTypes);
+        if (correction == null)
+        {
+            t.Fail("calculated anchor", "TransferPlanner.DrawCorrectionTransfer not found");
+            return;
+        }
+        List<CodeInstruction> reordered = Run([
+            new CodeInstruction(OpCodes.Call, anchor),
+            new CodeInstruction(OpCodes.Call, correction)]);
+        t.Check("an anchor ahead of the calculated one still receives the injection",
+            reordered.Count == 3 && reordered[0].Calls(inline) && reordered[1].Calls(anchor));
     }
 
     private static List<CodeInstruction> Run(IEnumerable<CodeInstruction> instructions)

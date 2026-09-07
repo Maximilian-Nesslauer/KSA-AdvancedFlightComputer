@@ -64,18 +64,6 @@ internal static class HohmannFlybyUI
         _prediction.PeriapsisRadius is double radius
         && double.IsFinite(_minFlybyRadius) && radius < _minFlybyRadius;
 
-    /// <summary>Draws the flyby section. <paramref name="entry"/> and
-    /// <paramref name="info"/> are the stock selected porkchop entry, resolved by
-    /// the calling <see cref="HohmannMultiPassUI"/>.</summary>
-    public static void DrawInline(
-        Vehicle source, OrbitalTransfers.PorkChopEntry entry,
-        OrbitalTransfers.TransferInfo info)
-    {
-        DrawControls(source, info);
-        ShowSingleDeparture(source, entry, info);
-        DrawSelectedResult(entry);
-    }
-
     internal static void DrawControls(
         Vehicle source, OrbitalTransfers.TransferInfo info)
     {
@@ -93,8 +81,8 @@ internal static class HohmannFlybyUI
         }
         catch (Exception ex)
         {
-            LogHelper.WarnOnce("flyby-draw-inline:" + ex.GetType().Name,
-                $"[AFC] HohmannFlybyUI.DrawInline: vehicle='{source.Id}' " +
+            LogHelper.WarnOnce("flyby-draw-controls:" + ex.GetType().Name,
+                $"[AFC] HohmannFlybyUI.DrawControls: vehicle='{source.Id}' " +
                 $"target='{(info.Target as Astronomical)?.Id ?? "?"}': {ex}");
         }
     }

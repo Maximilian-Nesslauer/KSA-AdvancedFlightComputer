@@ -13,6 +13,9 @@ internal static class RcsExecRegistry
 
     private static string _configPath = string.Empty;
 
+    // True when the last load could not read all entries from the file.
+    private static bool _lastLoadWasDefective;
+
     public static void Init()
     {
         string userDocs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -77,7 +80,11 @@ internal static class RcsExecRegistry
         }
     }
 
-    public static void Reset() => _byKey.Clear();
+    public static void Reset()
+    {
+        _byKey.Clear();
+        _lastLoadWasDefective = false;
+    }
 
     public static void Load()
     {
@@ -86,12 +93,19 @@ internal static class RcsExecRegistry
         try
         {
             var loaded = new Dictionary<(string SaveId, string VehicleId), RcsExecution>();
-            if (!ParseFile(_configPath, loaded))
-                return;
+            // Keep readable blocks, but do not keep entries from the previous save.
+            bool clean = ParseFile(_configPath, loaded, out int droppedBlocks);
+            _lastLoadWasDefective = !clean;
             _byKey.Clear();
             foreach (var entry in loaded)
                 _byKey.Add(entry.Key, entry.Value);
-            if (DebugConfig.RcsTranslation)
+
+            if (!clean)
+                DefaultCategory.Log.Warning(
+                    $"[AFC] RcsExecRegistry: could not read all of '{_configPath}'. " +
+                    $"{droppedBlocks} block(s) were dropped, {_byKey.Count} vehicle entry(ies) were kept, " +
+                    "and details appear in the earlier warnings. The next save writes only the kept entries.");
+            else if (DebugConfig.RcsTranslation)
                 DefaultCategory.Log.Debug(
                     $"[AFC] RcsExecRegistry: loaded {_byKey.Count} vehicle entries from {_configPath}");
         }
@@ -99,6 +113,7 @@ internal static class RcsExecRegistry
         catch (DirectoryNotFoundException) { }
         catch (Exception ex)
         {
+            _lastLoadWasDefective = true;
             LogHelper.WarnOnce($"rcs-registry-load-{ex.GetType().FullName}",
                 $"[AFC] RcsExecRegistry failed to load '{_configPath}' for save '{SaveLoadObserver.CurrentSaveId}': {ex}");
         }
@@ -117,12 +132,14 @@ internal static class RcsExecRegistry
                 break;
             }
         }
-        if (!hasPersistable && !File.Exists(_configPath))
+        // Do not erase an unreadable file when there are no entries to preserve.
+        if (!hasPersistable && (!File.Exists(_configPath) || _lastLoadWasDefective))
             return;
 
         try
         {
             WriteFile(_configPath, _byKey.Values);
+            _lastLoadWasDefective = false;
         }
         catch (Exception ex)
         {
@@ -197,16 +214,24 @@ internal static class RcsExecRegistry
 
     private static bool ParseFile(
         string path,
-        Dictionary<(string SaveId, string VehicleId), RcsExecution> into)
-        => ParseLines(File.ReadAllLines(path), Path.GetFileName(path), into);
+        Dictionary<(string SaveId, string VehicleId), RcsExecution> into,
+        out int droppedBlocks)
+        => ParseLines(File.ReadAllLines(path), Path.GetFileName(path), into, out droppedBlocks);
 
     internal static bool ParseLines(
         string[] lines, string sourceName,
         Dictionary<(string SaveId, string VehicleId), RcsExecution> into)
+        => ParseLines(lines, sourceName, into, out _);
+
+    internal static bool ParseLines(
+        string[] lines, string sourceName,
+        Dictionary<(string SaveId, string VehicleId), RcsExecution> into,
+        out int droppedBlocks)
     {
         Dictionary<string, string>? current = null;
         int headerLine = 0;
         bool success = true;
+        droppedBlocks = 0;
 
         for (int li = 0; li < lines.Length; li++)
         {
@@ -216,7 +241,7 @@ internal static class RcsExecRegistry
 
             if (line == "[[rcs_burn]]")
             {
-                success &= FlushBlock(current, headerLine, sourceName, into);
+                success &= FlushBlock(current, headerLine, sourceName, into, ref droppedBlocks);
                 current = new Dictionary<string, string>();
                 headerLine = lineNumber;
                 continue;
@@ -227,7 +252,7 @@ internal static class RcsExecRegistry
                     $"[AFC] RcsExecRegistry: {sourceName}:{lineNumber} " +
                     $"unrecognised TOML header '{line}', skipping until next [[rcs_burn]].");
                 success = false;
-                success &= FlushBlock(current, headerLine, sourceName, into);
+                success &= FlushBlock(current, headerLine, sourceName, into, ref droppedBlocks);
                 current = null;
                 continue;
             }
@@ -272,8 +297,18 @@ internal static class RcsExecRegistry
             }
             current[key] = val;
         }
-        success &= FlushBlock(current, headerLine, sourceName, into);
+        success &= FlushBlock(current, headerLine, sourceName, into, ref droppedBlocks);
         return success;
+    }
+
+    private static bool FlushBlock(
+        Dictionary<string, string>? block, int headerLine, string sourceName,
+        Dictionary<(string SaveId, string VehicleId), RcsExecution> into,
+        ref int droppedBlocks)
+    {
+        if (FlushBlock(block, headerLine, sourceName, into)) return true;
+        droppedBlocks++;
+        return false;
     }
 
     private static bool FlushBlock(

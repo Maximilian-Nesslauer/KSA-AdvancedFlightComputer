@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
-using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
@@ -9,12 +8,10 @@ using KSA;
 namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 
 /// <summary>
-/// Stock's <c>PopulateWithPlanets</c> drops every body with eccentricity of 1 or
-/// more. This appends exactly that complement, so no body is listed twice. The
-/// listing tests <c>Eccentricity &lt; 1.0</c> like stock does, while the handling
-/// patches test <see cref="Orbit.IsBound"/>, because the game classifies the band
-/// |e - 1| &lt;= 1e-6 as parabolic with a NaN Period, so a body stock still lists
-/// but cannot compute is handled too.
+/// Adds unbound bodies that stock excludes from the transfer target list. A body still needs a
+/// positive, non-NaN sphere of influence. Stock tests <c>Eccentricity &lt; 1.0</c>, while the
+/// handling patches use <see cref="Orbit.IsBound"/> so they also cover the narrow parabolic band
+/// whose Period is NaN.
 /// </summary>
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.PopulateWithPlanets),
     new Type[] { typeof(Span<TransferObject>), typeof(int), typeof(bool) },
@@ -73,7 +70,8 @@ internal static class Patch_PopulateWithPlanets
 /// porkchop search gets a stable baseline. A bound end keeps the semi major axis
 /// stock would use.
 /// </summary>
-[HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.HohmannFlight))]
+[HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.HohmannFlight),
+    new Type[] { typeof(Orbit), typeof(Orbit) })]
 internal static class Patch_HohmannFlight
 {
     static bool Prefix(Orbit origin, Orbit destination, ref UniverseTime __result)
@@ -162,7 +160,9 @@ internal static class Patch_SetTransferInfo
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] SetTransferInfo finalizer: {ex}");
+            LogHelper.WarnOnce("set-transfer-info:" + ex.GetType().Name,
+                $"[AFC] SetTransferInfo finalizer for target " +
+                $"'{(StockPlanner.TransferInfo?.Target as Astronomical)?.Id ?? "?"}': {ex}");
             return __exception;
         }
     }
@@ -222,11 +222,13 @@ internal static class Patch_SetTransferInfo
 /// Nothing here may touch state that assumes one thread, which is why the player
 /// alert lives in <see cref="Patch_SetTransferInfo"/>.
 /// </summary>
-[HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.AlignmentTime))]
+[HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.AlignmentTime),
+    new Type[] { typeof(OrbitalTransfers.TransferInfo), typeof(UniverseTime), typeof(double) })]
 internal static class Patch_AlignmentTime
 {
     static bool Prefix(OrbitalTransfers.TransferInfo transferInfo,
                        UniverseTime startTime,
+                       double offsetDegrees,
                        ref UniverseTime __result)
     {
         try
@@ -253,6 +255,15 @@ internal static class Patch_AlignmentTime
 
             UniverseTime ideal = tPeri - hohmannToF;
 
+            if (offsetDegrees != 0.0)
+            {
+                // The periapsis model has no phase angle, so it cannot apply this offset.
+                LogHelper.WarnOnce(
+                    $"alignment-offset-{(transferInfo.Target as Astronomical)?.Id ?? "?"}",
+                    $"[AFC] AlignmentTime: the {offsetDegrees:F1} degree phase offset does not " +
+                    "apply to an unbound target. Departing one Hohmann time before periapsis.");
+            }
+
             if (ideal < startTime)
             {
                 string targetId = (transferInfo.Target as Astronomical)?.Id ?? "?";
@@ -267,9 +278,12 @@ internal static class Patch_AlignmentTime
         }
         catch (Exception ex)
         {
-            // TransferTask.Run rethrows anything but a cancellation, and it is a
-            // ThreadPool work item, so an escaping exception would be unhandled.
-            DefaultCategory.Log.Warning($"[AFC] AlignmentTime prefix: {ex}");
+            // TransferTask.Run rethrows this on a ThreadPool thread. Log each fault type once
+            // because the plan window can call this on every frame.
+            LogHelper.WarnOnce("alignment-time:" + ex.GetType().Name,
+                $"[AFC] AlignmentTime prefix for target " +
+                $"'{(transferInfo?.Target as Astronomical)?.Id ?? "?"}' at sim " +
+                $"t={startTime.Seconds():F0}s: {ex}");
             return true;
         }
     }

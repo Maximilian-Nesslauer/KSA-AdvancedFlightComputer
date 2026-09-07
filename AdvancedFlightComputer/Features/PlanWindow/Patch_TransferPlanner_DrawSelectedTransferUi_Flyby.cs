@@ -2,7 +2,6 @@ using System;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
-using Brutal.ImGuiApi;
 using HarmonyLib;
 using KSA;
 
@@ -21,17 +20,10 @@ namespace AdvancedFlightComputer.Features.PlanWindow;
 [HarmonyPatch]
 internal static class Patch_TransferPlanner_DrawSelectedTransferUi_Flyby
 {
-    // IGameViewport here and IViewport on the DrawSelectedTransfer sibling.
-    // The wrong one resolves to null and the patch never binds.
-    private static readonly Type[] Signature = { typeof(IGameViewport) };
-
-    private static MethodInfo? Anchor =>
-        AccessTools.Method(typeof(TransferPlanner), "DrawSelectedTransferUi", Signature);
-
-    public static bool IsAnchorPresent => Anchor != null;
+    public static bool IsAnchorPresent => GameReflection.TransferPlanner_DrawSelectedTransferUi != null;
 
     static MethodBase TargetMethod() =>
-        Anchor ?? throw new InvalidOperationException(
+        GameReflection.TransferPlanner_DrawSelectedTransferUi ?? throw new InvalidOperationException(
             "[AFC] TransferPlanner.DrawSelectedTransferUi(IGameViewport) not found; "
             + "patching this class requires an IsAnchorPresent check first.");
 

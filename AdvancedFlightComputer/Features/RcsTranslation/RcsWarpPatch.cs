@@ -3,7 +3,8 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-[HarmonyPatch(typeof(Universe), nameof(Universe.AutoWarpTo))]
+[HarmonyPatch(typeof(Universe), nameof(Universe.AutoWarpTo),
+    new Type[] { typeof(UniverseTime), typeof(double) })]
 internal static class RcsWarpPatch
 {
     static void Prefix(UniverseTime endTime, ref double simTimeMargin)

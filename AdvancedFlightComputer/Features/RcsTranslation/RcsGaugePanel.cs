@@ -97,12 +97,8 @@ internal static class RcsGaugePanel
             offsetUv: ScreenReference.PixelsToUv(topLeft),
             sizeUv: ScreenReference.PixelsToUv(new float2(canvasSizePixels.X, heightPixels)));
 
-        if (!ImGauge.BeginWindow(in window, out float2 posPixels, out float2 sizePixels))
-        {
-            // BeginWindow pushes style state that only EndWindow pops.
-            ImGauge.EndWindow();
-            return;
-        }
+        // BeginWindow always succeeds and pushes style state that EndWindow must pop.
+        ImGauge.BeginWindow(in window, out float2 posPixels, out float2 sizePixels);
         try
         {
             ImGauge.DrawDressedBox(posPixels, sizePixels);
@@ -188,7 +184,7 @@ internal static class RcsGaugePanel
                 LabelRow("TO GO".AsSpan(), Fit(bt != null ? ToGo(bt.DeltaVToGoCci.Length()) : "-"));
                 if (ButtonRow(ReadOnlySpan<char>.Empty, "CANCEL".AsSpan(), in cancelButton))
                 {
-                    RcsExecutor.Cancel(vehicle, exec, "user request");
+                    RcsExecutor.RequestCancel(exec, "user request");
                 }
             }
 

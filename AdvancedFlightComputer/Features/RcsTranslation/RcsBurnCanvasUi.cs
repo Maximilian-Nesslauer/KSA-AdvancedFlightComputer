@@ -38,7 +38,7 @@ internal static class RcsBurnCanvasUi
         {
             // Once per load: this runs every frame the editor is open, and a
             // persistent draw failure would otherwise flood the log.
-            LogHelper.WarnOnce("rcs-burn-canvas",
+            LogHelper.WarnOnce("rcs-burn-canvas:" + ex.GetType().Name,
                 $"[AFC] RcsBurnCanvasUi failed for vehicle='{vehicle.Id}': {ex}");
         }
     }

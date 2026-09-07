@@ -6,31 +6,46 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// The harness manifest runs only Core + HeadlessHarness, so the mod's
-// OnFullyLoaded never applies its patches; the RCS flight tests apply exactly
-// the executor-relevant subset once per process (gauge/UI patches stay off:
-// nothing renders headless).
+// The harness does not load the mod, so each RCS flight test applies only the
+// patches that the executor needs. It removes them when the test ends.
 internal static class RcsTestPatches
 {
-    private static Harmony? _harmony;
+    public static Scope Apply() => new();
 
-    public static void Ensure()
+    internal sealed class Scope : IDisposable
     {
-        if (_harmony != null)
-            return;
-        RcsExecRegistry.Init();
-        _harmony = new Harmony("com.maxi.afc.harnesstests.rcs");
-        _harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
-        SharedVehicleHooks.ApplyPatches(_harmony);
-        _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
-        _harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
-        _harmony.CreateClassProcessor(typeof(RcsWarpObservationPatch)).Patch();
-        _harmony.CreateClassProcessor(typeof(RcsCancelLogPatch)).Patch();
-        SharedVehicleHooks.RcsEnabled = true;
+        private readonly Harmony _harmony;
+        private readonly bool _rcsEnabledBefore;
+
+        internal Scope()
+        {
+            _rcsEnabledBefore = SharedVehicleHooks.RcsEnabled;
+            RcsExecRegistry.Init();
+            _harmony = new Harmony("com.maxi.afc.harnesstests.rcs");
+            _harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
+            SharedVehicleHooks.ApplyPatches(_harmony);
+            _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
+            _harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
+            _harmony.CreateClassProcessor(typeof(RcsWarpObservationPatch)).Patch();
+            _harmony.CreateClassProcessor(typeof(RcsCancelLogPatch)).Patch();
+            SharedVehicleHooks.RcsEnabled = true;
+        }
+
+        public void Dispose()
+        {
+            SharedVehicleHooks.RcsEnabled = _rcsEnabledBefore;
+            RcsExecRegistry.Reset();
+            RcsCommandChannel.Reset();
+            RcsExecutor.ResetUiCache();
+            RcsWarpObservationPatch.Reset();
+            RcsCancelLogPatch.LastReason = null;
+            _harmony.UnpatchAll(_harmony.Id);
+        }
     }
 }
 
-[HarmonyPatch(typeof(Universe), nameof(Universe.AutoWarpTo))]
+[HarmonyPatch(typeof(Universe), nameof(Universe.AutoWarpTo),
+    new Type[] { typeof(UniverseTime), typeof(double) })]
 internal static class RcsWarpObservationPatch
 {
     internal static UniverseTime? LastEndTime;

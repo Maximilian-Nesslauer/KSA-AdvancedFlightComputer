@@ -404,4 +404,16 @@ internal static class MultiPassPreviewCache
         _cachedState = null;
         _cachedStateKey = default;
     }
+
+    // Clear only cache entries that can keep this vehicle and its part graph reachable.
+    public static void OnVehicleDisposed(Vehicle vehicle)
+    {
+        if (ReferenceEquals(_cachedStateKey.Source, vehicle))
+        {
+            _cachedState = null;
+            _cachedStateKey = default;
+        }
+        if (_hasPreviewKey && _cachedPreviewKey.VehicleId == vehicle.Id)
+            ClearPreview();
+    }
 }

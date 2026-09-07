@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using System.Collections.ObjectModel;
+using System.Text;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -30,6 +31,10 @@ public sealed class ManeuverTranspilerTest : AfcTest
             CountCalls(patched, inline) == 2
             && correctionIndex > 0 && patched[correctionIndex - 1].Calls(inline)
             && popStyleIndex > 0 && patched[popStyleIndex - 1].Calls(inline));
+
+        // The first injection wins, so the correction controls must remain first.
+        t.Check("stock draws the correction controls before it pops the widget style",
+            correctionIndex > 0 && popStyleIndex > correctionIndex);
 
         MethodInfo replacement = AccessTools.Method(typeof(HohmannCreateInterceptor), nameof(HohmannCreateInterceptor.CreateMaybeMultiPass));
         MethodInfo gate = AccessTools.Method(typeof(HohmannCreateInterceptor), nameof(HohmannCreateInterceptor.ShouldAllowCreateClick));
@@ -99,6 +104,58 @@ public sealed class ManeuverTranspilerTest : AfcTest
             && Equals(patched[apseIndex - 1].operand, BurnMenuLauncher.PeriapsisSubmenu)
             && patched[secondApseIndex - 1].opcode == OpCodes.Ldc_I4
             && Equals(patched[secondApseIndex - 1].operand, BurnMenuLauncher.ApoapsisSubmenu));
+
+        // Also verify the headings because the submenu arguments alone do not prove placement.
+        string? firstHeading = EnclosingMenuHeading(patched, apseIndex);
+        string? secondHeading = EnclosingMenuHeading(patched, secondApseIndex);
+        t.Check("apse shortcuts sit under their own headings",
+            firstHeading == "At Periapsis" && secondHeading == "At Apoapsis",
+            $"first='{firstHeading ?? "none"}' second='{secondHeading ?? "none"}'");
+    }
+
+    // Find the matching BeginMenu while accounting for nested menus.
+    private static string? EnclosingMenuHeading(List<CodeInstruction> code, int index)
+    {
+        int depth = 0;
+        for (int i = index - 1; i >= 0; i--)
+        {
+            if (CallsImGui(code[i], "EndMenu"))
+                depth++;
+            else if (CallsImGui(code[i], "BeginMenu"))
+            {
+                if (depth == 0)
+                    return MenuLabel(code, i);
+                depth--;
+            }
+        }
+        return null;
+    }
+
+    // Match the operand because this test project does not reference the ImGui assembly.
+    private static bool CallsImGui(CodeInstruction instruction, string name)
+        => (instruction.opcode == OpCodes.Call || instruction.opcode == OpCodes.Callvirt)
+           && instruction.operand is MethodInfo method
+           && method.Name == name
+           && method.DeclaringType?.Name == "ImGui";
+
+    // UTF-8 literals use compiler-generated data fields with a trailing null byte.
+    private static string? MenuLabel(List<CodeInstruction> code, int beginMenuIndex)
+    {
+        for (int i = beginMenuIndex - 1; i >= 0 && i >= beginMenuIndex - 8; i--)
+        {
+            if (code[i].opcode != OpCodes.Ldsflda || code[i].operand is not FieldInfo data)
+                continue;
+            try
+            {
+                return Encoding.UTF8.GetString(
+                    RuntimeHelpers.CreateSpan<byte>(data.FieldHandle).TrimEnd((byte)0));
+            }
+            catch (Exception)
+            {
+                // This static field does not contain a readable literal.
+            }
+        }
+        return null;
     }
 
     private static void CheckExceptionRegions(TestContext t)

@@ -17,6 +17,10 @@ public sealed class SharedVehicleHooksTest : AfcTest
 {
     private static readonly List<string> Calls = new();
 
+    // Step past the burn time without waiting long enough for the plan to remove the expired burn.
+    private const double StallBurnLeadSec = 3.0;
+    private const int StallStepCount = 32;
+
     public override string Name => "afc-shared-vehicle-hooks";
 
     protected override void Execute(TestContext t)
@@ -44,6 +48,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
                 OrbitFixtures.CircularAt(home, 500_000, Universe.GetElapsedTime()));
 
             CheckRcsCompletionHandover(t, vehicle);
+            CheckRcsStallHint(t, vehicle);
             PatchRecorder(harmony, typeof(PassCompletionPatch), nameof(RecordMultiPass));
             PatchRecorder(harmony, typeof(RcsDriverPatch), nameof(RecordRcs));
             CheckTickOrder(t, vehicle);
@@ -96,6 +101,10 @@ public sealed class SharedVehicleHooksTest : AfcTest
     {
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;
+        // The state cache holds the vehicle and its part graph.
+        MultiPassPreviewCache.GetSequenceState(vehicle);
+        FieldInfo cachedState = StaticField(typeof(MultiPassPreviewCache), "_cachedState");
+        t.Check("sequence-state cache holds the vehicle before disposal", cachedState.GetValue(null) != null);
         MultiPassRegistry.Add(new MultiPassExecution
         {
             SaveId = SaveLoadObserver.CurrentSaveId,
@@ -112,6 +121,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
         vehicle.Dispose(false);
         t.Check("disposal removes entries even when both drivers are disabled", !MultiPassRegistry.Has(vehicle.Id)
             && !RcsExecRegistry.TryGet(vehicle.Id, out _));
+        t.Check("disposal drops the sequence-state cache of that vehicle", cachedState.GetValue(null) == null);
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;
         Calls.Clear();
@@ -181,6 +191,68 @@ public sealed class SharedVehicleHooksTest : AfcTest
             RcsFlightSupport.CleanupBurns(vehicle.FlightComputer);
         }
     }
+
+    // RcsExecutor.Cancel clears the active execution but leaves the burn in the plan.
+    private static void CheckRcsStallHint(TestContext t, Vehicle vehicle)
+    {
+        SimDriver driver = t.Session.CreateDriver();
+        driver.Step(0.05, 2);
+        RcsFlightSupport.BurnSetup? setup = RcsFlightSupport.AddBurn(
+            vehicle, driver, double3.UnitX, 0.5, StallBurnLeadSec);
+        if (setup == null)
+        {
+            t.Fail("RCS stall hint setup", "could not add a burn");
+            RcsFlightSupport.CleanupBurns(vehicle.FlightComputer);
+            return;
+        }
+
+        var exec = new MultiPassExecution
+        {
+            SaveId = SaveLoadObserver.CurrentSaveId,
+            VehicleId = vehicle.Id,
+            Mode = SplitMode.EqualDv,
+            PassCountTotal = 2,
+            Intent = new NextBurnIntent(),
+        };
+        exec.AssignCurrentBurn(setup.Burn);
+        exec.AwaitingMaterialization = false;
+        MultiPassRegistry.Add(exec);
+
+        RcsExecution rcs = RcsExecRegistry.GetOrCreate(vehicle.Id);
+        rcs.ActiveBurnTimeSec = setup.Burn.Time.Seconds();
+        rcs.ActiveBurnDvMs = setup.Burn.DeltaVVlf.Length();
+
+        try
+        {
+            // Keep automatic ticks off while the simulation steps.
+            SharedVehicleHooks.RcsEnabled = true;
+            PassCompletionPatch.TickVehicle(vehicle);
+            SharedVehicleHooks.RcsEnabled = false;
+            if (!t.Check("an RCS execution arms the pass",
+                    exec.PassArmed && !exec.StallHintShown
+                    && vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Manual))
+                return;
+
+            rcs.ClearActive();
+            driver.Step(0.1, StallStepCount);
+            PassCompletionPatch.TickVehicle(vehicle);
+            t.Check("a cancelled RCS pass reports the stall", exec.StallHintShown);
+            t.Check("the stalled execution is preserved", MultiPassRegistry.Has(vehicle.Id)
+                && exec.CurrentBurn != null && exec.PassIndex == 0);
+        }
+        finally
+        {
+            SharedVehicleHooks.RcsEnabled = false;
+            MultiPassRegistry.Remove(vehicle.Id);
+            PassCompletionPatch.OnRegistryRemovedExternally(vehicle.Id);
+            RcsExecRegistry.Remove(vehicle.Id);
+            RcsFlightSupport.CleanupBurns(vehicle.FlightComputer);
+        }
+    }
+
+    private static FieldInfo StaticField(Type type, string name)
+        => type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+           ?? throw new MissingFieldException(type.FullName, name);
 
     private static void CheckBinding(TestContext t, string owner, MethodBase target)
     {

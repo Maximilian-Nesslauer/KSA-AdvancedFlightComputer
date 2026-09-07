@@ -1,7 +1,7 @@
 <Patch>
   <!--
-    Interstellar comets need Mass and SphereOfInfluence to be targetable
-    by the Transfer Planner.
+    Interstellar comets need a Mass and a SphereOfInfluence before the Transfer Planner can target
+    them. Stock already gives 3I_ATLAS a Mass.
   -->
 
   <Copy Path="//InterstellarComet[@Id='Oumuamua']" Pos="Append">

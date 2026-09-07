@@ -283,16 +283,32 @@ public sealed class RcsRegistryTest : AfcTest
             RcsExecRegistry.WriteFile(file, [Entry("disk", "disk-vehicle")]);
             File.AppendAllLines(file, ["[[rcs_burn]]", "save_id = \"broken\""]);
             RcsExecRegistry.Load();
-            t.Check("partial RCS parse preserves live state",
-                entries.TryGetValue(("live", "live-vehicle"), out preserved)
-                && ReferenceEquals(preserved, live)
-                && !entries.ContainsKey(("disk", "disk-vehicle")));
+            t.Check("partial RCS parse keeps the readable blocks",
+                entries.ContainsKey(("disk", "disk-vehicle"))
+                && !entries.ContainsKey(("live", "live-vehicle")));
+
+            // An empty save must not erase a file that did not load.
+            File.WriteAllLines(file, ["[[rcs_burn]]", "save_id = \"broken\""]);
+            string defective = File.ReadAllText(file);
+            entries.Clear();
+            RcsExecRegistry.Load();
+            t.Check("a wholly unreadable RCS file loads nothing", entries.Count == 0);
+            RcsExecRegistry.Save();
+            t.Check("an empty RCS save cannot overwrite an unreadable file",
+                File.ReadAllText(file) == defective);
 
             RcsExecRegistry.WriteFile(file, [Entry("disk", "disk-vehicle")]);
+            entries.Clear();
+            entries[("live", "live-vehicle")] = live;
             RcsExecRegistry.Load();
             t.Check("successful RCS load replaces live state",
                 entries.ContainsKey(("disk", "disk-vehicle"))
                 && !entries.ContainsKey(("live", "live-vehicle")));
+
+            entries.Clear();
+            RcsExecRegistry.Save();
+            t.Check("an empty RCS save clears a file that read cleanly",
+                !File.ReadAllText(file).Contains("[[rcs_burn]]", StringComparison.Ordinal));
         }
         finally
         {

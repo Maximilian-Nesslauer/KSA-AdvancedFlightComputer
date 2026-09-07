@@ -21,7 +21,9 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 ///
 /// Runs on the ThreadPool thread <c>RefineBurnTask</c> queues itself on.
 /// </summary>
-[HarmonyPatch(typeof(RefineBurnTask), nameof(RefineBurnTask.TryFindIntercept))]
+[HarmonyPatch(typeof(RefineBurnTask), nameof(RefineBurnTask.TryFindIntercept),
+    new Type[] { typeof(OrbitalTransfers.TransferInfo), typeof(OrbitalTransfers.PorkChopEntry) },
+    new ArgumentType[] { ArgumentType.Normal, ArgumentType.Ref })]
 internal static class Patch_TryFindIntercept
 {
     static bool Prefix(
@@ -66,7 +68,12 @@ internal static class Patch_TryFindIntercept
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning($"[AFC] TryFindIntercept prefix: {ex}");
+            // Refinement can enter this once for each selected entry, so log each fault type once.
+            double? departureDv = selectedEntry?.TransferData?.TransferDvVlf.Length();
+            LogHelper.WarnOnce("try-find-intercept:" + ex.GetType().Name,
+                $"[AFC] TryFindIntercept prefix for target " +
+                $"'{(transferInfo?.Target as Astronomical)?.Id ?? "?"}' at " +
+                $"{(departureDv is double dv ? dv.ToString("F1") : "?")} m/s: {ex}");
             return true;
         }
     }
@@ -140,23 +147,12 @@ internal static class Patch_TryFindIntercept
 [HarmonyPatch]
 internal static class Patch_FindClosestApproaches
 {
-    private static readonly Type[] Signature =
-    {
-        typeof(Span<Encounter>),
-        typeof(int).MakeByRefType(),
-        typeof(IOrbiter),
-        typeof(UniverseTime).MakeByRefType(),
-    };
-
-    private static MethodInfo? Anchor =>
-        AccessTools.Method(typeof(PatchedConic), "FindClosestApproaches", Signature);
-
     /// <summary>Whether the private stock method still exists in this build, so
     /// the feature can report the gap instead of failing to patch.</summary>
-    public static bool IsAnchorPresent => Anchor != null;
+    public static bool IsAnchorPresent => GameReflection.PatchedConic_FindClosestApproaches != null;
 
     static MethodBase TargetMethod() =>
-        Anchor ?? throw new InvalidOperationException(
+        GameReflection.PatchedConic_FindClosestApproaches ?? throw new InvalidOperationException(
             "[AFC] PatchedConic.FindClosestApproaches not found; "
             + "patching this class requires an IsAnchorPresent check first.");
 

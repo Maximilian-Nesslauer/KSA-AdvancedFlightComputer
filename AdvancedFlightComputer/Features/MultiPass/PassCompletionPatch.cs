@@ -88,8 +88,10 @@ internal static class PassCompletionPatch
         Vehicle vehicle, MultiPassExecution exec, FlightComputer fc,
         FlightComputerBurnMode prevMode, bool hadPrev)
     {
-        // A new Auto attempt permits another stall hint if the user retries the pass.
-        if (fc.BurnMode == FlightComputerBurnMode.Auto)
+        bool rcsFlyingPass = RcsIsFlyingPass(vehicle, exec);
+
+        // A new attempt on this pass permits another stall hint if the user retries it.
+        if (fc.BurnMode == FlightComputerBurnMode.Auto || rcsFlyingPass)
             exec.StallHintShown = false;
 
         // Match the target before recording Auto for this pass.
@@ -101,11 +103,23 @@ internal static class PassCompletionPatch
             && !exec.BurnAutoEngagedThisPass)
         {
             exec.BurnAutoEngagedThisPass = true;
+            exec.PassArmed = true;
             if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPass: vehicle='{vehicle.Id}' pass " +
                     $"{exec.PassIndex + 1}/{exec.PassCountTotal} Auto engaged " +
                     $"(burn t={exec.CurrentBurn.Time.Seconds():F1}s).");
+        }
+
+        // An RCS pass stays in Manual, so its active execution shows that it started.
+        if (rcsFlyingPass && !exec.PassArmed)
+        {
+            exec.PassArmed = true;
+            if (MultiPassDebug.Enabled)
+                DefaultCategory.Log.Debug(
+                    $"[AFC] MultiPass: vehicle='{vehicle.Id}' pass " +
+                    $"{exec.PassIndex + 1}/{exec.PassCountTotal} armed for RCS " +
+                    $"(burn t={exec.CurrentBurn!.Time.Seconds():F1}s).");
         }
 
         if (MultiPassDebug.Enabled && hadPrev && prevMode != fc.BurnMode)
@@ -138,7 +152,7 @@ internal static class PassCompletionPatch
 
         // Retain a stopped burn with remaining delta v. Show one hint and let the user resume or cancel.
         if (!didCommit && exec.CurrentBurn != null)
-            MaybeAlertStalledPass(vehicle.Id, exec, fc);
+            MaybeAlertStalledPass(vehicle, exec, fc);
 
         if (exec.CurrentBurn == null && exec.PassIndex >= exec.PassCountTotal)
         {
@@ -210,10 +224,14 @@ internal static class PassCompletionPatch
                 KeepStockTransferBurnInSync(exec.CurrentBurn);
 
             // Carry Auto into the next pass after FlightComputer.LoadBurn resets the mode to Manual.
+            // RCS can accept this request while the burn mode stays in Manual.
             if (exec.ReengageAutoOnNextBurn)
             {
                 vehicle.SetEnum(FlightComputerBurnMode.Auto);
                 exec.ReengageAutoOnNextBurn = false;
+                // Record the pass only if Auto or RCS accepted the request.
+                if (fc.BurnMode == FlightComputerBurnMode.Auto || RcsIsFlyingPass(vehicle, exec))
+                    exec.PassArmed = true;
                 if (MultiPassDebug.Enabled)
                     DefaultCategory.Log.Debug(
                         $"[AFC] MultiPass: vehicle={vehicleId} re-engaged execution " +
@@ -356,13 +374,15 @@ internal static class PassCompletionPatch
 
     // Manual can mean exhausted fuel or a user pause. Preserve the execution and show only one hint.
     private static void MaybeAlertStalledPass(
-        string vehicleId, MultiPassExecution exec, FlightComputer fc)
+        Vehicle vehicle, MultiPassExecution exec, FlightComputer fc)
     {
         if (exec.StallHintShown) return;
         if (exec.AwaitingMaterialization) return;
         if (exec.CurrentBurn == null) return;
-        // A pass that has not entered Auto can still be waiting for execution.
-        if (!exec.BurnAutoEngagedThisPass) return;
+        // A pass that was never armed can still be waiting for execution.
+        if (!exec.PassArmed) return;
+        // The RCS executor flies with the burn mode at Manual, so a running execution is not a stall.
+        if (RcsIsFlyingPass(vehicle, exec)) return;
         if (fc.BurnMode != FlightComputerBurnMode.Manual) return;
         if (!fc.BurnPlan.TryGetBurn(exec.CurrentBurn)) return;
         // Auto includes alignment. Wait until the planned impulsive time before reporting a stall.
@@ -370,14 +390,24 @@ internal static class PassCompletionPatch
 
         exec.StallHintShown = true;
         DefaultCategory.Log.Warning(
-            $"[AFC] MultiPass: vehicle={vehicleId} pass {exec.PassIndex + 1}/" +
-            $"{exec.PassCountTotal} engine stopped with dV remaining (out of fuel " +
-            "or Auto disengaged); execution paused until Auto is re-engaged or the " +
-            "plan is cancelled.");
+            $"[AFC] MultiPass: vehicle={vehicle.Id} pass {exec.PassIndex + 1}/" +
+            $"{exec.PassCountTotal} stopped with dV remaining. It ran out of " +
+            "propellant or execution was disengaged. The execution stays paused " +
+            "until it is engaged again or the plan is cancelled.");
         TimedAlert.Create(
             $"Multi-pass pass {exec.PassIndex + 1}/{exec.PassCountTotal} stopped with " +
             "dV remaining. Re-engage Auto to continue, or cancel the remaining passes.",
             Color.Yellow, 6.0);
+    }
+
+    // RCS stays in Manual. Match its active burn by time because it can fly another burn on the vehicle.
+    private static bool RcsIsFlyingPass(Vehicle vehicle, MultiPassExecution exec)
+    {
+        if (exec.CurrentBurn == null) return false;
+        if (!SharedVehicleHooks.RcsEnabled) return false;
+        if (!RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? rcs)) return false;
+        if (rcs.ActiveBurnTimeSec is not double activeTimeSec) return false;
+        return Math.Abs(activeTimeSec - exec.CurrentBurn.Time.Seconds()) < BurnIdentityToleranceSec;
     }
 
     private static void CompleteExecution(string vehicleId, MultiPassExecution exec)
@@ -447,17 +477,7 @@ internal static class PassCompletionPatch
     }
 
     private static void KeepStockTransferBurnInSync(Burn currentBurn)
-    {
-        try
-        {
-            StockPlanner.TransferBurn = currentBurn;
-        }
-        catch (Exception ex)
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] PassCompletionPatch: failed to sync _transferBurn: {ex.Message}");
-        }
-    }
+        => StockPlanner.TransferBurn = currentBurn;
 
     // Stock planner fields are global. Pin them only for the matching vehicle and transfer type.
     private static bool IsPlanWindowOnVehicleHohmann(Vehicle execVehicle)
@@ -469,39 +489,26 @@ internal static class PassCompletionPatch
                 return false;
             return StockPlanner.SourceVehicle is Vehicle v && v.Id == execVehicle.Id;
         }
-        catch
+        catch (Exception ex)
         {
+            // CelestialSystem.GetIndex can throw for an invalid source index. Do not let that escape
+            // from the ApplyVehicleSolvers postfix.
+            LogHelper.WarnOnce("multipass-plan-window-source:" + ex.GetType().Name,
+                $"[AFC] PassCompletionPatch: could not read the stock plan-window source for " +
+                $"vehicle='{execVehicle.Id}': {ex}");
             return false;
         }
     }
 
+    // DrawPlanWindow indexes the selected entry when the calculated flag is set. Restore that flag only while the underlying transfer array remains available.
     private static void KeepStockTransferCalculatedInSync()
     {
-        try
-        {
-            // DrawPlanWindow indexes the selected entry when the calculated flag is set. Restore that flag only while the underlying transfer array remains available.
-            if (!StockPlanner.SelectedTransferBlockIsSafe) return;
-            StockPlanner.TransferCalculated = true;
-        }
-        catch (Exception ex)
-        {
-            LogHelper.WarnOnce("multipass-sync-calculated:" + ex.GetType().Name,
-                $"[AFC] PassCompletionPatch: failed to sync _transferCalculated: {ex}");
-        }
+        if (!StockPlanner.SelectedTransferBlockIsSafe) return;
+        StockPlanner.TransferCalculated = true;
     }
 
     private static void DisableStockHohmannOrbitPreview()
-    {
-        try
-        {
-            StockPlanner.DisplaySelectedTransfer = false;
-        }
-        catch (Exception ex)
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] PassCompletionPatch: failed to disable _displaySelectedTransfer: {ex.Message}");
-        }
-    }
+        => StockPlanner.DisplaySelectedTransfer = false;
 
     #endregion
 }

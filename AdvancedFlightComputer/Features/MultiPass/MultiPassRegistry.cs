@@ -29,6 +29,9 @@ internal static class MultiPassRegistry
     private static string _modDir = string.Empty;
     private static string _configPath = string.Empty;
 
+    // True when the last load could not read all entries from the file.
+    private static bool _lastLoadWasDefective;
+
     public static void Init()
     {
         string userDocs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -88,6 +91,7 @@ internal static class MultiPassRegistry
                 $"-> {(removed ? "removed" : "not found")}");
     }
 
+    /// <summary>Gets a read-only view of the live entry map.</summary>
     public static IReadOnlyDictionary<(string, string), MultiPassExecution> Snapshot
         => _byKey;
 
@@ -128,7 +132,11 @@ internal static class MultiPassRegistry
         }
     }
 
-    public static void Reset() => _byKey.Clear();
+    public static void Reset()
+    {
+        _byKey.Clear();
+        _lastLoadWasDefective = false;
+    }
 
     public static void Load()
     {
@@ -137,12 +145,19 @@ internal static class MultiPassRegistry
         try
         {
             var loaded = new Dictionary<(string SaveId, string VehicleId), MultiPassExecution>();
-            if (!ParseFile(_configPath, loaded))
-                return;
+            // Keep readable blocks, but do not keep entries from the previous save.
+            bool clean = ParseFile(_configPath, loaded, out int droppedBlocks);
+            _lastLoadWasDefective = !clean;
             _byKey.Clear();
             foreach (var entry in loaded)
                 _byKey.Add(entry.Key, entry.Value);
-            if (MultiPassDebug.Enabled)
+
+            if (!clean)
+                DefaultCategory.Log.Warning(
+                    $"[AFC] MultiPassRegistry: could not read all of {_configPath}. " +
+                    $"{droppedBlocks} block(s) were dropped, {_byKey.Count} entry(ies) were kept, and " +
+                    "details appear in the earlier warnings. The next save writes only the kept entries.");
+            else if (MultiPassDebug.Enabled)
                 DefaultCategory.Log.Debug(
                     $"[AFC] MultiPassRegistry: loaded {_byKey.Count} entries from {_configPath}");
         }
@@ -150,6 +165,7 @@ internal static class MultiPassRegistry
         catch (DirectoryNotFoundException) { }
         catch (Exception ex)
         {
+            _lastLoadWasDefective = true;
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassRegistry: failed to load {_configPath}: {ex}");
         }
@@ -165,7 +181,8 @@ internal static class MultiPassRegistry
         {
             if (!string.IsNullOrEmpty(exec.SaveId)) { hasPersistable = true; break; }
         }
-        if (!hasPersistable && !File.Exists(_configPath))
+        // Do not erase an unreadable file when there are no entries to preserve.
+        if (!hasPersistable && (!File.Exists(_configPath) || _lastLoadWasDefective))
             return;
 
         // Write a temporary file before replacement so an interrupted write leaves the previous file intact.
@@ -181,6 +198,7 @@ internal static class MultiPassRegistry
             }
 
             File.Move(tempPath, _configPath, overwrite: true);
+            _lastLoadWasDefective = false;
         }
         catch (Exception ex)
         {
@@ -247,15 +265,23 @@ internal static class MultiPassRegistry
 
     private static bool ParseFile(
         string path,
-        Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink)
-        => ParseLines(File.ReadAllLines(path), path, sink);
+        Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink,
+        out int droppedBlocks)
+        => ParseLines(File.ReadAllLines(path), path, sink, out droppedBlocks);
 
     internal static bool ParseLines(
         string[] lines, string path,
         Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink)
+        => ParseLines(lines, path, sink, out _);
+
+    internal static bool ParseLines(
+        string[] lines, string path,
+        Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink,
+        out int droppedBlocks)
     {
         PendingBlock? current = null;
         bool success = true;
+        droppedBlocks = 0;
 
         for (int li = 0; li < lines.Length; li++)
         {
@@ -265,7 +291,7 @@ internal static class MultiPassRegistry
 
             if (line == "[[execution]]")
             {
-                success &= FlushBlock(current, sink);
+                success &= FlushBlock(current, sink, ref droppedBlocks);
                 current = new PendingBlock { HeaderLine = lineNumber };
                 continue;
             }
@@ -277,7 +303,7 @@ internal static class MultiPassRegistry
                     $"[AFC] MultiPassRegistry: {Path.GetFileName(path)}:{lineNumber} " +
                     $"unrecognised TOML header '{line}', skipping until next [[execution]].");
                 success = false;
-                success &= FlushBlock(current, sink);
+                success &= FlushBlock(current, sink, ref droppedBlocks);
                 current = null;
                 continue;
             }
@@ -327,8 +353,18 @@ internal static class MultiPassRegistry
             current.Fields[key] = val;
         }
 
-        success &= FlushBlock(current, sink);
+        success &= FlushBlock(current, sink, ref droppedBlocks);
         return success;
+    }
+
+    private static bool FlushBlock(
+        PendingBlock? pending,
+        Dictionary<(string SaveId, string VehicleId), MultiPassExecution> sink,
+        ref int droppedBlocks)
+    {
+        if (FlushBlock(pending, sink)) return true;
+        droppedBlocks++;
+        return false;
     }
 
     private static bool FlushBlock(
@@ -337,61 +373,26 @@ internal static class MultiPassRegistry
     {
         if (pending == null) return true;
         var block = pending.Fields;
+        int line = pending.HeaderLine;
 
-        // Require a save ID so malformed entries cannot enter the default world scope.
-        if (!block.TryGetValue("save_id", out string? saveId) || string.IsNullOrEmpty(saveId))
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing save_id).");
+        // A save ID is required so that a malformed entry cannot enter the default world scope.
+        if (!RequireString(block, "save_id", line, out string saveId)
+            || !RequireString(block, "vehicle_id", line, out string vehicleId)
+            || !RequireString(block, "kind", line, out string kind)
+            || !RequireEnum(block, "mode", line, out SplitMode mode)
+            || !RequireInt(block, "pass_count_total", line, out int total)
+            || !RequireInt(block, "pass_index", line, out int idx))
             return false;
-        }
-        if (!block.TryGetValue("vehicle_id", out string? vehicleId)
-            || string.IsNullOrEmpty(vehicleId))
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or empty vehicle_id).");
-            return false;
-        }
-        if (!block.TryGetValue("kind", out string? kind)
-            || string.IsNullOrEmpty(kind))
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or empty kind).");
-            return false;
-        }
-        if (!block.TryGetValue("mode", out string? modeStr) ||
-            !Enum.TryParse(modeStr, out SplitMode mode) || !Enum.IsDefined(mode))
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or invalid mode '{modeStr ?? "<null>"}').");
-            return false;
-        }
-        if (!block.TryGetValue("pass_count_total", out string? totalStr) ||
-            !int.TryParse(totalStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int total))
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or invalid pass_count_total).");
-            return false;
-        }
-        if (!block.TryGetValue("pass_index", out string? idxStr) ||
-            !int.TryParse(idxStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int idx))
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (missing or invalid pass_index).");
-            return false;
-        }
 
         if (!IntentDeserializers.TryGetValue(kind, out var deserializer))
         {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (unknown intent kind '{kind}').");
+            DropBlock(line, $"unknown intent kind '{kind}'");
             return false;
         }
         IManeuverIntent? intent = deserializer(block);
         if (intent == null)
         {
-            DefaultCategory.Log.Warning(
-                $"[AFC] MultiPassRegistry: dropping block at line {pending.HeaderLine} (intent '{kind}' deserialiser failed).");
+            DropBlock(line, $"the deserialiser of intent '{kind}' failed");
             return false;
         }
 
@@ -412,6 +413,46 @@ internal static class MultiPassRegistry
         };
         return true;
     }
+
+    private static bool RequireString(
+        Dictionary<string, string> block, string key, int headerLine, out string value)
+    {
+        if (block.TryGetValue(key, out string? raw) && !string.IsNullOrEmpty(raw))
+        {
+            value = raw;
+            return true;
+        }
+        value = string.Empty;
+        DropBlock(headerLine, $"missing or empty {key}");
+        return false;
+    }
+
+    private static bool RequireInt(
+        Dictionary<string, string> block, string key, int headerLine, out int value)
+    {
+        if (block.TryGetValue(key, out string? raw)
+            && int.TryParse(raw, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+            return true;
+        value = 0;
+        DropBlock(headerLine, $"missing or invalid {key}");
+        return false;
+    }
+
+    private static bool RequireEnum<TEnum>(
+        Dictionary<string, string> block, string key, int headerLine, out TEnum value)
+        where TEnum : struct, Enum
+    {
+        block.TryGetValue(key, out string? raw);
+        if (raw != null && Enum.TryParse(raw, out value) && Enum.IsDefined(value))
+            return true;
+        value = default;
+        DropBlock(headerLine, $"missing or invalid {key} '{raw ?? "<null>"}'");
+        return false;
+    }
+
+    private static void DropBlock(int headerLine, string reason)
+        => DefaultCategory.Log.Warning(
+            $"[AFC] MultiPassRegistry: dropping block at line {headerLine} ({reason}).");
 
     private static double? ParseOptionalDouble(
         Dictionary<string, string> block, string key)

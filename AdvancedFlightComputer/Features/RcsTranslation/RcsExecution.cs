@@ -45,6 +45,8 @@ internal sealed class RcsExecution
     /// <summary>Latch the lead window after takeover so a refreshed slew estimate cannot return control during the same burn.</summary>
     public bool ControlTaken;
 
+    public string? CancelRequestReason;
+
     public RcsCapabilitySnapshot Capability;
     public double CapabilityProbedAtSec = double.NegativeInfinity;
 
@@ -189,6 +191,7 @@ internal sealed class RcsExecution
         LastPublishedCommand = null;
         LastWorkerReadAtSec = double.NaN;
         ControlTaken = false;
+        CancelRequestReason = null;
         AlignCommanded = false;
         ForcedRcsOn = false;
         StartMassKg = 0.0;

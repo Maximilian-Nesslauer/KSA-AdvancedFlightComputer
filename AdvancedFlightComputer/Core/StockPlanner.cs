@@ -112,7 +112,10 @@ internal static class StockPlanner
     ///
     /// Outside the calculating window the array is all-or-nothing, because a completed run
     /// dereferences every cell in its best-index scan and a fresh TransferInfo has none, so
-    /// checking the two cells stock can read is sufficient.</summary>
+    /// checking the two cells stock can read is sufficient.
+    ///
+    /// <c>DrawPlanWindow</c> reads private copies of these indices. Stock updates those copies from
+    /// these fields when it takes the worker result, so they refer to the same array cells.</summary>
     public static bool CanIndexPorkChopData(
         OrbitalTransfers.PorkChopEntry? selectedEntry,
         bool transferBeingCalculated,
