@@ -17,11 +17,17 @@ internal static class PlanWindowPatchPipeline
 
     private const int MaxIlGapPrimaryButtonToBurnCreate = 160;
 
-    internal static bool HasCalculatedControlsAnchor =>
-        AccessTools.Method(typeof(TransferPlanner), "DrawCorrectionTransfer", Type.EmptyTypes) != null;
+    /// <summary>Whether stock still has the anchor beside the calculated transfer controls.</summary>
+    internal static bool HasCalculatedControlsAnchor => CalculatedControlsAnchor() != null;
 
-    internal static bool HasFallbackControlsAnchor =>
-        AccessTools.Method(typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes) != null;
+    /// <summary>Whether stock still has the fallback anchor that runs on every frame.</summary>
+    internal static bool HasFallbackControlsAnchor => FallbackControlsAnchor() != null;
+
+    private static MethodInfo? CalculatedControlsAnchor()
+        => AccessTools.Method(typeof(TransferPlanner), "DrawCorrectionTransfer", Type.EmptyTypes);
+
+    private static MethodInfo? FallbackControlsAnchor()
+        => AccessTools.Method(typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
 
     internal static bool HasCreateAnchor =>
         AccessTools.Method(typeof(Burn), nameof(Burn.Create), BurnCreateSignature) != null;
@@ -37,8 +43,7 @@ internal static class PlanWindowPatchPipeline
     internal static IEnumerable<CodeInstruction> InjectCalculatedControls(
         IEnumerable<CodeInstruction> instructions)
     {
-        MethodInfo? anchor = AccessTools.Method(
-            typeof(TransferPlanner), "DrawCorrectionTransfer", Type.EmptyTypes);
+        MethodInfo? anchor = CalculatedControlsAnchor();
         MethodInfo? injectTarget = AccessTools.Method(
             typeof(HohmannMultiPassUI), nameof(HohmannMultiPassUI.DrawInline));
 
@@ -77,8 +82,7 @@ internal static class PlanWindowPatchPipeline
     internal static IEnumerable<CodeInstruction> InjectFallbackControls(
         IEnumerable<CodeInstruction> instructions)
     {
-        MethodInfo? anchor = AccessTools.Method(
-            typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
+        MethodInfo? anchor = FallbackControlsAnchor();
         MethodInfo? injectTarget = AccessTools.Method(
             typeof(HohmannMultiPassUI), nameof(HohmannMultiPassUI.DrawInline));
 
@@ -101,6 +105,17 @@ internal static class PlanWindowPatchPipeline
                 "found in DrawPlanWindow IL; fallback render inactive.");
             return code;
         }
+
+        // The first injection wins. Keep the fallback, but report if stock moves it first.
+        MethodInfo? calculated = CalculatedControlsAnchor();
+        int calculatedIndex = calculated == null
+            ? -1
+            : code.FindIndex(instruction => instruction.Calls(calculated));
+        if (calculatedIndex > index)
+            LogHelper.WarnOnce("transpiler-hohmann-fallback-order",
+                "[AFC] HohmannFallback transpiler: ConsoleStyle.PopWidgetStyle now runs before " +
+                "DrawCorrectionTransfer in DrawPlanWindow, so the multi-pass section draws at " +
+                "the end of the window body instead of next to the transfer controls.");
 
         var injected = new CodeInstruction(OpCodes.Call, injectTarget);
         TranspilerInsertion.MoveEntryMarkers(code[index], injected);
