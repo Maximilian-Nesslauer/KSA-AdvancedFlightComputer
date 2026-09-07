@@ -20,15 +20,12 @@ internal enum PassPlanFailure
     /// fix: pick a later porkchop entry.</summary>
     TimeBudget,
 
-    /// <summary>Even with the per-prior escape-velocity cap, cumulative
-    /// dV pushes a prior orbit past the parent SOI envelope. User fix:
-    /// reduce passes; no porkchop tweak helps.</summary>
+    /// <summary>A prior orbit reaches the parent SOI limit.
+    /// User fix: reduce the pass count.</summary>
     SoiCeiling,
 
-    /// <summary>Per-pass dV would push v_p past parabolic before reaching
-    /// the final pass. With auto-cap enabled this should only fire when
-    /// the split is genuinely infeasible (priors degenerate after cap).
-    /// User fix: reduce passes.</summary>
+    /// <summary>A prior orbit reaches the final departure speed too early.
+    /// User fix: reduce the pass count.</summary>
     ParabolicVp,
 
     /// <summary>Integer-sum rounding pulled the last prior K below the

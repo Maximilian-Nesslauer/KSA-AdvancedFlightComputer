@@ -163,10 +163,15 @@ internal static class HohmannMultiPassPlanner
             remainingCount, mode, vehicleState);
         if (schedule.K == null)
         {
-            PassPlanFailure kind = schedule.Failure ?? PassPlanFailure.ParabolicVp;
-            string detail = kind == PassPlanFailure.FuelShort
-                ? "vehicle has insufficient fuel for this N"
-                : "priors degenerate under cap (transfer too high-energy for this N)";
+            PassPlanFailure kind = schedule.Failure ?? PassPlanFailure.Other;
+            string detail = kind switch
+            {
+                PassPlanFailure.FuelShort => "vehicle has insufficient fuel for this N",
+                PassPlanFailure.SoiCeiling =>
+                    "a prior orbit would reach past the parent SOI envelope at this N",
+                PassPlanFailure.ParabolicVp => "a prior orbit would reach escape speed at this N",
+                _ => "the requested split has no usable prior schedule",
+            };
             return Fail(string.Format(CultureInfo.InvariantCulture,
                 "vehicle '{0}': K-schedule build failed; {1}",
                 source.Id, detail), kind);
@@ -605,16 +610,17 @@ internal static class HohmannMultiPassPlanner
         public PassPlanFailure? Failure { get; init; }
     }
 
+    // vpMaxPrior is the speed whose apoapsis reaches the SOI envelope.
     private static RealKScheduleResult BuildRealKSchedule(
         double mu, double rp, double aPark, double soiLimit,
         double vpLive, double vTargetXy,
         int remainingCount, SplitMode mode, SequenceBurnState state)
     {
         int priors = remainingCount - 1;
-        if (priors < 1) return default;
+        if (priors < 1) return Refuse(PassPlanFailure.Other);
 
         double totalDv = vTargetXy - vpLive;
-        if (!(totalDv > 0.0)) return default;
+        if (!(totalDv > 0.0)) return Refuse(PassPlanFailure.Other);
 
         PassAllocation[] alloc = Splitter.Allocate(totalDv, remainingCount, mode, state);
 
@@ -631,25 +637,29 @@ internal static class HohmannMultiPassPlanner
             double targetVp = vpCum + alloc[k].DvCapacityMs;
             if (targetVp > vpMaxPrior)
             {
+                // The chain cannot gain more speed after it reaches the SOI cap.
                 if (reachedCap)
-                    return default;
+                    return Refuse(PassPlanFailure.SoiCeiling);
                 if (vpMaxPrior <= vpCum)
-                    return default;
+                    return Refuse(PassPlanFailure.SoiCeiling);
                 targetVp = vpMaxPrior;
                 reachedCap = true;
             }
             if (!(targetVp > vpCum))
-                return new RealKScheduleResult { Failure = PassPlanFailure.FuelShort };
+                return Refuse(PassPlanFailure.FuelShort);
             vpCum = targetVp;
             double term = 2.0 / rp - vpCum * vpCum / mu;
             if (!(term > 0.0))
-                return default;
+                return Refuse(PassPlanFailure.ParabolicVp);
             double aPost = 1.0 / term;
             K[k] = Math.Pow(aPost / aPark, 1.5);
         }
 
         return new RealKScheduleResult { K = K };
     }
+
+    private static RealKScheduleResult Refuse(PassPlanFailure kind)
+        => new() { Failure = kind };
     internal static int EstimateRequiredKTotal(
         HohmannPlanInput raw, Vehicle source, int passCount,
         SplitMode mode, SequenceBurnState state, double parkingPeriodSec)

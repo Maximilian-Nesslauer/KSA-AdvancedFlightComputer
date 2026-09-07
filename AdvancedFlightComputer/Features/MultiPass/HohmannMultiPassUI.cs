@@ -685,8 +685,9 @@ internal static class HohmannMultiPassUI
                 + $"SOI envelope. Reduce passes, or try {otherModeLabel} for "
                 + "tighter K.",
             PassPlanFailure.ParabolicVp =>
-                "Even with priors auto-capped at escape velocity the transfer "
-                + $"is too high-energy for this N. Reduce passes, or try {otherModeLabel}.",
+                "An intermediate orbit reaches the required departure speed too early. "
+                + "Reduce passes, or try "
+                + $"{otherModeLabel}.",
             PassPlanFailure.NonMonotonicK =>
                 "Integer-sum rounding artifact at this N; reduce passes by one "
                 + "(N-1 typically works).",
