@@ -37,37 +37,55 @@ internal static class SaveLoadObserver
     {
         static void Postfix(UncompressedSave __instance)
         {
+            // UncompressedSave.Load returns normally when GameSaves.RefusedInEditor refuses the load,
+            // so its postfix still runs. Read the same editor state without raising a second alert.
+            if (Program.IsEditorOpen)
+            {
+                if (DebugConfig.MultiPass)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] SaveLoadObserver.LoadPatch: ignored the refused load of " +
+                        $"'{__instance.Id}' because the vehicle editor is open.");
+                return;
+            }
+
+            string saveId = __instance.Id ?? string.Empty;
+            CurrentSaveId = saveId;
+
+            // Keep each stage independent so one failure does not prevent the others.
+            RunStage(saveId, "reset the save-scoped state", SaveScopedState.ResetAll);
+            RunStage(saveId, "restore the multi-pass registry", MultiPassRegistry.Load);
+            RunStage(saveId, "notify the save-loaded subscribers", () => SaveLoaded?.Invoke());
+            if (DebugConfig.MultiPass)
+                RunStage(saveId, "log the loaded state", () => LogLoadedState(saveId));
+        }
+
+        private static void RunStage(string saveId, string stageName, Action stage)
+        {
             try
             {
-                CurrentSaveId = __instance.Id ?? string.Empty;
-
-                SaveScopedState.ResetAll();
-
-                MultiPassRegistry.Load();
-
-                SaveLoaded?.Invoke();
-
-                if (DebugConfig.MultiPass)
-                {
-                    DefaultCategory.Log.Debug(
-                        $"[AFC] SaveLoadObserver.LoadPatch: loaded save '{CurrentSaveId}', " +
-                        $"registry has {MultiPassRegistry.Count} total entries " +
-                        $"({MultiPassRegistry.CountForCurrentSave} for this save).");
-                    MultiPassDebug.LogRegistry(
-                        "SaveLoadObserver.LoadPatch (post-load)", MultiPassRegistry.Snapshot);
-
-                    Vehicle? controlled = Program.ControlledVehicle;
-                    if (controlled != null)
-                        MultiPassDebug.LogBurnPlan(
-                            $"SaveLoadObserver.LoadPatch vehicle='{controlled.Id}'",
-                            controlled.FlightComputer.BurnPlan);
-                }
+                stage();
             }
             catch (Exception ex)
             {
                 DefaultCategory.Log.Warning(
-                    $"[AFC] SaveLoadObserver Load Postfix: {ex}");
+                    $"[AFC] SaveLoadObserver.LoadPatch: could not {stageName} for save '{saveId}': {ex}");
             }
+        }
+
+        private static void LogLoadedState(string saveId)
+        {
+            DefaultCategory.Log.Debug(
+                $"[AFC] SaveLoadObserver.LoadPatch: loaded save '{saveId}', " +
+                $"registry has {MultiPassRegistry.Count} total entries " +
+                $"({MultiPassRegistry.CountForCurrentSave} for this save).");
+            MultiPassDebug.LogRegistry(
+                "SaveLoadObserver.LoadPatch (post-load)", MultiPassRegistry.Snapshot);
+
+            Vehicle? controlled = Program.ControlledVehicle;
+            if (controlled != null)
+                MultiPassDebug.LogBurnPlan(
+                    $"SaveLoadObserver.LoadPatch vehicle='{controlled.Id}'",
+                    controlled.FlightComputer.BurnPlan);
         }
     }
 

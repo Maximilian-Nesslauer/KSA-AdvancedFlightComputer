@@ -197,17 +197,33 @@ public sealed class MultiPassRegistryTest : AfcTest
                 MultiPassRegistry.WriteToml(writer, [Make("disk", "disk-vehicle")]);
             File.AppendAllLines(file, ["[[execution]]", "save_id = \"broken\""]);
             MultiPassRegistry.Load();
-            t.Check("partial MultiPass parse preserves live state",
-                MultiPassRegistry.Snapshot.TryGetValue(("live", "live-vehicle"), out preserved)
-                && ReferenceEquals(preserved, live)
-                && !MultiPassRegistry.Snapshot.ContainsKey(("disk", "disk-vehicle")));
+            t.Check("partial MultiPass parse keeps the readable blocks",
+                MultiPassRegistry.Snapshot.ContainsKey(("disk", "disk-vehicle"))
+                && !MultiPassRegistry.Snapshot.ContainsKey(("live", "live-vehicle")));
+
+            // An empty save must not erase a file that did not load.
+            File.WriteAllLines(file, ["[[execution]]", "save_id = \"broken\""]);
+            string defective = File.ReadAllText(file);
+            MultiPassRegistry.Reset();
+            MultiPassRegistry.Load();
+            t.Check("a wholly unreadable file loads nothing", MultiPassRegistry.Count == 0);
+            MultiPassRegistry.Save();
+            t.Check("an empty save cannot overwrite an unreadable file",
+                File.ReadAllText(file) == defective);
 
             using (var writer = new StreamWriter(file))
                 MultiPassRegistry.WriteToml(writer, [Make("disk", "disk-vehicle")]);
+            MultiPassRegistry.Reset();
+            MultiPassRegistry.Add(live);
             MultiPassRegistry.Load();
             t.Check("successful load replaces live state",
                 MultiPassRegistry.Snapshot.ContainsKey(("disk", "disk-vehicle"))
                 && !MultiPassRegistry.Snapshot.ContainsKey(("live", "live-vehicle")));
+
+            MultiPassRegistry.Reset();
+            MultiPassRegistry.Save();
+            t.Check("an empty save clears a file that read cleanly",
+                !File.ReadAllText(file).Contains("[[execution]]", StringComparison.Ordinal));
         }
         finally
         {
