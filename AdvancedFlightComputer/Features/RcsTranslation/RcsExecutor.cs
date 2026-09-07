@@ -64,6 +64,15 @@ internal static partial class RcsExecutor
     public static bool WouldExecuteRcs(Vehicle vehicle, out RcsCapabilitySnapshot capability)
     {
         capability = default;
+        if (!ResolvesToRcs(vehicle))
+            return false;
+        capability = RcsCapability.Probe(vehicle);
+        return capability.HasAnyTranslation;
+    }
+
+    // Resolve the burn mode without the expensive thruster probe.
+    private static bool ResolvesToRcs(Vehicle vehicle)
+    {
         FlightComputer fc = vehicle.FlightComputer;
         if (fc.Burn == null || !vehicle.IsControllable)
             return false;
@@ -73,10 +82,7 @@ internal static partial class RcsExecutor
         RcsBurnOptions? options = null;
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec))
             options = exec.FindOptions(first.Time.Seconds(), first.DeltaVVlf.Length());
-        if (ResolveMode(vehicle, options) != RcsExecutionMode.Rcs)
-            return false;
-        capability = RcsCapability.Probe(vehicle);
-        return capability.HasAnyTranslation;
+        return ResolveMode(vehicle, options) == RcsExecutionMode.Rcs;
     }
 
     private static string _uiCacheVehicleId = string.Empty;
@@ -91,10 +97,10 @@ internal static partial class RcsExecutor
         long now = Environment.TickCount64;
         if (vehicle.Id == _uiCacheVehicleId && now - _uiCacheAtMs < UiCacheTtlMs)
             return;
-        _uiVerdict = WouldExecuteRcs(vehicle, out _uiCapability);
-        // The burn editor needs capability data even when the burn does not resolve to RCS.
-        if (!_uiVerdict)
-            _uiCapability = RcsCapability.Probe(vehicle);
+        // The burn editor needs capability data for all burn modes.
+        bool resolves = ResolvesToRcs(vehicle);
+        _uiCapability = RcsCapability.Probe(vehicle);
+        _uiVerdict = resolves && _uiCapability.HasAnyTranslation;
         _uiAvailableKg = RcsPropellant.AvailableKg(vehicle);
         _uiCacheVehicleId = vehicle.Id;
         _uiCacheAtMs = now;
@@ -470,13 +476,23 @@ internal static partial class RcsExecutor
 
         // Clear stale commands before stock can run an engine burn. Keep estimates available before activation.
         RcsCommandChannel.Clear(fc.BurnPlan);
-        if (fc.Burn != null && WouldExecuteRcs(vehicle, out RcsCapabilitySnapshot capability))
+        if (fc.Burn == null || !ResolvesToRcs(vehicle))
+            return;
+
+        // Reuse a recent snapshot because the probe solves each thruster nozzle.
+        if (hasExec && IsCapabilityFresh(RcsCtrlFrame.For(vehicle).Ctrl2Body, exec!, nowSec))
         {
-            RcsExecution armed = hasExec ? exec! : RcsExecRegistry.GetOrCreate(vehicle.Id);
-            armed.Capability = capability;
-            armed.CapabilityProbedAtSec = nowSec;
-            RefreshArmedEstimates(vehicle, fc, armed, nowSec);
+            if (exec!.Capability.HasAnyTranslation)
+                RefreshArmedEstimates(vehicle, fc, exec, nowSec);
+            return;
         }
+
+        // Cache negative results to avoid a probe on every frame.
+        RcsExecution armed = hasExec ? exec! : RcsExecRegistry.GetOrCreate(vehicle.Id);
+        armed.Capability = RcsCapability.Probe(vehicle);
+        armed.CapabilityProbedAtSec = nowSec;
+        if (armed.Capability.HasAnyTranslation)
+            RefreshArmedEstimates(vehicle, fc, armed, nowSec);
     }
 
     private static void Reconcile(Vehicle vehicle, FlightComputer fc, RcsExecution exec)
@@ -595,10 +611,8 @@ internal static partial class RcsExecutor
 
     private static bool RefreshCapability(Vehicle vehicle, RcsExecution exec, double nowSec)
     {
-        // A control point change invalidates all groups immediately, even inside the refresh interval.
         floatQuat liveCtrl2Body = RcsCtrlFrame.For(vehicle).Ctrl2Body;
-        if (liveCtrl2Body != exec.Capability.Ctrl2Body
-            || nowSec - exec.CapabilityProbedAtSec > CapabilityRefreshSec)
+        if (!IsCapabilityFresh(liveCtrl2Body, exec, nowSec))
         {
             exec.Capability = RcsCapability.Probe(vehicle);
             exec.CapabilityProbedAtSec = nowSec;
@@ -607,6 +621,11 @@ internal static partial class RcsExecutor
         // Rocket.UpdateThrusterCache can lag the live control frame. Do not compare completion floors until they agree.
         return liveCtrl2Body == exec.Capability.Ctrl2Body;
     }
+
+    // A control point change invalidates all groups immediately, even inside the refresh interval.
+    private static bool IsCapabilityFresh(floatQuat liveCtrl2Body, RcsExecution exec, double nowSec)
+        => liveCtrl2Body == exec.Capability.Ctrl2Body
+           && nowSec - exec.CapabilityProbedAtSec <= CapabilityRefreshSec;
 
     private static bool CheckProgress(
         Vehicle vehicle, RcsExecution exec, float togoMs, double tickDt, double nowSec,

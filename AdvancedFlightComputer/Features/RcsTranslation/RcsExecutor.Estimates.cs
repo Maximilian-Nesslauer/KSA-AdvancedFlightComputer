@@ -101,27 +101,29 @@ internal static partial class RcsExecutor
                 .Transform(vehicle.GetCtrl2Cci());
             double3 uCci = double3.Unpack(togo).NormalizeOrZero();
             double theta = MathEx.SafeAcos(double3.Dot(axisCci, uCci));
-            FlightComputer fc = vehicle.FlightComputer;
-            double alpha = Math.Min(fc.RcsTorqueAuthority.Y, fc.RcsTorqueAuthority.Z);
             if (theta > AlignMinThetaRad)
-            {
-                if (alpha <= MinSlewAlphaRadS2)
-                {
-                    est.AlignFeasible = false;
-                }
-                else
-                {
-                    double omega = Math.Min(fc.RateLimit, Math.Sqrt(theta * alpha));
-                    double thrustOn = 2.0 * omega / alpha;
-                    double coast = Math.Max(0.0, theta - omega * omega / alpha) / Math.Max(omega, 1e-9);
-                    est.AlignSlewDurationSec = thrustOn + coast;
-                    double slewMassFlow = SlewMassFlowFactor
-                        * (cap.RotationMassFlowKgS.Y + cap.RotationMassFlowKgS.Z);
-                    est.AlignSlewPropellantKg = thrustOn * slewMassFlow;
-                }
-            }
+                EstimateSlew(vehicle.FlightComputer, in cap, theta, ref est);
         }
         return est;
+    }
+
+    /// <summary>Estimate an acceleration and braking turn with the flight computer rate limit. Low angular acceleration makes Align infeasible.</summary>
+    private static void EstimateSlew(
+        FlightComputer fc, in RcsCapabilitySnapshot cap, double theta, ref RcsEstimates est)
+    {
+        double alpha = Math.Min(fc.RcsTorqueAuthority.Y, fc.RcsTorqueAuthority.Z);
+        if (alpha <= MinSlewAlphaRadS2)
+        {
+            est.AlignFeasible = false;
+            return;
+        }
+        double omega = Math.Min(fc.RateLimit, Math.Sqrt(theta * alpha));
+        double thrustOn = 2.0 * omega / alpha;
+        double coast = Math.Max(0.0, theta - omega * omega / alpha) / Math.Max(omega, 1e-9);
+        est.AlignSlewDurationSec = thrustOn + coast;
+        double slewMassFlow = SlewMassFlowFactor
+            * (cap.RotationMassFlowKgS.Y + cap.RotationMassFlowKgS.Z);
+        est.AlignSlewPropellantKg = thrustOn * slewMassFlow;
     }
 
     internal static bool TryHoldPerformance(

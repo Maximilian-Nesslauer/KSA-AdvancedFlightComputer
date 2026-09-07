@@ -136,8 +136,9 @@ internal static class RcsCapability
         RcsCtrlFrame ctrl = new(stateList.GlobalState.CachedCtrl2Body);
         snap.Ctrl2Body = ctrl.Ctrl2Body;
 
-        Span<ThrusterController> thrusters = vehicle.Parts.Modules.Get<ThrusterController>();
-        int contributionCapacity = 1;
+        // Use the same module list for the buffer size and the fill pass.
+        Span<ThrusterController> thrusters = stateList.Modules;
+        int contributionCapacity = 0;
         for (int i = 0; i < thrusters.Length; i++)
             contributionCapacity += thrusters[i].Cores.Length * 3;
         RcsPulseContribution[] contributionBuffer =
@@ -278,8 +279,6 @@ internal static class RcsCapability
         Span<RcsPulseContribution> contributions, ref int count,
         float3 force, float minimumPulseTime)
     {
-        if (count > contributions.Length - 3)
-            throw new InvalidOperationException("The RCS pulse contribution buffer is too small.");
         contributions[count++] = new RcsPulseContribution { GroupIndex = 0, ForceN = force.X, MinimumPulseTimeSec = minimumPulseTime };
         contributions[count++] = new RcsPulseContribution { GroupIndex = 2, ForceN = force.Y, MinimumPulseTimeSec = minimumPulseTime };
         contributions[count++] = new RcsPulseContribution { GroupIndex = 4, ForceN = force.Z, MinimumPulseTimeSec = minimumPulseTime };
