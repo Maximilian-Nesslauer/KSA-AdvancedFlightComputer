@@ -538,6 +538,13 @@ internal static class HohmannMultiPassPlanner
         _shiftCacheAdvisory = null;
         _shiftCacheTransit = default;
     }
+
+    // The cache key can keep transfer data for a disposed vehicle reachable.
+    public static void OnVehicleDisposed(string vehicleId)
+    {
+        if (!_hasShiftCache || _shiftCacheKey.VehicleId != vehicleId) return;
+        ResetShiftCache();
+    }
     // SplitMode changes the scan only through KShift, which is calculated before the cache lookup.
     private readonly record struct ShiftCacheKey(
         string VehicleId,

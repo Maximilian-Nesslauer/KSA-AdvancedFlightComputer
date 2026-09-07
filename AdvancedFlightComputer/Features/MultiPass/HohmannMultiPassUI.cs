@@ -169,6 +169,14 @@ internal static class HohmannMultiPassUI
         InvalidatePreview();
     }
 
+    // The flyby preview key can keep a disposed source vehicle reachable.
+    public static void OnVehicleDisposed(string vehicleId)
+    {
+        if (_cachedKey.SourceId != vehicleId
+            && _plannedFlybyDeparture?.Key.Source.Id != vehicleId) return;
+        InvalidatePreview();
+    }
+
     // The cached pass count preserves the active overlay when the user switches away from the source and back.
     public static bool HasMultiPassPreview
     {

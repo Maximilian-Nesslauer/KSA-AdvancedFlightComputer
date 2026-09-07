@@ -43,6 +43,11 @@ internal static class SharedVehicleHooks
         // A failed feature can still have loaded entries that the save observer will persist.
         VehicleDisposePatch.Remove(vehicle);
         RcsVehicleDisposePatch.Remove(vehicle);
+
+        // Vehicle.Dispose leaves the part graph intact. Clear caches that can keep it reachable.
+        MultiPassPreviewCache.OnVehicleDisposed(vehicle);
+        HohmannMultiPassUI.OnVehicleDisposed(vehicle.Id);
+        HohmannMultiPassPlanner.OnVehicleDisposed(vehicle.Id);
     }
 
     // Program.PrepareFrame joins the workers before this call and drains input events afterwards.
