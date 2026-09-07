@@ -38,19 +38,8 @@ internal static partial class Patch_DrawPlanWindow
 
     static bool Prefix(IGameViewport inViewport)
     {
-        TransferType transferType;
-        try
-        {
-            if (StockPlanner.TransferType is not TransferType current)
-                return true;
-            transferType = current;
-        }
-        catch (Exception ex)
-        {
-            LogHelper.WarnOnce("maneuvertools-type-lookup:" + ex.GetType().Name,
-                $"[AFC] ManeuverTools Prefix (type lookup): {ex}");
+        if (StockPlanner.TransferType is not TransferType transferType)
             return true;
-        }
 
         if (!ManeuverToolsFeature.IsHandledType(transferType.GetKey()))
         {

@@ -86,12 +86,22 @@ public sealed class Mod
         harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_OnPreRender)).Patch();
 
-        PatchIfAnchored(harmony, typeof(Patch_TransferPlanner_DrawSelectedTransfer_Flyby),
-            Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent,
-            "Flyby stock-preview suppression", "DrawSelectedTransfer");
-        PatchIfAnchored(harmony, typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Flyby),
-            Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent,
-            "Flyby stock-marker suppression", "DrawSelectedTransferUi");
+        // Suppress both parts of the stock preview together so lines and markers cannot disagree.
+        bool lines = Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent;
+        bool markers = Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent;
+        if (lines && markers)
+        {
+            harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawSelectedTransfer_Flyby)).Patch();
+            harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Flyby)).Patch();
+            return;
+        }
+
+        string missing = lines ? "DrawSelectedTransferUi"
+            : markers ? "DrawSelectedTransfer"
+            : "DrawSelectedTransfer and DrawSelectedTransferUi";
+        DefaultCategory.Log.Warning(
+            $"[AFC] Flyby stock-preview suppression disabled - {missing} anchor not found. "
+            + "Stock keeps drawing its own preview next to the flyby trajectory.");
     }
 
     // With the DrawPlanWindow prefix possibly missing, the injected types would sit in stock's
@@ -151,17 +161,6 @@ public sealed class Mod
         SaveLoadObserver.SaveWritten -= OnRcsSaveWritten;
         RcsExecRegistry.Reset();
         RcsCommandChannel.Reset();
-    }
-
-    private static bool PatchIfAnchored(Harmony harmony, Type patch, bool anchorPresent, string feature, string anchor)
-    {
-        if (!anchorPresent)
-        {
-            DefaultCategory.Log.Warning($"[AFC] {feature} disabled - {anchor} anchor not found.");
-            return false;
-        }
-        harmony.CreateClassProcessor(patch).Patch();
-        return true;
     }
 
     private static void RemoveTransferTypes()

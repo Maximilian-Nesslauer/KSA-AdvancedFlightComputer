@@ -30,7 +30,8 @@ internal static class Patch_OnPreRender
         }
     }
 
-    internal static void RenderHohmannOverlay(IViewport inViewport)
+    // Keep the overlay and maneuver preview fault keys separate.
+    private static void RenderHohmannOverlay(IViewport inViewport)
     {
         try
         {

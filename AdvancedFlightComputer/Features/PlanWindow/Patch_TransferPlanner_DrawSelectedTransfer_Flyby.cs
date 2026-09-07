@@ -2,7 +2,6 @@ using System;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
-using Brutal.ImGuiApi;
 using HarmonyLib;
 using KSA;
 
@@ -24,19 +23,11 @@ namespace AdvancedFlightComputer.Features.PlanWindow;
 [HarmonyPatch]
 internal static class Patch_TransferPlanner_DrawSelectedTransfer_Flyby
 {
-    // IViewport here and IGameViewport on the DrawSelectedTransferUi sibling.
-    // Shared by the gate and the target so they cannot drift.
-    private static readonly Type[] Signature = { typeof(IViewport) };
-
-    private static MethodInfo? Anchor =>
-        AccessTools.Method(typeof(TransferPlanner), "DrawSelectedTransfer", Signature);
-
-    /// <summary>Whether the private stock method still exists in this build, so
-    /// Mod.cs can skip the patch instead of failing to apply it.</summary>
-    public static bool IsAnchorPresent => Anchor != null;
+    /// <summary>Whether stock still has the line and marker suppression anchor.</summary>
+    public static bool IsAnchorPresent => GameReflection.TransferPlanner_DrawSelectedTransfer != null;
 
     static MethodBase TargetMethod() =>
-        Anchor ?? throw new InvalidOperationException(
+        GameReflection.TransferPlanner_DrawSelectedTransfer ?? throw new InvalidOperationException(
             "[AFC] TransferPlanner.DrawSelectedTransfer(IViewport) not found; "
             + "patching this class requires an IsAnchorPresent check first.");
 
