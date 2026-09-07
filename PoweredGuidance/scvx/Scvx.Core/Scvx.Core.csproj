@@ -11,7 +11,8 @@
     <!-- The native solver travels with the managed library, same pattern as
          Gfold.Core. scs.dll is built by build-scs.ps1 into scvx/native, and
          NativeLibraries.cs loads it from beside this assembly. -->
-    <None Include="..\native\scs.dll" Link="scs.dll" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\native\scs.dll" Link="scs.dll" CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\native\scs.dll')" />
   </ItemGroup>
 
   <ItemGroup>

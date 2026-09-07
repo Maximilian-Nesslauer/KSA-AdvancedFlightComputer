@@ -3,6 +3,8 @@
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <DeployToMods Condition="'$(DeployToMods)' == ''">true</DeployToMods>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <AssemblyName>PoweredGuidance</AssemblyName>
@@ -70,11 +72,19 @@
   <!-- After build, install into the game's mods folder: the mod DLL, the manifest,
        and our private deps (managed Gfold.Core + its native solvers). StarMap discovers
        the folder via mod.toml and loads PoweredGuidance as the EntryAssembly. -->
-  <Target Name="CopyToMods" AfterTargets="Build">
+  <Target Name="ValidateRuntimeNativeFiles" BeforeTargets="Build"
+          Condition="'$(Configuration)' == 'Release' OR '$(DeployToMods)' == 'true'">
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\..\gfold\native\clarabel_c.dll')"
+           Text="clarabel_c.dll is required for deployment or a Release package. Build the native solver first, or use Debug with -p:DeployToMods=false for a managed-only compile check." />
+    <Error Condition="!Exists('$(MSBuildProjectDirectory)\..\scvx\native\scs.dll')"
+           Text="scs.dll is required for deployment or a Release package. Build the native solver first, or use Debug with -p:DeployToMods=false for a managed-only compile check." />
+  </Target>
+
+  <Target Name="CopyToMods" AfterTargets="Build" Condition="'$(DeployToMods)' == 'true'">
     <MakeDir Directories="$(ModDir)" />
     <!-- Dependencies FIRST, entry assembly LAST. The game holds a lock on the entry
          assembly whenever it is running, and MSBuild aborts the target at the first
-         failed Copy — so with the entry assembly first, a running game silently left
+         failed Copy - so with the entry assembly first, a running game silently left
          every dependency stale. That shipped new mod code against an hour-old
          Scvx.Core.dll and looked like "the mod stopped working". -->
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ModDir)" />
