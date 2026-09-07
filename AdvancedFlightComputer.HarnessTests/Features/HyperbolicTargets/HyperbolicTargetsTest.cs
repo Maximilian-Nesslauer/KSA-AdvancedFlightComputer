@@ -140,6 +140,12 @@ public sealed class HyperbolicTargetsTest : AfcTest
         t.Check("alignment time derives a missing estimate",
             Approx.Abs(derived.Seconds(), expected.Seconds(), 1e-3),
             $"got {derived.Seconds():F3}s expected {expected.Seconds():F3}s");
+
+        // The periapsis model has no phase angle, so an offset does not change the result.
+        UniverseTime offset = OrbitalTransfers.AlignmentTime(withEstimate, now, 30.0);
+        t.Check("alignment time with a phase offset",
+            Approx.Abs(offset.Seconds(), expected.Seconds(), 1e-3),
+            $"got {offset.Seconds():F3}s expected {expected.Seconds():F3}s");
     }
 
     // With the vehicle parked at a planet, the target list must carry every unbound
@@ -280,12 +286,23 @@ public sealed class HyperbolicTargetsTest : AfcTest
                 t.Check($"target data against an unbound target, {label}", patch.TargetData != null,
                     $"expiry={(expiry.IsEndOfTime() ? "end of time" : expiry.Seconds().ToString("F0"))}");
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!IsGameApiDrift(ex))
             {
                 t.Fail($"target data against an unbound target, {label}",
                     $"threw {ex.GetType().Name}: {ex.Message}");
             }
         }
+    }
+
+    // Let game API drift escape because catching it would hide an infrastructure failure.
+    private static bool IsGameApiDrift(Exception e)
+    {
+        for (Exception? cur = e; cur != null; cur = cur.InnerException)
+        {
+            if (cur is MissingMemberException or TypeLoadException)
+                return true;
+        }
+        return false;
     }
 
     // The refine step for an unbound target builds the plan from the Lambert dV and

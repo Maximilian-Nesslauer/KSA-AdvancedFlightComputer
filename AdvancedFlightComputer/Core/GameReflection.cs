@@ -14,7 +14,8 @@ namespace AdvancedFlightComputer.Core;
 ///
 /// The <see cref="UsedByAttribute"/> on each handle is what the validation reads, and a handle
 /// without one fails every validation, so a key cannot be added without being validated for the
-/// features that use it.
+/// features that use it. Validators ignore <c>SoftAnchor</c> handles because each one controls
+/// only its own patch.
 /// </summary>
 internal static class GameReflection
 {
@@ -27,6 +28,9 @@ internal static class GameReflection
         RcsTranslation = 8,
         Core = 16,
         PlanWindow = 32,
+
+        /// <summary>Handles that control one optional patch. Each patch checks its own handle.</summary>
+        SoftAnchor = 64,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -136,6 +140,32 @@ internal static class GameReflection
     [UsedBy(Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<bool>? TransferPlanner_displaySelectedTransferRef =
         StaticFieldRef<bool>(TransferPlanner_displaySelectedTransfer);
+
+    #endregion
+
+    #region Optional patch anchors
+
+    // This guard prevents the stock search from using a second body with a NaN Period.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? PatchedConic_FindClosestApproaches =
+        AccessTools.Method(typeof(PatchedConic), "FindClosestApproaches", new[]
+        {
+            typeof(Span<Encounter>),
+            typeof(int).MakeByRefType(),
+            typeof(IOrbiter),
+            typeof(UniverseTime).MakeByRefType(),
+        });
+
+    // Stock draws the selected-transfer lines and markers through different viewport interfaces.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? TransferPlanner_DrawSelectedTransfer =
+        AccessTools.Method(typeof(TransferPlanner), "DrawSelectedTransfer",
+            new[] { typeof(IViewport) });
+
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? TransferPlanner_DrawSelectedTransferUi =
+        AccessTools.Method(typeof(TransferPlanner), "DrawSelectedTransferUi",
+            new[] { typeof(IGameViewport) });
 
     #endregion
 
