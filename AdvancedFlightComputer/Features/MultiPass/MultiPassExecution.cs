@@ -46,6 +46,9 @@ internal sealed class MultiPassExecution
     // Auto includes alignment before ignition. Observing it does not prove that thrust occurred.
     public bool BurnAutoEngagedThisPass { get; set; }
 
+    // The RCS executor stays in Manual, so the burn mode alone cannot show that a pass started.
+    public bool PassArmed { get; set; }
+
     public bool StallHintShown { get; set; }
 
     #endregion
@@ -58,6 +61,7 @@ internal sealed class MultiPassExecution
         AwaitingMaterialization = true;
         AwaitingMaterializationTicks = 0;
         BurnAutoEngagedThisPass = false;
+        PassArmed = false;
         StallHintShown = false;
     }
 
@@ -69,6 +73,7 @@ internal sealed class MultiPassExecution
         AwaitingMaterialization = false;
         AwaitingMaterializationTicks = 0;
         BurnAutoEngagedThisPass = false;
+        PassArmed = false;
         StallHintShown = false;
     }
 
