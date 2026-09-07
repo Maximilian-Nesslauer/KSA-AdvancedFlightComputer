@@ -31,7 +31,7 @@ public sealed class RcsTranslationTest : AfcTest
             return;
         }
 
-        RcsTestPatches.Ensure();
+        using RcsTestPatches.Scope patches = RcsTestPatches.Apply();
 
         foreach (string saveId in saves)
         {
@@ -43,6 +43,8 @@ public sealed class RcsTranslationTest : AfcTest
                     FlyAlignScenario(t, vehicle, driver, watcher);
                     FlyDeferredAlignCheck(t, vehicle, driver);
                     FlyRcsToggleScenario(t, vehicle, driver, watcher);
+                    FlyZeroedTargetScenario(t, vehicle, driver, watcher);
+                    FlyCancelRequestScenario(t, vehicle, driver, watcher);
                 });
         }
     }
@@ -462,6 +464,126 @@ public sealed class RcsTranslationTest : AfcTest
             $"capturedEnabled={capturedEnabled} reEnabledActive={reEnabledActive} " +
             $"restoredEnabled={restoredEnabled}");
 
+        RcsFlightSupport.CleanupBurns(fc);
+    }
+
+    // A zeroed target must cancel without a completion event or a MultiPass pass.
+    private static void FlyZeroedTargetScenario(
+        TestContext t, Vehicle vehicle, SimDriver driver, RcsFlightSupport.CompletionWatcher watcher)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        RcsFlightSupport.CleanupBurns(fc);
+        vehicle.RefillConsumables();
+        driver.Step(StepSec, 10);
+        watcher.Reset();
+        RcsCancelLogPatch.LastReason = null;
+
+        int bestAxis = RcsCapability.Probe(vehicle).BestAxis();
+        if (bestAxis < 0)
+        {
+            t.Skip("zeroed target: no usable translation axis on this save.");
+            return;
+        }
+        RcsFlightSupport.BurnSetup? setup = BuildStrongAxisBurn(vehicle, driver, bestAxis);
+        if (setup == null)
+        {
+            t.Fail("zeroed target", "could not set up the burn");
+            return;
+        }
+        Burn burn = setup.Burn;
+        BurnTarget bt = setup.BurnTarget;
+
+        RcsExecution? exec = RcsFlightSupport.ArmAndEngage(
+            vehicle, burn, RcsExecutionMode.Rcs, RcsAttitudeStrategy.Hold, RcsAllocator.Groups);
+        if (exec == null)
+        {
+            t.Fail("zeroed target", "SetEnum(Auto) did not engage the executor");
+            RcsFlightSupport.CleanupBurns(fc);
+            return;
+        }
+
+        // Reconcile before the edit because a zeroed burn no longer matches the loaded target.
+        driver.Step(StepSec);
+        if (!RcsExecRegistry.TryGet(vehicle.Id, out exec) || !exec.IsActive)
+        {
+            t.Fail("zeroed target", "the execution ended before the burn was edited");
+            RcsFlightSupport.CleanupBurns(fc);
+            return;
+        }
+
+        // Use the burn editor path so the game refreshes the loaded target.
+        burn.DeltaVVlf = double3.Zero;
+        burn.Update(fc);
+        driver.Step(StepSec, 3);
+
+        bool targetZeroed = bt.DeltaVTargetCci.IsExactlyZero();
+        bool inactive = !RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? after) || !after.IsActive;
+        bool noCompletion = !ReferenceEquals(watcher.LastBurn, burn);
+        t.Check("zeroed target cancels",
+            targetZeroed && inactive && noCompletion
+            && RcsCancelLogPatch.LastReason == "burn target has no delta-V",
+            $"targetZeroed={targetZeroed} inactive={inactive} completionRaised={!noCompletion} " +
+            $"reason={RcsCancelLogPatch.LastReason ?? "none"}");
+
+        if (RcsExecRegistry.TryGet(vehicle.Id, out after!) && after.IsActive)
+            RcsExecutor.Cancel(vehicle, after, "test cleanup");
+        RcsFlightSupport.CleanupBurns(fc);
+    }
+
+    private static void FlyCancelRequestScenario(
+        TestContext t, Vehicle vehicle, SimDriver driver, RcsFlightSupport.CompletionWatcher watcher)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        RcsFlightSupport.CleanupBurns(fc);
+        vehicle.RefillConsumables();
+        fc.RCSMode = FlightComputerRCSMode.Disabled;
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        driver.Step(StepSec, 10);
+        watcher.Reset();
+        RcsCancelLogPatch.LastReason = null;
+
+        int bestAxis = RcsCapability.Probe(vehicle).BestAxis();
+        if (bestAxis < 0)
+        {
+            t.Skip("cancel request: no usable translation axis on this save.");
+            return;
+        }
+        RcsFlightSupport.BurnSetup? setup = BuildStrongAxisBurn(vehicle, driver, bestAxis);
+        if (setup == null)
+        {
+            t.Fail("cancel request", "could not set up the burn");
+            return;
+        }
+
+        RcsExecution? exec = RcsFlightSupport.ArmAndEngage(
+            vehicle, setup.Burn, RcsExecutionMode.Rcs, RcsAttitudeStrategy.Hold, RcsAllocator.Groups);
+        if (exec == null)
+        {
+            t.Fail("cancel request", "SetEnum(Auto) did not engage the executor");
+            RcsFlightSupport.CleanupBurns(fc);
+            return;
+        }
+        if (!AdvanceUntilControlTaken(vehicle, driver, out exec))
+        {
+            t.Fail("cancel request", "the executor never took control inside the lead window");
+            RcsFlightSupport.CleanupBurns(fc);
+            return;
+        }
+
+        RcsExecutor.RequestCancel(exec, "user request");
+        bool stillActiveAtRequest = exec.IsActive && RcsCancelLogPatch.LastReason == null;
+        driver.Step(StepSec);
+        bool inactiveAfterTick = !RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? after) || !after.IsActive;
+        t.Check("cancel request applies on the driver tick",
+            stillActiveAtRequest && inactiveAfterTick
+            && RcsCancelLogPatch.LastReason == "user request"
+            && fc.RCSMode == FlightComputerRCSMode.Disabled
+            && !ReferenceEquals(watcher.LastBurn, setup.Burn),
+            $"activeAtRequest={stillActiveAtRequest} inactiveAfterTick={inactiveAfterTick} " +
+            $"reason={RcsCancelLogPatch.LastReason ?? "none"} rcsMode={fc.RCSMode}");
+
+        if (RcsExecRegistry.TryGet(vehicle.Id, out after!) && after.IsActive)
+            RcsExecutor.Cancel(vehicle, after, "test cleanup");
         RcsFlightSupport.CleanupBurns(fc);
     }
 

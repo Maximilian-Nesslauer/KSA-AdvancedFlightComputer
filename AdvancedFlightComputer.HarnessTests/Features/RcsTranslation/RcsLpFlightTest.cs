@@ -42,7 +42,7 @@ public sealed class RcsLpFlightTest : AfcTest
             return;
         }
 
-        RcsTestPatches.Ensure();
+        using RcsTestPatches.Scope patches = RcsTestPatches.Apply();
 
         foreach (string saveId in saves)
         {

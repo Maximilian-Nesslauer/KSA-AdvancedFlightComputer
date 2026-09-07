@@ -21,7 +21,7 @@ public sealed class RcsBurnPreviewTest : AfcTest
             t.Skip("no RCS test vehicle save present.");
             return;
         }
-        RcsTestPatches.Ensure();
+        using RcsTestPatches.Scope patches = RcsTestPatches.Apply();
         foreach (string save in saves)
             RcsFlightSupport.RunOnSave(t, home, save, 500_000.0, "HarnessRcsPreview",
                 (vehicle, driver) =>
