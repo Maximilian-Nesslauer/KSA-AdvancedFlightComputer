@@ -25,8 +25,9 @@ The enclosing AFC project excludes their source trees from its compile items and
 
 Build the solution in Debug with `dotnet build AdvancedFlightComputer.slnx -p:DeployToMods=false -p:GenerateLaunchProfile=false -p:KsaDir="<game install>" --disable-build-servers` for a managed compile check.
 This command does not need native solver DLLs.
-Run `build/build-clarabel.ps1` with Rust and `build/build-scs.ps1` with Zig to produce the native libraries in `build/native/`.
-Deployment and Release builds require both native DLLs.
+Run `build/build-clarabel.ps1` with Rust and `build/build-scs.ps1` with Zig to produce the native libraries in `build/native/<rid>/`.
+Deployment and Release builds need both native libraries for their target runtime.
+See [native-build.md](native-build.md) for the toolchains, runtime identifiers, ABI check, and package check.
 
 The production payload has one `AdvancedFlightComputer` folder and one production `mod.toml`.
 It includes the AFC assembly, the three numerical assemblies, both native solvers, XML patches, the root license, third-party notices, and the license texts in `licenses/`.
