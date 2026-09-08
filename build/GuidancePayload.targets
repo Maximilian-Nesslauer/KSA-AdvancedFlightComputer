@@ -7,8 +7,8 @@
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Scvx.dll" TargetPath="AdvancedFlightComputer.Guidance.Scvx.dll" />
   </ItemGroup>
 
-  <!-- The Windows and the Linux libraries have different file names, so both
-       runtimes can live in one mod folder and each platform loads its own. -->
+  <!-- Windows and Linux use different library names, so one mod folder can contain
+       both runtimes and each platform can load its own files. -->
   <ItemGroup Condition="$(GuidanceNativeRids.Contains('win-x64'))">
     <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/clarabel_c.dll" TargetPath="clarabel_c.dll" />
     <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/scs.dll" TargetPath="scs.dll" />
@@ -30,4 +30,30 @@
     <Error Condition="!Exists('%(GuidanceNativeFile.Identity)')"
            Text="%(GuidanceNativeFile.Identity) is required for deployment or Release. Build it with build/build-clarabel.ps1 or build/build-scs.ps1 for that runtime, or use Debug with -p:DeployToMods=false for a managed compile check." />
   </Target>
+  <!-- Check the archive against the payload list used to create it. This catches
+       missing files and prevents game or loader assemblies from being shipped. -->
+  <Target Name="VerifyGuidancePackage" AfterTargets="PackageRelease" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <GuidanceVerifyDir>$(OutputPath)package-verify/</GuidanceVerifyDir>
+      <ZipPath Condition="'$(ZipPath)' == ''">$(OutputPath)$(AssemblyName).zip</ZipPath>
+    </PropertyGroup>
+    <RemoveDir Directories="$(GuidanceVerifyDir)" />
+    <Unzip SourceFiles="$(ZipPath)" DestinationFolder="$(GuidanceVerifyDir)" />
+    <ItemGroup>
+      <ExpectedPackageFile Include="$(GuidanceVerifyDir)$(AssemblyName)/$(AssemblyName).dll" />
+      <ExpectedPackageFile Include="$(GuidanceVerifyDir)$(AssemblyName)/mod.toml" />
+      <ExpectedPackageFile Include="@(PatchFile->'$(GuidanceVerifyDir)$(AssemblyName)/Patches/%(Filename)%(Extension)')" />
+      <ExpectedPackageFile Include="@(ModPayloadFile->'$(GuidanceVerifyDir)$(AssemblyName)/%(TargetPath)')" />
+      <ActualPackageFile Include="$(GuidanceVerifyDir)**/*" />
+      <MissingPackageFile Include="@(ExpectedPackageFile->'%(FullPath)')" Exclude="@(ActualPackageFile->'%(FullPath)')" />
+      <UnexpectedPackageFile Include="@(ActualPackageFile->'%(FullPath)')" Exclude="@(ExpectedPackageFile->'%(FullPath)')" />
+    </ItemGroup>
+    <Error Condition="'@(MissingPackageFile)' != ''"
+           Text="The release package is missing @(MissingPackageFile->'%(Filename)%(Extension)', ', ')." />
+    <Error Condition="'@(UnexpectedPackageFile)' != ''"
+           Text="The release package contains undeclared files, @(UnexpectedPackageFile->'%(Filename)%(Extension)', ', ')." />
+    <Message Importance="high" Text="Release package verified, @(ExpectedPackageFile->Count()) files." />
+    <RemoveDir Directories="$(GuidanceVerifyDir)" />
+  </Target>
+
 </Project>
