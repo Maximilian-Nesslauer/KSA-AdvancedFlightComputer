@@ -53,7 +53,6 @@ public sealed class VehicleAutopilotState
     // --- cold solve ---
     public bool Converging;             // cold solve in progress, not yet flyable
     public int ColdFrames;
-    public bool ColdResult;             // outcome of the last collected cold iteration
 
     // --- node ladder ---
     public int GateIndex = -1;          // -1 = above every gate
@@ -608,7 +607,7 @@ public sealed class VehicleAutopilotState
     /// it, or replace it. While a job is in flight the worker owns it outright - only
     /// Published and Inputs may be crossed, and both are immutable.
     /// </summary>
-    public bool Idle(bool threaded) => !threaded || Worker == null || !Worker.IsBusy;
+    public bool Idle => Worker == null || Worker.IsIdle;
 
     // ---------------------------------------------------------------- boostback
 

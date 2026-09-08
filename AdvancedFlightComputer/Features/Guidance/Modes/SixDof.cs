@@ -361,13 +361,7 @@ public static partial class GuidanceWindow
                     ImGui.Text($"  sigma {_s.Guidance.Sigma,5:F1} s / {_s.Guidance.Nodes} nodes = " +
                                $"{_s.Guidance.Sigma / Math.Max(_s.Guidance.Nodes - 1, 1),4:F2} s actual");
             }
-            if (ImGui.Checkbox("Solve on a background thread", ref _s.SixDofThreaded))
-            {
-                // Switching mid-flight is the point of having the toggle, so it has to
-                // be safe: stop the worker on the way off, start one on the way on.
-                if (!_s.SixDofThreaded) { _s.Worker?.Dispose(); _s.Worker = null; }
-                else if (_s.Active && _s.Worker == null) _s.Worker = new Ksa6DofSolveWorker();
-            }
+            ImGui.Checkbox("Solve on a background thread", ref _s.SixDofThreaded);
             if (_s.SixDofThreaded)
             {
                 ImGui.TextWrapped(
@@ -984,7 +978,8 @@ public static partial class GuidanceWindow
     /// runs a full solve.
     /// </summary>
     private sealed record RebuildRequest(
-        int Nodes, Scvx6DofConfig Cfg, Dynamics6Dof.Params Dyn, Ksa6DofInputs Inputs, double[] Xf);
+        int Nodes, Scvx6DofConfig Cfg, Dynamics6Dof.Params Dyn, Ksa6DofInputs Inputs, double[] Xf,
+        bool FixedTime);
 
     /// <summary>
     /// The GAME-THREAD half of a rebuild: read the vehicle and produce a request.
@@ -1013,7 +1008,8 @@ public static partial class GuidanceWindow
 
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz);
         return new RebuildRequest(nodes, cfg, dyn,
-                                  new Ksa6DofInputs(_s.Guidance.AccelBias, ixx, iyy, izz), xf);
+                                  new Ksa6DofInputs(_s.Guidance.AccelBias, ixx, iyy, izz), xf,
+                                  _s.SixDofFixedTime);
     }
 
     /// <summary>
@@ -1027,7 +1023,7 @@ public static partial class GuidanceWindow
     private static Ksa6DofGuidance ApplyRebuild(RebuildRequest req, Ksa6DofGuidance from,
                                                 double[] x, double now)
     {
-        var next = new Ksa6DofGuidance(req.Cfg, req.Dyn) { FixedTime = _s.SixDofFixedTime };
+        var next = new Ksa6DofGuidance(req.Cfg, req.Dyn) { FixedTime = req.FixedTime };
         next.Inputs = req.Inputs;
         return next.SeedFrom(from, x, now) ? next : null;
     }
@@ -1098,19 +1094,12 @@ public static partial class GuidanceWindow
     // every real bug this feature has produced was found in a flight log, and being
     // able to switch back mid-descent is worth more than the duplicated branch costs.
 
-    /// <summary>Outcome of the last collected cold iteration, so the converging block
-    /// can judge it on the frame it lands rather than the frame it was dispatched.</summary>
-
-    /// <summary>The vehicle this guidance was engaged on, so a save load can be
-    /// detected. Compared by reference only - never dereferenced, because by the time
-    /// it differs the old one may already be destroyed.</summary>
-
     /// <summary>
     /// True when it is safe to touch the guidance object from the sim thread: solve on
     /// it, rebuild it, or replace it. While a solve is in flight the worker owns it
     /// outright - only Published and Inputs may be crossed, and both are immutable.
     /// </summary>
-    private static bool GuidanceIdle => _s.Idle(_s.SixDofThreaded);
+    private static bool GuidanceIdle => _s.Idle;
 
     // Set by the cadence gate so a row can say whether THIS cycle re-solved, rather
     // than only reporting the last solve's result forever. Without that distinction
@@ -1339,7 +1328,6 @@ public static partial class GuidanceWindow
         Ksa6DofSolveWorker worker = _s.Worker;
         _s.Worker = null;
         _s.Guidance = null;
-        _s.ColdResult = false;
         try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
         _s.GimbalMode = 0;
         KsaGimbalControl.Disengage(vehicle);
@@ -1474,6 +1462,39 @@ public static partial class GuidanceWindow
                 return;
         }
 
+        // Collect before a restart or node rebuild can change the source guidance.
+        Ksa6DofSolveResult coldResult = null;
+        if (_s.Worker != null && _s.Worker.TryCollect(out Ksa6DofSolveResult result)
+            && result.Matches(_s.Converging ? Ksa6DofJob.StepCold : Ksa6DofJob.Update, _s.Guidance))
+        {
+            if (result.Faulted)
+            {
+                string error = (result.Job == Ksa6DofJob.StepCold ? "cold" : "warm")
+                    + " solve failed: " + result.Error;
+                Disengage6Dof(vehicle);
+                _s.Error = error;
+                SixDofLog.Event(_s, now, error);
+                return;
+            }
+            if (result.Job == Ksa6DofJob.StepCold && _s.Converging)
+            {
+                coldResult = result;
+            }
+            else if (result.Job == Ksa6DofJob.Update && !_s.Converging)
+            {
+                _s.DidSolve = true;
+                if (result.Ok) OnSolveSucceeded(now, x);
+                else OnSolveRefused(now, result.Error);
+            }
+        }
+
+        // The UI changes the requested mode. Keep the worker until its current
+        // result is collected, so inline work cannot share the same mutable solver.
+        if (!_s.SixDofThreaded && _s.Worker != null && _s.Worker.TryStopWhenIdle())
+            _s.Worker = null;
+        else if (_s.SixDofThreaded && _s.Active && _s.Worker == null)
+            _s.Worker = new Ksa6DofSolveWorker();
+
         // CIRCUIT BREAKER. A long run of refusals means the plan is stale, the vehicle
         // has diverged from it, and every further Update is running the wide-trust-
         // region retry - so failure costs MORE than success and the loop digs itself
@@ -1555,8 +1576,11 @@ public static partial class GuidanceWindow
         // Advance a spread cold solve. Until it produces a flyable plan there is
         // nothing to command, so this returns without touching the actuators - the
         // vehicle carries on doing whatever it was doing.
-        if (_s.Converging && GuidanceIdle)
+        if (_s.Converging)
         {
+            if (!GuidanceIdle)
+                return;
+
             _s.ColdFrames++;
 
             // THE COLD SOLVE IS A SOLVE TOO. Threading Update alone left this running
@@ -1569,20 +1593,21 @@ public static partial class GuidanceWindow
             // over a hundred metres during a cold solve, and freezing x0 for the whole
             // of it would seed the first warm cycle from where the vehicle used to be.
             bool coldDone;
-            if (_s.SixDofThreaded && _s.Worker != null)
+            string coldError;
+            if (coldResult != null)
             {
-                if (_s.Worker.TryCollect(out Ksa6DofJob cJob, out bool cOk, out _, out _))
-                    _s.ColdResult = cJob == Ksa6DofJob.StepCold && cOk;
-                else
-                {
-                    _s.Worker.TryDispatchStepCold(_s.Guidance, x, now);
-                    return;         // nothing to judge until it lands
-                }
-                coldDone = _s.ColdResult;
+                coldDone = coldResult.Ok;
+                coldError = coldResult.Error;
+            }
+            else if (_s.Worker != null)
+            {
+                _s.Worker.TryDispatchStepCold(_s.Guidance, x, now);
+                return;
             }
             else
             {
                 coldDone = _s.Guidance.StepCold(x, now);
+                coldError = _s.Guidance.Error;
             }
 
             if (coldDone)
@@ -1671,13 +1696,15 @@ public static partial class GuidanceWindow
             else
             {
                 _s.Error = $"converging... {_s.Guidance.LastIterations} iterations, " +
-                               $"defect {_s.Guidance.LastDefectM:F1} m";
+                               $"defect {_s.Guidance.LastDefectM:F1} m" +
+                               (string.IsNullOrEmpty(coldError) ? "" : ": " + coldError);
                 // Give up rather than fall forever if it is not going to converge.
                 if (_s.ColdFrames > 240)
                 {
-                    SixDofLog.Event(_s, now, "COLD SOLVE gave up after 240 frames: " + _s.Guidance.Error);
+                    string error = "cold solve failed to converge: " + coldError;
+                    SixDofLog.Event(_s, now, "COLD SOLVE gave up after 240 frames: " + coldError);
                     Disengage6Dof(vehicle);
-                    _s.Error = "cold solve failed to converge: " + _s.Guidance.Error;
+                    _s.Error = error;
                 }
                 return;
             }
@@ -1777,22 +1804,9 @@ public static partial class GuidanceWindow
                              out _s.OffDiag, out _s.Asym);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
 
-        if (_s.SixDofThreaded)
+        if (_s.Worker != null)
         {
-            // THREADED: collect whatever finished since last frame, then dispatch if
-            // the cadence is due and the worker is free. Never blocks.
-            // Only warm results are handled here. A cold iteration is collected by
-            // the converging block above, which returns before reaching this point, so
-            // the two cannot consume each other's results.
-            if (_s.Worker != null &&
-                _s.Worker.TryCollect(out Ksa6DofJob job, out bool tSolved, out string tError, out _)
-                && job == Ksa6DofJob.Update)
-            {
-                _s.DidSolve = true;
-                if (tSolved) OnSolveSucceeded(now, x); else OnSolveRefused(now, tError);
-            }
-
-            if (now - _s.LastReplan >= cadence && _s.Worker != null)
+            if (now - _s.LastReplan >= cadence)
                 _s.Worker.TryDispatchUpdate(_s.Guidance, x, now, 5);
         }
         else if (now - _s.LastReplan >= cadence)

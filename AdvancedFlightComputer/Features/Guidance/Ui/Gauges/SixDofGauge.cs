@@ -169,11 +169,7 @@ public static partial class GuidanceWindow
 
         // Switching threading mid-flight is the point of having the toggle, so it has
         // to be safe: stop the worker on the way off, start one on the way on.
-        if (GaugeRowCheck("Solve on a background thread", "##sdthreaded", ref _s.SixDofThreaded))
-        {
-            if (!_s.SixDofThreaded) { _s.Worker?.Dispose(); _s.Worker = null; }
-            else if (_s.Active && _s.Worker == null) _s.Worker = new Ksa6DofSolveWorker();
-        }
+        GaugeRowCheck("Solve on a background thread", "##sdthreaded", ref _s.SixDofThreaded);
         if (_s.SixDofThreaded && _s.Worker != null)
             GaugeRowText("  worker",
                 $"{_s.Worker.Completed} solves, {_s.Worker.Skipped} skipped, {_s.Worker.LastSolveMs:F0} ms"
