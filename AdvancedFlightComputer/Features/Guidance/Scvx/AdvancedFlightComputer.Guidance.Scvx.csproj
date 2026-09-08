@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../../build/GuidanceNative.props" />
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
@@ -7,11 +8,11 @@
     <RootNamespace>AdvancedFlightComputer.Guidance.Scvx</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\Numerics\AdvancedFlightComputer.Guidance.Numerics.csproj" />
+    <ProjectReference Include="../Numerics/AdvancedFlightComputer.Guidance.Numerics.csproj" />
   </ItemGroup>
   <ItemGroup>
-    <None Include="..\..\..\..\build\native\scs.dll" Link="scs.dll"
+    <None Include="$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostScs)" Link="$(GuidanceHostScs)"
           CopyToOutputDirectory="PreserveNewest"
-          Condition="Exists('..\..\..\..\build\native\scs.dll')" />
+          Condition="Exists('$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostScs)')" />
   </ItemGroup>
 </Project>

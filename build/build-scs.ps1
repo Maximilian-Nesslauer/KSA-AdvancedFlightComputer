@@ -1,8 +1,13 @@
-# Builds scs.dll from the vendored SCS sources (third_party/scs, cvxgrp/scs 3.2.11)
-# using a portable Zig as the C compiler - no MSVC required. Mirrors
+# Builds the SCS library from the vendored SCS sources (third_party/scs, cvxgrp/scs
+# 3.2.11) using a portable Zig as the C compiler - no MSVC required. Mirrors
 # gfold/build-ecos.ps1's approach and flag choices.
 #
-# Output: build/native/scs.dll  (x86_64, MinGW-style: all public symbols exported)
+# Output: build/native/<rid>/scs.dll on Windows, libscs.so on Linux (x86_64, all
+# public symbols exported).
+#
+# Zig is a cross compiler, so the runtime identifier only selects its target triple
+# and the library name. The Linux object files also need -fPIC, because they are
+# linked into a shared object.
 #
 # Build choices:
 #  - DLONG left UNDEFINED (not "=0"): same #ifdef-tests-definedness trap as
@@ -42,13 +47,24 @@
 
 param(
     [string]$ZigExe = "zig",
-    [string]$Configuration = "Release"
+    [string]$Configuration = "Release",
+    [ValidateSet("win-x64", "linux-x64")]
+    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } else { "linux-x64" }),
+    [string]$OutDir
 )
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $scs = Join-Path $root "../third_party/scs"
-$out = Join-Path $root "native"
+
+$runtimes = @{
+    "win-x64"   = @{ Target = "x86_64-windows-gnu"; Library = "scs.dll";   Pic = @() }
+    "linux-x64" = @{ Target = "x86_64-linux-gnu";   Library = "libscs.so"; Pic = @("-fPIC") }
+}
+$target = $runtimes[$Rid].Target
+$library = $runtimes[$Rid].Library
+$pic = $runtimes[$Rid].Pic
+$out = if ($OutDir) { $OutDir } else { Join-Path $root "native/$Rid" }
 
 if (-not (Get-Command $ZigExe -ErrorAction SilentlyContinue)) {
     throw "zig not found ('$ZigExe'). Install Zig and put it on PATH, or pass -ZigExe <path>."
@@ -83,7 +99,7 @@ Push-Location $scs
 try {
     # aa.c alone gets -DUSE_LAPACK, so Anderson acceleration is compiled in
     # rather than stubbed out to a no-op. See the header comment.
-    $aaArgs = @("cc", "-target", "x86_64-windows-gnu", "-c") +
+    $aaArgs = @("cc", "-target", $target, "-c") + $pic +
         $opt.Split(" ") +
         @("-DCTRLC=0", "-DNDEBUG", "-DUSE_LAPACK") +
         $includes + @("src/aa.c", "-o", $aaObj)
@@ -93,18 +109,18 @@ try {
     # The shim needs the macro too: scs_blas.h puts the blas_int typedef and the
     # BLAS() name-mangling macros behind #ifdef USE_LAPACK, so without it the
     # shim cannot even name the types it is implementing.
-    $shimArgs = @("cc", "-target", "x86_64-windows-gnu", "-c") +
+    $shimArgs = @("cc", "-target", $target, "-c") + $pic +
         $opt.Split(" ") +
         @("-DCTRLC=0", "-DNDEBUG", "-DUSE_LAPACK") +
         $includes + @($shim, "-o", $shimObj)
     & $ZigExe @shimArgs
     if ($LASTEXITCODE -ne 0) { throw "zig cc failed compiling blas_shim.c with exit code $LASTEXITCODE" }
 
-    $zigArgs = @("cc", "-target", "x86_64-windows-gnu", "-shared") +
+    $zigArgs = @("cc", "-target", $target, "-shared") + $pic +
         $opt.Split(" ") +
         @("-DCTRLC=0", "-DNDEBUG") +
         $includes + $sources + @($shimObj, $aaObj) +
-        @("-o", (Join-Path $out "scs.dll"))
+        @("-o", (Join-Path $out $library))
     & $ZigExe @zigArgs
     if ($LASTEXITCODE -ne 0) { throw "zig cc failed with exit code $LASTEXITCODE" }
 }
@@ -113,4 +129,4 @@ finally {
     Remove-Item $aaObj, $shimObj -ErrorAction SilentlyContinue
 }
 
-Write-Host "Built: $(Join-Path $out 'scs.dll')" -ForegroundColor Green
+Write-Host "Built: $(Join-Path $out $library)" -ForegroundColor Green

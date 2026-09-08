@@ -1,4 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <Import Project="../../../../build/GuidanceNative.props" />
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <PlatformTarget>x64</PlatformTarget>
@@ -7,8 +8,8 @@
     <RootNamespace>AdvancedFlightComputer.Guidance.Gfold</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <None Include="..\..\..\..\build\native\clarabel_c.dll" Link="clarabel_c.dll"
+    <None Include="$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostClarabel)" Link="$(GuidanceHostClarabel)"
           CopyToOutputDirectory="PreserveNewest"
-          Condition="Exists('..\..\..\..\build\native\clarabel_c.dll')" />
+          Condition="Exists('$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostClarabel)')" />
   </ItemGroup>
 </Project>

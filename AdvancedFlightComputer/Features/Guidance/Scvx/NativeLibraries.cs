@@ -7,10 +7,14 @@ namespace AdvancedFlightComputer.Guidance.Scvx;
 /// Single DllImportResolver registration for the whole assembly.
 ///
 /// NativeLibrary.SetDllImportResolver THROWS if called twice for the same
-/// assembly, so every native library P/Invoke'd from Scvx.Core must be
+/// assembly, so every native library P/Invoke'd from this assembly must be
 /// dispatched from this one resolver - a second [ModuleInitializer] registering
 /// its own is an InvalidOperationException at load, which is how this file came
 /// to exist. Add new natives to the switch below, never as a new initializer.
+///
+/// KSA ships for Windows and for Linux, so one mod folder can hold the Windows
+/// build and the Linux build of the same library. Their file names differ, so
+/// both can sit beside each other and the running platform loads only its own.
 /// </summary>
 internal static class NativeLibraries
 {
@@ -23,7 +27,7 @@ internal static class NativeLibraries
         {
             string? fileName = name switch
             {
-                "scs" => "scs.dll",
+                "scs" => OperatingSystem.IsWindows() ? "scs.dll" : "libscs.so",
                 _ => null,
             };
             if (fileName == null)

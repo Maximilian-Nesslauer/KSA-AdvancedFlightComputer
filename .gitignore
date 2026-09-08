@@ -25,8 +25,8 @@ CoverageReport/
 
 # Native build output - the .dll/.lib/.pdb are rebuilt from the vendored C
 # sources, which ARE committed. (scs.pdb alone is 1.4 MB.)
-#   build/native/ <- build/build-clarabel.ps1 (needs Rust)
-#   build/native/  <- build/build-scs.ps1  (needs Zig)
+#   build/native/<rid>/ <- build/build-clarabel.ps1 (needs Rust)
+#   build/native/<rid>/ <- build/build-scs.ps1 (needs Zig)
 build/native/
 
 # Generated solver output

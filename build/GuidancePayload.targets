@@ -1,24 +1,33 @@
 <Project>
-  <PropertyGroup>
-    <GuidanceNativeDir>$(MSBuildThisFileDirectory)native\</GuidanceNativeDir>
-  </PropertyGroup>
+  <Import Project="$(MSBuildThisFileDirectory)GuidanceNative.props" />
 
   <ItemGroup>
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Numerics.dll" TargetPath="AdvancedFlightComputer.Guidance.Numerics.dll" />
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Gfold.dll" TargetPath="AdvancedFlightComputer.Guidance.Gfold.dll" />
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Scvx.dll" TargetPath="AdvancedFlightComputer.Guidance.Scvx.dll" />
-    <ModPayloadFile Include="$(GuidanceNativeDir)clarabel_c.dll" TargetPath="clarabel_c.dll" />
-    <ModPayloadFile Include="$(GuidanceNativeDir)scs.dll" TargetPath="scs.dll" />
-    <ModPayloadFile Include="$(MSBuildThisFileDirectory)..\LICENSE" TargetPath="LICENSE" />
-    <ModPayloadFile Include="$(MSBuildThisFileDirectory)..\THIRD-PARTY-NOTICES.md" TargetPath="THIRD-PARTY-NOTICES.md" />
-    <ModPayloadFile Include="$(MSBuildThisFileDirectory)..\licenses\*.txt" TargetPath="licenses\%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <!-- The Windows and the Linux libraries have different file names, so both
+       runtimes can live in one mod folder and each platform loads its own. -->
+  <ItemGroup Condition="$(GuidanceNativeRids.Contains('win-x64'))">
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/clarabel_c.dll" TargetPath="clarabel_c.dll" />
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/scs.dll" TargetPath="scs.dll" />
+  </ItemGroup>
+  <ItemGroup Condition="$(GuidanceNativeRids.Contains('linux-x64'))">
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libclarabel_c.so" TargetPath="libclarabel_c.so" />
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libscs.so" TargetPath="libscs.so" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ModPayloadFile Include="@(GuidanceNativeFile)" />
+    <ModPayloadFile Include="$(MSBuildThisFileDirectory)../LICENSE" TargetPath="LICENSE" />
+    <ModPayloadFile Include="$(MSBuildThisFileDirectory)../THIRD-PARTY-NOTICES.md" TargetPath="THIRD-PARTY-NOTICES.md" />
+    <ModPayloadFile Include="$(MSBuildThisFileDirectory)../licenses/*.txt" TargetPath="licenses/%(Filename)%(Extension)" />
   </ItemGroup>
 
   <Target Name="ValidateGuidanceRuntimeFiles" BeforeTargets="PrepareForBuild"
           Condition="'$(Configuration)' == 'Release' OR '$(DeployToMods)' == 'true'">
-    <Error Condition="!Exists('$(GuidanceNativeDir)clarabel_c.dll')"
-           Text="clarabel_c.dll is required for deployment or Release. Run build/build-clarabel.ps1, or use Debug with -p:DeployToMods=false for a managed compile check." />
-    <Error Condition="!Exists('$(GuidanceNativeDir)scs.dll')"
-           Text="scs.dll is required for deployment or Release. Run build/build-scs.ps1, or use Debug with -p:DeployToMods=false for a managed compile check." />
+    <Error Condition="!Exists('%(GuidanceNativeFile.Identity)')"
+           Text="%(GuidanceNativeFile.Identity) is required for deployment or Release. Build it with build/build-clarabel.ps1 or build/build-scs.ps1 for that runtime, or use Debug with -p:DeployToMods=false for a managed compile check." />
   </Target>
 </Project>
