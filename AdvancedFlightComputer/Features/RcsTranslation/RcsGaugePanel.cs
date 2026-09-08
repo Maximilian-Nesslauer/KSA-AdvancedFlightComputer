@@ -43,6 +43,8 @@ internal static class RcsGaugePanel
 
         RcsExecutionMode mode = options?.Mode ?? RcsExecutionMode.Default;
         RcsExecutionMode resolved = RcsExecutor.ResolveMode(vehicle, options);
+        bool faulted = exec?.Faulted == true;
+        bool cleanupPending = exec?.CleanupPending == true;
         bool rcsRows = resolved == RcsExecutionMode.Rcs || isActiveBurn;
 
         bool noTranslation = false;
@@ -53,7 +55,7 @@ internal static class RcsGaugePanel
         bool alignEst = false;
         bool shortOfPropellant = false;
         BurnTarget? bt = fc.Burn;
-        if (rcsRows && !isActiveBurn)
+        if (rcsRows && !isActiveBurn && !faulted)
         {
             noTranslation = !RcsExecutor.ProbeCached(vehicle).HasAnyTranslation;
             if (!noTranslation && RcsBurnPreview.TryGetEstimates(burn, vehicle, fc, exec,
@@ -73,6 +75,7 @@ internal static class RcsGaugePanel
         int rows = 2;                                   // header + execution
         if (rcsRows) rows += 2;                         // attitude + allocator
         if (isActiveBurn) rows += 3;                    // status, to go, cancel
+        if (faulted) rows += cleanupPending ? 2 : 1;
         if (noTranslation) rows += 1;
         if (estHeader) rows += 1;
         if (showEstimates && currentVehicle) rows += 1;
@@ -115,7 +118,7 @@ internal static class RcsGaugePanel
             ImGaugeStyle dim = ImGaugeStyle.Default.WithText(new float3(0.6f, 0.62f, 0.65f), TextScale);
             // ImGauge.Button rejects clicks through its disabled style. Cancel stays enabled.
             ImGaugeStyle button = ImGaugeStyle.Default.WithText(new float3(0f, 0f, 0f), TextScale)
-                .WithDisabled(isActiveBurn);
+                .WithDisabled(isActiveBurn || cleanupPending);
             ImGaugeStyle cancelButton = ImGaugeStyle.Default.WithText(new float3(0f, 0f, 0f), TextScale);
 
             void LabelRow(ReadOnlySpan<char> label, ReadOnlySpan<char> value)
@@ -147,6 +150,13 @@ internal static class RcsGaugePanel
                 .GetOrCreateOptions(timeSec, dvMs);
 
             FullRow("RCS BURN".AsSpan(), in text);
+
+            if (faulted)
+            {
+                FullRow(cleanupPending ? "CLEANUP FAILED".AsSpan() : "RCS FAULT STOP".AsSpan(), in warn);
+                if (cleanupPending && ButtonRow(ReadOnlySpan<char>.Empty, "RETRY CLEANUP".AsSpan(), in cancelButton))
+                    RcsExecutor.RequestCancel(exec!, "retry fault cleanup");
+            }
 
             if (ButtonRow("EXECUTION".AsSpan(), Fit(ExecutionLabel(mode, resolved)), in button))
             {
