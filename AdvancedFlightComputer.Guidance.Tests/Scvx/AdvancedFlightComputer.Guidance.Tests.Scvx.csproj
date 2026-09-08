@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AdvancedFlightComputer.Guidance.Tests.Scvx</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\AdvancedFlightComputer\Features\Guidance\Scvx\AdvancedFlightComputer.Guidance.Scvx.csproj" />
+    <ProjectReference Include="..\..\AdvancedFlightComputer\Features\Guidance\Gfold\AdvancedFlightComputer.Guidance.Gfold.csproj" />
+    <Compile Include="..\..\AdvancedFlightComputer\Features\Guidance\Adapters\Scvx\Ksa6DofGfoldSeed.cs" Link="Ksa6DofGfoldSeed.cs" />
+    <Using Include="AdvancedFlightComputer.Features.Guidance" />
+  </ItemGroup>
+</Project>

@@ -123,15 +123,26 @@ Required only to build the mod from source. Targets **.NET 10**.
 | [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.3.6 |
 | [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) | NuGet | 2.4.2 |
 
+## Experimental guidance
+
+The guidance source is integrated under `AdvancedFlightComputer/Features/Guidance/`.
+The AFC Guidance menu reports that execution is unavailable until control ownership is integrated.
+This build does not install guidance actuator hooks or expose execution controls.
+The numerical libraries and their console checks remain independent of the game.
+See [the guidance layout and build instructions](docs/guidance/README.md).
+
+If a standalone PoweredGuidance mod is installed, disable it before a future combined guidance flight test.
+This build does not change the game manifest.
+
 ## Mod compatibility
 
 - Known conflicts: none
 
 ## License
 
-MIT — see [`LICENSE`](LICENSE). This applies to everything in the current tree.
+MIT - see [`LICENSE`](LICENSE). This applies to everything in the current tree.
 
-The `PoweredGuidance/` subtree was merged in from
+The guidance source under `AdvancedFlightComputer/Features/Guidance/` was imported from
 [cairn5/PoweredGuidance](https://github.com/cairn5/PoweredGuidance) with its full history
 rather than as a squashed snapshot, so its commits stay reachable from this repo with
 their original authorship intact.
@@ -139,12 +150,12 @@ their original authorship intact.
 PoweredGuidance releases up to and including **v0.3.1** linked
 [ECOS](https://github.com/embotech/ecos), which is GPLv3, and were therefore distributed
 under GPLv3 as a whole. Those commits remain reachable here and those releases stay
-available under GPLv3 — a licence already granted cannot be withdrawn — but they are the
+available under GPLv3 - a licence already granted cannot be withdrawn - but they are the
 only versions to which that applies. ECOS was removed and replaced by Clarabel
 (Apache-2.0) before the import, so **nothing in the current tree is GPL**.
 
 Attribution for the vendored solvers and their own transitive dependencies is in
-[`PoweredGuidance/THIRD-PARTY-NOTICES.md`](PoweredGuidance/THIRD-PARTY-NOTICES.md); all
+[`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md); all
 of them are permissive, and none impose copyleft on this work.
 
 ## Community

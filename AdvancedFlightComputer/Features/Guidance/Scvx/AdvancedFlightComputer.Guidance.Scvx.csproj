@@ -1,0 +1,17 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AdvancedFlightComputer.Guidance.Scvx</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Numerics\AdvancedFlightComputer.Guidance.Numerics.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\..\..\..\build\native\scs.dll" Link="scs.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\..\..\..\build\native\scs.dll')" />
+  </ItemGroup>
+</Project>

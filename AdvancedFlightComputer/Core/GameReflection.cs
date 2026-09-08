@@ -31,6 +31,7 @@ internal static class GameReflection
 
         /// <summary>Handles that control one optional patch. Each patch checks its own handle.</summary>
         SoftAnchor = 64,
+        GuidanceDiagnostics = 128,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -224,6 +225,12 @@ internal static class GameReflection
     #endregion
 
     #region Validation
+
+    [UsedBy(Feature.GuidanceDiagnostics)]
+    public static readonly MethodInfo? Program_DrawProgramMenusHook =
+        AccessTools.Method(typeof(Program), nameof(Program.DrawProgramMenusHook), Type.EmptyTypes);
+
+    public static bool ValidateGuidanceDiagnostics() => Validate(Feature.GuidanceDiagnostics);
 
     public static bool ValidateCore() => Validate(Feature.Core);
 

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AdvancedFlightComputer.Guidance.Gfold</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="..\..\..\..\build\native\clarabel_c.dll" Link="clarabel_c.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('..\..\..\..\build\native\clarabel_c.dll')" />
+  </ItemGroup>
+</Project>

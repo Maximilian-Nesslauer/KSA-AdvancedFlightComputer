@@ -1,5 +1,6 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
+using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -56,6 +57,10 @@ public sealed class Mod
             if (!SharedVehicleHooks.RcsEnabled)
                 DisableRcsTranslation();
         }
+
+        if (Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
+            && !_patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyPatches))
+            GuidanceFeature.Reset();
 
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
@@ -176,6 +181,7 @@ public sealed class Mod
     {
         SharedVehicleHooks.Reset();
         _patches.UnpatchAll();
+        GuidanceFeature.Reset();
         RemoveTransferTypes();
 
         // Persistence is driven by UncompressedSave.Write, so a quit without saving drops
