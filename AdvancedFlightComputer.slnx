@@ -10,4 +10,7 @@
     <Project Path="AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj" />
     <Project Path="AdvancedFlightComputer.Guidance.Tests/Scvx/AdvancedFlightComputer.Guidance.Tests.Scvx.csproj" />
   </Folder>
+  <Folder Name="/Build/">
+    <Project Path="build/NativeChecks/NativeChecks.csproj" />
+  </Folder>
 </Solution>
