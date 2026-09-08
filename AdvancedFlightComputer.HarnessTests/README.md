@@ -90,6 +90,7 @@ The oracle is always the game's own orbit propagation, never a re-derivation of 
 - `afc-rcs-lp-solver` asserts the LP allocator's simplex on hand-checkable problems, including cost optimality, zero-torque constraint satisfaction, support selection, and clean infeasibility.
 - `afc-rcs-translation` flies a full RCS translation burn on the live simulation. The burn must reach its delta-V target within the minimum-impulse bound, consume thruster propellant, and never command a main engine. It also covers align slew, deferred alignment, the warp margin, save and load during coast, changed ignition time, cancellation, and RCS-toggle scenarios.
 - `afc-rcs-lp` flies the same burn with both allocators on one vehicle, asserts that both complete with quiet engines, and logs the propellant comparison.
+- `afc-rcs-driver-fault` injects driver, attitude, RCS, and fuel telemetry faults on a live vehicle. A faulted tick has to suppress the published command, hand back only the controls it owns, restore attitude and RCS independently, keep a failed restore visible and retryable within its attempt limit, survive save and load without reattaching the burn, and never raise the completion event.
 
 ### Core
 
