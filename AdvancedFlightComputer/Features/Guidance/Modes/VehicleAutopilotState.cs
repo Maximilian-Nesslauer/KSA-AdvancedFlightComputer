@@ -1,8 +1,12 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
-using Gfold;
-using PoweredGuidance.Upfg;
+using AdvancedFlightComputer.Guidance.Gfold;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 using KSA;
 
 /// <summary>
@@ -10,8 +14,8 @@ using KSA;
 /// craft: which mode is engaged, where it is going, how it is tuned, and every
 /// filter, plan, timer and counter those modes run on.
 ///
-/// This used to be static fields on PoweredGuidanceWindow, which meant the mod could
-/// fly exactly one vehicle at a time — and worse, that the state outlived the vehicle
+/// This used to be static fields on GuidanceWindow, which meant the mod could
+/// fly exactly one vehicle at a time - and worse, that the state outlived the vehicle
 /// it described. Loading a save replaced the Vehicle while the statics survived, so the
 /// autopilot went on flying a plan built for a craft that no longer existed.
 ///
@@ -21,13 +25,13 @@ using KSA;
 ///
 /// EVERYTHING THAT SHAPES HOW A VEHICLE FLIES LIVES HERE, not just what it is doing.
 /// An earlier split kept "settings" global on the theory that they were player
-/// preferences — but a target orbit, a landing site, a pointing cone, a feedback gain
+/// preferences - but a target orbit, a landing site, a pointing cone, a feedback gain
 /// and a vehicle height are all properties of one craft's mission and one craft's
 /// airframe, and sharing them meant focusing a second vehicle silently re-aimed the
 /// first. The rule now is simply: if a vehicle's flight computer would know it, it is
 /// a field on this class.
 ///
-/// What stays static on PoweredGuidanceWindow is only what belongs to the PANEL rather
+/// What stays static on GuidanceWindow is only what belongs to the PANEL rather
 /// than to a craft: which overlay or popup is open, the warp confirmation dialog,
 /// reflection handles, and scratch buffers reused within a single call.
 /// </summary>
@@ -63,7 +67,7 @@ public sealed class VehicleAutopilotState
     public double DemandN, CapabilityN;
     public bool ThrustSaturated;
 
-    /// <summary>6-DOF touchdown arming. The landing machine has its own — see
+    /// <summary>6-DOF touchdown arming. The landing machine has its own - see
     /// <see cref="LandingTouchdownArmed"/>; they arm on different events.</summary>
     public bool TouchdownArmed;
 
@@ -98,7 +102,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Fire sequences and drive the engine master switch automatically.</summary>
     public bool AutoStage = true;
 
-    /// <summary>Vehicle-wide acceleration limit — an airframe/payload constraint.</summary>
+    /// <summary>Vehicle-wide acceleration limit - an airframe/payload constraint.</summary>
     public bool GLimitEnabled;
     public double GLimitG = 4.0;
 
@@ -110,7 +114,7 @@ public sealed class VehicleAutopilotState
     /// state carried from the previous call, and it measures sensed acceleration as
     /// (v - vprev) against the velocity IT saw last. Shared between craft, the first
     /// step after a focus switch subtracted one vehicle's inertial velocity from
-    /// another's — kilometres per second of phantom sensed dv straight into vgo — and
+    /// another's - kilometres per second of phantom sensed dv straight into vgo - and
     /// the steering swung until it re-converged. That was the attitude twitch on every
     /// vehicle switch. Converged latches too, so the newly focused craft inherited the
     /// other's "converged" and could promote its own ascent phase on it.
@@ -135,7 +139,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// EXECUTE was pressed while <see cref="AutoLaunch"/> was set: warp to the launch
     /// window and start guidance there. Separate from AutoLaunch because that is a
-    /// MODE the user selects ahead of time, while this is the commit — arming used to
+    /// MODE the user selects ahead of time, while this is the commit - arming used to
     /// happen the instant the checkbox was ticked, which meant the panel could start
     /// warping before anyone had asked it to launch.
     /// </summary>
@@ -144,7 +148,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// Largest |rgo| and |vgo| seen since EXECUTE, so the ascent panel can draw each
     /// as a fraction of where it started rather than an unscaled absolute. Display
-    /// only — nothing in the guidance loop reads them. Latched as a running maximum
+    /// only - nothing in the guidance loop reads them. Latched as a running maximum
     /// rather than sampled once, because the first solved frame is not reliably the
     /// largest: UPFG is still converging on it.
     /// </summary>
@@ -162,7 +166,7 @@ public sealed class VehicleAutopilotState
     public bool HasCommand;
 
     /// <summary>
-    /// The TURNING RATE that command is moving at, rad/s in CCI — the "turning rate
+    /// The TURNING RATE that command is moving at, rad/s in CCI - the "turning rate
     /// implied" by the steering law, published to the flight computer as the target's
     /// own rate (see KsaAttitudeRate). Without it the FC is told every guidance update
     /// is a stationary target and nulls the error instead of tracking the motion.
@@ -172,7 +176,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// Sim time of the last UPFG solve, and of the last ascent step. UPFG runs on a
     /// fixed GUIDANCE CYCLE rather than once per sim step (see
-    /// PoweredGuidanceWindow.GuidanceCycle): it is a recursive once-per-cycle
+    /// GuidanceWindow.GuidanceCycle): it is a recursive once-per-cycle
     /// algorithm, and calling it every step wound its internal corrections up sixty
     /// times faster than they are damped for. NegativeInfinity means "never solved",
     /// which forces a solve on the first step after EXECUTE.
@@ -188,7 +192,7 @@ public sealed class VehicleAutopilotState
     /// The roll the vehicle had when ascent guidance engaged, as an angle about the
     /// thrust axis from the target plane's normal, and whether it has been measured
     /// yet. Held for the whole ascent so the mod commands a thrust DIRECTION and
-    /// nothing else — see PoweredGuidanceWindow.AscentRollRef.
+    /// nothing else - see GuidanceWindow.AscentRollRef.
     /// </summary>
     public double RollOffset;
     public bool RollLatched;
@@ -202,10 +206,10 @@ public sealed class VehicleAutopilotState
     ///
     /// Forcing it takes MORE than writing the angle into the commanded quaternion.
     /// KSA's UpdateAttitudeTrackError branches on RollMode.IsDecoupled(), and the
-    /// default IS decoupled — in that branch the roll term is never computed and the
+    /// default IS decoupled - in that branch the roll term is never computed and the
     /// target's roll is discarded, so the vehicle would keep whatever roll it had and
     /// the box would do nothing. Ticking this therefore also puts the flight computer
-    /// into a roll-tracking mode; see PoweredGuidanceWindow.CommandAttitude.
+    /// into a roll-tracking mode; see GuidanceWindow.CommandAttitude.
     /// </summary>
     public bool ForceRoll;
     public double ForceRollDeg;
@@ -225,7 +229,7 @@ public sealed class VehicleAutopilotState
     /// equation entirely - and sizing it against the stack instead over-reserves by the
     /// ratio of the two masses. On a 20 t booster under a 40 t upper stage that is
     /// three times too much propellant and 2.6 times the dV asked for. See
-    /// PoweredGuidanceWindow.ReservePropellantKg.
+    /// GuidanceWindow.ReservePropellantKg.
     /// </summary>
     public double AscentReserveDvMs;
 
@@ -275,7 +279,7 @@ public sealed class VehicleAutopilotState
     /// would cost each to come home from here. Rebuilt with the stage model; see
     /// Guidance/ReturnableStages.cs.
     /// </summary>
-    public readonly System.Collections.Generic.List<PoweredGuidanceWindow.ReturnableStage>
+    public readonly System.Collections.Generic.List<GuidanceWindow.ReturnableStage>
         ReturnableStages = new();
 
     /// <summary>
@@ -291,7 +295,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Live stage objects by root id, so the 4 Hz rebuild reuses them and the
     /// 1 Hz costs written into them survive it.</summary>
-    public readonly System.Collections.Generic.Dictionary<uint, PoweredGuidanceWindow.ReturnableStage>
+    public readonly System.Collections.Generic.Dictionary<uint, GuidanceWindow.ReturnableStage>
         ReturnableStageCache = new();
 
     /// <summary>Wall-clock tick for the return-cost solve, and why the last one
@@ -301,7 +305,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Scratch for the return-cost Jacobian, per vehicle so the solve
     /// allocates nothing - same arrangement as ImpactScratch.</summary>
-    public PoweredGuidance.Numerics.Dual[] ReturnScratch;
+    public AdvancedFlightComputer.Guidance.Numerics.Dual[] ReturnScratch;
 
     // The stage model cache. VehicleStageModel used to carry the vehicle it was built
     // for, purely so a switch could invalidate it; the key is the vehicle now, so that
@@ -311,7 +315,7 @@ public sealed class VehicleAutopilotState
     public long StageModelTick;
 
     /// <summary>
-    /// KSA's own total dV for the recompute the snapshot above was taken from — the
+    /// KSA's own total dV for the recompute the snapshot above was taken from - the
     /// figure behind the in-game stage menu. Kept alongside so the panel can show the
     /// two side by side when they disagree.
     /// </summary>
@@ -333,7 +337,7 @@ public sealed class VehicleAutopilotState
     public bool HandedBack;
 
     // ------------------------------------------------------------------ ascent
-    public PoweredGuidanceWindow.AscentPhase Phase = PoweredGuidanceWindow.AscentPhase.Vertical;
+    public GuidanceWindow.AscentPhase Phase = GuidanceWindow.AscentPhase.Vertical;
     public double TurnStartTime;
     public double3 FrozenDir;
     public double CutoffTime;
@@ -371,7 +375,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// Wall-clock tick of the last unarmed launch-window derivation, throttling the
-    /// target search behind it. Not used once armed — the instant above is absolute by
+    /// target search behind it. Not used once armed - the instant above is absolute by
     /// then, and re-deriving it is what would let a warp step skip the window.
     /// </summary>
     public long LaunchWindowTick;
@@ -381,7 +385,7 @@ public sealed class VehicleAutopilotState
     public double TurnRateDegS = 1.0;
 
     // ------------------------------------------------------------------ landing
-    public PoweredGuidanceWindow.LandingPhase LandingPhase = PoweredGuidanceWindow.LandingPhase.Idle;
+    public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;
 
     /// <summary>
     /// This vehicle's landing site. Defaults to the Apollo 11 landmark as KSA itself
@@ -401,7 +405,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Touchdown arming for the landing state machine (6-DOF has its own).</summary>
     public bool LandingTouchdownArmed;
-    public PoweredGuidanceWindow.LandingPhase TouchdownPrevPhase = PoweredGuidanceWindow.LandingPhase.Idle;
+    public GuidanceWindow.LandingPhase TouchdownPrevPhase = GuidanceWindow.LandingPhase.Idle;
 
     /// <summary>Upcoming site passes (time from now, closest ground distance).</summary>
     /// <summary>
@@ -418,7 +422,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// Which solver flies the powered descent: G-FOLD by default, or the 6-DOF
     /// successive-convexification one. Per vehicle rather than a panel-wide setting,
-    /// because the deorbit handoff READS it to decide what to start — so it describes
+    /// because the deorbit handoff READS it to decide what to start - so it describes
     /// how this craft lands, not what the player last clicked.
     /// </summary>
     public bool UseSixDofLanding;
@@ -445,21 +449,21 @@ public sealed class VehicleAutopilotState
     /// state from hanging the game.
     ///
     /// SCS ships with no time limit and a 100000-iteration cap, so a state it converges
-    /// on slowly just runs — on the sim thread. And the caller's response to a failed
+    /// on slowly just runs - on the sim thread. And the caller's response to a failed
     /// solve is to run a 35-solve search, twice, so one slow state became minutes of
     /// frozen game, retried every GfoldIntervalS. A solve that exceeds this comes back
-    /// as MaxIterations, which reads as "this time of flight does not work" — the same
+    /// as MaxIterations, which reads as "this time of flight does not work" - the same
     /// answer an infeasible one gives, and the search moves on instead of grinding.
     ///
     /// 40 ms is under three frames and roughly twice the 19.6 ms a converging solve
     /// costs at eps 1e-4, so it bounds the pathological case without truncating the
-    /// normal one. It does NOT bound a search, which is tens of solves — that is the
+    /// normal one. It does NOT bound a search, which is tens of solves - that is the
     /// argument for moving the solve off this thread, not something a per-solve limit
     /// can fix.
     /// </summary>
     public double GfoldSolveTimeLimitS = 0.040;
 
-    /// <summary>Wall-clock cost of the last descent solve, ms — the number the frame budget cares about.</summary>
+    /// <summary>Wall-clock cost of the last descent solve, ms - the number the frame budget cares about.</summary>
     public double GfoldSolveMs;
     public double GfoldHoverHandoffAltM = 10.0;
     public double GfoldThrottleMin = 0.05;
@@ -467,7 +471,7 @@ public sealed class VehicleAutopilotState
     public double GfoldSlewReg = 0.05;
 
     /// <summary>
-    /// Distance from this vehicle's CoM down to its landing legs — an airframe
+    /// Distance from this vehicle's CoM down to its landing legs - an airframe
     /// dimension, so emphatically per vehicle. Applied as an offset on the TARGET
     /// altitude (the CoM is planned to arrive this high above the pad), NOT by shifting
     /// the vehicle reference point.
@@ -532,7 +536,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Velocity setpoint offsets (m/s) the player nudges while hovering.</summary>
     public double TermSetE, TermSetN, TermSetUp;
 
-    public PoweredGuidanceWindow.Pid TermPidUp, TermPidE, TermPidN;
+    public GuidanceWindow.Pid TermPidUp, TermPidE, TermPidN;
     public double TermLastTime;
     public bool TermInit;
 
@@ -571,7 +575,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// This craft asks to be recorded when it engages. The log itself is a single
-    /// global sink and grants the first claimant — see SixDofLog.Start, which refuses
+    /// global sink and grants the first claimant - see SixDofLog.Start, which refuses
     /// a second owner rather than interleaving two craft into one CSV.
     /// </summary>
     public bool SixDofLogging = false;
@@ -601,7 +605,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// True when the sim thread may touch this vehicle's guidance: solve on it, rebuild
-    /// it, or replace it. While a job is in flight the worker owns it outright — only
+    /// it, or replace it. While a job is in flight the worker owns it outright - only
     /// Published and Inputs may be crossed, and both are immutable.
     /// </summary>
     public bool Idle(bool threaded) => !threaded || Worker == null || !Worker.IsBusy;
@@ -650,7 +654,7 @@ public sealed class VehicleAutopilotState
     // recomputed per frame because a prediction is milliseconds, not microseconds.
 
     /// <summary>Last impact prediction, or default if there is none yet.</summary>
-    public PoweredGuidance.Flight.ImpactPrediction Impact;
+    public AdvancedFlightComputer.Guidance.Numerics.Flight.ImpactPrediction Impact;
 
     /// <summary>Whether <see cref="Impact"/> holds anything at all.</summary>
     public bool HasImpact;
@@ -702,7 +706,7 @@ public sealed class VehicleAutopilotState
     public bool ImpactTerrainValid;
 
     /// <summary>Scratch for the integrator, so a prediction allocates nothing.</summary>
-    public PoweredGuidance.Numerics.Dual[] ImpactScratch;
+    public AdvancedFlightComputer.Guidance.Numerics.Dual[] ImpactScratch;
 
     /// <summary>Wall-clock tick of the last prediction, throttling it. Wall clock and
     /// not sim time, for the same reason the launch-window scan uses it: under warp a
@@ -722,7 +726,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// The optimised burn - pitch, yaw, turn rates and duration - from
-    /// <see cref="PoweredGuidance.Flight.BoostbackShooter"/>. This is what the boostback phase
+    /// <see cref="AdvancedFlightComputer.Guidance.Numerics.Flight.BoostbackShooter"/>. This is what the boostback phase
     /// FLIES, in place of the impulsive correction.
     ///
     /// WHY A PLAN RATHER THAN A DIRECTION. <see cref="SteerDv"/> answers "what is the
@@ -736,7 +740,7 @@ public sealed class VehicleAutopilotState
     /// The impulsive correction is still computed, because it is what says whether
     /// there is any targeting work left at all - see SteerShape for that split.
     /// </summary>
-    public PoweredGuidance.Flight.BurnParameters BoostbackPlan;
+    public AdvancedFlightComputer.Guidance.Numerics.Flight.BurnParameters BoostbackPlan;
 
     /// <summary>
     /// The frame the plan's angles are measured in, captured at the solve.
@@ -747,7 +751,7 @@ public sealed class VehicleAutopilotState
     /// number means a different direction a few seconds later. That drift is exactly
     /// what the re-solve is for.
     /// </summary>
-    public PoweredGuidance.Flight.BoostbackShooter.Frame BoostbackPlanFrame;
+    public AdvancedFlightComputer.Guidance.Numerics.Flight.BoostbackShooter.Frame BoostbackPlanFrame;
 
     /// <summary>
     /// Sim time the plan was SOLVED at. The steering law is a function of time since
@@ -767,7 +771,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// Set once the plan has HANDED OVER to the impulsive correction for the last few
-    /// seconds of the burn - see PoweredGuidanceWindow.BoostbackTerminalS. Past this the
+    /// seconds of the burn - see GuidanceWindow.BoostbackTerminalS. Past this the
     /// plan is neither re-solved nor flown, and the plan clock is stale.
     /// </summary>
     public bool BoostbackTerminal;
@@ -788,7 +792,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Scratch for the shooter, kept per vehicle so the solve allocates
     /// nothing - same arrangement as ImpactScratch.</summary>
-    public PoweredGuidance.Numerics.Dual[] BoostbackPlanScratch;
+    public AdvancedFlightComputer.Guidance.Numerics.Dual[] BoostbackPlanScratch;
 
     // --- steering on the impact point ---
 
@@ -907,8 +911,8 @@ public sealed class VehicleAutopilotState
     // Separation -> Rotation -> Boostback -> EntryOrient, per vehicle like every other
     // phase machine here. See Guidance/Boostback.cs for what each phase does.
 
-    public PoweredGuidanceWindow.BoostbackPhase BoostbackPhase =
-        PoweredGuidanceWindow.BoostbackPhase.Idle;
+    public GuidanceWindow.BoostbackPhase BoostbackPhase =
+        GuidanceWindow.BoostbackPhase.Idle;
 
     /// <summary>Sim time the current phase began, and of the previous step. The step
     /// time supplies the interval the slew limit and the sensed-dV integration run
@@ -966,7 +970,7 @@ public sealed class VehicleAutopilotState
     public double BoostbackBurnLimit = double.PositiveInfinity;
 
     /// <summary>Previous step's target direction and the low-passed rate differenced
-    /// from it — the feedforward published to the flight computer.</summary>
+    /// from it - the feedforward published to the flight computer.</summary>
     public double3 BoostbackPrevWant;
     public bool BoostbackPrevWantValid;
     public double3 BoostbackWantRate;
@@ -979,7 +983,7 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// Per-vehicle state, held WEAKLY so a destroyed or unloaded vehicle takes its
     /// autopilot state with it. A Dictionary would keep every craft the player ever
-    /// engaged alive for the session and would need explicit cleanup on scene changes —
+    /// engaged alive for the session and would need explicit cleanup on scene changes -
     /// the exact bookkeeping that made a stale plan survive a save load in the first
     /// place. Nothing here needs to outlive its vehicle.
     /// </summary>
@@ -990,7 +994,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// State for this vehicle ONLY if it already has some. The autopilot hook runs for
-    /// every vehicle on every sim step — thousands of calls a second under time warp —
+    /// every vehicle on every sim step - thousands of calls a second under time warp -
     /// so the hot path must not allocate for craft that have never been engaged.
     /// </summary>
     public static bool TryGet(Vehicle vehicle, out VehicleAutopilotState state)

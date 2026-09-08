@@ -1,7 +1,9 @@
+#nullable disable
+
 using System;
 using Brutal.Numerics;
 
-namespace PoweredGuidance.Upfg;
+namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // Conic State Extrapolation (Shepperd's method). Given a state (r0, v0) and a time
 // delta, returns the Keplerian-propagated state. UPFG uses it to estimate the

@@ -1,7 +1,11 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using Brutal.Numerics;
 
 /// <summary>
-/// Everything the sim thread measures each cycle that the SOLVER needs to read —
+/// Everything the sim thread measures each cycle that the SOLVER needs to read -
 /// gathered into one immutable object, handed over whole, and never edited in place.
 ///
 /// WHY THIS EXISTS. These values used to be written straight into the guidance's
@@ -9,7 +13,7 @@ using Brutal.Numerics;
 /// SetAccelBias wrote _dyn.Gx/Gy/Gz, SetInertia wrote _dyn.Ixx/Iyy/Izz. That is
 /// harmless while one thread does everything, because "between solves" is a real
 /// moment. It stops being harmless the instant the solve runs somewhere else, since
-/// those exact fields are read inside the linearisation loop — every node, every
+/// those exact fields are read inside the linearisation loop - every node, every
 /// iteration. A bias update landing halfway through would linearise the first half of
 /// a trajectory against one gravity and the second half against another, and then the
 /// ratio test would compare a merit computed under one model against a step taken
@@ -18,7 +22,7 @@ using Brutal.Numerics;
 ///
 /// So the rule is: a solve reads nothing that is not in its inputs, and its inputs
 /// cannot change once it has started. This type is a record precisely so there is no
-/// way to edit one — a new measurement produces a new object, and publishing it is a
+/// way to edit one - a new measurement produces a new object, and publishing it is a
 /// single reference assignment, which is atomic on every runtime we care about. The
 /// solve takes its copy at entry and works from that to the end.
 ///
@@ -41,7 +45,7 @@ public sealed record Ksa6DofInputs(double3 AccelBias, double Ixx, double Iyy, do
 
     /// <summary>
     /// True if every field is finite. A single NaN here would propagate through the
-    /// scale chain into A and P, and SCS is native and does not validate its input —
+    /// scale chain into A and P, and SCS is native and does not validate its input -
     /// it can take the process down rather than return an error.
     /// </summary>
     public bool IsUsable =>

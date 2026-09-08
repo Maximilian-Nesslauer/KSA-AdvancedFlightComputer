@@ -1,4 +1,4 @@
-namespace Gfold;
+namespace AdvancedFlightComputer.Guidance.Gfold;
 
 /// <summary>
 /// A conic program in the standard split form, independent of which solver runs it:
@@ -10,11 +10,11 @@ namespace Gfold;
 /// where K = R+^l x SOC(q[0]) x SOC(q[1]) x ... (no exponential cones).
 ///
 /// The SPLIT form is kept as the assembly target because it is how
-/// <see cref="GfoldPlanner"/> naturally builds the problem — equalities and cone rows
+/// <see cref="GfoldPlanner"/> naturally builds the problem - equalities and cone rows
 /// are different constraints and are emitted separately. Both solvers want the two
 /// stacked into a single matrix with the equalities expressed as a leading ZERO cone;
 /// <see cref="SparseCcs.VStack"/> does that conversion, which is a concatenation and
-/// nothing more — the algebra is identical either way, since a zero cone forces s = 0
+/// nothing more - the algebra is identical either way, since a zero cone forces s = 0
 /// and leaves A x = b.
 /// </summary>
 public sealed class ConicProblem
@@ -35,14 +35,14 @@ public sealed class ConicProblem
 /// <summary>
 /// Solver outcome, normalised across backends.
 ///
-/// The numeric values are historical and arbitrary — each backend maps its own status
+/// The numeric values are historical and arbitrary - each backend maps its own status
 /// onto the nearest member. The distinctions that matter downstream are only "usable",
 /// "infeasible" and "failed"; see <see cref="ConicResult.IsOptimal"/> and
 /// GfoldPlanner.IsUsable.
 ///
 /// OptimalInaccurate is a RECOVERY status, not a gentler convergence: both solvers
-/// reach it by stopping early — numerical trouble, no further progress, or out of
-/// iterations/time — and finding that the best iterate they held still met a RELAXED
+/// reach it by stopping early - numerical trouble, no further progress, or out of
+/// iterations/time - and finding that the best iterate they held still met a RELAXED
 /// tolerance set (Clarabel: check_convergence_almost; SCS: its inaccurate exits). It is
 /// counted as usable deliberately, but it means the residuals are looser than nominal.
 /// </summary>
@@ -64,8 +64,8 @@ public enum ConicStatus
 
 /// <summary>
 /// One solve's result. <paramref name="Iterations"/> is not comparable across
-/// backends — an interior-point method's tens and a first-order method's thousands
-/// measure different things — but wall time and <paramref name="PrimalCost"/> are.
+/// backends - an interior-point method's tens and a first-order method's thousands
+/// measure different things - but wall time and <paramref name="PrimalCost"/> are.
 /// </summary>
 public sealed record ConicResult(ConicStatus Status, double[] X, double PrimalCost, int Iterations)
 {

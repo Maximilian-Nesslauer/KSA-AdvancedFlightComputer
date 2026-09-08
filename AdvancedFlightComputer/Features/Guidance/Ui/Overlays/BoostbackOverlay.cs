@@ -1,9 +1,13 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Flight;
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Numerics;
 
 // World-space overlay for the drag-integrated impact point, matching the G-FOLD and
 // 6-DOF overlays so all three read the same way. Shares the projection plumbing in
@@ -35,7 +39,7 @@ using PoweredGuidance.Numerics;
 //   the recompute rate  a prediction is milliseconds, so it cannot run every frame;
 //                       whatever genuine motion happens between recomputes arrives
 //                       all at once. Blended below.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // Off by default, like the other two: it is an instrument, not chrome.
     private static bool _showImpactOverlay;

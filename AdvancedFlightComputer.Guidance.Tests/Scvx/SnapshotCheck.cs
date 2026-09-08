@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Is a solve a PURE FUNCTION of its inputs?
@@ -6,14 +6,14 @@ using Scvx;
 /// This is the property that has to hold before the solve can move off the sim
 /// thread, and it is worth nailing down while everything is still single-threaded and
 /// deterministic. Once there is a worker, a violation shows up as a plan that is
-/// occasionally and unreproducibly wrong — and telling that apart from a race, a stale
+/// occasionally and unreproducibly wrong - and telling that apart from a race, a stale
 /// seed, or a genuine convergence failure means log forensics on a nondeterministic
 /// system, which is the worst place to be doing first threading work.
 ///
 /// Three things, and they are different:
 ///
 ///   REPLAY. The same problem solved twice must give the same plan bit for bit.
-///   Anything hidden — a cached value, a clock, a static — shows up here as a
+///   Anything hidden - a cached value, a clock, a static - shows up here as a
 ///   difference the inputs cannot account for.
 ///
 ///   THE INPUTS MUST MATTER. Changing the dynamics parameters must change the answer.
@@ -21,12 +21,12 @@ using Scvx;
 ///   entirely would pass it.
 ///
 ///   NO CROSS-TALK. Two solvers alive at once, with different parameters, must not
-///   influence each other. That is the shape the threaded version takes — a worker
-///   holding one solver while the sim thread builds the next at a new node count —
+///   influence each other. That is the shape the threaded version takes - a worker
+///   holding one solver while the sim thread builds the next at a new node count -
 ///   and shared mutable state between instances would be invisible until then.
 ///
-/// WHAT THIS DOES NOT COVER. The guidance-level rule — that published inputs reach the
-/// model only at a solve's entry, never during — cannot be exercised here, because
+/// WHAT THIS DOES NOT COVER. The guidance-level rule - that published inputs reach the
+/// model only at a solve's entry, never during - cannot be exercised here, because
 /// Ksa6DofGuidance depends on KSA types this harness cannot reference. That half is
 /// structural rather than behavioural and holds by inspection: every write to _dyn in
 /// Ksa6DofGuidance lives inside CommitInputs, and CommitInputs is called only at the

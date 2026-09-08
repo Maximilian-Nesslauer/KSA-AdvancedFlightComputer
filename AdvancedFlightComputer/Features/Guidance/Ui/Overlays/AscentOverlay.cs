@@ -1,21 +1,25 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Upfg;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // Ascent overlay: the target orbit and the trajectory flown so far, drawn in the
 // world so they can be read straight off the map/orbit view. Uses the shared
 // projection helpers in Ui/Overlays/OverlayCore.cs.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     private static bool _showAscentOverlay = true;
 
-    // Flown trajectory, in the parent body's inertial (CCI) frame — the frame the
+    // Flown trajectory, in the parent body's inertial (CCI) frame - the frame the
     // target orbit lives in, so the two are directly comparable. A ring buffer:
     // once full, the oldest sample is dropped, so a long flight shows its most
     // recent stretch rather than growing without bound.
-    // Public because each vehicle owns its own ring buffer of this size — the track
+    // Public because each vehicle owns its own ring buffer of this size - the track
     // belongs to the craft that flew it, so switching focus shows that craft's path
     // instead of throwing away whichever one was on screen.
     public const int TraceCapacity = 2400;
@@ -24,7 +28,7 @@ public static partial class PoweredGuidanceWindow
 
     // Newest samples are held back from the drawing. The most recent one sits
     // within a sample interval of the vehicle, so drawing it puts a short line
-    // stuck to the hull — harmless at map zoom, but an ugly antenna in the
+    // stuck to the hull - harmless at map zoom, but an ugly antenna in the
     // close-in view. Dropping a couple of seconds' worth leaves a clean gap.
     private const int TraceTrimSamples = 4;
 
@@ -41,7 +45,7 @@ public static partial class PoweredGuidanceWindow
             return;
 
         // A change of SOI makes the existing samples meaningless: they were positions
-        // in another body's frame. The vehicle no longer needs checking — the buffer
+        // in another body's frame. The vehicle no longer needs checking - the buffer
         // is keyed on the vehicle, so it cannot be holding another craft's track.
         if (!ReferenceEquals(parent, _s.TraceParent))
         {
@@ -51,7 +55,7 @@ public static partial class PoweredGuidanceWindow
 
         // ONLY THE POWERED CLIMB. Sampling whenever the vehicle exists filled the
         // ring with the pad it sat on and the orbit it coasted in afterwards, so the
-        // stretch actually worth looking at — the ascent — was a small part of a
+        // stretch actually worth looking at - the ascent - was a small part of a
         // buffer mostly spent on a stationary dot and a closed ellipse.
         if (!IsAscentTraceWorthy(vehicle, orbit, parent))
             return;
@@ -74,7 +78,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// Above a kilometre and under thrust. The altitude floor drops the pad, where a
     /// lit engine has yet to move the vehicle anywhere; the thrust test drops the
-    /// coast after cutoff. Thrust is the game's own live engine state — lit AND fed —
+    /// coast after cutoff. Thrust is the game's own live engine state - lit AND fed -
     /// which is the same pair the auto-stager trusts.
     /// </summary>
     private static bool IsAscentTraceWorthy(Vehicle vehicle, Orbit orbit, IParentBody parent)
@@ -104,8 +108,8 @@ public static partial class PoweredGuidanceWindow
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##ascent_overlay");
 
-        var targetCol = new ImColor8(90, 225, 255);   // cyan  — target orbit
-        var traceCol = new ImColor8(255, 60, 220);    // magenta — flown so far
+        var targetCol = new ImColor8(90, 225, 255);   // cyan  - target orbit
+        var traceCol = new ImColor8(255, 60, 220);    // magenta - flown so far
 
         DrawTargetOrbit(dl, orbit.StateVectors.PositionCci, bodyRadius, targetCol);
         DrawTrace(dl, traceCol);
@@ -119,7 +123,7 @@ public static partial class PoweredGuidanceWindow
     // inputs, but the ARGUMENT OF PERIAPSIS is not: UpfgTarget inserts at
     // periapsis, so where periapsis ends up depends on where the ascent actually
     // reaches orbit. Periapsis is therefore anchored to the vehicle's CURRENT
-    // position, projected into the target plane — so the drawn orbit passes
+    // position, projected into the target plane - so the drawn orbit passes
     // through where the vehicle is now and you can see the ascent lining up with
     // it as you fly, rather than an ellipse rotated arbitrarily within its plane.
     // The ellipse turns with the vehicle as a result, which is the point.

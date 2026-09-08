@@ -1,12 +1,12 @@
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// A sparse matrix in the column-compressed storage ECOS expects, built once and
 /// then refilled in place.
 ///
 /// This is the piece that makes warm starting worthwhile. Across SCvx iterations
-/// only the NUMBERS change — the linearisation blocks, the reference trajectory,
-/// the trust radius — while which entries are non-zero is fixed by the problem
+/// only the NUMBERS change - the linearisation blocks, the reference trajectory,
+/// the trust radius - while which entries are non-zero is fixed by the problem
 /// structure. Rebuilding the pattern every iteration (sorting triplets, grouping
 /// duplicates, reallocating) is what makes the Python reference spend ~80% of its
 /// time in CVXPY canonicalisation rather than in the solver.
@@ -14,12 +14,12 @@ namespace Scvx;
 /// So: the first assembly pass records the pattern and the values; every later
 /// pass replays the same <see cref="Add"/> calls in the same order and only
 /// writes values. The CCS arrays are allocated once and never move, which is also
-/// what ECOS_updateData needs — it keeps the symbolic factorisation and only
+/// what ECOS_updateData needs - it keeps the symbolic factorisation and only
 /// refreshes the KKT entries.
 ///
 /// The contract that makes this safe: <b>the assembly code must call Add in an
 /// identical order every pass.</b> Never skip an entry because it happens to be
-/// zero this time round — explicit zeros are harmless, a shifted order is not.
+/// zero this time round - explicit zeros are harmless, a shifted order is not.
 /// <see cref="Refill"/> checks the count, so a divergence fails loudly instead of
 /// silently writing values into the wrong coefficients.
 /// </summary>
@@ -72,7 +72,7 @@ public sealed class CcsAssembler
         if (_cursor >= _slot.Length)
             throw new InvalidOperationException(
                 $"assembly produced more than the {_slot.Length} entries in the frozen " +
-                "pattern — the Add sequence must be identical every pass");
+                "pattern - the Add sequence must be identical every pass");
         // Accumulate, not assign: BeginRefill zeroes the values, and duplicate
         // (row, col) entries share a slot, so they must sum the same way Freeze
         // summed them on the first pass.
@@ -82,7 +82,7 @@ public sealed class CcsAssembler
     /// <summary>
     /// Finish the first pass: sort into CCS order and build the entry-to-slot map.
     /// Duplicate (row, col) entries are summed, exactly as the pattern-free
-    /// builder did — but note that duplicates make refills ambiguous, so the
+    /// builder did - but note that duplicates make refills ambiguous, so the
     /// assembly deliberately emits each coefficient combined and once.
     /// </summary>
     public void Freeze()
@@ -90,7 +90,7 @@ public sealed class CcsAssembler
         if (_frozen) throw new InvalidOperationException("already frozen");
 
         int nnz = _row.Count;
-        // Order entries by (column, row) — CCS wants rows ascending within a column.
+        // Order entries by (column, row) - CCS wants rows ascending within a column.
         var order = new int[nnz];
         for (int i = 0; i < nnz; i++) order[i] = i;
         Array.Sort(order, (a, b) =>
@@ -150,6 +150,6 @@ public sealed class CcsAssembler
         if (_cursor != _slot.Length)
             throw new InvalidOperationException(
                 $"assembly produced {_cursor} entries but the frozen pattern has " +
-                $"{_slot.Length} — the Add sequence must be identical every pass");
+                $"{_slot.Length} - the Add sequence must be identical every pass");
     }
 }

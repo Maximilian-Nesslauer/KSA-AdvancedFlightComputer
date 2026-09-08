@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Can the cold solve be SPREAD across frames instead of blocking, and does the
@@ -25,7 +25,7 @@ internal static class SpreadCheck
     private const int NX = Dynamics6Dof.NX;
     private const int NU = Dynamics6Dof.NU;
 
-    /// <summary>A 60 fps frame — the budget one iteration has to fit inside.</summary>
+    /// <summary>A 60 fps frame - the budget one iteration has to fit inside.</summary>
     private const double FrameDt = 1.0 / 60.0;
 
     /// <summary>Mirrors Ksa6DofGuidance.ColdMaxDefectM: the plan becomes flyable here.</summary>
@@ -98,7 +98,7 @@ internal static class SpreadCheck
     }
 
     /// <summary>
-    /// One iteration per frame, re-anchoring at the falling vehicle each time — i.e.
+    /// One iteration per frame, re-anchoring at the falling vehicle each time - i.e.
     /// the warm loop, started before there is anything worth flying.
     /// </summary>
     private static (int frames, double worstMs, double medMs, double defect, double fell, bool converged)

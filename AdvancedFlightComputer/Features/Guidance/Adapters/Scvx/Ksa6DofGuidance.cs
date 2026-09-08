@@ -1,14 +1,18 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.Numerics;
 using KSA;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// 6-DOF powered descent as straight model-predictive control.
 ///
 /// Every cycle: re-solve from the LIVE vehicle state, then apply the optimiser's own
 /// controls, interpolated along the fresh trajectory. That is the whole algorithm.
-/// There is no trajectory tracking, no PD, no attitude reference — MPC gets its
+/// There is no trajectory tracking, no PD, no attitude reference - MPC gets its
 /// feedback from re-solving at the measured state, which is the point of it.
 ///
 /// The optimiser's control IS the actuator command: u = (tdx, tdy, T, tau_roll) is a
@@ -16,13 +20,13 @@ using Scvx;
 ///     torque  = r_T x T_body = (LArm*tdy, -LArm*tdx, tau_roll)
 ///     thrust  = T, in NEWTONS
 /// and nothing else. Converting that thrust into a KSA throttle needs the vehicle's
-/// LIVE capability and so belongs at the KSA boundary, not here — see Command. Attitude then evolves from the torque that deflection produces,
+/// LIVE capability and so belongs at the KSA boundary, not here - see Command. Attitude then evolves from the torque that deflection produces,
 /// exactly as the model's own dynamics say it will.
 ///
 /// NODE 0 IS THE VEHICLE, and that has to be enforced rather than assumed. The
 /// subproblem pins it as an equality (`X[0][i] = x0[i]`), but the plan we read back
 /// is the SCvx REFERENCE trajectory, which only advances on an ACCEPTED step. Reseed
-/// sets that reference to the previous plan shifted forward — whose node 0 is the old
+/// sets that reference to the previous plan shifted forward - whose node 0 is the old
 /// plan's node `shift`, NOT the vehicle. So a cycle where the ratio test accepts
 /// nothing leaves a plan anchored an interval away from the vehicle, and the commands
 /// are read at the wrong point on it. AnchorOffsetM measures exactly that, and a plan
@@ -44,7 +48,7 @@ public sealed class Ksa6DofGuidance
     private readonly int _n;
 
     /// <summary>
-    /// The plan as the SIM THREAD sees it — the only guidance state that crosses a
+    /// The plan as the SIM THREAD sees it - the only guidance state that crosses a
     /// thread boundary. Written by one reference assignment at the end of a successful
     /// solve, so a reader gets a whole plan or the previous whole plan, never a
     /// mixture. See Ksa6DofPlan.
@@ -79,7 +83,7 @@ public sealed class Ksa6DofGuidance
 
     /// <summary>
     /// Distance between the plan's node 0 and the state it was solved for. Must be
-    /// ~0 — node 0 is an equality constraint. Anything else means the reference did
+    /// ~0 - node 0 is an equality constraint. Anything else means the reference did
     /// not advance and the plan is stale.
     /// </summary>
     public double AnchorOffsetM { get; private set; }
@@ -89,7 +93,7 @@ public sealed class Ksa6DofGuidance
     /// whether the plan is physical at all.
     ///
     /// The dynamics are imposed as X[k+1] = X[k] + 0.5*dtau*sigma*(g_k + g_k+1) + Wv[k]
-    /// where Wv is VIRTUAL CONTROL — a slack variable, penalised by RhoVc but not
+    /// where Wv is VIRTUAL CONTROL - a slack variable, penalised by RhoVc but not
     /// constrained to zero. Until SCvx converges, Wv is non-zero and the trajectory
     /// DOES NOT OBEY THE DYNAMICS: the state teleports between nodes on fictitious
     /// forces. Such a plan cannot be flown at any thrust, which is what "the vehicle
@@ -101,7 +105,7 @@ public sealed class Ksa6DofGuidance
     public double DefectTolerance => _solver.DefectTolerance;
 
     /// <summary>
-    /// The same defect expressed in METRES — LastDefect * XScale — which is what the
+    /// The same defect expressed in METRES - LastDefect * XScale - which is what the
     /// flight gate actually judges. See Finish for why the scaled figure is the wrong
     /// yardstick on an approach.
     /// </summary>
@@ -134,7 +138,7 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double ColdMaxDefectM { get; set; } = 15.0;
 
-    /// <summary>The Tmax the PLAN was built against — a fallback divisor only; see Command.</summary>
+    /// <summary>The Tmax the PLAN was built against - a fallback divisor only; see Command.</summary>
     public double Tmax => _cfg.Tmax;
 
     /// <summary>Sigma bounds, so the UI can show when burn time is being DICTATED by a bound rather than chosen.</summary>
@@ -144,13 +148,13 @@ public sealed class Ksa6DofGuidance
     /// <summary>Consecutive failed Update calls, used to stop paying for a retry that is not working.</summary>
     private int _consecutiveFailures;
 
-    /// <summary>True when the last Update needed the wide-trust-region retry — that retry is what turns a ~30 ms solve into ~500 ms.</summary>
+    /// <summary>True when the last Update needed the wide-trust-region retry - that retry is what turns a ~30 ms solve into ~500 ms.</summary>
     public bool FellBack { get; private set; }
 
     /// <summary>
     /// The measurements this guidance will use on its NEXT solve. Publishing is a
     /// single reference assignment and the object is immutable, so a solve already
-    /// under way keeps the inputs it started with — see Ksa6DofInputs for why that
+    /// under way keeps the inputs it started with - see Ksa6DofInputs for why that
     /// matters once the solve is not on the caller's thread.
     ///
     /// Setting this does NOT change the model. CommitInputs does, once, at the entry
@@ -163,8 +167,8 @@ public sealed class Ksa6DofGuidance
     /// Fold the published inputs into the model. Called at the top of every solve
     /// entry point and nowhere else.
     ///
-    /// KSA's TotalMassPropsBody.Inertia is LIVE — rebuilt whenever propellant changes
-    /// — so a value captured at engage goes stale over a burn that spends a meaningful
+    /// KSA's TotalMassPropsBody.Inertia is LIVE - rebuilt whenever propellant changes
+    /// - so a value captured at engage goes stale over a burn that spends a meaningful
     /// fraction of the wet mass. That is a SYSTEMATIC torque error: the plan is
     /// computed against a heavier vehicle than the one flying, so every commanded
     /// torque is wrong in the same direction, and MPC cannot correct it, because
@@ -198,7 +202,7 @@ public sealed class Ksa6DofGuidance
     private bool _haveBaseGravity;
 
     /// <summary>
-    /// Unmodelled acceleration, site frame, m/s^2 — added to the model's gravity so
+    /// Unmodelled acceleration, site frame, m/s^2 - added to the model's gravity so
     /// the OPTIMISER plans around it rather than fighting it.
     ///
     /// This is offset-free MPC, and it is the piece that was missing. Plain MPC
@@ -208,27 +212,27 @@ public sealed class Ksa6DofGuidance
     /// plan promises again. Nothing about re-solving fixes a model error.
     ///
     /// Measured on a real descent, the model was short by about 2.2 m/s^2 in the
-    /// vertical — a fitted 10.3% thrust shortfall on top of gravity being 9.4% low
+    /// vertical - a fitted 10.3% thrust shortfall on top of gravity being 9.4% low
     /// (10.74 measured against 9.82 from Mu/r^2). That is roughly a fifth of the
     /// vehicle's net climb authority, applied continuously, which is more than
     /// enough to turn an approach into an overshoot and then an orbit.
     ///
     /// Estimating the RESIDUAL rather than any individual term is deliberate: it
     /// needs no theory about which of gravity, thrust calibration or aerodynamics is
-    /// responsible, and it picks up drag for free — including the way drag falls off
+    /// responsible, and it picks up drag for free - including the way drag falls off
     /// as speed comes off, since the estimate simply follows it down.
     /// </summary>
     /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
     public double3 AccelBias { get; private set; }
 
-    /// <summary>Gravity the config was built with, before any bias — for the readout.</summary>
+    /// <summary>Gravity the config was built with, before any bias - for the readout.</summary>
     public double3 BaseGravity => _haveBaseGravity ? _baseGravity : new double3(_dyn.Gx, _dyn.Gy, _dyn.Gz);
 
     /// <summary>
     /// Fly a FIXED burn time instead of letting the solver choose it.
     ///
-    /// Free final time makes the dynamics BILINEAR in (sigma, x, u) — sigma multiplies
-    /// f(x,u) in the collocation — which is a first-class nonconvexity and the root of
+    /// Free final time makes the dynamics BILINEAR in (sigma, x, u) - sigma multiplies
+    /// f(x,u) in the collocation - which is a first-class nonconvexity and the root of
     /// several separate pathologies: sigma pinning at its bounds, the regularisers
     /// biasing the trajectory (BOTH W_DU and W_W get cheaper as sigma grows, so they
     /// push it to the ceiling), loitering to fill an over-long burn, and plan-to-plan
@@ -238,8 +242,8 @@ public sealed class Ksa6DofGuidance
     /// no longer buy anything by stretching time, so they can be set for smoothness
     /// and conditioning without distorting the answer.
     ///
-    /// This is what the 3-DOF Gfold planner already does — fixed time-of-flight per
-    /// solve with an outer bracket-and-golden-section search over it — and is the
+    /// This is what the 3-DOF Gfold planner already does - fixed time-of-flight per
+    /// solve with an outer bracket-and-golden-section search over it - and is the
     /// classic powered-descent formulation.
     /// </summary>
     public bool FixedTime { get; set; } = true;
@@ -253,7 +257,7 @@ public sealed class Ksa6DofGuidance
     /// <summary>
     /// ADMM iteration caps. THIS IS WHAT STOPS THE GAME FREEZING.
     ///
-    /// SCS defaults to 100,000 iterations per subproblem — an offline-validation
+    /// SCS defaults to 100,000 iterations per subproblem - an offline-validation
     /// number. Measured in closed loop, an uncapped worst-case subproblem ran 31,800
     /// iterations / 1.7 s against a mean of ~400, and several of those back to back on
     /// the sim thread is a multi-second stall: the game stops responding and is killed.
@@ -262,7 +266,7 @@ public sealed class Ksa6DofGuidance
     /// miss (2.1 m), BETTER path (1.27 vs 1.36 x direct), same plan jump, worst case
     /// 561 ms instead of 1709 ms. It is safe because SCS reports a truncated solve as
     /// SolvedInaccurate, HitIterationLimit catches it, and the SCvx loop already
-    /// treats that as a subproblem failure and shrinks the trust region — so the cap
+    /// treats that as a subproblem failure and shrinks the trust region - so the cap
     /// turns a stall into a smaller step.
     ///
     /// Cold needs more than warm: a cap of 1000 fails the cold solve outright.
@@ -281,7 +285,7 @@ public sealed class Ksa6DofGuidance
     /// An ITERATION cap does not bound TIME, because the cost of one ADMM iteration
     /// scales with problem size: measured, ~0.04 ms at N=30 but ~0.77 ms at N=80,
     /// twenty times more, since the KKT factorisation grows. So the 2000-iteration cap
-    /// that kept N=30 under 60 ms is 1.5 SECONDS at N=80 — which is exactly the
+    /// that kept N=30 under 60 ms is 1.5 SECONDS at N=80 - which is exactly the
     /// "periodic 2000 ms solve" seen in flight: the common case converges in ~50
     /// iterations and is a few ms, while the occasional hard subproblem takes its full
     /// budget and stalls the frame.
@@ -650,7 +654,7 @@ public sealed class Ksa6DofGuidance
             // (|X[k][i] - xbar[k][i]| <= tr * XScale[i]), and node 0 is simultaneously
             // pinned by the equality X[0] = x0. Together those demand
             // |x0[i] - xSeed[0][i]| <= tr * XScale[i]. With identity seeded into the
-            // quaternion and zero into the rates — XScale 1, tr 0.1 — the cold solve
+            // quaternion and zero into the rates - XScale 1, tr 0.1 - the cold solve
             // is INFEASIBLE for any vehicle more than ~11.5 deg off vertical or
             // rotating faster than 0.1 rad/s. Not slow: infeasible, immediately, and
             // untouched by relaxing any of the physical constraints.
@@ -1260,7 +1264,7 @@ public sealed class Ksa6DofGuidance
     /// far less than N independent solves.
     ///
     /// Selection is by MERIT among samples that are actually PHYSICAL (defect within
-    /// tolerance) — a shorter burn that only "wins" because it failed to converge is
+    /// tolerance) - a shorter burn that only "wins" because it failed to converge is
     /// not a win.
     /// </summary>
     public bool PlanSearch(double[] x0, double[] xf, double sigmaGuess, double simNow,
@@ -1331,14 +1335,14 @@ public sealed class Ksa6DofGuidance
 
     /// <summary>
     /// One MPC step: re-solve from the live state. The previous solution, shifted
-    /// forward, seeds it — that is what keeps the warm start good and the solve at
-    /// ~33 ms — but the ANSWER is anchored at the vehicle by the initial-state
+    /// forward, seeds it - that is what keeps the warm start good and the solve at
+    /// ~33 ms - but the ANSWER is anchored at the vehicle by the initial-state
     /// equality, not at the shifted seed.
     /// </summary>
     /// <param name="maxIterations">
     /// SCvx iterations per cycle. Measured in closed loop at N=50 with dispersion, a
     /// budget of 1 is indistinguishable from 5 in tracking (miss 1.8 vs 1.7 m, path
-    /// 1.29 vs 1.28 x direct, plan jump 1.3 m for both) for a fifth of the work — the
+    /// 1.29 vs 1.28 x direct, plan jump 1.3 m for both) for a fifth of the work - the
     /// standard real-time iteration scheme. Held at 5 for now anyway: that measurement
     /// was taken against the harness dynamics, and the thrust-shortfall question is
     /// still open, so this is not the moment to also cut the loop's convergence
@@ -1487,7 +1491,7 @@ public sealed class Ksa6DofGuidance
             return false;
         }
 
-        // Worst defect over the trace — the LAST entry is the accepted reference's.
+        // Worst defect over the trace - the LAST entry is the accepted reference's.
         // The CHANNEL comes from the same entry, deliberately: reading it from the
         // solver's latest evaluation instead would let the magnitude and its location
         // come from different iterations and quietly disagree.
@@ -1520,7 +1524,7 @@ public sealed class Ksa6DofGuidance
         }
 
         // REFUSE AN UNPHYSICAL PLAN. IterationLimit was previously accepted outright,
-        // which shipped whatever the loop happened to have reached — including
+        // which shipped whatever the loop happened to have reached - including
         // trajectories still carrying large virtual control. Flying one means asking
         // the vehicle to reproduce motion that no force produced, so it saturates
         // thrust and falls further behind on every cycle. Better to keep the previous
@@ -1528,7 +1532,7 @@ public sealed class Ksa6DofGuidance
         // THE GATE IS IN METRES, NOT IN SCALED UNITS.
         //
         // DefectNorm is max|defect| / XScale, and XScale's position entries are L,
-        // the range to the target — which is exactly the thing that shrinks on an
+        // the range to the target - which is exactly the thing that shrinks on an
         // approach. A fixed scaled tolerance therefore means 1e-3 * L METRES, so the
         // gate silently tightens as the vehicle closes in: measured, it allows 1.07 m
         // of defect at 1 km, 0.26 m at 235 m and 0.04 m at 50 m.
@@ -1544,8 +1548,8 @@ public sealed class Ksa6DofGuidance
         // flying an ageing open-loop plan while the commands are read further and
         // further along it. The failure is the gate, not the guidance.
         //
-        // Judged in metres this asks the question that actually matters — is the
-        // trajectory flyable — and the answer no longer depends on how close the
+        // Judged in metres this asks the question that actually matters - is the
+        // trajectory flyable - and the answer no longer depends on how close the
         // target happens to be.
         LastDefectM = LastDefect * _cfg.XScale[Dynamics6Dof.IR];
 
@@ -1603,11 +1607,11 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
-    /// The optimiser's control at this instant: body torque (N·m, MODEL body axes)
+    /// The optimiser's control at this instant: body torque (N*m, MODEL body axes)
     /// and throttle in [0,1], interpolated along the current plan.
     ///
     /// Read at (now - solveTime), so immediately after a solve this is node 0's
-    /// control — the control the optimiser chose FOR THE VEHICLE'S ACTUAL STATE.
+    /// control - the control the optimiser chose FOR THE VEHICLE'S ACTUAL STATE.
     /// </summary>
     public bool Command(double simNow, out double3 torqueModel, out double thrustN)
     {
@@ -1636,7 +1640,7 @@ public sealed class Ksa6DofGuidance
         double tauRoll = Lerp(plan.U, 3, k, f);
 
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre
-        // of mass — the model's own gimbal-torque relation, verbatim.
+        // of mass - the model's own gimbal-torque relation, verbatim.
         torqueModel = new double3(_dyn.LArm * tdy, -_dyn.LArm * tdx, tauRoll);
         LastLateralForce = new double2(tdx, tdy);
 
@@ -1644,8 +1648,8 @@ public sealed class Ksa6DofGuidance
         //
         // This used to return thrust / _cfg.Tmax, and that was the systematic error
         // behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is
-        // built, so the moment the vehicle's real capability differs from it — a
-        // different ambient pressure, an engine out, propellant starvation — every
+        // built, so the moment the vehicle's real capability differs from it - a
+        // different ambient pressure, an engine out, propellant starvation - every
         // commanded thrust is wrong by exactly that ratio. It is invisible to the
         // MPC too: re-solving corrects the STATE, but the error is in the actuator
         // mapping, so each new plan is executed just as wrongly as the last.
@@ -1723,7 +1727,7 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
-    /// Objective breakdown at the current plan. Fuel SHOULD dominate — if a
+    /// Objective breakdown at the current plan. Fuel SHOULD dominate - if a
     /// regulariser is comparable to or larger than it, the optimiser is no longer
     /// solving min-fuel, and because both regularisers get cheaper as sigma grows
     /// the visible symptom is burn time pinned at its upper bound.
@@ -1756,7 +1760,7 @@ public sealed class Ksa6DofGuidance
     /// <summary>
     /// The LATERAL thrust the model believes it is producing, (tdx, tdy) in model
     /// body axes, N. The model rigidly couples this to pitch/yaw torque through a
-    /// SINGLE engine at LArm: tau = r_T x T_body. The real vehicle does not — the
+    /// SINGLE engine at LArm: tau = r_T x T_body. The real vehicle does not - the
     /// allocator makes the requested torque using every gimbal it has, including
     /// verniers, and its lateral force is whatever that geometry gives.
     ///
@@ -1766,12 +1770,12 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public double2 LastLateralForce { get; private set; }
 
-    /// <summary>Plan node 0 in model coordinates — where the plan believes the vehicle is.</summary>
+    /// <summary>Plan node 0 in model coordinates - where the plan believes the vehicle is.</summary>
     public double3 PlanOrigin => HasPlan
         ? new double3(_planX[0], _planX[1], _planX[2])
         : default;
 
-    /// <summary>How far the vehicle has drifted from the plan it is flying. Pure diagnostics — nothing acts on it.</summary>
+    /// <summary>How far the vehicle has drifted from the plan it is flying. Pure diagnostics - nothing acts on it.</summary>
     public void Diagnostics(double[] x, out double posErrM, out double velErrMs, out double attErrDeg)
     {
         posErrM = velErrMs = attErrDeg = 0.0;

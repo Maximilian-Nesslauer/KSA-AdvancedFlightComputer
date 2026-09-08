@@ -1,11 +1,11 @@
-namespace PoweredGuidance.Numerics;
+namespace AdvancedFlightComputer.Guidance.Numerics;
 
 /// <summary>
 /// Forward-mode automatic differentiation number: a value paired with its
 /// derivative with respect to one seeded input.
 ///
 /// Scalar (single-partial) rather than vector mode is deliberate. The dynamics
-/// are tiny — order a hundred flops — so sweeping the function once per input
+/// are tiny - order a hundred flops - so sweeping the function once per input
 /// column (18 times: 14 states + 4 controls) costs less than the allocation and
 /// indirection a double[] of partials per intermediate would incur. This struct
 /// is two doubles, lives entirely on the stack, and allocates nothing, so a full
@@ -16,7 +16,7 @@ namespace PoweredGuidance.Numerics;
 /// independent of the seed, so f itself comes free from any sweep.
 ///
 /// Only the operations the dynamics actually use are defined. Adding an
-/// operation means adding its derivative rule — deliberately explicit, so an
+/// operation means adding its derivative rule - deliberately explicit, so an
 /// unsupported function is a compile error rather than a silently wrong slope.
 /// </summary>
 public readonly struct Dual

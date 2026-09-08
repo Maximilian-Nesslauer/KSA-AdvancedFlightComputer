@@ -1,6 +1,6 @@
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics;
 
-namespace PoweredGuidance.Flight;
+namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>
 /// A single-layer isothermal exponential atmosphere, written to MIRROR the one the

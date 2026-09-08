@@ -1,10 +1,14 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
 // The Powered Guidance panel: the gauge shell every flight phase shares, and the tab
-// bar that switches between them. The per-tab content lives alongside —
+// bar that switches between them. The per-tab content lives alongside -
 // Ui/Gauges/AscentGauge.cs for Ascent, and placeholders below for the rest.
 //
 // Layering: an ImGauge window for the chrome, then an ordinary ImGui body wrapped in
@@ -16,7 +20,7 @@ using KSA;
 // ConsoleStyle skin instead. ImGauge itself survives as chrome (DrawDressedBox, Box,
 // Screw, Label, Button), so the shell here is unchanged - but the helper that let
 // plain ImGui widgets sit inside it is now ConsoleStyle's.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     public enum GuidanceTab { Ascent, Boostback, Descent, Landing }
     public enum LandingSubTab { Powered, Hover }
@@ -25,7 +29,7 @@ public static partial class PoweredGuidanceWindow
     private static float2 _guidancePanelOffsetUv = new float2(0.012f, 0.06f);
 
     // Which tab the BUTTONS act on. They are drawn above the tab bar, so they read
-    // the selection the bar made last frame — a frame's lag on a tab switch, and the
+    // the selection the bar made last frame - a frame's lag on a tab switch, and the
     // alternative is drawing the commit controls below the content they commit.
     private static GuidanceTab _panelTab = GuidanceTab.Ascent;
     private static LandingSubTab _landingSubTab = LandingSubTab.Powered;
@@ -72,7 +76,7 @@ public static partial class PoweredGuidanceWindow
         // saved position, not a cosmetic edit. Done once, deliberately, to finish moving
         // off the obsolete "Navbox" name; it should not move again.
         ImGaugeWindow win = new ImGaugeWindow(
-            "PoweredGuidance", "Powered Guidance",
+            "AfcGuidance", "AFC Guidance",
             new float2(0f, 0f), new float2(0f, 0f),
             GaugeScreenUv(_guidancePanelOffsetUv),
             GaugeScreenUv(new float2(GuidancePanelWidthUv, _panelHeightUv)));
@@ -285,7 +289,7 @@ public static partial class PoweredGuidanceWindow
         //
         // EXECUTE lights green while that phase is actually doing something: guidance
         // running or a launch armed and waiting for its window on ascent, any live
-        // landing phase on descent. ABORT is red at all times — it should read the
+        // landing phase on descent. ABORT is red at all times - it should read the
         // same whether or not it currently has anything to stop.
         bool lit = _panelTab == GuidanceTab.Ascent
             ? (_s.Running || _s.LaunchArmed)
@@ -386,7 +390,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// The powered-descent solver choice. One implementation, called from both the
-    /// Descent and Landing tabs — the whole point is that picking it does not depend
+    /// Descent and Landing tabs - the whole point is that picking it does not depend
     /// on which page you happen to be on.
     /// </summary>
     private static void DrawSolverRadios()

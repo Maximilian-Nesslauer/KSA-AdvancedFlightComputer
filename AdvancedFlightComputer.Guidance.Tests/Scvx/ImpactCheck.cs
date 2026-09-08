@@ -1,5 +1,5 @@
-using PoweredGuidance.Flight;
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Numerics;
 
 /// <summary>
 /// Does the impact predictor integrate the right physics, and does its answer

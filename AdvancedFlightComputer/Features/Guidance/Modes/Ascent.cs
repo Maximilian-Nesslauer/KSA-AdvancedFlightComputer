@@ -1,22 +1,26 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Upfg;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // The Ascent tab and its guidance: reads the controlled vehicle's live inertial
 // (CCI) state, runs the standalone UPFG guidance toward a target orbit, and
 // (optionally) commands the flight computer through a full ascent profile:
 //
-//   Vertical   — straight up off the pad until the turn-start altitude
-//   Turn       — open-loop gravity turn: pitch down from vertical at a fixed rate
+//   Vertical   - straight up off the pad until the turn-start altitude
+//   Turn       - open-loop gravity turn: pitch down from vertical at a fixed rate
 //                (deg/s) toward the launch azimuth, until the commanded pitch
-//                meets UPFG's commanded pitch — or until the failsafe altitude
-//   ClosedLoop — fly the converged UPFG steering
-//   Terminal   — at tgo <= 10 s, freeze the commanded ATTITUDE (re-solving on a
+//                meets UPFG's commanded pitch - or until the failsafe altitude
+//   ClosedLoop - fly the converged UPFG steering
+//   Terminal   - at tgo <= 10 s, freeze the commanded ATTITUDE (re-solving on a
 //                near-zero arc just makes the steering chase itself) and count down
 //                to cutoff. UPFG keeps iterating throughout, for the readouts.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // The target orbit, the launch-to-target pick and the gravity-turn shaping all
     // live on the vehicle now (VehicleAutopilotState): they describe one craft's
@@ -25,7 +29,7 @@ public static partial class PoweredGuidanceWindow
     // and can be re-seeded with the button next to the input.
     private const double TerminalTgo = 10.0;
     // Hand over to UPFG no later than this altitude, even if the pitch profiles
-    // never crossed — the failsafe against an open-loop runaway vehicle.
+    // never crossed - the failsafe against an open-loop runaway vehicle.
     private const double FailsafeAltKm = 50.0;
 
     /// <summary>
@@ -41,10 +45,10 @@ public static partial class PoweredGuidanceWindow
     ///
     /// It also makes <see cref="UpfgGuidance.Converged"/> mean something again: the
     /// test is "tgo settled between calls", which at 60 Hz passes on the second step
-    /// no matter how far from converged the solution is — and the phase machine
+    /// no matter how far from converged the solution is - and the phase machine
     /// promotes the turn to closed loop on that flag.
     ///
-    /// THE CADENCE IS NOT WHAT KEEPS THE ATTITUDE SMOOTH — the steering LAW is
+    /// THE CADENCE IS NOT WHAT KEEPS THE ATTITUDE SMOOTH - the steering LAW is
     /// evaluated every step between solves (UpfgGuidance.SteeringAt), so the command
     /// is continuous whatever this is set to. All this decides is how often the
     /// solution behind that law is re-derived.
@@ -57,7 +61,7 @@ public static partial class PoweredGuidanceWindow
     /// "The plane overhead right now" is the wrong plane to launch into: the pad is
     /// carried east at the body's rotation rate the whole time the vehicle is still
     /// climbing through the vertical rise and the turn, so by the time the ascent is
-    /// actually flying, the site — and the vehicle with it — has moved off the plane
+    /// actually flying, the site - and the vehicle with it - has moved off the plane
     /// that was overhead at lift-off, and the guidance yaws to chase a node it has
     /// already gone past. Seeding the plane over where the pad WILL be instead puts
     /// the ascent in the plane over the part of the flight that matters.
@@ -69,8 +73,8 @@ public static partial class PoweredGuidanceWindow
     ///
     /// A GUARD, NOT THE SMOOTHING. The steering law is evaluated continuously now, and
     /// a launch vehicle pitches at about 1 deg/s, so in normal flight nothing should
-    /// come near this. What is left for it is the genuine discontinuities — the
-    /// hand-over out of the open-loop turn, and a stage list changing shape mid-burn —
+    /// come near this. What is left for it is the genuine discontinuities - the
+    /// hand-over out of the open-loop turn, and a stage list changing shape mid-burn -
     /// where it turns an instantaneous attitude snap into a maneuver. The number is
     /// chosen to sit well above any rate the trajectory legitimately asks for, so
     /// binding it at all is a signal that something upstream jumped.
@@ -86,7 +90,7 @@ public static partial class PoweredGuidanceWindow
     private static bool _autoLaunchStepped;
 
     // The Ascent tab body: target orbit, profile tuning, launch-to-target, and the
-    // commit controls. Everything the user sets is in this one panel — the profile
+    // commit controls. Everything the user sets is in this one panel - the profile
     // parameters used to live in a separate popup window, which meant tuning them
     // hid the guidance readout behind a second window.
     private static void DrawAscentTab(Vehicle vehicle, Orbit orbit, IParentBody parent,
@@ -134,7 +138,7 @@ public static partial class PoweredGuidanceWindow
 
         // The toggles are pure configuration: nothing acts until EXECUTE
         // starts the process (or the armed auto-launch fires it at the
-        // window). EXECUTE is the single commit point — guidance starts and
+        // window). EXECUTE is the single commit point - guidance starts and
         // whatever is toggled goes live at once, so you can warp time
         // freely beforehand.
         ImGui.Checkbox("Engage autopilot", ref _s.Engage);
@@ -156,8 +160,8 @@ public static partial class PoweredGuidanceWindow
     /// The single commit point. A TARGET is what decides whether this launches or
     /// arms: with one, there is a launch window to hit and firing now would miss the
     /// plane, so EXECUTE arms and guidance starts when the window arrives. Without a
-    /// target — or with a target whose plane the site cannot reach, so there is no
-    /// window at all — EXECUTE means EXECUTE.
+    /// target - or with a target whose plane the site cannot reach, so there is no
+    /// window at all - EXECUTE means EXECUTE.
     ///
     /// The auto-warp setting is deliberately NOT part of this decision. It only says
     /// whether the mod offers to warp to the window for you or you warp there
@@ -205,7 +209,7 @@ public static partial class PoweredGuidanceWindow
     ///
     /// THIS CANNOT LIVE IN A DRAW, which is where all of it used to be. Every one of
     /// those jobs was gated on the panel being open, on the Ascent tab being the
-    /// selected one, and on the "Target orbit" fold being expanded — so collapsing a
+    /// selected one, and on the "Target orbit" fold being expanded - so collapsing a
     /// section, or looking at the Descent tab while waiting, meant the window was
     /// never re-derived and the armed launch never fired. EXECUTE lit green and the
     /// countdown sat there, which is indistinguishable from a dead button.
@@ -220,12 +224,12 @@ public static partial class PoweredGuidanceWindow
             return;
 
         // ARMED: the launch instant is already latched and absolute, so this needs no
-        // geometry at all — and MUST not re-derive it. Checked every step, ahead of
+        // geometry at all - and MUST not re-derive it. Checked every step, ahead of
         // everything else here, because a single warp step can cross the window whole.
         if (_s.LaunchArmed && !double.IsNaN(_s.LaunchTargetTime))
         {
             // Ask to warp to just before the window (the warp itself needs the user's
-            // confirmation — see DrawWarpPrompt), then press EXECUTE for them. The
+            // confirmation - see DrawWarpPrompt), then press EXECUTE for them. The
             // engage/auto toggles are respected as configured, not forced.
             double waitSec = _s.LaunchTargetTime - SimNow();
 
@@ -246,7 +250,7 @@ public static partial class PoweredGuidanceWindow
         }
 
         // NOT ARMED: track the target's plane and the next window. Wall-clock gated
-        // like the stage model, and for the same two reasons — TryChaseOrbit searches
+        // like the stage model, and for the same two reasons - TryChaseOrbit searches
         // the system for the target vehicle, which is not a per-sim-step cost, and
         // under warp a sim-time gate would not throttle it at all.
         long now = Environment.TickCount64;
@@ -256,7 +260,7 @@ public static partial class PoweredGuidanceWindow
 
         ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
 
-        // The chase orbit is an OUTPUT of the target pick, recomputed continuously —
+        // The chase orbit is an OUTPUT of the target pick, recomputed continuously -
         // it has to keep tracking while the fold that displays it is shut, or the
         // launch would fly to whatever plane was last on screen.
         if (status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable)
@@ -274,7 +278,7 @@ public static partial class PoweredGuidanceWindow
         // Ascent guidance does not run forever: shortly after terminal cutoff it
         // releases. Leaving it engaged kept CommandAttitude running on every sim
         // step (thousands/s under warp) and held the flight computer in active
-        // attitude tracking — the lag that appeared with warp and lingered after.
+        // attitude tracking - the lag that appeared with warp and lingered after.
         // Released once the engines are actually out, or on the timeout if auto
         // staging was never going to cut them. Releasing has to CLEAR the solver as
         // well as the flag: leaving UPFG's recursive state loaded meant the panel went
@@ -283,7 +287,7 @@ public static partial class PoweredGuidanceWindow
         if (_s.Running && _s.Phase == AscentPhase.Terminal
             && (SimNow() > _s.CutoffTime + (_s.CutoffDone ? 2.0 : 15.0)))
         {
-            ReleaseAscent("Ascent complete — guidance released.");
+            ReleaseAscent("Ascent complete - guidance released.");
         }
 
         if (!_s.Running)
@@ -309,7 +313,7 @@ public static partial class PoweredGuidanceWindow
         }
     }
 
-    // The EXECUTE button's action — also fired automatically at the launch window.
+    // The EXECUTE button's action - also fired automatically at the launch window.
     private static void StartGuidance(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         // Ascent takes over from every other mode: all four drive the same
@@ -372,13 +376,13 @@ public static partial class PoweredGuidanceWindow
         if (status == ChaseStatus.PlaneUnreachable)
         {
             ImGui.TextColored(new float4(1f, 0.6f, 0.3f, 1f),
-                "Target inclination is below the site latitude — plane unreachable.");
+                "Target inclination is below the site latitude - plane unreachable.");
             return;
         }
 
         double waitSec = plan.WaitSec;
-        // The countdown is to IGNITION, which leads the plane crossing — see
-        // LanLeadSeconds — so the lead is named rather than left as an apparent
+        // The countdown is to IGNITION, which leads the plane crossing - see
+        // LanLeadSeconds - so the lead is named rather than left as an apparent
         // discrepancy between T-0 and the site being in the plane.
         ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")} crossing, "
                  + $"{LanLeadSeconds:F0} s lead)");
@@ -395,7 +399,7 @@ public static partial class PoweredGuidanceWindow
     /// print twice with both open.
     ///
     /// It used to fire the launch as well. That made a flight action depend on the
-    /// panel being open, the Ascent tab being selected and a fold being expanded —
+    /// panel being open, the Ascent tab being selected and a fold being expanded -
     /// see StepLaunchWindow, which owns it now.
     /// </summary>
     private static void DrawAutoLaunchArming()
@@ -405,24 +409,24 @@ public static partial class PoweredGuidanceWindow
         _autoLaunchStepped = true;
 
         // TEXT ONLY. The launch itself is fired by StepLaunchWindow, from the sim
-        // step — see there for why it cannot live in a draw.
+        // step - see there for why it cannot live in a draw.
         double waitSec = _s.LaunchTargetTime - SimNow();
         if (_s.LaunchArmed && !_s.Running && !double.IsNaN(waitSec))
         {
             if (!_s.Engage || !_s.AutoStage)
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                    "Note: engage/auto toggles are off — auto-launch will only start guidance.");
+                    "Note: engage/auto toggles are off - auto-launch will only start guidance.");
 
             ImGui.TextColored(new float4(0.5f, 0.9f, 1f, 1f), Universe.IsAutoWarpActive
                 ? "Auto-warping to the launch window..."
                 : (_s.AutoLaunch
-                    ? "Armed — will EXECUTE at the window."
-                    : "Armed — warp to the window yourself; it will EXECUTE there."));
+                    ? "Armed - will EXECUTE at the window."
+                    : "Armed - warp to the window yourself; it will EXECUTE there."));
         }
         else if (_s.LaunchArmed && _s.Running)
         {
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                "Guidance already running — auto-launch is waiting (Stop / reset to clear).");
+                "Guidance already running - auto-launch is waiting (Stop / reset to clear).");
         }
     }
 
@@ -442,11 +446,11 @@ public static partial class PoweredGuidanceWindow
 
         // The ATTITUDE is frozen in the terminal phase, not the solver. Re-running
         // UPFG over a near-zero remaining arc makes its steering chase itself, which
-        // is why the command holds _s.FrozenDir below — but the solve itself keeps
+        // is why the command holds _s.FrozenDir below - but the solve itself keeps
         // running, so tgo, vgo and the stage model stay live in the readouts instead
         // of freezing on whatever they happened to be ten seconds before cutoff.
         //
-        // ONE SOLVE PER GUIDANCE CYCLE, not one per sim step — see GuidanceCycle. The
+        // ONE SOLVE PER GUIDANCE CYCLE, not one per sim step - see GuidanceCycle. The
         // phase machine and the commanded attitude below still run every step; only
         // the solve is paced.
         if (now - _s.LastSolveTime >= GuidanceCycle)
@@ -455,12 +459,12 @@ public static partial class PoweredGuidanceWindow
             // masses and the actual remaining staging sequence. No usable thrust is a
             // normal transient during staging (old engine gone, new one not yet
             // active): hold the last solution and wait rather than stopping. The cycle
-            // clock is NOT advanced in that case — the next step retries immediately
+            // clock is NOT advanced in that case - the next step retries immediately
             // rather than sitting out a whole cycle on a transient.
             UpfgVehicle live = BuildUpfgVehicle(vehicle);
             if (live == null)
             {
-                _s.Status = "No thrust — holding last solution (staging/coast).";
+                _s.Status = "No thrust - holding last solution (staging/coast).";
             }
             else
             {
@@ -498,7 +502,7 @@ public static partial class PoweredGuidanceWindow
         // THE STEERING LAW EVALUATED ONCE, HERE, and used for everything downstream:
         // the pitch the turn hands over at, the azimuth it flies, the closed-loop
         // command, and the direction the terminal phase freezes. UpfgGuidance.Steering
-        // is the tau = 0 sample from the last solve — up to a cycle old — and mixing
+        // is the tau = 0 sample from the last solve - up to a cycle old - and mixing
         // the two would have the phase machine deciding against one direction while
         // the vehicle flew another.
         //
@@ -521,7 +525,7 @@ public static partial class PoweredGuidanceWindow
 
             case AscentPhase.Turn:
                 // Pitch ramps down at the fixed rate; hand over to UPFG when it
-                // meets the closed-loop solution — or at the failsafe altitude
+                // meets the closed-loop solution - or at the failsafe altitude
                 // regardless, so an open-loop profile can't run away.
                 if ((_s.Upfg.Converged && turnPitch <= upfgPitch)
                     || alt >= FailsafeAltKm * 1000.0)
@@ -533,7 +537,7 @@ public static partial class PoweredGuidanceWindow
                 {
                     _s.Phase = AscentPhase.Terminal;
                     _s.FrozenDir = steerNow;
-                    // tgo is measured from the SOLVE, not from now — the solution can
+                    // tgo is measured from the SOLVE, not from now - the solution can
                     // be most of a guidance cycle old by the time this trips, and
                     // counting that cycle twice is a whole second of extra burn.
                     _s.CutoffTime = _s.LastSolveTime + _s.Upfg.Tgo;
@@ -557,7 +561,7 @@ public static partial class PoweredGuidanceWindow
                 want = TurnDir(up, turnPitch, steerNow);
                 // The ramp's own rate: pitching down at TurnRateDegS about the axis
                 // the turn plane turns about, and zero once it has bottomed out on the
-                // horizon. The axis is up x want — a right-handed rotation about it
+                // horizon. The axis is up x want - a right-handed rotation about it
                 // carries the command AWAY from vertical and toward down-range, which
                 // is the direction this ramp goes. (up x down-range, the same axis:
                 // with up = Z and down-range = X that is +Y, and +Y turns Z toward X.)
@@ -587,7 +591,7 @@ public static partial class PoweredGuidanceWindow
         }
 
         // The command SLEWS toward the solution rather than jumping to it. With the
-        // law evaluated continuously above this should never bind in flight — what is
+        // law evaluated continuously above this should never bind in flight - what is
         // left for it is the hand-over out of the open-loop turn and whatever a stage
         // list changing shape mid-burn does to the solution. When it DOES bind, the
         // commanded rate is the slew's own, not the law's: publishing a feedforward
@@ -611,7 +615,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// Rotate <paramref name="current"/> toward <paramref name="target"/> by at most
     /// maxRad, about the axis between them. An uninitialised or degenerate current
-    /// direction snaps straight to the target — there is nothing to be continuous
+    /// direction snaps straight to the target - there is nothing to be continuous
     /// with on the first command of a launch.
     /// </summary>
     private static double3 SlewToward(double3 current, double3 target, double maxRad,
@@ -652,7 +656,7 @@ public static partial class PoweredGuidanceWindow
     //
     // TAKING THE AZIMUTH FROM THE SOLVER IS THE POINT, not a shortcut. The turn hands
     // over to that same steering vector, so flying its azimuth is what makes the
-    // hand-over seamless — the pitch profiles are matched before the switch and the
+    // hand-over seamless - the pitch profiles are matched before the switch and the
     // heading already agrees. Deriving the azimuth from the target plane geometry
     // instead looks more principled and is not: UPFG's azimuth includes the yaw that
     // cancels the launch site's own eastward velocity, so a geometric one differs from
@@ -683,7 +687,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     /// <summary>
-    /// The target orbit plane's normal in CCI — the roll reference the commanded
+    /// The target orbit plane's normal in CCI - the roll reference the commanded
     /// attitude is built on (see AscentRollRef).
     /// </summary>
     private static double3 AscentPlaneNormal() => UpfgTarget.OrbitNormal(
@@ -700,9 +704,9 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// The LAN of the plane with inclination incDeg that passes over the given CCI
-    /// position — not now, but <see cref="LanLeadSeconds"/> from now.
+    /// position - not now, but <see cref="LanLeadSeconds"/> from now.
     ///
-    /// Spherical trig: sin(lat) = sin(inc)·sin(u) on the orbit, so the node sits
+    /// Spherical trig: sin(lat) = sin(inc)*sin(u) on the orbit, so the node sits
     /// asin(tan lat / tan inc) of right ascension behind the site's meridian. The
     /// lead is a straight addition to the answer: turning the site east by an angle
     /// moves its right ascension by that angle and leaves its latitude alone, and the
@@ -726,7 +730,7 @@ public static partial class PoweredGuidanceWindow
 
         double inc = UpfgTarget.DegToRad(incDeg);
         // A plane can only contain the site if |inc| >= |lat|; clamp gives the
-        // closest achievable plane (node 90° back) otherwise.
+        // closest achievable plane (node 90 deg back) otherwise.
         double sinDl = Math.Tan(lat) / Math.Tan(Math.Max(Math.Abs(inc), 1e-6));
         double dl = Math.Asin(Math.Clamp(sinDl, -1.0, 1.0));
 

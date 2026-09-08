@@ -1,5 +1,5 @@
 using System.Globalization;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Verifies the node-schedule transition: that dropping the node count mid-flight
@@ -7,7 +7,7 @@ using Scvx;
 /// old one rather than starting over.
 ///
 /// The claim being tested is specific. Changing the node count necessarily throws
-/// away the ADMM warm start — ScsWorkspace length-checks its stored iterate — so
+/// away the ADMM warm start - ScsWorkspace length-checks its stored iterate - so
 /// the only thing carrying across is the reference TRAJECTORY, resampled by
 /// interpolation. If that is enough, the transition solve converges and the plan
 /// barely moves. If it is not, the transition is a cold solve in disguise and the

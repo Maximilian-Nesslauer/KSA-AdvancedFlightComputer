@@ -1,8 +1,12 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Flight;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 // The Boostback tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT
 // buttons live in Ui/Panel.cs; everything here draws inside the body child that panel
@@ -20,7 +24,7 @@ using PoweredGuidance.Flight;
 // wrong frame, referenced to the wrong area, or built from a stale bounding box all
 // produce a plausible-looking spline; the only way to catch it is to be able to read
 // the numbers against a vehicle you can see.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     /// <summary>Alphas shown in the profile readout, degrees, retrograde-first. A
     /// selection rather than every breakpoint - twenty rows is a scroll, nine is a

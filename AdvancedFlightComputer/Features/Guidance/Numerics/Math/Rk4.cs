@@ -1,4 +1,4 @@
-namespace PoweredGuidance.Numerics;
+namespace AdvancedFlightComputer.Guidance.Numerics;
 
 /// <summary>
 /// An ODE right-hand side, written in <see cref="Dual"/> so that integrating it

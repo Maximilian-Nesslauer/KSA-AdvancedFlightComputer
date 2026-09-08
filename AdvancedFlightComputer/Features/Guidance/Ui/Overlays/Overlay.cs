@@ -1,7 +1,11 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
-using Gfold;
+using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
 // World-space debug overlay for the G-FOLD descent. Projects the committed plan
@@ -9,9 +13,9 @@ using KSA;
 // solver is working with: the planned path, the glideslope cone, the target, the
 // commanded thrust at each node, the live vehicle state, and a numeric HUD.
 //
-// The projection and drawing helpers it uses are shared with the ascent overlay —
+// The projection and drawing helpers it uses are shared with the ascent overlay -
 // see Ui/Overlays/OverlayCore.cs.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     private static bool _showGfoldOverlay;
     private static bool _retargetArmed;
@@ -100,7 +104,7 @@ public static partial class PoweredGuidanceWindow
 
         // Refine once to the terrain height there: the visible surface sits at
         // MeanRadius + terrain, so the mean sphere reads slightly off (worse at grazing
-        // angles) — this pulls the hit onto the surface actually under the cursor.
+        // angles) - this pulls the hit onto the surface actually under the cursor.
         double terrain = body.GetTerrainHeightFromDirCcf(ccf);
         if (double.IsFinite(terrain) &&
             IntersectSphere(origin, dir, center, parent.MeanRadius + terrain, out double t2))

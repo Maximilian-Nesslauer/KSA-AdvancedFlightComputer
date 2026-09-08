@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -8,18 +12,18 @@ using KSA;
 //
 // DELIBERATELY NO TRAJECTORY PLOT. The hover flies a rate profile rather than a
 // trajectory, so there is no plan to draw a flown path against and the picture says
-// nothing the numbers above it do not. It still FEEDS the shared trace — hover is the
-// tail of the same descent — so the G-FOLD and 6-DOF pages show the whole thing
+// nothing the numbers above it do not. It still FEEDS the shared trace - hover is the
+// tail of the same descent - so the G-FOLD and 6-DOF pages show the whole thing
 // including this phase.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     private static void DrawHoverTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                             double mu, double bodyRadius, float innerW)
     {
         bool active = _s.LandingPhase == LandingPhase.TerminalHover;
 
-        // Hover is impossible below a TWR of one — the engine cannot hold the weight,
-        // let alone descend on a profile — so this is a go/no-go, not a statistic.
+        // Hover is impossible below a TWR of one - the engine cannot hold the weight,
+        // let alone descend on a profile - so this is a go/no-go, not a statistic.
         double twr = TerminalTwr(vehicle, orbit, mu);
         if (twr < 1.0)
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),

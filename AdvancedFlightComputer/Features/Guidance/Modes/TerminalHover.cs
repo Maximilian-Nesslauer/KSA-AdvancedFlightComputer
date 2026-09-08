@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -5,19 +9,19 @@ using KSA;
 
 // Terminal hover: a simple pilot-in-the-loop final descent. Nulls the rates
 // (velocity setpoints start at zero laterally), then descends on a quadratic
-// velocity profile — v = touchdown rate + k·(h − h0)² — dropping to a constant
+// velocity profile - v = touchdown rate + k*(h - h0)2 - dropping to a constant
 // touchdown rate for the last h0 metres. A per-axis PID on vertical and lateral
 // velocity turns the setpoint errors into a thrust command (gravity fed forward
 // on the vertical axis). The velocity setpoints can be nudged around with the
 // numpad (8/2 = N/S, 4/6 = W/E, 9/3 = up/down, 5 = zero) or the on-screen
 // buttons, so the touchdown point can be steered by eye.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // The descent profile, the PID gains, the integrator state and the player's
-    // velocity setpoints are all per vehicle (VehicleAutopilotState) — a hovering
+    // velocity setpoints are all per vehicle (VehicleAutopilotState) - a hovering
     // craft's integrators and nudged setpoints are the last thing that should follow
     // the camera to another vehicle.
-    private const double TermILimit = 3.0;           // integrator clamp, m/s²
+    private const double TermILimit = 3.0;           // integrator clamp, m/s2
 
     // Public because the per-vehicle state holds three of these.
     public struct Pid { public double I, PrevErr; }
@@ -44,7 +48,7 @@ public static partial class PoweredGuidanceWindow
         _s.LandingStatus = "Terminal hover engaged.";
     }
 
-    // Thrust-to-weight at the current mass and local gravity — hover needs > 1.
+    // Thrust-to-weight at the current mass and local gravity - hover needs > 1.
     private static double TerminalTwr(Vehicle vehicle, Orbit orbit, double mu)
     {
         double thrustMax = KsaEnginePerf.VacuumThrust(vehicle);
@@ -55,7 +59,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // Height of the touchdown plane above the terrain DIRECTLY BELOW the vehicle
-    // (not the landing site — a hover can drift anywhere), minus the vehicle
+    // (not the landing site - a hover can drift anywhere), minus the vehicle
     // height so zero means legs on the ground.
     private static double TerminalHeight(Orbit orbit, IParentBody parent, double bodyRadius)
     {
@@ -91,7 +95,7 @@ public static partial class PoweredGuidanceWindow
         double vUp = double3.Dot(vSrf, up);
 
         // No altitude-based cutoff here. Touchdown is decided solely by KSA's own
-        // contact flag, in StepLanding — see HasTouchedDown. The old test cut at
+        // contact flag, in StepLanding - see HasTouchedDown. The old test cut at
         // h <= 0.05 m, but h is a terrain-height sample minus an assumed vehicle
         // height, so it could sit above zero with the legs already down (or trip
         // early over rough ground). The hover just keeps flying the profile until
@@ -154,7 +158,7 @@ public static partial class PoweredGuidanceWindow
         double twr = TerminalTwr(vehicle, orbit, mu);
         if (twr < 1.0)
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                $"TWR {twr:F2} < 1 — hover NOT possible (thrust cannot hold weight).");
+                $"TWR {twr:F2} < 1 - hover NOT possible (thrust cannot hold weight).");
         else
             ImGui.Text($"TWR {twr:F2} (local gravity)");
 

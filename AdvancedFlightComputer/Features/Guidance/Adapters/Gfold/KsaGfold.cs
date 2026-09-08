@@ -1,6 +1,10 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.Numerics;
-using Gfold;
+using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
 // Bridges KSA's live vehicle/world state to the standalone G-FOLD convex
@@ -14,7 +18,7 @@ using KSA;
 // Approximations (all good for a short lunar terminal descent, flagged because
 // they matter for fast-rotating or atmospheric bodies):
 //  - constant gravity, evaluated at the site;
-//  - the site frame rotates with the body but is treated as inertial — the
+//  - the site frame rotates with the body but is treated as inertial - the
 //    Coriolis/centrifugal terms the original paper carries are dropped, the
 //    same simplification as Gfold.Core's v_dot = g + u dynamics;
 //  - no aerodynamics (correct for vacuum worlds; would need a separate entry
@@ -24,8 +28,8 @@ internal static class KsaGfold
     private const double G0 = 9.80665;
 
     // Orthonormal site frame: X = local up (radial), Y/Z span the horizon. The
-    // horizontal axes are arbitrary — G-FOLD's dynamics and glideslope cone are
-    // symmetric in the horizontal plane — so any stable pair will do.
+    // horizontal axes are arbitrary - G-FOLD's dynamics and glideslope cone are
+    // symmetric in the horizontal plane - so any stable pair will do.
     internal readonly struct Frame
     {
         public readonly double3 Origin;          // site at terrain height, CCI
@@ -60,13 +64,13 @@ internal static class KsaGfold
 
     // Builds the G-FOLD parameter set from the live vehicle and site. Returns
     // null if the vehicle has no usable engine (no thrust to plan with).
-    // refPosCci is the reference point the solve plans for — the vehicle CoM.
+    // refPosCci is the reference point the solve plans for - the vehicle CoM.
     // (The vehicle-height allowance is applied by the caller as an offset on the
     // TARGET altitude, never by shifting this reference: an attitude-dependent
     // reference point injects modelling error as the vehicle rotates.)
     // arrivalAltM / arrivalRateMs implement "Option B": the target is a point
     // arrivalAltM directly above the pad, reached descending vertically at
-    // arrivalRateMs with zero horizontal velocity — so G-FOLD nulls cross-range up
+    // arrivalRateMs with zero horizontal velocity - so G-FOLD nulls cross-range up
     // high and the terminal vertical phase only has to kill the remaining sink.
     internal static GfoldParams BuildParams(
         Vehicle vehicle, IParentBody parent, Frame frame, double3 siteCci, double3 refPosCci,
@@ -93,7 +97,7 @@ internal static class KsaGfold
         double3 rLocal = frame.PointToLocal(r);
         double3 vLocal = frame.VecToLocal(vSrf);
 
-        // Only the speed cap is loosened to admit a fast handoff state — it relaxes
+        // Only the speed cap is loosened to admit a fast handoff state - it relaxes
         // back toward the set value as the vehicle slows, so it never ratchets. The
         // glideslope and pointing angles are passed through exactly as set, so the
         // user's numbers are what's actually enforced; the fixed initial state is
@@ -141,7 +145,7 @@ internal static class KsaGfold
             return (frame.Ex, Throttle(accel, mass, thrustMax));
 
         // Node 0's pointing is unconstrained (RelaxInitialPath), so clamp the
-        // command to the upper hemisphere — never thrust below the local horizon
+        // command to the upper hemisphere - never thrust below the local horizon
         // (into the ground), which would only ever be a solver artefact.
         var dirLocal = new double3(Math.Max(uLocal.X, 0.0), uLocal.Y, uLocal.Z);
         if (dirLocal.Length() < 1e-9)

@@ -1,8 +1,10 @@
+#nullable disable
+
 using System;
 using System.Collections.Generic;
 using KSA;
 
-namespace PoweredGuidance.Upfg;
+namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // Builds the UPFG stage list from KSA's own staging simulator.
 //
@@ -12,7 +14,7 @@ namespace PoweredGuidance.Upfg;
 // menu's delta-v / TWR readout. For sequence k it jettisons the parts whose
 // decoupler fires at k, burns with every still-attached engine ignited in
 // sequences 0..k, and stops when the engines that the NEXT jettison will drop are
-// spent — which is precisely a UPFG stage boundary. Its mole masses are seeded
+// spent - which is precisely a UPFG stage boundary. Its mole masses are seeded
 // from the live tank/grain states, so every figure is "from here on".
 //
 // ALWAYS START AT INDEX 0. The game's Recompute() seeds its simulated mole
@@ -26,11 +28,11 @@ namespace PoweredGuidance.Upfg;
 // stays because the core engine hangs off it). Skipping forward then reads a
 // drained, fuel-less entry, yields no stages at all, and silently falls back to
 // the single-stage live-engine model. Leftover spent sequences are harmless read
-// in order — they simply produce zero-duration phases, which are filtered below.
+// in order - they simply produce zero-duration phases, which are filtered below.
 //
 // We consume SequencePerformance.Phases rather than the headline Thrust/Isp. A
-// sequence is split into phases wherever the number of burning engines changes —
-// solid boosters flaming out under a still-burning core, asparagus drops — and
+// sequence is split into phases wherever the number of burning engines changes -
+// solid boosters flaming out under a still-burning core, asparagus drops - and
 // each phase is constant-thrust, so it maps one-to-one onto a UPFG Mode 1 stage.
 // The headline Thrust/MassFlowRate are only phase 0's, and in flight mode they
 // are the *live throttled* values for the active sequence while DeltaV still
@@ -38,7 +40,7 @@ namespace PoweredGuidance.Upfg;
 //
 // Solid boosters come out right for free. Their grain lives in SolidGrainSegment
 // rather than a Tank (so a tank walk sees no propellant at all), part of it is
-// permanently unburnable, and thrust follows the burning area over the burn —
+// permanently unburnable, and thrust follows the burning area over the burn -
 // the game's sim handles all three, linearising the thrust curve to a constant
 // mass flow of usable-grain/BurnSeconds with thrust scaled to preserve Isp.
 //
@@ -58,7 +60,7 @@ public static class KsaVehicleAdapter
     /// <summary>
     /// How far past the engines' own capability a phase's mass flow has to be before
     /// <see cref="CorrectDuplicateRegistration"/> treats it as double-counted. The
-    /// real fault is a whole multiple — x2, x3 — so this sits well above anything a
+    /// real fault is a whole multiple - x2, x3 - so this sits well above anything a
     /// modelling difference could produce and well below the smallest real case.
     /// </summary>
     private const double DuplicateFlowRatio = 1.5;
@@ -135,22 +137,22 @@ public static class KsaVehicleAdapter
 
     // Fold the drain simulation's phase decomposition back into actual STAGES.
     //
-    // A UPFG stage is a constant-thrust arc that ends in a discontinuity — a jettison,
+    // A UPFG stage is a constant-thrust arc that ends in a discontinuity - a jettison,
     // an engine set changing. The game's phases are not that: they are whatever
     // intervals its drain simulation happened to break the burn into, and it breaks
     // one wherever the number of drawing engine cores changes for even a single
     // iteration. TANKS ARE WHAT DRIVES THAT. Its inner loop steps from one tank
     // emptying to the next, splitting the demand across the tanks in a level and
-    // spilling what is left to the next level, so a stack with several tanks — a
+    // spilling what is left to the next level, so a stack with several tanks - a
     // capsule tank plumbed to the stack, an asymmetric pair, anything that does not
-    // run dry at the same instant — takes several iterations to finish the burn, and
+    // run dry at the same instant - takes several iterations to finish the burn, and
     // any core that misses its full draw on one of them drops out and comes back.
     // Each of those became a separate row in the stage table with its own slice of the
     // stage's dV, which is what "one stage showing up as several" is.
     //
     // Two adjacent stages are the same stage if they have the same thrust and the same
-    // exhaust velocity and no mass went overboard between them. Merging is exact —
-    // dV is ve·ln(m0/m1), so ve·ln(m0/mid) + ve·ln(mid/m1) is the same number — and it
+    // exhaust velocity and no mass went overboard between them. Merging is exact -
+    // dV is ve*ln(m0/m1), so ve*ln(m0/mid) + ve*ln(mid/m1) is the same number - and it
     // leaves every real boundary (a booster drop, an engine cutting out, the g-limit
     // split applied later) intact, because those all change thrust, Isp or mass.
     private static void Coalesce(UpfgVehicle vehicle)
@@ -200,7 +202,7 @@ public static class KsaVehicleAdapter
     ///
     /// It now walks each part's sequenced MODULES and adds the part to every sequence
     /// any of them belongs to. A part carrying an engine module in one sequence and a
-    /// decoupler module in another therefore appears in two lists — and Recompute's
+    /// decoupler module in another therefore appears in two lists - and Recompute's
     /// registration loop, which is unchanged, walks sequences 0..k and registers every
     /// EngineController of every part it finds, with no de-duplication:
     ///
@@ -210,14 +212,14 @@ public static class KsaVehicleAdapter
     ///
     /// So that part's cores are registered once per list it appears in. Thrust and
     /// mass flow are both multiplied; the MASS RATIO is not, because the same
-    /// propellant is still drained — just faster. Which is why the stock delta-v
+    /// propellant is still drained - just faster. Which is why the stock delta-v
     /// readout looks correct while thrust reads double and the burn time reads half,
     /// and those two are exactly what UPFG steers on. (The same shape of error as the
     /// burning-solid pacing below, from an unrelated cause.)
     ///
-    /// The repair takes the engines the game itself says are in this phase —
+    /// The repair takes the engines the game itself says are in this phase -
     /// PhaseEngineParts is a HashSet, so it holds each part ONCE however many times it
-    /// was registered — and sums their vacuum capability. If the model claims
+    /// was registered - and sums their vacuum capability. If the model claims
     /// materially more than those engines can produce, the measured figures replace
     /// it and the duration is stretched to keep the propellant burned unchanged.
     ///
@@ -248,7 +250,7 @@ public static class KsaVehicleAdapter
             for (int i = 0; i < engines.Length; i++)
             {
                 // A solid's modelled flow is paced from the grain remaining, not its
-                // design figure, so it is not comparable — leave the whole phase to
+                // design figure, so it is not comparable - leave the whole phase to
                 // CorrectBurningSolids rather than half-correcting it here.
                 RocketCore[] cores = engines[i].Cores;
                 for (int j = 0; j < cores.Length; j++)
@@ -280,16 +282,16 @@ public static class KsaVehicleAdapter
     // (usable grain REMAINING) / (BurnSeconds of a FULL grain), and scales its
     // thrust by the same ratio to preserve exhaust velocity. At ignition that is
     // exact. Part-way through it is not: with a fraction f of the grain left the
-    // model reports f x the true thrust and mass flow, and — because the burn
-    // time it implies is remaining/(remaining/BurnSeconds) — predicts a further
+    // model reports f x the true thrust and mass flow, and - because the burn
+    // time it implies is remaining/(remaining/BurnSeconds) - predicts a further
     // FULL BurnSeconds of burn no matter how little grain is left.
     //
     // The mass ratio survives that (f cancels), which is why the stock stage
     // menu's delta-v looks right, but thrust and burn time are exactly what UPFG
-    // steers on — hence the visible attitude jump when the boosters finally go.
+    // steers on - hence the visible attitude jump when the boosters finally go.
     //
     // The fix takes the solid's LIVE nozzle performance as truth (solids have
-    // MinimumThrottle = 1, so live is full-throttle by definition — no throttle
+    // MinimumThrottle = 1, so live is full-throttle by definition - no throttle
     // contamination), works out what the model contributed, and swaps one for the
     // other in the stage that is burning now. Solids that are attached but not yet
     // lit have a full grain, so f = 1 and this is a no-op for them.
@@ -308,7 +310,7 @@ public static class KsaVehicleAdapter
 
         // We want the preview's BurnSeconds, not the curve. As of KSA 2026.8.19 the samples
         // are a ThrustCurveSamples of three parallel spans rather than one Span<float>,
-        // and an EMPTY one is explicitly valid (IsValid short-circuits on IsEmpty) — the
+        // and an EMPTY one is explicitly valid (IsValid short-circuits on IsEmpty) - the
         // resample loop at the end of TrySampleThrustCurve simply runs zero times while
         // the preview is still filled in. So ask for no samples at all and skip the
         // buffer entirely, rather than stackallocing one we never read.
@@ -341,7 +343,7 @@ public static class KsaVehicleAdapter
                 if (liveThrust <= 0.0 || liveFlow <= 0.0)
                     continue;   // mid-transient; leave the model alone this step
 
-                // Grain left that can actually burn — the residue never does.
+                // Grain left that can actually burn - the residue never does.
                 double usable = 0.0;
                 SolidGrainSegment[] segments = solid.Stack.Segments;
                 for (int k = 0; k < segments.Length; k++)
@@ -378,7 +380,7 @@ public static class KsaVehicleAdapter
         if (!(thrust > 0.0) || !(flow > 0.0))
             return;
 
-        // The model's own phase length still bounds us — whatever else runs dry
+        // The model's own phase length still bounds us - whatever else runs dry
         // first (a core tank) is unaffected by the solid's pacing.
         double duration = (stage.MassTotal - stage.MassDry) / modelStageFlow;
         if (!double.IsPositiveInfinity(solidBurnLeft))
@@ -390,7 +392,7 @@ public static class KsaVehicleAdapter
 
         // Propellant the model burned during a stage that is now shorter is still
         // aboard. It is whatever the non-solid engines would not have consumed,
-        // and it lives in the tanks the next stage burns to depletion — so hand it
+        // and it lives in the tanks the next stage burns to depletion - so hand it
         // to that stage's start mass and leave its burnout mass alone.
         double restored = burnout - stage.MassDry;
         if (restored > 0.0 && result.Stages.Count > 1)
@@ -417,7 +419,7 @@ public static class KsaVehicleAdapter
         return false;
     }
 
-    // Start mass the game's model believes the vehicle currently has — index 0's
+    // Start mass the game's model believes the vehicle currently has - index 0's
     // WetMass, i.e. the burn in progress. Compared against Vehicle.TotalMass in
     // the UI: the two are computed by different code paths and any persistent gap
     // is worth seeing, though UPFG reconciles stage 0 against the live mass each

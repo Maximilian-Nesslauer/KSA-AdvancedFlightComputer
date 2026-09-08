@@ -1,4 +1,4 @@
-namespace Gfold;
+namespace AdvancedFlightComputer.Guidance.Gfold;
 
 // Problem parameters for the G-FOLD powered-descent solve.
 //
@@ -7,7 +7,7 @@ namespace Gfold;
 // target Rf is the origin of the frame.
 //
 // Defaults are "Numerical Example 1" from the reference implementation
-// (G-FOLD-Python Static_Solution/GFOLD_Static_Parms.py — the original
+// (G-FOLD-Python Static_Solution/GFOLD_Static_Parms.py - the original
 // paper's Mars case) so results can be compared against it directly.
 public sealed record GfoldParams
 {

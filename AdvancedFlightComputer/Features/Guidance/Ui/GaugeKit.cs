@@ -1,9 +1,13 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// Shared plumbing for panels built on KSA.ImGauge — the immediate-mode face of the
+// Shared plumbing for panels built on KSA.ImGauge - the immediate-mode face of the
 // gauge renderer the game's own HUD uses.
 //
 // The shell pattern these support is stock's own, from KSA.GameSettings: an ImGauge
@@ -13,12 +17,12 @@ using KSA;
 //
 // Gotchas the signatures don't tell you:
 //   * Label and Button take at most 16 chars; Label THROWS on the 17th.
-//   * The gauge font is uppercase A-Z, 0-9 and " . - + / \ _" only — no '%', no ':'.
+//   * The gauge font is uppercase A-Z, 0-9 and " . - + / \ _" only - no '%', no ':'.
 //     (This applies to ImGauge primitives, NOT to ordinary ImGui text in the body.)
 //   * Offset and size are normalised to screen WIDTH on BOTH axes.
 //   * Button is cursor-relative; Box, Label and Screw are absolute.
 //   * BeginWindow hardcodes NoMove, so dragging means moving OffsetUv ourselves.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // Layout constants, matching ImGaugeDressing's so a hand-rolled panel lines up
     // with the stock popups. All are fractions of one canvas unit.
@@ -28,18 +32,18 @@ public static partial class PoweredGuidanceWindow
     private const float GaugeSpacingUv = 0.0076f;
     private const float GaugeBottomMarginUv = 0.019f;
 
-    /// <summary>One canvas unit in pixels — the screen width, for both axes.</summary>
+    /// <summary>One canvas unit in pixels - the screen width, for both axes.</summary>
     /// <summary>
     /// THE PANEL'S UV UNIT, in pixels: the window WIDTH.
     ///
-    /// Every authored dimension in the gauge — margins, spacings, button heights, the
-    /// panel width — is a fraction of this one number, and the measured height fit
+    /// Every authored dimension in the gauge - margins, spacings, button heights, the
+    /// panel width - is a fraction of this one number, and the measured height fit
     /// divides by it to convert back, so it only has to be self-consistent.
     ///
     /// It used to be ScreenReference.UvToPixels(1,0).X, which was the same thing.
     /// KSA 2026.8.22 changed ScreenReference to normalise BOTH axes by the window
     /// HEIGHT (see UvToPixelsNormalized, and the LEGACY_REFERENCE_ASPECT constant left
-    /// behind next to it), so that call started returning the height instead — every
+    /// behind next to it), so that call started returning the height instead - every
     /// authored dimension shrank by the aspect ratio at a stroke, which on 16:9 is the
     /// panel at 56% of the width it was drawn for. Reading the width directly keeps
     /// this independent of which axis KSA normalises to; GaugeScreenUv converts at the
@@ -51,8 +55,8 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// Convert a UV authored against <see cref="GaugeUnit"/> (i.e. width-normalised)
-    /// into the height-normalised UV ImGauge now expects. Isotropic — ScreenReference
-    /// scales both axes by the same number — so one factor does both components.
+    /// into the height-normalised UV ImGauge now expects. Isotropic - ScreenReference
+    /// scales both axes by the same number - so one factor does both components.
     /// </summary>
     private static float2 GaugeScreenUv(float2 authoredUv)
     {
@@ -81,7 +85,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// A button face in a chosen colour. ActiveColor is the HOVER colour and the
     /// pressed look lasts only while held, so a lit/latched button means setting
-    /// IdleColor — that is the only channel that survives between frames.
+    /// IdleColor - that is the only channel that survives between frames.
     /// </summary>
     private static ImGaugeStyle GaugeButton(float3 idle, float textScale) => new ImGaugeStyle(
         new float3(0f, 0f, 0f), ImGaugeStyle.Default.BackgroundColor,
@@ -90,7 +94,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// The drag ImGauge doesn't provide: an invisible ImGui button over a handle
     /// area, feeding the mouse delta back into the window's OffsetUv. Clamped to the
-    /// viewport — there is no layout save on this path, so a panel dragged off screen
+    /// viewport - there is no layout save on this path, so a panel dragged off screen
     /// would be gone for good.
     /// </summary>
     private static void GaugeDrag(string id, ref float2 offsetUv, float2 pos, float2 size,
@@ -131,7 +135,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// Draws the wordmark centred in a band of the given size with its top-left at
-    /// <paramref name="at"/> — where ImGauge.Label put the title it replaced.
+    /// <paramref name="at"/> - where ImGauge.Label put the title it replaced.
     /// </summary>
     private static void GaugeLogo(float2 at, float2 band)
     {
@@ -142,7 +146,7 @@ public static partial class PoweredGuidanceWindow
         // bottom: there is dressing above and the gap before the buttons below, and at
         // the band's own height the wordmark reads as a caption rather than a title.
         //
-        // AddText's size argument is free-form — 1.92 bakes whatever it is asked for —
+        // AddText's size argument is free-form - 1.92 bakes whatever it is asked for -
         // but nothing measures at that size, so widths come from the current font and
         // scale across.
         float scale = band.Y * 1.25f / ImGui.GetFontSize();
@@ -167,14 +171,14 @@ public static partial class PoweredGuidanceWindow
 
     // --- two-column rows ----------------------------------------------------
     //
-    // ImGuiHelper.BeginRegion puts the body in two columns — label at 33%, control
-    // at 67% — and its own widgets follow the idiom below. These match it for the
+    // ImGuiHelper.BeginRegion puts the body in two columns - label at 33%, control
+    // at 67% - and its own widgets follow the idiom below. These match it for the
     // types it doesn't cover: it has DrawFloat but nothing for double, and the
     // guidance state is double throughout.
     //
     // Ids are explicit rather than ImGuiHelper's _widgetId counter, because that
     // counter is global and reset by ImGuiHelper.StartFrame, which the game's own
-    // windows call — a mod incrementing it would collide with them.
+    // windows call - a mod incrementing it would collide with them.
 
     private static bool GaugeRow(string label, string id, ref double value)
     {

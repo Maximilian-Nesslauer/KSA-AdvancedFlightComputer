@@ -1,5 +1,5 @@
 using System.Linq;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// How many nodes does each stage of a descent actually need?
@@ -24,10 +24,10 @@ internal static class NodeSweep
     private const int NX = Dynamics6Dof.NX;
     private const int NU = Dynamics6Dof.NU;
 
-    /// <summary>Mirrors Ksa6DofGuidance.MaxDefectM — a plan past this is refused.</summary>
+    /// <summary>Mirrors Ksa6DofGuidance.MaxDefectM - a plan past this is refused.</summary>
     private const double GateM = 1.0;
 
-    /// <summary>Mirrors Ksa6DofGuidance.SubproblemBudgetMs — past this the solve is truncated.</summary>
+    /// <summary>Mirrors Ksa6DofGuidance.SubproblemBudgetMs - past this the solve is truncated.</summary>
     private const double BudgetMs = 40.0;
 
     /// <summary>Safety factor demanded against the defect gate when recommending a rung.</summary>
@@ -35,7 +35,7 @@ internal static class NodeSweep
 
     internal static int Run()
     {
-        // Altitude, downrange and descent rate down a plausible profile — the
+        // Altitude, downrange and descent rate down a plausible profile - the
         // geometry shrinks together the way it does on a real approach.
         (double alt, double down, double vz)[] stages =
         [
@@ -238,7 +238,7 @@ internal static class NodeSweep
     }
 
     /// <summary>
-    /// Defect of the last ACCEPTED step, in METRES — the flight gate's units.
+    /// Defect of the last ACCEPTED step, in METRES - the flight gate's units.
     /// DefectNorm is normalised by XScale, whose length entry is the range to the
     /// target, so the scaled figure means different things at different ranges.
     /// </summary>

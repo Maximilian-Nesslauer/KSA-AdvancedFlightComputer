@@ -1,4 +1,4 @@
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// The SCvx subproblem in SCS's native form:
@@ -79,7 +79,7 @@ public sealed class Scvx6DofSubproblemScs
         _xs = cfg.XScale;
         _us = cfg.ResolvedUScale;
 
-        // Path constraints apply from node 1 onward, NEVER at node 0 — see
+        // Path constraints apply from node 1 onward, NEVER at node 0 - see
         // Scvx6DofConfig.GlideSlopeWeight for why that is a correctness
         // requirement rather than a tidiness choice. Zero when disabled, so a
         // config without them assembles exactly the problem it did before.
@@ -152,8 +152,8 @@ public sealed class Scvx6DofSubproblemScs
     /// <summary>
     /// Fill (first call) or refill (later calls) from a reference trajectory and
     /// linearisation. Unlike the ECOS port there is no persistent native
-    /// workspace to reuse across calls — scs_init deep-copies its input and
-    /// scs_update only refreshes b/c, never A or P — so every solve pays a fresh
+    /// workspace to reuse across calls - scs_init deep-copies its input and
+    /// scs_update only refreshes b/c, never A or P - so every solve pays a fresh
     /// scs_init. What DOES carry across calls is the solution itself: ScsWorkspace
     /// keeps the previous x/y/s and feeds it back as the ADMM starting iterate
     /// when warmStart is requested.
@@ -175,8 +175,8 @@ public sealed class Scvx6DofSubproblemScs
 
         // Same row equilibration as the ECOS port, and for the same reason:
         // column scaling to physical units is not enough. Here the symptom was
-        // different — not a numerical breakdown but ADMM refusing to converge
-        // (100k iterations, still 5% off the reference) — but first-order
+        // different - not a numerical breakdown but ADMM refusing to converge
+        // (100k iterations, still 5% off the reference) - but first-order
         // methods are, if anything, MORE sensitive to row-scale disparity than
         // an interior-point method, so the same fix applies. SCS's own
         // `normalize` does its own equilibration internally, but evidently
@@ -196,7 +196,7 @@ public sealed class Scvx6DofSubproblemScs
                 if (a > rowMax[ir[k]]) rowMax[ir[k]] = a;
             }
 
-        // Every row of a second-order cone must share one scale — scaling them
+        // Every row of a second-order cone must share one scale - scaling them
         // independently would deform the cone rather than just rescale it. The
         // gimbal block sits at the tail of the combined matrix, after the
         // equality and positive-orthant rows.
@@ -215,13 +215,13 @@ public sealed class Scvx6DofSubproblemScs
         //
         // HISTORY, because this looks like defensive padding and was not. The tilt
         // constraint used to be an orthant row linearising R22 >= cos(tilt_max)
-        // about the reference quaternion, with gradient (-4*qx, -4*qy) — EXACTLY
+        // about the reference quaternion, with gradient (-4*qx, -4*qy) - EXACTLY
         // ZERO for a perfectly vertical booster and tiny for a nearly-vertical one,
-        // which is the whole flight — against a constant term of O(0.13). Dividing
+        // which is the whole flight - against a constant term of O(0.13). Dividing
         // that row by a ~1e-3 norm amplified the right-hand side by a thousand and
         // wrecked the conditioning of an otherwise well-scaled problem. Unbounded,
         // it made every SCvx iteration past the first fail to converge in 100k ADMM
-        // iterations at any trust-region size — and shrinking the trust region did
+        // iterations at any trust-region size - and shrinking the trust region did
         // not help, which is what gave it away.
         //
         // That row no longer exists: the tilt limit is an exact SOC now (see
@@ -231,7 +231,7 @@ public sealed class Scvx6DofSubproblemScs
         // reason, and a future row that vanishes should degrade rather than explode.
         // Only the LOWER bound is applied. SCS pairs it with an upper clamp of
         // 1e4, but that is inside its own Ruiz iteration on already-scaled data;
-        // imposing it on raw rows here is actively harmful — the mass trust-region
+        // imposing it on raw rows here is actively harmful - the mass trust-region
         // rows legitimately have norm ~2.5e5 (Xscale for mass), and clamping
         // leaves them 25x unnormalised, which broke the FIRST iteration that had
         // previously converged. Large rows are exactly the ones equilibration
@@ -263,7 +263,7 @@ public sealed class Scvx6DofSubproblemScs
     ///
     /// SCS is native and does no input validation worth relying on: a NaN or Inf
     /// anywhere in A, P, b or c gets consumed silently and comes back as nonsense, a
-    /// NULL workspace with no readable diagnostic, or — as seen in flight — takes the
+    /// NULL workspace with no readable diagnostic, or - as seen in flight - takes the
     /// whole PROCESS down. A managed exception naming the offending entry is
     /// enormously more useful than a game crash, and the check is O(nnz) against a
     /// solve that runs thousands of ADMM iterations, so it costs nothing measurable.
@@ -304,7 +304,7 @@ public sealed class Scvx6DofSubproblemScs
         {
             if (_ws.X.Length != _nVars)
                 throw new InvalidOperationException(
-                    "no solution yet — call Assemble then Run before reading the solution");
+                    "no solution yet - call Assemble then Run before reading the solution");
             var x = new double[_nVars];
             for (int i = 0; i < _nVars; i++) x[i] = _ws.X[i] * _colScale[i];
             return x;
@@ -333,7 +333,7 @@ public sealed class Scvx6DofSubproblemScs
                 AddP(IU(k, j), IU(k + 1, j), -2.0 * w);   // row < col: IU(k,j) < IU(k+1,j)
             }
 
-        // WW * sum_k ||w[k]||^2 — pure diagonal, no coupling between nodes
+        // WW * sum_k ||w[k]||^2 - pure diagonal, no coupling between nodes
         for (int k = 0; k < _n; k++)
             for (int i = 0; i < 3; i++)
                 AddP(IX(k, Dynamics6Dof.IW + i), IX(k, Dynamics6Dof.IW + i), 2.0 * _cfg.WW);
@@ -353,7 +353,7 @@ public sealed class Scvx6DofSubproblemScs
                     _c[col] += -2.0 * w * xbar[k * NX + i] * _colScale[col];
                 }
 
-        // RhoVc * sum_k ||Wv[k]/Xscale||^2 — pure diagonal
+        // RhoVc * sum_k ||Wv[k]/Xscale||^2 - pure diagonal
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++)
             {
@@ -362,7 +362,7 @@ public sealed class Scvx6DofSubproblemScs
             }
 
         // Path-constraint slacks: LINEAR (L1) penalties, not quadratic. An L1
-        // penalty is EXACT — above a finite weight the solution is identical to the
+        // penalty is EXACT - above a finite weight the solution is identical to the
         // hard-constrained one, so the slack sits at zero whenever the corridor is
         // reachable and only opens when the alternative is having no plan at all. A
         // quadratic penalty would instead always trade a little violation for a
@@ -370,7 +370,7 @@ public sealed class Scvx6DofSubproblemScs
         //
         // The penalty applies to the NORMALISED slack (violation / XScale), which is
         // what makes the weight dimensionless and comparable with the rest of the
-        // objective — the fuel term is -m_final/m_init, so everything here is order
+        // objective - the fuel term is -m_final/m_init, so everything here is order
         // 1. Penalising the RAW slack instead puts a coefficient of
         // weight * XScale = 1e6 next to terms of order 1e-2, and SCS does not merely
         // solve that slowly: it returns "unbounded", because a cost that lopsided
@@ -389,7 +389,7 @@ public sealed class Scvx6DofSubproblemScs
 
     // -------------------------------------------------------------- equalities
 
-    // Identical construction to the deleted ECOS port's AssembleEqualities — same
+    // Identical construction to the deleted ECOS port's AssembleEqualities - same
     // trapezoidal, time-dilated, virtual-controlled dynamics, same interior-only
     // quaternion tangent plane (nodes 0 and N-1 are pinned outright, so including
     // them there is a linearly dependent row; that redundancy was diagnosed
@@ -526,7 +526,7 @@ public sealed class Scvx6DofSubproblemScs
         // CLIMB RATE, from node 1 onward: v_z - d_k <= VzMax, d_k >= 0.
         //
         // Node 0 is excluded on purpose. It is pinned by an equality to the measured
-        // state, so constraining it constrains a value the solver cannot change —
+        // state, so constraining it constrains a value the solver cannot change -
         // and a vehicle that happens to be moving upward at that instant (a gust, a
         // wobble, the pitch-over after ignition) would make the whole problem
         // infeasible rather than merely expensive.
@@ -581,7 +581,7 @@ public sealed class Scvx6DofSubproblemScs
         // rows carry the cone's height and its two horizontal offsets. Excluded at
         // node 0 for the same reason as the climb rate, and slackened by g_k for a
         // sharper one: alone, either constraint is survivable, but a vehicle that is
-        // both outside the cone and too low can only get back inside by CLIMBING —
+        // both outside the cone and too low can only get back inside by CLIMBING -
         // which the climb-rate row forbids. Hard versions of the two together can
         // trap the vehicle in a region with no feasible exit at all. Soft versions
         // cannot, and the L1 penalty keeps the slack at exactly zero whenever the
@@ -667,7 +667,7 @@ public sealed class Scvx6DofSubproblemScs
 
     /// <summary>
     /// Packs a known SI primal point into scaled coordinates, for auditing an
-    /// externally produced solution against this formulation — same purpose and
+    /// externally produced solution against this formulation - same purpose and
     /// same technique as the ECOS port's PackPrimal.
     /// </summary>
     public double[] PackPrimal(double[] x, double[] u, double[] wv, double sigma)
@@ -718,7 +718,7 @@ public sealed class Scvx6DofSubproblemScs
     }
 
     /// <summary>
-    /// (1/2) z'Pz + c'z at a scaled point — what SCS actually minimises. Compare
+    /// (1/2) z'Pz + c'z at a scaled point - what SCS actually minimises. Compare
     /// against (reference objective - 1), the same dropped-constant convention
     /// as the ECOS port's LinearObjective.
     /// </summary>
@@ -746,7 +746,7 @@ public sealed class Scvx6DofSubproblemScs
     /// managed code. Written because scs_printf's failure messages go through
     /// the native CRT's stdout, which is fully buffered when the process isn't
     /// attached to a real console (piped output, or a process that throws before
-    /// the native side gets to flush) — so a validation failure can be
+    /// the native side gets to flush) - so a validation failure can be
     /// completely silent on the managed side even though SCS "explained itself"
     /// internally. This reproduces the same checks in C# where nothing can eat
     /// the output.
@@ -755,7 +755,7 @@ public sealed class Scvx6DofSubproblemScs
     /// Finds the structural cause of an "unbounded" result: a variable that the
     /// objective rewards moving in a direction nothing constrains.
     ///
-    /// SCvx subproblems are LINEARISED, so they are unbounded by default — the
+    /// SCvx subproblems are LINEARISED, so they are unbounded by default - the
     /// trust region is what makes them solvable at all. Every variable therefore
     /// needs either a box, a cone, or a quadratic penalty holding it in. A new
     /// variable added without one does not produce a wrong answer, it produces
@@ -805,7 +805,7 @@ public sealed class Scvx6DofSubproblemScs
         int anz = ajc[n];
         sb.AppendLine($"A: {n} cols, {m} rows, nnz={anz} (assembler reports {_A.NonZeros})");
         if (anz != _A.NonZeros)
-            sb.AppendLine("  MISMATCH: A.ColumnPointers[n] != A.NonZeros — column pointer array is inconsistent");
+            sb.AppendLine("  MISMATCH: A.ColumnPointers[n] != A.NonZeros - column pointer array is inconsistent");
         if ((double)anz / m > n || anz < 0)
             sb.AppendLine($"  FAIL (validate_lin_sys): Anz/m={((double)anz / m):F3} > n={n}, or Anz<0");
         int rMaxA = 0;
@@ -826,7 +826,7 @@ public sealed class Scvx6DofSubproblemScs
                 if (pir[k] > col)
                 {
                     upperOk = false;
-                    sb.AppendLine($"  FAIL (validate_lin_sys): P[{pir[k]},{col}] has row > col — not upper triangular");
+                    sb.AppendLine($"  FAIL (validate_lin_sys): P[{pir[k]},{col}] has row > col - not upper triangular");
                 }
         if (upperOk) sb.AppendLine("  P upper-triangular OK");
 
@@ -838,7 +838,7 @@ public sealed class Scvx6DofSubproblemScs
         if (_socDims.Any(d => d < 0))
             sb.AppendLine("  FAIL (validate_cones): a SOC dimension is negative");
 
-        // c and b finiteness — SCS doesn't explicitly validate this, but a NaN
+        // c and b finiteness - SCS doesn't explicitly validate this, but a NaN
         // or Infinity here is exactly the kind of thing that would otherwise
         // masquerade as an opaque setup failure.
         int badC = Array.FindIndex(_c, v => !double.IsFinite(v));

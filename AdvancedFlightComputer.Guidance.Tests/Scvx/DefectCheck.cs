@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Why does the defect gate start REJECTING plans as the vehicle closes on the
@@ -9,7 +9,7 @@ using Scvx;
 ///
 ///   THE YARDSTICK SHRINKS. DefectNorm is max|defect| / XScale, and XScale's
 ///   position entries are L, the distance to the target. A fixed tolerance of 1e-3
-///   therefore means 1e-3 * L METRES — 2 m of allowed defect at 2 km out, 5 cm at
+///   therefore means 1e-3 * L METRES - 2 m of allowed defect at 2 km out, 5 cm at
 ///   50 m. If the absolute defect holds steady while the normalised one climbs,
 ///   nothing got worse except the ruler.
 ///
@@ -24,7 +24,7 @@ internal static class DefectCheck
     private const int NX = Dynamics6Dof.NX;
     private const int NU = Dynamics6Dof.NU;
 
-    /// <summary>Mirrors Ksa6DofGuidance.MaxDefectM — the flight gate, in metres.</summary>
+    /// <summary>Mirrors Ksa6DofGuidance.MaxDefectM - the flight gate, in metres.</summary>
     private const double MaxDefectM = 1.0;
 
     internal static int Run()
@@ -93,7 +93,7 @@ internal static class DefectCheck
         Solve(int n, double[] x0, double[] xf)
     {
         // The mod's adaptive scaling, mirrored: per-axis, sized from the ACTUAL extent
-        // of this problem. That is the whole point here — it is what shrinks.
+        // of this problem. That is the whole point here - it is what shrinks.
         double L = Math.Sqrt((x0[0] - xf[0]) * (x0[0] - xf[0]) +
                              (x0[1] - xf[1]) * (x0[1] - xf[1]) +
                              (x0[2] - xf[2]) * (x0[2] - xf[2]));

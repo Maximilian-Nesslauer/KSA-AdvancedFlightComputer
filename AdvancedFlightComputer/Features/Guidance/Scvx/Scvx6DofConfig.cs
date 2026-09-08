@@ -1,10 +1,10 @@
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Vehicle limits and SCvx weights for the 6-DOF subproblem.
 ///
 /// Defaults mirror 6dof.py so the C# result can be diffed against the Python
-/// oracle. They are NOT flight values — for flight these must come from the
+/// oracle. They are NOT flight values - for flight these must come from the
 /// vehicle and the target body (thrust and Isp from the staging model, inertia
 /// and mass live, gravity from the body being landed on, gimbal limit from the
 /// actual parts). See the constants-drift guard in python_ref/loop_ref.py: the
@@ -30,7 +30,7 @@ public sealed class Scvx6DofConfig
     /// rho * ||(X - Xbar)/Xscale||^2, rather than deviation from zero.
     ///
     /// Exists purely for CONDITIONING. The WDu and WW regularisers were doing two
-    /// jobs at once: shaping the answer (badly — both get cheaper as sigma grows, so
+    /// jobs at once: shaping the answer (badly - both get cheaper as sigma grows, so
     /// they pin burn time at its upper bound) and adding positive-definite mass to
     /// P's diagonal. Turning them down fixes the trajectory and TRIPLES the ADMM
     /// iteration count, because P loses that mass and SCS's convergence rate degrades.
@@ -47,7 +47,7 @@ public sealed class Scvx6DofConfig
 
     /// <summary>
     /// Burn-time bounds. SETTABLE, not init-only, so a fixed-time formulation can pin
-    /// sigma per cycle (SigmaMin == SigmaMax) without rebuilding the solver — which
+    /// sigma per cycle (SigmaMin == SigmaMax) without rebuilding the solver - which
     /// would throw away the ADMM warm start and turn a 25 ms update into 1.3 s.
     /// The subproblem writes these into its cone rows on every Assemble, so a change
     /// takes effect on the next solve.
@@ -62,7 +62,7 @@ public sealed class Scvx6DofConfig
 
     /// <summary>
     /// Glideslope angle above the HORIZONTAL, in degrees, measured at the target.
-    /// Zero (the default) disables the constraint entirely and costs nothing — no
+    /// Zero (the default) disables the constraint entirely and costs nothing - no
     /// variables, no rows.
     ///
     /// Constrains the path to a cone opening upward from the target:
@@ -70,7 +70,7 @@ public sealed class Scvx6DofConfig
     /// node must sit at least this many degrees above the horizontal plane through
     /// the target, so a LARGER angle is a TIGHTER cone and a steeper approach.
     /// Same convention and same formula as the G-FOLD path already in the mod
-    /// (PoweredGuidanceOverlay draws the cone with cot = 1/tan of this angle), so
+    /// (The guidance overlay draws the cone with cot = 1/tan of this angle), so
     /// the two agree and the overlay draws what the solver enforces.
     ///
     /// The plan respects exactly this number, so set it a couple of degrees tighter

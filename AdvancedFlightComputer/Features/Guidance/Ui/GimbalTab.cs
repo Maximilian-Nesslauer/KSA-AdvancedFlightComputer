@@ -1,9 +1,13 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// "Gimbal" tab — a manual probe for KsaGimbalControl.
+// "Gimbal" tab - a manual probe for KsaGimbalControl.
 //
 // Not a guidance mode. Its job is to answer the question the 6-DOF port is blocked
 // on: can the mod command thrust vectoring directly, and at what layer? Two modes:
@@ -14,7 +18,7 @@ using KSA;
 //
 // The per-gimbal table shows which body axes each gimbal has leverage over, which
 // is how a main engine and its roll verniers visibly separate.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
 
     private static void DrawGimbalTab(Vehicle vehicle)
@@ -105,7 +109,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // Physical torque command. Sliders are normalized for usability but scaled by the
-    // allocator's own per-axis capability, so what you set is a real N-m demand — and
+    // allocator's own per-axis capability, so what you set is a real N-m demand - and
     // the readout below shows what the allocation actually delivers, including the
     // lateral force that necessarily comes with it.
     private static void DrawLsqControls(Vehicle vehicle)
@@ -152,7 +156,7 @@ public static partial class PoweredGuidanceWindow
     // Per-gimbal breakdown. The "axes" column is the interesting one: it shows which
     // body axes each gimbal can actually torque about, given its moment arm. A
     // centreline main engine reads "-PY" (pitch and yaw, no roll) while an off-axis
-    // vernier reads "RPY" — which is how KSA gets roll authority without a dedicated
+    // vernier reads "RPY" - which is how KSA gets roll authority without a dedicated
     // roll actuator.
     private static void DrawGimbalTable(Vehicle vehicle, Span<GimbalController> gimbals)
     {
@@ -183,7 +187,7 @@ public static partial class PoweredGuidanceWindow
             double maxZ = g.AxisZ.MaxAngle * 180.0 / Math.PI;
 
             // Show the command this gimbal will actually receive, computed by the same
-            // code the worker runs — so the table can't drift from the behaviour.
+            // code the worker runs - so the table can't drift from the behaviour.
             float cmdY, cmdZ;
             if (_s.GimbalMode == 1)
             {
@@ -193,7 +197,7 @@ public static partial class PoweredGuidanceWindow
             else if (_s.GimbalMode == 3)
             {
                 // The Lsq solve is global, not per-gimbal, so there is nothing to
-                // recompute here — show what the worker actually commanded.
+                // recompute here - show what the worker actually commanded.
                 KsaGimbalControl.Slot lsqSlot = KsaGimbalControl.Diagnostics(vehicle);
                 ReadOnlySpan<double> last = lsqSlot != null ? lsqSlot.LastCommands : default;
                 cmdY = last.Length > 2 * i + 1 ? (float)last[2 * i] : 0f;

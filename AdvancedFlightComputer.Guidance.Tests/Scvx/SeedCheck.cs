@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Does seeding the cold solve from a convex 3-DOF G-FOLD solution actually help?

@@ -1,4 +1,4 @@
-using Gfold;
+using AdvancedFlightComputer.Guidance.Gfold;
 
 // Replicates the reference Python P3_P4 flow on the Mars static test case:
 // Problem 3 (minimum landing error) finds the best reachable landing point,
@@ -18,14 +18,14 @@ if (positional.Length > 0) tf = positional[0];
 if (positional.Length > 1) nodes = (int)positional[1];
 
 // --check <csv>: audit an externally produced trajectory (e.g. the Python
-// reference's) against this implementation's constraint set — settles
+// reference's) against this implementation's constraint set - settles
 // "formulation mismatch vs solver accuracy" questions decisively.
 int checkIdx = Array.IndexOf(args, "--check");
 if (checkIdx >= 0)
     return CheckCsv(args[checkIdx + 1], tf, new GfoldParams());
 
 // --stress: a fast, shallow handoff state (high horizontal speed, low elevation,
-// speed above the cap) that violates the node-0 path constraints — the kind that
+// speed above the cap) that violates the node-0 path constraints - the kind that
 // made the live mod fail immediately. Reference options should be infeasible;
 // RealTime (relaxed initial path) should solve.
 if (args.Contains("--stress"))
@@ -64,14 +64,14 @@ if (args.Contains("--stress"))
 
 // --clarabel-layout: print the marshalled struct layouts for the Clarabel binding.
 //
-// Runnable WITHOUT clarabel_c.dll — Marshal.SizeOf/OffsetOf are pure reflection over
+// Runnable WITHOUT clarabel_c.dll - Marshal.SizeOf/OffsetOf are pure reflection over
 // the managed declarations and load nothing native. That matters, because struct layout
 // is the part of a P/Invoke binding that fails SILENTLY, and this is the only check on
 // it available before the DLL exists. Diff the output against
 // gfold/clarabel/include/c/*.h by hand.
 // --clarabel-smoke: solve a problem whose answer is known by hand, and print the raw
 // solution struct. Isolates "is the binding wired correctly" from "is the G-FOLD
-// problem being built correctly" — with a real G-FOLD problem a wrong answer could be
+// problem being built correctly" - with a real G-FOLD problem a wrong answer could be
 // either, and this one cannot.
 //
 //   minimize  x
@@ -136,7 +136,7 @@ if (args.Contains("--frame"))
 
     // Derive a FEASIBLE case to time, rather than picking a flight time and hoping.
     // A tf the vehicle cannot fly returns PrimalInfeasible in a fraction of the time a
-    // real solve takes, so timing one measures how fast the solver says "no" — which
+    // real solve takes, so timing one measures how fast the solver says "no" - which
     // is not the number in question.
     GfoldPlanner.SearchResult? seed = GfoldPlanner.SearchMinFuel(rtP, nodes, options: rtOpt);
     if (seed == null)
@@ -402,7 +402,7 @@ static bool Check(string what, bool pass)
 /// This exists because the failure it guards against is silent. A vertical stack in a
 /// column-major format is an interleave within every column, not a concatenation of two
 /// arrays, and getting it wrong produces a well-formed matrix describing a DIFFERENT
-/// problem — which SCS will then solve, successfully, to the wrong answer. Comparing
+/// problem - which SCS will then solve, successfully, to the wrong answer. Comparing
 /// backends would show a disagreement and blame the solver.
 ///
 /// The pattern is deliberately awkward: overlapping sparsity, empty columns, an empty
@@ -462,8 +462,8 @@ static bool VStackSelfTest()
 
 /// <summary>
 /// Is clarabel_c.dll present? Probed by attempting a solve of a trivial problem and
-/// catching the load failure, because the DLL is deliberately NOT checked in — it has
-/// to be built locally with a Rust toolchain — and the A/B has to degrade to a note
+/// catching the load failure, because the DLL is deliberately NOT checked in - it has
+/// to be built locally with a Rust toolchain - and the A/B has to degrade to a note
 /// rather than a crash for everyone who has not built it.
 /// </summary>
 static bool HasClarabel()
@@ -496,7 +496,7 @@ static int CheckCsv(string path, double tf, GfoldParams p)
     string[][] rows = File.ReadAllLines(path).Skip(1)
         .Select(l => l.Split(',')).ToArray();
     int n = rows.Length;
-    // dt from the file's own time column — an externally rounded tf argument
+    // dt from the file's own time column - an externally rounded tf argument
     // shows up as a phantom dynamics violation otherwise.
     double dt = D(rows[1][0]) - D(rows[0][0]);
     _ = tf;
@@ -549,7 +549,7 @@ static int CheckCsv(string path, double tf, GfoldParams p)
     static double D(string s) => double.Parse(s, System.Globalization.CultureInfo.InvariantCulture);
 }
 
-/// <summary>Cache for HasClarabel — a static local function cannot close over a top-level local.</summary>
+/// <summary>Cache for HasClarabel - a static local function cannot close over a top-level local.</summary>
 static class ClarabelProbe
 {
     internal static bool? Result;

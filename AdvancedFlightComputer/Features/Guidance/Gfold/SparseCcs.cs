@@ -1,4 +1,4 @@
-namespace Gfold;
+namespace AdvancedFlightComputer.Guidance.Gfold;
 
 // Builds a sparse matrix in the column-compressed storage (CCS) format both solvers
 // expect, from arbitrary-order (row, col, value) triplets. Duplicate entries
@@ -31,7 +31,7 @@ public sealed class SparseCcs
     /// by top.Rows. Both must have the same column count.
     ///
     /// This is how the split assembly form becomes the solvers' single constraint
-    /// matrix — the equality block on top, the cone block beneath — and it is the one step of the
+    /// matrix - the equality block on top, the cone block beneath - and it is the one step of the
     /// conversion that is easy to get quietly wrong, because CCS is COLUMN-major: a
     /// vertical stack is not a concatenation of the two arrays but an interleave
     /// within every column. Working in triplets sidesteps that entirely; Build()

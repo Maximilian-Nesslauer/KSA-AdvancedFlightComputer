@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Reproduces the spiralling descent seen in flight, from the exact logged initial

@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
@@ -13,7 +17,7 @@ public enum GimbalOverrideMode
     /// <summary>Normalized body-frame demand through a replica of KSA's own per-gimbal heuristic. For comparison.</summary>
     Torque = 2,
 
-    /// <summary>Physical body torque in N·m through a least-squares allocation. The interface guidance should use.</summary>
+    /// <summary>Physical body torque in N*m through a least-squares allocation. The interface guidance should use.</summary>
     Lsq = 3,
 }
 
@@ -33,7 +37,7 @@ public enum GimbalOverrideMode
 //
 // THREADING. ComputeControl runs on a VehicleSolvers job thread, not the main
 // thread, so these fields are written by the UI draw and read by the worker. They
-// are bool/float/enum — 32-bit aligned, reads cannot tear — and a command landing
+// are bool/float/enum - 32-bit aligned, reads cannot tear - and a command landing
 // one frame late is harmless for a manual test. Do NOT extend this with anything
 // needing a consistent multi-field snapshot without real synchronisation.
 public static class KsaGimbalControl
@@ -182,7 +186,7 @@ public static class KsaGimbalControl
             ModuleStateful<GimbalController, GimbalControllerState, EmptyStruct, EmptyStruct>
                 .StateUpdater.ModuleAndNewStateRef slot = outputs.Gimbals.GetModuleAndNewState(gimbal);
 
-            // Empty slots carry a null Module and a null State ref — writing through
+            // Empty slots carry a null Module and a null State ref - writing through
             // that would be an access violation, not an exception.
             if (slot.Module == null)
                 continue;
@@ -212,11 +216,11 @@ public static class KsaGimbalControl
         st.AppliedCount = applied;
     }
 
-    // Physical allocation: solve for the deflections delivering the commanded N·m.
+    // Physical allocation: solve for the deflections delivering the commanded N*m.
     //
     // Two passes over the gimbals because the solve needs every gimbal's thrust
     // before it can produce any command. Thrust falls back to the nameplate maximum
-    // when the engine is unlit, so the allocation can be inspected on the pad — the
+    // when the engine is unlit, so the allocation can be inspected on the pad - the
     // resulting commands are then what WOULD be flown at full thrust.
     private static void ApplyLsq(Slot st, Command cmd, FlightComputer.VehicleConfigInfo cfg,
                                  float3 com, ref FlightComputerOutput outputs)
@@ -269,7 +273,7 @@ public static class KsaGimbalControl
     }
 
     /// <summary>
-    /// Distribute one body-frame torque demand onto a single gimbal — a faithful
+    /// Distribute one body-frame torque demand onto a single gimbal - a faithful
     /// replica of the per-gimbal block inside FlightComputer.ComputeTvcControl.
     ///
     /// This is the layer worth commanding. KSA does NOT solve a control-allocation
@@ -283,7 +287,7 @@ public static class KsaGimbalControl
     /// along the demand. That direction is rotated into the gimbal's own frame and
     /// its Y/Z components become the deflection command.
     ///
-    /// The consequence — and the reason this is engine-config-agnostic — is that
+    /// The consequence - and the reason this is engine-config-agnostic - is that
     /// each gimbal is silently excluded from any axis it has no leverage over: an
     /// arm with no component in a plane cannot torque about the perpendicular axis,
     /// so that component of the demand is ZEROED FOR THIS GIMBAL ONLY. A centreline

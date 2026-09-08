@@ -1,7 +1,7 @@
 using System.Globalization;
 using System.Text;
 
-namespace Gfold;
+namespace AdvancedFlightComputer.Guidance.Gfold;
 
 // A solved descent trajectory at N discrete nodes, spaced Dt apart.
 public sealed class GfoldTrajectory
@@ -19,7 +19,7 @@ public sealed class GfoldTrajectory
 
     /// <summary>
     /// The solver returned something worth flying. "Inaccurate" is included on purpose
-    /// — Clarabel uses it for a solution that converged loosely rather than one that
+    /// - Clarabel uses it for a solution that converged loosely rather than one that
     /// failed, and the search's own tolerances are far wider than the difference.
     /// A solve that ran out of iterations is not in here: it maps to MaxIterations
     /// precisely so it lands outside this test.

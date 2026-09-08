@@ -1,9 +1,9 @@
 using System.Globalization;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
-/// Verifies the glideslope and climb-rate path constraints actually bind, and —
-/// more importantly — that they stay SOLVABLE from a state that violates them.
+/// Verifies the glideslope and climb-rate path constraints actually bind, and -
+/// more importantly - that they stay SOLVABLE from a state that violates them.
 ///
 /// A constraint with a sign error or a wrong state index does not announce
 /// itself: it produces a plausible trajectory that simply ignores the corridor,
@@ -107,7 +107,7 @@ internal static class PathConstraintCheck
 
     /// <summary>
     /// A plan we could actually fly. IterationLimit counts: the reference trajectory
-    /// is still a valid, constraint-respecting plan, it simply stopped improving —
+    /// is still a valid, constraint-respecting plan, it simply stopped improving -
     /// which is the normal outcome under a real-time iteration budget.
     /// </summary>
     private static bool Usable(ScvxStatus s) =>
@@ -119,7 +119,7 @@ internal static class PathConstraintCheck
     ///
     /// Measured as a distance rather than an angle on purpose. Near the target both
     /// the horizontal and vertical offsets go to zero, so the approach ANGLE is
-    /// atan2(tiny, tiny) — numerically meaningless exactly where the trajectory
+    /// atan2(tiny, tiny) - numerically meaningless exactly where the trajectory
     /// spends its last nodes, and it reads ~90 degrees for a perfectly good
     /// trajectory. The violation is the quantity the constraint actually states and
     /// it degrades gracefully to 0 at the target.
@@ -132,7 +132,7 @@ internal static class PathConstraintCheck
 
     /// <summary>
     /// The shallowest angle above the target's horizontal plane that a trajectory
-    /// reaches — the value the glideslope constraint would have to beat to bind.
+    /// reaches - the value the glideslope constraint would have to beat to bind.
     ///
     /// Nodes closer than 20 m to the target are skipped: there both offsets go to
     /// zero and the angle is atan2(tiny, tiny), which is numerically meaningless

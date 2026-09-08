@@ -1,46 +1,50 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using System.Collections.Generic;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Flight;
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Numerics;
 
 // WHICH STAGES CAN FLY THEMSELVES HOME, AND WHAT IT WOULD COST THEM.
 //
 // A stage is worth returning if it can be flown, and it can be flown if it has a
-// command pod — Vehicle.IsControllable is Parts.Controls.NumModules > 0, and every
+// command pod - Vehicle.IsControllable is Parts.Controls.NumModules > 0, and every
 // attitude profile in the flight computer gates on it. So the test is not "is this a
 // big expensive-looking booster" but the same one the game applies: does the subtree
 // that separates carry a Control module. An interstage does not. A booster with
 // avionics does.
 //
 // WHY THE JACOBIAN IS COMPUTED ONCE FOR ALL OF THEM. The cost of coming back is
-// ImpactSteering.Correction — the impulse that drags the ballistic impact point onto a
-// site — and that decomposes cleanly: the impact prediction and its velocity Jacobian
+// ImpactSteering.Correction - the impulse that drags the ballistic impact point onto a
+// site - and that decomposes cleanly: the impact prediction and its velocity Jacobian
 // depend only on where the VEHICLE is and how it flies, not on where anyone wants to
 // land. Only the miss depends on the target. So one prediction and one Jacobian serve
 // every stage in the list, and each extra target is a 3x3 solve. Listing five stages
 // costs what listing one does.
 //
 // WHAT THE NUMBER MEANS, AND WHAT IT DOES NOT. It is "if this separated NOW, what
-// impulse puts it on its site" — exactly the question for the next separation, and a
+// impulse puts it on its site" - exactly the question for the next separation, and a
 // hypothetical for anything further down the stack, which has no business separating
 // here. Two approximations are worth naming rather than burying:
 //
 //   THE BALLISTIC COEFFICIENT IS THE STACK'S. The coast is integrated with the aero
 //   surrogate fitted to the vehicle as it is now and its current mass, because a
-//   subtree that has not separated has no bounding box of its own to sweep — KSA
+//   subtree that has not separated has no bounding box of its own to sweep - KSA
 //   computes CdA from the live assembly. A booster alone is shorter, so its CdA is
 //   smaller and its true return cost differs. The nose area is much the same, and drag
 //   moves this number by single-digit percent on a boostback-shaped arc (--impact
 //   prices it), so it is a good gauge and not a plan.
 //
-//   IT IS AN IMPULSE. A real return burn lasts tens of seconds and costs more — the
+//   IT IS AN IMPULSE. A real return burn lasts tens of seconds and costs more - the
 //   shooter measures 18% more than the impulsive figure on the reference arc, and the
 //   impulsive answer points at the ground besides. BoostbackShooter is what plans the
 //   actual burn once the booster exists. This is the number that says whether to stage
 //   yet, not the number that flies it.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     /// <summary>How often the returnable-stage costs are re-solved, ms.</summary>
     private const long ReturnDvIntervalMs = 1000;
@@ -51,7 +55,7 @@ public static partial class PoweredGuidanceWindow
     public sealed class ReturnableStage
     {
         /// <summary>The detached subtree's root part. Its InstanceId is the stage's
-        /// identity — stable for the life of the craft, which is what lets a target set
+        /// identity - stable for the life of the craft, which is what lets a target set
         /// on the pad still be attached to the right stage at separation.</summary>
         public uint RootId;
 
@@ -61,7 +65,7 @@ public static partial class PoweredGuidanceWindow
         /// <summary>Which staging sequence separates it.</summary>
         public int SequenceIndex;
 
-        /// <summary>True when this is the NEXT thing to separate — the one the number
+        /// <summary>True when this is the NEXT thing to separate - the one the number
         /// below is actually about rather than hypothetical.</summary>
         public bool IsNext;
 
@@ -168,7 +172,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// Re-solve what it would cost each listed stage to come home from here.
     ///
-    /// ONE prediction and ONE Jacobian for the whole list — see the header. Throttled to
+    /// ONE prediction and ONE Jacobian for the whole list - see the header. Throttled to
     /// 1 Hz because a Jacobian is three seeded RK4 sweeps and this runs through an
     /// ascent, and because the answer moves on the timescale of the trajectory rather
     /// than the frame rate.

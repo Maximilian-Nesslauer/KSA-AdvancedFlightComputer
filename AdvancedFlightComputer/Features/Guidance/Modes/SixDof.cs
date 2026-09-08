@@ -1,19 +1,23 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
-// "6dof" sub-tab under Landing — the frame bridge, and the MPC guidance built on it.
+// "6dof" sub-tab under Landing - the frame bridge, and the MPC guidance built on it.
 //
 // The 6-DOF SCvx model works in a different inertial frame, a different body-axis
 // convention and a different quaternion convention from KSA (see KsaFrameBridge).
 // Every one of those fails SILENTLY: get a sign wrong and the symptom is "the
 // controller is unstable" days later, not an exception here. So the bridge readout
-// comes first and the round-trip error is the number that matters — it catches an
+// comes first and the round-trip error is the number that matters - it catches an
 // axis swap, a quaternion handedness error, a transposed site frame and a sign flip
 // all at once.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
 
     // 50. Measured in CLOSED LOOP (Scvx.Console --mpc, zero dispersion, so any plan
@@ -24,14 +28,14 @@ public static partial class PoweredGuidanceWindow
     //      50   1.6 m     1.28          1.3 m       1988
     //      80   4.3 m     1.25          1.0 m        821
     //
-    // The plan JUMPING between re-solves is DISCRETISATION ERROR — the gap between
-    // the trapezoidal collocation and the true dynamics — and it falls monotonically
+    // The plan JUMPING between re-solves is DISCRETISATION ERROR - the gap between
+    // the trapezoidal collocation and the true dynamics - and it falls monotonically
     // with node count. No weight, scale or conditioning change moved it at all. The
     // over-long curved path improves with nodes too, and the vehicle never actually
     // moves AWAY from the target (away-from-target is 0.0 m at every node count), so
     // the "loops" are a long curve, not a loop.
     //
-    // 20 was the worst point on this curve on ALL THREE reported symptoms at once —
+    // 20 was the worst point on this curve on ALL THREE reported symptoms at once -
     // most plan jump, longest path, and the MOST ADMM iterations. More nodes does not
     // cost more here: the smoother problem converges in fewer ADMM iterations.
     /// <summary>
@@ -106,8 +110,8 @@ public static partial class PoweredGuidanceWindow
         OwnerThreadViolation =
             $"ambient state touched from thread {id}, expected {_ownerThreadId} - "
           + "the sim step and the draw are no longer on one thread, and per-vehicle "
-          + "state is now racing. See PoweredGuidanceWindow._s.";
-        Console.Error.WriteLine("[PG] " + OwnerThreadViolation);
+          + "state is now racing. See GuidanceWindow._s.";
+        Console.Error.WriteLine("[AFC Guidance] " + OwnerThreadViolation);
     }
 
     /// <summary>
@@ -151,8 +155,8 @@ public static partial class PoweredGuidanceWindow
     // and has to rotate upright under thrust, so a cap below the ENTRY attitude is not
     // a conservative choice, it is an infeasible one - the cone applies at node 0, and
     // node 0 is pinned by equality to the measured state.
-    // Approach corridor and climb limit. Both are SOFT — they start at node 1 and
-    // carry a penalised slack — which is what makes these otherwise aggressive
+    // Approach corridor and climb limit. Both are SOFT - they start at node 1 and
+    // carry a penalised slack - which is what makes these otherwise aggressive
     // defaults safe; see Scvx6DofConfig.GlideSlopeWeight for why that is a
     // correctness requirement and not a nicety. 10 degrees above the horizontal is a
     // shallow corridor that mainly stops the trajectory going wide, rather than a
@@ -163,9 +167,9 @@ public static partial class PoweredGuidanceWindow
 
     // Hand over to the terminal hover controller for the last stretch. Default ON
     // and above the target altitude, so the solver is never asked to fly the part
-    // of the trajectory it is worst at — see the handover in Step6DofCore.
+    // of the trajectory it is worst at - see the handover in Step6DofCore.
     // Cadence in SECONDS of wall clock. The scale-free quantity is really plan NODES
-    // — node spacing is sigma/(N-1), so a fixed interval becomes an ever-larger
+    // - node spacing is sigma/(N-1), so a fixed interval becomes an ever-larger
     // fraction of a node as sigma shrinks through the burn, drifting toward the
     // stale-warm-start cliff exactly when the vehicle is closest to the ground. But
     // seconds is what the frame budget is denominated in, and it is what you can
@@ -175,17 +179,17 @@ public static partial class PoweredGuidanceWindow
     //   0.25 nd -> 63 ms | 0.5 nd -> 71 ms | 1.0 nd -> 335 ms | 3.0 nd -> 2829 ms
     // Past ~2 nodes the warm start is too stale, the tight trust region fails and it
     // thrashes. At the default 0.1 s and N=80 that bound is far away (a 20 s burn is
-    // 0.25 s/node, so 0.1 s is 0.4 of a node) — but it TIGHTENS as sigma falls, so
+    // 0.25 s/node, so 0.1 s is 0.4 of a node) - but it TIGHTENS as sigma falls, so
     // the readout below reports the cadence in nodes as well to keep it visible.
 
     // Objective regulariser weights. Both were originally the Python test case's
-    // (W_DU 0.2, W_W 1.0), where they came to 121% of the fuel term — dominating the
+    // (W_DU 0.2, W_W 1.0), where they came to 121% of the fuel term - dominating the
     // objective and, because both shrink as burn time grows, pinning sigma at its
     // upper bound. Turned down twice after flight testing. Exposed because the right
     // value depends on the vehicle and is easiest to find by flying it.
     // W_DU. Raised back to 0.05 after flight testing: unlike W_W (which was pinning
     // burn time at its upper bound and deserved cutting), THIS term has a distinct
-    // job — it is the only thing keeping the control profile CONTINUOUS. Min-fuel
+    // job - it is the only thing keeping the control profile CONTINUOUS. Min-fuel
     // with no control-rate penalty is bang-bang, and the optimum genuinely has the
     // thrust direction jumping between nodes. Measured on a realistic start:
     //   W_DU 0.000 -> 19.1 deg thrust-direction jump node-to-node (visible kinks)
@@ -204,7 +208,7 @@ public static partial class PoweredGuidanceWindow
     // regularisers biasing the trajectory, and loitering. Gfold already works this way.
     // Default back to FREE burn time. Fixing it removed the regulariser/sigma
     // coupling exactly as predicted, but did not fix the kinks, the wandering or the
-    // solve times — so it is kept as an option rather than imposed.
+    // solve times - so it is kept as an option rather than imposed.
 
     // Touchdown latch. A vehicle sitting on the pad ALREADY reports terrain contact
     // (the launch-pad collider counts), so "cut on contact" must not fire until the
@@ -427,7 +431,7 @@ public static partial class PoweredGuidanceWindow
         ImGui.Text($"status {_s.Guidance.Status}   solves {_s.Guidance.SolveCount}   " +
                    $"last {_s.Guidance.LastIterations} iters ({_s.Guidance.AcceptedSteps} accepted) " +
                    $"in {_s.Guidance.LastSolveMs:F0} ms");
-        // Plan age is time since the last SUCCESSFUL solve — the plan's own clock.
+        // Plan age is time since the last SUCCESSFUL solve - the plan's own clock.
         // Under a healthy MPC it sawtooths between 0 and the cadence. If it climbs
         // past that, re-solves are failing and the command is being read further and
         // further along a trajectory that is no longer being refreshed: the plan's
@@ -486,7 +490,7 @@ public static partial class PoweredGuidanceWindow
         {
             // Cadence in nodes is the number that decides whether the warm start is
             // still fresh, and it moves on its own as sigma shrinks even though the
-            // knob is fixed — so show it, and flag the ~2-node cliff.
+            // knob is fixed - so show it, and flag the ~2-node cliff.
             double nodeDt = _s.Guidance.Sigma / Math.Max(_s.SixDofNodes - 1, 1);
             double cadenceNodes = cadenceS / Math.Max(nodeDt, 1e-6);
             ImGui.Text($"plan age  {age,6:F2} s   cadence {cadenceS,5:F2} s = " +
@@ -499,7 +503,7 @@ public static partial class PoweredGuidanceWindow
 
         // Node 0 is an equality constraint, so this is ~0 on any usable plan. It is
         // THE check that the MPC re-anchored at the vehicle instead of serving a
-        // stale trajectory — which is what "the plan starts a node below" looked like.
+        // stale trajectory - which is what "the plan starts a node below" looked like.
         ImGui.Text($"anchor offset {_s.Guidance.AnchorOffsetM,8:F2} m");
 
         double3 bias = _s.Guidance.AccelBias;
@@ -545,7 +549,7 @@ public static partial class PoweredGuidanceWindow
                 $"Cold restart at {RefusalsBeforeRestart}.");
 
         // The physicality check. Virtual control is a SLACK variable in the dynamics
-        // constraint, so an unconverged plan contains motion no force produced — it
+        // constraint, so an unconverged plan contains motion no force produced - it
         // cannot be flown at any thrust. Plans above tolerance are now refused, so a
         // green reading here is what makes the displayed trajectory meaningful.
         //
@@ -597,7 +601,7 @@ public static partial class PoweredGuidanceWindow
                        $"{_s.Guidance.LastDefectRaw:G3} {_s.Guidance.LastDefectUnits}");
 
         // Pure diagnostics; nothing acts on these. Under MPC, drift between re-solves
-        // is expected — what matters is that it RESETS each cycle rather than growing.
+        // is expected - what matters is that it RESETS each cycle rather than growing.
         _s.Guidance.Diagnostics(x, out double pe, out double ve, out double ae);
         ImGui.SeparatorText("Drift since last solve");
         ImGui.Text($"position {pe,8:F1} m   velocity {ve,7:F2} m/s   attitude {ae,6:F2} deg");
@@ -618,7 +622,7 @@ public static partial class PoweredGuidanceWindow
 
         // Is the diagonal-inertia approximation actually valid for this vehicle?
         // For a truly axisymmetric booster both of these are ~0 and the approximation
-        // is EXACT rather than approximate — and the arbitrary roll reference that
+        // is EXACT rather than approximate - and the arbitrary roll reference that
         // BodyAxes picks becomes harmless, since the transverse inertia is degenerate.
         ImGui.SeparatorText("Inertia (model body axes)");
         double3 inr = _s.Guidance.Inertia;
@@ -635,7 +639,7 @@ public static partial class PoweredGuidanceWindow
         // pitch/yaw torque rigidly through one engine at LArm; the allocator makes the
         // torque with every gimbal it has and produces whatever force falls out. A
         // mismatch here means the plan's TRANSLATIONAL dynamics are wrong even when
-        // attitude tracks perfectly — the vehicle gets a different sideways push than
+        // attitude tracks perfectly - the vehicle gets a different sideways push than
         // was planned, drifts, and the next re-solve starts somewhere unexpected.
         // Commanded throttle, with the vehicle's own floor beside it. If the command
         // ever sits at or below the floor the engine is at its minimum and the plan
@@ -660,7 +664,7 @@ public static partial class PoweredGuidanceWindow
                 $"MISMATCH {rel * 100:F0}%% - the model's translational dynamics do not " +
                 "match what the vehicle actually gets sideways.");
 
-        // Commanded vs delivered torque — the link the drift numbers cannot see. A gap
+        // Commanded vs delivered torque - the link the drift numbers cannot see. A gap
         // means the plan is asking for torque this vehicle does not have.
         ImGui.SeparatorText("Torque commanded vs delivered (KSA body axes)");
         KsaGimbalControl.Slot gs = KsaGimbalControl.Diagnostics(vehicle);
@@ -677,7 +681,7 @@ public static partial class PoweredGuidanceWindow
     /// <param name="cutEngine">
     /// False when handing the vehicle to another controller rather than ending the
     /// flight. Cutting the engine on a handover would drop thrust for the frame
-    /// between this and the next controller's first command — survivable high up,
+    /// between this and the next controller's first command - survivable high up,
     /// not at the handover altitude, which is exactly where it would happen.
     /// </param>
     /// <summary>
@@ -822,7 +826,7 @@ public static partial class PoweredGuidanceWindow
     /// current plan across by resampling it onto the new node count.
     ///
     /// A failed rebuild leaves the existing guidance untouched and simply retries at
-    /// the next gate — losing the optimisation is survivable, losing the plan is not.
+    /// the next gate - losing the optimisation is survivable, losing the plan is not.
     /// </summary>
     private static void StepNodeGates(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                       double[] x, double now)
@@ -1017,7 +1021,7 @@ public static partial class PoweredGuidanceWindow
     /// resampling. Reads nothing but the request and the outgoing guidance, so this is
     /// the part that can move off the sim thread wholesale.
     ///
-    /// Returns null and leaves the existing guidance untouched if the reseed fails —
+    /// Returns null and leaves the existing guidance untouched if the reseed fails -
     /// losing the node change is survivable, losing the plan is not.
     /// </summary>
     private static Ksa6DofGuidance ApplyRebuild(RebuildRequest req, Ksa6DofGuidance from,
@@ -1030,7 +1034,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// Rebuild the guidance at a different node count. Prepare on the game thread,
-    /// apply off it — for now both happen here, back to back.
+    /// apply off it - for now both happen here, back to back.
     /// </summary>
     private static bool RebuildAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                   double[] x, double now, int nodes)
@@ -1356,7 +1360,7 @@ public static partial class PoweredGuidanceWindow
         Use(vehicle);
 
         // Caught here rather than left to Mod's prefix handler, which logs and
-        // swallows — for an engage failure that is indistinguishable from the button
+        // swallows - for an engage failure that is indistinguishable from the button
         // doing nothing at all.
         try
         {
@@ -1709,7 +1713,7 @@ public static partial class PoweredGuidanceWindow
         // the easiest for the hover PID. The horizon has collapsed to almost
         // nothing, so the plan is a handful of nodes over a second or two and the
         // trust region is the binding constraint; meanwhile the terminal state is
-        // exactly what a hover controller is built for — near-zero velocity,
+        // exactly what a hover controller is built for - near-zero velocity,
         // upright, holding a point. Optimising a descent is the wrong question by
         // then.
         //
@@ -1757,18 +1761,18 @@ public static partial class PoweredGuidanceWindow
             StepNodeGates(vehicle, parent, siteCci, x, now);
 
         // THE MPC STEP: re-solve from the MEASURED state on a cadence. This is where
-        // all the feedback in the system comes from — there is nothing else.
+        // all the feedback in the system comes from - there is nothing else.
         //
         // The cadence timer advances ONLY ON SUCCESS. Previously it was stamped
         // before the attempt, so a failed re-solve burned the whole interval before
-        // trying again while Command kept advancing the plan clock — the plan's time
+        // trying again while Command kept advancing the plan clock - the plan's time
         // index ran on along a trajectory that was never refreshed, which is the
         // "green dot outruns the vehicle" symptom. A failed solve now retries on the
         // next step instead of letting the clock run.
         double cadence = Math.Clamp(_s.SixDofReplanSec, 0.02, 5.0);
         // Refresh inertia from the live vehicle before re-solving. It changes as
         // propellant drains, and a stale value is a SYSTEMATIC torque error that MPC
-        // structurally cannot correct — re-anchoring the state does not fix the model.
+        // structurally cannot correct - re-anchoring the state does not fix the model.
         Ksa6DofSetup.Inertia(vehicle, out double ixx, out double iyy, out double izz,
                              out _s.OffDiag, out _s.Asym);
         _s.Guidance.Inputs = _s.Guidance.Inputs.WithInertia(ixx, iyy, izz);
@@ -1858,15 +1862,15 @@ public static partial class PoweredGuidanceWindow
 
         ref ManualControlInputs manual = ref ManualInputs(vehicle);
         // ENGINE STAYS LIT WHILE GUIDING. This was `throttle > 0.02`, copied from the
-        // G-FOLD path where it is correct — that planner has NO thrust floor and plans
+        // G-FOLD path where it is correct - that planner has NO thrust floor and plans
         // genuine coasts, so a near-zero command means "actually stop burning".
         //
         // The 6-DOF model is the opposite: its throttle box guarantees T >= Tmin > 0,
         // so it NEVER asks for a coast. And KSA clamps a vehicle's MinimumThrottle as
         // low as 0.01, so with the floor now read from the vehicle a perfectly normal
         // min-fuel opening command of 1% fell below the 2% threshold and shut the
-        // engine down. That loses THRUST AND TORQUE together — gimbals have no
-        // authority without thrust — so the vehicle went into free fall with no
+        // engine down. That loses THRUST AND TORQUE together - gimbals have no
+        // authority without thrust - so the vehicle went into free fall with no
         // attitude control on the very first step.
         manual.EngineOn = true;
         manual.EngineThrottle = (float)throttle;

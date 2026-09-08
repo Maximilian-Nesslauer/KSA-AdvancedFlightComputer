@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -11,7 +15,7 @@ using KSA;
 // the flight rather than the optimiser: it is where the plan levels off, and it is
 // set per landing. The rest tune how the problem is solved and are left alone once
 // they work.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     private static void Draw6DofLandingContent(Vehicle vehicle, float innerW)
     {

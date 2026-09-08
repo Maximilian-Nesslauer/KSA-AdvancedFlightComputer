@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -8,13 +12,13 @@ using KSA;
 //
 // Everything is drawn on a transparent, click-through, full-screen ImGui window
 // using the active camera's world->screen projection. There is no depth test, so
-// lines draw on top of terrain and planets rather than being occluded — fine for
+// lines draw on top of terrain and planets rather than being occluded - fine for
 // a guidance overlay, and it means the far side of an orbit stays visible.
 //
 // The same projection works at any zoom, so these draw correctly both in the
 // close-in flight view and zoomed out to the map/orbit view: KSA has one camera
 // (Program.GetMainCamera), not a separate map camera.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // Per-frame projection context, set by SetupProjection so the helpers don't
     // each re-fetch the camera and body transforms.

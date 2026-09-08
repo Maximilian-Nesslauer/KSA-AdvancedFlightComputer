@@ -1,11 +1,11 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Does softening the terminal position turn "no plan" into "imperfect plan"?
 ///
 /// A hard terminal constraint demands arrival exactly at the target, exactly at rest.
 /// When that is not achievable the problem is INFEASIBLE and the solver returns
-/// nothing — but a booster on the way down cannot decline to land, so "no plan" is
+/// nothing - but a booster on the way down cannot decline to land, so "no plan" is
 /// not a safe answer. It just means continuing to fly an older plan that is getting
 /// worse every cycle.
 ///

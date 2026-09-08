@@ -1,10 +1,10 @@
 using System.Globalization;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Closed-loop MPC simulator. No game required.
 ///
-/// Everything before this measured the SOLVER in isolation — one plan, judged on its
+/// Everything before this measured the SOLVER in isolation - one plan, judged on its
 /// own terms. But the reported problems are all closed-loop: solutions jumping
 /// between re-solves, the vehicle looping instead of going to the target, solve times
 /// climbing. None of those are visible in a single solve, which is why tuning
@@ -192,8 +192,8 @@ internal static class MpcHarness
         if (SplitOnly)
         {
             // WHERE DOES THE TIME ACTUALLY GO? scs_init rebuilds everything every
-            // call — deep copy, Ruiz equilibration, AMD ordering, symbolic+numeric
-            // LDL — while scs_solve runs the ADMM sweeps. Our sparsity pattern never
+            // call - deep copy, Ruiz equilibration, AMD ordering, symbolic+numeric
+            // LDL - while scs_solve runs the ADMM sweeps. Our sparsity pattern never
             // changes, so if init dominates, all of that ordering work is being
             // recomputed identically every solve and can be hoisted.
             Console.WriteLine("  WHERE THE TIME GOES (closed loop, MOD AS SHIPPED, dispersed):");
@@ -224,7 +224,7 @@ internal static class MpcHarness
         if (BudgetOnly)
         {
             // REAL-TIME ITERATION: does one SCvx iteration per cycle track as well as
-            // five? Real MPC implementations never solve to convergence — they take a
+            // five? Real MPC implementations never solve to convergence - they take a
             // single step per cycle and rely on the cycle rate. If tracking holds, the
             // per-cycle cost drops by the iteration count.
             Console.WriteLine("  SCvx iterations per cycle (N=50, with dispersion):");
@@ -258,7 +258,7 @@ internal static class MpcHarness
         // Separate HONEST disturbance response from INTERNAL churn. If plan jump goes
         // to ~0 with dispersion off, the MPC is behaving correctly and 5.7 m is simply
         // what a 3% thrust error costs. If it stays, the solver is moving the plan for
-        // reasons of its own — different local optima cycle to cycle.
+        // reasons of its own - different local optima cycle to cycle.
         Console.WriteLine();
         Console.WriteLine("  isolating the plan jump (MOD AS SHIPPED config):");
         Console.WriteLine("  dispersion  budget     miss   path/direct   PLAN JUMP   AWAY-FROM   ADMM/cycle");
@@ -388,7 +388,7 @@ internal static class MpcHarness
         double simTime = 0.0;
         // Run until the burn is actually DONE. The previous cap of 60 cycles ended the
         // run at ~9.9 s of a ~12 s burn, so the reported "miss" was simply where the
-        // vehicle happened to be part-way through — a harness artifact, not guidance.
+        // vehicle happened to be part-way through - a harness artifact, not guidance.
         double budgetTime = sigma * 2.0;
         while (simTime < budgetTime && state[2] > xf[2] + 1.0 && cycles < 400)
         {

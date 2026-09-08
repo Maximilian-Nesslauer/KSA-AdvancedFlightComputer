@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -10,13 +14,13 @@ using KSA;
 //
 // Drawn with an ordinary ImDrawList rather than gauge primitives. That is not a
 // compromise: ImGauge has no line, arc or filled rect, and its Label is capped at 16
-// uppercase characters — but because ImGauge registers its draw callback at
+// uppercase characters - but because ImGauge registers its draw callback at
 // BeginWindow, everything an ImGui draw list emits afterwards lands ON TOP of the
 // dressed panel. So these sit inside the gauge chrome without fighting it.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // The two ends of the pass strip's distance fade, in components. ImColor8 exposes
-    // no way to read a colour back out once built, so the blend needs the numbers —
+    // no way to read a colour back out once built, so the blend needs the numbers -
     // and the two swatches below are built from these so there is one source of truth.
     // Declared first: static initialisers run in textual order.
     private static readonly (byte R, byte G, byte B) PassNearRgb = (232, 238, 245);
@@ -129,7 +133,7 @@ public static partial class PoweredGuidanceWindow
         // Height depends on the stage count, so the bar reports what it used.
         float barH = DrawStagingBar(dl, new float2(origin.X, origin.Y + rowH + arcH + gap), innerW);
 
-        // Reserve the space in ImGui's layout — the draw list writes pixels but
+        // Reserve the space in ImGui's layout - the draw list writes pixels but
         // advances no cursor, so without this the sections would overlap it.
         ImGui.Dummy(new float2(innerW, rowH + arcH + gap + barH));
     }
@@ -142,7 +146,7 @@ public static partial class PoweredGuidanceWindow
     /// distances ALONG it. Deliberately not a vector plot: rgo and vgo are shown as
     /// SCALARS, each as a fraction of the largest value seen since EXECUTE, so both
     /// bands deplete toward the vehicle as the burn completes. Nothing here is to
-    /// scale against anything else — it is a picture of progress, not geometry.
+    /// scale against anything else - it is a picture of progress, not geometry.
     /// </summary>
     private static void DrawGuidanceSchematic(ImDrawListPtr dl, float2 min, float2 size,
                                               bool running, bool decelerating, double tgoSec)
@@ -167,7 +171,7 @@ public static partial class PoweredGuidanceWindow
         float rgoOff = thick * 1.6f;
         float vgoOff = thick * 3.2f;
 
-        // The surface itself, then faint full-length tracks — an almost-empty band
+        // The surface itself, then faint full-length tracks - an almost-empty band
         // has to read as almost empty rather than as missing.
         DrawArcBand(dl, centre, radius, -half, half, 0f, SchemSpent, 2f);
         DrawArcBand(dl, centre, radius, -half, half, rgoOff, SchemTrack, thick);
@@ -227,7 +231,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// The "we are here" marker at the start of the bands, pointing along the arc.
-    /// The tangent at angle a is (cos a, sin a) — the derivative of ArcPoint — which
+    /// The tangent at angle a is (cos a, sin a) - the derivative of ArcPoint - which
     /// is why this leans with the curve instead of standing radially like the vehicle
     /// glyph it replaced.
     /// </summary>
@@ -248,7 +252,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// The staging plan as a horizontal bar, each stage's width proportional to its
-    /// burn time — this one IS to scale — with the same stages listed underneath as
+    /// burn time - this one IS to scale - with the same stages listed underneath as
     /// dV and burn time. It is a PLAN, not a progress readout: the stage model
     /// describes the stack still to burn, so it carries no record of what has already
     /// gone, and marking elapsed time on it would be an invention.
@@ -275,7 +279,7 @@ public static partial class PoweredGuidanceWindow
         float total = 0f, totalDv = 0f;
         for (int i = 0; i < n; i++)
         {
-            PoweredGuidance.Upfg.UpfgStage st = stages.Stages[i];
+            AdvancedFlightComputer.Features.Guidance.Upfg.UpfgStage st = stages.Stages[i];
             double ve = st.Isp * 9.80665;
             double stageDv = ve * Math.Log(st.MassTotal / st.MassDry);
             double t = st.Mode == 2
@@ -294,7 +298,7 @@ public static partial class PoweredGuidanceWindow
 
         // KSA's own figure for the same stack, when it disagrees by more than a
         // percent. The two are computed from the same recompute, so a gap is a real
-        // disagreement about the staging — not a rounding difference — and it is the
+        // disagreement about the staging - not a rounding difference - and it is the
         // one failure a plausible-looking stage list will not otherwise show.
         double ksaDv = _s.StageModelKsaDv;
         string cross = ksaDv > 1.0 && Math.Abs(ksaDv - totalDv) > 0.01 * ksaDv
@@ -325,7 +329,7 @@ public static partial class PoweredGuidanceWindow
         // The trailing seq/eng pair is provenance: which staging sequence the arc came
         // from and how many engine cores the game's own drain simulation had burning
         // across it. Two rows carrying the same pair would be one physical stage that
-        // got sliced in two upstream — the adapter coalesces those, so seeing them
+        // got sliced in two upstream - the adapter coalesces those, so seeing them
         // here means it found a real difference in thrust, Isp or mass between them.
         float y = barTop + barH + 4f;
         float colDv = width * 0.16f;
@@ -333,7 +337,7 @@ public static partial class PoweredGuidanceWindow
         float colSeq = width * 0.64f;
         for (int i = 0; i < n; i++)
         {
-            PoweredGuidance.Upfg.UpfgStage st = stages.Stages[i];
+            AdvancedFlightComputer.Features.Guidance.Upfg.UpfgStage st = stages.Stages[i];
             ImColor8 col = StagePalette[i % StagePalette.Length];
             dl.AddText(new float2(min.X, y), col, $"S{i + 1}");
             dl.AddText(new float2(min.X + colDv, y), SchemInk, $"{dv[i]:F0} m/s");

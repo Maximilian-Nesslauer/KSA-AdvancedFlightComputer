@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.Numerics;
 using KSA;
@@ -6,13 +10,13 @@ using KSA;
 /// Converts a live KSA vehicle state into the frame and conventions the 6-DOF SCvx
 /// model works in, and back again.
 ///
-/// THREE MISMATCHES, all of which fail silently if got wrong — a sign error here
+/// THREE MISMATCHES, all of which fail silently if got wrong - a sign error here
 /// looks like "the controller is unstable", not like a bug:
 ///
 /// 1. INERTIAL FRAME. The model assumes flat ground with gravity along -Z. KSA is
 ///    in CCI about a round body. We build a local frame at the landing site with
 ///    +Z straight up, which makes the model's assumption locally true. (Note this
-///    is NOT the frame Gfold uses — KsaGfold.BuildFrame is X-up. Two solvers, two
+///    is NOT the frame Gfold uses - KsaGfold.BuildFrame is X-up. Two solvers, two
 ///    conventions; do not cross them.)
 ///
 /// 2. BODY AXES. The model puts thrust along body +Z with the engine at -Z, and
@@ -23,7 +27,7 @@ using KSA;
 ///
 /// 3. QUATERNION CONVENTION. KSA's doubleQuat is scalar-LAST (Identity = 0,0,0,1);
 ///    the model is scalar-FIRST Hamilton, [w,x,y,z]. Rather than reason about
-///    whether KSA is Hamilton or JPL — easy to get wrong, and wrong quietly — every
+///    whether KSA is Hamilton or JPL - easy to get wrong, and wrong quietly - every
 ///    conversion here goes THROUGH A ROTATION MATRIX built by transforming basis
 ///    vectors with KSA's own Transform. That inherits KSA's convention whatever it
 ///    is, and the matrix is then converted to a quaternion using the algorithm that
@@ -70,7 +74,7 @@ public static class KsaFrameBridge
     /// so it is correct for any layout.
     ///
     /// The roll reference (which way model +X points) is arbitrary but must be
-    /// STABLE — it is chosen from a fixed KSA axis, so it does not wander frame to
+    /// STABLE - it is chosen from a fixed KSA axis, so it does not wander frame to
     /// frame as the vehicle rotates.
     /// </summary>
     public static void BodyAxes(Vehicle vehicle, out double3 mx, out double3 my, out double3 mz)
@@ -137,7 +141,7 @@ public static class KsaFrameBridge
         x[6] = qw; x[7] = qx; x[8] = qy; x[9] = qz;
 
         // Body rates into MODEL body axes. KSA reports them in its own body frame, so
-        // they need the same axis swap as the attitude — a rate about KSA's long axis
+        // they need the same axis swap as the attitude - a rate about KSA's long axis
         // is a roll rate about model Z.
         BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
         double3 w = vehicle.BodyRates;
@@ -173,7 +177,7 @@ public static class KsaFrameBridge
     ///
     /// Verified against 6dof.py's quat_to_R rather than taken from a reference: for
     /// the trace branch, R21-R12 = 4*qw*qx under that formula, and s = 4*qw, so
-    /// x = qx exactly — and likewise for y and z. Branching on the largest diagonal
+    /// x = qx exactly - and likewise for y and z. Branching on the largest diagonal
     /// keeps it conditioned when qw is near zero (vehicle inverted relative to the
     /// site frame), which a naive trace-only formula would divide through.
     /// </summary>
@@ -254,7 +258,7 @@ public static class KsaFrameBridge
     ///
     /// This is the test that justifies trusting everything above. It catches an axis
     /// swap, a quaternion handedness error, a transposed site frame, and a sign flip
-    /// — all at once, all of which are otherwise invisible until the vehicle is
+    /// - all at once, all of which are otherwise invisible until the vehicle is
     /// tumbling. Expect ~1e-13 deg; anything above ~1e-6 deg means a real bug.
     /// </summary>
     public static double RoundTripErrorDeg(Vehicle vehicle, in SiteFrame frame)

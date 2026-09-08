@@ -1,7 +1,11 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
-using Gfold;
+using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
 // The Powered landing tab's G-FOLD content: a side view of the descent, the two
@@ -10,7 +14,7 @@ using KSA;
 // The plot is in the PAD FRAME, which is the frame G-FOLD itself plans in: horizontal
 // axis is range to the pad, vertical is height above touchdown, pad at bottom right.
 // That makes it a true side elevation of the descent rather than a projection of one.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     private const int GfoldTraceCapacity = 400;
     private const double GfoldTraceIntervalSec = 0.2;
@@ -25,8 +29,8 @@ public static partial class PoweredGuidanceWindow
     private static readonly ImColor8 GfoldThrustCol = new ImColor8(255, 176, 64);
 
     /// <summary>
-    /// Samples the flown path. Takes the two plotted quantities OUTRIGHT — horizontal
-    /// range to the pad and height above the site terrain, both in metres — rather
+    /// Samples the flown path. Takes the two plotted quantities OUTRIGHT - horizontal
+    /// range to the pad and height above the site terrain, both in metres - rather
     /// than a local position, because the two site frames in this mod do not agree on
     /// which axis is up: KsaGfold.BuildFrame is X-up, KsaFrameBridge.BuildSiteFrame is
     /// Z-up. Passing a double3 and picking an axis in here silently read the 6-DOF
@@ -53,7 +57,7 @@ public static partial class PoweredGuidanceWindow
             _s.GfoldTraceCount = GfoldTraceCapacity / 2;
         }
 
-        // Altitude is stored RAW — centre of mass above the site terrain — because
+        // Altitude is stored RAW - centre of mass above the site terrain - because
         // that is the convention the plans use: G-FOLD targets [VehicleHeightM, 0, 0],
         // legs down rather than CoM down. Subtracting the vehicle height here offset
         // the flown path from the plan by exactly that, so the two curves failed to
@@ -173,7 +177,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// Latches the axis extents, in FOUR steps: when the descent begins, at half the
     /// flight remaining, at a quarter remaining, and at five seconds to touchdown.
-    /// Each fires once, in order, so the picture holds still between them — refitting
+    /// Each fires once, in order, so the picture holds still between them - refitting
     /// every frame zooms it continuously and nothing stays put long enough to read.
     /// </summary>
     private static void LockGfoldAxes(GfoldTrajectory plan)
@@ -364,7 +368,7 @@ public static partial class PoweredGuidanceWindow
 
         // Thrust direction at a handful of nodes. AccelCmd is in the same pad frame,
         // so its up component is x and its horizontal component projects onto the
-        // range direction — which points AWAY from the pad, i.e. leftward on the plot.
+        // range direction - which points AWAY from the pad, i.e. leftward on the plot.
         int stride = Math.Max(1, plan.Nodes / 8);
         for (int i = 0; i < plan.Nodes; i += stride)
         {
@@ -393,7 +397,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// The 6-DOF plan, in the same side view. Node states are laid out flat, fourteen
-    /// doubles each with position first — the same buffer the world overlay reads.
+    /// doubles each with position first - the same buffer the world overlay reads.
     /// </summary>
     private static void Draw6DofPlannedPath(ImDrawListPtr dl, Func<double, double, float2> toPlot,
                                             float2 lo, float2 hi)
@@ -418,7 +422,7 @@ public static partial class PoweredGuidanceWindow
                 return;
             haveThrust = pu.Length >= n * 4;
 
-            // KsaFrameBridge's site frame is Z-UP — (ex, ey, up) — unlike the G-FOLD
+            // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD
             // frame above it, which is X-up. So height is index 2 and the horizon is
             // 0 and 1, the other way round from DrawGfoldPlannedPath.
             for (int k = 0; k < n; k++)
@@ -430,7 +434,7 @@ public static partial class PoweredGuidanceWindow
                 if (!haveThrust)
                     continue;
 
-                // The control is thrust in BODY coordinates, four doubles per node —
+                // The control is thrust in BODY coordinates, four doubles per node -
                 // NOT three, and not in the site frame. It has to be rotated by the
                 // node's attitude quaternion before it means anything spatially, which
                 // is exactly what the world overlay does.

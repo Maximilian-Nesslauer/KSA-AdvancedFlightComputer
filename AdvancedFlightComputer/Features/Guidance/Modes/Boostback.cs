@@ -1,8 +1,12 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Flight;
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Numerics;
 
 // THE BOOSTBACK STATE MACHINE: separate, turn round, burn back, and set up for entry.
 //
@@ -57,7 +61,7 @@ using PoweredGuidance.Numerics;
 //
 // THE BURN ATTITUDE AND THE PREDICTION'S ASSUMPTION AGREE, which is load-bearing and
 // not a coincidence worth leaving unstated. DragCoastSystem holds alpha = 0 for the
-// whole coast — engine into the wind — and both flown attitudes land there: the
+// whole coast - engine into the wind - and both flown attitudes land there: the
 // boostback dV is very nearly anti-parallel to the velocity, so thrusting along it
 // points body +x aft, and the entry phase commands exactly that direction outright. The
 // only stretch of the flight where the vehicle is NOT near alpha 0 is the rotation, and
@@ -90,7 +94,7 @@ using PoweredGuidance.Numerics;
 // solver can null, the tail costs 160 m; against a drag model 25% off, which it cannot,
 // the tail saves 321 m. The real vehicle is the second kind. Read the thrust-only table
 // alone and it recommends dropping the tail - which was done once, and flew worse.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // Public because VehicleAutopilotState holds a vehicle's phase - every craft runs
     // this machine on its own, exactly like AscentPhase and LandingPhase.
@@ -918,7 +922,7 @@ public static partial class PoweredGuidanceWindow
     /// MinimumThrottle over every engine).
     ///
     /// DELIBERATELY NOT Ksa6DofSetup.VehicleThrottleFloor, which reports 1.0 for
-    /// anything outside (0, 1] — including an engine whose MinimumThrottle is zero.
+    /// anything outside (0, 1] - including an engine whose MinimumThrottle is zero.
     /// That is the right conservative direction for a descent solver sizing its
     /// authority, and exactly the wrong one here, where it would read "settle the
     /// propellant at full thrust" and lay down a large unplanned dV two seconds before

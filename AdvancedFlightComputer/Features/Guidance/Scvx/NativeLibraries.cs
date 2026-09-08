@@ -1,14 +1,14 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Single DllImportResolver registration for the whole assembly.
 ///
 /// NativeLibrary.SetDllImportResolver THROWS if called twice for the same
 /// assembly, so every native library P/Invoke'd from Scvx.Core must be
-/// dispatched from this one resolver — a second [ModuleInitializer] registering
+/// dispatched from this one resolver - a second [ModuleInitializer] registering
 /// its own is an InvalidOperationException at load, which is how this file came
 /// to exist. Add new natives to the switch below, never as a new initializer.
 /// </summary>

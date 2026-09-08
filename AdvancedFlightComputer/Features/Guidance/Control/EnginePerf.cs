@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.Numerics;
 using KSA;
@@ -8,8 +12,8 @@ using KSA;
 // and TotalEngineExhaustVelocity; the August 2026 build dropped both (it now
 // carries only the RCS thrusters and gimbals), so we sum the same quantities
 // ourselves. EngineController.VacuumData is the game's own precomputed vacuum
-// performance for that controller's cores — thrust vector and max mass flow at
-// full throttle — refreshed by PartTree whenever the part tree changes.
+// performance for that controller's cores - thrust vector and max mass flow at
+// full throttle - refreshed by PartTree whenever the part tree changes.
 //
 // The Vacuum* members are deliberately NOT filtered by EngineController.IsActive.
 // The callers (G-FOLD planning, terminal hover) size a burn that may be commanded
@@ -18,7 +22,7 @@ using KSA;
 // They are vehicle-configuration figures, not live-thrust ones.
 //
 // They are also VACUUM figures, so they overstate thrust in any atmosphere. Use
-// AtPressure for anything flown on a world with air — see the comment there.
+// AtPressure for anything flown on a world with air - see the comment there.
 internal static class KsaEnginePerf
 {
     // Full-throttle vacuum thrust (N) and mass flow (kg/s) of the vehicle's
@@ -55,7 +59,7 @@ internal static class KsaEnginePerf
     // Full-throttle thrust (N) and mass flow (kg/s) AT A GIVEN AMBIENT PRESSURE,
     // counting only the engines that will actually be lit.
     //
-    // Vacuum() overstates thrust everywhere there is air — a booster's sea-level
+    // Vacuum() overstates thrust everywhere there is air - a booster's sea-level
     // thrust is typically ~80% of its vacuum figure, so a planner fed the vacuum
     // number believes in ~25% more thrust than exists. It never arrests as
     // planned, each re-solve starts lower than the last, and the trajectory
@@ -67,7 +71,7 @@ internal static class KsaEnginePerf
     // CAPABILITY at full throttle, not a measurement of current thrust. That
     // distinction matters: Vehicle.ComputeActiveThrust(p) reports what the engines
     // are producing right now, and feeding a live figure back in as Tmax builds a
-    // loop — throttle down, Tmax reads low, the plan believes it has less
+    // loop - throttle down, Tmax reads low, the plan believes it has less
     // authority, it throttles down further.
     internal static (double thrust, double massFlow) AtPressure(Vehicle vehicle, double ambientPressure)
     {
@@ -106,7 +110,7 @@ internal static class KsaEnginePerf
                     continue;
                 // The throttle argument is ours to pick as of KSA 2026.8.19: ComputeFromCores
                 // used to hardcode ComputeConditions(1f) internally. Pass 1 to keep this a
-                // full-throttle CAPABILITY — the whole point of this routine (see above).
+                // full-throttle CAPABILITY - the whole point of this routine (see above).
                 RocketControllerData d = RocketControllerData.ComputeFromCores(cores, com, p, 1f);
                 thrust += d.ThrustMax.Length();
                 massFlow += d.MassFlowRateMax;
@@ -123,8 +127,8 @@ internal static class KsaEnginePerf
     //
     // This is the number a thrust command must be divided by. KSA's EngineThrottle
     // is a FRACTION of whatever the engines can currently produce, so dividing a
-    // demand by anything else — a figure from plan time, a vacuum figure, a
-    // different altitude's figure — delivers the wrong thrust by exactly that ratio.
+    // demand by anything else - a figure from plan time, a vacuum figure, a
+    // different altitude's figure - delivers the wrong thrust by exactly that ratio.
     //
     // Safe to use as a divisor despite the name: ComputeActivePerformance calls
     // ComputeFromCores with a throttle of 1, so this is a capability and NOT scaled
@@ -148,7 +152,7 @@ internal static class KsaEnginePerf
     //
     //     F = mdot*Ve + (Pe - Pa)*Ae
     //
-    // The momentum term scales with throttle. The ambient term -Pa*Ae does NOT — it
+    // The momentum term scales with throttle. The ambient term -Pa*Ae does NOT - it
     // is the same at 30% throttle as at 100%. So
     //
     //     F(t) = t*F(1) - Pa*Ae*(1 - t)
@@ -230,13 +234,13 @@ internal static class KsaEnginePerf
 
     // Ambient pressure (Pa) at an altitude above the body's sea level datum, or 0
     // on an airless world. Anything missing reads as vacuum, which is the safe
-    // direction for every caller except a planner — see AtPressure's callers for
+    // direction for every caller except a planner - see AtPressure's callers for
     // which altitude they choose.
     internal static double AmbientPressureAt(IParentBody parent, double altitudeAslM)
     {
         // EVERY link here is nullable and an airless body breaks the FIRST one.
         // AtmosphereReference is a class, so GetAtmosphereReference() returns null
-        // on a body with no atmosphere — which is most of them, and is exactly the
+        // on a body with no atmosphere - which is most of them, and is exactly the
         // case this function exists to report 0 for. Guarding only `parent` (as an
         // earlier version did) throws a NullReferenceException instead, and because
         // this is called from the ImGui draw the exception unwinds past the window's
@@ -248,7 +252,7 @@ internal static class KsaEnginePerf
             return 0.0;
 
         // DO NOT gate this on phys.IsValid(). It requires ScaleHeight.IsValid(), and
-        // DistanceReference.IsValid() is `Math.Abs(value) > 100000.0` — over 100 km.
+        // DistanceReference.IsValid() is `Math.Abs(value) > 100000.0` - over 100 km.
         // Atmospheric scale heights are single-digit kilometres (Earth's is ~8.5 km),
         // so that predicate is FALSE for every atmosphere in the game. The check is
         // written for orbital distances and is simply the wrong test here.
@@ -258,7 +262,7 @@ internal static class KsaEnginePerf
         // VacuumData when pressure <= 0, so both the planner's Tmax and the throttle
         // divisor silently became VACUUM thrust. The vehicle then planned against
         // thrust it did not have and under-throttled by the same ratio all the way
-        // down — which is exactly the constant shortfall the flight logs showed.
+        // down - which is exactly the constant shortfall the flight logs showed.
         //
         // Validating the RESULT is the honest check: a body with no atmosphere has
         // zero or NaN sea-level pressure and lands on 0 here anyway, and a zero

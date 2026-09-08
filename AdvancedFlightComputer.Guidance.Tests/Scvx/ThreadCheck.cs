@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Does the solve survive being driven from another thread, and does the publish
@@ -8,20 +8,20 @@ using Scvx;
 ///
 ///   THE SOLVER OFF-THREAD. SCS is native and holds a workspace per solver instance.
 ///   Driving one from a background thread must produce exactly what driving it inline
-///   produces — not approximately, exactly, since nothing about the arithmetic should
+///   produces - not approximately, exactly, since nothing about the arithmetic should
 ///   care which thread runs it. A difference here would mean shared mutable state
 ///   somewhere in the native layer, and the whole approach would be off.
 ///
 ///   THE PUBLISH. A plan is four things written together: controls, burn time, anchor
 ///   time, node count. Read as four fields, a solve landing between two of them pairs
 ///   new controls with an old anchor, and the vehicle is commanded from the wrong
-///   point of the right trajectory — which looks exactly like guidance ignoring its
+///   point of the right trajectory - which looks exactly like guidance ignoring its
 ///   own plan, and would be maddening to find in a log. Published as one immutable
 ///   object swapped by reference, the reader gets the whole previous plan or the whole
 ///   new one. This hammers the read while solves land underneath it and checks that
 ///   every observation was internally consistent.
 ///
-/// A passing run does not prove the mod's threading is correct — the ownership rule
+/// A passing run does not prove the mod's threading is correct - the ownership rule
 /// around rebuilds and cold restarts lives in PoweredGuidance6Dof, which needs KSA
 /// types this harness cannot reference. It proves the foundation those rules sit on.
 /// </summary>
@@ -76,8 +76,8 @@ internal static class ThreadCheck
 
     /// <summary>
     /// One thread publishes internally-consistent snapshots as fast as it can; another
-    /// reads and checks consistency. The fields are correlated on purpose — Sigma,
-    /// SolveTime and U all carry the same generation number — so a torn read is
+    /// reads and checks consistency. The fields are correlated on purpose - Sigma,
+    /// SolveTime and U all carry the same generation number - so a torn read is
     /// detectable rather than merely possible.
     /// </summary>
     private static volatile bool _stopProducing;

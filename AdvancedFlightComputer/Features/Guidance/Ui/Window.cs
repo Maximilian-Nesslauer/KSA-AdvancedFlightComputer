@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
@@ -7,7 +11,7 @@ using KSA;
 // Guidance/Ascent.cs / Guidance/Landing.cs, the G-FOLD descent in
 // Guidance/GfoldDescent.cs, shared plumbing in Guidance/Autopilot.cs, and the
 // world-space overlay in Ui/Overlays/Overlay.cs.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     /// <summary>
     /// Whether the original ImGui window - the Ascent/Landing/Gimbal tab stack and the
@@ -24,7 +28,7 @@ public static partial class PoweredGuidanceWindow
     ///   AcquireVehicle now, on the path both branches take.
     ///
     ///   KEPT - the LAN seed. DrawAscentTab seeded _s.LanDeg on first sight of a
-    ///   vehicle; PoweredGuidancePanel does the same thing already, so it survives.
+    ///   vehicle; the panel does the same thing, so it survives.
     ///
     ///   KEPT - the tab-follow flags. GfoldTabSelectPending and TermTabSelectPending
     ///   are set outside these tabs and cleared by the gauge panel, so nothing latches.
@@ -87,14 +91,14 @@ public static partial class PoweredGuidanceWindow
             return;
 
         // One panel per frame gets to act on the armed auto-launch, whichever draws
-        // first — see DrawAutoLaunchArming.
+        // first - see DrawAutoLaunchArming.
         _autoLaunchStepped = false;
 
         // The End() is in a finally so that an exception anywhere below cannot leave
         // ImGui inside this window.
         //
         // ImGui keeps a window STACK, so an unwound Begin does not fail where the
-        // fault is — it fails at the end of the frame, as "window Powered Guidance:
+        // fault is - it fails at the end of the frame, as "window Powered Guidance:
         // missing End", and then keeps failing every frame afterwards. That message
         // names this function no matter what actually threw, so the real fault (twice
         // now, a null KSA reference several calls deep) is completely hidden. The
@@ -131,7 +135,7 @@ public static partial class PoweredGuidanceWindow
             _showGuidancePanel = true;
         }
 
-        // Skipped entirely if DrawBody threw — the exception propagates through the
+        // Skipped entirely if DrawBody threw - the exception propagates through the
         // finally above, so this is only reached on a clean frame.
         if (vehicle != null)
             DrawTrailingWindows(viewport, vehicle);
@@ -139,7 +143,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// The window's contents. Returns the controlled vehicle, or null if there was
-    /// none and nothing further should be drawn. Deliberately does NOT call End() —
+    /// none and nothing further should be drawn. Deliberately does NOT call End() -
     /// see Draw.
     /// </summary>
     /// <summary>
@@ -163,7 +167,7 @@ public static partial class PoweredGuidanceWindow
 
     private static Vehicle DrawBody(IGameViewport viewport)
     {
-        ImGui.Begin("Powered Guidance", ImGuiWindowFlags.AlwaysAutoResize);
+        ImGui.Begin("AFC Guidance", ImGuiWindowFlags.AlwaysAutoResize);
 
         Vehicle vehicle = AcquireVehicle();
         if (vehicle == null)
@@ -215,7 +219,7 @@ public static partial class PoweredGuidanceWindow
             ResetFlightComputer();
         }
 
-        // The rebuilt panel — see Ui/Panel.cs. Its own gauge window, so
+        // The rebuilt panel - see Ui/Panel.cs. Its own gauge window, so
         // it is drawn from DrawTrailingWindows rather than here.
         ImGui.SameLine();
         ImGui.Checkbox("Guidance panel", ref _showGuidancePanel);
@@ -230,7 +234,7 @@ public static partial class PoweredGuidanceWindow
         // here, which quietly made them focused-vehicle-only: the draw happens once
         // per frame for the craft the player is looking at, so any other vehicle's
         // guidance froze the moment the camera left it. They run from ApplyAutopilot
-        // now — the per-vehicle PrepareWorker prefix — and this panel is purely a
+        // now - the per-vehicle PrepareWorker prefix - and this panel is purely a
         // readout of whichever flight computer is focused.
 
         if (_s.GuidanceError.Length > 0)
@@ -239,7 +243,7 @@ public static partial class PoweredGuidanceWindow
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f), _s.Status);
 
         // The single-thread invariant the ambient state rests on, if it has ever been
-        // seen to break - see PoweredGuidanceWindow._s. Not per-vehicle and not
+        // seen to break - see GuidanceWindow._s. Not per-vehicle and not
         // clearable: once the sim step and the draw are on different threads, every
         // number on this panel is suspect and saying so once is the whole point.
         if (OwnerThreadViolation.Length > 0)
@@ -256,7 +260,7 @@ public static partial class PoweredGuidanceWindow
     {
         // Claim the ambient state again. DrawBody left it pointing here, but these are
         // separate ImGui windows drawn after it closed, and every one of them reads
-        // per-vehicle configuration — so they say which vehicle they mean rather than
+        // per-vehicle configuration - so they say which vehicle they mean rather than
         // inheriting it.
         Use(vehicle);
 
@@ -265,7 +269,7 @@ public static partial class PoweredGuidanceWindow
         double bodyRadius = parent.MeanRadius;
 
         // FIRST. Everything below can throw, and Mod.DrawGui catches the lot into a
-        // Console.Error that goes nowhere under StarMap — so anything drawn at the
+        // Console.Error that goes nowhere under StarMap - so anything drawn at the
         // END of this method is starved by an unrelated fault upstream, and looks
         // exactly like "my window doesn't work".
         DrawGuidancePanel(vehicle, orbit, parent, bodyRadius);
@@ -276,14 +280,14 @@ public static partial class PoweredGuidanceWindow
         DrawTermParamsWindow();
         DrawGfoldDebugWindow();
 
-        // Are we looking at a descent? Either window can say so — the legacy Landing
+        // Are we looking at a descent? Either window can say so - the legacy Landing
         // tab, or the gauge panel sitting on a descent tab. Both the ascent overlay
         // and the landing-site marker key off this, so that retargeting works from the
         // new panel and the two overlays don't clutter each other's view. Guidance
         // itself keeps running regardless of which tab is open.
         //
         // Named rather than inverted: this used to read "anything but Ascent", which
-        // silently made every tab added afterwards a descent. Boostback is not one —
+        // silently made every tab added afterwards a descent. Boostback is not one -
         // it has no landing site to mark and no retarget click to arm.
         bool descentUi = _landingTabActive
             || (_showGuidancePanel && (_panelTab == GuidanceTab.Descent
@@ -325,17 +329,17 @@ public static partial class PoweredGuidanceWindow
             double3 steer = _s.HasCommand ? _s.CommandDir : _s.Upfg.Steering;
 
             ImGui.Text(landingActive
-                ? $"Phase: landing — {_s.LandingPhase} (UPFG mode {_s.Upfg.Mode})"
+                ? $"Phase: landing - {_s.LandingPhase} (UPFG mode {_s.Upfg.Mode})"
                 : $"Phase: {PhaseName(_s.Phase)}");
             if (!landingActive && _s.Phase == AscentPhase.Terminal)
             {
                 double remaining = _s.CutoffTime - SimNow();
                 if (remaining > 0)
                     ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                        $"TERMINAL — attitude frozen, cutoff in {remaining,5:F1} s");
+                        $"TERMINAL - attitude frozen, cutoff in {remaining,5:F1} s");
                 else
                     ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                        "CUTOFF — kill throttle now");
+                        "CUTOFF - kill throttle now");
             }
             else
             {
@@ -360,7 +364,7 @@ public static partial class PoweredGuidanceWindow
         // --- Staged vehicle model ---
         // While flying, show the list UPFG is actually steering on (post g-limit
         // split). While idle, show the snapshot the PrepareWorker prefix keeps
-        // current anyway — so the staging can be checked on the pad, before
+        // current anyway - so the staging can be checked on the pad, before
         // committing to a launch, at no extra cost.
         ImGui.SeparatorText("Vehicle stages (UPFG)");
         var stageList = (_s.Running || landingActive) ? _s.UpfgVehicle : _s.StageModel;
@@ -374,7 +378,7 @@ public static partial class PoweredGuidanceWindow
             double totalDv = 0.0;
             for (int i = 0; i < stageList.Stages.Count; i++)
             {
-                PoweredGuidance.Upfg.UpfgStage s = stageList.Stages[i];
+                AdvancedFlightComputer.Features.Guidance.Upfg.UpfgStage s = stageList.Stages[i];
                 double burnTime = s.Mode == 2
                     ? s.Isp * 9.80665 * System.Math.Log(s.MassTotal / s.MassDry) / (s.GLim * 9.80665)
                     : (s.MassTotal - s.MassDry) / (s.Thrust / (s.Isp * 9.80665));
@@ -388,11 +392,11 @@ public static partial class PoweredGuidanceWindow
             // Cross-checks against the game's own model. The stage list comes from
             // KSA's staging simulator (the same one behind the in-game stage menu),
             // so these two are the ways it can silently disagree with reality.
-            if (PoweredGuidance.Upfg.KsaVehicleAdapter.AnyAtmosphericSequence(vehicle))
+            if (AdvancedFlightComputer.Features.Guidance.Upfg.KsaVehicleAdapter.AnyAtmosphericSequence(vehicle))
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                     "A sequence is set to Atmospheric: its figures are sea-level, not vacuum.");
 
-            double modelMass = PoweredGuidance.Upfg.KsaVehicleAdapter.CurrentStageWetMass(vehicle);
+            double modelMass = AdvancedFlightComputer.Features.Guidance.Upfg.KsaVehicleAdapter.CurrentStageWetMass(vehicle);
             double liveMass = vehicle.TotalMass;
             if (modelMass > 0 && liveMass > 0
                 && System.Math.Abs(modelMass - liveMass) > 0.005 * liveMass)
@@ -409,7 +413,7 @@ public static partial class PoweredGuidanceWindow
         }
         else
         {
-            ImGui.Text("No staged model — the vehicle has no sequenced engines.");
+            ImGui.Text("No staged model - the vehicle has no sequenced engines.");
         }
 
         // --- Current vs target ---
@@ -417,7 +421,7 @@ public static partial class PoweredGuidanceWindow
         ImGui.Text($"            current     target");
         ImGui.Text($"Periapsis  {(orbit.Periapsis - bodyRadius) / 1000.0,8:F1}   {_s.PeKm,8:F1} km");
         ImGui.Text($"Apoapsis   {(orbit.Apoapsis - bodyRadius) / 1000.0,8:F1}   {_s.ApKm,8:F1} km");
-        ImGui.Text($"Inclination{PoweredGuidance.Upfg.UpfgTarget.RadToDeg(orbit.Inclination),8:F2}   {_s.IncDeg,8:F2} deg");
+        ImGui.Text($"Inclination{AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.RadToDeg(orbit.Inclination),8:F2}   {_s.IncDeg,8:F2} deg");
 
         // --- Autopilot ---
         ImGui.SeparatorText("Autopilot");
@@ -425,17 +429,17 @@ public static partial class PoweredGuidanceWindow
         {
             // The actual flight-computer writes happen in ApplyAutopilot, from the
             // Harmony prefix just before the sim snapshots the FC (Vehicle.
-            // PrepareWorker). Writing from here — the UI draw — lands in the
+            // PrepareWorker). Writing from here - the UI draw - lands in the
             // window where the sim's copy-back erases it.
             float errDeg = (float)(vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / System.Math.PI);
             ImGui.Text($"Flying {PhaseName(_s.Phase)} attitude. Error: {errDeg:F1} deg");
             ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f), _s.AutoStage
                 ? (_s.CutoffDone
-                    ? "(Auto: engines cut off — done.)"
+                    ? "(Auto: engines cut off - done.)"
                     : (_s.StagingActive
-                        ? "(Auto: STAGING — firing sequences until thrust returns.)"
+                        ? "(Auto: STAGING - firing sequences until thrust returns.)"
                         : "(Auto: engines on, full throttle, staging at burnout.)"))
-                : "(Steering only — throttle and staging are manual.)");
+                : "(Steering only - throttle and staging are manual.)");
         }
         else if (_s.Engage && _s.Running)
         {

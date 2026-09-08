@@ -1,18 +1,18 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
-/// P/Invoke surface for the vendored scs.dll (scvx/scs, built by
-/// scvx/build-scs.ps1). Built with DLONG undefined and SFLOAT undefined, so
-/// scs_int is int32 and scs_float is double — matches ScsNative's layout
+/// P/Invoke surface for the vendored scs.dll (third_party/scs, built by
+/// build/build-scs.ps1). Built with DLONG undefined and SFLOAT undefined, so
+/// scs_int is int32 and scs_float is double - matches ScsNative's layout
 /// one-to-one with no width translation needed.
 ///
-/// Struct layouts below mirror scvx/scs/include/scs.h field order and types
+/// Struct layouts below mirror third_party/scs/include/scs.h field order and types
 /// exactly; C# struct layout is sequential by default, which matches a C
 /// struct's field order as long as no manual padding is required (none of
-/// these need it — every field here is either a pointer or a scs_int/scs_float,
+/// these need it - every field here is either a pointer or a scs_int/scs_float,
 /// both machine-word-sized or smaller with natural alignment).
 /// </summary>
 internal static partial class ScsNative
@@ -56,7 +56,7 @@ internal static partial class ScsNative
         public int Cssize;
         public int Ep;         // primal exponential cone count
         public int Ed;         // dual exponential cone count
-        public IntPtr P_;      // power cone params, unused (Zero) — field named P in scs.h
+        public IntPtr P_;      // power cone params, unused (Zero) - field named P in scs.h
         public int Psize;
     }
 
@@ -84,9 +84,9 @@ internal static partial class ScsNative
     [StructLayout(LayoutKind.Sequential)]
     internal struct ScsSolution
     {
-        public IntPtr X;   // scs_float*, length n — primal
-        public IntPtr Y;   // scs_float*, length m — dual
-        public IntPtr S;   // scs_float*, length m — slack
+        public IntPtr X;   // scs_float*, length n - primal
+        public IntPtr Y;   // scs_float*, length m - dual
+        public IntPtr S;   // scs_float*, length m - slack
     }
 
     // ScsInfo carries two fixed 128-byte char buffers (status, lin_sys_solver)
@@ -145,7 +145,7 @@ internal static partial class ScsNative
     /// Dumps .NET's actual computed size/offsets for the marshaled structs, to
     /// check against the C struct's real layout by hand. A P/Invoke struct with
     /// the right field ORDER can still have the wrong OFFSETS if an alignment
-    /// assumption is wrong somewhere — this makes that checkable instead of
+    /// assumption is wrong somewhere - this makes that checkable instead of
     /// argued about.
     /// </summary>
     internal static string DumpLayouts()

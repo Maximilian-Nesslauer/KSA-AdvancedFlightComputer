@@ -1,4 +1,4 @@
-namespace PoweredGuidance.Numerics;
+namespace AdvancedFlightComputer.Guidance.Numerics;
 
 /// <summary>How the surrogate behaves outside the fitted domain.</summary>
 public enum EdgeMode

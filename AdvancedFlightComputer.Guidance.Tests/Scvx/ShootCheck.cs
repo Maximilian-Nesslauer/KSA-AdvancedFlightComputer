@@ -1,5 +1,5 @@
-using PoweredGuidance.Flight;
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Numerics;
 
 /// <summary>
 /// Direct shooting on a boostback burn: does the finite-burn optimum agree with what

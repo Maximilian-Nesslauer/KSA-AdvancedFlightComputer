@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using System.Collections.Generic;
 using System.Reflection;
@@ -5,17 +9,17 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
-using PoweredGuidance.Upfg;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // Shared plumbing used by every flow: the per-vehicle step-and-apply entry point
 // (ApplyAutopilot, called from the Vehicle.PrepareWorker Harmony prefix for each
 // craft in turn), the commanded attitude, auto-staging, the UPFG vehicle builder,
 // the warp-confirmation prompt, and small math helpers.
 //
-// The state these act on is NOT here — it lives on the vehicle being serviced, via
+// The state these act on is NOT here - it lives on the vehicle being serviced, via
 // the ambient _s pointer (see VehicleAutopilotState). What remains static in this
 // partial class belongs to the panel or to the process, not to a craft.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
 
     // Guidance must survive transient bad frames (the staging frame reports zero
@@ -24,7 +28,7 @@ public static partial class PoweredGuidanceWindow
     // unbroken run of failures stops guidance for good.
     private const int MaxFailStreak = 600; // ~10 s of consecutive bad frames
 
-    // THE UPFG SOLVER IS PER VEHICLE — see VehicleAutopilotState.Upfg. It used to be
+    // THE UPFG SOLVER IS PER VEHICLE - see VehicleAutopilotState.Upfg. It used to be
     // one static instance shared by every craft, which is wrong for a filter that
     // warm-starts from its own previous state and differences velocities across
     // calls: switching focus fed one vehicle's inertial velocity into another's vgo.
@@ -69,7 +73,7 @@ public static partial class PoweredGuidanceWindow
     private static void RequestWarp(double targetSimSec, string label)
     {
         if (_warpDeclinedLabel == label)
-            return;   // the user said no to this one — don't nag every frame
+            return;   // the user said no to this one - don't nag every frame
         _warpPromptActive = true;
         _warpLabel = label;
         _warpTargetSimSec = targetSimSec;
@@ -102,7 +106,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // Staging needs an unknown number of sequence activations (decouple, then
-    // ignite, sometimes another press before that) — so whenever the vehicle has no
+    // ignite, sometimes another press before that) - so whenever the vehicle has no
     // engine actually producing thrust (lit AND fed with propellant, per the game's
     // own live engine state), keep firing the next sequence every SequenceCooldown
     // seconds until one is. That covers pad ignition, burnout staging, and
@@ -371,12 +375,12 @@ public static partial class PoweredGuidanceWindow
     //
     // Vehicle.Split detaches the TREE-CHILD side of a decoupler's connection into a
     // NEW vehicle and keeps the tree-parent side as the vehicle object the player is
-    // still controlling — and nothing in KSA moves control to follow the pod
+    // still controlling - and nothing in KSA moves control to follow the pod
     // (Program.ControlledVehicle is only reassigned by camera targeting and EVA). So
     // if every Control module sits on the child side, that separation hands the pod
     // away and leaves the player attached to the debris. The symptom is unmistakable
     // once seen: Vehicle.IsControllable is `Parts.Controls.NumModules > 0`, and the
-    // flight computer greys out everything it gates on that — the Strict/Balanced/
+    // flight computer greys out everything it gates on that - the Strict/Balanced/
     // Relaxed attitude profiles included, since those fall through to a bare
     // !IsControllable test.
     //
@@ -420,7 +424,7 @@ public static partial class PoweredGuidanceWindow
 
         Span<Control> controls = tree.Modules.Get<Control>();
         if (controls.Length == 0)
-            return false;   // already uncontrollable — nothing left to protect
+            return false;   // already uncontrollable - nothing left to protect
         for (int i = 0; i < controls.Length; i++)
             if (!_stagingDropped.Contains(controls[i].Parent.FullPart))
                 return false;   // at least one control module stays with us
@@ -428,7 +432,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // The part whose subtree separates when this decoupler fires: the tree-child
-    // side of its connection — the same rule Vehicle.Split applies.
+    // side of its connection - the same rule Vehicle.Split applies.
     private static Part DetachedRoot(Decoupler decoupler)
     {
         Part.Connection conn = decoupler.Connector?.Connection;
@@ -450,13 +454,13 @@ public static partial class PoweredGuidanceWindow
     }
 
     // Engine parts that are lit but out of propellant. SCRATCH: filled and consumed
-    // within one vehicle's AutoSequence call, never read across calls — the set we
+    // within one vehicle's AutoSequence call, never read across calls - the set we
     // last staged for is per vehicle (VehicleAutopilotState.SpentStagedFor). Kept as a
     // field so the check allocates nothing on the sim path.
     private static readonly HashSet<uint> _spentEngineParts = new HashSet<uint>();
 
     // True when a burnt-out engine is still attached and the next sequence is the
-    // one that separates something — i.e. spent boosters waiting to be dropped
+    // one that separates something - i.e. spent boosters waiting to be dropped
     // while the core still burns.
     //
     // Two guards keep this from turning into a staging loop. The next sequence
@@ -494,7 +498,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // --- Stage model ---
-    // KSA models staging itself (PartTree.PerformanceSequences — see
+    // KSA models staging itself (PartTree.PerformanceSequences - see
     // KsaVehicleAdapter), but in flight it only recomputes while the stage or
     // engine-control panel is open, so the mod drives it.
     //
@@ -506,7 +510,7 @@ public static partial class PoweredGuidanceWindow
     // VehicleSolvers.Wait() and before the tasks are re-queued, so no worker is
     // in flight. Hence both the recompute and the copy-out happen here, and the
     // guidance step consumes the snapshot. One sim step of staleness is
-    // immaterial — UPFG reconciles stage 0 against the live mass every step.
+    // immaterial - UPFG reconciles stage 0 against the live mass every step.
     private const long StageModelIntervalMs = 250;
 
     private static void RefreshStageModel(Vehicle vehicle)
@@ -525,8 +529,8 @@ public static partial class PoweredGuidanceWindow
         _s.StageModelDirty = false;
 
         // A staging frame can catch the part tree mid-rebuild. Losing one
-        // refresh is harmless — the previous snapshot stays valid and we retry
-        // immediately — but letting it escape would skip the attitude command
+        // refresh is harmless - the previous snapshot stays valid and we retry
+        // immediately - but letting it escape would skip the attitude command
         // for that step, which is not.
         try
         {
@@ -540,8 +544,8 @@ public static partial class PoweredGuidanceWindow
             performance.RecomputeForFlight(0f);
             _s.StageModel = KsaVehicleAdapter.Build(vehicle);
             // The game's own total for the same recompute, latched for the panel to
-            // check our stage list against. Both are "from here on" — its simulated
-            // mole masses are re-seeded from the live tanks every recompute — so a
+            // check our stage list against. Both are "from here on" - its simulated
+            // mole masses are re-seeded from the live tanks every recompute - so a
             // disagreement means the adapter is reading the sequence list wrongly,
             // which is exactly the failure that is invisible in a plausible-looking
             // stage table. TotalDeltaV is a Volatile.Read of a float, so the draw
@@ -564,8 +568,8 @@ public static partial class PoweredGuidanceWindow
     // The staged vehicle in UPFG's format, taken from the snapshot above. If the
     // vehicle has no usable sequences (e.g. a single stack with engines already
     // lit and no decouplers), fall back to one stage built from the live engine
-    // configuration. Null means "nothing to fly with yet" — either the snapshot
-    // hasn't been taken or there is no thrust anywhere — a transient the caller
+    // configuration. Null means "nothing to fly with yet" - either the snapshot
+    // hasn't been taken or there is no thrust anywhere - a transient the caller
     // waits out by holding its last solution.
     private static UpfgVehicle BuildUpfgVehicle(Vehicle vehicle)
     {
@@ -851,7 +855,7 @@ public static partial class PoweredGuidanceWindow
 
     // Vehicle-wide acceleration limit, applied to the freshly built stage list each
     // step (same split the original navbox did per stage): a stage that would cross
-    // the limit mid-burn is divided at the mass where full thrust hits the limit —
+    // the limit mid-burn is divided at the mass where full thrust hits the limit -
     // constant thrust before it, constant acceleration (Mode 2) after.
     private static void ApplyGLimit(UpfgVehicle vehicle, double gLim)
     {
@@ -961,14 +965,14 @@ public static partial class PoweredGuidanceWindow
             Disengage6Dof(vehicle);
     }
 
-    // Called from the Harmony prefix on Vehicle.PrepareWorker (see Mod) — i.e.
+    // Called from the Harmony prefix on Vehicle.PrepareWorker (see Mod) - i.e.
     // immediately before the sim snapshots the flight computer for this step, the one
     // place where our writes are guaranteed to reach the control loop instead of being
     // erased by the worker copy-back.
     //
     // EVERY MODE IS STEPPED HERE, FOR EVERY VEHICLE. Ascent and the landing machine
     // used to be stepped from the UI draw, which is called once per frame for the
-    // focused craft only — so an unfocused vehicle's guidance simply stopped, and its
+    // focused craft only - so an unfocused vehicle's guidance simply stopped, and its
     // flight computer coasted on whatever attitude it had been left holding until the
     // player looked at it again. That is not an autopilot per vehicle; it is one
     // autopilot that follows the camera. Running the flows from the per-vehicle sim
@@ -982,8 +986,8 @@ public static partial class PoweredGuidanceWindow
         // Point the ambient state at THIS vehicle for everything that follows.
         //
         // For() only for the focused craft, because it creates the entry and this runs
-        // for every vehicle on every sim step — thousands of calls a second under time
-        // warp — so a craft that has never been engaged must cost one failed lookup
+        // for every vehicle on every sim step - thousands of calls a second under time
+        // warp - so a craft that has never been engaged must cost one failed lookup
         // and no allocation.
         if (focused)
             Use(vehicle);
@@ -1034,7 +1038,7 @@ public static partial class PoweredGuidanceWindow
         if (!focused && !flying)
             return;
 
-        // HOUSEKEEPING FIRST, ahead of the 6-DOF dispatch on purpose — that dispatch
+        // HOUSEKEEPING FIRST, ahead of the 6-DOF dispatch on purpose - that dispatch
         // returns, so anything below it is skipped for a craft flying 6-DOF.
         //
         // Keep the staging model current even while the autopilot is idle: both
@@ -1066,13 +1070,13 @@ public static partial class PoweredGuidanceWindow
 
         // Likewise the flown-trajectory trace: sampled off the simulation rather than
         // the frame rate, and recorded whether or not guidance is running so the track
-        // is already there when the overlay is switched on — losing it the moment
+        // is already there when the overlay is switched on - losing it the moment
         // guidance engages would blank the overlay during exactly the descent worth
         // watching.
         RecordTrace(vehicle, vehicle.Orbit);
 
         // Likewise the launch window: tracked, and FIRED, from here rather than from
-        // the panel. It is housekeeping in the same sense the two above are — it has
+        // the panel. It is housekeeping in the same sense the two above are - it has
         // to run for a focused vehicle that is not flying yet, which is precisely the
         // state an armed launch sits in. See StepLaunchWindow.
         StepLaunchWindow(vehicle, vehicle.Orbit, vehicle.Orbit.Parent,
@@ -1112,7 +1116,7 @@ public static partial class PoweredGuidanceWindow
         //
         // The open-loop phases (vertical/kick/prograde) don't need a converged UPFG
         // solution; once flying, keep commanding through transient re-convergence
-        // (e.g. right after staging) — dropping to Manual mid-ascent would be far
+        // (e.g. right after staging) - dropping to Manual mid-ascent would be far
         // more disruptive.
         bool landingGuides = _s.LandingPhase == LandingPhase.Prep
             || _s.LandingPhase == LandingPhase.Burn
@@ -1120,17 +1124,17 @@ public static partial class PoweredGuidanceWindow
             || _s.LandingPhase == LandingPhase.TerminalHover;
         // Every live boostback phase steers, including the settling burn (which holds a
         // latched attitude) and the entry hold (which tracks surface retrograde
-        // indefinitely) — so unlike the landing machine there is no sub-phase here that
+        // indefinitely) - so unlike the landing machine there is no sub-phase here that
         // wants the vehicle back.
         bool boostbackGuides = BoostbackLive;
         bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides)
                           && _s.HasCommand;
 
         // Auto engine control: master switch on at full throttle while flying, off
-        // for good once the terminal countdown expires. Written here — the prefix
-        // runs just before PrepareWorker snapshots _manualControlInputs — so it
+        // for good once the terminal countdown expires. Written here - the prefix
+        // runs just before PrepareWorker snapshots _manualControlInputs - so it
         // reaches the sim exactly like the player's ignite/shutdown key.
-        // One-shot engine cut when the landing flow ends (cutoff, abort, failure) —
+        // One-shot engine cut when the landing flow ends (cutoff, abort, failure) -
         // after this the player's inputs are untouched, so the final descent below
         // the gate can be flown manually.
         if (_s.LandingCutPending)
@@ -1176,7 +1180,7 @@ public static partial class PoweredGuidanceWindow
                 // The phase decides; the step recorded it. Deliberately NOT paired with
                 // AutoSequence: the machine cuts the engine at boostback cutoff and
                 // coasts to entry from there, and the auto-stager reads "no thrust" as
-                // a cue to fire the next sequence — so it would work its way down a
+                // a cue to fire the next sequence - so it would work its way down a
                 // returning booster's staging list one activation per second, and the
                 // sequences left on a first stage are the ones that separate it.
                 ref ManualControlInputs inputs = ref ManualInputs(vehicle);
@@ -1238,19 +1242,19 @@ public static partial class PoweredGuidanceWindow
     // RateLimit are a ratchet (UpdateRcsParams only ever raises them, ONE-WAY,
     // toward the RCS's physical floor) and RateDeadband/RateBit/AttitudeTarget are
     // derived from them each step, so a snapshot taken while our guidance was
-    // flying could already be sitting on a ratcheted value — restoring it just
+    // flying could already be sitting on a ratcheted value - restoring it just
     // restores the corruption. A new FlightComputer starts at the Balanced-profile
     // defaults with nothing ratcheted.
     //
     // It also clears CustomAttitudeTarget, which MUST be cleared and not merely
     // untracked: KSA reads that one field two ways depending on AttitudeTrackTarget
-    // — Euler angles under Custom (what we write to steer), but a body RATE command
+    // - Euler angles under Custom (what we write to steer), but a body RATE command
     // in rad/s under None (see UpdateAttitudeTarget). Leaving our steering angles
     // behind with tracking dropped to None is read as a rate command of up to
     // pi rad/s, and the vehicle tumbles the moment anything selects a rate mode.
     //
     // ReadUpdatedVehicleConfiguration is ESSENTIAL here, not a nicety. A fresh
-    // FlightComputer has an empty VehicleConfig — no thrusters, no gimbals — and
+    // FlightComputer has an empty VehicleConfig - no thrusters, no gimbals - and
     // the game only repopulates it on part-tree modification, refill/deplete, or
     // save load; NOT every step. Without this call the vehicle keeps its attitude
     // commands but has no RCS or TVC to execute them with, and stays that way until
@@ -1286,14 +1290,14 @@ public static partial class PoweredGuidanceWindow
     }
 
     // The "Reset flight computer" button's action: unconditionally stop every
-    // guidance flow, cut the engine, and reset the flight computer — regardless of
+    // guidance flow, cut the engine, and reset the flight computer - regardless of
     // what state the mod's own bookkeeping thinks it's in. A backstop for the
     // normal disengage path not running (an unhandled exception, a phase the
     // fail-streak logic didn't cover), so it deliberately doesn't rely on any of
     // that bookkeeping being correct.
     //
     // The mod-side flags are set here, but the flight-computer write itself is
-    // only REQUESTED — see _s.FcResetPending. This runs from the UI draw, and a
+    // only REQUESTED - see _s.FcResetPending. This runs from the UI draw, and a
     // flight-computer write from the draw does not survive: within one frame the
     // game applies the worker's results onto the live FC, then runs PrepareWorker
     // and snapshots the FC into NewFlightComputer, and only then draws the UI. So
@@ -1360,7 +1364,7 @@ public static partial class PoweredGuidanceWindow
         _s.AutoLaunch = false;
         _s.HasCommand = false;
         _s.FcResetPending = true;
-        _s.Status = "Flight computer reset — autopilot disengaged, engine cut.";
+        _s.Status = "Flight computer reset - autopilot disengaged, engine cut.";
     }
 
     // Applies a requested reset from inside the PrepareWorker prefix, where writes
@@ -1381,16 +1385,16 @@ public static partial class PoweredGuidanceWindow
     }
 
     // Convert a commanded thrust direction into the flight computer's Custom-attitude
-    // Euler command. We use KSA's own ComputeBurnBody2Cci to build the body→CCI
+    // Euler command. We use KSA's own ComputeBurnBody2Cci to build the body->CCI
     // orientation that points thrust along the steering vector, then express it as
-    // Euler angles in the EclBody frame — the exact inverse of the conversion the
+    // Euler angles in the EclBody frame - the exact inverse of the conversion the
     // flight computer applies when it reads CustomAttitudeTarget.
     //
     // rollRef, when supplied, replaces the ROLL REFERENCE that ComputeBurnBody2Cci
-    // derives from the position vector — see SteerBody2Cci for why an ascent must not
+    // derives from the position vector - see SteerBody2Cci for why an ascent must not
     // use the stock one.
     //
-    // fullEngage=true additionally switches the FC into Custom/Auto tracking — done
+    // fullEngage=true additionally switches the FC into Custom/Auto tracking - done
     // once on engage, exactly like clicking "Apply Euler Target" in the attitude tab.
     private static void CommandAttitude(Vehicle vehicle, IParentBody parent, double3 dir,
                                         bool fullEngage, double3? rollRef = null)
@@ -1415,9 +1419,9 @@ public static partial class PoweredGuidanceWindow
         // WHETHER THE FLIGHT COMPUTER LOOKS AT THE ROLL WE JUST COMMANDED.
         // UpdateAttitudeTrackError computes a roll term only when RollMode is not
         // Decoupled; decoupled is the default and discards the target's roll entirely,
-        // tracking pointing alone. That is the right behaviour for an ascent — roll is
+        // tracking pointing alone. That is the right behaviour for an ascent - roll is
         // the axis a launch vehicle has least authority about and nothing in the
-        // trajectory needs a particular one — so it stays decoupled unless the roll is
+        // trajectory needs a particular one - so it stays decoupled unless the roll is
         // being forced deliberately.
         //
         // Written every step, not only on engagement: the box can be ticked mid-ascent,
@@ -1438,7 +1442,7 @@ public static partial class PoweredGuidanceWindow
     /// The ascent's roll reference: the target orbit plane, turned by the roll the
     /// vehicle ALREADY HAD when guidance engaged.
     ///
-    /// The plane on its own is what makes the reference continuous — it is
+    /// The plane on its own is what makes the reference continuous - it is
     /// perpendicular to the steering from the pad to cutoff, where cross(steer,
     /// position) is degenerate for the whole vertical rise (see SteerBody2Cci). But
     /// the plane on its own also picks a particular roll, and a vehicle sitting on the
@@ -1455,7 +1459,7 @@ public static partial class PoweredGuidanceWindow
         double3 x = double3.Normalize(steer);
 
         // The plane-referenced frame perpendicular to the thrust axis. MINUS the
-        // normal, so that with the steering along the velocity this is cross(v, r) —
+        // normal, so that with the steering along the velocity this is cross(v, r) -
         // the same direction the stock construction produces where it works.
         double3 baseRef = -AscentPlaneNormal();
         double3 yRef = baseRef - double3.Dot(baseRef, x) * x;
@@ -1477,7 +1481,7 @@ public static partial class PoweredGuidanceWindow
             return Math.Cos(forced) * yRef + Math.Sin(forced) * zRef;
         }
 
-        // Latched once per engagement, from the vehicle's own body Y — the axis
+        // Latched once per engagement, from the vehicle's own body Y - the axis
         // ComputeBurnBody2Cci puts the roll reference on.
         if (!_s.RollLatched)
         {
@@ -1491,13 +1495,13 @@ public static partial class PoweredGuidanceWindow
     }
 
     /// <summary>
-    /// The body→CCI orientation that points thrust along <paramref name="steerDir"/>,
+    /// The body->CCI orientation that points thrust along <paramref name="steerDir"/>,
     /// built exactly as KSA's BurnTarget.ComputeBurnBody2Cci builds it (body X along
     /// thrust, body Y the roll reference, body Z their cross) but with the roll
     /// reference supplied instead of derived from the position vector.
     ///
     /// WHY NOT THE STOCK ONE, ON AN ASCENT. ComputeBurnBody2Cci takes the roll
-    /// reference from cross(steer, position) — and on an ascent those two vectors are
+    /// reference from cross(steer, position) - and on an ascent those two vectors are
     /// THE SAME VECTOR at lift-off and within a fraction of a degree of it through the
     /// start of the pitch-over. The cross product normalises to zero, the stock code
     /// substitutes an arbitrary orthogonal direction, and then, the moment the pitch
@@ -1508,7 +1512,7 @@ public static partial class PoweredGuidanceWindow
     ///
     /// The reference passed in by the ascent is the target plane normal, which is
     /// perpendicular to the steering all the way to orbit and turns as slowly as the
-    /// plane does — i.e. the vehicle flies wings-level to its own orbital plane from
+    /// plane does - i.e. the vehicle flies wings-level to its own orbital plane from
     /// the pad to cutoff, with no discontinuity anywhere in between.
     /// </summary>
     private static doubleQuat SteerBody2Cci(double3 steerDir, double3 rollRef)
@@ -1534,7 +1538,7 @@ public static partial class PoweredGuidanceWindow
     // navball shows in its surface (EnuBody) frame. Computed with KSA's own functions
     // (ComputeBurnBody2Cci + EnuBody frame + RollPitchYaw decomposition + compass
     // wrap) so the readout matches the navball digit-for-digit. Note KSA's ENU frame
-    // is East-referenced, so this differs from a real-world compass azimuth by 90°.
+    // is East-referenced, so this differs from a real-world compass azimuth by 90 deg.
     private static (double pitchDeg, double headingDeg) NavballSteerAngles(double3 r, double3 dir)
     {
         if (r.Length() < 1 || dir.Length() < 1e-9) return (0, 0);

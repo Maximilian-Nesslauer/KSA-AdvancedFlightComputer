@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// How much does a cold solve cost at each node count, and how coarse can it afford
@@ -6,7 +6,7 @@ using Scvx;
 ///
 /// The cold solve is the last thing in the loop that still blocks a frame. Its cost
 /// cannot be bounded the way a warm cycle's now is, because a deadline between SCvx
-/// iterations only helps if there is a previous plan to fall back on — and a cold
+/// iterations only helps if there is a previous plan to fall back on - and a cold
 /// solve has none. So the only lever left is making a single iteration cheap, and the
 /// only thing that moves that is problem size.
 ///
@@ -17,7 +17,7 @@ using Scvx;
 ///   PER-ITERATION cost, which is what a frame actually feels. Total time matters
 ///   much less, because the solve is paced across frames anyway.
 ///   TIME TO A FLYABLE PLAN, since the vehicle is falling uncommanded until then.
-///   DEFECT at the cold gate and at the warm gate — a coarse plan only has to be a
+///   DEFECT at the cold gate and at the warm gate - a coarse plan only has to be a
 ///   good starting point (15 m), but the warm loop will not fly it until it is
 ///   within 1 m, so a count that never reaches the warm gate has only moved the
 ///   problem rather than solved it.
@@ -270,7 +270,7 @@ internal static class ColdNodeCheck
 
     /// <summary>
     /// The engage state from flight 20260808-104651, verbatim: 1552 m, 126 m/s down,
-    /// and 92.1 degrees off vertical. The attitude is the part that matters — see the
+    /// and 92.1 degrees off vertical. The attitude is the part that matters - see the
     /// class note.
     /// </summary>
     private static readonly double[] EngageState =

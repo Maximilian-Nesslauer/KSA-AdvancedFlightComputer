@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using System.Collections.Generic;
 using System.Globalization;
@@ -13,7 +17,7 @@ using System.Text;
 ///   -cycle.csv   one row per guidance step: state, solve outcome, defect,
 ///                thrust demand vs capability, feasibility. The time series.
 ///   -plan.csv    periodic snapshots of the WHOLE planned trajectory. This is the
-///                one that settles "does the vehicle loop, or does the PLAN loop" —
+///                one that settles "does the vehicle loop, or does the PLAN loop" -
 ///                a question the cycle rows genuinely cannot answer, since they
 ///                only ever record where the vehicle got to.
 ///   -events.log  engagement, node-gate steps, handover, touchdown, and every
@@ -23,7 +27,7 @@ using System.Text;
 ///
 ///   NOTHING HERE MAY THROW. This is called from the sim step and the ImGui draw,
 ///   and an exception escaping either one unwinds past ImGui's End() and corrupts
-///   the frame — the game then reports "missing End" and names the wrong function
+///   the frame - the game then reports "missing End" and names the wrong function
 ///   entirely. Every public entry point swallows its own errors; a broken log must
 ///   never break a flight.
 ///
@@ -175,7 +179,7 @@ internal static class SixDofLog
         try
         {
             // Invariant, like every other number here. Interpolation defaults to the
-            // CURRENT culture, which writes "13,00" on a comma-decimal machine — the
+            // CURRENT culture, which writes "13,00" on a comma-decimal machine - the
             // smoke test caught exactly that, and a timestamp that reads as two
             // fields is worse than useless when correlating against the CSV.
             _events.AppendLine(
@@ -189,7 +193,7 @@ internal static class SixDofLog
 
     /// <summary>
     /// One guidance cycle. Values are passed in rather than pulled from statics so
-    /// this stays a pure sink — nothing here reaches back into guidance state, so it
+    /// this stays a pure sink - nothing here reaches back into guidance state, so it
     /// cannot perturb what it is measuring.
     /// </summary>
     internal static void Cycle(object owner, in CycleRow r)

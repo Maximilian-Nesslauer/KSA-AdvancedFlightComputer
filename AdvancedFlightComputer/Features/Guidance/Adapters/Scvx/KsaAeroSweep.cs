@@ -1,8 +1,12 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using System.Text;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Flight;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>
 /// Samples KSA's own aerodynamics onto a Cd(Mach, alpha) grid for the current

@@ -1,6 +1,6 @@
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics;
 
-namespace PoweredGuidance.Flight;
+namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>Why an impact prediction stopped.</summary>
 public enum ImpactStatus

@@ -1,6 +1,6 @@
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics;
 
-namespace PoweredGuidance.Flight;
+namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>
 /// Tabulated axial drag coefficient Cd(Mach, alpha), fitted once to a

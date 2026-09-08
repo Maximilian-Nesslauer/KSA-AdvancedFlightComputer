@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace Gfold;
+namespace AdvancedFlightComputer.Guidance.Gfold;
 
 /// <summary>
 /// Single DllImportResolver registration for the whole assembly.
@@ -9,8 +9,8 @@ namespace Gfold;
 /// NativeLibrary.SetDllImportResolver THROWS if called twice for the same assembly, so
 /// every native library P/Invoke'd from Gfold.Core must be dispatched from this one
 /// resolver. A second [ModuleInitializer] registering its own is an
-/// InvalidOperationException at assembly load — before Main, with a
-/// TypeInitializationException for &lt;Module&gt; as the only clue — which is exactly
+/// InvalidOperationException at assembly load - before Main, with a
+/// TypeInitializationException for &lt;Module&gt; as the only clue - which is exactly
 /// what adding a second native binding once did, and how this file came to exist.
 /// (Scvx.Core has the same file for the same reason.) Add new natives to the switch,
 /// never as a new initializer.

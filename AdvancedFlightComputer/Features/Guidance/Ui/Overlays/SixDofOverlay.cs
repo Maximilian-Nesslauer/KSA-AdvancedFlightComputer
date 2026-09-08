@@ -1,16 +1,20 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
 // World-space overlay for the 6-DOF plan, matching the G-FOLD one so the two read
-// the same way. Shares the projection plumbing in PoweredGuidanceOverlayCore.
+// the same way. Shares the projection plumbing in OverlayCore.cs.
 //
 // This is the instrument for "is the PLAN sensible" as opposed to "is the TRACKER
-// following it" — which the tracking-error readout answers. A plan that dives at
+// following it" - which the tracking-error readout answers. A plan that dives at
 // the ground, wanders downrange, or demands a wild attitude profile is visible
 // here immediately and is not diagnosable from numbers alone.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // Off by default: it is a debug view, and it draws over the vehicle you are
     // trying to fly.
@@ -64,7 +68,7 @@ public static partial class PoweredGuidanceWindow
         //
         // Same construction as the G-FOLD overlay: apex at the target, opening
         // upward, radius cot(angle) * height. Drawing it from the SAME angle the
-        // solver was configured with is the point — a cone drawn from a separate
+        // solver was configured with is the point - a cone drawn from a separate
         // number would keep looking right while the solver enforced something else.
         if (_s.SixDofGlideSlopeDeg > 0.0)
         {
@@ -126,7 +130,7 @@ public static partial class PoweredGuidanceWindow
             KsaFrameBridge.QuatToMatrix(px[k * 14 + 6], px[k * 14 + 7], px[k * 14 + 8], px[k * 14 + 9],
                                         out double3 b0, out double3 b1, out double3 b2);
 
-            // Body +Z (the vehicle's pointing axis) in magenta — the attitude profile.
+            // Body +Z (the vehicle's pointing axis) in magenta - the attitude profile.
             OvLine(dl, p, p + f.VecToCci(b2) * (0.03 * span), axisCol, 1.5f);
 
             // Thrust vector in the site frame: R(q) * (tdx, tdy, T).

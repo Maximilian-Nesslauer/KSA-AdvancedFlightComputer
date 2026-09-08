@@ -1,13 +1,13 @@
 using System.Runtime.InteropServices;
 
-namespace Gfold;
+namespace AdvancedFlightComputer.Guidance.Gfold;
 
 /// <summary>
 /// Solves a <see cref="ConicProblem"/> with Clarabel.
 ///
 /// WHY A THIRD BACKEND. ECOS is interior-point and fast on this problem but GPLv3,
 /// which forces the whole work to GPLv3. SCS is MIT but first-order, and G-FOLD is the
-/// shape ADMM is worst at — small, banded, cold-started, on a frame budget — which
+/// shape ADMM is worst at - small, banded, cold-started, on a frame budget - which
 /// cost 2.4x per solve and 5x per search when it was measured against ECOS. Clarabel is
 /// Apache-2.0 AND interior-point: the licence of the one and the algorithm class of the
 /// other. If it performs like ECOS, it is the answer to the whole migration.
@@ -17,7 +17,7 @@ namespace Gfold;
 ///     minimize    (1/2) x'Px + q'x
 ///     subject to  Ax + s = b,  s in K
 ///
-/// which is the single stacked matrix with a leading zero cone — exactly what
+/// which is the single stacked matrix with a leading zero cone - exactly what
 /// <see cref="SparseCcs.VStack"/> builds. That stacking was originally written for the
 /// SCS binding, which took the same form; it outlived it. P is null here: the G-FOLD
 /// objective is linear.
@@ -26,7 +26,7 @@ namespace Gfold;
 /// call is a new plan, and a static function with no fields is safe to call from the
 /// mod's solver thread without a per-vehicle instance.
 ///
-/// clarabel_c.dll has to be built first (gfold/build-clarabel.ps1, needs a Rust
+/// clarabel_c.dll has to be built first (build/build-clarabel.ps1, needs a Rust
 /// toolchain). Every layout in ClarabelNative is a reading of the vendored headers, and
 /// struct layout is the part of a P/Invoke binding that fails silently, so verify with
 /// Gfold.Console --clarabel-layout (pure reflection, needs no DLL) and
@@ -36,7 +36,7 @@ public static class ClarabelSolver
 {
     /// <summary>
     /// Iteration ceiling. An interior-point method's iteration count is bounded in
-    /// practice — ECOS solves this problem in 11 to 20 — so unlike ADMM's cap this is
+    /// practice - ECOS solves this problem in 11 to 20 - so unlike ADMM's cap this is
     /// a guard against pathology, not a budget that shapes the answer.
     /// </summary>
     public const int DefaultMaxIterations = 200;
@@ -60,7 +60,7 @@ public static class ClarabelSolver
     /// <summary>
     /// The vendored Clarabel version, for the harness banner.
     /// A CONSTANT, not a query: Clarabel's C API exposes no version
-    /// entry point (unlike scs_version), so this tracks gfold/clarabel/Clarabel.rs's
+    /// entry point (unlike scs_version), so this tracks third_party/clarabel/Clarabel.rs's
     /// Cargo.toml by hand and must be bumped when that is updated.
     /// </summary>
     public const string NativeVersion = "0.11.1";
@@ -71,7 +71,7 @@ public static class ClarabelSolver
     /// <summary>
     /// What clarabel_DefaultSettings_f64_default() actually hands back. The layout dump
     /// proves .NET and the C header AGREE about offsets; this proves the values arrive
-    /// intact, which is a different question — a by-value struct return is marshalled,
+    /// intact, which is a different question - a by-value struct return is marshalled,
     /// and the two failures look identical from the outside.
     /// </summary>
     public static string DumpDefaultSettings()
@@ -98,7 +98,7 @@ public static class ClarabelSolver
     /// <param name="timeLimitS">
     /// Wall-clock ceiling, seconds, or 0 for none. Clarabel reports hitting it as
     /// MaxTime, a first-class status rather than something to be recovered from a
-    /// status string — which is what the first-order backend it replaced forced.
+    /// status string - which is what the first-order backend it replaced forced.
     /// </param>
     public static ConicResult Solve(ConicProblem problem, out ClarabelSolveInfo info,
                                     bool verbose = false,
@@ -173,7 +173,7 @@ public static class ClarabelSolver
             };
 
             // P is the zero matrix: a linear objective. Clarabel still wants a
-            // well-formed n x n CSC, so hand it one with no entries — an all-zero
+            // well-formed n x n CSC, so hand it one with no entries - an all-zero
             // column pointer array of length n+1 and null index/value pointers, which
             // is the representation CscMatrix.h documents for a zero matrix.
             var pMat = new ClarabelNative.ClarabelCscMatrix
@@ -189,7 +189,7 @@ public static class ClarabelSolver
             // INFINITY, NOT ZERO, FOR "NO LIMIT". SCS guards its time limit with
             // `if (stgs->time_limit_secs)`, so 0 there means "unset"; Clarabel takes
             // the number literally and its own default is f64::INFINITY. Passing SCS's
-            // 0 made every solve exit immediately with MaxTime after 0 iterations —
+            // 0 made every solve exit immediately with MaxTime after 0 iterations -
             // while still returning the correct answer, because it had already been
             // computed. The same parameter name, opposite meanings for the same value.
             settings.TimeLimit = timeLimitS > 0 ? timeLimitS : double.PositiveInfinity;
@@ -213,7 +213,7 @@ public static class ClarabelSolver
                 ClarabelNative.ClarabelDefaultSolution sol =
                     ClarabelNative.clarabel_DefaultSolver_f64_solution(solver);
 
-                // x is owned by the solver and dies with it — copy before the free.
+                // x is owned by the solver and dies with it - copy before the free.
                 var x = new double[n];
                 if (sol.X != IntPtr.Zero && (int)sol.XLength >= n)
                     Marshal.Copy(sol.X, x, 0, n);
@@ -237,8 +237,8 @@ public static class ClarabelSolver
     /// <summary>
     /// Clarabel's status onto the shared one.
     ///
-    /// "Almost" is Clarabel's reduced-tolerance outcome — it converged, just to the
-    /// looser of its two tolerance sets — which is the same meaning ECOS gives its
+    /// "Almost" is Clarabel's reduced-tolerance outcome - it converged, just to the
+    /// looser of its two tolerance sets - which is the same meaning ECOS gives its
     /// inaccurate exits, so it maps to OptimalInaccurate and stays usable.
     /// MaxIterations, MaxTime and InsufficientProgress all mean the iterate is not a
     /// solution and must NOT be flown, so they land outside GfoldPlanner.IsUsable.

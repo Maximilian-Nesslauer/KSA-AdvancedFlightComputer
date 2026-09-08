@@ -1,4 +1,4 @@
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Does a quaternion SIGN FLIP in the measured attitude wreck the plan, and does
@@ -17,7 +17,7 @@ using Scvx;
 ///     t+3.93   qw +0.000027  qx -0.68301  qz +0.73041    defect    0.2 m
 ///     t+3.95   qw +0.000066  qx -0.68235  qz +0.73102    defect 3548.0 m
 ///
-/// reported as "worst on qz (attitude) at interval 0 = 1.47" — and 1.47 is exactly
+/// reported as "worst on qz (attitude) at interval 0 = 1.47" - and 1.47 is exactly
 /// 0.73041 - (-0.72897), the antipodal gap. Fifteen refusals followed, then a cold
 /// restart, which repaired it only because the cold seed goes through Slerp and Slerp
 /// already takes the short way round.

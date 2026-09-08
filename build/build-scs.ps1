@@ -1,19 +1,19 @@
-# Builds scs.dll from the vendored SCS sources (scvx/scs, cvxgrp/scs 3.2.11)
-# using a portable Zig as the C compiler — no MSVC required. Mirrors
+# Builds scs.dll from the vendored SCS sources (third_party/scs, cvxgrp/scs 3.2.11)
+# using a portable Zig as the C compiler - no MSVC required. Mirrors
 # gfold/build-ecos.ps1's approach and flag choices.
 #
-# Output: scvx/native/scs.dll  (x86_64, MinGW-style: all public symbols exported)
+# Output: build/native/scs.dll  (x86_64, MinGW-style: all public symbols exported)
 #
 # Build choices:
 #  - DLONG left UNDEFINED (not "=0"): same #ifdef-tests-definedness trap as
-#    USE_LAPACK below — scs_types.h has `#ifdef DLONG`, so `-DDLONG=0` still
+#    USE_LAPACK below - scs_types.h has `#ifdef DLONG`, so `-DDLONG=0` still
 #    DEFINES it and switches scs_int to a 64-bit `long long`, silently breaking
 #    every C# struct that assumes the 32-bit `int` DLONG=0 looks like it should
 #    mean. (Found the hard way: struct offsets computed fine, data validated
-#    fine, and scs_init still failed — because the native side was reading
+#    fine, and scs_init still failed - because the native side was reading
 #    Z/L/Bsize/Qsize/M/N and every SOC-dims array element at the wrong width.)
 #    Leaving DLONG undefined gives scs_int = int32, matching the C# side.
-#  - CTRLC=0: no console signal handler — this DLL ends up inside the game
+#  - CTRLC=0: no console signal handler - this DLL ends up inside the game
 #    process, which must own its own signal handling.
 #  - USE_LAPACK is defined for src/aa.c ONLY, which is why that file is compiled
 #    to its own object first and linked in separately below.
@@ -21,7 +21,7 @@
 #    This USED to be undefined everywhere, with the note "aa.c has a complete
 #    no-LAPACK fallback (acceleration becomes a no-op), so leaving the macro
 #    undefined costs nothing we use." The fact was right and the conclusion was
-#    wrong. Anderson acceleration is not an optional extra — SCS turns it on by
+#    wrong. Anderson acceleration is not an optional extra - SCS turns it on by
 #    default (ACCELERATION_LOOKBACK = 10) and it is the mechanism that keeps the
 #    ADMM iteration count down on ill-conditioned problems, which every SCvx
 #    subproblem is. Measured in closed loop, scs_init is 2-6% of solve time and
@@ -33,8 +33,8 @@
 #    translation unit's ABI depends on the macro. That keeps cones.c on its
 #    non-LAPACK path (so the SDP-only dsyevr_/dgesvd_/dsyrk_ never enter the
 #    link, and we use no SDP cones) and leaves linalg.c on its hand-written
-#    loops. Only six routines are then needed — dnrm2_, daxpy_, dscal_, dgemv_,
-#    dgemm_, dgesv_ — supplied by native_src/blas_shim.c rather than by linking
+#    loops. Only six routines are then needed - dnrm2_, daxpy_, dscal_, dgemv_,
+#    dgemm_, dgesv_ - supplied by native_src/blas_shim.c rather than by linking
 #    a multi-megabyte OpenBLAS into the game process. The sizes involved are
 #    tiny (Anderson memory is 10, so a 10x10 LU and skinny dim-by-10 products),
 #    nowhere near the KKT solve that dominates each iteration.
@@ -47,7 +47,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
-$scs = Join-Path $root "scs"
+$scs = Join-Path $root "../third_party/scs"
 $out = Join-Path $root "native"
 
 if (-not (Get-Command $ZigExe -ErrorAction SilentlyContinue)) {

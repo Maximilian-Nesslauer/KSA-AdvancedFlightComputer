@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Solves one SCS cone-QP and carries the solution forward for the next call's
@@ -8,15 +8,15 @@ namespace Scvx;
 ///
 /// Unlike EcosWorkspace this holds NO persistent native handle between solves.
 /// scs_init's own documentation says it "maintains deep copies" of everything
-/// handed to it, so — unlike ECOS, which keeps raw pointers into the caller's
-/// arrays for the workspace's whole life and requires them pinned throughout —
+/// handed to it, so - unlike ECOS, which keeps raw pointers into the caller's
+/// arrays for the workspace's whole life and requires them pinned throughout -
 /// every array here only needs to stay pinned for the duration of the scs_init
 /// call itself. That also means there is nothing to gain from keeping a
 /// long-lived ScsWork around: scs_update only refreshes b and c (see
 /// ScsNative.cs), and our A/P values change every SCvx iteration regardless, so
 /// a fresh scs_init is required every solve either way. The actual warm start
-/// SCS offers is at the ITERATE level — the previous x/y/s fed back in via
-/// scs_solve's warm_start flag — which this class provides by holding onto the
+/// SCS offers is at the ITERATE level - the previous x/y/s fed back in via
+/// scs_solve's warm_start flag - which this class provides by holding onto the
 /// last solution and reusing it as the next call's starting point.
 /// </summary>
 public sealed class ScsWorkspace
@@ -27,20 +27,20 @@ public sealed class ScsWorkspace
     /// These are NOT SCS's own defaults (100k / 1e-4) and emphatically not
     /// interior-point-style defaults. ADMM needs iteration headroom the way an
     /// IPM never does, so a low cap silently degrades the answer rather than
-    /// failing loudly — which is what the large budget exists to prevent.
+    /// failing loudly - which is what the large budget exists to prevent.
     ///
     /// The TOLERANCE, however, is deliberately conservative and should NOT be
     /// used for flight. Measured across the whole SCvx loop at N=30, eps
     /// 1e-5 / 1e-6 / 1e-7 all converge in 17 iterations to the SAME answer to
     /// five significant figures (merit 9.7619e-2, defect 9.5e-6, peak tilt
-    /// 6.1 deg, burn 24.2 s) — but cost 1.7 s / 3.1 s / 5.5 s respectively, and
+    /// 6.1 deg, burn 24.2 s) - but cost 1.7 s / 3.1 s / 5.5 s respectively, and
     /// in receding horizon 33 ms / 334 ms / 1266 ms per cycle. ADMM's tail is
     /// almost the entire bill and it buys nothing here. Set
     /// <c>Scvx6DofSolver.SubproblemEps</c> to 1e-5 for real-time use.
     ///
     /// Caveat that motivated the conservative default: an under-solved
     /// subproblem is dangerous in a DIFFERENT way (see
-    /// <see cref="HitIterationLimit"/>) — the guard there, not a tight
+    /// <see cref="HitIterationLimit"/>) - the guard there, not a tight
     /// tolerance, is what actually keeps the loop honest.
     /// </summary>
     public const int DefaultMaxIterations = 100_000;
@@ -49,7 +49,7 @@ public sealed class ScsWorkspace
     /// <summary>
     /// Anderson acceleration memory, or null to leave SCS's own default (10).
     ///
-    /// This only does anything because aa.c is now compiled with USE_LAPACK — see
+    /// This only does anything because aa.c is now compiled with USE_LAPACK - see
     /// native_src/blas_shim.c. Before that the entire accelerator was a no-op and
     /// this setting had no effect whatsoever.
     /// </summary>
@@ -69,7 +69,7 @@ public sealed class ScsWorkspace
     /// because it converged.
     ///
     /// SCS reports this as SolvedInaccurate ("solved (inaccurate - reached
-    /// max_iters)"), which <see cref="ScsStatusEx.IsUsable"/> counts as usable —
+    /// max_iters)"), which <see cref="ScsStatusEx.IsUsable"/> counts as usable -
     /// and for a one-off solve it broadly is. It is NOT usable as an SCvx step:
     /// a truncated ADMM iterate can violate the trust region by orders of
     /// magnitude while still being returned, and feeding that to the ratio test
@@ -278,7 +278,7 @@ public sealed class ScsWorkspace
 
                 // Only carry a USABLE solution forward. On infeasible/unbounded/
                 // failed exits SCS leaves a certificate (or nothing meaningful) in
-                // x/y/s, not a primal point — seeding the next ADMM run with that
+                // x/y/s, not a primal point - seeding the next ADMM run with that
                 // would poison every subsequent solve, and silently, since a bad
                 // warm start degrades convergence rather than erroring. The SCvx
                 // loop retries after shrinking the trust region, so this is a live
@@ -286,7 +286,7 @@ public sealed class ScsWorkspace
                 // ...and NOT a TRUNCATED one either. SolvedInaccurate passes
                 // IsUsable(), so before this check a solve that merely ran out of
                 // ADMM iterations was stored and became the next solve's starting
-                // point — seeding the next run from a half-converged iterate, which
+                // point - seeding the next run from a half-converged iterate, which
                 // makes IT more likely to truncate too. That is the mechanism behind
                 // long solves arriving in BURSTS rather than singly: one truncation
                 // poisons the warm start and the next few inherit it.

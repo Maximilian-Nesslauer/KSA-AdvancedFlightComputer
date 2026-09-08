@@ -1,19 +1,23 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using System.Collections.Generic;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Upfg;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // The Landing tab and its state machine (UPFG modes 2/3 + the G-FOLD handoff).
 // Flow: EXECUTE runs Mode 2 synchronously to convergence to measure how far
 // downrange the braking burn reaches, finds when the along-track distance to
-// the site shrinks to (factor × that distance), asks to warp there, converges
+// the site shrinks to (factor * that distance), asks to warp there, converges
 // Mode 3 during a prep window, then burns with UPFG's throttle command driving
 // the cutoff to zero speed over the site.
 // Burn = UPFG braking to the high gate; GfoldDescent = convex (G-FOLD) powered
 // descent from the gate to the surface (see Guidance/GfoldDescent.cs).
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // Public because VehicleAutopilotState holds a vehicle's phase: every craft runs
     // this machine on its own, so the phase is a field on the flight computer rather
@@ -21,10 +25,10 @@ public static partial class PoweredGuidanceWindow
     public enum LandingPhase { Idle, Coast, Prep, Burn, GfoldDescent, TerminalHover, Done }
 
     // The site, the approach shaping (downrange factor, gate altitude/uprange, sink
-    // rate) and the whole pass scan live on the vehicle — see VehicleAutopilotState.
+    // rate) and the whole pass scan live on the vehicle - see VehicleAutopilotState.
     private const double PrepLeadTime = 30.0;      // converge + point before ignition
 
-    // Upcoming site passes are computed in closed form — see Guidance/SitePasses.cs.
+    // Upcoming site passes are computed in closed form - see Guidance/SitePasses.cs.
     private const int PassesToShow = 5;
 
     // The Landing tab body: a Deorbit sub-tab (UPFG braking to the gate) and a
@@ -44,7 +48,7 @@ public static partial class PoweredGuidanceWindow
             var gfoldFlags = _s.GfoldTabSelectPending
                 ? ImGuiTabItemFlags.SetSelected
                 : ImGuiTabItemFlags.None;
-            // One-shot, and this window draws FIRST — so it only consumes the flag
+            // One-shot, and this window draws FIRST - so it only consumes the flag
             // when the gauge panel is not up to act on it. Consuming unconditionally
             // is why the new panel never followed the handoff to G-FOLD.
             if (!_showGuidancePanel)
@@ -58,7 +62,7 @@ public static partial class PoweredGuidanceWindow
             var termFlags = _s.TermTabSelectPending
                 ? ImGuiTabItemFlags.SetSelected
                 : ImGuiTabItemFlags.None;
-            // One-shot, and this window draws FIRST — leave it for the gauge panel
+            // One-shot, and this window draws FIRST - leave it for the gauge panel
             // when that is up, exactly as with the G-FOLD focus flag above.
             if (!_showGuidancePanel)
                 _s.TermTabSelectPending = false;
@@ -110,7 +114,7 @@ public static partial class PoweredGuidanceWindow
 
         // --- Upcoming passes: how close the ground track comes to the site ---
         // Time-sliced: start a scan while idle at normal speed, advance it a fixed
-        // sample budget per frame — never a whole-scan hitch in one frame.
+        // sample budget per frame - never a whole-scan hitch in one frame.
         ImGui.SeparatorText("Upcoming passes");
         RefreshPasses(orbit, parent, mu, bodyRadius);
         for (int i = 0; i < _s.Passes.Count; i++)
@@ -204,9 +208,9 @@ public static partial class PoweredGuidanceWindow
             double tIgn = _s.BurnStartTime - SimNow();
             string phaseText = _s.LandingPhase switch
             {
-                LandingPhase.Coast => $"Coasting to burn point — ignition T-{tIgn,6:F0} s",
-                LandingPhase.Prep => $"Converging guidance — ignition T-{tIgn,5:F1} s",
-                LandingPhase.Burn => $"BURNING — cmd {_s.Upfg.Throttle * 100,4:F0} % / engine {vehicle.GetManualThrottle() * 100,4:F0} %, tgo {_s.Upfg.Tgo,6:F1} s",
+                LandingPhase.Coast => $"Coasting to burn point - ignition T-{tIgn,6:F0} s",
+                LandingPhase.Prep => $"Converging guidance - ignition T-{tIgn,5:F1} s",
+                LandingPhase.Burn => $"BURNING - cmd {_s.Upfg.Throttle * 100,4:F0} % / engine {vehicle.GetManualThrottle() * 100,4:F0} %, tgo {_s.Upfg.Tgo,6:F1} s",
                 LandingPhase.GfoldDescent => $"G-FOLD [{_s.GfoldStatus}] alt {_s.GfoldAltM,6:F0} m, {_s.GfoldSpeedMs,5:F0} m/s, throttle {_s.GfoldThrottle * 100,3:F0} %, tf~{Math.Max(_s.GfoldArrivalTime - SimNow(), 0),4:F0} s",
                 LandingPhase.TerminalHover => $"TERMINAL HOVER alt {_s.GfoldAltM,6:F1} m, {_s.GfoldSpeedMs,5:F1} m/s, throttle {_s.GfoldThrottle * 100,3:F0} %",
                 LandingPhase.Done => "Landing guidance ended.",
@@ -218,7 +222,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // EXECUTE: measure the braking burn with a synchronous Mode-2 convergence, find
-    // the moment our along-track distance to the site equals factor × that length,
+    // the moment our along-track distance to the site equals factor * that length,
     // and ask to warp there. The actual Mode-3 burn starts via StepLanding.
     private static void ExecuteLanding(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                        double mu, double bodyRadius)
@@ -247,7 +251,7 @@ public static partial class PoweredGuidanceWindow
         double wait = FindBurnStartTime(orbit, parent, mu, bodyRadius, downrange * _s.DownrangeFactor);
         if (double.IsNaN(wait))
         {
-            _s.LandingStatus = "No pass within 5 orbits gets inside the burn distance — adjust orbit.";
+            _s.LandingStatus = "No pass within 5 orbits gets inside the burn distance - adjust orbit.";
             return;
         }
 
@@ -284,11 +288,11 @@ public static partial class PoweredGuidanceWindow
     }
 
     // How far downrange the braking burn ends if lit at the given state, iterated
-    // synchronously to convergence (UPFG is pure math, so unlike the original —
-    // which flew its Mode 2 live while already braking — we can converge before
+    // synchronously to convergence (UPFG is pure math, so unlike the original -
+    // which flew its Mode 2 live while already braking - we can converge before
     // ignition in one frame). This is Mode 1 with the same high-gate end state the
     // real burn will fly (aim altitude, sink rate as a straight-down velocity via
-    // fpa = -90°), cutoff position free. NaN if it fails to converge.
+    // fpa = -90 deg), cutoff position free. NaN if it fails to converge.
     private static double PredictBurnDownrange(double3 r, double3 v, double mass, double mu,
                                                UpfgVehicle model, IParentBody parent, double bodyRadius)
     {
@@ -302,7 +306,7 @@ public static partial class PoweredGuidanceWindow
             Rdes = SiteDirCciAt(parent, 0) * gateRadius,
         };
         // A SCRATCH SOLVER, not the vehicle's. This is a what-if run off the flight
-        // path — 400 iterations against a state that may be an hour in the future —
+        // path - 400 iterations against a state that may be an hour in the future -
         // and the vehicle's own UPFG may be mid-burn on something else. It used to
         // borrow the shared instance and bracket the loop with Reset() to put it
         // back, which is exactly the kind of state laundering that stops working the
@@ -331,7 +335,7 @@ public static partial class PoweredGuidanceWindow
     // KSA's own contact switch. The physics step raises a terrain-contact flag on
     // the vehicle whenever ANY part of it makes a Bepu contact with the terrain or
     // launch-pad collider (ConstraintSim.DetectTerrainContact), and ocean entry
-    // sets the matching ocean flag — so this fires on the legs, or on whatever
+    // sets the matching ocean flag - so this fires on the legs, or on whatever
     // else reaches the ground first, without us guessing at leg geometry.
     //
     // This replaces trusting the altitude estimate to notice touchdown. That
@@ -359,7 +363,7 @@ public static partial class PoweredGuidanceWindow
         // sitting on the pad already reports terrain contact (the launch-pad
         // collider counts), so without this, taking over with terminal hover from
         // the ground would cut the engine on its first step. Re-armed on every
-        // phase change, which is free in the air — the same frame clears it.
+        // phase change, which is free in the air - the same frame clears it.
         bool contact = HasTouchedDown(vehicle);
         if (_s.LandingPhase != _s.TouchdownPrevPhase)
         {
@@ -375,7 +379,7 @@ public static partial class PoweredGuidanceWindow
             _s.HasCommand = false;
             _s.LandingPhase = LandingPhase.Done;
             _s.LandingCutPending = true;
-            _s.LandingStatus = $"TOUCHDOWN — contact detected, engine cut ({_s.GfoldSpeedMs:F1} m/s).";
+            _s.LandingStatus = $"TOUCHDOWN - contact detected, engine cut ({_s.GfoldSpeedMs:F1} m/s).";
             return;
         }
 
@@ -449,7 +453,7 @@ public static partial class PoweredGuidanceWindow
             {
                 _s.LandingPhase = LandingPhase.Done;
                 _s.LandingCutPending = true;
-                _s.LandingStatus = "Guidance failed repeatedly — landing stopped.";
+                _s.LandingStatus = "Guidance failed repeatedly - landing stopped.";
             }
         }
 
@@ -469,8 +473,8 @@ public static partial class PoweredGuidanceWindow
             {
                 if (_s.UseSixDofLanding)
                 {
-                    // 6-DOF is EXCLUSIVE — it drives attitude through the TVC
-                    // allocator rather than the flight computer — so the UPFG landing
+                    // 6-DOF is EXCLUSIVE - it drives attitude through the TVC
+                    // allocator rather than the flight computer - so the UPFG landing
                     // flow has to let go rather than run alongside it. Engage6Dof is
                     // that let-go (ClaimVehicle) and the request in one; the request is
                     // consumed by the next guidance step, which runs the cold solve

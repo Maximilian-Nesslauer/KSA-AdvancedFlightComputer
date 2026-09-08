@@ -1,4 +1,4 @@
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>Outcome of one SCvx iteration, for tracing and for the caller's loop control.</summary>
 public readonly record struct ScvxIteration(
@@ -8,7 +8,7 @@ public readonly record struct ScvxIteration(
     double Rho,           // actual / predicted cost reduction
     double TrustRegion,   // radius AFTER this iteration's update
     double Sigma,
-    double Step,          // max(dX, dSigma), normalised — the convergence measure
+    double Step,          // max(dX, dSigma), normalised - the convergence measure
     double DefectNorm,    // max |true nonlinear defect| / Xscale
     double Cost,          // true merit at the reference after this iteration
     int SolverIterations,
@@ -24,7 +24,7 @@ public readonly record struct ScvxIteration(
 
 public enum ScvxStatus
 {
-    /// <summary>Step and defect both under tolerance — a genuine fixed point.</summary>
+    /// <summary>Step and defect both under tolerance - a genuine fixed point.</summary>
     Converged,
     /// <summary>Ran out of the caller's iteration budget. The reference is still usable.</summary>
     IterationLimit,
@@ -49,7 +49,7 @@ public enum ScvxStatus
 ///   LINEARISED dynamics had to be violated.
 /// - PREDICTED reduction uses the subproblem's cost with Wv as the defect;
 ///   ACTUAL reduction uses the true nonlinear defect. rho = actual / predicted.
-///   Both must include the same constant terms or the ratio is meaningless —
+///   Both must include the same constant terms or the ratio is meaningless -
 ///   hence both go through the same fuel/smoothing helpers here.
 /// - On accept the quaternion is REPROJECTED to unit norm. The subproblem only
 ///   enforces the tangent-plane linearisation qbar.q = 1, which is exact only at
@@ -91,7 +91,7 @@ public sealed class Scvx6DofSolver
     /// too little error here costs iterations superlinearly.
     /// </summary>
     /// <summary>
-    /// Tolerance each convex subproblem is solved to — distinct from the OUTER
+    /// Tolerance each convex subproblem is solved to - distinct from the OUTER
     /// SCvx convergence test. Defaults to the conservative offline value; flight
     /// code should pass <see cref="RealTimeEps"/>.
     /// </summary>
@@ -106,12 +106,12 @@ public sealed class Scvx6DofSolver
     /// buys nothing, so the tighter defaults are for offline validation only.
     ///
     /// This is safe ONLY because <see cref="ScsWorkspace.HitIterationLimit"/>
-    /// rejects truncated solves outright — it is that guard, not a tight tolerance,
+    /// rejects truncated solves outright - it is that guard, not a tight tolerance,
     /// that keeps a bad subproblem out of the ratio test.
     /// </summary>
     /// <summary>
     /// Subproblem tolerance for FLIGHT. Not SCS's default and not the validation
-    /// tolerance (<see cref="ScsWorkspace.DefaultEps"/>, 1e-7) — offline solves keep
+    /// tolerance (<see cref="ScsWorkspace.DefaultEps"/>, 1e-7) - offline solves keep
     /// that.
     ///
     /// Measured in closed loop at N=80 with dispersion, eps 1e-5 / 1e-4 / 1e-3 all
@@ -126,7 +126,7 @@ public sealed class Scvx6DofSolver
     /// 1e-4 is the pick. The p50/p90 collapse is the whole story: at 1e-5 roughly
     /// HALF of all solves overran the 40 ms subproblem budget and got truncated, at
     /// 1e-4 under a tenth do. The p99/max going UP is real but does not reach the
-    /// vehicle — those solves hit the wall-clock budget and are cut off either way.
+    /// vehicle - those solves hit the wall-clock budget and are cut off either way.
     /// 1e-3 buys little more and leaves less margin on the iterate SCvx's ratio test
     /// depends on.
     /// </summary>
@@ -134,13 +134,13 @@ public sealed class Scvx6DofSolver
 
     /// <summary>
     /// Hard cap on ADMM iterations per subproblem. THE REAL-TIME PATH MUST HAVE A
-    /// BOUNDED WORST CASE — a mean is not a guarantee.
+    /// BOUNDED WORST CASE - a mean is not a guarantee.
     ///
     /// ScsWorkspace.DefaultMaxIterations is 100,000, which is an OFFLINE VALIDATION
     /// number: it exists so a hard problem is solved properly rather than silently
     /// truncated. On a game thread it is a licence to stall for seconds. Measured in
     /// closed loop, an UNCAPPED worst-case subproblem ran 31,800 ADMM iterations /
-    /// 1.7 s while the mean was ~400 — and that is on a synthetic problem. In game
+    /// 1.7 s while the mean was ~400 - and that is on a synthetic problem. In game
     /// that presents as a freeze, and then the process is killed.
     ///
     /// Capping is SAFE BY CONSTRUCTION here, and that is not a lucky accident: SCS
@@ -186,14 +186,14 @@ public sealed class Scvx6DofSolver
     /// <summary>
     /// Feed each subproblem the previous solve's ADMM iterate. The problem
     /// changes between SCvx iterations, but only within the trust region, so the
-    /// last point is a good start. This is the ONLY warm start SCS offers —
+    /// last point is a good start. This is the ONLY warm start SCS offers -
     /// scs_update refreshes just b and c, never A or P, and our Jacobian block
     /// lives in A, so the workspace itself must be rebuilt every iteration.
     /// </summary>
     public bool WarmStart { get; init; } = true;
     public double DefectTolerance { get; init; } = 1e-3;
 
-    // Reference trajectory — the SCvx state that persists across iterations and,
+    // Reference trajectory - the SCvx state that persists across iterations and,
     // in receding-horizon use, across guidance cycles.
     private double[] _xbar = [], _ubar = [];
     private double _sigBar;
@@ -212,7 +212,7 @@ public sealed class Scvx6DofSolver
     public double Cost => _jRef;
     public int IterationCount { get; private set; }
 
-    /// <summary>Why the most recent subproblem failed — SCS status plus its own text.</summary>
+    /// <summary>Why the most recent subproblem failed - SCS status plus its own text.</summary>
     public string LastFailureReason { get; private set; } = "";
 
     public Scvx6DofSolver(Scvx6DofConfig cfg, Dynamics6Dof.Params? dyn = null)
@@ -233,7 +233,7 @@ public sealed class Scvx6DofSolver
     /// <summary>
     /// Seed the loop. x0 is the full 14-component initial state; xf the 13
     /// pinned terminal components (mass is free). xSeed/uSeed are the initial
-    /// reference trajectory — a straight line is fine cold; in receding-horizon
+    /// reference trajectory - a straight line is fine cold; in receding-horizon
     /// use, pass the previous cycle's solution shifted forward.
     /// </summary>
     public void Initialize(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf,
@@ -258,7 +258,7 @@ public sealed class Scvx6DofSolver
 
     /// <summary>
     /// Advance to a new initial state, keeping the current reference trajectory
-    /// (shifted by the caller) AND the ADMM warm start — the receding-horizon
+    /// (shifted by the caller) AND the ADMM warm start - the receding-horizon
     /// entry point, as opposed to <see cref="Initialize"/> which starts cold.
     ///
     /// The distinction matters: Initialize throws away the solver's iterate,
@@ -282,7 +282,7 @@ public sealed class Scvx6DofSolver
 
     /// <summary>
     /// Run iterations until convergence, the budget runs out, or the trust
-    /// region collapses. Safe to call repeatedly — it continues from the current
+    /// region collapses. Safe to call repeatedly - it continues from the current
     /// reference, which is what a receding-horizon caller wants.
     /// </summary>
     /// <param name="deadlineMs">
@@ -380,7 +380,7 @@ public sealed class Scvx6DofSolver
 
         // A truncated solve counts as a failure, not a step. SCS returns
         // SolvedInaccurate when it runs out of iterations, and that iterate can
-        // sit far outside the trust region — accepting it produced a step 100x
+        // sit far outside the trust region - accepting it produced a step 100x
         // the radius and a rho of +335 before this guard existed.
         // Truncation is a BUDGET problem, not a trajectory problem: retry the same
         // already-assembled subproblem with more iterations rather than shrinking the
@@ -396,7 +396,7 @@ public sealed class Scvx6DofSolver
 
         if (!st.IsUsable() || _sub.HitIterationLimit)
         {
-            // Subproblem failure is not fatal — shrink and retry from the same
+            // Subproblem failure is not fatal - shrink and retry from the same
             // reference. A trust region that keeps collapsing is the signal that
             // something is actually wrong.
             TrustRegion = Math.Max(TrustRegionMin, TrustRegion * Shrink);
@@ -448,7 +448,7 @@ public sealed class Scvx6DofSolver
         }
 
         // 5. Trust-region update. Grow only if the step actually used most of the
-        //    radius — otherwise the radius is not what is limiting progress.
+        //    radius - otherwise the radius is not what is limiting progress.
         if (rho < RhoShrink)
             TrustRegion = Math.Max(TrustRegionMin, TrustRegion * Shrink);
         else if (rho >= RhoGrow && used >= 0.8 * TrustRegion)
@@ -466,7 +466,7 @@ public sealed class Scvx6DofSolver
     /// <summary>
     /// Merit function at a candidate point, using the TRUE nonlinear dynamics.
     /// Returns the cost and the largest normalised integration defect (the
-    /// convergence measure — a converged SCvx solution must be dynamically
+    /// convergence measure - a converged SCvx solution must be dynamically
     /// feasible, not merely optimal for its own linearisation).
     /// </summary>
     public (double Cost, double DefectNorm) TrueCost(double[] x, double[] u, double sigma)

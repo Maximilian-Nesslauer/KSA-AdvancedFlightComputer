@@ -1,28 +1,30 @@
+#nullable disable
+
 using System;
 using System.Collections.Generic;
 using Brutal.Numerics;
 
-namespace PoweredGuidance.Upfg;
+namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// Unified Powered Flight Guidance — the closed-loop ascent algorithm flown by the
+// Unified Powered Flight Guidance - the closed-loop ascent algorithm flown by the
 // Space Shuttle. Each call to Step() refines a thrust-direction estimate that, if
 // followed, places the vehicle on the target orbit at engine cutoff.
 //
 // This is an explicit standalone port of navbox's Upfg.cs, converted to double
 // precision over Brutal's double3. It takes the vehicle state as plain inertial
-// (CCI) inputs — no Simulator, no external dependencies — so it runs inside KSA.
+// (CCI) inputs - no Simulator, no external dependencies - so it runs inside KSA.
 //
 // Guidance modes (the original's `mode` field):
-//   1 — standard ascent: insert at target radius/velocity/FPA in the target plane,
+//   1 - standard ascent: insert at target radius/velocity/FPA in the target plane,
 //       cutoff position free.
-//   2 — predictive landing: soft target (vd = current v) so the solution converges
-//       on *where the braking burn would end* (Rd) — run synchronously to
+//   2 - predictive landing: soft target (vd = current v) so the solution converges
+//       on *where the braking burn would end* (Rd) - run synchronously to
 //       convergence to measure the burn's downrange before committing.
-//   3 — precision landing: drive the cutoff to target.Rdes at target.Velocity,
+//   3 - precision landing: drive the cutoff to target.Rdes at target.Velocity,
 //       with a throttle command (K, exposed as Throttle) stretching the burn to
 //       null the downrange error. Unlike the original (which propagated a CSE
 //       reference trajectory with a hard-coded t_ref), the reference here is
-//       simply the desired state at the landing point — equivalent for the
+//       simply the desired state at the landing point - equivalent for the
 //       zero-speed-at-site target and free of the absolute-time dependence.
 //
 // The vehicle model must carry *current* data: callers rebuild the stage list from
@@ -66,12 +68,12 @@ public sealed class UpfgGuidance
     // i_f(tau) = unit[ lambda + lambdadot * (tau - J/L) ],  tau = seconds since this
     // solve. The original document is explicit that this block "will receive the
     // vectors lambda and lambdadot" and that "during active guidance calls a turning
-    // rate may be implied" — the law is a function of time and the caller is meant to
+    // rate may be implied" - the law is a function of time and the caller is meant to
     // evaluate it, not to hold the tau = 0 sample until the next cycle.
     //
     // lambdadot is PERPENDICULAR to lambda by construction: rgo is built to satisfy
     // dot(lambda, rgo) = S, so dot(lambda, rgo - S*lambda) = 0. That is what makes it
-    // a pure turning rate, and what makes the law a linear TANGENT law — the angle off
+    // a pure turning rate, and what makes the law a linear TANGENT law - the angle off
     // lambda is atan(|lambdadot| * (tau - J/L)), so its tangent is linear in time.
     public double3 Lambda { get; private set; }       // unit primer direction at tau = J/L
     public double3 LambdaDot { get; private set; }    // its turning rate, rad/s, CCI
@@ -187,7 +189,7 @@ public sealed class UpfgGuidance
             exhaustVel.Add(s.Isp * G0);
             thrustAccel.Add(s.Thrust / s.MassTotal);
             charTimes.Add(exhaustVel[i] / thrustAccel[i]);
-            // Constant-acceleration stages burn dv = ve·ln(m0/m1) at a fixed accel,
+            // Constant-acceleration stages burn dv = ve*ln(m0/m1) at a fixed accel,
             // so their burn time is exact rather than the full-throttle estimate.
             if (s.Mode == 2)
                 burnTimes.Add(exhaustVel[i] * Math.Log(s.MassTotal / s.MassDry) / accelLimits[i]);
@@ -237,7 +239,7 @@ public sealed class UpfgGuidance
             out List<double> Li, out double L, out List<double> tgoi, out double tgo);
 
         // More dv aboard than vgo needs: the last stage won't be burned at all, so
-        // drop it and re-solve (same as original navbox's L > vgo trim) — otherwise
+        // drop it and re-solve (same as original navbox's L > vgo trim) - otherwise
         // its burn time goes negative and corrupts tgo.
         if (L > vgo.Length() && vehicle.Stages.Count > 1)
         {
@@ -260,7 +262,7 @@ public sealed class UpfgGuidance
         Rgo = rgo;   // latched for the panel schematic; not used by the solver
 
         // The steering law's terms, for SteeringAt. Latched before the finite check
-        // below only in the sense that the check discards the whole step on failure —
+        // below only in the sense that the check discards the whole step on failure -
         // a non-finite solution resets and these are never read against it.
         Lambda = lambda;
         LambdaDot = lambdadot;
@@ -279,7 +281,7 @@ public sealed class UpfgGuidance
         if (_mode == 2)
         {
             // Predictive: pin the cutoff to the target sphere in the plane, keep
-            // current velocity as the soft target — rd converges on where the
+            // current velocity as the soft target - rd converges on where the
             // braking burn actually ends.
             rp -= double3.Dot(rp, iy) * iy;
             rd = rdval * rp * (1.0 / rp.Length());
@@ -290,7 +292,7 @@ public sealed class UpfgGuidance
         {
             // Precision: drive the cutoff to the desired landing vector at the
             // desired (zero) speed, and stretch/relax the burn via throttle K to
-            // null the downrange miss: dtgo = -2·drz/vgoz, K <- K·tb/(tb+dtgo).
+            // null the downrange miss: dtgo = -2*drz/vgoz, K <- K*tb/(tb+dtgo).
             double3 ix3 = double3.Normalize(target.Rdes);
             double3 iz3 = double3.Cross(ix3, iy);
             // Forward speed along track plus the commanded sink rate (down = -ix).
@@ -324,7 +326,7 @@ public sealed class UpfgGuidance
 
         // A transient bad input (e.g. the zero-thrust frame mid-staging) can drive the
         // solution non-finite. Committing it would poison the persistent state (vgo,
-        // cser, rd) and corrupt every later step — so discard it and re-seed from the
+        // cser, rd) and corrupt every later step - so discard it and re-seed from the
         // live vehicle state on the next call instead.
         if (!IsFinite(tgo) || !IsFinite(rd) || !IsFinite(vgo) || !IsFinite(iF) || !IsFinite(rgrav))
         {
@@ -365,12 +367,12 @@ public sealed class UpfgGuidance
     ///     omega    = i_f x d(i_f)/dtau  =  (i_f x lambdadot) / |u|
     ///
     /// tau is seconds since the solve that produced these terms. At tau = 0 this
-    /// returns exactly <see cref="Steering"/> — the tau = 0 sample the solver already
-    /// latched — so evaluating it every step costs nothing but continuity.
+    /// returns exactly <see cref="Steering"/> - the tau = 0 sample the solver already
+    /// latched - so evaluating it every step costs nothing but continuity.
     ///
     /// Because lambdadot is perpendicular to lambda, |u| = sqrt(1 + |lambdadot|^2 s^2)
     /// with s = tau - J/L, the angle off lambda is atan(|lambdadot| s), and the rate
-    /// reduces to |lambdadot| / (1 + |lambdadot|^2 s^2) — the derivative of that
+    /// reduces to |lambdadot| / (1 + |lambdadot|^2 s^2) - the derivative of that
     /// arctangent, as it must be.
     ///
     /// EXTRAPOLATION IS BOUNDED BY THE CALLER. This is a local linearisation about one
@@ -510,7 +512,7 @@ public sealed class UpfgGuidance
     }
 
     /// <summary>
-    /// "tgo has settled" — the original's convergence test, made rate-independent.
+    /// "tgo has settled" - the original's convergence test, made rate-independent.
     ///
     /// A converged solution's tgo does not stand still, it counts DOWN in real time,
     /// so the quantity that goes to zero on convergence is the change in tgo net of

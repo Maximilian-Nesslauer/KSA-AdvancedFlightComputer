@@ -1,7 +1,9 @@
+#nullable disable
+
 using System;
 using Brutal.Numerics;
 
-namespace PoweredGuidance.Upfg;
+namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // The desired insertion orbit, expressed the way UPFG needs it: a target radius,
 // speed, flight-path angle and orbital-plane normal in the inertial (CCI) frame.

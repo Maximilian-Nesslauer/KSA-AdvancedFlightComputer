@@ -1,11 +1,15 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
 using KSA;
 
 // THE TARGET'S OWN TURNING RATE, handed to KSA's flight computer.
 //
-// WHY THIS EXISTS. FlightComputer.AttitudeTarget carries two things — Target2Cci,
-// where to point, and RatesCci, how fast that target is itself rotating — and the
+// WHY THIS EXISTS. FlightComputer.AttitudeTarget carries two things - Target2Cci,
+// where to point, and RatesCci, how fast that target is itself rotating - and the
 // tracking error is computed against BOTH:
 //
 //     ErrorRates = ctrlRates - AttitudeTarget.RatesCci.Transform(ctrl2Cci^-1)
@@ -18,7 +22,7 @@ using KSA;
 //     AttitudeTarget.Target2Cci = Concatenate(EulerToQuat(CustomAttitudeTarget), frame2Cci);
 //     AttitudeTarget.RatesCci   = AttitudeFrame.GetFrameRatesCci(in nav);
 //
-// We steer by writing CustomAttitudeTarget in the EclBody frame, which is inertial —
+// We steer by writing CustomAttitudeTarget in the EclBody frame, which is inertial -
 // so its frame rate is nil and the FC is told, every single step, that the target is
 // STATIONARY. Guidance then hands it a sequence of stationary targets and the
 // controller nulls each one in turn: chase, settle, chase. The steering law has a
@@ -29,14 +33,14 @@ using KSA;
 // HOW IT ATTACHES. A Harmony POSTFIX on FlightComputer.UpdateAttitudeTarget, which
 // ComputeControl calls immediately before UpdateAttitudeError. That is the one window
 // where the target has been built and nothing has read it yet, so overwriting
-// RatesCci there is the last word without touching how Target2Cci is derived — the
+// RatesCci there is the last word without touching how Target2Cci is derived - the
 // existing CustomAttitudeTarget path still decides where to point.
 //
 // THREADING AND IDENTITY. ComputeControl runs on a VehicleSolvers job thread against
 // a COPY of the FlightComputer, so the instance handed to the postfix is never the
 // live one and reference-comparing it would match nothing. VehicleConfigInfo is the
-// usable identity — FlightComputer.CopyFrom assigns it by reference rather than
-// cloning — which is the same key KsaGimbalControl is built on, for the same reason.
+// usable identity - FlightComputer.CopyFrom assigns it by reference rather than
+// cloning - which is the same key KsaGimbalControl is built on, for the same reason.
 // The published value is a double3 written on the sim thread and read on the job
 // thread; it is republished every step, so a torn read costs one step of a slightly
 // wrong rate and never a wrong ANGLE.
@@ -95,7 +99,7 @@ public static class KsaAttitudeRate
         // ADDED to whatever the frame contributes, not substituted for it. For the
         // EclBody frame we steer in that term is nil, but the field is the target's
         // total rate in CCI and a frame that does rotate would still have to be
-        // carried — overwriting it outright would silently subtract the frame.
+        // carried - overwriting it outright would silently subtract the frame.
         flightComputer.AttitudeTarget.RatesCci += s.RateCci;
     }
 }

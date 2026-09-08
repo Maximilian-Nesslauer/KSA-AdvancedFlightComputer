@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -8,13 +12,13 @@ using KSA;
 // child that panel opens, so it is plain ImGui under ImGaugeDressing's styling.
 //
 // The point of the restructure is that the legacy tab put thirty controls in one
-// flat list, so the four that matter — the target orbit — sat among solver tuning.
+// flat list, so the four that matter - the target orbit - sat among solver tuning.
 // Here the two sections that shape a launch are open, and everything else is folded
 // away behind "Expert settings", collapsed until asked for.
 //
 // It shares VehicleAutopilotState with the legacy Ascent tab, so both drive the same
 // guidance; the tab can be deleted once this has flown.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     private static void DrawAscentTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                              double bodyRadius, float innerW)
@@ -32,7 +36,7 @@ public static partial class PoweredGuidanceWindow
 
     // --- Target orbit -------------------------------------------------------
     // The main levers. Picking a target turns the four orbit inputs into OUTPUTS of
-    // that pick — continuously recomputed and greyed out — because a chase orbit that
+    // that pick - continuously recomputed and greyed out - because a chase orbit that
     // disagreed with the target it was chasing was never anything but a mistake.
     private static void DrawTargetOrbitSection(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                                double bodyRadius, float innerW)
@@ -55,8 +59,8 @@ public static partial class PoweredGuidanceWindow
         {
             GaugeRow("Periapsis (km)", "##pe", ref _s.PeKm);
             GaugeRow("Apoapsis (km)", "##ap", ref _s.ApKm);
-            // A new inclination makes the old LAN meaningless — the plane it named
-            // no longer passes overhead — so re-seed it from where the vehicle is.
+            // A new inclination makes the old LAN meaningless - the plane it named
+            // no longer passes overhead - so re-seed it from where the vehicle is.
             if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             GaugeRow("LAN (deg)", "##lan", ref _s.LanDeg);
@@ -154,7 +158,7 @@ public static partial class PoweredGuidanceWindow
         GaugeRow("Turn start alt (km)", "##turnalt", ref _s.TurnStartAltKm);
         GaugeRow("Turn rate (deg/s)", "##turnrate", ref _s.TurnRateDegS);
 
-        // Roll is FREE by default — the ascent holds whatever the vehicle lifted off
+        // Roll is FREE by default - the ascent holds whatever the vehicle lifted off
         // with and commands a thrust direction only. Ticking this commands a roll as
         // well, and switches the flight computer out of decoupled roll so it tracks it
         // (see VehicleAutopilotState.ForceRoll).
@@ -195,7 +199,7 @@ public static partial class PoweredGuidanceWindow
         {
             // Idle is the normal state for most of a flight - a strap-on stack does not
             // arm until the solids are gone - so it says WHY rather than just going
-            // quiet. See PoweredGuidanceWindow.NextSeparationDropsAllEngines.
+            // quiet. See GuidanceWindow.NextSeparationDropsAllEngines.
             GaugeRowText("Reserve", _s.ReserveNote.Length > 0 ? _s.ReserveNote
                                                               : "waiting for a stage model", warn);
             return;
@@ -242,7 +246,7 @@ public static partial class PoweredGuidanceWindow
 
         for (int i = 0; i < list.Count; i++)
         {
-            PoweredGuidanceWindow.ReturnableStage stage = list[i];
+            GuidanceWindow.ReturnableStage stage = list[i];
 
             // The name row carries the Set button, because the button is about the
             // stage rather than about any one of its numbers.
@@ -306,7 +310,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // --- Expert settings ----------------------------------------------------
-    // Collapsed by default — dropping DefaultOpen is the whole mechanism.
+    // Collapsed by default - dropping DefaultOpen is the whole mechanism.
     private static void DrawExpertSettingsSection(float innerW)
     {
         if (!ImGuiHelper.BeginRegion("Expert settings", ImGuiTreeNodeFlags.SpanAllColumns, innerW))

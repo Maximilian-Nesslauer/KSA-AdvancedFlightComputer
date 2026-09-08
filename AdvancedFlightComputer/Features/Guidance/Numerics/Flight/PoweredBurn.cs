@@ -1,6 +1,6 @@
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics;
 
-namespace PoweredGuidance.Flight;
+namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>
 /// A boostback burn described by five numbers, flown with a linear tangent steering

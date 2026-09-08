@@ -1,10 +1,10 @@
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics;
 
-namespace Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Six-degree-of-freedom rigid-body booster dynamics, and their Jacobians by
-/// forward-mode AD. Port of the model in Scvx/6dof.py — the ONE piece of
+/// forward-mode AD. Port of the model in Scvx/6dof.py - the ONE piece of
 /// hand-written physics; every slope below comes from differentiating it.
 ///
 ///   state    X = [ r(3)  v(3)  q(4)  w(3)  m(1) ]                 (14)
@@ -123,8 +123,8 @@ public static class Dynamics6Dof
     ///
     /// One sweep per input column, seeding that input's derivative to 1. The
     /// value is seed-independent, so f is taken from the first sweep rather than
-    /// evaluated separately. Pass null for a Jacobian to skip nothing — the
-    /// sweeps are shared — but to skip storing it.
+    /// evaluated separately. Pass null for a Jacobian to skip nothing - the
+    /// sweeps are shared - but to skip storing it.
     /// </summary>
     public static void Jacobian(ReadOnlySpan<double> x, ReadOnlySpan<double> u, Params p,
                                 Span<double> f, Span<double> A, Span<double> B)
@@ -161,7 +161,7 @@ public static class Dynamics6Dof
         }
     }
 
-    /// <summary>Value only, no derivatives — for the nonlinear defect / merit function.</summary>
+    /// <summary>Value only, no derivatives - for the nonlinear defect / merit function.</summary>
     public static void Eval(ReadOnlySpan<double> x, ReadOnlySpan<double> u, Params p, Span<double> f)
     {
         Span<Dual> dx = stackalloc Dual[NX];

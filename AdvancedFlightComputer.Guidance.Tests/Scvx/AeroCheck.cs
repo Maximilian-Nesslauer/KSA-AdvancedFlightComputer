@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using PoweredGuidance.Flight;
-using PoweredGuidance.Numerics;
+using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Numerics;
 
 /// <summary>
 /// Does the tabulated aero surrogate actually compose with our forward-mode AD?

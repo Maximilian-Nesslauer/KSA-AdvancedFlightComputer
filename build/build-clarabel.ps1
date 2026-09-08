@@ -1,12 +1,12 @@
-# Builds clarabel_c.dll from the vendored Clarabel sources (gfold/clarabel,
+# Builds clarabel_c.dll from the vendored Clarabel sources (third_party/clarabel,
 # oxfordcontrol/Clarabel.cpp + its Clarabel.rs submodule).
 #
-# Output: gfold/native/clarabel_c.dll  (x86_64)
+# Output: build/native/clarabel_c.dll  (x86_64)
 #
 # WHY CARGO AND NOT CMAKE. Clarabel.cpp's README asks for Rust *and* CMake, but the
 # CMake layer exists to build the optional C++/Eigen interface and the test binaries.
 # The C ABI we bind to comes out of the rust_wrapper crate, whose Cargo.toml already
-# declares `crate-type = ["cdylib", "staticlib"]` — so cargo alone emits the DLL and
+# declares `crate-type = ["cdylib", "staticlib"]` - so cargo alone emits the DLL and
 # CMake is not in our path at all. That matters: it drops the toolchain requirement
 # from "Rust + CMake + a C++ compiler" to "Rust".
 #
@@ -25,7 +25,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$crate = Join-Path $PSScriptRoot "clarabel/rust_wrapper"
+$crate = Join-Path $PSScriptRoot "../third_party/clarabel/rust_wrapper"
 if (-not (Test-Path (Join-Path $crate "Cargo.toml"))) {
     throw "clarabel rust_wrapper crate not found at $crate"
 }

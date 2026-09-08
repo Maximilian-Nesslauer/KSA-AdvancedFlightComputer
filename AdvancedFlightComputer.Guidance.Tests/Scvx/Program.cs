@@ -1,5 +1,5 @@
 using System.Globalization;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 // Validates Scvx.Core's forward-mode AD against JAX.
 //
@@ -258,7 +258,7 @@ foreach (string line in File.ReadLines(csv))
 
 // Independent cross-check: central finite differences against the same F().
 // This validates the derivative rules a second way (it cannot share a seeding
-// bug with the AD path) and measures what accuracy FD actually delivers here —
+// bug with the AD path) and measures what accuracy FD actually delivers here -
 // directly relevant to bolting on a black-box aero model later, where AD isn't
 // available and FD is the fallback.
 if (args.Contains("--fd"))
@@ -344,7 +344,7 @@ static int SubproblemCheckScs(bool verbose)
     var sub = new Scvx6DofSubproblemScs(cfg);
     Console.WriteLine($"SCS {ScsWorkspace.NativeVersion}   " +
                       $"n={sub.VariableCount} eq={sub.EqualityCount} rows={sub.RowCount}   " +
-                      $"(ECOS port was n=950 rows=1972 — {950 - sub.VariableCount} fewer vars, " +
+                      $"(ECOS port was n=950 rows=1972 - {950 - sub.VariableCount} fewer vars, " +
                       $"{1972 - sub.RowCount} fewer rows, from dropping the epigraphs)");
 
     sub.Assemble(x0, xf, xbar, ubar, sigBar, tr, A, B, f0);
@@ -375,7 +375,7 @@ static int SubproblemCheckScs(bool verbose)
 
     // Re-assemble with IDENTICAL data (a no-op iteration) and solve warm-started,
     // to show the warm-start path runs and to see its iteration count against
-    // the cold solve above — on identical data this should converge in very few
+    // the cold solve above - on identical data this should converge in very few
     // iterations if warm starting is doing anything.
     t0 = System.Diagnostics.Stopwatch.StartNew();
     sub.Assemble(x0, xf, xbar, ubar, sigBar, tr, A, B, f0);
@@ -411,14 +411,14 @@ static int SubproblemCheckScs(bool verbose)
     //
     // That spread is the point: the OBJECTIVE agrees to 1.2e-5 while an
     // individual control component differs by 1.5e-3. Matching objective with
-    // differing components is the signature of a near-degenerate optimum — at
+    // differing components is the signature of a near-degenerate optimum - at
     // SCvx iteration 0 the trust region is active on almost every variable
     // (visible as dozens of trust rows at ~0 slack in the audit above), so the
     // argmin is close to non-unique and two correct solvers can legitimately
     // land on different points of the same optimal face.
     //
     // So this is deliberately NOT justified by "solvers disagree by about this
-    // much" — the Clarabel-vs-SCS gap measured in session 2 was an OBJECTIVE
+    // much" - the Clarabel-vs-SCS gap measured in session 2 was an OBJECTIVE
     // gap (~1e-5), which is a different quantity and would be the wrong thing
     // to compare a component tolerance against.
     const double Tol = 1e-2;
@@ -432,7 +432,7 @@ static int SubproblemCheckScs(bool verbose)
 
 // Run the full SCvx loop from the same cold seed as python_ref/loop_ref.py and
 // compare the CONVERGED result. SCvx is a nonconvex local method, so the
-// meaningful test is that both implementations land on the same fixed point —
+// meaningful test is that both implementations land on the same fixed point -
 // matching iteration-for-iteration is a bonus that only holds while both take
 // identical accept/reject decisions, and the two use different convex solvers.
 static int LoopCheck(bool verbose)
@@ -526,7 +526,7 @@ static int LoopCheck(bool verbose)
     Console.WriteLine($"  iterations {solver.IterationCount} vs {itersRef:F0}");
 
     // SCvx is a LOCAL method on a nonconvex problem, so "did it reproduce the
-    // reference trajectory" is the wrong pass criterion — and demonstrably so
+    // reference trajectory" is the wrong pass criterion - and demonstrably so
     // here. The reference run hit SIX convex-solver failures (iterations 6, 7,
     // 8, 10, 13, 15 come back rho=0 / rejected in loop_ref.csv); each one
     // shrank the trust region, and that is what arrested sigma's growth around
@@ -583,8 +583,8 @@ static int LoopCheck(bool verbose)
 // The cold-start numbers (17 iterations, ~6 s) are NOT the realtime figure: in
 // flight the previous cycle's solution is available and one control interval of
 // motion barely changes the problem. This walks the plan forward the way a
-// guidance loop would — advance the state to plan node 1, shift the reference,
-// shrink sigma by one interval — and reports per-cycle cost at several
+// guidance loop would - advance the state to plan node 1, shift the reference,
+// shrink sigma by one interval - and reports per-cycle cost at several
 // iteration budgets.
 static int RecedingHorizonCheck()
 {
@@ -689,12 +689,12 @@ static int RecedingHorizonCheck()
 
     Console.WriteLine();
     Console.WriteLine("Realtime reading: the WORST case is what matters for a control loop,");
-    Console.WriteLine("not the mean — a guidance cycle that occasionally takes 5x its budget");
+    Console.WriteLine("not the mean - a guidance cycle that occasionally takes 5x its budget");
     Console.WriteLine("is a dropped update, and ADMM iteration counts here vary ~9x.");
     return 0;
 }
 
-// Check a converged trajectory against the TRUE nonlinear constraint set — the
+// Check a converged trajectory against the TRUE nonlinear constraint set - the
 // one the problem actually has, not the linearisation any single subproblem was
 // solved with. A solution can satisfy every linearised constraint and still
 // violate the real one (the tilt cone especially, since its linearisation is
@@ -759,7 +759,7 @@ static string AuditTrajectory(double[] x, double[] u, double sigma,
 
     // |q|=1 does NOT scale: the solver reprojects the quaternion on every accepted
     // step, so this is exact regardless of tolerance and a loose gate would hide a
-    // real bug. "above ground" does not scale either — it is a physical margin in
+    // real bug. "above ground" does not scale either - it is a physical margin in
     // metres, not a solver residual.
     Check("|q| = 1", quatErr, 1e-9);
     Check("thrust >= Tmin (rel Tmax)", thrustLo, conTol);
@@ -786,7 +786,7 @@ static string AuditTrajectory(double[] x, double[] u, double sigma,
 }
 
 // df/dx by central differences. Step per variable is cbrt(eps) scaled by the
-// variable's own magnitude — central differences trade O(h^2) truncation against
+// variable's own magnitude - central differences trade O(h^2) truncation against
 // O(eps/h) round-off, so cbrt(eps) is the optimum, giving ~eps^(2/3) accuracy.
 // (Forward differences would want sqrt(eps) and deliver only ~sqrt(eps).)
 static double[] FdStateJacobian(double[] x, double[] u, Dynamics6Dof.Params p)
@@ -1027,7 +1027,7 @@ static int CadenceSweep()
 //
 // The solver works on x~ = x/scale and the trust region is in those units, so a
 // scale hard-coded to one test case means the physical step size stays fixed while
-// the problem grows — and the iteration budget eventually cannot traverse it. This
+// the problem grows - and the iteration budget eventually cannot traverse it. This
 // scales the reference descent up and compares a FIXED reference XScale against one
 // sized from the problem itself.
 static int ScaleCheck()
@@ -1096,8 +1096,8 @@ static int ScaleCheck()
 // Where is the SOLVE TIME going? ADMM iteration count is the currency, not wall
 // clock: a subproblem that needs 50x the ADMM iterations costs 50x, and that is a
 // CONDITIONING property of the matrices we hand it. This isolates the two things
-// the mod changed relative to the validated reference — the state scaling and the
-// objective weights — and reports ADMM iterations for each.
+// the mod changed relative to the validated reference - the state scaling and the
+// objective weights - and reports ADMM iterations for each.
 static int CondCheck()
 {
     string path = FindFile("loop_ref.csv") ?? "loop_ref.csv";
@@ -1186,7 +1186,7 @@ static int BodyCheck()
         double tmax = 6.0e6 * (g / 9.81);
 
         // AND a physically equivalent entry speed. Holding v0 at the Earth value is
-        // not a body-agnosticism test — at the same TWR the stopping distance scales
+        // not a body-agnosticism test - at the same TWR the stopping distance scales
         // as v0^2/g, so 50 m/s needs 532 m on the Moon and 3193 m on Ceres against
         // 316 m of altitude. Those cases are simply impossible, and the solver
         // correctly refuses them. Scaling v0 as sqrt(L*g) makes the descent equally
@@ -1389,8 +1389,8 @@ static int ArcCheck()
 // is on the axis, so the optimal trajectory is PLANAR. Any y excursion is the solver
 // exploiting a degeneracy, not physics.
 //
-// The degeneracy: the translational dynamics only see R(q)*(tdx,tdy,T) — three
-// numbers — but the control has FOUR components. Roll is a free parameter; infinitely
+// The degeneracy: the translational dynamics only see R(q)*(tdx,tdy,T) - three
+// numbers - but the control has FOUR components. Roll is a free parameter; infinitely
 // many (roll, tdx, tdy) triples give the same inertial thrust. W_W (the angular-rate
 // penalty) is the only thing that picks among them. Drive it to zero and roll becomes
 // arbitrary, which shows up as out-of-plane kinks.

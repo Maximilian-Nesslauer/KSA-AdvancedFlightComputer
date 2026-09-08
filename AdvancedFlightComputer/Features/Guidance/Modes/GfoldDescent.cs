@@ -1,7 +1,11 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
-using Gfold;
+using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
 // Convex (G-FOLD) powered descent from the high gate to the surface, flown as
@@ -9,7 +13,7 @@ using KSA;
 // (feed-forward the planned thrust + PD feedback on the planned state), re-solve
 // on a cadence. Also home to the G-FOLD debug window, which plots every series
 // of the committed optimal trajectory.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     // Every knob and every piece of committed state this descent runs on lives on the
     // vehicle (VehicleAutopilotState): the pointing cone, the throttle bounds and the
@@ -50,7 +54,7 @@ public static partial class PoweredGuidanceWindow
         var frame = KsaGfold.BuildFrame(siteCci);
         double3 v = orbit.StateVectors.VelocityCci;
 
-        // The flown state is the CoM — the vehicle-height allowance lives in the
+        // The flown state is the CoM - the vehicle-height allowance lives in the
         // solver TARGET (see GfoldSolverTargetAltM), so attitude changes don't
         // perturb the reference state. _s.GfoldAltM is height above touchdown: zero
         // when the CoM sits _s.VehicleHeightM over the pad, i.e. legs on the ground.
@@ -64,7 +68,7 @@ public static partial class PoweredGuidanceWindow
         // Hand off to the terminal hover controller for the last stretch: G-FOLD
         // brings the vehicle down to the handoff height (slow and near-vertical),
         // and the hover flies the final touchdown. This is the only exit from the
-        // G-FOLD descent now — G-FOLD never lands the vehicle itself.
+        // G-FOLD descent now - G-FOLD never lands the vehicle itself.
         if (_s.GfoldAltM <= _s.GfoldHoverHandoffAltM)
         {
             StartTerminalHover(vehicle);
@@ -75,8 +79,8 @@ public static partial class PoweredGuidanceWindow
         // Inside the last GfoldMinTf seconds before the planned arrival, the distance
         // still to fly is too small for any valid flight time: tf >= TfMin (the search
         // floor) overshoots it, so a re-solve goes degenerate and reports the target
-        // unreachable right before the handoff. Freeze the committed plan there — it
-        // already terminates at the target — and just fly it down.
+        // unreachable right before the handoff. Freeze the committed plan there - it
+        // already terminates at the target - and just fly it down.
         bool terminalWindow = _s.GfoldPlan != null && _s.GfoldArrivalTime - now <= GfoldMinTf;
         if (!terminalWindow &&
             (_s.GfoldPlan == null || now - _s.GfoldLastSolveTime >= _s.GfoldIntervalS))
@@ -91,7 +95,7 @@ public static partial class PoweredGuidanceWindow
     }
 
     // Solve a fresh descent plan from the current state and commit it. A min-fuel
-    // search (so it coasts/brakes optimally — "throttles down") to the site; if the
+    // search (so it coasts/brakes optimally - "throttles down") to the site; if the
     // site is unreachable in the remaining time the search floats the touchdown to
     // the closest point, so this degrades gracefully instead of going infeasible.
     private static void SolveGfoldPlan(Vehicle vehicle, IParentBody parent,
@@ -102,7 +106,7 @@ public static partial class PoweredGuidanceWindow
             GfoldSolverTargetAltM, 0.0, _s.GfoldThrottleMin, _s.GfoldThrottleMax);
         if (p == null)
         {
-            _s.LandingStatus = "G-FOLD: no engine — holding.";
+            _s.LandingStatus = "G-FOLD: no engine - holding.";
             return;
         }
 
@@ -113,7 +117,7 @@ public static partial class PoweredGuidanceWindow
         // GfoldPlanner.SolveTimeLimitS is process-wide, which is safe ONLY because the
         // solve below is synchronous and on this thread: each vehicle sets it
         // immediately before its own call and the call has returned before any other
-        // vehicle is serviced. Move the solve to a worker and this becomes a race —
+        // vehicle is serviced. Move the solve to a worker and this becomes a race -
         // see GfoldSolveMs for why that move is worth making anyway.
         GfoldPlanner.SolveTimeLimitS = _s.GfoldSolveTimeLimitS > 0 ? _s.GfoldSolveTimeLimitS : null;
         var solveClock = System.Diagnostics.Stopwatch.StartNew();
@@ -136,9 +140,9 @@ public static partial class PoweredGuidanceWindow
             if (traj == null)
             {
                 // Warm-start the SEARCH from the last solution. The solver itself
-                // can't be warm started — ECOS is an interior-point method and the
+                // can't be warm started - ECOS is an interior-point method and the
                 // previous optimum sits on the boundary, the worst possible starting
-                // iterate — but the flight-time search around it can be.
+                // iterate - but the flight-time search around it can be.
                 //
                 // The committed plan's remaining time IS the previous solution
                 // carried forward: _s.GfoldArrivalTime was set to now + tf* when that
@@ -146,14 +150,14 @@ public static partial class PoweredGuidanceWindow
                 // since. That's the best available estimate of the new optimum, so
                 // bracket it instead of rescanning the full range. Searching
                 // [4, 120] from cold spends 8 coarse points plus ~10 golden-section
-                // steps, at up to two SOCP solves each — 35-40 solves. A tight
+                // steps, at up to two SOCP solves each - 35-40 solves. A tight
                 // bracket collapses the coarse scan onto the plausible range.
                 //
                 // Both bounds move, not just the upper one: with a 20 s remaining
                 // flight the old floor of 4 s was as wasteful as the old 120 s
                 // ceiling, just at the other end.
                 // _s.GfoldForceSearch means the previous solution is no longer a valid
-                // guess — a retarget replaces _s.GfoldArrivalTime with a placeholder
+                // guess - a retarget replaces _s.GfoldArrivalTime with a placeholder
                 // far in the future purely to escape the terminal freeze, so
                 // bracketing around it would spend a narrow search on a fabricated
                 // centre and then fall back anyway. Go straight to the full range.
@@ -176,7 +180,7 @@ public static partial class PoweredGuidanceWindow
 
                 // A bracket can only lose solutions that lie outside it, so the full
                 // range is still tried before declaring the site unreachable. Costs
-                // the old price only when the cheap window genuinely found nothing —
+                // the old price only when the cheap window genuinely found nothing -
                 // which is also exactly when the vehicle's situation has changed
                 // enough that the previous solution was a bad guess.
                 if (best == null)
@@ -292,10 +296,10 @@ public static partial class PoweredGuidanceWindow
         // A failed re-solve is not fatal once we hold a feasible plan: keep flying the
         // last committed trajectory (the solver usually only chokes on the degenerate
         // last few metres, where the existing plan lands fine) and just tell the user.
-        // Only give up when there's nothing to fly — no plan was ever found.
+        // Only give up when there's nothing to fly - no plan was ever found.
         if (_s.GfoldPlan != null)
         {
-            _s.LandingStatus = $"G-FOLD re-solve failed ({_s.GfoldFailStreak}) — flying last trajectory. {message}";
+            _s.LandingStatus = $"G-FOLD re-solve failed ({_s.GfoldFailStreak}) - flying last trajectory. {message}";
             return;
         }
         _s.LandingStatus = message;
@@ -303,7 +307,7 @@ public static partial class PoweredGuidanceWindow
         {
             _s.LandingPhase = LandingPhase.Done;
             _s.LandingCutPending = true;
-            _s.LandingStatus = "G-FOLD found no trajectory — vehicle is yours.";
+            _s.LandingStatus = "G-FOLD found no trajectory - vehicle is yours.";
         }
     }
 
@@ -317,7 +321,7 @@ public static partial class PoweredGuidanceWindow
             return;
 
         // Note: the UPFG->G-FOLD handoff gate lives in the Deorbit sub-tab, not
-        // here — it governs when the braking burn ends, which is a deorbit-phase
+        // here - it governs when the braking burn ends, which is a deorbit-phase
         // decision, not a G-FOLD tuning one.
         ImGui.Begin("G-FOLD params", ImGuiWindowFlags.AlwaysAutoResize);
         ImGui.InputDouble("Glide slope (deg)", ref _s.GfoldGlideSlopeDeg);
@@ -332,11 +336,11 @@ public static partial class PoweredGuidanceWindow
         // The solver swap, in front of whoever is flying it. Clarabel is the default and
         // is GPLv3; SCS is MIT and is what an MIT release needs. They are fed the
         // identical assembled problem, so switching mid-descent compares like with
-        // like — and the solve time beside the status is the number that decides it.
+        // like - and the solve time beside the status is the number that decides it.
         //
         // The solver selector that used to sit here is gone: Clarabel is the only
         // backend now. There is no tolerance knob either, and that is a property of the
-        // algorithm rather than an omission — an interior-point method's cost scales
+        // algorithm rather than an omission - an interior-point method's cost scales
         // with log(1/eps) rather than 1/eps, so accuracy is nearly free and the
         // tolerance stops being something a pilot should be tuning. The time limit
         // stays, because Clarabel reports hitting it as a first-class status.
@@ -358,7 +362,7 @@ public static partial class PoweredGuidanceWindow
 
     // Every series of the committed optimal trajectory plotted against plan time,
     // with a cursor at "now" so you can watch the vehicle walk along the plan and
-    // each re-solve reshape it. Reads only the committed plan — pure display.
+    // each re-solve reshape it. Reads only the committed plan - pure display.
     private static void DrawGfoldDebugWindow()
     {
         if (!_showGfoldDebug)
@@ -368,7 +372,7 @@ public static partial class PoweredGuidanceWindow
         GfoldTrajectory plan = _s.GfoldPlan;
         if (plan == null)
         {
-            ImGui.Text("No committed plan yet — appears once a G-FOLD descent solves.");
+            ImGui.Text("No committed plan yet - appears once a G-FOLD descent solves.");
             ImGui.End();
             return;
         }

@@ -1,3 +1,7 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using System.Threading;
 
@@ -15,8 +19,8 @@ public enum Ksa6DofJob
 /// <summary>
 /// Runs the guidance solve on a background thread so the sim thread never waits for it.
 ///
-/// WHY, and what it does not fix. The warm cycle is already bounded — CycleBudgetMs
-/// stops it between SCvx iterations — but the floor is ONE iteration, and one iteration
+/// WHY, and what it does not fix. The warm cycle is already bounded - CycleBudgetMs
+/// stops it between SCvx iterations - but the floor is ONE iteration, and one iteration
 /// is indivisible: measured at 43 ms typically and 300 ms at its worst. That floor is
 /// the stutter, and no budgeting gets underneath it. The ways down were fewer nodes,
 /// which --coldn showed this vehicle cannot afford, or splitting an iteration, which
@@ -24,7 +28,7 @@ public enum Ksa6DofJob
 ///
 /// ALL THREE JOB KINDS, not just the warm one. A first version threaded Update alone
 /// and flight log 20260809-113132 still hitched throughout, because the cold solve and
-/// the node-step reseed are solves too — that run did three cold solves and six
+/// the node-step reseed are solves too - that run did three cold solves and six
 /// reseeds, all inline. Anything that calls into the solver has to come through here or
 /// the frame pays for it.
 ///
@@ -100,7 +104,7 @@ public sealed class Ksa6DofSolveWorker : IDisposable
     /// <summary>
     /// One cold iteration, re-anchored at x0. Dispatched per frame rather than looping
     /// on the worker, so the anchor stays as fresh as it was when the sim thread did
-    /// this inline — the vehicle falls fast enough during a cold solve that freezing
+    /// this inline - the vehicle falls fast enough during a cold solve that freezing
     /// x0 for its whole duration would seed the next warm cycle from where the vehicle
     /// used to be.
     /// </summary>

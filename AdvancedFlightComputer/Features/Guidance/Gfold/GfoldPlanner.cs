@@ -1,8 +1,8 @@
-namespace Gfold;
+namespace AdvancedFlightComputer.Guidance.Gfold;
 
-// The G-FOLD powered-descent problems (Açıkmeşe & Ploen; Blackmore), ported
+// The G-FOLD powered-descent problems (Acikmese & Ploen; Blackmore), ported
 // from the reference Python (GFOLD_static_p3p4.py) into standard conic
-// form. Time of flight is an input — wrap with a search over tf if needed.
+// form. Time of flight is an input - wrap with a search over tf if needed.
 //
 //   Problem 3 (minimum landing error): minimize ||r(tf) - rf||, final
 //   altitude pinned to zero.
@@ -31,20 +31,20 @@ public sealed record GfoldOptions
 {
     // Enforce the engine's thrust FLOOR (rho1 <= ||T||), the paper's quadratic
     // lower-bound cut the reference script omits. Without it min-fuel coasts
-    // then suicide-burns, so the first node has ~zero thrust — useless to fly
+    // then suicide-burns, so the first node has ~zero thrust - useless to fly
     // node-by-node. With it the descent thrusts continuously and node 0 is a
     // real, trackable command.
     public bool EnforceLowerThrust { get; init; }
 
     // Drop the "first thrust points straight up" boundary condition. That suits
     // the start of a one-shot trajectory but, re-solved every cycle, it forces
-    // every commanded node-0 thrust vertical — no horizontal steering.
+    // every commanded node-0 thrust vertical - no horizontal steering.
     public bool FreeInitialThrust { get; init; }
 
     // Skip the path inequalities (glideslope, velocity cap, thrust pointing) on
     // node 0. The initial state is pinned by equality, so imposing an inequality
     // it might violate (a fast/high/shallow handoff outside the glideslope cone
-    // or above the speed cap) makes EVERY tf infeasible — a spurious failure.
+    // or above the speed cap) makes EVERY tf infeasible - a spurious failure.
     // The trajectory still has to satisfy the constraints from node 1 on.
     public bool RelaxInitialPath { get; init; }
 
@@ -52,14 +52,14 @@ public sealed record GfoldOptions
     // landing-error objective. Pure min-error is indifferent to thrust, so with a
     // forced thrust floor the solver dumps the mandatory thrust sideways in an
     // arbitrary direction (flat, rotating, never throttling down). Among equally
-    // accurate trajectories this picks the minimum-thrust one — throttle-down and
-    // sensible — at no accuracy cost. Tiny by design: a pure tiebreaker.
+    // accurate trajectories this picks the minimum-thrust one - throttle-down and
+    // sensible - at no accuracy cost. Tiny by design: a pure tiebreaker.
     public double LandingFuelReg { get; init; }
 
     // Thrust-slew smoothing (min-fuel / P4 only): a penalty on the L2 norm of the
     // stacked thrust-vector differences ||u[n+1]-u[n]|| added to the objective, so the
     // solver spreads direction/throttle changes out over time instead of demanding
-    // rapid slews the 6-DOF autopilot can't track. A soft regularizer — larger values
+    // rapid slews the 6-DOF autopilot can't track. A soft regularizer - larger values
     // trade a little fuel for a smoother command; 0 disables it (unchanged behaviour).
     public double SlewReg { get; init; }
 
@@ -71,7 +71,7 @@ public sealed record GfoldOptions
     };
 
     // For committed-trajectory tracking: NO thrust floor, so the min-fuel plan can
-    // coast (throttle down) where optimal and brake where needed — the caller flies
+    // coast (throttle down) where optimal and brake where needed - the caller flies
     // the whole trajectory by time index rather than node 0, so the coast arc is
     // followed instead of frozen.
     public static readonly GfoldOptions Descent = new()
@@ -216,9 +216,9 @@ public static class GfoldPlanner
         // Nondimensionalize: solve in units where lengths, velocities and
         // accelerations are all O(1) (length scale ~ the problem size, time
         // scale such that gravity is ~1). An interior-point solver breaks down
-        // ("unreliable search direction") on the raw SI problem — metre-scale
+        // ("unreliable search direction") on the raw SI problem - metre-scale
         // coordinates against unit-scale ln-mass rows condition the KKT system
-        // badly — and returns visibly suboptimal iterates. In scaled units it
+        // badly - and returns visibly suboptimal iterates. In scaled units it
         // converges cleanly. Mass stays in kg: every mass term enters through
         // ln(m) or the invariant combination alpha*r*t.
         double lenScale = Math.Max(1000.0, Math.Sqrt(P.R0.Sum(x => x * x)));
@@ -287,7 +287,7 @@ public static class GfoldPlanner
         {
             // Reach the target altitude, floating only the horizontal landing point
             // to minimize the miss. rf_x is 0 for a ground landing and > 0 for an
-            // above-the-pad arrival (Option B) — hardcoding 0 here made every P3
+            // above-the-pad arrival (Option B) - hardcoding 0 here made every P3
             // miss by the arrival altitude, so SearchMinFuel judged it unreachable.
             A.Add(row, IX(N - 1, 0), 1); b[row++] = rf[0]; // reach the target altitude
         }

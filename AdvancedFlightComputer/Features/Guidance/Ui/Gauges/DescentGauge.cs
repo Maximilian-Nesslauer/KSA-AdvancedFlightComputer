@@ -1,15 +1,19 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
 // The Descent tab's content: everything that happens before the vehicle is anywhere
-// near the ground — where it is going, when the deorbit burn is, and how the approach
+// near the ground - where it is going, when the deorbit burn is, and how the approach
 // is shaped. The shell, tab bar and EXECUTE/ABORT live in Ui/Panel.cs.
 //
 // Shares VehicleAutopilotState with the legacy Landing tab's Deorbit sub-tab, so both
 // drive the same flow; that sub-tab can be deleted once this has flown.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     /// <summary>
     /// Phase as the operator thinks of it. The landing machine's own names are about
@@ -59,7 +63,7 @@ public static partial class PoweredGuidanceWindow
             : SchemVgo;
 
         // decelerating: the marker turns round, because a descent flies its track
-        // backwards — thrust opposes travel.
+        // backwards - thrust opposes travel.
         DrawGuidanceStatusBlock(origin, innerW, rowH, DescentPhaseLabel(), col, live,
             tgoSec, decelerating: true);
     }
@@ -138,13 +142,13 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// How close each upcoming orbit brings the ground track to the site, as one
     /// horizontal strip: the site is the centre line, and every pass is a block
-    /// placed left or right of it by its SIGNED closest approach — which side of the
+    /// placed left or right of it by its SIGNED closest approach - which side of the
     /// track the site fell on. Reading down the strip you see the track walking past
     /// the site orbit by orbit, and whether it is converging on it or drifting away.
     ///
     /// The soonest pass is the one you can actually act on, so it is the only one
     /// coloured: green when it is close enough to be worth committing to, through to
-    /// red when it is not. The rest stay white — they are context, not choices.
+    /// red when it is not. The rest stay white - they are context, not choices.
     /// </summary>
     private static void DrawPassStrip(Orbit orbit, IParentBody parent, double mu,
                                       double bodyRadius, float2 origin, float width, float rowH)
@@ -172,7 +176,7 @@ public static partial class PoweredGuidanceWindow
             lastT = Math.Max(lastT, _s.Passes[i].tSec);
         }
         // Quantised, so the axis holds still. Scaling to the exact widest pass meant
-        // every small change in it re-scaled the strip and slid every other block —
+        // every small change in it re-scaled the strip and slid every other block -
         // motion that looked like the passes moving when it was only the ruler.
         scaleKm = NiceScale(scaleKm);
 
@@ -257,7 +261,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// Green through red by how close a pass comes. The thresholds are a rule of
-    /// thumb for "is this pass worth committing to", not a capability model — nothing
+    /// thumb for "is this pass worth committing to", not a capability model - nothing
     /// here knows the vehicle's actual cross-range divert.
     /// </summary>
     private static ImColor8 PassProximityColour(double minKm)

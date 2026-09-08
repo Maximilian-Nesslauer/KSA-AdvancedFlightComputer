@@ -1,6 +1,10 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
-using Gfold;
-using Scvx;
+using AdvancedFlightComputer.Guidance.Gfold;
+using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Builds the 6-DOF cold-start seed by solving the 3-DOF G-FOLD problem first.
@@ -41,7 +45,7 @@ public static class Ksa6DofGfoldSeed
 
     /// <summary>
     /// Try to produce a seed. Returns false if G-FOLD cannot solve the case, in which
-    /// case the caller should fall back to the straight-line seed — a worse guess is
+    /// case the caller should fall back to the straight-line seed - a worse guess is
     /// much better than no plan.
     /// </summary>
     /// <summary>Milliseconds spent inside G-FOLD on the last TryBuild, for measurement.</summary>
@@ -167,7 +171,7 @@ public static class Ksa6DofGfoldSeed
     ///
     /// The attitude channel is the interesting part. G-FOLD's commanded acceleration
     /// EXCLUDES gravity, so the thrust direction is simply its direction, and pointing
-    /// the body +Z axis along it makes the thrust purely axial — which in turn means
+    /// the body +Z axis along it makes the thrust purely axial - which in turn means
     /// the lateral control channels seed to zero and are consistent with the attitude.
     /// A seed whose attitude and control disagree would start the solver off with a
     /// large defect for no reason.

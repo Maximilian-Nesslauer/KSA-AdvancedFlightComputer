@@ -1,12 +1,16 @@
+#nullable disable
+
+namespace AdvancedFlightComputer.Features.Guidance;
+
 using System;
 using Brutal.Numerics;
 using KSA;
-using PoweredGuidance.Upfg;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // The launch-to-target geometry, extracted from the Ascent tab's draw so the gauge
 // panel and the legacy tab compute it exactly once between them. Pure computation:
 // no ImGui, no state writes.
-public static partial class PoweredGuidanceWindow
+public static partial class GuidanceWindow
 {
     public enum ChaseStatus
     {
@@ -20,7 +24,7 @@ public static partial class PoweredGuidanceWindow
     /// <summary>
     /// The chase orbit to fly and the launch window to fly it at. Orbit fields are
     /// valid for both <see cref="ChaseStatus.Ok"/> and
-    /// <see cref="ChaseStatus.PlaneUnreachable"/> — only <see cref="WaitSec"/> is
+    /// <see cref="ChaseStatus.PlaneUnreachable"/> - only <see cref="WaitSec"/> is
     /// meaningless in the latter, because there is no crossing to wait for.
     /// </summary>
     public struct ChasePlan
@@ -49,8 +53,8 @@ public static partial class PoweredGuidanceWindow
 
         plan.Target = target;
 
-        // Target plane straight from its state vectors: n = r × v. With our LAN
-        // convention Normal = (sin i sin Ω, −sin i cos Ω, cos i), so Ω = atan2(nx, −ny).
+        // Target plane straight from its state vectors: n = r * v. With our LAN
+        // convention Normal = (sin i sin Omega, -sin i cos Omega, cos i), so Omega = atan2(nx, -ny).
         double3 rt = targetOrbit.StateVectors.PositionCci;
         double3 vt = targetOrbit.StateVectors.VelocityCci;
         double3 n = double3.Normalize(double3.Cross(rt, vt));
@@ -61,7 +65,7 @@ public static partial class PoweredGuidanceWindow
         plan.TargetApKm = (targetOrbit.Apoapsis - bodyRadius) / 1000.0;
 
         // Chase orbit: circular, with semi-major axis the chosen offset below the
-        // target's. A true co-elliptic depends on launch phasing anyway — circular
+        // target's. A true co-elliptic depends on launch phasing anyway - circular
         // is a clean baseline to correct from once up.
         double targetSmaKm = (targetOrbit.Periapsis + targetOrbit.Apoapsis) / 2000.0;
         double chaseAltKm = targetSmaKm - bodyRadius / 1000.0 - _s.ChaseOffsetKm;
@@ -108,8 +112,8 @@ public static partial class PoweredGuidanceWindow
         double wait = Wrap2Pi(raRequired - raNow) / omega;
 
         // ... AND THE WRAP IS NOT ALLOWED TO COST A WHOLE REVOLUTION. Inside the lead
-        // window — the ideal ignition is behind us but the plane crossing itself is
-        // still ahead — the wrap reports the NEXT revolution's launch, so pressing
+        // window - the ideal ignition is behind us but the plane crossing itself is
+        // still ahead - the wrap reports the NEXT revolution's launch, so pressing
         // EXECUTE armed a countdown of most of a day and looked like a dead button.
         // Going now is at most LanLeadSeconds late, which only means the crossing
         // lands earlier in the ascent than the lead intends; waiting a revolution for
@@ -124,7 +128,7 @@ public static partial class PoweredGuidanceWindow
 
     /// <summary>
     /// Drives the target-orbit inputs from the chase plan. The gauge panel calls this
-    /// every frame while a target is selected — which is why those inputs are greyed
+    /// every frame while a target is selected - which is why those inputs are greyed
     /// out there: they are outputs of the target pick, not independent settings.
     /// </summary>
     private static void ApplyChaseOrbit(in ChasePlan plan)
