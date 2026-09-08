@@ -199,7 +199,9 @@ internal static class RcsExecRegistry
                 writer.WriteLine($"allocator = \"{o.Allocator}\"");
                 if (active)
                 {
-                    writer.WriteLine("active = true");
+                    writer.WriteLine($"active = {(exec.Faulted ? "false" : "true")}");
+                    if (exec.Faulted)
+                        writer.WriteLine("faulted = true");
                     writer.WriteLine($"resolved_strategy = \"{exec.ResolvedStrategy}\"");
                     writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
                         "resolved_axis = {0}", exec.ResolvedAxis));
@@ -351,8 +353,10 @@ internal static class RcsExecRegistry
             Allocator = allocator,
         });
 
-        if (block.TryGetValue("active", out string? activeStr)
-            && bool.TryParse(activeStr, out bool active) && active)
+        bool faulted = block.TryGetValue("faulted", out string? faultStr)
+            && bool.TryParse(faultStr, out bool faultValue) && faultValue;
+        if (faulted || (block.TryGetValue("active", out string? activeStr)
+            && bool.TryParse(activeStr, out bool active) && active))
         {
             if (!TryParseActiveState(block, mode, attitude, allocator, timeSec, dvMs,
                     out RcsAttitudeStrategy resolved, out int axis,
@@ -372,6 +376,7 @@ internal static class RcsExecRegistry
             exec.ResolvedAllocator = resolvedAllocator;
             exec.AlignCommanded = alignCommanded;
             exec.ForcedRcsOn = forcedRcs;
+            exec.Faulted = faulted;
         }
         return true;
     }

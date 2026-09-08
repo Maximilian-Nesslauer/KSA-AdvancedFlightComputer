@@ -142,6 +142,11 @@ internal static partial class RcsExecutor
 
     public static bool OnBurnModeSetEnum(Vehicle vehicle, FlightComputerBurnMode mode)
     {
+        if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
+        {
+            RequestCancel(pending, "retry fault cleanup");
+            return false;
+        }
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec) && exec.IsActive)
         {
             // Auto cancels an active execution. Manual also cancels it and allows stock handling to continue.
@@ -188,6 +193,8 @@ internal static partial class RcsExecutor
 
     public static void Activate(Vehicle vehicle)
     {
+        if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
+            return;
         FlightComputer fc = vehicle.FlightComputer;
         Burn? burn = fc.BurnPlan.FindFirstExecutableBurn();
         if (burn == null || fc.Burn == null)
@@ -232,6 +239,9 @@ internal static partial class RcsExecutor
         }
 
         RcsExecution exec = existing ?? RcsExecRegistry.GetOrCreate(vehicle.Id);
+        exec.Faulted = false;
+        exec.CleanupAttempts = 0;
+        exec.CleanupError = null;
         RcsBurnOptions options = exec.GetOrCreateOptions(timeSec, dvMs);
         exec.Capability = capability;
         exec.CapabilityProbedAtSec = Universe.GetElapsedTime().Seconds();
@@ -317,6 +327,11 @@ internal static partial class RcsExecutor
 
     public static void Cancel(Vehicle vehicle, RcsExecution exec, string reason)
     {
+        if (exec.Faulted)
+        {
+            RetryFaultCleanup(vehicle.FlightComputer, exec);
+            return;
+        }
         RcsFuelSummary fuel = ComputeFuelSummary(vehicle.FlightComputer, exec);
         EndExecution(vehicle.FlightComputer, exec);
         RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
@@ -344,9 +359,34 @@ internal static partial class RcsExecutor
     // Restore control before ClearActive erases the ownership flags. An uncommanded Align leaves the tracker alone.
     private static void EndExecution(FlightComputer fc, RcsExecution exec)
     {
-        if (exec.AlignCommanded)
-            fc.SetNullRot(VehicleReferenceFrame.BurnBody);
-        RestoreRcsMode(fc, exec);
+        RcsCommandChannel.Clear(fc.BurnPlan);
+        Exception? failure = null;
+        try
+        {
+            if (exec.AlignCommanded)
+            {
+                fc.SetNullRot(VehicleReferenceFrame.BurnBody);
+                exec.AlignCommanded = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            failure = ex;
+        }
+        try
+        {
+            if (exec.ForcedRcsOn)
+            {
+                RestoreRcsMode(fc, exec);
+                exec.ForcedRcsOn = false;
+            }
+        }
+        catch (Exception ex)
+        {
+            failure = failure == null ? ex : new AggregateException(failure, ex);
+        }
+        if (failure != null)
+            throw failure;
         exec.ClearActive();
     }
 
@@ -461,6 +501,16 @@ internal static partial class RcsExecutor
     {
         FlightComputer fc = vehicle.FlightComputer;
         bool hasExec = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec);
+        if (hasExec && exec!.Faulted)
+        {
+            if (exec.CancelRequestReason != null)
+            {
+                exec.CancelRequestReason = null;
+                exec.CleanupAttempts = 0;
+            }
+            RetryFaultCleanup(fc, exec);
+            return;
+        }
         if (!hasExec && fc.Burn == null)
         {
             RcsCommandChannel.Clear(fc.BurnPlan);
