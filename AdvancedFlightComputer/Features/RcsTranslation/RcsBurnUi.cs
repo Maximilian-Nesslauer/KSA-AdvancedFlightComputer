@@ -24,6 +24,16 @@ internal static class RcsBurnUi
             && options.Matches(exec.ActiveBurnTimeSec!.Value, exec.ActiveBurnDvMs!.Value);
 
         ImGui.Separator();
+        if (exec?.Faulted == true)
+        {
+            DrawWarning(exec.CleanupPending ? "RCS stopped. Control cleanup failed." : "RCS stopped after an internal error. See log.");
+            if (exec.CleanupPending)
+            {
+                if (ConsoleWidgets.DangerButton("RETRY RCS CLEANUP".AsSpan()))
+                    RcsExecutor.RequestCancel(exec, "retry fault cleanup");
+                return;
+            }
+        }
         RcsExecutionMode mode = options?.Mode ?? RcsExecutionMode.Default;
         RcsExecutionMode resolved = RcsExecutor.ResolveMode(vehicle, options);
 

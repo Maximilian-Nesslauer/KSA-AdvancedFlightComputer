@@ -33,6 +33,8 @@ internal sealed class RcsExecution
     /// <summary>Persist whether RCS was disabled when control was taken. Completion and cancellation restore that setting, including after a save and load.</summary>
     public bool ForcedRcsOn { get; set; }
 
+    public bool Faulted { get; set; }
+
     #endregion
 
     #region Transient state
@@ -46,6 +48,10 @@ internal sealed class RcsExecution
     public bool ControlTaken;
 
     public string? CancelRequestReason;
+
+    public int CleanupAttempts;
+    public string? CleanupError;
+    public bool CleanupPending => Faulted && (AlignCommanded || ForcedRcsOn);
 
     public RcsCapabilitySnapshot Capability;
     public double CapabilityProbedAtSec = double.NegativeInfinity;
@@ -147,7 +153,7 @@ internal sealed class RcsExecution
 
     #endregion
 
-    public bool IsActive => ActiveBurnTimeSec.HasValue;
+    public bool IsActive => ActiveBurnTimeSec.HasValue && !Faulted;
 
     #endregion
 

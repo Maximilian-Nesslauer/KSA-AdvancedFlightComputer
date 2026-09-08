@@ -14,8 +14,7 @@ internal static class RcsDriverPatch
         }
         catch (Exception ex)
         {
-            // A published worker command can outlive a failed tick and keep engine control disabled. Clear it to return control to stock.
-            RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
+            RcsExecutor.StopAfterFault(vehicle);
             LogHelper.WarnOnce($"rcs-driver-{vehicle.Id}:{ex.GetType().Name}",
                 $"[AFC] RcsDriverPatch for vehicle='{vehicle.Id}': {ex}");
         }
