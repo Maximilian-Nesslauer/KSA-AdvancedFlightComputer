@@ -1,0 +1,11 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Keep package versions in source control so CI can reject unexpected changes. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+
+    <!-- Both CI jobs share one lock file per project, then build for their own runtime. -->
+    <RuntimeIdentifiers>win-x64;linux-x64</RuntimeIdentifiers>
+  </PropertyGroup>
+
+</Project>
