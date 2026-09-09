@@ -1331,12 +1331,9 @@ public static partial class GuidanceWindow
         try { worker?.Dispose(); } catch { /* disengaging must always succeed */ }
         _s.GimbalMode = 0;
         KsaGimbalControl.Disengage(vehicle);
-        if (vehicle != null && cutEngine)
-        {
-            ref ManualControlInputs inputs = ref ManualInputs(vehicle);
-            inputs.EngineOn = false;
-            inputs.EngineThrottle = 0f;
-        }
+        // This also runs from the UI, so queue the engine cut for the next vehicle step.
+        if (vehicle != null && cutEngine && _s.ControlAcquired)
+            _s.LandingCutPending = true;
     }
 
     // ---- Execute (runs from the PrepareWorker prefix, never the draw) ----
