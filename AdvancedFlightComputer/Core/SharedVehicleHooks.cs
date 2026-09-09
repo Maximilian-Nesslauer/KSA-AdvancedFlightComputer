@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using HarmonyLib;
@@ -10,6 +11,7 @@ internal static class SharedVehicleHooks
     // Core remains patched when a feature fails to load. Only complete feature blocks may drive vehicles.
     internal static bool MultiPassEnabled { get; set; }
     internal static bool RcsEnabled { get; set; }
+    internal static bool GuidanceEnabled { get; set; }
 
     internal static void ApplyPatches(Harmony harmony)
     {
@@ -21,6 +23,7 @@ internal static class SharedVehicleHooks
     {
         MultiPassEnabled = false;
         RcsEnabled = false;
+        GuidanceEnabled = false;
     }
 
     internal static void TickVehicles(ReadOnlySpan<Astronomical> bodies)
@@ -43,6 +46,10 @@ internal static class SharedVehicleHooks
         // A failed feature can still have loaded entries that the save observer will persist.
         VehicleDisposePatch.Remove(vehicle);
         RcsVehicleDisposePatch.Remove(vehicle);
+
+        // Vehicle.Dispose has finished, so guidance releases only process resources.
+        if (GuidanceEnabled)
+            GuidanceWindow.ReleaseDisposedVehicle(vehicle);
 
         // Vehicle.Dispose leaves the part graph intact. Clear caches that can keep it reachable.
         MultiPassPreviewCache.OnVehicleDisposed(vehicle);

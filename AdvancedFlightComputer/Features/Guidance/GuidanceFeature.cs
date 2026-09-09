@@ -1,5 +1,6 @@
 using System.Reflection;
 using AdvancedFlightComputer.Core;
+using KSA;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
@@ -24,6 +25,9 @@ internal static class GuidanceFeature
         // The control code stays unreachable until all execution paths share vehicle ownership.
         harmony.Patch(GameReflection.Program_DrawProgramMenusHook!,
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(DrawMenu)));
+
+        // Clear guidance state after a save replaces the vehicles.
+        SaveLoadObserver.SaveLoaded += GuidanceWindow.ReleaseAllVehicles;
         DefaultCategory.Log.Warning($"[AFC] {UnavailableReason}");
     }
 
@@ -39,6 +43,11 @@ internal static class GuidanceFeature
             try
             {
                 ImGui.Text(UnavailableReason);
+
+                // Keep release errors visible while the guidance panel is hidden.
+                string failure = GuidanceWindow.ReleaseFailure(Program.ControlledVehicle);
+                if (failure.Length > 0)
+                    ImGui.Text(failure);
             }
             finally
             {
@@ -70,6 +79,10 @@ internal static class GuidanceFeature
 
     internal static void Reset()
     {
+        SaveLoadObserver.SaveLoaded -= GuidanceWindow.ReleaseAllVehicles;
+
+        // On unload, the patches are already removed and no later step can retry cleanup.
+        GuidanceWindow.ReleaseAllVehicles();
         if (_resolverRegistered)
             AppDomain.CurrentDomain.AssemblyResolve -= ResolveManagedLibrary;
         _resolverRegistered = false;

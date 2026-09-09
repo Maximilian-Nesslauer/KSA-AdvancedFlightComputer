@@ -58,9 +58,12 @@ public sealed class Mod
                 DisableRcsTranslation();
         }
 
-        if (Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
-            && !_patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyPatches))
+        // The diagnostic menu stands alone, but the release paths run from the shared hooks.
+        bool guidanceReady = Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
+            && _patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyPatches);
+        if (!guidanceReady)
             GuidanceFeature.Reset();
+        SharedVehicleHooks.GuidanceEnabled = coreReady && guidanceReady;
 
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
