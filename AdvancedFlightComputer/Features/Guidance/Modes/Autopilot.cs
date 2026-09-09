@@ -943,6 +943,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ClaimVehicle(GuidanceMode mode, Vehicle vehicle)
     {
+        ResetLandingEngineWait();
         if (mode != GuidanceMode.Ascent)
         {
             _s.Running = false;
@@ -1269,6 +1270,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private static bool HandBackVehicle(Vehicle vehicle)
     {
+        // Clear the wait even when no guidance resources need release.
+        ResetLandingEngineWait();
         if (!_s.ControlAcquired && !_s.FcResetPending && _s.Worker == null
             && !_s.Active && !_s.EngagePending && !_s.Converging && !_s.Running
             && !_s.LaunchArmed && !_s.LandingCutPending
@@ -1339,6 +1342,7 @@ public static partial class GuidanceWindow
     // Queue UI requests for the PrepareWorker prefix because worker results can overwrite UI attitude writes.
     private static void ResetFlightComputer()
     {
+        ResetLandingEngineWait();
         _s.FcResetPending = true;
         _s.Status = "Guidance release requested.";
     }

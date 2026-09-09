@@ -176,6 +176,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void StartGfoldNow(Vehicle vehicle)
     {
+        ResetLandingEngineWait();
         ClaimVehicle(GuidanceMode.Landing, vehicle);   // the descent takes the vehicle over
         _s.Engage = true;
         _s.AutoStage = true;
@@ -193,6 +194,7 @@ public static partial class GuidanceWindow
 
     private static void AbortLanding()
     {
+        ResetLandingEngineWait();
         _s.LandingPhase = LandingPhase.Done;
         _s.LandingCutPending = true;
         _s.LandingStatus = "Aborted.";
@@ -227,6 +229,7 @@ public static partial class GuidanceWindow
     private static void ExecuteLanding(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                        double mu, double bodyRadius)
     {
+        ResetLandingEngineWait();
         _s.LandingStatus = "";
         UpfgVehicle model = BuildUpfgVehicle(vehicle);
         if (model == null)
@@ -375,6 +378,7 @@ public static partial class GuidanceWindow
 
         if (contact && _s.LandingTouchdownArmed && IsPoweredDescentPhase(_s.LandingPhase))
         {
+            ResetLandingEngineWait();
             _s.GfoldThrottle = 0.0;
             _s.HasCommand = false;
             _s.LandingPhase = LandingPhase.Done;
