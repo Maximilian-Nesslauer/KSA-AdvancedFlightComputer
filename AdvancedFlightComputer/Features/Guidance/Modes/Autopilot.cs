@@ -1236,13 +1236,13 @@ public static partial class GuidanceWindow
         {
             ReleaseAttitude(vehicle);
             _s.WasEngaged = false;
-
-            // Finish the release in this step. The next frame applies player input before
-            // this prefix runs again, so a release left for later can undo a fresh
-            // ignition. An armed launch still needs its channels, so it keeps them.
-            if (!_s.LaunchArmed)
-                HandBackVehicle(vehicle);
         }
+
+        // A temporary command gap releases attitude but keeps ownership.
+        // Release ownership when the mode ends, before the next frame applies player input.
+        bool stillNeedsCraft = _s.Engage && (_s.Running || landingGuides || boostbackGuides);
+        if (_s.ControlAcquired && !_s.LaunchArmed && !stillNeedsCraft)
+            HandBackVehicle(vehicle);
     }
 
     // Release attitude without replacing the flight computer and losing the player's burn plan or settings.
