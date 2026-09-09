@@ -92,6 +92,7 @@ The oracle is always the game's own orbit propagation, never a re-derivation of 
 - `afc-rcs-lp` flies the same burn with both allocators on one vehicle, asserts that both complete with quiet engines, and logs the propellant comparison.
 - `afc-rcs-driver-fault` injects driver, attitude, RCS, and fuel telemetry faults on a live vehicle. A faulted tick has to suppress the published command, hand back only the controls it owns, restore attitude and RCS independently, keep a failed restore visible and retryable within its attempt limit, survive save and load without reattaching the burn, and never raise the completion event.
 - `afc-guidance-handback` drives the guidance release paths, which no vehicle driver reaches while guidance is disabled. A craft guidance never engaged has to come out unchanged, an acquired one gets back only the fields guidance wrote and keeps its plan and throttle, a failed cleanup keeps its ownership and error until a later step, and a terminal path reports once and forgets the craft.
+- `afc-guidance-thrust` checks what guidance may command from the engines a craft is running. It inverts the game's own nozzle performance at three pressures, and builds an active, an inactive, a dry, a solid and a partly supplied engine, a combination no shipped vehicle offers, to check which of them count as authority. A solid motor that was lit before its controller was switched off keeps burning, so it refuses throttle control while an unlit one does not.
 
 ### Core
 
