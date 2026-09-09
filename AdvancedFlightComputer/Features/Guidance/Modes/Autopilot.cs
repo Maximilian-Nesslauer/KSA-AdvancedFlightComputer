@@ -1089,12 +1089,25 @@ public static partial class GuidanceWindow
             return;
         }
 
+        sixDof = _s.Active || _s.EngagePending;
+        landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
+        // Active, not EngagePending: a setup that Engage6Dof rejects never writes control,
+        // and must not leave the craft owned.
+        if (_s.Active || (_s.Engage && (_s.Running || landingActive || BoostbackLive)))
+            _s.ControlAcquired = true;
+
         // 6-DOF is EXCLUSIVE: it drives attitude through the TVC allocator rather than
         // the flight computer, so it must not be mixed with the UPFG / G-FOLD command
         // path below. It has its own engage flag and does not set _s.Running.
         if (sixDof)
         {
+            // 6-DOF steers through the allocator, so the flight computer command it does
+            // not use is given back first. When the step ends the mode, the release runs
+            // in this same step, before the next frame can apply player input.
+            ReleaseAttitude(vehicle);
             Step6Dof(vehicle);
+            if (!_s.Active && !_s.EngagePending)
+                HandBackVehicle(vehicle);
             return;
         }
 
@@ -1225,6 +1238,12 @@ public static partial class GuidanceWindow
         {
             ReleaseAttitude(vehicle);
             _s.WasEngaged = false;
+
+            // Finish the release in this step. The next frame applies player input before
+            // this prefix runs again, so a release left for later can undo a fresh
+            // ignition. An armed launch still needs its channels, so it keeps them.
+            if (!_s.LaunchArmed)
+                HandBackVehicle(vehicle);
         }
     }
 
