@@ -221,6 +221,9 @@ public static partial class GuidanceWindow
             ResetFlightComputer();
         }
 
+        if (_s.ReleaseError.Length > 0)
+            ImGui.Text(_s.ReleaseError);
+
         ConsoleStyle.PopWidgetStyle();
 
         // Content height, read INSIDE the child where the cursor is content-relative.
