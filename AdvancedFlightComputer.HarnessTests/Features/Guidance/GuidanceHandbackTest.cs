@@ -36,6 +36,12 @@ public sealed class GuidanceHandbackTest : AfcTest
         PlayerChangesArePreserved(t);
         ReleaseDoesNotFollowAReplacementComputer(t);
 
+        // Both global operations below reach every craft in the shared session, so they only
+        // run when no other craft holds guidance state.
+        bool isolated = VehicleAutopilotState.Snapshot().Length == 0;
+        if (!isolated)
+            t.Skip("another craft holds guidance state, so the global release cases do not run.");
+
         Vehicle? previousFocus = Program.ControlledVehicle;
         bool previousModActive = GuidanceWindow.ModActive;
         HashSet<string> preexisting = TestSupport.CollectVehicleIds(t.System);
@@ -61,9 +67,10 @@ public sealed class GuidanceHandbackTest : AfcTest
                 OrbitFixtures.CircularAt(home, 600_000.0, driver.Elapsed));
             spawnedOther = other;
 
-            DisabledCraftIsUntouched(t, vehicle, driver);
+            DisabledCraftIsUntouched(t, vehicle, driver, isolated);
             AcquiredCraftStopsWithoutChangingItsPlan(t, vehicle, other, driver);
-            FailedReleaseRemainsPending(t, vehicle, other);
+            if (isolated)
+                FailedReleaseRemainsPending(t, vehicle, other);
             FailedRateCleanupDoesNotBlockAttitudeRelease(t, vehicle);
         }
         finally
@@ -162,7 +169,7 @@ public sealed class GuidanceHandbackTest : AfcTest
             replacement.CustomAttitudeTarget.Equals(new double3(4, 5, 6)));
     }
 
-    private static void DisabledCraftIsUntouched(TestContext t, Vehicle vehicle, SimDriver driver)
+    private static void DisabledCraftIsUntouched(TestContext t, Vehicle vehicle, SimDriver driver, bool isolated)
     {
         FlightComputer computer = vehicle.FlightComputer;
         computer.CustomAttitudeTarget = new double3(0.2, 0.3, 0.4);
@@ -182,7 +189,10 @@ public sealed class GuidanceHandbackTest : AfcTest
         // Opening a panel creates state without granting control.
         VehicleAutopilotState panelState = VehicleAutopilotState.For(vehicle);
         panelState.AutoLaunch = true;
-        GuidanceWindow.QueueAllReleases();
+        if (isolated)
+            GuidanceWindow.QueueAllReleases();
+        else
+            panelState.FcResetPending = true;
         GuidanceWindow.ApplyAutopilot(vehicle);
         GuidanceWindow.ApplyAutopilot(vehicle);
 
@@ -257,13 +267,6 @@ public sealed class GuidanceHandbackTest : AfcTest
         VehicleAutopilotState otherState = VehicleAutopilotState.For(other);
         otherState.Engage = false;
         otherState.ControlAcquired = true;
-
-        foreach (var entry in VehicleAutopilotState.Snapshot())
-            if (!ReferenceEquals(entry.Key, vehicle) && !ReferenceEquals(entry.Key, other))
-            {
-                t.Skip("another craft holds guidance state, so the global release is not isolated.");
-                return;
-            }
 
         var harmony = new Harmony("com.maxi.afc.harnesstests.guidance.shutdown");
         harmony.Patch(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.SetEnum), new[] { typeof(Enum) }),
