@@ -52,17 +52,8 @@ public static partial class GuidanceWindow
     internal static bool ShowLegacyWindow;
 
     /// <summary>
-    /// Switch the mod on or off from the game's menu bar.
-    ///
-    /// Off does NOT tear anything down here. The writes that release attitude and cut
-    /// the engine are only legal from the PrepareWorker prefix, and the per-vehicle
-    /// state has no enumeration, so each craft hands itself back the next time that
-    /// prefix runs for it - which is every sim step, so within a frame. See
-    /// ApplyAutopilot and HandBackVehicle.
-    ///
-    /// Turning it back on clears nothing: settings, targets and tuning are all
-    /// untouched. What does not come back is anything that was ENGAGED, because it was
-    /// genuinely disengaged on the way out.
+    /// Disabling guidance queues release for each vehicle's next PrepareWorker prefix.
+    /// Enabling it preserves settings but does not cancel a queued release or restart guidance.
     /// </summary>
     internal static void SetModActive(bool active)
     {
@@ -71,10 +62,8 @@ public static partial class GuidanceWindow
 
         ModActive = active;
 
-        // A retarget click armed when the switch flipped would otherwise still be
-        // waiting for a world click that can no longer be cancelled from anywhere.
         if (!active)
-            _retargetArmed = false;
+            QueueAllReleases();
     }
 
     public static void Draw(IGameViewport viewport)
