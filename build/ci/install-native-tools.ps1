@@ -99,7 +99,12 @@ Get-VerifiedDownload -Uri $zigUrl -Destination $zigArchive -Sha256 $platform.Zig
 $localManifest = Join-Path $rustDist "channel-rust-$RustVersion.toml"
 Copy-Item -LiteralPath $rustManifest -Destination $localManifest -Force
 "$rustManifestSha256  channel-rust-$RustVersion.toml" | Set-Content -LiteralPath "$localManifest.sha256" -Encoding ascii
-$rustDistServer = ([uri]$rustDistRoot).AbsoluteUri.TrimEnd('/')
+# A Unix path cast to Uri can be relative, so set the file scheme explicitly.
+$rustDistUri = [UriBuilder]::new()
+$rustDistUri.Scheme = "file"
+$rustDistUri.Host = ""
+$rustDistUri.Path = $rustDistRoot
+$rustDistServer = $rustDistUri.Uri.AbsoluteUri.TrimEnd('/')
 
 $manifestLines = @(Get-Content -LiteralPath $rustManifest)
 $rustComponents = [ordered]@{}

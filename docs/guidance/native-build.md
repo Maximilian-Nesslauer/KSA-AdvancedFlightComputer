@@ -74,5 +74,4 @@ A local Release build packages the host runtime and checks the ZIP against its p
 To package both runtimes, build both native library pairs first, then pass both runtime identifiers to the mod build.
 Use `DeployToMods=false` and `GenerateLaunchProfile=false` for a compile-only check.
 
-Windows native, ABI, and numerical checks have passed locally.
-Linux execution and GitHub artifact upload remain unverified until the workflow runs on GitHub.
+
