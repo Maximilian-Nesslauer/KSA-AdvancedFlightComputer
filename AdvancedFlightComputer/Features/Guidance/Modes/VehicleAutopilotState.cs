@@ -300,13 +300,6 @@ public sealed class VehicleAutopilotState
     /// <summary>A flight-computer reset the draw asked for, applied on the sim thread.</summary>
     public bool FcResetPending;
 
-    /// <summary>
-    /// Prevents repeated handback while guidance is disabled. Deactivation cannot sweep every
-    /// vehicle at once, because the writes that release attitude and cut the engine are only
-    /// legal from the PrepareWorker prefix, so each craft releases itself on its next step.
-    /// </summary>
-    public bool HandedBack;
-
     /// <summary>Guidance acquired control and still needs to release it.</summary>
     public bool ControlAcquired;
 
