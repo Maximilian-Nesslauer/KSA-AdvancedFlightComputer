@@ -981,14 +981,20 @@ public static partial class GuidanceWindow
     // applying it at the NEXT step's prefix.
     public static void ApplyAutopilot(Vehicle vehicle)
     {
-        bool focused = ReferenceEquals(vehicle, Program.ControlledVehicle);
+        // Do not create state while guidance is disabled.
+        // Release each vehicle in its PrepareWorker prefix so cleanup reaches the next worker snapshot.
+        if (!ModActive)
+        {
+            if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState disabledState))
+            {
+                _s = disabledState;
+                HandBackVehicle(vehicle);
+            }
+            return;
+        }
 
-        // Point the ambient state at THIS vehicle for everything that follows.
-        //
-        // For() only for the focused craft, because it creates the entry and this runs
-        // for every vehicle on every sim step - thousands of calls a second under time
-        // warp - so a craft that has never been engaged must cost one failed lookup
-        // and no allocation.
+        // Use creates state, so reserve it for the focused vehicle and reuse existing state elsewhere.
+        bool focused = ReferenceEquals(vehicle, Program.ControlledVehicle);
         if (focused)
             Use(vehicle);
         else if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state))
@@ -996,29 +1002,11 @@ public static partial class GuidanceWindow
         else if (!TryAdoptBooster(vehicle))
             return;
 
-        // SWITCHED OFF: hand this vehicle back and stop touching it.
-        //
-        // Deliberately AFTER the state lookup and BEFORE anything that steps guidance.
-        // Simply not running would be the wrong kind of off - a craft mid-descent would
-        // keep the engine lit, keep the TVC override driving the nozzles, and keep the
-        // attitude hold the mod took out, with nothing left running to undo any of it.
-        // Off has to mean handed back, and the hand-back has to happen here because
-        // this prefix is the only place those writes reach the sim.
-        if (!ModActive)
+        if (_s.FcResetPending)
         {
-            if (!_s.HandedBack)
-            {
-                HandBackVehicle(vehicle);
-                _s.HandedBack = true;
-            }
-            // One more flush in case a reset was already queued when the switch flipped.
-            else if (_s.FcResetPending)
-            {
-                ApplyPendingFcReset(vehicle);
-            }
+            HandBackVehicle(vehicle);
             return;
         }
-        _s.HandedBack = false;
 
         bool sixDof = _s.Active || _s.EngagePending;
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
