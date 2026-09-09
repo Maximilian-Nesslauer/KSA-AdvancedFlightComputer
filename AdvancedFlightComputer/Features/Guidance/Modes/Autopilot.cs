@@ -1230,63 +1230,18 @@ public static partial class GuidanceWindow
         }
     }
 
-    // Vehicle.FlightComputer is `get; private set;`, so swapping in a new instance
-    // needs the non-public setter. Same approach as ManualInputs above.
-    private static readonly MethodInfo SetVehicleFlightComputer =
-        AccessTools.PropertySetter(typeof(Vehicle), nameof(Vehicle.FlightComputer));
-
-    // Hand the vehicle back to the player by giving it a brand new flight computer,
-    // straight off the default template.
-    //
-    // Restoring individual fields is the wrong shape for this: AngleDeadband and
-    // RateLimit are a ratchet (UpdateRcsParams only ever raises them, ONE-WAY,
-    // toward the RCS's physical floor) and RateDeadband/RateBit/AttitudeTarget are
-    // derived from them each step, so a snapshot taken while our guidance was
-    // flying could already be sitting on a ratcheted value - restoring it just
-    // restores the corruption. A new FlightComputer starts at the Balanced-profile
-    // defaults with nothing ratcheted.
-    //
-    // It also clears CustomAttitudeTarget, which MUST be cleared and not merely
-    // untracked: KSA reads that one field two ways depending on AttitudeTrackTarget
-    // - Euler angles under Custom (what we write to steer), but a body RATE command
-    // in rad/s under None (see UpdateAttitudeTarget). Leaving our steering angles
-    // behind with tracking dropped to None is read as a rate command of up to
-    // pi rad/s, and the vehicle tumbles the moment anything selects a rate mode.
-    //
-    // ReadUpdatedVehicleConfiguration is ESSENTIAL here, not a nicety. A fresh
-    // FlightComputer has an empty VehicleConfig - no thrusters, no gimbals - and
-    // the game only repopulates it on part-tree modification, refill/deplete, or
-    // save load; NOT every step. Without this call the vehicle keeps its attitude
-    // commands but has no RCS or TVC to execute them with, and stays that way until
-    // the player happens to stage or dock.
-    //
-    // The new BurnPlan is empty, so any burn node the player had queued is cleared
-    // along with everything else. That is the cost of a genuine reset rather than a
-    // selective one.
+    // Give back only what guidance wrote. Replacing the whole flight computer would take
+    // the burn plan, the tuning and the stored throttle with it, and those belong to the
+    // player rather than to guidance.
     private static void ReleaseAttitude(Vehicle vehicle)
     {
-        // Before the swap, while the OLD VehicleConfig this vehicle's rate is keyed on
-        // is still reachable. The new flight computer brings a new config and so a new
-        // (unengaged) slot regardless, but a feedforward is a standing instruction to
-        // keep rotating and is not a thing to leave lying around on the strength of an
-        // object becoming unreachable.
-        KsaAttitudeRate.Clear(vehicle);
-
-        var fresh = new FlightComputer();
-        if (SetVehicleFlightComputer != null)
-        {
-            SetVehicleFlightComputer.Invoke(vehicle, new object[] { fresh });
-            fresh.ReadUpdatedVehicleConfiguration(vehicle);
+        if (!_s.ControlAcquired)
             return;
-        }
 
-        // Setter not resolvable (a game update changed the property): copy the
-        // template onto the existing instance instead. Same resulting state, minus
-        // ConservativeFlipTime/DetumbleRateLimit, which CopyFrom skips and
-        // UpdateRcsParams recomputes anyway.
-        FlightComputer fc = vehicle.FlightComputer;
-        fc.CopyFrom(fresh);
-        fc.ReadUpdatedVehicleConfiguration(vehicle);
+        // A feedforward is a standing instruction to keep rotating, so it goes first.
+        KsaAttitudeRate.Clear(vehicle);
+        _s.AttitudeOwnership.Release(vehicle.FlightComputer);
+        _s.WasEngaged = false;
     }
 
     // The "Reset flight computer" button's action: unconditionally stop every
@@ -1414,6 +1369,8 @@ public static partial class GuidanceWindow
         double3 euler = value.ToRollYawPitchRadians();
 
         var fc = vehicle.FlightComputer;
+        _s.ControlAcquired = true;
+        _s.AttitudeOwnership.BeginWrite(fc);
         fc.CustomAttitudeTarget = euler;
 
         // WHETHER THE FLIGHT COMPUTER LOOKS AT THE ROLL WE JUST COMMANDED.
@@ -1436,6 +1393,7 @@ public static partial class GuidanceWindow
             fc.AttitudeFrame = VehicleReferenceFrame.EclBody;
             fc.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
         }
+        _s.AttitudeOwnership.EndWrite(fc, writesRoll: _s.Running);
     }
 
     /// <summary>
