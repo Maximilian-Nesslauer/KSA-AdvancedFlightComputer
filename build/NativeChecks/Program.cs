@@ -4,15 +4,12 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 
-// P/Invoke layout errors fail silently. This check compiles a probe against the
-// solver headers, compares the native layout with the managed declarations, and
-// verifies that all bound entry points are exported.
-//
-// The probe must run on the runtime it describes. Numerical behaviour is checked by
-// the console projects under AdvancedFlightComputer.Guidance.Tests.
+// Compare managed bindings with a native probe built from the solver headers.
+// Run on the target platform because layouts can differ between platforms.
 
 const string usage = "Usage: NativeChecks <clarabel|scs> <assembly-path> "
-    + "[--rid <win-x64|linux-x64>] [--zig <path>] [--scs-include <dir>] [--clarabel-include <dir>]";
+    + "[--rid <win-x64|linux-x64>] [--zig <path>] [--scs-include <dir>] [--clarabel-include <dir>] "
+    + "[--expect-checks <count>] [--expect-exports <count>]";
 
 if (args.Length < 2 || args[0] is not ("scs" or "clarabel"))
 {
@@ -32,6 +29,10 @@ string zig = "zig";
 string scsInclude = Path.Combine(repoRoot, "third_party", "scs", "include");
 string clarabelInclude = Path.Combine(repoRoot, "third_party", "clarabel", "include", "c");
 
+// Expected counts also detect removed bindings, which would otherwise go unchecked.
+int expectedChecks = -1;
+int expectedExports = -1;
+
 for (int i = 2; i < args.Length; i += 2)
 {
     if (i + 1 >= args.Length)
@@ -45,6 +46,20 @@ for (int i = 2; i < args.Length; i += 2)
         case "--zig": zig = args[i + 1]; break;
         case "--scs-include": scsInclude = args[i + 1]; break;
         case "--clarabel-include": clarabelInclude = args[i + 1]; break;
+        case "--expect-checks":
+            if (!int.TryParse(args[i + 1], out expectedChecks) || expectedChecks < 0)
+            {
+                Console.Error.WriteLine(usage);
+                return 2;
+            }
+            break;
+        case "--expect-exports":
+            if (!int.TryParse(args[i + 1], out expectedExports) || expectedExports < 0)
+            {
+                Console.Error.WriteLine(usage);
+                return 2;
+            }
+            break;
         default:
             Console.Error.WriteLine(usage);
             return 2;
@@ -97,6 +112,10 @@ try
         foreach (FieldInfo field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
             Equal(type.Name + "." + field.Name, checked((int)Marshal.OffsetOf(type, field.Name)));
     }
+    if (expectedChecks >= 0 && checks != expectedChecks)
+        throw new InvalidOperationException(
+            $"{library} ran {checks} size and field-offset checks on {rid}, but {expectedChecks} were expected. "
+            + "Review the bindings before updating the expected count.");
     Console.WriteLine($"{library} ABI passed on {rid}, {checks} size and field-offset checks");
 
     string nativePath = Path.Combine(directory, scs ? scsName : clarabelName);
@@ -115,6 +134,10 @@ try
                 throw new EntryPointNotFoundException($"{Path.GetFileName(nativePath)} does not export {entry}");
             exports++;
         }
+        if (expectedExports >= 0 && exports != expectedExports)
+            throw new InvalidOperationException(
+                $"{library} bound {exports} entry points, but {expectedExports} were expected. "
+                + "Review the bindings before updating the expected count.");
         Console.WriteLine($"{library} exports passed, {exports} bound entry points");
     }
     finally
