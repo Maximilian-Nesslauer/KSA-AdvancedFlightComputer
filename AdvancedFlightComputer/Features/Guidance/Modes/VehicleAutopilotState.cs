@@ -452,6 +452,14 @@ public sealed class VehicleAutopilotState
 
     public double GfoldHandoffTgo = 40.0;  // hand UPFG braking over this long before the gate
     public double GfoldThrottle;
+
+    /// <summary>Why the last thrust command could not be met, empty when it could.</summary>
+    public string GfoldThrustStatus = "";
+
+    // A landing mode waits here while automatic staging supplies the next engine.
+    public double LandingEngineWaitStart = double.NaN;
+    public double LandingEngineWaitProgressTime;
+    public Sequence LandingEngineWaitNextSequence;
     public double GfoldHandoffTime;
     public double GfoldLastSolveTime = double.NegativeInfinity;
     public double GfoldAltM, GfoldSpeedMs;
