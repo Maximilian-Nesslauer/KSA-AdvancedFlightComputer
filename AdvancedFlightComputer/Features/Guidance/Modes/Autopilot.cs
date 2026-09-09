@@ -1230,114 +1230,105 @@ public static partial class GuidanceWindow
         }
     }
 
-    // Give back only what guidance wrote. Replacing the whole flight computer would take
-    // the burn plan, the tuning and the stored throttle with it, and those belong to the
-    // player rather than to guidance.
+    // Release attitude without replacing the flight computer and losing the player's burn plan or settings.
     private static void ReleaseAttitude(Vehicle vehicle)
     {
         if (!_s.ControlAcquired)
             return;
 
-        // A feedforward is a standing instruction to keep rotating, so it goes first.
+        // Clear the commanded rotation rate before restoring attitude settings.
         KsaAttitudeRate.Clear(vehicle);
         _s.AttitudeOwnership.Release(vehicle.FlightComputer);
         _s.WasEngaged = false;
     }
 
-    // The "Reset flight computer" button's action: unconditionally stop every
-    // guidance flow, cut the engine, and reset the flight computer - regardless of
-    // what state the mod's own bookkeeping thinks it's in. A backstop for the
-    // normal disengage path not running (an unhandled exception, a phase the
-    // fail-streak logic didn't cover), so it deliberately doesn't rely on any of
-    // that bookkeeping being correct.
-    //
-    // The mod-side flags are set here, but the flight-computer write itself is
-    // only REQUESTED - see _s.FcResetPending. This runs from the UI draw, and a
-    // flight-computer write from the draw does not survive: within one frame the
-    // game applies the worker's results onto the live FC, then runs PrepareWorker
-    // and snapshots the FC into NewFlightComputer, and only then draws the UI. So
-    // anything the draw writes lands after that snapshot and is overwritten by the
-    // next frame's copy-back. The same reason every other FC write in this mod
-    // happens from the PrepareWorker prefix.
-
-    /// <summary>
-    /// Whether the mod is doing anything at all. Cleared from the game's menu bar - see
-    /// Mod.OnDrawProgramMenus - so a player who is not using guidance gets their screen
-    /// and their flight computer back completely.
-    ///
-    /// Read from the sim thread (ApplyAutopilot) and written from the draw, hence
-    /// volatile: without it a release build is free to hoist the test out of the
-    /// per-vehicle loop and keep servicing craft after the switch has flipped.
-    /// </summary>
+    /// <summary>Enables guidance processing in ApplyAutopilot.</summary>
+    // Read by simulation code and written by the UI.
     internal static volatile bool ModActive = true;
 
     /// <summary>
-    /// Give one vehicle back to the player, completely. Runs from the PrepareWorker
-    /// prefix, which is the only context where the flight-computer and manual-input
-    /// writes below actually reach the simulation.
-    ///
-    /// Ordered so that nothing is left half-owned: the 6-DOF worker is stopped and its
-    /// TVC override released BEFORE the flight computer is reset, because the override
-    /// lives outside the flight computer and a reset would otherwise leave it driving
-    /// the nozzles of a craft the player now believes they control.
+    /// Releases this vehicle's guidance state, keeping ownership if any cleanup fails.
+    /// Run from the PrepareWorker prefix so the worker receives the released state.
     /// </summary>
-    private static void HandBackVehicle(Vehicle vehicle)
+    private static bool HandBackVehicle(Vehicle vehicle)
     {
-        try
-        {
-            if (_s.Active || _s.EngagePending || _s.Converging)
-                Disengage6Dof(vehicle);
+        if (!_s.ControlAcquired && !_s.FcResetPending && _s.Worker == null
+            && !_s.Active && !_s.EngagePending && !_s.Converging && !_s.Running
+            && !_s.LaunchArmed && !_s.LandingCutPending
+            && !_s.HasCommand && _s.GimbalMode == 0 && _s.Guidance == null
+            && _s.HandoverPendingUntil == double.NegativeInfinity
+            && !ReferenceEquals(SixDofLog.Owner, _s)
+            && _s.LandingPhase == LandingPhase.Idle && _s.BoostbackPhase == BoostbackPhase.Idle)
+            return true;
 
-            // Belt and braces: Disengage6Dof does both of these, but it is skipped
-            // entirely when 6-DOF was never engaged and the gimbal tab could still
-            // have left an override running.
-            _s.GimbalMode = 0;
-            KsaGimbalControl.Disengage(vehicle);
-
-            // Clears Running, LandingPhase, AutoLaunch and HasCommand, and queues the
-            // flight-computer reset that actually releases attitude and cuts the engine.
-            ResetFlightComputer();
-            ApplyPendingFcReset(vehicle);
-
-            // The reset's status line is for a player who pressed a button. This one
-            // was not asked for by anyone looking at a panel, and the panel is gone.
-            _s.Status = "";
-        }
-        catch
-        {
-            // A vehicle that throws on the way out must not take the sim step with it,
-            // and must not be retried forever - HandedBack is set by the caller either
-            // way, so a failure here costs this craft its clean release and nothing else.
-        }
-    }
-
-    private static void ResetFlightComputer()
-    {
         _s.Running = false;
         _s.LandingPhase = LandingPhase.Idle;
         _s.BoostbackPhase = BoostbackPhase.Idle;
-        _s.AutoLaunch = false;
+        _s.LaunchArmed = false;
         _s.HasCommand = false;
-        _s.FcResetPending = true;
-        _s.Status = "Flight computer reset - autopilot disengaged, engine cut.";
-    }
+        _s.Active = false;
+        _s.EngagePending = false;
+        _s.Converging = false;
+        _s.GimbalMode = 0;
+        _s.HandoverPendingUntil = double.NegativeInfinity;
 
-    // Applies a requested reset from inside the PrepareWorker prefix, where writes
-    // to the flight computer and to _manualControlInputs actually reach the sim.
-    private static void ApplyPendingFcReset(Vehicle vehicle)
-    {
+        string failure = "";
+        // One cleanup failure must not prevent the remaining releases.
+        void Attempt(Action release)
+        {
+            try { release(); }
+            catch (Exception error)
+            {
+                if (failure.Length == 0)
+                    failure = "Guidance release failed: " + error.Message;
+            }
+        }
+
+        Attempt(() => KsaAttitudeRate.Clear(vehicle));
+        Attempt(() => KsaGimbalControl.Disengage(vehicle));
+        if (_s.ControlAcquired)
+        {
+            Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
+            Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer));
+        }
+        Attempt(() =>
+        {
+            _s.Worker?.Dispose();
+            _s.Worker = null;
+            _s.Guidance = null;
+        });
+        Attempt(() => SixDofLog.Stop(_s));
+
+        if (failure.Length > 0)
+        {
+            _s.FcResetPending = true;
+            if (_s.ReleaseError != failure)
+                Console.Error.WriteLine("[AFC Guidance] " + failure);
+            _s.ReleaseError = failure;
+            _s.Status = failure;
+            return false;
+        }
+
+        if (_s.Status == _s.ReleaseError)
+            _s.Status = "";
+        _s.ControlAcquired = false;
         _s.FcResetPending = false;
-        ReleaseAttitude(vehicle);
-
-        ref ManualControlInputs inputs = ref ManualInputs(vehicle);
-        inputs.EngineOn = false;
-        inputs.EngineThrottle = 0f;
-
-        // Cleared last: _s.WasEngaged gates the normal release path, which would
-        // otherwise fire again on top of the reset we just did.
-        _s.WasEngaged = false;
         _s.LandingCutPending = false;
+        _s.WasEngaged = false;
+        _s.ReleaseError = "";
+        return true;
     }
+
+    // Queue UI requests for the PrepareWorker prefix because worker results can overwrite UI attitude writes.
+    private static void ResetFlightComputer()
+    {
+        _s.FcResetPending = true;
+        _s.Status = "Guidance release requested.";
+    }
+
+    // A queued reset runs the same cleanup as any other release, so a failed attempt keeps
+    // its pending request and is retried on a later step.
+    private static void ApplyPendingFcReset(Vehicle vehicle) => HandBackVehicle(vehicle);
 
     // Convert a commanded thrust direction into the flight computer's Custom-attitude
     // Euler command. We use KSA's own ComputeBurnBody2Cci to build the body->CCI
