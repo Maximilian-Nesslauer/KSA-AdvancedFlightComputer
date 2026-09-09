@@ -1314,7 +1314,7 @@ public static partial class GuidanceWindow
             _s.Worker = null;
             _s.Guidance = null;
         });
-        Attempt(() => SixDofLog.Stop(_s));
+        Attempt(() => ReportLogStop(SixDofLog.Stop(_s)));
 
         if (failure.Length > 0)
         {

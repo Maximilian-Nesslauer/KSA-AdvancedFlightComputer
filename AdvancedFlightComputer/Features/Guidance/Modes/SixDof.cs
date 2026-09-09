@@ -1315,7 +1315,7 @@ public static partial class GuidanceWindow
 
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
     {
-        SixDofLog.Stop(_s);
+        ReportLogStop(SixDofLog.Stop(_s));
         _s.Active = false;
         _s.EngagePending = false;
         _s.Converging = false;
@@ -1728,7 +1728,7 @@ public static partial class GuidanceWindow
         {
             SixDofLog.Event(_s, now, $"TOUCHDOWN at alt {x[2]:F1} m, vz {x[5]:F2} m/s, " +
                                  $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
-            SixDofLog.Stop(_s);
+            ReportLogStop(SixDofLog.Stop(_s));
             Disengage6Dof(vehicle);
             _s.Error = "touchdown - engine cut, 6-DOF guidance disengaged.";
             return;
@@ -1751,7 +1751,7 @@ public static partial class GuidanceWindow
         {
             SixDofLog.Event(_s, now, $"HANDOFF to terminal hover at alt {x[2]:F1} m, " +
                                  $"vz {x[5]:F2} m/s, lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m");
-            SixDofLog.Stop(_s);
+            ReportLogStop(SixDofLog.Stop(_s));
             Disengage6Dof(vehicle, cutEngine: false);
             StartTerminalHover(vehicle);
             _s.LandingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";

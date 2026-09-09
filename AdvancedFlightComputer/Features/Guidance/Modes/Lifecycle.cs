@@ -56,19 +56,20 @@ public static partial class GuidanceWindow
         _s.Worker = null;
         _s.Guidance = null;
 
-        // Stop keeps ordinary file errors in LastError instead of throwing, so the error is
-        // read back here. Only the owner reads it, or one craft reports another craft's error.
-        bool ownsLog = ReferenceEquals(SixDofLog.Owner, _s);
         try
         {
-            SixDofLog.Stop(_s);
+            ReportLogStop(SixDofLog.Stop(_s));
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine("[AFC Guidance] Guidance log did not close: " + error.Message);
+            ReportLogStop(error.Message);
         }
-        if (ownsLog && SixDofLog.LastError.Length > 0)
-            Console.Error.WriteLine("[AFC Guidance] Guidance log did not close: " + SixDofLog.LastError);
+    }
+
+    private static void ReportLogStop(string error)
+    {
+        if (error.Length > 0)
+            Console.Error.WriteLine("[AFC Guidance] Log cleanup failed: " + error);
     }
 
     // Defer control writes to the vehicle step so worker results cannot overwrite them.

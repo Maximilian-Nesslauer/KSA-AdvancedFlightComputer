@@ -140,28 +140,32 @@ internal static class SixDofLog
 
     internal static string LastError { get; private set; } = "";
 
-    /// <summary>Close the run. Only the owner may - see Start.</summary>
-    internal static void Stop(object owner)
+    // A request from another owner must leave the current log running.
+    internal static string Stop(object owner)
     {
         if (Owner != null && !ReferenceEquals(Owner, owner))
-            return;
+            return "";
         Owner = null;
-        Stop();
+        return Stop();
     }
 
-    internal static void Stop()
+    internal static string Stop()
     {
         if (!Enabled)
-            return;
+            return "";
+
+        string error;
         try
         {
-            Flush();
+            error = Flush();
         }
         catch (Exception e)
         {
             LastError = e.Message;
+            error = e.Message;
         }
         Enabled = false;
+        return error;
     }
 
     /// <summary>
@@ -288,10 +292,15 @@ internal static class SixDofLog
         }
     }
 
-    internal static void Flush()
+    /// <summary>
+    /// Write what is buffered and report this write. LastError keeps the last error of the
+    /// run for the panel, so it cannot say whether this write succeeded, because a repeated
+    /// failure carries the same text.
+    /// </summary>
+    internal static string Flush()
     {
         if (!Enabled && _cycle.Length == 0)
-            return;
+            return "";
         try
         {
             if (_cycle.Length > 0) { File.AppendAllText(_cyclePath, _cycle.ToString()); RowsWritten += _pendingRows; _cycle.Clear(); }
@@ -302,7 +311,9 @@ internal static class SixDofLog
         catch (Exception e)
         {
             LastError = e.Message;
+            return e.Message;
         }
+        return "";
     }
 
     // Invariant culture throughout: a machine with a comma decimal separator would
