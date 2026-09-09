@@ -1,58 +1,21 @@
-# Builds the SCS library from the vendored SCS sources (third_party/scs, cvxgrp/scs
-# 3.2.11) using a portable Zig as the C compiler - no MSVC required. Mirrors
-# gfold/build-ecos.ps1's approach and flag choices.
-#
-# Output: build/native/<rid>/scs.dll on Windows, libscs.so on Linux (x86_64, all
-# public symbols exported).
-#
-# Zig is a cross compiler, so the runtime identifier only selects its target triple
-# and the library name. The Linux object files also need -fPIC, because they are
-# linked into a shared object.
-#
-# Build choices:
-#  - DLONG left UNDEFINED (not "=0"): same #ifdef-tests-definedness trap as
-#    USE_LAPACK below - scs_types.h has `#ifdef DLONG`, so `-DDLONG=0` still
-#    DEFINES it and switches scs_int to a 64-bit `long long`, silently breaking
-#    every C# struct that assumes the 32-bit `int` DLONG=0 looks like it should
-#    mean. (Found the hard way: struct offsets computed fine, data validated
-#    fine, and scs_init still failed - because the native side was reading
-#    Z/L/Bsize/Qsize/M/N and every SOC-dims array element at the wrong width.)
-#    Leaving DLONG undefined gives scs_int = int32, matching the C# side.
-#  - CTRLC=0: no console signal handler - this DLL ends up inside the game
-#    process, which must own its own signal handling.
-#  - USE_LAPACK is defined for src/aa.c ONLY, which is why that file is compiled
-#    to its own object first and linked in separately below.
-#
-#    This USED to be undefined everywhere, with the note "aa.c has a complete
-#    no-LAPACK fallback (acceleration becomes a no-op), so leaving the macro
-#    undefined costs nothing we use." The fact was right and the conclusion was
-#    wrong. Anderson acceleration is not an optional extra - SCS turns it on by
-#    default (ACCELERATION_LOOKBACK = 10) and it is the mechanism that keeps the
-#    ADMM iteration count down on ill-conditioned problems, which every SCvx
-#    subproblem is. Measured in closed loop, scs_init is 2-6% of solve time and
-#    the ADMM sweeps are the other 94-98%, so iteration count is the ONLY thing
-#    worth attacking and we had disabled the tool for attacking it.
-#
-#    Scoping it to aa.c alone is what makes this cheap. `struct ACCEL_WORK` is
-#    defined inside aa.c and everyone else sees an opaque AaWork*, so no other
-#    translation unit's ABI depends on the macro. That keeps cones.c on its
-#    non-LAPACK path (so the SDP-only dsyevr_/dgesvd_/dsyrk_ never enter the
-#    link, and we use no SDP cones) and leaves linalg.c on its hand-written
-#    loops. Only six routines are then needed - dnrm2_, daxpy_, dscal_, dgemv_,
-#    dgemm_, dgesv_ - supplied by native_src/blas_shim.c rather than by linking
-#    a multi-megabyte OpenBLAS into the game process. The sizes involved are
-#    tiny (Anderson memory is 10, so a 10x10 LU and skinny dim-by-10 products),
-#    nowhere near the KKT solve that dominates each iteration.
-#  - NDEBUG: disables AMD's internal debug dumps, matching the ECOS build.
+# Builds SCS from third_party/scs with Zig for Windows or Linux.
+# Leave DLONG and SFLOAT undefined to keep 32-bit integers and 64-bit floats in the C ABI.
+# Defining either macro as 0 still changes the types because SCS tests whether it is defined.
+# CTRLC=0 leaves signal handling to the host process, and NDEBUG disables debug output.
+# Anderson acceleration uses aa.c with the small BLAS shim in native_src/blas_shim.c.
+# Compile only those two files with USE_LAPACK to avoid a full BLAS/LAPACK dependency.
 
+[CmdletBinding()]
 param(
     [string]$ZigExe = "zig",
+    [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
     [ValidateSet("win-x64", "linux-x64")]
     [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } else { "linux-x64" }),
     [string]$OutDir
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $scs = Join-Path $root "../third_party/scs"
@@ -69,8 +32,8 @@ $out = if ($OutDir) { $OutDir } else { Join-Path $root "native/$Rid" }
 if (-not (Get-Command $ZigExe -ErrorAction SilentlyContinue)) {
     throw "zig not found ('$ZigExe'). Install Zig and put it on PATH, or pass -ZigExe <path>."
 }
-if (-not (Test-Path $scs)) { throw "SCS sources not found at $scs" }
-New-Item -ItemType Directory -Force $out | Out-Null
+if (-not (Test-Path -LiteralPath $scs -PathType Container)) { throw "SCS sources not found at $scs" }
+New-Item -ItemType Directory -Force -Path $out | Out-Null
 
 $sources = @(
     "src/scs.c", "src/scs_version.c", "src/cones.c", "src/ctrlc.c",
@@ -79,7 +42,7 @@ $sources = @(
     "linsys/scs_matrix.c", "linsys/csparse.c",
     "linsys/cpu/direct/private.c",
     "linsys/external/qdldl/qdldl.c"
-) + (Get-ChildItem (Join-Path $scs "linsys/external/amd") -Filter *.c |
+) + (Get-ChildItem -LiteralPath (Join-Path $scs "linsys/external/amd") -Filter *.c |
         ForEach-Object { "linsys/external/amd/" + $_.Name })
 
 $includes = @(
@@ -91,14 +54,12 @@ $includes = @(
 $opt = if ($Configuration -eq "Release") { "-O2" } else { "-O0 -g" }
 
 $shim = Join-Path $root "native_src/blas_shim.c"
-if (-not (Test-Path $shim)) { throw "BLAS shim not found at $shim" }
+if (-not (Test-Path -LiteralPath $shim -PathType Leaf)) { throw "BLAS shim not found at $shim" }
 $aaObj = Join-Path $out "aa_lapack.o"
 $shimObj = Join-Path $out "blas_shim.o"
 
-Push-Location $scs
+Push-Location -LiteralPath $scs
 try {
-    # aa.c alone gets -DUSE_LAPACK, so Anderson acceleration is compiled in
-    # rather than stubbed out to a no-op. See the header comment.
     $aaArgs = @("cc", "-target", $target, "-c") + $pic +
         $opt.Split(" ") +
         @("-DCTRLC=0", "-DNDEBUG", "-DUSE_LAPACK") +
@@ -106,9 +67,7 @@ try {
     & $ZigExe @aaArgs
     if ($LASTEXITCODE -ne 0) { throw "zig cc failed compiling aa.c with exit code $LASTEXITCODE" }
 
-    # The shim needs the macro too: scs_blas.h puts the blas_int typedef and the
-    # BLAS() name-mangling macros behind #ifdef USE_LAPACK, so without it the
-    # shim cannot even name the types it is implementing.
+    # USE_LAPACK also exposes the BLAS types and names that the shim implements.
     $shimArgs = @("cc", "-target", $target, "-c") + $pic +
         $opt.Split(" ") +
         @("-DCTRLC=0", "-DNDEBUG", "-DUSE_LAPACK") +
@@ -126,7 +85,7 @@ try {
 }
 finally {
     Pop-Location
-    Remove-Item $aaObj, $shimObj -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $aaObj, $shimObj -ErrorAction SilentlyContinue
 }
 
 Write-Host "Built: $(Join-Path $out $library)" -ForegroundColor Green
