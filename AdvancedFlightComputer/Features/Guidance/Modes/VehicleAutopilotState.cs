@@ -10,30 +10,7 @@ using AdvancedFlightComputer.Features.Guidance.Upfg;
 using KSA;
 
 /// <summary>
-/// ONE VEHICLE'S FLIGHT COMPUTER. Everything the autopilot knows about a single
-/// craft: which mode is engaged, where it is going, how it is tuned, and every
-/// filter, plan, timer and counter those modes run on.
-///
-/// This used to be static fields on GuidanceWindow, which meant the mod could
-/// fly exactly one vehicle at a time - and worse, that the state outlived the vehicle
-/// it described. Loading a save replaced the Vehicle while the statics survived, so the
-/// autopilot went on flying a plan built for a craft that no longer existed.
-///
-/// Keyed per vehicle instead, a booster can fly itself home while the player watches
-/// the upper stage continue to orbit, and the window simply shows whichever vehicle is
-/// focused.
-///
-/// EVERYTHING THAT SHAPES HOW A VEHICLE FLIES LIVES HERE, not just what it is doing.
-/// An earlier split kept "settings" global on the theory that they were player
-/// preferences - but a target orbit, a landing site, a pointing cone, a feedback gain
-/// and a vehicle height are all properties of one craft's mission and one craft's
-/// airframe, and sharing them meant focusing a second vehicle silently re-aimed the
-/// first. The rule now is simply: if a vehicle's flight computer would know it, it is
-/// a field on this class.
-///
-/// What stays static on GuidanceWindow is only what belongs to the PANEL rather
-/// than to a craft: which overlay or popup is open, the warp confirmation dialog,
-/// reflection handles, and scratch buffers reused within a single call.
+/// Guidance settings and runtime state for one vehicle, independent of panel focus.
 /// </summary>
 public sealed class VehicleAutopilotState
 {
@@ -324,16 +301,19 @@ public sealed class VehicleAutopilotState
     public bool FcResetPending;
 
     /// <summary>
-    /// This vehicle has already been handed back after the mod was switched off.
-    ///
-    /// Deactivation cannot be a synchronous sweep: the per-vehicle state lives in a
-    /// ConditionalWeakTable with no enumeration, and the writes that release attitude
-    /// and cut the engine are only legal from the PrepareWorker prefix. So the flag is
-    /// set globally and each vehicle tears itself down the next time that prefix runs
-    /// for it, which is every sim step. This marks the ones already done, so the
-    /// steady-state cost of an inactive mod is one bool test per vehicle.
+    /// Prevents repeated handback while guidance is disabled. Deactivation cannot sweep every
+    /// vehicle at once, because the writes that release attitude and cut the engine are only
+    /// legal from the PrepareWorker prefix, so each craft releases itself on its next step.
     /// </summary>
     public bool HandedBack;
+
+    /// <summary>Guidance acquired control and still needs to release it.</summary>
+    public bool ControlAcquired;
+
+    /// <summary>Cleanup error shown until release succeeds.</summary>
+    public string ReleaseError = "";
+
+    internal readonly AttitudeOwnership AttitudeOwnership = new();
 
     // ------------------------------------------------------------------ ascent
     public GuidanceWindow.AscentPhase Phase = GuidanceWindow.AscentPhase.Vertical;
@@ -979,26 +959,27 @@ public sealed class VehicleAutopilotState
     public double BoostbackThrottle;
     public bool BoostbackEngineOn;
 
-    /// <summary>
-    /// Per-vehicle state, held WEAKLY so a destroyed or unloaded vehicle takes its
-    /// autopilot state with it. A Dictionary would keep every craft the player ever
-    /// engaged alive for the session and would need explicit cleanup on scene changes -
-    /// the exact bookkeeping that made a stale plan survive a save load in the first
-    /// place. Nothing here needs to outlive its vehicle.
-    /// </summary>
+    // Weak keys keep this table from retaining vehicles after they are unloaded.
     private static readonly ConditionalWeakTable<Vehicle, VehicleAutopilotState> Table = new();
 
     /// <summary>State for this vehicle, created on first use.</summary>
     public static VehicleAutopilotState For(Vehicle vehicle) => Table.GetOrCreateValue(vehicle);
 
-    /// <summary>
-    /// State for this vehicle ONLY if it already has some. The autopilot hook runs for
-    /// every vehicle on every sim step - thousands of calls a second under time warp -
-    /// so the hot path must not allocate for craft that have never been engaged.
-    /// </summary>
+    /// <summary>Looks up existing state without creating it for an untouched vehicle.</summary>
     public static bool TryGet(Vehicle vehicle, out VehicleAutopilotState state)
     {
         state = null;
         return vehicle != null && Table.TryGetValue(vehicle, out state);
     }
+
+    // Lifecycle cleanup needs a stable list while it releases resources and removes entries.
+    internal static KeyValuePair<Vehicle, VehicleAutopilotState>[] Snapshot()
+    {
+        var states = new List<KeyValuePair<Vehicle, VehicleAutopilotState>>();
+        foreach (var entry in Table)
+            states.Add(entry);
+        return states.ToArray();
+    }
+
+    internal static void Remove(Vehicle vehicle) => Table.Remove(vehicle);
 }
