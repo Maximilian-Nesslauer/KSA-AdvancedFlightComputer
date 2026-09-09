@@ -28,6 +28,14 @@ public static partial class GuidanceWindow
 
     private static void StartTerminalHover(Vehicle vehicle)
     {
+        // Staging may supply a liquid engine, so allow a pending staging wait.
+        if (!KsaEnginePerf.SupportsThrottleControl(vehicle)
+            && !(_s.Engage && _s.AutoStage && _s.StagingActive
+                && KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.NoAuthority))
+        {
+            _s.LandingStatus = "Terminal hover requires active, supplied liquid engines with shutdown control.";
+            return;
+        }
         // BEFORE the phase is read below, because the claim does not touch
         // LandingPhase - hover is the same machine - and the trace decision depends on
         // what that phase was.
@@ -44,6 +52,8 @@ public static partial class GuidanceWindow
         _s.TermInit = false;
         _s.TermSetE = _s.TermSetN = _s.TermSetUp = 0.0;
         _s.HasCommand = false;
+        _s.GfoldThrustStatus = "";
+        ResetLandingEngineWait();
         _s.TermTabSelectPending = true;
         _s.LandingStatus = "Terminal hover engaged.";
     }
@@ -51,8 +61,9 @@ public static partial class GuidanceWindow
     // Thrust-to-weight at the current mass and local gravity - hover needs > 1.
     private static double TerminalTwr(Vehicle vehicle, Orbit orbit, double mu)
     {
-        double thrustMax = KsaEnginePerf.VacuumThrust(vehicle);
         double rLen = orbit.StateVectors.PositionCci.Length();
+        double pressure = KsaEnginePerf.AmbientPressureAt(vehicle.Parent, rLen - vehicle.Parent.MeanRadius);
+        double thrustMax = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure);
         double g = mu / (rLen * rLen);
         double weight = vehicle.TotalMass * g;
         return weight > 0 ? thrustMax / weight : 0.0;
@@ -75,8 +86,8 @@ public static partial class GuidanceWindow
     private static void StepTerminalHover(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                           double mu, double bodyRadius, double now)
     {
-        if (_s.Engage && _s.AutoStage)
-            AutoSequence(vehicle);
+        if (!PrepareLandingEngines(vehicle, parent, now, requireAirless: false))
+            return;
 
         double3 r = orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(r);
@@ -128,10 +139,11 @@ public static partial class GuidanceWindow
         // Local (x = up) command: throttle from the magnitude, direction clamped
         // to the tilt cone so lateral authority never flips the vehicle over.
         var local = new double3(Math.Max(aUp, 0.0), aE, aN);
-        double thrustMax = KsaEnginePerf.VacuumThrust(vehicle);
-        _s.GfoldThrottle = thrustMax > 0
-            ? Math.Clamp(local.Length() * vehicle.TotalMass / thrustMax, 0.0, 1.0)
-            : 0.0;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, r.Length() - parent.MeanRadius);
+        KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(
+            vehicle, local.Length() * vehicle.TotalMass, pressure);
+        _s.GfoldThrottle = command.Throttle;
+        _s.GfoldThrustStatus = command.Message;
         double3 dirLocal = ClampToCone(local, _s.TermMaxTiltDeg);
         double3 dir = dirLocal.X * up + dirLocal.Y * east + dirLocal.Z * north;
         if (dir.Length() > 1e-6)
@@ -154,6 +166,8 @@ public static partial class GuidanceWindow
                                         double mu, double bodyRadius)
     {
         bool active = _s.LandingPhase == LandingPhase.TerminalHover;
+        if (active && _s.GfoldThrustStatus.Length > 0)
+            ImGui.Text(_s.GfoldThrustStatus);
 
         double twr = TerminalTwr(vehicle, orbit, mu);
         if (twr < 1.0)

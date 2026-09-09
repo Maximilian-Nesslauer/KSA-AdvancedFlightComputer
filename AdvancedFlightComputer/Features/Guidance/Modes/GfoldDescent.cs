@@ -25,7 +25,6 @@ public static partial class GuidanceWindow
     // to the surface; the hover handoff simply cuts over in the last stretch.
     private static double GfoldSolverTargetAltM => _s.VehicleHeightM;
     private const double GfoldMinTf = 4.0;
-    private const double GfoldCoastThrottle = 0.02;  // below this, cut the engine (true coast)
 
     // Flight-time search bounds. SearchTfMax is the cold-start ceiling; the two
     // bracket factors are the window searched around the previous solution's
@@ -47,8 +46,8 @@ public static partial class GuidanceWindow
     private static void StepGfoldDescent(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                          double bodyRadius, double now)
     {
-        if (_s.Engage && _s.AutoStage)
-            AutoSequence(vehicle);
+        if (!PrepareLandingEngines(vehicle, parent, now, requireAirless: true))
+            return;
 
         double3 siteCci = SiteDirCciAt(parent, 0) * (bodyRadius + SiteTerrainHeight(parent));
         var frame = KsaGfold.BuildFrame(siteCci);
@@ -91,7 +90,7 @@ public static partial class GuidanceWindow
         // site is body-fixed, so its CCI position rotates with the body, and the live
         // frame carries the plan around with it so we keep aiming at the real pad.
         if (_s.GfoldPlan != null)
-            TrackGfoldPlan(frame, r, vSrf, vehicle.TotalMass, now);
+            TrackGfoldPlan(vehicle, parent, frame, r, vSrf, vehicle.TotalMass, now);
     }
 
     // Solve a fresh descent plan from the current state and commit it. A min-fuel
@@ -103,10 +102,16 @@ public static partial class GuidanceWindow
     {
         GfoldParams p = KsaGfold.BuildParams(
             vehicle, parent, frame, siteCci, comPos, _s.GfoldGlideSlopeDeg, _s.GfoldPointingDeg, _s.GfoldVMaxMs,
-            GfoldSolverTargetAltM, 0.0, _s.GfoldThrottleMin, _s.GfoldThrottleMax);
+            GfoldSolverTargetAltM, 0.0, _s.GfoldThrottleMin, _s.GfoldThrottleMax, out string refusal);
         if (p == null)
         {
-            _s.LandingStatus = "G-FOLD: no engine - holding.";
+            _s.LandingStatus = refusal;
+            _s.GfoldLastSolveTime = now;
+            _s.GfoldPlan = null;
+            _s.GfoldThrottle = 0.0;
+            _s.HasCommand = false;
+            _s.LandingPhase = LandingPhase.Done;
+            _s.LandingCutPending = true;
             return;
         }
 
@@ -217,7 +222,8 @@ public static partial class GuidanceWindow
     // Fly the committed plan: feed-forward the planned thrust at the current time
     // plus PD feedback on the planned state, expressed in the given (live) site
     // frame so the plan stays locked to the body-fixed, rotating landing pad.
-    private static void TrackGfoldPlan(KsaGfold.Frame f, double3 r, double3 vSrf, double mass, double now)
+    private static void TrackGfoldPlan(Vehicle vehicle, IParentBody parent, KsaGfold.Frame f,
+                                       double3 r, double3 vSrf, double mass, double now)
     {
         GfoldTrajectory plan = _s.GfoldPlan;
         int n = plan.Nodes;
@@ -246,7 +252,8 @@ public static partial class GuidanceWindow
         double3 fb = _s.GfoldKp * (refPos - curPos) + _s.GfoldKd * (refVel - curVel);
         double3 cmd = ff + fb; // local thrust acceleration
 
-        double targetThrottle = Math.Clamp(cmd.Length() * mass / Math.Max(_s.GfoldThrustMax, 1.0), 0.0, 1.0);
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, r.Length() - parent.MeanRadius);
+        double demand = cmd.Length() * mass;
 
         // Direction: clamp the command to within the pointing cone of local up. The
         // plan respects the pointing limit, but the PD feedback can tilt past it, so
@@ -265,7 +272,12 @@ public static partial class GuidanceWindow
             : 1.0 - Math.Exp(-dt / _s.GfoldSmoothTau);
         _s.GfoldTrackInit = true;
 
-        _s.GfoldThrottle += a * (targetThrottle - _s.GfoldThrottle);
+        double previousThrust = _s.GfoldThrottle > 0.0
+            ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.GfoldThrottle, pressure) : 0.0;
+        double smoothedDemand = demand > 0.0 ? previousThrust + a * (demand - previousThrust) : demand;
+        KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, smoothedDemand, pressure);
+        _s.GfoldThrottle = command.Throttle;
+        _s.GfoldThrustStatus = command.Message;
         double3 blended = _s.CommandDir.Length() > 0.5 ? _s.CommandDir + a * (targetDir - _s.CommandDir) : targetDir;
         if (blended.Length() > 1e-6)
             _s.CommandDir = double3.Normalize(blended);
@@ -385,6 +397,8 @@ public static partial class GuidanceWindow
         // thread, so anything past a frame time (16.7 ms at 60 Hz) is a stutter the
         // player feels once every re-solve interval.
         ImGui.Text($"status {_s.GfoldStatus}   nodes {n}   dt {plan.Dt:F2} s   tf {plan.TimeOfFlight:F1} s");
+        if (_s.GfoldThrustStatus.Length > 0)
+            ImGui.Text(_s.GfoldThrustStatus);
         ImGui.Text($"last solve {_s.GfoldSolveMs:F1} ms   " +
                    $"({_s.GfoldSolveMs / 16.7:F1} frames at 60 Hz)");
         ImGui.Text($"fuel used {plan.FuelUsed:F0} kg   landing err {plan.LandingErrorNorm:F1} m   plan t+{elapsed:F1} s");
