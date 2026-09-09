@@ -75,12 +75,19 @@ internal static class KsaGfold
     internal static GfoldParams BuildParams(
         Vehicle vehicle, IParentBody parent, Frame frame, double3 siteCci, double3 refPosCci,
         double glideSlopeDeg, double pointingDeg, double vMax,
-        double arrivalAltM, double arrivalRateMs, double throttleMin, double throttleMax)
+        double arrivalAltM, double arrivalRateMs, double throttleMin, double throttleMax, out string refusal)
     {
-        (double thrust, double massFlow) = KsaEnginePerf.Vacuum(vehicle);
+        refusal = RefusalReason(vehicle, parent);
+        if (refusal.Length > 0)
+            return null;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, refPosCci.Length() - parent.MeanRadius);
+        (double thrust, double massFlow) = KsaEnginePerf.AtPressure(vehicle, pressure);
         double exhaustVel = massFlow > 0 ? thrust / massFlow : 0.0;
         if (thrust <= 0 || exhaustVel <= 0)
+        {
+            refusal = "G-FOLD requires available thrust from active engines.";
             return null;
+        }
 
         double mass = vehicle.TotalMass;
         double prop = vehicle.PropellantMass;
@@ -105,10 +112,16 @@ internal static class KsaGfold
         double speed = vLocal.Length();
         double vMaxEff = Math.Max(vMax, 1.3 * speed);
 
-        // Solver thrust bounds (fractions of max), set by the user. These constrain the
-        // planned trajectory only; the tracker still commands the full 0-100% range.
-        double tMin = Math.Clamp(throttleMin, 0.01, 0.95);
-        double tMax = Math.Clamp(throttleMax, tMin + 0.02, 1.0);
+        // The plan must respect both the engine minimum and the selected thrust range.
+        // The tracker can use the full available range to correct tracking errors.
+        double minimumThrust = KsaEnginePerf.ThrustAtThrottle(vehicle, vehicle.GetMinThrottle(), pressure);
+        double tMin = Math.Max(Math.Clamp(throttleMin, 0.01, 1.0), minimumThrust / thrust);
+        double tMax = Math.Clamp(throttleMax, 0.01, 1.0);
+        if (!double.IsFinite(tMin) || !double.IsFinite(tMax) || tMin >= tMax)
+        {
+            refusal = "G-FOLD thrust bounds do not admit the active engine minimum.";
+            return null;
+        }
 
         return new GfoldParams
         {
@@ -127,6 +140,16 @@ internal static class KsaGfold
             Rf = [arrivalAltM, 0.0, 0.0],      // above the pad (x = up)
             Vf = [-arrivalRateMs, 0.0, 0.0],   // descending vertically, no cross-range
         };
+    }
+
+    internal static string RefusalReason(Vehicle vehicle, IParentBody parent)
+    {
+        // This model assumes constant exhaust velocity and no aerodynamic forces.
+        if (parent?.GetAtmosphereReference()?.Physical != null)
+            return "G-FOLD is limited to airless bodies. Use terminal hover in atmosphere.";
+        if (!KsaEnginePerf.SupportsThrottleControl(vehicle))
+            return "G-FOLD requires active, supplied liquid engines with shutdown control.";
+        return "";
     }
 
     // The first-node control of a solved trajectory, mapped back to the world:
