@@ -1021,6 +1021,16 @@ public static partial class GuidanceWindow
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || _s.WasEngaged
                    || _s.LandingCutPending || _s.LaunchArmed || handingOver;
 
+        // Check ownership before mode steps can overwrite a changed attitude command.
+        // Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
+        if (_s.ControlAcquired && ((!sixDof && !_s.Engage)
+            || (!sixDof && !_s.Running && !landingActive && !BoostbackLive && !_s.LaunchArmed)
+            || !_s.AttitudeOwnership.IsCurrent(vehicle.FlightComputer)))
+        {
+            HandBackVehicle(vehicle);
+            return;
+        }
+
         // Nothing engaged and nobody looking: an unfocused idle craft is not worth a
         // stage-model rebuild or a trace sample.
         if (!focused && !flying)
