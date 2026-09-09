@@ -207,13 +207,10 @@ public static partial class GuidanceWindow
             ImGui.EndTabBar();
         }
 
-        // Manual escape hatch: stop everything and hand the vehicle back, in case
-        // a guidance flow didn't end cleanly on its own. Below the tabs so it's
-        // reachable regardless of which one is open.
-        if (ImGui.Button("Reset flight computer"))
+        // Keep release available below the tabs, regardless of which mode is open.
+        if (ImGui.Button("Release guidance"))
         {
-            // The TVC override lives outside the flight computer, so a reset would
-            // otherwise leave it silently driving the nozzles.
+            // The gimbal override needs its own release because it lives outside the flight computer.
             _s.GimbalMode = 0;
             KsaGimbalControl.Disengage(vehicle);
             ResetFlightComputer();

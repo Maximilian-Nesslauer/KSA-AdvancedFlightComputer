@@ -209,34 +209,13 @@ public static partial class GuidanceWindow
 
         _s.GfoldTabSelectPending = false;
 
-        // RESET, the unconditional escape hatch. It used to sit under the legacy
-        // window's tabs; with that window hidden this is the only way to reach it.
-        //
-        // Not a duplicate of ABORT. ABORT is per-mode and dispatches on whichever tab
-        // is open, so it stops the thing it can see. This stops everything - guidance,
-        // landing phase, armed auto-launch, the pending command - and cuts the engine
-        // through FcResetPending, whatever state the mod believes it is in. It exists
-        // for when a flow did not end cleanly on its own, which by definition is when
-        // the mode-specific control is the one you cannot trust.
-        //
-        // At the FOOT of the body on purpose: it is a rarely used recovery, not a
-        // commit control, and the top of the panel is reserved for the two buttons
-        // that must never be behind a fold or a scroll.
-        //
-        // PLAIN ImGui.Button, not ImGauge.Button. The gauge buttons are a
-        // gauge-WINDOW primitive - EXECUTE, ABORT and RETARGET are all drawn outside
-        // the body child, positioned absolutely. Calling one inside an ImGui child
-        // ends the child as if it were a window: "Must call EndChild() and not End()",
-        // followed by a cascade of missing PopStyleColor as the unwound style stack
-        // unbalances. Everything else drawn inside the body - the hover numpad, the
-        // 6-DOF log controls - uses ImGui.Button for the same reason.
+        // Keep a release request available regardless of the selected guidance mode.
+        // Use ImGui.Button inside this child window because ImGauge.Button expects a gauge window.
         ImGui.Dummy(new float2(0f, ImGui.GetTextLineHeight() * 0.5f));
-        if (ImGui.Button("RESET FLIGHT COMPUTER",
+        if (ImGui.Button("RELEASE GUIDANCE",
                 new float2(ImGui.GetContentRegionAvail().X, ImGui.GetTextLineHeight() * 1.6f)))
         {
-            // The TVC override lives outside the flight computer, so a reset would
-            // otherwise leave it silently driving the nozzles - same pairing the
-            // legacy button used.
+            // The gimbal override needs its own release because it lives outside the flight computer.
             _s.GimbalMode = 0;
             KsaGimbalControl.Disengage(vehicle);
             ResetFlightComputer();
