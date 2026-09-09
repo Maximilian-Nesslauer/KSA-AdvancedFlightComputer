@@ -1169,17 +1169,14 @@ public static partial class GuidanceWindow
                 }
                 else if (_s.LandingPhase == LandingPhase.GfoldDescent)
                 {
-                    // Cut the engine on a planned coast so it genuinely throttles
-                    // down. Hysteresis (off below 2%, on above 6%) stops the engine
-                    // toggling every step when the command sits near the threshold.
-                    if (_s.GfoldThrottle < GfoldCoastThrottle) _s.GfoldEngineOn = false;
-                    else if (_s.GfoldThrottle > GfoldCoastThrottle * 3.0) _s.GfoldEngineOn = true;
-                    inputs.EngineOn = _s.GfoldEngineOn;
+                    // Positive demands below minimum thrust are clamped to the engine minimum.
+                    // Keep the engine on for every positive command.
+                    inputs.EngineOn = _s.GfoldThrottle > 0.0;
                     inputs.EngineThrottle = (float)_s.GfoldThrottle;
                 }
                 else if (_s.LandingPhase == LandingPhase.TerminalHover)
                 {
-                    inputs.EngineOn = _s.GfoldThrottle > 0.01;
+                    inputs.EngineOn = _s.GfoldThrottle > 0.0;
                     inputs.EngineThrottle = (float)_s.GfoldThrottle;
                 }
                 else
