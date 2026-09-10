@@ -58,6 +58,13 @@ internal static class VehicleControlOwnership
     internal static string? ClaimedId(Vehicle vehicle)
         => vehicle != null && _claims.TryGetValue(vehicle, out Claim? claim) ? claim.VehicleId : null;
 
+    /// <summary>Follows a rename, so a claim taken under the old id stays releasable.</summary>
+    internal static void NoteRename(Vehicle vehicle)
+    {
+        if (vehicle != null && _claims.TryGetValue(vehicle, out Claim? claim))
+            claim.VehicleId = vehicle.Id;
+    }
+
     /// <summary>Releases only the caller's claim.</summary>
     internal static void Release(Vehicle vehicle, ControlClaimant claimant)
     {

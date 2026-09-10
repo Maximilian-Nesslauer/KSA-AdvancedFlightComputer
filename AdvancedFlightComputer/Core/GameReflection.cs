@@ -199,6 +199,11 @@ internal static class GameReflection
     public static readonly MethodInfo? Vehicle_Dispose =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
 
+    // ID-keyed registries must follow a successful vehicle rename.
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
+    public static readonly MethodInfo? Vehicle_SetName =
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.SetName), new[] { typeof(string) });
+
     #endregion
 
     #region RcsTranslation
