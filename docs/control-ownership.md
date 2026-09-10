@@ -22,14 +22,15 @@ The output commands are rebuilt each step, while the executor's saved settings n
 | `FlightComputer.LastThrustTime` | `RcsComputeControlPatch.Command` | Record commanded RCS pulses. The timestamp is not restored. |
 | `FlightComputer.RCSMode` | `RcsExecutor.ForceRcsOn` and `RestoreRcsMode` | Enable RCS when needed and restore Disabled if AFC changed it. |
 | `FlightComputer.BurnMode` | `RcsExecutor.ForceBurnManual` and `RestoreBurnMode` | Set Manual at acquisition. Restore an earlier Auto only after cleanup succeeds and while the field still matches Manual. Explicit stops and completion discard the saved Auto. This is not a periodic Manual write. |
+| `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `AttitudeTarget` | `RcsExecutor.EnsureBurnControl` through `FlightComputer.RateHold` | Select Auto and null the rotation when the burn takes control from Manual. This is the first write to the mode, so the release records here what to hand back. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `CustomAttitudeTarget` | `RcsExecutor.CommandAlignAttitude` | Select Auto and a burn-relative target for Align. Non-X axes use custom Euler angles. |
-| `FlightComputer.AttitudeTrackTarget`, `AttitudeFrame` and `AttitudeTarget` | `RcsExecutor.EndExecution` through `FlightComputer.SetNullRot` | Select None in BurnBody and zero the computed target. This does not restore the previous mode, frame or custom coordinates. |
+| `FlightComputer.AttitudeTrackTarget`, `AttitudeFrame`, `AttitudeTarget`, `AttitudeMode` and `CustomAttitudeTarget` | `RcsExecutor.EndExecution` through `FlightComputer.SetNullRot` and its own restore | Select None in BurnBody and zero the computed target, hand Manual back when acquisition replaced it, and clear the custom coordinates because tracking is None. The frame stays at BurnBody. |
 | Navball frame | `RcsExecutor.BeginControl` through `Vehicle.SetNavBallFrame` | Select BurnBody. Specific SetEnum cancellation and activation-failure paths select the vehicle-region frame; generic release does not restore a captured frame. |
 
-RCS attitude release has a known gap.
-`SetNullRot` does not restore `AttitudeMode` or clear `CustomAttitudeTarget`.
-After a custom-axis Align, `FlightComputer.UpdateAttitudeTarget` can interpret the retained Euler angles as a rotation-rate command because tracking is now None.
-Selecting None therefore does not by itself establish a neutral rotation command.
+Selecting None does not by itself establish a neutral rotation command.
+`FlightComputer.UpdateAttitudeTarget` reads `CustomAttitudeTarget` as a rotation rate while tracking is None, and both `RateHold` at acquisition and the release select None.
+Coordinates left there are a standing turn whoever wrote them, and the tracker they pointed with is gone once AFC took the attitude, so the release clears them.
+`afc-control-write-surface` sets a custom target, takes control through the executor, cancels, and measures the commanded rate after a game step.
 
 ## Guidance code that is not enabled
 
