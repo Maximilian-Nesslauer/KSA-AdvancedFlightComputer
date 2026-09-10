@@ -223,6 +223,8 @@ internal static class RcsExecRegistry
                     writer.WriteLine($"resolved_allocator = \"{exec.ResolvedAllocator}\"");
                     writer.WriteLine($"align_commanded = {(exec.AlignCommanded ? "true" : "false")}");
                     writer.WriteLine($"forced_rcs_on = {(exec.ForcedRcsOn ? "true" : "false")}");
+                    if (exec.ForcedBurnManual)
+                        writer.WriteLine("forced_burn_manual = true");
                 }
                 writer.WriteLine();
             }
@@ -370,6 +372,8 @@ internal static class RcsExecRegistry
 
         bool faulted = block.TryGetValue("faulted", out string? faultStr)
             && bool.TryParse(faultStr, out bool faultValue) && faultValue;
+        bool forcedBurnManual = block.TryGetValue("forced_burn_manual", out string? burnModeStr)
+            && bool.TryParse(burnModeStr, out bool burnModeValue) && burnModeValue;
         if (faulted || (block.TryGetValue("active", out string? activeStr)
             && bool.TryParse(activeStr, out bool active) && active))
         {
@@ -391,6 +395,7 @@ internal static class RcsExecRegistry
             exec.ResolvedAllocator = resolvedAllocator;
             exec.AlignCommanded = alignCommanded;
             exec.ForcedRcsOn = forcedRcs;
+            exec.ForcedBurnManual = forcedBurnManual;
             exec.Faulted = faulted;
         }
         return true;
