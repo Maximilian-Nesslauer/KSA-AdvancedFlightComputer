@@ -964,6 +964,7 @@ public static partial class GuidanceWindow
     private static void ClaimVehicle(GuidanceMode mode, Vehicle vehicle)
     {
         ResetLandingEngineWait();
+        _s.ReleaseWithoutEngineCut = false;
         if (mode != GuidanceMode.Ascent)
         {
             _s.Running = false;
@@ -1317,7 +1318,11 @@ public static partial class GuidanceWindow
             && _s.HandoverPendingUntil == double.NegativeInfinity
             && !ReferenceEquals(SixDofLog.Owner, _s)
             && _s.LandingPhase == LandingPhase.Idle && _s.BoostbackPhase == BoostbackPhase.Idle)
+        {
+            // Nothing to release, so the next stop starts from the default again.
+            _s.ReleaseWithoutEngineCut = false;
             return true;
+        }
 
         _s.Running = false;
         _s.LandingPhase = LandingPhase.Idle;
@@ -1346,7 +1351,8 @@ public static partial class GuidanceWindow
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
         if (_s.ControlAcquired)
         {
-            Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
+            if (!_s.ReleaseWithoutEngineCut)
+                Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
             Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer));
         }
         Attempt(() =>
@@ -1373,6 +1379,7 @@ public static partial class GuidanceWindow
         VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
         _s.FcResetPending = false;
         _s.LandingCutPending = false;
+        _s.ReleaseWithoutEngineCut = false;
         _s.WasEngaged = false;
         _s.ReleaseError = "";
         return true;
