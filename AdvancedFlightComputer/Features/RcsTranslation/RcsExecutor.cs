@@ -195,6 +195,15 @@ internal static partial class RcsExecutor
     {
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
             return;
+
+        ControlClaimant holder = VehicleControlOwnership.HolderOf(vehicle);
+        if (holder != ControlClaimant.None && holder != ControlClaimant.RcsTranslation)
+        {
+            Alert($"RCS burn not engaged: {VehicleControlOwnership.Describe(holder)} is flying "
+                  + $"'{vehicle.Id}'.");
+            return;
+        }
+
         FlightComputer fc = vehicle.FlightComputer;
         Burn? burn = fc.BurnPlan.FindFirstExecutableBurn();
         if (burn == null || fc.Burn == null)
@@ -259,10 +268,53 @@ internal static partial class RcsExecutor
 
         exec.BaselineFuel(fc, exec.CapabilityProbedAtSec);
 
-        if (!BeginControl(vehicle, fc, exec))
+        if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.RcsTranslation, out holder))
+        {
+            Alert($"RCS burn not engaged: {VehicleControlOwnership.Describe(holder)} is flying "
+                  + $"'{vehicle.Id}'.");
             return;
+        }
+        if (!BeginControl(vehicle, fc, exec))
+        {
+            VehicleControlOwnership.Release(vehicle, ControlClaimant.RcsTranslation);
+            return;
+        }
         PublishCommand(vehicle, exec);
         LogEngaged(vehicle, exec, dvMs);
+    }
+
+    /// <summary>Acquires a claim for active work or pending cleanup, and releases an idle claim.</summary>
+    internal static bool ReconcileClaim(Vehicle vehicle)
+    {
+        bool running = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec)
+                       && (exec.IsActive || exec.CleanupPending);
+        if (!running)
+        {
+            ReleaseIdleClaim(vehicle);
+            return true;
+        }
+
+        // Load recovery bypasses Activate, so the driver must acquire the restored execution's claim.
+        if (VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.RcsTranslation,
+                                             out ControlClaimant holder))
+            return true;
+
+        LogHelper.WarnOnce($"rcs-claim-{vehicle.Id}",
+            $"[AFC] The RCS execution on '{vehicle.Id}' is held because "
+            + $"{VehicleControlOwnership.Describe(holder)} is flying it.");
+        return false;
+    }
+
+    private static void ReleaseIdleClaim(Vehicle vehicle)
+    {
+        if (!VehicleControlOwnership.Holds(vehicle, ControlClaimant.RcsTranslation))
+            return;
+
+        // A rename hides the ID-keyed execution from this lookup.
+        // Retain the claim because forced control settings can still need cleanup.
+        if (VehicleControlOwnership.ClaimedId(vehicle) != vehicle.Id)
+            return;
+        VehicleControlOwnership.Release(vehicle, ControlClaimant.RcsTranslation);
     }
 
     private static void PrepareAllocation(

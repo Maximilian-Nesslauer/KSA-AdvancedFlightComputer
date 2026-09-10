@@ -8,6 +8,10 @@ internal static class RcsDriverPatch
 {
     internal static void TickVehicle(Vehicle vehicle)
     {
+        // Check ownership before an active execution or pending cleanup writes control.
+        if (!RcsExecutor.ReconcileClaim(vehicle))
+            return;
+
         try
         {
             RcsExecutor.Tick(vehicle);
