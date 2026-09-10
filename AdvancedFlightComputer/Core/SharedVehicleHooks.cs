@@ -21,6 +21,7 @@ internal static class SharedVehicleHooks
 
     internal static void Reset()
     {
+        VehicleControlOwnership.Clear();
         MultiPassEnabled = false;
         RcsEnabled = false;
         GuidanceEnabled = false;
@@ -43,6 +44,8 @@ internal static class SharedVehicleHooks
 
     internal static void OnDisposed(Vehicle vehicle)
     {
+        VehicleControlOwnership.ReleaseAll(vehicle);
+
         // A failed feature can still have loaded entries that the save observer will persist.
         VehicleDisposePatch.Remove(vehicle);
         RcsVehicleDisposePatch.Remove(vehicle);
