@@ -104,6 +104,7 @@ The oracle is always the game's own orbit propagation, never a re-derivation of 
 - `afc-feature-patch-rollback` checks that a failed feature block removes only its partial patches, keeps other owners intact, and does not prevent a later block or unload.
 - `afc-shared-vehicle-hooks` checks the shared MultiPass and RCS tick order, feature gates, patch bindings, and unconditional registry cleanup when a vehicle is disposed.
 - `afc-command-sink` checks the one owner of the `FlightComputer.ComputeControl` postfix. It asserts the receipt semantics, that stock values survive a run, that a writer fault neither escapes nor discards what the writer already reported, and that an executing RCS burn holds its own vehicle in full physics with the flight fixture's off-rails override switched off.
+- `afc-control-ownership` checks the one claim per vehicle. It asserts that an untouched craft is unclaimed, that the holder can claim again, that a second claimant is refused and told who holds the craft, and that a release by a non-holder changes nothing. On the production path it asserts that an RCS burn refuses a craft guidance holds, that it gives its own claim back when the execution ends, that a running execution takes the claim again on the next driver step, which is what a save reload needs, that a held craft gets no RCS step at all, and that a claim records the id it was taken under. Renaming a craft mid-burn is not covered, because a rename leaves the shared session with an entry it cannot despawn.
 
 ### Fixtures
 
