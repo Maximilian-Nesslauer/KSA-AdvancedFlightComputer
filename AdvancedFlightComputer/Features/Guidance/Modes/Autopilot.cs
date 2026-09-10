@@ -214,17 +214,17 @@ public static partial class GuidanceWindow
         return remaining <= _s.ReserveKg;
     }
 
-    // --- the hand-over to boostback -----------------------------------------
-    //
-    // ONE PENDING HAND-OVER AT A TIME, in statics rather than per-vehicle state, and
-    // that is a real limitation rather than an oversight. The record has to be read
-    // from a vehicle that does not exist yet and has no state of its own, so it cannot
-    // live on either party; and a pair of side boosters separating together would need
-    // one record each. A returning first stage is one vehicle, which is the case this
-    // is for. It expires either way, so a hand-over that finds nothing does not linger.
-    private static readonly HashSet<uint> _handoverParts = new HashSet<uint>();
-    private static double _handoverSiteLat, _handoverSiteLon;
-    private static double _handoverExpiry = double.NegativeInfinity;
+    // Keep pending handovers outside vehicle state because the detached vehicles do not exist yet.
+    // Each sequence has one landing target, so boosters in the same sequence share a site.
+    private sealed class BoosterHandover
+    {
+        internal uint RootId;
+        internal double SiteLatDeg;
+        internal double SiteLonDeg;
+        internal double ExpiresAt;
+    }
+
+    private static readonly List<BoosterHandover> _handovers = new List<BoosterHandover>();
 
     /// <summary>How long a hand-over waits for its booster to show up, s. The split
     /// happens inside the same activation, so this only has to survive a frame or two;
@@ -239,7 +239,7 @@ public static partial class GuidanceWindow
     private static void ArmBoosterHandover(Vehicle vehicle, SequenceList sequenceList,
                                            double now)
     {
-        _handoverParts.Clear();
+        DropExpiredHandovers(now);
         _s.ReserveStaged = true;
 
         Sequence next = null;
@@ -255,7 +255,7 @@ public static partial class GuidanceWindow
         if (next == null)
             return;
 
-        _stagingDropped.Clear();
+        int firstArmed = _handovers.Count;
         Part detached = null;
         ReadOnlySpan<Part> parts = next.Parts;
         for (int i = 0; i < parts.Length; i++)
@@ -264,69 +264,88 @@ public static partial class GuidanceWindow
             for (int j = 0; j < decouplers.Length; j++)
             {
                 Part root = DetachedRoot(decouplers[j]);
-                if (root == null)
+                if (root == null || AlreadyArmed(root.InstanceId, firstArmed))
                     continue;
-                detached ??= root;       // FIRST decoupler's root - see below
-                CollectSubtree(root, _stagingDropped);
+                detached ??= root;
+
+                // Nested separations have overlapping subtrees but distinct roots.
+                // Matching the root keeps the inner vehicle from claiming the outer vehicle's record.
+                _handovers.Add(new BoosterHandover
+                {
+                    RootId = root.InstanceId,
+                    ExpiresAt = now + HandoverWindowS,
+                });
             }
         }
-        foreach (Part part in _stagingDropped)
-            _handoverParts.Add(part.InstanceId);
 
-        if (_handoverParts.Count == 0 || detached == null)
+        if (detached == null || _handovers.Count == firstArmed)
             return;
 
-        // The site travels with the booster, and it is THIS STAGE'S site when one was
-        // set for it - which is the point of setting them independently. The vehicle's
-        // own site is the fallback, because a booster with no state of its own would
-        // otherwise separate with no target at all.
-        //
-        // The id is taken with the SAME RULE RefreshReturnableStages uses - the first
-        // decoupler's detached root - and that has to stay true, because the two only
-        // agree by construction. Deriving it here instead by scanning the dropped set
-        // for a part whose parent stayed behind looks equivalent and is not: a sequence
-        // with several decouplers has several such roots, and a HashSet does not
-        // promise which comes out first. The lookup would then miss and fall back to
-        // the vehicle site without a word.
-        ResolveStageTarget(detached.InstanceId, out _handoverSiteLat, out _handoverSiteLon);
-        _handoverExpiry = now + HandoverWindowS;
+        // Use the first detached root, as RefreshReturnableStages does, to find the stage's target.
+        // HashSet order can select a different root and cause a silent fallback to the vehicle's site.
+        ResolveStageTarget(detached.InstanceId, out double siteLatDeg, out double siteLonDeg);
+        for (int i = firstArmed; i < _handovers.Count; i++)
+        {
+            _handovers[i].SiteLatDeg = siteLatDeg;
+            _handovers[i].SiteLonDeg = siteLonDeg;
+        }
+    }
+
+    private static bool AlreadyArmed(uint rootId, int firstArmed)
+    {
+        for (int i = firstArmed; i < _handovers.Count; i++)
+        {
+            if (_handovers[i].RootId == rootId)
+                return true;
+        }
+        return false;
+    }
+
+    private static void DropExpiredHandovers(double now)
+    {
+        for (int i = _handovers.Count - 1; i >= 0; i--)
+        {
+            if (now > _handovers[i].ExpiresAt)
+                _handovers.RemoveAt(i);
+        }
     }
 
     /// <summary>
-    /// A vehicle the sweep has never seen before: is it the booster we just staged?
-    /// If so, give it state, the landing site, and a running boostback.
-    ///
-    /// This is where the hand-over has to happen. A separated booster is a NEW Vehicle
-    /// object with no entry in the state table, and the sweep drops unknown unfocused
-    /// craft on the floor - which is correct for every other vehicle in the universe and
-    /// exactly wrong for this one. Matching on the parts recorded before the split is
-    /// what tells the two apart.
+    /// Matches an unknown vehicle to a recorded root and gives it a landing target and a pending boostback.
+    /// This lets the sweep adopt a separated booster before it skips unknown, unfocused vehicles.
     /// </summary>
     private static bool TryAdoptBooster(Vehicle vehicle)
     {
-        if (_handoverParts.Count == 0 || SimNow() > _handoverExpiry)
+        double now = SimNow();
+        DropExpiredHandovers(now);
+        if (_handovers.Count == 0)
             return false;
 
         PartTree tree = vehicle?.Parts;
         if (tree == null)
             return false;
 
-        bool mine = false;
+        BoosterHandover mine = null;
         ReadOnlySpan<Part> parts = tree.Parts;
-        for (int i = 0; i < parts.Length && !mine; i++)
-            mine = _handoverParts.Contains(parts[i].InstanceId);
-        if (!mine)
+        for (int i = 0; i < _handovers.Count && mine == null; i++)
+        {
+            for (int j = 0; j < parts.Length; j++)
+            {
+                if (parts[j].InstanceId != _handovers[i].RootId)
+                    continue;
+                mine = _handovers[i];
+                break;
+            }
+        }
+        if (mine == null)
             return false;
 
-        // Consumed on the first match: the record describes one separation, and a second
-        // vehicle claiming it would be the upper stage or debris taking the booster's
-        // guidance with it.
-        _handoverParts.Clear();
-        _handoverExpiry = double.NegativeInfinity;
+        // Consume only this match so other boosters can still claim their records.
+        _handovers.Remove(mine);
 
         _s = VehicleAutopilotState.For(vehicle);
-        _s.SiteLatDeg = _handoverSiteLat;
-        _s.SiteLonDeg = _handoverSiteLon;
+        _s.SiteLatDeg = mine.SiteLatDeg;
+        _s.SiteLonDeg = mine.SiteLonDeg;
 
         // NOT engaged here, deliberately. This runs on the frame the split happened,
         // which is the frame the part tree is least settled - and ExecuteBoostback needs
@@ -334,7 +353,7 @@ public static partial class GuidanceWindow
         // rather than throwing, and refusing here would leave a booster that had been
         // adopted and would never be flown, with the hand-over record already consumed.
         // So the engage is retried from the sweep until it takes.
-        _s.HandoverPendingUntil = SimNow() + HandoverWindowS;
+        _s.HandoverPendingUntil = now + HandoverWindowS;
         return true;
     }
 
