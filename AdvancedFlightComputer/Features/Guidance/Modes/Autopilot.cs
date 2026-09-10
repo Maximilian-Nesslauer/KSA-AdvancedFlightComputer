@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -1114,20 +1115,41 @@ public static partial class GuidanceWindow
         // Active, not EngagePending: a setup that Engage6Dof rejects never writes control,
         // and must not leave the craft owned.
         if (_s.Active || (_s.Engage && (_s.Running || landingActive || BoostbackLive)))
+        {
+            // A refused claim must not reach command writes or restore the holder's attitude fields.
+            if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
+            {
+                _s.Status = $"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.";
+                return;
+            }
             _s.ControlAcquired = true;
+        }
 
         // 6-DOF is EXCLUSIVE: it drives attitude through the TVC allocator rather than
         // the flight computer, so it must not be mixed with the UPFG / G-FOLD command
         // path below. It has its own engage flag and does not set _s.Running.
         if (sixDof)
         {
+            // Pending setup can reach command writes in Step6Dof, so it needs a claim too.
+            // Taking the claim alone does not set ControlAcquired, so rejected setup does not cut the engine.
+            if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
+            {
+                _s.Status = $"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.";
+                return;
+            }
+
             // 6-DOF steers through the allocator, so the flight computer command it does
             // not use is given back first. When the step ends the mode, the release runs
             // in this same step, before the next frame can apply player input.
             ReleaseAttitude(vehicle);
             Step6Dof(vehicle);
             if (!_s.Active && !_s.EngagePending)
-                HandBackVehicle(vehicle);
+            {
+                // Failed cleanup must retain ownership.
+                // This also releases a setup-only claim when HandBackVehicle has no resources to clear.
+                if (HandBackVehicle(vehicle))
+                    VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
+            }
             return;
         }
 
@@ -1348,6 +1370,7 @@ public static partial class GuidanceWindow
         if (_s.Status == _s.ReleaseError)
             _s.Status = "";
         _s.ControlAcquired = false;
+        VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
         _s.FcResetPending = false;
         _s.LandingCutPending = false;
         _s.WasEngaged = false;
@@ -1397,6 +1420,11 @@ public static partial class GuidanceWindow
         double3 euler = value.ToRollYawPitchRadians();
 
         var fc = vehicle.FlightComputer;
+        if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
+        {
+            _s.Status = $"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.";
+            return;
+        }
         _s.ControlAcquired = true;
         _s.AttitudeOwnership.BeginWrite(fc);
         fc.CustomAttitudeTarget = euler;
