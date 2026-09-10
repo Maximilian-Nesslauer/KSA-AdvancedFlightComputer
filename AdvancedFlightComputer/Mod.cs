@@ -80,6 +80,9 @@ public sealed class Mod
     {
         SharedVehicleHooks.ApplyPatches(harmony);
         SaveLoadObserver.ApplyPatches(harmony);
+
+        // Keep the shared command sink installed when an individual feature fails to load.
+        VehicleCommandSink.ApplyPatches(harmony);
     }
 
     private static void PatchManeuverTools(Harmony harmony)
@@ -149,7 +152,6 @@ public sealed class Mod
 
     private static void PatchRcsTranslation(Harmony harmony)
     {
-        harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.IsDisabledPatch)).Patch();

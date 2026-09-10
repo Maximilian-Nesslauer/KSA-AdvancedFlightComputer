@@ -22,7 +22,7 @@ internal static class RcsTestPatches
             _rcsEnabledBefore = SharedVehicleHooks.RcsEnabled;
             RcsExecRegistry.Init();
             _harmony = new Harmony("com.maxi.afc.harnesstests.rcs");
-            _harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
+            VehicleCommandSink.ApplyPatches(_harmony);
             SharedVehicleHooks.ApplyPatches(_harmony);
             _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
             _harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
