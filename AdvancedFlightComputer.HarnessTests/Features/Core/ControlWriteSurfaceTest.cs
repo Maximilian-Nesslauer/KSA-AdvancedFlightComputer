@@ -55,6 +55,7 @@ public sealed class ControlWriteSurfaceTest : AfcTest
 
         using RcsTestPatches.Scope patches = RcsTestPatches.Apply();
         AnRcsBurnStaysInsideTheDocumentedSet(t, home, saves[0]);
+        TakingTheAttitudeLeavesNoStandingRotation(t, home, saves[0]);
     }
 
     private static void EveryDocumentedFieldExists(TestContext t)
@@ -126,6 +127,68 @@ public sealed class ControlWriteSurfaceTest : AfcTest
                         outstanding.Length == 0 ? "clean" : "still changed " + string.Join(", ", outstanding));
                     t.Info("left by the release, as documented: "
                         + string.Join(", ", Changed(before, Snapshot(fc)).Intersect(NulledByRelease)));
+                }
+                finally
+                {
+                    VehicleControlOwnership.ReleaseAll(vehicle);
+                }
+            });
+    }
+
+    // Taking the attitude runs through FlightComputer.RateHold, which selects Auto and tracking None.
+    // In that mode UpdateAttitudeTarget reads CustomAttitudeTarget as a rotation rate, so coordinates
+    // that were there before acquisition would become a standing turn once AFC lets go.
+    private static void TakingTheAttitudeLeavesNoStandingRotation(
+        TestContext t, IParentBody home, string save)
+    {
+        RcsFlightSupport.RunOnSave(t, home, save, 500_000.0, "HarnessAttitudeRelease",
+            (vehicle, driver) =>
+            {
+                FlightComputer fc = vehicle.FlightComputer;
+                try
+                {
+                    RcsFlightSupport.CleanupBurns(fc);
+                    fc.BurnMode = FlightComputerBurnMode.Manual;
+                    TestSupport.SetManualControlInputs(vehicle, 0f, engineOn: false);
+                    driver.Step(0.05, 40);
+                    if (!RcsCapability.Probe(vehicle).HasAnyTranslation)
+                    {
+                        t.Skip("save has no active RCS translation capability.");
+                        return;
+                    }
+                    if (RcsFlightSupport.AddBurn(vehicle, driver, double3.UnitX, 1.0, 5.0) == null)
+                    {
+                        t.Fail("attitude release setup", "no patch or loaded burn target");
+                        return;
+                    }
+
+                    // A pointing target the player set before the burn, on the mode AFC has to give back.
+                    fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+                    fc.AttitudeTrackTarget = FlightComputerAttitudeTrackTarget.Custom;
+                    fc.CustomAttitudeTarget = new double3(0.0, 0.0, Math.PI / 2.0);
+
+                    RcsExecutor.Activate(vehicle);
+                    if (!RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec) || !exec.IsActive)
+                    {
+                        t.Fail("attitude release setup", "the RCS burn did not engage");
+                        return;
+                    }
+                    t.Check("taking the attitude records the mode it replaced",
+                        exec.ForcedAttitudeAuto && fc.AttitudeMode == FlightComputerAttitudeMode.Auto);
+
+                    RcsExecutor.Cancel(vehicle, exec, "no usable translation");
+                    t.Check("the release hands the attitude mode back",
+                        fc.AttitudeMode == FlightComputerAttitudeMode.Manual);
+                    t.Check("the release takes the custom coordinates with it",
+                        fc.CustomAttitudeTarget.Equals(default(double3)));
+
+                    // The game recomputes the target every control step, so this is what the craft
+                    // actually flies with after the release.
+                    driver.Step(0.05, 4);
+                    double rate = fc.AttitudeTarget.RatesCci.Length();
+                    t.Info($"commanded rate after the release: {rate:F6} rad/s");
+                    t.Check("no standing rotation is commanded after the release", rate < 0.05,
+                        $"{rate:F6} rad/s");
                 }
                 finally
                 {
