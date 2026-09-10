@@ -27,6 +27,17 @@ internal static class PassCompletionPatch
     public static void OnRegistryRemovedExternally(string vehicleId)
         => _lastBurnMode.Remove(vehicleId);
 
+    // Preserve the previous mode so a rename cannot hide the Auto to Manual completion transition.
+    public static void RenameVehicle(string oldVehicleId, string newVehicleId)
+    {
+        if (oldVehicleId == newVehicleId) return;
+
+        if (_lastBurnMode.Remove(oldVehicleId, out FlightComputerBurnMode mode))
+            _lastBurnMode[newVehicleId] = mode;
+        else
+            _lastBurnMode.Remove(newVehicleId);
+    }
+
     internal static void OnRcsBurnCompleted(Vehicle vehicle, Burn completedBurn)
     {
         if (!MultiPassRegistry.TryGet(vehicle.Id, out MultiPassExecution? exec)
