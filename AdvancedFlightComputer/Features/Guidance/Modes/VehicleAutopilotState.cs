@@ -375,6 +375,10 @@ public sealed class VehicleAutopilotState
     public string LandingStatus = "";
     public bool LandingCutPending;         // one-shot engine cut when the flow ends
 
+    // Preserve the engine command during handover, including cleanup retries.
+    // A finished release or the next claim clears the request.
+    public bool ReleaseWithoutEngineCut;
+
     /// <summary>Touchdown arming for the landing state machine (6-DOF has its own).</summary>
     public bool LandingTouchdownArmed;
     public GuidanceWindow.LandingPhase TouchdownPrevPhase = GuidanceWindow.LandingPhase.Idle;

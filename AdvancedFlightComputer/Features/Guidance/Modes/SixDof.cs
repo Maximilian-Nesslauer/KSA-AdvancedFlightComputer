@@ -1334,6 +1334,8 @@ public static partial class GuidanceWindow
         // This also runs from the UI, so queue the engine cut for the next vehicle step.
         if (vehicle != null && cutEngine && _s.ControlAcquired)
             _s.LandingCutPending = true;
+        if (!cutEngine)
+            _s.ReleaseWithoutEngineCut = true;
     }
 
     // ---- Execute (runs from the PrepareWorker prefix, never the draw) ----
