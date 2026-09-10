@@ -144,12 +144,17 @@ internal static partial class RcsExecutor
     {
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
         {
+            // The request is suppressed, but it still says the player wants AFC to stop, so the
+            // retry that follows must not arm stock Auto instead.
+            pending.ForcedBurnManual = false;
             RequestCancel(pending, "retry fault cleanup");
             return false;
         }
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec) && exec.IsActive)
         {
             // Auto cancels an active execution. Manual also cancels it and allows stock handling to continue.
+            // An explicit stop must not restore stock Auto.
+            exec.ForcedBurnManual = false;
             Cancel(vehicle, exec, "user request");
             if (mode == FlightComputerBurnMode.Auto)
             {
@@ -339,8 +344,7 @@ internal static partial class RcsExecutor
 
     private static bool BeginControl(Vehicle vehicle, FlightComputer fc, RcsExecution exec)
     {
-        // Keep stock engine automation off while the RCS worker owns the burn.
-        fc.BurnMode = FlightComputerBurnMode.Manual;
+        ForceBurnManual(fc, exec);
         vehicle.SetNavBallFrame(VehicleReferenceFrame.BurnBody);
 
         if (!EnsureBurnControl(vehicle, fc, exec, exec.CapabilityProbedAtSec))
@@ -408,6 +412,20 @@ internal static partial class RcsExecutor
             fc.RCSMode = FlightComputerRCSMode.Disabled;
     }
 
+    // Manual prevents stock Auto from taking attitude control near ignition.
+    private static void ForceBurnManual(FlightComputer fc, RcsExecution exec)
+    {
+        exec.ForcedBurnManual = fc.BurnMode == FlightComputerBurnMode.Auto;
+        fc.BurnMode = FlightComputerBurnMode.Manual;
+    }
+
+    private static void RestoreBurnMode(FlightComputer fc, RcsExecution exec)
+    {
+        // Restore only while the mode still matches AFC's last write.
+        if (exec.ForcedBurnManual && fc.BurnMode == FlightComputerBurnMode.Manual)
+            fc.BurnMode = FlightComputerBurnMode.Auto;
+    }
+
     // Restore control before ClearActive erases the ownership flags. An uncommanded Align leaves the tracker alone.
     private static void EndExecution(FlightComputer fc, RcsExecution exec)
     {
@@ -439,6 +457,13 @@ internal static partial class RcsExecutor
         }
         if (failure != null)
             throw failure;
+
+        // Restore Auto only after attitude and RCS cleanup succeeds.
+        if (exec.ForcedBurnManual)
+        {
+            RestoreBurnMode(fc, exec);
+            exec.ForcedBurnManual = false;
+        }
         exec.ClearActive();
     }
 
@@ -841,6 +866,9 @@ internal static partial class RcsExecutor
         double burnDv = exec.ActiveBurnDvMs ?? 0.0;
         Burn? completedBurn = exec.ActiveBurn;
         RcsFuelSummary fuel = ComputeFuelSummary(fc, exec);
+
+        // Stock also leaves a completed burn in Manual.
+        exec.ForcedBurnManual = false;
         EndExecution(fc, exec);
         RcsBurnOptions? options = exec.FindOptions(burnTime, burnDv);
         if (options != null)

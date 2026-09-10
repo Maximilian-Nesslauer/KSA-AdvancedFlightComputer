@@ -34,6 +34,9 @@ internal sealed class RcsExecution
     /// <summary>Persist whether RCS was disabled when control was taken. Completion and cancellation restore that setting, including after a save and load.</summary>
     public bool ForcedRcsOn { get; set; }
 
+    /// <summary>Records whether AFC replaced Auto with Manual. Completion discards the saved mode.</summary>
+    public bool ForcedBurnManual { get; set; }
+
     public bool Faulted { get; set; }
 
     #endregion
@@ -52,7 +55,7 @@ internal sealed class RcsExecution
 
     public int CleanupAttempts;
     public string? CleanupError;
-    public bool CleanupPending => Faulted && (AlignCommanded || ForcedRcsOn);
+    public bool CleanupPending => Faulted && (AlignCommanded || ForcedRcsOn || ForcedBurnManual);
 
     public RcsCapabilitySnapshot Capability;
     public double CapabilityProbedAtSec = double.NegativeInfinity;
@@ -201,6 +204,7 @@ internal sealed class RcsExecution
         CancelRequestReason = null;
         AlignCommanded = false;
         ForcedRcsOn = false;
+        ForcedBurnManual = false;
         StartMassKg = 0.0;
         LastTickMassKg = 0.0;
         BurnedPropellantKg = 0.0;
