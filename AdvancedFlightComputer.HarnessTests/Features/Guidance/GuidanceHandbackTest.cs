@@ -72,6 +72,7 @@ public sealed class GuidanceHandbackTest : AfcTest
             if (isolated)
                 FailedReleaseRemainsPending(t, vehicle, other);
             FailedRateCleanupDoesNotBlockAttitudeRelease(t, vehicle);
+            AHandoverReleaseKeepsTheEngineLit(t, vehicle, driver);
         }
         finally
         {
@@ -298,6 +299,36 @@ public sealed class GuidanceHandbackTest : AfcTest
     {
         if (ReferenceEquals(__0, _failing))
             throw new InvalidOperationException("Injected rate cleanup failure");
+    }
+
+    // Tests the release flag directly, without running the 6-DOF handover.
+    private static void AHandoverReleaseKeepsTheEngineLit(
+        TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        SeedBurn(t, vehicle, driver);
+        TestSupport.SetManualControlInputs(vehicle, 0.63f, engineOn: true);
+        VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
+        state.Engage = false;
+        state.ControlAcquired = true;
+        state.Running = true;
+        state.ReleaseWithoutEngineCut = true;
+
+        GuidanceWindow.ApplyAutopilot(vehicle);
+        t.Check("a handover release finishes",
+            !state.ControlAcquired && !state.Running && !state.FcResetPending);
+        t.Check("a handover release preserves the engine-on input", Inputs(vehicle).EngineOn);
+        t.Check("the finished release restores the default stop",
+            !state.ReleaseWithoutEngineCut);
+
+        // A later ordinary stop must not inherit the no-cut request.
+        TestSupport.SetManualControlInputs(vehicle, 0.63f, engineOn: true);
+        state.Engage = false;
+        state.ControlAcquired = true;
+        state.Running = true;
+        GuidanceWindow.ApplyAutopilot(vehicle);
+        t.Check("an ordinary stop still cuts the engine", !Inputs(vehicle).EngineOn);
+
+        VehicleAutopilotState.Remove(vehicle);
     }
 
     private static void FailedRateCleanupDoesNotBlockAttitudeRelease(TestContext t, Vehicle vehicle)
