@@ -11,7 +11,8 @@ internal sealed class RcsExecution
     /// <summary>An unsaved session uses an empty SaveId. RcsExecRegistry.RekeyTo moves its entries when the save is written under another id.</summary>
     public required string SaveId { get; set; }
 
-    public required string VehicleId { get; init; }
+    /// <summary>Updated on rename so saved state uses the vehicle's current ID.</summary>
+    public required string VehicleId { get; set; }
 
     public List<RcsBurnOptions> Options { get; } = new();
 

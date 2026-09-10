@@ -49,6 +49,21 @@ internal static class RcsExecRegistry
         _byKey.Remove((saveId, vehicleId));
     }
 
+    /// <summary>Keeps execution and cleanup reachable under the vehicle's new ID.</summary>
+    public static void RenameVehicle(string oldVehicleId, string newVehicleId)
+    {
+        if (oldVehicleId == newVehicleId) return;
+
+        string saveId = SaveLoadObserver.CurrentSaveId;
+        if (!_byKey.Remove((saveId, oldVehicleId), out RcsExecution? exec))
+            return;
+
+        // Replace stale state left under a reused vehicle name.
+        _byKey.Remove((saveId, newVehicleId));
+        exec.VehicleId = newVehicleId;
+        _byKey[(saveId, newVehicleId)] = exec;
+    }
+
     /// <summary>Move the current entries on first save, Save-As, or overwrite of another save so save-scoped lookups can still reach their teardown.</summary>
     public static void RekeyTo(string oldSaveId, string newSaveId)
     {
