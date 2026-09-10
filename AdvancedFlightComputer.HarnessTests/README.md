@@ -102,6 +102,7 @@ The oracle is always the game's own orbit propagation, never a re-derivation of 
 - `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature.
 - `afc-feature-patch-rollback` checks that a failed feature block removes only its partial patches, keeps other owners intact, and does not prevent a later block or unload.
 - `afc-shared-vehicle-hooks` checks the shared MultiPass and RCS tick order, feature gates, patch bindings, and unconditional registry cleanup when a vehicle is disposed.
+- `afc-command-sink` checks the one owner of the `FlightComputer.ComputeControl` postfix. It asserts the receipt semantics, that stock values survive a run, that a writer fault neither escapes nor discards what the writer already reported, and that an executing RCS burn holds its own vehicle in full physics with the flight fixture's off-rails override switched off.
 
 ### Fixtures
 
