@@ -37,6 +37,11 @@ internal sealed class RcsExecution
     /// <summary>Records whether AFC replaced Auto with Manual. Completion discards the saved mode.</summary>
     public bool ForcedBurnManual { get; set; }
 
+    /// <summary>Records whether the align switched the attitude mode to Auto.</summary>
+    public bool ForcedAttitudeAuto { get; set; }
+
+
+
     public bool Faulted { get; set; }
 
     #endregion
@@ -55,7 +60,7 @@ internal sealed class RcsExecution
 
     public int CleanupAttempts;
     public string? CleanupError;
-    public bool CleanupPending => Faulted && (AlignCommanded || ForcedRcsOn || ForcedBurnManual);
+    public bool CleanupPending => Faulted && (AlignCommanded || ForcedRcsOn || ForcedBurnManual || ForcedAttitudeAuto);
 
     public RcsCapabilitySnapshot Capability;
     public double CapabilityProbedAtSec = double.NegativeInfinity;
@@ -205,6 +210,7 @@ internal sealed class RcsExecution
         AlignCommanded = false;
         ForcedRcsOn = false;
         ForcedBurnManual = false;
+        ForcedAttitudeAuto = false;
         StartMassKg = 0.0;
         LastTickMassKg = 0.0;
         BurnedPropellantKg = 0.0;

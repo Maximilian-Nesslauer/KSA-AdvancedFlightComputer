@@ -433,10 +433,26 @@ internal static partial class RcsExecutor
         Exception? failure = null;
         try
         {
+            bool tookTheAttitude = exec.AlignCommanded || exec.ForcedAttitudeAuto;
             if (exec.AlignCommanded)
             {
                 fc.SetNullRot(VehicleReferenceFrame.BurnBody);
                 exec.AlignCommanded = false;
+            }
+
+            // FlightComputer.UpdateAttitudeTarget reads custom coordinates as rotation rates while
+            // tracking is None, and both the rate hold and this release select None. Coordinates left
+            // there are a standing turn, and the tracker they pointed with is already gone, so they go too.
+            if (tookTheAttitude
+                && fc.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.None
+                && !fc.CustomAttitudeTarget.Equals(default(double3)))
+                fc.CustomAttitudeTarget = default;
+
+            if (exec.ForcedAttitudeAuto)
+            {
+                if (fc.AttitudeMode == FlightComputerAttitudeMode.Auto)
+                    fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+                exec.ForcedAttitudeAuto = false;
             }
         }
         catch (Exception ex)
@@ -1036,7 +1052,10 @@ internal static partial class RcsExecutor
             DefaultCategory.Log.Debug(
                 $"[AFC] RCS: enabled RCSMode inside the control lead window on vehicle='{vehicle.Id}'.");
 
-        // Rate hold counters residual torque from off center translation thrusters.
+        // Rate hold counters residual torque from off center translation thrusters. It is the first
+        // write to the attitude mode, so the release records here what it has to hand back.
+        if (takingControl)
+            exec.ForcedAttitudeAuto = fc.AttitudeMode == FlightComputerAttitudeMode.Manual;
         if (fc.AttitudeMode == FlightComputerAttitudeMode.Manual)
         {
             fc.RateHold(vehicle.NavBallData.Frame);
