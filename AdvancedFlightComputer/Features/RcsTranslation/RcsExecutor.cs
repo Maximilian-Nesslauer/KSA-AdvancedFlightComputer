@@ -666,7 +666,18 @@ internal static partial class RcsExecutor
             return;
         }
         exec.ActiveBurn = burn;
-        exec.ControlTaken = exec.AlignCommanded || exec.ForcedRcsOn;
+
+        // Retained ownership or a yield prevents another acquisition after loading.
+        exec.ControlTaken = exec.AlignCommanded || exec.ForcedRcsOn
+            || exec.ForcedAttitudeAuto || exec.AttitudeYielded;
+
+        // Hold restores a missing snapshot from the loaded Auto state; Align writes its target again.
+        // Preserve an existing snapshot so reconciliation cannot hide a later player change.
+        if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align
+            && exec.ForcedAttitudeAuto && !exec.AttitudeYielded
+            && exec.CommandedAttitude == null
+            && fc.AttitudeMode == FlightComputerAttitudeMode.Auto)
+            exec.CommandedAttitude = RcsAttitudeCommand.From(fc);
         // The next driver tick applies the same align lead gate after load.
 
         // Restart telemetry at load so the summary covers only the observed portion.

@@ -227,6 +227,8 @@ internal static class RcsExecRegistry
                         writer.WriteLine("forced_burn_manual = true");
                     if (exec.ForcedAttitudeAuto)
                         writer.WriteLine("forced_attitude_auto = true");
+                    if (exec.AttitudeYielded)
+                        writer.WriteLine("attitude_yielded = true");
                 }
                 writer.WriteLine();
             }
@@ -378,6 +380,8 @@ internal static class RcsExecRegistry
             && bool.TryParse(burnModeStr, out bool burnModeValue) && burnModeValue;
         bool forcedAttitudeAuto = block.TryGetValue("forced_attitude_auto", out string? attitudeStr)
             && bool.TryParse(attitudeStr, out bool attitudeValue) && attitudeValue;
+        bool attitudeYielded = block.TryGetValue("attitude_yielded", out string? yieldedStr)
+            && bool.TryParse(yieldedStr, out bool yieldedValue) && yieldedValue;
         if (faulted || (block.TryGetValue("active", out string? activeStr)
             && bool.TryParse(activeStr, out bool active) && active))
         {
@@ -401,6 +405,7 @@ internal static class RcsExecRegistry
             exec.ForcedRcsOn = forcedRcs;
             exec.ForcedBurnManual = forcedBurnManual;
             exec.ForcedAttitudeAuto = forcedAttitudeAuto;
+            exec.AttitudeYielded = attitudeYielded;
             exec.Faulted = faulted;
         }
         return true;
