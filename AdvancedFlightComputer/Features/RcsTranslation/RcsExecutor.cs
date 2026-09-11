@@ -430,6 +430,18 @@ internal static partial class RcsExecutor
     private static void EndExecution(FlightComputer fc, RcsExecution exec)
     {
         RcsCommandChannel.Clear(fc.BurnPlan);
+
+        // Cancellation can bypass the step check, so check for a takeover before restoring attitude.
+        // Without a snapshot after loading, cleanup uses the persisted ownership flags.
+        if (!exec.AttitudeYielded
+            && exec.CommandedAttitude is { } owned && !owned.Matches(fc))
+        {
+            exec.AlignCommanded = false;
+            exec.ForcedAttitudeAuto = false;
+            exec.CommandedAttitude = null;
+            exec.AttitudeYielded = true;
+        }
+
         Exception? failure = null;
         try
         {
