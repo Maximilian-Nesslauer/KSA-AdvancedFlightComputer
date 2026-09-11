@@ -20,12 +20,31 @@ The output commands are rebuilt each step, while the executor's saved settings n
 | `FlightComputerOutput.AnyActuatorCommanded` and `NextWakeupDeltaTime` | `VehicleCommandSink.Run` | Apply RCS receipt requests without clearing stock's command flag or delaying an earlier wake request. |
 | `BurnTarget.BurnDuration` and `IgnitionTime` | `RcsComputeControlPatch.Command` | Replace stock engine timing with RCS timing on the current target. These are not saved settings to restore. |
 | `FlightComputer.LastThrustTime` | `RcsComputeControlPatch.Command` | Record commanded RCS pulses. The timestamp is not restored. |
-| `FlightComputer.RCSMode` | `RcsExecutor.ForceRcsOn` and `RestoreRcsMode` | Enable RCS when needed and restore Disabled if AFC changed it. |
+| `FlightComputer.RCSMode` | `RcsExecutor.ForceRcsOn` and `RestoreRcsMode` | Enable RCS at acquisition when needed and restore Disabled if AFC changed it. A running burn that finds RCS switched off stands down, because the player owns the actuator. |
 | `FlightComputer.BurnMode` | `RcsExecutor.ForceBurnManual` and `RestoreBurnMode` | Set Manual at acquisition. Restore an earlier Auto only after cleanup succeeds and while the field still matches Manual. Explicit stops and completion discard the saved Auto. This is not a periodic Manual write. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `AttitudeTarget` | `RcsExecutor.EnsureBurnControl` through `FlightComputer.RateHold` | Select Auto and null the rotation when the burn takes control from Manual. This is the first write to the mode, so the release records here what to hand back. |
-| `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `CustomAttitudeTarget` | `RcsExecutor.CommandAlignAttitude` | Select Auto and a burn-relative target for Align. Non-X axes use custom Euler angles. |
+| `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `CustomAttitudeTarget` | `RcsExecutor.CommandAlignAttitude` | Select Auto and a burn-relative target for Align. Non-X axes use custom Euler angles. Later steps compare mode and tracker, plus frame and coordinates for None and Custom. |
 | `FlightComputer.AttitudeTrackTarget`, `AttitudeFrame`, `AttitudeTarget`, `AttitudeMode` and `CustomAttitudeTarget` | `RcsExecutor.EndExecution` through `FlightComputer.SetNullRot` and its own restore | Select None in BurnBody and zero the computed target, hand Manual back when acquisition replaced it, and clear the custom coordinates because tracking is None. The frame stays at BurnBody. |
 | Navball frame | `RcsExecutor.BeginControl` through `Vehicle.SetNavBallFrame` | Select BurnBody. Specific SetEnum cancellation and activation-failure paths select the vehicle-region frame; generic release does not restore a captured frame. |
+
+## Yielding the attitude
+
+AFC takes the attitude once, at acquisition, and never takes it again for the same execution.
+Rate hold and Align record a command for comparison on later steps.
+The comparison checks the fields the live tracker reads for the recorded target.
+Mode and tracker always count. The frame and the coordinates count under None and under Custom, because `FlightComputer.UpdateAttitudeTarget` reads the coordinates as a rotation rate under None and as an orientation under Custom, and reads the frame in both.
+They do not count for a built-in target, where that method derives the frame itself and a change is the game rather than a takeover.
+A value that no longer matches means a player click or another mod points the craft, so AFC yields, drops Align to Hold, stops requiring an attitude for its firing gate, stops claiming a mode to hand back, and leaves the new tracker alone at release.
+Selecting another tracked target leaves the mode at Auto, so checking the mode alone is insufficient.
+The yield is recorded in `attitude_yielded` and survives a save, so a load cannot take the attitude back from the player.
+A burn that finds RCS disabled after acquisition cancels with a visible message and leaves RCS disabled.
+The executor detects changes on its next step.
+Cleanup also checks for a takeover before restoring attitude, because cancellation can bypass the step check.
+A save does not carry the recorded command, so an execution that has not yielded writes its align target again after a load.
+A hold burn has no such rewrite, so reconciliation adopts the loaded values as its own command, but only when it has nothing recorded, it still holds the attitude, and the loaded mode is the Auto its rate hold leaves behind.
+Reconciliation rebuilds control state from all ownership markers to prevent another acquisition after loading.
+`afc-rcs-attitude-yield` checks target changes, a rate and a frame change under None, a changed euler target under Custom, Manual selections, release, and simulated load recovery.
+The tests call `Vehicle.SetEnum` directly rather than queue UI input, and load cases reset transient state rather than save and load the game.
 
 Selecting None does not by itself establish a neutral rotation command.
 `FlightComputer.UpdateAttitudeTarget` reads `CustomAttitudeTarget` as a rotation rate while tracking is None, and both `RateHold` at acquisition and the release select None.
