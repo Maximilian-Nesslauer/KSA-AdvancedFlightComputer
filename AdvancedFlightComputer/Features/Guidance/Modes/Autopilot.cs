@@ -1156,8 +1156,19 @@ public static partial class GuidanceWindow
             // not use is given back first. When the step ends the mode, the release runs
             // in this same step, before the next frame can apply player input.
             ReleaseAttitude(vehicle);
+            LandingPhase landingBefore = _s.LandingPhase;
+            bool boostbackBefore = BoostbackLive;
+            bool ascentBefore = _s.Running;
             Step6Dof(vehicle);
-            if (!_s.Active && !_s.EngagePending)
+
+            // A step that hands the craft to another guidance mode is not a stop. Handing back here
+            // would cut the engine the handover kept lit and reset the mode that just started.
+            bool startedAnotherMode =
+                (_s.LandingPhase != landingBefore
+                    && _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done)
+                || (BoostbackLive && !boostbackBefore)
+                || (_s.Running && !ascentBefore);
+            if (!_s.Active && !_s.EngagePending && !startedAnotherMode)
             {
                 // Failed cleanup must retain ownership.
                 // This also releases a setup-only claim when HandBackVehicle has no resources to clear.
