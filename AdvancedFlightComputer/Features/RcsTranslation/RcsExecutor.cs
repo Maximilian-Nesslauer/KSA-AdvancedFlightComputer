@@ -1052,44 +1052,80 @@ internal static partial class RcsExecutor
             DefaultCategory.Log.Debug(
                 $"[AFC] RCS: enabled RCSMode inside the control lead window on vehicle='{vehicle.Id}'.");
 
-        // Rate hold counters residual torque from off center translation thrusters. It is the first
-        // write to the attitude mode, so the release records here what it has to hand back.
-        if (takingControl)
-            exec.ForcedAttitudeAuto = fc.AttitudeMode == FlightComputerAttitudeMode.Manual;
-        if (fc.AttitudeMode == FlightComputerAttitudeMode.Manual)
+        // Compare later commands before writing so a Manual selection can trigger a yield.
+        // A persisted yield keeps the attitude out of reach for the rest of this execution.
+        if (takingControl && !exec.AttitudeYielded)
         {
-            fc.RateHold(vehicle.NavBallData.Frame);
-            if (DebugConfig.RcsTranslation)
-                DefaultCategory.Log.Debug(
-                    $"[AFC] RCS: engaged rate hold inside the control lead window on vehicle='{vehicle.Id}'.");
+            // Rate hold counters torque from off-center thrusters.
+            // Capture the mode before RateHold changes it.
+            exec.ForcedAttitudeAuto = fc.AttitudeMode == FlightComputerAttitudeMode.Manual;
+            if (fc.AttitudeMode == FlightComputerAttitudeMode.Manual)
+            {
+                fc.RateHold(vehicle.NavBallData.Frame);
+                exec.CommandedAttitude = RcsAttitudeCommand.From(fc);
+                if (DebugConfig.RcsTranslation)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] RCS: engaged rate hold inside the control lead window on vehicle='{vehicle.Id}'.");
+            }
+        }
+        else if (!exec.AttitudeYielded
+            && exec.CommandedAttitude is { } commanded && !commanded.Matches(fc)
+            && !YieldAttitude(vehicle, exec))
+        {
+            return false;
         }
 
-        return EnsureAlignCommanded(fc, exec);
+        return EnsureAlignCommanded(vehicle, fc, exec);
     }
 
     // A failed target command falls back to Hold only if Hold is feasible.
-    private static bool EnsureAlignCommanded(FlightComputer fc, RcsExecution exec)
+    private static bool EnsureAlignCommanded(Vehicle vehicle, FlightComputer fc, RcsExecution exec)
     {
-        if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
+        // A yielded attitude belongs to whoever took it, for the rest of this execution.
+        if (exec.AttitudeYielded || exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
             return true;
-        if (!exec.AlignCommanded)
+
+        // Saves retain the Align flag but not this snapshot, so loading requires a new command record.
+        if (!exec.AlignCommanded || exec.CommandedAttitude == null)
         {
             if (CommandAlignAttitude(fc, exec.ResolvedAxis))
             {
                 exec.AlignCommanded = true;
+                exec.CommandedAttitude = RcsAttitudeCommand.From(fc);
                 return true;
             }
         }
+        else if (exec.CommandedAttitude.Value.Matches(fc))
+        {
+            return true;
+        }
         else
         {
-            bool tracking = fc.AttitudeMode == FlightComputerAttitudeMode.Auto
-                && fc.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.None;
-            if (tracking || CommandAlignAttitude(fc, exec.ResolvedAxis))
-                return true;
+            return YieldAttitude(vehicle, exec);
         }
+
         exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
         exec.ResolvedAxis = -1;
         exec.AlignCommanded = false;
+        exec.CommandedAttitude = null;
+        return exec.Estimates.HoldFeasible;
+    }
+
+    /// <summary>
+    /// Stop Align when another writer changes its target.
+    /// Hold no longer gates translation on that target's error, and release leaves it unchanged.
+    /// </summary>
+    private static bool YieldAttitude(Vehicle vehicle, RcsExecution exec)
+    {
+        exec.AlignCommanded = false;
+        exec.CommandedAttitude = null;
+        exec.AttitudeYielded = true;
+
+        // AFC has nothing left to hand back once the mode belongs to whoever took the attitude.
+        exec.ForcedAttitudeAuto = false;
+        exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
+        exec.ResolvedAxis = -1;
+        Alert($"RCS align released on '{vehicle.Id}': the attitude was taken over, holding instead.");
         return exec.Estimates.HoldFeasible;
     }
 
