@@ -965,6 +965,8 @@ public static partial class GuidanceWindow
     {
         ResetLandingEngineWait();
         _s.ReleaseWithoutEngineCut = false;
+        _s.ShutdownRequested = false;
+        _s.TakeoverStop = false;
         if (mode != GuidanceMode.Ascent)
         {
             _s.Running = false;
@@ -1045,10 +1047,21 @@ public static partial class GuidanceWindow
 
         // Check ownership before mode steps can overwrite a changed attitude command.
         // Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
+        bool attitudeTaken = _s.ControlAcquired
+            && !_s.AttitudeOwnership.IsCurrent(vehicle.FlightComputer);
         if (_s.ControlAcquired && ((!sixDof && !_s.Engage)
             || (!sixDof && !_s.Running && !landingActive && !BoostbackLive && !_s.LaunchArmed)
-            || !_s.AttitudeOwnership.IsCurrent(vehicle.FlightComputer)))
+            || attitudeTaken))
         {
+            // Release steering after a takeover without changing the engine command. A takeover
+            // moves the attitude and nothing else, so an engine cut guidance already decided on
+            // still happens, whether it sits in the queued one-shot cut or in a release that
+            // shuts down by itself. The reason outlives a failed cleanup, so the retry can say it.
+            if (attitudeTaken)
+            {
+                _s.TakeoverStop = true;
+                _s.ReleaseWithoutEngineCut = true;
+            }
             HandBackVehicle(vehicle);
             return;
         }
@@ -1321,6 +1334,8 @@ public static partial class GuidanceWindow
         {
             // Nothing to release, so the next stop starts from the default again.
             _s.ReleaseWithoutEngineCut = false;
+            _s.ShutdownRequested = false;
+            _s.TakeoverStop = false;
             return true;
         }
 
@@ -1351,7 +1366,10 @@ public static partial class GuidanceWindow
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
         if (_s.ControlAcquired)
         {
-            if (!_s.ReleaseWithoutEngineCut)
+            // A cut guidance decided on wins over a no-cut request, whenever it was decided. The
+            // request can outlive a failed cleanup, so an abort between two retries would otherwise
+            // lose its shutdown.
+            if (_s.LandingCutPending || _s.ShutdownRequested || !_s.ReleaseWithoutEngineCut)
                 Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
             Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer));
         }
@@ -1375,6 +1393,12 @@ public static partial class GuidanceWindow
 
         if (_s.Status == _s.ReleaseError)
             _s.Status = "";
+        if (_s.TakeoverStop)
+        {
+            _s.Status = "Guidance stopped: another writer took attitude control.";
+            _s.TakeoverStop = false;
+        }
+        _s.ShutdownRequested = false;
         _s.ControlAcquired = false;
         VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
         _s.FcResetPending = false;

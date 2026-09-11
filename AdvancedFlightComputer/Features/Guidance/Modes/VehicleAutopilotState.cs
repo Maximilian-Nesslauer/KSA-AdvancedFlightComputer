@@ -379,6 +379,15 @@ public sealed class VehicleAutopilotState
     // A finished release or the next claim clears the request.
     public bool ReleaseWithoutEngineCut;
 
+    // Guidance asked for the engine to stop as part of this release, on a path that queues no
+    // one-shot cut of its own. A takeover does not undo it, because it decides the engine channel
+    // and a takeover only moves the attitude.
+    public bool ShutdownRequested;
+
+    // A stop another writer caused. It survives a failed cleanup, so the retry that finishes the
+    // release can still say why guidance let the craft go.
+    public bool TakeoverStop;
+
     /// <summary>Touchdown arming for the landing state machine (6-DOF has its own).</summary>
     public bool LandingTouchdownArmed;
     public GuidanceWindow.LandingPhase TouchdownPrevPhase = GuidanceWindow.LandingPhase.Idle;

@@ -192,6 +192,9 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ReleaseAscent(string status)
     {
+        // The shutdown for this path comes from the release itself, so record the intent. Nothing
+        // here queues a one-shot cut that a later takeover could preserve on its own.
+        _s.ShutdownRequested = true;
         _s.Running = false;
         _s.LaunchArmed = false;
         _s.HasCommand = false;
