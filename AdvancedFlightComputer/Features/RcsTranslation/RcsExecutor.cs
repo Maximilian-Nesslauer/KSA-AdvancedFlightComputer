@@ -732,6 +732,14 @@ internal static partial class RcsExecutor
             return;
         }
 
+        // Cancel if RCS is disabled after acquisition, because the burn needs it to continue.
+        if (exec.ControlTaken && fc.RCSMode == FlightComputerRCSMode.Disabled)
+        {
+            Alert($"RCS burn cancelled: RCS was switched off on '{vehicle.Id}'.");
+            Cancel(vehicle, exec, "rcs switched off");
+            return;
+        }
+
         if (!EnsureBurnControl(vehicle, fc, exec, nowSec))
         {
             Alert($"RCS burn cancelled: cannot align or hold for the burn direction on '{vehicle.Id}'.");

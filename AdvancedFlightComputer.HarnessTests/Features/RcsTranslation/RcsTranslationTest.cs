@@ -451,18 +451,16 @@ public sealed class RcsTranslationTest : AfcTest
         bool capturedEnabled = tookControlC && !execC.ForcedRcsOn
             && fc.RCSMode == FlightComputerRCSMode.Enabled;
 
+        // Disabling RCS ends the burn and leaves RCS disabled.
         fc.RCSMode = FlightComputerRCSMode.Disabled;
         driver.Step(StepSec);
-        bool reEnabledActive = RcsExecRegistry.TryGet(vehicle.Id, out execC!)
-            && execC.IsActive
-            && fc.RCSMode == FlightComputerRCSMode.Enabled
-            && !execC.ForcedRcsOn;
+        bool stoodDown = RcsExecRegistry.TryGet(vehicle.Id, out execC!)
+            && !execC.IsActive
+            && fc.RCSMode == FlightComputerRCSMode.Disabled;
         if (execC.IsActive)
             RcsExecutor.Cancel(vehicle, execC, "test cleanup");
-        bool restoredEnabled = fc.RCSMode == FlightComputerRCSMode.Enabled;
-        t.Check("rcs toggle C guard", capturedEnabled && reEnabledActive && restoredEnabled,
-            $"capturedEnabled={capturedEnabled} reEnabledActive={reEnabledActive} " +
-            $"restoredEnabled={restoredEnabled}");
+        t.Check("rcs toggle C guard", capturedEnabled && stoodDown,
+            $"capturedEnabled={capturedEnabled} stoodDown={stoodDown}");
 
         RcsFlightSupport.CleanupBurns(fc);
     }
