@@ -51,6 +51,21 @@ Selecting None does not by itself establish a neutral rotation command.
 Coordinates left there are a standing turn whoever wrote them, and the tracker they pointed with is gone once AFC took the attitude, so the release clears them.
 `afc-control-write-surface` sets a custom target, takes control through the executor, cancels, and measures the commanded rate after a game step.
 
+## Guidance stopping on a player takeover
+
+Guidance writes one attitude command, Custom in a chosen frame, and `AttitudeOwnership` compares that whole command on every step.
+A mismatch means a player or another mod steers now, so the modes that need that attitude stop.
+Stopping is not a shutdown request. The release hands back the rate and the gimbal override as it always does, keeps the player's attitude fields, leaves the engine command where the flight left it, and says why guidance stopped.
+A takeover moves the attitude and nothing else, so an engine cut guidance already decided on still happens.
+That covers the queued one-shot cut, which touchdown, a failed landing solve, an engine-wait failure, a boostback abort and a 6-DOF disengage all set, and it covers a release that shuts down by itself, which the ascent release records in `ShutdownRequested`.
+Only a takeover with neither of those pending leaves the engine command alone.
+The release makes that call, not the takeover, so a cut decided after the takeover still happens. That matters when a cleanup failed, because the no-cut request waits for the retry and an abort can arrive between the two.
+
+A step that hands the craft to another guidance mode is not a stop either. The 6-DOF dispatch releases only when the step left no mode running, because the handover to terminal hover claims the craft again, and a release in the same step would cut the engine the handover kept lit and reset the mode that just started.
+The no-cut request and the reason both survive a failed cleanup, so a retry can neither deliver a late shutdown nor lose why guidance stopped.
+Holding the last throttle is not a claim that the trajectory is safe, and continuing an automatic throttle under player steering would be a separate mode capability with its own tests.
+`afc-guidance-player-takeover` covers the stop, the queued cut, and the failed cleanup with its retry.
+
 ## Guidance code that is not enabled
 
 `GuidanceFeature` installs diagnostics and lifecycle cleanup, but no vehicle command driver or actuator hooks.
@@ -62,7 +77,7 @@ These paths must be integrated with ownership before Guidance is enabled.
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget`, `CustomAttitudeTarget` and `RollMode` | `GuidanceWindow.CommandAttitude` with `AttitudeOwnership` | Capture before writing. Restore frame, tracking and custom coordinates as one group if still unchanged; restore mode and roll conditionally. The complete computed `AttitudeTarget` is not captured. |
 | `FlightComputer.AttitudeTarget.RatesCci` | `KsaAttitudeRate.OnUpdateAttitudeTarget` | Add the published rate after stock computes its target. Clear disables future additions; it does not restore the current field. Stock rebuilds it on the next update. |
 | `FlightComputerOutput.Gimbals[].State.CommandY` and `CommandZ`, plus `AnyActuatorCommanded` | `KsaGimbalControl.Apply` and `ApplyLsq` | Write output commands from the per-vehicle override. These paths set the flag directly and do not use the sink receipt yet. Disengage clears the override. |
-| `Vehicle._manualControlInputs.EngineOn` and `EngineThrottle` | Guidance mode steps and `GuidanceWindow.ApplyAutopilot` | Write through the shared field accessor. HandBackVehicle requests MainShutdown after acquired control, preserving the throttle setting. An explicit no-cut handover skips shutdown. |
+| `Vehicle._manualControlInputs.EngineOn` and `EngineThrottle` | Guidance mode steps and `GuidanceWindow.ApplyAutopilot` | Write through the shared field accessor. HandBackVehicle requests MainShutdown after acquired control, preserving the throttle setting. An explicit no-cut handover skips shutdown, and so does a stop that a player attitude takeover caused. |
 | Sequence activation and part-tree refresh | `GuidanceWindow.AutoSequence` | Call `SequenceList.ActivateNextSequence` and `Vehicle.UpdateAfterPartTreeModification`. Staging is not a reversible setting restored on release. |
 
 The release paths keep the existing flight computer and burn plan objects.
