@@ -170,7 +170,7 @@ Required only to build the mod from source. Targets **.NET 10**.
 
 ## Mod compatibility
 
-- [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) is now part of this mod. While the standalone mod is still installed, the built-in automatic staging stays off and the log says so.
+- [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) is now part of this mod. Delete its folder under `mods`, do not only disable it: KittenExtensions applies the XML patches of every manifest entry, so a disabled AutoStage still puts its own dead AUTOSTAGE button on top of this one, and an enabled one keeps the built-in staging off, which the log says.
 - Known conflicts: none
 
 ## Community
