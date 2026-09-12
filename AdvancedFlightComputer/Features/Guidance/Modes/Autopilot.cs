@@ -10,6 +10,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // Shared plumbing used by every flow: the per-vehicle step-and-apply entry point
@@ -109,18 +110,12 @@ public static partial class GuidanceWindow
         }
     }
 
-    // Staging needs an unknown number of sequence activations (decouple, then
-    // ignite, sometimes another press before that) - so whenever the vehicle has no
-    // engine actually producing thrust (lit AND fed with propellant, per the game's
-    // own live engine state), keep firing the next sequence every SequenceCooldown
-    // seconds until one is. That covers pad ignition, burnout staging, and
-    // decouple-only sequences. Same call pair the game's staging key uses, from
-    // the same (main) thread.
-    //
-    // Total thrust loss is not the only staging cue, though: strap-on boosters
-    // burn out while the core keeps firing, so the vehicle never goes quiet and
-    // spent casings would ride all the way to orbit. DropSpentEngines covers that
-    // second case.
+    // Staging is the AutoStage feature's job: its per-vehicle machine stages on burnout and drops
+    // spent boosters, with the delays, the crossfeed refusal and the control-module guard.
+    // Guidance arms it for the craft it flies and adds the two cues only a flight plan knows: a
+    // cold ignition, when nothing produces thrust, and the reserve boundary of a returning
+    // booster. A request while a staging is already in flight is dropped by the detector, and
+    // the cooldown keeps guidance from asking every step.
     private static void AutoSequence(Vehicle vehicle)
     {
         SequenceList sequenceList = vehicle.Parts?.SequenceList;
@@ -138,54 +133,53 @@ public static partial class GuidanceWindow
             return;
         }
 
+        if (!StagingDetector.IsArmed(vehicle))
+        {
+            StagingDetector.Arm(vehicle, true);
+            _s.ArmedStaging = true;
+        }
+
+        double now = SimNow();
+        int generation = StagingHelpers.SequenceGeneration;
+        if (generation != _s.SeenSequenceGeneration)
+        {
+            // A row fired, by the detector or by anyone else: the stage list changed under us.
+            // The first observation only records where the count stands.
+            bool first = _s.SeenSequenceGeneration < 0;
+            _s.SeenSequenceGeneration = generation;
+            if (!first)
+            {
+                _s.StageModelDirty = true;
+                _s.LastSequenceTime = now;
+            }
+        }
+
         bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
 
-        // LEVER TWO: the reserve's own staging cue.
-        //
-        // The other two cues both wait for propellant to run out - "nothing is producing
-        // thrust" and ShouldDropSpentEngines. This one is the opposite: it fires while
-        // the stage is still perfectly capable of burning, because the propellant left
-        // in it is spoken for. Without it the reserve does nothing at all, since UPFG
-        // plans stage boundaries but never commands one.
+        // The reserve's own cue fires while the stage could still burn, because the propellant
+        // left in it is spoken for. UPFG plans stage boundaries but never commands one.
         bool reserveDone = ShouldStageForReserve(vehicle);
 
-        // EVALUATED UNCONDITIONALLY, not short-circuited behind thrustOn. Its real
-        // output is not just the bool: it refills _spentEngineParts, and the
-        // activation below records that set as "already staged for". Skipping the
-        // call left the buffer holding whatever the PREVIOUS vehicle in this step's
-        // sweep put there, and that craft's engine ids were then written into this
-        // one's SpentStagedFor. Harmless while one vehicle was ever serviced; not
-        // once the hook runs every craft in sequence.
-        bool dropSpent = ShouldDropSpentEngines(vehicle, sequenceList);
-        if (thrustOn && !dropSpent && !reserveDone)
-        {
-            _s.StagingActive = false;
+        _s.StagingActive = !thrustOn || reserveDone;
+        if (!_s.StagingActive || now - _s.LastSequenceTime < SequenceCooldown)
             return;
-        }
 
-        _s.StagingActive = true;
-        double now = SimNow();
-        if (now - _s.LastSequenceTime >= SequenceCooldown)
-        {
-            if (WouldLoseControl(vehicle, sequenceList))
-            {
-                _s.StagingActive = false;
-                _s.Status = "Auto-staging held: the next sequence would separate the control module.";
-                return;
-            }
-            // Everything the booster needs to be recognised and flown, recorded BEFORE
-            // the split - afterwards the parts have moved to a vehicle we have no
-            // handle on and the decoupler that named them is gone.
-            if (reserveDone)
-                ArmBoosterHandover(vehicle, sequenceList, now);
+        // Everything the booster needs to be recognised and flown, recorded before the split,
+        // because afterwards the parts belong to a vehicle we have no handle on.
+        if (reserveDone)
+            ArmBoosterHandover(vehicle, sequenceList, now);
 
-            sequenceList.ActivateNextSequence(vehicle);
-            vehicle.UpdateAfterPartTreeModification();
-            _s.LastSequenceTime = now;
-            _s.StageModelDirty = true;   // the stage list just changed under us
-            _s.SpentStagedFor.Clear();
-            _s.SpentStagedFor.UnionWith(_spentEngineParts);
-        }
+        StagingDetector.RequestStaging(vehicle);
+        _s.LastSequenceTime = now;
+    }
+
+    private static void DisarmStaging(Vehicle vehicle)
+    {
+        if (!_s.ArmedStaging)
+            return;
+        _s.ArmedStaging = false;
+        if (vehicle != null && !vehicle.IsDisposed)
+            StagingDetector.Arm(vehicle, false);
     }
 
     /// <summary>
@@ -391,69 +385,6 @@ public static partial class GuidanceWindow
             ExecuteBoostback(vehicle, orbit, parent);
     }
 
-    private static readonly HashSet<Part> _stagingDropped = new HashSet<Part>();
-
-    // True if firing the next sequence would leave the vehicle we are flying with
-    // no control module.
-    //
-    // Vehicle.Split detaches the TREE-CHILD side of a decoupler's connection into a
-    // NEW vehicle and keeps the tree-parent side as the vehicle object the player is
-    // still controlling - and nothing in KSA moves control to follow the pod
-    // (Program.ControlledVehicle is only reassigned by camera targeting and EVA). So
-    // if every Control module sits on the child side, that separation hands the pod
-    // away and leaves the player attached to the debris. The symptom is unmistakable
-    // once seen: Vehicle.IsControllable is `Parts.Controls.NumModules > 0`, and the
-    // flight computer greys out everything it gates on that - the Strict/Balanced/
-    // Relaxed attitude profiles included, since those fall through to a bare
-    // !IsControllable test.
-    //
-    // Doing that deliberately is a legitimate thing to want; doing it automatically,
-    // mid-ascent, is not the autopilot's call.
-    private static bool WouldLoseControl(Vehicle vehicle, SequenceList sequenceList)
-    {
-        PartTree tree = vehicle.Parts;
-        if (tree == null)
-            return false;
-
-        // The sequence ActivateNextSequence will actually fire: the first one not
-        // yet activated that still has parts (it skips empty ones).
-        Sequence next = null;
-        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
-        for (int i = 0; i < sequences.Length; i++)
-        {
-            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
-            {
-                next = sequences[i];
-                break;
-            }
-        }
-        if (next == null)
-            return false;
-
-        _stagingDropped.Clear();
-        ReadOnlySpan<Part> parts = next.Parts;
-        for (int i = 0; i < parts.Length; i++)
-        {
-            Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
-            for (int j = 0; j < decouplers.Length; j++)
-            {
-                Part root = DetachedRoot(decouplers[j]);
-                if (root != null)
-                    CollectSubtree(root, _stagingDropped);
-            }
-        }
-        if (_stagingDropped.Count == 0)
-            return false;   // nothing separates
-
-        Span<Control> controls = tree.Modules.Get<Control>();
-        if (controls.Length == 0)
-            return false;   // already uncontrollable - nothing left to protect
-        for (int i = 0; i < controls.Length; i++)
-            if (!_stagingDropped.Contains(controls[i].Parent.FullPart))
-                return false;   // at least one control module stays with us
-        return true;
-    }
-
     // The part whose subtree separates when this decoupler fires: the tree-child
     // side of its connection - the same rule Vehicle.Split applies.
     private static Part DetachedRoot(Decoupler decoupler)
@@ -476,49 +407,6 @@ public static partial class GuidanceWindow
             CollectSubtree(child, into);
     }
 
-    // Engine parts that are lit but out of propellant. SCRATCH: filled and consumed
-    // within one vehicle's AutoSequence call, never read across calls - the set we
-    // last staged for is per vehicle (VehicleAutopilotState.SpentStagedFor). Kept as a
-    // field so the check allocates nothing on the sim path.
-    private static readonly HashSet<uint> _spentEngineParts = new HashSet<uint>();
-
-    // True when a burnt-out engine is still attached and the next sequence is the
-    // one that separates something - i.e. spent boosters waiting to be dropped
-    // while the core still burns.
-    //
-    // Two guards keep this from turning into a staging loop. The next sequence
-    // must actually contain a decoupler, so a dead engine with nothing left to
-    // separate is ignored; and the same set of dead engines only ever triggers one
-    // activation, so if a sequence fires without removing them we stop rather than
-    // walk the whole list at one activation per cooldown.
-    private static bool ShouldDropSpentEngines(Vehicle vehicle, SequenceList sequenceList)
-    {
-        _spentEngineParts.Clear();
-        if (!ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
-                .TryGetFrom(vehicle.Parts.States, out var engineStates))
-            return false;
-
-        foreach (var engine in engineStates.ModulesAndStates)
-        {
-            if (engine.Module.IsActive && !engine.State.IsPropellantAvailable)
-                _spentEngineParts.Add(engine.Module.Parent.FullPart.InstanceId);
-        }
-        if (_spentEngineParts.Count == 0 || _spentEngineParts.SetEquals(_s.SpentStagedFor))
-            return false;
-
-        ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
-        for (int i = 0; i < sequences.Length; i++)
-        {
-            if (sequences[i].Activated)
-                continue;
-            ReadOnlySpan<Part> parts = sequences[i].Parts;
-            for (int j = 0; j < parts.Length; j++)
-                if (!parts[j].SubtreeModules.Get<Decoupler>().IsEmpty)
-                    return true;
-            return false;   // the next sequence separates nothing
-        }
-        return false;
-    }
 
     // --- Stage model ---
     // KSA models staging itself (PartTree.PerformanceSequences - see
@@ -708,8 +596,7 @@ public static partial class GuidanceWindow
         return dropped * (Math.Exp(dvMs / ve) - 1.0);
     }
 
-    // Scratch for the separation walk. Same contract as _stagingDropped: filled and
-    // consumed inside one call, never read across calls.
+    // Scratch for the separation walk, filled and consumed inside one call, never read across calls.
     private static readonly HashSet<Part> _separationDrops = new HashSet<Part>();
 
     /// <summary>
@@ -1372,6 +1259,7 @@ public static partial class GuidanceWindow
     {
         // Clear the wait even when no guidance resources need release.
         ResetLandingEngineWait();
+        DisarmStaging(vehicle);
         if (!_s.ControlAcquired && !_s.FcResetPending && _s.Worker == null
             && !_s.Active && !_s.EngagePending && !_s.Converging && !_s.Running
             && !_s.LaunchArmed && !_s.LandingCutPending

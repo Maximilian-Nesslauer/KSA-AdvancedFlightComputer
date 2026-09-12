@@ -97,11 +97,12 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public readonly UpfgGuidance Upfg = new UpfgGuidance();
 
-    /// <summary>
-    /// Spent engines the auto-stager has already fired a sequence for. Per vehicle so
-    /// one craft dropping its boosters cannot suppress another's staging.
-    /// </summary>
-    public readonly HashSet<uint> SpentStagedFor = new HashSet<uint>();
+    /// <summary>True while guidance armed the AutoStage feature for this craft itself, so the
+    /// hand-back disarms only what guidance switched on.</summary>
+    public bool ArmedStaging;
+
+    /// <summary>The staging generation the stage model was last refreshed for.</summary>
+    public int SeenSequenceGeneration = -1;
 
     // ------------------------------------------------------------------ UPFG / ascent
     //

@@ -92,8 +92,6 @@ public static partial class GuidanceWindow
         _warpDeclinedLabel = "";
         _warpTargetSimSec = 0;
         _handovers.Clear();
-        _stagingDropped.Clear();
-        _spentEngineParts.Clear();
         _separationDrops.Clear();
         _retargetArmed = false;
         _autoLaunchStepped = false;

@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
@@ -36,13 +37,15 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         {
             harmony.Patch(Method("SimNow"), prefix: Prefix(nameof(Clock)));
             harmony.Patch(Method("ShouldStageForReserve"), prefix: Prefix(nameof(False)));
-            harmony.Patch(Method("ShouldDropSpentEngines"), prefix: Prefix(nameof(False)));
-            harmony.Patch(Method("WouldLoseControl"), prefix: Prefix(nameof(False)));
             harmony.Patch(Method("BuildUpfgVehicle"), prefix: Prefix(nameof(Skip)));
             harmony.Patch(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.UpdateAfterPartTreeModification)),
                 prefix: Prefix(nameof(SkipSyntheticConfiguration)));
-            harmony.Patch(AccessTools.Method(typeof(SequenceList), nameof(SequenceList.ActivateNextSequence)),
+            // Guidance asks the AutoStage feature for a row; the synthetic vehicles never reach the
+            // detector, so the request seam stands in for the activation and the arming is a no-op.
+            harmony.Patch(AccessTools.Method(typeof(StagingDetector), nameof(StagingDetector.RequestStaging)),
                 prefix: Prefix(nameof(Activate)));
+            harmony.Patch(AccessTools.Method(typeof(StagingDetector), nameof(StagingDetector.Arm)),
+                prefix: Prefix(nameof(Skip)));
             harmony.Patch(Method("PrepareLandingEngines"), postfix: Prefix(nameof(StopAfterReady)));
 
             foreach (GuidanceWindow.LandingPhase phase in new[]
@@ -107,11 +110,11 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         return false;
     }
 
-    private static bool Activate(SequenceList __instance)
+    private static bool Activate(Vehicle vehicle)
     {
         _activations++;
         if (!_freezeSequence)
-            foreach (Sequence sequence in __instance.Sequences)
+            foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
                 if (!sequence.Activated)
                 {
                     sequence.Activated = true;
