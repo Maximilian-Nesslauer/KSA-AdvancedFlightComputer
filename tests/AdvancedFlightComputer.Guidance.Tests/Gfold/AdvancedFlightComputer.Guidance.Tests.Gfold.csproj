@@ -8,6 +8,6 @@
     <RootNamespace>AdvancedFlightComputer.Guidance.Tests.Gfold</RootNamespace>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\..\AdvancedFlightComputer\Features\Guidance\Gfold\AdvancedFlightComputer.Guidance.Gfold.csproj" />
+    <ProjectReference Include="../../../AdvancedFlightComputer/Features/Guidance/Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj" />
   </ItemGroup>
 </Project>

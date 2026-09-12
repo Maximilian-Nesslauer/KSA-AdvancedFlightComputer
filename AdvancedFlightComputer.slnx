@@ -1,15 +1,15 @@
 <Solution>
   <Project Path="AdvancedFlightComputer/AdvancedFlightComputer.csproj" />
-  <Project Path="AdvancedFlightComputer.HarnessTests/AdvancedFlightComputer.HarnessTests.csproj" />
+  <Project Path="tests/AdvancedFlightComputer.HarnessTests/AdvancedFlightComputer.HarnessTests.csproj" />
   <Folder Name="/Guidance/">
     <Project Path="AdvancedFlightComputer/Features/Guidance/Numerics/AdvancedFlightComputer.Guidance.Numerics.csproj" />
     <Project Path="AdvancedFlightComputer/Features/Guidance/Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj" />
     <Project Path="AdvancedFlightComputer/Features/Guidance/Scvx/AdvancedFlightComputer.Guidance.Scvx.csproj" />
   </Folder>
   <Folder Name="/Guidance Tests/">
-    <Project Path="AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj" />
-    <Project Path="AdvancedFlightComputer.Guidance.Tests/Scvx/AdvancedFlightComputer.Guidance.Tests.Scvx.csproj" />
-    <Project Path="AdvancedFlightComputer.Guidance.Tests/Worker.Tests/Worker.Tests.csproj" />
+    <Project Path="tests/AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj" />
+    <Project Path="tests/AdvancedFlightComputer.Guidance.Tests/Scvx/AdvancedFlightComputer.Guidance.Tests.Scvx.csproj" />
+    <Project Path="tests/AdvancedFlightComputer.Guidance.Tests/Worker.Tests/Worker.Tests.csproj" />
   </Folder>
   <Folder Name="/Build/">
     <Project Path="build/NativeChecks/NativeChecks.csproj" />

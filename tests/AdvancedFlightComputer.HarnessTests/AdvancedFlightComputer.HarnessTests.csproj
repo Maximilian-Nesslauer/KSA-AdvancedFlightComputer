@@ -24,24 +24,24 @@
     path to your local clone.
   -->
   <ItemGroup>
-    <ProjectReference Include="..\AdvancedFlightComputer\AdvancedFlightComputer.csproj">
+    <ProjectReference Include="../../AdvancedFlightComputer/AdvancedFlightComputer.csproj">
       <Private>false</Private>
     </ProjectReference>
     <Reference Include="HeadlessHarness">
-      <HintPath>..\..\HeadlessHarness\HeadlessHarness\bin\$(Configuration)\net10.0\HeadlessHarness.dll</HintPath>
+      <HintPath>../../../HeadlessHarness/HeadlessHarness/bin/$(Configuration)/net10.0/HeadlessHarness.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="KSA">
-      <HintPath>..\..\..\refs\game\KSA.dll</HintPath>
+      <HintPath>../../../../refs/game/KSA.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Core.Numerics">
-      <HintPath>..\..\..\refs\game\Brutal.Core.Numerics.dll</HintPath>
+      <HintPath>../../../../refs/game/Brutal.Core.Numerics.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <!-- Overload resolution on KSA's frame-transform extensions pulls in BepuUtilities types. -->
     <Reference Include="BepuUtilities">
-      <HintPath>..\..\..\refs\game\BepuUtilities.dll</HintPath>
+      <HintPath>../../../../refs/game/BepuUtilities.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
@@ -58,6 +58,6 @@
     <GenerateLaunchProfile>false</GenerateLaunchProfile>
   </PropertyGroup>
 
-  <Import Project="..\build\ModDeploy.targets" />
+  <Import Project="../../build/ModDeploy.targets" />
 
 </Project>

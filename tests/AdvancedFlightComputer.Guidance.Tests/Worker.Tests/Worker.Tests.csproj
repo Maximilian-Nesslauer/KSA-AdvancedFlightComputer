@@ -6,6 +6,6 @@
     <Nullable>disable</Nullable>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/Ksa6DofSolveWorker.cs" Link="Ksa6DofSolveWorker.cs" />
+    <Compile Include="../../../AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/Ksa6DofSolveWorker.cs" Link="Ksa6DofSolveWorker.cs" />
   </ItemGroup>
 </Project>

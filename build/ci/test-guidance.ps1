@@ -36,9 +36,9 @@ $projects = [ordered]@{
     Numerics = "AdvancedFlightComputer/Features/Guidance/Numerics/AdvancedFlightComputer.Guidance.Numerics.csproj"
     Gfold = "AdvancedFlightComputer/Features/Guidance/Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj"
     Scvx = "AdvancedFlightComputer/Features/Guidance/Scvx/AdvancedFlightComputer.Guidance.Scvx.csproj"
-    GfoldConsole = "AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj"
-    ScvxConsole = "AdvancedFlightComputer.Guidance.Tests/Scvx/AdvancedFlightComputer.Guidance.Tests.Scvx.csproj"
-    WorkerTests = "AdvancedFlightComputer.Guidance.Tests/Worker.Tests/Worker.Tests.csproj"
+    GfoldConsole = "tests/AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj"
+    ScvxConsole = "tests/AdvancedFlightComputer.Guidance.Tests/Scvx/AdvancedFlightComputer.Guidance.Tests.Scvx.csproj"
+    WorkerTests = "tests/AdvancedFlightComputer.Guidance.Tests/Worker.Tests/Worker.Tests.csproj"
     NativeChecks = "build/NativeChecks/NativeChecks.csproj"
 }
 foreach ($relativePath in $projects.Values) {
@@ -115,7 +115,7 @@ foreach ($project in $projects.GetEnumerator()) {
 $targetFramework = "net10.0"
 $gfoldAssembly = Join-Path $RepositoryRoot "AdvancedFlightComputer/Features/Guidance/Gfold/bin/$Configuration/$targetFramework/$RuntimeIdentifier/AdvancedFlightComputer.Guidance.Gfold.dll"
 $scvxAssembly = Join-Path $RepositoryRoot "AdvancedFlightComputer/Features/Guidance/Scvx/bin/$Configuration/$targetFramework/$RuntimeIdentifier/AdvancedFlightComputer.Guidance.Scvx.dll"
-$scvxConsoleDir = Join-Path $RepositoryRoot "AdvancedFlightComputer.Guidance.Tests/Scvx/bin/$Configuration/$targetFramework/$RuntimeIdentifier"
+$scvxConsoleDir = Join-Path $RepositoryRoot "tests/AdvancedFlightComputer.Guidance.Tests/Scvx/bin/$Configuration/$targetFramework/$RuntimeIdentifier"
 
 Copy-Item -LiteralPath (Join-Path $nativeDir $nativeNames[0]) -Destination (Split-Path -Parent $gfoldAssembly) -Force
 Copy-Item -LiteralPath (Join-Path $nativeDir $nativeNames[1]) -Destination (Split-Path -Parent $scvxAssembly) -Force
