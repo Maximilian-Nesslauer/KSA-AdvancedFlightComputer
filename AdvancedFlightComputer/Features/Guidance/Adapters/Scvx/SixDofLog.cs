@@ -9,30 +9,14 @@ using System.IO;
 using System.Text;
 
 /// <summary>
-/// Flight telemetry for the 6-DOF guidance, written to CSV so a run can be read
-/// back afterwards instead of described from memory.
-///
-/// Three files per run, because they answer different questions:
-///
-///   -cycle.csv   one row per guidance step: state, solve outcome, defect,
-///                thrust demand vs capability, feasibility. The time series.
-///   -plan.csv    periodic snapshots of the WHOLE planned trajectory. This is the
-///                one that settles "does the vehicle loop, or does the PLAN loop" -
-///                a question the cycle rows genuinely cannot answer, since they
-///                only ever record where the vehicle got to.
-///   -events.log  engagement, node-gate steps, handover, touchdown, and every
-///                refused re-solve with its reason.
-///
-/// DESIGN CONSTRAINTS, both learned the hard way:
-///
-///   NOTHING HERE MAY THROW. This is called from the sim step and the ImGui draw,
-///   and an exception escaping either one unwinds past ImGui's End() and corrupts
-///   the frame - the game then reports "missing End" and names the wrong function
-///   entirely. Every public entry point swallows its own errors; a broken log must
-///   never break a flight.
-///
-///   NOTHING HERE MAY STALL. Rows accumulate in memory and are flushed on an
-///   interval, so the sim thread does not wait on the disk at 10 Hz.
+/// Flight telemetry for the 6-DOF guidance, written to CSV so a run can be read back afterwards instead of described from memory.
+///  Three files per run, because they answer different questions:
+///  -cycle.csv   one row per guidance step: state, solve outcome, defect, thrust demand vs capability, feasibility. The time series.
+///   -plan.csv    periodic snapshots of the WHOLE planned trajectory. This is the one that settles "does the vehicle loop, or does the PLAN loop" - a question the cycle rows genuinely cannot answer, since they only ever record where the vehicle got to.
+///   -events.log  engagement, node-gate steps, handover, touchdown, and every refused re-solve with its reason.
+///  DESIGN CONSTRAINTS, both learned the hard way:
+///  NOTHING HERE MAY THROW. This is called from the sim step and the ImGui draw, and an exception escaping either one unwinds past ImGui's End() and corrupts the frame - the game then reports "missing End" and names the wrong function entirely. Every public entry point swallows its own errors; a broken log must never break a flight.
+///  NOTHING HERE MAY STALL. Rows accumulate in memory and are flushed on an interval, so the sim thread does not wait on the disk at 10 Hz.
 /// </summary>
 internal static class SixDofLog
 {
@@ -55,20 +39,13 @@ internal static class SixDofLog
     internal static double PlanSnapshotInterval = 1.0;
 
     /// <summary>
-    /// The vehicle this log belongs to. One log, one craft: guidance is per-vehicle
-    /// now, so a second craft engaging must not silently take the file over and a
-    /// first craft disengaging must not stop the log of one still flying.
+    /// The vehicle this log belongs to. One log, one craft: guidance is per-vehicle now, so a second craft engaging must not silently take the file over and a first craft disengaging must not stop the log of one still flying.
     /// </summary>
     internal static object Owner { get; private set; }
 
     /// <summary>
-    /// Begin a run for this vehicle. Refuses if another craft's run is already open -
-    /// see Owner. Returns true if this call owns the log afterwards.
-    ///
-    /// A refusal is not an error and is not worth surfacing: it means a booster is
-    /// already being recorded and the upper stage will simply not be. Interleaving two
-    /// craft in one CSV would make every column ambiguous, and the log's whole value
-    /// has been that a row means one thing.
+    /// Begin a run for this vehicle. Refuses if another craft's run is already open - see Owner. Returns true if this call owns the log afterwards.
+    ///  A refusal is not an error and is not worth surfacing: it means a booster is already being recorded and the upper stage will simply not be. Interleaving two craft in one CSV would make every column ambiguous, and the log's whole value has been that a row means one thing.
     /// </summary>
     internal static bool Start(object owner, string vehicleName, string bodyName)
     {
@@ -80,10 +57,7 @@ internal static class SixDofLog
             Stop();
             Owner = owner;
 
-            // A NEW run starts clean. LastError was only ever assigned, never cleared,
-            // so one transient failure - a locked file, a missing folder on a previous
-            // run - was reported as "log error" for the rest of the session even once
-            // logging was working perfectly.
+            // A NEW run starts clean. LastError was only ever assigned, never cleared, so one transient failure - a locked file, a missing folder on a previous run - was reported as "log error" for the rest of the session even once logging was working perfectly.
             LastError = "";
 
             string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
@@ -103,8 +77,7 @@ internal static class SixDofLog
             RowsWritten = 0;
             _lastPlanSnapshot = double.NegativeInfinity;
 
-            // Header names match the field order in Cycle() exactly; keeping them in
-            // one place would be neater but this is read by eye as often as by tool.
+            // Header names match the field order in Cycle() exactly; keeping them in one place would be neater but this is read by eye as often as by tool.
             _cycle.AppendLine(string.Join(",",
                 "cycle", "t", "alt", "rx", "ry", "rz", "vx", "vy", "vz", "speed",
                 "qw", "qx", "qy", "qz", "tiltDeg", "wx", "wy", "wz", "mass",
@@ -169,10 +142,7 @@ internal static class SixDofLog
     }
 
     /// <summary>
-    /// May this caller write? The sink is single-owner by design, but only Start and
-    /// Stop ever checked - so a second craft refused ownership went on appending to
-    /// the same three buffers anyway, interleaving two vehicles' rows in one CSV and
-    /// racing a StringBuilder between their guidance threads. Every write checks now.
+    /// May this caller write? The sink is single-owner by design, but only Start and Stop ever checked - so a second craft refused ownership went on appending to the same three buffers anyway, interleaving two vehicles' rows in one CSV and racing a StringBuilder between their guidance threads. Every write checks now.
     /// </summary>
     private static bool Writable(object owner) => Enabled && ReferenceEquals(Owner, owner);
 
@@ -182,10 +152,7 @@ internal static class SixDofLog
             return;
         try
         {
-            // Invariant, like every other number here. Interpolation defaults to the
-            // CURRENT culture, which writes "13,00" on a comma-decimal machine - the
-            // smoke test caught exactly that, and a timestamp that reads as two
-            // fields is worse than useless when correlating against the CSV.
+            // Invariant, like every other number here. Interpolation defaults to the CURRENT culture, which writes "13,00" on a comma-decimal machine - the smoke test caught exactly that, and a timestamp that reads as two fields is worse than useless when correlating against the CSV.
             _events.AppendLine(
                 string.Format(CultureInfo.InvariantCulture, "{0,10:F2}  {1}", t, message));
         }
@@ -196,9 +163,7 @@ internal static class SixDofLog
     }
 
     /// <summary>
-    /// One guidance cycle. Values are passed in rather than pulled from statics so
-    /// this stays a pure sink - nothing here reaches back into guidance state, so it
-    /// cannot perturb what it is measuring.
+    /// One guidance cycle. Values are passed in rather than pulled from statics so this stays a pure sink - nothing here reaches back into guidance state, so it cannot perturb what it is measuring.
     /// </summary>
     internal static void Cycle(object owner, in CycleRow r)
     {
@@ -254,9 +219,7 @@ internal static class SixDofLog
 
     /// <summary>
     /// Snapshot the whole planned trajectory, rate-limited. THE point of this file:
-    /// a cycle row can only say where the vehicle went, so on its own it can never
-    /// distinguish "the plan is a loop and the vehicle followed it" from "the plan
-    /// was straight and the vehicle diverged". Those have opposite causes.
+    /// a cycle row can only say where the vehicle went, so on its own it can never distinguish "the plan is a loop and the vehicle followed it" from "the plan was straight and the vehicle diverged". Those have opposite causes.
     /// </summary>
     internal static void PlanSnapshot(object owner, double t, int nodes,
                                       ReadOnlySpan<double> planX, ReadOnlySpan<double> planU)
@@ -293,9 +256,7 @@ internal static class SixDofLog
     }
 
     /// <summary>
-    /// Write what is buffered and report this write. LastError keeps the last error of the
-    /// run for the panel, so it cannot say whether this write succeeded, because a repeated
-    /// failure carries the same text.
+    /// Write what is buffered and report this write. LastError keeps the last error of the run for the panel, so it cannot say whether this write succeeded, because a repeated failure carries the same text.
     /// </summary>
     internal static string Flush()
     {
@@ -316,9 +277,7 @@ internal static class SixDofLog
         return "";
     }
 
-    // Invariant culture throughout: a machine with a comma decimal separator would
-    // otherwise write "1,234" into a comma-separated file and silently shift every
-    // column right of it.
+    // Invariant culture throughout: a machine with a comma decimal separator would otherwise write "1,234" into a comma-separated file and silently shift every column right of it.
     private static void F(StringBuilder sb, double v, bool last = false)
     {
         sb.Append(double.IsFinite(v) ? v.ToString("G9", CultureInfo.InvariantCulture) : "");
@@ -341,52 +300,27 @@ internal static class SixDofLog
         public string Status;
         public int ScvxIters, Accepted, Admm, Escalations, Nodes;
         public double SolveMs, DefectM, DefectLimitM, AnchorM, Sigma, PlanElapsed;
-        // WHERE the defect is, not just how big. DefectM is a max over all fourteen
-        // state channels scaled by the POSITION scale, so it is only a distance when
-        // the worst channel is a position - see Ksa6DofGuidance.LastDefectChannel.
+        // WHERE the defect is, not just how big. DefectM is a max over all fourteen state channels scaled by the POSITION scale, so it is only a distance when the worst channel is a position - see Ksa6DofGuidance.LastDefectChannel.
         public string DefectChan, DefectGroup;
         public double DefectRaw;
         public int DefectNode;
         // The HORIZON-WEIGHTED figure the gate actually tested, and where it was worst.
-        // DefectM above stays the honest full-horizon max, so the two together say both
-        // "how bad is this plan anywhere" and "how bad is it where we are about to fly".
+        // DefectM above stays the honest full-horizon max, so the two together say both "how bad is this plan anywhere" and "how bad is it where we are about to fly".
         // CommitIntervals is how many intervals were judged at full strength this cycle;
-        // it moves with dt, so it is recorded rather than inferred. See
-        // Scvx6DofSolver.WeightedDefect.
-        // GatedRatio is DIMENSIONLESS - the worst channel as a multiple of its own
-        // tolerance, after horizon weighting - so 1.0 is the gate. GatedRaw and
-        // GatedTolerance are that channel's numbers in its own units, so the row can be
-        // read without knowing the tolerance table. DefectM above stays the legacy
-        // metre-scaled full-horizon max.
+        // it moves with dt, so it is recorded rather than inferred. See Scvx6DofSolver.WeightedDefect.
+        // GatedRatio is DIMENSIONLESS - the worst channel as a multiple of its own tolerance, after horizon weighting - so 1.0 is the gate. GatedRaw and GatedTolerance are that channel's numbers in its own units, so the row can be read without knowing the tolerance table. DefectM above stays the legacy metre-scaled full-horizon max.
         public double GatedRatio, GatedRaw, GatedTolerance;
         public string GatedDefectChan;
         public int GatedDefectNode, CommitIntervals;
-        // Nodes re-expressed onto the vehicle's quaternion branch this cycle. Normally
-        // zero; non-zero means the double cover was about to inject a defect that has
-        // no physical meaning. See Ksa6DofGuidance.AlignQuaternionBranch.
+        // Nodes re-expressed onto the vehicle's quaternion branch this cycle. Normally zero; non-zero means the double cover was about to inject a defect that has no physical meaning. See Ksa6DofGuidance.AlignQuaternionBranch.
         public int QFlips;
         // TRUST REGION, start and end of the cycle, with its floor alongside.
-        //
-        // trEnd sitting at trMin means the region has COLLAPSED: the solver shrinks it
-        // on every rejected iteration, and at the floor the per-node box is far smaller
-        // than one interval of travel, so the plan cannot be re-anchored at any
-        // iteration count and the cycle can only fail. That state had to be inferred
-        // from a status enum on flight 20260820-191435; it is a column now.
-        //
-        // trStart is what the cycle was reseeded from - normally the warm constant,
-        // TrustRegionMax after a wide-trust-region retry or a restart.
+        //  trEnd sitting at trMin means the region has collapsed and the plan may no longer be able to re-anchor within one interval of travel.
+        //  trStart is what the cycle was reseeded from - normally the warm constant, TrustRegionMax after a wide-trust-region retry or a restart.
         // HOW FAR THE VEHICLE IS FROM ITS PLAN, and how far it is allowed to be.
-        //
-        // anchorM above cannot answer this: it measures ReferenceX[0] - x0 against an
-        // equality the subproblem enforces and a seed that is overwritten with x0, so
-        // it reads 0.000 by construction on exactly the cycles that are going wrong.
-        // DriftM is Ksa6DofGuidance.MeasureDrift - the published plan's prediction for
-        // now, against where the vehicle actually is - and DriftLimitM is the threshold
-        // the cold-restart branch compares it to.
-        //
-        // SeedShift is the whole nodes the warm seed was shifted forward by. The two
-        // together separate "the vehicle left its plan" from "the seed was re-timed",
-        // which the logs so far could only distinguish by inference.
+        //  anchorM above cannot answer this: it measures ReferenceX[0] - x0 against an equality the subproblem enforces and a seed that is overwritten with x0, so it reads 0.000 by construction on exactly the cycles that are going wrong.
+        // DriftM is Ksa6DofGuidance.MeasureDrift - the published plan's prediction for now, against where the vehicle actually is - and DriftLimitM is the threshold the cold-restart branch compares it to.
+        //  SeedShift is the whole nodes the warm seed was shifted forward by. The two together separate "the vehicle left its plan" from "the seed was re-timed", which the logs so far could only distinguish by inference.
         public double DriftM, DriftLimitM;
         public int SeedShift;
         public double TrStart, TrEnd, TrMin;

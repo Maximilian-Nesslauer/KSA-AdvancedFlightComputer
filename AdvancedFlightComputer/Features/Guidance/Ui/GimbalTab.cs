@@ -8,16 +8,11 @@ using Brutal.Numerics;
 using KSA;
 
 // "Gimbal" tab - a manual probe for KsaGimbalControl.
-//
-// Not a guidance mode. Its job is to answer the question the 6-DOF port is blocked
-// on: can the mod command thrust vectoring directly, and at what layer? Two modes:
-//
-//   Direct  - same normalized deflection to every gimbal. Proves the write lands.
+//  Not a guidance mode. Its job is to answer the question the 6-DOF port is blocked on: can the mod command thrust vectoring directly, and at what layer? Two modes:
+//  Direct  - same normalized deflection to every gimbal. Proves the write lands.
 //   Torque  - body-frame roll/pitch/yaw through KSA's own per-gimbal geometry.
 //             This is the layer a guidance mode should actually use.
-//
-// The per-gimbal table shows which body axes each gimbal has leverage over, which
-// is how a main engine and its roll verniers visibly separate.
+//  The per-gimbal table shows which body axes each gimbal has leverage over, which is how a main engine and its roll verniers visibly separate.
 public static partial class GuidanceWindow
 {
 
@@ -61,9 +56,7 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // No re-pointing any more: the override is keyed on the vehicle's config, so
-        // switching craft or staging simply lands on a different slot rather than
-        // dragging one global target around behind the player.
+        // No re-pointing any more: the override is keyed on the vehicle's config, so switching craft or staging simply lands on a different slot rather than dragging one global target around behind the player.
 
         ImGui.TextWrapped(
             "While engaged the flight computer's own attitude control cannot move these " +
@@ -108,10 +101,7 @@ public static partial class GuidanceWindow
         DrawGimbalTable(vehicle, gimbals);
     }
 
-    // Physical torque command. Sliders are normalized for usability but scaled by the
-    // allocator's own per-axis capability, so what you set is a real N-m demand - and
-    // the readout below shows what the allocation actually delivers, including the
-    // lateral force that necessarily comes with it.
+    // Physical torque command. Sliders are normalized for usability but scaled by the allocator's own per-axis capability, so what you set is a real N-m demand - and the readout below shows what the allocation actually delivers, including the lateral force that necessarily comes with it.
     private static void DrawLsqControls(Vehicle vehicle)
     {
         ImGui.TextWrapped(
@@ -141,9 +131,7 @@ public static partial class GuidanceWindow
                    $"P {a.AchievedTorque.Y / 1000.0,9:F1}  " +
                    $"Z {a.AchievedTorque.Z / 1000.0,9:F1}  kN-m");
 
-        // Gimballing for torque always tilts the thrust vector. Surfacing it here
-        // because the 6-DOF model has to account for it: it is a real acceleration,
-        // not an artifact of the allocation.
+        // Gimballing for torque always tilts the thrust vector. Surfacing it here because the 6-DOF model has to account for it: it is a real acceleration, not an artifact of the allocation.
         ImGui.Text($"Side force  X {a.AchievedForce.X / 1000.0,9:F1}  " +
                    $"Y {a.AchievedForce.Y / 1000.0,9:F1}  " +
                    $"Z {a.AchievedForce.Z / 1000.0,9:F1}  kN");
@@ -153,11 +141,7 @@ public static partial class GuidanceWindow
                 $"Saturated - demand scaled to {a.SaturationScale * 100.0:F0}%% (direction preserved).");
     }
 
-    // Per-gimbal breakdown. The "axes" column is the interesting one: it shows which
-    // body axes each gimbal can actually torque about, given its moment arm. A
-    // centreline main engine reads "-PY" (pitch and yaw, no roll) while an off-axis
-    // vernier reads "RPY" - which is how KSA gets roll authority without a dedicated
-    // roll actuator.
+    // Per-gimbal breakdown. The "axes" column is the interesting one: it shows which body axes each gimbal can actually torque about, given its moment arm. A centreline main engine reads "-PY" (pitch and yaw, no roll) while an off-axis vernier reads "RPY" - which is how KSA gets roll authority without a dedicated roll actuator.
     private static void DrawGimbalTable(Vehicle vehicle, Span<GimbalController> gimbals)
     {
         ImGui.Separator();
@@ -186,8 +170,7 @@ public static partial class GuidanceWindow
             double maxY = g.AxisY.MaxAngle * 180.0 / Math.PI;
             double maxZ = g.AxisZ.MaxAngle * 180.0 / Math.PI;
 
-            // Show the command this gimbal will actually receive, computed by the same
-            // code the worker runs - so the table can't drift from the behaviour.
+            // Show the command this gimbal will actually receive, computed by the same code the worker runs - so the table can't drift from the behaviour.
             float cmdY, cmdZ;
             if (_s.GimbalMode == 1)
             {
@@ -196,8 +179,7 @@ public static partial class GuidanceWindow
             }
             else if (_s.GimbalMode == 3)
             {
-                // The Lsq solve is global, not per-gimbal, so there is nothing to
-                // recompute here - show what the worker actually commanded.
+                // The Lsq solve is global, not per-gimbal, so there is nothing to recompute here - show what the worker actually commanded.
                 KsaGimbalControl.Slot lsqSlot = KsaGimbalControl.Diagnostics(vehicle);
                 ReadOnlySpan<double> last = lsqSlot != null ? lsqSlot.LastCommands : default;
                 cmdY = last.Length > 2 * i + 1 ? (float)last[2 * i] : 0f;

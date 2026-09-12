@@ -8,33 +8,21 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
-// World-space debug overlay for the G-FOLD descent. Projects the committed plan
-// and its constraints into the live game view so you can see exactly what the
-// solver is working with: the planned path, the glideslope cone, the target, the
-// commanded thrust at each node, the live vehicle state, and a numeric HUD.
-//
-// The projection and drawing helpers it uses are shared with the ascent overlay -
-// see Ui/Overlays/OverlayCore.cs.
+// World-space debug overlay for the G-FOLD descent. Projects the committed plan and its constraints into the live game view so you can see exactly what the solver is working with: the planned path, the glideslope cone, the target, the commanded thrust at each node, the live vehicle state, and a numeric HUD.
+//  The projection and drawing helpers it uses are shared with the ascent overlay - see Ui/Overlays/OverlayCore.cs.
 public static partial class GuidanceWindow
 {
     private static bool _showGfoldOverlay;
     private static bool _retargetArmed;
 
     /// <summary>
-    /// When non-zero, the armed retarget click sets THAT returnable stage's own landing
-    /// site rather than the vehicle's. The id is the detached subtree root's
-    /// InstanceId - see VehicleAutopilotState.StageTargets for why that is the identity.
-    ///
-    /// A UI mode rather than per-vehicle state, like _retargetArmed beside it: it lasts
-    /// from pressing Set to the click that answers it, and there is one mouse.
+    /// When non-zero, the armed retarget click sets THAT returnable stage's own landing site rather than the vehicle's. The id is the detached subtree root's InstanceId - see VehicleAutopilotState.StageTargets for why that is the identity.
+    ///  A UI mode rather than per-vehicle state, like _retargetArmed beside it: it lasts from pressing Set to the click that answers it, and there is one mouse.
     /// </summary>
     private static uint _retargetStageId;
     private static bool _landingTabActive;   // set while the Landing tab is the open tab
 
-    // Clickable retargeting: while armed, each frame we ray-cast the cursor onto the
-    // body, draw a live preview marker (projected back through the validated forward
-    // EclToScreen, so it should sit under the cursor), and commit the new site on a
-    // left-click. Right-click cancels.
+    // Clickable retargeting: while armed, each frame we ray-cast the cursor onto the body, draw a live preview marker (projected back through the validated forward EclToScreen, so it should sit under the cursor), and commit the new site on a left-click. Right-click cancels.
     private static void HandleRetargetClick(IGameViewport vp, IParentBody parent)
     {
         if (!_retargetArmed)
@@ -73,9 +61,7 @@ public static partial class GuidanceWindow
         if (parent is not Celestial body)
             return false;
 
-        // Cursor pixel -> NDC. Normalize by ImGui's display size (the space the mouse
-        // is in). Vulkan NDC has y pointing DOWN, so screen y maps straight through
-        // (no flip).
+        // Cursor pixel -> NDC. Normalize by ImGui's display size (the space the mouse is in). Vulkan NDC has y pointing DOWN, so screen y maps straight through (no flip).
         float2 mp = ImGui.GetMousePos();
         float2 disp = ImGui.GetIO().DisplaySize;
         if (disp.X < 1f || disp.Y < 1f)
@@ -83,11 +69,7 @@ public static partial class GuidanceWindow
         double nx = 2.0 * mp.X / disp.X - 1.0;
         double ny = 2.0 * mp.Y / disp.Y - 1.0;
 
-        // Ray through the cursor. Vulkan reverse-Z: the near plane is z=1, far is z=0,
-        // so the origin (camera side) is the z=1 unprojection and the ray runs toward
-        // z=0. Getting this backwards makes the near sphere root land on the BACK of
-        // the body (which still projects under the cursor, hence the camera-dependent,
-        // antipodal lat/lon).
+        // Ray through the cursor. Vulkan reverse-Z: the near plane is z=1, far is z=0, so the origin (camera side) is the z=1 unprojection and the ray runs toward z=0. Getting this backwards makes the near sphere root land on the BACK of the body (which still projects under the cursor, hence the camera-dependent, antipodal lat/lon).
         double3 origin = cam.EgoToEcl(cam.NdcToEgo(new double3(nx, ny, 1.0)));
         double3 farPt = cam.EgoToEcl(cam.NdcToEgo(new double3(nx, ny, 0.0)));
         double3 dir = double3.Normalize(farPt - origin);
@@ -102,9 +84,7 @@ public static partial class GuidanceWindow
         // lat = asin(z), lon = atan2(y, x)).
         double3 ccf = double3.Normalize(origin + dir * t - center).Transform(ecl2ccf);
 
-        // Refine once to the terrain height there: the visible surface sits at
-        // MeanRadius + terrain, so the mean sphere reads slightly off (worse at grazing
-        // angles) - this pulls the hit onto the surface actually under the cursor.
+        // Refine once to the terrain height there: the visible surface sits at MeanRadius + terrain, so the mean sphere reads slightly off (worse at grazing angles) - this pulls the hit onto the surface actually under the cursor.
         double terrain = body.GetTerrainHeightFromDirCcf(ccf);
         if (double.IsFinite(terrain) &&
             IntersectSphere(origin, dir, center, parent.MeanRadius + terrain, out double t2))
@@ -119,8 +99,7 @@ public static partial class GuidanceWindow
         return true;
     }
 
-    // Nearest forward intersection of a ray with a sphere; false on a miss or if both
-    // roots are behind the origin.
+    // Nearest forward intersection of a ray with a sphere; false on a miss or if both roots are behind the origin.
     private static bool IntersectSphere(double3 origin, double3 dir, double3 center, double radius, out double t)
     {
         t = 0.0;
@@ -136,8 +115,7 @@ public static partial class GuidanceWindow
         return t >= 0.0;
     }
 
-    // Live preview while armed: a marker at the projected hit (should track the cursor
-    // if the inverse projection is correct) plus the lat/lon it would set.
+    // Live preview while armed: a marker at the projected hit (should track the cursor if the inverse projection is correct) plus the lat/lon it would set.
     private static void DrawRetargetPreview(IGameViewport vp, Camera cam, bool hit,
                                             double3 hitEcl, double latDeg, double lonDeg)
     {
@@ -160,19 +138,11 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// Move the landing site, and make whichever solver is flying notice.
-    ///
-    /// Setting the lat/lon alone is not enough for either of them. Both rebuild the
-    /// pad frame from the site every step, so the frame jumps - but each is running a
-    /// plan that was solved against the OLD pad and will not revisit it until its own
-    /// cadence says so. Until then the vehicle flies the previous target through a
-    /// frame that no longer points at it.
+    ///  Setting the lat/lon alone is not enough for either of them. Both rebuild the pad frame from the site every step, so the frame jumps - but each is running a plan that was solved against the OLD pad and will not revisit it until its own cadence says so. Until then the vehicle flies the previous target through a frame that no longer points at it.
     /// </summary>
     private static void RetargetLandingSite(double latDeg, double lonDeg)
     {
-        // BOUND TO A STAGE, when the click was armed from a stage's own Set button. It
-        // writes that stage's target and nothing else: the vehicle's site is what the
-        // craft being flown aims at, and a booster two separations away has no business
-        // moving it. Everything below is about the live guidance and is skipped.
+        // BOUND TO A STAGE, when the click was armed from a stage's own Set button. It writes that stage's target and nothing else: the vehicle's site is what the craft being flown aims at, and a booster two separations away has no business moving it. Everything below is about the live guidance and is skipped.
         if (_retargetStageId != 0)
         {
             _s.StageTargets[_retargetStageId] = new double2(latDeg, lonDeg);
@@ -194,10 +164,7 @@ public static partial class GuidanceWindow
             _s.GfoldFailStreak = 0;
         }
 
-        // 6-DOF had no path here at all, which is why a retarget never reached it: the
-        // frame moved under a warm-started plan and nothing asked for a new one. Force
-        // the next step to replan; SCvx re-anchors at the measured state every solve,
-        // so the stale warm start is a slower first solve rather than a wrong one.
+        // 6-DOF had no path here at all, which is why a retarget never reached it: the frame moved under a warm-started plan and nothing asked for a new one. Force the next step to replan; SCvx re-anchors at the measured state every solve, so the stale warm start is a slower first solve rather than a wrong one.
         if (_s.Active)
         {
             _s.LastReplan = double.NegativeInfinity;
@@ -216,9 +183,7 @@ public static partial class GuidanceWindow
         if (!SetupProjection(parent))
             return;
 
-        // Rebuild the site frame live (the plan is flown in the body-fixed, rotating
-        // pad frame, not the solve-time one), so the overlay sits on the real ground
-        // instead of drifting off it as the body turns.
+        // Rebuild the site frame live (the plan is flown in the body-fixed, rotating pad frame, not the solve-time one), so the overlay sits on the real ground instead of drifting off it as the body turns.
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaGfold.Frame f = KsaGfold.BuildFrame(siteCci);
         int n = plan.Nodes;
@@ -237,9 +202,7 @@ public static partial class GuidanceWindow
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##gfold_overlay");
 
-        // --- Glideslope cone (drawn first so the path sits on top of it). The
-        // constraint is ||r_horizontal|| <= cot(gs) * height-above-target, i.e. a
-        // cone with apex at the target opening upward; rings + a few ribs show it.
+        // --- Glideslope cone (drawn first so the path sits on top of it). The constraint is ||r_horizontal|| <= cot(gs) * height-above-target, i.e. a cone with apex at the target opening upward; rings + a few ribs show it.
         double tx = plan.Position[n - 1][0];                       // target altitude (local up)
         double topAlt = Math.Max(plan.Position[0][0], _s.GfoldAltM); // draw up to the start/current
         double cot = 1.0 / Math.Tan(Math.Max(_s.GfoldGlideSlopeDeg, 1.0) * Math.PI / 180.0);
@@ -345,8 +308,7 @@ public static partial class GuidanceWindow
         ImGui.End();
     }
 
-    // The landing-site marker, drawn in the world whenever the Landing tab is open
-    // (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
+    // The landing-site marker, drawn in the world whenever the Landing tab is open (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
     private static void DrawLandingSiteMarker(IGameViewport vp, IParentBody parent)
     {
         if (!SetupProjection(parent))

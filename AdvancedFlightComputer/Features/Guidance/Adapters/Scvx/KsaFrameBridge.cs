@@ -7,31 +7,11 @@ using Brutal.Numerics;
 using KSA;
 
 /// <summary>
-/// Converts a live KSA vehicle state into the frame and conventions the 6-DOF SCvx
-/// model works in, and back again.
-///
-/// THREE MISMATCHES, all of which fail silently if got wrong - a sign error here
-/// looks like "the controller is unstable", not like a bug:
-///
-/// 1. INERTIAL FRAME. The model assumes flat ground with gravity along -Z. KSA is
-///    in CCI about a round body. We build a local frame at the landing site with
-///    +Z straight up, which makes the model's assumption locally true. (Note this
-///    is NOT the frame Gfold uses - KsaGfold.BuildFrame is X-up. Two solvers, two
-///    conventions; do not cross them.)
-///
-/// 2. BODY AXES. The model puts thrust along body +Z with the engine at -Z, and
-///    its inertia (Ixx=Iyy=1e8, Izz=2.5e6) says Z is the long/roll axis. KSA's long
-///    axis is body X. Rather than hard-code that swap we DERIVE it from the actual
-///    measured thrust direction of the engines, so a vehicle built differently
-///    still converts correctly.
-///
-/// 3. QUATERNION CONVENTION. KSA's doubleQuat is scalar-LAST (Identity = 0,0,0,1);
-///    the model is scalar-FIRST Hamilton, [w,x,y,z]. Rather than reason about
-///    whether KSA is Hamilton or JPL - easy to get wrong, and wrong quietly - every
-///    conversion here goes THROUGH A ROTATION MATRIX built by transforming basis
-///    vectors with KSA's own Transform. That inherits KSA's convention whatever it
-///    is, and the matrix is then converted to a quaternion using the algorithm that
-///    matches 6dof.py's quat_to_R exactly. No convention is assumed on either side.
+/// Converts a live KSA vehicle state into the frame and conventions the 6-DOF SCvx model works in, and back again.
+///  THREE MISMATCHES, all of which fail silently if got wrong - a sign error here looks like "the controller is unstable", not like a bug:
+///  1. INERTIAL FRAME. The model assumes flat ground with gravity along -Z. KSA is in CCI about a round body. We build a local frame at the landing site with +Z straight up, which makes the model's assumption locally true. (Note this is NOT the frame Gfold uses - KsaGfold.BuildFrame is X-up. Two solvers, two conventions; do not cross them.) 2. BODY AXES. The model puts thrust along body +Z with the engine at -Z, and its inertia (Ixx=Iyy=1e8, Izz=2.5e6) says Z is the long/roll axis. KSA's long axis is body X. Rather than hard-code that swap we DERIVE it from the actual measured thrust direction of the engines, so a vehicle built differently still converts correctly.
+///  3. QUATERNION CONVENTION. KSA's doubleQuat is scalar-LAST (Identity = 0,0,0,1);
+///    the model is scalar-FIRST Hamilton, [w,x,y,z]. Rather than reason about whether KSA is Hamilton or JPL - easy to get wrong, and wrong quietly - every conversion here goes THROUGH A ROTATION MATRIX built by transforming basis vectors with KSA's own Transform. That inherits KSA's convention whatever it is, and the matrix is then converted to a quaternion using the algorithm that matches 6dof.py's quat_to_R exactly. No convention is assumed on either side.
 /// </summary>
 public static class KsaFrameBridge
 {
@@ -69,19 +49,12 @@ public static class KsaFrameBridge
     }
 
     /// <summary>
-    /// Rotation taking MODEL body coordinates to KSA body coordinates, as three
-    /// columns. Derived from the vehicle's own thrust direction rather than assumed,
-    /// so it is correct for any layout.
-    ///
-    /// The roll reference (which way model +X points) is arbitrary but must be
-    /// STABLE - it is chosen from a fixed KSA axis, so it does not wander frame to
-    /// frame as the vehicle rotates.
+    /// Rotation taking MODEL body coordinates to KSA body coordinates, as three columns. Derived from the vehicle's own thrust direction rather than assumed, so it is correct for any layout.
+    ///  The roll reference (which way model +X points) is arbitrary but must be STABLE - it is chosen from a fixed KSA axis, so it does not wander frame to frame as the vehicle rotates.
     /// </summary>
     public static void BodyAxes(Vehicle vehicle, out double3 mx, out double3 my, out double3 mz)
     {
-        // Model +Z is the thrust axis. Take it from the highest-thrust gimbal, which
-        // is the main engine on any sane layout; fall back to KSA's long axis (+X)
-        // if the vehicle has no gimballed engine to measure.
+        // Model +Z is the thrust axis. Take it from the highest-thrust gimbal, which is the main engine on any sane layout; fall back to KSA's long axis (+X) if the vehicle has no gimballed engine to measure.
         double3 thrust = new(1, 0, 0);
         double best = 0;
         foreach (GimbalController gc in vehicle.Parts.Modules.Get<GimbalController>())
@@ -100,10 +73,7 @@ public static class KsaFrameBridge
     }
 
     /// <summary>
-    /// Body -> CCI rotation as three column vectors, read out of KSA's quaternion by
-    /// transforming the basis vectors. This is the step that makes the whole bridge
-    /// convention-agnostic: whatever handedness or scalar position KSA uses, its own
-    /// Transform is the definition, and we only ever consume the resulting matrix.
+    /// Body -> CCI rotation as three column vectors, read out of KSA's quaternion by transforming the basis vectors. This is the step that makes the whole bridge convention-agnostic: whatever handedness or scalar position KSA uses, its own Transform is the definition, and we only ever consume the resulting matrix.
     /// </summary>
     public static void BodyToCciColumns(Vehicle vehicle, out double3 c0, out double3 c1, out double3 c2)
     {
@@ -118,9 +88,7 @@ public static class KsaFrameBridge
         doubleQuat.Concatenate(vehicle.Body2Cce, vehicle.Orbit.Parent.GetCce2Cci());
 
     /// <summary>
-    /// Full model state: [r(3) v(3) q(4) w(3) m(1)] = 14, matching Dynamics6Dof's
-    /// layout. Velocity is SURFACE-relative (the body's rotation removed), because
-    /// the model's flat-ground frame is not inertial in KSA's sense.
+    /// Full model state: [r(3) v(3) q(4) w(3) m(1)] = 14, matching Dynamics6Dof's layout. Velocity is SURFACE-relative (the body's rotation removed), because the model's flat-ground frame is not inertial in KSA's sense.
     /// </summary>
     public static double[] ToModelState(Vehicle vehicle, in SiteFrame frame)
     {
@@ -140,9 +108,7 @@ public static class KsaFrameBridge
         ModelAttitude(vehicle, frame, out double qw, out double qx, out double qy, out double qz);
         x[6] = qw; x[7] = qx; x[8] = qy; x[9] = qz;
 
-        // Body rates into MODEL body axes. KSA reports them in its own body frame, so
-        // they need the same axis swap as the attitude - a rate about KSA's long axis
-        // is a roll rate about model Z.
+        // Body rates into MODEL body axes. KSA reports them in its own body frame, so they need the same axis swap as the attitude - a rate about KSA's long axis is a roll rate about model Z.
         BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
         double3 w = vehicle.BodyRates;
         x[10] = double3.Dot(w, mx);
@@ -163,8 +129,7 @@ public static class KsaFrameBridge
         BodyToCciColumns(vehicle, out double3 b0, out double3 b1, out double3 b2);
         BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
 
-        // Each model body axis, expressed in CCI, then in the site frame. These are
-        // the columns of the model's body->inertial rotation.
+        // Each model body axis, expressed in CCI, then in the site frame. These are the columns of the model's body->inertial rotation.
         double3 c0 = frame.VecToLocal(mx.X * b0 + mx.Y * b1 + mx.Z * b2);
         double3 c1 = frame.VecToLocal(my.X * b0 + my.Y * b1 + my.Z * b2);
         double3 c2 = frame.VecToLocal(mz.X * b0 + mz.Y * b1 + mz.Z * b2);
@@ -174,12 +139,7 @@ public static class KsaFrameBridge
 
     /// <summary>
     /// Rotation matrix (given as columns) to a scalar-first Hamilton quaternion.
-    ///
-    /// Verified against 6dof.py's quat_to_R rather than taken from a reference: for
-    /// the trace branch, R21-R12 = 4*qw*qx under that formula, and s = 4*qw, so
-    /// x = qx exactly - and likewise for y and z. Branching on the largest diagonal
-    /// keeps it conditioned when qw is near zero (vehicle inverted relative to the
-    /// site frame), which a naive trace-only formula would divide through.
+    ///  Verified against 6dof.py's quat_to_R rather than taken from a reference: for the trace branch, R21-R12 = 4*qw*qx under that formula, and s = 4*qw, so x = qx exactly - and likewise for y and z. Branching on the largest diagonal keeps it conditioned when qw is near zero (vehicle inverted relative to the site frame), which a naive trace-only formula would divide through.
     /// </summary>
     public static void MatrixToQuat(double3 c0, double3 c1, double3 c2,
                                     out double qw, out double qx, out double qy, out double qz)
@@ -223,8 +183,7 @@ public static class KsaFrameBridge
             qz = 0.25 * s;
         }
 
-        // Sign is arbitrary (q and -q are the same rotation); pin it so successive
-        // conversions don't flip and look like a discontinuity to the solver.
+        // Sign is arbitrary (q and -q are the same rotation); pin it so successive conversions don't flip and look like a discontinuity to the solver.
         if (qw < 0.0)
         {
             qw = -qw; qx = -qx; qy = -qy; qz = -qz;
@@ -241,9 +200,7 @@ public static class KsaFrameBridge
     }
 
     /// <summary>
-    /// Where the model says the vehicle's thrust axis points, in CCI. This is the
-    /// output a guidance mode would steer on, and the cheapest end-to-end check that
-    /// the bridge is right: it must agree with the vehicle's ACTUAL thrust axis.
+    /// Where the model says the vehicle's thrust axis points, in CCI. This is the output a guidance mode would steer on, and the cheapest end-to-end check that the bridge is right: it must agree with the vehicle's ACTUAL thrust axis.
     /// </summary>
     public static double3 ModelThrustAxisToCci(double qw, double qx, double qy, double qz,
                                                in SiteFrame frame)
@@ -253,13 +210,9 @@ public static class KsaFrameBridge
     }
 
     /// <summary>
-    /// Round-trip check: convert the live attitude into the model and back out, and
-    /// report how far the recovered thrust axis is from the real one, in degrees.
-    ///
-    /// This is the test that justifies trusting everything above. It catches an axis
-    /// swap, a quaternion handedness error, a transposed site frame, and a sign flip
-    /// - all at once, all of which are otherwise invisible until the vehicle is
-    /// tumbling. Expect ~1e-13 deg; anything above ~1e-6 deg means a real bug.
+    /// Round-trip check: convert the live attitude into the model and back out, and report how far the recovered thrust axis is from the real one, in degrees.
+    ///  This is the test that justifies trusting everything above. It catches an axis swap, a quaternion handedness error, a transposed site frame, and a sign flip
+    /// - all at once, all of which are otherwise invisible until the vehicle is tumbling. Expect ~1e-13 deg; anything above ~1e-6 deg means a real bug.
     /// </summary>
     public static double RoundTripErrorDeg(Vehicle vehicle, in SiteFrame frame)
     {

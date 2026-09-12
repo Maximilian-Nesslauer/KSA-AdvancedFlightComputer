@@ -51,8 +51,7 @@ internal static class KsaEnginePerf
                 .TryGetFrom(vehicle.Parts.States, out var coreStates))
             return (0.0, 0.0);
 
-        // Vehicle.PrepareWorker applies the vehicle floor. ComputeActivePerformance
-        // then applies each core's floor through RocketControllerData.ComputeFromCores.
+        // Vehicle.PrepareWorker applies the vehicle floor. ComputeActivePerformance then applies each core's floor through RocketControllerData.ComputeFromCores.
         float command = (float)Math.Clamp(throttle, vehicle.GetMinThrottle(), 1.0);
         float pressure = (float)Math.Clamp(ambientPressure, 0.0, float.MaxValue);
         double thrust = 0.0, massFlow = 0.0;

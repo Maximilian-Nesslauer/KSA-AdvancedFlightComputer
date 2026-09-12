@@ -8,11 +8,8 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
-// The Powered landing tab's G-FOLD content: a side view of the descent, the two
-// debug toggles, and every solver parameter folded away behind them.
-//
-// The plot is in the PAD FRAME, which is the frame G-FOLD itself plans in: horizontal
-// axis is range to the pad, vertical is height above touchdown, pad at bottom right.
+// The Powered landing tab's G-FOLD content: a side view of the descent, the two debug toggles, and every solver parameter folded away behind them.
+//  The plot is in the PAD FRAME, which is the frame G-FOLD itself plans in: horizontal axis is range to the pad, vertical is height above touchdown, pad at bottom right.
 // That makes it a true side elevation of the descent rather than a projection of one.
 public static partial class GuidanceWindow
 {
@@ -29,15 +26,8 @@ public static partial class GuidanceWindow
     private static readonly ImColor8 GfoldThrustCol = new ImColor8(255, 176, 64);
 
     /// <summary>
-    /// Samples the flown path. Takes the two plotted quantities OUTRIGHT - horizontal
-    /// range to the pad and height above the site terrain, both in metres - rather
-    /// than a local position, because the two site frames in this mod do not agree on
-    /// which axis is up: KsaGfold.BuildFrame is X-up, KsaFrameBridge.BuildSiteFrame is
-    /// Z-up. Passing a double3 and picking an axis in here silently read the 6-DOF
-    /// plan's altitude off a horizontal component.
-    ///
-    /// Called from the guidance step, so the trace is even under time warp and exists
-    /// for craft that are not on screen.
+    /// Samples the flown path. Takes the two plotted quantities OUTRIGHT - horizontal range to the pad and height above the site terrain, both in metres - rather than a local position, because the two site frames in this mod do not agree on which axis is up: KsaGfold.BuildFrame is X-up, KsaFrameBridge.BuildSiteFrame is Z-up. Passing a double3 and picking an axis in here silently read the 6-DOF plan's altitude off a horizontal component.
+    ///  Called from the guidance step, so the trace is even under time warp and exists for craft that are not on screen.
     /// </summary>
     private static void RecordGfoldTrace(double rangeM, double altM)
     {
@@ -49,27 +39,18 @@ public static partial class GuidanceWindow
         _s.GfoldTrace ??= new float2[GfoldTraceCapacity];
         if (_s.GfoldTraceCount >= GfoldTraceCapacity)
         {
-            // Full: drop every other sample and carry on at half the rate. The shape
-            // of the descent is what matters, and halving keeps the WHOLE descent
-            // rather than a ring buffer's most recent window of it.
+            // Full: drop every other sample and carry on at half the rate. The shape of the descent is what matters, and halving keeps the WHOLE descent rather than a ring buffer's most recent window of it.
             for (int i = 0; i < GfoldTraceCapacity / 2; i++)
                 _s.GfoldTrace[i] = _s.GfoldTrace[i * 2];
             _s.GfoldTraceCount = GfoldTraceCapacity / 2;
         }
 
-        // Altitude is stored RAW - centre of mass above the site terrain - because
-        // that is the convention the plans use: G-FOLD targets [VehicleHeightM, 0, 0],
-        // legs down rather than CoM down. Subtracting the vehicle height here offset
-        // the flown path from the plan by exactly that, so the two curves failed to
-        // meet at the vehicle.
+        // Altitude is stored RAW - centre of mass above the site terrain - because that is the convention the plans use: G-FOLD targets [VehicleHeightM, 0, 0], legs down rather than CoM down. Subtracting the vehicle height here offset the flown path from the plan by exactly that, so the two curves failed to meet at the vehicle.
         _s.GfoldTrace[_s.GfoldTraceCount++] = new float2((float)rangeM, (float)altM);
     }
 
     /// <summary>
-    /// The trace's last sample, read SAFELY. The buffer and the count are written by
-    /// the guidance step and read by the draw, so a reset landing between a
-    /// "count > 0" test and the indexing that followed it would index [-1]. Both are
-    /// snapshotted once here and validated against each other.
+    /// The trace's last sample, read SAFELY. The buffer and the count are written by the guidance step and read by the draw, so a reset landing between a "count > 0" test and the indexing that followed it would index [-1]. Both are snapshotted once here and validated against each other.
     /// </summary>
     private static bool TryLastTraceSample(out float2 at)
     {
@@ -100,8 +81,7 @@ public static partial class GuidanceWindow
         dl.AddRect(min, min + size, SchemSpent, 3f);
 
         // Every powered phase feeds the same trace, so one plot spans all of them.
-        // What differs is the PLAN drawn behind it: G-FOLD has a trajectory, 6-DOF has
-        // its own, and the hover has none at all because it flies a rate profile.
+        // What differs is the PLAN drawn behind it: G-FOLD has a trajectory, 6-DOF has its own, and the hover has none at all because it flies a rate profile.
         bool live = _s.LandingPhase == LandingPhase.GfoldDescent
                  || _s.LandingPhase == LandingPhase.TerminalHover
                  || _s.Active;
@@ -124,18 +104,8 @@ public static partial class GuidanceWindow
             return;
 
         // The two axes scale INDEPENDENTLY, each filling the box.
-        //
-        // A shared metres-per-pixel is the honest way to draw an elevation, and I tried
-        // it - but the box is about five times wider than tall, and a descent is far
-        // taller than it is wide by the end, so the isotropic fit left the trajectory
-        // as a sliver against the right edge with 90% of the plot empty. A distorted
-        // picture that fills the frame beats a true one too small to read; the corner
-        // label states both spans so the scales are never implied to match.
-        //
-        // Pad at the BOTTOM RIGHT: range runs down to zero as the vehicle arrives, so
-        // the descent reads left-to-right the way it is flown. NOT clamped - points
-        // outside the frame keep their true coordinates so they can be clipped away
-        // rather than smeared along the edge.
+        //  A shared metres-per-pixel is the honest way to draw an elevation, and I tried it - but the box is about five times wider than tall, and a descent is far taller than it is wide by the end, so the isotropic fit left the trajectory as a sliver against the right edge with 90% of the plot empty. A distorted picture that fills the frame beats a true one too small to read; the corner label states both spans so the scales are never implied to match.
+        //  Pad at the BOTTOM RIGHT: range runs down to zero as the vehicle arrives, so the descent reads left-to-right the way it is flown. NOT clamped - points outside the frame keep their true coordinates so they can be clipped away rather than smeared along the edge.
         float2 plotMax = plotMin + plotSize;
         float2 ToPlot(double rangeM, double altM) => new float2(
             plotMax.X - plotSize.X * (float)(rangeM / axRange),
@@ -153,9 +123,7 @@ public static partial class GuidanceWindow
             Draw6DofPlannedPath(dl, ToPlot, plotMin, plotMax);
         DrawGfoldFlownPath(dl, ToPlot, plotMin, plotMax);
 
-        // _s.GfoldAltM / GfoldSpeedMs / GfoldThrottle are written by the G-FOLD and
-        // hover steps only, so under 6-DOF they hold whatever the last descent left
-        // behind - which is why this line read "alt 0 m 0 m/s thr 0" throughout.
+        // _s.GfoldAltM / GfoldSpeedMs / GfoldThrottle are written by the G-FOLD and hover steps only, so under 6-DOF they hold whatever the last descent left behind - which is why this line read "alt 0 m 0 m/s thr 0" throughout.
         // 6-DOF reports from its own plan and command instead.
         double altNow = TryLastTraceSample(out float2 lastSample) ? lastSample.Y : _s.GfoldAltM;
         double speedNow = _s.GfoldSpeedMs;
@@ -175,31 +143,21 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// Latches the axis extents, in FOUR steps: when the descent begins, at half the
-    /// flight remaining, at a quarter remaining, and at five seconds to touchdown.
-    /// Each fires once, in order, so the picture holds still between them - refitting
-    /// every frame zooms it continuously and nothing stays put long enough to read.
+    /// Latches the axis extents, in FOUR steps: when the descent begins, at half the flight remaining, at a quarter remaining, and at five seconds to touchdown.
+    /// Each fires once, in order, so the picture holds still between them - refitting every frame zooms it continuously and nothing stays put long enough to read.
     /// </summary>
     private static void LockGfoldAxes(GfoldTrajectory plan)
     {
         double now = SimNow();
 
-        // Without an arrival time to stage against - 6-DOF and the hover - the frame
-        // is refitted whenever the picture no longer suits it, in EITHER direction.
-        //
-        // The previous rule only ever shrank: it refitted when the vehicle dropped
-        // below a fraction of the frame, and never when the content outgrew it. With
-        // the 6-DOF plan not counted at all, the first latch floored at the minimum
-        // and the plan was then clamped to the edges for the rest of the descent.
+        // Without an arrival time to stage against - 6-DOF and the hover - the frame is refitted whenever the picture no longer suits it, in EITHER direction.
+        //  The previous rule only ever shrank: it refitted when the vehicle dropped below a fraction of the frame, and never when the content outgrew it. With the 6-DOF plan not counted at all, the first latch floored at the minimum and the plan was then clamped to the edges for the rest of the descent.
         if (plan == null)
         {
             DescentExtent(null, out double r, out double a);
             bool first = _s.GfoldAxisStage == 0;
             bool doesNotFit = r > _s.GfoldAxisRangeM || a > _s.GfoldAxisAltM;
-            // EITHER axis, not both. Requiring both is why the horizontal never
-            // tightened in the final phase: range collapses to nearly nothing while
-            // altitude is still coming down slowly, so the range axis stayed at
-            // whatever it was latched at kilometres earlier.
+            // EITHER axis, not both. Requiring both is why the horizontal never tightened in the final phase: range collapses to nearly nothing while altitude is still coming down slowly, so the range axis stayed at whatever it was latched at kilometres earlier.
             bool farTooWide = r < _s.GfoldAxisRangeM * GfoldRefitFraction
                            || a < _s.GfoldAxisAltM * GfoldRefitFraction;
             if (!first && !doesNotFit && !farTooWide)
@@ -212,15 +170,13 @@ public static partial class GuidanceWindow
         }
 
         double remaining = _s.GfoldArrivalTime - now;
-        // A NaN here would make every threshold comparison false and re-latch on every
-        // frame - the exact behaviour the staging exists to prevent.
+        // A NaN here would make every threshold comparison false and re-latch on every frame - the exact behaviour the staging exists to prevent.
         if (!double.IsFinite(remaining))
             remaining = plan.TimeOfFlight;
 
         if (_s.GfoldAxisStage == 0)
         {
-            // Total flight, measured once, so the later fractions are of the WHOLE
-            // descent rather than of a remainder that shrinks as it is measured.
+            // Total flight, measured once, so the later fractions are of the WHOLE descent rather than of a remainder that shrinks as it is measured.
             _s.GfoldFlightTime0 = Math.Max(remaining, 1.0);
         }
         else
@@ -249,14 +205,9 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// How much of the plot the descent needs: whatever is still to be flown, plus the
-    /// vehicle itself. Covers all three sources - a G-FOLD trajectory, the 6-DOF plan,
-    /// or neither during the hover - so the frame is never sized off one of them while
-    /// another is what is actually drawn.
-    ///
-    /// The vehicle contributes its CURRENT position only, not the whole flown path:
-    /// including where it started would keep the view pinned to the top of the descent
-    /// all the way down.
+    /// How much of the plot the descent needs: whatever is still to be flown, plus the vehicle itself. Covers all three sources - a G-FOLD trajectory, the 6-DOF plan, or neither during the hover - so the frame is never sized off one of them while another is what is actually drawn.
+    ///  The vehicle contributes its CURRENT position only, not the whole flown path:
+    /// including where it started would keep the view pinned to the top of the descent all the way down.
     /// </summary>
     private static void DescentExtent(GfoldTrajectory gfold, out double rangeM, out double altM)
     {
@@ -295,11 +246,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// Liang-Barsky: trims a segment to the plot rectangle, or reports it entirely
-    /// outside. Clipping rather than clamping matters here - a clamped point sits on
-    /// the boundary and joins up with its neighbours, so a descent beginning off the
-    /// top of the frame was drawn as a flat line along it, which looks exactly like a
-    /// long level cruise the vehicle never flew.
+    /// Liang-Barsky: trims a segment to the plot rectangle, or reports it entirely outside. Clipping rather than clamping matters here - a clamped point sits on the boundary and joins up with its neighbours, so a descent beginning off the top of the frame was drawn as a flat line along it, which looks exactly like a long level cruise the vehicle never flew.
     /// </summary>
     private static bool ClipToBox(ref float2 a, ref float2 b, float2 lo, float2 hi)
     {
@@ -366,9 +313,7 @@ public static partial class GuidanceWindow
         for (int i = 0; i < plan.Nodes - 1; i++)
             ClipLine(dl, PlanPoint(i), PlanPoint(i + 1), lo, hi, GfoldPlanCol, 2f);
 
-        // Thrust direction at a handful of nodes. AccelCmd is in the same pad frame,
-        // so its up component is x and its horizontal component projects onto the
-        // range direction - which points AWAY from the pad, i.e. leftward on the plot.
+        // Thrust direction at a handful of nodes. AccelCmd is in the same pad frame, so its up component is x and its horizontal component projects onto the range direction - which points AWAY from the pad, i.e. leftward on the plot.
         int stride = Math.Max(1, plan.Nodes / 8);
         for (int i = 0; i < plan.Nodes; i += stride)
         {
@@ -396,8 +341,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The 6-DOF plan, in the same side view. Node states are laid out flat, fourteen
-    /// doubles each with position first - the same buffer the world overlay reads.
+    /// The 6-DOF plan, in the same side view. Node states are laid out flat, fourteen doubles each with position first - the same buffer the world overlay reads.
     /// </summary>
     private static void Draw6DofPlannedPath(ImDrawListPtr dl, Func<double, double, float2> toPlot,
                                             float2 lo, float2 hi)
@@ -410,8 +354,7 @@ public static partial class GuidanceWindow
         if (n < 2)
             return;
 
-        // Materialised up front: a Span cannot be captured by a local function, and
-        // projecting each node once is cheaper than doing it per use anyway.
+        // Materialised up front: a Span cannot be captured by a local function, and projecting each node once is cheaper than doing it per use anyway.
         var pt = new float2[n];
         var thrust = new float2[n];
         bool haveThrust;
@@ -422,9 +365,7 @@ public static partial class GuidanceWindow
                 return;
             haveThrust = pu.Length >= n * 4;
 
-            // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD
-            // frame above it, which is X-up. So height is index 2 and the horizon is
-            // 0 and 1, the other way round from DrawGfoldPlannedPath.
+            // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD frame above it, which is X-up. So height is index 2 and the horizon is 0 and 1, the other way round from DrawGfoldPlannedPath.
             for (int k = 0; k < n; k++)
             {
                 int b = k * 14;
@@ -434,18 +375,13 @@ public static partial class GuidanceWindow
                 if (!haveThrust)
                     continue;
 
-                // The control is thrust in BODY coordinates, four doubles per node -
-                // NOT three, and not in the site frame. It has to be rotated by the
-                // node's attitude quaternion before it means anything spatially, which
-                // is exactly what the world overlay does.
+                // The control is thrust in BODY coordinates, four doubles per node - NOT three, and not in the site frame. It has to be rotated by the node's attitude quaternion before it means anything spatially, which is exactly what the world overlay does.
                 int c = k * 4;
                 KsaFrameBridge.QuatToMatrix(px[b + 6], px[b + 7], px[b + 8], px[b + 9],
                     out double3 b0, out double3 b1, out double3 b2);
                 double3 tSite = b0 * pu[c + 0] + b1 * pu[c + 1] + b2 * pu[c + 2];
 
-                // Up component, and the component along "away from the pad". Directly
-                // over the pad there is no meaningful range direction, so only the
-                // vertical part survives.
+                // Up component, and the component along "away from the pad". Directly over the pad there is no meaningful range direction, so only the vertical part survives.
                 double alongRange = horiz > 1e-6
                     ? (tSite.X * px[b + 0] + tSite.Y * px[b + 1]) / horiz
                     : 0.0;
@@ -504,18 +440,12 @@ public static partial class GuidanceWindow
         dl.AddText(legend + new float2(90f, 0f), GfoldThrustCol, "thrust");
         ImGui.Dummy(new float2(innerW, ImGui.GetTextLineHeight()));
 
-        // Debug toggles stay OUT of the fold: they are things you reach for while
-        // something is going wrong, which is exactly when you do not want to go
-        // hunting through a collapsed section for them.
+        // Debug toggles stay OUT of the fold: they are things you reach for while something is going wrong, which is exactly when you do not want to go hunting through a collapsed section for them.
         ImGui.Checkbox("Show G-FOLD overlay (world)", ref _showGfoldOverlay);
         ImGui.SameLine();
         ImGui.Checkbox("G-FOLD debug", ref _showGfoldDebug);
 
-        // These two are up here rather than with the solver tuning because they are
-        // properties of the AIRFRAME and the flight plan, not of the optimiser: the
-        // hover handoff decides where G-FOLD stops flying, and the vehicle height is
-        // what "on the ground" means. Both get changed per vehicle; the rest rarely
-        // get touched at all.
+        // These two are up here rather than with the solver tuning because they are properties of the AIRFRAME and the flight plan, not of the optimiser: the hover handoff decides where G-FOLD stops flying, and the vehicle height is what "on the ground" means. Both get changed per vehicle; the rest rarely get touched at all.
         if (ImGuiHelper.BeginRegion("Descent", ImGuiTreeNodeFlags.DefaultOpen
                 | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
         {
@@ -526,9 +456,7 @@ public static partial class GuidanceWindow
 
         if (ImGuiHelper.BeginRegion("G-FOLD parameters", ImGuiTreeNodeFlags.SpanAllColumns, innerW))
         {
-            // The UPFG-to-G-FOLD handoff gate is deliberately NOT here: it governs
-            // when the braking burn ends, which is a descent decision. It lives with
-            // the approach parameters on the Descent tab.
+            // The UPFG-to-G-FOLD handoff gate is deliberately NOT here: it governs when the braking burn ends, which is a descent decision. It lives with the approach parameters on the Descent tab.
             GaugeRow("Glide slope (deg)", "##gfglide", ref _s.GfoldGlideSlopeDeg);
             GaugeRow("Thrust pointing (deg)", "##gfpoint", ref _s.GfoldPointingDeg);
             GaugeRow("Max speed (m/s)", "##gfvmax", ref _s.GfoldVMaxMs);

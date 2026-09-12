@@ -7,29 +7,16 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
-// Bridges KSA's live vehicle/world state to the standalone G-FOLD convex
-// powered-descent solver (Gfold.Core) and back. G-FOLD works in a local
-// "x is up" frame at the landing site, with uniform gravity and a frame it
-// treats as inertial. We build that frame, express the vehicle state in it
-// (surface-relative, so vf = 0 means at rest on the ground), and after a solve
-// map the first commanded acceleration back to a CCI thrust direction +
-// throttle.
-//
-// Approximations (all good for a short lunar terminal descent, flagged because
-// they matter for fast-rotating or atmospheric bodies):
+// Bridges KSA's live vehicle/world state to the standalone G-FOLD convex powered-descent solver (Gfold.Core) and back. G-FOLD works in a local "x is up" frame at the landing site, with uniform gravity and a frame it treats as inertial. We build that frame, express the vehicle state in it (surface-relative, so vf = 0 means at rest on the ground), and after a solve map the first commanded acceleration back to a CCI thrust direction + throttle.
+//  Approximations (all good for a short lunar terminal descent, flagged because they matter for fast-rotating or atmospheric bodies):
 //  - constant gravity, evaluated at the site;
-//  - the site frame rotates with the body but is treated as inertial - the
-//    Coriolis/centrifugal terms the original paper carries are dropped, the
-//    same simplification as Gfold.Core's v_dot = g + u dynamics;
-//  - no aerodynamics (correct for vacuum worlds; would need a separate entry
-//    phase in atmosphere).
+//  - the site frame rotates with the body but is treated as inertial - the Coriolis/centrifugal terms the original paper carries are dropped, the same simplification as Gfold.Core's v_dot = g + u dynamics;
+//  - no aerodynamics (correct for vacuum worlds; would need a separate entry phase in atmosphere).
 internal static class KsaGfold
 {
     private const double G0 = 9.80665;
 
-    // Orthonormal site frame: X = local up (radial), Y/Z span the horizon. The
-    // horizontal axes are arbitrary - G-FOLD's dynamics and glideslope cone are
-    // symmetric in the horizontal plane - so any stable pair will do.
+    // Orthonormal site frame: X = local up (radial), Y/Z span the horizon. The horizontal axes are arbitrary - G-FOLD's dynamics and glideslope cone are symmetric in the horizontal plane - so any stable pair will do.
     internal readonly struct Frame
     {
         public readonly double3 Origin;          // site at terrain height, CCI
@@ -62,16 +49,9 @@ internal static class KsaGfold
         return new Frame(siteCci, up, ey, ez);
     }
 
-    // Builds the G-FOLD parameter set from the live vehicle and site. Returns
-    // null if the vehicle has no usable engine (no thrust to plan with).
+    // Builds the G-FOLD parameter set from the live vehicle and site. Returns null if the vehicle has no usable engine (no thrust to plan with).
     // refPosCci is the reference point the solve plans for - the vehicle CoM.
-    // (The vehicle-height allowance is applied by the caller as an offset on the
-    // TARGET altitude, never by shifting this reference: an attitude-dependent
-    // reference point injects modelling error as the vehicle rotates.)
-    // arrivalAltM / arrivalRateMs implement "Option B": the target is a point
-    // arrivalAltM directly above the pad, reached descending vertically at
-    // arrivalRateMs with zero horizontal velocity - so G-FOLD nulls cross-range up
-    // high and the terminal vertical phase only has to kill the remaining sink.
+    // (The vehicle-height allowance is applied by the caller as an offset on the TARGET altitude, never by shifting this reference: an attitude-dependent reference point injects modelling error as the vehicle rotates.) arrivalAltM / arrivalRateMs implement "Option B": the target is a point arrivalAltM directly above the pad, reached descending vertically at arrivalRateMs with zero horizontal velocity - so G-FOLD nulls cross-range up high and the terminal vertical phase only has to kill the remaining sink.
     internal static GfoldParams BuildParams(
         Vehicle vehicle, IParentBody parent, Frame frame, double3 siteCci, double3 refPosCci,
         double glideSlopeDeg, double pointingDeg, double vMax,
@@ -97,18 +77,13 @@ internal static class KsaGfold
 
         double3 r = refPosCci;   // vehicle CoM
         double3 v = vehicle.Orbit.StateVectors.VelocityCci;
-        // Surface-relative velocity: the site frame co-rotates with the body, so
-        // remove the rotation to make "land at rest on the ground" = vf 0.
+        // Surface-relative velocity: the site frame co-rotates with the body, so remove the rotation to make "land at rest on the ground" = vf 0.
         double3 vSrf = v - double3.Cross(parent.GetAngularVelocityCci(), r);
 
         double3 rLocal = frame.PointToLocal(r);
         double3 vLocal = frame.VecToLocal(vSrf);
 
-        // Only the speed cap is loosened to admit a fast handoff state - it relaxes
-        // back toward the set value as the vehicle slows, so it never ratchets. The
-        // glideslope and pointing angles are passed through exactly as set, so the
-        // user's numbers are what's actually enforced; the fixed initial state is
-        // handled by skipping node 0 (RelaxInitialPath), not by overriding them.
+        // Only the speed cap is loosened to admit a fast handoff state - it relaxes back toward the set value as the vehicle slows, so it never ratchets. The glideslope and pointing angles are passed through exactly as set, so the user's numbers are what's actually enforced; the fixed initial state is handled by skipping node 0 (RelaxInitialPath), not by overriding them.
         double speed = vLocal.Length();
         double vMaxEff = Math.Max(vMax, 1.3 * speed);
 
@@ -153,8 +128,7 @@ internal static class KsaGfold
     }
 
     // The first-node control of a solved trajectory, mapped back to the world:
-    // a unit CCI thrust direction and a throttle fraction (commanded thrust over
-    // max). G-FOLD's u already excludes gravity, so thrust = mass * |u|.
+    // a unit CCI thrust direction and a throttle fraction (commanded thrust over max). G-FOLD's u already excludes gravity, so thrust = mass * |u|.
     internal static (double3 dirCci, double throttle) FirstControl(
         GfoldTrajectory traj, Frame frame, double mass, double thrustMax)
     {
@@ -167,9 +141,7 @@ internal static class KsaGfold
         if (!IsFinite(uLocal) || accel < 1e-9)
             return (frame.Ex, Throttle(accel, mass, thrustMax));
 
-        // Node 0's pointing is unconstrained (RelaxInitialPath), so clamp the
-        // command to the upper hemisphere - never thrust below the local horizon
-        // (into the ground), which would only ever be a solver artefact.
+        // Node 0's pointing is unconstrained (RelaxInitialPath), so clamp the command to the upper hemisphere - never thrust below the local horizon (into the ground), which would only ever be a solver artefact.
         var dirLocal = new double3(Math.Max(uLocal.X, 0.0), uLocal.Y, uLocal.Z);
         if (dirLocal.Length() < 1e-9)
             dirLocal = new double3(1, 0, 0);

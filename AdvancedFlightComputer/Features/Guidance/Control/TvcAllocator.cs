@@ -7,33 +7,13 @@ using Brutal.Numerics;
 using KSA;
 
 /// <summary>
-/// Physical thrust-vector control allocation: given a desired body torque in N*m,
-/// solve for the per-gimbal deflections that produce it.
-///
-/// WHY NOT USE KSA'S OWN ALLOCATION. The game's ComputeTvcControl offers the SAME
-/// normalized demand vector to every gimbal and lets each independently pick a
-/// direction from its own moment arm. That is a heuristic, not an inverse:
-///   - the demand is DIMENSIONLESS. Its magnitude scales deflection directly and
-///     is then clamped to [-1,1], so there is nowhere to put a torque in N*m.
-///   - nothing solves "produce exactly tau". The realized torque is the sum over
-///     gimbals and is generally NOT parallel to the demand, so commanding pure
-///     roll leaks pitch and yaw.
-///   - every gimbal gets the same deflection magnitude regardless of its thrust,
-///     so a 6 MN main and a small vernier contribute wildly unequally.
-/// For SCvx that matters: the model's dynamics are J*wdot = tau with tau a control
-/// we choose and trust. Commanding through a heuristic makes the realized torque a
-/// nonlinear function of the demand, and the planned attitude stops matching the
-/// flown one - which is the main thing 6-DOF buys over the 3-DOF plan.
-///
-/// WHAT THIS DOES INSTEAD. Build the true allocation matrix B (3 x 2N) mapping
-/// per-gimbal commands to body torque, then solve the regularized minimum-norm
-/// problem
-///     u = B^T (B B^T + lambda I)^-1 tau
-/// B B^T is only 3x3, so this is a closed-form inverse, not an iterative solve -
-/// cheap enough to run every flight-computer step. Minimum-norm is the right
-/// objective here: it spreads effort across gimbals in proportion to their
-/// effectiveness, which is what makes the verniers take roll and the main engine
-/// take pitch/yaw with no per-vehicle configuration.
+/// Physical thrust-vector control allocation: given a desired body torque in N*m, solve for the per-gimbal deflections that produce it.
+///  WHY NOT USE KSA'S OWN ALLOCATION. The game's ComputeTvcControl offers the SAME normalized demand vector to every gimbal and lets each independently pick a direction from its own moment arm. That is a heuristic, not an inverse:
+///   - the demand is DIMENSIONLESS. Its magnitude scales deflection directly and is then clamped to [-1,1], so there is nowhere to put a torque in N*m.
+///   - nothing solves "produce exactly tau". The realized torque is the sum over gimbals and is generally NOT parallel to the demand, so commanding pure roll leaks pitch and yaw.
+///   - every gimbal gets the same deflection magnitude regardless of its thrust, so a 6 MN main and a small vernier contribute wildly unequally.
+/// For SCvx that matters: the model's dynamics are J*wdot = tau with tau a control we choose and trust. Commanding through a heuristic makes the realized torque a nonlinear function of the demand, and the planned attitude stops matching the flown one - which is the main thing 6-DOF buys over the 3-DOF plan.
+///  WHAT THIS DOES INSTEAD. Build the true allocation matrix B (3 x 2N) mapping per-gimbal commands to body torque, then solve the regularized minimum-norm problem u = B^T (B B^T + lambda I)^-1 tau B B^T is only 3x3, so this is a closed-form inverse, not an iterative solve - cheap enough to run every flight-computer step. Minimum-norm is the right objective here: it spreads effort across gimbals in proportion to their effectiveness, which is what makes the verniers take roll and the main engine take pitch/yaw with no per-vehicle configuration.
 /// </summary>
 public static class KsaTvcAllocator
 {
@@ -43,20 +23,13 @@ public static class KsaTvcAllocator
     private const double DiffStep = 0.5;
 
     /// <summary>
-    /// Tikhonov term, relative to trace(B B^T). Without it an axis with no authority
-    /// at all (e.g. roll on a vehicle with no off-axis gimbals) makes B B^T singular
-    /// and the solve explodes. With it, an unreachable torque simply produces a small
-    /// command instead of a huge one.
+    /// Tikhonov term, relative to trace(B B^T). Without it an axis with no authority at all (e.g. roll on a vehicle with no off-axis gimbals) makes B B^T singular and the solve explodes. With it, an unreachable torque simply produces a small command instead of a huge one.
     /// </summary>
     private const double RelativeRegularization = 1e-6;
 
     /// <summary>
     /// Thrust direction in the VEHICLE assembly frame for a given normalized command.
-    ///
-    /// Mirrors RocketNozzle.UpdateState exactly. The game rotates assembly-frame
-    /// vectors by (Gimbal2Asmb * state * Gimbal2Asmb^-1), which is just "apply the
-    /// state rotation in the gimbal's own frame" - so we take the rest direction into
-    /// gimbal frame via Data.VehicleAsmb2Gimbal, rotate, and come back.
+    ///  Mirrors RocketNozzle.UpdateState exactly. The game rotates assembly-frame vectors by (Gimbal2Asmb * state * Gimbal2Asmb^-1), which is just "apply the state rotation in the gimbal's own frame" - so we take the rest direction into gimbal frame via Data.VehicleAsmb2Gimbal, rotate, and come back.
     /// </summary>
     public static double3 ThrustDirection(GimbalController gc, double commandY, double commandZ)
     {
@@ -76,14 +49,8 @@ public static class KsaTvcAllocator
     }
 
     /// <summary>
-    /// Fill the torque and force Jacobians for one gimbal: columns 2i and 2i+1 of
-    /// B (N*m per unit command) and Bf (N per unit command).
-    ///
-    /// The moment arm is taken at the REST thrust position, ignoring the small
-    /// translation of the nozzle as it swings about its pivot. That is second order
-    /// (offset x sin(10 deg)) and is exactly the approximation KSA's own
-    /// ComputeTvcControl and UpdateTvcParams make, so we stay consistent with the
-    /// plant rather than more accurate than it.
+    /// Fill the torque and force Jacobians for one gimbal: columns 2i and 2i+1 of B (N*m per unit command) and Bf (N per unit command).
+    ///  The moment arm is taken at the REST thrust position, ignoring the small translation of the nozzle as it swings about its pivot. That is second order (offset x sin(10 deg)) and is exactly the approximation KSA's own ComputeTvcControl and UpdateTvcParams make, so we stay consistent with the plant rather than more accurate than it.
     /// </summary>
     private static void FillColumns(GimbalController gc, float3 comAsmb, double thrust,
                                     double[] bTorque, double[] bForce, int gimbalIndex)
@@ -151,10 +118,7 @@ public static class KsaTvcAllocator
         if (trace <= 0.0)
             return result;                        // no authority at all (no thrust)
 
-        // Per-axis capability first, so the demand can be clamped to what each axis can
-        // actually deliver. Without this a weak axis (roll here: 700x weaker than
-        // pitch/yaw) sends the least-squares solution far outside the deflection box,
-        // and the uniform saturation scaling below then throttles the STRONG axes too.
+        // Per-axis capability first, so the demand can be clamped to what each axis can actually deliver. Without this a weak axis (roll here: 700x weaker than pitch/yaw) sends the least-squares solution far outside the deflection box, and the uniform saturation scaling below then throttles the STRONG axes too.
         double lambda0 = RelativeRegularization * trace;
         Span<double> g0 = stackalloc double[9];
         for (int i = 0; i < 9; i++) g0[i] = g[i];
@@ -191,21 +155,9 @@ public static class KsaTvcAllocator
             peak = Math.Max(peak, Math.Abs(u));
         }
 
-        // Saturation: scale the WHOLE solution rather than clipping per component, so
-        // the torque DIRECTION survives.
-        //
-        // That policy is only sound when the axes have COMPARABLE authority. Measured
-        // in flight this vehicle has roll capability of 2.8 kN-m against 1902 kN-m in
-        // pitch and yaw - a factor of 700. A roll demand a few percent over its limit
-        // then dragged the entire command down to 29%, so pitch and yaw arrived at a
-        // third of their value despite being well inside capability. Preserving the
-        // direction of a vector whose smallest component is 700x cheaper to satisfy is
-        // not a meaningful thing to preserve.
-        //
-        // The demand is therefore clamped PER AXIS to what that axis can actually do,
-        // BEFORE allocation (see Solve's caller-facing clamp above); uniform scaling
-        // then only ever handles a genuinely unachievable magnitude rather than one
-        // weak axis vetoing the other two.
+        // Saturation: scale the WHOLE solution rather than clipping per component, so the torque DIRECTION survives.
+        //  That policy is only sound when the axes have COMPARABLE authority. Measured in flight this vehicle has roll capability of 2.8 kN-m against 1902 kN-m in pitch and yaw - a factor of 700. A roll demand a few percent over its limit then dragged the entire command down to 29%, so pitch and yaw arrived at a third of their value despite being well inside capability. Preserving the direction of a vector whose smallest component is 700x cheaper to satisfy is not a meaningful thing to preserve.
+        //  The demand is therefore clamped PER AXIS to what that axis can actually do, BEFORE allocation (see Solve's caller-facing clamp above); uniform scaling then only ever handles a genuinely unachievable magnitude rather than one weak axis vetoing the other two.
         if (peak > 1.0)
         {
             double scale = 1.0 / peak;
@@ -214,9 +166,7 @@ public static class KsaTvcAllocator
             result.SaturationScale = scale;
         }
 
-        // Report what the linear model says we actually get, including the lateral
-        // force that comes along for free - gimballing for torque always tilts the
-        // thrust vector, and that coupling is real.
+        // Report what the linear model says we actually get, including the lateral force that comes along for free - gimballing for torque always tilts the thrust vector, and that coupling is real.
         double3 torque = default, force = default;
         for (int c = 0; c < cols; c++)
         {
@@ -232,10 +182,7 @@ public static class KsaTvcAllocator
         result.AchievedForce = force;
 
         // Per-axis capability, for scaling a UI slider or clamping a guidance demand:
-        // the torque produced by driving the min-norm solution for that axis to
-        // saturation. Unlike KSA's TvcTorqueAuthority (a sum of absolute values, so
-        // an optimistic bound that assumes every gimbal serves that axis maximally),
-        // this is achievable by construction.
+        // the torque produced by driving the min-norm solution for that axis to saturation. Unlike KSA's TvcTorqueAuthority (a sum of absolute values, so an optimistic bound that assumes every gimbal serves that axis maximally), this is achievable by construction.
         result.MaxTorque = new double3(
             AxisCapability(bTorque, cols, inv, 0),
             AxisCapability(bTorque, cols, inv, 1),
@@ -243,8 +190,7 @@ public static class KsaTvcAllocator
         return result;
     }
 
-    // Largest torque about one axis alone that the min-norm solution can deliver
-    // before some gimbal saturates.
+    // Largest torque about one axis alone that the min-norm solution can deliver before some gimbal saturates.
     private static double AxisCapability(double[] bTorque, int cols, ReadOnlySpan<double> inv, int axis)
     {
         double wx = inv[axis], wy = inv[3 + axis], wz = inv[6 + axis];

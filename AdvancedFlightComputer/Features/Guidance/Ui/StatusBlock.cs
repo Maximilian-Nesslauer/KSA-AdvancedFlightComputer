@@ -7,26 +7,16 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// The panel's status block, shared by every powered phase: the phase/tgo/dV readout,
-// a schematic arc showing how much of the guidance solution is left to fly, and the
-// staging plan as a bar. Ascent and descent differ only in which phase names they
-// supply and which way the marker points.
-//
-// Drawn with an ordinary ImDrawList rather than gauge primitives. That is not a
-// compromise: ImGauge has no line, arc or filled rect, and its Label is capped at 16
-// uppercase characters - but because ImGauge registers its draw callback at
-// BeginWindow, everything an ImGui draw list emits afterwards lands ON TOP of the
-// dressed panel. So these sit inside the gauge chrome without fighting it.
+// The panel's status block, shared by every powered phase: the phase/tgo/dV readout, a schematic arc showing how much of the guidance solution is left to fly, and the staging plan as a bar. Ascent and descent differ only in which phase names they supply and which way the marker points.
+//  Drawn with an ordinary ImDrawList rather than gauge primitives. That is not a compromise: ImGauge has no line, arc or filled rect, and its Label is capped at 16 uppercase characters - but because ImGauge registers its draw callback at BeginWindow, everything an ImGui draw list emits afterwards lands ON TOP of the dressed panel. So these sit inside the gauge chrome without fighting it.
 public static partial class GuidanceWindow
 {
-    // The two ends of the pass strip's distance fade, in components. ImColor8 exposes
-    // no way to read a colour back out once built, so the blend needs the numbers -
-    // and the two swatches below are built from these so there is one source of truth.
+    // The two ends of the pass strip's distance fade, in components. ImColor8 exposes no way to read a colour back out once built, so the blend needs the numbers - and the two swatches below are built from these so there is one source of truth.
     // Declared first: static initialisers run in textual order.
     private static readonly (byte R, byte G, byte B) PassNearRgb = (232, 238, 245);
     private static readonly (byte R, byte G, byte B) PassFarRgb = (48, 53, 60);
 
-    // Palette, kept close to the gauge colours so the block doesn't read as foreign.
+    // Palette, Current close to the gauge colours so the block doesn't read as foreign.
     private static readonly ImColor8 SchemInk = new ImColor8(205, 215, 225);
     private static readonly ImColor8 SchemDim = new ImColor8(120, 128, 138);
     private static readonly ImColor8 SchemRgo = new ImColor8(90, 190, 255);
@@ -37,8 +27,7 @@ public static partial class GuidanceWindow
     private static readonly ImColor8 SchemTrack = new ImColor8(PassFarRgb.R, PassFarRgb.G, PassFarRgb.B);
     private static readonly ImColor8 SchemAlert = new ImColor8(255, 96, 96);
 
-    // Pass strip: block width, the narrowest axis it will scale to, and the
-    // green/red span for the nearest pass.
+    // Pass strip: block width, the narrowest axis it will scale to, and the green/red span for the nearest pass.
     private const float PassStripBlockW = 7f;
     private const float PassStripMinScaleKm = 25f;
     private const double PassGreenKm = 10.0;
@@ -49,8 +38,7 @@ public static partial class GuidanceWindow
     // Length of a thrust tick on the G-FOLD side view, in pixels.
     private const float GfoldThrustGlyphPx = 12f;
 
-    // One colour per stage, cycled. Distinct hues rather than a ramp, because the
-    // point is to tell stages apart, not to imply an ordering between them.
+    // One colour per stage, cycled. Distinct hues rather than a ramp, because the point is to tell stages apart, not to imply an ordering between them.
     private static readonly ImColor8[] StagePalette =
     {
         new ImColor8(255, 176, 64),
@@ -62,9 +50,7 @@ public static partial class GuidanceWindow
     };
 
     /// <summary>
-    /// Seconds until engine cutoff. Read off the time LATCHED when the terminal phase
-    /// began, not off UPFG's tgo: the solver keeps iterating through the freeze, and
-    /// its tgo over a near-zero arc is exactly the quantity that misbehaves there.
+    /// Seconds until engine cutoff. Read off the time LATCHED when the terminal phase began, not off UPFG's tgo: the solver keeps iterating through the freeze, and its tgo over a near-zero arc is exactly the quantity that misbehaves there.
     /// </summary>
     private static double AscentCutoffIn() => _s.CutoffTime - SimNow();
 
@@ -95,11 +81,8 @@ public static partial class GuidanceWindow
             : terminal ? (AscentCutoffIn() > 0.0 ? SchemBurn : SchemAlert)
             : (_s.Phase == AscentPhase.ClosedLoop && !_s.Upfg.Converged ? SchemBurn : SchemVgo);
 
-        // In the freeze the countdown is the latched one, so it keeps ticking down
-        // cleanly while UPFG's own tgo wanders over the near-zero remaining arc.
-        // Before that it is the solver's, aged by however long ago the solve was: the
-        // guidance cycle is a second long and a tgo that only moves when a solve lands
-        // reads as a stuck number rather than a countdown.
+        // In the freeze the countdown is the latched one, so it keeps ticking down cleanly while UPFG's own tgo wanders over the near-zero remaining arc.
+        // Before that it is the solver's, aged by however long ago the solve was: the guidance cycle is a second long and a tgo that only moves when a solve lands reads as a stuck number rather than a countdown.
         double tgoSec = terminal
             ? Math.Max(0.0, AscentCutoffIn())
             : Math.Max(0.0, _s.Upfg.Tgo - Math.Max(0.0, SimNow() - _s.LastSolveTime));
@@ -110,8 +93,7 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// The shared block. <paramref name="decelerating"/> only turns the marker round:
-    /// on a descent the vehicle is flying backwards along its own track, and a nose
-    /// pointing the way it is travelling would read as an ascent.
+    /// on a descent the vehicle is flying backwards along its own track, and a nose pointing the way it is travelling would read as an ascent.
     /// </summary>
     private static void DrawGuidanceStatusBlock(float2 origin, float innerW, float rowH,
                                                 string phase, ImColor8 phaseCol, bool live,
@@ -119,13 +101,10 @@ public static partial class GuidanceWindow
     {
         ImDrawListPtr dl = ImGui.GetWindowDrawList();
 
-        // Phase alone on this line. T-GO has moved into the arc, alongside the two
-        // quantities it is the countdown FOR - and the separate dV readout that used
-        // to sit here is gone: it was VGO under another name.
+        // Phase alone on this line. T-GO has moved into the arc, alongside the two quantities it is the countdown FOR - and the separate dV readout that previously sit here is gone: it was VGO under another name.
         dl.AddText(origin, phaseCol, phase);
 
-        // Both displays run the full width: the arc needs the span to stay gentle,
-        // and the bar needs it to keep short stages legible.
+        // Both displays run the full width: the arc needs the span to stay gentle, and the bar needs it to keep short stages legible.
         float arcH = rowH * 4.2f;
         float gap = rowH * 0.3f;
         DrawGuidanceSchematic(dl, new float2(origin.X, origin.Y + rowH), new float2(innerW, arcH),
@@ -133,20 +112,14 @@ public static partial class GuidanceWindow
         // Height depends on the stage count, so the bar reports what it used.
         float barH = DrawStagingBar(dl, new float2(origin.X, origin.Y + rowH + arcH + gap), innerW);
 
-        // Reserve the space in ImGui's layout - the draw list writes pixels but
-        // advances no cursor, so without this the sections would overlap it.
+        // Reserve the space in ImGui's layout - the draw list writes pixels but advances no cursor, so without this the sections would overlap it.
         ImGui.Dummy(new float2(innerW, rowH + arcH + gap + barH));
     }
 
     // --- the arc schematic --------------------------------------------------
 
     /// <summary>
-    /// A gentle arc standing for the curvature of the body we are climbing away from,
-    /// with the vehicle at its left end and the two guidance figures drawn as
-    /// distances ALONG it. Deliberately not a vector plot: rgo and vgo are shown as
-    /// SCALARS, each as a fraction of the largest value seen since EXECUTE, so both
-    /// bands deplete toward the vehicle as the burn completes. Nothing here is to
-    /// scale against anything else - it is a picture of progress, not geometry.
+    /// A gentle arc standing for the curvature of the body we are climbing away from, with the vehicle at its left end and the two guidance figures drawn as distances ALONG it. Deliberately not a vector plot: rgo and vgo are shown as SCALARS, each as a fraction of the largest value seen since EXECUTE, so both bands deplete toward the vehicle as the burn completes. Nothing here is to scale against anything else - it is a picture of progress, not geometry.
     /// </summary>
     private static void DrawGuidanceSchematic(ImDrawListPtr dl, float2 min, float2 size,
                                               bool running, bool decelerating, double tgoSec)
@@ -158,8 +131,7 @@ public static partial class GuidanceWindow
         if (span < 32f)
             return;
 
-        // A circle through the two ends and an apex bulged up by the sagitta. A large
-        // radius for a small sagitta is exactly what makes the arc read as gentle.
+        // A circle through the two ends and an apex bulged up by the sagitta. A large radius for a small sagitta is exactly what makes the arc read as gentle.
         float sagitta = MathF.Max(6f, size.Y * 0.16f);
         float radius = (span * span * 0.25f + sagitta * sagitta) / (2f * sagitta);
         float apexY = min.Y + size.Y * 0.70f;
@@ -171,8 +143,7 @@ public static partial class GuidanceWindow
         float rgoOff = thick * 1.6f;
         float vgoOff = thick * 3.2f;
 
-        // The surface itself, then faint full-length tracks - an almost-empty band
-        // has to read as almost empty rather than as missing.
+        // The surface itself, then faint full-length tracks - an almost-empty band has to read as almost empty rather than as missing.
         DrawArcBand(dl, centre, radius, -half, half, 0f, SchemSpent, 2f);
         DrawArcBand(dl, centre, radius, -half, half, rgoOff, SchemTrack, thick);
         DrawArcBand(dl, centre, radius, -half, half, vgoOff, SchemTrack, thick);
@@ -191,8 +162,7 @@ public static partial class GuidanceWindow
         DrawArcBand(dl, centre, radius, -half, -half + 2f * half * rgoFrac, rgoOff, SchemRgo, thick);
         DrawArcBand(dl, centre, radius, -half, -half + 2f * half * vgoFrac, vgoOff, SchemVgo, thick);
 
-        // Start marker: aligned with the arc's TANGENT at its left end, so it points
-        // the way the bands run rather than standing up off the surface.
+        // Start marker: aligned with the arc's TANGENT at its left end, so it points the way the bands run rather than standing up off the surface.
         DrawStartMarker(dl, ArcPoint(centre, radius + vgoOff + thick * 1.7f, -half), -half,
             MathF.Max(5f, size.Y * 0.11f), decelerating);
 
@@ -213,8 +183,7 @@ public static partial class GuidanceWindow
             live ? SchemVgo : SchemDim, vgoText);
     }
 
-    // Angles run from straight up at the arc's centre; ImDrawList wants the standard
-    // convention, which is a quarter turn behind.
+    // Angles run from straight up at the arc's centre; ImDrawList wants the standard convention, which is a quarter turn behind.
     private static float2 ArcPoint(float2 centre, float radius, float a)
         => new float2(centre.X + radius * MathF.Sin(a), centre.Y - radius * MathF.Cos(a));
 
@@ -231,9 +200,7 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// The "we are here" marker at the start of the bands, pointing along the arc.
-    /// The tangent at angle a is (cos a, sin a) - the derivative of ArcPoint - which
-    /// is why this leans with the curve instead of standing radially like the vehicle
-    /// glyph it replaced.
+    /// The tangent at angle a is (cos a, sin a) - the derivative of ArcPoint - which is why this leans with the curve instead of standing radially like the vehicle glyph it replaced.
     /// </summary>
     private static void DrawStartMarker(ImDrawListPtr dl, float2 at, float a, float len,
                                         bool reversed)
@@ -251,11 +218,7 @@ public static partial class GuidanceWindow
     // --- staging bar --------------------------------------------------------
 
     /// <summary>
-    /// The staging plan as a horizontal bar, each stage's width proportional to its
-    /// burn time - this one IS to scale - with the same stages listed underneath as
-    /// dV and burn time. It is a PLAN, not a progress readout: the stage model
-    /// describes the stack still to burn, so it carries no record of what has already
-    /// gone, and marking elapsed time on it would be an invention.
+    /// The staging plan as a horizontal bar, each stage's width proportional to its burn time - this one IS to scale - with the same stages listed underneath as dV and burn time. It is a PLAN, not a progress readout: the stage model describes the stack still to burn, so it carries no record of what has already gone, and marking elapsed time on it would be an invention.
     /// </summary>
     /// <returns>The height consumed, so the caller can reserve it.</returns>
     private static float DrawStagingBar(ImDrawListPtr dl, float2 min, float width)
@@ -270,9 +233,7 @@ public static partial class GuidanceWindow
             return lineH;
         }
 
-        // Burn time and dV per stage, by the same rules as the stage table: a
-        // constant-acceleration (g-limited) stage burns for as long as its dV takes at
-        // the limit, not as long as its propellant lasts at full thrust.
+        // Burn time and dV per stage, by the same rules as the stage table: a constant-acceleration (g-limited) stage burns for as long as its dV takes at the limit, not as long as its propellant lasts at full thrust.
         int n = stages.Stages.Count;
         Span<float> burn = n <= 12 ? stackalloc float[12] : new float[n];
         Span<float> dv = n <= 12 ? stackalloc float[12] : new float[n];
@@ -296,10 +257,7 @@ public static partial class GuidanceWindow
             return lineH;
         }
 
-        // KSA's own figure for the same stack, when it disagrees by more than a
-        // percent. The two are computed from the same recompute, so a gap is a real
-        // disagreement about the staging - not a rounding difference - and it is the
-        // one failure a plausible-looking stage list will not otherwise show.
+        // KSA's own figure for the same stack, when it disagrees by more than a percent. The two are computed from the same recompute, so a gap is a real disagreement about the staging - not a rounding difference - and it is the one failure a plausible-looking stage list will not otherwise show.
         double ksaDv = _s.StageModelKsaDv;
         string cross = ksaDv > 1.0 && Math.Abs(ksaDv - totalDv) > 0.01 * ksaDv
             ? $"   (KSA {ksaDv:F0})" : "";
@@ -324,13 +282,7 @@ public static partial class GuidanceWindow
             x += wSeg;
         }
 
-        // --- the same stages as text, keyed by colour to the bar above ---
-        //
-        // The trailing seq/eng pair is provenance: which staging sequence the arc came
-        // from and how many engine cores the game's own drain simulation had burning
-        // across it. Two rows carrying the same pair would be one physical stage that
-        // got sliced in two upstream - the adapter coalesces those, so seeing them
-        // here means it found a real difference in thrust, Isp or mass between them.
+        // --- the same stages as text, keyed by colour to the bar above --- The trailing seq/eng pair is provenance: which staging sequence the arc came from and how many engine cores the game's own drain simulation had burning across it. Two rows carrying the same pair would be one physical stage that got sliced in two upstream - the adapter coalesces those, so seeing them here means it found a real difference in thrust, Isp or mass between them.
         float y = barTop + barH + 4f;
         float colDv = width * 0.16f;
         float colBurn = width * 0.42f;
@@ -342,8 +294,7 @@ public static partial class GuidanceWindow
             dl.AddText(new float2(min.X, y), col, $"S{i + 1}");
             dl.AddText(new float2(min.X + colDv, y), SchemInk, $"{dv[i]:F0} m/s");
             dl.AddText(new float2(min.X + colBurn, y), SchemInk, $"{burn[i]:F0} s");
-            // Seq < 0 is the fallback model: no usable staging sequences, so the
-            // stack was measured off the live engines instead.
+            // Seq < 0 is the fallback model: no usable staging sequences, so the stack was measured off the live engines instead.
             string prov = st.Seq < 0 ? "live engines" : $"seq {st.Seq}  {st.Engines} eng";
             dl.AddText(new float2(min.X + colSeq, y), SchemDim,
                 st.Mode == 2 ? prov + "  G" : prov);

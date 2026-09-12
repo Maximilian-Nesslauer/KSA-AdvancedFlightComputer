@@ -7,25 +7,16 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// World-space overlay for the 6-DOF plan, matching the G-FOLD one so the two read
-// the same way. Shares the projection plumbing in OverlayCore.cs.
-//
-// This is the instrument for "is the PLAN sensible" as opposed to "is the TRACKER
-// following it" - which the tracking-error readout answers. A plan that dives at
-// the ground, wanders downrange, or demands a wild attitude profile is visible
-// here immediately and is not diagnosable from numbers alone.
+// World-space overlay for the 6-DOF plan, matching the G-FOLD one so the two read the same way. Shares the projection plumbing in OverlayCore.cs.
+//  This is the instrument for "is the PLAN sensible" as opposed to "is the TRACKER following it" - which the tracking-error readout answers. A plan that dives at the ground, wanders downrange, or demands a wild attitude profile is visible here immediately and is not diagnosable from numbers alone.
 public static partial class GuidanceWindow
 {
-    // Off by default: it is a debug view, and it draws over the vehicle you are
-    // trying to fly.
+    // Off by default: it is a debug view, and it draws over the vehicle you are trying to fly.
     private static bool _show6DofOverlay;
 
     private static void Draw6DofOverlay(IGameViewport vp, IParentBody parent)
     {
-        // The FOCUSED vehicle's state, resolved here rather than read from the
-        // ambient current. The overlay draws what the player is looking at, and the
-        // draw reaches it through several entry points - relying on one of them having
-        // pointed the ambient at the right vehicle would be a trap.
+        // The FOCUSED vehicle's state, resolved here rather than read from the ambient current. The overlay draws what the player is looking at, and the draw reaches it through several entry points - relying on one of them having pointed the ambient at the right vehicle would be a trap.
         if (!_show6DofOverlay || !VehicleAutopilotState.TryGet(Program.ControlledVehicle, out VehicleAutopilotState st)
             || !st.Active)
             return;
@@ -36,9 +27,7 @@ public static partial class GuidanceWindow
         if (!SetupProjection(parent))
             return;
 
-        // Rebuild the site frame live rather than caching it from solve time: the
-        // plan is flown against the rotating body, so a stale frame slides off the
-        // ground as the world turns. Same reasoning as the G-FOLD overlay.
+        // Rebuild the site frame live rather than caching it from solve time: the plan is flown against the rotating body, so a stale frame slides off the ground as the world turns. Same reasoning as the G-FOLD overlay.
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         KsaFrameBridge.SiteFrame f = KsaFrameBridge.BuildSiteFrame(siteCci);
 
@@ -58,18 +47,13 @@ public static partial class GuidanceWindow
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##sixdof_overlay");
 
-        // Materialised up front rather than read through a local function: a Span
-        // cannot be captured by one, and projecting each node once is cheaper anyway.
+        // Materialised up front rather than read through a local function: a Span cannot be captured by one, and projecting each node once is cheaper anyway.
         var node = new double3[n];
         for (int k = 0; k < n; k++)
             node[k] = f.PosToCci(new double3(px[k * 14 + 0], px[k * 14 + 1], px[k * 14 + 2]));
 
         // --- Glideslope cone, drawn first so the path sits on top of it.
-        //
-        // Same construction as the G-FOLD overlay: apex at the target, opening
-        // upward, radius cot(angle) * height. Drawing it from the SAME angle the
-        // solver was configured with is the point - a cone drawn from a separate
-        // number would keep looking right while the solver enforced something else.
+        //  Same construction as the G-FOLD overlay: apex at the target, opening upward, radius cot(angle) * height. Drawing it from the SAME angle the solver was configured with is the point - a cone drawn from a separate number would keep looking right while the solver enforced something else.
         if (_s.SixDofGlideSlopeDeg > 0.0)
         {
             var coneCol = new ImColor8(90, 140, 190);
@@ -105,10 +89,7 @@ public static partial class GuidanceWindow
         for (int k = 0; k + 1 < n; k++)
             OvLine(dl, node[k], node[k + 1], trajCol, 2.0f);
 
-        // --- per-node markers, thrust vectors and body axis ---
-        // Thrust and attitude are drawn because they are what a 6-DOF plan adds over
-        // a 3-DOF one: if the attitude profile is nonsense the path can still look
-        // fine, and this is the only place that shows up.
+        // --- per-node markers, thrust vectors and body axis --- Thrust and attitude are drawn because they are what a 6-DOF plan adds over a 3-DOF one: if the attitude profile is nonsense the path can still look fine, and this is the only place that shows up.
         double thrustScale = 0.0;
         for (int k = 0; k < n; k++)
         {
@@ -118,8 +99,7 @@ public static partial class GuidanceWindow
                 pu[k * 4 + 2] * pu[k * 4 + 2]);
             thrustScale = Math.Max(thrustScale, t);
         }
-        // Longest thrust arrow spans ~8% of the trajectory, so the picture stays
-        // readable whatever the vehicle's thrust happens to be.
+        // Longest thrust arrow spans ~8% of the trajectory, so the picture stays readable whatever the vehicle's thrust happens to be.
         double span = (node[0] - node[n - 1]).Length();
         double arrow = thrustScale > 0 ? 0.08 * span / thrustScale : 0.0;
 
@@ -149,9 +129,7 @@ public static partial class GuidanceWindow
             dl.AddCircleFilled(tgt, 5.0f, tgtCol);
         OvLine(dl, siteCci, targetCci, padCol, 1.0f);
 
-        // --- where the tracker thinks the vehicle should be right now ---
-        // Drawn against the live vehicle so plan-vs-flown divergence is visible in
-        // the world, not just as a number.
+        // --- where the tracker thinks the vehicle should be right now --- Drawn against the live vehicle so plan-vs-flown divergence is visible in the world, not just as a number.
         double dt = g.Sigma / (n - 1);
         double sNode = Math.Clamp(g.PlanElapsed / dt, 0.0, n - 1.001);
         int k0 = (int)sNode;
@@ -166,9 +144,7 @@ public static partial class GuidanceWindow
                 OvLine(dl, refCci, v.Orbit.StateVectors.PositionCci, refCol, 1.0f);
         }
 
-        // BeginOverlayWindow opens an ImGui window and documents that the caller
-        // closes it. Omitting this produces ImGui's "missing End" assert, not a
-        // silent leak.
+        // BeginOverlayWindow opens an ImGui window and documents that the caller closes it. Omitting this produces ImGui's "missing End" assert, not a silent leak.
         ImGui.End();
     }
 }

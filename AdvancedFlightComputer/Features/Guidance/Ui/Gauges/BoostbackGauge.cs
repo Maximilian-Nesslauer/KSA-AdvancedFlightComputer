@@ -8,22 +8,9 @@ using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 
-// The Boostback tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT
-// buttons live in Ui/Panel.cs; everything here draws inside the body child that panel
-// opens, so it is plain ImGui under ConsoleStyle's widget styling.
-//
-// WHAT THIS TAB IS, FOR NOW. An aero workbench, not a guidance mode. It samples the
-// focused vehicle's drag off KSA's own aerodynamics, fits the Cd(Mach, alpha)
-// surrogate the SCvx formulation wants, and mirrors the game's atmosphere into a
-// self-contained rho(h) the solver can carry without referencing the game. There is
-// no boostback guidance behind EXECUTE yet - the buttons stripe out on this tab - and
-// nothing here feeds the 6-DOF dynamics, which still have no aero term at all.
-//
-// The point of doing it as a visible tab rather than a silent setup step is that the
-// surrogate is the thing most likely to be quietly wrong. A table sampled off the
-// wrong frame, referenced to the wrong area, or built from a stale bounding box all
-// produce a plausible-looking spline; the only way to catch it is to be able to read
-// the numbers against a vehicle you can see.
+// The Boostback tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT buttons live in Ui/Panel.cs; everything here draws inside the body child that panel opens, so it is plain ImGui under ConsoleStyle's widget styling.
+//  WHAT THIS TAB IS, FOR NOW. An aero workbench, not a guidance mode. It samples the focused vehicle's drag off KSA's own aerodynamics, fits the Cd(Mach, alpha) surrogate the SCvx formulation wants, and mirrors the game's atmosphere into a self-contained rho(h) the solver can carry without referencing the game. There is no boostback guidance behind EXECUTE yet - the buttons stripe out on this tab - and nothing here feeds the 6-DOF dynamics, which still have no aero term at all.
+//  The point of doing it as a visible tab rather than a silent setup step is that the surrogate is the thing most likely to be quietly wrong. A table sampled off the wrong frame, referenced to the wrong area, or built from a stale bounding box all produce a plausible-looking spline; the only way to catch it is to be able to read the numbers against a vehicle you can see.
 public static partial class GuidanceWindow
 {
     /// <summary>Alphas shown in the profile readout, degrees, retrograde-first. A
@@ -35,14 +22,8 @@ public static partial class GuidanceWindow
     private static void DrawBoostbackTabContent(Vehicle vehicle, Orbit orbit,
                                                 IParentBody parent, float innerW)
     {
-        // Sample on first sight of a vehicle, and again whenever its bounding box
-        // changes - which is the only thing that can change the answer, since KSA
-        // itself only recomputes AerodynamicCdABody on a part-tree modification.
-        //
-        // "When the tab is selected" is exactly here: this method only runs while the
-        // tab is open, so an unopened tab costs nothing and an open one re-fits only
-        // when staging has actually invalidated the table. The guidance step calls the
-        // same helper, so a boostback flown with the panel shut uses the same table.
+        // Sample on first sight of a vehicle, and again whenever its bounding box changes - which is the only thing that can change the answer, since KSA itself only recomputes AerodynamicCdABody on a part-tree modification.
+        //  "When the tab is selected" is exactly here: this method only runs while the tab is open, so an unopened tab costs nothing and an open one re-fits only when staging has actually invalidated the table. The guidance step calls the same helper, so a boostback flown with the panel shut uses the same table.
         EnsureBoostbackAero(vehicle, parent);
 
         DrawBoostbackGuidanceSection(vehicle, innerW);
@@ -52,10 +33,7 @@ public static partial class GuidanceWindow
         DrawBoostbackAtmosphereSection(vehicle, orbit, parent, innerW);
     }
 
-    // --- Guidance -----------------------------------------------------------
-    // The state machine: which phase, what it is waiting for, and the two numbers the
-    // burn is flown on. First, because it is the only thing on this tab that commands
-    // the vehicle - everything below it is the model the commands are derived from.
+    // --- Guidance ----------------------------------------------------------- The state machine: which phase, what it is waiting for, and the two numbers the burn is flown on. First, because it is the only thing on this tab that commands the vehicle - everything below it is the model the commands are derived from.
     private static void DrawBoostbackGuidanceSection(Vehicle vehicle, float innerW)
     {
         if (!ImGuiHelper.BeginRegion("Boostback guidance",
@@ -83,8 +61,7 @@ public static partial class GuidanceWindow
 
                 case BoostbackPhase.Rotation:
                 {
-                    // Both errors, because both gate the transition: the command has to
-                    // finish issuing AND the vehicle has to have followed it.
+                    // Both errors, because both gate the transition: the command has to finish issuing AND the vehicle has to have followed it.
                     double3 aim = BoostbackPlanDirection(SimNow());
                     double cmdErr = aim.Length() > 0.5
                         ? AngleBetween(_s.CommandDir, aim) * 180.0 / Math.PI
@@ -104,23 +81,19 @@ public static partial class GuidanceWindow
                     GaugeRowText("Burn time left",
                         double.IsFinite(_s.BoostbackTgo) ? $"{_s.BoostbackTgo,8:F1} s" : "  no plan",
                         double.IsFinite(_s.BoostbackTgo) ? dim : warn);
-                    // HOW OFTEN THE PLAN IS BEING RE-SOLVED. The same law flies the
-                    // whole burn; what changes at the end is the cadence behind it, and
-                    // that is what the readout tracks.
+                    // HOW OFTEN THE PLAN IS BEING RE-SOLVED. The same law flies the whole burn; what changes at the end is the cadence behind it, and that is what the readout tracks.
                     GaugeRowText("Plan",
                         _s.BoostbackLocked ? "open loop to cutoff"
                         : _s.BoostbackTerminal ? $"re-solved every {BoostbackTerminalIntervalS:F1} s"
                         : $"re-solved every {BoostbackPlanIntervalS:F0} s",
                         _s.BoostbackLocked ? warn : good);
-                    // Only ever shown when a tail is configured - BoostbackLockTgo is
-                    // zero, so normally the plan runs to cutoff and this never appears.
+                    // Only ever shown when a tail is configured - BoostbackLockTgo is zero, so normally the plan runs to cutoff and this never appears.
                     if (_s.BoostbackLocked)
                         GaugeRowText("Flown open loop", $"{_s.BoostbackAccumDv,8:F1} m/s", dim);
                     break;
 
                 case BoostbackPhase.EntryOrient:
-                    // The whole point of the phase, so it is the number shown: how far
-                    // the vehicle still is from engine-first into the relative wind.
+                    // The whole point of the phase, so it is the number shown: how far the vehicle still is from engine-first into the relative wind.
                     GaugeRowText("Vehicle error",
                         $"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg");
                     GaugeRowText("Holding", "surface retrograde (alpha 0)", dim);
@@ -128,11 +101,7 @@ public static partial class GuidanceWindow
             }
         }
 
-        // THE PLAN. Its own rows because this is what the vehicle is flying, and
-        // because the solve time is the number that says whether the cadence is still
-        // affordable - it runs on the sim thread, so a plan that starts costing
-        // hundreds of milliseconds is a stutter every two seconds and wants moving to
-        // the worker thread rather than being left alone.
+        // THE PLAN. Its own rows because this is what the vehicle is flying, and because the solve time is the number that says whether the cadence is still affordable - it runs on the sim thread, so a plan that starts costing hundreds of milliseconds is a stutter every two seconds and wants moving to the worker thread rather than being left alone.
         if (_s.BoostbackHasPlan)
         {
             GaugeRowText("Burn plan",
@@ -158,12 +127,7 @@ public static partial class GuidanceWindow
         GaugeRow("Settling burn (s)", "##bbsep", ref _s.BoostbackSeparationS);
         GaugeRow("Slew rate (deg/s)", "##bbslew", ref _s.BoostbackSlewDegS);
 
-        // Flight-path-angle shaping. A FLOOR on how far the burn may point below the
-        // horizon, bought with the free direction - the velocity change that moves the
-        // impact point nowhere - so it costs dV but not accuracy. Any pitch below the
-        // geometric ceiling is reachable and is honoured whatever it costs; see
-        // ShapeFlightPathAngle. Lofting the burn is what buys flight time for a
-        // low-thrust vehicle. Very negative switches shaping off.
+        // Flight-path-angle shaping. A FLOOR on how far the burn may point below the horizon, bought with the free direction - the velocity change that moves the impact point nowhere - so it costs dV but not accuracy. Any pitch below the geometric ceiling is reachable and is honoured whatever it costs; see ShapeFlightPathAngle. Lofting the burn is what buys flight time for a low-thrust vehicle. Very negative switches shaping off.
         GaugeRow("Min pitch (deg)", "##bbpitch", ref _s.BoostbackPitchDeg);
 
         if (_s.HasSteer)
@@ -198,10 +162,7 @@ public static partial class GuidanceWindow
         ImGuiHelper.EndRegion();
     }
 
-    // --- Impact prediction --------------------------------------------------
-    // The drag landing point: where this vehicle touches down if it does nothing
-    // more. First because it is the one thing on this tab that is about the flight
-    // rather than about the model.
+    // --- Impact prediction -------------------------------------------------- The drag landing point: where this vehicle touches down if it does nothing more. First because it is the one thing on this tab that is about the flight rather than about the model.
     private static void DrawBoostbackImpactSection(Vehicle vehicle, Orbit orbit,
                                                    IParentBody parent, float innerW)
     {
@@ -212,10 +173,7 @@ public static partial class GuidanceWindow
         bool wasOn = _showImpactOverlay;
         GaugeRowCheck("Show impact overlay", "##impactoverlay", ref _showImpactOverlay);
 
-        // The OVERLAY owns the prediction - see DrawBoostbackOverlay for why it must,
-        // rather than this tab. All that happens here is that switching the toggle on
-        // clears the throttle, so the first prediction lands on the next frame instead
-        // of up to 200 ms later.
+        // The OVERLAY owns the prediction - see DrawBoostbackOverlay for why it must, rather than this tab. All that happens here is that switching the toggle on clears the throttle, so the first prediction lands on the next frame instead of up to 200 ms later.
         if (_showImpactOverlay && !wasOn)
         {
             _s.ImpactTick = 0;
@@ -235,8 +193,7 @@ public static partial class GuidanceWindow
         }
         else if (!_s.HasImpact)
         {
-            // Not an error: an orbiting stage genuinely has no impact point inside the
-            // horizon, and saying so is more useful than a blank.
+            // Not an error: an orbiting stage genuinely has no impact point inside the horizon, and saying so is more useful than a blank.
             string why = _s.Impact.Status == ImpactStatus.NoImpactWithinHorizon
                 ? $"none within {ImpactHorizonMinutes:F0} min"
                 : _s.Impact.Status.ToString();
@@ -252,9 +209,7 @@ public static partial class GuidanceWindow
             GaugeRowText("Downrange", $"{_s.ImpactDownrangeM / 1000.0,8:F1} km");
             GaugeRowText("Impact speed", $"{ImpactSpeed(_s),8:F0} m/s");
 
-            // Miss distance against the landing site, which is what a boostback is
-            // actually trying to null. Great-circle, so it is the number a map would
-            // give rather than a chord.
+            // Miss distance against the landing site, which is what a boostback is actually trying to null. Great-circle, so it is the number a map would give rather than a chord.
             double miss = ImpactMissDistance(parent);
             if (double.IsFinite(miss))
                 GaugeRowText("Miss vs site", $"{miss / 1000.0,8:F1} km",
@@ -263,23 +218,16 @@ public static partial class GuidanceWindow
             GaugeRowText("Integration", $"{_s.Impact.Steps,8} steps");
         }
 
-        // The steering arrows and the correction behind them. Its own toggle because
-        // the Jacobian is three seeded sweeps - about four times the cost of the
-        // prediction - and it is only meaningful once there is a site to aim at.
+        // The steering arrows and the correction behind them. Its own toggle because the Jacobian is three seeded sweeps - about four times the cost of the prediction - and it is only meaningful once there is a site to aim at.
         GaugeRowCheck("Show steering arrow", "##steerarrow", ref _showSteerArrow);
         if (_showSteerArrow && _s.HasSteer)
         {
             GaugeRowText("Correction dV", $"{_s.SteerDv.Length(),8:F1} m/s");
-            // How far the greedy direction is from the one that actually nulls the
-            // miss. Zero when the miss lies along one of J's singular directions,
-            // which is why it reads zero for a purely downrange or purely crossrange
-            // miss and grows for anything in between.
+            // How far the greedy direction is from the one that actually nulls the miss. Zero when the miss lies along one of J's singular directions, which is why it reads zero for a purely downrange or purely crossrange miss and grows for anything in between.
             GaugeRowText("Greedy offset",
                 $"{AngleBetweenDeg(_s.SteerDv, _s.SteerGreedy),8:F1} deg", dim);
 
-            // The shaping split out: how much of the commanded dv is targeting and
-            // how much is buying pitch. The pitch itself is up in the guidance
-            // section, next to the knob that sets it.
+            // The shaping split out: how much of the commanded dv is targeting and how much is buying pitch. The pitch itself is up in the guidance section, next to the knob that sets it.
             double shape = _s.SteerShape.Length();
             if (shape > 0.05)
                 GaugeRowText("Shaping dV", $"{shape,8:F1} m/s  (free direction)", dim);
@@ -291,8 +239,7 @@ public static partial class GuidanceWindow
         }
 
         // The assumption, stated where the numbers are rather than only in the code:
-        // it is the model's biggest simplification and the first thing to doubt if a
-        // prediction disagrees with what the vehicle does.
+        // it is the model's biggest simplification and the first thing to doubt if a prediction disagrees with what the vehicle does.
         ImGui.Text("");
         ImGui.NextColumn();
         ImGui.TextWrapped("Assumes retrograde attitude (alpha 0) for the whole coast, "
@@ -334,15 +281,12 @@ public static partial class GuidanceWindow
         }
         else
         {
-            // Keep whatever we had. A failed resample on a vehicle mid-staging is not
-            // a reason to throw away a table that was correct a second ago, and the
-            // stale check will try again on the next frame anyway.
+            // Keep whatever we had. A failed resample on a vehicle mid-staging is not a reason to throw away a table that was correct a second ago, and the stale check will try again on the next frame anyway.
             _s.AeroError = error;
         }
     }
 
-    // --- Surrogate ----------------------------------------------------------
-    // What was sampled, and the three numbers that say whether it is worth trusting.
+    // --- Surrogate ---------------------------------------------------------- What was sampled, and the three numbers that say whether it is worth trusting.
     private static void DrawBoostbackSurrogateSection(Vehicle vehicle, IParentBody parent,
                                                      float innerW)
     {
@@ -375,13 +319,8 @@ public static partial class GuidanceWindow
             float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
             float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
 
-            // Two different questions about attitude, and they have opposite answers
-            // for a slender booster - which is why both are here.
-            //
-            // FORM FRACTION is local, at alpha = 0. KSA adds 0.1 * (box surface area)
-            // to CdA isotropically, and in the tail-first attitude that term swamps
-            // the form drag, so a few degrees of pointing error near the boostback
-            // attitude costs almost nothing. That is load-bearing for guidance.
+            // Two different questions about attitude, and they have opposite answers for a slender booster - which is why both are here.
+            //  FORM FRACTION is local, at alpha = 0. KSA adds 0.1 * (box surface area) to CdA isotropically, and in the tail-first attitude that term swamps the form drag, so a few degrees of pointing error near the boostback attitude costs almost nothing. That is load-bearing for guidance.
             bool formMatters = a.FormFraction > 0.15;
             GaugeRowText("Form frac (a=0)", $"{a.FormFraction * 100.0,7:F1} %",
                 formMatters ? dim : warn);
@@ -394,18 +333,10 @@ public static partial class GuidanceWindow
                 ImGui.NextColumn();
             }
 
-            // ATTITUDE SENSITIVITY is global. Broadside form drag is enormous whatever
-            // the fraction above says, because a slender stack's flank area dwarfs its
-            // nose area - so the alpha axis is carrying real information even when the
-            // vehicle is insensitive to attitude where it normally sits.
+            // ATTITUDE SENSITIVITY is global. Broadside form drag is enormous whatever the fraction above says, because a slender stack's flank area dwarfs its nose area - so the alpha axis is carrying real information even when the vehicle is insensitive to attitude where it normally sits.
             GaugeRowText("Cd(90)/Cd(0)", $"{a.AttitudeSensitivity,7:F1} x", dim);
 
-            // Roll dependence the table cannot represent, because it has no roll input
-            // and stores the azimuthal mean. This does NOT go to zero for an
-            // axisymmetric vehicle: KSA's model is a box, so a square-section booster
-            // rolled 45 degrees still presents sqrt(2) the area it does at 0. About
-            // 25% is the floor for a slender stack; above ~35% the cross-section is
-            // genuinely not square on top of that.
+            // Roll dependence the table cannot represent, because it has no roll input and stores the azimuthal mean. This does NOT go to zero for an axisymmetric vehicle: KSA's model is a box, so a square-section booster rolled 45 degrees still presents sqrt(2) the area it does at 0. About 25% is the floor for a slender stack; above ~35% the cross-section is genuinely not square on top of that.
             GaugeRowText("Roll spread", $"{a.RollSpread * 100.0,7:F1} %  (~25% is inherent)",
                 a.RollSpread > 0.35 ? warn : dim);
 
@@ -430,10 +361,7 @@ public static partial class GuidanceWindow
         ImGuiHelper.EndRegion();
     }
 
-    // --- Cd profile ---------------------------------------------------------
-    // The table itself, read off the FITTED spline rather than the sampled grid, so
-    // what is shown is what the solver would actually get - including any overshoot
-    // the fit introduced between breakpoints.
+    // --- Cd profile --------------------------------------------------------- The table itself, read off the FITTED spline rather than the sampled grid, so what is shown is what the solver would actually get - including any overshoot the fit introduced between breakpoints.
     private static void DrawBoostbackProfileSection(float innerW)
     {
         if (!ImGuiHelper.BeginRegion("Cd profile", ImGuiTreeNodeFlags.SpanAllColumns, innerW))
@@ -447,9 +375,7 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // One Mach is enough while the axis is flat; sampling at 0.8 rather than 0
-        // means a future non-flat table shows something representative here without
-        // this needing to change.
+        // One Mach is enough while the axis is flat; sampling at 0.8 rather than 0 means a future non-flat table shows something representative here without this needing to change.
         const double AtMach = 0.8;
         const double Deg = Math.PI / 180.0;
 
@@ -457,9 +383,7 @@ public static partial class GuidanceWindow
         {
             double deg = BoostbackProfileAlphas[i];
             double cd = a.Table.Cd(AtMach, deg * Deg);
-            // CdA is the number that actually multiplies dynamic pressure, so show it
-            // beside the coefficient - it is what makes the drag force checkable
-            // against the game without doing arithmetic in your head.
+            // CdA is the number that actually multiplies dynamic pressure, so show it beside the coefficient - it is what makes the drag force checkable against the game without doing arithmetic in your head.
             GaugeRowText($"alpha {deg,5:F0} deg",
                 $"Cd {cd,7:F2}   CdA {cd * a.ReferenceArea,8:F1} m^2");
         }
@@ -473,8 +397,7 @@ public static partial class GuidanceWindow
         ImGuiHelper.EndRegion();
     }
 
-    // --- Atmosphere ---------------------------------------------------------
-    // The mirrored rho(h), and the check that it really is a mirror.
+    // --- Atmosphere --------------------------------------------------------- The mirrored rho(h), and the check that it really is a mirror.
     private static void DrawBoostbackAtmosphereSection(Vehicle vehicle, Orbit orbit,
                                                        IParentBody parent, float innerW)
     {
@@ -495,12 +418,10 @@ public static partial class GuidanceWindow
         GaugeRowText("Sea level P", $"{atm.SeaLevelPressure / 1000.0,8:F2} kPa");
         GaugeRowText("Scale height", $"{atm.ScaleHeight / 1000.0,8:F2} km");
         GaugeRowText("Top", $"{atm.TopAltitude / 1000.0,8:F1} km");
-        // Derived from P0/rho0, not assumed - an isothermal atmosphere has one speed
-        // of sound at every altitude. See ExponentialAtmosphere.
+        // Derived from P0/rho0, not assumed - an isothermal atmosphere has one speed of sound at every altitude. See ExponentialAtmosphere.
         GaugeRowText("Speed of sound", $"{atm.SpeedOfSound,8:F1} m/s  (derived)");
 
-        // The mirror check. This is the number that says our self-contained rho really
-        // is the game's rho, re-verified on every resample rather than assumed once.
+        // The mirror check. This is the number that says our self-contained rho really is the game's rho, re-verified on every resample rather than assumed once.
         double err = _s.Aero.AtmosphereMirrorError;
         GaugeRowText("Mirror error", $"{err:E2}",
             err < 1e-9 ? new float4(0.4f, 1f, 0.4f, 1f) : new float4(1f, 0.4f, 0.4f, 1f));
@@ -526,8 +447,7 @@ public static partial class GuidanceWindow
             if (a?.Table != null)
             {
                 double cd = a.Table.Cd(atm.Mach(speed), alphaDeg * Math.PI / 180.0);
-                // The whole chain, end to end: what the surrogate says this vehicle is
-                // feeling right now. Comparable against the game by eye.
+                // The whole chain, end to end: what the surrogate says this vehicle is feeling right now. Comparable against the game by eye.
                 GaugeRowText("Drag (model)", $"{cd * a.ReferenceArea * q / 1000.0,8:F1} kN");
             }
         }
@@ -541,16 +461,8 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// The vehicle's CURRENT angle of attack, retrograde-first, in degrees.
-    ///
-    /// Airspeed is surface-relative because KSA's atmosphere co-rotates rigidly with
-    /// the body - the game subtracts omega x r itself before computing drag, and a
-    /// readout that used inertial velocity would disagree with the sim by a full
-    /// equatorial rotation speed near the ground.
-    ///
-    /// Measured in KSA's OWN body frame, where +x is the nose, rather than the
-    /// solver's model frame where the thrust axis is +z. That is deliberate: the
-    /// surrogate was sampled against AerodynamicCdABody, which is indexed in these
-    /// axes, so reading it back the same way is what makes the two comparable.
+    ///  Airspeed is surface-relative because KSA's atmosphere co-rotates rigidly with the body - the game subtracts omega x r itself before computing drag, and a readout that used inertial velocity would disagree with the sim by a full equatorial rotation speed near the ground.
+    ///  Measured in KSA's OWN body frame, where +x is the nose, rather than the solver's model frame where the thrust axis is +z. That is deliberate: the surrogate was sampled against AerodynamicCdABody, which is indexed in these axes, so reading it back the same way is what makes the two comparable.
     /// </summary>
     private static bool TryLiveAlpha(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                      out double alphaDeg)
@@ -565,8 +477,7 @@ public static partial class GuidanceWindow
 
         double3 vBody = vAir.Transform(doubleQuat.Inverse(vehicle.GetBody2Cci()));
 
-        // atan2 of cross-flow against the TAIL-ward axial component: -x, so a vehicle
-        // flying engine-first reads zero.
+        // atan2 of cross-flow against the TAIL-ward axial component: -x, so a vehicle flying engine-first reads zero.
         double cross = Math.Sqrt(vBody.Y * vBody.Y + vBody.Z * vBody.Z);
         alphaDeg = Math.Atan2(cross, -vBody.X) * 180.0 / Math.PI;
         return true;

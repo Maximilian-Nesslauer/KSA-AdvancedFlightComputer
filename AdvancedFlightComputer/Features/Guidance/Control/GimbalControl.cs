@@ -23,34 +23,15 @@ public enum GimbalOverrideMode
 }
 
 // Thrust-vector-control override.
-//
-// WHY THIS EXISTS. The 6-DOF SCvx solver plans in (tdx, tdy, T, tau_roll). Until
-// now the mod could only write CustomAttitudeTarget and let KSA's flight computer
-// decide how to get there, throwing away most of the plan.
-//
-// HOW IT ATTACHES. FlightComputer.ComputeControl calls ComputeTvcControl (which
-// allocates, or ZeroizeTvcs which clears) and then ComputeRcsControl. AFC's
-// VehicleCommandSink runs this writer after ComputeControl, so it lands after every
-// stock writer of CommandY/Z and the override is the last word regardless of
-// attitude mode. Actuator writes are reported through the sink's receipt, which is
-// what keeps a commanded craft in full physics.
-//
-// UNITS. CommandY/CommandZ are NORMALIZED, not angles: Gimbal.GetCommand clamps
-// each to [-1,1] and multiplies by that axis's MaxAngle (radians).
-//
-// THREADING. The demand is published from the Vehicle.PrepareWorker prefix on the
-// main thread, before the step's worker job is queued, and read on a VehicleSolvers
-// job thread inside that job, so a publish is ordered before the read that consumes
-// it. Only Disengage is also called from the draw. One immutable Command record per
-// publish keeps a read from pairing a new mode with an old torque.
+//  WHY THIS EXISTS. The 6-DOF SCvx solver plans in (tdx, tdy, T, tau_roll). Until now the mod could only write CustomAttitudeTarget and let KSA's flight computer decide how to get there, throwing away most of the plan.
+//  HOW IT ATTACHES. FlightComputer.ComputeControl calls ComputeTvcControl (which allocates, or ZeroizeTvcs which clears) and then ComputeRcsControl. AFC's VehicleCommandSink runs this writer after ComputeControl, so it lands after every stock writer of CommandY/Z and the override is the last word regardless of attitude mode. Actuator writes are reported through the sink's receipt, which is what keeps a commanded craft in full physics.
+//  UNITS. CommandY/CommandZ are NORMALIZED, not angles: Gimbal.GetCommand clamps each to [-1,1] and multiplies by that axis's MaxAngle (radians).
+//  THREADING. The demand is published from the Vehicle.PrepareWorker prefix on the main thread, before the step's worker job is queued, and read on a VehicleSolvers job thread inside that job, so a publish is ordered before the read that consumes it. Only Disengage is also called from the draw. One immutable Command record per publish keeps a read from pairing a new mode with an old torque.
 public static class KsaGimbalControl
 {
     /// <summary>
     /// One vehicle's gimbal demand, published whole.
-    ///
-    /// A record because the apply side runs on a VehicleSolvers JOB THREAD while the
-    /// demand is written on the sim thread: reading nine loose fields there could pair
-    /// a new mode with an old torque. One reference assignment cannot.
+    ///  A record because the apply side runs on a VehicleSolvers JOB THREAD while the demand is written on the sim thread: reading nine loose fields there could pair a new mode with an old torque. One reference assignment cannot.
     /// </summary>
     public sealed record Command(
         GimbalOverrideMode Mode,
@@ -63,13 +44,8 @@ public static class KsaGimbalControl
     }
 
     /// <summary>
-    /// Everything the override holds for ONE vehicle: its demand, its scratch buffers
-    /// and its diagnostics.
-    ///
-    /// THE SCRATCH HAS TO BE PER-VEHICLE, not merely the demand. ApplyLsq runs on a
-    /// job thread, and with two guided vehicles two of those run at once - sharing one
-    /// commands array between them would interleave two allocations into the same
-    /// buffer and then fly the result.
+    /// Everything the override holds for ONE vehicle: its demand, its scratch buffers and its diagnostics.
+    ///  THE SCRATCH HAS TO BE PER-VEHICLE, not merely the demand. ApplyLsq runs on a job thread, and with two guided vehicles two of those run at once - sharing one commands array between them would interleave two allocations into the same buffer and then fly the result.
     /// </summary>
     public sealed class Slot
     {
@@ -88,26 +64,16 @@ public static class KsaGimbalControl
         public TvcAllocationResult LastAllocation;
 
         /// <summary>
-        /// Commands from the last Lsq allocation, 2 per gimbal (Y then Z). Written by
-        /// the worker, read by the UI for display only - an occasional torn read just
-        /// means one frame of a stale number in a readout.
+        /// Commands from the last Lsq allocation, 2 per gimbal (Y then Z). Written by the worker, read by the UI for display only - an occasional torn read just means one frame of a stale number in a readout.
         /// </summary>
         public ReadOnlySpan<double> LastCommands => Commands;
     }
 
     /// <summary>
     /// Per-vehicle state, keyed on the identity the apply side can actually see.
-    ///
-    /// The FlightComputer handed to the postfix is NOT the live one - the worker runs
-    /// on a copy - so reference-comparing the FlightComputer would never match.
-    /// VehicleConfigInfo is the usable identity because FlightComputer.CopyFrom assigns
-    /// it by REFERENCE rather than cloning.
-    ///
-    /// This replaces a single _target field, and the gain is not only that two vehicles
-    /// can be driven at once. With one target, a second vehicle engaging silently stole
-    /// the first one's gimbals, and whether the first still flew depended on the order
-    /// KSA happened to interleave prepare and compute across vehicles. A lookup cannot
-    /// be pointed at the wrong vehicle.
+    ///  The FlightComputer handed to the postfix is NOT the live one - the worker runs on a copy - so reference-comparing the FlightComputer would never match.
+    /// VehicleConfigInfo is the usable identity because FlightComputer.CopyFrom assigns it by REFERENCE rather than cloning.
+    ///  This replaces a single _target field, and the gain is not only that two vehicles can be driven at once. With one target, a second vehicle engaging silently stole the first one's gimbals, and whether the first still flew depended on the order KSA happened to interleave prepare and compute across vehicles. A lookup cannot be pointed at the wrong vehicle.
     /// </summary>
     private static readonly ConditionalWeakTable<FlightComputer.VehicleConfigInfo, Slot> Slots = new();
 
@@ -158,8 +124,7 @@ public static class KsaGimbalControl
         s.AppliedCount = 0;
     }
 
-    // Runs on the vehicle worker from VehicleCommandSink.Run. Switching guidance off stops the
-    // override on the next control step, one step before the per-vehicle release disengages it.
+    // Runs on the vehicle worker from VehicleCommandSink.Run. Switching guidance off stops the override on the next control step, one step before the per-vehicle release disengages it.
     internal static void OnComputeControl(FlightComputer flightComputer, ref FlightComputerOutput outputs,
                                           ref VehicleCommandSink.Receipt receipt)
     {
@@ -170,8 +135,7 @@ public static class KsaGimbalControl
         if (cfg == null || !Slots.TryGetValue(cfg, out Slot st))
             return;
 
-        // ONE read of the demand, into a local. Re-reading the field would let a sim
-        // thread publish land between two reads and mix two demands together.
+        // ONE read of the demand, into a local. Re-reading the field would let a sim thread publish land between two reads and mix two demands together.
         Command cmd = st.Cmd;
         GimbalOverrideMode mode = cmd.Mode;
         if (mode == GimbalOverrideMode.Off)
@@ -194,8 +158,7 @@ public static class KsaGimbalControl
             ModuleStateful<GimbalController, GimbalControllerState, EmptyStruct, EmptyStruct>
                 .StateUpdater.ModuleAndNewStateRef slot = outputs.Gimbals.GetModuleAndNewState(gimbal);
 
-            // Empty slots carry a null Module and a null State ref - writing through
-            // that would be an access violation, not an exception.
+            // Empty slots carry a null Module and a null State ref - writing through that would be an access violation, not an exception.
             if (slot.Module == null)
                 continue;
 
@@ -210,9 +173,7 @@ public static class KsaGimbalControl
                 Allocate(gimbal, com, demand, out y, out z);
             }
 
-            // Deliberately NOT gated on TotalThrust > 0, unlike the game's own
-            // ComputeTvcControl. An unlit engine still swings its nozzle visually,
-            // which is what makes this testable on the pad before committing to a burn.
+            // Deliberately NOT gated on TotalThrust > 0, unlike the game's own ComputeTvcControl. An unlit engine still swings its nozzle visually, which is what makes this testable on the pad before committing to a burn.
             slot.State.CommandY = y;
             slot.State.CommandZ = z;
             applied++;
@@ -225,11 +186,7 @@ public static class KsaGimbalControl
     }
 
     // Physical allocation: solve for the deflections delivering the commanded N*m.
-    //
-    // Two passes over the gimbals because the solve needs every gimbal's thrust
-    // before it can produce any command. Thrust falls back to the nameplate maximum
-    // when the engine is unlit, so the allocation can be inspected on the pad - the
-    // resulting commands are then what WOULD be flown at full thrust.
+    //  Two passes over the gimbals because the solve needs every gimbal's thrust before it can produce any command. Thrust falls back to the nameplate maximum when the engine is unlit, so the allocation can be inspected on the pad - the resulting commands are then what WOULD be flown at full thrust.
     private static void ApplyLsq(Slot st, Command cmd, FlightComputer.VehicleConfigInfo cfg,
                                  float3 com, ref FlightComputerOutput outputs,
                                  ref VehicleCommandSink.Receipt receipt)
@@ -282,29 +239,11 @@ public static class KsaGimbalControl
     }
 
     /// <summary>
-    /// Distribute one body-frame torque demand onto a single gimbal - a faithful
-    /// replica of the per-gimbal block inside FlightComputer.ComputeTvcControl.
-    ///
-    /// This is the layer worth commanding. KSA does NOT solve a control-allocation
-    /// matrix; each gimbal independently works out, from pure geometry, which way
-    /// to push to make torque in the demanded direction about ITS OWN moment arm:
-    ///
-    ///   arm     = thrust-weighted nozzle position - centre of mass
-    ///   dir     = cross(normalize(cross(demand, armHat)), armHat)
-    ///
-    /// i.e. the lateral thrust direction perpendicular to the arm whose moment lies
-    /// along the demand. That direction is rotated into the gimbal's own frame and
-    /// its Y/Z components become the deflection command.
-    ///
-    /// The consequence - and the reason this is engine-config-agnostic - is that
-    /// each gimbal is silently excluded from any axis it has no leverage over: an
-    /// arm with no component in a plane cannot torque about the perpendicular axis,
-    /// so that component of the demand is ZEROED FOR THIS GIMBAL ONLY. A centreline
-    /// main engine therefore contributes pitch and yaw but no roll, while an
-    /// off-axis vernier picks the roll up. Commanding torque rather than deflection
-    /// means we inherit that split for free on any vehicle layout.
-    ///
-    /// Public so the UI can display exactly what the worker will command.
+    /// Distribute one body-frame torque demand onto a single gimbal - a faithful replica of the per-gimbal block inside FlightComputer.ComputeTvcControl.
+    ///  This is the layer worth commanding. KSA does NOT solve a control-allocation matrix; each gimbal independently works out, from pure geometry, which way to push to make torque in the demanded direction about ITS OWN moment arm:
+    ///  arm     = thrust-weighted nozzle position - centre of mass dir     = cross(normalize(cross(demand, armHat)), armHat) i.e. the lateral thrust direction perpendicular to the arm whose moment lies along the demand. That direction is rotated into the gimbal's own frame and its Y/Z components become the deflection command.
+    ///  The consequence - and the reason this is engine-config-agnostic - is that each gimbal is silently excluded from any axis it has no leverage over: an arm with no component in a plane cannot torque about the perpendicular axis, so that component of the demand is ZEROED FOR THIS GIMBAL ONLY. A centreline main engine therefore contributes pitch and yaw but no roll, while an off-axis vernier picks the roll up. Commanding torque rather than deflection means we inherit that split for free on any vehicle layout.
+    ///  Public so the UI can display exactly what the worker will command.
     /// </summary>
     public static void Allocate(GimbalController gimbal, float3 comAsmb, double3 demand,
                                 out float commandY, out float commandZ)
@@ -316,9 +255,7 @@ public static class KsaGimbalControl
         var arm = new double3(armF.X, armF.Y, armF.Z);
         double3 armHat = double3.NormalizeOrZero(arm);
 
-        // Per-axis leverage test, matching KSA's tolerance. Written out on components
-        // rather than via the double2 swizzles so the intent is legible: an arm lying
-        // along one axis has no moment about it.
+        // Per-axis leverage test, matching KSA's tolerance. Written out on components rather than via the double2 swizzles so the intent is legible: an arm lying along one axis has no moment about it.
         double3 d = demand;
         if (Math.Sqrt(armHat.X * armHat.X + armHat.Y * armHat.Y) < 1e-3) d.Z = 0.0;
         if (Math.Sqrt(armHat.X * armHat.X + armHat.Z * armHat.Z) < 1e-3) d.Y = 0.0;

@@ -8,32 +8,10 @@ using AdvancedFlightComputer.Guidance.Scvx;
 
 /// <summary>
 /// Builds the 6-DOF cold-start seed by solving the 3-DOF G-FOLD problem first.
-///
-/// SCvx does not search for a trajectory, it REFINES one. It linearises about the
-/// reference it was handed and can only walk a trust region's distance per iteration,
-/// so the quality of the initial guess sets both how many iterations the cold solve
-/// needs and whether it finds a sensible trajectory at all. The default seed is a
-/// straight line from the vehicle to the target at constant thrust, which satisfies
-/// neither the dynamics nor the constraints and is nowhere near the optimum.
-///
-/// G-FOLD is a much better guess and costs almost nothing to obtain. It solves the
-/// same landing under a 3-DOF point-mass model, but it is CONVEX - lossless
-/// convexification turns the non-convex thrust-magnitude bounds into a second-order
-/// cone - so it has no local minima, needs no initial guess of its own, and returns
-/// the global optimum of its own problem in a handful of milliseconds. A golden-section
-/// search over time of flight then gives a burn duration that is close to optimal
-/// rather than a guess.
-///
-/// What it does NOT model is attitude: it commands an acceleration vector directly and
-/// assumes the vehicle can point wherever it likes instantly. That is exactly the part
-/// SCvx adds, and it is why this is a seed and not an answer. But the position,
-/// velocity, mass and burn-time profiles are close to right, and the commanded
-/// acceleration DIRECTION is a good guess at where the vehicle should be pointing -
-/// which gives the attitude channel a sensible seed too.
-///
-/// FRAMES: G-FOLD works in a local frame with x UP; the 6-DOF model has z up. The
-/// mapping used here is gfold(x,y,z) = model(z,x,y), a cyclic permutation and so
-/// right-handed, applied consistently in both directions.
+///  SCvx does not search for a trajectory, it REFINES one. It linearises about the reference it was handed and can only walk a trust region's distance per iteration, so the quality of the initial guess sets both how many iterations the cold solve needs and whether it finds a sensible trajectory at all. The default seed is a straight line from the vehicle to the target at constant thrust, which satisfies neither the dynamics nor the constraints and is nowhere near the optimum.
+///  G-FOLD is a much better guess and costs almost nothing to obtain. It solves the same landing under a 3-DOF point-mass model, but it is CONVEX - lossless convexification turns the non-convex thrust-magnitude bounds into a second-order cone - so it has no local minima, needs no initial guess of its own, and returns the global optimum of its own problem in a handful of milliseconds. A golden-section search over time of flight then gives a burn duration that is close to optimal rather than a guess.
+///  What it does NOT model is attitude: it commands an acceleration vector directly and assumes the vehicle can point wherever it likes instantly. That is exactly the part SCvx adds, and it is why this is a seed and not an answer. But the position, velocity, mass and burn-time profiles are close to right, and the commanded acceleration DIRECTION is a good guess at where the vehicle should be pointing - which gives the attitude channel a sensible seed too.
+///  FRAMES: G-FOLD works in a local frame with x UP; the 6-DOF model has z up. The mapping used here is gfold(x,y,z) = model(z,x,y), a cyclic permutation and so right-handed, applied consistently in both directions.
 /// </summary>
 public static class Ksa6DofGfoldSeed
 {
@@ -44,19 +22,14 @@ public static class Ksa6DofGfoldSeed
     private const int GfoldNodes = 60;
 
     /// <summary>
-    /// Try to produce a seed. Returns false if G-FOLD cannot solve the case, in which
-    /// case the caller should fall back to the straight-line seed - a worse guess is
-    /// much better than no plan.
+    /// Try to produce a seed. Returns false if G-FOLD cannot solve the case, in which case the caller should fall back to the straight-line seed - a worse guess is much better than no plan.
     /// </summary>
     /// <summary>Milliseconds spent inside G-FOLD on the last TryBuild, for measurement.</summary>
     public static double LastGfoldMs { get; private set; }
 
     /// <summary>
     /// Search over time of flight, or take a single solve at an estimated duration?
-    ///
-    /// The search costs a conic solve pair per sample and dominates the seed's cost,
-    /// while the SEED does not need the optimal burn time - SCvx re-optimises sigma
-    /// anyway. Measured by Scvx.Console --seed.
+    ///  The search costs a conic solve pair per sample and dominates the seed's cost, while the SEED does not need the optimal burn time - SCvx re-optimises sigma anyway. Measured by Scvx.Console --seed.
     /// </summary>
     public static bool SearchTimeOfFlight { get; set; }
 
@@ -81,9 +54,7 @@ public static class Ksa6DofGfoldSeed
                 return false;
             }
 
-            // G-FOLD needs a dry/fuel split. The 6-DOF model has no dry mass, so give
-            // it a generous notional budget: the seed only has to be a good SHAPE, and
-            // a fuel-starved G-FOLD would refuse to solve rather than return one.
+            // G-FOLD needs a dry/fuel split. The 6-DOF model has no dry mass, so give it a generous notional budget: the seed only has to be a good SHAPE, and a fuel-starved G-FOLD would refuse to solve rather than return one.
             double fuel = 0.5 * m0;
 
             var p = new GfoldParams
@@ -95,10 +66,7 @@ public static class Ksa6DofGfoldSeed
                 ThrustMax = cfg.Tmax,
                 ThrottleMin = Math.Clamp(cfg.ThrottleFloor, 0.01, 0.95),
                 ThrottleMax = 1.0,
-                // Deliberately permissive. These are the SEED's constraints, not the
-                // flight constraints: the 6-DOF solve re-imposes the real tilt cone,
-                // glideslope and speed limits, and a G-FOLD run that refuses to solve
-                // because of a tight corridor gives us nothing to start from.
+                // Deliberately permissive. These are the SEED's constraints, not the flight constraints: the 6-DOF solve re-imposes the real tilt cone, glideslope and speed limits, and a G-FOLD run that refuses to solve because of a tight corridor gives us nothing to start from.
                 VMax = Math.Max(4.0 * Speed(x0), 200.0),
                 GlideSlopeDeg = 1.0,
                 PointingMaxDeg = Math.Clamp(cfg.TiltMaxDeg, 1.0, 89.0),
@@ -126,13 +94,8 @@ public static class Ksa6DofGfoldSeed
             }
             else
             {
-                // Estimate the burn time rather than searching for it. SCvx
-                // re-optimises sigma from here, so the seed only has to be in the
-                // right region, and the search is what makes G-FOLD expensive.
-                // MIN-ERROR (P3), not min-fuel (P4). P4 needs a landing point that
-                // only P3 can supply, so min fuel is inherently two solves - and for a
-                // SEED the distinction does not matter: SCvx re-optimises fuel from
-                // here, and what it needs is a dynamically sensible SHAPE.
+                // Estimate the burn time rather than searching for it. SCvx re-optimises sigma from here, so the seed only has to be in the right region, and the search is what makes G-FOLD expensive.
+                // MIN-ERROR (P3), not min-fuel (P4). P4 needs a landing point that only P3 can supply, so min fuel is inherently two solves - and for a SEED the distinction does not matter: SCvx re-optimises fuel from here, and what it needs is a dynamically sensible SHAPE.
                 tof = EstimateTimeOfFlight(x0, xf, g, cfg, m0);
                 traj = GfoldPlanner.SolveMinError(p, tof, GfoldNodes);
                 solves = 1;
@@ -152,8 +115,7 @@ public static class Ksa6DofGfoldSeed
         }
         catch (Exception e)
         {
-            // A seed is an optimisation, never a requirement. Anything unexpected here
-            // must degrade to the straight-line seed rather than stop the engage.
+            // A seed is an optimisation, never a requirement. Anything unexpected here must degrade to the straight-line seed rather than stop the engage.
             note = "G-FOLD seed failed: " + e.Message;
             return false;
         }
@@ -166,19 +128,12 @@ public static class Ksa6DofGfoldSeed
     private static double[] ToGfold(double mx, double my, double mz) => [mz, mx, my];
 
     /// <summary>
-    /// Resample the G-FOLD trajectory onto the 6-DOF node count and turn it into a
-    /// full 14-state seed.
-    ///
-    /// The attitude channel is the interesting part. G-FOLD's commanded acceleration
-    /// EXCLUDES gravity, so the thrust direction is simply its direction, and pointing
-    /// the body +Z axis along it makes the thrust purely axial - which in turn means
-    /// the lateral control channels seed to zero and are consistent with the attitude.
-    /// A seed whose attitude and control disagree would start the solver off with a
-    /// large defect for no reason.
+    /// Resample the G-FOLD trajectory onto the 6-DOF node count and turn it into a full 14-state seed.
+    ///  The attitude channel is the interesting part. G-FOLD's commanded acceleration EXCLUDES gravity, so the thrust direction is simply its direction, and pointing the body +Z axis along it makes the thrust purely axial - which in turn means the lateral control channels seed to zero and are consistent with the attitude.
+    /// A seed whose attitude and control disagree would start the solver off with a large defect for no reason.
     /// </summary>
     /// <summary>
-    /// Time to descend the remaining height, braking from the current sink rate. The
-    /// seed only needs the right order of magnitude.
+    /// Time to descend the remaining height, braking from the current sink rate. The seed only needs the right order of magnitude.
     /// </summary>
     private static double EstimateTimeOfFlight(double[] x0, double[] xf, double g,
                                                Scvx6DofConfig cfg, double m0)
@@ -228,8 +183,7 @@ public static class Ksa6DofGfoldSeed
             double uz = Lerp(u0[0], u1[0], a);
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
 
-            // Attitude: body +Z along the commanded acceleration. Fall back to
-            // straight up where the command is degenerate.
+            // Attitude: body +Z along the commanded acceleration. Fall back to straight up where the command is degenerate.
             if (un > 1e-6)
                 PointZAt(ux / un, uy / un, uz / un, xSeed.AsSpan(k * NX + Dynamics6Dof.IQ, 4));
             else
@@ -239,12 +193,7 @@ public static class Ksa6DofGfoldSeed
             uSeed[k * NU + Dynamics6Dof.IT] = un * m;
         }
 
-        // BODY RATES MUST MATCH THE ATTITUDE PROFILE. Leaving them at zero while the
-        // seeded attitude rotates is internally INCONSISTENT - the seed asserts the
-        // vehicle turns with no angular velocity, a large dynamics defect the solver
-        // then spends iterations undoing. A straight-line seed with identity attitude
-        // everywhere is at least self-consistent, which is how a "better" seed can
-        // lose to it. Finite-difference the quaternion instead: w = 2 * conj(q) * dq/dt.
+        // BODY RATES MUST MATCH THE ATTITUDE PROFILE. Leaving them at zero while the seeded attitude rotates is internally INCONSISTENT - the seed asserts the vehicle turns with no angular velocity, a large dynamics defect the solver then spends iterations undoing. A straight-line seed with identity attitude everywhere is at least self-consistent, which is how a "better" seed can lose to it. Finite-difference the quaternion instead: w = 2 * conj(q) * dq/dt.
         double dt = tof / Math.Max(nodes - 1, 1);
         for (int k = 0; k < nodes; k++)
         {
@@ -261,18 +210,14 @@ public static class Ksa6DofGfoldSeed
             xSeed[k * NX + Dynamics6Dof.IW + 2] = 2.0 * (qk[0] * dz - qk[1] * dy + qk[2] * dx - qk[3] * dw);
         }
 
-        // Node 0 IS the measured state, exactly. The subproblem pins it by equality and
-        // the trust region applies there too, so any disagreement between the seed and
-        // x0 makes the first subproblem infeasible rather than merely inaccurate.
+        // Node 0 IS the measured state, exactly. The subproblem pins it by equality and the trust region applies there too, so any disagreement between the seed and x0 makes the first subproblem infeasible rather than merely inaccurate.
         Array.Copy(x0, 0, xSeed, 0, NX);
     }
 
     private static double Lerp(double a, double b, double t) => a * (1.0 - t) + b * t;
 
     /// <summary>
-    /// Shortest-arc quaternion (scalar-first) taking body +Z onto the given unit
-    /// vector. Roll about the thrust axis is left at whatever the shortest rotation
-    /// gives, because a landing does not care about it.
+    /// Shortest-arc quaternion (scalar-first) taking body +Z onto the given unit vector. Roll about the thrust axis is left at whatever the shortest rotation gives, because a landing does not care about it.
     /// </summary>
     private static void PointZAt(double x, double y, double z, Span<double> q)
     {

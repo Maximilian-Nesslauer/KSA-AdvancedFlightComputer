@@ -7,20 +7,13 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// The Powered landing tab's 6-DOF content. Same shape as the G-FOLD page: what the
-// guidance is doing, the one knob that gets set per flight, the debug toggles, and
-// every solver parameter folded away.
-//
-// The one visible knob is TARGET ALTITUDE, because it is the only one that describes
-// the flight rather than the optimiser: it is where the plan levels off, and it is
-// set per landing. The rest tune how the problem is solved and are left alone once
-// they work.
+// The Powered landing tab's 6-DOF content. Same shape as the G-FOLD page: what the guidance is doing, the one knob that gets set per flight, the debug toggles, and every solver parameter folded away.
+//  The one visible knob is TARGET ALTITUDE, because it is the only one that describes the flight rather than the optimiser: it is where the plan levels off, and it is set per landing. The rest tune how the problem is solved and are left alone once they work.
 public static partial class GuidanceWindow
 {
     private static void Draw6DofLandingContent(Vehicle vehicle, float innerW)
     {
-        // Same descent plot the G-FOLD and hover pages carry, drawing this solver's
-        // plan against the flown path.
+        // Same descent plot the G-FOLD and hover pages carry, drawing this solver's plan against the flown path.
         float plotH = ImGui.GetTextLineHeightWithSpacing() * 6.5f;
         DrawGfoldPlot(ImGui.GetWindowDrawList(), ImGui.GetCursorScreenPos(),
             new float2(innerW, plotH));
@@ -33,12 +26,7 @@ public static partial class GuidanceWindow
         {
             GaugeRow("Target altitude (m)", "##sdtargetalt", ref _s.SixDofTargetAltM);
 
-            // HANDOFF SITS WITH TARGET ALTITUDE, not in the parameter fold, because the
-            // two only mean anything relative to each other: the handoff must be ABOVE
-            // the target or it never fires, and the guidance then flies to the target
-            // and sits there. Separating them by a collapsed section made it possible
-            // to move one and forget the other, which reads in flight as the hover
-            // simply not happening.
+            // HANDOFF SITS WITH TARGET ALTITUDE, not in the parameter fold, because the two only mean anything relative to each other: the handoff must be ABOVE the target or it never fires, and the guidance then flies to the target and sits there. Separating them by a collapsed section made it possible to move one and forget the other, which reads in flight as the hover simply not happening.
             GaugeRowCheck("Hand off to terminal hover", "##sdhover", ref _s.SixDofHoverHandoff);
             using (new ImGuiDisabledScope(!_s.SixDofHoverHandoff))
                 GaugeRow("Handoff altitude (m)", "##sdhoveralt", ref _s.SixDofHoverHandoffAltM);
@@ -49,8 +37,7 @@ public static partial class GuidanceWindow
             ImGuiHelper.EndRegion();
         }
 
-        // Debug toggles stay OUT of the fold, as on the G-FOLD page: they are what you
-        // reach for while something is going wrong.
+        // Debug toggles stay OUT of the fold, as on the G-FOLD page: they are what you reach for while something is going wrong.
         ImGui.Checkbox("Show plan overlay", ref _show6DofOverlay);
         ImGui.SameLine();
         ImGui.Checkbox("Log telemetry to file", ref _s.SixDofLogging);
@@ -72,14 +59,12 @@ public static partial class GuidanceWindow
         {
             ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f),
                 _s.EngagePending ? "Engaging..." : "Idle - EXECUTE engages 6-DOF guidance.");
-            // The cold solve is ~1.7 s of sim thread unless it is threaded or spread,
-            // which is worth knowing BEFORE committing rather than after the hitch.
+            // The cold solve is ~1.7 s of sim thread unless it is threaded or spread, which is worth knowing BEFORE committing rather than after the hitch.
             if (!_s.SixDofThreaded && !_s.SixDofSpreadCold)
                 ImGui.TextWrapped("Cold solve blocks the sim thread for ~1.7 s - engage during a coast, "
                     + "or turn on threading or cold-solve spreading in the parameters.");
 
-            // Whether a plan can exist AT ALL, before committing rather than after a
-            // failed solve. This is the readout that explains a refusal to engage.
+            // Whether a plan can exist AT ALL, before committing rather than after a failed solve. This is the readout that explains a refusal to engage.
             Draw6DofFeasibility(vehicle);
             return;
         }
@@ -98,9 +83,7 @@ public static partial class GuidanceWindow
 
     private static void Draw6DofLogStatus()
     {
-        // One global sink with one owner, so say plainly whether it is recording THIS
-        // craft: "logging" on a vehicle whose rows are going nowhere is worse than
-        // silence.
+        // One global sink with one owner, so say plainly whether it is recording THIS craft: "logging" on a vehicle whose rows are going nowhere is worse than silence.
         if (SixDofLog.Enabled && ReferenceEquals(SixDofLog.Owner, _s))
         {
             ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
@@ -136,9 +119,7 @@ public static partial class GuidanceWindow
             GaugeRow("Throttle floor", "##sdfloor", ref _s.SixDofThrottleFloor);
 
         // Seeds the cold solve from a G-FOLD solution instead of a straight line.
-        // SCvx refines a reference rather than searching for one, so the seed decides
-        // how many iterations the cold solve needs and which local solution it walks
-        // toward - and G-FOLD also supplies a far better burn time than a fixed guess.
+        // SCvx refines a reference rather than searching for one, so the seed decides how many iterations the cold solve needs and which local solution it walks toward - and G-FOLD also supplies a far better burn time than a fixed guess.
         // Strictly an optimisation: a failure falls back to the straight-line seed.
         GaugeRowCheck("Seed cold solve from G-FOLD", "##sdgfseed", ref _s.SixDofGfoldSeed);
 
@@ -167,8 +148,7 @@ public static partial class GuidanceWindow
             GaugeRowText("  actual",
                 $"{_s.Guidance.Sigma / Math.Max(_s.Guidance.Nodes - 1, 1):F2} s");
 
-        // Switching threading mid-flight is the point of having the toggle, so it has
-        // to be safe: stop the worker on the way off, start one on the way on.
+        // Switching threading mid-flight is the point of having the toggle, so it has to be safe: stop the worker on the way off, start one on the way on.
         GaugeRowCheck("Solve on a background thread", "##sdthreaded", ref _s.SixDofThreaded);
         if (_s.SixDofThreaded && _s.Worker != null)
             GaugeRowText("  worker",

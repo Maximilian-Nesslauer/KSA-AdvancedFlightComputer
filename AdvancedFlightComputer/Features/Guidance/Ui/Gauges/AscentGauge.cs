@@ -7,17 +7,10 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// The Ascent tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT
-// buttons live in Ui/Panel.cs; everything here draws inside the body
-// child that panel opens, so it is plain ImGui under ImGaugeDressing's styling.
-//
-// The point of the restructure is that the legacy tab put thirty controls in one
-// flat list, so the four that matter - the target orbit - sat among solver tuning.
-// Here the two sections that shape a launch are open, and everything else is folded
-// away behind "Expert settings", collapsed until asked for.
-//
-// It shares VehicleAutopilotState with the legacy Ascent tab, so both drive the same
-// guidance; the tab can be deleted once this has flown.
+// The Ascent tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT buttons live in Ui/Panel.cs; everything here draws inside the body child that panel opens, so it is plain ImGui under ImGaugeDressing's styling.
+//  The point of the restructure is that the legacy tab put thirty controls in one flat list, so the four that matter - the target orbit - sat among solver tuning.
+// Here the two sections that shape a launch are open, and everything else is folded away behind "Expert settings", collapsed until asked for.
+//  It shares VehicleAutopilotState with the legacy Ascent tab, so both drive the same guidance; the tab can be deleted once this has flown.
 public static partial class GuidanceWindow
 {
     private static void DrawAscentTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
@@ -34,10 +27,7 @@ public static partial class GuidanceWindow
         DrawExpertSettingsSection(innerW);
     }
 
-    // --- Target orbit -------------------------------------------------------
-    // The main levers. Picking a target turns the four orbit inputs into OUTPUTS of
-    // that pick - continuously recomputed and greyed out - because a chase orbit that
-    // disagreed with the target it was chasing was never anything but a mistake.
+    // --- Target orbit ------------------------------------------------------- The main levers. Picking a target turns the four orbit inputs into OUTPUTS of that pick - continuously recomputed and greyed out - because a chase orbit that disagreed with the target it was chasing was never anything but a mistake.
     private static void DrawTargetOrbitSection(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                                double bodyRadius, float innerW)
     {
@@ -59,8 +49,7 @@ public static partial class GuidanceWindow
         {
             GaugeRow("Periapsis (km)", "##pe", ref _s.PeKm);
             GaugeRow("Apoapsis (km)", "##ap", ref _s.ApKm);
-            // A new inclination makes the old LAN meaningless - the plane it named
-            // no longer passes overhead - so re-seed it from where the vehicle is.
+            // A new inclination makes the old LAN meaningless - the plane it named no longer passes overhead - so re-seed it from where the vehicle is.
             if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             GaugeRow("LAN (deg)", "##lan", ref _s.LanDeg);
@@ -75,8 +64,7 @@ public static partial class GuidanceWindow
             ImGui.NextColumn();
         }
 
-        // Directly below the orbit parameters: these two decide what EXECUTE
-        // actually does, so they belong with the launch, not buried in Expert.
+        // Directly below the orbit parameters: these two decide what EXECUTE actually does, so they belong with the launch, not buried in Expert.
         using (new ImGuiDisabledScope(!driven))
             GaugeRowCheck("Auto warp to window", "##autolaunch", ref _s.AutoLaunch);
         GaugeRowCheck("Auto engines/staging", "##autostage", ref _s.AutoStage);
@@ -130,9 +118,7 @@ public static partial class GuidanceWindow
                         && ImGui.Selectable(v.Id, v.Id == _s.TargetId))
                     {
                         _s.TargetId = v.Id;
-                        // Mirror into the game's own targeting, so the map and the rendezvous
-                        // gauge agree with us. Through the input buffer, because the draw overlaps
-                        // the vehicle solver and a direct SetTarget rebuilds the flight plan it reads.
+                        // Mirror into the game's own targeting, so the map and the rendezvous gauge agree with us. Through the input buffer, because the draw overlaps the vehicle solver and a direct SetTarget rebuilds the flight plan it reads.
                         Universe.SetTargetCommand(vehicle.Id, v.Id);
                     }
                 }
@@ -143,8 +129,7 @@ public static partial class GuidanceWindow
         ImGui.NextColumn();
     }
 
-    // --- Ascent settings ----------------------------------------------------
-    // How the vehicle flies the ascent, as opposed to where it is going.
+    // --- Ascent settings ---------------------------------------------------- How the vehicle flies the ascent, as opposed to where it is going.
     private static void DrawAscentSettingsSection(float innerW)
     {
         if (!ImGuiHelper.BeginRegion("Ascent settings",
@@ -159,10 +144,7 @@ public static partial class GuidanceWindow
         GaugeRow("Turn start alt (km)", "##turnalt", ref _s.TurnStartAltKm);
         GaugeRow("Turn rate (deg/s)", "##turnrate", ref _s.TurnRateDegS);
 
-        // Roll is FREE by default - the ascent holds whatever the vehicle lifted off
-        // with and commands a thrust direction only. Ticking this commands a roll as
-        // well, and switches the flight computer out of decoupled roll so it tracks it
-        // (see VehicleAutopilotState.ForceRoll).
+        // Roll is FREE by default - the ascent holds whatever the vehicle lifted off with and commands a thrust direction only. Ticking this commands a roll as well, and switches the flight computer out of decoupled roll so it tracks it (see VehicleAutopilotState.ForceRoll).
         GaugeRowCheck("Force roll", "##forceroll", ref _s.ForceRoll);
         using (new ImGuiDisabledScope(!_s.ForceRoll))
             GaugeRow("Roll angle (deg)", "##rollangle", ref _s.ForceRollDeg);
@@ -175,15 +157,9 @@ public static partial class GuidanceWindow
     // --- Booster reserve ----------------------------------------------------
 
     /// <summary>
-    /// Stage the first stage EARLY, leaving it the dV it needs to fly itself home, and
-    /// hand it to boostback with the landing site. Zero switches it off.
-    ///
-    /// A dV RATHER THAN A MASS, and the readout shows both numbers for the same reason:
-    /// what a reserve costs depends on what it has to lift, and that is the booster
-    /// alone - m_dry * (exp(dv/ve) - 1), with the upper stage cancelling out of the
-    /// rocket equation entirely. So a reserve that looks wrong is nearly always a
-    /// booster dry mass that looks wrong, and the booster mass is the one worth
-    /// checking against the vehicle in the editor.
+    /// Stage the first stage EARLY, leaving it the dV it needs to fly itself home, and hand it to boostback with the landing site. Zero switches it off.
+    ///  A dV RATHER THAN A MASS, and the readout shows both numbers for the same reason:
+    /// what a reserve costs depends on what it has to lift, and that is the booster alone - m_dry * (exp(dv/ve) - 1), with the upper stage cancelling out of the rocket equation entirely. So a reserve that looks wrong is nearly always a booster dry mass that looks wrong, and the booster mass is the one worth checking against the vehicle in the editor.
     /// </summary>
     private static void DrawBoosterReserve()
     {
@@ -198,9 +174,7 @@ public static partial class GuidanceWindow
 
         if (!_s.ReserveArmed)
         {
-            // Idle is the normal state for most of a flight - a strap-on stack does not
-            // arm until the solids are gone - so it says WHY rather than just going
-            // quiet. See GuidanceWindow.NextSeparationDropsAllEngines.
+            // Idle is the normal state for most of a flight - a strap-on stack does not arm until the solids are gone - so it says WHY rather than just going quiet. See GuidanceWindow.NextSeparationDropsAllEngines.
             GaugeRowText("Reserve", _s.ReserveNote.Length > 0 ? _s.ReserveNote
                                                               : "waiting for a stage model", warn);
             return;
@@ -218,18 +192,9 @@ public static partial class GuidanceWindow
     // --- Returnable stages --------------------------------------------------
 
     /// <summary>
-    /// The stages that could fly themselves home, each with its own landing site and
-    /// what coming back would cost it from where the vehicle is right now.
-    ///
-    /// CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that
-    /// separates carries a command pod, which is the same thing Vehicle.IsControllable
-    /// asks. An interstage does not qualify however large it is.
-    ///
-    /// THE COST IS LIVE THROUGH THE CLIMB, which is the point of it. It is the impulse
-    /// that would put the ballistic impact on the site if the stage separated NOW, so
-    /// it starts enormous, falls as the trajectory bends over, and is the number that
-    /// says when staging is affordable. Read it against Booster reserve dV above: that
-    /// is what the reserve has to buy.
+    /// The stages that could fly themselves home, each with its own landing site and what coming back would cost it from where the vehicle is right now.
+    ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is.
+    ///  THE COST IS LIVE THROUGH THE CLIMB, which is the point of it. It is the impulse that would put the ballistic impact on the site if the stage separated NOW, so it starts enormous, falls as the trajectory bends over, and is the number that says when staging is affordable. Read it against Booster reserve dV above: that is what the reserve has to buy.
     /// </summary>
     private static void DrawReturnableStagesSection(float innerW)
     {
@@ -249,16 +214,14 @@ public static partial class GuidanceWindow
         {
             GuidanceWindow.ReturnableStage stage = list[i];
 
-            // The name row carries the Set button, because the button is about the
-            // stage rather than about any one of its numbers.
+            // The name row carries the Set button, because the button is about the stage rather than about any one of its numbers.
             ImGui.Text(stage.Name + (stage.IsNext ? "  (next)" : ""));
             ImGui.NextColumn();
             bool arming = _retargetStageId == stage.RootId;
             if (ImGui.Button(arming ? $"click a spot##set{stage.RootId}"
                                     : $"Set target##set{stage.RootId}"))
             {
-                // Arms the world click for THIS stage. Same click handler the landing
-                // retarget uses; the binding is what sends the answer somewhere else.
+                // Arms the world click for THIS stage. Same click handler the landing retarget uses; the binding is what sends the answer somewhere else.
                 _retargetStageId = arming ? 0u : stage.RootId;
                 _retargetArmed = !arming;
             }
@@ -283,8 +246,7 @@ public static partial class GuidanceWindow
 
             if (double.IsNaN(stage.RequiredDvMs))
             {
-                // Normal for most of a climb: a vehicle still going up has no ballistic
-                // impact to drag anywhere, so there is no cost to quote yet.
+                // Normal for most of a climb: a vehicle still going up has no ballistic impact to drag anywhere, so there is no cost to quote yet.
                 GaugeRowText("Return dV", _s.ReturnDvNote.Length > 0 ? _s.ReturnDvNote
                                                                      : "not solved yet", dim);
                 continue;
@@ -310,8 +272,7 @@ public static partial class GuidanceWindow
         ImGuiHelper.EndRegion();
     }
 
-    // --- Expert settings ----------------------------------------------------
-    // Collapsed by default - dropping DefaultOpen is the whole mechanism.
+    // --- Expert settings ---------------------------------------------------- Collapsed by default - dropping DefaultOpen is the whole mechanism.
     private static void DrawExpertSettingsSection(float innerW)
     {
         if (!ImGuiHelper.BeginRegion("Expert settings", ImGuiTreeNodeFlags.SpanAllColumns, innerW))

@@ -7,14 +7,8 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// The Hover sub-tab: the last stretch of the descent, flown by hand on velocity
-// setpoints. The live readout and the nudge pad are visible, tuning is folded away.
-//
-// DELIBERATELY NO TRAJECTORY PLOT. The hover flies a rate profile rather than a
-// trajectory, so there is no plan to draw a flown path against and the picture says
-// nothing the numbers above it do not. It still FEEDS the shared trace - hover is the
-// tail of the same descent - so the G-FOLD and 6-DOF pages show the whole thing
-// including this phase.
+// The Hover sub-tab: the last stretch of the descent, flown by hand on velocity setpoints. The live readout and the nudge pad are visible, tuning is folded away.
+//  DELIBERATELY NO TRAJECTORY PLOT. The hover flies a rate profile rather than a trajectory, so there is no plan to draw a flown path against and the picture says nothing the numbers above it do not. It still FEEDS the shared trace - hover is the tail of the same descent - so the G-FOLD and 6-DOF pages show the whole thing including this phase.
 public static partial class GuidanceWindow
 {
     private static void DrawHoverTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
@@ -22,8 +16,7 @@ public static partial class GuidanceWindow
     {
         bool active = _s.LandingPhase == LandingPhase.TerminalHover;
 
-        // Hover is impossible below a TWR of one - the engine cannot hold the weight,
-        // let alone descend on a profile - so this is a go/no-go, not a statistic.
+        // Hover is impossible below a TWR of one - the engine cannot hold the weight, let alone descend on a profile - so this is a go/no-go, not a statistic.
         double twr = TerminalTwr(vehicle, orbit, mu);
         if (twr < 1.0)
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
@@ -86,8 +79,7 @@ public static partial class GuidanceWindow
         ImGui.SeparatorText("Velocity setpoints (m/s)");
         ImGui.Text($"East {_s.TermSetE,6:F1}   North {_s.TermSetN,6:F1}   Vertical bias {_s.TermSetUp,6:F1}");
 
-        // Numpad nudges while hovering. Unlikely to clash with game bindings, and the
-        // buttons below always work regardless.
+        // Numpad nudges while hovering. Unlikely to clash with game bindings, and the buttons below always work regardless.
         if (active)
         {
             if (ImGui.IsKeyPressed(ImGuiKey.Keypad8)) _s.TermSetN += _s.TermNudgeStep;
@@ -99,14 +91,11 @@ public static partial class GuidanceWindow
             if (ImGui.IsKeyPressed(ImGuiKey.Keypad5, false)) ZeroTerminalSetpoints();
         }
 
-        // Laid out as the numpad it mirrors, so the keys and the buttons are the same
-        // control rather than two things that happen to agree.
+        // Laid out as the numpad it mirrors, so the keys and the buttons are the same control rather than two things that happen to agree.
         float w = MathF.Max(48f, MathF.Min(80f, innerW / 4.5f));
         var pad = new float2(w, ImGui.GetTextLineHeightWithSpacing() * 1.2f);
 
-        // Compass on the left as a 3x3, vertical on the right as its own stack, with a
-        // clear gap between them: they are different axes, and interleaving Up and Down
-        // into the compass rows made one control out of two.
+        // Compass on the left as a 3x3, vertical on the right as its own stack, with a clear gap between them: they are different axes, and interleaving Up and Down into the compass rows made one control out of two.
         float step = w + ImGui.GetStyle().ItemSpacing.X;
         float gap = w * 0.45f;
         float2 origin = ImGui.GetCursorScreenPos();

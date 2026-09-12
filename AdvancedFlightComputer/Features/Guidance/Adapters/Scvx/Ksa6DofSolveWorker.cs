@@ -21,8 +21,7 @@ public sealed record Ksa6DofSolveResult(
 }
 
 /// <summary>
-/// Owns one mutable guidance during a solve. Callers can read its immutable plan
-/// and publish immutable inputs, but must collect the result before changing the solver.
+/// Owns one mutable guidance during a solve. Callers can read its immutable plan and publish immutable inputs, but must collect the result before changing the solver.
 /// A completed result holds the slot until collection so another request cannot erase it.
 /// </summary>
 public sealed class Ksa6DofSolveWorker : IDisposable
@@ -171,8 +170,7 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                 {
                     _solveMs = sw.Elapsed.TotalMilliseconds;
                     _completed++;
-                    // Dispose abandons both the worker and its guidance. No result
-                    // from that owner can be collected after a later engagement.
+                    // Dispose abandons both the worker and its guidance. No result from that owner can be collected after a later engagement.
                     if (_running)
                         _result = new Ksa6DofSolveResult(request.Job, request.Guidance,
                             ok, error, faulted, produced);
@@ -199,8 +197,7 @@ public sealed class Ksa6DofSolveWorker : IDisposable
     }
 
     /// <summary>
-    /// Abandons the worker without waiting for native work. The caller must also
-    /// abandon the guidance, because an active solve can still change that instance.
+    /// Abandons the worker without waiting for native work. The caller must also abandon the guidance, because an active solve can still change that instance.
     /// Use TryStopWhenIdle to retain the guidance for inline execution.
     /// </summary>
     public void Dispose()

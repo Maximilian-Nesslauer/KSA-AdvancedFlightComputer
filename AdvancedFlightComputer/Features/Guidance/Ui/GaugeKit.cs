@@ -7,14 +7,8 @@ using Brutal.Numerics;
 using KSA;
 
 // The two-column rows the guidance tabs are built from.
-//
-// ImGuiHelper.BeginRegion puts the body in two columns, the label at 33 percent and the control
-// at 67 percent, and its own widgets follow the idiom below. These match it for the types it does
-// not cover: it has DrawFloat but nothing for double, and the guidance state is double throughout.
-//
-// Ids are explicit rather than ImGuiHelper's _widgetId counter, because that counter is global and
-// reset by ImGuiHelper.StartFrame, which the game's own windows call, so a mod incrementing it
-// would collide with them.
+//  ImGuiHelper.BeginRegion puts the body in two columns, the label at 33 percent and the control at 67 percent, and its own widgets follow the idiom below. These match it for the types it does not cover: it has DrawFloat but nothing for double, and the guidance state is double throughout.
+//  Ids are explicit rather than ImGuiHelper's _widgetId counter, because that counter is global and reset by ImGuiHelper.StartFrame, which the game's own windows call, so a mod incrementing it would collide with them.
 public static partial class GuidanceWindow
 {
     private static bool GaugeRow(string label, string id, ref double value)
