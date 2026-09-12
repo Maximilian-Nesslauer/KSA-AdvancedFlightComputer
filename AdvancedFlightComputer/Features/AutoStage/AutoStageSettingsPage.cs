@@ -1,134 +1,123 @@
-using System;
-using System.Collections.Generic;
 using System.Reflection;
 using System.Reflection.Emit;
-using AutoStage.Core;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
 
-namespace AutoStage;
+namespace AdvancedFlightComputer.Features.AutoStage;
 
-/// <summary>
-/// Every settings page renders into one body child closed by a single
-/// ConsoleStyle.PopWidgetStyle, so inserting the drawer before that call lands
-/// inside the body with the widget style still pushed. Nothing is replaced, so
-/// other mods can do the same; the drawer itself checks which page is open.
-/// </summary>
-[HarmonyPatch(typeof(GameSettings), nameof(GameSettings.OnDrawUi))]
-static class SettingsTabPatch
+// Every settings page renders into one body child closed by a single ConsoleStyle.PopWidgetStyle,
+// so a drawer inserted before that call lands inside the body with the widget style still pushed.
+// Nothing is replaced, so other mods can do the same; the drawer checks which page is open.
+[HarmonyPatch(typeof(GameSettings), nameof(GameSettings.OnDrawUi), new[] { typeof(Camera) })]
+internal static class AutoStageSettingsPage
 {
+    private static readonly MethodInfo? Anchor =
+        AccessTools.Method(typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
+
+    internal static bool IsAnchorPresent
+    {
+        get
+        {
+            MethodBase? target = AccessTools.Method(typeof(GameSettings), nameof(GameSettings.OnDrawUi), new[] { typeof(Camera) });
+            return target != null && FindAnchor(PatchProcessor.GetOriginalInstructions(target)) >= 0;
+        }
+    }
+
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
     {
         var codes = new List<CodeInstruction>(instructions);
-        MethodInfo? anchor = AccessTools.Method(typeof(ConsoleStyle),
-            nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
-        MethodInfo drawer = AccessTools.Method(typeof(SettingsTabPatch), nameof(DrawSettingsPage));
-
-        if (anchor == null)
-        {
-            DefaultCategory.Log.Warning(
-                "[AutoStage] Transpiler: ConsoleStyle.PopWidgetStyle not found; "
-                + "settings page not patched.");
-            return codes;
-        }
-
-        int anchorIdx = -1;
-        for (int i = 0; i < codes.Count; i++)
-        {
-            if (codes[i].Calls(anchor))
-            {
-                anchorIdx = i;
-                break;
-            }
-        }
-
+        int anchorIdx = FindAnchor(codes);
         if (anchorIdx < 0)
         {
             DefaultCategory.Log.Warning(
-                $"[AutoStage] Transpiler: no ConsoleStyle.PopWidgetStyle() call in "
-                + $"GameSettings.OnDrawUi ({codes.Count} IL instructions scanned); "
-                + "settings page not patched.");
+                $"[AFC] AutoStage settings: no ConsoleStyle.PopWidgetStyle call in GameSettings.OnDrawUi ({codes.Count} instructions), page not patched.");
             return codes;
         }
 
-        // Insert, do not replace: labels stay on the anchor so a jump to it
-        // skips the drawer rather than landing mid-call.
-        codes.Insert(anchorIdx, new CodeInstruction(OpCodes.Call, drawer));
+        // Labels stay on the anchor, so a jump to it skips the drawer instead of landing mid-call.
+        codes.Insert(anchorIdx, new CodeInstruction(OpCodes.Call,
+            AccessTools.Method(typeof(AutoStageSettingsPage), nameof(DrawSettingsPage))));
         return codes;
     }
 
+    private static int FindAnchor(List<CodeInstruction> codes)
+    {
+        if (Anchor == null)
+            return -1;
+        for (int i = 0; i < codes.Count; i++)
+        {
+            if (codes[i].Calls(Anchor))
+                return i;
+        }
+        return -1;
+    }
+
+    private static bool IsModsPageOpen()
+        => GameReflection.GameSettings_openTab_Mods is { } mods
+           && mods.Equals(GameReflection.GameSettings_openTab!.GetValue(null));
+
     public static void DrawSettingsPage()
     {
-        if (!GameReflection.IsModsSettingsPageOpen())
+        if (!IsModsPageOpen())
             return;
-
         try
         {
             ConsoleWidgets.Rule();
             ConsoleWidgets.RegionHeader("AUTOSTAGE".AsSpan());
-            DrawAutoStageSettings();
+            DrawSettings();
         }
         catch (Exception ex)
         {
-            LogHelper.ErrorOnce("Settings.Draw",
-                $"[AutoStage] Settings draw error: {ex.Message}");
+            LogHelper.WarnOnce("autostage-settings", $"[AFC] AutoStage settings draw failed: {ex}");
         }
     }
 
-    private static void DrawAutoStageSettings()
+    private static void DrawSettings()
     {
-        // Takes effect immediately; the Save button below writes it to disk,
-        // same as the delay tables.
-        bool dropSpentStages = Config.DropSpentStages;
-        ConsoleWidgets.BeginRow("DROP SPENT STAGES EARLY".AsSpan());
-        if (ConsoleWidgets.Checkbox("AutoStageDropSpent".AsSpan(), ref dropSpentStages, pending: false))
-            Config.DropSpentStages = dropSpentStages;
-        if (ConsoleWidgets.RowHovered)
-            ConsoleWidgets.Tooltip("Stage as soon as the next sequence would shed nothing but burnt-out engines, so spent boosters drop while the core stage keeps firing. Off: staging waits until every active engine is dry.".AsSpan());
-        ConsoleWidgets.EndRow();
+        bool active = StagingDetector.Active;
+        if (ConsoleUi.CheckboxRow("AUTOMATIC STAGING".AsSpan(), "AutoStageActive".AsSpan(), ref active,
+                "The same switch as the AUTOSTAGE gauge button. Stages when the active engines run out of propellant, and drops spent boosters while the rest keeps firing.".AsSpan()))
+            StagingDetector.Active = active;
 
-        // The delay tables need the part library and the sequence internals the
-        // ignition-delay reflection resolves; the checkbox above does not.
-        if (!Mod.IgnitionDelayAvailable)
+        // Takes effect immediately; SAVE below writes it to disk, like the delay tables.
+        bool dropSpentStages = StagingConfig.DropSpentStages;
+        if (ConsoleUi.CheckboxRow("DROP SPENT STAGES EARLY".AsSpan(), "AutoStageDropSpent".AsSpan(), ref dropSpentStages,
+                "Stage as soon as the next sequence would shed nothing but burnt-out engines, so spent boosters drop while the core stage keeps firing. Off: staging waits until every active engine is dry.".AsSpan()))
+            StagingConfig.DropSpentStages = dropSpentStages;
+
+        if (GameReflection.ModLibrary_AllParts == null)
         {
             ImGui.TextDisabled("(delay settings unavailable on this game build)"u8);
             return;
         }
 
         ImGui.TextWrapped(
-            "Per-part-variant delays in seconds. Both delays are measured " +
-            "from the staging trigger, so set decoupler delay shorter than " +
-            "engine delay if you want the decoupler to fire first.");
+            "Per-part-variant delays in seconds. Both delays are measured from the staging trigger, " +
+            "so set the decoupler delay shorter than the engine delay if the decoupler should fire first.");
         ImGui.Spacing();
 
         List<PartInfo> engines = GetKnownParts(ref _knownEngines, DeclaresEngine);
         List<PartInfo> decouplers = GetKnownParts(ref _knownDecouplers, DeclaresDecoupler);
 
         if (ImGui.CollapsingHeader("Engine Ignition Delays"u8, ImGuiTreeNodeFlags.DefaultOpen))
-        {
-            DrawDelayTable(engines, "eng",
-                get: id => Config.GetEngineDelay(id),
-                set: (id, v) => Config.EngineDelays[id] = v);
-        }
+            DrawDelayTable(engines, "eng", StagingConfig.GetEngineDelay, (id, v) => StagingConfig.EngineDelays[id] = v);
 
         if (ImGui.CollapsingHeader("Decoupler Delays"u8, ImGuiTreeNodeFlags.DefaultOpen))
-        {
-            DrawDelayTable(decouplers, "dec",
-                get: id => Config.GetDecouplerDelay(id),
-                set: (id, v) => Config.DecouplerDelays[id] = v);
-        }
+            DrawDelayTable(decouplers, "dec", StagingConfig.GetDecouplerDelay, (id, v) => StagingConfig.DecouplerDelays[id] = v);
 
         ImGui.Spacing();
         if (ConsoleWidgets.Button("SAVE".AsSpan()))
         {
-            Config.SaveGlobalConfig();
+            StagingConfig.SaveGlobalConfig();
             TimedAlert.Create("AutoStage config saved", Color.Green, 2.0);
         }
     }
 
+    // An InputFloat rather than a drag control, so typing an exact delay and the step buttons keep working.
     private static void DrawDelayTable(List<PartInfo> parts, string idPrefix,
         Func<string, double> get, Action<string, double> set)
     {
@@ -138,26 +127,18 @@ static class SettingsTabPatch
             return;
         }
 
-        // The row lays the label and control out like every other settings row;
-        // the field itself stays an InputFloat so typing an exact delay and the
-        // step buttons keep working, which a drag control would take away.
         foreach (PartInfo p in parts)
         {
             float delay = (float)get(p.TemplateId);
-
             ConsoleWidgets.BeginRow(p.DisplayName.AsSpan());
             ImGui.SetNextItemWidth(ConsoleWidgets.RowControlWidth);
-            string inputId = $"###{idPrefix}_{p.TemplateId}";
-            if (ImGui.InputFloat(inputId, ref delay, 0.1f, 1.0f, "%.1f"))
+            if (ImGui.InputFloat($"###{idPrefix}_{p.TemplateId}", ref delay, 0.1f, 1.0f, "%.1f"))
                 set(p.TemplateId, Math.Max(0.0, (double)delay));
             ConsoleWidgets.EndRow();
         }
     }
 
-    /// <summary>
-    /// Same scope the game sequences: the template plus its direct sub-parts.
-    /// Anything deeper never gets a sequence, so it gets no delay row.
-    /// </summary>
+    // Same scope the game sequences: the template plus its direct sub-parts.
     private static bool DeclaresEngine(PartTemplate template)
         => DeclaresModule(template, static t => t.RocketEngineControllers.Count > 0);
 
@@ -180,8 +161,7 @@ static class SettingsTabPatch
             {
                 // Contained, so one malformed part cannot empty the whole table.
                 DefaultCategory.Log.Warning(
-                    $"[AutoStage] Part '{template.Id}' references sub-part "
-                    + $"'{subPart.InstanceOf}', which does not resolve: {ex.Message}");
+                    $"[AFC] Part '{template.Id}' references the sub-part '{subPart.InstanceOf}', which does not resolve: {ex.Message}");
             }
         }
         return false;
@@ -191,7 +171,8 @@ static class SettingsTabPatch
     {
         foreach (ModuleBase.TemplateDataBase component in template.Components)
         {
-            if (component is Decoupler.TemplateData) return true;
+            if (component is Decoupler.TemplateData)
+                return true;
         }
         return false;
     }
@@ -205,8 +186,7 @@ static class SettingsTabPatch
     private static List<PartInfo>? _knownEngines;
     private static List<PartInfo>? _knownDecouplers;
 
-    private static List<PartInfo> GetKnownParts(ref List<PartInfo>? cache,
-        Func<PartTemplate, bool> filter)
+    private static List<PartInfo> GetKnownParts(ref List<PartInfo>? cache, Func<PartTemplate, bool> filter)
     {
         if (cache != null)
             return cache;
@@ -214,20 +194,17 @@ static class SettingsTabPatch
         cache = new List<PartInfo>();
         try
         {
-            if (GameReflection.ModLibrary_AllParts?.GetValue(null)
-                is not SerializedCollection<PartTemplate> collection)
+            if (GameReflection.ModLibrary_AllParts?.GetValue(null) is not SerializedCollection<PartTemplate> collection)
                 return cache;
 
             var raw = new List<(string id, string name)>();
             foreach (PartTemplate template in collection.GetList())
             {
-                // A delay is keyed on the tree part, so a sub-part row is inert.
-                if (template.IsSubPart) continue;
-                if (filter(template))
+                // A delay is keyed on the tree part, so a sub-part row would be inert.
+                if (!template.IsSubPart && filter(template))
                     raw.Add((template.Id, template.DisplayName));
             }
 
-            // Find duplicate DisplayNames and disambiguate with a short suffix
             var nameCounts = new Dictionary<string, int>();
             foreach (var (_, name) in raw)
                 nameCounts[name] = nameCounts.GetValueOrDefault(name) + 1;
@@ -238,19 +215,16 @@ static class SettingsTabPatch
                 if (nameCounts[name] > 1)
                 {
                     int lastUnderscore = id.LastIndexOf('_');
-                    string suffix = lastUnderscore >= 0 ? id.Substring(lastUnderscore + 1) : id;
-                    displayName = $"{name} ({suffix})";
+                    displayName = $"{name} ({(lastUnderscore >= 0 ? id.Substring(lastUnderscore + 1) : id)})";
                 }
                 cache.Add(new PartInfo { TemplateId = id, DisplayName = displayName });
             }
 
-            cache.Sort((a, b) =>
-                string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal));
+            cache.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName, StringComparison.Ordinal));
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Warning(
-                $"[AutoStage] Failed to enumerate part templates: {ex.Message}");
+            DefaultCategory.Log.Warning($"[AFC] Failed to enumerate the part templates: {ex.Message}");
         }
         return cache;
     }

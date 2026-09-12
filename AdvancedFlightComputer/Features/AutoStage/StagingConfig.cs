@@ -1,61 +1,49 @@
-using System;
-using System.Collections.Generic;
 using System.Globalization;
-using System.IO;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using KSA;
 
-namespace AutoStage.Core;
+namespace AdvancedFlightComputer.Features.AutoStage;
 
-/// <summary>
-/// Two layers: autostage.toml (per part variant, plus the behaviour switches)
-/// and vehicles/{id}.toml (per sequence), the latter winning. Decoupler delays
-/// default to 0, so stock timing holds until the user sets one. All files live
-/// in the mod's own directory, never in a game save.
-/// </summary>
-static class Config
+// Two layers: autostage.toml holds the per-part-variant delays and the behaviour switches,
+// autostage-vehicles/{id}.toml the per-sequence overrides, which win. Nothing lives in a save.
+internal static class StagingConfig
 {
+    public const bool DropSpentStagesDefault = true;
+
     private static string _modDir = string.Empty;
     private static string _vehiclesDir = string.Empty;
     private static string _configPath = string.Empty;
 
-    public const bool DropSpentStagesDefault = true;
-
-    /// <summary>
-    /// Stage early when the next sequence would shed nothing but burnt-out
-    /// engines, instead of waiting for the whole vehicle to run dry.
-    /// </summary>
     public static bool DropSpentStages { get; set; } = DropSpentStagesDefault;
 
-    // Part Template ID -> delay in seconds
+    // Part template id to seconds.
     public static Dictionary<string, double> EngineDelays { get; } = new();
     public static Dictionary<string, double> DecouplerDelays { get; } = new();
 
-    // Vehicle ID -> (Sequence number -> delay in seconds)
+    // Vehicle id to sequence number to seconds.
     private static readonly Dictionary<string, Dictionary<int, double>> _vehicleEngineOverrides = new();
     private static readonly Dictionary<string, Dictionary<int, double>> _vehicleDecouplerOverrides = new();
-
     private static readonly HashSet<string> _dirtyVehicles = new();
 
-    // Blocks SaveGlobalConfig after a parse failure so we don't write the
-    // half-loaded state back over the user's file.
+    // A file that failed to load is never written back, so the half-loaded state cannot overwrite it.
     private static bool _globalConfigLoadFailed;
+    private static readonly HashSet<string> _failedVehicleLoads = new();
 
     public static void Init()
     {
-        string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        _modDir = Path.Combine(userProfile, "My Games", "Kitten Space Agency", "mods", "AutoStage");
-        _vehiclesDir = Path.Combine(_modDir, "vehicles");
+        string modsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
+            "My Games", "Kitten Space Agency", "mods");
+        _modDir = Path.Combine(modsDir, "AdvancedFlightComputer");
+        _vehiclesDir = Path.Combine(_modDir, "autostage-vehicles");
         _configPath = Path.Combine(_modDir, "autostage.toml");
-
+        ImportStandaloneConfig(Path.Combine(modsDir, "AutoStage"));
         LoadGlobalConfig();
     }
 
     public static void Reset()
     {
-        // Before the dirty set is dropped: the part window only flushes on
-        // IsItemDeactivatedAfterEdit, so an override typed right before an
-        // unload would otherwise be lost without a trace.
+        // The part window only flushes on IsItemDeactivatedAfterEdit, so an override typed right before unload is still dirty.
         FlushPendingSaves();
         EngineDelays.Clear();
         DecouplerDelays.Clear();
@@ -64,6 +52,36 @@ static class Config
         _vehicleDecouplerOverrides.Clear();
         _dirtyVehicles.Clear();
         _globalConfigLoadFailed = false;
+        _failedVehicleLoads.Clear();
+    }
+
+    // The files the standalone AutoStage mod wrote carry over once, on the first load without an AFC copy.
+    private static void ImportStandaloneConfig(string legacyDir)
+    {
+        string legacyConfig = Path.Combine(legacyDir, "autostage.toml");
+        if (File.Exists(_configPath) || !File.Exists(legacyConfig))
+            return;
+        try
+        {
+            Directory.CreateDirectory(_modDir);
+            File.Copy(legacyConfig, _configPath);
+            string legacyVehicles = Path.Combine(legacyDir, "vehicles");
+            if (Directory.Exists(legacyVehicles))
+            {
+                Directory.CreateDirectory(_vehiclesDir);
+                foreach (string file in Directory.GetFiles(legacyVehicles, "*.toml"))
+                {
+                    string target = Path.Combine(_vehiclesDir, Path.GetFileName(file));
+                    if (!File.Exists(target))
+                        File.Copy(file, target);
+                }
+            }
+            DefaultCategory.Log.Info($"[AFC] Imported the AutoStage settings from {legacyDir}.");
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] Could not import the AutoStage settings from {legacyDir}: {ex.Message}");
+        }
     }
 
     private static void SetDefaults()
@@ -76,13 +94,9 @@ static class Config
         EngineDelays["CorePropulsionA_Prefab_EngineA6"] = 3.0;
     }
 
-    #region TOML Parsing
+    #region TOML parsing
 
-    /// <summary>
-    /// Parses a minimal TOML file into sections of key-value pairs.
-    /// Supports comments (#), [section] headers, and key = value lines.
-    /// The root section (before any header) uses key "".
-    /// </summary>
+    // Comments, [section] headers and key = value lines. The root section has the key "".
     private static Dictionary<string, Dictionary<string, string>> ParseToml(string path)
     {
         var result = new Dictionary<string, Dictionary<string, string>>();
@@ -108,17 +122,14 @@ static class Config
             }
 
             int eq = line.IndexOf('=');
-            if (eq < 1) continue;
+            if (eq < 1)
+                continue;
 
             string key = line.Substring(0, eq).Trim();
             string value = line.Substring(eq + 1).Trim();
-
-            int commentIdx = value.IndexOf('#');
-            if (commentIdx >= 0)
-                value = value.Substring(0, commentIdx).Trim();
-
-            if (!result.ContainsKey(currentSection))
-                result[currentSection] = new Dictionary<string, string>();
+            int comment = value.IndexOf('#');
+            if (comment >= 0)
+                value = value.Substring(0, comment).Trim();
             result[currentSection][key] = value;
         }
 
@@ -139,25 +150,20 @@ static class Config
     private static bool ReadFlag(Dictionary<string, Dictionary<string, string>> sections,
         string section, string key, bool fallback)
     {
-        if (!sections.TryGetValue(section, out var entries)
-            || !entries.TryGetValue(key, out string? raw))
+        if (!sections.TryGetValue(section, out var entries) || !entries.TryGetValue(key, out string? raw))
             return fallback;
-
         if (bool.TryParse(raw, out bool parsed))
             return parsed;
 
-        // Worth saying out loud: bool.TryParse rejects 0/no/off, and the next
-        // save rewrites the line, so a user who meant to switch something off
-        // would otherwise get the default back with no trace of why.
+        // bool.TryParse rejects 0/no/off, and the next save rewrites the line, so say why the default came back.
         DefaultCategory.Log.Warning(
-            $"[AutoStage] Config: [{section}] {key} = '{raw}' is not true or false, "
-            + $"using {(fallback ? "true" : "false")}.");
+            $"[AFC] autostage.toml: [{section}] {key} = '{raw}' is not true or false, using {(fallback ? "true" : "false")}.");
         return fallback;
     }
 
     #endregion
 
-    #region Global Config
+    #region Global config
 
     public static void LoadGlobalConfig()
     {
@@ -176,23 +182,16 @@ static class Config
         try
         {
             var sections = ParseToml(_configPath);
-
             if (sections.TryGetValue("engine_delays", out var engines))
                 LoadDelaySection(engines, EngineDelays);
-
             if (sections.TryGetValue("decoupler_delays", out var decouplers))
                 LoadDelaySection(decouplers, DecouplerDelays);
+            DropSpentStages = ReadFlag(sections, "staging", "drop_spent_stages", DropSpentStagesDefault);
 
-            DropSpentStages = ReadFlag(sections, "staging", "drop_spent_stages",
-                DropSpentStagesDefault);
-
-            // Either flag: the delays belong to IgnitionDelay, drop_spent_stages
-            // to AutoStage, and one line reports both.
-            if (DebugConfig.IgnitionDelay || DebugConfig.AutoStage)
+            if (DebugConfig.AutoStage)
                 DefaultCategory.Log.Debug(
-                    $"[AutoStage] Config loaded: {EngineDelays.Count} engine delays, " +
-                    $"{DecouplerDelays.Count} decoupler delays, " +
-                    $"drop_spent_stages={DropSpentStages}");
+                    $"[AFC] AutoStage config loaded: {EngineDelays.Count} engine delays, " +
+                    $"{DecouplerDelays.Count} decoupler delays, drop_spent_stages={DropSpentStages}");
         }
         catch (Exception ex)
         {
@@ -200,13 +199,11 @@ static class Config
             DecouplerDelays.Clear();
             DropSpentStages = DropSpentStagesDefault;
             _globalConfigLoadFailed = true;
-            DefaultCategory.Log.Error(
-                $"[AutoStage] Failed to load config ({_configPath}): {ex.Message}");
+            DefaultCategory.Log.Error($"[AFC] Failed to load {_configPath}: {ex.Message}");
         }
     }
 
-    private static void LoadDelaySection(Dictionary<string, string> raw,
-        Dictionary<string, double> target)
+    private static void LoadDelaySection(Dictionary<string, string> raw, Dictionary<string, double> target)
     {
         foreach (var kvp in raw)
         {
@@ -220,8 +217,7 @@ static class Config
         if (_globalConfigLoadFailed)
         {
             DefaultCategory.Log.Warning(
-                "[AutoStage] Skipping save, last load failed and the in-memory "
-                + "config is empty. Fix the file manually before saving from the UI.");
+                "[AFC] Skipping the autostage.toml save, the last load failed and the in-memory config is empty. Fix the file before saving from the UI.");
             return;
         }
 
@@ -229,30 +225,25 @@ static class Config
         {
             Directory.CreateDirectory(_modDir);
             using var writer = new StreamWriter(_configPath);
-            writer.WriteLine("# AutoStage configuration.");
+            writer.WriteLine("# AdvancedFlightComputer automatic staging.");
             writer.WriteLine();
             writer.WriteLine("[staging]");
-            writer.WriteLine("# Stage as soon as the next sequence would shed nothing but");
-            writer.WriteLine("# burnt-out engines, instead of waiting for the whole vehicle to");
-            writer.WriteLine("# run dry. This is what drops spent boosters off a core stage.");
+            writer.WriteLine("# Stage as soon as the next sequence would shed nothing but burnt-out");
+            writer.WriteLine("# engines, instead of waiting for the whole vehicle to run dry.");
             writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
                 "drop_spent_stages = {0}", DropSpentStages ? "true" : "false"));
             writer.WriteLine();
-            writer.WriteLine("# Per-part-variant delays keyed by Part Template ID.");
-            writer.WriteLine("# Values are seconds to wait after staging before the part activates.");
+            writer.WriteLine("# Per-part-variant delays keyed by part template id, in seconds after the staging trigger.");
             writer.WriteLine();
             writer.WriteLine("[engine_delays]");
             WriteDelaySection(writer, EngineDelays);
             writer.WriteLine();
             writer.WriteLine("[decoupler_delays]");
             WriteDelaySection(writer, DecouplerDelays);
-
-            if (DebugConfig.IgnitionDelay)
-                DefaultCategory.Log.Debug("[AutoStage] Config saved.");
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Error($"[AutoStage] Failed to save config: {ex.Message}");
+            DefaultCategory.Log.Error($"[AFC] Failed to save {_configPath}: {ex.Message}");
         }
     }
 
@@ -261,15 +252,12 @@ static class Config
         var keys = new List<string>(source.Keys);
         keys.Sort(StringComparer.Ordinal);
         foreach (string key in keys)
-        {
-            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "{0} = {1:F1}", key, source[key]));
-        }
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0} = {1:F1}", key, source[key]));
     }
 
     #endregion
 
-    #region Delay Lookup
+    #region Delay lookup
 
     public static double GetEngineDelay(string partTemplateId)
         => EngineDelays.TryGetValue(partTemplateId, out double d) ? d : 0.0;
@@ -277,31 +265,14 @@ static class Config
     public static double GetDecouplerDelay(string partTemplateId)
         => DecouplerDelays.TryGetValue(partTemplateId, out double d) ? d : 0.0;
 
-    /// <summary>
-    /// Effective engine ignition delay for a sequence. Priority:
-    /// 1. Per-sequence vehicle override
-    /// 2. Max engine-variant delay across the sequence's engine parts
-    /// </summary>
+    // The per-sequence override wins over the longest variant delay in the row.
     public static double GetSequenceEngineDelay(Vehicle vehicle, int sequenceNumber)
-    {
-        if (_vehicleEngineOverrides.TryGetValue(vehicle.Id, out var overrides)
-            && overrides.TryGetValue(sequenceNumber, out double overrideDelay))
-            return overrideDelay;
-        return ComputeSequenceEngineDelay(vehicle, sequenceNumber);
-    }
+        => TryGetOverride(_vehicleEngineOverrides, vehicle, sequenceNumber, out double delay)
+            ? delay : ComputeSequenceEngineDelay(vehicle, sequenceNumber);
 
-    /// <summary>
-    /// Effective decoupler delay for a sequence. Priority:
-    /// 1. Per-sequence vehicle override
-    /// 2. Max decoupler-variant delay across the sequence's decoupler parts
-    /// </summary>
     public static double GetSequenceDecouplerDelay(Vehicle vehicle, int sequenceNumber)
-    {
-        if (_vehicleDecouplerOverrides.TryGetValue(vehicle.Id, out var overrides)
-            && overrides.TryGetValue(sequenceNumber, out double overrideDelay))
-            return overrideDelay;
-        return ComputeSequenceDecouplerDelay(vehicle, sequenceNumber);
-    }
+        => TryGetOverride(_vehicleDecouplerOverrides, vehicle, sequenceNumber, out double delay)
+            ? delay : ComputeSequenceDecouplerDelay(vehicle, sequenceNumber);
 
     public static double ComputeSequenceEngineDelay(Vehicle vehicle, int sequenceNumber)
         => ComputeSequenceMaxDelay(vehicle, sequenceNumber, DelayKind.Engine);
@@ -309,26 +280,23 @@ static class Config
     public static double ComputeSequenceDecouplerDelay(Vehicle vehicle, int sequenceNumber)
         => ComputeSequenceMaxDelay(vehicle, sequenceNumber, DelayKind.Decoupler);
 
-    /// <summary>
-    /// Longest delay among the modules of one kind this row fires. Per module,
-    /// not per part: else a decoupler-only row inherits the part's engine delay.
-    /// </summary>
+    // Per module, not per part, or a decoupler-only row would inherit the part's engine delay.
     private static double ComputeSequenceMaxDelay(Vehicle vehicle, int sequenceNumber, DelayKind kind)
     {
         double maxDelay = 0.0;
         foreach (Sequence seq in vehicle.Parts.SequenceList.Sequences)
         {
-            if (seq.Number != sequenceNumber) continue;
+            if (seq.Number != sequenceNumber)
+                continue;
             ReadOnlySpan<Part> parts = seq.Parts;
             for (int i = 0; i < parts.Length; i++)
             {
                 foreach (ISequenced module in parts[i].InSequence(sequenceNumber))
                 {
-                    if (!SequencedModules.Matches(module, kind)) continue;
+                    if (!SequencedModules.Matches(module, kind))
+                        continue;
                     string key = SequencedModules.DelayKey(module);
-                    double delay = kind == DelayKind.Engine
-                        ? GetEngineDelay(key)
-                        : GetDecouplerDelay(key);
+                    double delay = kind == DelayKind.Engine ? GetEngineDelay(key) : GetDecouplerDelay(key);
                     maxDelay = Math.Max(maxDelay, delay);
                 }
             }
@@ -337,13 +305,18 @@ static class Config
         return maxDelay;
     }
 
+    private static bool TryGetOverride(Dictionary<string, Dictionary<int, double>> store,
+        Vehicle vehicle, int sequenceNumber, out double delay)
+    {
+        delay = 0.0;
+        return store.TryGetValue(vehicle.Id, out var overrides) && overrides.TryGetValue(sequenceNumber, out delay);
+    }
+
     public static bool HasSequenceEngineOverride(Vehicle vehicle, int sequenceNumber)
-        => _vehicleEngineOverrides.TryGetValue(vehicle.Id, out var o)
-           && o.ContainsKey(sequenceNumber);
+        => TryGetOverride(_vehicleEngineOverrides, vehicle, sequenceNumber, out _);
 
     public static bool HasSequenceDecouplerOverride(Vehicle vehicle, int sequenceNumber)
-        => _vehicleDecouplerOverrides.TryGetValue(vehicle.Id, out var o)
-           && o.ContainsKey(sequenceNumber);
+        => TryGetOverride(_vehicleDecouplerOverrides, vehicle, sequenceNumber, out _);
 
     public static void SetSequenceEngineOverride(Vehicle vehicle, int sequenceNumber, double delay)
         => SetSequenceOverride(_vehicleEngineOverrides, vehicle.Id, sequenceNumber, delay);
@@ -357,8 +330,7 @@ static class Config
     public static void ClearSequenceDecouplerOverride(Vehicle vehicle, int sequenceNumber)
         => ClearSequenceOverride(_vehicleDecouplerOverrides, vehicle.Id, sequenceNumber);
 
-    private static void SetSequenceOverride(
-        Dictionary<string, Dictionary<int, double>> store,
+    private static void SetSequenceOverride(Dictionary<string, Dictionary<int, double>> store,
         string vehicleId, int sequenceNumber, double delay)
     {
         if (!store.TryGetValue(vehicleId, out var overrides))
@@ -370,8 +342,7 @@ static class Config
         _dirtyVehicles.Add(vehicleId);
     }
 
-    private static void ClearSequenceOverride(
-        Dictionary<string, Dictionary<int, double>> store,
+    private static void ClearSequenceOverride(Dictionary<string, Dictionary<int, double>> store,
         string vehicleId, int sequenceNumber)
     {
         if (store.TryGetValue(vehicleId, out var overrides) && overrides.Remove(sequenceNumber))
@@ -387,15 +358,13 @@ static class Config
 
     #endregion
 
-    #region Per-Vehicle Persistence
+    #region Per-vehicle persistence
 
     public static void LoadVehicleOverrides(string vehicleId)
     {
-        // Seed both stores so we don't keep re-reading a missing/malformed
-        // file on every per-frame call from the part window.
-        bool alreadyLoaded = _vehicleEngineOverrides.ContainsKey(vehicleId)
-                             && _vehicleDecouplerOverrides.ContainsKey(vehicleId);
-        if (alreadyLoaded) return;
+        // Both stores are seeded first, so a missing or malformed file is not re-read on every part-window frame.
+        if (_vehicleEngineOverrides.ContainsKey(vehicleId) && _vehicleDecouplerOverrides.ContainsKey(vehicleId))
+            return;
 
         var engine = new Dictionary<int, double>();
         var decoupler = new Dictionary<int, double>();
@@ -403,7 +372,8 @@ static class Config
         _vehicleDecouplerOverrides[vehicleId] = decoupler;
 
         string path = GetVehiclePath(vehicleId);
-        if (!File.Exists(path)) return;
+        if (!File.Exists(path))
+            return;
 
         try
         {
@@ -412,32 +382,23 @@ static class Config
                 LoadSequenceDelays(engineSection, engine);
             if (sections.TryGetValue("decoupler_delays", out var decouplerSection))
                 LoadSequenceDelays(decouplerSection, decoupler);
-
-            if ((engine.Count > 0 || decoupler.Count > 0) && DebugConfig.IgnitionDelay)
-                DefaultCategory.Log.Debug(
-                    $"[AutoStage] Loaded {engine.Count} engine + {decoupler.Count} decoupler " +
-                    $"sequence overrides for {vehicleId}");
         }
         catch (Exception ex)
         {
-            // Seeds stay: removing them clears alreadyLoaded, and the part window
-            // calls this per frame, so an unreadable file would repeat forever.
             engine.Clear();
             decoupler.Clear();
-            DefaultCategory.Log.Error(
-                $"[AutoStage] Failed to load vehicle overrides for {vehicleId}: {ex.Message}");
+            _failedVehicleLoads.Add(vehicleId);
+            DefaultCategory.Log.Error($"[AFC] Failed to load the staging overrides for {vehicleId}, edits are not saved: {ex}");
         }
     }
 
     public static void RemoveVehicle(string vehicleId)
     {
-        if (_dirtyVehicles.Contains(vehicleId))
-        {
+        if (_dirtyVehicles.Remove(vehicleId))
             SaveVehicleOverrides(vehicleId);
-            _dirtyVehicles.Remove(vehicleId);
-        }
         _vehicleEngineOverrides.Remove(vehicleId);
         _vehicleDecouplerOverrides.Remove(vehicleId);
+        _failedVehicleLoads.Remove(vehicleId);
     }
 
     private static void LoadSequenceDelays(Dictionary<string, string> raw, Dictionary<int, double> target)
@@ -451,13 +412,17 @@ static class Config
 
     private static void SaveVehicleOverrides(string vehicleId)
     {
-        string path = GetVehiclePath(vehicleId);
+        if (_failedVehicleLoads.Contains(vehicleId))
+        {
+            DefaultCategory.Log.Warning($"[AFC] Skipping the staging override save for {vehicleId}, its file failed to load.");
+            return;
+        }
 
+        string path = GetVehiclePath(vehicleId);
         try
         {
             _vehicleEngineOverrides.TryGetValue(vehicleId, out var engine);
             _vehicleDecouplerOverrides.TryGetValue(vehicleId, out var decoupler);
-
             bool hasEngine = engine != null && engine.Count > 0;
             bool hasDecoupler = decoupler != null && decoupler.Count > 0;
             if (!hasEngine && !hasDecoupler)
@@ -469,7 +434,7 @@ static class Config
 
             Directory.CreateDirectory(_vehiclesDir);
             using var writer = new StreamWriter(path);
-            writer.WriteLine("# Per-sequence delay overrides for this vehicle.");
+            writer.WriteLine("# Per-sequence staging delay overrides for this vehicle.");
             if (hasEngine)
             {
                 writer.WriteLine();
@@ -485,8 +450,7 @@ static class Config
         }
         catch (Exception ex)
         {
-            DefaultCategory.Log.Error(
-                $"[AutoStage] Failed to save vehicle overrides for {vehicleId}: {ex.Message}");
+            DefaultCategory.Log.Error($"[AFC] Failed to save the staging overrides for {vehicleId}: {ex.Message}");
         }
     }
 
@@ -495,10 +459,7 @@ static class Config
         var keys = new List<int>(source.Keys);
         keys.Sort();
         foreach (int key in keys)
-        {
-            writer.WriteLine(string.Format(CultureInfo.InvariantCulture,
-                "{0} = {1:F1}", key, source[key]));
-        }
+            writer.WriteLine(string.Format(CultureInfo.InvariantCulture, "{0} = {1:F1}", key, source[key]));
     }
 
     private static string GetVehiclePath(string vehicleId)

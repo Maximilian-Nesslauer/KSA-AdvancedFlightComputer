@@ -1,215 +1,166 @@
-using AutoStage.Core;
-using HeadlessHarness.Core;
+using AdvancedFlightComputer.Features.AutoStage;
+using AdvancedFlightComputer.HarnessTests.Framework;
 using HeadlessHarness.Harness;
 using KSA;
 
-namespace AutoStage.HarnessTests;
+namespace AdvancedFlightComputer.HarnessTests;
 
-// Verifies the delayed split staging: a decoupler-only sequence must fire its decoupler
-// DecouplerDelayS after the sequence activates, and the following engine sequence must ignite
-// EngineDelayS after ITS activation, with the burn resuming afterwards. The delays are injected
-// into the in-memory global config (per part variant); CleanupAfterFlight reloads the user's file.
+// A decoupler-only sequence must fire its decoupler DecouplerDelayS after it activates, and the
+// engine sequence after it must ignite EngineDelayS after its own activation. The delays are
+// injected into the in-memory config per part variant.
 //
-// Needs a save with a decoupler-only sequence somewhere after the launch stage and an engine
-// sequence after that; anything else skips. The vehicle comes from KSA_HEADLESS_VEHICLE, shared
-// with the harness flight test.
-//
-// What is measured is the delay between a sequence activating and its parts firing, so how the
-// sequence came to activate does not matter and the staging triggers are left at their shipped
-// settings. Reaching an activation depends on burn durations and gets a generous cap; the delay
-// that follows it is the actual assertion and gets a tight one.
-public sealed class DelayTest : IHarnessTest
+// Needs a save with a decoupler-only sequence after the launch stage and an engine sequence after
+// that; anything else skips. What is measured is the delay between a sequence activating and its
+// parts firing, so how the activation came about does not matter. Reaching it gets a generous cap,
+// the delay that follows gets a tight one.
+public sealed class StagingDelayTest : AfcTest
 {
     private const double DecouplerDelayS = 3.0;
     private const double EngineDelayS = 5.0;
-    // The countdown ticks once per solver step and the fired activation lands via the input queue
-    // on the following step, so the observed delay runs a step or two past the configured one.
+    // The countdown ticks once per solver step and the fired activation lands through the input
+    // queue on the following step.
     private const double DelayTolS = 1.5;
     private const double MeasureDt = 0.5;
     private const double MaxStagingSeconds = 900.0;
     private const double MaxPhaseSeconds = 30.0;
-    // Part throttle, unlike the other flying tests. Those burn a stage and end; this one has to
-    // survive several stagings to reach the sequence pair it measures, and a full-throttle stack
-    // that keeps shedding mass runs itself past VehicleStructuralLimits.EffectiveMaxGLoad and is
-    // destroyed mid-test. The delays being measured do not depend on the throttle.
+    // Part throttle, because a full-throttle stack that survives several stagings runs itself past
+    // VehicleStructuralLimits.EffectiveMaxGLoad and is destroyed mid-test.
     private const float Throttle = 0.4f;
 
-    public string Name => "autostage-delays";
+    public override string Name => "afc-autostage-delays";
 
-    public int Run(HeadlessSession session)
+    protected override void Execute(TestContext t)
     {
         string? saveId = Environment.GetEnvironmentVariable(TestSupport.VehicleEnvVar);
         if (string.IsNullOrEmpty(saveId))
         {
-            HarnessLog.Line($"[autostage-delays] SKIP: {TestSupport.VehicleEnvVar} not set.");
-            return 0;
+            t.Skip($"{TestSupport.VehicleEnvVar} not set");
+            return;
         }
 
-        AutoStageHost.EnsureInitialized();
-        if (!AutoStageHost.CoreOk || !Mod.IgnitionDelayAvailable)
-        {
-            HarnessLog.Line("[autostage-delays] FAIL: AutoStage delay patches are not active (see autostage-api-drift).");
-            return 1;
-        }
-
-        CelestialSystem system = session.System;
-        HashSet<string> preexisting = TestSupport.CollectVehicleIds(system);
-        SimDriver driver = session.CreateDriver();
-        double t = 0.0;
-        bool ok = true;
+        HashSet<string> preexisting = TestSupport.CollectVehicleIds(t.System);
+        SimDriver driver = t.Session.CreateDriver();
+        double time = 0.0;
+        using AutoStageTestPatches.Scope patches = AutoStageTestPatches.Apply();
         try
         {
-            // Inside the try: Astronomical's constructor registers with the system before the
-            // spawner finishes, so a throw part-way still leaves a vehicle for cleanup to remove.
             Vehicle vehicle;
             try
             {
-                vehicle = AutoStageHost.SpawnFromSave(session, saveId, "AutoStageDelayTest", out _);
+                vehicle = AutoStageFlightSupport.SpawnFromSave(t, saveId, "AfcAutoStageDelay", out _);
             }
             catch (InvalidOperationException e)
             {
-                HarnessLog.Line($"[autostage-delays] FAIL: {e.Message}");
-                return 1;
+                t.Fail("spawn", e.Message);
+                return;
             }
 
             PhysicsBubble._forceOffRails = true;
             Program.ControlledVehicle = vehicle;
-
-            // Pinned to the shipped default rather than the local file, so the run covers the same
-            // trigger set a player gets whatever autostage.toml says. CleanupAfterFlight reloads it.
-            Config.DropSpentStages = Config.DropSpentStagesDefault;
+            StagingConfig.DropSpentStages = StagingConfig.DropSpentStagesDefault;
 
             if (!TryFindDelaySequences(vehicle, out Sequence? decouplerSeq, out Sequence? engineSeq))
             {
-                HarnessLog.Line("[autostage-delays] SKIP: the save has no decoupler-only sequence " +
-                                "followed by an engine sequence.");
-                return 0;
+                t.Skip("the save has no decoupler-only sequence followed by an engine sequence");
+                return;
             }
             ConfigureDelays(vehicle, decouplerSeq!, engineSeq!);
-            HarnessLog.Line($"[autostage-delays] decoupler sequence {decouplerSeq!.Number} delayed {DecouplerDelayS:F1}s, " +
-                            $"engine sequence {engineSeq!.Number} delayed {EngineDelayS:F1}s.");
+            t.Info($"decoupler sequence {decouplerSeq!.Number} delayed {DecouplerDelayS:F1}s, " +
+                   $"engine sequence {engineSeq!.Number} delayed {EngineDelayS:F1}s");
 
-            vehicle.ToggleEnum(AutoStageToggle.Enabled);
-            if (!Mod.AutoStageEnabled)
-            {
-                HarnessLog.Line("[autostage-delays] FAIL: ToggleEnum(AutoStageToggle) did not enable the mod.");
-                return 1;
-            }
-            AutoStageHost.HoldPrograde(vehicle, Throttle);
-            AutoStageHost.IgniteFirstStage(vehicle, driver);
+            if (!AutoStageFlightSupport.Arm(t, vehicle))
+                return;
+            AutoStageFlightSupport.HoldPrograde(vehicle, Throttle);
+            AutoStageFlightSupport.IgniteFirstStage(vehicle, driver);
 
             bool StepUntil(Func<bool> condition, double capSeconds, string what)
             {
-                double deadline = t + capSeconds;
+                double deadline = time + capSeconds;
                 while (!condition())
                 {
-                    if (t >= deadline)
-                    {
-                        HarnessLog.Line($"[autostage-delays] FAIL: timed out after {capSeconds:F0}s waiting for {what}.");
-                        return false;
-                    }
+                    if (time >= deadline)
+                        return t.Fail(what, $"timed out after {capSeconds:F0}s");
                     driver.Step(MeasureDt);
-                    t += MeasureDt;
+                    time += MeasureDt;
                 }
                 return true;
             }
 
-            // The Sequence object, never its number: SequenceList.Remove decrements every number at
-            // or above a removed sequence, and RemoveSpentSequences runs inside both
-            // ActivateNextSequence and Vehicle.Split, so a number captured here can name a different
-            // sequence by the time the staging lands.
-            if (!StepUntil(() => decouplerSeq!.Activated,
-                    MaxStagingSeconds, "the decoupler sequence to activate"))
-                return 1;
-            double tDecouplerSeq = t;
+            // The Sequence object, never its number: SequenceList.Remove renumbers, and
+            // RemoveSpentSequences runs inside ActivateNextSequence and Vehicle.Split.
+            if (!StepUntil(() => decouplerSeq!.Activated, MaxStagingSeconds, "the decoupler sequence activates"))
+                return;
+            double tDecouplerSeq = time;
             StructuralLoad loadBeforeSplit = vehicle.StructuralLoad;
 
-            // The part count on the vehicle itself, not the system-wide vehicle count: shed
-            // boosters can be destroyed on the same frame they separate (a radial stack drops
-            // four of them into each other), which leaves the net count flat or falling while
-            // the decouplers did fire exactly on time.
+            // The vehicle's own part count, not the system-wide vehicle count: shed boosters can be
+            // destroyed on the frame they separate, which leaves the vehicle count flat.
             int partsBefore = vehicle.Parts.Count;
-            if (!StepUntil(() => vehicle.IsDisposed || vehicle.Parts.Count < partsBefore,
-                    MaxPhaseSeconds, "the decoupler split"))
+            if (!StepUntil(() => vehicle.IsDisposed || vehicle.Parts.Count < partsBefore, MaxPhaseSeconds, "the decoupler split"))
             {
-                LogSequenceState(vehicle, decouplerSeq!, "decoupler sequence at timeout");
-                return 1;
+                LogSequenceState(t, vehicle, decouplerSeq!);
+                return;
             }
             if (vehicle.IsDisposed)
             {
-                HarnessLog.Line("[autostage-delays] FAIL: the vehicle was destroyed during the " +
-                                $"decoupler split ({DescribeLoad(loadBeforeSplit)} before it). " +
-                                "The scenario, not the delay, is at fault: lower the throttle.");
-                return 1;
+                t.Fail("the vehicle survives the decoupler split",
+                    $"destroyed with {DescribeLoad(loadBeforeSplit)} before it; the scenario, not the delay, is at fault, lower the throttle");
+                return;
             }
-            double splitDelay = t - tDecouplerSeq;
+            double splitDelay = time - tDecouplerSeq;
 
-            if (!StepUntil(() => engineSeq!.Activated,
-                    MaxStagingSeconds, "the engine sequence to activate"))
-                return 1;
-            double tEngineSeq = t;
+            if (!StepUntil(() => engineSeq!.Activated, MaxStagingSeconds, "the engine sequence activates"))
+                return;
+            double tEngineSeq = time;
 
-            // The ignition check below is vehicle-wide, so it only measures this sequence's delay
-            // while nothing else is burning. Say so instead of reporting a zero-second ignition.
+            // The ignition check is vehicle-wide, so it only measures this sequence while nothing else burns.
             if (StagingHelpers.HasActiveEngineWithPropellant(vehicle))
             {
-                HarnessLog.Line("[autostage-delays] FAIL: the vehicle was still under thrust when the " +
-                                "engine sequence activated, so its ignition delay cannot be measured.");
-                return 1;
+                t.Fail("the vehicle is dry when the engine sequence activates",
+                    "still under thrust, so the ignition delay cannot be measured");
+                return;
             }
-            if (!StepUntil(() => StagingHelpers.HasActiveEngineWithPropellant(vehicle),
-                    MaxPhaseSeconds, "upper-stage ignition"))
-                return 1;
-            double igniteDelay = t - tEngineSeq;
+            if (!StepUntil(() => StagingHelpers.HasActiveEngineWithPropellant(vehicle), MaxPhaseSeconds, "upper-stage ignition"))
+                return;
+            double igniteDelay = time - tEngineSeq;
 
-            bool splitOk = Math.Abs(splitDelay - DecouplerDelayS) <= DelayTolS;
-            bool igniteOk = Math.Abs(igniteDelay - EngineDelayS) <= DelayTolS;
-            HarnessLog.Line($"[autostage-delays] decoupler fired {splitDelay:F1}s after sequence activation " +
-                            $"(configured {DecouplerDelayS:F1}s, tol {DelayTolS:F1}s) => {(splitOk ? "ok" : "FAIL")}");
-            HarnessLog.Line($"[autostage-delays] engine ignited {igniteDelay:F1}s after sequence activation " +
-                            $"(configured {EngineDelayS:F1}s, tol {DelayTolS:F1}s) => {(igniteOk ? "ok" : "FAIL")}");
-            ok = splitOk && igniteOk;
+            t.CheckAbs("decoupler fires after its delay", splitDelay, DecouplerDelayS, DelayTolS);
+            t.CheckAbs("engine ignites after its delay", igniteDelay, EngineDelayS, DelayTolS);
         }
         finally
         {
-            AutoStageHost.CleanupAfterFlight(system, preexisting);
+            AutoStageFlightSupport.CleanupAfterFlight(t.System, preexisting);
         }
-
-        HarnessLog.Line($"[autostage-delays] {TestSupport.Verdict(ok)}");
-        return ok ? 0 : 1;
     }
 
     private static string DescribeLoad(in StructuralLoad load) =>
         $"g-load {load.PeakGLoad:F1}/{load.MaxGLoad:F1} ({load.GLoadFraction:P0} of the limit), " +
         $"dynamic pressure {load.DynamicPressureFraction:P0} of the limit";
 
-    // A timeout here means either the sequence never carried the decouplers the search picked it
-    // for, or the configured delay was not found for it. Both are indistinguishable from the
-    // outside, so name them.
-    private static void LogSequenceState(Vehicle vehicle, Sequence seq, string label)
+    // A timeout means the sequence never carried the decouplers the search picked it for, or the
+    // configured delay was not found for it. Both look the same from outside, so name them.
+    private static void LogSequenceState(TestContext t, Vehicle vehicle, Sequence seq)
     {
-        HarnessLog.Line($"[autostage-delays] {label}: number={seq.Number}, activated={seq.Activated}, " +
-                        $"parts={seq.Parts.Length}, " +
-                        $"configuredDelay={Config.GetSequenceDecouplerDelay(vehicle, seq.Number):F1}s, " +
-                        $"nextSequence={vehicle.Parts.SequenceList.GetNextSequenceNumber()}");
+        t.Info($"decoupler sequence at timeout: number={seq.Number}, activated={seq.Activated}, parts={seq.Parts.Length}, " +
+               $"configuredDelay={StagingConfig.GetSequenceDecouplerDelay(vehicle, seq.Number):F1}s, " +
+               $"nextSequence={vehicle.Parts.SequenceList.GetNextSequenceNumber()}");
         ReadOnlySpan<Part> parts = seq.Parts;
         for (int i = 0; i < parts.Length; i++)
         {
             foreach (ISequenced module in parts[i].InSequence(seq.Number))
             {
-                if (module is not Decoupler decoupler) continue;
-                HarnessLog.Line($"[autostage-delays]   '{parts[i].Id}' {SequencedModules.Describe(module)} " +
-                                $"active={decoupler.IsActive} enabled={decoupler.IsEnabled} " +
-                                $"connected={decoupler.Connector.Connection != null} " +
-                                $"delayKey={SequencedModules.DelayKey(module)}");
+                if (module is not Decoupler decoupler)
+                    continue;
+                t.Info($"  '{parts[i].Id}' {SequencedModules.Describe(module)} active={decoupler.IsActive} " +
+                       $"enabled={decoupler.IsEnabled} connected={decoupler.Connector.Connection != null} " +
+                       $"delayKey={SequencedModules.DelayKey(module)}");
             }
         }
     }
 
-    // The measurement needs a stage layout of: engines (the launch stage), a decoupler-only
-    // sequence, then an engine sequence, so each delay is observable in isolation.
-    private static bool TryFindDelaySequences(Vehicle vehicle,
-        out Sequence? decouplerSeq, out Sequence? engineSeq)
+    // Engines (the launch stage), then a decoupler-only sequence, then an engine sequence, so each
+    // delay is observable in isolation.
+    private static bool TryFindDelaySequences(Vehicle vehicle, out Sequence? decouplerSeq, out Sequence? engineSeq)
     {
         decouplerSeq = null;
         engineSeq = null;
@@ -218,8 +169,6 @@ public sealed class DelayTest : IHarnessTest
         {
             if (seq.Activated || seq.Parts.IsEmpty)
                 continue;
-            // Per module: else a part whose motor belongs to a later row makes this one read
-            // as an engine row.
             bool hasEngine = false;
             bool hasDecoupler = false;
             ReadOnlySpan<Part> parts = seq.Parts;
@@ -250,23 +199,24 @@ public sealed class DelayTest : IHarnessTest
         return false;
     }
 
-    // Keyed the way the mod resolves a delay, so staging looks up the value set here.
+    // Keyed the way the detector resolves a delay, so staging looks up the value set here.
     private static void ConfigureDelays(Vehicle vehicle, Sequence decouplerSeq, Sequence engineSeq)
     {
-        Config.EngineDelays.Clear();
-        Config.DecouplerDelays.Clear();
+        StagingConfig.EngineDelays.Clear();
+        StagingConfig.DecouplerDelays.Clear();
         foreach (Sequence seq in vehicle.Parts.SequenceList.Sequences)
         {
-            if (seq != decouplerSeq && seq != engineSeq) continue;
+            if (seq != decouplerSeq && seq != engineSeq)
+                continue;
             ReadOnlySpan<Part> parts = seq.Parts;
             for (int i = 0; i < parts.Length; i++)
             {
                 foreach (ISequenced module in parts[i].InSequence(seq.Number))
                 {
                     if (seq == decouplerSeq && module is Decoupler)
-                        Config.DecouplerDelays[SequencedModules.DelayKey(module)] = DecouplerDelayS;
+                        StagingConfig.DecouplerDelays[SequencedModules.DelayKey(module)] = DecouplerDelayS;
                     if (seq == engineSeq && module is EngineController)
-                        Config.EngineDelays[SequencedModules.DelayKey(module)] = EngineDelayS;
+                        StagingConfig.EngineDelays[SequencedModules.DelayKey(module)] = EngineDelayS;
                 }
             }
         }

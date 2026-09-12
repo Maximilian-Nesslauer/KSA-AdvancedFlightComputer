@@ -1,172 +1,96 @@
-using AutoStage.Core;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
-using StarMap.API;
 
-namespace AutoStage;
+namespace AdvancedFlightComputer.Features.AutoStage;
 
-[StarMapMod]
-public sealed class Mod
+internal static class AutoStageFeature
 {
-    private static Harmony? _harmony;
-
-    // Keep in sync with README.md.
-    private const string TestedGameVersion = "v2026.9.7.5402";
-
-    internal static bool AutoStageEnabled;
-    internal static bool IgnitionDelayAvailable;
+    // The marker the standalone AutoStage mod injects at its own immediate load.
+    private const string StandaloneToggleName = "AutoStageToggle";
 
     private static bool _enumInjected;
 
-    /// <summary>
-    /// Injects our enum into GaugeButtonFlightComputer.EnumTypes before the
-    /// game processes Gauges.xml, so EngineControlPatch.xml can resolve
-    /// Action="AutoStageToggle". The game looks up the entry by Type.Name,
-    /// which matches "AutoStageToggle".
-    /// </summary>
-    [StarMapImmediateLoad]
-    public void OnImmediateLoad(KSA.Mod mod)
-    {
-        if (DebugConfig.AutoStage)
-            DefaultCategory.Log.Debug("[AutoStage] ImmediateLoad: injecting enum...");
+    internal static bool GaugeEnumInjected =>
+        TryGetEnumTypes(out List<EnumTypeOption> list) && list.Any(o => o.Type == typeof(AfcAutoStageToggle));
 
-        _enumInjected = InjectEnumType();
+    // Runs at immediate load, before the game reads Gauges.xml and binds the AUTOSTAGE button's
+    // Action="AfcAutoStageToggle" once. The binding cannot be undone later, so a build whose
+    // staging keys do not resolve gets no entry and one warning instead of a live-looking button.
+    internal static void InjectGaugeEnumAtLoad()
+    {
+        if (!GameReflection.ValidateAutoStage())
+        {
+            DefaultCategory.Log.Warning("[AFC] AutoStage reflection keys did not resolve; the AUTOSTAGE gauge button is not registered.");
+            return;
+        }
+        if (!InjectGaugeEnum())
+            DefaultCategory.Log.Warning("[AFC] GaugeButtonFlightComputer.EnumTypes is not a List<EnumTypeOption>; the AUTOSTAGE gauge button is not registered.");
     }
 
-    [StarMapAllModsLoaded]
-    public void OnFullyLoaded()
+    // Idempotent, because a reload would otherwise add a second entry.
+    internal static bool InjectGaugeEnum()
     {
-        string gameVersion = VersionInfo.Current.VersionString;
-        DefaultCategory.Log.Info($"[AutoStage] Game version: {gameVersion}");
-        if (gameVersion != TestedGameVersion)
-            DefaultCategory.Log.Warning(
-                $"[AutoStage] Tested against {TestedGameVersion}, current is {gameVersion}. " +
-                "Some features may not work correctly.");
-
-        Config.Init();
-
-#if DEBUG
-        PerfTracker.Reset();
-#endif
-
-        _harmony = new Harmony("com.maxi.autostage");
-
-        bool coreOk = _enumInjected && GameReflection.ValidateAll();
-        if (coreOk)
-        {
-            _harmony.CreateClassProcessor(typeof(Patch_ToggleEnum)).Patch();
-            _harmony.CreateClassProcessor(typeof(Patch_IsSet)).Patch();
-            _harmony.CreateClassProcessor(typeof(Patch_IsFlightComputerDisabled)).Patch();
-            _harmony.CreateClassProcessor(typeof(Patch_SequenceList_ActivateNextSequence)).Patch();
-            _harmony.CreateClassProcessor(typeof(Patch_SequenceList_ResetCaches)).Patch();
-            _harmony.CreateClassProcessor(typeof(Patch_Universe_ApplyVehicleSolvers)).Patch();
-            _harmony.CreateClassProcessor(typeof(Patch_Vehicle_Dispose)).Patch();
-
-            // The settings window carries the only in-game switch for the
-            // spent-stage drop, which uses none of the ignition-delay reflection
-            // targets, so it must not go down with them. The delay tables inside
-            // it hide themselves via Mod.IgnitionDelayAvailable.
-            _harmony.CreateClassProcessor(typeof(SettingsTabPatch)).Patch();
-
-            if (DebugConfig.AutoStage)
-                DefaultCategory.Log.Debug("[AutoStage] Core patches applied.");
-        }
-        else
-        {
-            DefaultCategory.Log.Warning("[AutoStage] Disabled, reflection targets not found.");
-        }
-
-        if (coreOk && GameReflection.ValidateIgnitionDelay())
-        {
-            IgnitionDelayAvailable = true;
-            _harmony.CreateClassProcessor(typeof(PartWindowPatch)).Patch();
-
-            if (DebugConfig.IgnitionDelay)
-                DefaultCategory.Log.Debug("[AutoStage] IgnitionDelay patches applied.");
-        }
-        else if (coreOk)
-        {
-            IgnitionDelayAvailable = false;
-            DefaultCategory.Log.Warning(
-                "[AutoStage] IgnitionDelay disabled, reflection targets not found.");
-        }
-
-        DefaultCategory.Log.Info("[AutoStage] Loaded.");
-    }
-
-    [StarMapUnload]
-    public void Unload()
-    {
-        // Before the patches come off. Reset below drops the pending slot
-        // unfired, stranding an already-activated row.
-        StagingDetector.FlushPendingForUnload();
-        _harmony?.UnpatchAll(_harmony.Id);
-        _harmony = null;
-        AutoStageEnabled = false;
-        IgnitionDelayAvailable = false;
-        StagingDetector.Reset();
-        StagingHelpers.Reset();
-        SettingsTabPatch.Reset();
-        Config.Reset();
-        LogHelper.Reset();
-        if (_enumInjected)
-        {
-            RemoveEnumType();
-            _enumInjected = false;
-        }
-#if DEBUG
-        PerfTracker.Reset();
-#endif
-        DefaultCategory.Log.Info("[AutoStage] Unloaded.");
-    }
-
-    private static bool InjectEnumType()
-    {
-        if (!TryGetEnumTypes(out var list))
+        if (!TryGetEnumTypes(out List<EnumTypeOption> list))
             return false;
-
-        // Guard against duplicate entries on reload, since GaugeButtonFlightComputer
-        // matches by Type.Name and would happily pick the first hit.
-        if (list.Any(opt => opt.Type == typeof(AutoStageToggle)))
-        {
-            if (DebugConfig.AutoStage)
-                DefaultCategory.Log.Debug(
-                    $"[AutoStage] AutoStageToggle already present in EnumTypes ({list.Count} entries).");
-            return true;
-        }
-
-        list.Add(new EnumTypeOption(typeof(AutoStageToggle)));
-
-        if (DebugConfig.AutoStage)
-            DefaultCategory.Log.Debug(
-                $"[AutoStage] Appended AutoStageToggle to EnumTypes ({list.Count} entries).");
+        if (!list.Any(o => o.Type == typeof(AfcAutoStageToggle)))
+            list.Add(new EnumTypeOption(typeof(AfcAutoStageToggle)));
+        _enumInjected = true;
         return true;
     }
 
-    private static void RemoveEnumType()
+    internal static void RemoveGaugeEnum()
     {
-        if (!TryGetEnumTypes(out var list))
-            return;
+        if (_enumInjected && TryGetEnumTypes(out List<EnumTypeOption> list))
+            list.RemoveAll(o => o.Type == typeof(AfcAutoStageToggle));
+        _enumInjected = false;
+    }
 
-        list.RemoveAll(opt => opt.Type == typeof(AutoStageToggle));
+    // Two stagers on one burnout would activate two rows, so the built-in one stands down while
+    // the standalone mod is installed. Its marker is visible here because every immediate load
+    // runs before any AllModsLoaded hook.
+    internal static bool StandaloneModAbsent()
+    {
+        if (!TryGetEnumTypes(out List<EnumTypeOption> list))
+            return true;
+        foreach (EnumTypeOption option in list)
+        {
+            if (option.Type.Name == StandaloneToggleName)
+            {
+                DefaultCategory.Log.Warning(
+                    "[AFC] The standalone AutoStage mod is installed, so AFC's built-in automatic staging stays off and its AUTOSTAGE button does nothing. Remove AutoStage; AdvancedFlightComputer contains it.");
+                return false;
+            }
+        }
+        return true;
+    }
+
+    internal static void ApplyPatches(Harmony harmony)
+    {
+        if (!InjectGaugeEnum())
+            throw new InvalidOperationException("GaugeButtonFlightComputer.EnumTypes is not a List<EnumTypeOption>.");
+        StagingConfig.Init();
+        harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.TogglePatch)).Patch();
+        harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.IsSetPatch)).Patch();
+        harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.IsDisabledPatch)).Patch();
+        harmony.CreateClassProcessor(typeof(SequenceListPatches.ActivateNextSequencePatch)).Patch();
+        harmony.CreateClassProcessor(typeof(SequenceListPatches.ResetCachesPatch)).Patch();
+        harmony.CreateClassProcessor(typeof(AutoStageSettingsPage)).Patch();
+        harmony.CreateClassProcessor(typeof(StagingDelayPartWindow)).Patch();
+    }
+
+    internal static void Disable()
+    {
+        StagingDetector.Reset();
+        StagingHelpers.Reset();
+        AutoStageSettingsPage.Reset();
+        StagingConfig.Reset();
     }
 
     private static bool TryGetEnumTypes(out List<EnumTypeOption> list)
     {
-        list = null!;
-        if (GameReflection.GaugeButton_EnumTypes == null)
-        {
-            DefaultCategory.Log.Error(
-                "[AutoStage] GaugeButtonFlightComputer.EnumTypes not found.");
-            return false;
-        }
-        if (GameReflection.GaugeButton_EnumTypes.GetValue(null) is not List<EnumTypeOption> found)
-        {
-            DefaultCategory.Log.Error("[AutoStage] EnumTypes is null or unexpected type.");
-            return false;
-        }
-        list = found;
-        return true;
+        list = (GameReflection.GaugeButtonFlightComputer_EnumTypes?.GetValue(null) as List<EnumTypeOption>)!;
+        return list != null;
     }
 }

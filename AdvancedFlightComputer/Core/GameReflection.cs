@@ -31,6 +31,8 @@ internal static class GameReflection
 
         /// <summary>Handles that control one optional patch. Each patch checks its own handle.</summary>
         SoftAnchor = 64,
+
+        AutoStage = 128,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -178,7 +180,7 @@ internal static class GameReflection
     // host, because Vehicle.UpdateFromTaskResultsUnsynchronized runs one worker per physics bubble
     // and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined, which a Harmony detour
     // on the callee cannot survive.
-    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage)]
     public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
         AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers), Type.EmptyTypes);
 
@@ -194,9 +196,65 @@ internal static class GameReflection
 
     // Registry entries drop with their vehicle, or a recycled vehicle id could pick up an orphaned
     // execution.
-    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage)]
     public static readonly MethodInfo? Vehicle_Dispose =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
+
+    #endregion
+
+    #region AutoStage
+
+    // The gauge button resolves its bound enum by Type.Name from this list, so the AUTOSTAGE
+    // button's own enum type is appended to it at immediate load.
+    [UsedBy(Feature.AutoStage)]
+    public static readonly FieldInfo? GaugeButtonFlightComputer_EnumTypes =
+        AccessTools.Field(typeof(GaugeButtonFlightComputer), "EnumTypes");
+
+    // Closed over System.Enum, because GaugeButtonFlightComputer.PackData calls them on its boxed value.
+    [UsedBy(Feature.AutoStage)]
+    public static readonly MethodInfo? Vehicle_IsSet_Enum =
+        GenericVehicleMethod(nameof(Vehicle.IsSet), parameterCount: 2)?.MakeGenericMethod(typeof(Enum));
+
+    [UsedBy(Feature.AutoStage)]
+    public static readonly MethodInfo? Vehicle_IsFlightComputerDisabled_Enum =
+        GenericVehicleMethod(nameof(Vehicle.IsFlightComputerDisabled), parameterCount: 1)?.MakeGenericMethod(typeof(Enum));
+
+    // Private setter. The public SetActiveSequence rewrites Activated list-wide and resets caches,
+    // which stock's own activation does not.
+    [UsedBy(Feature.AutoStage)]
+    public static readonly PropertyInfo? SequenceList_ActiveSequence =
+        AccessTools.Property(typeof(SequenceList), nameof(SequenceList.ActiveSequence));
+
+    // Stock brackets its activation loop with this flag, and ResetCaches early-returns on it.
+    [UsedBy(Feature.AutoStage)]
+    public static readonly FieldInfo? SequenceList_updatingSequence =
+        AccessTools.Field(typeof(SequenceList), "_updatingSequence");
+
+    // Which settings page the nav rail has open. The enum is private to GameSettings, so its Mods
+    // member is resolved as a boxed value once and compared by equality.
+    [UsedBy(Feature.AutoStage)]
+    public static readonly FieldInfo? GameSettings_openTab =
+        AccessTools.Field(typeof(GameSettings), "_openTab");
+
+    [UsedBy(Feature.AutoStage)]
+    public static readonly object? GameSettings_openTab_Mods =
+        GameSettings_openTab?.FieldType is { IsEnum: true } tab && Enum.TryParse(tab, "Mods", out object? mods) ? mods : null;
+
+    // Only the delay tables in the settings page list the part library; the page draws without them.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly FieldInfo? ModLibrary_AllParts =
+        AccessTools.Field(typeof(ModLibrary), "AllParts");
+
+    private static MethodInfo? GenericVehicleMethod(string name, int parameterCount)
+    {
+        foreach (MethodInfo method in typeof(Vehicle).GetMethods())
+        {
+            if (method.Name == name && method.IsGenericMethodDefinition
+                && method.GetParameters().Length == parameterCount)
+                return method;
+        }
+        return null;
+    }
 
     #endregion
 
@@ -238,6 +296,8 @@ internal static class GameReflection
     public static bool ValidateMultiPass() => Validate(Feature.MultiPass);
 
     public static bool ValidateRcsTranslation() => Validate(Feature.RcsTranslation);
+
+    public static bool ValidateAutoStage() => Validate(Feature.AutoStage);
 
     private static bool Validate(Feature feature)
     {

@@ -1,61 +1,57 @@
-using System;
 using System.Reflection;
-using AutoStage.Core;
-using Brutal.Logging;
+using AdvancedFlightComputer.Core;
 using HarmonyLib;
 using KSA;
 
-namespace AutoStage;
+namespace AdvancedFlightComputer.Features.AutoStage;
 
-// Type marker for GaugeButtonFlightComputer._enumLookup. Value is never read.
-public enum AutoStageToggle { Enabled }
-
-[HarmonyPatch(typeof(Vehicle), nameof(Vehicle.ToggleEnum))]
-static class Patch_ToggleEnum
+internal static class AutoStageGaugePatches
 {
-    static bool Prefix(Enum? enumValue)
+    [HarmonyPatch(typeof(Vehicle), nameof(Vehicle.ToggleEnum), new[] { typeof(Enum) })]
+    internal static class TogglePatch
     {
-        if (enumValue is not AutoStageToggle) return true;
-
-        Mod.AutoStageEnabled = !Mod.AutoStageEnabled;
-
-        if (DebugConfig.AutoStage)
-            DefaultCategory.Log.Debug($"[AutoStage] Enabled = {Mod.AutoStageEnabled}");
-
-        return false;
+        static bool Prefix(Enum? enumValue)
+        {
+            if (enumValue is not AfcAutoStageToggle)
+                return true;
+            StagingDetector.Active = !StagingDetector.Active;
+            return false;
+        }
     }
-}
 
-// KittenEva overrides this and forwards anything that is not a KittenEvaAction
-// to base, so the patch still answers for an EVA kitten.
-[HarmonyPatch]
-static class Patch_IsSet
-{
-    static MethodBase TargetMethod() => GameReflection.Vehicle_IsSet_Enum!;
-
-    static bool Prefix(Enum value, ref bool __result)
+    // KittenEva's override forwards anything that is not a KittenEvaAction to base, so this still
+    // answers for an EVA kitten.
+    [HarmonyPatch]
+    internal static class IsSetPatch
     {
-        if (value is not AutoStageToggle) return true;
+        static MethodBase TargetMethod() => GameReflection.Vehicle_IsSet_Enum!;
 
-        __result = Mod.AutoStageEnabled;
-        return false;
+        static bool Prefix(Enum value, ref bool __result)
+        {
+            if (value is not AfcAutoStageToggle)
+                return true;
+            __result = StagingDetector.Active;
+            return false;
+        }
     }
-}
 
-// Unlike IsSet, KittenEva's override answers "disabled" for everything that is
-// not a KittenEvaAction instead of calling base, so this never runs for an EVA
-// kitten. That is the wanted answer anyway, and the AUTOSTAGE button rides on a
-// canvas an EVA kitten does not draw.
-[HarmonyPatch]
-static class Patch_IsFlightComputerDisabled
-{
-    static MethodBase TargetMethod() => GameReflection.Vehicle_IsFlightComputerDisabled_Enum!;
-
-    static bool Prefix(Vehicle __instance, Enum value, ref bool __result)
+    // KittenEva's override answers "disabled" for everything but its own actions without calling
+    // base, which is the wanted answer: an EVA kitten draws no engine panel.
+    [HarmonyPatch]
+    internal static class IsDisabledPatch
     {
-        if (value is not AutoStageToggle) return true;
+        static MethodBase TargetMethod() => GameReflection.Vehicle_IsFlightComputerDisabled_Enum!;
 
-        __result = !StagingHelpers.HasNextEngineSequence(__instance);
-        return false;
+        // Stays enabled while armed, so the player can always switch it off, and while a pure
+        // jettison row is pending, which is what the spent-stage drop stages.
+        static bool Prefix(Vehicle __instance, Enum value, ref bool __result)
+        {
+            if (value is not AfcAutoStageToggle)
+                return true;
+            __result = !StagingDetector.Active
+                       && !StagingHelpers.HasNextEngineSequence(__instance)
+                       && !(StagingConfig.DropSpentStages && JettisonAnalysis.GetPendingJettison(__instance) != null);
+            return false;
+        }
     }
 }

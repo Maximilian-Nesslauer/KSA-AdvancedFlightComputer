@@ -1,22 +1,17 @@
 using KSA;
 
-namespace AutoStage;
+namespace AdvancedFlightComputer.Features.AutoStage;
 
-/// <summary>
-/// A sequence is a set of ISequenced modules, not of parts. One part can put
-/// each of its modules in a different sequence, so Sequence.Parts lists a part
-/// once per sequence any of its modules sits in and a part alone never answers
-/// what a sequence does. Scope is the part plus its direct sub-parts, matching
-/// Part.ActivateSubtreeInStage.
-/// </summary>
-static class SequencedModules
+// A sequence is a set of ISequenced modules, not of parts: one part can put each of its modules in
+// a different row, so Sequence.Parts lists a part once per row any of its modules sits in. Scope is
+// the part plus its direct sub-parts, matching Part.ActivateSubtreeInStage.
+internal static class SequencedModules
 {
-    /// <summary>Yields in the order the game activates them.</summary>
+    // Yields in the order the game activates them.
     public static SequencedModuleEnumerator InSequence(this Part part, int sequence)
-        => new SequencedModuleEnumerator(part, sequence);
+        => new(part, sequence);
 
-    // Each kind names its type, so a third kind the game may add later matches
-    // neither and fires without a delay.
+    // Each kind names its type, so a third kind the game may add matches neither and fires without a delay.
     public static bool Matches(ISequenced module, DelayKind kind)
         => kind == DelayKind.Engine ? module is EngineController : module is Decoupler;
 
@@ -24,7 +19,8 @@ static class SequencedModules
     {
         foreach (ISequenced module in part.InSequence(sequence))
         {
-            if (module is EngineController) return true;
+            if (module is EngineController)
+                return true;
         }
         return false;
     }
@@ -34,13 +30,13 @@ static class SequencedModules
         ReadOnlySpan<Part> parts = sequence.Parts;
         for (int i = 0; i < parts.Length; i++)
         {
-            if (HasEngineIn(parts[i], sequence.Number)) return true;
+            if (HasEngineIn(parts[i], sequence.Number))
+                return true;
         }
         return false;
     }
 
-    // The tree part, not the module's own: the settings table lists placeable
-    // parts. Identical on stock content, where no sub-part is sequenced.
+    // The tree part, because the settings table lists placeable parts.
     public static string DelayKey(ISequenced module) => module.Parent.FullPart.Template.Id;
 
     // Same wording as the stock staging window's chip tooltip.
@@ -53,15 +49,14 @@ static class SequencedModules
     }
 }
 
-enum DelayKind
+internal enum DelayKind
 {
     Engine,
     Decoupler,
 }
 
-// A ref struct because the game's own enumerator is one, so this cannot be
-// stored in a field or produced by an iterator method.
-ref struct SequencedModuleEnumerator
+// A ref struct like the game's own enumerator, so it cannot be stored or produced by an iterator.
+internal ref struct SequencedModuleEnumerator
 {
     private Part.SubtreeSequencedModuleEnumerator _inner;
     private readonly int _sequence;
@@ -78,11 +73,11 @@ ref struct SequencedModuleEnumerator
     {
         while (_inner.MoveNext())
         {
-            if (_inner.Current.Sequence == _sequence) return true;
+            if (_inner.Current.Sequence == _sequence)
+                return true;
         }
         return false;
     }
 
-    // A copy of the unstarted enumerator, the same way the game's does it.
     public readonly SequencedModuleEnumerator GetEnumerator() => this;
 }
