@@ -4,6 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Runtime.CompilerServices;
+using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
 
@@ -28,18 +29,20 @@ public enum GimbalOverrideMode
 // decide how to get there, throwing away most of the plan.
 //
 // HOW IT ATTACHES. FlightComputer.ComputeControl calls ComputeTvcControl (which
-// allocates, or ZeroizeTvcs which clears) and then ComputeRcsControl. A Harmony
-// POSTFIX on ComputeControl therefore lands after every writer of CommandY/Z, so
-// the override is the last word regardless of attitude mode.
+// allocates, or ZeroizeTvcs which clears) and then ComputeRcsControl. AFC's
+// VehicleCommandSink runs this writer after ComputeControl, so it lands after every
+// stock writer of CommandY/Z and the override is the last word regardless of
+// attitude mode. Actuator writes are reported through the sink's receipt, which is
+// what keeps a commanded craft in full physics.
 //
 // UNITS. CommandY/CommandZ are NORMALIZED, not angles: Gimbal.GetCommand clamps
 // each to [-1,1] and multiplies by that axis's MaxAngle (radians).
 //
-// THREADING. ComputeControl runs on a VehicleSolvers job thread, not the main
-// thread, so these fields are written by the UI draw and read by the worker. They
-// are bool/float/enum - 32-bit aligned, reads cannot tear - and a command landing
-// one frame late is harmless for a manual test. Do NOT extend this with anything
-// needing a consistent multi-field snapshot without real synchronisation.
+// THREADING. The demand is published from the Vehicle.PrepareWorker prefix on the
+// main thread, before the step's worker job is queued, and read on a VehicleSolvers
+// job thread inside that job, so a publish is ordered before the read that consumes
+// it. Only Disengage is also called from the draw. One immutable Command record per
+// publish keeps a read from pairing a new mode with an old torque.
 public static class KsaGimbalControl
 {
     /// <summary>
@@ -155,9 +158,14 @@ public static class KsaGimbalControl
         s.AppliedCount = 0;
     }
 
-    // Harmony postfix body. Kept beside the state it drives.
-    internal static void OnComputeControl(FlightComputer flightComputer, ref FlightComputerOutput outputs)
+    // Runs on the vehicle worker from VehicleCommandSink.Run. Switching guidance off stops the
+    // override on the next control step, one step before the per-vehicle release disengages it.
+    internal static void OnComputeControl(FlightComputer flightComputer, ref FlightComputerOutput outputs,
+                                          ref VehicleCommandSink.Receipt receipt)
     {
+        if (!GuidanceWindow.ModActive)
+            return;
+
         FlightComputer.VehicleConfigInfo cfg = flightComputer.VehicleConfig;
         if (cfg == null || !Slots.TryGetValue(cfg, out Slot st))
             return;
@@ -173,7 +181,7 @@ public static class KsaGimbalControl
 
         if (mode == GimbalOverrideMode.Lsq)
         {
-            ApplyLsq(st, cmd, cfg, com, ref outputs);
+            ApplyLsq(st, cmd, cfg, com, ref outputs, ref receipt);
             return;
         }
 
@@ -211,7 +219,7 @@ public static class KsaGimbalControl
         }
 
         if (applied > 0)
-            outputs.AnyActuatorCommanded = true;
+            receipt.Command();
 
         st.AppliedCount = applied;
     }
@@ -223,7 +231,8 @@ public static class KsaGimbalControl
     // when the engine is unlit, so the allocation can be inspected on the pad - the
     // resulting commands are then what WOULD be flown at full thrust.
     private static void ApplyLsq(Slot st, Command cmd, FlightComputer.VehicleConfigInfo cfg,
-                                 float3 com, ref FlightComputerOutput outputs)
+                                 float3 com, ref FlightComputerOutput outputs,
+                                 ref VehicleCommandSink.Receipt receipt)
     {
         int n = cfg.Gimbals.Count;
         if (n == 0)
@@ -268,7 +277,7 @@ public static class KsaGimbalControl
         }
 
         if (applied > 0)
-            outputs.AnyActuatorCommanded = true;
+            receipt.Command();
         st.AppliedCount = applied;
     }
 

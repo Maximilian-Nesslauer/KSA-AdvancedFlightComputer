@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using HarmonyLib;
 using KSA;
@@ -53,6 +54,19 @@ internal static class VehicleCommandSink
             {
                 LogHelper.WarnOnce($"command-sink-rcs:{ex.GetType().Name}",
                     $"[AFC] RCS command writer failed on the vehicle worker: {ex}");
+            }
+        }
+
+        if (SharedVehicleHooks.GuidanceEnabled)
+        {
+            try
+            {
+                KsaGimbalControl.OnComputeControl(fc, ref outputs, ref receipt);
+            }
+            catch (Exception ex)
+            {
+                LogHelper.WarnOnce($"command-sink-guidance:{ex.GetType().Name}",
+                    $"[AFC] Guidance gimbal writer failed on the vehicle worker: {ex}");
             }
         }
 
