@@ -14,10 +14,18 @@ internal static class AutoStageSettingsPage
         ConsoleWidgets.Rule();
         ConsoleWidgets.RegionHeader("AUTOSTAGE".AsSpan());
 
-        bool active = StagingDetector.Active;
-        if (ConsoleUi.CheckboxRow("AUTOMATIC STAGING".AsSpan(), "AutoStageActive".AsSpan(), ref active,
-                "The same switch as the AUTOSTAGE gauge button. Stages when the active engines run out of propellant, and drops spent boosters while the rest keeps firing.".AsSpan()))
-            StagingDetector.Active = active;
+        Vehicle? controlled = Program.ControlledVehicle;
+        if (controlled != null)
+        {
+            bool active = StagingDetector.IsArmed(controlled);
+            if (ConsoleUi.CheckboxRow("AUTOMATIC STAGING".AsSpan(), "AutoStageActive".AsSpan(), ref active,
+                    "The same switch as the AUTOSTAGE gauge button, for the controlled vehicle. Stages when its active engines run out of propellant, and drops spent boosters while the rest keeps firing.".AsSpan()))
+                StagingDetector.Arm(controlled, active);
+        }
+        else
+        {
+            ImGui.TextDisabled("(no controlled vehicle to arm)"u8);
+        }
 
         // Takes effect immediately; SAVE below writes it to disk, like the delay tables.
         bool dropSpentStages = StagingConfig.DropSpentStages;

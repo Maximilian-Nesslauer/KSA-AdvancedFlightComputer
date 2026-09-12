@@ -10,11 +10,11 @@ internal static class AutoStageGaugePatches
     [HarmonyPatch(typeof(Vehicle), nameof(Vehicle.ToggleEnum), new[] { typeof(Enum) })]
     internal static class TogglePatch
     {
-        static bool Prefix(Enum? enumValue)
+        static bool Prefix(Vehicle __instance, Enum? enumValue)
         {
             if (enumValue is not AfcAutoStageToggle)
                 return true;
-            StagingDetector.Active = !StagingDetector.Active;
+            StagingDetector.Arm(__instance, !StagingDetector.IsArmed(__instance));
             return false;
         }
     }
@@ -26,11 +26,11 @@ internal static class AutoStageGaugePatches
     {
         static MethodBase TargetMethod() => GameReflection.Vehicle_IsSet_Enum!;
 
-        static bool Prefix(Enum value, ref bool __result)
+        static bool Prefix(Vehicle __instance, Enum value, ref bool __result)
         {
             if (value is not AfcAutoStageToggle)
                 return true;
-            __result = StagingDetector.Active;
+            __result = StagingDetector.IsArmed(__instance);
             return false;
         }
     }
@@ -48,9 +48,10 @@ internal static class AutoStageGaugePatches
         {
             if (value is not AfcAutoStageToggle)
                 return true;
-            __result = !StagingDetector.Active
+            __result = !StagingDetector.IsArmed(__instance)
                        && !StagingHelpers.HasNextEngineSequence(__instance)
-                       && !(StagingConfig.DropSpentStages && JettisonAnalysis.GetPendingJettison(__instance) != null);
+                       && !(StagingConfig.DropSpentStages
+                            && JettisonAnalysis.GetPendingJettison(__instance, StagingDetector.StateOf(__instance)) != null);
             return false;
         }
     }

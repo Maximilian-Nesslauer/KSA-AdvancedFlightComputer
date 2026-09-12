@@ -41,7 +41,6 @@ internal static class SaveScopedState
         RcsCommandChannel.Reset();
         // Also disarms the AUTOSTAGE switch, so a loaded save does not stage until the player arms it again.
         StagingDetector.Reset();
-        StagingHelpers.Reset();
         FinishedBurnRemover.Reset();
     }
 }

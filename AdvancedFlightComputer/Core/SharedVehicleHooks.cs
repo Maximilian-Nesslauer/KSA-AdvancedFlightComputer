@@ -63,8 +63,6 @@ internal static class SharedVehicleHooks
         MultiPassPreviewCache.OnVehicleDisposed(vehicle);
         HohmannMultiPassUI.OnVehicleDisposed(vehicle.Id);
         HohmannMultiPassPlanner.OnVehicleDisposed(vehicle.Id);
-        StagingHelpers.ForgetVehicle(vehicle);
-        JettisonAnalysis.ForgetVehicle(vehicle);
         StagingDetector.ForgetVehicle(vehicle);
     }
 
