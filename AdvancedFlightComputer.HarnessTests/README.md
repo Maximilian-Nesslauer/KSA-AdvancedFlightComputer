@@ -48,7 +48,9 @@ Build this solution and HeadlessHarness, checked out as a sibling, in the same c
 
 `-Tests` filters on exact `Name` values, so renaming a test breaks the invocations that use it. Use one or more of the names below, separated by commas.
 
-The flight tests fly whichever of `RcsTestVehicles.Candidates` the machine has. Set `KSA_HEADLESS_VEHICLES` to override the candidates. Without one of these saves, the flight tests skip.
+The RCS flight tests fly whichever of `RcsTestVehicles.Candidates` the machine has. Set `KSA_HEADLESS_VEHICLES` to override the candidates. Without one of these saves, the flight tests skip.
+
+The staging flight tests use the save named by `KSA_HEADLESS_VEHICLE`, shared with the harness's own flight test, and skip when it is unset. `afc-autostage-spent-drop` instead takes its save from `KSA_HEADLESS_VEHICLES` and defaults to "Test Vehicle 1". That default is the only end-to-end cover of the jettison analysis, so it fails rather than skips when the save is missing: provide a save whose launch stage mixes boosters with a core under that name, or name a substitute in `KSA_HEADLESS_VEHICLES`.
 
 Leave the deployed test mod disabled for normal play. It only does work inside a harness run and is not part of the released mod.
 
@@ -92,13 +94,21 @@ The oracle is always the game's own orbit propagation, never a re-derivation of 
 - `afc-rcs-lp` flies the same burn with both allocators on one vehicle, asserts that both complete with quiet engines, and logs the propellant comparison.
 - `afc-rcs-driver-fault` injects driver, attitude, RCS, and fuel telemetry faults on a live vehicle. A faulted tick has to suppress the published command, hand back only the controls it owns, restore attitude and RCS independently, keep a failed restore visible and retryable within its attempt limit, survive save and load without reattaching the burn, and never raise the completion event.
 
+### Automatic staging
+
+The staging tests apply the feature's patches on a test-scoped Harmony owner through `AutoStageTestPatches`, arm the detector through the gauge toggle path, and remove the patches when they end.
+
+- `afc-autostage-flight` flies a staged save at full manual throttle and asserts that every remaining engine sequence is activated automatically and that each one actually lights. A trailing decoupler-only sequence is left standing on purpose, because staging only runs while an engine is still ahead.
+- `afc-autostage-delays` measures that configured decoupler and engine ignition delays fire on time, each in isolation.
+- `afc-autostage-spent-drop` flies a save whose launch stage mixes boosters with a core and asserts the boosters are shed as soon as they burn out, never earlier, with the core still firing afterwards, and that the drop never arms on the frame the launch sequence fires.
+
 ### Core
 
 - `afc-save-scoped-reset` asserts that the save-scoped reset list runs cold, populated, and twice in a row without throwing, and clears the plan-window inputs that it covers.
 - `afc-stock-pin-guard` asserts the guard that decides whether stock's selected-transfer block can index the porkchop array, against fresh, in-flight, populated, zero-sized, and out-of-range `TransferInfo` states.
-- `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature.
+- `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature. It also checks the AUTOSTAGE gauge enum injection and that stock still activates a sequence row through `Part.ActivateSubtreeInStage`, which the staging execution clones.
 - `afc-feature-patch-rollback` checks that a failed feature block removes only its partial patches, keeps other owners intact, and does not prevent a later block or unload.
-- `afc-shared-vehicle-hooks` checks the shared MultiPass and RCS tick order, feature gates, patch bindings, and unconditional registry cleanup when a vehicle is disposed.
+- `afc-shared-vehicle-hooks` checks the shared AutoStage, MultiPass and RCS tick order, feature gates, patch bindings, and unconditional registry and cache cleanup when a vehicle is disposed.
 
 ### Fixtures
 
