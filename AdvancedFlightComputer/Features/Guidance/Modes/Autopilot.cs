@@ -133,25 +133,47 @@ public static partial class GuidanceWindow
             return;
         }
 
-        if (!StagingDetector.IsArmed(vehicle))
+        if (!SharedVehicleHooks.AutoStageEnabled)
         {
-            StagingDetector.Arm(vehicle, true);
-            _s.ArmedStaging = true;
+            // The block did not load, or the standalone AutoStage mod holds it off.
+            _s.StagingActive = false;
+            _s.Status = "Auto-staging unavailable: the AutoStage feature is off (see the log).";
+            return;
+        }
+
+        // Armed once, on the first step that needs it. A craft the player armed before is left
+        // as it is, and a player disarming mid-flight is honoured.
+        if (!_s.ArmedStaging)
+        {
+            if (!StagingDetector.IsArmed(vehicle))
+            {
+                StagingDetector.Arm(vehicle, true);
+                _s.ArmedStaging = true;
+            }
+        }
+        else if (!StagingDetector.IsArmed(vehicle))
+        {
+            _s.ArmedStaging = false;
+            _s.StagingActive = false;
+            _s.Status = "Auto-staging switched off by the player.";
+            return;
         }
 
         double now = SimNow();
-        int generation = StagingHelpers.SequenceGeneration;
-        if (generation != _s.SeenSequenceGeneration)
+        int activations = StagingDetector.ActivationsOf(vehicle);
+        if (activations != _s.SeenStagings)
         {
-            // A row fired, by the detector or by anyone else: the stage list changed under us.
-            // The first observation only records where the count stands.
-            bool first = _s.SeenSequenceGeneration < 0;
-            _s.SeenSequenceGeneration = generation;
-            if (!first)
-            {
-                _s.StageModelDirty = true;
-                _s.LastSequenceTime = now;
-            }
+            // A requested or triggered row fired on this craft: the stage list changed under us.
+            _s.SeenStagings = activations;
+            _s.StageModelDirty = true;
+            _s.LastSequenceTime = now;
+        }
+
+        if (StagingDetector.IsHeldForControl(vehicle))
+        {
+            _s.StagingActive = false;
+            _s.Status = "Auto-staging held: the next sequence would separate the control module.";
+            return;
         }
 
         bool thrustOn = vehicle.IsAnyEngineActive() && vehicle.IsAnyEnginePropellantAvailable();
@@ -178,7 +200,7 @@ public static partial class GuidanceWindow
         if (!_s.ArmedStaging)
             return;
         _s.ArmedStaging = false;
-        if (vehicle != null && !vehicle.IsDisposed)
+        if (!vehicle.IsDisposed)
             StagingDetector.Arm(vehicle, false);
     }
 

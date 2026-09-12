@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Guidance.Gfold;
@@ -32,6 +33,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
     {
         FieldInfo ambient = typeof(GuidanceWindow).GetField("_s", PrivateStatic)!;
         object? previousAmbient = ambient.GetValue(null);
+        bool autoStageBefore = SharedVehicleHooks.AutoStageEnabled;
         var harmony = new Harmony("com.maxi.afc.harnesstests.guidance.staging");
         try
         {
@@ -44,8 +46,9 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             // detector, so the request seam stands in for the activation and the arming is a no-op.
             harmony.Patch(AccessTools.Method(typeof(StagingDetector), nameof(StagingDetector.RequestStaging)),
                 prefix: Prefix(nameof(Activate)));
-            harmony.Patch(AccessTools.Method(typeof(StagingDetector), nameof(StagingDetector.Arm)),
-                prefix: Prefix(nameof(Skip)));
+            harmony.Patch(AccessTools.Method(typeof(StagingDetector), nameof(StagingDetector.IsArmed)),
+                prefix: Prefix(nameof(True)));
+            SharedVehicleHooks.AutoStageEnabled = true;
             harmony.Patch(Method("PrepareLandingEngines"), postfix: Prefix(nameof(StopAfterReady)));
 
             foreach (GuidanceWindow.LandingPhase phase in new[]
@@ -66,6 +69,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         finally
         {
             harmony.UnpatchAll(harmony.Id);
+            SharedVehicleHooks.AutoStageEnabled = autoStageBefore;
             _freezeSequence = false;
             _endModeOnStep = null;
             _modeEndedInStep = false;
@@ -89,6 +93,12 @@ public sealed class GuidanceLandingStagingTest : AfcTest
     private static bool False(ref bool __result)
     {
         __result = false;
+        return false;
+    }
+
+    private static bool True(ref bool __result)
+    {
+        __result = true;
         return false;
     }
 

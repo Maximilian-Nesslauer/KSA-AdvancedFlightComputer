@@ -101,8 +101,8 @@ public sealed class VehicleAutopilotState
     /// hand-back disarms only what guidance switched on.</summary>
     public bool ArmedStaging;
 
-    /// <summary>The staging generation the stage model was last refreshed for.</summary>
-    public int SeenSequenceGeneration = -1;
+    /// <summary>The count of rows the AutoStage feature activated on this craft, as last seen.</summary>
+    public int SeenStagings;
 
     // ------------------------------------------------------------------ UPFG / ascent
     //
