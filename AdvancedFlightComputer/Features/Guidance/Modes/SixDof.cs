@@ -12,7 +12,7 @@ using AdvancedFlightComputer.Guidance.Scvx;
 //
 // The 6-DOF SCvx model works in a different inertial frame, a different body-axis
 // convention and a different quaternion convention from KSA (see KsaFrameBridge).
-// Every one of those fails SILENTLY: get a sign wrong and the symptom is "the
+// Every one of those fails silently: get a sign wrong and the symptom is "the
 // controller is unstable" days later, not an exception here. So the bridge readout
 // comes first and the round-trip error is the number that matters - it catches an
 // axis swap, a quaternion handedness error, a transposed site frame and a sign flip
@@ -20,7 +20,7 @@ using AdvancedFlightComputer.Guidance.Scvx;
 public static partial class GuidanceWindow
 {
 
-    // 50. Measured in CLOSED LOOP (Scvx.Console --mpc, zero dispersion, so any plan
+    // 50. Measured in closed loop (Scvx.Console --mpc, zero dispersion, so any plan
     // movement is the model's own error rather than disturbance):
     //   nodes   miss   path/direct   plan jump   ADMM/cycle
     //      20   1.9 m     1.50          4.0 m       2377
@@ -28,48 +28,46 @@ public static partial class GuidanceWindow
     //      50   1.6 m     1.28          1.3 m       1988
     //      80   4.3 m     1.25          1.0 m        821
     //
-    // The plan JUMPING between re-solves is DISCRETISATION ERROR - the gap between
+    // The plan jumping between re-solves is discretisation error - the gap between
     // the trapezoidal collocation and the true dynamics - and it falls monotonically
     // with node count. No weight, scale or conditioning change moved it at all. The
     // over-long curved path improves with nodes too, and the vehicle never actually
     // moves AWAY from the target (away-from-target is 0.0 m at every node count), so
     // the "loops" are a long curve, not a loop.
     //
-    // 20 was the worst point on this curve on ALL THREE reported symptoms at once -
+    // 20 was the worst point on this curve on all three reported symptoms at once -
     // most plan jump, longest path, and the MOST ADMM iterations. More nodes does not
     // cost more here: the smoother problem converges in fewer ADMM iterations.
     /// <summary>
-    /// THE VEHICLE CURRENTLY BEING SERVICED. Set once at every entry point - the sim
-    /// hook before it steps a vehicle, the draw before it renders one - and read by
-    /// everything downstream.
+    /// The vehicle currently being serviced. Set once at every entry point, before the
+    /// sim step or draw, and read by everything downstream.
     ///
     /// An ambient current rather than a parameter threaded through sixty methods,
     /// which is what keeps this a rename rather than a rewrite.
     ///
-    /// THE INVARIANT IS NOT "one vehicle at a time per thread", which is what this
-    /// said and which the field does not provide. It is a PLAIN static, not
+    /// The invariant is not "one vehicle at a time per thread", which is what this
+    /// field does not provide. It is a plain static, not
     /// [ThreadStatic], so what it actually requires is stronger and narrower:
     ///
-    ///   EVERY WRITER AND EVERY READER OF _s RUNS ON ONE THREAD.
+    /// Every writer and every reader of _s runs on one thread.
     ///
-    /// Two of them do. Vehicle.PrepareWorker is called per vehicle, in sequence, on
-    /// the main thread - Universe.PrepareVehicleWorkers runs after VehicleSolvers.Wait()
-    /// and before the tasks are re-queued, so no job thread is in flight (see
-    /// RefreshStageModel). StarMap's GUI hook draws on that same main thread, after the
-    /// step. So the sim step and the draw interleave rather than overlap, and one
-    /// pointer between them is safe WITHOUT synchronisation.
+    /// Vehicle.PrepareWorker is called per vehicle in sequence on the main thread.
+    /// Universe.PrepareVehicleWorkers runs after the vehicle solver jobs complete and
+    /// before the tasks are re-queued, so no job thread is in flight. StarMap's GUI
+    /// hook draws on that same main thread after the step, so the sim step and the draw
+    /// interleave rather than overlap, and one pointer between them is safe without
+    /// synchronisation.
     ///
-    /// IF THAT EVER STOPS BEING TRUE the failure is silent and total: the draw would
+    /// If that ever stops being true the failure is silent and total: the draw would
     /// re-point _s mid-step and the sim would fly one vehicle's plan onto another. It
     /// would not throw, and it would not look like a threading bug. Hence AssertOwner
     /// in Use() below, which turns that into one line in the log instead. The invariant
     /// is a property of how KSA schedules its hooks, so it is the game - not this mod -
     /// that can invalidate it, which is exactly why it is checked rather than assumed.
     ///
-    /// This is also why the two Harmony postfixes that DO run on VehicleSolvers job
-    /// threads (KsaGimbalControl, KsaAttitudeRate) never touch _s: they carry their own
-    /// per-vehicle slots keyed on VehicleConfigInfo, and read a published immutable
-    /// snapshot rather than the ambient current.
+    /// The Harmony postfixes that run on vehicle solver job threads never touch _s. They
+    /// use per-vehicle slots keyed on VehicleConfigInfo and read a published immutable
+    /// snapshot instead.
     ///
     /// Never null once Use() has run. It starts as a detached instance so a stray read
     /// before the first vehicle arrives reads harmless defaults rather than throwing.
@@ -130,12 +128,7 @@ public static partial class GuidanceWindow
     }
 
 
-    // A FIXED COARSE COLD START WAS WRONG. It was chosen from an offline sweep that
-    // measured 0.44 m of defect at 10 nodes; the flown vehicle at 10 nodes got 7.87 m
-    // and could not follow its own plan for a single cycle. The sweep started from an
-    // UPRIGHT vehicle, and the real entry is a belly-flop at 92 degrees - so it
-    // measured the translation and missed the attitude slew, which is the stiff part
-    // of this problem and the part a coarse spacing fails to resolve.
+    // A coarse cold start must account for the attitude slew during the 92 degree belly-flop entry, because coarse spacing can resolve translation while leaving the attitude part of the problem too stiff to follow.
     //
     // The cold count is now derived from the same spacing target as everything else,
     // so there is one criterion rather than two, and it cannot drift away from what
@@ -206,9 +199,7 @@ public static partial class GuidanceWindow
     // Fixed burn time (see Ksa6DofGuidance.FixedTime). Free final time makes the
     // dynamics bilinear in (sigma, x, u) and is the root of sigma pinning, the
     // regularisers biasing the trajectory, and loitering. Gfold already works this way.
-    // Default back to FREE burn time. Fixing it removed the regulariser/sigma
-    // coupling exactly as predicted, but did not fix the kinks, the wandering or the
-    // solve times - so it is kept as an option rather than imposed.
+    // Free final time remains available because it can be useful for trajectories that do not need the fixed-time conditioning described above.
 
     // Touchdown latch. A vehicle sitting on the pad ALREADY reports terrain contact
     // (the launch-pad collider counts), so "cut on contact" must not fire until the
@@ -434,10 +425,7 @@ public static partial class GuidanceWindow
         double cadenceS = _s.SixDofReplanSec;
         bool stale = age > cadenceS * 2.5;
         double sg = _s.Guidance.Sigma;
-        // Solver health. The occasional multi-second solve was an ITERATION cap that
-        // did not bound TIME: one ADMM iteration costs ~20x more at N=80 than at
-        // N=30, so a fixed 2000-iteration budget was 1.5 s there. The cap is derived
-        // from this measured cost each cycle instead.
+        // Solver health. The cap is derived from the measured cost of one ADMM iteration each cycle, because that cost changes with the node count.
         ImGui.Text($"solver {_s.Guidance.MsPerAdmmIteration * 1000.0,6:F0} us/ADMM-iter   " +
                    $"budget {_s.Guidance.SubproblemBudgetMs:F0} ms -> cap " +
                    $"{(int)(_s.Guidance.SubproblemBudgetMs / Math.Max(_s.Guidance.MsPerAdmmIteration, 1e-4))} iters   " +
@@ -1624,11 +1612,7 @@ public static partial class GuidanceWindow
             }
             else if (_s.Guidance.NeedsMoreNodes && _s.Guidance.Nodes < MaxNodes)
             {
-                // MORE NODES, NOT MORE TRIES. The cold solve has stopped improving
-                // while still above the gate the warm loop judges by, and repeating it
-                // at the same node count reruns the identical problem. Flight log
-                // 20260808-104651 did that three times before giving up: settle at
-                // 7.87 m, hand over, get refused fifteen times, cold restart, repeat.
+                // Increase the node count when the cold solve stops improving above the warm-loop gate, because repeating the same node count repeats the same problem.
                 int finer = NodeRungs.Length - 1;
                 for (int i = NodeRungs.Length - 1; i >= 0; i--)
                     if (NodeRungs[i] > _s.Guidance.Nodes) { finer = i; break; }
