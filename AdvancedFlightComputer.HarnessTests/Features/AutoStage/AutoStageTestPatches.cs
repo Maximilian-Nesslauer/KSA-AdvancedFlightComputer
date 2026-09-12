@@ -17,9 +17,17 @@ internal static class AutoStageTestPatches
 
         internal Scope()
         {
-            SharedVehicleHooks.ApplyPatches(_harmony);
-            AutoStageFeature.ApplyPatches(_harmony);
-            SharedVehicleHooks.AutoStageEnabled = true;
+            try
+            {
+                SharedVehicleHooks.ApplyPatches(_harmony);
+                AutoStageFeature.ApplyPatches(_harmony);
+                SharedVehicleHooks.AutoStageEnabled = true;
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
         }
 
         public void Dispose()

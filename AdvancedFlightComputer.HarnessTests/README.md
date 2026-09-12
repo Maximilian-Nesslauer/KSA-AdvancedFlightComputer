@@ -102,13 +102,18 @@ The staging tests apply the feature's patches on a test-scoped Harmony owner thr
 - `afc-autostage-delays` measures that configured decoupler and engine ignition delays fire on time, each in isolation.
 - `afc-autostage-spent-drop` flies a save whose launch stage mixes boosters with a core and asserts the boosters are shed as soon as they burn out, never earlier, with the core still firing afterwards, and that the drop never arms on the frame the launch sequence fires.
 
+### Automatic burn removal
+
+- `afc-autoremove-burns` adds a real burn through the game's input queue and drives the real flight computer through the Auto to Manual transition: a completed auto-burn is removed, while out-of-fuel, switched-off, manual-mode, zero-delta-V-insert and uncontrolled-vehicle cases keep the burn.
+- `afc-autoremove-rcs` raises the RCS completion event through the feature's own subscription and checks the removal policy on it: raised, switched off, uncontrolled, and a burn already gone.
+
 ### Core
 
 - `afc-save-scoped-reset` asserts that the save-scoped reset list runs cold, populated, and twice in a row without throwing, and clears the plan-window inputs that it covers.
 - `afc-stock-pin-guard` asserts the guard that decides whether stock's selected-transfer block can index the porkchop array, against fresh, in-flight, populated, zero-sized, and out-of-range `TransferInfo` states.
 - `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature. It also checks the AUTOSTAGE gauge enum injection and that stock still activates a sequence row through `Part.ActivateSubtreeInStage`, which the staging execution clones.
 - `afc-feature-patch-rollback` checks that a failed feature block removes only its partial patches, keeps other owners intact, and does not prevent a later block or unload.
-- `afc-shared-vehicle-hooks` checks the shared AutoStage, MultiPass and RCS tick order, feature gates, patch bindings, and unconditional registry and cache cleanup when a vehicle is disposed.
+- `afc-shared-vehicle-hooks` checks the shared AutoStage, MultiPass, RCS and AutoRemove tick order, feature gates, patch bindings, and unconditional registry and cache cleanup when a vehicle is disposed.
 
 ### Fixtures
 

@@ -29,6 +29,8 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("MultiPass keys resolve", GameReflection.ValidateMultiPass());
         t.Check("RcsTranslation keys resolve", GameReflection.ValidateRcsTranslation());
         t.Check("AutoStage keys resolve", GameReflection.ValidateAutoStage());
+        t.Check("AutoRemove keys resolve", GameReflection.ValidateAutoRemove());
+        t.Check("SettingsPage keys resolve", GameReflection.ValidateSettingsPage());
 
         t.Check("DrawCorrectionTransfer anchor", PlanWindowPatchPipeline.HasCalculatedControlsAnchor);
         t.Check("Burn.Create anchor", PlanWindowPatchPipeline.HasCreateAnchor);
@@ -37,7 +39,7 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("DrawSelectedTransfer anchor", Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent);
         t.Check("DrawSelectedTransferUi anchor", Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent);
         t.Check("FindClosestApproaches anchor", Patch_FindClosestApproaches.IsAnchorPresent);
-        t.Check("GameSettings.OnDrawUi PopWidgetStyle anchor", AutoStageSettingsPage.IsAnchorPresent);
+        t.Check("GameSettings.OnDrawUi PopWidgetStyle anchor", ModSettingsPage.IsAnchorPresent);
         t.Check("ModLibrary.AllParts anchor", GameReflection.ModLibrary_AllParts != null);
 
         // Stock initialises _transferType to its first entry, so a null key means the accessor did

@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -12,6 +13,7 @@ internal static class SharedVehicleHooks
     internal static bool MultiPassEnabled { get; set; }
     internal static bool RcsEnabled { get; set; }
     internal static bool AutoStageEnabled { get; set; }
+    internal static bool AutoRemoveEnabled { get; set; }
 
     internal static void ApplyPatches(Harmony harmony)
     {
@@ -24,6 +26,7 @@ internal static class SharedVehicleHooks
         MultiPassEnabled = false;
         RcsEnabled = false;
         AutoStageEnabled = false;
+        AutoRemoveEnabled = false;
     }
 
     internal static void TickVehicles(ReadOnlySpan<Astronomical> bodies)
@@ -43,6 +46,10 @@ internal static class SharedVehicleHooks
             if (RcsEnabled)
                 RcsDriverPatch.TickVehicle(vehicle);
         }
+
+        // Last, so MultiPass observes the stock completion before the finished burn leaves the plan.
+        if (AutoRemoveEnabled)
+            FinishedBurnRemover.Tick();
     }
 
     internal static void OnDisposed(Vehicle vehicle)

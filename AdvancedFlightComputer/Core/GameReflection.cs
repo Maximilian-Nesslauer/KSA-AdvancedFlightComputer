@@ -33,6 +33,8 @@ internal static class GameReflection
         SoftAnchor = 64,
 
         AutoStage = 128,
+        AutoRemove = 256,
+        SettingsPage = 512,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -180,7 +182,7 @@ internal static class GameReflection
     // host, because Vehicle.UpdateFromTaskResultsUnsynchronized runs one worker per physics bubble
     // and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined, which a Harmony detour
     // on the callee cannot survive.
-    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage | Feature.AutoRemove)]
     public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
         AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers), Type.EmptyTypes);
 
@@ -230,13 +232,14 @@ internal static class GameReflection
     public static readonly FieldInfo? SequenceList_updatingSequence =
         AccessTools.Field(typeof(SequenceList), "_updatingSequence");
 
-    // Which settings page the nav rail has open. The enum is private to GameSettings, so its Mods
-    // member is resolved as a boxed value once and compared by equality.
-    [UsedBy(Feature.AutoStage)]
+    // Which settings page the nav rail has open, read by the shared Mods settings section host. The
+    // enum is private to GameSettings, so its Mods member is resolved as a boxed value once and
+    // compared by equality. Its own feature, so a settings-window rename costs the sections only.
+    [UsedBy(Feature.SettingsPage)]
     public static readonly FieldInfo? GameSettings_openTab =
         AccessTools.Field(typeof(GameSettings), "_openTab");
 
-    [UsedBy(Feature.AutoStage)]
+    [UsedBy(Feature.SettingsPage)]
     public static readonly object? GameSettings_openTab_Mods =
         GameSettings_openTab?.FieldType is { IsEnum: true } tab && Enum.TryParse(tab, "Mods", out object? mods) ? mods : null;
 
@@ -298,6 +301,10 @@ internal static class GameReflection
     public static bool ValidateRcsTranslation() => Validate(Feature.RcsTranslation);
 
     public static bool ValidateAutoStage() => Validate(Feature.AutoStage);
+
+    public static bool ValidateAutoRemove() => Validate(Feature.AutoRemove);
+
+    public static bool ValidateSettingsPage() => Validate(Feature.SettingsPage);
 
     private static bool Validate(Feature feature)
     {

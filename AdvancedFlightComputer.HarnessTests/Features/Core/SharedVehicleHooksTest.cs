@@ -1,6 +1,7 @@
 using System.IO;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -39,6 +40,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
         bool oldMultiPass = SharedVehicleHooks.MultiPassEnabled;
         bool oldRcs = SharedVehicleHooks.RcsEnabled;
         bool oldAutoStage = SharedVehicleHooks.AutoStageEnabled;
+        bool oldAutoRemove = SharedVehicleHooks.AutoRemoveEnabled;
         string vehicleId = "SharedHooks_" + Guid.NewGuid().ToString("N");
         Vehicle? vehicle = null;
         try
@@ -54,13 +56,15 @@ public sealed class SharedVehicleHooksTest : AfcTest
             PatchRecorder(harmony, typeof(StagingDetector), nameof(StagingDetector.Evaluate), [], nameof(RecordAutoStage));
             PatchRecorder(harmony, typeof(PassCompletionPatch), "TickVehicle", [typeof(Vehicle)], nameof(RecordMultiPass));
             PatchRecorder(harmony, typeof(RcsDriverPatch), "TickVehicle", [typeof(Vehicle)], nameof(RecordRcs));
+            PatchRecorder(harmony, typeof(FinishedBurnRemover), nameof(FinishedBurnRemover.Tick), [], nameof(RecordAutoRemove));
             CheckTickOrder(t, vehicle);
             CheckDisposal(t, vehicle);
             CheckBinding(t, harmony.Id, GameReflection.Universe_ApplyVehicleSolvers!, expectPrefix: true);
             CheckBinding(t, harmony.Id, GameReflection.Vehicle_Dispose!, expectPrefix: false);
             SharedVehicleHooks.Reset();
             t.Check("reset disables every driver", !SharedVehicleHooks.MultiPassEnabled
-                && !SharedVehicleHooks.RcsEnabled && !SharedVehicleHooks.AutoStageEnabled);
+                && !SharedVehicleHooks.RcsEnabled && !SharedVehicleHooks.AutoStageEnabled
+                && !SharedVehicleHooks.AutoRemoveEnabled);
         }
         finally
         {
@@ -73,6 +77,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
             SharedVehicleHooks.MultiPassEnabled = oldMultiPass;
             SharedVehicleHooks.RcsEnabled = oldRcs;
             SharedVehicleHooks.AutoStageEnabled = oldAutoStage;
+            SharedVehicleHooks.AutoRemoveEnabled = oldAutoRemove;
             Calls.Clear();
         }
     }
@@ -82,27 +87,34 @@ public sealed class SharedVehicleHooksTest : AfcTest
         SharedVehicleHooks.AutoStageEnabled = true;
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;
+        SharedVehicleHooks.AutoRemoveEnabled = true;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("AutoStage, MultiPass, then RCS, each exactly once",
-            Calls.SequenceEqual(new[] { "AutoStage", "MultiPass", "RCS" }));
+        t.Check("AutoStage, MultiPass, RCS, then AutoRemove, each exactly once",
+            Calls.SequenceEqual(new[] { "AutoStage", "MultiPass", "RCS", "AutoRemove" }));
 
         SharedVehicleHooks.MultiPassEnabled = false;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("failed MultiPass block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "RCS" }));
+        t.Check("failed MultiPass block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "RCS", "AutoRemove" }));
 
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = false;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("failed RCS block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "MultiPass" }));
+        t.Check("failed RCS block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "MultiPass", "AutoRemove" }));
 
         SharedVehicleHooks.RcsEnabled = true;
         SharedVehicleHooks.AutoStageEnabled = false;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("failed AutoStage block cannot tick", Calls.SequenceEqual(new[] { "MultiPass", "RCS" }));
+        t.Check("failed AutoStage block cannot tick", Calls.SequenceEqual(new[] { "MultiPass", "RCS", "AutoRemove" }));
+
+        SharedVehicleHooks.AutoStageEnabled = true;
+        SharedVehicleHooks.AutoRemoveEnabled = false;
+        Calls.Clear();
+        SharedVehicleHooks.TickVehicles([vehicle]);
+        t.Check("failed AutoRemove block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "MultiPass", "RCS" }));
 
         SharedVehicleHooks.Reset();
         Calls.Clear();
@@ -142,10 +154,11 @@ public sealed class SharedVehicleHooksTest : AfcTest
         SharedVehicleHooks.AutoStageEnabled = true;
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;
+        SharedVehicleHooks.AutoRemoveEnabled = true;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        // The staging detector ticks per frame, not per vehicle, so it is the one call expected here.
-        t.Check("disposed vehicles do not tick", Calls.SequenceEqual(new[] { "AutoStage" }));
+        // The staging detector and the burn remover tick per frame, not per vehicle, so those two calls are expected.
+        t.Check("disposed vehicles do not tick", Calls.SequenceEqual(new[] { "AutoStage", "AutoRemove" }));
     }
 
     private static void CheckRcsCompletionHandover(TestContext t, Vehicle vehicle)
@@ -289,6 +302,12 @@ public sealed class SharedVehicleHooksTest : AfcTest
     private static bool RecordAutoStage()
     {
         Calls.Add("AutoStage");
+        return false;
+    }
+
+    private static bool RecordAutoRemove()
+    {
+        Calls.Add("AutoRemove");
         return false;
     }
 
