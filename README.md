@@ -2,7 +2,7 @@
 
 Extra maneuver planning tools for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency).
 
-Adds quick-tools to the Transfer Planner (set Pe/Ap, match/set inclination, circularize), flyby targeting so a Hohmann transfer arrives as a flyby instead of an impact, multi-pass burn splitting for Oberth-efficient departures, RCS-only burn execution, automatic staging with spent-booster drop and configurable staging delays, and enables the planner to target interstellar comets on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS).
+Adds quick-tools to the Transfer Planner (set Pe/Ap, match/set inclination, circularize), flyby targeting so a Hohmann transfer arrives as a flyby instead of an impact, multi-pass burn splitting for Oberth-efficient departures, RCS-only burn execution, automatic staging with spent-booster drop and configurable staging delays, automatic removal of finished burns, and enables the planner to target interstellar comets on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS).
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
@@ -66,8 +66,8 @@ Instead of one long burn that sweeps a large arc away from periapsis, the engine
 When burn duration is a significant fraction of the orbital period, a single burn wastes fuel by thrusting far from periapsis. Splitting across N passes keeps each burn near periapsis where the Oberth effect is strongest.
 This is the same technique used by real missions: lunar kick stages that perform multiple perigee burns over several days to gradually raise their orbit before the final trans-lunar injection, because a single burn would spend too long thrusting away from periapsis. Particularly useful for low-TWR spacecraft (ion engines, small kick stages, nuclear tugs) where a single departure burn can take tens of minutes and sweep a large fraction of the orbit.
 
-**Recommended companion mod:**
-Multi-pass works best with the built-in [automatic staging](#automatic-staging) switched on (handles staging between passes) and [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) installed (cleans up completed burns automatically). A multi-pass execution then runs hands-free from first ignition to final departure.
+**Hands-free execution:**
+Multi-pass works best with the built-in [automatic staging](#automatic-staging) switched on (handles staging between passes) and the built-in [automatic burn removal](#automatic-burn-removal) left on (cleans up completed burns). A multi-pass execution then runs hands-free from first ignition to final departure.
 
 **Limitations:**
 - Automatic pass advancement currently requires stock engine Auto mode. RCS translation completion does not advance the multi-pass sequence.
@@ -87,7 +87,7 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 - Burns themselves stay in the stock save format; removing the mod keeps every planned burn. The RCS arming metadata lives in `mods/AdvancedFlightComputer/rcs-exec.toml` next to the mod and survives save/load, including mid-burn.
 - The burn editor warns when a burn resolves to RCS but no thruster can translate (no propellant, none active) and when the estimated propellant exceeds what the thrusters can actually reach. Auto also shows an alert and refuses the burn before it creates execution state or changes the controls when the burn has no delta-V, no usable translation, or no axis that can serve its direction.
 - Estimates for a later planned burn use the current vehicle as an approximation and show **Estimate basis: Current vehicle** in the burn editor or **Current vehicle** in the gauge. Stock only loads the first executable burn as its active burn target, so these estimates do not forecast earlier burns or staging.
-- Completed RCS burns raise a public event (`RcsBurnCompletions.Completed`) other mods can consume; [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) uses it to clean up finished RCS burns the same way it cleans up engine auto-burns.
+- Completed RCS burns raise a public event (`RcsBurnCompletions.Completed`) other mods can consume; the built-in [automatic burn removal](#automatic-burn-removal) uses it to clean up finished RCS burns the same way it cleans up engine auto-burns.
 - The **allocator** is selectable per burn (default **Groups**). Groups fires signed-axis groups and uses attitude control to counter residual torque. **LP** solves a fuel-optimal jet-selection problem over individual thruster forces and torques (the Bergmann/Draper formulation). It prices residual torque on axes with rotation authority and requires zero net torque on the other axes. LP can require costly counter-thrust, so it is opt-in. It falls back to Groups when the constraints are infeasible.
 
 ### Automatic Staging
@@ -135,6 +135,15 @@ CoreFairingA_Prefab_Interstage3W3HB = 1.0
 
 Per-vehicle sequence overrides are stored next to it in `autostage-vehicles\<vehicle-id>.toml`, created automatically when you set an override in the part window, with separate `[sequence_delays]` (engines) and `[decoupler_delays]` sections. Nothing is written to a game save.
 
+### Automatic Burn Removal
+
+In stock KSA, when an auto-burn completes the flight computer flips the burn mode to Manual but leaves the burn entry in the plan, so you have to click "Delete" before the next maneuver can take focus. This feature cleans up completed burns automatically. Formerly the separate AutoRemoveFinishedBurns mod; remove that mod when you install this version. Its saved switch is imported on the first load.
+
+- **Auto-burns** are removed as soon as the flight computer flips out of Auto mode on completion. Completion is confirmed through the same delta-V vector reversal the stock flight computer uses, so a burn that flamed out before reaching its target stays in the plan and can be resumed after staging.
+- **RCS burns** executed by this mod are removed on their completion event.
+- **Manual burns are never touched**, and only the vehicle you control is watched. A burn that finishes on a background vehicle stays in its plan.
+- **Switch** on the Mods settings page, on by default, persisted in `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\autoremove.toml`.
+
 ### Hyperbolic Targets
 
 The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod lets it target interstellar comets (Oumuamua, 2I/Borisov, 3I/ATLAS) by patching the planner's time-of-flight and alignment math to handle unbound orbits.
@@ -171,6 +180,7 @@ Required only to build the mod from source. Targets **.NET 10**.
 ## Mod compatibility
 
 - [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) is now part of this mod. Delete its folder under `mods`, do not only disable it: KittenExtensions applies the XML patches of every manifest entry, so a disabled AutoStage still puts its own dead AUTOSTAGE button on top of this one, and an enabled one keeps the built-in staging off, which the log says.
+- [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) is now part of this mod. Remove the standalone mod; with both installed each removes the burn the other already took care of, which is harmless but logged.
 - Known conflicts: none
 
 ## Community
@@ -180,4 +190,3 @@ Thread on the KSA forums: https://forums.ahwoo.com/threads/advanced-flight-compu
 ## Check out my other mods
 
 - [MeasureTools](https://github.com/Maximilian-Nesslauer/KSA-MeasureTools) - click-to-measure ruler, protractor, and surface measuring in the map view ([forum thread](https://forums.ahwoo.com/threads/measuretools.992/))
-- [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) - automatically remove finished auto-burns from the burn plan ([forum thread](https://forums.ahwoo.com/threads/autoremovefinishedburns.928/))
