@@ -10,7 +10,7 @@ throttle setting and a gimbal deflection. Where the design departs from textbook
 successive convexification, that is called out explicitly.
 
 For the development history and the specific traps encountered along the way, see
-[DEVNOTES.md](DEVNOTES.md).
+[scvx-bridge-devnotes.md](scvx-bridge-devnotes.md).
 
 ---
 
@@ -31,7 +31,7 @@ For the development history and the specific traps encountered along the way, se
 ## 1. The problem
 
 A booster is falling. Given where it is now, find the thrust and gimbal history that
-lands it on the pad, upright and stopped, using as little propellant as possible —
+lands it on the pad, upright and stopped, using as little propellant as possible -
 while respecting everything the vehicle physically cannot do.
 
 **State** (14 numbers):
@@ -59,13 +59,13 @@ whole vehicle. Roll is separate because a single centreline engine cannot produc
 
 **Constraints:**
 
-- **Throttle box**: `Tmin ≤ T ≤ Tmax`. A lit engine has a minimum thrust — it cannot
+- **Throttle box**: `Tmin <= T <= Tmax`. A lit engine has a minimum thrust - it cannot
   be turned down arbitrarily far.
-- **Gimbal cone**: `‖(tdx, tdy)‖ ≤ tan(δmax)·T`. The engine deflects only so far.
+- **Gimbal cone**: `‖(tdx, tdy)‖ <= tan(δmax)·T`. The engine deflects only so far.
 - **Tilt limit**: the vehicle may not lean more than some angle from vertical.
-- **Roll authority**: `|τ| ≤ τmax`.
+- **Roll authority**: `|τ| <= τmax`.
 - **Ground**: altitude stays above zero.
-- Plus optional **glideslope** and **descent-rate** corridors (§4).
+- Plus optional **glideslope** and **descent-rate** corridors (section 4).
 
 **Objective**: maximise final mass, i.e. burn as little propellant as possible.
 
@@ -76,7 +76,7 @@ whole vehicle. Roll is separate because a single centreline engine cannot produc
 If this problem were convex, we could solve it once, exactly, and be done. It isn't,
 for three reasons:
 
-1. **Rotational dynamics.** `q̇` depends on `q ⊗ ω` and `ω̇` on `I⁻¹(τ − ω × Iω)` —
+1. **Rotational dynamics.** `q̇` depends on `q ⊗ ω` and `ω̇` on `I⁻¹(τ - ω x Iω)` -
    products of unknowns.
 2. **The thrust vector rotates with the vehicle.** Body-frame thrust becomes
    world-frame acceleration through `q`, another product of unknowns.
@@ -102,7 +102,7 @@ A trajectory is a continuous function of time; a solver needs a finite vector. T
 trajectory is represented by its values at `N` **nodes**, evenly spaced in normalised
 time `τ ∈ [0,1]`, and the actual duration is the separate variable `σ`.
 
-Between nodes the dynamics are enforced by **trapezoidal collocation** — the state at
+Between nodes the dynamics are enforced by **trapezoidal collocation** - the state at
 one node must equal the state at the previous node plus the average of the derivatives
 at both ends:
 
@@ -115,14 +115,14 @@ about the current guess.
 
 Two consequences matter throughout:
 
-**Node spacing sets accuracy.** The real spacing is `dt = σ/(N−1)` seconds. Collocation
+**Node spacing sets accuracy.** The real spacing is `dt = σ/(N-1)` seconds. Collocation
 error grows with `dt`, so the same node count is generous close to the pad and coarse
 at altitude, where `σ` is large. Measured across a descent, `dt < 2 s` keeps the error
 under 0.1 m while `dt > 8 s` pushes it past 0.5 m. **The meaningful knob is spacing,
-not node count** — see §8.
+not node count** - see section 8.
 
 **`Wv` is a slack variable.** That is the *virtual control* term, and it is the single
-most important thing to understand about a partially converged plan (§5).
+most important thing to understand about a partially converged plan (section 5).
 
 ---
 
@@ -143,11 +143,11 @@ a set of second-order cones. Everything stacks into **one** matrix `A`, in that 
 
 | Block | Count | What |
 |---|---|---|
-| `X` | `N × 14` | state at every node |
-| `U` | `N × 4` | control at every node |
-| `Wv` | `(N−1) × 14` | virtual control, one per interval |
+| `X` | `N x 14` | state at every node |
+| `U` | `N x 4` | control at every node |
+| `Wv` | `(N-1) x 14` | virtual control, one per interval |
 | `σ` | 1 | burn duration |
-| slacks | 0–2 per node | glideslope and descent-rate relaxations (§8) |
+| slacks | 0-2 per node | glideslope and descent-rate relaxations (section 8) |
 
 ### The equality rows
 
@@ -155,8 +155,8 @@ a set of second-order cones. Everything stacks into **one** matrix `A`, in that 
 |---|---|
 | 14 | initial state = the measured vehicle state |
 | 13 | terminal state = the target (mass is free) |
-| `(N−1) × 14` | the collocation identity above |
-| `N−2` | **quaternion norm**, linearised as `q̄·q = 1` at interior nodes |
+| `(N-1) x 14` | the collocation identity above |
+| `N-2` | **quaternion norm**, linearised as `q̄·q = 1` at interior nodes |
 
 That last one is worth a note: a unit-norm constraint is not convex, but *linearised
 about the current guess* it becomes a plane, and the iteration pulls the quaternion
@@ -168,28 +168,28 @@ Per node: the throttle box, roll-torque limits, the linearised tilt limit, and a
 floor. Then a **trust region** box on every state, control and on `σ`, and the bounds on
 `σ` itself.
 
-The tilt constraint is `R₂₂ ≥ cos(tilt_max)` where `R₂₂ = 1 − 2(qx² + qy²)` — again not
+The tilt constraint is `R₂₂ >= cos(tilt_max)` where `R₂₂ = 1 - 2(qx^2 + qy^2)` - again not
 convex, again linearised about the guess.
 
 ### The second-order cones
 
-One per node for the **gimbal**: `tan(δmax)·T ≥ ‖(tdx, tdy)‖`. This is the one
-constraint that is genuinely conic rather than merely linearised — the set of
+One per node for the **gimbal**: `tan(δmax)·T >= ‖(tdx, tdy)‖`. This is the one
+constraint that is genuinely conic rather than merely linearised - the set of
 achievable thrust vectors really is an ice-cream cone, and the solver handles it
-exactly. Optionally a second cone per node for the glideslope corridor (§8).
+exactly. Optionally a second cone per node for the glideslope corridor (section 8).
 
 ### The objective
 
-- **Linear**: `−m_final / m_initial` — maximise the propellant left. Plus L1 penalties
+- **Linear**: `-m_final / m_initial` - maximise the propellant left. Plus L1 penalties
   on the path-constraint slacks.
-- **Quadratic** (`P`): a penalty `ρ_vc‖Wv‖²` on virtual control, small penalties on
-  control rate and body rate, and a **proximal** term (§8).
+- **Quadratic** (`P`): a penalty `ρ_vc‖Wv‖^2` on virtual control, small penalties on
+  control rate and body rate, and a **proximal** term (section 8).
 
 ### Scaling
 
-The solver never sees SI units. Every variable is divided by a characteristic scale —
+The solver never sees SI units. Every variable is divided by a characteristic scale -
 length by the distance to the target, speed by a characteristic speed, mass by the
-initial mass — so all variables are order 1. This is not cosmetic: **the trust region
+initial mass - so all variables are order 1. This is not cosmetic: **the trust region
 is expressed in scaled units**, so the scale determines how far the solver may move per
 iteration. Rows are separately equilibrated, because first-order methods like ADMM are
 even more sensitive to row-scale disparity than interior-point methods are.
@@ -201,9 +201,9 @@ even more sensitive to row-scale disparity than interior-point methods are.
 ```
 seed a reference trajectory
 repeat:
-    linearise the dynamics about the reference        →  A, B, f0
-    assemble and solve the convex subproblem          →  candidate X, U, σ
-    integrate the TRUE nonlinear dynamics along it    →  actual cost and defect
+    linearise the dynamics about the reference        ->  A, B, f0
+    assemble and solve the convex subproblem          ->  candidate X, U, σ
+    integrate the TRUE nonlinear dynamics along it    ->  actual cost and defect
     ρ = actual improvement / predicted improvement
     if ρ is good:  accept the candidate as the new reference, grow the trust region
     else:          reject it, shrink the trust region and retry
@@ -217,15 +217,15 @@ thing that detects a step that went too far.
 ### Virtual control, and why a converged plan matters
 
 `Wv` is a free variable in the collocation identity. The solver can always satisfy the
-dynamics by setting `Wv` to whatever is needed — it just pays `ρ_vc‖Wv‖²` for it. That
+dynamics by setting `Wv` to whatever is needed - it just pays `ρ_vc‖Wv‖^2` for it. That
 is deliberate and necessary: without it, an early linearisation could make the problem
 infeasible and the iteration would die before it started.
 
 But it means an unconverged trajectory **does not obey physics**. The state jumps
 between nodes on a force that does not exist. Such a plan is not slightly wrong; it is
-*unflyable* — no thrust setting reproduces it.
+*unflyable* - no thrust setting reproduces it.
 
-So the **defect** — the size of that fictitious force, converted to metres — is the
+So the **defect** - the size of that fictitious force, converted to metres - is the
 measure of whether a plan is real. This implementation refuses to fly any plan whose
 defect exceeds a threshold, keeping the previous plan instead and reporting why. That
 is a departure from the textbook algorithm, which simply returns whatever it has when
@@ -241,7 +241,7 @@ match the game's.
 
 ### Frames
 
-The model works in a **site frame** — origin at the landing target, `+z` up — and treats
+The model works in a **site frame** - origin at the landing target, `+z` up - and treats
 it as inertial. The game works in a body-centred inertial frame and uses a
 scalar-**last** quaternion; the model uses scalar-**first**. `KsaFrameBridge` converts
 in both directions, routing through rotation matrices so the conversion cannot depend on
@@ -254,8 +254,8 @@ would catch an axis swap, a handedness error or a sign flip.
 
 ### Reading the control at the current instant
 
-The plan's control is sampled at `t = now − solve_time` and interpolated linearly
-between nodes — matching the assumption the collocation itself made. Immediately after
+The plan's control is sampled at `t = now - solve_time` and interpolated linearly
+between nodes - matching the assumption the collocation itself made. Immediately after
 a solve this returns node 0's control, which is the control the optimiser chose *for the
 vehicle's actual current state*.
 
@@ -265,11 +265,11 @@ The model's lateral thrust becomes a body torque directly, from the geometry of 
 engine hanging below the centre of mass:
 
 ```
-τ_body = r_engine × T_body = ( L·tdy, −L·tdx, τ_roll )
+τ_body = r_engine x T_body = ( L·tdy, -L·tdx, τ_roll )
 ```
 
 That torque is converted to the game's body axes and handed to an allocator, which
-solves a small least-squares problem for the per-gimbal deflections that produce it —
+solves a small least-squares problem for the per-gimbal deflections that produce it -
 including the roll verniers. The allocator clamps each axis independently, because roll
 authority on this class of vehicle is hundreds of times weaker than pitch and yaw, and a
 single over-large roll demand would otherwise scale down the whole solution.
@@ -284,14 +284,14 @@ guidance.
 It is not a division. In an atmosphere, nozzle thrust is
 
 ```
-F = ṁ·Ve + (Pe − Pa)·Ae
+F = ṁ·Ve + (Pe - Pa)·Ae
 ```
 
-The momentum term scales with throttle, but the ambient back-pressure term `−Pa·Ae`
-does not — throttle sets *combustion pressure*, not thrust. So
+The momentum term scales with throttle, but the ambient back-pressure term `-Pa·Ae`
+does not - throttle sets *combustion pressure*, not thrust. So
 
 ```
-F(t) = t·F(1) − Pa·Ae·(1 − t)
+F(t) = t·F(1) - Pa·Ae·(1 - t)
 ```
 
 which is a near-constant deficit, largest at low throttle, exactly where a descent
@@ -309,7 +309,7 @@ The trajectory is never flown open loop. Every cycle:
 3. Apply the first fraction of the new plan.
 4. Discard the rest.
 
-There is no trajectory-tracking controller — no PD loop, no attitude reference, no
+There is no trajectory-tracking controller - no PD loop, no attitude reference, no
 gain schedule. **The feedback is the re-solve.** Because node 0 is pinned to the
 measured state, every plan begins where the vehicle actually is, and disturbances are
 absorbed by re-planning rather than corrected against a stored reference.
@@ -318,7 +318,7 @@ Two properties follow, and they cut in opposite directions:
 
 - Anything wrong with the vehicle's *state* is corrected automatically, every cycle.
 - Anything wrong with the *model* is not corrected at all. Every re-plan meets the same
-  error and makes the same mistake. §8 covers the mechanism added for that.
+  error and makes the same mistake. section 8 covers the mechanism added for that.
 
 Warm starting matters enormously here. The shifted previous plan is a very good guess,
 so a re-solve typically takes a few milliseconds against a few hundred for a cold start.
@@ -333,15 +333,15 @@ why.
 ### Offset-free MPC: an estimated acceleration bias
 
 Standard MPC re-anchors the *state* but keeps planning with the same *model*. If a
-persistent force is missing from the model — a thrust calibration error, drag, a wrong
-gravity constant — every re-plan encounters it identically: the plan promises to
+persistent force is missing from the model - a thrust calibration error, drag, a wrong
+gravity constant - every re-plan encounters it identically: the plan promises to
 arrive, the vehicle falls short, the next plan promises again. Re-solving cannot fix a
 model error.
 
 So the guidance estimates the residual acceleration
 
 ```
-bias = measured acceleration − ( thrust/m + gravity )
+bias = measured acceleration - ( thrust/m + gravity )
 ```
 
 low-pass filters it, clamps it, and **adds it to the planner's gravity vector**. The
@@ -355,10 +355,10 @@ speed comes off.
 
 The reference formulation penalises control rate and body rate to keep the trajectory
 smooth. Those penalties also, incidentally, add positive-definite mass to `P` and hold
-the subproblem's conditioning together — so tuning them down to fix the trajectory
+the subproblem's conditioning together - so tuning them down to fix the trajectory
 triples the solver's iteration count.
 
-A **proximal** term `ρ‖(X − X̄)/scale‖²` restores exactly that conditioning without the
+A **proximal** term `ρ‖(X - X̄)/scale‖^2` restores exactly that conditioning without the
 side effect. Being centred on the current reference rather than on zero, it expresses no
 preference about the answer, and it vanishes at convergence where `X = X̄`.
 
@@ -369,10 +369,10 @@ linear row per node. Two design choices make them safe:
 
 **They skip node 0.** Node 0 is pinned by equality to the measured state. A hard
 constraint that the vehicle is *already violating* makes the problem infeasible by
-construction — no plan at all, precisely when one is most needed.
+construction - no plan at all, precisely when one is most needed.
 
 **They carry penalised slacks.** The sharper hazard is two corridors interacting:
-outside a glideslope cone and too low, the only way back inside is to climb — which a
+outside a glideslope cone and too low, the only way back inside is to climb - which a
 descent-rate constraint forbids. Hard versions of both can trap the vehicle in a region
 with no feasible exit. Soft versions cannot.
 
@@ -387,7 +387,7 @@ forever.
 Textbook SCvx runs to a tolerance. Running inside a game's simulation thread, a solve
 that takes a second is a visible freeze.
 
-An iteration cap does not bound time — one ADMM iteration costs several times more at
+An iteration cap does not bound time - one ADMM iteration costs several times more at
 80 nodes than at 30. So the cap is derived each cycle from a *measured* cost per
 iteration against a wall-clock budget, with a larger escalated budget for the rare hard
 subproblem.
@@ -398,7 +398,7 @@ the tail of the ADMM iteration is almost the entire bill and buys nothing.
 
 ### A defect gate in metres
 
-Whether a plan is flyable is an absolute question — a 10 cm discrepancy over a 20 second
+Whether a plan is flyable is an absolute question - a 10 cm discrepancy over a 20 second
 trajectory is fine whether the target is 2 km away or 50 m. But the solver's internal
 defect is normalised by the problem scale, whose length is the *range to target*, so a
 fixed scaled tolerance silently tightens as the vehicle closes in.
@@ -409,21 +409,21 @@ still uses the scaled figure, where it belongs.
 ### A node ladder
 
 Node count steps down at fixed altitudes rather than being held constant. Since spacing
-is `σ/(N−1)` and `σ` shrinks on approach, a fixed count buys steadily finer resolution
+is `σ/(N-1)` and `σ` shrinks on approach, a fixed count buys steadily finer resolution
 than the problem needs.
 
 It is a ladder rather than a continuously tracked value because changing `N` changes the
 problem's dimensions: the sparsity pattern is frozen at construction, so a new count
 means a new solver and the loss of the warm start. The reference *trajectory* survives
-by interpolation onto the new node count, and that is the seed that matters — measured
-5–90× cheaper than a cold solve at the transition.
+by interpolation onto the new node count, and that is the seed that matters - measured
+5-90x cheaper than a cold solve at the transition.
 
 ### Hand-off to a hover controller
 
 The last few metres are the worst case for this solver and the easiest for a simple
 controller. The horizon has collapsed to a handful of nodes over a second or two, so the
-trust region rather than the physics is what binds; meanwhile the terminal state —
-near-zero velocity, upright, holding a point — is exactly what a hover PID is for.
+trust region rather than the physics is what binds; meanwhile the terminal state -
+near-zero velocity, upright, holding a point - is exactly what a hover PID is for.
 Optimising a descent is the wrong question by then, so the guidance hands over.
 
 ---
@@ -432,23 +432,23 @@ Optimising a descent is the wrong question by then, so the guidance hands over.
 
 | File | Role |
 |---|---|
-| `scvx/Scvx.Core/Dynamics6Dof.cs` | The nonlinear dynamics and their Jacobians |
-| `scvx/Scvx.Core/Scvx6DofSubproblemScs.cs` | Builds one cone program per iteration |
-| `scvx/Scvx.Core/Scvx6DofSolver.cs` | The SCvx loop: linearise, solve, ratio test, trust region |
-| `scvx/Scvx.Core/ScsWorkspace.cs` | SCS bindings and iterate-level warm starting |
-| `ksamod/Scvx/KsaFrameBridge.cs` | Frame, body-axis and quaternion conversions |
-| `ksamod/Scvx/Ksa6DofSetup.cs` | Measures the live vehicle into a solver configuration |
-| `ksamod/Scvx/Ksa6DofGuidance.cs` | The MPC loop and the command interface |
-| `ksamod/Control/TvcAllocator.cs` | Body torque → per-gimbal deflections |
-| `ksamod/Control/EnginePerf.cs` | Engine capability and the thrust-curve inversion |
-| `ksamod/Guidance/SixDof.cs` | UI, stepping, telemetry, hand-off |
+| `AdvancedFlightComputer/Features/Guidance/Scvx/Dynamics6Dof.cs` | The nonlinear dynamics and their Jacobians |
+| `AdvancedFlightComputer/Features/Guidance/Scvx/Scvx6DofSubproblemScs.cs` | Builds one cone program per iteration |
+| `AdvancedFlightComputer/Features/Guidance/Scvx/Scvx6DofSolver.cs` | The SCvx loop: linearise, solve, ratio test, trust region |
+| `AdvancedFlightComputer/Features/Guidance/Scvx/ScsWorkspace.cs` | SCS bindings and iterate-level warm starting |
+| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/KsaFrameBridge.cs` | Frame, body-axis and quaternion conversions |
+| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/Ksa6DofSetup.cs` | Measures the live vehicle into a solver configuration |
+| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/Ksa6DofGuidance.cs` | The MPC loop and the command interface |
+| `AdvancedFlightComputer/Features/Guidance/Control/TvcAllocator.cs` | Body torque -> per-gimbal deflections |
+| `AdvancedFlightComputer/Features/Guidance/Control/EnginePerf.cs` | Engine capability and the thrust-curve inversion |
+| `AdvancedFlightComputer/Features/Guidance/Modes/SixDof.cs` | UI, stepping, telemetry, hand-off |
 
 ### Validation
 
-`scvx/Scvx.Console` runs the solver headless against a JAX reference implementation and
-a set of behavioural checks — closed-loop MPC with injected dispersions, path-constraint
+`tests/AdvancedFlightComputer.Guidance.Tests/Scvx` runs the solver headless against a JAX reference implementation and
+a set of behavioural checks - closed-loop MPC with injected dispersions, path-constraint
 enforcement, node-ladder transitions, defect behaviour against range, and solve-time
-distributions. `dotnet run --project scvx/Scvx.Console -c Release -- --help` lists them.
+distributions. `dotnet run --project tests/AdvancedFlightComputer.Guidance.Tests/Scvx -c Release -- --help` lists them.
 
 In flight, `SixDofLog` writes per-cycle telemetry, periodic whole-plan snapshots and an
 event log; `tools/readlog.py` summarises a run.
