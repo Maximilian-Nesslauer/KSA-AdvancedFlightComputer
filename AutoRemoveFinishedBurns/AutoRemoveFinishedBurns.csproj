@@ -1,0 +1,66 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
+    <PackageReference Include="StarMap.API" Version="0.3.6" />
+  </ItemGroup>
+
+  <!-- The headless test consumer needs the internal patch classes and GameReflection. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="AutoRemoveFinishedBurns.HarnessTests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="KSA">
+      <HintPath>..\..\..\refs\game\KSA.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Numerics">
+      <HintPath>..\..\..\refs\game\Brutal.Core.Numerics.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Logging">
+      <HintPath>..\..\..\refs\game\Brutal.Core.Logging.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.ImGui">
+      <HintPath>..\..\..\refs\game\Brutal.ImGui.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Brutal.Core.Strings">
+      <HintPath>..\..\..\refs\game\Brutal.Core.Strings.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="mod.toml">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!-- Deploy into the game's mods folder, plus the worktree-safety and game-is-running guards. -->
+  <Import Project="..\build\ModDeploy.targets" />
+
+  <Target Name="PackageRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <ReleaseDir>$(OutputPath)release\$(AssemblyName)\</ReleaseDir>
+      <ZipPath>$(OutputPath)$(AssemblyName).zip</ZipPath>
+    </PropertyGroup>
+    <RemoveDir Directories="$(OutputPath)release" />
+    <MakeDir Directories="$(ReleaseDir)" />
+    <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ReleaseDir)" />
+    <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
+    <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />
+    <RemoveDir Directories="$(OutputPath)release" />
+    <Message Importance="high" Text="Release packaged: $(ZipPath)" />
+  </Target>
+
+</Project>

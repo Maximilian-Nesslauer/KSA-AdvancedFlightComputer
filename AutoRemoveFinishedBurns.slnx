@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AutoRemoveFinishedBurns/AutoRemoveFinishedBurns.csproj" />
+  <Project Path="AutoRemoveFinishedBurns.HarnessTests/AutoRemoveFinishedBurns.HarnessTests.csproj" />
+</Solution>

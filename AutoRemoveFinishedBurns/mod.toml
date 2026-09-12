@@ -1,0 +1,4 @@
+name = "AutoRemoveFinishedBurns"
+
+[StarMap]
+EntryAssembly = "AutoRemoveFinishedBurns"
