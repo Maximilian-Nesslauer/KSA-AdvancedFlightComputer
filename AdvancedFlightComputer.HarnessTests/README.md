@@ -48,7 +48,9 @@ Build this solution and HeadlessHarness, checked out as a sibling, in the same c
 
 `-Tests` filters on exact `Name` values, so renaming a test breaks the invocations that use it. Use one or more of the names below, separated by commas.
 
-The flight tests fly whichever of `RcsTestVehicles.Candidates` the machine has. Set `KSA_HEADLESS_VEHICLES` to override the candidates. Without one of these saves, the flight tests skip.
+The RCS flight tests fly whichever of `RcsTestVehicles.Candidates` the machine has. Set `KSA_HEADLESS_VEHICLES` to override the candidates. Without one of these saves, the flight tests skip.
+
+The staging flight tests use the save named by `KSA_HEADLESS_VEHICLE`, shared with the harness's own flight test, and skip when it is unset. `afc-autostage-spent-drop` instead takes its save from `KSA_HEADLESS_VEHICLES` and defaults to "Test Vehicle 1". That default is the only end-to-end cover of the jettison analysis, so it fails rather than skips when the save is missing: provide a save whose launch stage mixes boosters with a core under that name, or name a substitute in `KSA_HEADLESS_VEHICLES`.
 
 Leave the deployed test mod disabled for normal play. It only does work inside a harness run and is not part of the released mod.
 
@@ -100,13 +102,26 @@ The oracle is always the game's own orbit propagation, never a re-derivation of 
 - `afc-guidance-booster-handover` separates a real vehicle and checks adoption, record consumption, guidance state and expiry. Arming and adoption are called directly, so this does not test autonomous flight. The available saves separate sibling boosters, leaving nested separations untested.
 - `afc-guidance-driver` installs the production guidance hooks on a test-scoped Harmony id and steps the universe with the ascent step replaced, so the driver plumbing is under test and not the flight. Control writes: the `PrepareWorker` prefix takes the claim and writes the attitude and the engine, the engine command survives stock's own input pass, the commanded turning rate reaches the worker and is gone after release, and the gimbal writer runs through the sink and stops with the feature flag. Ownership: an Auto burn mode is held in Manual and given back only by a release that cuts the engine on the same burn, and an Auto armed during the hold stops guidance and stays armed. Failure cleanup: the Enabled switch releases the craft on its next step, and a step that throws releases the craft and reports why. A synchronous 6-DOF engage is not covered, because it needs a real solve.
 
+### Automatic staging
+
+The staging tests apply the feature's patches on a test-scoped Harmony owner through `AutoStageTestPatches`, arm the detector through the gauge toggle path, and remove the patches when they end.
+
+- `afc-autostage-flight` flies a staged save at full manual throttle and asserts that every remaining engine sequence is activated automatically and that each one actually lights. A trailing decoupler-only sequence is left standing on purpose, because staging only runs while an engine is still ahead.
+- `afc-autostage-delays` measures that configured decoupler and engine ignition delays fire on time, each in isolation.
+- `afc-autostage-spent-drop` flies a save whose launch stage mixes boosters with a core and asserts the boosters are shed as soon as they burn out, never earlier, with the core still firing afterwards, and that the drop never arms on the frame the launch sequence fires.
+
+### Automatic burn removal
+
+- `afc-autoremove-burns` adds a real burn through the game's input queue and drives the real flight computer through the Auto to Manual transition: a completed auto-burn is removed, while out-of-fuel, switched-off, manual-mode, zero-delta-V-insert and uncontrolled-vehicle cases keep the burn.
+- `afc-autoremove-rcs` raises the RCS completion event through the feature's own subscription and checks the removal policy on it: raised, switched off, uncontrolled, and a burn already gone.
+
 ### Core
 
 - `afc-save-scoped-reset` asserts that the save-scoped reset list runs cold, populated, and twice in a row without throwing, and clears the plan-window inputs that it covers.
 - `afc-stock-pin-guard` asserts the guard that decides whether stock's selected-transfer block can index the porkchop array, against fresh, in-flight, populated, zero-sized, and out-of-range `TransferInfo` states.
-- `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature.
+- `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature. It also checks the AUTOSTAGE gauge enum injection and that stock still activates a sequence row through `Part.ActivateSubtreeInStage`, which the staging execution clones.
 - `afc-feature-patch-rollback` checks that a failed feature block removes only its partial patches, keeps other owners intact, and does not prevent a later block or unload.
-- `afc-shared-vehicle-hooks` checks the shared MultiPass and RCS tick order, feature gates, patch bindings, and unconditional registry cleanup when a vehicle is disposed.
+- `afc-shared-vehicle-hooks` checks the shared AutoStage, MultiPass, RCS and AutoRemove tick order, feature gates, patch bindings, and unconditional registry and cache cleanup when a vehicle is disposed.
 - `afc-vehicle-rename` uses the system rename path and checks the system index, both registries, stored IDs, burn-mode history and claim metadata. It also checks idle claim release and both refused-name paths. Execution records and history are seeded directly, so this does not test a full burn or save round trip.
 - `afc-control-write-surface` compares public FlightComputer field values around one RCS activation and cancellation against a maintained list. It checks mode restoration and selected attitude fields, but does not cover nested object mutations, worker outputs or the next step's rotation command. See `docs/control-ownership.md` for the write inventory and known release gaps.
 - `afc-command-sink` checks the one owner of the `FlightComputer.ComputeControl` postfix. It asserts the receipt semantics, that stock values survive a run, that a writer fault neither escapes nor discards what the writer already reported, and that an executing RCS burn holds its own vehicle in full physics with the flight fixture's off-rails override switched off.

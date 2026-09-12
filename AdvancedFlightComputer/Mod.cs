@@ -1,4 +1,6 @@
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoRemove;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
@@ -21,6 +23,11 @@ public sealed class Mod
     private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
     private static bool _maneuverTypesInjected;
 
+    // The AUTOSTAGE gauge button resolves its enum by name while the game reads Gauges.xml, which
+    // happens before any AllModsLoaded hook.
+    [StarMapImmediateLoad]
+    public void OnImmediateLoad(KSA.Mod mod) => AutoStageFeature.InjectGaugeEnumAtLoad();
+
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()
     {
@@ -32,6 +39,10 @@ public sealed class Mod
 
         bool coreReady = Validated("Core", GameReflection.ValidateCore)
             && _patches.TryApply("Core", PatchCore);
+
+        // Its own owner, so a settings-window rename costs the mod sections and nothing else.
+        if (Validated("SettingsPage", GameReflection.ValidateSettingsPage))
+            _patches.TryApply("SettingsPage", ModSettingsPage.ApplyPatches);
 
         if (Validated("HyperbolicTargets", GameReflection.ValidateHyperbolicTargets))
             _patches.TryApply("HyperbolicTargets", HyperbolicTargets.ApplyPatches);
@@ -68,6 +79,26 @@ public sealed class Mod
             SharedVehicleHooks.GuidanceEnabled = _patches.TryApply("Guidance", GuidanceFeature.ApplyDriverPatches);
             if (!SharedVehicleHooks.GuidanceEnabled)
                 GuidanceFeature.DisableDriver();
+        }
+
+        if (coreReady && Validated("AutoStage", GameReflection.ValidateAutoStage)
+            && AutoStageFeature.StandaloneModAbsent())
+        {
+            SharedVehicleHooks.AutoStageEnabled = _patches.TryApply("AutoStage", AutoStageFeature.ApplyPatches);
+            if (!SharedVehicleHooks.AutoStageEnabled)
+            {
+                AutoStageFeature.Disable();
+                // The button bound its enum while the game read Gauges.xml, so it still draws.
+                DefaultCategory.Log.Warning("[AFC] AutoStage is off, so the AUTOSTAGE gauge button does nothing this session.");
+            }
+        }
+
+        if (coreReady && Validated("AutoRemove", GameReflection.ValidateAutoRemove))
+        {
+            AutoRemoveFeature.WarnIfStandaloneInstalled();
+            SharedVehicleHooks.AutoRemoveEnabled = _patches.TryApply("AutoRemove", AutoRemoveFeature.ApplyPatches);
+            if (!SharedVehicleHooks.AutoRemoveEnabled)
+                AutoRemoveFeature.Disable();
         }
 
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
@@ -194,6 +225,8 @@ public sealed class Mod
     [StarMapUnload]
     public void Unload()
     {
+        // Before the patches come off: a held staging row is already marked activated, so nothing else would fire it.
+        StagingDetector.FlushPendingForUnload();
         SharedVehicleHooks.Reset();
         _patches.UnpatchAll();
         GuidanceFeature.Reset();
@@ -212,6 +245,10 @@ public sealed class Mod
         RcsExecRegistry.Reset();
         RcsBurnCompletions.Reset();
         MultiPassRegistry.Reset();
+        AutoStageFeature.Disable();
+        AutoStageFeature.RemoveGaugeEnum();
+        AutoRemoveFeature.Disable();
+        ModSettingsPage.Reset();
         SaveLoadObserver.Reset();
         Patch_SetTransferInfo.Reset();
         LogHelper.Reset();

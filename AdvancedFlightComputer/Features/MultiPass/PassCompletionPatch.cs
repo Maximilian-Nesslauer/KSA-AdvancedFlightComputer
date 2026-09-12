@@ -363,8 +363,7 @@ internal static class PassCompletionPatch
                 $"[AFC] MultiPass.DetectImplicitCompletion: vehicle='{vehicleId}' " +
                 $"burn t={exec.CurrentBurn.Time.Seconds():F1}s removed from BurnPlan " +
                 $"after firing (Auto engaged this pass, sim t={simNow.Seconds():F1}s); " +
-                "treating as natural completion (likely AutoRemoveFinishedBurns or " +
-                "similar cleanup).");
+                "treating as natural completion, another completion subscriber removed it.");
         return true;
     }
 

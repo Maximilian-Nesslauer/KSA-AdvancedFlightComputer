@@ -1,6 +1,8 @@
 using System.IO;
 using System.Reflection;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoRemove;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -37,6 +39,8 @@ public sealed class SharedVehicleHooksTest : AfcTest
         Harmony harmony = new("com.maxi.afc.harnesstests.shared-hooks");
         bool oldMultiPass = SharedVehicleHooks.MultiPassEnabled;
         bool oldRcs = SharedVehicleHooks.RcsEnabled;
+        bool oldAutoStage = SharedVehicleHooks.AutoStageEnabled;
+        bool oldAutoRemove = SharedVehicleHooks.AutoRemoveEnabled;
         string vehicleId = "SharedHooks_" + Guid.NewGuid().ToString("N");
         Vehicle? vehicle = null;
         try
@@ -49,14 +53,18 @@ public sealed class SharedVehicleHooksTest : AfcTest
 
             CheckRcsCompletionHandover(t, vehicle);
             CheckRcsStallHint(t, vehicle);
-            PatchRecorder(harmony, typeof(PassCompletionPatch), nameof(RecordMultiPass));
-            PatchRecorder(harmony, typeof(RcsDriverPatch), nameof(RecordRcs));
+            PatchRecorder(harmony, typeof(StagingDetector), nameof(StagingDetector.Evaluate), [], nameof(RecordAutoStage));
+            PatchRecorder(harmony, typeof(PassCompletionPatch), "TickVehicle", [typeof(Vehicle)], nameof(RecordMultiPass));
+            PatchRecorder(harmony, typeof(RcsDriverPatch), "TickVehicle", [typeof(Vehicle)], nameof(RecordRcs));
+            PatchRecorder(harmony, typeof(FinishedBurnRemover), nameof(FinishedBurnRemover.Tick), [], nameof(RecordAutoRemove));
             CheckTickOrder(t, vehicle);
             CheckDisposal(t, vehicle);
-            CheckBinding(t, harmony.Id, GameReflection.Universe_ApplyVehicleSolvers!);
-            CheckBinding(t, harmony.Id, GameReflection.Vehicle_Dispose!);
+            CheckBinding(t, harmony.Id, GameReflection.Universe_ApplyVehicleSolvers!, expectPrefix: true);
+            CheckBinding(t, harmony.Id, GameReflection.Vehicle_Dispose!, expectPrefix: false);
             SharedVehicleHooks.Reset();
-            t.Check("reset disables both drivers", !SharedVehicleHooks.MultiPassEnabled && !SharedVehicleHooks.RcsEnabled);
+            t.Check("reset disables every driver", !SharedVehicleHooks.MultiPassEnabled
+                && !SharedVehicleHooks.RcsEnabled && !SharedVehicleHooks.AutoStageEnabled
+                && !SharedVehicleHooks.AutoRemoveEnabled);
         }
         finally
         {
@@ -68,28 +76,45 @@ public sealed class SharedVehicleHooksTest : AfcTest
             harmony.UnpatchAll(harmony.Id);
             SharedVehicleHooks.MultiPassEnabled = oldMultiPass;
             SharedVehicleHooks.RcsEnabled = oldRcs;
+            SharedVehicleHooks.AutoStageEnabled = oldAutoStage;
+            SharedVehicleHooks.AutoRemoveEnabled = oldAutoRemove;
             Calls.Clear();
         }
     }
 
     private static void CheckTickOrder(TestContext t, Vehicle vehicle)
     {
+        SharedVehicleHooks.AutoStageEnabled = true;
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;
+        SharedVehicleHooks.AutoRemoveEnabled = true;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("MultiPass runs before RCS exactly once", Calls.SequenceEqual(new[] { "MultiPass", "RCS" }));
+        t.Check("AutoStage, MultiPass, RCS, then AutoRemove, each exactly once",
+            Calls.SequenceEqual(new[] { "AutoStage", "MultiPass", "RCS", "AutoRemove" }));
 
         SharedVehicleHooks.MultiPassEnabled = false;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("failed MultiPass block cannot tick", Calls.SequenceEqual(new[] { "RCS" }));
+        t.Check("failed MultiPass block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "RCS", "AutoRemove" }));
 
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = false;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("failed RCS block cannot tick", Calls.SequenceEqual(new[] { "MultiPass" }));
+        t.Check("failed RCS block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "MultiPass", "AutoRemove" }));
+
+        SharedVehicleHooks.RcsEnabled = true;
+        SharedVehicleHooks.AutoStageEnabled = false;
+        Calls.Clear();
+        SharedVehicleHooks.TickVehicles([vehicle]);
+        t.Check("failed AutoStage block cannot tick", Calls.SequenceEqual(new[] { "MultiPass", "RCS", "AutoRemove" }));
+
+        SharedVehicleHooks.AutoStageEnabled = true;
+        SharedVehicleHooks.AutoRemoveEnabled = false;
+        Calls.Clear();
+        SharedVehicleHooks.TickVehicles([vehicle]);
+        t.Check("failed AutoRemove block cannot tick", Calls.SequenceEqual(new[] { "AutoStage", "MultiPass", "RCS" }));
 
         SharedVehicleHooks.Reset();
         Calls.Clear();
@@ -105,6 +130,9 @@ public sealed class SharedVehicleHooksTest : AfcTest
         MultiPassPreviewCache.GetSequenceState(vehicle);
         FieldInfo cachedState = StaticField(typeof(MultiPassPreviewCache), "_cachedState");
         t.Check("sequence-state cache holds the vehicle before disposal", cachedState.GetValue(null) != null);
+        StagingHelpers.HasNextEngineSequence(vehicle);
+        FieldInfo stagingCache = StaticField(typeof(StagingHelpers), "_cachedVehicle");
+        t.Check("staging sequence cache holds the vehicle before disposal", ReferenceEquals(stagingCache.GetValue(null), vehicle));
         MultiPassRegistry.Add(new MultiPassExecution
         {
             SaveId = SaveLoadObserver.CurrentSaveId,
@@ -122,11 +150,15 @@ public sealed class SharedVehicleHooksTest : AfcTest
         t.Check("disposal removes entries even when both drivers are disabled", !MultiPassRegistry.Has(vehicle.Id)
             && !RcsExecRegistry.TryGet(vehicle.Id, out _));
         t.Check("disposal drops the sequence-state cache of that vehicle", cachedState.GetValue(null) == null);
+        t.Check("disposal drops the staging sequence cache of that vehicle", stagingCache.GetValue(null) == null);
+        SharedVehicleHooks.AutoStageEnabled = true;
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;
+        SharedVehicleHooks.AutoRemoveEnabled = true;
         Calls.Clear();
         SharedVehicleHooks.TickVehicles([vehicle]);
-        t.Check("disposed vehicles do not tick", Calls.Count == 0);
+        // The staging detector and the burn remover tick per frame, not per vehicle, so those two calls are expected.
+        t.Check("disposed vehicles do not tick", Calls.SequenceEqual(new[] { "AutoStage", "AutoRemove" }));
     }
 
     private static void CheckRcsCompletionHandover(TestContext t, Vehicle vehicle)
@@ -254,17 +286,30 @@ public sealed class SharedVehicleHooksTest : AfcTest
         => type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
            ?? throw new MissingFieldException(type.FullName, name);
 
-    private static void CheckBinding(TestContext t, string owner, MethodBase target)
+    private static void CheckBinding(TestContext t, string owner, MethodBase target, bool expectPrefix)
     {
         Patches? patches = Harmony.GetPatchInfo(target);
-        t.Check($"one shared postfix on {target.Name}", patches != null
-            && patches.Postfixes.Count(p => p.owner == owner) == 1
-            && !patches.Prefixes.Any(p => p.owner == owner));
+        int prefixes = patches?.Prefixes.Count(p => p.owner == owner) ?? 0;
+        t.Check($"one shared postfix and {(expectPrefix ? "one prefix" : "no prefix")} on {target.Name}",
+            patches != null && patches.Postfixes.Count(p => p.owner == owner) == 1
+            && prefixes == (expectPrefix ? 1 : 0));
     }
 
-    private static void PatchRecorder(Harmony harmony, Type driver, string recorder)
-        => harmony.Patch(AccessTools.Method(driver, "TickVehicle", [typeof(Vehicle)]),
+    private static void PatchRecorder(Harmony harmony, Type driver, string method, Type[] parameters, string recorder)
+        => harmony.Patch(AccessTools.Method(driver, method, parameters),
             prefix: new HarmonyMethod(typeof(SharedVehicleHooksTest), recorder));
+
+    private static bool RecordAutoStage()
+    {
+        Calls.Add("AutoStage");
+        return false;
+    }
+
+    private static bool RecordAutoRemove()
+    {
+        Calls.Add("AutoRemove");
+        return false;
+    }
 
     private static bool RecordMultiPass()
     {
