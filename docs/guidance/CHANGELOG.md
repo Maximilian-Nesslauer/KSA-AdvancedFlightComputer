@@ -6,7 +6,7 @@
 
 Boosters fly themselves home. Returnable stages with their own landing sites, and a move to MIT.
 
-- Added **boostback guidance**. EXECUTE on the new Boostback tab flies a separated booster back toward its landing site — settling burn, flip, boostback burn, then entry attitude — and it keeps flying whether or not you are watching it. RETARGET works there, so the site can be moved mid-flight.
+- Added **boostback guidance**. EXECUTE on the new Boostback tab flies a separated booster back toward its landing site through a settling burn, flip, boostback burn, and entry attitude, and it keeps flying whether or not you are watching it. RETARGET works there, so the site can be moved mid-flight.
 
 - Boosters hand themselves over at separation: the stage that drops away starts its own boostback with its own landing site while you stay with the upper stage.
 
@@ -14,7 +14,7 @@ Boosters fly themselves home. Returnable stages with their own landing sites, an
 
 - Added **Booster reserve dV**, per vehicle. Ascent leaves that much propellant in the booster and stages on it, rather than burning the stage dry and leaving nothing to come home on.
 
-- The Boostback tab draws where the vehicle will actually hit the ground — through the atmosphere rather than in vacuum — with time to impact, impact speed, and the miss against your landing site.
+- The Boostback tab draws where the vehicle will actually hit the ground through the atmosphere rather than in vacuum, with time to impact, impact speed, and the miss against your landing site.
 
 - **The project is now MIT licensed.** ECOS was the only copyleft dependency and forced the whole work to be GPLv3. It has been replaced by [Clarabel](https://github.com/oxfordcontrol/Clarabel.rs), which reproduces its landing solutions exactly. Attributions are in THIRD-PARTY-NOTICES.md; releases up to and including v0.3.1 remain GPLv3.
 
@@ -42,15 +42,15 @@ Fixed the ascent attitude jerk, aimed the launch plane ahead of the pad, and cau
 
 Added sequential convex programming and UI updates.
 
-- Implemented Convex Approximation for Trajectories - Sequential Algorithm (CAT-S), allowing accurate control of vehicles with high rotational interia, and paving the way for aerodynamic entries.
+- Implemented Convex Approximation for Trajectories - Sequential Algorithm (CAT-S), allowing accurate control of vehicles with high rotational inertia and paving the way for aerodynamic entries.
 
-- Added new UI designed for the end-user. New UI elements such as UPFG visualiser, landing visualiser and descent pass planner.
+- Added a new user interface with a UPFG visualizer, landing visualizer, and descent pass planner.
 
 - Added multi-vehicle control with independent PoweredGuidance instances.
 
 - Tweaked orbit overlay.
 
-- New logo. 
+- Added a new logo.
 
 ## [0.2.1]
 HOTFIX
@@ -69,14 +69,10 @@ Updated compatability with new staging menu, added ascent overlay, tweaked landi
   so you can check your staging on the pad.
 - Moved the G-FOLD-to-hover handoff setting into the Deorbit tab, next to the rest
   of the approach settings.
-- Touchdown is now detected by actual ground contact instead of an altitude
-  guess, for both G-FOLD descent and terminal hover — engines cut the instant any
-  part of the vehicle touches down.
+- Touchdown is now detected by actual ground contact instead of an altitude guess, for both G-FOLD descent and terminal hover. Engines cut the instant any part of the vehicle touches down.
 - Fixed: solid rocket boosters were treated as having no propellant, so their
   fuel and thrust were missing from the ascent stage list.
-- Auto-staging now also drops burned-out boosters that are still attached to a
-  live core, not just at total engine flameout — and won't ever separate the part
-  of the vehicle you're actually flying.
+- Auto-staging now also drops burned-out boosters that are still attached to a live core, not just at total engine flameout, and will not separate the part of the vehicle you are actually flying.
 - Fixed: disengaging the autopilot could leave the vehicle spinning uncontrollably,
   and could make the Strict/Balanced/Relaxed attitude presets stop responding.
 
