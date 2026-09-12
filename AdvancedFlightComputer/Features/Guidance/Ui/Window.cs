@@ -6,7 +6,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// The in-game Powered Guidance panel: the window frame, the Ascent/Landing tab
+// The legacy guidance window: the window frame, the Ascent/Landing tab
 // dispatch, and the shared status readout. The tabs themselves live in
 // Guidance/Ascent.cs / Guidance/Landing.cs, the G-FOLD descent in
 // Guidance/GfoldDescent.cs, shared plumbing in Guidance/Autopilot.cs, and the
@@ -119,9 +119,6 @@ public static partial class GuidanceWindow
             // it stale and the ascent overlay would hide itself for the rest of the
             // session. See DrawTrailingWindows.
             _landingTabActive = false;
-            // The checkbox that owns this lives in the window we are not drawing, so
-            // an unticked one would be unreachable AND would leave no interface at all.
-            _showGuidancePanel = true;
         }
 
         // Skipped entirely if DrawBody threw - the exception propagates through the
@@ -205,15 +202,15 @@ public static partial class GuidanceWindow
             ResetFlightComputer();
         }
 
-        // The rebuilt panel - see Ui/Panel.cs. Its own gauge window, so
+        // The console panel, see Ui/Panel.cs. Its own window, so
         // it is drawn from DrawTrailingWindows rather than here.
         ImGui.SameLine();
-        ImGui.Checkbox("Guidance panel", ref _showGuidancePanel);
+        ImGui.Checkbox("Guidance panel", ref PanelVisible);
 
         // Any warp the mod wants needs the user's OK first. Drawn here only when the
         // gauge panel is not up: it renders the same prompt, and two of them would
         // both be live at once.
-        if (!_showGuidancePanel)
+        if (!PanelVisible)
             DrawWarpPrompt();
 
         // NOTHING IS STEPPED FROM THE DRAW. The ascent and landing flows used to run
@@ -276,7 +273,7 @@ public static partial class GuidanceWindow
         // silently made every tab added afterwards a descent. Boostback is not one -
         // it has no landing site to mark and no retarget click to arm.
         bool descentUi = _landingTabActive
-            || (_showGuidancePanel && (_panelTab == GuidanceTab.Descent
+            || (PanelVisible && (_panelTab == GuidanceTab.Descent
                                     || _panelTab == GuidanceTab.Landing));
 
         // World-space overlays (each its own full-screen window, drawn after the
@@ -296,7 +293,7 @@ public static partial class GuidanceWindow
         // That was true while the tab was only an aero workbench; the burn aims the
         // predicted impact point at this same site, so the marker is the other half of
         // the miss line the overlay draws and the thing RETARGET moves.
-        if (descentUi || (_showGuidancePanel && _panelTab == GuidanceTab.Boostback))
+        if (descentUi || (PanelVisible && _panelTab == GuidanceTab.Boostback))
             DrawLandingSiteMarker(viewport, parent);
 
         // Clickable retargeting: while armed, a world click sets the new landing site.

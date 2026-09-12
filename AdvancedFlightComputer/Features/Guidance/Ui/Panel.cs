@@ -7,167 +7,129 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// The Powered Guidance panel: the gauge shell every flight phase shares, and the tab
-// bar that switches between them. The per-tab content lives alongside -
-// Ui/Gauges/AscentGauge.cs for Ascent, and placeholders below for the rest.
+// The AFC Guidance panel: the console window every flight phase shares, the commit buttons, and
+// the tab bar that switches between the phases. The per-tab content lives in Ui/Gauges, one file
+// per phase.
 //
-// Layering: an ImGauge window for the chrome, then an ordinary ImGui body wrapped in
-// ConsoleStyle.PushWidgetStyle so plain widgets take the stock palette, with
-// ImGuiHelper.BeginRegion for the collapsible two-column sections.
-//
-// This used to be stock's own layering, copied from KSA.GameSettings. KSA 2026.8.19
-// retired it: ImGaugeDressing is gone entirely and GameSettings now builds on the new
-// ConsoleStyle skin instead. ImGauge itself survives as chrome (DrawDressedBox, Box,
-// Screw, Label, Button), so the shell here is unchanged - but the helper that let
-// plain ImGui widgets sit inside it is now ConsoleStyle's.
+// The shell is ConsoleStyle.BeginWindow, the skin the stock transfer planner and AFC's plan window
+// use, so the panel moves, resizes, scrolls and closes like every other console window, and it can
+// leave the main game window because it is not pinned to the main viewport. The body is plain
+// ImGui inside ConsoleStyle.PushWidgetStyle, with ImGuiHelper.BeginRegion for the collapsible
+// two-column sections.
 public static partial class GuidanceWindow
 {
     public enum GuidanceTab { Ascent, Boostback, Descent, Landing }
     public enum LandingSubTab { Powered, Hover }
 
-    private static bool _showGuidancePanel = true;
-    private static float2 _guidancePanelOffsetUv = new float2(0.012f, 0.06f);
+    private const string PanelId = "afc-guidance";
+    private const string PanelTitle = "AFC GUIDANCE";
+    private const string PanelSignature = "AFC-GNC";
 
-    // Which tab the BUTTONS act on. They are drawn above the tab bar, so they read
-    // the selection the bar made last frame - a frame's lag on a tab switch, and the
-    // alternative is drawing the commit controls below the content they commit.
+    private static float PanelWidthPx => 460f * ImGuiHelper.InterfaceScale;
+    private static float PanelHeightPx => 720f * ImGuiHelper.InterfaceScale;
+
+    /// <summary>
+    /// Whether the panel is drawn. Off at start, so a game start shows no guidance window until
+    /// the player opens it from the AFC Guidance menu. The window's close button and the legacy
+    /// window's checkbox write it too. Hiding the panel does not stop guidance, that is the
+    /// Enabled switch in the same menu.
+    /// </summary>
+    internal static bool PanelVisible;
+
+    // Which tab the BUTTONS act on. They are drawn above the tab bar, so they read the selection
+    // the bar made last frame, one frame of lag on a tab switch, and the alternative is drawing
+    // the commit controls below the content they commit.
     private static GuidanceTab _panelTab = GuidanceTab.Ascent;
     private static LandingSubTab _landingSubTab = LandingSubTab.Powered;
-
-    // Width is authored and stays put. Height is measured, not authored - see
-    // _panelHeightUv below - and this is only its floor.
-    private const float GuidancePanelWidthUv = 0.30f;
-    private const float MinPanelHeightUv = 0.06f;
-
-    // The panel's own fit-to-content. ImGauge used to do this for us (BeginWindow took
-    // a fitContent flag and the window grew to whatever ReportContentExtent last said);
-    // KSA 2026.8.19 removed all three, and BeginWindow now sizes the window to exactly
-    // SizeUv. So we measure the body ourselves at the end of the draw and feed the
-    // result back here for the next frame - a frame of lag, which is the same deal the
-    // body-scroll decision below already runs on.
-    private static float _panelHeightUv = MinPanelHeightUv;
-
-    // Body scrolling. The measured content height decides whether the body auto-sizes
-    // or scrolls; the dead band keeps it from flipping between the two.
-    private const float MinBodyHeightPx = 120f;
-    private const float BodyScrollHysteresisPx = 24f;
-    private static float _panelBodyContentH;
 
     private static void DrawGuidancePanel(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                           double bodyRadius)
     {
-        if (!_showGuidancePanel)
+        if (!PanelVisible)
             return;
 
-        // Seed the LAN from where the vessel is right now. The legacy tab does this on
-        // its own draw; without it here, a user who never opens that tab would launch
-        // toward LAN 0.
+        // Seed the LAN from where the vessel is right now. The legacy tab does this on its own
+        // draw; without it here, a user who never opens that tab would launch toward LAN 0.
         if (!_s.LanSeeded)
         {
             _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, orbit.Parent);
             _s.LanSeeded = true;
         }
 
-        // Rebuilt each frame so the dragged offset takes effect; BeginWindow keys its
-        // Vulkan resources off the Id, not this struct.
-        //
-        // The Id is an IDENTITY rather than a label - it is what any persisted window
-        // layout is filed under - so changing it is a one-off reset of this panel's
-        // saved position, not a cosmetic edit. Done once, deliberately, to finish moving
-        // off the obsolete "Navbox" name; it should not move again.
-        ImGaugeWindow win = new ImGaugeWindow(
-            "AfcGuidance", "AFC Guidance",
-            new float2(0f, 0f), new float2(0f, 0f),
-            GaugeScreenUv(_guidancePanelOffsetUv),
-            GaugeScreenUv(new float2(GuidancePanelWidthUv, _panelHeightUv)));
-
-        // Since KSA 2026.8.19 BeginWindow takes no flags and always succeeds, so there
-        // is no early-out to guard any more. EndWindow still has to run whatever the
-        // body does - it is what uploads the gauge instances - hence the try/finally.
-        ImGauge.BeginWindow(in win, out float2 pos, out float2 size);
+        // ConsoleStyle.BeginWindow closes the ImGui window itself when it returns false. The size
+        // applies on the first use only, so a resize by the player sticks for the session.
+        bool open = true;
+        if (!ConsoleStyle.BeginWindow(PanelId, PanelTitle, PanelSignature, ref open,
+                new float2(PanelWidthPx, PanelHeightPx), ImGuiWindowFlags.None,
+                ImGuiCond.FirstUseEver, pinToMainViewport: false))
+            return;
 
         try
         {
-            DrawGuidancePanelBody(vehicle, orbit, parent, bodyRadius, pos, size);
+            if (!open)
+            {
+                PanelVisible = false;
+                return;
+            }
+
+            ConsoleStyle.BeginBody();
+            ConsoleStyle.PushWidgetStyle();
+            try
+            {
+                DrawGuidancePanelBody(vehicle, orbit, parent, bodyRadius);
+            }
+            finally
+            {
+                ConsoleStyle.PopWidgetStyle();
+                ConsoleStyle.EndBody();
+            }
+
+            // The release request stays available regardless of the selected tab, so it sits in
+            // the footer where no scroll or fold can hide it.
+            ConsoleStyle.BeginFooter();
+            try
+            {
+                if (ImGui.Button("RELEASE GUIDANCE"))
+                {
+                    // The gimbal override needs its own release because it lives outside the
+                    // flight computer.
+                    _s.GimbalMode = 0;
+                    KsaGimbalControl.Disengage(vehicle);
+                    ResetFlightComputer();
+                }
+            }
+            finally
+            {
+                ConsoleStyle.EndFooter();
+            }
         }
         finally
         {
-            ImGauge.EndWindow();
+            ConsoleStyle.EndWindow();
         }
     }
 
     private static void DrawGuidancePanelBody(Vehicle vehicle, Orbit orbit, IParentBody parent,
-                                              double bodyRadius, float2 pos, float2 size)
+                                              double bodyRadius)
     {
-        float u = GaugeUnit();
-        float margin = GaugeMarginUv * u;
-        float spacing = GaugeSpacingUv * u;
-        float headerH = GaugeHeaderHeightUv * u;
-        float bigButtonH = 0.030f * u;          // half again the standard gauge button
-        float innerW = size.X - margin * 2f;
+        // Above the tabs deliberately: the commit controls are the one thing that must never be
+        // behind a fold, a scroll or a tab switch.
+        DrawPanelCommitButtons(vehicle, orbit, parent, bodyRadius);
 
-        ImGauge.DrawDressedBox(pos, size);
-
-        // --- header, which doubles as the drag handle ---
-        // The logo stands in for the title, drawn to the band the label used.
-        float2 headerPos = pos + new float2(margin, GaugeHeaderTopUv * u);
-        GaugeLogo(headerPos, new float2(innerW, headerH));
-        GaugeDrag("##paneldrag", ref _guidancePanelOffsetUv, pos, size,
-            pos, new float2(size.X, headerPos.Y + headerH + spacing * 0.5f - pos.Y));
-
-        // --- EXECUTE / ABORT ---
-        // Above the tabs deliberately: the commit controls are the one thing that must
-        // never be behind a fold, a scroll or a tab switch.
-        DrawPanelCommitButtons(vehicle, orbit, parent, bodyRadius,
-            new float2(pos.X + margin, headerPos.Y + headerH + spacing),
-            innerW, bigButtonH, spacing);
-
-        // --- body ---
-        float bodyTop = headerPos.Y + headerH + spacing + bigButtonH * 2f + spacing * 2f;
-
-        // How much room is left below the header before running off the screen. The
-        // window grows to the body (see the fit at the foot of this method), and that
-        // fit is clamped to the screen - so past this height the window stops growing
-        // whatever the body does. ImGauge.EndWindow used to apply that clamp itself;
-        // since KSA 2026.8.19 the clamp is ours, and it has to stay in step with this
-        // number or the body would never switch to scrolling.
-        ImGuiViewportPtr vp = ImGui.GetMainViewport();
-        float maxBodyH = MathF.Max(MinBodyHeightPx,
-            vp.Pos.Y + vp.Size.Y - bodyTop - GaugeBottomMarginUv * u);
-
-        // AutoResizeY while the content fits: the window shrinks and grows with the
-        // sections, which is the whole point of the folds.
-        //
-        // Once it does NOT fit, the child has to become a fixed height and scroll.
-        // AutoResizeY never scrolls - it just keeps growing - so with every section
-        // open the body ran off the bottom of a window that had stopped growing, and
-        // the wheel fell through to whatever was behind it. Measured last frame, with
-        // hysteresis so it cannot flip modes on alternate frames.
-        bool scrollBody = _panelBodyContentH > maxBodyH;
-
-        ImGui.SetCursorScreenPos(new float2(pos.X + margin, bodyTop));
-        if (scrollBody)
-            ImGui.BeginChild("~PanelBody", new float2?(new float2(innerW, maxBodyH)),
-                ImGuiChildFlags.None, ImGuiWindowFlags.NoBackground);
-        else
-            ImGui.BeginChild("~PanelBody", new float2?(new float2(innerW, 0f)),
-                ImGuiChildFlags.AutoResizeY, ImGuiWindowFlags.NoBackground);
-        ConsoleStyle.PushWidgetStyle();
-
-        // Above the tabs because it is not a phase's concern: both the ascent launch
-        // window and the deorbit burn request warps, and a prompt that vanished on a
-        // tab switch would strand whichever flow was waiting on it.
+        // Above the tabs because it is not a phase's concern: both the ascent launch window and
+        // the deorbit burn request warps, and a prompt that vanished on a tab switch would strand
+        // whichever flow was waiting on it.
         DrawWarpPrompt();
 
-        // The guidance handed over to a powered descent: follow it, at both levels of
-        // the tab bar, and make the solver shown agree with the one that actually
-        // started. Read here and consumed after the bar, so both levels see it.
+        // The guidance handed over to a powered descent: follow it, at both levels of the tab
+        // bar, and make the solver shown agree with the one that actually started. Read here and
+        // consumed after the bar, so both levels see it.
         bool followGfold = _s.GfoldTabSelectPending;
 
         if (ImGui.BeginTabBar("##panel_tabs"))
         {
-            // Width is taken INSIDE each tab: the tab bar insets its content, and a
-            // region sized to the panel's inner width would overhang it.
+            // Width is taken INSIDE each tab: the tab bar insets its content, and a region sized
+            // to the panel's inner width would overhang it.
             if (ImGui.BeginTabItem("Ascent"))
             {
                 _panelTab = GuidanceTab.Ascent;
@@ -176,9 +138,9 @@ public static partial class GuidanceWindow
                 ImGui.EndTabItem();
             }
 
-            // Next to Ascent because that is the order they are flown in: a booster
-            // separates, turns round, and boosts back. Its content is the aero
-            // workbench for now - see Ui/Gauges/BoostbackGauge.cs.
+            // Next to Ascent because that is the order they are flown in: a booster separates,
+            // turns round, and boosts back. Its content is the aero workbench for now, see
+            // Ui/Gauges/BoostbackGauge.cs.
             if (ImGui.BeginTabItem("Boostback"))
             {
                 _panelTab = GuidanceTab.Boostback;
@@ -187,7 +149,8 @@ public static partial class GuidanceWindow
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Descent"))
+            // The whole chain from orbit: coast, deorbit burn, powered descent, hover, touchdown.
+            if (ImGui.BeginTabItem("Deorbit and land"))
             {
                 _panelTab = GuidanceTab.Descent;
                 DrawDescentTabContent(vehicle, orbit, parent, parent.Mu, bodyRadius,
@@ -195,7 +158,9 @@ public static partial class GuidanceWindow
                 ImGui.EndTabItem();
             }
 
-            if (ImGui.BeginTabItem("Landing", followGfold || _s.TermTabSelectPending
+            // Only the terminal part, started from wherever the craft is now, for a craft that
+            // is already falling.
+            if (ImGui.BeginTabItem("Land from here", followGfold || _s.TermTabSelectPending
                     ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
             {
                 _panelTab = GuidanceTab.Landing;
@@ -209,70 +174,32 @@ public static partial class GuidanceWindow
 
         _s.GfoldTabSelectPending = false;
 
-        // Keep a release request available regardless of the selected guidance mode.
-        // Use ImGui.Button inside this child window because ImGauge.Button expects a gauge window.
-        ImGui.Dummy(new float2(0f, ImGui.GetTextLineHeight() * 0.5f));
-        if (ImGui.Button("RELEASE GUIDANCE",
-                new float2(ImGui.GetContentRegionAvail().X, ImGui.GetTextLineHeight() * 1.6f)))
-        {
-            // The gimbal override needs its own release because it lives outside the flight computer.
-            _s.GimbalMode = 0;
-            KsaGimbalControl.Disengage(vehicle);
-            ResetFlightComputer();
-        }
-
         if (_s.ReleaseError.Length > 0)
             ImGui.Text(_s.ReleaseError);
-
-        ConsoleStyle.PopWidgetStyle();
-
-        // Content height, read INSIDE the child where the cursor is content-relative.
-        // Drives next frame's choice of mode; the dead band stops a body sitting right
-        // on the limit from toggling between scrolling and not on alternate frames.
-        float contentH = ImGui.GetCursorPosY();
-        _panelBodyContentH = scrollBody && contentH < maxBodyH - BodyScrollHysteresisPx
-            ? contentH
-            : MathF.Max(contentH, scrollBody ? maxBodyH + 1f : contentH);
-
-        ImGui.EndChild();
-
-        // Grow/shrink the window to the body, for next frame. GetItemRectMax is the
-        // body child we just ended, and the bottom margin is the reserve the child's
-        // extent doesn't include - the same two numbers SetFitReserve/ReportContentExtent
-        // were handed before KSA 2026.8.19 removed them.
-        //
-        // Clamped to the bottom of the screen, exactly where maxBodyH above assumes the
-        // window stops: without the clamp the panel would keep growing off-screen and
-        // the body would never flip to scrolling. UV here is isotropic in GaugeUnit()
-        // for both orientations (ScreenReference scales the short axis by the aspect
-        // ratio), so one divide converts back the way the rest of the file does.
-        float fitH = ImGui.GetItemRectMax().Y + GaugeBottomMarginUv * u - pos.Y;
-        fitH = MathF.Min(fitH, vp.Pos.Y + vp.Size.Y - pos.Y);
-        _panelHeightUv = MathF.Max(MinPanelHeightUv, fitH / u);
     }
 
     /// <summary>
-    /// EXECUTE and ABORT, dispatched to whichever phase the tab bar has selected.
-    /// Only Ascent is wired up; the others stripe out rather than disappearing, so
-    /// the panel keeps one fixed shape as you move between tabs.
+    /// EXECUTE, ABORT and RETARGET on one row, dispatched to whichever phase the tab bar has
+    /// selected. Every tab commits to something: ascent launches, boostback starts the
+    /// separate, turn, burn and orient machine from the vehicle's current state, the deorbit tab
+    /// starts the whole landing chain, and the land-from-here tab drops straight into the powered
+    /// descent.
     /// </summary>
     private static void DrawPanelCommitButtons(Vehicle vehicle, Orbit orbit, IParentBody parent,
-                                               double bodyRadius, float2 origin, float innerW,
-                                               float height, float gap)
+                                               double bodyRadius)
     {
-        float half = (innerW - gap) * 0.5f;
+        float gap = ImGui.GetStyle().ItemSpacing.X;
+        float2 size = new float2(
+            MathF.Floor((ImGui.GetContentRegionAvail().X - gap * 2f) / 3f),
+            ImGui.GetTextLineHeight() * 1.8f);
         float3 green = ColorRgbReference.GetIndexedRgb(IndexedColor.Green);
         float3 red = ColorRgbReference.GetIndexedRgb(IndexedColor.Red);
+        float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
 
-        // Every tab commits to something now: ascent launches, boostback starts the
-        // separate/turn/burn/orient machine from the vehicle's current state, descent
-        // starts the deorbit flow, landing drops straight into the powered descent from
-        // wherever the vehicle currently is. Nothing stripes out here any more.
-        //
-        // EXECUTE lights green while that phase is actually doing something: guidance
-        // running or a launch armed and waiting for its window on ascent, any live
-        // landing phase on descent. ABORT is red at all times - it should read the
-        // same whether or not it currently has anything to stop.
+        // EXECUTE lights green while that phase is actually doing something: guidance running or
+        // a launch armed and waiting for its window on ascent, any live landing phase on the
+        // deorbit tab. ABORT is red at all times, so it reads the same whether or not it currently
+        // has anything to stop.
         bool lit = _panelTab == GuidanceTab.Ascent
             ? (_s.Running || _s.LaunchArmed)
             : _panelTab == GuidanceTab.Boostback ? BoostbackLive
@@ -283,9 +210,7 @@ public static partial class GuidanceWindow
                     ? (_s.Active || _s.EngagePending)
                     : _s.LandingPhase == LandingPhase.GfoldDescent;
 
-        ImGui.SetCursorScreenPos(origin);
-        if (ImGauge.Button("EXECUTE", new float2(half, height),
-                GaugeButton(lit ? green : ImGaugeStyle.Default.IdleColor, 0.4f)))
+        if (TintedButton("EXECUTE", size, green, lit))
         {
             if (_panelTab == GuidanceTab.Boostback)
                 ExecuteBoostback(vehicle, orbit, parent);
@@ -301,9 +226,8 @@ public static partial class GuidanceWindow
                 StartGfoldNow(vehicle);
         }
 
-        ImGui.SetCursorScreenPos(new float2(origin.X + half + gap, origin.Y));
-        if (ImGauge.Button("ABORT", new float2(half, height),
-                GaugeButton(red, 0.4f)))
+        ImGui.SameLine();
+        if (TintedButton("ABORT", size, red, true))
         {
             if (_panelTab == GuidanceTab.Boostback)
                 AbortBoostback();
@@ -316,29 +240,43 @@ public static partial class GuidanceWindow
                 AbortLanding();
         }
 
-        // RETARGET, full width on its own row. It arms a world click that moves the
-        // landing site, so it means nothing on Ascent and stripes out there. It DOES
-        // mean something on Boostback: the site is what the correction aims the
-        // predicted impact point at, so moving it is how the burn is retargeted.
-        // Retarget means nothing on Ascent - the site is what a LANDING aims at - with
-        // one exception: a returnable stage's Set button arms a click for that stage,
-        // and that is set from the Ascent tab. So the gate follows the binding rather
-        // than the tab alone.
+        // RETARGET arms a world click that moves the landing site. It means nothing on Ascent,
+        // because the site is what a landing aims at, with one exception: a returnable stage's
+        // Set button arms a click for that stage, and that is set from the Ascent tab. So the
+        // gate follows the binding rather than the tab alone. On Boostback the site is what the
+        // correction aims the predicted impact point at, so moving it is how the burn is
+        // retargeted.
         bool canRetarget = _panelTab != GuidanceTab.Ascent || _retargetStageId != 0;
-        float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
 
-        ImGui.SetCursorScreenPos(new float2(origin.X, origin.Y + height + gap));
-        if (ImGauge.Button(_retargetArmed ? "CLICK A SPOT" : "RETARGET",
-                new float2(innerW, height),
-                GaugeButton(_retargetArmed && canRetarget ? amber : ImGaugeStyle.Default.IdleColor, 0.4f)
-                    .WithDisabled(!canRetarget)))
+        ImGui.SameLine();
+        if (!canRetarget)
+            ImGui.BeginDisabled();
+        if (TintedButton(_retargetArmed ? "CLICK A SPOT" : "RETARGET", size, amber,
+                _retargetArmed && canRetarget))
             _retargetArmed = !_retargetArmed;
+        if (!canRetarget)
+            ImGui.EndDisabled();
     }
 
-    // --- Landing ------------------------------------------------------------
+    /// <summary>
+    /// A button whose face carries the phase colour while lit and the stock button colour
+    /// otherwise.
+    /// </summary>
+    private static bool TintedButton(string label, float2 size, float3 rgb, bool lit)
+    {
+        if (!lit)
+            return ImGui.Button(label, size);
+
+        ImGui.PushStyleColor(ImGuiCol.Button, new float4(rgb * 0.45f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new float4(rgb * 0.6f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new float4(rgb * 0.75f, 1f));
+        bool pressed = ImGui.Button(label, size);
+        ImGui.PopStyleColor(3);
+        return pressed;
+    }
 
     /// <summary>
-    /// PLACEHOLDER. Two sub-tabs: the powered descent to the pad, and the hover the
+    /// The land-from-here tab. Two sub-tabs: the powered descent to the pad, and the hover the
     /// last few metres are flown on.
     /// </summary>
     private static void DrawLandingTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
@@ -355,8 +293,8 @@ public static partial class GuidanceWindow
             ImGui.EndTabItem();
         }
 
-        // The hover controller sets its own focus flag when it takes over, the same
-        // way the powered descent does.
+        // The hover controller sets its own focus flag when it takes over, the same way the
+        // powered descent does.
         bool followHover = _s.TermTabSelectPending;
         if (ImGui.BeginTabItem("Hover", followHover
                 ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
@@ -371,9 +309,8 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The powered-descent solver choice. One implementation, called from both the
-    /// Descent and Landing tabs - the whole point is that picking it does not depend
-    /// on which page you happen to be on.
+    /// The powered-descent solver choice. One implementation, called from both landing tabs,
+    /// because picking it does not depend on which page you happen to be on.
     /// </summary>
     private static void DrawSolverRadios()
     {

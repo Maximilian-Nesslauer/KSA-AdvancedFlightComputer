@@ -51,7 +51,7 @@ public static partial class GuidanceWindow
             // One-shot, and this window draws FIRST - so it only consumes the flag
             // when the gauge panel is not up to act on it. Consuming unconditionally
             // is why the new panel never followed the handoff to G-FOLD.
-            if (!_showGuidancePanel)
+            if (!PanelVisible)
                 _s.GfoldTabSelectPending = false;
             if (ImGui.BeginTabItem("G-FOLD", gfoldFlags))
             {
@@ -64,7 +64,7 @@ public static partial class GuidanceWindow
                 : ImGuiTabItemFlags.None;
             // One-shot, and this window draws FIRST - leave it for the gauge panel
             // when that is up, exactly as with the G-FOLD focus flag above.
-            if (!_showGuidancePanel)
+            if (!PanelVisible)
                 _s.TermTabSelectPending = false;
             if (ImGui.BeginTabItem("Terminal", termFlags))
             {
