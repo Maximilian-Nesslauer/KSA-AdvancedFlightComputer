@@ -52,7 +52,9 @@ internal static class GuidanceFeature
 
     internal static void DrawGui()
     {
-        if (!SharedVehicleHooks.GuidanceEnabled)
+        // Guidance flies a craft, so its panel and overlays are flight UI and stay out of the
+        // editor. Guidance itself keeps running; only the drawing is skipped.
+        if (!SharedVehicleHooks.GuidanceEnabled || Program.IsEditorOpen)
             return;
 
         try
@@ -116,12 +118,13 @@ internal static class GuidanceFeature
     }
 
     // The menu carries the driver's only off switch, so a fault here is logged once per kind and
-    // the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally.
+    // the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally. The menu is
+    // flight UI, so the editor's menu bar does not get it.
     private static void DrawMenu()
     {
         try
         {
-            if (!ImGui.BeginMenu("AFC Guidance"u8))
+            if (Program.IsEditorOpen || !ImGui.BeginMenu("AFC Guidance"u8))
                 return;
             try
             {
@@ -130,6 +133,12 @@ internal static class GuidanceFeature
                     bool active = GuidanceWindow.ModActive;
                     if (ImGui.MenuItem("Enabled", "", ref active, true))
                         GuidanceWindow.SetModActive(active);
+
+                    // The panel is the only place a mode is started from, and it starts hidden,
+                    // so this is how the player reaches it.
+                    bool visible = GuidanceWindow.PanelVisible;
+                    if (ImGui.MenuItem("Show panel", "", ref visible, active))
+                        GuidanceWindow.PanelVisible = visible;
                 }
                 else
                     ImGui.Text(UnavailableReason);
