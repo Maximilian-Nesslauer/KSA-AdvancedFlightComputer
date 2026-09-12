@@ -14,31 +14,31 @@ using KSA;
 /// </summary>
 public sealed class VehicleAutopilotState
 {
-    // --- engagement ---
+    // Engagement state.
     public Ksa6DofGuidance Guidance;
     public Ksa6DofSolveWorker Worker;
     public bool Active;
     public bool EngagePending;          // set by the draw, consumed by the step
     public string Error = "";
 
-    // --- the MPC loop ---
+    // MPC loop state.
     public double LastReplan;
     public bool DidSolve, SolveOk;      // did THIS cycle re-solve, and did it work
     public int RefusalRun;              // consecutive refused re-solves
     public int Recoveries;
 
-    // --- cold solve ---
+    // Cold solve state.
     public bool Converging;             // cold solve in progress, not yet flyable
     public int ColdFrames;
 
-    // --- node ladder ---
+    // Node ladder state.
     public int GateIndex = -1;          // -1 = above every gate
     public int GateChanges;
     public int RungFloor = int.MaxValue;
     public double RungFloorSpeed;
     public int BackedOffTo = -1;
 
-    // --- actuation, for the readout and the bias estimator ---
+    // Actuation values used by the readout and bias estimator.
     public double LastThrottle;
     public double DemandN, CapabilityN;
     public bool ThrustSaturated;
@@ -47,12 +47,12 @@ public sealed class VehicleAutopilotState
     /// <see cref="LandingTouchdownArmed"/>; they arm on different events.</summary>
     public bool TouchdownArmed;
 
-    // --- offset-free MPC: the residual acceleration estimate ---
+    // Offset-free MPC residual acceleration estimate.
     public double[] PrevV;
     public double PrevT;
     public double3 Bias;
 
-    // --- diagnostics: how valid the diagonal-inertia approximation is ---
+    // Diagnostics for the diagonal-inertia approximation.
     public double OffDiag, Asym;
 
     /// <summary>
@@ -66,11 +66,9 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double LastMass;
 
-    // ------------------------------------------------------------------ shared
+    // Shared state.
     //
-    // The engage toggles are per vehicle because they gate whether THIS craft's
-    // commands reach its flight computer. Shared, turning the autopilot off to hand one
-    // vehicle back also stopped steering every other vehicle in flight.
+    // The engage toggles are per vehicle because they gate whether that craft's commands reach its flight computer.
 
     /// <summary>Commands reach the flight computer.</summary>
     public bool Engage = true;
@@ -104,11 +102,9 @@ public sealed class VehicleAutopilotState
     /// <summary>The count of rows the AutoStage feature activated on this craft, as last seen.</summary>
     public int SeenStagings;
 
-    // ------------------------------------------------------------------ UPFG / ascent
+    // UPFG and ascent state.
     //
-    // The flight-computer path, which every non-6-DOF mode drives. These were static
-    // too, so two vehicles would have shared one _running, one _status and one
-    // command direction - the upper stage's guidance writing over the booster's.
+    // The flight-computer path is shared by every non-6-DOF mode, but its state belongs to each vehicle.
 
     /// <summary>Guidance is driving the flight computer for this vehicle.</summary>
     public bool Running;
@@ -116,9 +112,8 @@ public sealed class VehicleAutopilotState
     /// <summary>
     /// EXECUTE was pressed while <see cref="AutoLaunch"/> was set: warp to the launch
     /// window and start guidance there. Separate from AutoLaunch because that is a
-    /// MODE the user selects ahead of time, while this is the commit - arming used to
-    /// happen the instant the checkbox was ticked, which meant the panel could start
-    /// warping before anyone had asked it to launch.
+    /// MODE the user selects ahead of time, while this is the commit. Arming occurs
+    /// only after EXECUTE, so the panel cannot start warping before a launch request.
     /// </summary>
     public bool LaunchArmed;
 
@@ -195,7 +190,7 @@ public sealed class VehicleAutopilotState
     public bool StagingActive;
     public double LastSequenceTime = double.NegativeInfinity;
 
-    // --- ascent propellant reserve, for a returning booster ---
+    // Ascent propellant reserve for a returning booster.
 
     /// <summary>
     /// dV to leave in the first stage for its own return, m/s. Zero switches it off.
@@ -249,7 +244,7 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double HandoverPendingUntil = double.NegativeInfinity;
 
-    // --- returnable stages ---
+    // Returnable stage state.
 
     /// <summary>
     /// The separable stages that carry a command pod, in staging order, with what it
@@ -284,9 +279,7 @@ public sealed class VehicleAutopilotState
     /// allocates nothing - same arrangement as ImpactScratch.</summary>
     public AdvancedFlightComputer.Guidance.Numerics.Dual[] ReturnScratch;
 
-    // The stage model cache. VehicleStageModel used to carry the vehicle it was built
-    // for, purely so a switch could invalidate it; the key is the vehicle now, so that
-    // field is gone.
+    // The stage model cache belongs to the vehicle it describes.
     public UpfgVehicle StageModel;
     public bool StageModelDirty = true;
     public long StageModelTick;
@@ -309,7 +302,7 @@ public sealed class VehicleAutopilotState
 
     internal readonly AttitudeOwnership AttitudeOwnership = new();
 
-    // ------------------------------------------------------------------ ascent
+    // Ascent state.
     public GuidanceWindow.AscentPhase Phase = GuidanceWindow.AscentPhase.Vertical;
     public double TurnStartTime;
     public double3 FrozenDir;
@@ -357,7 +350,7 @@ public sealed class VehicleAutopilotState
     public double TurnStartAltKm = 0.5;
     public double TurnRateDegS = 1.0;
 
-    // ------------------------------------------------------------------ landing
+    // Landing state.
     public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;
 
     /// <summary>
@@ -376,22 +369,17 @@ public sealed class VehicleAutopilotState
     public string LandingStatus = "";
     public bool LandingCutPending;         // one-shot engine cut when the flow ends
 
-    // Preserve the engine command during handover, including cleanup retries.
-    // A finished release or the next claim clears the request.
+    // Preserve the engine command during handover, including cleanup retries. A finished release or the next claim clears the request.
     public bool ReleaseWithoutEngineCut;
 
-    // Guidance asked for the engine to stop as part of this release, on a path that queues no
-    // one-shot cut of its own. A takeover does not undo it, because it decides the engine channel
-    // and a takeover only moves the attitude.
+    // Guidance asked for the engine to stop as part of this release, on a path that queues no one-shot cut of its own. A takeover does not undo it, because it decides the engine channel and a takeover only moves the attitude.
     public bool ShutdownRequested;
 
-    // A stop another writer caused. It survives a failed cleanup, so the retry that finishes the
-    // release can still say why guidance let the craft go.
+    // A stop another writer caused. It survives a failed cleanup, so the retry that finishes the release can still say why guidance let the craft go.
     public bool TakeoverStop;
     public string TakeoverReason = "";
 
-    // Acquisition found stock's burn mode at Auto and replaced it with Manual, so the release owes
-    // the player that Auto back, on the burn target that was loaded at the time.
+    // Acquisition found stock's burn mode at Auto and replaced it with Manual, so the release owes the player that Auto back, on the burn target that was loaded at the time.
     public bool ForcedBurnManual;
     public BurnTarget ForcedBurnTarget;
 
@@ -429,7 +417,7 @@ public sealed class VehicleAutopilotState
     public object SiteTerrainCacheBody;
     public double SiteTerrainHeightM;
 
-    // ------------------------------------------------------------------ G-FOLD
+    // G-FOLD state.
     public double GfoldGlideSlopeDeg = 1.0;
     public double GfoldPointingDeg = 90.0;
     public double GfoldVMaxMs = 500.0;
@@ -499,10 +487,7 @@ public sealed class VehicleAutopilotState
     public bool GfoldTrackInit;
     public bool GfoldEngineOn;             // hysteretic engine state
 
-    // --- G-FOLD side-view plot ---------------------------------------------
-    // The flown path in the pad frame, as (horizontal range to pad, height above
-    // touchdown) in metres. Sampled off the guidance step rather than the draw, so it
-    // stays even under time warp and does not depend on which craft is on screen.
+    // The G-FOLD trace stores the flown path in the pad frame as horizontal range to the pad and height above touchdown in metres.
     public float2[] GfoldTrace;
     public int GfoldTraceCount;
     public double GfoldTraceLastTime = double.NegativeInfinity;
@@ -523,7 +508,7 @@ public sealed class VehicleAutopilotState
     public int GfoldAxisStage;
     public double GfoldFlightTime0;
 
-    // ------------------------------------------------------------------ terminal hover
+    // Terminal hover state.
     public double TermTouchdownRate = 0.5; // m/s, constant final descent
     public double TermConstAltM = 0.25;    // constant-rate zone height
     public double TermQuadK = 0.2;         // m^-1 s^-1: v = touch + k*(h-h0)^2
@@ -540,7 +525,7 @@ public sealed class VehicleAutopilotState
     public double TermLastTime;
     public bool TermInit;
 
-    // ------------------------------------------------------------------ 6-DOF SCvx
+    // 6-DOF SCvx state.
     public int SixDofNodes = 50;
     public double SixDofTiltDeg = 120.0;
     public double SixDofThrottleFloor = 0.40;
@@ -580,22 +565,18 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofLogging = false;
 
-    // ------------------------------------------------------------------ flown track
+    // Flown track state.
     //
-    // The overlay's trace. Per vehicle so switching craft shows that craft's own flown
-    // path rather than blanking a track the player was watching.
+    // The overlay's trace. Per vehicle so switching craft shows that craft's own flown path rather than blanking a track the player was watching.
     //
-    // Allocated lazily by RecordTrace, not here: at TraceCapacity samples this buffer
-    // is ~57 kB, and state is created for any craft the panel merely draws. Every
-    // other field on this class is a handful of bytes; this one is worth deferring
-    // until the vehicle is actually being flown or watched.
+    // Allocated lazily by RecordTrace, not here: at TraceCapacity samples this buffer is ~57 kB, and state is created for any craft the panel merely draws. Every other field on this class is a handful of bytes; this one is worth deferring until the vehicle is actually being flown or watched.
     public double3[] Trace;
     public int TraceCount;
     public int TraceHead;                  // next write slot
     public double TraceLastTime = double.NegativeInfinity;
     public IParentBody TraceParent;
 
-    // ------------------------------------------------------------------ gimbal probe
+    // Gimbal probe state.
     public int GimbalMode;                 // 0 = off, 1 = direct, 2 = torque
     public float GimbalY;
     public float GimbalZ;
@@ -610,7 +591,7 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool Idle => Worker == null || Worker.IsIdle;
 
-    // ---------------------------------------------------------------- boostback
+    // Boostback state.
 
     /// <summary>
     /// This vehicle's aero surrogate: the Cd(Mach, alpha) table sampled off KSA's own
@@ -646,12 +627,9 @@ public sealed class VehicleAutopilotState
             || System.Math.Abs(was.Z - liveExtents.Z) > tol;
     }
 
-    // --- impact prediction ---
+    // Impact prediction state.
     //
-    // Per vehicle, not static, and for a reason that bit the older overlays: the
-    // prediction is a property of ONE craft's state and drag model, so a booster and
-    // the upper stage it just dropped must not share one. Cached rather than
-    // recomputed per frame because a prediction is milliseconds, not microseconds.
+    // The prediction belongs to one vehicle's state and drag model. It is cached because prediction takes milliseconds.
 
     /// <summary>Last impact prediction, or default if there is none yet.</summary>
     public AdvancedFlightComputer.Guidance.Numerics.Flight.ImpactPrediction Impact;
@@ -722,7 +700,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Downrange from the vehicle to the predicted impact, m.</summary>
     public double ImpactDownrangeM;
 
-    // --- the shot boostback plan ---
+    // Boostback plan state.
 
     /// <summary>
     /// The optimised burn - pitch, yaw, turn rates and duration - from
@@ -794,7 +772,7 @@ public sealed class VehicleAutopilotState
     /// nothing - same arrangement as ImpactScratch.</summary>
     public AdvancedFlightComputer.Guidance.Numerics.Dual[] BoostbackPlanScratch;
 
-    // --- steering on the impact point ---
+    // Impact-point steering state.
 
     /// <summary>
     /// The velocity correction that moves the predicted impact onto the landing site,
@@ -906,10 +884,9 @@ public sealed class VehicleAutopilotState
     /// the prediction: three seeded sweeps cost about four times one prediction.</summary>
     public long SteerTick;
 
-    // --- the boostback state machine ---
+    // Boostback state machine.
     //
-    // Separation -> Rotation -> Boostback -> EntryOrient, per vehicle like every other
-    // phase machine here. See Guidance/Boostback.cs for what each phase does.
+    // Separation -> Rotation -> Boostback -> EntryOrient, per vehicle like every other phase machine here. See Guidance/Boostback.cs for what each phase does.
 
     public GuidanceWindow.BoostbackPhase BoostbackPhase =
         GuidanceWindow.BoostbackPhase.Idle;
@@ -923,7 +900,7 @@ public sealed class VehicleAutopilotState
 
     public string BoostbackStatus = "";
 
-    // --- tuning (per vehicle: these describe one booster's airframe and mission) ---
+    // Per-vehicle tuning for the booster's airframe and mission.
 
     /// <summary>Settling burn at minimum throttle after separation, s.</summary>
     public double BoostbackSeparationS = 2.0;
@@ -937,7 +914,7 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double BoostbackSlewDegS = 30.0;
 
-    // --- live ---
+    // Live boostback state.
 
     /// <summary>Attitude held through the settling burn, latched at EXECUTE. A fixed
     /// inertial direction rather than a live reading, so the hold is a hold and the

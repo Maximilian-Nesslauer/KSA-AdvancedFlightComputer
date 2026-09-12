@@ -2,10 +2,7 @@
 
 namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// A propulsion stage as UPFG models it. Mode 1 = constant thrust, Mode 2 = constant
-// acceleration (g-limited). For the first KSA integration we build a single constant-
-// thrust stage from the vehicle's live engine configuration, but the guidance loop is
-// written to accept a list so multi-stage can be added later.
+// A propulsion stage as UPFG models it. Mode 1 uses constant thrust, and Mode 2 uses constant acceleration with a g-limit. The guidance loop accepts a list of stages built from the vehicle's live engine configuration.
 public sealed class UpfgStage
 {
     public int Mode = 1;
@@ -15,10 +12,7 @@ public sealed class UpfgStage
     public double MassDry;     // kg, at burnout
     public double GLim;        // acceleration limit in g's (Mode 2); large = unlimited
 
-    // Provenance, for the stage table only - nothing in the guidance reads these.
-    // Which staging sequence this arc came out of and how many engine cores the
-    // game's drain simulation had burning across it: the two numbers that say
-    // whether a row is a real stage or an artefact of how the burn was sliced up.
+    // These values identify the staging sequence and the engine-core count for the stage table. The guidance solver does not read them.
     public int Seq = -1;
     public int Engines;
 }

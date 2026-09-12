@@ -14,8 +14,7 @@ public static partial class GuidanceWindow
 
     internal static void ReleaseAllVehicles()
     {
-        // Try to restore live vehicles before unload.
-        // Vehicles replaced by a save load need only resource cleanup.
+        // Try to restore live vehicles before unload. Vehicles replaced by a save load need only resource cleanup.
         foreach (var entry in VehicleAutopilotState.Snapshot())
             DropVehicle(entry.Key, release: !entry.Key.IsDisposed);
         ClearLifecycleRequests();
@@ -34,8 +33,7 @@ public static partial class GuidanceWindow
             if (release)
             {
                 HandBackVehicle(vehicle);
-                // No later step retries this release, so a failed one must not leave stock's burn
-                // mode forced to Manual for good.
+                // No later step retries this release, so a failed one must not leave stock's burn mode forced to Manual for good.
                 RestoreBurnMode(vehicle.FlightComputer, giveBack: true);
             }
             DiscardResources();

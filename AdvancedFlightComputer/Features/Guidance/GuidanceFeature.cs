@@ -52,8 +52,7 @@ internal static class GuidanceFeature
 
     internal static void DrawGui()
     {
-        // Guidance flies a craft, so its panel and overlays are flight UI and stay out of the
-        // editor. Guidance itself keeps running; only the drawing is skipped.
+        // Guidance flies a craft, so its panel and overlays are flight UI and stay out of the editor. Guidance itself keeps running; only the drawing is skipped.
         if (!SharedVehicleHooks.GuidanceEnabled || Program.IsEditorOpen)
             return;
 
@@ -68,8 +67,7 @@ internal static class GuidanceFeature
         }
     }
 
-    // Runs on the main thread inside Universe.PrepareVehicleWorkers for every vehicle. See the
-    // handle in GameReflection for why this is the site.
+    // Runs on the main thread inside Universe.PrepareVehicleWorkers for every vehicle. See the handle in GameReflection for why this is the site.
     private static void OnPrepareWorker(Vehicle __instance) => StepVehicle(__instance);
 
     private static void StepVehicle(Vehicle vehicle)
@@ -98,9 +96,7 @@ internal static class GuidanceFeature
         }
     }
 
-    // Runs on the vehicle worker after stock builds the attitude target and before it reads the
-    // target rate. Both gates match the gimbal writer, so the worker-side writers stop together,
-    // and the catch keeps an escape from ending the worker's step for the whole physics bubble.
+    // Runs on the vehicle worker after stock builds the attitude target and before it reads the target rate. Both gates match the gimbal writer, so the worker-side writers stop together, and the catch keeps an escape from ending the worker's step for the whole physics bubble.
     private static void OnUpdateAttitudeTarget(FlightComputer __instance)
     {
         if (!SharedVehicleHooks.GuidanceEnabled || !GuidanceWindow.ModActive)
@@ -117,9 +113,7 @@ internal static class GuidanceFeature
         }
     }
 
-    // The menu carries the driver's only off switch, so a fault here is logged once per kind and
-    // the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally. The menu is
-    // flight UI, so the editor's menu bar does not get it.
+    // The menu carries the driver's only off switch, so a fault here is logged once per kind and the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally. The menu is flight UI, so the editor's menu bar does not get it.
     private static void DrawMenu()
     {
         try
@@ -134,8 +128,7 @@ internal static class GuidanceFeature
                     if (ImGui.MenuItem("Enabled", "", ref active, true))
                         GuidanceWindow.SetModActive(active);
 
-                    // The panel is the only place a mode is started from, and it starts hidden,
-                    // so this is how the player reaches it.
+                    // The panel is the only place a mode is started from, and it starts hidden, so this is how the player reaches it.
                     bool visible = GuidanceWindow.PanelVisible;
                     if (ImGui.MenuItem("Show panel", "", ref visible, active))
                         GuidanceWindow.PanelVisible = visible;

@@ -5,12 +5,9 @@ using Brutal.Numerics;
 
 namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// The desired insertion orbit, expressed the way UPFG needs it: a target radius,
-// speed, flight-path angle and orbital-plane normal in the inertial (CCI) frame.
+// The desired insertion orbit, expressed the way UPFG needs it: a target radius, speed, flight-path angle and orbital-plane normal in the inertial (CCI) frame.
 //
-// Ported explicitly from navbox's UPFGTarget.Set (the orbital-ascent case). Inputs
-// are taken from the UI in km / degrees; the body radius and gravitational parameter
-// come from the live KSA celestial body rather than hard-coded Earth constants.
+// This target builder converts UI inputs in km and degrees into the inertial CCI values that UPFG requires. The body radius and gravitational parameter come from the live KSA celestial body.
 public sealed class UpfgTarget
 {
     public double Radius;     // insertion radius (m, from body centre)
@@ -55,8 +52,7 @@ public sealed class UpfgTarget
         return t;
     }
 
-    // navbox Utils.CalcOrbitNormal: plane normal from inclination and longitude of
-    // ascending node, with Z as the celestial polar axis (matches CCI).
+    // Calculate the plane normal from inclination and longitude of ascending node, with Z as the celestial polar axis in CCI.
     public static double3 OrbitNormal(double inc, double lan)
     {
         return new double3(

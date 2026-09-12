@@ -6,13 +6,9 @@ using Brutal.Numerics;
 
 namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// Unified Powered Flight Guidance - the closed-loop ascent algorithm flown by the
-// Space Shuttle. Each call to Step() refines a thrust-direction estimate that, if
-// followed, places the vehicle on the target orbit at engine cutoff.
+// Unified Powered Flight Guidance - the closed-loop ascent algorithm flown by the Space Shuttle. Each call to Step() refines a thrust-direction estimate that, if followed, places the vehicle on the target orbit at engine cutoff.
 //
-// This is an explicit standalone port of navbox's Upfg.cs, converted to double
-// precision over Brutal's double3. It takes the vehicle state as plain inertial
-// (CCI) inputs - no Simulator, no external dependencies - so it runs inside KSA.
+// This is a standalone UPFG implementation that uses double precision over Brutal's double3. It takes vehicle state as plain inertial CCI inputs, so it has no external dependencies.
 //
 // Guidance modes (the original's `mode` field):
 //   1 - standard ascent: insert at target radius/velocity/FPA in the target plane,
@@ -27,11 +23,7 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 //       simply the desired state at the landing point - equivalent for the
 //       zero-speed-at-site target and free of the absolute-time dependence.
 //
-// The vehicle model must carry *current* data: callers rebuild the stage list from
-// the live vehicle every step, so Stages[0].MassTotal is the present mass and its
-// burn time is inherently time-remaining. (Original navbox instead kept a static
-// config and subtracted tb, the time burned on the current stage; with a live
-// model that correction would double-count, so this port does not track tb.)
+// The vehicle model carries current data. Callers rebuild the stage list from the live vehicle every step, so Stages[0].MassTotal is the present mass and its burn time is time remaining.
 public sealed class UpfgGuidance
 {
     private const double G0 = 9.80665;
@@ -65,16 +57,9 @@ public sealed class UpfgGuidance
 
     // --- The steering LAW, not just its value at the solve instant ---
     //
-    // i_f(tau) = unit[ lambda + lambdadot * (tau - J/L) ],  tau = seconds since this
-    // solve. The original document is explicit that this block "will receive the
-    // vectors lambda and lambdadot" and that "during active guidance calls a turning
-    // rate may be implied" - the law is a function of time and the caller is meant to
-    // evaluate it, not to hold the tau = 0 sample until the next cycle.
+    // i_f(tau) = unit[ lambda + lambdadot * (tau - J/L) ],  tau = seconds since this solve. The original document is explicit that this block "will receive the vectors lambda and lambdadot" and that "during active guidance calls a turning rate may be implied" - the law is a function of time and the caller is meant to evaluate it, not to hold the tau = 0 sample until the next cycle.
     //
-    // lambdadot is PERPENDICULAR to lambda by construction: rgo is built to satisfy
-    // dot(lambda, rgo) = S, so dot(lambda, rgo - S*lambda) = 0. That is what makes it
-    // a pure turning rate, and what makes the law a linear TANGENT law - the angle off
-    // lambda is atan(|lambdadot| * (tau - J/L)), so its tangent is linear in time.
+    // lambdadot is PERPENDICULAR to lambda by construction: rgo is built to satisfy dot(lambda, rgo) = S, so dot(lambda, rgo - S*lambda) = 0. That is what makes it a pure turning rate, and what makes the law a linear TANGENT law - the angle off lambda is atan(|lambdadot| * (tau - J/L)), so its tangent is linear in time.
     public double3 Lambda { get; private set; }       // unit primer direction at tau = J/L
     public double3 LambdaDot { get; private set; }    // its turning rate, rad/s, CCI
     public double TLambda { get; private set; }       // J/L, s: when lambda is the direction
@@ -86,15 +71,9 @@ public sealed class UpfgGuidance
         _prev = new State();
     }
 
-    // r, v: inertial (CCI) state in metres and m/s. vehicle: the staged model,
-    // rebuilt by the caller from live data so stage 0 reflects the current mass.
-    // mode is latched at setup (after Reset); pass 2/3 for the landing modes.
+    // r, v: inertial (CCI) state in metres and m/s. vehicle: the staged model, rebuilt by the caller from live data so stage 0 reflects the current mass. mode is latched at setup (after Reset); pass 2/3 for the landing modes.
     //
-    // dt is the sim interval this call covers. Pass it when the caller runs on a
-    // fixed guidance cycle: convergence is then measured against how far tgo SHOULD
-    // have moved (a converged solution's tgo falls one second per second) rather than
-    // against how far it moved at all, which is a test that any high enough call rate
-    // passes by definition. Zero (the default) keeps the original rate-dependent test.
+    // dt is the sim interval this call covers. Pass it when the caller runs on a fixed guidance cycle: convergence is then measured against how far tgo SHOULD have moved (a converged solution's tgo falls one second per second) rather than against how far it moved at all, which is a test that any high enough call rate passes by definition. Zero (the default) keeps the original rate-dependent test.
     public void Step(double3 r, double3 v, double mass, double mu,
                      UpfgTarget target, UpfgVehicle vehicle, int mode = 1, double dt = 0.0)
     {
@@ -116,15 +95,13 @@ public sealed class UpfgGuidance
         double3 tgoV;
         if (_mode == 3)
         {
-            // Precision landing: aim straight at the desired landing vector and
-            // start from "cancel all current velocity".
+            // Precision landing: aim straight at the desired landing vector and start from "cancel all current velocity".
             desR = target.Rdes;
             tgoV = -v;
         }
         else if (_mode == 2)
         {
-            // Predictive landing: shape rd ahead on the target sphere; vgo seeds
-            // as the full braking dv.
+            // Predictive landing: shape rd ahead on the target sphere; vgo seeds as the full braking dv.
             double3 unit2 = RodriguesRotation(r, target.Normal, DegToRad(15));
             desR = unit2 * (target.Radius / unit2.Length());
             tgoV = -v;
@@ -189,16 +166,14 @@ public sealed class UpfgGuidance
             exhaustVel.Add(s.Isp * G0);
             thrustAccel.Add(s.Thrust / s.MassTotal);
             charTimes.Add(exhaustVel[i] / thrustAccel[i]);
-            // Constant-acceleration stages burn dv = ve*ln(m0/m1) at a fixed accel,
-            // so their burn time is exact rather than the full-throttle estimate.
+            // Constant-acceleration stages burn dv = ve*ln(m0/m1) at a fixed accel, so their burn time is exact rather than the full-throttle estimate.
             if (s.Mode == 2)
                 burnTimes.Add(exhaustVel[i] * Math.Log(s.MassTotal / s.MassDry) / accelLimits[i]);
             else
                 burnTimes.Add((s.MassTotal - s.MassDry) / massflow);
         }
 
-        // 2 - Accelerations (subtract sensed dv). No tb correction: the stage list
-        // is rebuilt from live data each step, so burnTimes[0] is already remaining.
+        // 2 - Accelerations (subtract sensed dv). No tb correction: the stage list is rebuilt from live data each step, so burnTimes[0] is already remaining.
         double3 dvsensed = v - vprev;
         vgo -= dvsensed;
 
@@ -222,10 +197,7 @@ public sealed class UpfgGuidance
             burnTimes[0] = exhaustVel[0] * Math.Log(mass / vehicle.Stages[0].MassDry) / accelLimits[0];
         }
 
-        // Throttle command: while the current stage is acceleration-limited, scale
-        // thrust so full-throttle acceleration never exceeds the limit. Computed
-        // directly from the live mass each step (no feedback through K, which the
-        // original used and which is unstable).
+        // Throttle command: while the current stage is acceleration-limited, scale thrust so full-throttle acceleration never exceeds the limit. Computed directly from the live mass each step (no feedback through K, which the original used and which is unstable).
         Throttle = 1.0;
         if (stageModes[0] == 2 && mass > 0)
         {
@@ -238,9 +210,7 @@ public sealed class UpfgGuidance
         ComputeBurnTimes(stageModes, accelLimits, exhaustVel, charTimes, burnTimes, vgo,
             out List<double> Li, out double L, out List<double> tgoi, out double tgo);
 
-        // More dv aboard than vgo needs: the last stage won't be burned at all, so
-        // drop it and re-solve (same as original navbox's L > vgo trim) - otherwise
-        // its burn time goes negative and corrupts tgo.
+        // If the remaining delta-v exceeds vgo, the last stage is not needed. Drop it and re-solve so its burn time does not become negative.
         if (L > vgo.Length() && vehicle.Stages.Count > 1)
         {
             var trimmed = new UpfgVehicle();
@@ -261,9 +231,7 @@ public sealed class UpfgGuidance
         rbias = rgo - rthrust;
         Rgo = rgo;   // latched for the panel schematic; not used by the solver
 
-        // The steering law's terms, for SteeringAt. Latched before the finite check
-        // below only in the sense that the check discards the whole step on failure -
-        // a non-finite solution resets and these are never read against it.
+        // The steering law's terms, for SteeringAt. Latched before the finite check below only in the sense that the check discards the whole step on failure - a non-finite solution resets and these are never read against it.
         Lambda = lambda;
         LambdaDot = lambdadot;
         TLambda = Math.Abs(L) > 1e-9 ? J / L : 0.0;
@@ -280,9 +248,7 @@ public sealed class UpfgGuidance
         double3 vd;
         if (_mode == 2)
         {
-            // Predictive: pin the cutoff to the target sphere in the plane, keep
-            // current velocity as the soft target - rd converges on where the
-            // braking burn actually ends.
+            // Predictive: pin the cutoff to the target sphere in the plane, keep current velocity as the soft target - rd converges on where the braking burn actually ends.
             rp -= double3.Dot(rp, iy) * iy;
             rd = rdval * rp * (1.0 / rp.Length());
             vd = v;
@@ -290,9 +256,7 @@ public sealed class UpfgGuidance
         }
         else if (_mode == 3)
         {
-            // Precision: drive the cutoff to the desired landing vector at the
-            // desired (zero) speed, and stretch/relax the burn via throttle K to
-            // null the downrange miss: dtgo = -2*drz/vgoz, K <- K*tb/(tb+dtgo).
+            // Precision: drive the cutoff to the desired landing vector at the desired (zero) speed, and stretch/relax the burn via throttle K to null the downrange miss: dtgo = -2*drz/vgoz, K <- K*tb/(tb+dtgo).
             double3 ix3 = double3.Normalize(target.Rdes);
             double3 iz3 = double3.Cross(ix3, iy);
             // Forward speed along track plus the commanded sink rate (down = -ix).
@@ -324,10 +288,7 @@ public sealed class UpfgGuidance
         }
         vgo = vd - v - vgrav + vbias;
 
-        // A transient bad input (e.g. the zero-thrust frame mid-staging) can drive the
-        // solution non-finite. Committing it would poison the persistent state (vgo,
-        // cser, rd) and corrupt every later step - so discard it and re-seed from the
-        // live vehicle state on the next call instead.
+        // A transient bad input (e.g. the zero-thrust frame mid-staging) can drive the solution non-finite. Committing it would poison the persistent state (vgo, cser, rd) and corrupt every later step - so discard it and re-seed from the live vehicle state on the next call instead.
         if (!IsFinite(tgo) || !IsFinite(rd) || !IsFinite(vgo) || !IsFinite(iF) || !IsFinite(rgrav))
         {
             Reset();
@@ -353,8 +314,7 @@ public sealed class UpfgGuidance
         VgoMag = vgo.Length();
         Vgo = vgo;
 
-        // In precision-landing mode the throttle command is K itself (the g-limit
-        // block above only applies to constant-acceleration stages).
+        // In precision-landing mode the throttle command is K itself (the g-limit block above only applies to constant-acceleration stages).
         if (_mode == 3)
             Throttle = K;
     }

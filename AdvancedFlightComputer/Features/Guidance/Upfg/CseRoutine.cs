@@ -5,13 +5,9 @@ using Brutal.Numerics;
 
 namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// Conic State Extrapolation (Shepperd's method). Given a state (r0, v0) and a time
-// delta, returns the Keplerian-propagated state. UPFG uses it to estimate the
-// gravitational contribution over the remaining burn.
+// Conic State Extrapolation (Shepperd's method). Given a state (r0, v0) and a time delta, returns the Keplerian-propagated state. UPFG uses it to estimate the gravitational contribution over the remaining burn.
 //
-// Ported explicitly from navbox's OrbitalMechanics.CSEroutine, converted to double
-// precision (Brutal double3) and a small mutable state struct instead of a
-// string-keyed dictionary. Mu is passed in rather than read from a global.
+// This standalone routine uses double precision with Brutal double3 and a small mutable state struct. Mu is passed in rather than read from a global.
 public struct CseState
 {
     public double Dtcp;
@@ -123,8 +119,7 @@ public static class CseRoutine
         double rs = 1 + 2 * (b0 * A + sigma0s * D * E);
         double b4 = 1 / rs;
 
-        // navbox tracks an integer revolution count here; for ascent dt is small enough
-        // that it stays zero, so the multi-revolution terms drop out.
+        // The ascent case uses zero completed revolutions, so the multi-revolution terms are zero.
         double xc = f6 * xguess;
         double dtc = f4 * dtguess;
 
