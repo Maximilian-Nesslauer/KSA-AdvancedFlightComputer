@@ -100,7 +100,8 @@ internal static class StagingHelpers
         return fueled;
     }
 
-    // Bumped on every sequence activation and cache reset, so the per-vehicle answers below refresh.
+    // Bumped on every sequence activation and cache reset, for every vehicle, so the per-vehicle
+    // answers below refresh. Deliberately never reset: every consumer starts at -1.
     private static int _sequenceGeneration;
 
     public static int SequenceGeneration => _sequenceGeneration;

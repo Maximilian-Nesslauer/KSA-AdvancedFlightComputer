@@ -36,6 +36,13 @@ internal sealed class StagingState
     public FlightComputerBurnMode TriggeredMode;
     public PendingStaging? Pending;
 
+    // Rows this detector activated on the vehicle, so a caller can see its own request land.
+    public int Activations;
+
+    // The control-module guard refused the next row. Latched, so the refusal is reported once
+    // per row and a caller can show why nothing happens.
+    public bool HeldForControl;
+
     // Taken before the solver results reach the universe and consumed afterwards; the flag makes
     // sure one sample is never evaluated twice.
     public bool Sampled;

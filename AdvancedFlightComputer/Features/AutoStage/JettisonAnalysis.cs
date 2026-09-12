@@ -94,15 +94,8 @@ internal static class JettisonAnalysis
     // Staging past the last control module is a legitimate thing to want, not an automatic one.
     public static bool WouldSeparateLastControl(Vehicle vehicle)
     {
-        Sequence? next = null;
-        foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
-        {
-            if (!sequence.Activated && !sequence.Parts.IsEmpty)
-            {
-                next = sequence;
-                break;
-            }
-        }
+        SequenceList seqList = vehicle.Parts.SequenceList;
+        Sequence? next = FindSequence(seqList, seqList.GetNextSequenceNumber());
         if (next == null)
             return false;
 
@@ -116,18 +109,18 @@ internal static class JettisonAnalysis
                     AddSubtree(root!, _guardSet);
             }
         }
-        if (_guardSet.Count == 0)
-            return false;
 
-        Span<Control> controls = vehicle.Parts.Modules.Get<Control>();
-        if (controls.Length == 0)
-            return false;
-        for (int i = 0; i < controls.Length; i++)
+        bool separatesLastControl = false;
+        if (_guardSet.Count > 0)
         {
-            if (!_guardSet.Contains(controls[i].Parent.FullPart))
-                return false;
+            Span<Control> controls = vehicle.Parts.Modules.Get<Control>();
+            separatesLastControl = controls.Length > 0;
+            for (int i = 0; i < controls.Length && separatesLastControl; i++)
+                separatesLastControl = _guardSet.Contains(controls[i].Parent.FullPart);
         }
-        return true;
+        // Cleared on the way out, so the scratch set does not pin a shed subtree.
+        _guardSet.Clear();
+        return separatesLastControl;
     }
 
     private static Sequence? FindSequence(SequenceList seqList, int number)

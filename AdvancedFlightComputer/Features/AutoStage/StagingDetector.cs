@@ -21,7 +21,7 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 internal static class StagingDetector
 {
     private static readonly Dictionary<Vehicle, StagingState> _states = new();
-    // Snapshot for the per-frame walks, because a staging can dispose a vehicle mid-walk.
+    // Snapshot for the walks, because the helpers a walk calls can insert a state through StateOf.
     private static readonly List<KeyValuePair<Vehicle, StagingState>> _walk = new();
 
     // One frame for the worker to process the new engines, plus one margin.
@@ -45,6 +45,7 @@ internal static class StagingDetector
             // armed would already be expired on the frame it is switched back on.
             state.PropagationFrames = 0;
             state.ResetDwell();
+            state.HeldForControl = false;
             if (state.State != StagingState.Phase.AwaitingIgnition)
                 state.State = StagingState.Phase.Monitoring;
         }
@@ -57,6 +58,12 @@ internal static class StagingDetector
     internal static void RequestStaging(Vehicle vehicle) => StateOf(vehicle).Requested = true;
 
     internal static bool HasState(Vehicle vehicle) => _states.ContainsKey(vehicle);
+
+    internal static int ActivationsOf(Vehicle vehicle)
+        => _states.TryGetValue(vehicle, out StagingState? state) ? state.Activations : 0;
+
+    internal static bool IsHeldForControl(Vehicle vehicle)
+        => _states.TryGetValue(vehicle, out StagingState? state) && state.HeldForControl;
 
     internal static StagingState StateOf(Vehicle vehicle)
     {
@@ -325,12 +332,18 @@ internal static class StagingDetector
     {
         if (JettisonAnalysis.WouldSeparateLastControl(vehicle))
         {
-            LogHelper.WarnOnce("autostage-control-loss:" + vehicle.Id,
-                $"[AFC] AutoStage held on '{vehicle.Id}': the next sequence would separate the last control module. Stage it by hand if that is wanted.");
-            TimedAlert.Create("AutoStage held: the next sequence would separate the control module", Color.Yellow, 4.0);
+            // Once per row: the triggers keep asking every frame while the row stands.
+            if (!state.HeldForControl)
+            {
+                state.HeldForControl = true;
+                DefaultCategory.Log.Warning(
+                    $"[AFC] AutoStage held on '{vehicle.Id}': the next sequence would separate the last control module. Stage it by hand if that is wanted.");
+                TimedAlert.Create("AutoStage held: the next sequence would separate the control module", Color.Yellow, 4.0);
+            }
             state.State = StagingState.Phase.Monitoring;
             return;
         }
+        state.HeldForControl = false;
 
         if (DebugConfig.AutoStage)
         {
@@ -344,6 +357,7 @@ internal static class StagingDetector
         FlushPendingStaging(vehicle, state);
 
         PendingStaging? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
+        state.Activations++;
 
         if (originalBurnMode == FlightComputerBurnMode.Auto && fc.Burn != null)
             fc.BurnMode = FlightComputerBurnMode.Auto;
@@ -396,7 +410,9 @@ internal static class StagingDetector
     // Modules still held at unload are dead for the flight, because their row is already activated.
     internal static void FlushPendingForUnload()
     {
-        foreach (KeyValuePair<Vehicle, StagingState> entry in _states)
+        _walk.Clear();
+        _walk.AddRange(_states);
+        foreach (KeyValuePair<Vehicle, StagingState> entry in _walk)
         {
             PendingStaging? p = entry.Value.Pending;
             if (p == null || entry.Key.IsDisposed)
