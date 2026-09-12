@@ -43,7 +43,9 @@ internal static class AutoStageGaugePatches
         static MethodBase TargetMethod() => GameReflection.Vehicle_IsFlightComputerDisabled_Enum!;
 
         // Stays enabled while armed, so the player can always switch it off, and while a pure
-        // jettison row is pending, which is what the spent-stage drop stages.
+        // jettison row is pending, which is what the spent-stage drop stages. The jettison
+        // rebuild runs from the draw pass while solvers are queued; that is safe because the
+        // worker path snapshots PartTree.Parts itself and never reads the lazy Sequence.Parts cache.
         static bool Prefix(Vehicle __instance, Enum value, ref bool __result)
         {
             if (value is not AfcAutoStageToggle)

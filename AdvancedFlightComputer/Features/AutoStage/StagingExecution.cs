@@ -96,7 +96,7 @@ internal static class StagingExecution
         if (!anyPending)
             return null;
 
-        return new PendingStaging(vehicle, pendingDecouplers, decouplerDelay, pendingEngines, engineDelay,
+        return new PendingStaging(pendingDecouplers, decouplerDelay, pendingEngines, engineDelay,
             Universe.GetElapsedSeconds());
     }
 
@@ -124,7 +124,6 @@ internal static class StagingExecution
 // game spends paused, where the last non-zero DeltaTime would keep draining a countdown.
 internal sealed class PendingStaging
 {
-    public Vehicle Vehicle { get; }
     public List<ISequenced>? DecouplerModules { get; private set; }
     public List<ISequenced>? EngineModules { get; private set; }
 
@@ -137,11 +136,10 @@ internal sealed class PendingStaging
     public bool EnginesPending => EngineModules is { Count: > 0 };
     public bool AnyPending => DecouplersPending || EnginesPending;
 
-    public PendingStaging(Vehicle vehicle,
+    public PendingStaging(
         List<ISequenced>? decouplerModules, double decouplerDelay,
         List<ISequenced>? engineModules, double engineDelay, double now)
     {
-        Vehicle = vehicle;
         DecouplerModules = decouplerModules;
         EngineModules = engineModules;
         DecouplerDelay = decouplerDelay;
