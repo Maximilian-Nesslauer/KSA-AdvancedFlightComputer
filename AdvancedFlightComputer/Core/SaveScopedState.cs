@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -37,5 +38,8 @@ internal static class SaveScopedState
         PassCompletionPatch.Reset();
         RcsExecutor.ResetUiCache();
         RcsCommandChannel.Reset();
+        // Also disarms the AUTOSTAGE switch, so a loaded save does not stage until the player arms it again.
+        StagingDetector.Reset();
+        StagingHelpers.Reset();
     }
 }

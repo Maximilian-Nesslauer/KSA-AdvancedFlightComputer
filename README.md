@@ -2,7 +2,7 @@
 
 Extra maneuver planning tools for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency).
 
-Adds quick-tools to the Transfer Planner (set Pe/Ap, match/set inclination, circularize), flyby targeting so a Hohmann transfer arrives as a flyby instead of an impact, multi-pass burn splitting for Oberth-efficient departures, and enables the planner to target interstellar comets on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS).
+Adds quick-tools to the Transfer Planner (set Pe/Ap, match/set inclination, circularize), flyby targeting so a Hohmann transfer arrives as a flyby instead of an impact, multi-pass burn splitting for Oberth-efficient departures, RCS-only burn execution, automatic staging with spent-booster drop and configurable staging delays, and enables the planner to target interstellar comets on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS).
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
@@ -66,8 +66,8 @@ Instead of one long burn that sweeps a large arc away from periapsis, the engine
 When burn duration is a significant fraction of the orbital period, a single burn wastes fuel by thrusting far from periapsis. Splitting across N passes keeps each burn near periapsis where the Oberth effect is strongest.
 This is the same technique used by real missions: lunar kick stages that perform multiple perigee burns over several days to gradually raise their orbit before the final trans-lunar injection, because a single burn would spend too long thrusting away from periapsis. Particularly useful for low-TWR spacecraft (ion engines, small kick stages, nuclear tugs) where a single departure burn can take tens of minutes and sweep a large fraction of the orbit.
 
-**Recommended companion mods:**
-Multi-pass works best together with [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) (handles staging between passes) and [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) (cleans up completed burns automatically). With all three installed, a multi-pass execution runs hands-free from first ignition to final departure.
+**Recommended companion mod:**
+Multi-pass works best with the built-in [automatic staging](#automatic-staging) switched on (handles staging between passes) and [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) installed (cleans up completed burns automatically). A multi-pass execution then runs hands-free from first ignition to final departure.
 
 **Limitations:**
 - Automatic pass advancement currently requires stock engine Auto mode. RCS translation completion does not advance the multi-pass sequence.
@@ -90,13 +90,58 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 - Completed RCS burns raise a public event (`RcsBurnCompletions.Completed`) other mods can consume; [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) uses it to clean up finished RCS burns the same way it cleans up engine auto-burns.
 - The **allocator** is selectable per burn (default **Groups**). Groups fires signed-axis groups and uses attitude control to counter residual torque. **LP** solves a fuel-optimal jet-selection problem over individual thruster forces and torques (the Bergmann/Draper formulation). It prices residual torque on axes with rotation authority and requires zero net torque on the other axes. LP can require costly counter-thrust, so it is opt-in. It falls back to Groups when the constraints are infeasible.
 
+### Automatic Staging
+
+<table>
+  <tr>
+    <th align="center">Stock</th>
+    <th align="center">With AdvancedFlightComputer</th>
+  </tr>
+  <tr valign="top">
+    <td><img src="images/AutoStage_stock.png" alt="Stock engine gauge panel" width="420" /></td>
+    <td><img src="images/AutoStage_button.png" alt="Engine gauge panel with AUTOSTAGE toggle" width="420" /></td>
+  </tr>
+</table>
+
+Activates the next sequence whenever the active engines run out of propellant, and drops burnt-out boosters while the rest of the stage keeps firing. Works during auto-burns (continues the burn instead of aborting) and manual burns. Formerly the separate AutoStage mod; remove that mod when you install this version, because two stagers on one burnout would activate two sequences. The settings written by AutoStage are imported on the first load.
+
+- **AUTOSTAGE toggle button** on the EngineControl gauge panel, in the free slot under RCS. The same switch is available on the Mods settings page for installs without KittenExtensions.
+- **Auto-burn continuation** - keeps the burn mode at Auto through staging so planned burns do not abort.
+- **Cascade staging** - stages again if the next stage is empty or only has decouplers.
+- **Spent stage drop** - sheds burnt-out boosters as soon as they quit, without waiting for the core stage to run dry.
+- **Configurable staging delays** - independent delays for decouplers and engines, simulating separation and engine spool-up time.
+- **On-screen countdowns** - "Decouple in X.Xs" and "Ignition in X.Xs" alerts during a delayed stage.
+
+**Spent stage drop.** A launch stage that mixes solid boosters with a liquid core does not run out of propellant all at once. The boosters burn out first, but a staging trigger that waits for *every* active engine to go dry never fires while the core is still burning, so the empty booster casings ride along as dead mass. The mod therefore also stages when the next sequence would jettison nothing but burnt-out hardware. Before staging it works out which parts each decoupler in that sequence would separate, and only fires when the sequence activates no engine, every active engine in the jettisoned parts is spent, at least one engine that stays with the vehicle is still firing, and nothing in the jettisoned parts is an engine that has never been activated. It also refuses when the parts to be jettisoned still hold propellant a retained engine can draw from, or when an enabled fuel link crosses the separation, so crossfeed setups are not cut off mid-burn. Turn it off with "Drop spent stages early" on the Mods settings page if staging should wait for a full burnout.
+
+**Staging delays.** Two delays are configurable per part variant, both measured from the staging trigger: the engine ignition delay (default values per stock engine variant, the small EngineA1 ignites after 2 s, EngineA3 after 3 s) and the decoupler delay (default 0 s, which matches stock). Set the decoupler delay shorter than the engine delay if the lower stage should drop away before the upper stage lights up.
+
+- **Settings window (Settings > Mods > AUTOSTAGE):** the two switches, then the "Engine Ignition Delays" and "Decoupler Delays" tables listing every known part variant. Every setting takes effect immediately; click SAVE to persist it.
+- **Part window (right-click part > Window):** override the delay for a specific sequence on the current vehicle. A part gets one block per sequence it fires something in, each naming the module it covers. Per-vehicle overrides take priority over the global config.
+
+The global config is `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\autostage.toml`:
+
+```toml
+[staging]
+drop_spent_stages = true
+
+[engine_delays]
+CorePropulsionA_Prefab_EngineA2 = 2.0
+CorePropulsionA_Prefab_EngineA3 = 5.0
+
+[decoupler_delays]
+CoreFairingA_Prefab_Interstage3W3HB = 1.0
+```
+
+Per-vehicle sequence overrides are stored next to it in `autostage-vehicles\<vehicle-id>.toml`, created automatically when you set an override in the part window, with separate `[sequence_delays]` (engines) and `[decoupler_delays]` sections. Nothing is written to a game save.
+
 ### Hyperbolic Targets
 
 The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod lets it target interstellar comets (Oumuamua, 2I/Borisov, 3I/ATLAS) by patching the planner's time-of-flight and alignment math to handle unbound orbits.
 
 ## Installation
 
-1. Install [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions](https://github.com/tsholmes/KittenExtensions) (the latter is only required for hyperbolic targets).
+1. Install [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions](https://github.com/tsholmes/KittenExtensions) (the latter is only required for hyperbolic targets and the AUTOSTAGE gauge button).
 2. Download the latest release from the [Releases](https://github.com/Maximilian-Nesslauer/KSA-AdvancedFlightComputer/releases) tab.
 3. Extract into `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\`.
 4. The game auto-discovers new mods and prompts you to enable them. Alternatively, add to `Documents\My Games\Kitten Space Agency\manifest.toml`:
@@ -112,7 +157,7 @@ enabled = true
 | Package | Purpose | Tested version |
 | --- | --- | --- |
 | [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader, required at runtime (see [Installation](#installation)) | 0.4.6 |
-| [KittenExtensions](https://github.com/tsholmes/KittenExtensions) | Optional, required at runtime for the hyperbolic-targets XML patch | v0.4.0 |
+| [KittenExtensions](https://github.com/tsholmes/KittenExtensions) | Optional, required at runtime for the hyperbolic-targets and AUTOSTAGE button XML patches | v0.4.0 |
 
 ## Build dependencies
 
@@ -125,6 +170,7 @@ Required only to build the mod from source. Targets **.NET 10**.
 
 ## Mod compatibility
 
+- [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) is now part of this mod. Delete its folder under `mods`, do not only disable it: KittenExtensions applies the XML patches of every manifest entry, so a disabled AutoStage still puts its own dead AUTOSTAGE button on top of this one, and an enabled one keeps the built-in staging off, which the log says.
 - Known conflicts: none
 
 ## Community
@@ -133,6 +179,5 @@ Thread on the KSA forums: https://forums.ahwoo.com/threads/advanced-flight-compu
 
 ## Check out my other mods
 
-- [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) - automatic staging during auto-burns and manual flight, with configurable ignition delays ([forum thread](https://forums.ahwoo.com/threads/autostage.891/))
 - [MeasureTools](https://github.com/Maximilian-Nesslauer/KSA-MeasureTools) - click-to-measure ruler, protractor, and surface measuring in the map view ([forum thread](https://forums.ahwoo.com/threads/measuretools.992/))
 - [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) - automatically remove finished auto-burns from the burn plan ([forum thread](https://forums.ahwoo.com/threads/autoremovefinishedburns.928/))
