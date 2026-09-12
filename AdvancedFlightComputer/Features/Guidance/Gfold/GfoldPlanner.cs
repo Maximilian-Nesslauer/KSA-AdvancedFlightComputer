@@ -1,8 +1,8 @@
 namespace AdvancedFlightComputer.Guidance.Gfold;
 
-// The G-FOLD powered-descent problems (Acikmese & Ploen; Blackmore), ported
-// from the reference Python (GFOLD_static_p3p4.py) into standard conic
-// form. Time of flight is an input - wrap with a search over tf if needed.
+// The G-FOLD powered-descent problems from Acikmese and Ploen and from Blackmore are
+// expressed in standard conic form. Time of flight is an input, so callers can
+// search over tf when needed.
 //
 //   Problem 3 (minimum landing error): minimize ||r(tf) - rf||, final
 //   altitude pinned to zero.
@@ -16,51 +16,42 @@ namespace AdvancedFlightComputer.Guidance.Gfold;
 //   s     slack with ||u|| <= s            (lossless convexification)
 // plus, for P3, one epigraph variable t bounding the landing error norm.
 //
-// Deviations from the reference, both deliberate:
+// The formulation uses two deliberate choices:
 //  - The glideslope cone uses the horizontal components (y,z) against
 //    altitude x: ||(r-rf)_{y,z}|| <= (x-rf_x)/tan(gs). The Python's "fast"
-//    line normed components [0:2] (altitude and y), which contradicts its
-//    own commented-out general form.
-//  - The thrust lower bound rows mirror the Python exactly (upper bound +
-//    z box bounds only; the paper's quadratic lower-bound cut is omitted
-//    there too, its comment notwithstanding).
-// Options that change the formulation away from the literal reference. Defaults
-// reproduce the reference exactly (so the Python cross-validation still holds);
-// the live mod turns both on for real-time receding-horizon guidance.
+//    line normed components [0:2] (altitude and y), which does not match its
+//    commented-out general form.
+//  - The thrust lower bound rows match the reference's upper bound and z box
+//    bounds. The paper's quadratic lower-bound cut is not part of that reference.
+// The default options reproduce the reference formulation. Real-time guidance
+// enables the options that improve receding-horizon control.
 public sealed record GfoldOptions
 {
-    // Enforce the engine's thrust FLOOR (rho1 <= ||T||), the paper's quadratic
-    // lower-bound cut the reference script omits. Without it min-fuel coasts
-    // then suicide-burns, so the first node has ~zero thrust - useless to fly
-    // node-by-node. With it the descent thrusts continuously and node 0 is a
-    // real, trackable command.
+    // Enforce the engine's thrust floor, rho1 <= ||T||. Without it, a min-fuel
+    // plan can coast and then brake late, so node 0 may have almost no thrust.
+    // With it, the descent thrusts continuously and node 0 is a trackable command.
     public bool EnforceLowerThrust { get; init; }
 
-    // Drop the "first thrust points straight up" boundary condition. That suits
-    // the start of a one-shot trajectory but, re-solved every cycle, it forces
-    // every commanded node-0 thrust vertical - no horizontal steering.
+    // Allow the first thrust vector to steer horizontally. A vertical boundary
+    // condition is useful for a one-shot trajectory but prevents horizontal
+    // steering when the problem is solved again each cycle.
     public bool FreeInitialThrust { get; init; }
 
-    // Skip the path inequalities (glideslope, velocity cap, thrust pointing) on
-    // node 0. The initial state is pinned by equality, so imposing an inequality
-    // it might violate (a fast/high/shallow handoff outside the glideslope cone
-    // or above the speed cap) makes EVERY tf infeasible - a spurious failure.
-    // The trajectory still has to satisfy the constraints from node 1 on.
+    // Skip the path inequalities on node 0. The initial state is pinned by
+    // equality, so imposing an inequality that the handoff might violate can
+    // make every tf infeasible. The trajectory still satisfies the constraints
+    // from node 1 on.
     public bool RelaxInitialPath { get; init; }
 
-    // Min-error (P3) tiebreaker: a small "prefer less fuel" weight added to the
-    // landing-error objective. Pure min-error is indifferent to thrust, so with a
-    // forced thrust floor the solver dumps the mandatory thrust sideways in an
-    // arbitrary direction (flat, rotating, never throttling down). Among equally
-    // accurate trajectories this picks the minimum-thrust one - throttle-down and
-    // sensible - at no accuracy cost. Tiny by design: a pure tiebreaker.
+    // Add a small fuel weight to the P3 landing-error objective. Pure minimum
+    // error is indifferent to thrust, so this tiebreaker selects the lowest
+    // thrust among equally accurate trajectories.
     public double LandingFuelReg { get; init; }
 
-    // Thrust-slew smoothing (min-fuel / P4 only): a penalty on the L2 norm of the
-    // stacked thrust-vector differences ||u[n+1]-u[n]|| added to the objective, so the
-    // solver spreads direction/throttle changes out over time instead of demanding
-    // rapid slews the 6-DOF autopilot can't track. A soft regularizer - larger values
-    // trade a little fuel for a smoother command; 0 disables it (unchanged behaviour).
+    // Penalize the L2 norm of adjacent thrust-vector differences for P4. This
+    // spreads direction and throttle changes over time instead of demanding
+    // rapid slews. Larger values trade some fuel for smoother commands, and 0
+    // disables the regularizer.
     public double SlewReg { get; init; }
 
     public static readonly GfoldOptions Reference = new();
@@ -70,10 +61,9 @@ public sealed record GfoldOptions
         LandingFuelReg = 0.001,
     };
 
-    // For committed-trajectory tracking: NO thrust floor, so the min-fuel plan can
-    // coast (throttle down) where optimal and brake where needed - the caller flies
-    // the whole trajectory by time index rather than node 0, so the coast arc is
-    // followed instead of frozen.
+    // Use no thrust floor for committed-trajectory tracking. The min-fuel plan
+    // can coast where optimal and brake where needed, while the caller follows
+    // the whole trajectory by time index.
     public static readonly GfoldOptions Descent = new()
     { FreeInitialThrust = true, RelaxInitialPath = true };
 }
@@ -81,10 +71,8 @@ public sealed record GfoldOptions
 public static class GfoldPlanner
 {
     /// <summary>
-    /// Wall-clock ceiling per solve, seconds; null or 0 means none. This is what
-    /// keeps one pathological state from blocking the sim thread
-    /// indefinitely. Note a SEARCH is tens of solves, so the worst case it bounds is
-    /// that multiple, not this.
+    /// Wall-clock ceiling per solve, in seconds. Null or 0 means no limit. A search
+    /// performs many solves, so this limits each solve rather than the full search.
     /// </summary>
     public static double? SolveTimeLimitS;
 
@@ -100,16 +88,14 @@ public static class GfoldPlanner
     public sealed record SearchResult(GfoldTrajectory Trajectory, double TimeOfFlight,
                                       double FuelUsed, int Solves);
 
-    // Search over time of flight for the minimum-fuel landing: fuel(tf) is
-    // +inf where the target is unreachable (P3 misses) and U-shaped where it
-    // is (too fast costs dv, too slow costs gravity losses), so a coarse
-    // bracket plus golden-section refinement finds the minimum reliably.
+    // Search over time of flight for the minimum-fuel landing. Fuel(tf) is
+    // +inf when the target is unreachable and is usually U-shaped otherwise,
+    // so a coarse bracket and golden-section refinement find the minimum.
     // Each evaluation is a P3 (reachability) + P4 (min fuel) solve pair.
     //
-    // Whether the answer fits the fuel actually aboard is deliberately the
-    // caller's check (FuelUsed vs params.FuelMass): the formulation has no
-    // fuel-budget constraint, faithfully to the reference, and the overshoot
-    // amount is useful go/no-go information.
+    // The caller checks whether the answer fits the available fuel because the
+    // formulation has no fuel-budget constraint. The overshoot is useful
+    // go/no-go information.
     public static SearchResult? SearchMinFuel(GfoldParams p, int nodes,
                                               double landingToleranceM = 10.0,
                                               double tfToleranceS = 0.25,

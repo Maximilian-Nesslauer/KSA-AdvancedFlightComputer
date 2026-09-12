@@ -5,17 +5,14 @@ namespace AdvancedFlightComputer.Guidance.Scvx;
 ///     minimize    (1/2) x'Px + c'x
 ///     subject to  Ax + s = b,  s in K = zero(z) x nonneg(l) x SOC(q...)
 ///
-/// This problem was first ported to ECOS; that port is DELETED (see git history
-/// if the comparison is ever needed) because ECOS minimises a LINEAR objective
-/// only, and every reference to "the ECOS port" below is history explaining why
-/// this design is as it is, not a pointer to live code.
+/// This formulation uses a quadratic objective directly. The three
+/// sum_squares penalties go into P, so the problem has no epigraph variables or
+/// epigraph cones.
 ///
 /// Formulated for a solver that takes a quadratic objective directly. The
-/// three sum_squares penalties go into P; there are no epigraph variables and
-/// no epigraph cones, so this problem is smaller (n = N*NX + N*NU + (N-1)*NX +
-/// 1, vs +4 and +3 extra large SOCs for the ECOS port) and every SOC in it is a
-/// genuine conic constraint rather than an epigraph: N gimbal cones, N tilt
-/// cones, and the glideslope cones when enabled.
+/// This keeps the problem small, with n = N*NX + N*NU + (N-1)*NX + 1, and
+/// every SOC is a genuine conic constraint. The constraints are N gimbal cones,
+/// N tilt cones, and the glideslope cones when enabled.
 ///
 /// SCS stacks equality, inequality and SOC rows into ONE matrix A (its zero
 /// cone is rows [0,z), positive orthant is [z,z+l), SOC blocks follow in q

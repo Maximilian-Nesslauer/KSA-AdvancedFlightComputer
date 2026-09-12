@@ -26,15 +26,14 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// the greedy law needs a line search or a gain in units of 1/s^2 that has to be
 /// retuned as the time of flight shrinks. See docs/impact-steering.md.
 ///
-/// J IS RANK DEFICIENT, and for exactly ONE reason - which is not a constraint. The
-/// predictor reports the point where the trajectory CROSSES the surface, and a
-/// crossing point of a sphere is on that sphere, so |p| = R identically for every
-/// initial state. A function whose values all lie on a sphere has a derivative landing
-/// in that sphere's tangent plane: three velocity inputs onto two output directions.
+/// J is rank deficient for one geometric reason. The predictor reports the point
+/// where the trajectory crosses the surface, so |p| = R for every initial state.
+/// A function whose values all lie on a sphere has a derivative in that sphere's
+/// tangent plane, with three velocity inputs and two output directions.
 ///
-/// Planarity is NOT a second reason, though an earlier version of this comment said so.
-/// Two independent deficiencies would leave rank 1 and two zero singular values; there
-/// is one. On an inclined, non-planar arc the singular values are still
+/// Planarity is not a second reason. Two independent deficiencies would leave rank
+/// 1 and two zero singular values, but J has only one zero singular value. On an inclined, non-planar arc
+/// the singular values are still
 /// (130.89, 101.66, 0). Planarity fixes WHERE the null direction points, not that
 /// there is one.
 ///
@@ -54,8 +53,7 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// It degrades smoothly to steepest descent as lambda grows and to the exact
 /// Gauss-Newton step as lambda falls.
 ///
-/// THE TANGENT PROJECTION IS DEFENSIVE, NOT LOAD-BEARING, and an earlier version of
-/// this comment claimed otherwise. The impact point is driven to |g| = TargetRadius
+/// The tangent projection is defensive. The impact point is driven to |g| = TargetRadius
 /// for every perturbed trajectory, so d|g|/dv is zero and the surface normal is a
 /// LEFT NULL VECTOR of J - measured at |n^T J|/|J| = 1e-17. A radial miss component
 /// is therefore annihilated by the solve on its own, and removing it first changes
@@ -64,9 +62,9 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// state-dependent - a terrain-following target would do it - but it is not what
 /// makes the solve well behaved. Lambda is.
 ///
-/// WHAT THIS IS NOT: guidance. It answers one narrow question - "what is the
-/// smallest instantaneous velocity change that puts the impact on the target, to
-/// first order" - and that is greedy in the sense that matters for propellant:
+/// This is not guidance. It answers one narrow question, namely what smallest
+/// instantaneous velocity change puts the impact on the target to first order,
+/// and it is greedy in the sense that matters for propellant:
 ///
 ///   It is a LINEARISATION. One step removes 93.7% of a 21.5 km miss; iterating
 ///   re-linearises and converges 21.5 km -> 1.35 km -> 5 m -> 0. Converged, it costs

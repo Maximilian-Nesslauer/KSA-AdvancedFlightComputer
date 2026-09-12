@@ -6,22 +6,11 @@ namespace AdvancedFlightComputer.Guidance.Gfold;
 /// <summary>
 /// Single DllImportResolver registration for the whole assembly.
 ///
-/// NativeLibrary.SetDllImportResolver THROWS if called twice for the same assembly, so
-/// every native library P/Invoke'd from this assembly must be dispatched from this one
-/// resolver. A second [ModuleInitializer] registering its own is an
-/// InvalidOperationException at assembly load - before Main, with a
-/// TypeInitializationException for &lt;Module&gt; as the only clue - which is exactly
-/// what adding a second native binding once did, and how this file came to exist.
-/// (The Scvx project has the same file for the same reason.) Add new natives to the
-/// switch, never as a new initializer.
+/// NativeLibrary.SetDllImportResolver throws if called twice for the same assembly, so every native library called through P/Invoke from this assembly must use this resolver. A second [ModuleInitializer] would cause an InvalidOperationException during assembly load. Add new native libraries to the switch, never as a new initializer.
 ///
-/// Resolving from next to this assembly rather than the process working directory is
-/// what lets the same assembly work in the console runner, a test host, and the game
-/// with the mod's DLLs in the mod folder.
+/// Resolving from next to this assembly rather than the process working directory lets the same assembly work in the console runner, a test host, and the game.
 ///
-/// KSA ships for Windows and for Linux, so one mod folder can hold the Windows build
-/// and the Linux build of the same library. Their file names differ, so both can sit
-/// beside each other and the running platform loads only its own.
+/// KSA ships for Windows and Linux, so one mod folder can hold both builds of the same library. Their file names differ, and the running platform loads only its own.
 /// </summary>
 internal static class NativeLibraries
 {

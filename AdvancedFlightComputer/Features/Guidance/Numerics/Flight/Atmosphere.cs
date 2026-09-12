@@ -3,8 +3,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>
-/// A single-layer isothermal exponential atmosphere, written to MIRROR the one the
-/// game actually integrates against rather than to be a good atmosphere.
+/// A single-layer isothermal exponential atmosphere that mirrors the model used by the game.
 ///
 /// KSA's PhysicalAtmosphereReference is exactly this and nothing more:
 ///
@@ -18,25 +17,11 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// game for it - is what lets a solve run on a worker thread and still agree with
 /// what the vehicle will experience.
 ///
-/// WHY THIS LIVES HERE AND NOT IN THE MOD. The solver must not reference the game;
-/// that is a project-level rule so it is a compile error rather than a convention
-/// (see Scvx.Core's csproj). But the solver still has to know about the air. So the
-/// mod reads the three numbers off KSA's AtmosphereReference and constructs one of
-/// these; everything downstream sees plain doubles. The mirror is checkable in one
-/// line against KSA's own GetAtmosphericDensityAtAltitude, which is what the
-/// Boostback tab does on every resample.
+/// The solver must not reference the game, so the mod reads the three values from KSA's AtmosphereReference and constructs this model. The Boostback tab checks this model against KSA's GetAtmosphericDensityAtAltitude on every resample.
 ///
-/// SPEED OF SOUND IS DERIVED, NOT INVENTED. An isothermal atmosphere has constant
-/// P/rho, so a = sqrt(gamma * P0 / rho0) is constant at every altitude - which is
-/// self-consistent with the model rather than an extra assumption bolted onto it.
-/// For KSA's Earth that is sqrt(1.4 * 101325 / 1.225) = 340.3 m/s, the right answer
-/// for the right reason. Gamma is the one genuinely free parameter and it is a
-/// constructor argument.
+/// An isothermal atmosphere has constant P/rho, so a = sqrt(gamma * P0 / rho0) is constant at every altitude. For KSA's Earth that is sqrt(1.4 * 101325 / 1.225) = 340.3 m/s. Gamma is the free parameter and is a constructor argument.
 ///
-/// The game has no Mach number anywhere in its aerodynamics, so nothing in KSA
-/// consumes this today. It exists because the surrogate is parameterised on Mach -
-/// see <see cref="AeroTable"/> - and a Mach axis needs a speed of sound even while
-/// the table is flat along it.
+/// The game has no Mach number in its aerodynamics. The surrogate is parameterised on Mach, so a Mach axis needs a speed of sound even while the table is flat along it.
 /// </summary>
 public sealed class ExponentialAtmosphere
 {
@@ -81,8 +66,8 @@ public sealed class ExponentialAtmosphere
     /// <param name="seaLevelPressure">P0, Pa.</param>
     /// <param name="scaleHeight">H, metres.</param>
     /// <param name="gamma">Ratio of specific heats for the speed of sound. The
-    /// default is diatomic air; the game models no composition at all, so this is
-    /// the caller's choice and not something that can be read off a body.</param>
+    /// default is diatomic air. The game models no composition, so this is the
+    /// caller's choice and not something that can be read from a body.</param>
     public ExponentialAtmosphere(double seaLevelDensity, double seaLevelPressure,
                                  double scaleHeight, double gamma = 1.4)
     {
@@ -104,9 +89,7 @@ public sealed class ExponentialAtmosphere
         ScaleHeight = scaleHeight;
         Gamma = gamma;
 
-        // KSA's CalculateBoundaryHeight, verbatim: whichever of the two floors is
-        // reached LAST sets the top, so neither quantity is ever left non-zero above
-        // the boundary.
+        // KSA's CalculateBoundaryHeight uses the higher floor crossing as the top, so neither quantity remains non-zero above the boundary.
         TopAltitude = Math.Max(-scaleHeight * Math.Log(MinDensity / seaLevelDensity),
                                -scaleHeight * Math.Log(MinPressure / seaLevelPressure));
 
@@ -116,11 +99,7 @@ public sealed class ExponentialAtmosphere
     /// <summary>
     /// Density at a geometric altitude above MEAN radius, kg/m^3.
     ///
-    /// Altitude is above the mean radius, not above the terrain: KSA computes it as
-    /// |r_ccf| - MeanRadius and never consults the height map, so a vehicle sitting on
-    /// a 5 km plateau is at 5 km of altitude for aerodynamic purposes even though it
-    /// is on the ground. Feeding this a terrain-relative altitude would be wrong by
-    /// however much the local terrain deviates.
+    /// Altitude is above the mean radius, not above the terrain. KSA computes it as |r_ccf| - MeanRadius and never consults the height map, so a vehicle on a 5 km plateau has 5 km of aerodynamic altitude even when it is on the ground.
     /// </summary>
     public double Density(double altitude)
     {
@@ -144,13 +123,9 @@ public sealed class ExponentialAtmosphere
     public Dual Mach(Dual speed) => speed / SpeedOfSound;
 
     /// <summary>
-    /// Density as a <see cref="Dual"/>, so an atmosphere can be written inline in
-    /// dynamics code and d(rho)/d(altitude) falls out of the same sweep as every
-    /// other slope.
+    /// Density as a <see cref="Dual"/>, so dynamics code can compute d(rho)/d(altitude) in the same sweep as every other slope.
     ///
-    /// TWO KINKS ARE INHERITED FROM THE GAME DELIBERATELY, and whoever wires this
-    /// into a solver's dynamics should decide about them there rather than discover
-    /// them:
+    /// This model has two deliberate kinks inherited from the game, and solver dynamics should account for them:
     ///
     ///   at h = 0    the max() clamp flattens rho below mean radius, so the slope
     ///               steps from -rho0/H to 0. This is a real altitude - a landing
@@ -160,10 +135,7 @@ public sealed class ExponentialAtmosphere
     ///               1e-9 kg/m^3 by construction, so the jump is nine orders below
     ///               anything that moves a booster.
     ///
-    /// Smoothing either one would make this stop mirroring the game, which is the
-    /// whole point of the type. If the trust region ever chatters on the h = 0 corner
-    /// the fix is to drop the clamp HERE, in one place, with the divergence written
-    /// down - not to paper over it at the call site.
+    /// Smoothing either kink would stop this type from mirroring the game. If the trust region chatters at h = 0, change the clamp here and document the resulting divergence at this boundary.
     /// </summary>
     public Dual Density(Dual altitude)
     {
@@ -172,12 +144,7 @@ public sealed class ExponentialAtmosphere
         if (altitude.V <= 0.0)
             return new Dual(SeaLevelDensity, 0.0);
 
-        // The exponent is built by DIVIDING, not by multiplying by the reciprocal,
-        // which is what Dual's operator/ would do. That is a one-ULP difference and it
-        // would be invisible - except that it makes this overload disagree with
-        // Density(double) in the last bit, and "the differentiable path returns
-        // something very slightly different" is exactly the kind of divergence that is
-        // impossible to find later. Identical arithmetic, checked by --aero.
+        // Build the exponent by division so this overload uses the same arithmetic as Density(double) and agrees with it in the last bit.
         Dual e = Dual.Exp(new Dual(-altitude.V / ScaleHeight, -altitude.D / ScaleHeight));
         return SeaLevelDensity * e;
     }
