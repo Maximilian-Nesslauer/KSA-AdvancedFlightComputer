@@ -108,6 +108,7 @@ The staging tests apply the feature's patches on a test-scoped Harmony owner thr
 
 - `afc-autostage-flight` flies a staged save at full manual throttle and asserts that every remaining engine sequence is activated automatically and that each one actually lights. A trailing decoupler-only sequence is left standing on purpose, because staging only runs while an engine is still ahead.
 - `afc-autostage-delays` measures that configured decoupler and engine ignition delays fire on time, each in isolation.
+- `afc-autostage-per-vehicle` spawns two vehicles and checks that the switch, a staging request and the state belong to the vehicle: a request activates a row on the armed vehicle only, waits on a disarmed one, and a disposed vehicle takes its state with it.
 - `afc-autostage-spent-drop` flies a save whose launch stage mixes boosters with a core and asserts the boosters are shed as soon as they burn out, never earlier, with the core still firing afterwards, and that the drop never arms on the frame the launch sequence fires.
 
 ### Automatic burn removal

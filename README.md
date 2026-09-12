@@ -105,7 +105,8 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 
 Activates the next sequence whenever the active engines run out of propellant, and drops burnt-out boosters while the rest of the stage keeps firing. Works during auto-burns (continues the burn instead of aborting) and manual burns. Formerly the separate AutoStage mod; remove that mod when you install this version, because two stagers on one burnout would activate two sequences. The settings written by AutoStage are imported on the first load.
 
-- **AUTOSTAGE toggle button** on the EngineControl gauge panel, in the free slot under RCS. The same switch is available on the Mods settings page for installs without KittenExtensions.
+- **AUTOSTAGE toggle button** on the EngineControl gauge panel, in the free slot under RCS. The switch belongs to the vehicle, so an armed craft keeps staging when you control another one. The same switch is available on the Mods settings page for installs without KittenExtensions.
+- **Control-module guard** - a sequence that would separate the last control module is never staged automatically; stage it by hand if that is what you want.
 - **Auto-burn continuation** - keeps the burn mode at Auto through staging so planned burns do not abort.
 - **Cascade staging** - stages again if the next stage is empty or only has decouplers.
 - **Spent stage drop** - sheds burnt-out boosters as soon as they quit, without waiting for the core stage to run dry.

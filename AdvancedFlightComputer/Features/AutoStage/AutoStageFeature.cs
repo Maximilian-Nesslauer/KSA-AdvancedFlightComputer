@@ -84,7 +84,6 @@ internal static class AutoStageFeature
     {
         ModSettingsPage.Unregister(AutoStageSettingsPage.DrawSection);
         StagingDetector.Reset();
-        StagingHelpers.Reset();
         AutoStageSettingsPage.Reset();
         StagingConfig.Reset();
     }
