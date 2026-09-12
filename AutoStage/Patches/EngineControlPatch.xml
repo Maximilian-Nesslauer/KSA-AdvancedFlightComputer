@@ -1,0 +1,23 @@
+<Patch>
+  <!-- Adds an AUTOSTAGE toggle button to the EngineControl gauge panel, in the
+       free lower-left slot of its 2x2 button grid (RCS / IGNITE above,
+       AUTOSTAGE / SHUTDN below).
+
+       EngineControl rather than BurnControl because BurnControl only draws
+       while a burn is planned (VisibleInContext=Burn), and both staging
+       triggers work without one. EngineControl draws whenever the vehicle
+       carries an engine at all, which is the condition AutoStage needs. -->
+  <Copy Path="//GaugeCanvas[@Id='EngineControl']/Component[@Name='Buttons']" Pos="Append">
+    <Button X="0.006" Y="0.5" Width="0.4854" Height="0.4994"
+            Label="AUTOSTAGE" TextScale="0.28">
+      <TextColor Name="Black" />
+      <BackColor Name="AlmostBlack" A="0" />
+      <DisabledColor R="0.1" G="0.1" B="0.1" />
+      <IdleColor R="0.175" G="0.18" B="0.19" />
+      <ActiveColor Name="Green" />
+      <SoundEvent SoundId="LedButtonDown" Action="Pressed" />
+      <FlightComputer Action="AutoStageToggle" Value="Enabled" Toggle="true"/>
+      <Tooltip Value="Automatically stage when engines run out of propellant, and drop spent boosters while the rest of the stage keeps firing."/>
+    </Button>
+  </Copy>
+</Patch>

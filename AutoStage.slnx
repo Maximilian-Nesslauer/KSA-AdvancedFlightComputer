@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AutoStage/AutoStage.csproj" />
+  <Project Path="AutoStage.HarnessTests/AutoStage.HarnessTests.csproj" />
+</Solution>

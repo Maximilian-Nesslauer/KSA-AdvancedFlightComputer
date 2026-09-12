@@ -1,0 +1,9 @@
+name = "AutoStage"
+patches = [ "Patches/EngineControlPatch.xml" ]
+
+[StarMap]
+EntryAssembly = "AutoStage"
+
+[[StarMap.ModDependencies]]
+ModId = "KittenExtensions"
+Optional = false
