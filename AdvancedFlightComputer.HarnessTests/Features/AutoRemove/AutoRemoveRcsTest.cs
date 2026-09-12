@@ -1,172 +1,117 @@
-using AutoRemoveFinishedBurns.Core;
-using AutoRemoveFinishedBurns.Features;
+using AdvancedFlightComputer.Features.AutoRemove;
+using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
-using HarmonyLib;
-using HeadlessHarness.Core;
 using HeadlessHarness.Harness;
 using KSA;
 
-namespace AutoRemoveFinishedBurns.HarnessTests;
+namespace AdvancedFlightComputer.HarnessTests;
 
-// Exercises the AdvancedFlightComputer RCS interop: the reflection binding
-// against the deployed AFC assembly, delivery through AFC's actual event
-// (invoked via its backing delegate, proving the full subscribe -> raise ->
-// remove chain), and the removal policy on the handler itself (enabled,
-// controlled vehicle, burn still in plan). AFC not deployed skips the test:
-// the binding is a soft dependency by design.
+// The RCS completion path: delivery through the real RcsBurnCompletions event, which proves the
+// subscription the feature makes, and the removal policy on the handler itself.
 //
-// Scenarios (each starts from one fresh future burn in the plan):
-//   1. bound-event: handler subscribed via TryEnable, AFC's event delegate
-//      invoked -> the burn is removed from the plan.
-//   2. disabled:    Config.Enabled = false, handler called -> the burn stays.
-//   3. uncontrolled: completion for a vehicle that is not controlled -> stays.
-//   4. stale-burn:  completion for a burn already removed -> no effect, no throw.
-public sealed class RcsInteropTest : IHarnessTest
+// Scenarios, each from one fresh future burn in the plan:
+//   raised-event: the feature's subscription receives the event, the burn is removed.
+//   disabled:     the switch is off, the burn stays.
+//   uncontrolled: completion for a vehicle that is not controlled, the burn stays.
+//   stale-burn:   completion for a burn already removed, no effect and no throw.
+public sealed class AutoRemoveRcsTest : AfcTest
 {
-    private const string Prefix = "[arfb-rcs-interop]";
-    private const string CompletionsTypeName =
-        "AdvancedFlightComputer.Features.RcsTranslation.RcsBurnCompletions";
-
     private const double StepDt = 1.0;
     private const double SpawnAltitudeOffsetM = 700_000.0;
     private const double BurnLeadSeconds = 3600.0;
     private const double BurnDvMps = 5.0;
     private const int SettleSteps = 5;
 
-    public string Name => "arfb-rcs-interop";
+    public override string Name => "afc-autoremove-rcs";
 
-    public int Run(HeadlessSession session)
+    protected override void Execute(TestContext t)
     {
-        if (AccessTools.TypeByName(CompletionsTypeName) == null)
-        {
-            HarnessLog.Line($"{Prefix} SKIP: AdvancedFlightComputer not deployed; nothing to bind.");
-            return 0;
-        }
-
-        CelestialSystem system = session.System;
-        Vehicle? source = null;
-        for (int i = 0; i < system.Count; i++)
-        {
-            if (system.GetIndex(i) is Vehicle v)
-            {
-                source = v;
-                break;
-            }
-        }
+        Vehicle? source = AutoRemoveBurnTest.FirstVehicle(t.System);
         if (source == null)
         {
-            HarnessLog.Line($"{Prefix} SKIP: the loaded system has no vehicle to copy.");
-            return 0;
+            t.Skip("the loaded system has no vehicle to copy");
+            return;
         }
 
-        UniverseTime now = Universe.GetElapsedTime();
-        IParentBody parent = source.Orbit.Parent;
-        Orbit orbit = VehicleSpawner.CircularCci(
-            parent, source.Orbit.SemiMajorAxis + SpawnAltitudeOffsetM, now);
-        Vehicle vehicle = VehicleSpawner.SpawnCopy(source, parent, "ArfbRcsInteropVehicle", orbit);
-
-        bool originalEnabled = Config.Enabled;
         Vehicle? originalControlled = Program.ControlledVehicle;
-        bool interopWasActive = AfcRcsInterop.Active;
-        bool ok;
+        Vehicle? vehicle = null;
+        using AutoRemoveTestPatches.Scope patches = AutoRemoveTestPatches.Apply();
         try
         {
-            Config.Enabled = true;
+            // Inside the try, because the constructor registers with the system before the spawn finishes.
+            UniverseTime now = Universe.GetElapsedTime();
+            IParentBody parent = source.Orbit.Parent;
+            Orbit orbit = VehicleSpawner.CircularCci(parent, source.Orbit.SemiMajorAxis + SpawnAltitudeOffsetM, now);
+            vehicle = VehicleSpawner.SpawnCopy(source, parent, "AfcAutoRemoveRcs", orbit);
             Program.ControlledVehicle = vehicle;
-            SimDriver driver = session.CreateDriver();
+            SimDriver driver = t.Session.CreateDriver();
             driver.Step(StepDt, SettleSteps);
 
-            ok = ScenarioBoundEventRemoves(vehicle, driver);
-            ok &= ScenarioDisabledKeeps(vehicle, driver);
-            ok &= ScenarioUncontrolledKeeps(vehicle, driver);
-            ok &= ScenarioStaleBurnIsIgnored(vehicle, driver);
+            ScenarioRaisedEventRemoves(t, vehicle, driver);
+            ScenarioDisabledKeeps(t, vehicle, driver);
+            ScenarioUncontrolledKeeps(t, vehicle, driver);
+            ScenarioStaleBurnIsIgnored(t, vehicle, driver);
         }
         finally
         {
-            // State-preserving teardown: only drop the subscription when
-            // this test created it, so a session where the mod itself
-            // enabled the interop keeps it.
-            if (!interopWasActive)
-                AfcRcsInterop.Disable();
-            Config.Enabled = originalEnabled;
             Program.ControlledVehicle = originalControlled;
-            VehicleSpawner.Despawn(vehicle);
+            if (vehicle != null)
+                VehicleSpawner.Despawn(vehicle);
         }
-
-        HarnessLog.Line($"{Prefix} {TestSupport.Verdict(ok)}");
-        return ok ? 0 : 1;
     }
 
-    private bool ScenarioBoundEventRemoves(Vehicle vehicle, SimDriver driver)
+    private static void ScenarioRaisedEventRemoves(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        Burn? burn = null;
-        bool ok = Check("bound-event", "TryEnable bound the AFC event", AfcRcsInterop.TryEnable());
-        ok = ok && AddBurn("bound-event", vehicle, driver, out burn);
-        if (ok)
+        if (AddBurn(t, "raised-event", vehicle, driver, out Burn? burn))
         {
-            // Raise through AFC's own event delegate (the backing field), so
-            // the assertion covers the real subscription, not just the
-            // handler in isolation.
-            Type type = AccessTools.TypeByName(CompletionsTypeName)!;
-            Delegate? evt = AccessTools.Field(type, "Completed")?.GetValue(null) as Delegate;
-            ok &= Check("bound-event", "AFC event has a subscriber", evt != null);
-            evt?.DynamicInvoke(vehicle, burn);
-            ok &= Check("bound-event", "burn removed from the plan", !fc.BurnPlan.HasActiveBurns);
+            RcsBurnCompletions.Raise(vehicle, burn!);
+            t.Check("raised-event: burn removed from the plan", !fc.BurnPlan.HasActiveBurns);
         }
         CleanupBurns(fc);
-        return ok;
     }
 
-    private bool ScenarioDisabledKeeps(Vehicle vehicle, SimDriver driver)
+    private static void ScenarioDisabledKeeps(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        Config.Enabled = false;
-        bool ok = AddBurn("disabled", vehicle, driver, out Burn? burn);
-        if (ok)
+        AutoRemoveConfig.Enabled = false;
+        if (AddBurn(t, "disabled", vehicle, driver, out Burn? burn))
         {
-            AfcRcsInterop.OnRcsBurnCompleted(vehicle, burn!);
-            ok &= Check("disabled", "burn kept while the mod is disabled", fc.BurnPlan.HasActiveBurns);
+            FinishedBurnRemover.OnRcsBurnCompleted(vehicle, burn!);
+            t.Check("disabled: burn kept while the switch is off", fc.BurnPlan.HasActiveBurns);
         }
-        Config.Enabled = true;
+        AutoRemoveConfig.Enabled = true;
         CleanupBurns(fc);
-        return ok;
     }
 
-    private bool ScenarioUncontrolledKeeps(Vehicle vehicle, SimDriver driver)
+    private static void ScenarioUncontrolledKeeps(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        bool ok = AddBurn("uncontrolled", vehicle, driver, out Burn? burn);
+        bool added = AddBurn(t, "uncontrolled", vehicle, driver, out Burn? burn);
         Program.ControlledVehicle = null;
-        if (ok)
+        if (added)
         {
-            AfcRcsInterop.OnRcsBurnCompleted(vehicle, burn!);
-            ok &= Check("uncontrolled", "burn kept on a vehicle that is not controlled",
-                fc.BurnPlan.HasActiveBurns);
+            FinishedBurnRemover.OnRcsBurnCompleted(vehicle, burn!);
+            t.Check("uncontrolled: burn kept on a vehicle that is not controlled", fc.BurnPlan.HasActiveBurns);
         }
         Program.ControlledVehicle = vehicle;
         CleanupBurns(fc);
-        return ok;
     }
 
-    private bool ScenarioStaleBurnIsIgnored(Vehicle vehicle, SimDriver driver)
+    private static void ScenarioStaleBurnIsIgnored(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        bool ok = AddBurn("stale-burn", vehicle, driver, out Burn? burn);
-        if (ok)
+        if (AddBurn(t, "stale-burn", vehicle, driver, out Burn? burn))
         {
             CleanupBurns(fc);
-            AfcRcsInterop.OnRcsBurnCompleted(vehicle, burn!);
-            ok &= Check("stale-burn", "no burn resurrected or thrown for a removed burn",
-                !fc.BurnPlan.HasActiveBurns);
+            FinishedBurnRemover.OnRcsBurnCompleted(vehicle, burn!);
+            t.Check("stale-burn: no burn resurrected or thrown for a removed burn", !fc.BurnPlan.HasActiveBurns);
         }
         CleanupBurns(fc);
-        return ok;
     }
 
-    // One fresh future burn through the same input-event path the game's
-    // burn UI uses (mirrors BurnRemovalTest.BeginScenario).
-    private bool AddBurn(string scenario, Vehicle vehicle, SimDriver driver, out Burn? burn)
+    private static bool AddBurn(TestContext t, string scenario, Vehicle vehicle, SimDriver driver, out Burn? burn)
     {
         FlightComputer fc = vehicle.FlightComputer;
         fc.BurnMode = FlightComputerBurnMode.Manual;
@@ -182,18 +127,12 @@ public sealed class RcsInteropTest : IHarnessTest
             AddBurn = true,
         });
         driver.Step(StepDt);
-        return Check(scenario, "burn added to the plan", fc.BurnPlan.HasActiveBurns);
+        return t.Check($"{scenario}: burn added to the plan", fc.BurnPlan.HasActiveBurns);
     }
 
     private static void CleanupBurns(FlightComputer fc)
     {
         while (fc.BurnPlan.HasActiveBurns)
             fc.RemoveBurnAt(0);
-    }
-
-    private bool Check(string scenario, string label, bool condition)
-    {
-        HarnessLog.Line($"{Prefix} {scenario}: {label} => {TestSupport.Verdict(condition)}");
-        return condition;
     }
 }

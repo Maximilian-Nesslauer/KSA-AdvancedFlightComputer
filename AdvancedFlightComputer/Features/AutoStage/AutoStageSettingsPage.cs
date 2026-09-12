@@ -1,83 +1,19 @@
-using System.Reflection;
-using System.Reflection.Emit;
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
-using HarmonyLib;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
-// Every settings page renders into one body child closed by a single ConsoleStyle.PopWidgetStyle,
-// so a drawer inserted before that call lands inside the body with the widget style still pushed.
-// Nothing is replaced, so other mods can do the same; the drawer checks which page is open.
-[HarmonyPatch(typeof(GameSettings), nameof(GameSettings.OnDrawUi), new[] { typeof(Camera) })]
+// The AUTOSTAGE section of the Mods settings page, drawn through ModSettingsPage.
 internal static class AutoStageSettingsPage
 {
-    private static readonly MethodInfo? Anchor =
-        AccessTools.Method(typeof(ConsoleStyle), nameof(ConsoleStyle.PopWidgetStyle), Type.EmptyTypes);
-
-    internal static bool IsAnchorPresent
+    public static void DrawSection()
     {
-        get
-        {
-            MethodBase? target = AccessTools.Method(typeof(GameSettings), nameof(GameSettings.OnDrawUi), new[] { typeof(Camera) });
-            return target != null && FindAnchor(PatchProcessor.GetOriginalInstructions(target)) >= 0;
-        }
-    }
+        ConsoleWidgets.Rule();
+        ConsoleWidgets.RegionHeader("AUTOSTAGE".AsSpan());
 
-    static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)
-    {
-        var codes = new List<CodeInstruction>(instructions);
-        int anchorIdx = FindAnchor(codes);
-        if (anchorIdx < 0)
-        {
-            DefaultCategory.Log.Warning(
-                $"[AFC] AutoStage settings: no ConsoleStyle.PopWidgetStyle call in GameSettings.OnDrawUi ({codes.Count} instructions), page not patched.");
-            return codes;
-        }
-
-        // Labels stay on the anchor, so a jump to it skips the drawer instead of landing mid-call.
-        codes.Insert(anchorIdx, new CodeInstruction(OpCodes.Call,
-            AccessTools.Method(typeof(AutoStageSettingsPage), nameof(DrawSettingsPage))));
-        return codes;
-    }
-
-    private static int FindAnchor(List<CodeInstruction> codes)
-    {
-        if (Anchor == null)
-            return -1;
-        for (int i = 0; i < codes.Count; i++)
-        {
-            if (codes[i].Calls(Anchor))
-                return i;
-        }
-        return -1;
-    }
-
-    private static bool IsModsPageOpen()
-        => GameReflection.GameSettings_openTab_Mods is { } mods
-           && mods.Equals(GameReflection.GameSettings_openTab!.GetValue(null));
-
-    public static void DrawSettingsPage()
-    {
-        if (!IsModsPageOpen())
-            return;
-        try
-        {
-            ConsoleWidgets.Rule();
-            ConsoleWidgets.RegionHeader("AUTOSTAGE".AsSpan());
-            DrawSettings();
-        }
-        catch (Exception ex)
-        {
-            LogHelper.WarnOnce("autostage-settings", $"[AFC] AutoStage settings draw failed: {ex}");
-        }
-    }
-
-    private static void DrawSettings()
-    {
         bool active = StagingDetector.Active;
         if (ConsoleUi.CheckboxRow("AUTOMATIC STAGING".AsSpan(), "AutoStageActive".AsSpan(), ref active,
                 "The same switch as the AUTOSTAGE gauge button. Stages when the active engines run out of propellant, and drops spent boosters while the rest keeps firing.".AsSpan()))

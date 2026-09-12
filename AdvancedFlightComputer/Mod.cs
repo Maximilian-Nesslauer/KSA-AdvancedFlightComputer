@@ -1,4 +1,5 @@
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
@@ -38,6 +39,10 @@ public sealed class Mod
         bool coreReady = Validated("Core", GameReflection.ValidateCore)
             && _patches.TryApply("Core", PatchCore);
 
+        // Its own owner, so a settings-window rename costs the mod sections and nothing else.
+        if (Validated("SettingsPage", GameReflection.ValidateSettingsPage))
+            _patches.TryApply("SettingsPage", ModSettingsPage.ApplyPatches);
+
         if (Validated("HyperbolicTargets", GameReflection.ValidateHyperbolicTargets))
             _patches.TryApply("HyperbolicTargets", HyperbolicTargets.ApplyPatches);
 
@@ -73,6 +78,14 @@ public sealed class Mod
                 // The button bound its enum while the game read Gauges.xml, so it still draws.
                 DefaultCategory.Log.Warning("[AFC] AutoStage is off, so the AUTOSTAGE gauge button does nothing this session.");
             }
+        }
+
+        if (coreReady && Validated("AutoRemove", GameReflection.ValidateAutoRemove))
+        {
+            AutoRemoveFeature.WarnIfStandaloneInstalled();
+            SharedVehicleHooks.AutoRemoveEnabled = _patches.TryApply("AutoRemove", AutoRemoveFeature.ApplyPatches);
+            if (!SharedVehicleHooks.AutoRemoveEnabled)
+                AutoRemoveFeature.Disable();
         }
 
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
@@ -213,6 +226,8 @@ public sealed class Mod
         MultiPassRegistry.Reset();
         AutoStageFeature.Disable();
         AutoStageFeature.RemoveGaugeEnum();
+        AutoRemoveFeature.Disable();
+        ModSettingsPage.Reset();
         SaveLoadObserver.Reset();
         Patch_SetTransferInfo.Reset();
         LogHelper.Reset();

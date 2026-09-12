@@ -1,92 +1,56 @@
-using AutoRemoveFinishedBurns.Core;
-using AutoRemoveFinishedBurns.Features;
+using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.RcsTranslation;
+using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
-using StarMap.API;
 
-namespace AutoRemoveFinishedBurns;
+namespace AdvancedFlightComputer.Features.AutoRemove;
 
-[StarMapMod]
-public sealed class Mod
+internal static class AutoRemoveFeature
 {
-    private static Harmony? _harmony;
+    private const string StandaloneModType = "AutoRemoveFinishedBurns.Mod";
 
-    // Keep in sync with README.md.
-    private const string TestedGameVersion = "v2026.9.7.5402";
-
-    [StarMapAllModsLoaded]
-    public void OnFullyLoaded()
+    // No patch of its own. The tick runs through SharedVehicleHooks, the RCS completion through
+    // AFC's own event, and the settings section through ModSettingsPage.
+    internal static void ApplyPatches(Harmony harmony)
     {
-        string gameVersion = VersionInfo.Current.VersionString;
-        DefaultCategory.Log.Info($"[AutoRemoveFinishedBurns] Game version: {gameVersion}");
-        if (gameVersion != TestedGameVersion)
-            DefaultCategory.Log.Warning(
-                $"[AutoRemoveFinishedBurns] Tested against {TestedGameVersion}, current is {gameVersion}. " +
-                "Some features may not work correctly.");
-
-        if (DebugConfig.Any)
-            DefaultCategory.Log.Debug(
-                $"[AutoRemoveFinishedBurns] Debug flags: Detection={DebugConfig.Detection}, " +
-                $"Settings={DebugConfig.Settings}, Performance={DebugConfig.Performance}");
-
-        Config.Init();
-
-#if DEBUG
-        // Re-anchor the report-interval clock so the first sample is a full
-        // ReportIntervalSeconds wide, not however long elapsed since type init.
-        PerfTracker.Reset();
-#endif
-
-        _harmony = new Harmony("com.maxi.autoremovefinishedburns");
-
-        if (GameReflection.ValidateDetection())
-        {
-            _harmony.CreateClassProcessor(typeof(BurnRemovalPatch)).Patch();
-            if (DebugConfig.Detection)
-                DefaultCategory.Log.Debug(
-                    "[AutoRemoveFinishedBurns] Detection patch applied.");
-        }
-        else
-        {
-            DefaultCategory.Log.Warning(
-                "[AutoRemoveFinishedBurns] Detection disabled - reflection targets not found.");
-        }
-
-        if (GameReflection.ValidateSettings())
-        {
-            _harmony.CreateClassProcessor(typeof(SettingsTabPatch)).Patch();
-            if (DebugConfig.Settings)
-                DefaultCategory.Log.Debug(
-                    "[AutoRemoveFinishedBurns] Settings tab patch applied.");
-        }
-        else
-        {
-            DefaultCategory.Log.Warning(
-                "[AutoRemoveFinishedBurns] Settings tab disabled - reflection targets not found.");
-        }
-
-        // TryEnable reports why it declined; a failure is not an error here
-        // because the AFC dependency is optional.
-        if (AfcRcsInterop.TryEnable())
-            DefaultCategory.Log.Info(
-                "[AutoRemoveFinishedBurns] AdvancedFlightComputer RCS interop active.");
-
-        DefaultCategory.Log.Info("[AutoRemoveFinishedBurns] Loaded.");
+        AutoRemoveConfig.Init();
+        RcsBurnCompletions.Completed += FinishedBurnRemover.OnRcsBurnCompleted;
+        ModSettingsPage.Register(DrawSection);
     }
 
-    [StarMapUnload]
-    public void Unload()
+    // The standalone mod removes the same burn a tick earlier or later, which the plan lookup
+    // tolerates, so this is a hint rather than a stand-down.
+    internal static void WarnIfStandaloneInstalled()
     {
-        _harmony?.UnpatchAll(_harmony.Id);
-        _harmony = null;
-        AfcRcsInterop.Disable();
-        BurnRemovalPatch.Reset();
-        Config.Reset();
-        LogHelper.Reset();
-#if DEBUG
-        PerfTracker.Reset();
-#endif
-        DefaultCategory.Log.Info("[AutoRemoveFinishedBurns] Unloaded.");
+        if (AccessTools.TypeByName(StandaloneModType) != null)
+            DefaultCategory.Log.Warning(
+                "[AFC] The standalone AutoRemoveFinishedBurns mod is installed next to AFC's built-in copy. Remove it; AdvancedFlightComputer contains it.");
+    }
+
+    internal static void Disable()
+    {
+        RcsBurnCompletions.Completed -= FinishedBurnRemover.OnRcsBurnCompleted;
+        ModSettingsPage.Unregister(DrawSection);
+        FinishedBurnRemover.Reset();
+        AutoRemoveConfig.Reset();
+    }
+
+    internal static void DrawSection()
+    {
+        ConsoleWidgets.Rule();
+        ConsoleWidgets.RegionHeader("AUTO REMOVE FINISHED BURNS".AsSpan());
+
+        bool enabled = AutoRemoveConfig.Enabled;
+        if (ConsoleUi.CheckboxRow("ENABLED".AsSpan(), "AfcAutoRemoveEnabled".AsSpan(), ref enabled))
+        {
+            AutoRemoveConfig.Enabled = enabled;
+            AutoRemoveConfig.Save();
+        }
+
+        ImGui.TextWrapped(
+            "When on, finished auto-burns and RCS burns are removed from the burn plan. Detection only fires " +
+            "for completed burns, never manual ones. Out-of-fuel cases are left in place so you can resume them after staging.");
     }
 }
