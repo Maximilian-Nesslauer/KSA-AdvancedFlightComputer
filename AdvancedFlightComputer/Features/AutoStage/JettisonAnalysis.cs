@@ -6,46 +6,39 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 
 // Which parts the next row would throw overboard, without activating it. Mirrors Vehicle.Split: a
 // decoupler sheds the subtree below the child side of its connection. Only the shape is cached,
-// because only the shape is fixed between tree and sequence edits.
+// per vehicle, because only the shape is fixed between tree and sequence edits.
 internal static class JettisonAnalysis
 {
-    private static readonly HashSet<Part> _jettisonSet = new();
-
-    private static Vehicle? _cachedVehicle;
-    private static int _cachedGeneration = -1;
-    private static int _cachedPartCount = -1;
-    private static int _cachedSequenceNumber = -1;
-    private static bool _cachedValid;
+    // Scratch for the control-loss guard, which is not cached.
+    private static readonly HashSet<Part> _guardSet = new();
 
     // Null when the row is not a pure jettison: it lights an engine, or sheds nothing predictable.
-    public static IReadOnlySet<Part>? GetPendingJettison(Vehicle vehicle)
+    public static IReadOnlySet<Part>? GetPendingJettison(Vehicle vehicle, StagingState state)
     {
         int generation = StagingHelpers.SequenceGeneration;
         // The part count catches tree changes the sequence generation misses, such as a decouple from a part menu.
         int partCount = vehicle.Parts.Count;
         int sequenceNumber = vehicle.Parts.SequenceList.GetNextSequenceNumber();
 
-        if (_cachedVehicle != vehicle
-            || _cachedGeneration != generation
-            || _cachedPartCount != partCount
-            || _cachedSequenceNumber != sequenceNumber)
+        if (state.JettisonGeneration != generation
+            || state.JettisonPartCount != partCount
+            || state.JettisonSequenceNumber != sequenceNumber)
         {
             // The key is written before the rebuild, so a throw mid-rebuild leaves the set
             // unusable until the inputs change instead of throwing again every frame.
-            _cachedVehicle = vehicle;
-            _cachedGeneration = generation;
-            _cachedPartCount = partCount;
-            _cachedSequenceNumber = sequenceNumber;
-            _cachedValid = false;
-            _cachedValid = Rebuild(vehicle);
+            state.JettisonGeneration = generation;
+            state.JettisonPartCount = partCount;
+            state.JettisonSequenceNumber = sequenceNumber;
+            state.JettisonValid = false;
+            state.JettisonValid = Rebuild(vehicle, state.JettisonSet);
         }
 
-        return _cachedValid ? _jettisonSet : null;
+        return state.JettisonValid ? state.JettisonSet : null;
     }
 
-    private static bool Rebuild(Vehicle vehicle)
+    private static bool Rebuild(Vehicle vehicle, HashSet<Part> jettisonSet)
     {
-        _jettisonSet.Clear();
+        jettisonSet.Clear();
 
         SequenceList seqList = vehicle.Parts.SequenceList;
         int number = seqList.GetNextSequenceNumber();
@@ -72,7 +65,7 @@ internal static class JettisonAnalysis
                 {
                     case Separation.Predicted:
                         anyDecoupler = true;
-                        AddSubtree(root!);
+                        AddSubtree(root!, jettisonSet);
                         break;
                     case Separation.None:
                         break;
@@ -88,12 +81,52 @@ internal static class JettisonAnalysis
         if (DebugConfig.AutoStage)
         {
             int engines = 0;
-            foreach (Part part in _jettisonSet)
+            foreach (Part part in jettisonSet)
                 engines += part.SubtreeModules.Get<EngineController>().Length;
             DefaultCategory.Log.Debug(
-                $"[AFC] Spent-stage jettison armed on '{vehicle.Id}': sequence {number} would shed {_jettisonSet.Count} part(s) carrying {engines} engine(s).");
+                $"[AFC] Spent-stage jettison armed on '{vehicle.Id}': sequence {number} would shed {jettisonSet.Count} part(s) carrying {engines} engine(s).");
         }
 
+        return true;
+    }
+
+    // True when the next row that would fire separates every control module from the vehicle.
+    // Staging past the last control module is a legitimate thing to want, not an automatic one.
+    public static bool WouldSeparateLastControl(Vehicle vehicle)
+    {
+        Sequence? next = null;
+        foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)
+        {
+            if (!sequence.Activated && !sequence.Parts.IsEmpty)
+            {
+                next = sequence;
+                break;
+            }
+        }
+        if (next == null)
+            return false;
+
+        _guardSet.Clear();
+        ReadOnlySpan<Part> parts = next.Parts;
+        for (int i = 0; i < parts.Length; i++)
+        {
+            foreach (ISequenced module in parts[i].InSequence(next.Number))
+            {
+                if (module is Decoupler decoupler && GetJettisonedRoot(decoupler, out Part? root) == Separation.Predicted)
+                    AddSubtree(root!, _guardSet);
+            }
+        }
+        if (_guardSet.Count == 0)
+            return false;
+
+        Span<Control> controls = vehicle.Parts.Modules.Get<Control>();
+        if (controls.Length == 0)
+            return false;
+        for (int i = 0; i < controls.Length; i++)
+        {
+            if (!_guardSet.Contains(controls[i].Parent.FullPart))
+                return false;
+        }
         return true;
     }
 
@@ -193,32 +226,16 @@ internal static class JettisonAnalysis
         return Separation.Predicted;
     }
 
-    private static void AddSubtree(Part root)
+    private static void AddSubtree(Part root, HashSet<Part> into)
     {
-        _jettisonSet.Add(root);
+        into.Add(root);
         PartTreeChildrenIterator iterator = new PartTreeChildrenIterator(root);
         while (true)
         {
             Part? node = iterator.GetNextNode();
             if (node == null)
                 break;
-            _jettisonSet.Add(node);
+            into.Add(node);
         }
-    }
-
-    internal static void ForgetVehicle(Vehicle vehicle)
-    {
-        if (_cachedVehicle == vehicle)
-            Reset();
-    }
-
-    internal static void Reset()
-    {
-        _jettisonSet.Clear();
-        _cachedVehicle = null;
-        _cachedGeneration = -1;
-        _cachedPartCount = -1;
-        _cachedSequenceNumber = -1;
-        _cachedValid = false;
     }
 }

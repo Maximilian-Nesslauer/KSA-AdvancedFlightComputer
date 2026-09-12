@@ -240,7 +240,7 @@ public sealed class SpentStageDropTest : AfcTest
 
     private static StagingHelpers.EngineSurvey Survey(Vehicle vehicle, out bool hasJettison)
     {
-        IReadOnlySet<Part>? jettison = JettisonAnalysis.GetPendingJettison(vehicle);
+        IReadOnlySet<Part>? jettison = JettisonAnalysis.GetPendingJettison(vehicle, StagingDetector.StateOf(vehicle));
         hasJettison = jettison != null;
         return StagingHelpers.SurveyActiveEngines(vehicle, jettison);
     }

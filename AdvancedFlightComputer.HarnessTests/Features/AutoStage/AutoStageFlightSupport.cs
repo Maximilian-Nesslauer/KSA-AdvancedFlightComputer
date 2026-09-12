@@ -45,7 +45,7 @@ internal static class AutoStageFlightSupport
     public static bool Arm(TestContext t, Vehicle vehicle)
     {
         vehicle.ToggleEnum(AfcAutoStageToggle.Enabled);
-        return t.Check("ToggleEnum(AfcAutoStageToggle) arms the detector", StagingDetector.Active);
+        return t.Check("ToggleEnum(AfcAutoStageToggle) arms the vehicle", StagingDetector.IsArmed(vehicle));
     }
 
     public static void CleanupAfterFlight(CelestialSystem system, HashSet<string> preexisting)

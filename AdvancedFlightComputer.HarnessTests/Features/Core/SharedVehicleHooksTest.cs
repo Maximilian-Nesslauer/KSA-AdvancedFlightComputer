@@ -131,8 +131,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
         FieldInfo cachedState = StaticField(typeof(MultiPassPreviewCache), "_cachedState");
         t.Check("sequence-state cache holds the vehicle before disposal", cachedState.GetValue(null) != null);
         StagingHelpers.HasNextEngineSequence(vehicle);
-        FieldInfo stagingCache = StaticField(typeof(StagingHelpers), "_cachedVehicle");
-        t.Check("staging sequence cache holds the vehicle before disposal", ReferenceEquals(stagingCache.GetValue(null), vehicle));
+        t.Check("staging state exists for the vehicle before disposal", StagingDetector.HasState(vehicle));
         MultiPassRegistry.Add(new MultiPassExecution
         {
             SaveId = SaveLoadObserver.CurrentSaveId,
@@ -150,7 +149,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
         t.Check("disposal removes entries even when both drivers are disabled", !MultiPassRegistry.Has(vehicle.Id)
             && !RcsExecRegistry.TryGet(vehicle.Id, out _));
         t.Check("disposal drops the sequence-state cache of that vehicle", cachedState.GetValue(null) == null);
-        t.Check("disposal drops the staging sequence cache of that vehicle", stagingCache.GetValue(null) == null);
+        t.Check("disposal drops the staging state of that vehicle", !StagingDetector.HasState(vehicle));
         SharedVehicleHooks.AutoStageEnabled = true;
         SharedVehicleHooks.MultiPassEnabled = true;
         SharedVehicleHooks.RcsEnabled = true;

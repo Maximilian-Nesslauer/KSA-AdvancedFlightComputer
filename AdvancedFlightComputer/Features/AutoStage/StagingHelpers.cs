@@ -100,25 +100,23 @@ internal static class StagingHelpers
         return fueled;
     }
 
-    // Queried per frame by the gauge button, but it only changes on sequence activation.
-    private static Vehicle? _cachedVehicle;
-    private static bool _cachedHasNextEngineSequence;
-    private static int _cachedGeneration = -1;
+    // Bumped on every sequence activation and cache reset, so the per-vehicle answers below refresh.
     private static int _sequenceGeneration;
 
     public static int SequenceGeneration => _sequenceGeneration;
 
     public static void InvalidateSequenceCache() => _sequenceGeneration++;
 
+    // Queried per frame by the gauge button, but it only changes on sequence activation.
     public static bool HasNextEngineSequence(Vehicle vehicle)
     {
-        if (_cachedVehicle == vehicle && _cachedGeneration == _sequenceGeneration)
-            return _cachedHasNextEngineSequence;
-
-        _cachedVehicle = vehicle;
-        _cachedGeneration = _sequenceGeneration;
-        _cachedHasNextEngineSequence = ComputeHasNextEngineSequence(vehicle);
-        return _cachedHasNextEngineSequence;
+        StagingState state = StagingDetector.StateOf(vehicle);
+        if (state.NextEngineGeneration != _sequenceGeneration)
+        {
+            state.NextEngineGeneration = _sequenceGeneration;
+            state.NextEngineSequence = ComputeHasNextEngineSequence(vehicle);
+        }
+        return state.NextEngineSequence;
     }
 
     private static bool ComputeHasNextEngineSequence(Vehicle vehicle)
@@ -129,18 +127,5 @@ internal static class StagingHelpers
                 return true;
         }
         return false;
-    }
-
-    internal static void ForgetVehicle(Vehicle vehicle)
-    {
-        if (_cachedVehicle == vehicle)
-            Reset();
-    }
-
-    internal static void Reset()
-    {
-        _cachedVehicle = null;
-        _cachedGeneration = -1;
-        _cachedHasNextEngineSequence = false;
     }
 }
