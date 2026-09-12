@@ -130,9 +130,10 @@ public static partial class GuidanceWindow
                         && ImGui.Selectable(v.Id, v.Id == _s.TargetId))
                     {
                         _s.TargetId = v.Id;
-                        // Mirror into the game's own targeting, so the map and the
-                        // rendezvous gauge agree with us.
-                        Universe.SetTarget(vehicle, v);
+                        // Mirror into the game's own targeting, so the map and the rendezvous
+                        // gauge agree with us. Through the input buffer, because the draw overlaps
+                        // the vehicle solver and a direct SetTarget rebuilds the flight plan it reads.
+                        Universe.SetTargetCommand(vehicle.Id, v.Id);
                     }
                 }
             }

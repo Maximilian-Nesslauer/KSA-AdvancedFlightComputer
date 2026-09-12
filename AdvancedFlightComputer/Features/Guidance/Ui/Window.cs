@@ -70,7 +70,7 @@ public static partial class GuidanceWindow
     {
         // SWITCHED OFF: draw nothing at all - no window, no panel, no overlays, no
         // warp prompt. The menu entry that turns it back on lives in the game's own
-        // menu bar (Mod.OnDrawProgramMenus), not in here, so this can go completely
+        // menu bar (GuidanceFeature.DrawMenu), not in here, so this can go completely
         // dark without becoming unreachable.
         //
         // Handing the vehicles back is NOT done here. This runs once per frame for the
@@ -254,10 +254,10 @@ public static partial class GuidanceWindow
         IParentBody parent = orbit.Parent;
         double bodyRadius = parent.MeanRadius;
 
-        // FIRST. Everything below can throw, and Mod.DrawGui catches the lot into a
-        // Console.Error that goes nowhere under StarMap - so anything drawn at the
-        // END of this method is starved by an unrelated fault upstream, and looks
-        // exactly like "my window doesn't work".
+        // FIRST. Everything below can throw, and GuidanceFeature.DrawGui catches the lot
+        // into one log line per fault - so anything drawn at the END of this method is
+        // starved by an unrelated fault upstream, and looks exactly like "my window
+        // doesn't work".
         DrawGuidancePanel(vehicle, orbit, parent, bodyRadius);
 
         // Per-domain tuning popups (each no-ops unless opened from its tab) and the

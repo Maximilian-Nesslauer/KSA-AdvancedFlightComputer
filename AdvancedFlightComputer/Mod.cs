@@ -58,12 +58,17 @@ public sealed class Mod
                 DisableRcsTranslation();
         }
 
-        // The diagnostic menu stands alone, but the release paths run from the shared hooks.
-        bool guidanceReady = Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
-            && _patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyPatches);
-        if (!guidanceReady)
-            GuidanceFeature.Reset();
-        SharedVehicleHooks.GuidanceEnabled = coreReady && guidanceReady;
+        // Keep the menu available when the driver fails. The driver still requires the menu because
+        // it contains the off switch.
+        bool guidanceMenu = Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
+            && _patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyDiagnosticPatches);
+
+        if (coreReady && guidanceMenu && Validated("Guidance", GameReflection.ValidateGuidance))
+        {
+            SharedVehicleHooks.GuidanceEnabled = _patches.TryApply("Guidance", GuidanceFeature.ApplyDriverPatches);
+            if (!SharedVehicleHooks.GuidanceEnabled)
+                GuidanceFeature.DisableDriver();
+        }
 
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
@@ -180,6 +185,11 @@ public sealed class Mod
         ManeuverTools.RemoveTransferTypes();
         _maneuverTypesInjected = false;
     }
+
+    // The guidance panel is its own set of ImGui windows rather than a patch on a stock window, so
+    // it draws from the loader's hook after stock has drawn its viewports.
+    [StarMapAfterGui]
+    public void DrawGui(double dt) => GuidanceFeature.DrawGui();
 
     [StarMapUnload]
     public void Unload()

@@ -2,19 +2,23 @@ using System.Reflection;
 using AdvancedFlightComputer.Core;
 using KSA;
 using Brutal.ImGuiApi;
-using Brutal.Logging;
 using HarmonyLib;
 
 namespace AdvancedFlightComputer.Features.Guidance;
 
+/// <summary>
+/// The guidance feature's two patch blocks. The diagnostics block owns the menu and the managed
+/// resolver. The driver block owns the per-vehicle step and the worker hook, and its enable flag is
+/// what the panel and the gimbal writer are gated on, so a driver that fails to load still leaves a
+/// menu that says so.
+/// </summary>
 internal static class GuidanceFeature
 {
-    internal const string UnavailableReason = "Guidance is unavailable until control ownership is integrated.";
+    internal const string UnavailableReason = "Guidance is unavailable because its game hooks did not load.";
 
     private static bool _resolverRegistered;
-    private static bool _menuFailed;
 
-    internal static void ApplyPatches(Harmony harmony)
+    internal static void ApplyDiagnosticPatches(Harmony harmony)
     {
         if (!_resolverRegistered)
         {
@@ -22,27 +26,113 @@ internal static class GuidanceFeature
             _resolverRegistered = true;
         }
 
-        // The control code stays unreachable until all execution paths share vehicle ownership.
         harmony.Patch(GameReflection.Program_DrawProgramMenusHook!,
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(DrawMenu)));
-
-        // Clear guidance state after a save replaces the vehicles.
-        SaveLoadObserver.SaveLoaded += GuidanceWindow.ReleaseAllVehicles;
-        DefaultCategory.Log.Warning($"[AFC] {UnavailableReason}");
     }
 
-    private static void DrawMenu()
+    internal static void ApplyDriverPatches(Harmony harmony)
     {
-        if (_menuFailed)
+        harmony.Patch(GameReflection.Vehicle_PrepareWorker!,
+            prefix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnPrepareWorker)));
+        harmony.Patch(GameReflection.FlightComputer_UpdateAttitudeTarget!,
+            postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnUpdateAttitudeTarget)));
+
+        // A save replaces every vehicle, so the state keyed on the old ones is dropped.
+        SaveLoadObserver.SaveLoaded += GuidanceWindow.ReleaseAllVehicles;
+    }
+
+    /// <summary>Releases what the driver holds when its block failed or the mod unloads.</summary>
+    internal static void DisableDriver()
+    {
+        SaveLoadObserver.SaveLoaded -= GuidanceWindow.ReleaseAllVehicles;
+
+        // The feature flag is already off, so no later step retries a failed cleanup.
+        GuidanceWindow.ReleaseAllVehicles();
+    }
+
+    internal static void DrawGui()
+    {
+        if (!SharedVehicleHooks.GuidanceEnabled)
             return;
 
+        try
+        {
+            GuidanceWindow.Draw(Program.MainViewport);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce($"guidance-draw:{ex.GetType().Name}",
+                $"[AFC] Guidance panel draw failed for '{Program.ControlledVehicle?.Id}': {ex}");
+        }
+    }
+
+    // Runs on the main thread inside Universe.PrepareVehicleWorkers for every vehicle. See the
+    // handle in GameReflection for why this is the site.
+    private static void OnPrepareWorker(Vehicle __instance) => StepVehicle(__instance);
+
+    private static void StepVehicle(Vehicle vehicle)
+    {
+        // The flag outlives a patch that failed to unpatch, and a kitten on EVA is a vehicle too.
+        if (!SharedVehicleHooks.GuidanceEnabled || vehicle is KittenEva)
+            return;
+
+        try
+        {
+            GuidanceWindow.ApplyAutopilot(vehicle);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce($"guidance-step-{vehicle.Id}:{ex.GetType().Name}",
+                $"[AFC] Guidance step failed on '{vehicle.Id}', releasing the craft: {ex}");
+            try
+            {
+                GuidanceWindow.FailAutopilot(vehicle, ex);
+            }
+            catch (Exception release)
+            {
+                LogHelper.WarnOnce($"guidance-release-{vehicle.Id}:{release.GetType().Name}",
+                    $"[AFC] Guidance could not release '{vehicle.Id}' after a failed step: {release}");
+            }
+        }
+    }
+
+    // Runs on the vehicle worker after stock builds the attitude target and before it reads the
+    // target rate. Both gates match the gimbal writer, so the worker-side writers stop together,
+    // and the catch keeps an escape from ending the worker's step for the whole physics bubble.
+    private static void OnUpdateAttitudeTarget(FlightComputer __instance)
+    {
+        if (!SharedVehicleHooks.GuidanceEnabled || !GuidanceWindow.ModActive)
+            return;
+
+        try
+        {
+            KsaAttitudeRate.OnUpdateAttitudeTarget(__instance);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce($"guidance-rate:{ex.GetType().Name}",
+                $"[AFC] Guidance rate feedforward failed on the vehicle worker: {ex}");
+        }
+    }
+
+    // The menu carries the driver's only off switch, so a fault here is logged once per kind and
+    // the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally.
+    private static void DrawMenu()
+    {
         try
         {
             if (!ImGui.BeginMenu("AFC Guidance"u8))
                 return;
             try
             {
-                ImGui.Text(UnavailableReason);
+                if (SharedVehicleHooks.GuidanceEnabled)
+                {
+                    bool active = GuidanceWindow.ModActive;
+                    if (ImGui.MenuItem("Enabled", "", ref active, true))
+                        GuidanceWindow.SetModActive(active);
+                }
+                else
+                    ImGui.Text(UnavailableReason);
 
                 // Keep release errors visible while the guidance panel is hidden.
                 string failure = GuidanceWindow.ReleaseFailure(Program.ControlledVehicle);
@@ -56,8 +146,8 @@ internal static class GuidanceFeature
         }
         catch (Exception ex)
         {
-            _menuFailed = true;
-            DefaultCategory.Log.Warning($"[AFC] Guidance diagnostic menu failed: {ex}");
+            LogHelper.WarnOnce($"guidance-menu:{ex.GetType().Name}",
+                $"[AFC] Guidance menu failed: {ex}");
         }
     }
 
@@ -79,13 +169,9 @@ internal static class GuidanceFeature
 
     internal static void Reset()
     {
-        SaveLoadObserver.SaveLoaded -= GuidanceWindow.ReleaseAllVehicles;
-
-        // On unload, the patches are already removed and no later step can retry cleanup.
-        GuidanceWindow.ReleaseAllVehicles();
+        DisableDriver();
         if (_resolverRegistered)
             AppDomain.CurrentDomain.AssemblyResolve -= ResolveManagedLibrary;
         _resolverRegistered = false;
-        _menuFailed = false;
     }
 }
