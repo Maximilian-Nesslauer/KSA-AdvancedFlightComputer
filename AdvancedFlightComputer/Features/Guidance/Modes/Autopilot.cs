@@ -51,18 +51,15 @@ public static partial class GuidanceWindow
 
     private const double WarpLeadTime = 10.0;  // end auto-warp this many s early
 
-    // The engine master switch and throttle live in Vehicle's private
-    // _manualControlInputs; the game's own ignite/shutdown actions just set
-    // EngineOn there, so we do exactly the same via a field ref.
-    private static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs> ManualInputs =
-        AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
+    // The game's own ignite and shutdown actions write EngineOn in this private field.
+    private static AccessTools.FieldRef<Vehicle, ManualControlInputs> ManualInputs =>
+        GameReflection.Vehicle_manualControlInputsRef!;
 
     // The mod's clock: elapsed sim time in seconds. Used for everything time-based
     // (turn ramp, staging cooldown, cutoff) so behavior is correct under time
     // warp, unlike the wall-clock-ish player time.
     private static double SimNow() => Universe.GetElapsedSeconds();
 
-    // --- Warp confirmation ---
     // Nothing in the mod starts a time warp on its own: flows that want one call
     // RequestWarp, and DrawWarpPrompt asks the user first. This prevents warping
     // into a planet because a predicted burn point happened to be far away.
@@ -95,7 +92,13 @@ public static partial class GuidanceWindow
             $"Warp to {_warpLabel}?  (T-{wait,6:F0} s)");
         if (ImGui.Button("Warp"))
         {
-            Universe.AutoWarpTo(Universe.GetElapsedTime() + wait);
+            // The draw overlaps the vehicle solver, so the warp goes through the input buffer
+            // that Program.PrepareFrame drains with the solvers joined, as stock's own warp does.
+            InputEvents.AutoWarpBuffer.Add(new InputEvents.AutoWarpData
+            {
+                StopWarp = false,
+                WarpToTime = Universe.GetElapsedTime() + wait,
+            });
             _warpPromptActive = false;
         }
         ImGui.SameLine();
@@ -989,7 +992,7 @@ public static partial class GuidanceWindow
             Disengage6Dof(vehicle);
     }
 
-    // Called from the Harmony prefix on Vehicle.PrepareWorker (see Mod) - i.e.
+    // Called from GuidanceFeature's prefix on Vehicle.PrepareWorker - i.e.
     // immediately before the sim snapshots the flight computer for this step, the one
     // place where our writes are guaranteed to reach the control loop instead of being
     // erased by the worker copy-back.
@@ -1045,21 +1048,29 @@ public static partial class GuidanceWindow
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || _s.WasEngaged
                    || _s.LandingCutPending || _s.LaunchArmed || handingOver;
 
-        // Check ownership before mode steps can overwrite a changed attitude command.
+        // Check ownership per actuator before mode steps can overwrite a changed command. The
+        // attitude is compared by value. The engine belongs to whoever arms stock Auto, because
+        // Vehicle.PrepareWorker then clears EngineOn on every step after this prefix and stock's
+        // own burn logic never writes Auto by itself.
         // Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
         bool attitudeTaken = _s.ControlAcquired
             && !_s.AttitudeOwnership.IsCurrent(vehicle.FlightComputer);
+        bool engineTaken = _s.ControlAcquired
+            && vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto;
         if (_s.ControlAcquired && ((!sixDof && !_s.Engage)
             || (!sixDof && !_s.Running && !landingActive && !BoostbackLive && !_s.LaunchArmed)
-            || attitudeTaken))
+            || attitudeTaken || engineTaken))
         {
-            // Release steering after a takeover without changing the engine command. A takeover
-            // moves the attitude and nothing else, so an engine cut guidance already decided on
-            // still happens, whether it sits in the queued one-shot cut or in a release that
-            // shuts down by itself. The reason outlives a failed cleanup, so the retry can say it.
-            if (attitudeTaken)
+            // Release after a takeover without changing the engine command. A takeover moves one
+            // actuator and nothing else, so an engine cut guidance already decided on still
+            // happens, whether it sits in the queued one-shot cut or in a release that shuts down
+            // by itself. The reason outlives a failed cleanup, so the retry can say it.
+            if (attitudeTaken || engineTaken)
             {
                 _s.TakeoverStop = true;
+                _s.TakeoverReason = engineTaken
+                    ? "Guidance stopped: stock auto burn took the engine."
+                    : "Guidance stopped: another writer took attitude control.";
                 _s.ReleaseWithoutEngineCut = true;
             }
             HandBackVehicle(vehicle);
@@ -1136,7 +1147,7 @@ public static partial class GuidanceWindow
                 _s.Status = $"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.";
                 return;
             }
-            _s.ControlAcquired = true;
+            AcquireControl(vehicle);
         }
 
         // 6-DOF is EXCLUSIVE: it drives attitude through the TVC allocator rather than
@@ -1327,6 +1338,32 @@ public static partial class GuidanceWindow
     // Read by simulation code and written by the UI.
     internal static volatile bool ModActive = true;
 
+    // Vehicle.PrepareWorker clears EngineOn while BurnMode is Auto, so hold Manual while guidance
+    // controls the engine. The burn target is recorded with the mode, because stock also writes
+    // Manual when a burn is loaded, unloaded or completed, and an Auto given back on a burn the
+    // player never armed would start the stock autopilot on it.
+    private static void AcquireControl(Vehicle vehicle)
+    {
+        if (!_s.ControlAcquired)
+        {
+            FlightComputer fc = vehicle.FlightComputer;
+            _s.ForcedBurnManual = fc.BurnMode == FlightComputerBurnMode.Auto;
+            _s.ForcedBurnTarget = _s.ForcedBurnManual ? fc.Burn : null;
+            fc.BurnMode = FlightComputerBurnMode.Manual;
+        }
+        _s.ControlAcquired = true;
+    }
+
+    private static void RestoreBurnMode(FlightComputer fc, bool giveBack)
+    {
+        if (giveBack && _s.ForcedBurnManual
+            && fc.BurnMode == FlightComputerBurnMode.Manual
+            && ReferenceEquals(fc.Burn, _s.ForcedBurnTarget))
+            fc.BurnMode = FlightComputerBurnMode.Auto;
+        _s.ForcedBurnManual = false;
+        _s.ForcedBurnTarget = null;
+    }
+
     /// <summary>
     /// Releases this vehicle's guidance state, keeping ownership if any cleanup fails.
     /// Run from the PrepareWorker prefix so the worker receives the released state.
@@ -1375,12 +1412,14 @@ public static partial class GuidanceWindow
 
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
+
+        // A cut guidance decided on wins over a no-cut request, whenever it was decided. The
+        // request can outlive a failed cleanup, so an abort between two retries would otherwise
+        // lose its shutdown.
+        bool cutEngine = _s.LandingCutPending || _s.ShutdownRequested || !_s.ReleaseWithoutEngineCut;
         if (_s.ControlAcquired)
         {
-            // A cut guidance decided on wins over a no-cut request, whenever it was decided. The
-            // request can outlive a failed cleanup, so an abort between two retries would otherwise
-            // lose its shutdown.
-            if (_s.LandingCutPending || _s.ShutdownRequested || !_s.ReleaseWithoutEngineCut)
+            if (cutEngine)
                 Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
             Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer));
         }
@@ -1391,6 +1430,12 @@ public static partial class GuidanceWindow
             _s.Guidance = null;
         });
         Attempt(() => ReportLogStop(SixDofLog.Stop(_s)));
+
+        // Stock Auto comes back last, once nothing of guidance still commands the craft, and only
+        // with a cut. A no-cut release leaves the engine as the flight left it, and a restored Auto
+        // would have Vehicle.PrepareWorker switch it off on the same step.
+        if (failure.Length == 0 && _s.ControlAcquired)
+            Attempt(() => RestoreBurnMode(vehicle.FlightComputer, giveBack: cutEngine));
 
         if (failure.Length > 0)
         {
@@ -1406,7 +1451,7 @@ public static partial class GuidanceWindow
             _s.Status = "";
         if (_s.TakeoverStop)
         {
-            _s.Status = "Guidance stopped: another writer took attitude control.";
+            _s.Status = _s.TakeoverReason;
             _s.TakeoverStop = false;
         }
         _s.ShutdownRequested = false;
@@ -1467,7 +1512,7 @@ public static partial class GuidanceWindow
             _s.Status = $"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.";
             return;
         }
-        _s.ControlAcquired = true;
+        AcquireControl(vehicle);
         _s.AttitudeOwnership.BeginWrite(fc);
         fc.CustomAttitudeTarget = euler;
 

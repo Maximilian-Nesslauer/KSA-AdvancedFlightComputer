@@ -1459,6 +1459,9 @@ public static partial class GuidanceWindow
             _s.EngagePending = false;
             if (!Engage6Dof(vehicle, parent, siteCci, x, now))
                 return;
+            // A synchronous solve publishes its first gimbal and engine command further down in
+            // this same step, so the craft is acquired here and not on the next step's entry.
+            AcquireControl(vehicle);
         }
 
         // Collect before a restart or node rebuild can change the source guidance.

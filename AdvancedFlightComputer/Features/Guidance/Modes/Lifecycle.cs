@@ -32,7 +32,12 @@ public static partial class GuidanceWindow
         {
             _s = state;
             if (release)
+            {
                 HandBackVehicle(vehicle);
+                // No later step retries this release, so a failed one must not leave stock's burn
+                // mode forced to Manual for good.
+                RestoreBurnMode(vehicle.FlightComputer, giveBack: true);
+            }
             DiscardResources();
         }
         finally

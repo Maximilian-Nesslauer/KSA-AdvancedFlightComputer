@@ -387,6 +387,12 @@ public sealed class VehicleAutopilotState
     // A stop another writer caused. It survives a failed cleanup, so the retry that finishes the
     // release can still say why guidance let the craft go.
     public bool TakeoverStop;
+    public string TakeoverReason = "";
+
+    // Acquisition found stock's burn mode at Auto and replaced it with Manual, so the release owes
+    // the player that Auto back, on the burn target that was loaded at the time.
+    public bool ForcedBurnManual;
+    public BurnTarget ForcedBurnTarget;
 
     /// <summary>Touchdown arming for the landing state machine (6-DOF has its own).</summary>
     public bool LandingTouchdownArmed;
