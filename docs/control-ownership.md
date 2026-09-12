@@ -4,8 +4,7 @@
 It is internal to AFC and provides no shared ownership protocol for other mods.
 Conflicting writes from another mod are outside this arbitration.
 
-RCS control is active in the current build.
-Guidance's command hooks are not installed, so its control paths below describe code that is not yet enabled.
+RCS control and the guidance driver are active in the current build.
 Planning features also edit burn plans; this page focuses on control, release and staging.
 
 ## Active RCS control
@@ -66,19 +65,23 @@ The no-cut request and the reason both survive a failed cleanup, so a retry can 
 Holding the last throttle is not a claim that the trajectory is safe, and continuing an automatic throttle under player steering would be a separate mode capability with its own tests.
 `afc-guidance-player-takeover` covers the stop, the queued cut, and the failed cleanup with its retry.
 
-## Guidance code that is not enabled
+## Guidance control
 
-`GuidanceFeature` installs diagnostics and lifecycle cleanup, but no vehicle command driver or actuator hooks.
-The sink currently dispatches only RCS.
-These paths must be integrated with ownership before Guidance is enabled.
+`GuidanceFeature` installs a prefix on `Vehicle.PrepareWorker` that runs `GuidanceWindow.ApplyAutopilot` for every vehicle, after `InputEvents.ApplyInputEvents` has drained the player's input and before the worker snapshot, so an engine command written there is the one the worker sees.
+The same block installs the rate postfix on `FlightComputer.UpdateAttitudeTarget`, and `VehicleCommandSink.Run` dispatches the gimbal writer after the RCS writer.
+A step that throws releases the craft through `GuidanceWindow.FailAutopilot` and reports once.
+The game menu's Enabled switch queues a release for every held craft, applied on each craft's next step.
 
 | State or action | Writer | Release behavior |
 | --- | --- | --- |
+| `FlightComputer.BurnMode` | `GuidanceWindow.AcquireControl` and `RestoreBurnMode` | Set Manual when control is acquired, because `Vehicle.PrepareWorker` clears `EngineOn` on every step while the mode is Auto. An Auto that appears while guidance holds the craft is a takeover of the engine, so guidance stops without a cut and leaves it armed. Restore an earlier Auto only on a release that cuts the engine, after the rest of the release succeeded, while the field still reads Manual and the loaded burn target is the one acquisition saw, because stock also writes Manual when a burn is loaded, unloaded or completed. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget`, `CustomAttitudeTarget` and `RollMode` | `GuidanceWindow.CommandAttitude` with `AttitudeOwnership` | Capture before writing. Restore frame, tracking and custom coordinates as one group if still unchanged; restore mode and roll conditionally. The complete computed `AttitudeTarget` is not captured. |
 | `FlightComputer.AttitudeTarget.RatesCci` | `KsaAttitudeRate.OnUpdateAttitudeTarget` | Add the published rate after stock computes its target. Clear disables future additions; it does not restore the current field. Stock rebuilds it on the next update. |
-| `FlightComputerOutput.Gimbals[].State.CommandY` and `CommandZ`, plus `AnyActuatorCommanded` | `KsaGimbalControl.Apply` and `ApplyLsq` | Write output commands from the per-vehicle override. These paths set the flag directly and do not use the sink receipt yet. Disengage clears the override. |
-| `Vehicle._manualControlInputs.EngineOn` and `EngineThrottle` | Guidance mode steps and `GuidanceWindow.ApplyAutopilot` | Write through the shared field accessor. HandBackVehicle requests MainShutdown after acquired control, preserving the throttle setting. An explicit no-cut handover skips shutdown, and so does a stop that a player attitude takeover caused. |
+| `FlightComputerOutput.Gimbals[].State.CommandY` and `CommandZ` | `KsaGimbalControl.OnComputeControl` and `ApplyLsq` | Write output commands from the per-vehicle override and report them through the sink receipt, which sets `AnyActuatorCommanded`. Disengage clears the override, and the Enabled switch stops the writer on the next control step. |
+| `Vehicle._manualControlInputs.EngineOn` and `EngineThrottle` | Guidance mode steps and `GuidanceWindow.ApplyAutopilot` | Write through the validated handle in `GameReflection`. HandBackVehicle requests MainShutdown after acquired control, preserving the throttle setting. An explicit no-cut handover skips shutdown, and so does a stop that a player attitude takeover caused. |
 | Sequence activation and part-tree refresh | `GuidanceWindow.AutoSequence` | Call `SequenceList.ActivateNextSequence` and `Vehicle.UpdateAfterPartTreeModification`. Staging is not a reversible setting restored on release. |
+
+`afc-guidance-driver` installs these hooks and steps the universe with the ascent step replaced. It checks the claim, the attitude and engine writes, the rate on the worker, the burn-mode hold with its takeover, replaced-burn and no-cut cases, the sink dispatch, the Enabled switch and a failed step.
 
 The release paths keep the existing flight computer and burn plan objects.
 That does not mean AFC never changes plans, parts or staging through other features and stock APIs.

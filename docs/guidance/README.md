@@ -1,9 +1,9 @@
 # AFC guidance
 
 Guidance is part of AFC under `AdvancedFlightComputer/Features/Guidance/`.
-The current production bootstrap registers only an AFC Guidance menu with an unavailable message.
-Control ownership must be integrated before guidance execution can be enabled.
-The bootstrap does not call `GuidanceWindow`, install actuator patches, start solver workers, or write to vehicles.
+`GuidanceFeature` registers two patch blocks. The diagnostics block owns the AFC Guidance menu, and the driver block owns the per-vehicle step, the worker hooks and the panel.
+Every guidance write to a craft goes through the ownership described in `../control-ownership.md`.
+No guidance mode has been flown in the game from this build yet.
 
 | Path | Purpose |
 | --- | --- |
@@ -11,7 +11,7 @@ The bootstrap does not call `GuidanceWindow`, install actuator patches, start so
 | `AdvancedFlightComputer/Features/Guidance/Control` | Attitude, engine, and gimbal adapters. |
 | `AdvancedFlightComputer/Features/Guidance/Adapters` | Game data conversion for the solvers. |
 | `AdvancedFlightComputer/Features/Guidance/Upfg` | Ascent guidance. |
-| `AdvancedFlightComputer/Features/Guidance/Ui` | Guidance panels and overlays, with no production draw callback yet. |
+| `AdvancedFlightComputer/Features/Guidance/Ui` | Guidance panels and overlays, drawn from the loader's after-GUI hook. |
 | `AdvancedFlightComputer/Features/Guidance/Numerics` | Game-independent numerical primitives and flight models. |
 | `AdvancedFlightComputer/Features/Guidance/Gfold` | Game-independent G-FOLD solver. |
 | `AdvancedFlightComputer/Features/Guidance/Scvx` | Game-independent six degree of freedom solver. |

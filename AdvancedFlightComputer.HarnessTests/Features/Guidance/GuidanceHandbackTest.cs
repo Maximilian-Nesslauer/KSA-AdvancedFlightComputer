@@ -9,8 +9,8 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// Calls release paths directly because guidance's vehicle driver is disabled.
-// Fault injection makes cleanup failures deterministic.
+// Calls the release paths directly instead of through the vehicle driver, so each case controls
+// exactly one step. Fault injection makes cleanup failures deterministic.
 public sealed class GuidanceHandbackTest : AfcTest
 {
     public override string Name => "afc-guidance-handback";

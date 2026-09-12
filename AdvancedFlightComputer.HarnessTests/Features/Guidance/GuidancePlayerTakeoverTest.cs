@@ -11,7 +11,7 @@ using KSA;
 namespace AdvancedFlightComputer.HarnessTests;
 
 // Check takeover, a pending cut, and a failed release through ApplyAutopilot.
-// The calls are direct because Guidance's vehicle driver is not installed.
+// The calls are direct instead of through the vehicle driver, so each case controls one step.
 public sealed class GuidancePlayerTakeoverTest : AfcTest
 {
     public override string Name => "afc-guidance-player-takeover";
