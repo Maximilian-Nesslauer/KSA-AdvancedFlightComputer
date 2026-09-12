@@ -1,16 +1,10 @@
 # gfold
 
-G-FOLD (convex powered-descent guidance, Açıkmeşe/Blackmore) in C#, intended as
-the terminal-guidance trajectory generator for the KSA mod (`../ksamod`). The
-mod consumes this as compiled artifacts only — `Gfold.Core.dll` + `clarabel_c.dll`
-dropped next to the mod DLL — so none of the optimization machinery leaks into
-the mod project.
+G-FOLD (convex powered-descent guidance, Acikmese/Blackmore) in C#, intended as the terminal-guidance trajectory generator for the KSA mod (`../ksamod`). The mod consumes this as compiled artifacts only - `Gfold.Core.dll` + `clarabel_c.dll` dropped next to the mod DLL - so none of the optimization machinery leaks into the mod project.
 
 ## Mathematics
 
-G-FOLD casts powered-descent guidance as a **second-order cone program**
-(SOCP): a convex problem with a linear objective, linear equality
-constraints, and second-order (Lorentz) cone constraints. In standard form,
+G-FOLD casts powered-descent guidance as a **second-order cone program** (SOCP): a convex problem with a linear objective, linear equality constraints, and second-order (Lorentz) cone constraints. In standard form,
 
 $$
 \begin{aligned}
@@ -20,60 +14,31 @@ $$
 \end{aligned}
 $$
 
-where $`x \in \mathbb{R}^n`$ is the decision vector and there are $`k`$ conic
-constraints. Each one confines $`(A_i x + b_i,\ c_i^\top x + d_i)`$ to a
-second-order cone $`\mathcal{Q} = \lbrace (y, \tau) : \lVert y \rVert_2 \le \tau \rbrace`$.
+where $`x \in \mathbb{R}^n`$ is the decision vector and there are $`k`$ conic constraints. Each one confines $`(A_i x + b_i,\ c_i^\top x + d_i)`$ to a second-order cone $`\mathcal{Q} = \lbrace (y, \tau) : \lVert y \rVert_2 \le \tau \rbrace`$.
 
-The problem is assembled and then solved by Clarabel; its output is the
-decision vector $`x`$, which stacks every per-node variable — position, velocity,
-thrust acceleration $`\mathbf{u}`$, log-mass $`z`$, and slack $`\sigma`$ — into one
-vector (see Notation).
+The problem is assembled and then solved by Clarabel; its output is the decision vector $`x`$, which stacks every per-node variable - position, velocity, thrust acceleration $`\mathbf{u}`$, log-mass $`z`$, and slack $`\sigma`$ - into one vector (see Notation).
 
-The sections below build up to that form: the convexity rules an SOCP must obey,
-notation, the continuous dynamics, the convexification that makes it an SOCP, the
-discretized problem with its constraint tables, and finally how it is assembled
-for the solver (down to the full matrices for a tiny case).
+The sections below build up to that form: the convexity rules an SOCP must obey, notation, the continuous dynamics, the convexification that makes it an SOCP, the discretized problem with its constraint tables, and finally how it is assembled for the solver (down to the full matrices for a tiny case).
 
 ### Convexity: what an SOCP allows
 
-A convex program can be solved to a *global* optimum in polynomial time precisely
-because its feasible set is convex and its objective convex — the interior-point
-method can never get stuck in a false local minimum. An SOCP is the special case
-assembled from only these ingredients:
+A convex program can be solved to a *global* optimum in polynomial time precisely because its feasible set is convex and its objective convex - the interior-point method can never get stuck in a false local minimum. An SOCP is the special case assembled from only these ingredients:
 
-- **Objective** — linear, $`f^\top x`$. (A convex objective is made linear by the
-  epigraph trick: $`\min\, t`$ subject to $`f(x) \le t`$ — exactly how P3 handles its
-  norm objective.)
-- **Equality constraints** — must be **affine**, $`Fx = g`$. A nonlinear equality is
-  never allowed: it traces a curved surface, not a solid convex region. (This is
-  why the mass equality $`\dot m = -\alpha \lVert \mathbf{T}_c \rVert`$ had to be
-  relaxed — see Convexification.)
-- **Inequality constraints** — must be **convex**, and in an SOCP take exactly two
-  shapes:
+- **Objective** - linear, $`f^\top x`$. (A convex objective is made linear by the epigraph trick: $`\min\, t`$ subject to $`f(x) \le t`$ - exactly how P3 handles its norm objective.)
+- **Equality constraints** - must be **affine**, $`Fx = g`$. A nonlinear equality is never allowed: it traces a curved surface, not a solid convex region. (This is why the mass equality $`\dot m = -\alpha \lVert \mathbf{T}_c \rVert`$ had to be relaxed - see Convexification.)
+- **Inequality constraints** - must be **convex**, and in an SOCP take exactly two shapes:
   - linear, $`a^\top x \le b`$ (the nonnegative orthant $`\mathbb{R}_+`$);
   - second-order cone, $`\lVert A x + b \rVert_2 \le c^\top x + d`$.
 
-**Rules of thumb.** Write every inequality as $`g(x) \le 0`$; it is a convex
-constraint **iff $`g`$ is convex**. Useful facts:
+**Rules of thumb.** Write every inequality as $`g(x) \le 0`$; it is a convex constraint **iff $`g`$ is convex**. Useful facts:
 
-- affine functions $`a^\top x + b`$ are convex *and* concave → fine on either side
-  of an inequality, and the only thing allowed in an equality;
+- affine functions $`a^\top x + b`$ are convex *and* concave -> fine on either side of an inequality, and the only thing allowed in an equality;
 - norms $`\lVert \cdot \rVert`$, exponentials $`e^{az}`$, and squares are convex;
 - a sum of convex functions, or the pointwise max of convex functions, is convex;
-- "convex $`\le`$ affine" is convex (e.g. $`\lVert \mathbf{u} \rVert \le \sigma`$, or
-  the throttle floor $`\rho_1 e^{-z} \le \sigma`$); the reverse "affine $`\le`$ convex"
-  is **non-convex** (e.g. the throttle ceiling $`\sigma \le \rho_2 e^{-z}`$, which is
-  why it must be linearized);
-- the intersection of convex sets is convex, so stacking more valid constraints
-  keeps the whole problem convex.
+- "convex $`\le`$ affine" is convex (e.g. $`\lVert \mathbf{u} \rVert \le \sigma`$, or the throttle floor $`\rho_1 e^{-z} \le \sigma`$); the reverse "affine $`\le`$ convex" is **non-convex** (e.g. the throttle ceiling $`\sigma \le \rho_2 e^{-z}`$, which is why it must be linearized);
+- the intersection of convex sets is convex, so stacking more valid constraints keeps the whole problem convex.
 
-**Worked example — why the log-mass box is convex.** The box
-$`z_{0,n} \le z_n \le z_{1,n}`$ looks like it might inherit the exponential
-trouble, but $`z_{0,n}`$ and $`z_{1,n}`$ are precomputed *constants* (the min/max-mass
-envelope at node $`n`$), not functions of the variables. So it is just two affine
-bounds, $`z_n - z_{1,n} \le 0`$ and $`z_{0,n} - z_n \le 0`$ — two half-spaces whose
-intersection (a slab) is convex. No $`e^{-z}`$ appears in the box itself, which is
-why it is plain *linear*, not a cone.
+**Worked example - why the log-mass box is convex.** The box $`z_{0,n} \le z_n \le z_{1,n}`$ looks like it might inherit the exponential trouble, but $`z_{0,n}`$ and $`z_{1,n}`$ are precomputed *constants* (the min/max-mass envelope at node $`n`$), not functions of the variables. So it is just two affine bounds, $`z_n - z_{1,n} \le 0`$ and $`z_{0,n} - z_n \le 0`$ - two half-spaces whose intersection (a slab) is convex. No $`e^{-z}`$ appears in the box itself, which is why it is plain *linear*, not a cone.
 
 ### Notation
 
@@ -84,7 +49,7 @@ why it is plain *linear*, not a cone.
 | $`(\cdot)_{yz}`$ | the horizontal $`(r_y, r_z)`$ components of a vector |
 | $`\mathbf{v}`$ | velocity |
 | $`\mathbf{x} = [\mathbf{r}; \mathbf{v}]`$ | per-node 6-D dynamical state (distinct from the stacked SOCP decision vector $`x`$ above) |
-| $`\mathbf{u} = \mathbf{T}_c / m`$ | thrust acceleration — the control |
+| $`\mathbf{u} = \mathbf{T}_c / m`$ | thrust acceleration - the control |
 | $`z = \ln m`$ | log-mass (not a position component) |
 | $`\sigma`$ | thrust-magnitude slack, $`\lVert \mathbf{u} \rVert \le \sigma`$; equals $`\Gamma / m`$ |
 | $`t`$ | P3 landing-error epigraph variable |
@@ -107,8 +72,7 @@ $$
 \mathbf{r}, \mathbf{v} \in \mathbb{R}^3
 $$
 
-Its derivative is the translational equation of motion, with thrust
-acceleration $`\mathbf{T}_c / m`$ and gravity $`\mathbf{g}`$ as inputs:
+Its derivative is the translational equation of motion, with thrust acceleration $`\mathbf{T}_c / m`$ and gravity $`\mathbf{g}`$ as inputs:
 
 $$
 \dot{\mathbf{x}} = A(\omega) \mathbf{x} + B \left( \mathbf{g} + \frac{\mathbf{T}_c}{m} \right)
@@ -120,86 +84,45 @@ A(\omega) = \begin{bmatrix} 0 & I \\ -S(\omega)^2 & -2 S(\omega) \end{bmatrix},
 B = \begin{bmatrix} 0 \\ I \end{bmatrix}
 $$
 
-Here $`S(\omega)`$ is the skew-symmetric cross-product matrix of the planet's
-angular velocity $`\omega`$, so $`-S(\omega)^2 \mathbf{r}`$ is the centripetal and
-$`-2 S(\omega) \mathbf{v}`$ the Coriolis term. This implementation takes
-$`\omega = 0`$ (non-rotating frame), reducing $`A`$ to the double integrator
-$`\left[ \begin{smallmatrix} 0 & I \\ 0 & 0 \end{smallmatrix} \right]`$.
+Here $`S(\omega)`$ is the skew-symmetric cross-product matrix of the planet's angular velocity $`\omega`$, so $`-S(\omega)^2 \mathbf{r}`$ is the centripetal and $`-2 S(\omega) \mathbf{v}`$ the Coriolis term. This implementation takes $`\omega = 0`$ (non-rotating frame), reducing $`A`$ to the double integrator $`\left[ \begin{smallmatrix} 0 & I \\ 0 & 0 \end{smallmatrix} \right]`$.
 
 ### Convexification
 
-In physical variables $`(\mathbf{r}, \mathbf{v}, m, \mathbf{T}_c)`$ the problem is
-**non-convex** on three counts: the acceleration $`\mathbf{T}_c / m`$ is bilinear,
-the mass depletion $`\dot m = -\alpha \lVert \mathbf{T}_c \rVert`$ is nonlinear,
-and the engine's lower throttle limit $`\lVert \mathbf{T}_c \rVert \ge \rho_1 > 0`$
-carves out a non-convex set. Two changes of variable ($`\mathbf{u}`$, $`z`$), one
-slack relaxation ($`\sigma`$), and one epigraph variable ($`t`$) turn it into the
-SOCP standard form above. (The mass/discretization part is from Açıkmeşe & Ploen
-2007; the lossless control relaxation from Açıkmeşe, Carson & Blackmore 2013 —
-see references.)
+In physical variables $`(\mathbf{r}, \mathbf{v}, m, \mathbf{T}_c)`$ the problem is **non-convex** on three counts: the acceleration $`\mathbf{T}_c / m`$ is bilinear, the mass depletion $`\dot m = -\alpha \lVert \mathbf{T}_c \rVert`$ is nonlinear, and the engine's lower throttle limit $`\lVert \mathbf{T}_c \rVert \ge \rho_1 > 0`$ carves out a non-convex set. Two changes of variable ($`\mathbf{u}`$, $`z`$), one slack relaxation ($`\sigma`$), and one epigraph variable ($`t`$) turn it into the SOCP standard form above. (The mass/discretization part is from Acikmese & Ploen 2007; the lossless control relaxation from Acikmese, Carson & Blackmore 2013 - see references.)
 
 | New variable | Definition | Removes | Replaces |
 | --- | --- | --- | --- |
-| $`\mathbf{u}`$ | $`\mathbf{T}_c / m`$ (thrust acceleration) | $`\mathbf{T}_c/m`$ division → dynamics become $`\dot{\mathbf{v}} = \mathbf{u} + \mathbf{g}`$ | thrust force |
-| $`z`$ | $`\ln m`$ (log-mass) | nonlinear mass ODE → $`\dot z = -\alpha \sigma`$ | mass |
+| $`\mathbf{u}`$ | $`\mathbf{T}_c / m`$ (thrust acceleration) | $`\mathbf{T}_c/m`$ division -> dynamics become $`\dot{\mathbf{v}} = \mathbf{u} + \mathbf{g}`$ | thrust force |
+| $`z`$ | $`\ln m`$ (log-mass) | nonlinear mass ODE -> $`\dot z = -\alpha \sigma`$ | mass |
 | $`\sigma`$ | slack with $`\lVert \mathbf{u} \rVert \le \sigma`$ | non-convex thrust lower bound $`\lVert \mathbf{T}_c \rVert \ge \rho_1`$ (handled *losslessly*) | $`\lVert \mathbf{u} \rVert`$ |
-| $`t`$ | epigraph with $`\lVert \mathbf{r}_{N-1} - \mathbf{r}_f \rVert \le t`$ | norm in the P3 objective | — (P3 only) |
+| $`t`$ | epigraph with $`\lVert \mathbf{r}_{N-1} - \mathbf{r}_f \rVert \le t`$ | norm in the P3 objective | - (P3 only) |
 
-**Lossless convexification.** The thrust magnitude is relaxed from
-$`\lVert \mathbf{u} \rVert = \sigma`$ to the cone $`\lVert \mathbf{u} \rVert \le \sigma`$.
-The slack $`\sigma`$ here is the paper's $`\Gamma`$ normalized by mass,
-$`\sigma = \Gamma / m`$ — it carries the magnitude into the (now linear) mass
-dynamics and throttle bounds. The relaxation is provably *tight* at the optimum
-($`\lVert \mathbf{u} \rVert = \sigma`$), so nothing is lost.
+**Lossless convexification.** The thrust magnitude is relaxed from $`\lVert \mathbf{u} \rVert = \sigma`$ to the cone $`\lVert \mathbf{u} \rVert \le \sigma`$. The slack $`\sigma`$ here is the paper's $`\Gamma`$ normalized by mass, $`\sigma = \Gamma / m`$ - it carries the magnitude into the (now linear) mass dynamics and throttle bounds. The relaxation is provably *tight* at the optimum ($`\lVert \mathbf{u} \rVert = \sigma`$), so nothing is lost.
 
-**Taylor-linearized throttle bounds.** Dividing the throttle limits by mass
-gives $`\rho_1 e^{-z} \le \sigma \le \rho_2 e^{-z}`$. The upper bound is
-"$`\sigma \le`$ (convex)", a non-convex region, so $`e^{-z}`$ is linearized about a
-per-node point $`z_{0,n}`$:
+**Taylor-linearized throttle bounds.** Dividing the throttle limits by mass gives $`\rho_1 e^{-z} \le \sigma \le \rho_2 e^{-z}`$. The upper bound is "$`\sigma \le`$ (convex)", a non-convex region, so $`e^{-z}`$ is linearized about a per-node point $`z_{0,n}`$:
 
 $$
 \sigma_n \le \mu_{2,n}\,(1 - (z_n - z_{0,n})), \qquad \mu_{2,n} = \rho_2 e^{-z_{0,n}} .
 $$
 
-The expansion point is the **minimum possible mass at node $`n`$** — the lightest
-the vehicle can be is full-throttle burn since launch:
+The expansion point is the **minimum possible mass at node $`n`$** - the lightest the vehicle can be is full-throttle burn since launch:
 
 $$
 z_{0,n} = \ln\!\left( m_\text{wet} - \alpha \rho_2 \, t_n \right), \qquad t_n = n\,\Delta t .
 $$
 
-$`e^{-z}`$ is convex (its second derivative $`\tfrac{d^2}{dz^2} e^{-z} = e^{-z} > 0`$
-everywhere), so its tangent lies below the curve and the affine bound is exact at
-$`z_{0,n}`$ and conservative above it (it never permits an infeasible throttle). The
-box $`z_{0,n} \le z_n \le z_{1,n}`$ keeps $`z_n`$ near $`z_{0,n}`$ so the linearization
-stays tight.
+$`e^{-z}`$ is convex (its second derivative $`\tfrac{d^2}{dz^2} e^{-z} = e^{-z} > 0`$ everywhere), so its tangent lies below the curve and the affine bound is exact at $`z_{0,n}`$ and conservative above it (it never permits an infeasible throttle). The box $`z_{0,n} \le z_n \le z_{1,n}`$ keeps $`z_n`$ near $`z_{0,n}`$ so the linearization stays tight.
 
-**Upper vs lower bound — expanded for different reasons.** The two throttle bounds
-are not the same kind of constraint:
+**Upper vs lower bound - expanded for different reasons.** The two throttle bounds are not the same kind of constraint:
 
-- **Upper** $`\sigma \le \rho_2 e^{-z}`$ is the region *below* a convex curve (a
-  hypograph) — **non-convex**. The first-order linearization replaces it with an
-  affine constraint to *make it convex*.
-- **Lower** $`\sigma \ge \rho_1 e^{-z}`$ is the region *above* a convex curve (an
-  epigraph) — already **convex**, so it needs no fixing for convexity. It is
-  expanded only because it is an *exponential-cone* shape, and the solvers here take only
-  linear and second-order cones. A second-order Taylor cut,
-  $`\sigma \ge \mu_{1,n}(1 - w + \tfrac{1}{2} w^2)`$ with $`w = z - z_{0,n} \ge 0`$,
-  turns it into a quadratic — a rotated second-order cone they *can* take.
-  Truncating the alternating series after the $`+\tfrac{1}{2}w^2`$ term
-  over-estimates $`e^{-w}`$, so the cut stays conservative (never under-thrusts).
-  This bound is optional (`EnforceLowerThrust`).
+- **Upper** $`\sigma \le \rho_2 e^{-z}`$ is the region *below* a convex curve (a hypograph) - **non-convex**. The first-order linearization replaces it with an affine constraint to *make it convex*.
+- **Lower** $`\sigma \ge \rho_1 e^{-z}`$ is the region *above* a convex curve (an epigraph) - already **convex**, so it needs no fixing for convexity. It is expanded only because it is an *exponential-cone* shape, and the solvers here take only linear and second-order cones. A second-order Taylor cut, $`\sigma \ge \mu_{1,n}(1 - w + \tfrac{1}{2} w^2)`$ with $`w = z - z_{0,n} \ge 0`$, turns it into a quadratic - a rotated second-order cone they *can* take. Truncating the alternating series after the $`+\tfrac{1}{2}w^2`$ term over-estimates $`e^{-w}`$, so the cut stays conservative (never under-thrusts). This bound is optional (`EnforceLowerThrust`).
 
-This is what trades the *unfixable* non-convexity in the dynamics for a *mild,
-conservative* linearization on the throttle bound — the reason the log-mass form
-is preferred even though it (unlike the force form) needs the Taylor step.
+This is what trades the *unfixable* non-convexity in the dynamics for a *mild, conservative* linearization on the throttle bound - the reason the log-mass form is preferred even though it (unlike the force form) needs the Taylor step.
 
 ### G-FOLD Problem Formulation
 
-Time of flight $`t_f`$ is **not** a decision variable in the convex program: each
-solve fixes $`t_f`$ (so $`\Delta t = t_f/(N-1)`$ is constant), and an outer
-golden-section search picks the best $`t_f`$. For a fixed $`t_f`$ the code solves one
-of two problems:
+Time of flight $`t_f`$ is **not** a decision variable in the convex program: each solve fixes $`t_f`$ (so $`\Delta t = t_f/(N-1)`$ is constant), and an outer golden-section search picks the best $`t_f`$. For a fixed $`t_f`$ the code solves one of two problems:
 
 $$
 \textbf{P3 (min landing error):} \quad \min \; \lVert \mathbf{r}_{N-1} - \mathbf{r}_f \rVert
@@ -209,20 +132,13 @@ $$
 \textbf{P4 (min fuel):} \quad \max \; z_{N-1}
 $$
 
-The classic G-FOLD objective is written $`\min \int_0^{t_f} \Gamma\, dt`$ (minimize
-integrated thrust = fuel). The code does **not** optimize that integral directly;
-it maximizes the final log-mass $`z_{N-1}`$, which is **equivalent**: fuel burned is
-$`m_\text{wet} - e^{z_{N-1}}`$, so maximizing $`z_{N-1}`$ minimizes fuel, and fuel
-$`= \alpha \int_0^{t_f} \Gamma\, dt`$. P3's norm objective is made linear with the
-epigraph variable $`t`$ ($`\lVert \mathbf{r}_{N-1} - \mathbf{r}_f \rVert \le t`$,
-minimize $`t`$).
+The classic G-FOLD objective is written $`\min \int_0^{t_f} \Gamma\, dt`$ (minimize integrated thrust = fuel). The code does **not** optimize that integral directly; it maximizes the final log-mass $`z_{N-1}`$, which is **equivalent**: fuel burned is $`m_\text{wet} - e^{z_{N-1}}`$, so maximizing $`z_{N-1}`$ minimizes fuel, and fuel $`= \alpha \int_0^{t_f} \Gamma\, dt`$. P3's norm objective is made linear with the epigraph variable $`t`$ ($`\lVert \mathbf{r}_{N-1} - \mathbf{r}_f \rVert \le t`$, minimize $`t`$).
 
 Subject to equality and inequality constraints.
 
 #### Equality Constraints
 
-Our equality constraints are our initial and terminal conditions, as well as the
-dynamics that link one node to another.
+Our equality constraints are our initial and terminal conditions, as well as the dynamics that link one node to another.
 
 | Constraint | Expression | Description |
 | --- | --- | --- |
@@ -249,21 +165,13 @@ dynamics that link one node to another.
 | Glideslope | $`\lVert (\mathbf{r}_n - \mathbf{r}_f)_{yz} \rVert \le \cot\gamma_{gs}\,(r_{x,n} - r_{f,x})`$ | SOC | Stay above the approach cone toward the pad |
 | Velocity cap | $`\lVert \mathbf{v}_n \rVert \le V_\text{max}`$ | SOC | Speed stays below $`V_\text{max}`$ |
 | Ground | $`r_{x,n} \ge 0`$ | linear | Altitude stays non-negative |
-| Landing-error epigraph | $`\lVert \mathbf{r}_{N-1} - \mathbf{r}_f \rVert \le t`$ | SOC | P3 only — bound the miss distance, minimized as the objective |
+| Landing-error epigraph | $`\lVert \mathbf{r}_{N-1} - \mathbf{r}_f \rVert \le t`$ | SOC | P3 only - bound the miss distance, minimized as the objective |
 
 ### What GfoldPlanner hands the solver
 
-`GfoldPlanner.Solve` turns the formulation above into the arrays
-`ConicProblem` carries — an objective `c`, equality matrices `A, b`,
-inequality matrices `G, h`, and the cone-size declarations `PositiveOrthantDim`
-and `SocDims` — then reads the answer back. Here is what each piece is and where
-it comes from.
+`GfoldPlanner.Solve` turns the formulation above into the arrays `ConicProblem` carries - an objective `c`, equality matrices `A, b`, inequality matrices `G, h`, and the cone-size declarations `PositiveOrthantDim` and `SocDims` - then reads the answer back. Here is what each piece is and where it comes from.
 
-**The decision vector `x`.** The trajectory is sampled at `N` nodes
-($`t_n = n\,\Delta t`$) and every variable at every node becomes an unknown
-(direct transcription). They are packed into one vector `x` of length
-$`11N`$ (or $`11N+1`$ for P3), blocked by type then node. The index helpers are
-the single source of truth for which slot is what:
+**The decision vector `x`.** The trajectory is sampled at `N` nodes ($`t_n = n\,\Delta t`$) and every variable at every node becomes an unknown (direct transcription). They are packed into one vector `x` of length $`11N`$ (or $`11N+1`$ for P3), blocked by type then node. The index helpers are the single source of truth for which slot is what:
 
 | Block | Index helper | Size | Contents |
 | --- | --- | --- | --- |
@@ -274,44 +182,28 @@ the single source of truth for which slot is what:
 | epigraph | `IT = 11N` | $`1`$ | $`t`$ (P3 only) |
 
 **The objective `c`.** Same length as `x`, all zeros except one entry:
-- P4 (min fuel): `c[IZ(N-1)] = -1` — maximize final log-mass.
-- P3 (min error): `c[IT] = 1` — minimize the epigraph variable `t`.
+- P4 (min fuel): `c[IZ(N-1)] = -1` - maximize final log-mass.
+- P3 (min error): `c[IT] = 1` - minimize the epigraph variable `t`.
 
-**The equalities `A, b`.** `A` has one column per entry of `x` and one **row per
-scalar equation**; `b` is the right-hand side. A row is mostly zeros — only the
-variables that appear in that equation are nonzero. Each entry in the
-equality-constraints table contributes its rows: a *vector* condition expands to
-three (one per x/y/z component), the dynamics links couple node `n` to `n+1`.
+**The equalities `A, b`.** `A` has one column per entry of `x` and one **row per scalar equation**; `b` is the right-hand side. A row is mostly zeros - only the variables that appear in that equation are nonzero. Each entry in the equality-constraints table contributes its rows: a *vector* condition expands to three (one per x/y/z component), the dynamics links couple node `n` to `n+1`.
 
-For example, "initial position $`\mathbf{r}_0 = \mathbf{r}_\text{init}`$" is three
-rows; the first (`GfoldPlanner.cs:245`) is
+For example, "initial position $`\mathbf{r}_0 = \mathbf{r}_\text{init}`$" is three rows; the first (`GfoldPlanner.cs:245`) is
 
 ```csharp
 A.Add(row, IX(0, 0), 1); b[row] = r0[0];   // 1 * x[IX(0,0)] = r0[0]
 ```
 
-— a single `1` in the column for the initial-altitude slot, the measured value in
-`b`.
+- a single `1` in the column for the initial-altitude slot, the measured value in `b`.
 
-**The inequalities `G, h` and cone sizes.** These use $`G x + s = h`$, i.e.
-$`s = h - G x`$, with `s` required to stay in its cone (`≥ 0` for linear,
-$`s_0 \ge \lVert(s_1,\dots)\rVert`$ for a cone). So for each row: **`h` holds the
-constant part** of the quantity you want `s` to equal, and **`G` holds the
-*negated* coefficients** of the variables (because of the minus sign).
+**The inequalities `G, h` and cone sizes.** These use $`G x + s = h`$, i.e. $`s = h - G x`$, with `s` required to stay in its cone (`>= 0` for linear, $`s_0 \ge \lVert(s_1,\dots)\rVert`$ for a cone). So for each row: **`h` holds the constant part** of the quantity you want `s` to equal, and **`G` holds the *negated* coefficients** of the variables (because of the minus sign).
 
-*Linear example — ground, $`r_{x,n} \ge 0`$.* Altitude is the variable
-`x[IX(n,0)]`; we want the slack to be that altitude (`s ≥ 0`). Constant part is
-`0`, the coefficient `+1` negates to `-1` (`GfoldPlanner.cs:363`):
+*Linear example - ground, $`r_{x,n} \ge 0`$.* Altitude is the variable `x[IX(n,0)]`; we want the slack to be that altitude (`s >= 0`). Constant part is `0`, the coefficient `+1` negates to `-1` (`GfoldPlanner.cs:363`):
 
 ```csharp
 G.Add(row, IX(n, 0), -1); h[row] = 0;      // s = 0 - (-1)*r_x = r_x >= 0
 ```
 
-*Cone example — velocity cap, $`\lVert \mathbf{v}_n \rVert \le V_\text{max}`$.* A
-second-order cone of size 4: we want `s = (V_max, v_x, v_y, v_z)`, so that
-$`s_0 \ge \lVert(s_1,s_2,s_3)\rVert`$ reads $`V_\text{max} \ge \lVert\mathbf{v}_n\rVert`$.
-Row 0 is the constant bound (no variables); rows 1–3 pull in the velocity
-components (`GfoldPlanner.cs:384`):
+*Cone example - velocity cap, $`\lVert \mathbf{v}_n \rVert \le V_\text{max}`$.* A second-order cone of size 4: we want `s = (V_max, v_x, v_y, v_z)`, so that $`s_0 \ge \lVert(s_1,s_2,s_3)\rVert`$ reads $`V_\text{max} \ge \lVert\mathbf{v}_n\rVert`$. Row 0 is the constant bound (no variables); rows 1-3 pull in the velocity components (`GfoldPlanner.cs:384`):
 
 ```csharp
 h[row++] = vMax;                            // s0 = V_max
@@ -320,49 +212,27 @@ for (int i = 0; i < 3; i++)
 soc.Add(4);                                 // declare: these 4 rows are one cone
 ```
 
-The solver reads the rows as a sequence of blocks, so `Solve` **emits them in a
-fixed order** and reports the sizes:
-- the **linear** rows first — thrust pointing, throttle ceiling, log-mass box,
-  ground — and their total count is `PositiveOrthantDim`;
-- then each **cone** as one contiguous block — glideslope, velocity cap, thrust
-  magnitude, optional throttle floor, P3 epigraph — with each block's size pushed
-  onto `SocDims` in that order.
+The solver reads the rows as a sequence of blocks, so `Solve` **emits them in a fixed order** and reports the sizes:
+- the **linear** rows first - thrust pointing, throttle ceiling, log-mass box, ground - and their total count is `PositiveOrthantDim`;
+- then each **cone** as one contiguous block - glideslope, velocity cap, thrust magnitude, optional throttle floor, P3 epigraph - with each block's size pushed onto `SocDims` in that order.
 
-The order and the sizes must match the rows, or constraints get silently
-misassigned; that is the only reason `Solve` builds the rows in this particular
-sequence.
+The order and the sizes must match the rows, or constraints get silently misassigned; that is the only reason `Solve` builds the rows in this particular sequence.
 
-**Sparse format and the call.** `A` and `G` are accumulated as
-`(row, col, value)` triplets and converted to compressed-column form by
-`SparseCcs` (the layout the native solvers read). Arrays are pinned across the
-P/Invoke boundary for the duration of the call; note Clarabel's index arrays are
-`uintptr_t`, so `ClarabelSolver` widens the 32-bit ones `SparseCcs` produces.
+**Sparse format and the call.** `A` and `G` are accumulated as `(row, col, value)` triplets and converted to compressed-column form by `SparseCcs` (the layout the native solvers read). Arrays are pinned across the P/Invoke boundary for the duration of the call; note Clarabel's index arrays are `uintptr_t`, so `ClarabelSolver` widens the 32-bit ones `SparseCcs` produces.
 
-**Reading the result.** the solver returns the optimal `x`; `Extract`
-pulls each block out by the same indices and converts back to physical quantities
-(`m = e^z`, and un-scaling — see below).
+**Reading the result.** the solver returns the optimal `x`; `Extract` pulls each block out by the same indices and converts back to physical quantities (`m = e^z`, and un-scaling - see below).
 
-**Nondimensionalization.** One thing `Solve` does *before* assembly: scale the
-problem to $`O(1)`$. The raw SI problem — metre-scale positions against unit-scale
-log-mass rows — makes the solver numerically unhappy ("unreliable search
-direction"). So lengths are scaled by $`L = \max(1000, \lVert \mathbf{r}_0 \rVert)`$,
-time by $`T = \sqrt{L/g}`$ (hence velocity $`L/T`$, acceleration $`L/T^2`$); mass stays
-in kg since it only enters through $`z = \ln m`$ and the scale-invariant product
-$`\alpha\,\rho\,t`$. `Extract` un-scales everything on the way out.
+**Nondimensionalization.** One thing `Solve` does *before* assembly: scale the problem to $`O(1)`$. The raw SI problem - metre-scale positions against unit-scale log-mass rows - makes the solver numerically unhappy ("unreliable search direction"). So lengths are scaled by $`L = \max(1000, \lVert \mathbf{r}_0 \rVert)`$, time by $`T = \sqrt{L/g}`$ (hence velocity $`L/T`$, acceleration $`L/T^2`$); mass stays in kg since it only enters through $`z = \ln m`$ and the scale-invariant product $`\alpha\,\rho\,t`$. `Extract` un-scales everything on the way out.
 
 ### The constraint matrices, spelled out
 
-The matrices are `11N` columns wide, so rather than a literal grid, each row group
-is listed as a *stencil*: the columns it touches, the coefficient on each, and the
-right-hand side. With the column ordering below, this fully determines `A`, `b`,
-`G`, `h`. Shown for the **reference configuration** (no relaxations, throttle
-floor off); $`i \in \{0,1,2\}`$ is the axis, $`n`$ the node, $`\Delta t`$ the step.
+The matrices are `11N` columns wide, so rather than a literal grid, each row group is listed as a *stencil*: the columns it touches, the coefficient on each, and the right-hand side. With the column ordering below, this fully determines `A`, `b`, `G`, `h`. Shown for the **reference configuration** (no relaxations, throttle floor off); $`i \in \{0,1,2\}`$ is the axis, $`n`$ the node, $`\Delta t`$ the step.
 
 **Column ordering of `x`** (length `11N`, or `11N+1` for P3):
 
 ```
 [ r_0 v_0 | r_1 v_1 | ... | r_{N-1} v_{N-1} | u_0 ... u_{N-1} | z_0 ... z_{N-1} | s_0 ... s_{N-1} | t ]
-  └──────── state, 6N ─────────────────────┘ └── control 3N ─┘ └─ log-mass N ─┘ └── slack N ───┘ └P3┘
+  +-------- state, 6N ---------------------+ +-- control 3N -+ +- log-mass N -+ +-- slack N ---+ +P3+
    cols 0 .. 6N-1                              6N .. 9N-1        9N .. 10N-1      10N .. 11N-1     11N
 ```
 
@@ -378,52 +248,38 @@ floor off); $`i \in \{0,1,2\}`$ is the axis, $`n`$ the node, $`\Delta t`$ the st
 | 3 | initial thrust dir | `IU(0,0):1, IS(0):-1` ; `IU(0,1):1` ; `IU(0,2):1` | `0` |
 | 3 | terminal thrust dir | `IU(N-1,0):1, IS(N-1):-1` ; `IU(N-1,1):1` ; `IU(N-1,2):1` | `0` |
 | 1 | terminal slack | `IS(N-1):1` | `0` |
-| 3(N-1) | velocity dynamics, `n=0..N-2` | `IX(n+1,3+i):1, IX(n,3+i):-1, IU(n,i):-Δt/2, IU(n+1,i):-Δt/2` | `Δt·g[i]` |
-| 3(N-1) | position dynamics, `n=0..N-2` | `IX(n+1,i):1, IX(n,i):-1, IX(n+1,3+i):-Δt/2, IX(n,3+i):-Δt/2` | `0` |
-| N-1 | mass dynamics, `n=0..N-2` | `IZ(n+1):1, IZ(n):-1, IS(n):αΔt/2, IS(n+1):αΔt/2` | `0` |
+| 3(N-1) | velocity dynamics, `n=0..N-2` | `IX(n+1,3+i):1, IX(n,3+i):-1, IU(n,i):-Delta t/2, IU(n+1,i):-Delta t/2` | `Delta t*g[i]` |
+| 3(N-1) | position dynamics, `n=0..N-2` | `IX(n+1,i):1, IX(n,i):-1, IX(n+1,3+i):-Delta t/2, IX(n,3+i):-Delta t/2` | `0` |
+| N-1 | mass dynamics, `n=0..N-2` | `IZ(n+1):1, IZ(n):-1, IS(n):alpha*Delta t/2, IS(n+1):alpha*Delta t/2` | `0` |
 
-**Inequality rows `G x + s = h`** — linear block first (their count is
-`PositiveOrthantDim`), then the cone blocks (sizes go to `SocDims`). Each cone is
-listed row-by-row:
+**Inequality rows `G x + s = h`** - linear block first (their count is `PositiveOrthantDim`), then the cone blocks (sizes go to `SocDims`). Each cone is listed row-by-row:
 
 | # rows | constraint (linear) | columns : coefficient | `h` |
 | --- | --- | --- | --- |
-| N-1 | thrust pointing, `n=0..N-2` | `IS(n):cosθ, IU(n,0):-1` | `0` |
-| N-2 | thrust upper bound, `n=1..N-2` | `IS(n):1, IZ(n):μ₂,ₙ` | `μ₂,ₙ(1+z₀,ₙ)` |
-| N-2 | log-mass lower, `n=1..N-2` | `IZ(n):-1` | `-z₀,ₙ` |
-| N-2 | log-mass upper, `n=1..N-2` | `IZ(n):1` | `z₁,ₙ` |
+| N-1 | thrust pointing, `n=0..N-2` | `IS(n):costheta, IU(n,0):-1` | `0` |
+| N-2 | thrust upper bound, `n=1..N-2` | `IS(n):1, IZ(n):mu_2,n` | `mu_2,n(1+z_0,n)` |
+| N-2 | log-mass lower, `n=1..N-2` | `IZ(n):-1` | `-z_0,n` |
+| N-2 | log-mass upper, `n=1..N-2` | `IZ(n):1` | `z_1,n` |
 | N-1 | ground, `n=0..N-2` | `IX(n,0):-1` | `0` |
 
-| cone × count | constraint (SOC) | rows (columns : coefficient) | `h` per row |
+| cone * count | constraint (SOC) | rows (columns : coefficient) | `h` per row |
 | --- | --- | --- | --- |
-| Q3 × (N-1) | glideslope, `n=0..N-2` | `IX(n,0):-cotγ` / `IX(n,1):-1` / `IX(n,2):-1` | `-cotγ·r_f[0]` / `-r_f[1]` / `-r_f[2]` |
-| Q4 × (N-1) | velocity cap, `n=0..N-2` | (none) / `IX(n,3+i):-1` | `V_max` / `0,0,0` |
-| Q4 × (N-1) | thrust magnitude, `n=0..N-2` | `IS(n):-1` / `IU(n,i):-1` | `0` / `0,0,0` |
-| Q4 × 1 | landing epigraph (P3) | `IT:-1` / `IX(N-1,i):-1` | `0` / `-r_f[i]` |
+| Q3 * (N-1) | glideslope, `n=0..N-2` | `IX(n,0):-cotgamma` / `IX(n,1):-1` / `IX(n,2):-1` | `-cotgamma*r_f[0]` / `-r_f[1]` / `-r_f[2]` |
+| Q4 * (N-1) | velocity cap, `n=0..N-2` | (none) / `IX(n,3+i):-1` | `V_max` / `0,0,0` |
+| Q4 * (N-1) | thrust magnitude, `n=0..N-2` | `IS(n):-1` / `IU(n,i):-1` | `0` / `0,0,0` |
+| Q4 * 1 | landing epigraph (P3) | `IT:-1` / `IX(N-1,i):-1` | `0` / `-r_f[i]` |
 
-**Shape of it.** The boundary rows are just identity entries pinning single
-variables. The dynamics rows are **bidiagonal in the node index** — each couples
-node `n` to `n+1` only — so `A` is mostly a banded ladder down the diagonal. The
-path-constraint rows of `G` are **block-diagonal by node** (each touches one
-node's variables), except the epigraph, which ties the final node to `t`. That
-sparsity is exactly what `SparseCcs` stores and what makes the solve fast.
+**Shape of it.** The boundary rows are just identity entries pinning single variables. The dynamics rows are **bidiagonal in the node index** - each couples node `n` to `n+1` only - so `A` is mostly a banded ladder down the diagonal. The path-constraint rows of `G` are **block-diagonal by node** (each touches one node's variables), except the epigraph, which ties the final node to `t`. That sparsity is exactly what `SparseCcs` stores and what makes the solve fast.
 
 ### The full matrices for N = 5
 
-A concrete instance: `N = 5` nodes (`n = 0..4`), `Δt = t_f/4`, problem **P4**
-(min fuel), reference configuration. The decision vector has `11N = 55` entries.
-Unlike a 2-node toy, the interior nodes `n = 1, 2, 3` now carry the throttle-ceiling
-and log-mass-box rows, so every row family is visible.
+A concrete instance: `N = 5` nodes (`n = 0..4`), `Delta t = t_f/4`, problem **P4** (min fuel), reference configuration. The decision vector has `11N = 55` entries. Unlike a 2-node toy, the interior nodes `n = 1, 2, 3` now carry the throttle-ceiling and log-mass-box rows, so every row family is visible.
 
-Legend: `.` = 0, `p` = +1, `m` = −1, `D` = −Δt/2, `a` = +αΔt/2, `c` = cos θ,
-`k` = −cot γ_gs, `U` = μ₂,ₙ (a positive per-node constant). The `b/h` column holds
-the right-hand side.
+Legend: `.` = 0, `p` = +1, `m` = -1, `D` = -Delta t/2, `a` = +alpha*Delta t/2, `c` = cos theta, `k` = -cot gamma_gs, `U` = mu_2,n (a positive per-node constant). The `b/h` column holds the right-hand side.
 
-Columns of `x` (0–54): node blocks `6n..6n+5` are `(rₙ, vₙ)` — so `0-5` = node 0,
-`6-11` = node 1, `12-17` = node 2, `18-23` = node 3, `24-29` = node 4; then
-`30-44` = controls `u₀..u₄` (3 each); `45-49` = `z₀..z₄`; `50-54` = `σ₀..σ₄`.
+Columns of `x` (0-54): node blocks `6n..6n+5` are `(r_n, v_n)` - so `0-5` = node 0, `6-11` = node 1, `12-17` = node 2, `18-23` = node 3, `24-29` = node 4; then `30-44` = controls `u_0..u_4` (3 each); `45-49` = `z_0..z_4`; `50-54` = `sigma_0..sigma_4`.
 
-**Equality system `A x = b`** (48 rows × 55 cols):
+**Equality system `A x = b`** (48 rows * 55 cols):
 
 ```
        0 1 2 3 4 5 6 7 8 9 101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354 |  b/h
@@ -477,10 +333,7 @@ r46:   . . . . . . . . . . . . . . . . . . . . m . . D . . p . . D . . . . . . .
 r47:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m p . . . a a | 0
 ```
 
-**Inequality system `G x + s = h`** (61 rows × 55 cols), with
-`PositiveOrthantDim = 17` and `SocDims = [3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4]`
-(rows g00–g16 are the orthant block; then four `SOC(3)` glideslope cones, four
-`SOC(4)` velocity cones, four `SOC(4)` thrust-magnitude cones):
+**Inequality system `G x + s = h`** (61 rows * 55 cols), with `PositiveOrthantDim = 17` and `SocDims = [3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4]` (rows g00-g16 are the orthant block; then four `SOC(3)` glideslope cones, four `SOC(4)` velocity cones, four `SOC(4)` thrust-magnitude cones):
 
 ```
        0 1 2 3 4 5 6 7 8 9 101112131415161718192021222324252627282930313233343536373839404142434445464748495051525354 |  b/h
@@ -547,82 +400,39 @@ g59:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .
 g60:   . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . m . . . . . . . . . . . . . | 0
 ```
 
-**Objective** `c` is all zeros except `c[49] = -1` (i.e. `IZ(N-1)` → maximize
-final log-mass `z₄`).
+**Objective** `c` is all zeros except `c[49] = -1` (i.e. `IZ(N-1)` -> maximize final log-mass `z_4`).
 
-Notice the structure the stencils predicted: identity entries for the boundary
-rows, the dynamics rows marching down the diagonal in `±1 / D` triples (one node
-to the next), the interior-node throttle/box rows (`g04`–`g12`), and each cone as
-a tight little block touching a single node.
+Notice the structure the stencils predicted: identity entries for the boundary rows, the dynamics rows marching down the diagonal in `+/-1 / D` triples (one node to the next), the interior-node throttle/box rows (`g04`-`g12`), and each cone as a tight little block touching a single node.
 
-For **P3** instead: add a 56th column for `t`, change the objective to
-`c[55] = 1`, replace the three terminal-position rows (r17–r19) with the single
-altitude row `IX(4,0):p | r_fx`, and append a 4-row `SOC(4)` epigraph block
-(`t` vs `r₄ − r_f`) — making `SocDims = [3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4]`.
+For **P3** instead: add a 56th column for `t`, change the objective to `c[55] = 1`, replace the three terminal-position rows (r17-r19) with the single altitude row `IX(4,0):p | r_fx`, and append a 4-row `SOC(4)` epigraph block (`t` vs `r_4 - r_f`) - making `SocDims = [3, 3, 3, 3, 4, 4, 4, 4, 4, 4, 4, 4, 4]`.
 
 ### References
 
-- Açıkmeşe & Ploen, *Convex Programming Approach to Powered Descent Guidance for[README.md](../README.md)
-  Mars Landing*, JGCD, 2007 (docs/reference/_Convexprogramming_pdgforMarslanding.pdf)  — log-mass change of variables, discretization, and
-  the Taylor-linearized throttle bounds (eqs. 34-36).
-- Açıkmeşe, Carson & Blackmore, *Lossless Convexification of Nonconvex Control
-  Bound and Pointing Constraints of the Soft Landing Optimal Control Problem*,
-  IEEE TCST, 2013 (`docs/reference/gfold.pdf`) — the lossless-convexification
-  proof for the thrust bounds and pointing constraint.
+- Acikmese & Ploen, *Convex Programming Approach to Powered Descent Guidance for Mars Landing*, JGCD, 2007 ([README.md](../README.md); docs/reference/_Convexprogramming_pdgforMarslanding.pdf) - log-mass change of variables, discretization, and the Taylor-linearized throttle bounds (eqs. 34-36).
+- Acikmese, Carson & Blackmore, *Lossless Convexification of Nonconvex Control Bound and Pointing Constraints of the Soft Landing Optimal Control Problem*, IEEE TCST, 2013 (`docs/reference/gfold.pdf`) - the lossless-convexification proof for the thrust bounds and pointing constraint.
 
 ## Layout
 
-- `clarabel/` — vendored Clarabel sources (oxfordcontrol/Clarabel.cpp plus its
-  Clarabel.rs submodule). Apache-2.0.
-- `build-clarabel.ps1` — builds `native/clarabel_c.dll` with cargo. Needs a Rust
-  toolchain; no CMake (see the script for why).
-- `native/` — build output (gitignored). Rebuild with the script.
-- `Gfold.Core/` — the managed library: `ClarabelSolver.Solve(ConicProblem)`
-  (standard conic form: min c'x s.t. Ax=b, Gx+s=h, s in R+^l x SOC(q...)),
-  `SparseCcs` triplet->CCS builder, P/Invoke bindings with pinned-array
-  lifetime management.
-- `Gfold.Console/` — runs the P3 -> P4 flow on the reference "Numerical
-  Example 1" case, verifies the result physically (dynamics replay, bounds),
-  writes CSVs. `--check <csv>` audits any trajectory against the constraint
-  set; `--frame` times a solve at the shape the mod flies; `--clarabel-smoke`
-  and `--clarabel-layout` check the binding.
-- `python_ref/` — CVXPY/Clarabel replica of the original Python for
-  cross-validation (`gfold_ref.py [tf] [N] [--scaled] [--feascheck csv]`).
-
+- `clarabel/` - vendored Clarabel sources (oxfordcontrol/Clarabel.cpp plus its Clarabel.rs submodule). Apache-2.0.
+- `build-clarabel.ps1` - builds `native/clarabel_c.dll` with cargo. Needs a Rust toolchain; no CMake (see the script for why).
+- `native/` - build output (gitignored). Rebuild with the script.
+- `Gfold.Core/` - the managed library: `ClarabelSolver.Solve(ConicProblem)` (standard conic form: min c'x s.t. Ax=b, Gx+s=h, s in R+^l x SOC(q...)), `SparseCcs` triplet->CCS builder, P/Invoke bindings with pinned-array lifetime management.
+- `Gfold.Console/` - runs the P3 -> P4 flow on the reference "Numerical Example 1" case, verifies the result physically (dynamics replay, bounds), writes CSVs. `--check <csv>` audits any trajectory against the constraint set; `--frame` times a solve at the shape the mod flies; `--clarabel-smoke` and `--clarabel-layout` check the binding.
+- `python_ref/` - CVXPY/Clarabel replica of the original Python for cross-validation (`gfold_ref.py [tf] [N] [--scaled] [--feascheck csv]`).
 
 ## Build notes
 
-Clarabel is a Rust crate exposing a C ABI, so `native/clarabel_c.dll` is built with
-cargo (`build-clarabel.ps1`) and is **not checked in** — it is the one native dependency
-that cannot be built with the portable C compiler the rest of the tree uses. SCS is
-built by `../scvx/build-scs.ps1` with `zig cc`.
+Clarabel is a Rust crate exposing a C ABI, so `native/clarabel_c.dll` is built with cargo (`build-clarabel.ps1`) and is **not checked in** - it is the one native dependency that cannot be built with the portable C compiler the rest of the tree uses. SCS is built by `../scvx/build-scs.ps1` with `zig cc`.
 
-Interop notes worth knowing: Clarabel's CSC indices are `uintptr_t` (64-bit) where SCS
-uses 32-bit ints, and its `time_limit` of `0` means *zero seconds*, not "no limit" —
-infinity is the value for none. Both are documented at their call sites, and
-`--clarabel-layout` prints the marshalled struct offsets for checking against
-`clarabel/include/c/*.h`.
+Interop notes worth knowing: Clarabel's CSC indices are `uintptr_t` (64-bit) where SCS uses 32-bit ints, and its `time_limit` of `0` means *zero seconds*, not "no limit" - infinity is the value for none. Both are documented at their call sites, and `--clarabel-layout` prints the marshalled struct offsets for checking against `clarabel/include/c/*.h`.
 
 ## Solver backends: Clarabel and SCS
 
-The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend`
-runs it. Clarabel is permissively licensed, which is what let the project move to MIT —
-the ECOS backend that preceded it was GPLv3 and forced the whole work to be GPLv3. (An
-SCS backend was carried alongside it for a while as a cross-check; it has since been
-removed. Scvx.Core still uses SCS for the 6-DOF subproblem.)
+The assembled problem (`ConicProblem`) is solver-neutral, and `GfoldPlanner.Backend` runs it. Clarabel is permissively licensed, which is what let the project move to MIT - the ECOS backend that preceded it was GPLv3 and forced the whole work to be GPLv3. (An SCS backend was carried alongside it for a while as a cross-check; it has since been removed. Scvx.Core still uses SCS for the 6-DOF subproblem.)
 
-`ClarabelSolver` wants the equalities and the cone rows stacked into one matrix with a
-leading zero cone, which `SparseCcs.VStack` does. That
-stack is the one step of the conversion that can be silently wrong — CCS is
-column-major, so a vertical stack interleaves within every column rather than
-concatenating — and it is checked against a dense reference at the top of
-`--clarabel-smoke`.
+`ClarabelSolver` wants the equalities and the cone rows stacked into one matrix with a leading zero cone, which `SparseCcs.VStack` does. That stack is the one step of the conversion that can be silently wrong - CCS is column-major, so a vertical stack interleaves within every column rather than concatenating - and it is checked against a dense reference at the top of `--clarabel-smoke`.
 
-`ClarabelSolver` is a static function with no state. G-FOLD **always cold starts**: every
-call is a new plan, and the successive solves inside `SearchMinFuel` are different times
-of flight probed by a golden section, related by nothing but their order in the caller's
-cache. (Scvx.Core's `ScsWorkspace` is stateful for the opposite reason — an SCvx
-iteration *is* a perturbation of the last one.)
+`ClarabelSolver` is a static function with no state. G-FOLD **always cold starts**: every call is a new plan, and the successive solves inside `SearchMinFuel` are different times of flight probed by a golden section, related by nothing but their order in the caller's cache. (Scvx.Core's `ScsWorkspace` is stateful for the opposite reason - an SCvx iteration *is* a perturbation of the last one.)
 
 ### Running the frame-budget check
 
@@ -630,36 +440,23 @@ iteration *is* a perturbation of the last one.)
 dotnet run --project gfold/Gfold.Console -- --frame
 ```
 
-Times both in-flight call shapes at the size the mod actually solves: the cadence
-solve (one `SolveMinFuel` at the remaining flight time) and the fallback
-(`SearchMinFuel`, tens of solves, the one that can stall a frame). It also exercises
-the time-limit guard, which must come back inside its budget *and* report itself
-unusable — a time-limited iterate is not a solution, and a run that reported both
-Optimal and usable would mean the caller flies a half-converged plan.
+Times both in-flight call shapes at the size the mod actually solves: the cadence solve (one `SolveMinFuel` at the remaining flight time) and the fallback (`SearchMinFuel`, tens of solves, the one that can stall a frame). It also exercises the time-limit guard, which must come back inside its budget *and* report itself unusable - a time-limited iterate is not a solution, and a run that reported both Optimal and usable would mean the caller flies a half-converged plan.
 
-*Historical, on tolerance:* when SCS was carried as a second backend, the headline from
-the N=120 Mars case was that **tighter is not better**. At eps 1e-5 it agreed with the
-interior-point answer to 0.06 kg and 0.06 s for about 3x the per-solve cost; at 1e-7 the
-individual solves were more accurate and the *search* was far worse — 17 s and 41 kg off
-— because enough solves exhausted the iteration budget to be rejected as infeasible and
-the search bracketed the minimum elsewhere. A first-order solver degrades by returning a
-worse decision, not a looser number. Clarabel needs no equivalent knob: an IPM's cost
-scales with log(1/eps), so accuracy is nearly free.
+*Tolerance note:* when SCS was carried as a second backend, the N=120 Mars case showed that **tighter is not better**. At eps 1e-5 it agreed with the interior-point answer to 0.06 kg and 0.06 s for about 3x the per-solve cost. At 1e-7 the individual solves were more accurate but the *search* was far worse, 17 s and 41 kg off, because enough solves exhausted the iteration budget to be rejected as infeasible and the search bracketed the minimum elsewhere. A first-order solver degrades by returning a worse decision, not a looser number. Clarabel needs no equivalent knob because an IPM's cost scales with log(1/eps), so accuracy is nearly free.
 
 ### Result: Clarabel replaced ECOS at parity
 
-*Historical — ECOS has since been removed. Kept as the record of why.*
+*Historical - ECOS has since been removed. Kept as the record of why.*
 
 Measured on the Mars reference case, all three fed the identical assembled problem:
 
 | | P4 solve | full tf search | tf | fuel vs ECOS |
 |---|---|---|---|---|
-| ECOS (GPLv3) | 23 ms | 599 ms | 57.02 s | — |
+| ECOS (GPLv3) | 23 ms | 599 ms | 57.02 s | - |
 | **Clarabel (Apache-2.0)** | **22 ms** | **693 ms** | **57.02 s** | **0.0000 kg** |
 | SCS 1e-5 (MIT) | 65 ms | 6663 ms | 56.97 s | 0.06 kg |
 
-And at the shape the mod actually flies (N=50, Descent options, sim thread, 16.7 ms
-frame budget):
+And at the shape the mod actually flies (N=50, Descent options, sim thread, 16.7 ms frame budget):
 
 | | cadence solve | worst | bracketed search |
 |---|---|---|---|
@@ -667,35 +464,21 @@ frame budget):
 | **Clarabel** | **10.3 ms** | **13.2 ms** | **256 ms** |
 | SCS 1e-4 | 19.7 ms | 23.6 ms | 1244 ms |
 
-Clarabel reproduces ECOS's answer exactly and fits inside a frame; SCS does not, at any
-tolerance worth flying. That is not a tuning difference — Clarabel is an interior-point
-method like ECOS, while SCS is first-order, and G-FOLD is small, banded, cold-started
-and on a deadline, which is the profile ADMM is worst at. Clarabel is therefore the
-default for the descent, and ECOS can go, which takes GPLv3 with it.
+Clarabel reproduces ECOS's answer exactly and fits inside a frame; SCS does not, at any tolerance worth flying. That is not a tuning difference - Clarabel is an interior-point method like ECOS, while SCS is first-order, and G-FOLD is small, banded, cold-started and on a deadline, which is the profile ADMM is worst at. Clarabel is therefore the default for the descent, and ECOS can go, which takes GPLv3 with it.
 
-The licence chain for an MIT release: Clarabel Apache-2.0, its AMD BSD-3 and QDLDL
-Apache-2.0, SCS MIT, and the BLAS shim is ours. Nothing left forces a copyleft.
+The licence chain for an MIT release: Clarabel Apache-2.0, its AMD BSD-3 and QDLDL Apache-2.0, SCS MIT, and the BLAS shim is ours. Nothing left forces a copyleft.
 
 ### Building Clarabel
 
-`clarabel_c.dll` is **not checked in** — unlike scs.dll it needs a Rust
-toolchain, so it is built on demand:
+`clarabel_c.dll` is **not checked in** - unlike scs.dll it needs a Rust toolchain, so it is built on demand:
 
 ```
 pwsh gfold/build-clarabel.ps1
 ```
 
-Cargo alone; no CMake. Clarabel.cpp's README asks for CMake, but that layer only builds
-the optional C++/Eigen interface and the tests — the C ABI comes from the `rust_wrapper`
-crate, which already declares `crate-type = ["cdylib"]`.
+Cargo alone; no CMake. Clarabel.cpp's README asks for CMake, but that layer only builds the optional C++/Eigen interface and the tests - the C ABI comes from the `rust_wrapper` crate, which already declares `crate-type = ["cdylib"]`.
 
 Two traps the binding had to handle, both worth knowing if it is ever revisited:
 
-- **CSC indices are `uintptr_t`, i.e. 64-bit**, where ECOS and SCS both use 32-bit ints.
-  `ClarabelSolver` widens them; passing the int arrays through would be read at twice
-  the stride.
-- **`time_limit = 0` means zero seconds, not "no limit."** SCS guards its equivalent
-  with `if (stgs->time_limit_secs)` so 0 there means unset; Clarabel takes the number
-  literally and uses infinity for none. Carrying SCS's convention across made every
-  solve exit immediately with `MaxTime` after 0 iterations — while still returning the
-  correct answer, because it had already been computed.
+- **CSC indices are `uintptr_t`, i.e. 64-bit**, where ECOS and SCS both use 32-bit ints. `ClarabelSolver` widens them; passing the int arrays through would be read at twice the stride.
+- **`time_limit = 0` means zero seconds, not "no limit."** SCS guards its equivalent with `if (stgs->time_limit_secs)` so 0 there means unset; Clarabel takes the number literally and uses infinity for none. Carrying SCS's convention across made every solve exit immediately with `MaxTime` after 0 iterations - while still returning the correct answer, because it had already been computed.
