@@ -403,7 +403,6 @@ public static partial class GuidanceWindow
                         "because the plan levels off at the target and never descends past it.");
             }
             ImGui.InputDouble("Re-solve every (s)", ref _s.SixDofReplanSec);
-            ImGui.InputDouble("Thrust fraction", ref _s.SixDofThrustFrac);
             ImGui.InputDouble("Rate damping (share of fuel)", ref _s.SixDofRateDampShare);
             ImGui.InputDouble("Control smoothing (W_DU)", ref _s.SixDofControlSmooth);
             ImGui.InputDouble("Proximal conditioning", ref _s.SixDofProximal);
@@ -2046,7 +2045,6 @@ public static partial class GuidanceWindow
         (double thrust, _) = KsaEnginePerf.AtPressure(vehicle, ambientPa);
         if (thrust <= 0.0)
             return;
-        thrust *= Math.Clamp(_s.SixDofThrustFrac, 0.01, 1.0);
 
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
@@ -2060,7 +2058,7 @@ public static partial class GuidanceWindow
         // The air, and what it costs. On an airless world this reads 0 Pa / 100%
         // and the whole line is a no-op; anywhere else it is the number that
         // decides whether the plan is flyable.
-        double vac = KsaEnginePerf.VacuumThrust(vehicle) * Math.Clamp(_s.SixDofThrustFrac, 0.01, 1.0);
+        double vac = KsaEnginePerf.VacuumThrust(vehicle);
         double frac = vac > 0.0 ? thrust / vac : 1.0;
         ImGui.Text($"ambient {ambientPa / 1000.0,6:F1} kPa (at target alt)   " +
                    $"thrust {frac * 100.0,5:F1} % of vacuum {vac / 1e6:F2} MN");
@@ -2117,8 +2115,7 @@ public static partial class GuidanceWindow
                 $"OVER-POWERED - needs {needTilt:F0} deg tilt just to stop climbing " +
                 $"(limit {_s.SixDofTiltDeg:F0}). No descent exists.");
             ImGui.TextWrapped(
-                $"Fix: throttle floor below {feasibleFloor:F2}, or thrust fraction " +
-                $"~{feasibleFloor / Math.Max(_s.SixDofThrottleFloor, 1e-6):F2} to plan on fewer engines.");
+                $"Fix: a throttle floor below {feasibleFloor:F2}, or a higher tilt limit.");
         }
         else if (twrMin > 1.0)
         {

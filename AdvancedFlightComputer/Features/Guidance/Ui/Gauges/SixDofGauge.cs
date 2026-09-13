@@ -163,7 +163,6 @@ public static partial class GuidanceWindow
         GaugeRowCheck("Estimate unmodelled accel", "##sdbias", ref _s.SixDofBiasEnabled);
 
         GaugeRow("Re-solve every (s)", "##sdreplan", ref _s.SixDofReplanSec);
-        GaugeRow("Thrust fraction", "##sdthrustfrac", ref _s.SixDofThrustFrac);
         GaugeRow("Rate damping (fuel share)", "##sdratedamp", ref _s.SixDofRateDampShare);
         GaugeRow("Control smoothing (W_DU)", "##sdsmooth", ref _s.SixDofControlSmooth);
         GaugeRow("Proximal conditioning", "##sdprox", ref _s.SixDofProximal);

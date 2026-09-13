@@ -195,7 +195,7 @@ public static class Ksa6DofSetup
     }
 
     /// <param name="thrustFraction">
-    /// Share of the vehicle's total thrust the landing burn will actually use. An over-powered booster lands on a SUBSET of its engines; the model has no way to express "shut three of five down", so scaling Tmax is how that intent is communicated. This is usually the difference between a feasible plan and a spiral.
+    /// Not applied, see the note where Tmax is set. Planning on part of the thrust needs engines that are really shut down.
     /// </param>
     /// <param name="glideSlopeDeg">
     /// Approach corridor, degrees above the horizontal at the target. 0 disables it.
@@ -234,10 +234,9 @@ public static class Ksa6DofSetup
         LastVacuumThrustN = KsaEnginePerf.VacuumThrust(vehicle);
         LastPressureThrustN = thrust;
 
-        // THRUST FRACTION IS DELIBERATELY NOT APPLIED TO Tmax. It previously be, and that was a serious bug: the plan was built against a REDUCED Tmax while the throttle command was computed as T / Tmax_model, so a fraction of 0.4 made "full planned thrust" command throttle 1.0 and KSA delivered 2.5x what the plan assumed. The vehicle then overshot every plan, every re-solve started from a state nowhere near the last one, and the trajectory appeared to jump.
-        //  It cannot be made to work by rescaling alone either: we do not shut engines down, so the achievable range is fixed at [floor * Tmax_real, Tmax_real].
-        // Pretending it is smaller is unphysical at BOTH ends - the reduced floor would also fall below the engine's real minimum and be clamped back up.
-        //  An over-powered vehicle is a real physical situation, not something to model around: the feasibility panel reports it and names the throttle floor that would work. Genuinely landing on fewer engines needs the engines actually shut down, which is a separate piece of work.
+        // The thrust fraction is not applied to Tmax. The throttle command is T / Tmax of the model, so a plan built against a reduced Tmax would command full throttle for what it takes to be part of the thrust, and the vehicle would overshoot every plan.
+        // Rescaling cannot fix that, because no engine is shut down and the achievable range stays [floor * Tmax_real, Tmax_real]. A smaller model range is wrong at both ends, and its floor would fall below the real engine minimum and be clamped back up.
+        // An over-powered vehicle is a real situation, not something to model around. The feasibility panel reports it and names the throttle floor that would work, and landing on fewer engines needs those engines really shut down.
         _ = thrustFraction;
 
         double gimbalDeg = GimbalLimitDeg(vehicle);
@@ -290,9 +289,7 @@ public static class Ksa6DofSetup
                 error =
                     $"over-powered: min throttle gives TWR {twrMin:F2}, which needs " +
                     $"{needTiltDeg:F0} deg of tilt just to stop climbing (limit {tiltMaxDeg:F0} deg). " +
-                    $"Lower the throttle floor below {feasibleFloor:F2}, raise the tilt limit, " +
-                    $"or set the thrust fraction to ~{feasibleFloor / Math.Max(throttleFloor, 1e-6):F2} " +
-                    "to plan on fewer engines.";
+                    $"Lower the throttle floor below {feasibleFloor:F2} or raise the tilt limit.";
                 return false;
             }
         }
