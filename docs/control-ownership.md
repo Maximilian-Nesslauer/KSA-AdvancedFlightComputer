@@ -7,6 +7,15 @@ Conflicting writes from another mod are outside this arbitration.
 RCS control and the guidance driver are active in the current build.
 Planning features also edit burn plans; this page focuses on control, release and staging.
 
+## Stock burn mode
+
+Guidance and the RCS executor take stock's burn mode through `StockBurnMode`.
+`StockBurnMode.HoldManual` selects Manual when the mode was Auto and says so, and `StockBurnMode.GiveBackAuto` gives an Auto back when the controller lets go.
+The writes mirror `Vehicle.SetEnum` without going through it, because AFC intercepts that path to start and cancel RCS burns.
+So the navball frame follows the mode, the vehicle region's frame for Manual and BurnBody for Auto, and a craft without a control module gets no Auto back, as stock refuses it.
+A give-back also needs the mode to still read Manual and the loaded burn target to be the one the caller names.
+Two other writers stay outside it. AutoStage writes Auto directly to keep it across a staging, because stock drops Auto after two denied ignitions and a freshly staged engine looks like that until its propellant state propagates. MultiPass re-engages Auto for its next pass through `Vehicle.SetEnum`, so that request reaches the RCS interception.
+
 ## Active RCS control
 
 `VehicleCommandSink.Run` calls the RCS writer after stock `FlightComputer.ComputeControl`.
@@ -20,11 +29,11 @@ The output commands are rebuilt each step, while the executor's saved settings n
 | `BurnTarget.BurnDuration` and `IgnitionTime` | `RcsComputeControlPatch.Command` | Replace stock engine timing with RCS timing on the current target. These are not saved settings to restore. |
 | `FlightComputer.LastThrustTime` | `RcsComputeControlPatch.Command` | Record commanded RCS pulses. The timestamp is not restored. |
 | `FlightComputer.RCSMode` | `RcsExecutor.ForceRcsOn` and `RestoreRcsMode` | Enable RCS at acquisition when needed and restore Disabled if AFC changed it. A running burn that finds RCS switched off stands down, because the player owns the actuator. |
-| `FlightComputer.BurnMode` | `RcsExecutor.ForceBurnManual` and `RestoreBurnMode` | Set Manual at acquisition. Restore an earlier Auto only after cleanup succeeds and while the field still matches Manual. Explicit stops and completion discard the saved Auto. This is not a periodic Manual write. |
+| `FlightComputer.BurnMode` | `RcsExecutor.ForceBurnManual` and `RestoreBurnMode` through `StockBurnMode` | Set Manual at acquisition. Restore an earlier Auto only after cleanup succeeds and while the field still matches Manual. The give-back needs the burn target the hold saw, and after a load, which does not keep that target, the loaded one. Explicit stops and completion discard the saved Auto. This is not a periodic Manual write. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `AttitudeTarget` | `RcsExecutor.EnsureBurnControl` through `FlightComputer.RateHold` | Select Auto and null the rotation when the burn takes control from Manual. This is the first write to the mode, so the release records here what to hand back. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `CustomAttitudeTarget` | `RcsExecutor.CommandAlignAttitude` | Select Auto and a burn-relative target for Align. Non-X axes use custom Euler angles. Later steps compare mode and tracker, plus frame and coordinates for None and Custom. |
 | `FlightComputer.AttitudeTrackTarget`, `AttitudeFrame`, `AttitudeTarget`, `AttitudeMode` and `CustomAttitudeTarget` | `RcsExecutor.EndExecution` through `FlightComputer.SetNullRot` and its own restore | Select None in BurnBody and zero the computed target, hand Manual back when acquisition replaced it, and clear the custom coordinates because tracking is None. The frame stays at BurnBody. |
-| Navball frame | `RcsExecutor.BeginControl` through `Vehicle.SetNavBallFrame` | Select BurnBody. Specific SetEnum cancellation and activation-failure paths select the vehicle-region frame; generic release does not restore a captured frame. |
+| Navball frame | `RcsExecutor.BeginControl` through `Vehicle.SetNavBallFrame`, and `StockBurnMode` | Select BurnBody at acquisition. `StockBurnMode` sets the frame with the burn mode, and specific SetEnum cancellation and activation-failure paths select the vehicle-region frame; generic release does not restore a captured frame. |
 
 ## Yielding the attitude
 
@@ -69,19 +78,20 @@ Holding the last throttle is not a claim that the trajectory is safe, and contin
 
 `GuidanceFeature` installs a prefix on `Vehicle.PrepareWorker` that runs `GuidanceWindow.ApplyAutopilot` for every vehicle, after `InputEvents.ApplyInputEvents` has drained the player's input and before the worker snapshot, so an engine command written there is the one the worker sees.
 The same block installs the rate postfix on `FlightComputer.UpdateAttitudeTarget`, and `VehicleCommandSink.Run` dispatches the gimbal writer after the RCS writer.
-A step that throws releases the craft through `GuidanceWindow.FailAutopilot` and reports once.
+A step that throws keeps the craft on its last attitude target and engine command, and a run of `GuidanceWindow.MaxFailedSteps` steps that throw releases it through `GuidanceWindow.FailAutopilot`. Each kind of fault is reported once.
+The readouts, which are the return cost and the trace, run in their own guard. A fault there is reported once, waits a second before the next try, and does not count as a failed step. The stage-model refresh catches its own faults, and the booster hand-over and the launch window start modes, so their faults count as failed steps like a mode's.
 The game menu's Enabled switch queues a release for every held craft, applied on each craft's next step.
 
 | State or action | Writer | Release behavior |
 | --- | --- | --- |
-| `FlightComputer.BurnMode` | `GuidanceWindow.AcquireControl` and `RestoreBurnMode` | Set Manual when control is acquired, because `Vehicle.PrepareWorker` clears `EngineOn` on every step while the mode is Auto. An Auto that appears while guidance holds the craft is a takeover of the engine, so guidance stops without a cut and leaves it armed. Restore an earlier Auto only on a release that cuts the engine, after the rest of the release succeeded, while the field still reads Manual and the loaded burn target is the one acquisition saw, because stock also writes Manual when a burn is loaded, unloaded or completed. |
+| `FlightComputer.BurnMode` | `GuidanceWindow.AcquireControl` and `RestoreBurnMode` through `StockBurnMode` | Set Manual when control is acquired, because `Vehicle.PrepareWorker` clears `EngineOn` on every step while the mode is Auto. An Auto that appears while guidance holds the craft is a takeover of the engine, so guidance stops without a cut and leaves it armed. Restore an earlier Auto only on a release that cuts the engine, after the rest of the release succeeded, while the field still reads Manual and the loaded burn target is the one acquisition saw, because stock also writes Manual when a burn is loaded, unloaded or completed. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget`, `CustomAttitudeTarget` and `RollMode` | `GuidanceWindow.CommandAttitude` with `AttitudeOwnership` | Capture before writing. Restore frame, tracking and custom coordinates as one group if still unchanged; restore mode and roll conditionally. The complete computed `AttitudeTarget` is not captured. |
 | `FlightComputer.AttitudeTarget.RatesCci` | `KsaAttitudeRate.OnUpdateAttitudeTarget` | Add the published rate after stock computes its target. Clear disables future additions; it does not restore the current field. Stock rebuilds it on the next update. |
 | `FlightComputerOutput.Gimbals[].State.CommandY` and `CommandZ` | `KsaGimbalControl.OnComputeControl` and `ApplyLsq` | Write output commands from the per-vehicle override and report them through the sink receipt, which sets `AnyActuatorCommanded`. Disengage clears the override, and the Enabled switch stops the writer on the next control step. |
 | `Vehicle._manualControlInputs.EngineOn` and `EngineThrottle` | Guidance mode steps and `GuidanceWindow.ApplyAutopilot` | Write through the validated handle in `GameReflection`. HandBackVehicle requests MainShutdown after acquired control, preserving the throttle setting. An explicit no-cut handover skips shutdown, and so does a stop that a player attitude takeover caused. |
-| Sequence activation | `GuidanceWindow.AutoSequence` through `StagingDetector.Arm` and `StagingDetector.RequestStaging` | Guidance arms the AutoStage feature for the craft it flies and asks it for a row on a cold ignition or at the reserve boundary; the feature's own executor activates the row, fires held modules after their delays and never refreshes the part tree itself. The hand-back disarms only what guidance armed. Staging is not a reversible setting restored on release. |
+| Sequence activation | `GuidanceWindow.AutoSequence` through `StagingDetector.Arm` and `StagingDetector.RequestStaging` | Guidance arms the AutoStage feature for the craft it flies and asks it for a row on a cold ignition or at the reserve boundary; the feature's own executor activates the row, fires held modules after their delays and never refreshes the part tree itself. A request made while a staging is still in flight is refused, and the reserve's hand-over is recorded only for a request the feature kept, so the reserve cue asks again after the cooldown. The hand-back disarms only what guidance armed. Staging is not a reversible setting restored on release. |
 
-`afc-guidance-driver` installs these hooks and steps the universe with the ascent step replaced. It checks the claim, the attitude and engine writes, the rate on the worker, the burn-mode hold with its takeover, replaced-burn and no-cut cases, the sink dispatch, the Enabled switch and a failed step.
+`afc-guidance-driver` installs these hooks and steps the universe with the ascent step replaced. It checks the claim, the attitude and engine writes, the rate on the worker, the burn-mode hold with its takeover, replaced-burn and no-cut cases, the sink dispatch, the Enabled switch, a readout fault that leaves the mode flying, and a run of failed steps that releases the craft.
 
 The release paths keep the existing flight computer and burn plan objects.
 That does not mean AFC never changes plans, parts or staging through other features and stock APIs.
