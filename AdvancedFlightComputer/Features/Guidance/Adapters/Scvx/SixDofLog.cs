@@ -21,6 +21,8 @@ using System.Text;
 internal static class SixDofLog
 {
     private const int FlushEveryRows = 60;
+    private const int MaxFailedFlushes = 3;
+    private static int _failedFlushes;
 
     private static readonly StringBuilder _cycle = new();
     private static readonly StringBuilder _plan = new();
@@ -74,6 +76,7 @@ internal static class SixDofLog
             _events.Clear();
             _cycleIndex = 0;
             _pendingRows = 0;
+            _failedFlushes = 0;
             RowsWritten = 0;
             _lastPlanSnapshot = double.NegativeInfinity;
 
@@ -268,10 +271,18 @@ internal static class SixDofLog
             if (_plan.Length > 0) { File.AppendAllText(_planPath, _plan.ToString()); _plan.Clear(); }
             if (_events.Length > 0) { File.AppendAllText(_eventsPath, _events.ToString()); _events.Clear(); }
             _pendingRows = 0;
+            _failedFlushes = 0;
         }
         catch (Exception e)
         {
+            // What a failed write could not store is dropped. Kept, it would make every later row call this again with a larger buffer, on the sim thread. A run whose writes keep failing stops logging.
+            _cycle.Clear();
+            _plan.Clear();
+            _events.Clear();
+            _pendingRows = 0;
             LastError = e.Message;
+            if (++_failedFlushes >= MaxFailedFlushes)
+                Enabled = false;
             return e.Message;
         }
         return "";
