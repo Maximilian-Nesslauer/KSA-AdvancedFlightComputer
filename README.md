@@ -1,8 +1,9 @@
 # AdvancedFlightComputer [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Extra maneuver planning tools for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency).
+Maneuver planning, burn execution and closed-loop guidance for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency).
 
 Adds quick-tools to the Transfer Planner (set Pe/Ap, match/set inclination, circularize), flyby targeting so a Hohmann transfer arrives as a flyby instead of an impact, multi-pass burn splitting for Oberth-efficient departures, RCS-only burn execution, automatic staging with spent-booster drop and configurable staging delays, automatic removal of finished burns, and enables the planner to target interstellar comets on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS).
+Its powered guidance flies an ascent to orbit, a booster boostback and a pinpoint powered landing.
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
@@ -149,6 +150,22 @@ In stock KSA, when an auto-burn completes the flight computer flips the burn mod
 
 The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod lets it target interstellar comets (Oumuamua, 2I/Borisov, 3I/ATLAS) by patching the planner's time-of-flight and alignment math to handle unbound orbits.
 
+### Powered Guidance
+
+[![Watch the PoweredGuidance demo](docs/guidance/reference-material/images/twin_boosters.png)](https://youtu.be/hSUcV6tx3oY)
+
+Closed-loop guidance that flies the vehicle for you, originally the [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) mod by cairn5, see [Credits](#credits).
+Open the **AFC Guidance** menu in the top bar, switch **Enabled** on and open the panel with **Show panel**. EXECUTE, ABORT and RETARGET act on the selected tab.
+
+- **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, with an optional launch window, g-limit and booster reserve. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
+- **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
+- **Deorbit and land** flies the whole chain from orbit: the deorbit burn, a fuel-optimal powered descent with G-FOLD or the 6-DOF solver, and a terminal hover to touchdown.
+- **Land from here** starts only the powered descent and the hover, from where the craft is now.
+
+Guidance takes a craft only when you press EXECUTE, and it lets go when you abort, take over the attitude or arm the stock Auto burn.
+G-FOLD suits airless bodies and agile landers that point with RCS. The 6-DOF solver models the vehicle rotation, so it handles boosters with high rotational inertia and descents through an atmosphere.
+The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [guidance documentation](docs/guidance/README.md) for how it works.
+
 ## Installation
 
 1. Install [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions](https://github.com/tsholmes/KittenExtensions) (the latter is only required for hyperbolic targets and the AUTOSTAGE gauge button).
@@ -178,16 +195,7 @@ Required only to build the mod from source. Targets **.NET 10**.
 | [StarMap.API](https://github.com/StarMapLoader/StarMap) | NuGet | 0.3.6 |
 | [Lib.Harmony](https://www.nuget.org/packages/Lib.Harmony) | NuGet | 2.4.2 |
 
-## Experimental guidance
-
-The guidance source is integrated under `AdvancedFlightComputer/Features/Guidance/`.
-The AFC Guidance menu reports that execution is unavailable until control ownership is integrated.
-This build does not install guidance actuator hooks or expose execution controls.
-The numerical libraries and their console checks remain independent of the game.
-See [the guidance layout and build instructions](docs/guidance/README.md).
-
-If a standalone PoweredGuidance mod is installed, disable it before a future combined guidance flight test.
-This build does not change the game manifest.
+The native guidance solvers are built from the vendored sources with Rust and Zig, see [native-build.md](docs/guidance/native-build.md).
 
 ## Mod compatibility
 
