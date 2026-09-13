@@ -11,11 +11,12 @@ namespace AdvancedFlightComputer.HarnessTests;
 // only end-to-end proof of the jettison analysis.
 //
 // Needs a save whose launch sequence has engines on both sides of the next sequence's decouplers.
-// The candidate is resolved through TestSupport.ResolveVehicleSaves, so KSA_HEADLESS_VEHICLES
-// overrides it.
+// The defaults are tried in order and the first that qualifies is flown. They are resolved through
+// TestSupport.ResolveVehicleSaves, so KSA_HEADLESS_VEHICLES overrides them.
 public sealed class SpentStageDropTest : AfcTest
 {
-    private const string DefaultSave = "Test Vehicle 1";
+    private static readonly string[] DefaultSaves = { "Test Vehicle 2", "Test Vehicle 1" };
+    private static string DefaultNames => "'" + string.Join("', '", DefaultSaves) + "'";
     private const double BurnDt = 1.0;
     private const double ReactionDt = 0.25;
     private const double MaxBurnSeconds = 900.0;
@@ -26,16 +27,16 @@ public sealed class SpentStageDropTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
-        // The default is known to have a mixed launch stage, so its rejection means the analysis
+        // A default is known to have a mixed launch stage, so rejecting every one means the analysis
         // lost its grip on the game build. Only an operator-supplied save list may skip.
         bool defaultOnly = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(TestSupport.VehiclesEnvVar));
 
-        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(DefaultSave);
+        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(DefaultSaves);
         if (saves.Count == 0)
         {
             if (defaultOnly)
-                t.Fail("default save", $"'{DefaultSave}' is not in the game's Vehicles folder, so the spent-stage drop " +
-                                       $"was not exercised. Recreate it, or name a substitute in {TestSupport.VehiclesEnvVar}");
+                t.Fail("default save", $"none of {DefaultNames} is in the game's Vehicles folder, so the spent-stage drop " +
+                                       $"was not exercised. Recreate one, or name a substitute in {TestSupport.VehiclesEnvVar}");
             else
                 t.Skip($"none of the saves named in {TestSupport.VehiclesEnvVar} are available");
             return;
@@ -49,7 +50,8 @@ public sealed class SpentStageDropTest : AfcTest
         }
 
         if (defaultOnly)
-            t.Fail("default save", $"'{DefaultSave}' was rejected as a mixed launch stage; the jettison analysis no longer recognises it");
+            t.Fail("default save", $"none of {DefaultNames} has a launch stage whose boosters burn out while the core keeps firing, " +
+                                   "see the reasons above. Provide such a save, or the jettison analysis no longer recognises one");
         else
             t.Skip("no candidate save has a launch stage that keeps firing after its boosters burn out");
     }
@@ -149,6 +151,9 @@ public sealed class SpentStageDropTest : AfcTest
                     t.Fail("the jettison analysis keeps recognising the pending sequence", $"lost at t={time:F1}s");
                     return true;
                 }
+
+                if (CoreRanDryFirst(t, saveId, survey, time))
+                    return false;
             }
 
             if (survey.FueledInside > 0)
@@ -156,6 +161,8 @@ public sealed class SpentStageDropTest : AfcTest
                 t.Fail("booster burnout", $"the jettisoned engines never burnt out within {MaxBurnSeconds:F0}s");
                 return true;
             }
+            if (CoreRanDryFirst(t, saveId, survey, time))
+                return false;
             double tBurnout = time;
             // Snapshot here, not before the burn, or propellant spent alone would pass the mass check.
             double massAtBurnout = vehicle.TotalMass;
@@ -190,6 +197,16 @@ public sealed class SpentStageDropTest : AfcTest
         {
             AutoStageFlightSupport.CleanupAfterFlight(t.System, preexisting);
         }
+    }
+
+    // Boosters that outlast their core at full throttle are a real design, but then the drop follows the all-engines-dry trigger and the core cannot still be firing afterwards, so the save is no scenario for this case and the next one is tried.
+    private static bool CoreRanDryFirst(TestContext t, string saveId, StagingHelpers.EngineSurvey survey, double time)
+    {
+        if (survey.FueledOutside > 0)
+            return false;
+        t.Info($"'{saveId}': the engines staying with the vehicle ran dry at t={time:F1}s while " +
+               $"{survey.FueledInside} jettisoned engine(s) still had propellant; trying the next save");
+        return true;
     }
 
     private static Sequence? FindPendingSequence(Vehicle vehicle)

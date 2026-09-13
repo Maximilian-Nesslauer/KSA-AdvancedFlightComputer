@@ -249,13 +249,12 @@ public sealed class GuidanceDriverTest : AfcTest
         }
     }
 
-    // A hold that started from stock Auto. A burn far from ignition keeps stock from dropping Auto
-    // by itself, and the first step's acquisition replaces it with Manual.
+    // A hold that started from stock Auto. A burn far from ignition keeps stock from dropping Auto by itself, and the first step's acquisition replaces it with Manual. The hold runs the engine, and FlightComputer.UpdateBurnTarget writes Manual once the delta-V it accumulates passes the target, so the burn is large enough that a few steps of any save's engines cannot finish it.
     private static VehicleAutopilotState? HoldFromAuto(
         TestContext t, Vehicle vehicle, SimDriver driver, string label)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        if (RcsFlightSupport.AddBurn(vehicle, driver, double3.UnitX, 1.0, 600.0) == null)
+        if (RcsFlightSupport.AddBurn(vehicle, driver, double3.UnitX, 100.0, 600.0) == null)
         {
             t.Fail($"{label} setup", "no patch or loaded burn target");
             return null;

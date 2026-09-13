@@ -16,6 +16,7 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
 
     private const BindingFlags PrivateStatic = BindingFlags.NonPublic | BindingFlags.Static;
     private const double WindowS = 30.0;
+    private const int MaxRowsBeforeSeparation = 4;
 
     private static double _now;
 
@@ -82,8 +83,7 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
             PhysicsBubble._forceOffRails = true;
             driver.Step(0.05, 20);
 
-            Arm(ambient, parent);
-            int armed = Records.Count;
+            int armed = ArmFirstSeparation(ambient, parent, driver);
             if (armed == 0)
             {
                 t.Skip("the next sequence of the save separates nothing.");
@@ -160,14 +160,13 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
                 return;
             }
 
-            Arm(ambient, first);
-            int afterFirst = Records.Count;
-            if (afterFirst == 0)
+            if (ArmFirstSeparation(ambient, first, driver) == 0)
             {
                 t.Skip("the next sequence of the save separates nothing.");
                 return;
             }
-            Arm(ambient, second);
+            int afterFirst = Records.Count;
+            ArmFirstSeparation(ambient, second, driver);
             t.Check("arming a second separation keeps the records of the first",
                 Records.Count > afterFirst, $"{afterFirst} then {Records.Count}");
 
@@ -200,7 +199,7 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
                 return;
             }
 
-            Arm(ambient, vehicle);
+            ArmFirstSeparation(ambient, vehicle, driver);
             if (!t.Check("a separation leaves a record behind", Records.Count > 0))
                 return;
 
@@ -232,6 +231,33 @@ public sealed class GuidanceBoosterHandoverTest : AfcTest
     {
         ambient.SetValue(null, VehicleAutopilotState.For(vehicle));
         Method("ArmBoosterHandover").Invoke(null, [vehicle, vehicle.Parts.SequenceList, _now]);
+    }
+
+    // A design spawned from the Vehicles folder has its ignition row next, and that row separates nothing. Rows like that are fired until the next one drops something, so the case does not depend on how a save orders its rows. Returns the records the separation added.
+    private static int ArmFirstSeparation(FieldInfo ambient, Vehicle vehicle, SimDriver driver)
+    {
+        int before = Records.Count;
+        for (int row = 0; row < MaxRowsBeforeSeparation; row++)
+        {
+            Arm(ambient, vehicle);
+            if (Records.Count > before || !HasRowToFire(vehicle))
+                break;
+            // Activation marks the row at once and SimDriver.Step drains the queued modules.
+            vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
+            driver.Step(0.05, 2);
+        }
+        return Records.Count - before;
+    }
+
+    private static bool HasRowToFire(Vehicle vehicle)
+    {
+        ReadOnlySpan<Sequence> sequences = vehicle.Parts.SequenceList.Sequences;
+        for (int i = 0; i < sequences.Length; i++)
+        {
+            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+                return true;
+        }
+        return false;
     }
 
     private static bool Adopt(Vehicle vehicle) =>

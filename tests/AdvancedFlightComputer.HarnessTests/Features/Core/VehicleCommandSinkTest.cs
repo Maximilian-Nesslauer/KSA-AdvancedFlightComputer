@@ -13,6 +13,9 @@ public sealed class VehicleCommandSinkTest : AfcTest
 {
     public override string Name => "afc-command-sink";
 
+    private const double FiringStepSec = 0.05;
+    private const int MaxFiringSteps = 1200;
+
     protected override void Execute(TestContext t)
     {
         ReceiptTakesTheEarliestWake(t);
@@ -145,8 +148,22 @@ public sealed class VehicleCommandSinkTest : AfcTest
                     return;
                 }
                 RcsExecutor.Activate(vehicle);
-                driver.Step(0.05, 20);
 
+                // While the execution waits for ignition or for the attitude it asks for a wake seconds away, and PhysicsBubble may rail a craft that commands nothing. The case is the step a translation pulse is committed, which the RCS writer stamps into FlightComputer.LastThrustTime. Stock stamps it only for a commanded main engine or a manual translation, and here the engines are off and nobody translates by hand.
+                UniverseTime thrustBefore = fc.LastThrustTime;
+                bool fired = false;
+                for (int i = 0; i < MaxFiringSteps && !fired; i++)
+                {
+                    driver.Step(FiringStepSec);
+                    fired = fc.LastThrustTime > thrustBefore;
+                }
+
+                if (!fired)
+                {
+                    t.Skip($"the RCS burn committed no translation pulse within {MaxFiringSteps * FiringStepSec:F0} s, " +
+                           "so the commanded case would prove nothing.");
+                    return;
+                }
                 bool active = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec) && exec.IsActive;
                 t.Check("the execution is still running when the situation is read", active);
                 t.Check("an executing RCS burn holds its vehicle in full physics",
