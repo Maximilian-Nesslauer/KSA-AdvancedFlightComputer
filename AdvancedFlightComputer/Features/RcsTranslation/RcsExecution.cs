@@ -37,6 +37,9 @@ internal sealed class RcsExecution
     /// <summary>Records whether AFC replaced Auto with Manual. Completion discards the saved mode.</summary>
     public bool ForcedBurnManual { get; set; }
 
+    /// <summary>The burn target the burn-mode hold saw at acquisition. It is not saved, so after a load the loaded target stands in for it.</summary>
+    public BurnTarget? HeldBurnTarget;
+
     /// <summary>Records whether AFC changed the attitude mode from Manual to Auto.</summary>
     public bool ForcedAttitudeAuto { get; set; }
 
@@ -216,6 +219,7 @@ internal sealed class RcsExecution
         AlignCommanded = false;
         ForcedRcsOn = false;
         ForcedBurnManual = false;
+        HeldBurnTarget = null;
         ForcedAttitudeAuto = false;
         AttitudeYielded = false;
         CommandedAttitude = null;
