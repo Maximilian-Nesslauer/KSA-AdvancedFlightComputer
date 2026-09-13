@@ -133,7 +133,7 @@ public sealed class VehicleAutopilotState
     public string Status = "";
     public int FailStreak;
 
-    /// <summary>Driver steps in a row that threw. A short run keeps the craft on its last command, and a long one releases it, see GuidanceWindow.CountFailedStep.</summary>
+    /// <summary>The weighted count of driver steps that threw, which each good step lowers again, see GuidanceWindow.CountFailedStep.</summary>
     public int FailedSteps;
 
     /// <summary>Stage model refreshes in a row that threw. The first retries on the next step, and later ones wait for the normal interval.</summary>

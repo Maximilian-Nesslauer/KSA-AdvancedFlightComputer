@@ -86,13 +86,13 @@ internal static class GuidanceFeature
             LogHelper.WarnOnce($"guidance-step-{vehicle.Id}:{ex.GetType().Name}",
                 $"[AFC] Guidance step failed on '{vehicle.Id}': {ex}");
 
-            // One bad step keeps the craft on its last command, and a run that does not recover gives it back.
-            if (!GuidanceWindow.CountFailedStep(vehicle))
-                return;
-            LogHelper.WarnOnce($"guidance-step-release-{vehicle.Id}",
-                $"[AFC] Guidance released '{vehicle.Id}' after {GuidanceWindow.MaxFailedSteps} failed steps in a row.");
+            // A bad step keeps the craft on its last command, and faults that keep coming, or a fault on the ground, give it back. Counting reads the craft's situation, so it sits inside the guard that keeps a second fault out of the game's loop.
             try
             {
+                if (!GuidanceWindow.CountFailedStep(vehicle))
+                    return;
+                LogHelper.WarnOnce($"guidance-step-release-{vehicle.Id}",
+                    $"[AFC] Guidance released '{vehicle.Id}' after its steps kept failing.");
                 GuidanceWindow.FailAutopilot(vehicle, ex);
             }
             catch (Exception release)

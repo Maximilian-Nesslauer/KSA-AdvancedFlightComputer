@@ -93,6 +93,9 @@ public sealed class GuidanceDriverTest : AfcTest
             SwitchingGuidanceOffReleasesTheCraft(t, vehicle, driver);
             AHousekeepingFaultKeepsTheCraft(t, vehicle, driver);
             AFailedStepReleasesTheCraft(t, vehicle, driver);
+            AFaultOnEveryOtherStepReleasesTheCraft(t, vehicle, driver);
+            ARareFaultKeepsTheCraft(t, vehicle, driver);
+            AFaultWithACutQueuedReleasesAtOnce(t, vehicle, driver);
         }
         finally
         {
@@ -380,6 +383,89 @@ public sealed class GuidanceDriverTest : AfcTest
             t.Check("a failed step reports why",
                 state.Error.StartsWith("Guidance stopped", StringComparison.Ordinal), state.Error);
             t.Check("a failed step cuts the engine", !Inputs(vehicle).EngineOn);
+        }
+        finally
+        {
+            _faulting = null;
+            VehicleAutopilotState.Remove(vehicle);
+        }
+    }
+
+    // A failed step counts double and a good step takes one away, so faults on every other step release the craft too, only later than a steady fault.
+    private static void AFaultOnEveryOtherStepReleasesTheCraft(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        VehicleAutopilotState state = Running(vehicle);
+        try
+        {
+            driver.Step(0.05, 2);
+            if (!t.Check("the mode runs before the alternating fault", state.ControlAcquired && Inputs(vehicle).EngineOn))
+                return;
+
+            int pairs = 0;
+            bool held = true;
+            while (held && pairs < 4 * GuidanceWindow.MaxFailedSteps)
+            {
+                _faulting = vehicle;
+                driver.Step(0.05, 1);
+                _faulting = null;
+                driver.Step(0.05, 1);
+                pairs++;
+                held = VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance;
+            }
+            t.Check("a fault on every other step releases the craft in the end", !held, $"pairs={pairs}");
+            t.Check("that release comes later than a steady fault's", pairs > GuidanceWindow.MaxFailedSteps, $"pairs={pairs}");
+        }
+        finally
+        {
+            _faulting = null;
+            VehicleAutopilotState.Remove(vehicle);
+        }
+    }
+
+    // A fault on one step in four never adds up, because the good steps between take away more than it adds.
+    private static void ARareFaultKeepsTheCraft(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        VehicleAutopilotState state = Running(vehicle);
+        try
+        {
+            driver.Step(0.05, 2);
+            for (int cycle = 0; cycle < 2 * GuidanceWindow.MaxFailedSteps; cycle++)
+            {
+                _faulting = vehicle;
+                driver.Step(0.05, 1);
+                _faulting = null;
+                driver.Step(0.05, 3);
+            }
+            t.Check("a fault on one step in four keeps the craft",
+                VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance
+                && state.ControlAcquired && state.Running && Inputs(vehicle).EngineOn);
+            t.Check("the good steps keep the count from growing", state.FailedSteps == 0, $"count={state.FailedSteps}");
+        }
+        finally
+        {
+            _faulting = null;
+            state.Engage = false;
+            driver.Step(0.05, 1);
+            VehicleAutopilotState.Remove(vehicle);
+        }
+    }
+
+    // With an engine cut already queued a lit engine helps nothing, so the first failed step releases the craft and the release makes the cut.
+    private static void AFaultWithACutQueuedReleasesAtOnce(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        VehicleAutopilotState state = Running(vehicle);
+        try
+        {
+            driver.Step(0.05, 2);
+            if (!t.Check("the mode runs before the queued cut", state.ControlAcquired && Inputs(vehicle).EngineOn))
+                return;
+
+            state.LandingCutPending = true;
+            _faulting = vehicle;
+            driver.Step(0.05, 1);
+            t.Check("a failed step with a cut queued releases the craft at once",
+                VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.None && !state.ControlAcquired);
+            t.Check("that release cuts the engine", !Inputs(vehicle).EngineOn);
         }
         finally
         {
