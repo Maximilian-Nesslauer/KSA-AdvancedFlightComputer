@@ -200,6 +200,7 @@ The native guidance solvers are built from the vendored sources with Rust and Zi
 
 - [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage) is now part of this mod. Delete its folder under `mods`, do not only disable it: KittenExtensions applies the XML patches of every manifest entry, so a disabled AutoStage still puts its own dead AUTOSTAGE button on top of this one, and an enabled one keeps the built-in staging off, which the log says.
 - [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) is now part of this mod. Remove the standalone mod; with both installed each removes the burn the other already took care of, which is harmless but logged.
+- [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) is now part of this mod. Remove or disable the standalone mod, otherwise both would steer the same craft.
 - Known conflicts: none
 
 ## License
