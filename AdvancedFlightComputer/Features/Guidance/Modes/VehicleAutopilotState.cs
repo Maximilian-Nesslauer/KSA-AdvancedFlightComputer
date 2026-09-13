@@ -303,6 +303,17 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double StageModelKsaDv;
 
+    /// <summary>The fingerprint of the stage list the last stage-model log line described, see <see cref="GuidanceLog.StageSignature"/>.</summary>
+    public string StageModelSignature = "";
+
+    /// <summary>Sim time of the last periodic UPFG log line.</summary>
+    public double LastGuidanceLogTime = double.NegativeInfinity;
+
+    // The mode phases the last log line reported, so a change is logged once whichever path made it.
+    public GuidanceWindow.LandingPhase LoggedLandingPhase = GuidanceWindow.LandingPhase.Idle;
+    public GuidanceWindow.BoostbackPhase LoggedBoostbackPhase = GuidanceWindow.BoostbackPhase.Idle;
+    public bool LoggedSixDofActive;
+
     /// <summary>A flight-computer reset the draw asked for, applied on the sim thread.</summary>
     public bool FcResetPending;
 

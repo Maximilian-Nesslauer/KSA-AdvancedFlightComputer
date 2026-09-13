@@ -39,6 +39,32 @@ internal sealed class AttitudeOwnership
     public bool IsCurrent(FlightComputer value) => computer == null
         || (ReferenceEquals(computer, value) && last.Equals(Snapshot.Read(value)));
 
+    /// <summary>
+    /// What differs between the last command guidance wrote and the flight computer now, for the
+    /// log line that reports a takeover.
+    /// </summary>
+    public string DescribeChange(FlightComputer value)
+    {
+        if (computer == null)
+            return "nothing written yet";
+        if (!ReferenceEquals(computer, value))
+            return "the flight computer instance was replaced";
+
+        Snapshot now = Snapshot.Read(value);
+        string change = "";
+        if (now.Mode != last.Mode)
+            change += $" mode {last.Mode}->{now.Mode}";
+        if (now.Frame != last.Frame)
+            change += $" frame {last.Frame}->{now.Frame}";
+        if (now.Target != last.Target)
+            change += $" target {last.Target}->{now.Target}";
+        if (!now.Custom.Equals(last.Custom))
+            change += $" custom {last.Custom}->{now.Custom}";
+        if (now.Roll != last.Roll)
+            change += $" roll {last.Roll}->{now.Roll}";
+        return change.Length == 0 ? "no difference" : change.Substring(1);
+    }
+
     public void EndWrite(FlightComputer value, bool writesRoll)
     {
         rollWritten |= writesRoll;

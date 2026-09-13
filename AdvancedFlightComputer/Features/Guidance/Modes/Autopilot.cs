@@ -120,11 +120,14 @@ public static partial class GuidanceWindow
             {
                 StagingDetector.Arm(vehicle, true);
                 _s.ArmedStaging = true;
+                GuidanceLog.Debug(vehicle, "armed AutoStage for this flight.");
             }
         }
         if (!StagingDetector.IsArmed(vehicle))
         {
             // What guidance armed is off now, so the release has nothing of its own to switch off.
+            if (_s.ArmedStaging)
+                GuidanceLog.Debug(vehicle, "AutoStage was switched off by the player, staging cues stop.");
             _s.ArmedStaging = false;
             _s.StagingActive = false;
             _s.Status = "Auto-staging switched off by the player.";
@@ -136,6 +139,7 @@ public static partial class GuidanceWindow
         if (activations != _s.SeenStagings)
         {
             // A requested or triggered row fired on this craft: the stage list changed under us.
+            GuidanceLog.Debug(vehicle, $"AutoStage fired a row ({_s.SeenStagings}->{activations} activations), the stage model is rebuilt on this step.");
             _s.SeenStagings = activations;
             _s.StageModelDirty = true;
             _s.LastSequenceTime = now;
@@ -143,6 +147,8 @@ public static partial class GuidanceWindow
 
         if (StagingDetector.IsHeldForControl(vehicle))
         {
+            if (_s.StagingActive)
+                GuidanceLog.Debug(vehicle, "staging held, the next sequence would separate the control module.");
             _s.StagingActive = false;
             _s.Status = "Auto-staging held: the next sequence would separate the control module.";
             return;
@@ -159,12 +165,17 @@ public static partial class GuidanceWindow
 
         // A staging still in flight refuses the request, and the cue asks again after the cooldown. Only a queued request records the reserve as staged, otherwise a booster jettison still in flight would cost the reserve its only staging. A queued request can still stage nothing when the machine holds a row that would separate the control module, and the reserve then stays held with that row.
         _s.LastSequenceTime = now;
-        if (StagingDetector.RequestStaging(vehicle) != StagingDetector.StagingRequest.Queued)
+        StagingDetector.StagingRequest request = StagingDetector.RequestStaging(vehicle);
+        GuidanceLog.Debug(vehicle, $"staging requested for {(reserveDone ? "the booster reserve" : "no thrust")}: {request}.");
+        if (request != StagingDetector.StagingRequest.Queued)
             return;
 
         // Everything the booster needs to be recognised and flown, recorded before the split, because afterwards the parts belong to a vehicle we have no handle on. The split happens when the machine takes the request, on a later step.
         if (reserveDone)
+        {
             ArmBoosterHandover(vehicle, sequenceList, now);
+            GuidanceLog.Debug(vehicle, $"booster hand-over armed for {_handovers.Count} record(s), site lat {_s.SiteLatDeg:F3} lon {_s.SiteLonDeg:F3}.");
+        }
     }
 
     private static void DisarmStaging(Vehicle vehicle)
@@ -334,6 +345,7 @@ public static partial class GuidanceWindow
         _s = VehicleAutopilotState.For(vehicle);
         _s.SiteLatDeg = mine.SiteLatDeg;
         _s.SiteLonDeg = mine.SiteLonDeg;
+        GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
         // NOT engaged here, deliberately. This runs on the frame the split happened, which is the frame the part tree is least settled - and ExecuteBoostback needs an aero surrogate fitted to a bounding box that may not exist yet. It refuses rather than throwing, and refusing here would leave a booster that had been adopted and would never be flown, with the hand-over record already consumed. So the engage is retried from the sweep until it takes.
         _s.HandoverPendingUntil = now + HandoverWindowS;
@@ -361,6 +373,7 @@ public static partial class GuidanceWindow
             _s.HandoverPendingUntil = double.NegativeInfinity;
             _s.BoostbackStatus = "Hand-over failed: " + (_s.AeroError.Length > 0
                 ? _s.AeroError : "no aero surrogate for the separated booster.");
+            GuidanceLog.Info(vehicle, _s.BoostbackStatus);
             return;
         }
 
@@ -420,6 +433,17 @@ public static partial class GuidanceWindow
             _s.StageModel = KsaVehicleAdapter.Build(vehicle);
             // The game's own total for the same recompute, latched for the panel to check our stage list against. Both are "from here on" - its simulated mole masses are re-seeded from the live tanks every recompute - so a disagreement means the adapter is reading the sequence list wrongly, which is exactly the failure that is invisible in a plausible-looking stage table. TotalDeltaV is a Volatile.Read of a float, so the draw thread can have this even though the Lists behind it can tear.
             _s.StageModelKsaDv = performance.TotalDeltaV;
+
+            // One line when the staging changes shape, not one per refresh.
+            if (GuidanceLog.Enabled)
+            {
+                string signature = GuidanceLog.StageSignature(_s.StageModel);
+                if (signature != _s.StageModelSignature)
+                {
+                    _s.StageModelSignature = signature;
+                    GuidanceLog.Debug(vehicle, $"stage model: {GuidanceLog.DescribeStages(_s.StageModel)}; KSA total {_s.StageModelKsaDv:F0} m/s.");
+                }
+            }
 
             // The reserve rides the same tick: both of its inputs - the stage model and the part tree the separation walk reads - only change when staging does, and StageModelDirty is already set exactly then. So does the returnable stage list, which reads the same part tree for the same reason.
             RefreshReserve(vehicle);
@@ -778,6 +802,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ClaimVehicle(GuidanceMode mode, Vehicle vehicle)
     {
+        GuidanceLog.Debug(vehicle, $"{mode} claims the craft.");
         ResetLandingEngineWait();
         _s.ReleaseWithoutEngineCut = false;
         _s.ShutdownRequested = false;
@@ -797,6 +822,31 @@ public static partial class GuidanceWindow
         // The engine cut is deliberate and is NOT redundant with the incoming mode's own engine handling. A mode can claim the vehicle in a phase that commands nothing yet - LandingPhase.Coast is the case, coasting to a burn point - and in that phase nothing in ApplyAutopilot writes EngineOn at all. Without the cut, a 6-DOF descent handing over to a deorbit coast would leave the engine lit and throttled the whole way round.
         if (mode != GuidanceMode.SixDof && (_s.Active || _s.EngagePending))
             Disengage6Dof(vehicle);
+    }
+
+    // One line per mode phase change, whichever path made it, a step or a panel button. Compared against the phases the last line reported, so the draw path needs no log calls of its own.
+    private static void LogModeChanges(Vehicle vehicle)
+    {
+        if (!GuidanceLog.Enabled)
+            return;
+
+        if (_s.LandingPhase != _s.LoggedLandingPhase)
+        {
+            GuidanceLog.Debug(vehicle, $"landing phase {_s.LoggedLandingPhase} -> {_s.LandingPhase}"
+                + (_s.LandingStatus.Length > 0 ? $" ({_s.LandingStatus})" : "") + ".");
+            _s.LoggedLandingPhase = _s.LandingPhase;
+        }
+        if (_s.BoostbackPhase != _s.LoggedBoostbackPhase)
+        {
+            GuidanceLog.Debug(vehicle, $"boostback phase {_s.LoggedBoostbackPhase} -> {_s.BoostbackPhase}"
+                + (_s.BoostbackStatus.Length > 0 ? $" ({_s.BoostbackStatus})" : "") + ".");
+            _s.LoggedBoostbackPhase = _s.BoostbackPhase;
+        }
+        if (_s.Active != _s.LoggedSixDofActive)
+        {
+            GuidanceLog.Debug(vehicle, _s.Active ? "6-DOF guidance is active." : "6-DOF guidance ended.");
+            _s.LoggedSixDofActive = _s.Active;
+        }
     }
 
     // Called from GuidanceFeature's prefix on Vehicle.PrepareWorker - i.e. immediately before the sim snapshots the flight computer for this step, the one place where our writes are guaranteed to reach the control loop instead of being erased by the worker copy-back.
@@ -823,6 +873,8 @@ public static partial class GuidanceWindow
             _s = state;
         else if (!TryAdoptBooster(vehicle))
             return;
+
+        LogModeChanges(vehicle);
 
         if (_s.FcResetPending)
         {
@@ -854,7 +906,12 @@ public static partial class GuidanceWindow
                     ? "Guidance stopped: stock auto burn took the engine."
                     : "Guidance stopped: another writer took attitude control.";
                 _s.ReleaseWithoutEngineCut = true;
+                GuidanceLog.Info(vehicle, engineTaken
+                    ? "engine takeover, stock's burn mode reads Auto."
+                    : $"attitude takeover, {_s.AttitudeOwnership.DescribeChange(vehicle.FlightComputer)}.");
             }
+            else
+                GuidanceLog.Debug(vehicle, "nothing flies the craft any more, releasing it.");
             HandBackVehicle(vehicle);
             return;
         }
@@ -1183,12 +1240,14 @@ public static partial class GuidanceWindow
         {
             _s.FcResetPending = true;
             if (_s.ReleaseError != failure)
-                Console.Error.WriteLine("[AFC Guidance] " + failure);
+                GuidanceLog.Info(vehicle, failure + " The release is retried on the next step.");
             _s.ReleaseError = failure;
             _s.Status = failure;
             return false;
         }
 
+        GuidanceLog.Info(vehicle, $"released the craft{(cutEngine ? " with an engine cut" : ", engine left as it was")}"
+            + (_s.TakeoverStop ? $" after a takeover: {_s.TakeoverReason}" : "."));
         if (_s.Status == _s.ReleaseError)
             _s.Status = "";
         if (_s.TakeoverStop)

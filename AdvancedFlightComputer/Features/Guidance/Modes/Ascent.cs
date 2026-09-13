@@ -157,16 +157,19 @@ public static partial class GuidanceWindow
         StartGuidance(vehicle, orbit, parent);
     }
 
-    /// <summary>Stop everything, including a pending armed launch.</summary>
-    private static void AbortAscent() => ReleaseAscent("");
+    /// <summary>Stop everything, including a pending armed launch. A panel action, so the craft is the focused one.</summary>
+    private static void AbortAscent() => ReleaseAscent("", Program.ControlledVehicle);
 
     /// <summary>
     /// Hand the vehicle back and return the panel to a clean slate: guidance off, no
     /// pending launch, and the solver reset so nothing downstream reads a stale
     /// solution as if it were live.
     /// </summary>
-    private static void ReleaseAscent(string status)
+    private static void ReleaseAscent(string status, Vehicle vehicle)
     {
+        if (_s.Running || _s.LaunchArmed)
+            GuidanceLog.Info(vehicle, $"ascent {(status.Length > 0 ? "ended: " + status : "stopped by the player")}"
+                + $" (phase {PhaseName(_s.Phase)}, tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s).");
         // The shutdown for this path comes from the release itself, so record the intent. Nothing here queues a one-shot cut that a later takeover could preserve on its own.
         _s.ShutdownRequested = true;
         _s.Running = false;
@@ -240,7 +243,7 @@ public static partial class GuidanceWindow
         if (_s.Running && _s.Phase == AscentPhase.Terminal
             && (SimNow() > _s.CutoffTime + (_s.CutoffDone ? 2.0 : 15.0)))
         {
-            ReleaseAscent("Ascent complete - guidance released.");
+            ReleaseAscent("Ascent complete - guidance released.", vehicle);
         }
 
         if (!_s.Running)
@@ -287,6 +290,10 @@ public static partial class GuidanceWindow
         _s.LastSequenceTime = double.NegativeInfinity;
         _s.RgoPeak = 0.0;
         _s.VgoPeak = 0.0;
+        _s.LastGuidanceLogTime = double.NegativeInfinity;
+        GuidanceLog.Info(vehicle, $"ascent started to {_s.PeKm:F0} x {_s.ApKm:F0} km, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg"
+            + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}"
+            + $", reserve {(_s.ReserveArmed ? _s.ReserveKg.ToString("F0") + " kg" : "off")}, turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s).");
     }
 
     // The launch-to-target panel: target picker, chase-orbit offset, node direction, window countdown, and (when armed) a warp request plus the launch trigger.
@@ -393,10 +400,14 @@ public static partial class GuidanceWindow
             UpfgVehicle live = BuildUpfgVehicle(vehicle);
             if (live == null)
             {
-                _s.Status = "No thrust - holding last solution (staging/coast).";
+                if (_s.Status != NoThrustStatus)
+                    GuidanceLog.Debug(vehicle, "no thrust to plan with, holding the last solution.");
+                _s.Status = NoThrustStatus;
             }
             else
             {
+                if (_s.Status == NoThrustStatus)
+                    GuidanceLog.Debug(vehicle, "thrust is back, solving again.");
                 // The reserve BEFORE the g-limit split, so a stage that gets divided is divided at the masses it will actually fly through. Applied to this copy only - the cached model stays the vehicle as it is, which is what the stage table and the staging cue both need it to be.
                 if (_s.ReserveArmed)
                     ApplyAscentReserve(live, _s.ReserveKg);
@@ -409,14 +420,28 @@ public static partial class GuidanceWindow
                 double solveDt = double.IsNegativeInfinity(_s.LastSolveTime) ? 0.0 : now - _s.LastSolveTime;
                 _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
                 _s.LastSolveTime = now;
+
+                // A sample of the solution every few seconds, so a log shows the steering the craft was given without a line per cycle.
+                if (GuidanceLog.Enabled && now - _s.LastGuidanceLogTime >= GuidanceLogIntervalS)
+                {
+                    _s.LastGuidanceLogTime = now;
+                    double3 up = double3.Normalize(r);
+                    GuidanceLog.Debug(vehicle, $"UPFG {PhaseName(_s.Phase)}: tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s, converged {_s.Upfg.Converged}"
+                        + $", steer pitch {PitchOf(up, _s.Upfg.Steering):F1} deg, command pitch {PitchOf(up, _s.CommandDir):F1} deg"
+                        + $", alt {(r.Length() - bodyRadius) / 1000.0:F1} km, speed {v.Length():F0} m/s, mass {vehicle.TotalMass / 1000.0:F1} t"
+                        + $", model {live.Stages.Count} stage(s), S1 {live.Stages[0].Thrust / 1000.0:F0} kN {(live.Stages[0].MassTotal - live.Stages[0].MassDry) / (live.Stages[0].Thrust / (live.Stages[0].Isp * 9.80665)):F0} s.");
+                }
             }
         }
 
-        UpdatePhase(r, bodyRadius, stepDt);
+        UpdatePhase(vehicle, r, bodyRadius, stepDt);
     }
 
+    private const string NoThrustStatus = "No thrust - holding last solution (staging/coast).";
+    private const double GuidanceLogIntervalS = 5.0;
+
     // Ascent phase state machine. Transitions cascade naturally over successive frames, so initializing mid-flight fast-forwards to the right phase. stepDt is the sim time since the previous step, for the command slew limit.
-    private static void UpdatePhase(double3 r, double bodyRadius, double stepDt)
+    private static void UpdatePhase(Vehicle vehicle, double3 r, double bodyRadius, double stepDt)
     {
         double3 up = double3.Normalize(r);
         double alt = r.Length() - bodyRadius;
@@ -436,6 +461,7 @@ public static partial class GuidanceWindow
                 {
                     _s.Phase = AscentPhase.Turn;
                     _s.TurnStartTime = SimNow();
+                    GuidanceLog.Debug(vehicle, $"turn starts at {alt / 1000.0:F1} km.");
                 }
                 break;
 
@@ -443,7 +469,10 @@ public static partial class GuidanceWindow
                 // Pitch ramps down at the fixed rate; hand over to UPFG when it meets the closed-loop solution - or at the failsafe altitude regardless, so an open-loop profile can't run away.
                 if ((_s.Upfg.Converged && turnPitch <= upfgPitch)
                     || alt >= FailsafeAltKm * 1000.0)
+                {
                     _s.Phase = AscentPhase.ClosedLoop;
+                    GuidanceLog.Debug(vehicle, $"closed loop from {alt / 1000.0:F1} km, turn pitch {turnPitch:F1} deg, UPFG pitch {upfgPitch:F1} deg, converged {_s.Upfg.Converged}.");
+                }
                 break;
 
             case AscentPhase.ClosedLoop:
@@ -453,6 +482,7 @@ public static partial class GuidanceWindow
                     _s.FrozenDir = steerNow;
                     // tgo is measured from the SOLVE, not from now - the solution can be most of a guidance cycle old by the time this trips, and counting that cycle twice is a whole second of extra burn.
                     _s.CutoffTime = _s.LastSolveTime + _s.Upfg.Tgo;
+                    GuidanceLog.Debug(vehicle, $"terminal phase, attitude frozen at pitch {upfgPitch:F1} deg, cutoff in {_s.CutoffTime - SimNow():F1} s.");
                 }
                 break;
         }
