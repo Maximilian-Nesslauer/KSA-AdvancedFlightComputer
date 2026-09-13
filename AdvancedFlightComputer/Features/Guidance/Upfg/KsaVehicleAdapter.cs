@@ -212,7 +212,7 @@ public static class KsaVehicleAdapter
         duration = burned / realFlow;
     }
 
-    // Adjust the staging model when a solid motor is already burning.
+    // Adjust the staging model when a solid motor is already burning and the game paces it the way it ships. With SolidPacingPatch installed the drain simulation already paces a burning solid at its live flow, so this correction stands down, because it would otherwise add the same difference a second time.
     //
     // SequencePerformanceList.ComputeSolidPacingMassFlowRate paces a solid at (usable grain REMAINING) / (BurnSeconds of a FULL grain), and scales its thrust by the same ratio to preserve exhaust velocity. At ignition that is exact. Part-way through it is not: with a fraction f of the grain left the model reports f x the true thrust and mass flow, and - because the burn time it implies is remaining/(remaining/BurnSeconds) - predicts a further FULL BurnSeconds of burn no matter how little grain is left.
     //
@@ -221,7 +221,7 @@ public static class KsaVehicleAdapter
     // The adjustment uses the solid's live nozzle performance as the reference. Solids that are attached but not yet lit have a full grain, so f = 1 and no adjustment is needed.
     private static void CorrectBurningSolids(Vehicle vehicle, UpfgVehicle result)
     {
-        if (result.Stages.Count == 0)
+        if (SolidPacingPatch.Active || result.Stages.Count == 0)
             return;
 
         PartTree tree = vehicle.Parts;
