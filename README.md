@@ -203,13 +203,18 @@ The native guidance solvers are built from the vendored sources with Rust and Zi
 - [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) is now part of this mod. Remove or disable the standalone mod, otherwise both would steer the same craft.
 - Known conflicts: none
 
+## Credits
+
+- **Oliver Cairns ([cairn5](https://github.com/cairn5))** wrote [PoweredGuidance](https://github.com/cairn5/PoweredGuidance), which is the powered guidance in this mod: the UPFG ascent and its landing mode, G-FOLD, the CAT-S successive-convexification 6-DOF guidance, boostback, terminal hover, returnable stages, the impact prediction and the guidance panel. Its full history is part of this repository, and he is co-author of the project.
+- **[PEGAS](https://github.com/Noiredd/PEGAS)** by Noiredd is the reference and foundation for the UPFG implementation.
+- **G-FOLD** follows Acikmese and Ploen, *Convex Programming Approach to Powered Descent Guidance for Mars Landing* (2007), and Acikmese, Carson and Blackmore, *Lossless Convexification of Nonconvex Control Bound and Pointing Constraints of the Soft Landing Optimal Control Problem* (2013).
+- **[Clarabel](https://github.com/oxfordcontrol/Clarabel.rs)** by Goulart and Chen and **[SCS](https://github.com/cvxgrp/scs)** by O'Donoghue are the conic solvers behind G-FOLD and the 6-DOF guidance.
+
 ## License
 
 MIT - see [`LICENSE`](LICENSE). This applies to everything in the current tree.
 
-The guidance source under `AdvancedFlightComputer/Features/Guidance/` was imported from [cairn5/PoweredGuidance](https://github.com/cairn5/PoweredGuidance) with its full history rather than as a squashed snapshot, so its commits stay reachable from this repo with their original authorship intact.
-
-PoweredGuidance releases up to and including **v0.3.1** linked [ECOS](https://github.com/embotech/ecos), which is GPLv3, and were therefore distributed under GPLv3 as a whole. Those commits remain reachable here and those releases stay available under GPLv3 because a licence already granted cannot be withdrawn, but they are the only versions to which that applies. ECOS was removed and replaced by Clarabel (Apache-2.0) before the import, so **nothing in the current tree is GPL**.
+PoweredGuidance releases up to and including **v0.3.1** linked [ECOS](https://github.com/embotech/ecos), which is GPLv3, and were therefore distributed under GPLv3 as a whole. Those releases stay available under GPLv3, but ECOS was replaced by Clarabel (Apache-2.0) before the import, so **nothing in the current tree is GPL**.
 
 Attribution for the vendored solvers and their own transitive dependencies is in [`THIRD-PARTY-NOTICES.md`](THIRD-PARTY-NOTICES.md); all of them are permissive, and none impose copyleft on this work.
 
