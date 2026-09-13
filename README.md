@@ -60,7 +60,7 @@ Instead of one long burn that sweeps a large arc away from periapsis, the engine
 1. Select a plan type and configure the maneuver as usual.
 2. Use the **PASSES** slider to choose how many passes (2-10).
 3. Click **Create**. The first pass burn is placed in the burn plan.
-4. Enable **Auto** burn mode. Each pass fires automatically, and the next pass is scheduled after completion.
+4. Enable **Auto** burn mode. Each pass fires automatically, with the main engine or as an RCS burn, and the next pass is scheduled after completion.
 5. The plan window shows "Multi-pass active: pass X of N" with remaining pass details and a **Cancel remaining passes** button.
 
 **Why it helps:**
@@ -71,7 +71,6 @@ This is the same technique used by real missions: lunar kick stages that perform
 Multi-pass works best with the built-in [automatic staging](#automatic-staging) switched on (handles staging between passes) and the built-in [automatic burn removal](#automatic-burn-removal) left on (cleans up completed burns). A multi-pass execution then runs hands-free from first ignition to final departure.
 
 **Limitations:**
-- Automatic pass advancement currently requires stock engine Auto mode. RCS translation completion does not advance the multi-pass sequence.
 - Same-parent transfers (e.g., LEO to Luna) shift the final burn forward by a few parking periods to fit the K-schedule. The shift is shown in the plan window.
 - A change to the flyby side or altitude updates the selected departure even during thrust.
 - Very high-energy departures from small SOIs (e.g., low Mars orbit to Saturn) may auto-clamp to fewer passes because intermediate orbits would escape the SOI.
