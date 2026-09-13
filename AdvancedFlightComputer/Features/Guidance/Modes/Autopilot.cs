@@ -112,17 +112,19 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // Armed once, on the first step that needs it. A craft the player armed before is left as it is, and a player disarming mid-flight is honoured.
-        if (!_s.ArmedStaging)
+        // Armed once per flight, on the first step that needs it, unless the player armed the craft already. After that the switch is the player's, so a disarm holds for the rest of the flight and a re-arm is used as it is.
+        if (!_s.StagingArmChecked)
         {
+            _s.StagingArmChecked = true;
             if (!StagingDetector.IsArmed(vehicle))
             {
                 StagingDetector.Arm(vehicle, true);
                 _s.ArmedStaging = true;
             }
         }
-        else if (!StagingDetector.IsArmed(vehicle))
+        if (!StagingDetector.IsArmed(vehicle))
         {
+            // What guidance armed is off now, so the release has nothing of its own to switch off.
             _s.ArmedStaging = false;
             _s.StagingActive = false;
             _s.Status = "Auto-staging switched off by the player.";
@@ -167,6 +169,8 @@ public static partial class GuidanceWindow
 
     private static void DisarmStaging(Vehicle vehicle)
     {
+        // The next flight looks at the switch again.
+        _s.StagingArmChecked = false;
         if (!_s.ArmedStaging)
             return;
         _s.ArmedStaging = false;

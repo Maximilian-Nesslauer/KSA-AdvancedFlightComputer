@@ -21,7 +21,7 @@ A player change to the attitude target that guidance wrote is a takeover as well
 
 ## Staging
 
-Guidance has no stager of its own. `AutoSequence` arms AFC's AutoStage feature for the craft through `StagingDetector.Arm` and requests rows through `RequestStaging` for the cues only a plan knows, the cold ignition and the reserve boundary. Burnout and spent-booster detection, delays, crossfeed checks and the cascade are AutoStage's.
+Guidance has no stager of its own. `AutoSequence` arms AFC's AutoStage feature for the craft through `StagingDetector.Arm` and requests rows through `RequestStaging` for the cues only a plan knows, the cold ignition and the reserve boundary. Burnout and spent-booster detection, delays, crossfeed checks and the cascade are AutoStage's. Guidance arms the switch once per flight and then leaves it to the player, so a disarm holds until the flight ends.
 
 ## Layout
 

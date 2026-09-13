@@ -99,6 +99,9 @@ public sealed class VehicleAutopilotState
     /// hand-back disarms only what guidance switched on.</summary>
     public bool ArmedStaging;
 
+    /// <summary>True once this flight has looked at the AutoStage switch. From then on the switch is the player's, so guidance does not arm it again until the release.</summary>
+    public bool StagingArmChecked;
+
     /// <summary>The count of rows the AutoStage feature activated on this craft, as last seen.</summary>
     public int SeenStagings;
 
