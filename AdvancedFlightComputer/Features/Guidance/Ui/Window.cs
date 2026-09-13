@@ -31,10 +31,10 @@ public static partial class GuidanceWindow
     /// </summary>
     internal static void SetModActive(bool active)
     {
-        if (ModActive == active)
+        if (_modActive == active)
             return;
 
-        ModActive = active;
+        _modActive = active;
 
         if (!active)
             QueueAllReleases();

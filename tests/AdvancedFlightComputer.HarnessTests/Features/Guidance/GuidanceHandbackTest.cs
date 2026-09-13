@@ -20,6 +20,11 @@ public sealed class GuidanceHandbackTest : AfcTest
 
     private static Vehicle? _failing;
 
+    // Sets the switch without the releases SetModActive queues, so a case can test the disabled path on its own.
+    private static void SetModActiveRaw(bool active) =>
+        typeof(GuidanceWindow).GetField("_modActive", BindingFlags.NonPublic | BindingFlags.Static)!
+            .SetValue(null, active);
+
     protected override void Execute(TestContext t)
     {
         if (!TestWorld.RequireHome(t, out IParentBody home))
@@ -79,7 +84,7 @@ public sealed class GuidanceHandbackTest : AfcTest
             // Only this test's craft are cleared. The harness shares one session, so a global
             // release would take state another test left behind.
             _failing = null;
-            GuidanceWindow.ModActive = previousModActive;
+            SetModActiveRaw(previousModActive);
             if (spawned != null)
                 VehicleAutopilotState.Remove(spawned);
             if (spawnedOther != null)
@@ -183,7 +188,7 @@ public sealed class GuidanceHandbackTest : AfcTest
             .ToDictionary(field => field, field => field.GetValue(computer));
 
         // Set the flag directly to test the disabled path without queuing cleanup.
-        GuidanceWindow.ModActive = false;
+        SetModActiveRaw(false);
         GuidanceWindow.ApplyAutopilot(vehicle);
         t.Check("a disabled panel creates no state", !VehicleAutopilotState.TryGet(vehicle, out _));
 
@@ -212,7 +217,7 @@ public sealed class GuidanceHandbackTest : AfcTest
         t.Check("the stored engine command survives",
             Inputs(vehicle).EngineOn && Inputs(vehicle).EngineThrottle == 0.63f);
 
-        GuidanceWindow.ModActive = true;
+        SetModActiveRaw(true);
         VehicleAutopilotState.Remove(vehicle);
     }
 

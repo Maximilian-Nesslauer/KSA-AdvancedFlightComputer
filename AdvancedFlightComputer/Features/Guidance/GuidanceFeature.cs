@@ -79,11 +79,18 @@ internal static class GuidanceFeature
         try
         {
             GuidanceWindow.ApplyAutopilot(vehicle);
+            GuidanceWindow.StepSucceeded(vehicle);
         }
         catch (Exception ex)
         {
             LogHelper.WarnOnce($"guidance-step-{vehicle.Id}:{ex.GetType().Name}",
-                $"[AFC] Guidance step failed on '{vehicle.Id}', releasing the craft: {ex}");
+                $"[AFC] Guidance step failed on '{vehicle.Id}': {ex}");
+
+            // One bad step keeps the craft on its last command, and a run that does not recover gives it back.
+            if (!GuidanceWindow.CountFailedStep(vehicle))
+                return;
+            LogHelper.WarnOnce($"guidance-step-release-{vehicle.Id}",
+                $"[AFC] Guidance released '{vehicle.Id}' after {GuidanceWindow.MaxFailedSteps} failed steps in a row.");
             try
             {
                 GuidanceWindow.FailAutopilot(vehicle, ex);

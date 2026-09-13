@@ -130,6 +130,15 @@ public sealed class VehicleAutopilotState
     public string Status = "";
     public int FailStreak;
 
+    /// <summary>Driver steps in a row that threw. A short run keeps the craft on its last command, and a long one releases it, see GuidanceWindow.CountFailedStep.</summary>
+    public int FailedSteps;
+
+    /// <summary>Stage model refreshes in a row that threw. The first retries on the next step, and later ones wait for the normal interval.</summary>
+    public int StageModelFailures;
+
+    /// <summary>Wall-clock tick before which housekeeping that threw is not tried again.</summary>
+    public long HousekeepingRetryTick;
+
     /// <summary>The staged vehicle model UPFG plans against, rebuilt as the stack changes.</summary>
     public UpfgVehicle UpfgVehicle;
 

@@ -9,6 +9,9 @@ using KSA;
 /// </summary>
 public static partial class GuidanceWindow
 {
+    // A step that throws keeps its craft for a short run, because the flight computer still holds the last attitude target and engine command, and one bad step is not worth an engine cut. A run this long releases the craft.
+    internal const int MaxFailedSteps = 30;
+
     // The dispose postfix runs after the vehicle is removed, so only process resources need cleanup.
     internal static void ReleaseDisposedVehicle(Vehicle vehicle) => DropVehicle(vehicle, release: false);
 
@@ -34,7 +37,7 @@ public static partial class GuidanceWindow
             {
                 HandBackVehicle(vehicle);
                 // No later step retries this release, so a failed one must not leave stock's burn mode forced to Manual for good.
-                RestoreBurnMode(vehicle.FlightComputer, giveBack: true);
+                RestoreBurnMode(vehicle, giveBack: true);
             }
             DiscardResources();
         }
@@ -95,11 +98,22 @@ public static partial class GuidanceWindow
         _autoLaunchStepped = false;
     }
 
+    internal static void StepSucceeded(Vehicle vehicle)
+    {
+        if (VehicleAutopilotState.TryGet(vehicle, out var state))
+            state.FailedSteps = 0;
+    }
+
+    /// <summary>Counts a step that threw and returns true once the run is long enough to release the craft.</summary>
+    internal static bool CountFailedStep(Vehicle vehicle) =>
+        VehicleAutopilotState.TryGet(vehicle, out var state) && ++state.FailedSteps >= MaxFailedSteps;
+
     internal static void FailAutopilot(Vehicle vehicle, Exception error)
     {
         if (!VehicleAutopilotState.TryGet(vehicle, out var state))
             return;
         _s = state;
+        _s.FailedSteps = 0;
         _s.Error = "Guidance stopped: " + error.Message;
         HandBackVehicle(vehicle);
     }

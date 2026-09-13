@@ -28,6 +28,7 @@ public sealed class GuidanceDriverTest : AfcTest
 
     private static Vehicle? _held;
     private static Vehicle? _faulting;
+    private static Vehicle? _housekeepingFaulting;
 
     protected override void Execute(TestContext t)
     {
@@ -59,8 +60,10 @@ public sealed class GuidanceDriverTest : AfcTest
             GuidanceFeature.ApplyDriverPatches(harmony);
             harmony.Patch(AccessTools.Method(typeof(GuidanceWindow), "StepAscent"),
                 prefix: new HarmonyMethod(typeof(GuidanceDriverTest), nameof(ReplaceTheAscentStep)));
+            harmony.Patch(AccessTools.Method(typeof(GuidanceWindow), "RecordTrace"),
+                prefix: new HarmonyMethod(typeof(GuidanceDriverTest), nameof(ThrowInHousekeeping)));
             SharedVehicleHooks.GuidanceEnabled = true;
-            GuidanceWindow.ModActive = true;
+            GuidanceWindow.SetModActive(true);
 
             Orbit orbit = OrbitFixtures.CircularAt(home, 500_000.0, driver.Elapsed);
             Vehicle vehicle;
@@ -88,18 +91,20 @@ public sealed class GuidanceDriverTest : AfcTest
             ANoCutReleaseKeepsManual(t, vehicle, driver);
             TheGimbalWriterRunsThroughTheSink(t, vehicle, driver);
             SwitchingGuidanceOffReleasesTheCraft(t, vehicle, driver);
+            AHousekeepingFaultKeepsTheCraft(t, vehicle, driver);
             AFailedStepReleasesTheCraft(t, vehicle, driver);
         }
         finally
         {
             _held = null;
             _faulting = null;
+            _housekeepingFaulting = null;
             PhysicsBubble._forceOffRails = previousOffRails;
             harmony.UnpatchAll(harmony.Id);
             // Releases this test's craft before it despawns. No other craft holds state, see above.
             GuidanceFeature.DisableDriver();
             SharedVehicleHooks.GuidanceEnabled = previousEnabled;
-            GuidanceWindow.ModActive = previousModActive;
+            GuidanceWindow.SetModActive(previousModActive);
             Program.ControlledVehicle = previousFocus;
             AmbientState() = previousAmbient;
             TestSupport.DespawnNewVehicles(t.System, preexisting);
@@ -331,15 +336,46 @@ public sealed class GuidanceDriverTest : AfcTest
         }
     }
 
+    // A readout fault costs readouts, not the flight, and does not count as a failed step.
+    private static void AHousekeepingFaultKeepsTheCraft(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        VehicleAutopilotState state = Running(vehicle);
+        _housekeepingFaulting = vehicle;
+        try
+        {
+            driver.Step(0.05, GuidanceWindow.MaxFailedSteps + 2);
+            t.Check("a readout fault leaves the mode flying",
+                VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance
+                && state.ControlAcquired && state.Running && Inputs(vehicle).EngineOn);
+            t.Check("the fault holds the readouts off for a while", state.HousekeepingRetryTick > 0);
+        }
+        finally
+        {
+            _housekeepingFaulting = null;
+            state.Engage = false;
+            driver.Step(0.05, 1);
+            VehicleAutopilotState.Remove(vehicle);
+        }
+    }
+
+    // One step that throws keeps the craft on its last command, and a run that does not recover releases it.
     private static void AFailedStepReleasesTheCraft(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         VehicleAutopilotState state = Running(vehicle);
-        TestSupport.SetManualControlInputs(vehicle, 0.5f, engineOn: true);
-        _faulting = vehicle;
         try
         {
+            driver.Step(0.05, 2);
+            if (!t.Check("the mode runs before the fault", state.ControlAcquired && Inputs(vehicle).EngineOn))
+                return;
+
+            _faulting = vehicle;
             driver.Step(0.05, 1);
-            t.Check("a failed step releases the craft",
+            t.Check("one failed step keeps the craft and its engine",
+                VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance
+                && state.ControlAcquired && state.Running && Inputs(vehicle).EngineOn);
+
+            driver.Step(0.05, GuidanceWindow.MaxFailedSteps - 1);
+            t.Check("a run of failed steps releases the craft",
                 VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.None
                 && !state.ControlAcquired && !state.Running);
             t.Check("a failed step reports why",
@@ -367,6 +403,14 @@ public sealed class GuidanceDriverTest : AfcTest
         state.CommandDir = double3.Normalize(vehicle.Orbit.StateVectors.PositionCci);
         state.CommandRate = CommandRate;
         return state;
+    }
+
+    // Throws from the trace recorder, which runs as housekeeping, for the craft a case marks.
+    private static bool ThrowInHousekeeping(Vehicle vehicle)
+    {
+        if (ReferenceEquals(vehicle, _housekeepingFaulting))
+            throw new InvalidOperationException("Injected housekeeping fault");
+        return true;
     }
 
     // A Harmony prefix that returns false skips the original, so the fixture's ascent step is held
