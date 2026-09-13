@@ -336,6 +336,7 @@ public static partial class GuidanceWindow
         // here - it governs when the braking burn ends, which is a deorbit-phase
         // decision, not a G-FOLD tuning one.
         ImGui.Begin("G-FOLD params", ImGuiWindowFlags.AlwaysAutoResize);
+        using WindowEnd end = default;
         ImGui.InputDouble("Glide slope (deg)", ref _s.GfoldGlideSlopeDeg);
         ImGui.InputDouble("Thrust pointing (deg)", ref _s.GfoldPointingDeg);
         ImGui.InputDouble("Max speed (m/s)", ref _s.GfoldVMaxMs);
@@ -365,7 +366,6 @@ public static partial class GuidanceWindow
         ImGui.InputDouble("Command smoothing (s)", ref _s.GfoldSmoothTau);
         if (ImGui.Button("Close"))
             _showGfoldParams = false;
-        ImGui.End();
     }
 
     // ----- G-FOLD debug window -----
@@ -381,11 +381,11 @@ public static partial class GuidanceWindow
             return;
 
         ImGui.Begin("G-FOLD debug", ImGuiWindowFlags.AlwaysAutoResize);
+        using WindowEnd end = default;
         GfoldTrajectory plan = _s.GfoldPlan;
         if (plan == null)
         {
             ImGui.Text("No committed plan yet - appears once a G-FOLD descent solves.");
-            ImGui.End();
             return;
         }
 
@@ -418,8 +418,6 @@ public static partial class GuidanceWindow
                  "sigma (m/s2)", i => plan.Sigma[i], n, cursor);
         PlotPair("throttle (%)", i => 100.0 * plan.Sigma[i] * plan.Mass[i] / Math.Max(_s.GfoldThrustMax, 1.0),
                  "mass (kg)", i => plan.Mass[i], n, cursor);
-
-        ImGui.End();
     }
 
     private static double VecLen(double[] v)

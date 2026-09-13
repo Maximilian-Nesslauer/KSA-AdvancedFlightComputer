@@ -417,6 +417,7 @@ public static partial class GuidanceWindow
         var siteCol = new ImColor8(255, 120, 220);
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##boostback_overlay");
+        using WindowEnd end = default;
 
         // Body-fixed straight through - no per-frame rotation, and glued to the ground.
         DrawCcfPolyline(dl, st.ImpactPathCcf.AsSpan(0, st.ImpactPathCount), pathCol, 2.0f);
@@ -479,9 +480,6 @@ public static partial class GuidanceWindow
                 }
             }
         }
-
-        // BeginOverlayWindow opens an ImGui window and leaves the End() to the caller.
-        ImGui.End();
     }
 
     private static double AngleBetweenDeg(double3 a, double3 b)

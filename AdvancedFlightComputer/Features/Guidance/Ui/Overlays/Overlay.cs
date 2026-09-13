@@ -120,6 +120,7 @@ public static partial class GuidanceWindow
                                             double3 hitEcl, double latDeg, double lonDeg)
     {
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##retarget_preview");
+        using WindowEnd end = default;
         float2 m = ImGui.GetMousePos();
         var col = new ImColor8(255, 90, 220);
         if (hit)
@@ -133,7 +134,6 @@ public static partial class GuidanceWindow
         {
             dl.AddText(m + new float2(12f, 6f), new ImColor8(200, 200, 200), "aim at the surface to retarget");
         }
-        ImGui.End();
     }
 
     /// <summary>
@@ -201,6 +201,7 @@ public static partial class GuidanceWindow
         var hudCol = new ImColor8(205, 215, 225);
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##gfold_overlay");
+        using WindowEnd end = default;
 
         // --- Glideslope cone (drawn first so the path sits on top of it). The constraint is ||r_horizontal|| <= cot(gs) * height-above-target, i.e. a cone with apex at the target opening upward; rings + a few ribs show it.
         double tx = plan.Position[n - 1][0];                       // target altitude (local up)
@@ -304,8 +305,6 @@ public static partial class GuidanceWindow
             new float2(hx + 292f, hy + hud.Length * lh + 6f), new ImColor8(10, 14, 20), 4f);
         for (int i = 0; i < hud.Length; i++)
             dl.AddText(new float2(hx, hy + i * lh), hudCol, hud[i]);
-
-        ImGui.End();
     }
 
     // The landing-site marker, drawn in the world whenever the Landing tab is open (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
@@ -318,6 +317,7 @@ public static partial class GuidanceWindow
             return;
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##landing_site");
+        using WindowEnd end = default;
         var col = new ImColor8(120, 230, 255);
         const float g = 5f, r = 13f;            // crosshair gap and reach
         ScreenLine(dl, s + new float2(g, 0f), s + new float2(r, 0f), col, 1.6f);
@@ -326,7 +326,6 @@ public static partial class GuidanceWindow
         ScreenLine(dl, s - new float2(0f, r), s - new float2(0f, g), col, 1.6f);
         dl.AddCircleFilled(s, 2.5f, col);
         dl.AddText(s + new float2(r + 4f, -6f), col, $"SITE  {_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}");
-        ImGui.End();
     }
 
     // A point in the plan's site-local frame (x = up) back to a CCI position.

@@ -82,14 +82,13 @@ public static partial class GuidanceWindow
             return;
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##ascent_overlay");
+        using WindowEnd end = default;
 
         var targetCol = new ImColor8(90, 225, 255);   // cyan  - target orbit
         var traceCol = new ImColor8(255, 60, 220);    // magenta - flown so far
 
         DrawTargetOrbit(dl, orbit.StateVectors.PositionCci, bodyRadius, targetCol);
         DrawTrace(dl, traceCol);
-
-        ImGui.End();
     }
 
     // The target orbit as a closed ellipse in the target plane.

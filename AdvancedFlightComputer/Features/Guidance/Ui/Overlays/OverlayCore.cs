@@ -28,14 +28,19 @@ public static partial class GuidanceWindow
         ImGuiWindowFlags.NoFocusOnAppearing | ImGuiWindowFlags.NoInputs |
         ImGuiWindowFlags.NoBackground;
 
-    // Open a full-screen, click-through overlay window and hand back its draw list.
-    // Callers must ImGui.End() when done.
+    // Open a full-screen, click-through overlay window and hand back its draw list. The caller holds a WindowEnd for the rest of its draw, so the window ends however that draw exits.
     private static ImDrawListPtr BeginOverlayWindow(IGameViewport vp, string name)
     {
         ImGui.SetNextWindowPos(new float2(0f, 0f));
         ImGui.SetNextWindowSize(new float2(vp.Width, vp.Height));
         ImGui.Begin(name, OverlayFlags);
         return ImGui.GetWindowDrawList();
+    }
+
+    // Ends the ImGui window it guards when its scope exits, an exception included. ImGui keeps a window stack, so a Begin left without its End does not fail where the fault is. It fails at the end of the frame as a missing End that names the wrong window.
+    private ref struct WindowEnd
+    {
+        public void Dispose() => ImGui.End();
     }
 
     // Set the per-frame projection context (camera + body transforms) used by TryProjectCci. False if there's no camera or the parent isn't a Celestial.

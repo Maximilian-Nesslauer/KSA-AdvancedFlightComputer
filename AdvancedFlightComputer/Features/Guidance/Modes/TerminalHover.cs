@@ -250,6 +250,7 @@ public static partial class GuidanceWindow
             return;
 
         ImGui.Begin("Hover params", ImGuiWindowFlags.AlwaysAutoResize);
+        using WindowEnd end = default;
         ImGui.InputDouble("Touchdown rate (m/s)", ref _s.TermTouchdownRate);
         ImGui.InputDouble("Constant-rate zone (m)", ref _s.TermConstAltM);
         ImGui.InputDouble("Profile quad k (1/(m s))", ref _s.TermQuadK);
@@ -264,6 +265,5 @@ public static partial class GuidanceWindow
         ImGui.InputDouble("Nudge step (m/s)", ref _s.TermNudgeStep);
         if (ImGui.Button("Close"))
             _showTermParams = false;
-        ImGui.End();
     }
 }

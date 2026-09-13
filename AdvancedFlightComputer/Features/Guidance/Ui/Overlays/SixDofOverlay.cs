@@ -46,6 +46,7 @@ public static partial class GuidanceWindow
         var refCol = new ImColor8(120, 255, 150);
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##sixdof_overlay");
+        using WindowEnd end = default;
 
         // Materialised up front rather than read through a local function: a Span cannot be captured by one, and projecting each node once is cheaper anyway.
         var node = new double3[n];
@@ -143,8 +144,5 @@ public static partial class GuidanceWindow
             if (v != null)
                 OvLine(dl, refCci, v.Orbit.StateVectors.PositionCci, refCol, 1.0f);
         }
-
-        // BeginOverlayWindow opens an ImGui window and documents that the caller closes it. Omitting this produces ImGui's "missing End" assert, not a silent leak.
-        ImGui.End();
     }
 }
