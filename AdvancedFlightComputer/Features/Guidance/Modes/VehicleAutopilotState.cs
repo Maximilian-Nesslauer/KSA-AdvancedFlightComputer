@@ -457,6 +457,9 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Wall-clock cost of the last descent solve, ms - the number the frame budget cares about.</summary>
     public double GfoldSolveMs;
+
+    /// <summary>Sim time before which a re-plan skips the flight-time searches, set when a plan was refused for propellant.</summary>
+    public double GfoldSearchRetryTime = double.NegativeInfinity;
     public double GfoldHoverHandoffAltM = 10.0;
     public double GfoldThrottleMin = 0.05;
     public double GfoldThrottleMax = 0.90;

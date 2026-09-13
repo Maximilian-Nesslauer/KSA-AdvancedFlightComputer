@@ -162,6 +162,8 @@ public static partial class GuidanceWindow
             _s.GfoldLastSolveTime = double.NegativeInfinity;
             _s.GfoldArrivalTime = SimNow() + 120.0; // out of the terminal-freeze window so it re-solves
             _s.GfoldFailStreak = 0;
+            // A new site gets its search at once, even while the searches rest after a refusal for the old one.
+            _s.GfoldSearchRetryTime = double.NegativeInfinity;
         }
 
         // 6-DOF had no path here at all, which is why a retarget never reached it: the frame moved under a warm-started plan and nothing asked for a new one. Force the next step to replan; SCvx re-anchors at the measured state every solve, so the stale warm start is a slower first solve rather than a wrong one.

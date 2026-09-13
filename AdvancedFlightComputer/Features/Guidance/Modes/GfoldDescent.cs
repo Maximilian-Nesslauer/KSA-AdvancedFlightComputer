@@ -34,6 +34,9 @@ public static partial class GuidanceWindow
     private const double SearchBracketLo = 0.5;
     private const double SearchBracketHi = 2.0;
 
+    // How long the flight-time searches rest after a plan was refused for propellant. A craft that is short now is still short a quarter second later, and a search costs tens of solves on the sim thread.
+    private const double GfoldFuelSearchRetryS = 2.0;
+
     // Committed-trajectory tracking: the solved descent plan is flown by time
     // index (feed-forward the planned thrust at the current time + light PD
     // feedback on the reference state) and re-solved on a cadence, rather than
@@ -142,6 +145,12 @@ public static partial class GuidanceWindow
                 if (t.Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate && FitsFuel(t, p))
                     traj = t;
             }
+            // While the searches rest after a propellant refusal, the committed plan keeps flying and the single solve above still runs on every cadence, so a plan that fits again is taken at once. A retarget ends the rest, so its first search runs straight away, and a refused retarget rests like any other search. A craft with no plan yet always searches.
+            if (traj == null && _s.GfoldPlan != null && now < _s.GfoldSearchRetryTime)
+            {
+                FailGfold($"G-FOLD is short of propellant, searching again in {_s.GfoldSearchRetryTime - now:F1} s");
+                return;
+            }
             if (traj == null)
             {
                 // Warm-start the SEARCH from the last solution. The solver itself
@@ -202,6 +211,7 @@ public static partial class GuidanceWindow
                 }
                 if (!FitsFuel(best.Trajectory, p))
                 {
+                    _s.GfoldSearchRetryTime = now + GfoldFuelSearchRetryS;
                     FailGfold($"G-FOLD needs {best.FuelUsed:F0} kg of propellant, {p.FuelMass:F0} kg aboard");
                     return;
                 }
@@ -216,6 +226,7 @@ public static partial class GuidanceWindow
             _s.GfoldThrustMax = p.ThrustMax;
             _s.GfoldFailStreak = 0;
             _s.GfoldForceSearch = false;
+            _s.GfoldSearchRetryTime = double.NegativeInfinity;
             _s.LandingStatus = "";
         }
         catch (Exception e)

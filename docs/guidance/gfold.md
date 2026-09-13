@@ -441,6 +441,7 @@ dotnet run --project gfold/Gfold.Console -- --frame
 ```
 
 Times both in-flight call shapes at the size the mod actually solves: the cadence solve (one `SolveMinFuel` at the remaining flight time) and the fallback (`SearchMinFuel`, tens of solves, the one that can stall a frame). It also exercises the time-limit guard, which must come back inside its budget *and* report itself unusable - a time-limited iterate is not a solution, and a run that reported both Optimal and usable would mean the caller flies a half-converged plan.
+In flight, a plan refused because it needs more propellant than the craft carries rests these searches for two seconds of sim time, while the committed plan keeps flying and the cadence solve still runs. A retarget ends that rest.
 
 *Tolerance note:* when SCS was carried as a second backend, the N=120 Mars case showed that **tighter is not better**. At eps 1e-5 it agreed with the interior-point answer to 0.06 kg and 0.06 s for about 3x the per-solve cost. At 1e-7 the individual solves were more accurate but the *search* was far worse, 17 s and 41 kg off, because enough solves exhausted the iteration budget to be rejected as infeasible and the search bracketed the minimum elsewhere. A first-order solver degrades by returning a worse decision, not a looser number. Clarabel needs no equivalent knob because an IPM's cost scales with log(1/eps), so accuracy is nearly free.
 
