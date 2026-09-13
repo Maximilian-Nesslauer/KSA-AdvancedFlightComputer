@@ -128,7 +128,11 @@ internal static class RcsBurnUi
                 ConsoleWidgets.Readout("TO GO".AsSpan(),
                     $"{bt.DeltaVToGoCci.Length():F2} m/s".AsSpan());
             if (ConsoleWidgets.DangerButton("CANCEL RCS BURN".AsSpan()))
+            {
+                // An explicit stop must not restore stock Auto.
+                exec.ForcedBurnManual = false;
                 RcsExecutor.RequestCancel(exec, "user request");
+            }
             return;
         }
 

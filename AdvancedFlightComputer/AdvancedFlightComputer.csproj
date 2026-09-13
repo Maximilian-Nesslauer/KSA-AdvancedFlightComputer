@@ -5,6 +5,8 @@
     <PlatformTarget>x64</PlatformTarget>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <KsaDir Condition="'$(KsaDir)' == ''">$(MSBuildProjectDirectory)\..\..\..\refs\game</KsaDir>
   </PropertyGroup>
 
   <ItemGroup>
@@ -14,41 +16,48 @@
 
   <ItemGroup>
     <Reference Include="KSA">
-      <HintPath>..\..\..\refs\game\KSA.dll</HintPath>
+      <HintPath>$(KsaDir)\KSA.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Core.Numerics">
-      <HintPath>..\..\..\refs\game\Brutal.Core.Numerics.dll</HintPath>
+      <HintPath>$(KsaDir)\Brutal.Core.Numerics.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Core.Logging">
-      <HintPath>..\..\..\refs\game\Brutal.Core.Logging.dll</HintPath>
+      <HintPath>$(KsaDir)\Brutal.Core.Logging.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="CommunityToolkit.HighPerformance">
-      <HintPath>..\..\..\refs\game\CommunityToolkit.HighPerformance.dll</HintPath>
+      <HintPath>$(KsaDir)\CommunityToolkit.HighPerformance.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.ImGui">
-      <HintPath>..\..\..\refs\game\Brutal.ImGui.dll</HintPath>
+      <HintPath>$(KsaDir)\Brutal.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Core.Strings">
-      <HintPath>..\..\..\refs\game\Brutal.Core.Strings.dll</HintPath>
+      <HintPath>$(KsaDir)\Brutal.Core.Strings.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Localization">
-      <HintPath>..\..\..\refs\game\Brutal.Localization.dll</HintPath>
+      <HintPath>$(KsaDir)\Brutal.Localization.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="BepuUtilities">
-      <HintPath>..\..\..\refs\game\BepuUtilities.dll</HintPath>
+      <HintPath>$(KsaDir)\BepuUtilities.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>
 
   <ItemGroup>
     <PatchFile Include="Patches\*.xml" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Remove="Features\Guidance\Numerics\**\*.cs;Features\Guidance\Gfold\**\*.cs;Features\Guidance\Scvx\**\*.cs" />
+    <ProjectReference Include="Features\Guidance\Numerics\AdvancedFlightComputer.Guidance.Numerics.csproj" />
+    <ProjectReference Include="Features\Guidance\Gfold\AdvancedFlightComputer.Guidance.Gfold.csproj" />
+    <ProjectReference Include="Features\Guidance\Scvx\AdvancedFlightComputer.Guidance.Scvx.csproj" />
   </ItemGroup>
 
   <!-- The headless test mod asserts against internal feature code (OrbitManeuvers). -->
@@ -65,6 +74,7 @@
   <!-- Deploy into the game's mods folder, plus the worktree-safety and game-is-running
        guards. The @(PatchFile) items declared above are picked up automatically. -->
   <Import Project="..\build\ModDeploy.targets" />
+  <Import Project="..\build\GuidancePayload.targets" />
 
   <Target Name="PackageRelease" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
     <PropertyGroup>
@@ -76,6 +86,7 @@
     <Copy SourceFiles="$(OutputPath)$(AssemblyName).dll" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="mod.toml" DestinationFolder="$(ReleaseDir)" />
     <Copy SourceFiles="@(PatchFile)" DestinationFolder="$(ReleaseDir)Patches\" />
+    <Copy SourceFiles="@(ModPayloadFile)" DestinationFiles="@(ModPayloadFile->'$(ReleaseDir)%(TargetPath)')" />
     <ZipDirectory SourceDirectory="$(OutputPath)release" DestinationFile="$(ZipPath)" Overwrite="true" />
     <RemoveDir Directories="$(OutputPath)release" />
     <Message Importance="high" Text="Release packaged: $(ZipPath)" />

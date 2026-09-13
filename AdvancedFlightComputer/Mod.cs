@@ -2,6 +2,8 @@ using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
+using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -68,6 +70,23 @@ public sealed class Mod
                 DisableRcsTranslation();
         }
 
+        // Keep the menu available when the driver fails. The driver still requires the menu because
+        // it contains the off switch.
+        bool guidanceMenu = Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
+            && _patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyDiagnosticPatches);
+
+        if (coreReady && guidanceMenu && Validated("Guidance", GameReflection.ValidateGuidance))
+        {
+            SharedVehicleHooks.GuidanceEnabled = _patches.TryApply("Guidance", GuidanceFeature.ApplyDriverPatches);
+            if (!SharedVehicleHooks.GuidanceEnabled)
+                GuidanceFeature.DisableDriver();
+        }
+
+        // The solid-motor pacing of the staging drain model, which the game's staging window and the ascent stage model both read. Independent of the driver, so a stock staging readout is right whether or not guidance flies.
+        if (Validated("GuidanceStaging", GameReflection.ValidateGuidanceStaging)
+            && !_patches.TryApply("GuidanceStaging", SolidPacingPatch.Apply))
+            SolidPacingPatch.Disable();
+
         if (coreReady && Validated("AutoStage", GameReflection.ValidateAutoStage)
             && AutoStageFeature.StandaloneModAbsent())
         {
@@ -103,6 +122,9 @@ public sealed class Mod
     {
         SharedVehicleHooks.ApplyPatches(harmony);
         SaveLoadObserver.ApplyPatches(harmony);
+
+        // Keep the shared command sink installed when an individual feature fails to load.
+        VehicleCommandSink.ApplyPatches(harmony);
     }
 
     private static void PatchManeuverTools(Harmony harmony)
@@ -172,7 +194,6 @@ public sealed class Mod
 
     private static void PatchRcsTranslation(Harmony harmony)
     {
-        harmony.CreateClassProcessor(typeof(RcsComputeControlPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
         harmony.CreateClassProcessor(typeof(RcsGaugePatches.IsDisabledPatch)).Patch();
@@ -202,6 +223,11 @@ public sealed class Mod
         _maneuverTypesInjected = false;
     }
 
+    // The guidance panel is its own set of ImGui windows rather than a patch on a stock window, so
+    // it draws from the loader's hook after stock has drawn its viewports.
+    [StarMapAfterGui]
+    public void DrawGui(double dt) => GuidanceFeature.DrawGui();
+
     [StarMapUnload]
     public void Unload()
     {
@@ -209,6 +235,8 @@ public sealed class Mod
         StagingDetector.FlushPendingForUnload();
         SharedVehicleHooks.Reset();
         _patches.UnpatchAll();
+        GuidanceFeature.Reset();
+        SolidPacingPatch.Disable();
         RemoveTransferTypes();
 
         // Persistence is driven by UncompressedSave.Write, so a quit without saving drops

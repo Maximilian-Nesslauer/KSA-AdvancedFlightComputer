@@ -1,21 +1,19 @@
 using System.Runtime.CompilerServices;
+using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using CommunityToolkit.HighPerformance;
-using HarmonyLib;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
-/// <summary>This postfix runs on the vehicle worker after FlightComputer.ComputeControl. It reads the published command and converts the remaining delta V into thruster pulses without allocating memory or taking locks. The worker also records that it read the command.</summary>
-[HarmonyPatch(typeof(FlightComputer), nameof(FlightComputer.ComputeControl),
-    new Type[] { typeof(FlightComputerNavigation), typeof(ManualControlInputs), typeof(FlightComputerOutput) },
-    new ArgumentType[] { ArgumentType.Ref, ArgumentType.Ref, ArgumentType.Ref })]
+/// <summary>Converts the published RCS command into thruster pulses on the vehicle worker, without allocations or locks. Reports pulse and wake requests to <see cref="VehicleCommandSink"/>.</summary>
 internal static class RcsComputeControlPatch
 {
-    static void Postfix(FlightComputer __instance, in FlightComputerNavigation nav, ref FlightComputerOutput outputs)
+    internal static void Command(FlightComputer fc, in FlightComputerNavigation nav,
+                                 ref FlightComputerOutput outputs, ref VehicleCommandSink.Receipt receipt)
     {
         // Only active executions may override stock engine commands and burn timing.
-        if (!RcsCommandChannel.TryGet(__instance.BurnPlan, out RcsWorkerCommand cmd) || !cmd.Active)
+        if (!RcsCommandChannel.TryGet(fc.BurnPlan, out RcsWorkerCommand cmd) || !cmd.Active)
             return;
 
         cmd.MarkConsumed();
@@ -23,57 +21,58 @@ internal static class RcsComputeControlPatch
         // Suppress engine commands even if another caller changed BurnMode directly.
         ZeroEngineCommands(ref outputs);
 
-        BurnTarget? bt = __instance.Burn;
+        BurnTarget? bt = fc.Burn;
         if (bt == null)
             return;
 
         float3 togo = bt.DeltaVToGoCci;
         float3 impulse = float3.Pack(
             double3.Unpack(togo).Transform(doubleQuat.Concatenate(nav.Ctrl2Body, nav.Body2Cci).Inverse()))
-            * __instance.TotalMassPropsBody.Mass;
+            * fc.TotalMassPropsBody.Mass;
 
         // Stock UpdateBurnTarget writes engine timing every tick. Replace it with remaining RCS duration. Stale LP geometry uses the group model.
         bool lpUsable = cmd.LpSecondsPerImpulse != null
-            && cmd.LpSecondsPerImpulse.Length == __instance.VehicleConfig.Thrusters.Count
-            && (!cmd.RequireAttitude || !RcsExecutor.OutsideAlignGate(__instance));
+            && cmd.LpSecondsPerImpulse.Length == fc.VehicleConfig.Thrusters.Count
+            && (!cmd.RequireAttitude || !RcsExecutor.OutsideAlignGate(fc));
         bt.BurnDuration = RemainingDurationSec(cmd, impulse, lpUsable);
         bt.IgnitionTime = cmd.IgnitionTime;
 
         // Mirror timing before this gate. FlightComputer.UpdateBurnTarget otherwise leaves engine timing on a disabled RCS tick.
-        if (__instance.RCSMode != FlightComputerRCSMode.Enabled)
+        if (fc.RCSMode != FlightComputerRCSMode.Enabled)
             return;
 
         double toIgnition = (cmd.IgnitionTime - nav.Time).Seconds();
         if (toIgnition > 0.0)
         {
-            outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, toIgnition);
+            receipt.Wake(toIgnition);
             return;
         }
 
         if (float3.Dot(togo, bt.DeltaVTargetCci) <= 0f)
             return;
 
-        if (cmd.RequireAttitude && RcsExecutor.OutsideAlignGate(__instance))
+        if (cmd.RequireAttitude && RcsExecutor.OutsideAlignGate(fc))
         {
-            outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
+            receipt.Wake(RcsExecutor.MaxPulseSec);
             return;
         }
 
         // Stock updates the thrust timestamp before this postfix, so record any translation pulses committed here. A changed thruster count invalidates the LP pattern and falls back to groups.
         float[]? lp = cmd.LpSecondsPerImpulse;
-        if (lp != null && lp.Length == __instance.VehicleConfig.Thrusters.Count)
+        if (lp != null && lp.Length == fc.VehicleConfig.Thrusters.Count)
         {
-            if (FireLpPattern(__instance, ref outputs, cmd, lp, impulse))
-                __instance.LastThrustTime = nav.Time;
+            if (FireLpPattern(fc, ref outputs, ref receipt, cmd, lp, impulse))
+                fc.LastThrustTime = nav.Time;
             return;
         }
 
-        if (FireGroups(__instance, ref outputs, cmd, impulse))
-            __instance.LastThrustTime = nav.Time;
+        if (FireGroups(fc, ref outputs, ref receipt, cmd, impulse))
+            fc.LastThrustTime = nav.Time;
     }
 
     private static bool FireGroups(
-        FlightComputer fc, ref FlightComputerOutput outputs, RcsWorkerCommand cmd, float3 impulse)
+        FlightComputer fc, ref FlightComputerOutput outputs, ref VehicleCommandSink.Receipt receipt,
+        RcsWorkerCommand cmd, float3 impulse)
     {
         impulse.X = ShapeAxis(impulse.X, cmd.AxisForcePos.X, cmd.AxisForceNeg.X,
             cmd.AxisMinCorrectingImpulsePos.X, cmd.AxisMinCorrectingImpulseNeg.X, cmd.MaxPulseSec);
@@ -83,7 +82,7 @@ internal static class RcsComputeControlPatch
             cmd.AxisMinCorrectingImpulsePos.Z, cmd.AxisMinCorrectingImpulseNeg.Z, cmd.MaxPulseSec);
         if (impulse.IsExactlyZero())
         {
-            outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
+            receipt.Wake(RcsExecutor.MaxPulseSec);
             return false;
         }
 
@@ -108,12 +107,11 @@ internal static class RcsComputeControlPatch
             if (pulse > state.CommandPulseTime)
                 state.CommandPulseTime = pulse;
             minCommanded = Math.Min(minCommanded, pulse);
-            outputs.AnyActuatorCommanded = true;
+            receipt.Command();
         }
         if (float.IsFinite(minCommanded))
         {
-            outputs.NextWakeupDeltaTime = Math.Min(
-                outputs.NextWakeupDeltaTime, Math.Min(RcsExecutor.MaxPulseSec, minCommanded));
+            receipt.Wake(Math.Min(RcsExecutor.MaxPulseSec, minCommanded));
             return true;
         }
         return false;
@@ -145,15 +143,15 @@ internal static class RcsComputeControlPatch
 
     /// <summary>Returns true when at least one pulse was committed.</summary>
     private static bool FireLpPattern(
-        FlightComputer fc, ref FlightComputerOutput outputs, RcsWorkerCommand cmd,
-        float[] secondsPerImpulse, float3 impulseCtrl)
+        FlightComputer fc, ref FlightComputerOutput outputs, ref VehicleCommandSink.Receipt receipt,
+        RcsWorkerCommand cmd, float[] secondsPerImpulse, float3 impulseCtrl)
     {
         // Project onto the solved direction. A negative projection cannot fire this pattern.
         float j = float3.Dot(impulseCtrl, cmd.LpDirCtrl);
         j = Math.Min(j, cmd.LpImpulseCapNs);
         if (j <= 0f)
         {
-            outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
+            receipt.Wake(RcsExecutor.MaxPulseSec);
             return false;
         }
 
@@ -174,15 +172,14 @@ internal static class RcsComputeControlPatch
             if (pulse > current.State.CommandPulseTime)
                 current.State.CommandPulseTime = pulse;
             minCommanded = Math.Min(minCommanded, pulse);
-            outputs.AnyActuatorCommanded = true;
+            receipt.Command();
         }
         if (float.IsFinite(minCommanded))
         {
-            outputs.NextWakeupDeltaTime = Math.Min(
-                outputs.NextWakeupDeltaTime, Math.Min(RcsExecutor.MaxPulseSec, minCommanded));
+            receipt.Wake(Math.Min(RcsExecutor.MaxPulseSec, minCommanded));
             return true;
         }
-        outputs.NextWakeupDeltaTime = Math.Min(outputs.NextWakeupDeltaTime, RcsExecutor.MaxPulseSec);
+        receipt.Wake(RcsExecutor.MaxPulseSec);
         return false;
     }
 

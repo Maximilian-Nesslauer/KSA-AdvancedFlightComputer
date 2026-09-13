@@ -1,0 +1,59 @@
+<Project>
+  <Import Project="$(MSBuildThisFileDirectory)GuidanceNative.props" />
+
+  <ItemGroup>
+    <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Numerics.dll" TargetPath="AdvancedFlightComputer.Guidance.Numerics.dll" />
+    <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Gfold.dll" TargetPath="AdvancedFlightComputer.Guidance.Gfold.dll" />
+    <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Scvx.dll" TargetPath="AdvancedFlightComputer.Guidance.Scvx.dll" />
+  </ItemGroup>
+
+  <!-- Windows and Linux use different library names, so one mod folder can contain
+       both runtimes and each platform can load its own files. -->
+  <ItemGroup Condition="$(GuidanceNativeRids.Contains('win-x64'))">
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/clarabel_c.dll" TargetPath="clarabel_c.dll" />
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/scs.dll" TargetPath="scs.dll" />
+  </ItemGroup>
+  <ItemGroup Condition="$(GuidanceNativeRids.Contains('linux-x64'))">
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libclarabel_c.so" TargetPath="libclarabel_c.so" />
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libscs.so" TargetPath="libscs.so" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ModPayloadFile Include="@(GuidanceNativeFile)" />
+    <ModPayloadFile Include="$(MSBuildThisFileDirectory)../LICENSE" TargetPath="LICENSE" />
+    <ModPayloadFile Include="$(MSBuildThisFileDirectory)../THIRD-PARTY-NOTICES.md" TargetPath="THIRD-PARTY-NOTICES.md" />
+    <ModPayloadFile Include="$(MSBuildThisFileDirectory)../licenses/*.txt" TargetPath="licenses/%(Filename)%(Extension)" />
+  </ItemGroup>
+
+  <Target Name="ValidateGuidanceRuntimeFiles" BeforeTargets="PrepareForBuild"
+          Condition="'$(Configuration)' == 'Release' OR '$(DeployToMods)' == 'true'">
+    <Error Condition="!Exists('%(GuidanceNativeFile.Identity)')"
+           Text="%(GuidanceNativeFile.Identity) is required for deployment or Release. Build it with build/build-clarabel.ps1 or build/build-scs.ps1 for that runtime, or use Debug with -p:DeployToMods=false for a managed compile check." />
+  </Target>
+  <!-- Check the archive against the payload list used to create it. This catches
+       missing files and prevents game or loader assemblies from being shipped. -->
+  <Target Name="VerifyGuidancePackage" AfterTargets="PackageRelease" Condition="'$(Configuration)' == 'Release'">
+    <PropertyGroup>
+      <GuidanceVerifyDir>$(OutputPath)package-verify/</GuidanceVerifyDir>
+      <ZipPath Condition="'$(ZipPath)' == ''">$(OutputPath)$(AssemblyName).zip</ZipPath>
+    </PropertyGroup>
+    <RemoveDir Directories="$(GuidanceVerifyDir)" />
+    <Unzip SourceFiles="$(ZipPath)" DestinationFolder="$(GuidanceVerifyDir)" />
+    <ItemGroup>
+      <ExpectedPackageFile Include="$(GuidanceVerifyDir)$(AssemblyName)/$(AssemblyName).dll" />
+      <ExpectedPackageFile Include="$(GuidanceVerifyDir)$(AssemblyName)/mod.toml" />
+      <ExpectedPackageFile Include="@(PatchFile->'$(GuidanceVerifyDir)$(AssemblyName)/Patches/%(Filename)%(Extension)')" />
+      <ExpectedPackageFile Include="@(ModPayloadFile->'$(GuidanceVerifyDir)$(AssemblyName)/%(TargetPath)')" />
+      <ActualPackageFile Include="$(GuidanceVerifyDir)**/*" />
+      <MissingPackageFile Include="@(ExpectedPackageFile->'%(FullPath)')" Exclude="@(ActualPackageFile->'%(FullPath)')" />
+      <UnexpectedPackageFile Include="@(ActualPackageFile->'%(FullPath)')" Exclude="@(ExpectedPackageFile->'%(FullPath)')" />
+    </ItemGroup>
+    <Error Condition="'@(MissingPackageFile)' != ''"
+           Text="The release package is missing @(MissingPackageFile->'%(Filename)%(Extension)', ', ')." />
+    <Error Condition="'@(UnexpectedPackageFile)' != ''"
+           Text="The release package contains undeclared files, @(UnexpectedPackageFile->'%(Filename)%(Extension)', ', ')." />
+    <Message Importance="high" Text="Release package verified, @(ExpectedPackageFile->Count()) files." />
+    <RemoveDir Directories="$(GuidanceVerifyDir)" />
+  </Target>
+
+</Project>

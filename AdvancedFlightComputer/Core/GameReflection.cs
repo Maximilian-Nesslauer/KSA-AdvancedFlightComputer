@@ -31,10 +31,12 @@ internal static class GameReflection
 
         /// <summary>Handles that control one optional patch. Each patch checks its own handle.</summary>
         SoftAnchor = 64,
-
-        AutoStage = 128,
-        AutoRemove = 256,
-        SettingsPage = 512,
+        GuidanceDiagnostics = 128,
+        Guidance = 256,
+        AutoStage = 512,
+        AutoRemove = 1024,
+        SettingsPage = 2048,
+        GuidanceStaging = 4096,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -202,6 +204,11 @@ internal static class GameReflection
     public static readonly MethodInfo? Vehicle_Dispose =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
 
+    // ID-keyed registries must follow a successful vehicle rename.
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
+    public static readonly MethodInfo? Vehicle_SetName =
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.SetName), new[] { typeof(string) });
+
     #endregion
 
     #region AutoStage
@@ -284,7 +291,60 @@ internal static class GameReflection
 
     #endregion
 
+    #region Guidance
+
+    // The per-vehicle guidance step runs as a prefix here. Universe.PrepareVehicleWorkers calls it
+    // after InputEvents.ApplyInputEvents drained the player's input and before
+    // VehicleUpdateState.PrepareFromVehicle snapshots the flight computer and the manual inputs for
+    // the worker, so it is the last main-thread site before the snapshot and the only one after
+    // the drain. The rest of the method still runs after the prefix and clears EngineOn while
+    // BurnMode is Auto, which is why guidance holds the mode in Manual.
+    [UsedBy(Feature.Guidance)]
+    public static readonly MethodInfo? Vehicle_PrepareWorker =
+        AccessTools.Method(typeof(Vehicle), nameof(Vehicle.PrepareWorker), new[] { typeof(SimStep) });
+
+    // Stock builds AttitudeTarget here and reads it in UpdateAttitudeError right after, so a postfix
+    // can add the commanded turning rate without changing where the craft points. It is a private
+    // method with one call site, so an inlining attribute added on a game update would leave this
+    // handle resolving and the postfix silent. afc-guidance-driver checks that the rate arrives.
+    [UsedBy(Feature.Guidance)]
+    public static readonly MethodInfo? FlightComputer_UpdateAttitudeTarget =
+        AccessTools.Method(typeof(FlightComputer), "UpdateAttitudeTarget",
+            new[] { typeof(FlightComputerNavigation).MakeByRefType() });
+
+    // The engine master switch and throttle that the player's ignite and shutdown actions write.
+    [UsedBy(Feature.Guidance)]
+    public static readonly FieldInfo? Vehicle_manualControlInputs =
+        AccessTools.Field(typeof(Vehicle), "_manualControlInputs");
+
+    [UsedBy(Feature.Guidance)]
+    public static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs>? Vehicle_manualControlInputsRef =
+        InstanceFieldRef<Vehicle, ManualControlInputs>(Vehicle_manualControlInputs);
+
+    // The staging drain simulation paces a burning solid at the grain left over the full grain's
+    // burn time, so the motor's remaining burn never shortens and a nearly spent booster is
+    // modelled as a trickle that outlasts the core. SolidPacingPatch replaces that pacing with the
+    // motor's live mass flow. Its own feature, so a renamed method costs the correction and not
+    // the guidance driver.
+    [UsedBy(Feature.GuidanceStaging)]
+    public static readonly MethodInfo? SequencePerformanceList_ComputeSolidPacingMassFlowRate =
+        AccessTools.Method(typeof(SequencePerformanceList), "ComputeSolidPacingMassFlowRate",
+            new[] { typeof(SolidMotor), typeof(ReadOnlySpan<float>), typeof(float) });
+
+    #endregion
+
     #region Validation
+
+    // The driver's only off switch is in this menu, so the driver validates the hook as well.
+    [UsedBy(Feature.GuidanceDiagnostics | Feature.Guidance)]
+    public static readonly MethodInfo? Program_DrawProgramMenusHook =
+        AccessTools.Method(typeof(Program), nameof(Program.DrawProgramMenusHook), Type.EmptyTypes);
+
+    public static bool ValidateGuidanceDiagnostics() => Validate(Feature.GuidanceDiagnostics);
+
+    public static bool ValidateGuidance() => Validate(Feature.Guidance);
+
+    public static bool ValidateGuidanceStaging() => Validate(Feature.GuidanceStaging);
 
     public static bool ValidateCore() => Validate(Feature.Core);
 
@@ -355,6 +415,22 @@ internal static class GameReflection
         try
         {
             return AccessTools.StaticFieldRefAccess<F>(field);
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Error(
+                $"[AFC] {field.DeclaringType?.Name}.{field.Name} is not a {typeof(F).Name}: {ex.Message}");
+            return null;
+        }
+    }
+
+    private static AccessTools.FieldRef<T, F>? InstanceFieldRef<T, F>(FieldInfo? field) where T : class
+    {
+        if (field == null)
+            return null;
+        try
+        {
+            return AccessTools.FieldRefAccess<T, F>(field);
         }
         catch (Exception ex)
         {

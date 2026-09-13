@@ -1,0 +1,21 @@
+<Project>
+  <!-- The one place that knows how the guidance native libraries are laid out.
+       The loaders, the two solver projects and the payload list all read these
+       properties, so a new runtime identifier is added here and nowhere else. -->
+  <PropertyGroup>
+    <GuidanceNativeDir>$(MSBuildThisFileDirectory)native/</GuidanceNativeDir>
+
+    <GuidanceHostRid Condition="'$(GuidanceHostRid)' == '' and '$(OS)' == 'Windows_NT'">win-x64</GuidanceHostRid>
+    <GuidanceHostRid Condition="'$(GuidanceHostRid)' == ''">linux-x64</GuidanceHostRid>
+
+    <!-- Which runtimes the payload carries. A local build ships the host runtime
+         only, so a missing cross build cannot fail an ordinary deployment. A
+         release build passes both, for example -p:GuidanceNativeRids=win-x64;linux-x64 -->
+    <GuidanceNativeRids Condition="'$(GuidanceNativeRids)' == ''">$(GuidanceHostRid)</GuidanceNativeRids>
+
+    <GuidanceHostClarabel Condition="'$(GuidanceHostRid)' == 'win-x64'">clarabel_c.dll</GuidanceHostClarabel>
+    <GuidanceHostClarabel Condition="'$(GuidanceHostClarabel)' == ''">libclarabel_c.so</GuidanceHostClarabel>
+    <GuidanceHostScs Condition="'$(GuidanceHostRid)' == 'win-x64'">scs.dll</GuidanceHostScs>
+    <GuidanceHostScs Condition="'$(GuidanceHostScs)' == ''">libscs.so</GuidanceHostScs>
+  </PropertyGroup>
+</Project>

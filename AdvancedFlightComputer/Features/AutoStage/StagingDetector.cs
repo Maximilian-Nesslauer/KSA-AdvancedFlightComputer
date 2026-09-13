@@ -53,9 +53,27 @@ internal static class StagingDetector
             DefaultCategory.Log.Debug($"[AFC] AutoStage {(active ? "armed" : "disarmed")} on '{vehicle.Id}'.");
     }
 
-    // Asks for one row on the next evaluation, for a caller with a cue of its own such as a planned
-    // stage boundary or a cold ignition. Ignored while a staging is already in flight on the vehicle.
-    internal static void RequestStaging(Vehicle vehicle) => StateOf(vehicle).Requested = true;
+    internal enum StagingRequest
+    {
+        // The machine evaluates the row next, and still holds it when it would separate the last control module.
+        Queued,
+        // The vehicle is disarmed, so the row waits until it is armed.
+        Deferred,
+        // A staging is still in flight and its evaluation would drop the request, so nothing is kept.
+        Busy,
+    }
+
+    // Asks for one row, for a caller with a cue of its own such as a planned stage boundary or a
+    // cold ignition. The answer says whether the row is on its way, so a caller that records
+    // something for the separation records it only for a request that was kept.
+    internal static StagingRequest RequestStaging(Vehicle vehicle)
+    {
+        StagingState state = StateOf(vehicle);
+        if (state.State != StagingState.Phase.Monitoring)
+            return StagingRequest.Busy;
+        state.Requested = true;
+        return state.Active ? StagingRequest.Queued : StagingRequest.Deferred;
+    }
 
     internal static bool HasState(Vehicle vehicle) => _states.ContainsKey(vehicle);
 

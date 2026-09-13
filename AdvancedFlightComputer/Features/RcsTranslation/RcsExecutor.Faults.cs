@@ -20,11 +20,12 @@ internal static partial class RcsExecutor
         exec.LastPublishedCommand = null;
         exec.LastFuel = default;
         exec.CancelRequestReason = null;
-        RetryFaultCleanup(fc, exec);
+        RetryFaultCleanup(vehicle, exec);
     }
 
-    private static void RetryFaultCleanup(FlightComputer fc, RcsExecution exec)
+    private static void RetryFaultCleanup(Vehicle vehicle, RcsExecution exec)
     {
+        FlightComputer fc = vehicle.FlightComputer;
         RcsCommandChannel.Clear(fc.BurnPlan);
         if (!exec.CleanupPending)
         {
@@ -38,7 +39,7 @@ internal static partial class RcsExecutor
         exec.CleanupAttempts++;
         try
         {
-            EndExecution(fc, exec);
+            EndExecution(vehicle, exec);
             exec.CleanupError = null;
         }
         catch (Exception ex)

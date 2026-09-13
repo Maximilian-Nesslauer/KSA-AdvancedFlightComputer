@@ -15,7 +15,8 @@ internal sealed class MultiPassExecution
     // The ID stays empty until the first save. RekeyTo follows Save As and overwrite operations.
     public required string SaveId { get; internal set; }
 
-    public required string VehicleId { get; init; }
+    // Updated on rename so saved state uses the vehicle's current ID.
+    public required string VehicleId { get; internal set; }
     public required IManeuverIntent Intent { get; init; }
     public required SplitMode Mode { get; init; }
     public required int PassCountTotal { get; init; }

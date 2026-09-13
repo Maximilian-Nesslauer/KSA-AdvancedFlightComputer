@@ -49,6 +49,21 @@ internal static class RcsExecRegistry
         _byKey.Remove((saveId, vehicleId));
     }
 
+    /// <summary>Keeps execution and cleanup reachable under the vehicle's new ID.</summary>
+    public static void RenameVehicle(string oldVehicleId, string newVehicleId)
+    {
+        if (oldVehicleId == newVehicleId) return;
+
+        string saveId = SaveLoadObserver.CurrentSaveId;
+        if (!_byKey.Remove((saveId, oldVehicleId), out RcsExecution? exec))
+            return;
+
+        // Replace stale state left under a reused vehicle name.
+        _byKey.Remove((saveId, newVehicleId));
+        exec.VehicleId = newVehicleId;
+        _byKey[(saveId, newVehicleId)] = exec;
+    }
+
     /// <summary>Move the current entries on first save, Save-As, or overwrite of another save so save-scoped lookups can still reach their teardown.</summary>
     public static void RekeyTo(string oldSaveId, string newSaveId)
     {
@@ -208,6 +223,12 @@ internal static class RcsExecRegistry
                     writer.WriteLine($"resolved_allocator = \"{exec.ResolvedAllocator}\"");
                     writer.WriteLine($"align_commanded = {(exec.AlignCommanded ? "true" : "false")}");
                     writer.WriteLine($"forced_rcs_on = {(exec.ForcedRcsOn ? "true" : "false")}");
+                    if (exec.ForcedBurnManual)
+                        writer.WriteLine("forced_burn_manual = true");
+                    if (exec.ForcedAttitudeAuto)
+                        writer.WriteLine("forced_attitude_auto = true");
+                    if (exec.AttitudeYielded)
+                        writer.WriteLine("attitude_yielded = true");
                 }
                 writer.WriteLine();
             }
@@ -355,6 +376,12 @@ internal static class RcsExecRegistry
 
         bool faulted = block.TryGetValue("faulted", out string? faultStr)
             && bool.TryParse(faultStr, out bool faultValue) && faultValue;
+        bool forcedBurnManual = block.TryGetValue("forced_burn_manual", out string? burnModeStr)
+            && bool.TryParse(burnModeStr, out bool burnModeValue) && burnModeValue;
+        bool forcedAttitudeAuto = block.TryGetValue("forced_attitude_auto", out string? attitudeStr)
+            && bool.TryParse(attitudeStr, out bool attitudeValue) && attitudeValue;
+        bool attitudeYielded = block.TryGetValue("attitude_yielded", out string? yieldedStr)
+            && bool.TryParse(yieldedStr, out bool yieldedValue) && yieldedValue;
         if (faulted || (block.TryGetValue("active", out string? activeStr)
             && bool.TryParse(activeStr, out bool active) && active))
         {
@@ -376,6 +403,9 @@ internal static class RcsExecRegistry
             exec.ResolvedAllocator = resolvedAllocator;
             exec.AlignCommanded = alignCommanded;
             exec.ForcedRcsOn = forcedRcs;
+            exec.ForcedBurnManual = forcedBurnManual;
+            exec.ForcedAttitudeAuto = forcedAttitudeAuto;
+            exec.AttitudeYielded = attitudeYielded;
             exec.Faulted = faulted;
         }
         return true;

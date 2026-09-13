@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "dependencies": {
+    "net10.0": {
+      "Lib.Harmony": {
+        "type": "Direct",
+        "requested": "[2.4.2, )",
+        "resolved": "2.4.2",
+        "contentHash": "D2X9ojVjqbqdqWVK3VQETrEb56yVoXxtEp6tP5UvW0PP+bA4uJiswqOxF8GhH02ECwyevUa9vwhwdLzyXfksbw=="
+      },
+      "StarMap.API": {
+        "type": "Direct",
+        "requested": "[0.3.6, )",
+        "resolved": "0.3.6",
+        "contentHash": "wYcs0x7Dtxn0xI3I3mXnUFLAxHFfj+iR8nfz8CIIXRXIPjvxxsfsGLmcvxzwmQR/HiPUW5XLyiWm3ga9MFaV2Q=="
+      },
+      "advancedflightcomputer.guidance.gfold": {
+        "type": "Project"
+      },
+      "advancedflightcomputer.guidance.numerics": {
+        "type": "Project"
+      },
+      "advancedflightcomputer.guidance.scvx": {
+        "type": "Project",
+        "dependencies": {
+          "AdvancedFlightComputer.Guidance.Numerics": "[1.0.0, )"
+        }
+      }
+    },
+    "net10.0/linux-x64": {},
+    "net10.0/win-x64": {}
+  }
+}

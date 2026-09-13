@@ -11,7 +11,8 @@ internal sealed class RcsExecution
     /// <summary>An unsaved session uses an empty SaveId. RcsExecRegistry.RekeyTo moves its entries when the save is written under another id.</summary>
     public required string SaveId { get; set; }
 
-    public required string VehicleId { get; init; }
+    /// <summary>Updated on rename so saved state uses the vehicle's current ID.</summary>
+    public required string VehicleId { get; set; }
 
     public List<RcsBurnOptions> Options { get; } = new();
 
@@ -33,6 +34,20 @@ internal sealed class RcsExecution
     /// <summary>Persist whether RCS was disabled when control was taken. Completion and cancellation restore that setting, including after a save and load.</summary>
     public bool ForcedRcsOn { get; set; }
 
+    /// <summary>Records whether AFC replaced Auto with Manual. Completion discards the saved mode.</summary>
+    public bool ForcedBurnManual { get; set; }
+
+    /// <summary>The burn target the burn-mode hold saw at acquisition. It is not saved, so after a load the loaded target stands in for it.</summary>
+    public BurnTarget? HeldBurnTarget;
+
+    /// <summary>Records whether AFC changed the attitude mode from Manual to Auto.</summary>
+    public bool ForcedAttitudeAuto { get; set; }
+
+    /// <summary>Records a takeover by another writer across saves.</summary>
+    public bool AttitudeYielded { get; set; }
+
+
+
     public bool Faulted { get; set; }
 
     #endregion
@@ -47,11 +62,14 @@ internal sealed class RcsExecution
     /// <summary>Latch the lead window after takeover so a refreshed slew estimate cannot return control during the same burn.</summary>
     public bool ControlTaken;
 
+    /// <summary>The last attitude command, used to detect changes by another writer.</summary>
+    public RcsAttitudeCommand? CommandedAttitude;
+
     public string? CancelRequestReason;
 
     public int CleanupAttempts;
     public string? CleanupError;
-    public bool CleanupPending => Faulted && (AlignCommanded || ForcedRcsOn);
+    public bool CleanupPending => Faulted && (AlignCommanded || ForcedRcsOn || ForcedBurnManual || ForcedAttitudeAuto);
 
     public RcsCapabilitySnapshot Capability;
     public double CapabilityProbedAtSec = double.NegativeInfinity;
@@ -200,6 +218,11 @@ internal sealed class RcsExecution
         CancelRequestReason = null;
         AlignCommanded = false;
         ForcedRcsOn = false;
+        ForcedBurnManual = false;
+        HeldBurnTarget = null;
+        ForcedAttitudeAuto = false;
+        AttitudeYielded = false;
+        CommandedAttitude = null;
         StartMassKg = 0.0;
         LastTickMassKg = 0.0;
         BurnedPropellantKg = 0.0;
@@ -300,4 +323,29 @@ internal struct RcsEstimates
             _ => 0.0,
         },
     };
+}
+
+/// <summary>The attitude fields compared to detect a change by another writer.</summary>
+internal readonly record struct RcsAttitudeCommand(
+    FlightComputerAttitudeMode Mode,
+    VehicleReferenceFrame Frame,
+    FlightComputerAttitudeTrackTarget TrackTarget,
+    double3 CustomTarget)
+{
+    internal static RcsAttitudeCommand From(FlightComputer fc)
+        => new(fc.AttitudeMode, fc.AttitudeFrame, fc.AttitudeTrackTarget, fc.CustomAttitudeTarget);
+
+    /// <summary>
+    /// Compare frame and coordinates for None and Custom, where FlightComputer.UpdateAttitudeTarget uses both.
+    /// Built-in targets derive their frame, so only mode and tracker are compared for them.
+    /// </summary>
+    internal readonly bool Matches(FlightComputer fc)
+    {
+        if (fc.AttitudeMode != Mode || fc.AttitudeTrackTarget != TrackTarget)
+            return false;
+        if (TrackTarget is not (FlightComputerAttitudeTrackTarget.None
+            or FlightComputerAttitudeTrackTarget.Custom))
+            return true;
+        return fc.AttitudeFrame == Frame && fc.CustomAttitudeTarget.Equals(CustomTarget);
+    }
 }

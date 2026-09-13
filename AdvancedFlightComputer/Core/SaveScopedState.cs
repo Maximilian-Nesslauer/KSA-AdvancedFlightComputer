@@ -24,6 +24,11 @@ namespace AdvancedFlightComputer.Core;
 /// path reloads <see cref="MultiPassRegistry"/> and <see cref="RcsExecRegistry"/> from disk right
 /// after this runs, the per-feature Enabled flags belong to the patch state, and the dedup sets in
 /// <see cref="LogHelper"/> and <c>Patch_SetTransferInfo</c> live for the whole mod load.
+///
+/// Guidance is not in the list either. Its per-vehicle state is released through its own
+/// <c>SaveLoaded</c> subscription in <c>GuidanceFeature.ApplyDriverPatches</c>, which also stops the
+/// solve workers and telemetry a plain reset would leave running, and exists only while the driver
+/// block is loaded.
 /// </summary>
 internal static class SaveScopedState
 {

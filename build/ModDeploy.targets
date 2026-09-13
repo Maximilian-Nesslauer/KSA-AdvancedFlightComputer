@@ -93,6 +93,9 @@
     <Copy SourceFiles="$(MSBuildProjectDirectory)\mod.toml" DestinationFolder="$(ModDeployDir)" />
     <MakeDir Directories="$(ModDeployDir)Patches\" Condition="'@(PatchFile)' != ''" />
     <Copy SourceFiles="@(PatchFile)" DestinationFolder="$(ModDeployDir)Patches\" Condition="'@(PatchFile)' != ''" />
+    <Copy SourceFiles="@(ModPayloadFile)"
+          DestinationFiles="@(ModPayloadFile->'$(ModDeployDir)%(TargetPath)')"
+          Condition="'@(ModPayloadFile)' != ''" />
   </Target>
 
   <Target Name="StampDeploySlot" AfterTargets="CopyToMods" Condition="'$(DeployToMods)' == 'true'">

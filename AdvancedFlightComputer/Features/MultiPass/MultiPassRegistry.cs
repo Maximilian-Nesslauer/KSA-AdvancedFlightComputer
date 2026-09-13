@@ -95,6 +95,26 @@ internal static class MultiPassRegistry
     public static IReadOnlyDictionary<(string, string), MultiPassExecution> Snapshot
         => _byKey;
 
+    // Keep the same execution so renaming does not interrupt the pass sequence.
+    public static void RenameVehicle(string oldVehicleId, string newVehicleId)
+    {
+        if (oldVehicleId == newVehicleId) return;
+
+        string saveId = SaveLoadObserver.CurrentSaveId;
+        if (!_byKey.Remove((saveId, oldVehicleId), out MultiPassExecution? exec))
+            return;
+
+        // Replace stale state left under a reused vehicle name.
+        _byKey.Remove((saveId, newVehicleId));
+        exec.VehicleId = newVehicleId;
+        _byKey[(saveId, newVehicleId)] = exec;
+
+        if (MultiPassDebug.Enabled)
+            DefaultCategory.Log.Debug(
+                $"[AFC] MultiPassRegistry: rekeyed exec in save='{saveId}' " +
+                $"from vehicle='{oldVehicleId}' to '{newVehicleId}'.");
+    }
+
     // Move the current world to its written save ID and discard entries from an overwritten destination.
     public static void RekeyTo(string oldSaveId, string newSaveId)
     {

@@ -1,0 +1,63 @@
+name: Guidance native
+
+on:
+  pull_request:
+  push:
+    branches: [main, powered-guidance]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: native (${{ matrix.runtime }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: win-x64
+          - os: ubuntu-latest
+            runtime: linux-x64
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      NUGET_XMLDOC_MODE: skip
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Install native tools
+        shell: pwsh
+        run: >-
+          ./build/ci/install-native-tools.ps1
+          -InstallRoot '${{ runner.temp }}/guidance-tools'
+          -RuntimeIdentifier '${{ matrix.runtime }}'
+
+      - name: Build and test guidance
+        shell: pwsh
+        run: >-
+          ./build/ci/test-guidance.ps1
+          -RepositoryRoot '${{ github.workspace }}'
+          -RuntimeIdentifier '${{ matrix.runtime }}'
+          -Configuration Release
+          -ArtifactsRoot '${{ runner.temp }}/guidance-artifacts'
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: guidance-native-${{ matrix.runtime }}
+          path: ${{ runner.temp }}/guidance-artifacts/${{ matrix.runtime }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0

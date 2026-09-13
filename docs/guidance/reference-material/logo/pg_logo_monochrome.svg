@@ -1,0 +1,159 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="210mm"
+   height="297mm"
+   viewBox="0 0 210 297"
+   version="1.1"
+   id="svg1"
+   inkscape:version="1.4.2 (f4327f4, 2025-05-13)"
+   sodipodi:docname="pg_logo_monochrome.svg"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns:xlink="http://www.w3.org/1999/xlink"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:document-units="mm"
+     inkscape:zoom="0.5"
+     inkscape:cx="184"
+     inkscape:cy="-37"
+     inkscape:window-width="1920"
+     inkscape:window-height="1009"
+     inkscape:window-x="-8"
+     inkscape:window-y="-8"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="layer4" />
+  <defs
+     id="defs1">
+    <linearGradient
+       id="linearGradient3"
+       inkscape:collect="always">
+      <stop
+         style="stop-color:#303030;stop-opacity:1;"
+         offset="0"
+         id="stop3" />
+      <stop
+         style="stop-color:#303030;stop-opacity:0;"
+         offset="1"
+         id="stop4" />
+    </linearGradient>
+    <linearGradient
+       inkscape:collect="always"
+       xlink:href="#linearGradient3"
+       id="linearGradient6"
+       x1="76.228168"
+       y1="70.6509"
+       x2="120.59776"
+       y2="70.6509"
+       gradientUnits="userSpaceOnUse" />
+  </defs>
+  <g
+     id="g3"
+     style="display:inline">
+    <g
+       inkscape:label="Layer 1"
+       inkscape:groupmode="layer"
+       id="layer1"
+       style="display:inline">
+      <g
+         inkscape:groupmode="layer"
+         id="layer4"
+         inkscape:label="Layer 2"
+         style="fill:#000000">
+        <rect
+           style="font-variation-settings:normal;display:inline;opacity:1;vector-effect:none;fill:#000000;fill-opacity:1;stroke:#002867;stroke-width:1.08217;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none"
+           id="rect8"
+           width="98.478592"
+           height="102.9655"
+           x="34.965511"
+           y="32.210083" />
+      </g>
+      <path
+         sodipodi:type="star"
+         style="fill:#ffffff;fill-opacity:1;stroke-width:0.264583"
+         id="path3"
+         inkscape:flatsided="true"
+         sodipodi:sides="3"
+         sodipodi:cx="61.828995"
+         sodipodi:cy="128.81041"
+         sodipodi:r1="6.6653023"
+         sodipodi:r2="3.3326509"
+         sodipodi:arg1="1.5707963"
+         sodipodi:arg2="2.6179939"
+         inkscape:rounded="0"
+         inkscape:randomized="0"
+         d="m 61.828995,135.47571 -5.772321,-9.99795 11.544642,0 z"
+         inkscape:transform-center-y="5.0736218"
+         transform="matrix(0.80466893,0,0,3.0448184,30.185351,-279.68857)" />
+      <rect
+         style="font-variation-settings:normal;display:none;opacity:1;vector-effect:none;fill:#ff9cfa;fill-opacity:0.740425;stroke-width:0.278797;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;stop-color:#000000;stop-opacity:1"
+         id="rect7"
+         width="5.1550231"
+         height="5.1550231"
+         x="133.89709"
+         y="2.4251294"
+         transform="matrix(0.60803425,0.7939108,-0.60803425,0.7939108,0,0)" />
+      <rect
+         style="font-variation-settings:normal;display:none;opacity:1;vector-effect:none;fill:#ff9df8;fill-opacity:0.646809;stroke-width:0.291905;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;stop-color:#000000;stop-opacity:1"
+         id="rect7-8"
+         width="4.6447515"
+         height="4.6447515"
+         x="149.37897"
+         y="-19.673489"
+         transform="matrix(0.47287478,0.88112964,-0.47287478,0.88112964,0,0)" />
+      <rect
+         style="font-variation-settings:normal;display:none;opacity:1;vector-effect:none;fill:#ff9df8;fill-opacity:0.697872;stroke-width:0.342481;stroke-linecap:butt;stroke-linejoin:miter;stroke-miterlimit:4;stroke-dasharray:none;stroke-dashoffset:0;stroke-opacity:1;-inkscape-stroke:none;stop-color:#000000;stop-opacity:1"
+         id="rect7-8-7"
+         width="4.0668459"
+         height="4.0668459"
+         x="203.63055"
+         y="-77.114929"
+         transform="matrix(0.28470618,0.95861483,-0.28470618,0.95861483,0,0)" />
+    </g>
+    <g
+       inkscape:groupmode="layer"
+       id="layer2"
+       inkscape:label="text"
+       style="display:inline">
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:semi-condensed;font-size:97.6967px;line-height:0;font-family:'Lucida Console';-inkscape-font-specification:'Lucida Console Semi-Condensed';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:#ffffff;fill-opacity:1;stroke-width:1.30844"
+         x="49.192448"
+         y="113.22336"
+         id="text2"
+         transform="scale(0.98649007,1.0136949)"><tspan
+           id="tspan2"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:semi-condensed;font-family:'Lucida Console';-inkscape-font-specification:'Lucida Console Semi-Condensed';fill:#ffffff;fill-opacity:1;stroke-width:1.30844"
+           x="49.192448"
+           y="113.22336"
+           sodipodi:role="line">G</tspan></text>
+      <text
+         xml:space="preserve"
+         style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:97.8137px;line-height:0;font-family:'Lucida Console';-inkscape-font-specification:'Lucida Console';text-align:start;writing-mode:lr-tb;direction:ltr;text-anchor:start;fill:#ffffff;fill-opacity:1;stroke-width:1.31;stroke:none;stroke-opacity:1"
+         x="65.338753"
+         y="101.28932"
+         id="text1"
+         transform="scale(0.98767352,1.0124803)"><tspan
+           sodipodi:role="line"
+           id="tspan1"
+           style="font-style:normal;font-variant:normal;font-weight:normal;font-stretch:normal;font-size:97.8137px;line-height:0;font-family:'Lucida Console';-inkscape-font-specification:'Lucida Console';fill:#ffffff;fill-opacity:1;stroke-width:1.31;stroke:none;stroke-opacity:1"
+           x="65.338753"
+           y="101.28932">P</tspan></text>
+    </g>
+    <g
+       inkscape:groupmode="layer"
+       id="layer3"
+       inkscape:label="text 1"
+       style="display:inline" />
+  </g>
+</svg>

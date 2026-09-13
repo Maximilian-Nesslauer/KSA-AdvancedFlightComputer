@@ -144,12 +144,17 @@ internal static partial class RcsExecutor
     {
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
         {
+            // The request is suppressed, but it still says the player wants AFC to stop, so the
+            // retry that follows must not arm stock Auto instead.
+            pending.ForcedBurnManual = false;
             RequestCancel(pending, "retry fault cleanup");
             return false;
         }
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec) && exec.IsActive)
         {
             // Auto cancels an active execution. Manual also cancels it and allows stock handling to continue.
+            // An explicit stop must not restore stock Auto.
+            exec.ForcedBurnManual = false;
             Cancel(vehicle, exec, "user request");
             if (mode == FlightComputerBurnMode.Auto)
             {
@@ -178,7 +183,7 @@ internal static partial class RcsExecutor
                 DefaultCategory.Log.Warning(
                     $"[AFC] RCS activation failed for vehicle='{vehicle.Id}': {ex}");
                 if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? failed))
-                    EndExecution(vehicle.FlightComputer, failed);
+                    EndExecution(vehicle, failed);
                 RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
                 vehicle.SetNavBallFrame(vehicle.VehicleRegion.GetVehicleReferenceFrame());
             }
@@ -195,6 +200,15 @@ internal static partial class RcsExecutor
     {
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
             return;
+
+        ControlClaimant holder = VehicleControlOwnership.HolderOf(vehicle);
+        if (holder != ControlClaimant.None && holder != ControlClaimant.RcsTranslation)
+        {
+            Alert($"RCS burn not engaged: {VehicleControlOwnership.Describe(holder)} is flying "
+                  + $"'{vehicle.Id}'.");
+            return;
+        }
+
         FlightComputer fc = vehicle.FlightComputer;
         Burn? burn = fc.BurnPlan.FindFirstExecutableBurn();
         if (burn == null || fc.Burn == null)
@@ -259,10 +273,53 @@ internal static partial class RcsExecutor
 
         exec.BaselineFuel(fc, exec.CapabilityProbedAtSec);
 
-        if (!BeginControl(vehicle, fc, exec))
+        if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.RcsTranslation, out holder))
+        {
+            Alert($"RCS burn not engaged: {VehicleControlOwnership.Describe(holder)} is flying "
+                  + $"'{vehicle.Id}'.");
             return;
+        }
+        if (!BeginControl(vehicle, fc, exec))
+        {
+            VehicleControlOwnership.Release(vehicle, ControlClaimant.RcsTranslation);
+            return;
+        }
         PublishCommand(vehicle, exec);
         LogEngaged(vehicle, exec, dvMs);
+    }
+
+    /// <summary>Acquires a claim for active work or pending cleanup, and releases an idle claim.</summary>
+    internal static bool ReconcileClaim(Vehicle vehicle)
+    {
+        bool running = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec)
+                       && (exec.IsActive || exec.CleanupPending);
+        if (!running)
+        {
+            ReleaseIdleClaim(vehicle);
+            return true;
+        }
+
+        // Load recovery bypasses Activate, so the driver must acquire the restored execution's claim.
+        if (VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.RcsTranslation,
+                                             out ControlClaimant holder))
+            return true;
+
+        LogHelper.WarnOnce($"rcs-claim-{vehicle.Id}",
+            $"[AFC] The RCS execution on '{vehicle.Id}' is held because "
+            + $"{VehicleControlOwnership.Describe(holder)} is flying it.");
+        return false;
+    }
+
+    private static void ReleaseIdleClaim(Vehicle vehicle)
+    {
+        if (!VehicleControlOwnership.Holds(vehicle, ControlClaimant.RcsTranslation))
+            return;
+
+        // A rename hides the ID-keyed execution from this lookup.
+        // Retain the claim because forced control settings can still need cleanup.
+        if (VehicleControlOwnership.ClaimedId(vehicle) != vehicle.Id)
+            return;
+        VehicleControlOwnership.Release(vehicle, ControlClaimant.RcsTranslation);
     }
 
     private static void PrepareAllocation(
@@ -287,14 +344,13 @@ internal static partial class RcsExecutor
 
     private static bool BeginControl(Vehicle vehicle, FlightComputer fc, RcsExecution exec)
     {
-        // Keep stock engine automation off while the RCS worker owns the burn.
-        fc.BurnMode = FlightComputerBurnMode.Manual;
+        ForceBurnManual(vehicle, exec);
         vehicle.SetNavBallFrame(VehicleReferenceFrame.BurnBody);
 
         if (!EnsureBurnControl(vehicle, fc, exec, exec.CapabilityProbedAtSec))
         {
             Alert($"RCS burn not engaged: cannot align or hold for the burn direction on '{vehicle.Id}'.");
-            EndExecution(fc, exec);
+            EndExecution(vehicle, exec);
             return false;
         }
         return true;
@@ -329,11 +385,11 @@ internal static partial class RcsExecutor
     {
         if (exec.Faulted)
         {
-            RetryFaultCleanup(vehicle.FlightComputer, exec);
+            RetryFaultCleanup(vehicle, exec);
             return;
         }
         RcsFuelSummary fuel = ComputeFuelSummary(vehicle.FlightComputer, exec);
-        EndExecution(vehicle.FlightComputer, exec);
+        EndExecution(vehicle, exec);
         RcsCommandChannel.Clear(vehicle.FlightComputer.BurnPlan);
         DefaultCategory.Log.Info($"[AFC] RCS burn cancelled ({reason}): vehicle='{vehicle.Id}'");
         LogFuel(vehicle, in fuel);
@@ -356,17 +412,60 @@ internal static partial class RcsExecutor
             fc.RCSMode = FlightComputerRCSMode.Disabled;
     }
 
-    // Restore control before ClearActive erases the ownership flags. An uncommanded Align leaves the tracker alone.
-    private static void EndExecution(FlightComputer fc, RcsExecution exec)
+    // Manual prevents stock Auto from taking attitude control near ignition.
+    private static void ForceBurnManual(Vehicle vehicle, RcsExecution exec)
     {
+        exec.HeldBurnTarget = vehicle.FlightComputer.Burn;
+        exec.ForcedBurnManual = StockBurnMode.HoldManual(vehicle);
+    }
+
+    // Restore only while the mode still matches AFC's last write, on the burn target the hold saw. The hold survives a save and that target does not, so after a load the loaded target stands in for it.
+    private static void RestoreBurnMode(Vehicle vehicle, RcsExecution exec)
+    {
+        if (exec.ForcedBurnManual)
+            StockBurnMode.GiveBackAuto(vehicle, exec.HeldBurnTarget ?? vehicle.FlightComputer.Burn);
+    }
+
+    // Restore control before ClearActive erases the ownership flags. An uncommanded Align leaves the tracker alone.
+    private static void EndExecution(Vehicle vehicle, RcsExecution exec)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
         RcsCommandChannel.Clear(fc.BurnPlan);
+
+        // Cancellation can bypass the step check, so check for a takeover before restoring attitude.
+        // Without a snapshot after loading, cleanup uses the persisted ownership flags.
+        if (!exec.AttitudeYielded
+            && exec.CommandedAttitude is { } owned && !owned.Matches(fc))
+        {
+            exec.AlignCommanded = false;
+            exec.ForcedAttitudeAuto = false;
+            exec.CommandedAttitude = null;
+            exec.AttitudeYielded = true;
+        }
+
         Exception? failure = null;
         try
         {
+            bool tookTheAttitude = exec.AlignCommanded || exec.ForcedAttitudeAuto;
             if (exec.AlignCommanded)
             {
                 fc.SetNullRot(VehicleReferenceFrame.BurnBody);
                 exec.AlignCommanded = false;
+            }
+
+            // FlightComputer.UpdateAttitudeTarget reads custom coordinates as rotation rates while
+            // tracking is None, and both the rate hold and this release select None. Coordinates left
+            // there are a standing turn, and the tracker they pointed with is already gone, so they go too.
+            if (tookTheAttitude
+                && fc.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.None
+                && !fc.CustomAttitudeTarget.Equals(default(double3)))
+                fc.CustomAttitudeTarget = default;
+
+            if (exec.ForcedAttitudeAuto)
+            {
+                if (fc.AttitudeMode == FlightComputerAttitudeMode.Auto)
+                    fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+                exec.ForcedAttitudeAuto = false;
             }
         }
         catch (Exception ex)
@@ -387,6 +486,13 @@ internal static partial class RcsExecutor
         }
         if (failure != null)
             throw failure;
+
+        // Restore Auto only after attitude and RCS cleanup succeeds.
+        if (exec.ForcedBurnManual)
+        {
+            RestoreBurnMode(vehicle, exec);
+            exec.ForcedBurnManual = false;
+        }
         exec.ClearActive();
     }
 
@@ -508,7 +614,7 @@ internal static partial class RcsExecutor
                 exec.CancelRequestReason = null;
                 exec.CleanupAttempts = 0;
             }
-            RetryFaultCleanup(fc, exec);
+            RetryFaultCleanup(vehicle, exec);
             return;
         }
         if (!hasExec && fc.Burn == null)
@@ -569,11 +675,22 @@ internal static partial class RcsExecutor
                 $"[AFC] RCS burn for vehicle='{vehicle.Id}' not found after load, cancelling.");
             // A loaded save can retain forced controls even when its burn vanished. Restore them before clearing state.
             exec.LastFuel = default;
-            EndExecution(fc, exec);
+            EndExecution(vehicle, exec);
             return;
         }
         exec.ActiveBurn = burn;
-        exec.ControlTaken = exec.AlignCommanded || exec.ForcedRcsOn;
+
+        // Retained ownership or a yield prevents another acquisition after loading.
+        exec.ControlTaken = exec.AlignCommanded || exec.ForcedRcsOn
+            || exec.ForcedAttitudeAuto || exec.AttitudeYielded;
+
+        // Hold restores a missing snapshot from the loaded Auto state; Align writes its target again.
+        // Preserve an existing snapshot so reconciliation cannot hide a later player change.
+        if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align
+            && exec.ForcedAttitudeAuto && !exec.AttitudeYielded
+            && exec.CommandedAttitude == null
+            && fc.AttitudeMode == FlightComputerAttitudeMode.Auto)
+            exec.CommandedAttitude = RcsAttitudeCommand.From(fc);
         // The next driver tick applies the same align lead gate after load.
 
         // Restart telemetry at load so the summary covers only the observed portion.
@@ -613,6 +730,14 @@ internal static partial class RcsExecutor
             Alert($"RCS burn stalled: no usable RCS translation left on '{vehicle.Id}' " +
                   "(thrusters inactive, out of propellant, or no usable axis).");
             Cancel(vehicle, exec, "no usable translation");
+            return;
+        }
+
+        // Cancel if RCS is disabled after acquisition, because the burn needs it to continue.
+        if (exec.ControlTaken && fc.RCSMode == FlightComputerRCSMode.Disabled)
+        {
+            Alert($"RCS burn cancelled: RCS was switched off on '{vehicle.Id}'.");
+            Cancel(vehicle, exec, "rcs switched off");
             return;
         }
 
@@ -789,7 +914,10 @@ internal static partial class RcsExecutor
         double burnDv = exec.ActiveBurnDvMs ?? 0.0;
         Burn? completedBurn = exec.ActiveBurn;
         RcsFuelSummary fuel = ComputeFuelSummary(fc, exec);
-        EndExecution(fc, exec);
+
+        // Stock also leaves a completed burn in Manual.
+        exec.ForcedBurnManual = false;
+        EndExecution(vehicle, exec);
         RcsBurnOptions? options = exec.FindOptions(burnTime, burnDv);
         if (options != null)
             exec.Options.Remove(options);
@@ -956,41 +1084,80 @@ internal static partial class RcsExecutor
             DefaultCategory.Log.Debug(
                 $"[AFC] RCS: enabled RCSMode inside the control lead window on vehicle='{vehicle.Id}'.");
 
-        // Rate hold counters residual torque from off center translation thrusters.
-        if (fc.AttitudeMode == FlightComputerAttitudeMode.Manual)
+        // Compare later commands before writing so a Manual selection can trigger a yield.
+        // A persisted yield keeps the attitude out of reach for the rest of this execution.
+        if (takingControl && !exec.AttitudeYielded)
         {
-            fc.RateHold(vehicle.NavBallData.Frame);
-            if (DebugConfig.RcsTranslation)
-                DefaultCategory.Log.Debug(
-                    $"[AFC] RCS: engaged rate hold inside the control lead window on vehicle='{vehicle.Id}'.");
+            // Rate hold counters torque from off-center thrusters.
+            // Capture the mode before RateHold changes it.
+            exec.ForcedAttitudeAuto = fc.AttitudeMode == FlightComputerAttitudeMode.Manual;
+            if (fc.AttitudeMode == FlightComputerAttitudeMode.Manual)
+            {
+                fc.RateHold(vehicle.NavBallData.Frame);
+                exec.CommandedAttitude = RcsAttitudeCommand.From(fc);
+                if (DebugConfig.RcsTranslation)
+                    DefaultCategory.Log.Debug(
+                        $"[AFC] RCS: engaged rate hold inside the control lead window on vehicle='{vehicle.Id}'.");
+            }
+        }
+        else if (!exec.AttitudeYielded
+            && exec.CommandedAttitude is { } commanded && !commanded.Matches(fc)
+            && !YieldAttitude(vehicle, exec))
+        {
+            return false;
         }
 
-        return EnsureAlignCommanded(fc, exec);
+        return EnsureAlignCommanded(vehicle, fc, exec);
     }
 
     // A failed target command falls back to Hold only if Hold is feasible.
-    private static bool EnsureAlignCommanded(FlightComputer fc, RcsExecution exec)
+    private static bool EnsureAlignCommanded(Vehicle vehicle, FlightComputer fc, RcsExecution exec)
     {
-        if (exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
+        // A yielded attitude belongs to whoever took it, for the rest of this execution.
+        if (exec.AttitudeYielded || exec.ResolvedStrategy != RcsAttitudeStrategy.Align)
             return true;
-        if (!exec.AlignCommanded)
+
+        // Saves retain the Align flag but not this snapshot, so loading requires a new command record.
+        if (!exec.AlignCommanded || exec.CommandedAttitude == null)
         {
             if (CommandAlignAttitude(fc, exec.ResolvedAxis))
             {
                 exec.AlignCommanded = true;
+                exec.CommandedAttitude = RcsAttitudeCommand.From(fc);
                 return true;
             }
         }
+        else if (exec.CommandedAttitude.Value.Matches(fc))
+        {
+            return true;
+        }
         else
         {
-            bool tracking = fc.AttitudeMode == FlightComputerAttitudeMode.Auto
-                && fc.AttitudeTrackTarget != FlightComputerAttitudeTrackTarget.None;
-            if (tracking || CommandAlignAttitude(fc, exec.ResolvedAxis))
-                return true;
+            return YieldAttitude(vehicle, exec);
         }
+
         exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
         exec.ResolvedAxis = -1;
         exec.AlignCommanded = false;
+        exec.CommandedAttitude = null;
+        return exec.Estimates.HoldFeasible;
+    }
+
+    /// <summary>
+    /// Stop Align when another writer changes its target.
+    /// Hold no longer gates translation on that target's error, and release leaves it unchanged.
+    /// </summary>
+    private static bool YieldAttitude(Vehicle vehicle, RcsExecution exec)
+    {
+        exec.AlignCommanded = false;
+        exec.CommandedAttitude = null;
+        exec.AttitudeYielded = true;
+
+        // AFC has nothing left to hand back once the mode belongs to whoever took the attitude.
+        exec.ForcedAttitudeAuto = false;
+        exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
+        exec.ResolvedAxis = -1;
+        Alert($"RCS align released on '{vehicle.Id}': the attitude was taken over, holding instead.");
         return exec.Estimates.HoldFeasible;
     }
 
