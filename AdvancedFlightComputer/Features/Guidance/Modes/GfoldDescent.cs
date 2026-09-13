@@ -139,7 +139,7 @@ public static partial class GuidanceWindow
                 GfoldTrajectory t = GfoldPlanner.SolveMinFuel(
                     p, remaining, _s.GfoldNodes, [GfoldSolverTargetAltM, 0.0, 0.0],
                     options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg });
-                if (t.Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate)
+                if (t.Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate && FitsFuel(t, p))
                     traj = t;
             }
             if (traj == null)
@@ -188,15 +188,21 @@ public static partial class GuidanceWindow
                 // the old price only when the cheap window genuinely found nothing -
                 // which is also exactly when the vehicle's situation has changed
                 // enough that the previous solution was a bad guess.
-                if (best == null)
+                // A plan the tanks cannot supply is no better than none, so the full range is also searched for a cheaper one. The bracket's plan is kept when that finds nothing, so the refusal below can say how much propellant it was short.
+                if (best == null || !FitsFuel(best.Trajectory, p))
                     best = GfoldPlanner.SearchMinFuel(
                         p, _s.GfoldNodes, tfLo: GfoldMinTf, tfHi: SearchTfMax,
-                        options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg });
+                        options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg }) ?? best;
 
                 if (best == null)
                 {
                     FailGfold($"G-FOLD unreachable: alt {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, " +
                               $"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, fuel {p.FuelMass:F0} kg");
+                    return;
+                }
+                if (!FitsFuel(best.Trajectory, p))
+                {
+                    FailGfold($"G-FOLD needs {best.FuelUsed:F0} kg of propellant, {p.FuelMass:F0} kg aboard");
                     return;
                 }
                 traj = best.Trajectory;
@@ -299,6 +305,9 @@ public static partial class GuidanceWindow
         double3 hUnit = h > 1e-9 ? horiz * (1.0 / h) : new double3(0, 1, 0);
         return new double3(cosMax, sinMax * hUnit.Y, sinMax * hUnit.Z);
     }
+
+    // The formulation carries no fuel budget, so a usable conic status can still describe a burn the tanks cannot supply. FuelMass counts every tank on the craft, so this can refuse a plan but cannot prove that the landing engines reach that propellant.
+    private static bool FitsFuel(GfoldTrajectory plan, GfoldParams p) => plan.FuelUsed <= p.FuelMass;
 
     // A failed solve holds the last command briefly; a short run of failures gives
     // the vehicle back rather than flying a stale (often sideways) command in.
