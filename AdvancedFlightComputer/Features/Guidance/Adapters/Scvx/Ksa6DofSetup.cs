@@ -194,9 +194,6 @@ public static class Ksa6DofSetup
             : Math.Acos(Math.Clamp(1.0 / twrMin, -1.0, 1.0)) * 180.0 / Math.PI;
     }
 
-    /// <param name="thrustFraction">
-    /// Not applied, see the note where Tmax is set. Planning on part of the thrust needs engines that are really shut down.
-    /// </param>
     /// <param name="glideSlopeDeg">
     /// Approach corridor, degrees above the horizontal at the target. 0 disables it.
     /// </param>
@@ -205,7 +202,7 @@ public static class Ksa6DofSetup
     /// <param name="xf">Terminal model state, same reason.</param>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
-                                double sigmaSeed, double thrustFraction,
+                                double sigmaSeed,
                                 double rateDampShare, double controlSmoothWeight,
                                 double proximalWeight,
                                 double glideSlopeDeg, double vzMaxMs,
@@ -234,10 +231,8 @@ public static class Ksa6DofSetup
         LastVacuumThrustN = KsaEnginePerf.VacuumThrust(vehicle);
         LastPressureThrustN = thrust;
 
-        // The thrust fraction is not applied to Tmax. The throttle command is T / Tmax of the model, so a plan built against a reduced Tmax would command full throttle for what it takes to be part of the thrust, and the vehicle would overshoot every plan.
-        // Rescaling cannot fix that, because no engine is shut down and the achievable range stays [floor * Tmax_real, Tmax_real]. A smaller model range is wrong at both ends, and its floor would fall below the real engine minimum and be clamped back up.
-        // An over-powered vehicle is a real situation, not something to model around. The feasibility panel reports it and names the throttle floor that would work, and landing on fewer engines needs those engines really shut down.
-        _ = thrustFraction;
+        // Tmax is the thrust of every engine the craft runs, because no engine is shut down for the landing. The throttle command is T / Tmax of the model, so a plan built against a smaller Tmax would command full throttle for part of the thrust and overshoot every plan.
+        // An over-powered vehicle is a real situation, not something to model around. The feasibility panel reports it and names the throttle floor that would work.
 
         double gimbalDeg = GimbalLimitDeg(vehicle);
         if (gimbalDeg <= 0.0)

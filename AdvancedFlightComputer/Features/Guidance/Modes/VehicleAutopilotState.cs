@@ -553,7 +553,6 @@ public sealed class VehicleAutopilotState
     public bool SixDofHoverHandoff = true;
     public double SixDofHoverHandoffAltM = 3.5;
     public double SixDofReplanSec = 0.1;
-    public double SixDofThrustFrac = 1.0;  // share of total thrust the burn uses
     public double SixDofRateDampShare = 0.002;
     public double SixDofControlSmooth = 0.05;
     public double SixDofProximal = 0.05;

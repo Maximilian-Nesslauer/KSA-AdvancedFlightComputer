@@ -981,7 +981,7 @@ public static partial class GuidanceWindow
         TerminalAttitude(x, xf);
 
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _s.SixDofTiltDeg,
-                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed, _s.SixDofThrustFrac,
+                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed,
                                    _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                    _s.SixDofProximal,
                                    _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
@@ -1910,7 +1910,7 @@ public static partial class GuidanceWindow
             : _s.SixDofNodes;
 
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _s.SixDofTiltDeg,
-                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed, _s.SixDofThrustFrac,
+                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed,
                                    _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                    _s.SixDofProximal,
                                    _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
