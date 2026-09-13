@@ -120,8 +120,9 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         return false;
     }
 
-    private static bool Activate(Vehicle vehicle)
+    private static bool Activate(Vehicle vehicle, ref StagingDetector.StagingRequest __result)
     {
+        __result = StagingDetector.StagingRequest.Queued;
         _activations++;
         if (!_freezeSequence)
             foreach (Sequence sequence in vehicle.Parts.SequenceList.Sequences)

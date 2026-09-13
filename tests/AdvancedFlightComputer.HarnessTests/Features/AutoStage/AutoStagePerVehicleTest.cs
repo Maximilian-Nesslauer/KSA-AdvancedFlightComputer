@@ -8,7 +8,8 @@ namespace AdvancedFlightComputer.HarnessTests;
 
 // Two vehicles, one armed: the switch, the request and the state belong to the vehicle, not to
 // whichever craft is controlled. A requested row activates on the armed vehicle only, a request on
-// a disarmed vehicle waits until it is armed, and a disposed vehicle takes its state with it.
+// a disarmed vehicle waits until it is armed, a request while a staging is still in flight is refused,
+// and a disposed vehicle takes its state with it.
 public sealed class AutoStagePerVehicleTest : AfcTest
 {
     public override string Name => "afc-autostage-per-vehicle";
@@ -49,11 +50,16 @@ public sealed class AutoStagePerVehicleTest : AfcTest
 
             int nextA = a.Parts.SequenceList.GetNextSequenceNumber();
             int nextB = b.Parts.SequenceList.GetNextSequenceNumber();
-            StagingDetector.RequestStaging(a);
-            StagingDetector.RequestStaging(b);
+            t.Check("a request on a disarmed vehicle is deferred",
+                StagingDetector.RequestStaging(a) == StagingDetector.StagingRequest.Deferred);
+            t.Check("a request on an armed vehicle is queued",
+                StagingDetector.RequestStaging(b) == StagingDetector.StagingRequest.Queued);
             driver.Step(0.05, 1);
             t.Check("a request on the armed vehicle activates its next row",
                 b.Parts.SequenceList.GetNextSequenceNumber() != nextB || FirstRowActivated(b));
+            // The staging just fired and its new engines have not reported propellant yet, so a request now would be dropped by the evaluation and is refused instead.
+            t.Check("a request while that staging is still in flight is refused",
+                StagingDetector.RequestStaging(b) == StagingDetector.StagingRequest.Busy);
             t.Check("a request on a disarmed vehicle waits", a.Parts.SequenceList.GetNextSequenceNumber() == nextA && !FirstRowActivated(a));
 
             // The controlled vehicle is A, so B staging proves the machine does not follow the focus.
