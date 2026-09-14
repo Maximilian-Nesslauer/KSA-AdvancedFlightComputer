@@ -42,8 +42,13 @@ public sealed class GuidanceThrustTest : AfcTest
             foreach (double target in new[] { 0.25, 0.4, 0.7, 0.95 })
             {
                 double demand = curve(target);
-                KsaEnginePerf.ThrustCommand result = KsaEnginePerf.InvertThrust(demand, 0.2, curve);
+                int calls = 0;
+                KsaEnginePerf.ThrustCommand result = KsaEnginePerf.InvertThrust(demand, 0.2,
+                    throttle => { calls++; return curve(throttle); });
                 t.CheckAbs($"round trip at {pressure} Pa, throttle {target}", result.Throttle, target, 2e-6);
+                // Bisection took 27. The ambient curves bend hard at low throttle, where this needs up to about 17.
+                t.Check($"inversion at {pressure} Pa, throttle {target} evaluates the curve at most 20 times",
+                    calls <= 20, $"{calls} evaluations");
                 t.CheckAbs($"delivered thrust at {pressure} Pa, throttle {target}",
                     result.DeliveredThrust, demand, Math.Max(0.1, demand * 2e-6));
             }
