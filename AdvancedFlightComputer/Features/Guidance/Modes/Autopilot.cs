@@ -368,7 +368,8 @@ public static partial class GuidanceWindow
             return;
         }
 
-        if (SimNow() > _s.HandoverPendingUntil)
+        double now = SimNow();
+        if (now > _s.HandoverPendingUntil)
         {
             _s.HandoverPendingUntil = double.NegativeInfinity;
             _s.BoostbackStatus = "Hand-over failed: " + (_s.AeroError.Length > 0
@@ -377,11 +378,20 @@ public static partial class GuidanceWindow
             return;
         }
 
+        // A refused engage rebuilt the aero surrogate from scratch, so the next try waits.
+        if (now < _s.HandoverNextAttempt)
+            return;
+
         Orbit orbit = vehicle.Orbit;
         IParentBody parent = orbit?.Parent;
-        if (parent != null)
-            ExecuteBoostback(vehicle, orbit, parent);
+        if (parent == null)
+            return;
+        ExecuteBoostback(vehicle, orbit, parent);
+        if (!BoostbackLive)
+            _s.HandoverNextAttempt = now + HandoverRetryS;
     }
+
+    private const double HandoverRetryS = 0.5;
 
     // The part whose subtree separates when this decoupler fires: the tree-child side of its connection - the same rule Vehicle.Split applies.
     private static Part DetachedRoot(Decoupler decoupler)
