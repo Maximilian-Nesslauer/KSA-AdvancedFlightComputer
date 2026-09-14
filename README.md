@@ -206,13 +206,13 @@ The native guidance solvers are built from the vendored sources with Rust and Zi
 ## Credits
 
 - **Oliver Cairns ([cairn5](https://github.com/cairn5))** wrote [PoweredGuidance](https://github.com/cairn5/PoweredGuidance), which is the powered guidance in this mod: the UPFG ascent and its landing mode, G-FOLD, the CAT-S successive-convexification 6-DOF guidance, boostback, terminal hover, returnable stages, the impact prediction and the guidance panel. Its full history is part of this repository, and he is co-author of the project.
-- **[PEGAS](https://github.com/Noiredd/PEGAS)** by Noiredd is the reference and foundation for the UPFG implementation.
+- **[PEGAS](https://github.com/Noiredd/PEGAS)** by Noiredd is the reference and foundation for the UPFG implementation; its MIT license is kept at [`third_party/pegas/LICENSE`](third_party/pegas/LICENSE).
 - **G-FOLD** follows Acikmese and Ploen, *Convex Programming Approach to Powered Descent Guidance for Mars Landing* (2007), and Acikmese, Carson and Blackmore, *Lossless Convexification of Nonconvex Control Bound and Pointing Constraints of the Soft Landing Optimal Control Problem* (2013).
 - **[Clarabel](https://github.com/oxfordcontrol/Clarabel.rs)** by Goulart and Chen and **[SCS](https://github.com/cvxgrp/scs)** by O'Donoghue are the conic solvers behind G-FOLD and the 6-DOF guidance.
 
 ## License
 
-MIT - see [`LICENSE`](LICENSE). This applies to everything in the current tree.
+MIT - see [`LICENSE`](LICENSE). Vendored code under `third_party/` keeps its own upstream license.
 
 PoweredGuidance releases up to and including **v0.3.1** linked [ECOS](https://github.com/embotech/ecos), which is GPLv3, and were therefore distributed under GPLv3 as a whole. Those releases stay available under GPLv3, but ECOS was replaced by Clarabel (Apache-2.0) before the import, so **nothing in the current tree is GPL**.
 
