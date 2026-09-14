@@ -455,6 +455,8 @@ public static partial class GuidanceWindow
             _s.GuidanceError = e.Message;
             if (_s.FailStreak > MaxFailStreak)
             {
+                if (_s.LandingPhase != LandingPhase.Done)
+                    GuidanceLog.Info(vehicle, $"landing stopped after {_s.FailStreak} failed steps: {e}");
                 _s.LandingPhase = LandingPhase.Done;
                 _s.LandingCutPending = true;
                 _s.LandingStatus = "Guidance failed repeatedly - landing stopped.";

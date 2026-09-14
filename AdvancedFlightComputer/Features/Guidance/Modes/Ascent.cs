@@ -263,7 +263,11 @@ public static partial class GuidanceWindow
             _s.FailStreak++;
             _s.GuidanceError = e.Message;
             if (_s.FailStreak > MaxFailStreak)
+            {
                 _s.Running = false;
+                _s.Status = "Guidance failed repeatedly: " + e.Message;
+                GuidanceLog.Info(vehicle, $"ascent stopped after {_s.FailStreak} failed steps: {e}");
+            }
         }
     }
 

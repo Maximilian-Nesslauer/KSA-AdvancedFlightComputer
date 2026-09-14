@@ -60,7 +60,8 @@ public static partial class GuidanceWindow
         }
         catch (Exception error)
         {
-            Console.Error.WriteLine("[AFC Guidance] Worker cleanup failed: " + error.Message);
+            AdvancedFlightComputer.Core.LogHelper.WarnOnce($"guidance-worker-cleanup:{error.GetType().Name}",
+                "[AFC] Guidance worker cleanup failed: " + error);
         }
         _s.Worker = null;
         _s.Guidance = null;
@@ -78,7 +79,8 @@ public static partial class GuidanceWindow
     private static void ReportLogStop(string error)
     {
         if (error.Length > 0)
-            Console.Error.WriteLine("[AFC Guidance] Log cleanup failed: " + error);
+            AdvancedFlightComputer.Core.LogHelper.WarnOnce("guidance-log-cleanup:" + error,
+                "[AFC] Guidance log cleanup failed: " + error);
     }
 
     // Defer control writes to the vehicle step so worker results cannot overwrite them.
