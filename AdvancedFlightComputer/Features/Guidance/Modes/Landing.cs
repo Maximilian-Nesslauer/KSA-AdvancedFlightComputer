@@ -188,16 +188,28 @@ public static partial class GuidanceWindow
         _s.GfoldFailStreak = 0;
         _s.GfoldTrackInit = false;
         _s.GfoldEngineOn = false;
+        _s.GfoldHoverRefused = false;
         _s.HasCommand = false;
         _s.LandingStatus = "G-FOLD started from current state.";
     }
 
+    // An abort in the air hands the craft back with the engine as it is, because a cut there drops the craft. The coast and the deorbit burn keep the cut, which stops the burn and costs a coasting craft nothing.
     private static void AbortLanding()
     {
         ResetLandingEngineWait();
+        bool airborne = _s.LandingPhase == LandingPhase.GfoldDescent
+            || _s.LandingPhase == LandingPhase.TerminalHover;
         _s.LandingPhase = LandingPhase.Done;
-        _s.LandingCutPending = true;
-        _s.LandingStatus = "Aborted.";
+        if (airborne)
+        {
+            _s.ReleaseWithoutEngineCut = true;
+            _s.LandingStatus = "Aborted, the engine is left as it was.";
+        }
+        else
+        {
+            _s.LandingCutPending = true;
+            _s.LandingStatus = "Aborted.";
+        }
     }
 
     // Shared landing status, drawn below whichever sub-tab is open.
@@ -503,6 +515,7 @@ public static partial class GuidanceWindow
                     _s.GfoldFailStreak = 0;
                     _s.GfoldTrackInit = false;
                     _s.GfoldEngineOn = false;
+                    _s.GfoldHoverRefused = false;
                     _s.LandingStatus = "Handoff to G-FOLD descent.";
                 }
                 _s.GfoldTabSelectPending = true;   // focus the powered-landing page
