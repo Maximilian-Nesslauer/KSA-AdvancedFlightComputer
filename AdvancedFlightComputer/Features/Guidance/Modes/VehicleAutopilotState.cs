@@ -256,6 +256,9 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double HandoverPendingUntil = double.NegativeInfinity;
 
+    /// <summary>Sim time of the next hand-over engage attempt after a refused one.</summary>
+    public double HandoverNextAttempt = double.NegativeInfinity;
+
     // Returnable stage state.
 
     /// <summary>
