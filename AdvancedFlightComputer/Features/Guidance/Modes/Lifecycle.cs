@@ -87,7 +87,10 @@ public static partial class GuidanceWindow
     internal static void QueueAllReleases()
     {
         foreach (var entry in VehicleAutopilotState.Snapshot())
+        {
             entry.Value.FcResetPending = true;
+            entry.Value.ReleaseRetryKeepsCoast = false;
+        }
         ClearLifecycleRequests();
     }
 

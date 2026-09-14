@@ -326,6 +326,9 @@ public sealed class VehicleAutopilotState
     /// <summary>Cleanup error shown until release succeeds.</summary>
     public string ReleaseError = "";
 
+    // The failed release kept a waiting coast, so its retry keeps it too; a release the player or a save load asks for clears this.
+    public bool ReleaseRetryKeepsCoast;
+
     internal readonly AttitudeOwnership AttitudeOwnership = new();
 
     // Ascent state.

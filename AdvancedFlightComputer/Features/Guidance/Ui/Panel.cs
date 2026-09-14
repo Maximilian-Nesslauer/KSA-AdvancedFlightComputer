@@ -99,6 +99,19 @@ public static partial class GuidanceWindow
         // Above the tabs deliberately: the commit controls are the one thing that must never be behind a fold, a scroll or a tab switch.
         DrawPanelCommitButtons(vehicle, orbit, parent, bodyRadius);
 
+        // What the last commit or step said, under the buttons that caused it, so a refused EXECUTE is not silent. The tab picks its phase's line, and the shared status carries a held craft or a takeover.
+        string phaseStatus = _panelTab switch
+        {
+            GuidanceTab.Boostback => _s.BoostbackStatus,
+            GuidanceTab.Descent or GuidanceTab.Landing => _s.LandingStatus,
+            _ => "",
+        };
+        var statusColor = new float4(1f, 0.8f, 0.3f, 1f);
+        if (phaseStatus.Length > 0)
+            ImGui.TextColored(statusColor, phaseStatus);
+        if (_s.Status.Length > 0)
+            ImGui.TextColored(statusColor, _s.Status);
+
         // Above the tabs because it is not a phase's concern: both the ascent launch window and the deorbit burn request warps, and a prompt that vanished on a tab switch would strand whichever flow was waiting on it.
         DrawWarpPrompt();
 

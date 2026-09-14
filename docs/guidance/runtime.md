@@ -16,7 +16,7 @@ The panel is drawn from the loader's after-GUI hook through `GuidanceFeature.Dra
 
 ## Ownership
 
-Every guidance mode takes the per-vehicle claim in `Core/VehicleControlOwnership.cs` where it commits to flying a craft, and gives it back only after its cleanup succeeded. A second claimant is refused by name, never overwritten. While guidance holds a craft, stock's burn mode is held in Manual, and an Auto that appears is an engine takeover by the player that stops guidance without an engine cut.
+Every guidance mode takes the per-vehicle claim in `Core/VehicleControlOwnership.cs` where it commits to flying a craft, and gives it back only after its cleanup succeeded. Neither an armed launch nor the coast to a deorbit burn takes the claim on its own, so a waiting craft keeps its burn mode and its RCS executor free, and the step that starts commanding is the step that claims. A launch armed over a craft another mode already owned keeps that claim through the wait. A second claimant is refused by name, never overwritten. While guidance holds a craft, stock's burn mode is held in Manual, and an Auto that appears is an engine takeover by the player that stops guidance without an engine cut.
 
 A player change to the attitude target that guidance wrote is a takeover as well, detected by comparing the values guidance last wrote against what the flight computer holds. The release restores only the fields guidance replaced.
 
