@@ -148,7 +148,7 @@ public static partial class GuidanceWindow
             // While the searches rest after a propellant refusal, the committed plan keeps flying and the single solve above still runs on every cadence, so a plan that fits again is taken at once. A retarget ends the rest, so its first search runs straight away, and a refused retarget rests like any other search. A craft with no plan yet always searches.
             if (traj == null && _s.GfoldPlan != null && now < _s.GfoldSearchRetryTime)
             {
-                FailGfold($"G-FOLD is short of propellant, searching again in {_s.GfoldSearchRetryTime - now:F1} s");
+                FailGfold(vehicle, $"G-FOLD is short of propellant, searching again in {_s.GfoldSearchRetryTime - now:F1} s");
                 return;
             }
             if (traj == null)
@@ -205,14 +205,14 @@ public static partial class GuidanceWindow
 
                 if (best == null)
                 {
-                    FailGfold($"G-FOLD unreachable: alt {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, " +
+                    FailGfold(vehicle, $"G-FOLD unreachable: alt {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, " +
                               $"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, fuel {p.FuelMass:F0} kg");
                     return;
                 }
                 if (!FitsFuel(best.Trajectory, p))
                 {
                     _s.GfoldSearchRetryTime = now + GfoldFuelSearchRetryS;
-                    FailGfold($"G-FOLD needs {best.FuelUsed:F0} kg of propellant, {p.FuelMass:F0} kg aboard");
+                    FailGfold(vehicle, $"G-FOLD needs {best.FuelUsed:F0} kg of propellant, {p.FuelMass:F0} kg aboard");
                     return;
                 }
                 traj = best.Trajectory;
@@ -232,7 +232,7 @@ public static partial class GuidanceWindow
         catch (Exception e)
         {
             _s.GfoldSolveMs = solveClock.Elapsed.TotalMilliseconds;
-            FailGfold("G-FOLD: " + e.Message);
+            FailGfold(vehicle, "G-FOLD: " + e.Message);
         }
     }
 
@@ -322,7 +322,7 @@ public static partial class GuidanceWindow
 
     // A failed solve holds the last command briefly; a short run of failures gives
     // the vehicle back rather than flying a stale (often sideways) command in.
-    private static void FailGfold(string message)
+    private static void FailGfold(Vehicle vehicle, string message)
     {
         _s.GfoldFailStreak++;
         // A failed re-solve is not fatal once we hold a feasible plan: keep flying the
@@ -337,6 +337,8 @@ public static partial class GuidanceWindow
         _s.LandingStatus = message;
         if (_s.GfoldFailStreak > 3)
         {
+            if (_s.LandingPhase != LandingPhase.Done)
+                GuidanceLog.Info(vehicle, $"G-FOLD gave up after {_s.GfoldFailStreak} failed solves: {message}");
             _s.LandingPhase = LandingPhase.Done;
             _s.LandingCutPending = true;
             _s.LandingStatus = "G-FOLD found no trajectory - vehicle is yours.";

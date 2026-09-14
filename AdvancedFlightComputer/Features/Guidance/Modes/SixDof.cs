@@ -109,7 +109,7 @@ public static partial class GuidanceWindow
             $"ambient state touched from thread {id}, expected {_ownerThreadId} - "
           + "the sim step and the draw are no longer on one thread, and per-vehicle "
           + "state is now racing. See GuidanceWindow._s.";
-        Console.Error.WriteLine("[AFC Guidance] " + OwnerThreadViolation);
+        AdvancedFlightComputer.Core.LogHelper.WarnOnce("guidance-owner-thread", "[AFC] Guidance " + OwnerThreadViolation);
     }
 
     /// <summary>
