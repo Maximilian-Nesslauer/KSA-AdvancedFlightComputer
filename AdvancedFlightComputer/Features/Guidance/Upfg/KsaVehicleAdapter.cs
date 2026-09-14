@@ -231,9 +231,9 @@ public static class KsaVehicleAdapter
         duration = burned / realFlow;
     }
 
-    // Adjust the staging model when a solid motor is already burning and the game paces it the way it ships. With SolidPacingPatch installed the drain simulation already paces a burning solid at its live flow, so this correction stands down, because it would otherwise add the same difference a second time.
+    // Adjust the staging model when a solid motor is already burning and the game paces it the way it ships. With SolidPacingPatch installed the drain simulation already paces a burning solid correctly, so this correction stands down, because it would otherwise add the same difference a second time.
     //
-    // SequencePerformanceList.ComputeSolidPacingMassFlowRate paces a solid at (usable grain REMAINING) / (BurnSeconds of a FULL grain), and scales its thrust by the same ratio to preserve exhaust velocity. At ignition that is exact. Part-way through it is not: with a fraction f of the grain left the model reports f x the true thrust and mass flow, and - because the burn time it implies is remaining/(remaining/BurnSeconds) - predicts a further FULL BurnSeconds of burn no matter how little grain is left.
+    // SequencePerformanceList.ComputeSolidPacingMassFlowRate paces a solid at (usable grain REMAINING) / (BurnSeconds of a FULL grain), and scales its thrust by the same ratio to preserve exhaust velocity. For a grain that holds less than its geometry that is long even at ignition, and part-way through it is worse: with a fraction f of the grain left the model reports f x the true thrust and mass flow, and - because the burn time it implies is remaining/(remaining/BurnSeconds) - predicts a further FULL BurnSeconds of burn no matter how little grain is left.
     //
     // The mass ratio survives that (f cancels), which is why the stock stage menu's delta-v looks right, but thrust and burn time are exactly what UPFG steers on - hence the visible attitude jump when the boosters finally go.
     //

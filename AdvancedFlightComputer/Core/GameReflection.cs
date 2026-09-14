@@ -321,11 +321,8 @@ internal static class GameReflection
     public static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs>? Vehicle_manualControlInputsRef =
         InstanceFieldRef<Vehicle, ManualControlInputs>(Vehicle_manualControlInputs);
 
-    // The staging drain simulation paces a burning solid at the grain left over the full grain's
-    // burn time, so the motor's remaining burn never shortens and a nearly spent booster is
-    // modelled as a trickle that outlasts the core. SolidPacingPatch replaces that pacing with the
-    // motor's live mass flow. Its own feature, so a renamed method costs the correction and not
-    // the guidance driver.
+    // SolidPacingPatch corrects this. Its own feature, so a renamed method costs the correction and
+    // not the guidance driver.
     [UsedBy(Feature.GuidanceStaging)]
     public static readonly MethodInfo? SequencePerformanceList_ComputeSolidPacingMassFlowRate =
         AccessTools.Method(typeof(SequencePerformanceList), "ComputeSolidPacingMassFlowRate",
