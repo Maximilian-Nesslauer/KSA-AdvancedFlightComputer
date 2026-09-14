@@ -98,6 +98,10 @@ public static partial class GuidanceWindow
             ImGui.SameLine();
             if (ImGui.Button("From position"))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
+            ImGui.Checkbox("Fix arg. of periapsis", ref _s.ArgPeFixed);
+            ImGui.SameLine();
+            using (new ImGuiDisabledScope(!_s.ArgPeFixed))
+                ImGui.InputDouble("Arg. of periapsis (deg)", ref _s.ArgPeDeg);
         }
 
         if (ImGui.CollapsingHeader("Ascent params", ImGuiTreeNodeFlags.DefaultOpen))
@@ -296,6 +300,7 @@ public static partial class GuidanceWindow
         _s.VgoPeak = 0.0;
         _s.LastGuidanceLogTime = double.NegativeInfinity;
         GuidanceLog.Info(vehicle, $"ascent started to {_s.PeKm:F0} x {_s.ApKm:F0} km, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg"
+            + $", arg. Pe {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") + " deg" : "free")}"
             + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}"
             + $", reserve {(_s.ReserveArmed ? _s.ReserveKg.ToString("F0") + " kg" : "off")}, turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s).");
     }
@@ -330,7 +335,10 @@ public static partial class GuidanceWindow
         }
 
         ImGui.Text($"Target orbit:  {plan.TargetPeKm,7:F1} x {plan.TargetApKm,7:F1} km  inc {plan.IncDeg,6:F2} deg");
-        ImGui.Text($"Chase orbit:   {plan.PeKm,7:F1} km circular  (SMA {_s.ChaseOffsetKm:F0} km below target)");
+        ImGui.Text($"Chase orbit:   {plan.PeKm,7:F1} x {plan.ApKm,7:F1} km co-elliptic  (SMA {_s.ChaseOffsetKm:F0} km below target)");
+        ImGui.Checkbox("Copy target arg. of periapsis", ref _s.MatchTargetArgPe);
+        ImGui.SameLine();
+        ImGui.Text(double.IsNaN(plan.ArgPeDeg) ? "(target has none)" : $"({plan.ArgPeDeg:F2} deg)");
 
         if (status == ChaseStatus.PlaneUnreachable)
         {
@@ -419,7 +427,9 @@ public static partial class GuidanceWindow
                     ApplyGLimit(live, _s.GLimitG);
                 _s.Status = "";
                 _s.UpfgVehicle = live;
-                var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu);
+                // The insertion floor is the top of the atmosphere, zero for an airless body: an insertion under it would cut the engines in the air.
+                var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu,
+                    _s.ArgPeFixed ? _s.ArgPeDeg : double.NaN, parent?.GetAtmosphereRadius() ?? 0.0);
                 // dt is the interval this solve covers, which is what makes the convergence test rate-independent (see UpfgGuidance.Step).
                 double solveDt = double.IsNegativeInfinity(_s.LastSolveTime) ? 0.0 : now - _s.LastSolveTime;
                 _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
@@ -430,7 +440,11 @@ public static partial class GuidanceWindow
                 {
                     _s.LastGuidanceLogTime = now;
                     double3 up = double3.Normalize(r);
+                    UpfgTarget.Insertion aim = _s.Upfg.Aim;
                     GuidanceLog.Debug(vehicle, $"UPFG {PhaseName(_s.Phase)}: tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s, converged {_s.Upfg.Converged}"
+                        + (aim.Valid && (target.ArgPeFixed || aim.FloorLimited)
+                            ? $", insertion {UpfgTarget.RadToDeg(aim.TrueAnomaly):F1} deg from Pe at {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {UpfgTarget.RadToDeg(aim.Fpa):F2} deg"
+                            : "")
                         + $", steer pitch {PitchOf(up, _s.Upfg.Steering):F1} deg, command pitch {PitchOf(up, _s.CommandDir):F1} deg"
                         + $", alt {(r.Length() - bodyRadius) / 1000.0:F1} km, speed {v.Length():F0} m/s, mass {vehicle.TotalMass / 1000.0:F1} t"
                         + $", model {live.Stages.Count} stage(s), S1 {live.Stages[0].Thrust / 1000.0:F0} kN {(live.Stages[0].MassTotal - live.Stages[0].MassDry) / (live.Stages[0].Thrust / (live.Stages[0].Isp * 9.80665)):F0} s.");

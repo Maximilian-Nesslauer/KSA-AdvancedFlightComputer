@@ -43,6 +43,9 @@ public static partial class GuidanceWindow
         {
             ApplyChaseOrbit(in plan);
             GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
+            // Greyed for a near-circular target, which has no argument of periapsis to copy.
+            using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))
+                GaugeRowCheck("Copy target arg. Pe", "##matchargpe", ref _s.MatchTargetArgPe);
         }
 
         using (new ImGuiDisabledScope(driven))
@@ -53,6 +56,10 @@ public static partial class GuidanceWindow
             if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
             GaugeRow("LAN (deg)", "##lan", ref _s.LanDeg);
+            // Free inserts at periapsis wherever the burn ends. Fixed holds periapsis where it is put and moves the insertion along the ellipse instead, which costs more the further from periapsis it lands - the Insertion row says where that is once guidance runs.
+            GaugeRowCheck("Fix arg. of Pe", "##argpefixed", ref _s.ArgPeFixed);
+            using (new ImGuiDisabledScope(!_s.ArgPeFixed))
+                GaugeRow("Arg. of Pe (deg)", "##argpe", ref _s.ArgPeDeg);
         }
 
         if (!driven)
@@ -91,11 +98,47 @@ public static partial class GuidanceWindow
                 break;
         }
 
+        DrawInsertionRows(bodyRadius);
+
         ImGuiHelper.EndRegion();
 
         // Outside the region: it emits plain full-width status text, not column rows.
         if (status == ChaseStatus.Ok)
             DrawAutoLaunchArming();
+    }
+
+    // Where the Insertion row turns amber. Not limits - nothing is refused, and what an insertion costs depends on the vehicle - but where the cost has stopped being small: far round the ellipse from periapsis, or climbing steeply onto it.
+    private const double InsertionWarnAnomalyDeg = 45.0;
+    private const double InsertionWarnFpaDeg = 5.0;
+
+    // Below this the insertion is before periapsis in any sense worth saying, rather than hovering over it.
+    private const double InsertionDescendingFpaDeg = -0.5;
+
+    /// <summary>
+    /// Where the running ascent is aiming to insert on the target ellipse, whenever that is anywhere but periapsis: how far round from periapsis, at what altitude, and at what flight-path angle - the numbers a fixed argument of periapsis spends dV on. Drawn only while there is a solution to read them from.
+    /// </summary>
+    private static void DrawInsertionRows(double bodyRadius)
+    {
+        var aim = _s.Upfg.Aim;
+        if (!_s.Running || !aim.Valid || !(_s.ArgPeFixed || aim.FloorLimited))
+            return;
+
+        double nuDeg = aim.TrueAnomaly * (180.0 / Math.PI);
+        double fpaDeg = aim.Fpa * (180.0 / Math.PI);
+        bool far = Math.Abs(nuDeg) > InsertionWarnAnomalyDeg || Math.Abs(fpaDeg) > InsertionWarnFpaDeg;
+        bool descending = fpaDeg < InsertionDescendingFpaDeg;
+        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
+        float4 fine = new float4(0.5f, 0.9f, 1f, 1f);
+
+        GaugeRowText("Insertion",
+            $"{nuDeg:+0.0;-0.0} deg from Pe, {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {fpaDeg:+0.0;-0.0}",
+            far || descending || aim.FloorLimited ? warn : fine);
+        if (aim.FloorLimited)
+            GaugeRowText("", "Pe inside the atmosphere - inserting at its top", warn);
+        if (far)
+            GaugeRowText("", "far round from Pe - costs dV", warn);
+        else if (descending)
+            GaugeRowText("", "before Pe - a burn from orbit may not converge", warn);
     }
 
     private static void DrawTargetPicker(Vehicle vehicle)
@@ -105,8 +148,12 @@ public static partial class GuidanceWindow
         ImGui.PushItemWidth(-1f);
         if (ImGui.BeginCombo("##ascenttarget", _s.TargetId.Length > 0 ? _s.TargetId : "(none)"))
         {
-            if (ImGui.Selectable("(none)", _s.TargetId.Length == 0))
+            // Dropping the target frees the argument of periapsis again: the target's was only ever copied for the chase.
+            if (ImGui.Selectable("(none)", _s.TargetId.Length == 0) && _s.TargetId.Length > 0)
+            {
                 _s.TargetId = "";
+                _s.ArgPeFixed = false;
+            }
 
             CelestialSystem system = Universe.CurrentSystem;
             if (system != null)

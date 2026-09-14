@@ -31,6 +31,7 @@ public static partial class GuidanceWindow
     {
         public Vehicle Target;
         public double IncDeg, LanDeg, PeKm, ApKm;    // the chase orbit
+        public double ArgPeDeg;                      // the chase orbit's, which is the target's; NaN when the target is too round to have one
         public double TargetPeKm, TargetApKm;        // the target's own, for display
         public double WaitSec;
     }
@@ -64,16 +65,22 @@ public static partial class GuidanceWindow
         plan.TargetPeKm = (targetOrbit.Periapsis - bodyRadius) / 1000.0;
         plan.TargetApKm = (targetOrbit.Apoapsis - bodyRadius) / 1000.0;
 
-        // Chase orbit: circular, with semi-major axis the chosen offset below the
-        // target's. A true co-elliptic depends on launch phasing anyway - circular
-        // is a clean baseline to correct from once up.
-        double targetSmaKm = (targetOrbit.Periapsis + targetOrbit.Apoapsis) / 2000.0;
-        double chaseAltKm = targetSmaKm - bodyRadius / 1000.0 - _s.ChaseOffsetKm;
+        // Chase orbit: CO-ELLIPTIC with the target - its eccentricity and argument of
+        // periapsis, on a semi-major axis the chosen offset below its own. Sharing the line
+        // of apsides keeps the chase orbit inside the target's all the way round, where a
+        // circular one under an eccentric target crosses it. Against a circular target this
+        // is the circular chase orbit it replaces.
+        double targetSma = (targetOrbit.Periapsis + targetOrbit.Apoapsis) / 2.0;
+        double ecc = (targetOrbit.Apoapsis - targetOrbit.Periapsis)
+                   / (targetOrbit.Apoapsis + targetOrbit.Periapsis);
+        double chaseSma = targetSma - _s.ChaseOffsetKm * 1000.0;
+        double argPe = UpfgTarget.ArgumentOfPeriapsisOf(rt, vt, parent.Mu, lanT);
 
         plan.IncDeg = UpfgTarget.RadToDeg(incT);
         plan.LanDeg = UpfgTarget.RadToDeg(lanT);
-        plan.PeKm = chaseAltKm;
-        plan.ApKm = chaseAltKm;
+        plan.PeKm = (chaseSma * (1.0 - ecc) - bodyRadius) / 1000.0;
+        plan.ApKm = (chaseSma * (1.0 + ecc) - bodyRadius) / 1000.0;
+        plan.ArgPeDeg = double.IsNaN(argPe) ? double.NaN : UpfgTarget.RadToDeg(argPe);
 
         // Launch window: how long until the body's rotation carries the launch site
         // under the target plane, at the requested (ascending/descending) crossing.
@@ -130,6 +137,10 @@ public static partial class GuidanceWindow
     /// Drives the target-orbit inputs from the chase plan. The gauge panel calls this
     /// every frame while a target is selected - which is why those inputs are greyed
     /// out there: they are outputs of the target pick, not independent settings.
+    ///
+    /// The argument of periapsis follows the target's only while MatchTargetArgPe is
+    /// set, so clearing that leaves the chase orbit to insert at its own periapsis. A
+    /// target too round to have one leaves nothing to copy, and the chase is free.
     /// </summary>
     private static void ApplyChaseOrbit(in ChasePlan plan)
     {
@@ -137,6 +148,10 @@ public static partial class GuidanceWindow
         _s.LanDeg = plan.LanDeg;
         _s.PeKm = plan.PeKm;
         _s.ApKm = plan.ApKm;
+        bool hasArgPe = !double.IsNaN(plan.ArgPeDeg);
+        if (hasArgPe)
+            _s.ArgPeDeg = plan.ArgPeDeg;
+        _s.ArgPeFixed = _s.MatchTargetArgPe && hasArgPe;
         _s.LanSeeded = true;
     }
 }

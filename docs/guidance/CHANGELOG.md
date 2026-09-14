@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+- Added **argument of periapsis** to the ascent target. Tick **Fix arg. of Pe** and the ascent holds the whole ellipse in place, inserting wherever along it the burn ends instead of always at periapsis. While it flies, an **Insertion** row shows how far round from periapsis that is, and turns amber once that starts to cost real dV, or when the insertion is before periapsis, which a burn that starts from orbit may not converge on. Left unticked, the ascent inserts at periapsis as before.
+
+- Launch to target now flies a **co-elliptic** chase orbit, with the target's eccentricity and argument of periapsis on a semi-major axis the offset below its own, instead of a circular one. Clear **Copy target arg. Pe** to leave the argument of periapsis free.
+
+- An ascent to a periapsis inside the atmosphere now inserts where the orbit climbs out of it, rather than cutting the engines in the air.
+
+- The target orbit overlay draws periapsis where a fixed argument of periapsis puts it.
+
 ## [0.4.0]
 
 Boosters fly themselves home. Returnable stages with their own landing sites, and a move to MIT.

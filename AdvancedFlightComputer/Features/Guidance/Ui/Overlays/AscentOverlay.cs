@@ -92,8 +92,8 @@ public static partial class GuidanceWindow
     }
 
     // The target orbit as a closed ellipse in the target plane.
-    //  The plane and the periapsis/apoapsis radii are fully determined by the UI inputs, but the ARGUMENT OF PERIAPSIS is not: UpfgTarget inserts at periapsis, so where periapsis ends up depends on where the ascent actually reaches orbit. Periapsis is therefore anchored to the vehicle's CURRENT position, projected into the target plane - so the drawn orbit passes through where the vehicle is now and you can see the ascent lining up with it as you fly, rather than an ellipse rotated arbitrarily within its plane.
-    // The ellipse turns with the vehicle as a result, which is the point.
+    //  The plane and the periapsis/apoapsis radii are fully determined by the UI inputs, and so is the ARGUMENT OF PERIAPSIS when it is fixed: the ellipse is then drawn exactly where the ascent is aiming it. While it is free, UpfgTarget inserts at periapsis, so where periapsis ends up depends on where the ascent actually reaches orbit. Periapsis is then anchored to the vehicle's CURRENT position, projected into the target plane - so the drawn orbit passes through where the vehicle is now and you can see the ascent lining up with it as you fly, rather than an ellipse rotated arbitrarily within its plane.
+    // A free ellipse turns with the vehicle as a result, which is the point.
     private static void DrawTargetOrbit(ImDrawListPtr dl, double3 vehicleCci,
                                         double bodyRadius, ImColor8 col)
     {
@@ -110,12 +110,20 @@ public static partial class GuidanceWindow
         double inc = UpfgTarget.DegToRad(_s.IncDeg);
         double lan = UpfgTarget.DegToRad(_s.LanDeg);
 
-        // In-plane basis: periapsis at the vehicle's position flattened into the target plane, normal is UPFG's own plane normal, prograde completes the right-handed pair. If the vehicle happens to sit on the plane's axis the projection vanishes, so fall back to the ascending node there.
+        // In-plane basis: periapsis where a fixed argument puts it, otherwise at the vehicle's position flattened into the target plane; normal is UPFG's own plane normal, prograde completes the right-handed pair. If the vehicle happens to sit on the plane's axis the projection vanishes, so fall back to the ascending node there.
         double3 normal = UpfgTarget.OrbitNormal(inc, lan);
-        double3 periapsis = vehicleCci - double3.Dot(vehicleCci, normal) * normal;
-        periapsis = periapsis.Length() > 1.0
-            ? double3.Normalize(periapsis)
-            : new double3(Math.Cos(lan), Math.Sin(lan), 0.0);
+        double3 periapsis;
+        if (_s.ArgPeFixed && ecc >= UpfgTarget.MinArgPeEccentricity)
+        {
+            periapsis = UpfgTarget.PeriapsisDirection(inc, lan, UpfgTarget.DegToRad(_s.ArgPeDeg));
+        }
+        else
+        {
+            periapsis = vehicleCci - double3.Dot(vehicleCci, normal) * normal;
+            periapsis = periapsis.Length() > 1.0
+                ? double3.Normalize(periapsis)
+                : UpfgTarget.NodeDirection(lan);
+        }
         double3 prograde = double3.Cross(normal, periapsis);
 
         const int segments = 160;
