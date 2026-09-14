@@ -167,8 +167,7 @@ internal static class KsaEnginePerf
             ? -1.0 : command.Throttle;
     }
 
-    // Bisection requires a monotone thrust curve and handles its nonlinear pressure response.
-    // Zero demand switches the engine off instead of commanding its minimum throttle.
+    // Needs a monotone thrust curve. Zero demand switches the engine off instead of commanding its minimum throttle.
     internal static ThrustCommand InvertThrust(double demandN, double minimumThrottle, Func<double, double> thrustAtThrottle)
     {
         if (!double.IsFinite(demandN))
@@ -187,14 +186,37 @@ internal static class KsaEnginePerf
         if (demandN >= full)
             return new(hi, full, demandN > full ? ThrustStatus.AboveMaximum : ThrustStatus.Available);
 
-        for (int i = 0; i < 24; i++)
+        // Illinois false position: keeps the bracket thrust(lo) < demand <= thrust(hi) like bisection, and
+        // takes the midpoint when the secant point is degenerate or the bracket stops halving.
+        double fLo = minimum - demandN, fHi = full - demandN;
+        double tolerance = full * 1e-7;
+        int lastSide = 0, stalls = 0;
+        for (int i = 0; i < 60 && hi - lo > 1e-9; i++)
         {
-            double mid = 0.5 * (lo + hi);
-            double thrust = thrustAtThrottle(mid);
-            if (!double.IsFinite(thrust))
+            double width = hi - lo;
+            double mid = stalls >= 2 ? 0.5 * (lo + hi) : hi - fHi * width / (fHi - fLo);
+            if (!(mid > lo && mid < hi))
+                mid = 0.5 * (lo + hi);
+            double f = thrustAtThrottle(mid) - demandN;
+            if (!double.IsFinite(f))
                 return new(0.0, 0.0, ThrustStatus.NoAuthority);
-            if (thrust < demandN) lo = mid;
-            else hi = mid;
+            if (f < 0.0)
+            {
+                lo = mid;
+                fLo = f;
+                if (lastSide < 0) fHi *= 0.5;
+                lastSide = -1;
+            }
+            else
+            {
+                hi = mid;
+                fHi = f;
+                if (lastSide > 0) fLo *= 0.5;
+                lastSide = 1;
+                if (f <= tolerance)
+                    break;
+            }
+            stalls = hi - lo > 0.5 * width ? stalls + 1 : 0;
         }
         // Return the realizable upper endpoint, including the game's float rounding.
         float throttle = (float)hi;
