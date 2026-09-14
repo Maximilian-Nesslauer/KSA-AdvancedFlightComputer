@@ -31,7 +31,7 @@ Guidance has no stager of its own. `AutoSequence` arms AFC's AutoStage feature f
 | `Modes` | One file per mode, `Ascent`, `Boostback`, `Landing`, `GfoldDescent`, `SixDof`, `TerminalHover`, plus `Autopilot.cs`, the per-vehicle step every mode is driven from, `Lifecycle.cs`, the release paths, and `VehicleAutopilotState.cs`, the per-craft state. |
 | `Control` | The actuator boundary: `GimbalControl` and `TvcAllocator` for thrust vectoring, `AttitudeRate` for the rate feedforward, `EnginePerf` for engine capability and thrust inversion, `AttitudeOwnership` for the fields guidance writes. |
 | `Adapters` | Game data conversion for the solvers: `KsaGfold` for G-FOLD, `Ksa6DofSetup`, `KsaFrameBridge` and `Ksa6DofGuidance` for the 6-DOF path, the solve worker and its telemetry log. |
-| `Upfg` | The double-precision UPFG port and `KsaVehicleAdapter`, which builds the stage model from the stock sequence performance. |
+| `Upfg` | The double-precision UPFG port and `KsaVehicleAdapter`, which builds the stage model from the stock sequence performance and scales the burning stage to the craft's ambient pressure. |
 | `Ui` | The panel shell in `Panel.cs`, the per-tab content in `Gauges`, the world-space overlays in `Overlays`, and the legacy diagnostic window in `Window.cs`, off by default. |
 | `Numerics`, `Gfold`, `Scvx` | The three game-independent projects, built as their own assemblies so their checks run with no game. |
 
