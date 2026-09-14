@@ -32,7 +32,10 @@ public sealed class GuidanceAscentStagingTest : AfcTest
     private const double AfterDropSeconds = 20.0;
     private const double ReconvergeSeconds = 10.0;
     private const double MaxPitchRiseDeg = 15.0;
+    private const double MaxPacedBurnError = 0.15;
     private const double SampleIntervalS = 2.0;
+    private const double ProbeIntervalS = 10.0;
+    private const int CurvePoints = 65;
     private const double TargetApoapsisKm = 1_000_000.0;
     private const double TargetPeriapsisRiseKm = 100.0;
     private const double GLimitG = 2.0;
@@ -181,6 +184,14 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         double pitchBefore = PitchDeg(up, state.CommandDir);
         double nextSample = 0.0;
         double ignitionTime = time;
+        double pacedBurnLeft = DescribeSolids(t, vehicle, jettison, time);
+
+        SolidMotor? probeSolid = FindShedSolid(vehicle, jettison);
+        DescribeCurve(t, probeSolid);
+        double probeGrain = 0.0, probeTime = time;
+        SolidPacingPatch.TryUsableGrainMass(probeSolid, out probeGrain);
+        double nextProbe = time + ProbeIntervalS;
+
         while (time < MaxBurnSeconds && TestSupport.CountVehicles(t.System) <= vehiclesBefore)
         {
             if (!state.Running)
@@ -192,6 +203,11 @@ public sealed class GuidanceAscentStagingTest : AfcTest
             {
                 nextSample += SampleIntervalS;
                 Sample(t, vehicle, state, time);
+            }
+            if (time >= nextProbe)
+            {
+                nextProbe += ProbeIntervalS;
+                ProbeSolid(t, vehicle, probeSolid, time, ref probeGrain, ref probeTime);
             }
             up = double3.Normalize(vehicle.Orbit.StateVectors.PositionCci);
             pitchBefore = PitchDeg(up, state.CommandDir);
@@ -211,6 +227,11 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         t.Check("the modelled burn of the stack does not balloon while the boosters burn",
             stackBurnAtIgnition > 0.0 && stackBurnPeak <= 1.5 * stackBurnAtIgnition,
             $"{stackBurnAtIgnition:F0} s at ignition, peak {stackBurnPeak:F0} s");
+        // The flown burn also holds the burnout detection and the decoupler step, hence the tolerance.
+        t.Check($"the paced burn left of the boosters holds to the flown burn within {MaxPacedBurnError:P0}",
+            pacedBurnLeft > 0.0 && boosterBurn > 0.0
+            && Math.Abs(pacedBurnLeft - boosterBurn) <= MaxPacedBurnError * boosterBurn,
+            $"{pacedBurnLeft:F1} s paced at t={ignitionTime:F1} s, {boosterBurn:F1} s flown");
 
         // After the drop: the craft stays guidance's, and the command stays continuous.
         double maxPitch = double.NegativeInfinity, minPitch = double.PositiveInfinity;
@@ -282,6 +303,177 @@ public sealed class GuidanceAscentStagingTest : AfcTest
             _planSignature = plan;
             t.Info($"   solve model: {GuidanceLog.DescribeStages(state.UpfgVehicle)}");
         }
+    }
+
+    // Logs each burning solid of the shed side, because the harness does not capture the game log.
+    // Returns the longest paced burn left.
+    private static double DescribeSolids(TestContext t, Vehicle vehicle, IReadOnlySet<Part> jettison, double time)
+    {
+        double longest = 0.0;
+        PartTree tree = vehicle.Parts;
+        if (tree?.Moles == null || tree.RocketNozzles == null)
+            return longest;
+
+        foreach (EngineController engine in tree.Modules.Get<EngineController>())
+        {
+            if (!engine.IsActive || !jettison.Contains(engine.Parent.FullPart))
+                continue;
+            foreach (RocketCore core in engine.Cores)
+            {
+                if (core is not SolidMotor solid || solid.Rocket == null || !solid.Stack.IsValid)
+                    continue;
+
+                double liveFlow = 0.0;
+                foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan()))
+                    liveFlow += nozzle.State.Performance.MassFlowRate;
+                if (!(liveFlow > 0.0))
+                    continue;
+
+                SolidPacingPatch.TryUsableGrainMass(solid, out double usable);
+                bool paced = SolidPacingPatch.TryBurnSecondsLeft(solid, out double left);
+                var noSamples = new SolidMotor.ThrustCurveSamples
+                {
+                    ThrustNewtons = default,
+                    IspSeconds = default,
+                    ChamberPressurePascals = default,
+                };
+                solid.TrySampleThrustCurve(noSamples, out SolidMotor.ThrustCurvePreview preview);
+                t.Info($"solid '{solid.TemplateId}' at t={time:F1}s: grain {usable / 1000.0:F1} t of " +
+                       $"{solid.InitialBurnableGrainMass / 1000.0:F1} t burnable, live flow {liveFlow:F0} kg/s, " +
+                       $"curve reports {preview.BurnSeconds:F1} s, grain over live flow {usable / liveFlow:F1} s, " +
+                       $"paced burn left {(paced ? left.ToString("F1") + " s" : "not read")}");
+                if (paced)
+                    longest = Math.Max(longest, left);
+            }
+        }
+        return longest;
+    }
+
+    private static SolidMotor? FindShedSolid(Vehicle vehicle, IReadOnlySet<Part>? jettison)
+    {
+        PartTree? tree = vehicle?.Parts;
+        if (tree == null || jettison == null)
+            return null;
+        foreach (EngineController engine in tree.Modules.Get<EngineController>())
+        {
+            if (!engine.IsActive || !jettison.Contains(engine.Parent.FullPart))
+                continue;
+            foreach (RocketCore core in engine.Cores)
+                if (core is SolidMotor solid && solid.Rocket?.Nozzles != null && solid.Stack.IsValid)
+                    return solid;
+        }
+        return null;
+    }
+
+    // Logs the curve against the grain and each segment's GrainVolume against its own geometry. A
+    // craft spawned outside the editor keeps GrainVolume sized for the default geometry.
+    private static void DescribeCurve(TestContext t, SolidMotor? solid)
+    {
+        if (solid == null)
+            return;
+        Span<float> thrust = stackalloc float[CurvePoints];
+        Span<float> isp = stackalloc float[CurvePoints];
+        Span<float> pressure = stackalloc float[CurvePoints];
+        var samples = new SolidMotor.ThrustCurveSamples
+        {
+            ThrustNewtons = thrust,
+            IspSeconds = isp,
+            ChamberPressurePascals = pressure,
+        };
+        if (!solid.TrySampleThrustCurve(samples, out SolidMotor.ThrustCurvePreview preview))
+        {
+            t.Info($"curve '{solid.TemplateId}': not sampled");
+            return;
+        }
+
+        double running = 0.0;
+        double previous = Flow(thrust[0], isp[0]);
+        for (int i = 1; i < CurvePoints; i++)
+        {
+            double next = Flow(thrust[i], isp[i]);
+            running += 0.5 * (previous + next);
+            previous = next;
+        }
+        double curveMass = running * preview.BurnSeconds / (CurvePoints - 1);
+
+        double residue = 0.0;
+        foreach (SolidGrainSegment segment in solid.Stack.Segments)
+            residue += segment.UnburnableGrainMass;
+
+        bool ended = SolidPacingPatch.TryBurnEndSeconds(solid, out double burnEnd);
+        t.Info($"curve '{solid.TemplateId}': reports {preview.BurnSeconds:F1} s, grain runs out at " +
+               $"{(ended ? burnEnd.ToString("F1") + " s" : "not read")}, first flow {Flow(thrust[0], isp[0]):F1} kg/s, " +
+               $"last flow {Flow(thrust[CurvePoints - 1], isp[CurvePoints - 1]):F1} kg/s, " +
+               $"first pressure {pressure[0] / 1e6:F3} MPa, last pressure {pressure[CurvePoints - 1] / 1e6:F3} MPa; " +
+               $"its flows over its burn add up to {curveMass / 1000.0:F1} t against {solid.InitialBurnableGrainMass / 1000.0:F1} t burnable " +
+               $"(ratio {(solid.InitialBurnableGrainMass > 0f ? curveMass / solid.InitialBurnableGrainMass : double.NaN):F3}); " +
+               $"its residue {preview.UnburnableGrainKg / 1000.0:F2} t against {residue / 1000.0:F2} t on the segments");
+
+        // A volume ratio under 1 means the grain runs out before the web ends.
+        PartTree? tree = solid.Rocket?.Parent?.FullPart?.Tree;
+        if (tree?.Moles == null)
+            return;
+        ReadOnlySpan<MoleState> moles = tree.Moles.States;
+        foreach (SolidGrainSegment segment in solid.Stack.Segments)
+        {
+            GrainGeometryTable lut = segment.Geometry.Lut;
+            double geometryVolume = lut.InitialGrainArea * segment.CasingInnerRadius * segment.CasingInnerRadius * segment.Length;
+            double moleMass = segment.Grain != null ? moles[segment.Grain.StatesIdx].Mass : double.NaN;
+            t.Info($"segment '{segment.Geometry.Id}' (library default '{GrainGeometryLibrary.Default.Id}'): R {segment.CasingInnerRadius:F4} m, " +
+                   $"L {segment.Length:F3} m, GrainVolume {segment.GrainVolume:F3} m3 against {geometryVolume:F3} m3 for its geometry " +
+                   $"(ratio {segment.GrainVolume / geometryVolume:F4}), mole container {segment.Grain?.ContainerVolume ?? float.NaN:F3} m3, " +
+                   $"mole {moleMass / 1000.0:F3} t of {segment.InitialGrainMass / 1000.0:F3} t, " +
+                   $"empty web {segment.ComputeGrainDepth(0f):F4} of {lut.MaxDepth:F4}");
+        }
+    }
+
+    private static double Flow(double thrustNewtons, double ispSeconds) =>
+        ispSeconds > 0.0 ? thrustNewtons / (ispSeconds * 9.80665) : 0.0;
+
+    // Logs the grain one motor really consumes against the flow, pressure and regression rate that
+    // its published state and a repeated curve solve give for the same grain.
+    private static void ProbeSolid(TestContext t, Vehicle vehicle, SolidMotor? solid, double time,
+                                   ref double previousGrain, ref double previousTime)
+    {
+        PartTree? tree = vehicle?.Parts;
+        if (solid == null || tree?.Moles == null || tree.RocketNozzles == null || tree.RocketCores == null)
+            return;
+        if (!SolidPacingPatch.TryUsableGrainMass(solid, out double usable))
+            return;
+
+        double elapsed = time - previousTime;
+        double consumption = elapsed > 0.0 ? (previousGrain - usable) / elapsed : double.NaN;
+        previousGrain = usable;
+        previousTime = time;
+
+        RocketCoreState coreState = tree.RocketCores.States[solid.StatesIdx];
+        double statePressure = coreState.Conditions.Core.Pressure;
+
+        double nozzleFlow = 0.0;
+        foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan()))
+            nozzleFlow += nozzle.State.Performance.MassFlowRate;
+
+        ReadOnlySpan<MoleState> moles = tree.Moles.States;
+        float area = solid.ComputeBurningArea(moles);
+        RocketCoreConditions solved = solid.SolveConditionsForArea(area, (float)statePressure);
+        double solvedPressure = solved.Core.Pressure;
+        double solvedFlow = 0.0;
+        foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan()))
+            solvedFlow += nozzle.Module.ComputePerformance(in solved, 0f).MassFlowRate;
+
+        double density = solid.Propellant?.StorageDensity ?? 0.0;
+        double lawRate = solid.BurnRate.Evaluate((float)solvedPressure);
+        double flownRate = density > 0.0 && area > 0f ? consumption / (density * area) : double.NaN;
+
+        SolidGrainSegment? first = solid.Stack.Segments.Length > 0 ? solid.Stack.Segments[0] : null;
+        double depth = first?.Grain != null ? first.ComputeGrainDepth(moles[first.Grain.StatesIdx].Mass) : double.NaN;
+        double maxDepth = first != null ? first.Geometry.Lut.MaxDepth : double.NaN;
+
+        t.Info($"probe t={time,6:F1}s grain={usable / 1000.0,6:F1}t flown={consumption,7:F1}kg/s " +
+               $"state={coreState.MassFlowRate,7:F1}kg/s nozzles={nozzleFlow,7:F1}kg/s solved={solvedFlow,7:F1}kg/s " +
+               $"p state={statePressure / 1e6,6:F3}MPa solved={solvedPressure / 1e6,6:F3}MPa " +
+               $"area={area,7:F3}m2 rate flown={flownRate * 1000.0,6:F3}mm/s law={lawRate * 1000.0,6:F3}mm/s " +
+               $"web={depth,6:F4} of {maxDepth:F4}");
     }
 
     private static void DescribeSequences(TestContext t, Vehicle vehicle, string when)
