@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using Brutal.Numerics;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.Guidance.Upfg;
@@ -16,7 +17,7 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 //
 // Solid boosters come out right for free. Their grain lives in SolidGrainSegment rather than a Tank (so a tank walk sees no propellant at all), part of it is permanently unburnable, and thrust follows the burning area over the burn - the game's sim handles all three, linearising the thrust curve to a constant mass flow of usable-grain/BurnSeconds with thrust scaled to preserve Isp.
 //
-// Pressure: the drain sim uses each sequence's own Environment setting (Vacuum = 0 Pa, Atmospheric = 101325 Pa), NOT the ambient pressure passed to RecomputeForFlight. Sequences default to Vacuum, which is what UPFG wants; AnyAtmosphericSequence reports the exception so the UI can flag it.
+// Pressure: the drain sim uses each sequence's own Environment setting (Vacuum = 0 Pa, Atmospheric = 101325 Pa), NOT the ambient pressure passed to RecomputeForFlight. ApplyAmbientPressure scales only the burning stage to the craft's pressure, because later stages burn where the model puts them. AnyAtmosphericSequence reports a sequence the player set to sea level so the UI can flag it.
 public static class KsaVehicleAdapter
 {
     private const double G0 = 9.80665;
@@ -35,7 +36,10 @@ public static class KsaVehicleAdapter
     // ...and a phase can be long enough to survive that and still be dust: a tank trickling out its last few grams paces a "burn" of seconds that delivers no dV worth planning around. A stage under this is dropped rather than shown.
     private const double MinStageDv = 1.0;   // m/s
 
-    public static UpfgVehicle Build(Vehicle vehicle)
+    private const double SeaLevelPressure = 101325.0;
+
+    // ambientPressure is in Pa, the pressure the live nozzles run at.
+    public static UpfgVehicle Build(Vehicle vehicle, double ambientPressure)
     {
         var result = new UpfgVehicle();
 
@@ -50,6 +54,10 @@ public static class KsaVehicleAdapter
         int count = Math.Min(sequences.Length, performance.Length);
         if (count == 0)
             return result;
+
+        UpfgStage burningStage = null;
+        HashSet<Part> burningPhaseParts = null;
+        double burningModelPressure = 0.0;
 
         for (int i = 0; i < count; i++)
         {
@@ -76,7 +84,7 @@ public static class KsaVehicleAdapter
                 double burnout = mass - massFlow * duration;
                 if (duration >= MinPhaseSeconds && mass > 0.0 && burnout > 0.0)
                 {
-                    result.Stages.Add(new UpfgStage
+                    var stage = new UpfgStage
                     {
                         Mode = 1,
                         Thrust = thrust,
@@ -86,14 +94,25 @@ public static class KsaVehicleAdapter
                         GLim = 1e9,
                         Seq = i,
                         Engines = phase.ActiveEngineCount,
-                    });
+                    };
+                    result.Stages.Add(stage);
+                    if (burningStage == null)
+                    {
+                        burningStage = stage;
+                        burningPhaseParts = PhaseParts(perf, j);
+                        burningModelPressure = sequences[i].Environment == PerformanceEnvironment.Atmospheric
+                            ? SeaLevelPressure : 0.0;
+                    }
                 }
                 mass = burnout;
             }
         }
 
-        CorrectBurningSolids(vehicle, result);
+        CorrectBurningSolids(vehicle, result, burningModelPressure);
         Coalesce(result);
+        // Coalesce can drop the first stage, and the phase parts describe that stage only.
+        if (burningStage != null && result.Stages.Count > 0 && ReferenceEquals(result.Stages[0], burningStage))
+            ApplyAmbientPressure(tree, result, burningStage, burningPhaseParts, burningModelPressure, ambientPressure);
         return result;
     }
 
@@ -218,16 +237,21 @@ public static class KsaVehicleAdapter
     //
     // The mass ratio survives that (f cancels), which is why the stock stage menu's delta-v looks right, but thrust and burn time are exactly what UPFG steers on - hence the visible attitude jump when the boosters finally go.
     //
-    // The adjustment uses the solid's live nozzle performance as the reference. Solids that are attached but not yet lit have a full grain, so f = 1 and no adjustment is needed.
-    private static void CorrectBurningSolids(Vehicle vehicle, UpfgVehicle result)
+    // The adjustment uses the solid's live chamber conditions as the reference. Solids that are attached but not yet lit have a full grain, so f = 1 and no adjustment is needed.
+    //
+    // The motor's thrust is recomputed at modelPressure, because RocketNozzle.UpdateState fills the live state at the craft's pressure and ApplyAmbientPressure scales the whole stage to that afterwards.
+    private static void CorrectBurningSolids(Vehicle vehicle, UpfgVehicle result, double modelPressure)
     {
         if (SolidPacingPatch.Active || result.Stages.Count == 0)
             return;
 
         PartTree tree = vehicle.Parts;
-        if (tree?.Moles == null || tree.RocketNozzles == null)
+        if (tree?.Moles == null || tree.RocketNozzles == null
+            || !ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>
+                .TryGetFrom(tree.States, out var coreStates))
             return;
         ReadOnlySpan<MoleState> moles = tree.Moles.States;
+        float modelPa = (float)Math.Clamp(modelPressure, 0.0, float.MaxValue);
 
         double deltaThrust = 0.0, deltaFlow = 0.0;
         double solidBurnLeft = double.PositiveInfinity;
@@ -252,14 +276,15 @@ public static class KsaVehicleAdapter
                     continue;
 
                 // What this motor is actually doing right now.
-                double liveThrust = 0.0, liveFlow = 0.0;
+                RocketCoreConditions conditions = coreStates.States[solid.StatesIdx].Conditions;
+                double modelThrust = 0.0, liveFlow = 0.0;
                 var nozzles = tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan());
                 foreach (var nozzle in nozzles)
                 {
-                    liveThrust += nozzle.State.Performance.TotalThrust;
+                    modelThrust += nozzle.Module.ComputePerformance(in conditions, modelPa).GetRocketPerformance().TotalThrust;
                     liveFlow += nozzle.State.Performance.MassFlowRate;
                 }
-                if (liveThrust <= 0.0 || liveFlow <= 0.0)
+                if (modelThrust <= 0.0 || liveFlow <= 0.0)
                     continue;   // mid-transient; leave the model alone this step
 
                 // Grain left that can actually burn - the residue never does.
@@ -281,7 +306,7 @@ public static class KsaVehicleAdapter
 
                 // The pacing the model used, and the exhaust velocity it kept.
                 double modelFlow = usable / preview.BurnSeconds;
-                double exhaustVel = liveThrust / liveFlow;
+                double exhaustVel = modelThrust / liveFlow;
 
                 deltaFlow += liveFlow - modelFlow;
                 deltaThrust += exhaustVel * (liveFlow - modelFlow);
@@ -316,6 +341,65 @@ public static class KsaVehicleAdapter
         stage.Thrust = thrust;
         stage.Isp = thrust / (flow * G0);
         stage.MassDry = burnout;
+    }
+
+    private static void ApplyAmbientPressure(PartTree tree, UpfgVehicle result, UpfgStage stage,
+                                             HashSet<Part> phaseParts, double modelPressure, double ambientPressure)
+    {
+        if (phaseParts == null || phaseParts.Count == 0
+            || !double.IsFinite(ambientPressure) || ambientPressure < 0.0)
+            return;
+        if (Math.Abs(ambientPressure - modelPressure) <= 1.0)
+            return;   // not worth two engine sums
+
+        double ambientThrust = PhaseThrustAtPressure(tree, phaseParts, ambientPressure);
+        double modelThrust = PhaseThrustAtPressure(tree, phaseParts, modelPressure);
+        if (!(ambientThrust > 0.0) || !(modelThrust > 0.0))
+            return;
+
+        double ratio = ambientThrust / modelThrust;
+        if (!double.IsFinite(ratio) || ratio <= 0.0)
+            return;
+
+        // Mass flow does not depend on back pressure (DeLavalNozzleConfig.ComputePerformance), so Isp moves with thrust and the masses stay.
+        stage.Thrust *= ratio;
+        stage.Isp *= ratio;
+        result.BurningStageThrustRatio = ratio;
+    }
+
+    // Mirrors SequencePerformanceList.AccumulateCoreThrustAtPressure. Design conditions, not live ones, make the ratio of two calls a pure pressure response, also for a solid part way through its grain.
+    private static double PhaseThrustAtPressure(PartTree tree, HashSet<Part> parts, double pressure)
+    {
+        if (tree?.RocketNozzles == null)
+            return 0.0;
+        float ambient = (float)Math.Clamp(pressure, 0.0, float.MaxValue);
+        float3 thrustVec = float3.Zero;
+        foreach (Part part in parts)
+        {
+            Span<EngineController> engines = part.Modules.Get<EngineController>();
+            for (int i = 0; i < engines.Length; i++)
+            {
+                RocketCore[] cores = engines[i].Cores;
+                for (int j = 0; j < cores.Length; j++)
+                {
+                    RocketNozzle[] nozzles = cores[j]?.Rocket?.Nozzles;
+                    if (nozzles == null)
+                        continue;
+                    RocketCoreConditions conditions = cores[j].ComputeDesignConditions();
+                    foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(nozzles.AsSpan()))
+                        thrustVec += nozzle.Module.ComputePerformance(in conditions, ambient)
+                            .GetRocketPerformance().TotalThrust * nozzle.State.ThrustDirectionVehicleAsmb;
+                }
+            }
+        }
+        return thrustVec.Length();
+    }
+
+    // RunDrainSimulation fills PhaseEngineParts in step with Phases. It holds the engines the model burns, lit or not, and as a set it counts a double-registered engine once.
+    private static HashSet<Part> PhaseParts(SequencePerformance perf, int phaseIdx)
+    {
+        List<HashSet<Part>> phaseParts = perf.PhaseEngineParts;
+        return phaseParts != null && phaseIdx >= 0 && phaseIdx < phaseParts.Count ? phaseParts[phaseIdx] : null;
     }
 
     // True if any sequence is set to compute at sea level instead of in vacuum. That is a per-sequence player setting saved with the vehicle, so the mod surfaces it rather than overwriting it.

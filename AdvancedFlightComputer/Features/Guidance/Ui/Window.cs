@@ -280,7 +280,7 @@ public static partial class GuidanceWindow
             // Cross-checks against the game's own model. The stage list comes from KSA's staging simulator (the same one behind the in-game stage menu), so these two are the ways it can silently disagree with reality.
             if (AdvancedFlightComputer.Features.Guidance.Upfg.KsaVehicleAdapter.AnyAtmosphericSequence(vehicle))
                 ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                    "A sequence is set to Atmospheric: its figures are sea-level, not vacuum.");
+                    "A sequence is set to Atmospheric: its figures are sea-level, except for the stage that is burning, which is at the craft's pressure.");
 
             double modelMass = AdvancedFlightComputer.Features.Guidance.Upfg.KsaVehicleAdapter.CurrentStageWetMass(vehicle);
             double liveMass = vehicle.TotalMass;

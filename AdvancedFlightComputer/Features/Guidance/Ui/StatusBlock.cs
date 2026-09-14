@@ -198,6 +198,26 @@ public static partial class GuidanceWindow
         dl.PathStroke(col, ImDrawFlags.None, thickness);
     }
 
+    // Total dV without the ambient correction. A g-limit can split the burning stage into leading rows with the same thrust and Isp and a continuous mass.
+    private static double UncorrectedTotalDv(
+        AdvancedFlightComputer.Features.Guidance.Upfg.UpfgVehicle stages, ReadOnlySpan<float> dv, int n, double totalDv)
+    {
+        double ratio = stages.BurningStageThrustRatio;
+        if (n == 0 || !(ratio > 0.0) || Math.Abs(ratio - 1.0) < 1e-9)
+            return totalDv;
+
+        AdvancedFlightComputer.Features.Guidance.Upfg.UpfgStage first = stages.Stages[0];
+        double corrected = dv[0];
+        for (int i = 1; i < n; i++)
+        {
+            AdvancedFlightComputer.Features.Guidance.Upfg.UpfgStage s = stages.Stages[i];
+            if (s.Thrust != first.Thrust || s.Isp != first.Isp || s.MassTotal != stages.Stages[i - 1].MassDry)
+                break;
+            corrected += dv[i];
+        }
+        return totalDv + corrected * (1.0 / ratio - 1.0);
+    }
+
     /// <summary>
     /// The "we are here" marker at the start of the bands, pointing along the arc.
     /// The tangent at angle a is (cos a, sin a) - the derivative of ArcPoint - which is why this leans with the curve instead of standing radially like the vehicle glyph it replaced.
@@ -257,9 +277,10 @@ public static partial class GuidanceWindow
             return lineH;
         }
 
-        // KSA's own figure for the same stack, when it disagrees by more than a percent. The two are computed from the same recompute, so a gap is a real disagreement about the staging - not a rounding difference - and it is the one failure a plausible-looking stage list will not otherwise show.
+        // KSA's own figure for the same stack, when it disagrees by more than a percent. KSA has no ambient correction, so the compare leaves it out too, and a gap is then a real disagreement about the staging that a plausible-looking stage list will not otherwise show.
         double ksaDv = _s.StageModelKsaDv;
-        string cross = ksaDv > 1.0 && Math.Abs(ksaDv - totalDv) > 0.01 * ksaDv
+        double modelDv = UncorrectedTotalDv(stages, dv, n, totalDv);
+        string cross = ksaDv > 1.0 && Math.Abs(ksaDv - modelDv) > 0.01 * ksaDv
             ? $"   (KSA {ksaDv:F0})" : "";
         dl.AddText(min, SchemDim, $"staging   {totalDv:F0} m/s   {total:F0} s total{cross}");
 

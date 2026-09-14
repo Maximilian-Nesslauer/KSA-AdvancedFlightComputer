@@ -425,12 +425,13 @@ public static partial class GuidanceWindow
         // A staging frame can catch the part tree mid-rebuild. Losing one refresh is harmless, because the previous snapshot stays valid, but letting it escape would skip the attitude command for that step, which is not. The first failure retries on the next step, and a repeat waits for the normal interval, so a refresh that keeps failing does not throw on every step.
         try
         {
-            // Vacuum. Closed-loop guidance only flies above significant atmosphere, and UPFG re-converges in real time regardless; the pressure argument would in any case only change the active sequence's headline thrust, which the adapter doesn't consume.
+            // This pressure moves only the headline figures of the active sequence, not the phases Build reads, so Build scales the burning stage itself.
             SequencePerformanceList performance = vehicle.Parts?.PerformanceSequences;
             if (performance == null || vehicle.Parts.SequenceList == null)
                 return;
-            performance.RecomputeForFlight(0f);
-            _s.StageModel = KsaVehicleAdapter.Build(vehicle);
+            float ambientPressure = vehicle.PhysicsEnvironment.AtmosphericPressure;
+            performance.RecomputeForFlight(ambientPressure);
+            _s.StageModel = KsaVehicleAdapter.Build(vehicle, ambientPressure);
             // The game's own total for the same recompute, latched for the panel to check our stage list against. Both are "from here on" - its simulated mole masses are re-seeded from the live tanks every recompute - so a disagreement means the adapter is reading the sequence list wrongly, which is exactly the failure that is invisible in a plausible-looking stage table. TotalDeltaV is a Volatile.Read of a float, so the draw thread can have this even though the Lists behind it can tear.
             _s.StageModelKsaDv = performance.TotalDeltaV;
 
@@ -477,6 +478,7 @@ public static partial class GuidanceWindow
                     MassTotal = s.MassTotal, MassDry = s.MassDry, GLim = s.GLim,
                     Seq = s.Seq, Engines = s.Engines,
                 });
+            copy.BurningStageThrustRatio = snapshot.BurningStageThrustRatio;
             return copy;
         }
 
@@ -526,7 +528,7 @@ public static partial class GuidanceWindow
     /// first real jettison is the booster, and Coalesce has already used exactly that
     /// discontinuity to decide the boundary is a boundary (KsaVehicleAdapter).
     ///
-    /// ve is the stage's VACUUM exhaust velocity, which is what the model carries.
+    /// ve is the stage's VACUUM exhaust velocity, with the ambient correction divided back out.
     /// Staging happens high enough that the boostback burn is very nearly a vacuum burn,
     /// so this is close - but it is optimistic, not conservative, and a reserve flown
     /// low would deliver less dV than the knob says.
@@ -545,7 +547,8 @@ public static partial class GuidanceWindow
         if (dropped <= 1e-4 * Math.Max(first.MassTotal, 1.0))
             return 0.0;
 
-        double ve = first.Isp * 9.80665;
+        double ratio = model.BurningStageThrustRatio;
+        double ve = first.Isp * 9.80665 / (ratio > 0.0 ? ratio : 1.0);
         if (!(ve > 0.0))
             return 0.0;
 

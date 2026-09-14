@@ -6,7 +6,7 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 public sealed class UpfgStage
 {
     public int Mode = 1;
-    public double Thrust;      // N (vacuum)
+    public double Thrust;      // N, the burning stage at ambient pressure
     public double Isp;         // s
     public double MassTotal;   // kg, wet (current)
     public double MassDry;     // kg, at burnout
@@ -20,4 +20,10 @@ public sealed class UpfgStage
 public sealed class UpfgVehicle
 {
     public System.Collections.Generic.List<UpfgStage> Stages { get; } = new();
+
+    /// <summary>
+    /// The factor the burning stage's thrust and Isp were scaled by for ambient pressure,
+    /// 1.0 when uncorrected. A readout that compares against the stock model divides it out.
+    /// </summary>
+    public double BurningStageThrustRatio = 1.0;
 }
