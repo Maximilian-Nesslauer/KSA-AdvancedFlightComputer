@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
@@ -891,7 +892,7 @@ public static partial class GuidanceWindow
 
         if (_s.FcResetPending)
         {
-            HandBackVehicle(vehicle);
+            RetryRelease(vehicle);
             return;
         }
 
@@ -973,10 +974,12 @@ public static partial class GuidanceWindow
             return;
         }
 
+        // The coast to a deorbit burn waits without the craft, like an armed launch, and turns into Prep here, ahead of the claim below, so the step that starts Prep is the step that claims, and Prep never commands an unowned craft.
+        StepLandingCoast();
+
         sixDof = _s.Active || _s.EngagePending;
-        landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
-        // Active, not EngagePending: a setup that Engage6Dof rejects never writes control, and must not leave the craft owned.
-        if (_s.Active || (_s.Engage && (_s.Running || landingActive || BoostbackLive)))
+        // Active, not EngagePending: a setup that Engage6Dof rejects never writes control, and must not leave the craft owned. A coast owns nothing either, see StepLandingCoast.
+        if (_s.Active || (_s.Engage && (_s.Running || LandingCommands(_s.LandingPhase) || BoostbackLive)))
         {
             // A refused claim must not reach command writes or restore the holder's attitude fields.
             if (!TryTakeCraft(vehicle, acquire: true))
@@ -1023,10 +1026,7 @@ public static partial class GuidanceWindow
         // Read straight off _s, not off the values the bail above was computed from: the flows just ran, and a touchdown, an abort or a handoff can have changed the phase on this very step.
         //
         // The open-loop phases (vertical/kick/prograde) don't need a converged UPFG solution; once flying, keep commanding through transient re-convergence (e.g. right after staging) - dropping to Manual mid-ascent would be far more disruptive.
-        bool landingGuides = _s.LandingPhase == LandingPhase.Prep
-            || _s.LandingPhase == LandingPhase.Burn
-            || _s.LandingPhase == LandingPhase.GfoldDescent
-            || _s.LandingPhase == LandingPhase.TerminalHover;
+        bool landingGuides = LandingCommands(_s.LandingPhase);
         // Every live boostback phase steers, including the settling burn (which holds a latched attitude) and the entry hold (which tracks surface retrograde indefinitely) - so unlike the landing machine there is no sub-phase here that wants the vehicle back.
         bool boostbackGuides = BoostbackLive;
         bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides)
@@ -1035,8 +1035,12 @@ public static partial class GuidanceWindow
         // Auto engine control: master switch on at full throttle while flying, off for good once the terminal countdown expires. Written here - the prefix runs just before PrepareWorker snapshots _manualControlInputs - so it reaches the sim exactly like the player's ignite/shutdown key. One-shot engine cut when the landing flow ends (cutoff, abort, failure) - after this the player's inputs are untouched, so the final descent below the gate can be flown manually.
         if (_s.LandingCutPending)
         {
-            ref ManualControlInputs cut = ref ManualInputs(vehicle);
-            cut.EngineOn = false;
+            // An unowned craft's engine is the player's, which an aborted waiting coast reaches, so the cut is dropped there.
+            if (_s.ControlAcquired)
+            {
+                ref ManualControlInputs cut = ref ManualInputs(vehicle);
+                cut.EngineOn = false;
+            }
             _s.LandingCutPending = false;
         }
 
@@ -1109,10 +1113,10 @@ public static partial class GuidanceWindow
             _s.WasEngaged = false;
         }
 
-        // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input.
+        // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input. A coast that EXECUTE queued while another mode still owned the craft stays through that release, and claims again at Prep.
         bool stillNeedsCraft = _s.Engage && (_s.Running || landingGuides || boostbackGuides);
         if (_s.ControlAcquired && !_s.LaunchArmed && !stillNeedsCraft)
-            HandBackVehicle(vehicle);
+            ReleaseVehicle(vehicle, keepWaitingCoast: true);
     }
 
     private static void StepReadouts(Vehicle vehicle, Orbit orbit, IParentBody parent)
@@ -1179,11 +1183,19 @@ public static partial class GuidanceWindow
         _s.ForcedBurnTarget = null;
     }
 
+    // Not inlined, because a harness test patches it by name to fail a release.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static bool HandBackVehicle(Vehicle vehicle) => ReleaseVehicle(vehicle, keepWaitingCoast: false);
+
+    // A failed release is retried with the intent it had, and a release the player or a save load asked for drops the coast.
+    private static bool RetryRelease(Vehicle vehicle) => ReleaseVehicle(vehicle, _s.ReleaseRetryKeepsCoast);
+
     /// <summary>
     /// Releases this vehicle's guidance state, keeping ownership if any cleanup fails.
     /// Run from the PrepareWorker prefix so the worker receives the released state.
+    /// With keepWaitingCoast a coast to a deorbit burn stays queued, because it commands nothing and claims the craft on its own at Prep.
     /// </summary>
-    private static bool HandBackVehicle(Vehicle vehicle)
+    private static bool ReleaseVehicle(Vehicle vehicle, bool keepWaitingCoast)
     {
         // Clear the wait even when no guidance resources need release.
         ResetLandingEngineWait();
@@ -1203,8 +1215,9 @@ public static partial class GuidanceWindow
             return true;
         }
 
+        bool coastWaits = keepWaitingCoast && _s.LandingPhase == LandingPhase.Coast;
         _s.Running = false;
-        _s.LandingPhase = LandingPhase.Idle;
+        _s.LandingPhase = coastWaits ? LandingPhase.Coast : LandingPhase.Idle;
         _s.BoostbackPhase = BoostbackPhase.Idle;
         _s.LaunchArmed = false;
         _s.HasCommand = false;
@@ -1252,6 +1265,7 @@ public static partial class GuidanceWindow
         if (failure.Length > 0)
         {
             _s.FcResetPending = true;
+            _s.ReleaseRetryKeepsCoast = coastWaits;
             if (_s.ReleaseError != failure)
                 GuidanceLog.Info(vehicle, failure + " The release is retried on the next step.");
             _s.ReleaseError = failure;
@@ -1259,7 +1273,9 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        GuidanceLog.Info(vehicle, $"released the craft{(cutEngine ? " with an engine cut" : ", engine left as it was")}"
+        GuidanceLog.Info(vehicle, "released the craft"
+            + (!_s.ControlAcquired ? ", nothing was held" : cutEngine ? " with an engine cut" : ", engine left as it was")
+            + (coastWaits ? ", the coast to the burn continues" : "")
             + (_s.TakeoverStop ? $" after a takeover: {_s.TakeoverReason}" : "."));
         if (_s.Status == _s.ReleaseError)
             _s.Status = "";
@@ -1272,6 +1288,7 @@ public static partial class GuidanceWindow
         _s.ControlAcquired = false;
         VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
         _s.FcResetPending = false;
+        _s.ReleaseRetryKeepsCoast = false;
         _s.LandingCutPending = false;
         _s.ReleaseWithoutEngineCut = false;
         _s.WasEngaged = false;
@@ -1284,11 +1301,12 @@ public static partial class GuidanceWindow
     {
         ResetLandingEngineWait();
         _s.FcResetPending = true;
+        _s.ReleaseRetryKeepsCoast = false;
         _s.Status = "Guidance release requested.";
     }
 
     // A queued reset runs the same cleanup as any other release, so a failed attempt keeps its pending request and is retried on a later step.
-    private static void ApplyPendingFcReset(Vehicle vehicle) => HandBackVehicle(vehicle);
+    private static void ApplyPendingFcReset(Vehicle vehicle) => RetryRelease(vehicle);
 
     // Convert a commanded thrust direction into the flight computer's Custom-attitude Euler command. We use KSA's own ComputeBurnBody2Cci to build the body->CCI orientation that points thrust along the steering vector, then express it as Euler angles in the EclBody frame - the exact inverse of the conversion the flight computer applies when it reads CustomAttitudeTarget.
     //

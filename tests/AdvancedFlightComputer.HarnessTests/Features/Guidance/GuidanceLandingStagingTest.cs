@@ -22,6 +22,8 @@ public sealed class GuidanceLandingStagingTest : AfcTest
     private const BindingFlags PrivateStatic = BindingFlags.NonPublic | BindingFlags.Static;
 
     private static readonly HashSet<Vehicle> Synthetic = [];
+    private static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs> Inputs =
+        AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
     private static VehicleAutopilotState? _endModeOnStep;
     private static bool _modeEndedInStep;
     private static double _now;
@@ -64,6 +66,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             AtmosphereRefusal(t);
             RestartAfterAbort(t);
             WaitStateEndsWithOwnership(t);
+            ACoastWaitsWithoutTheCraft(t);
             OwnershipSurvivesTheWaitAndEndsWithIt(t, harmony);
         }
         finally
@@ -322,6 +325,143 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             target.Invoke(null, args);
             t.Check($"{method} clears every wait field", WaitReset(fixture));
         }
+    }
+
+    // EXECUTE queues a coast to the burn. The coast waits without the craft and Prep claims on its own
+    // first step, and a coast queued while another mode still owned the craft survives that mode's
+    // release. The clock is the patched SimNow, so the prep lead sits at an exact time.
+    private static void ACoastWaitsWithoutTheCraft(TestContext t)
+    {
+        if (!TestWorld.RequireHome(t, out IParentBody home))
+            return;
+        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(RcsTestVehicles.Candidates);
+        if (saves.Count == 0)
+        {
+            t.Skip("no test vehicle save present, so the coast is not checked.");
+            return;
+        }
+        if (VehicleAutopilotState.Snapshot().Length != 0)
+        {
+            t.Skip("another craft holds guidance state, so the coast is not checked.");
+            return;
+        }
+
+        Vehicle? previousFocus = Program.ControlledVehicle;
+        HashSet<string> preexisting = TestSupport.CollectVehicleIds(t.System);
+        SimDriver driver = t.Session.CreateDriver();
+        Vehicle? craft = null;
+        try
+        {
+            try
+            {
+                craft = VehicleSpawner.SpawnFromSave(saves[0], t.System, home, "HarnessGuidanceCoast",
+                    OrbitFixtures.CircularAt(home, 500_000.0, driver.Elapsed));
+            }
+            catch (InvalidOperationException e)
+            {
+                t.Skip($"'{saves[0]}': {e.Message}");
+                return;
+            }
+            Program.ControlledVehicle = craft;
+            craft.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
+
+            _now = 100;
+            VehicleAutopilotState state = QueuedCoast(craft, burnStartTime: 1000);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("a coast survives its first step", state.LandingPhase == GuidanceWindow.LandingPhase.Coast);
+            t.Check("a coast waits without the craft",
+                !state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.None);
+
+            _now = 970;
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("the coast turns into Prep at the prep lead", state.LandingPhase == GuidanceWindow.LandingPhase.Prep);
+            t.Check("the step that starts Prep takes the craft",
+                state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
+            VehicleControlOwnership.ReleaseAll(craft);
+            VehicleAutopilotState.Remove(craft);
+
+            // An abort of the waiting coast finds the engine in the player's hands and leaves it there.
+            _now = 100;
+            TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: true);
+            state = QueuedCoast(craft, burnStartTime: 1000);
+            GuidanceWindow.ApplyAutopilot(craft);
+            typeof(GuidanceWindow).GetField("_s", PrivateStatic)!.SetValue(null, state);
+            Method("AbortLanding").Invoke(null, null);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("an aborted waiting coast ends", state.LandingPhase == GuidanceWindow.LandingPhase.Done && !state.LandingCutPending);
+            t.Check("an aborted waiting coast leaves the player's engine alone", Inputs(craft).EngineOn);
+            VehicleAutopilotState.Remove(craft);
+
+            // The same coast, queued while a previous mode still held the craft with its engine lit. The
+            // first release is made to fail, so the retry is the one that has to keep the coast.
+            _now = 100;
+            TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: true);
+            state = QueuedCoast(craft, burnStartTime: 1000);
+            state.ControlAcquired = true;
+            VehicleControlOwnership.TryClaim(craft, ControlClaimant.Guidance, out _);
+            FlightComputer computer = craft.FlightComputer;
+            state.AttitudeOwnership.BeginWrite(computer);
+            computer.CustomAttitudeTarget = craft.Orbit.StateVectors.PositionCci.Normalized();
+            computer.AttitudeFrame = VehicleReferenceFrame.EclBody;
+            computer.TrackTarget(FlightComputerAttitudeTrackTarget.Custom);
+            state.AttitudeOwnership.EndWrite(computer, writesRoll: false);
+
+            var failing = new Harmony("com.maxi.afc.harnesstests.guidance.staging.coast");
+            failing.Patch(AccessTools.Method(typeof(KsaAttitudeRate), nameof(KsaAttitudeRate.Clear)),
+                prefix: Prefix(nameof(RejectRateClear)));
+            try
+            {
+                _failing = craft;
+                GuidanceWindow.ApplyAutopilot(craft);
+                t.Check("a failed release keeps the coast and its retry",
+                    state.LandingPhase == GuidanceWindow.LandingPhase.Coast && state.FcResetPending && state.ControlAcquired);
+            }
+            finally
+            {
+                _failing = null;
+                failing.UnpatchAll(failing.Id);
+            }
+
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("the retry keeps the coast through the release",
+                state.LandingPhase == GuidanceWindow.LandingPhase.Coast && !state.FcResetPending);
+            t.Check("the previous mode's craft goes back",
+                !state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.None);
+            t.Check("the previous mode's engine is cut", !Inputs(craft).EngineOn);
+
+            _now = 970;
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("the kept coast reaches Prep and claims",
+                state.LandingPhase == GuidanceWindow.LandingPhase.Prep && state.ControlAcquired);
+        }
+        finally
+        {
+            _failing = null;
+            if (craft != null)
+            {
+                VehicleControlOwnership.ReleaseAll(craft);
+                VehicleAutopilotState.Remove(craft);
+            }
+            Program.ControlledVehicle = previousFocus;
+            TestSupport.DespawnNewVehicles(t.System, preexisting);
+        }
+    }
+
+    private static Vehicle? _failing;
+
+    private static void RejectRateClear(Vehicle __0)
+    {
+        if (ReferenceEquals(__0, _failing))
+            throw new InvalidOperationException("Injected rate cleanup failure");
+    }
+
+    private static VehicleAutopilotState QueuedCoast(Vehicle craft, double burnStartTime)
+    {
+        VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+        state.Engage = true;
+        state.LandingPhase = GuidanceWindow.LandingPhase.Coast;
+        state.BurnStartTime = burnStartTime;
+        return state;
     }
 
     // Waiting retains ownership, but completion must release it before the next frame's input.
