@@ -164,6 +164,8 @@ Open the **AFC Guidance** menu in the top bar, switch **Enabled** on and open th
 - **Land from here** starts only the powered descent and the hover, from where the craft is now.
 
 Guidance takes a craft only when you press EXECUTE, and it lets go when you abort, take over the attitude or arm the stock Auto burn.
+An abort during the powered descent or the terminal hover leaves the engine as it is, so the craft does not drop, while every other abort cuts the engine.
+The hover refuses a craft whose thrust at minimum throttle exceeds its weight, because such a craft climbs whenever the engine runs, and a G-FOLD or 6-DOF descent that would hand over to it flies its own plan to touchdown instead.
 G-FOLD suits airless bodies and agile landers that point with RCS. The 6-DOF solver models the vehicle rotation, so it handles boosters with high rotational inertia and descents through an atmosphere.
 The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [guidance documentation](docs/guidance/README.md) for how it works.
 

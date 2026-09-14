@@ -37,6 +37,9 @@ public static partial class GuidanceWindow
     // How long the flight-time searches rest after a plan was refused for propellant. A craft that is short now is still short a quarter second later, and a search costs tens of solves on the sim thread.
     private const double GfoldFuelSearchRetryS = 2.0;
 
+    // Shown while the plan flies to touchdown after a refused handoff, and kept through the re-solves that clear the status on success. The reason is in the guidance log.
+    private const string GfoldHoverRefusedStatus = "Terminal hover refused, G-FOLD flies its plan to touchdown.";
+
     // Committed-trajectory tracking: the solved descent plan is flown by time
     // index (feed-forward the planned thrust at the current time + light PD
     // feedback on the reference state) and re-solved on a cadence, rather than
@@ -69,13 +72,18 @@ public static partial class GuidanceWindow
 
         // Hand off to the terminal hover controller for the last stretch: G-FOLD
         // brings the vehicle down to the handoff height (slow and near-vertical),
-        // and the hover flies the final touchdown. This is the only exit from the
-        // G-FOLD descent now - G-FOLD never lands the vehicle itself.
-        if (_s.GfoldAltM <= _s.GfoldHoverHandoffAltM)
+        // and the hover flies the final touchdown. A hover that refuses the craft is asked once, and the plan, which ends at the surface anyway, is flown to the touchdown StepLanding detects.
+        if (_s.GfoldAltM <= _s.GfoldHoverHandoffAltM && !_s.GfoldHoverRefused)
         {
             StartTerminalHover(vehicle);
-            _s.LandingStatus = $"G-FOLD handoff to terminal hover at {_s.GfoldAltM:F0} m.";
-            return;
+            if (_s.LandingPhase == LandingPhase.TerminalHover)
+            {
+                _s.LandingStatus = $"G-FOLD handoff to terminal hover at {_s.GfoldAltM:F0} m.";
+                return;
+            }
+            _s.GfoldHoverRefused = true;
+            GuidanceLog.Info(vehicle, $"G-FOLD flies its plan to touchdown from {_s.GfoldAltM:F0} m: {_s.LandingStatus}");
+            _s.LandingStatus = GfoldHoverRefusedStatus;
         }
 
         // Inside the last GfoldMinTf seconds before the planned arrival, the distance
@@ -227,7 +235,7 @@ public static partial class GuidanceWindow
             _s.GfoldFailStreak = 0;
             _s.GfoldForceSearch = false;
             _s.GfoldSearchRetryTime = double.NegativeInfinity;
-            _s.LandingStatus = "";
+            _s.LandingStatus = _s.GfoldHoverRefused ? GfoldHoverRefusedStatus : "";
         }
         catch (Exception e)
         {

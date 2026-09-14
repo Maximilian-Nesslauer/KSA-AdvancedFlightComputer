@@ -23,6 +23,10 @@ public static partial class GuidanceWindow
                 $"TWR {twr:F2} < 1 - hover NOT possible (thrust cannot hold weight).");
         else
             ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f), $"TWR {twr:F2} (local gravity)");
+        double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
+        if (minTwr > 1.0)
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
+                $"TWR {minTwr:F2} at minimum throttle > 1 - hover NOT possible (the craft climbs whenever the engine runs).");
 
         DrawHoverReadout(orbit, parent, bodyRadius, active, innerW);
         DrawHoverSetpoints(active, innerW);

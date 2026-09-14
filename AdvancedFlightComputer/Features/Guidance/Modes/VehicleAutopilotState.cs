@@ -475,6 +475,13 @@ public sealed class VehicleAutopilotState
     /// <summary>Sim time before which a re-plan skips the flight-time searches, set when a plan was refused for propellant.</summary>
     public double GfoldSearchRetryTime = double.NegativeInfinity;
     public double GfoldHoverHandoffAltM = 10.0;
+
+    // The hover refused this descent at the handoff height, so the plan flies on and the hover is not asked again. One flag per descent mode, reset where that mode starts.
+    public bool GfoldHoverRefused;
+    public bool SixDofHoverRefused;
+
+    // The hover has compared the thrust at minimum throttle with the weight, at the engage or on the first step with a lit engine.
+    public bool TermMinThrustChecked;
     public double GfoldThrottleMin = 0.05;
     public double GfoldThrottleMax = 0.90;
     public double GfoldSlewReg = 0.05;
