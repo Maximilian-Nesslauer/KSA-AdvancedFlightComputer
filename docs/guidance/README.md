@@ -56,5 +56,5 @@ The solver documents keep the imported design and its notation.
 Authorship remains in the Git history and root `LICENSE`.
 See the root `THIRD-PARTY-NOTICES.md` for the solver attribution.
 
-Before a combined flight test, remove an installed standalone PoweredGuidance mod folder, because the game loads the XML patches of every manifest entry whether it is enabled or not.
+Delete the standalone PoweredGuidance, AutoStage and AutoRemoveFinishedBurns folders under `mods`, because a disabled mod still applies its XML patches.
 The AFC build does not change the user's manifest.
