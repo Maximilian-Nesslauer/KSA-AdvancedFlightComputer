@@ -124,7 +124,6 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         {
             VehicleCommandSink.ApplyPatches(harmony);
             GuidanceFeature.ApplyDriverPatches(harmony);
-            SolidPacingPatch.Apply(harmony);
             SharedVehicleHooks.GuidanceEnabled = true;
             GuidanceWindow.SetModActive(true);
 
@@ -155,7 +154,6 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         finally
         {
             harmony.UnpatchAll(harmony.Id);
-            SolidPacingPatch.Disable();
             GuidanceFeature.DisableDriver();
             SharedVehicleHooks.GuidanceEnabled = previousEnabled;
             GuidanceWindow.SetModActive(previousModActive);
