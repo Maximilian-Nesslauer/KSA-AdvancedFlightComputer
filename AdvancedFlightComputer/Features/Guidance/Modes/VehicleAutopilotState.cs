@@ -353,11 +353,40 @@ public sealed class VehicleAutopilotState
     public double IncDeg = 51.6;
     public double LanDeg = 250.0;
 
+    /// <summary>
+    /// ARGUMENT OF PERIAPSIS, deg, and whether the ascent holds it. Free by default: the
+    /// ascent inserts at periapsis wherever its burn ends, so the orbit's shape and plane
+    /// are hit and its periapsis falls where the cutoff does. Fixed pins the ellipse in its
+    /// plane and slides the insertion point along it instead - see UpfgTarget.
+    ///
+    /// With a target picked this is an output of the pick like the four above: fixed at the
+    /// target's own argument of periapsis while <see cref="MatchTargetArgPe"/> is set.
+    /// Clearing the target returns it to free.
+    /// </summary>
+    public bool ArgPeFixed;
+    public double ArgPeDeg;
+
     /// <summary>Launch-to-target: the vehicle to chase, and the chase orbit's offset.</summary>
     public string TargetId = "";
     public double ChaseOffsetKm = 20.0;
     public bool LaunchDescending;
     public bool AutoLaunch = true;
+
+    /// <summary>Launch-to-target: fly the chase orbit at the target's argument of periapsis
+    /// (the default) rather than leaving it free.</summary>
+    public bool MatchTargetArgPe = true;
+
+    /// <summary>
+    /// With the argument of periapsis free, insert wherever UPFG prices the burn cheapest
+    /// instead of always at periapsis - see UpfgInsertionSearch. On by default: it only moves
+    /// the insertion when that saves dV, and it stands aside while the argument of periapsis
+    /// is fixed, which decides the insertion point by itself.
+    /// </summary>
+    public bool OptimiseInsertion = true;
+
+    /// <summary>This craft's search for the cheapest free insertion. Per vehicle, like the
+    /// solver it copies.</summary>
+    public readonly UpfgInsertionSearch InsertionSearch = new UpfgInsertionSearch();
 
     /// <summary>
     /// Absolute sim time of the launch window, LATCHED when EXECUTE arms the launch.

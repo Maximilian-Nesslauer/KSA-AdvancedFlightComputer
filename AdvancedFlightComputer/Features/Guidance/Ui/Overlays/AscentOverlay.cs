@@ -87,14 +87,13 @@ public static partial class GuidanceWindow
         var targetCol = new ImColor8(90, 225, 255);   // cyan  - target orbit
         var traceCol = new ImColor8(255, 60, 220);    // magenta - flown so far
 
-        DrawTargetOrbit(dl, orbit.StateVectors.PositionCci, bodyRadius, targetCol);
+        DrawTargetOrbit(dl, orbit, parent, bodyRadius, targetCol);
         DrawTrace(dl, traceCol);
     }
 
     // The target orbit as a closed ellipse in the target plane.
-    //  The plane and the periapsis/apoapsis radii are fully determined by the UI inputs, but the ARGUMENT OF PERIAPSIS is not: UpfgTarget inserts at periapsis, so where periapsis ends up depends on where the ascent actually reaches orbit. Periapsis is therefore anchored to the vehicle's CURRENT position, projected into the target plane - so the drawn orbit passes through where the vehicle is now and you can see the ascent lining up with it as you fly, rather than an ellipse rotated arbitrarily within its plane.
-    // The ellipse turns with the vehicle as a result, which is the point.
-    private static void DrawTargetOrbit(ImDrawListPtr dl, double3 vehicleCci,
+    //  The plane and the periapsis/apoapsis radii are fully determined by the UI inputs, and so is the ARGUMENT OF PERIAPSIS when it is fixed: the ellipse is then drawn exactly where the ascent is aiming it. While it is free, where periapsis ends up depends on where the ascent actually reaches orbit, so it is drawn from the best information there is - see the free branch below.
+    private static void DrawTargetOrbit(ImDrawListPtr dl, Orbit orbit, IParentBody parent,
                                         double bodyRadius, ImColor8 col)
     {
         double pe = _s.PeKm * 1000.0 + bodyRadius;
@@ -110,12 +109,43 @@ public static partial class GuidanceWindow
         double inc = UpfgTarget.DegToRad(_s.IncDeg);
         double lan = UpfgTarget.DegToRad(_s.LanDeg);
 
-        // In-plane basis: periapsis at the vehicle's position flattened into the target plane, normal is UPFG's own plane normal, prograde completes the right-handed pair. If the vehicle happens to sit on the plane's axis the projection vanishes, so fall back to the ascending node there.
+        // In-plane basis: periapsis where a fixed argument puts it, otherwise where a free one is expected to fall; normal is UPFG's own plane normal, prograde completes the right-handed pair.
         double3 normal = UpfgTarget.OrbitNormal(inc, lan);
-        double3 periapsis = vehicleCci - double3.Dot(vehicleCci, normal) * normal;
-        periapsis = periapsis.Length() > 1.0
-            ? double3.Normalize(periapsis)
-            : new double3(Math.Cos(lan), Math.Sin(lan), 0.0);
+        double3 periapsis;
+        if (_s.ArgPeFixed && ecc >= UpfgTarget.MinArgPeEccentricity)
+        {
+            periapsis = UpfgTarget.PeriapsisDirection(inc, lan, UpfgTarget.DegToRad(_s.ArgPeDeg));
+        }
+        else
+        {
+            // WHERE A FREE PERIAPSIS WILL ACTUALLY FALL, from the best information there is. Anchoring it to the vehicle's own position throughout kept the drawn periapsis riding along with the vehicle for the whole climb, and on round the orbit after cutoff.
+            //  - Flying with a converged solution: UPFG's predicted cutoff, less the true anomaly the insertion is aimed at - zero at periapsis, the insertion search's pick, or the atmosphere-floor crossing. The prediction settles onto a point that holds still in inertial space, and the ellipse with it.
+            //  - Not flying, on a closed orbit clear of the surface: that orbit's own periapsis, so a finished ascent shows where the ellipse it reached really sits.
+            //  - Otherwise, on the pad or before the first solution, the vehicle's position, which is all there is.
+            double3 r = orbit.StateVectors.PositionCci;
+            double3 anchor = r;
+            double behind = 0.0;
+            UpfgTarget.Insertion aim = _s.Upfg.Aim;
+            if (_s.Running && _s.Upfg.Converged && aim.Valid)
+            {
+                anchor = _s.Upfg.Rd;
+                behind = aim.TrueAnomaly;
+            }
+            else if (!_s.Running && orbit.Eccentricity >= UpfgTarget.MinArgPeEccentricity && orbit.Eccentricity < 1.0
+                     && orbit.Periapsis > bodyRadius)
+            {
+                // The eccentricity vector, which points at periapsis; its scale does not matter here.
+                double3 v = orbit.StateVectors.VelocityCci;
+                anchor = (double3.Dot(v, v) - parent.Mu / r.Length()) * r - double3.Dot(r, v) * v;
+            }
+
+            // Flattened into the target plane. An anchor on the plane's axis has no direction in it, so fall back to the ascending node there.
+            double3 inPlane = anchor - double3.Dot(anchor, normal) * normal;
+            periapsis = inPlane.Length() > 1e-6 * anchor.Length()
+                ? double3.Normalize(inPlane)
+                : UpfgTarget.NodeDirection(lan);
+            periapsis = Math.Cos(behind) * periapsis - Math.Sin(behind) * double3.Cross(normal, periapsis);
+        }
         double3 prograde = double3.Cross(normal, periapsis);
 
         const int segments = 160;

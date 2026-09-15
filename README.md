@@ -158,7 +158,7 @@ The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod l
 Closed-loop guidance that flies the vehicle for you, originally the [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) mod by cairn5, see [Credits](#credits).
 Open the **AFC Guidance** menu in the top bar, switch **Enabled** on and open the panel with **Show panel**. EXECUTE, ABORT and RETARGET act on the selected tab.
 
-- **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, with an optional launch window, g-limit and booster reserve. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
+- **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
 - **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
 - **Deorbit and land** flies the whole chain from orbit: the deorbit burn, a fuel-optimal powered descent with G-FOLD or the 6-DOF solver, and a terminal hover to touchdown.
 - **Land from here** starts only the powered descent and the hover, from where the craft is now.

@@ -304,6 +304,11 @@ public static partial class GuidanceWindow
         ImGui.Text($"Periapsis  {(orbit.Periapsis - bodyRadius) / 1000.0,8:F1}   {_s.PeKm,8:F1} km");
         ImGui.Text($"Apoapsis   {(orbit.Apoapsis - bodyRadius) / 1000.0,8:F1}   {_s.ApKm,8:F1} km");
         ImGui.Text($"Inclination{AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.RadToDeg(orbit.Inclination),8:F2}   {_s.IncDeg,8:F2} deg");
+        // The game's own argument of periapsis, which UpfgTarget measures the same way. Dashes where the orbit is too round to have one.
+        string argPeNow = orbit.Eccentricity >= AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.MinArgPeEccentricity
+            ? AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.RadToDeg(orbit.ArgumentOfPeriapsis).ToString("F2")
+            : "--";
+        ImGui.Text($"Arg. Pe    {argPeNow,8}   {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") : "free"),8} deg");
 
         // --- Autopilot ---
         ImGui.SeparatorText("Autopilot");
