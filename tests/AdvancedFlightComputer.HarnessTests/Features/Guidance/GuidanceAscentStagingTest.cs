@@ -76,7 +76,6 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         {
             VehicleCommandSink.ApplyPatches(harmony);
             GuidanceFeature.ApplyDriverPatches(harmony);
-            SolidPacingPatch.Apply(harmony);
             SharedVehicleHooks.GuidanceEnabled = true;
             GuidanceWindow.SetModActive(true);
 
@@ -103,7 +102,6 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         finally
         {
             harmony.UnpatchAll(harmony.Id);
-            SolidPacingPatch.Disable();
             GuidanceFeature.DisableDriver();
             SharedVehicleHooks.GuidanceEnabled = previousEnabled;
             GuidanceWindow.SetModActive(previousModActive);
@@ -189,7 +187,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         SolidMotor? probeSolid = FindShedSolid(vehicle, jettison);
         DescribeCurve(t, probeSolid);
         double probeGrain = 0.0, probeTime = time;
-        SolidPacingPatch.TryUsableGrainMass(probeSolid, out probeGrain);
+        TryUsableGrainMass(probeSolid, out probeGrain);
         double nextProbe = time + ProbeIntervalS;
 
         while (time < MaxBurnSeconds && TestSupport.CountVehicles(t.System) <= vehiclesBefore)
@@ -223,7 +221,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         double boosterBurn = dropTime - ignitionTime;
         t.Info($"boosters dropped at t={boosterBurn:F1} s after ignition, command pitch before the drop {pitchBefore:F1} deg, " +
                $"tgo {state.Upfg.Tgo:F1} s, vgo {state.Upfg.VgoMag:F0} m/s, converged {state.Upfg.Converged}");
-        // Without the live pacing of a burning solid, the drain model gives the boosters their full burn again on every refresh and the core's leftover propellant lands in a booster-only trickle phase, so the modelled burn of the whole stack more than doubles before the drop. A progressive grain still makes the estimate drift, so the bound is loose.
+        // The drain model paces a burning solid by the burn it has left. A model that gave the boosters their full burn again on every refresh would move the core's leftover propellant into a booster-only trickle phase and more than double the modelled burn of the whole stack before the drop. A progressive grain still makes the estimate drift, so the bound is loose.
         t.Check("the modelled burn of the stack does not balloon while the boosters burn",
             stackBurnAtIgnition > 0.0 && stackBurnPeak <= 1.5 * stackBurnAtIgnition,
             $"{stackBurnAtIgnition:F0} s at ignition, peak {stackBurnPeak:F0} s");
@@ -329,24 +327,43 @@ public sealed class GuidanceAscentStagingTest : AfcTest
                 if (!(liveFlow > 0.0))
                     continue;
 
-                SolidPacingPatch.TryUsableGrainMass(solid, out double usable);
-                bool paced = SolidPacingPatch.TryBurnSecondsLeft(solid, out double left);
-                var noSamples = new SolidMotor.ThrustCurveSamples
-                {
-                    ThrustNewtons = default,
-                    IspSeconds = default,
-                    ChamberPressurePascals = default,
-                };
-                solid.TrySampleThrustCurve(noSamples, out SolidMotor.ThrustCurvePreview preview);
+                TryUsableGrainMass(solid, out double usable);
+                bool paced = TryBurnSecondsLeft(solid, usable, out double left);
                 t.Info($"solid '{solid.TemplateId}' at t={time:F1}s: grain {usable / 1000.0:F1} t of " +
                        $"{solid.InitialBurnableGrainMass / 1000.0:F1} t burnable, live flow {liveFlow:F0} kg/s, " +
-                       $"curve reports {preview.BurnSeconds:F1} s, grain over live flow {usable / liveFlow:F1} s, " +
+                       $"profile reports {solid.VacuumThrustProfile.TotalBurnSeconds:F1} s, grain over live flow {usable / liveFlow:F1} s, " +
                        $"paced burn left {(paced ? left.ToString("F1") + " s" : "not read")}");
                 if (paced)
                     longest = Math.Max(longest, left);
             }
         }
         return longest;
+    }
+
+    // The grain that can still burn, without the residue that never does.
+    private static bool TryUsableGrainMass(SolidMotor? solid, out double usable)
+    {
+        usable = 0.0;
+        PartTree? tree = solid?.Rocket?.Parent?.FullPart?.Tree;
+        if (solid == null || tree?.Moles == null || !solid.Stack.IsValid)
+            return false;
+        ReadOnlySpan<MoleState> moles = tree.Moles.States;
+        foreach (SolidGrainSegment segment in solid.Stack.Segments)
+        {
+            if (segment.Grain != null)
+                usable += Math.Max(0.0, moles[segment.Grain.StatesIdx].Mass - segment.UnburnableGrainMass);
+        }
+        return usable > 0.0;
+    }
+
+    // The burn left that the game's drain model paces a solid by. The model picks the profile from Sequence.Environment, and the ascent save leaves its sequences at the default Vacuum.
+    private static bool TryBurnSecondsLeft(SolidMotor solid, double usable, out double seconds)
+    {
+        seconds = 0.0;
+        if (!solid.VacuumThrustProfile.TryComputeRemainingBurn((float)usable, out float left, out _))
+            return false;
+        seconds = left;
+        return true;
     }
 
     private static SolidMotor? FindShedSolid(Vehicle vehicle, IReadOnlySet<Part>? jettison)
@@ -400,9 +417,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         foreach (SolidGrainSegment segment in solid.Stack.Segments)
             residue += segment.UnburnableGrainMass;
 
-        bool ended = SolidPacingPatch.TryBurnEndSeconds(solid, out double burnEnd);
-        t.Info($"curve '{solid.TemplateId}': reports {preview.BurnSeconds:F1} s, grain runs out at " +
-               $"{(ended ? burnEnd.ToString("F1") + " s" : "not read")}, first flow {Flow(thrust[0], isp[0]):F1} kg/s, " +
+        t.Info($"curve '{solid.TemplateId}': reports {preview.BurnSeconds:F1} s, first flow {Flow(thrust[0], isp[0]):F1} kg/s, " +
                $"last flow {Flow(thrust[CurvePoints - 1], isp[CurvePoints - 1]):F1} kg/s, " +
                $"first pressure {pressure[0] / 1e6:F3} MPa, last pressure {pressure[CurvePoints - 1] / 1e6:F3} MPa; " +
                $"its flows over its burn add up to {curveMass / 1000.0:F1} t against {solid.InitialBurnableGrainMass / 1000.0:F1} t burnable " +
@@ -438,7 +453,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
         PartTree? tree = vehicle?.Parts;
         if (solid == null || tree?.Moles == null || tree.RocketNozzles == null || tree.RocketCores == null)
             return;
-        if (!SolidPacingPatch.TryUsableGrainMass(solid, out double usable))
+        if (!TryUsableGrainMass(solid, out double usable))
             return;
 
         double elapsed = time - previousTime;

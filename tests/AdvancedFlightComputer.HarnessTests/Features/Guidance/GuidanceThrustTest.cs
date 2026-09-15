@@ -247,7 +247,7 @@ public sealed class GuidanceThrustTest : AfcTest
             return RocketCoreConditions.Zero;
         }
 
-        public override RocketCoreConditions ComputeDesignConditions() => throw new NotSupportedException();
+        public override void RecomputeDesignConditions() => throw new NotSupportedException();
 
         public override bool ComputePropellantAvailable(ReadOnlySpan<MoleState> states, bool isBurning)
             => throw new NotSupportedException();

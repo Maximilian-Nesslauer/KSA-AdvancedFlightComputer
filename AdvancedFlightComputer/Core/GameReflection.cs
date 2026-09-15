@@ -36,7 +36,6 @@ internal static class GameReflection
         AutoStage = 512,
         AutoRemove = 1024,
         SettingsPage = 2048,
-        GuidanceStaging = 4096,
     }
 
     [AttributeUsage(AttributeTargets.Field)]
@@ -321,13 +320,6 @@ internal static class GameReflection
     public static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs>? Vehicle_manualControlInputsRef =
         InstanceFieldRef<Vehicle, ManualControlInputs>(Vehicle_manualControlInputs);
 
-    // SolidPacingPatch corrects this. Its own feature, so a renamed method costs the correction and
-    // not the guidance driver.
-    [UsedBy(Feature.GuidanceStaging)]
-    public static readonly MethodInfo? SequencePerformanceList_ComputeSolidPacingMassFlowRate =
-        AccessTools.Method(typeof(SequencePerformanceList), "ComputeSolidPacingMassFlowRate",
-            new[] { typeof(SolidMotor), typeof(ReadOnlySpan<float>), typeof(float) });
-
     #endregion
 
     #region Validation
@@ -340,8 +332,6 @@ internal static class GameReflection
     public static bool ValidateGuidanceDiagnostics() => Validate(Feature.GuidanceDiagnostics);
 
     public static bool ValidateGuidance() => Validate(Feature.Guidance);
-
-    public static bool ValidateGuidanceStaging() => Validate(Feature.GuidanceStaging);
 
     public static bool ValidateCore() => Validate(Feature.Core);
 

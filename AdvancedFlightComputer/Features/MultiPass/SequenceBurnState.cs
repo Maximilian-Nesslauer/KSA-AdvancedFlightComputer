@@ -13,9 +13,11 @@ internal readonly record struct SequenceInfo(
     double BurnTimeSec);
 // A private SequencePerformanceList avoids changing the game worker's shared result.
 // RecomputeForFlight(0f) uses vacuum for the active sequence and the selected environment for the rest.
-// Flow is held at its ignition value, although later cutoff phases can reduce the real mass flow.
+// Flow is the first phase's value, although later cutoff phases can reduce the real mass flow.
+// Exhaust velocity comes from Isp. For a sequence that is not active the game takes Thrust from the ignition thrust but MassFlowRate from the paced first phase, so their ratio is not an exhaust velocity once a solid motor burns.
 internal sealed class SequenceBurnState
 {
+    private const double G0 = 9.80665;
     private const double MinMassFlowKgPerSec = 1e-6;
     private const double MinDryMassKg = 1.0;
 
@@ -48,12 +50,11 @@ internal sealed class SequenceBurnState
         for (int i = 0; i < count; i++)
         {
             ref readonly SequencePerformance p = ref perf[i];
-            if (!(p.MassFlowRate >= MinMassFlowKgPerSec) || !(p.Thrust > 0f))
+            if (!(p.MassFlowRate >= MinMassFlowKgPerSec) || !(p.Thrust > 0f) || !(p.Isp > 0f))
                 continue;
 
-            double vExhaust = p.Thrust / p.MassFlowRate;
-            // SequencePerformanceList.Recompute omits inert mass from subparts when calculating WetMass.
-            double startMass = p.WetMass + SubPartInertMassKg(p.AttachedParts);
+            double vExhaust = p.Isp * G0;
+            double startMass = p.WetMass;
             double burnableFuel = p.BurnedFuelMass;
             // Keep dry mass positive for the rocket equation logarithm.
             double maxBurnable = startMass - MinDryMassKg;
@@ -73,19 +74,5 @@ internal sealed class SequenceBurnState
         }
 
         return new SequenceBurnState(result, anyUsable);
-    }
-
-    private static double SubPartInertMassKg(HashSet<Part>? attachedParts)
-    {
-        if (attachedParts == null)
-            return 0.0;
-        double mass = 0.0;
-        foreach (Part part in attachedParts)
-        {
-            ReadOnlySpan<Part> subParts = part.SubParts;
-            for (int i = 0; i < subParts.Length; i++)
-                mass += subParts[i].InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f;
-        }
-        return mass;
     }
 }

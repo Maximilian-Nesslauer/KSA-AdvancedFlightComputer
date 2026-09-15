@@ -75,14 +75,11 @@ internal static class MultiPassPreviewCache
             Part part = parts[i];
             hc.Add(part.InstanceId);
             hc.Add(part.SequenceOrder);
-            hc.Add(part.InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f);
+            hc.Add(part.ComputeSubtreeInertMass());
 
             ReadOnlySpan<Part> subParts = part.SubParts;
             for (int s = 0; s < subParts.Length; s++)
-            {
                 hc.Add(subParts[s].InstanceId);
-                hc.Add(subParts[s].InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f);
-            }
 
             foreach (ISequenced module in part.GetSubtreeSequencedModules())
             {
@@ -199,14 +196,12 @@ internal static class MultiPassPreviewCache
         hc.Add(manager);
         if (manager == null) return;
         hc.Add((int)manager.FlowRule);
-        Tank[][]? levels = manager.ConsumptionOrder;
-        hc.Add(levels?.Length ?? -1);
-        if (levels == null) return;
-        for (int i = 0; i < levels.Length; i++)
+        FlowOrder<Tank> levels = manager.ConsumptionOrder;
+        hc.Add(levels.IsValid ? levels.LevelCount : -1);
+        for (int i = 0; i < levels.LevelCount; i++)
         {
-            Tank[]? level = levels[i];
-            hc.Add(level?.Length ?? -1);
-            if (level == null) continue;
+            ReadOnlySpan<Tank> level = levels[i];
+            hc.Add(level.Length);
             for (int j = 0; j < level.Length; j++)
                 hc.Add(level[j]);
         }

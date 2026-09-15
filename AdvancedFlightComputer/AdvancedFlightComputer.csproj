@@ -47,6 +47,10 @@
       <HintPath>$(KsaDir)\BepuUtilities.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="Planet.Render.Core">
+      <HintPath>$(KsaDir)\Planet.Render.Core.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <ItemGroup>

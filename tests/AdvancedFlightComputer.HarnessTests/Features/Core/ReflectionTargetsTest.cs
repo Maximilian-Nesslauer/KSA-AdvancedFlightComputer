@@ -31,7 +31,6 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("AutoStage keys resolve", GameReflection.ValidateAutoStage());
         t.Check("AutoRemove keys resolve", GameReflection.ValidateAutoRemove());
         t.Check("SettingsPage keys resolve", GameReflection.ValidateSettingsPage());
-        t.Check("GuidanceStaging keys resolve", GameReflection.ValidateGuidanceStaging());
 
         t.Check("DrawCorrectionTransfer anchor", PlanWindowPatchPipeline.HasCalculatedControlsAnchor);
         t.Check("Burn.Create anchor", PlanWindowPatchPipeline.HasCreateAnchor);
