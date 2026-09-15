@@ -10,7 +10,7 @@
 
 - An ascent to a periapsis inside the atmosphere now inserts where the orbit climbs out of it, rather than cutting the engines in the air.
 
-- The target orbit overlay draws periapsis where a fixed argument of periapsis puts it.
+- The target orbit overlay draws periapsis where a fixed argument of periapsis puts it. With it free, periapsis no longer rides along with the vehicle: it sits where the ascent's predicted cutoff and insertion angle put it, and after cutoff on the orbit actually reached.
 
 ## [0.4.0]
 
