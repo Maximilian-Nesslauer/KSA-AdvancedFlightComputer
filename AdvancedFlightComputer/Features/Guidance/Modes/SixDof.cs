@@ -1732,16 +1732,26 @@ public static partial class GuidanceWindow
         // Handing over ABOVE the target altitude on purpose: the 6-DOF plan aims at
         // _s.SixDofTargetAltM and this fires on the way down to it. A handover set
         // below the target would simply never trigger, which the UI warns about.
-        if (_s.SixDofHoverHandoff && x[2] <= _s.SixDofHoverHandoffAltM)
+        // The hover is asked before 6-DOF lets go, because a refused hover claims nothing and the craft would be released in the air; a refusal keeps the plan, which ends at the target, flying to the touchdown latch above, and asks once.
+        if (_s.SixDofHoverHandoff && !_s.SixDofHoverRefused && x[2] <= _s.SixDofHoverHandoffAltM)
         {
-            SixDofLog.Event(_s, now, $"HANDOFF to terminal hover at alt {x[2]:F1} m, " +
-                                 $"vz {x[5]:F2} m/s, lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m");
-            ReportLogStop(SixDofLog.Stop(_s));
-            Disengage6Dof(vehicle, cutEngine: false);
-            StartTerminalHover(vehicle);
-            _s.LandingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
-            _s.Error = _s.LandingStatus;
-            return;
+            if (!TerminalHoverAvailable(vehicle, out _))
+            {
+                _s.SixDofHoverRefused = true;
+                SixDofLog.Event(_s, now, $"HANDOFF refused at alt {x[2]:F1} m, 6-DOF flies to touchdown: {_s.LandingStatus}");
+                _s.Error = "Terminal hover refused, 6-DOF flies its plan to touchdown.";
+            }
+            else
+            {
+                SixDofLog.Event(_s, now, $"HANDOFF to terminal hover at alt {x[2]:F1} m, " +
+                                     $"vz {x[5]:F2} m/s, lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m");
+                ReportLogStop(SixDofLog.Stop(_s));
+                Disengage6Dof(vehicle, cutEngine: false);
+                StartTerminalHover(vehicle);
+                _s.LandingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
+                _s.Error = _s.LandingStatus;
+                return;
+            }
         }
 
         // Estimate what the model is missing BEFORE re-solving, so the optimiser
@@ -1945,6 +1955,7 @@ public static partial class GuidanceWindow
             _s.ColdFrames = 0;
             _s.Active = true;
             _s.TouchdownArmed = false;
+            _s.SixDofHoverRefused = false;
             _s.GateIndex = -1;
             _s.GateChanges = 0;
             _s.RefusalRun = 0;
@@ -1992,6 +2003,7 @@ public static partial class GuidanceWindow
         _s.Active = true;
         _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
         _s.TouchdownArmed = false;
+        _s.SixDofHoverRefused = false;
         _s.GateIndex = -1;
         _s.GateChanges = 0;
         _s.LastReplan = now;

@@ -8,15 +8,13 @@ How the guidance feature hangs on AFC at run time. The algorithms are described 
 
 - The diagnostics block, `GuidanceFeature.ApplyDiagnosticPatches`, installs the managed assembly resolver for the three numerical assemblies and one postfix on `Program.DrawProgramMenusHook` that draws the AFC Guidance menu. The menu holds the Enabled switch and the Show panel switch. It is not drawn while the editor is open.
 - The driver block, `GuidanceFeature.ApplyDriverPatches`, installs the prefix on `Vehicle.PrepareWorker` that runs `GuidanceWindow.ApplyAutopilot` for every vehicle on the main thread before stock snapshots the flight computer for its worker, and the postfix on the private `FlightComputer.UpdateAttitudeTarget` that adds the rate feedforward on the vehicle worker. It also subscribes the release of every guided craft to `SaveLoadObserver.SaveLoaded`, because a load replaces every vehicle.
-- The staging block, `SolidPacingPatch.Apply`, installs a postfix on the private `SequencePerformanceList.ComputeSolidPacingMassFlowRate` that paces a solid motor at the mean mass flow of the burn it has left, read off the samples of `SolidMotor.TrySampleThrustCurve`. The game divides by the burn time of a grain that fills its geometry, which never shortens and is too long for a grain that holds less. The patch is its own feature block, because the game's staging window reads the same model and stays right whether or not guidance flies.
-
 The gimbal writer, `KsaGimbalControl.OnComputeControl`, is not a patch of its own. `VehicleCommandSink` owns the single `FlightComputer.ComputeControl` postfix and dispatches the guidance writer after the RCS writer, with the wake and off-rails bookkeeping applied from the receipt.
 
 The panel is drawn from the loader's after-GUI hook through `GuidanceFeature.DrawGui`, which skips the editor and logs a draw fault once per kind instead of letting it end the frame.
 
 ## Ownership
 
-Every guidance mode takes the per-vehicle claim in `Core/VehicleControlOwnership.cs` where it commits to flying a craft, and gives it back only after its cleanup succeeded. A second claimant is refused by name, never overwritten. While guidance holds a craft, stock's burn mode is held in Manual, and an Auto that appears is an engine takeover by the player that stops guidance without an engine cut.
+Every guidance mode takes the per-vehicle claim in `Core/VehicleControlOwnership.cs` where it commits to flying a craft, and gives it back only after its cleanup succeeded. Neither an armed launch nor the coast to a deorbit burn takes the claim on its own, so a waiting craft keeps its burn mode and its RCS executor free, and the step that starts commanding is the step that claims. A launch armed over a craft another mode already owned keeps that claim through the wait. A second claimant is refused by name, never overwritten. While guidance holds a craft, stock's burn mode is held in Manual, and an Auto that appears is an engine takeover by the player that stops guidance without an engine cut.
 
 A player change to the attitude target that guidance wrote is a takeover as well, detected by comparing the values guidance last wrote against what the flight computer holds. The release restores only the fields guidance replaced.
 

@@ -188,16 +188,28 @@ public static partial class GuidanceWindow
         _s.GfoldFailStreak = 0;
         _s.GfoldTrackInit = false;
         _s.GfoldEngineOn = false;
+        _s.GfoldHoverRefused = false;
         _s.HasCommand = false;
         _s.LandingStatus = "G-FOLD started from current state.";
     }
 
+    // An abort in the air hands the craft back with the engine as it is, because a cut there drops the craft. The coast and the deorbit burn keep the cut, which stops the burn and costs a coasting craft nothing.
     private static void AbortLanding()
     {
         ResetLandingEngineWait();
+        bool airborne = _s.LandingPhase == LandingPhase.GfoldDescent
+            || _s.LandingPhase == LandingPhase.TerminalHover;
         _s.LandingPhase = LandingPhase.Done;
-        _s.LandingCutPending = true;
-        _s.LandingStatus = "Aborted.";
+        if (airborne)
+        {
+            _s.ReleaseWithoutEngineCut = true;
+            _s.LandingStatus = "Aborted, the engine is left as it was.";
+        }
+        else
+        {
+            _s.LandingCutPending = true;
+            _s.LandingStatus = "Aborted.";
+        }
     }
 
     // Shared landing status, drawn below whichever sub-tab is open.
@@ -251,10 +263,12 @@ public static partial class GuidanceWindow
             _s.LandingStatus = "Burn prediction failed to converge.";
             return;
         }
-        double wait = FindBurnStartTime(orbit, parent, mu, bodyRadius, downrange * _s.DownrangeFactor);
+        double startDistance = downrange * _s.DownrangeFactor;
+        double wait = FindBurnStartTime(orbit, parent, mu, bodyRadius, startDistance, out double closest);
         if (double.IsNaN(wait))
         {
-            _s.LandingStatus = "No pass within 5 orbits gets inside the burn distance - adjust orbit.";
+            _s.LandingStatus = NoPassReason(downrange, startDistance, closest, bodyRadius);
+            GuidanceLog.Info(vehicle, _s.LandingStatus);
             return;
         }
 
@@ -265,7 +279,7 @@ public static partial class GuidanceWindow
         double refined = PredictBurnDownrange(rIgn, vIgn, vehicle.TotalMass, mu, model, parent, bodyRadius);
         if (!double.IsNaN(refined) && refined > 0)
         {
-            double refinedWait = FindBurnStartTime(orbit, parent, mu, bodyRadius, refined * _s.DownrangeFactor);
+            double refinedWait = FindBurnStartTime(orbit, parent, mu, bodyRadius, refined * _s.DownrangeFactor, out _);
             if (!double.IsNaN(refinedWait))
             {
                 downrange = refined;
@@ -275,6 +289,10 @@ public static partial class GuidanceWindow
         _s.BurnDownrangeKm = downrange / 1000.0;
 
         _s.BurnStartTime = SimNow() + wait;
+        GuidanceLog.Info(vehicle, $"deorbit burn planned: braking downrange {downrange / 1000.0:F1} km, ignition in {wait:F0} s"
+            + $" at alt {(r.Length() - bodyRadius) / 1000.0:F1} km and {v.Length():F0} m/s, gate {_s.AimAltKm * 1000.0:F0} m above the site"
+            + $" at lat {_s.SiteLatDeg:F3} lon {_s.SiteLonDeg:F3}, {_s.DescentRate:F0} m/s sink at the gate.");
+        _s.LastGuidanceLogTime = double.NegativeInfinity;
         ClaimVehicle(GuidanceMode.Landing, vehicle);   // landing owns the vehicle now
         // Not part of the claim: AutoLaunch is a SETTING (offer to warp to the window)
         // rather than a live mode, and clearing it here stops the ascent panel offering
@@ -326,6 +344,24 @@ public static partial class GuidanceWindow
             }
         }
         return converged ? AngleBetween(r, scratch.Rd) * bodyRadius : double.NaN;
+    }
+
+    // The phases that fly the craft and so need the claim. Coast waits for its burn without the craft, the way an armed launch does, so stock's burn mode and the RCS executor stay free until Prep.
+    private static bool LandingCommands(LandingPhase phase) =>
+        phase == LandingPhase.Prep
+        || phase == LandingPhase.Burn
+        || phase == LandingPhase.GfoldDescent
+        || phase == LandingPhase.TerminalHover;
+
+    // Runs from ApplyAutopilot ahead of the claim, so the step that turns the coast into Prep is the step that claims the craft.
+    private static void StepLandingCoast()
+    {
+        if (_s.LandingPhase != LandingPhase.Coast || SimNow() < _s.BurnStartTime - PrepLeadTime)
+            return;
+        if (Universe.IsAutoWarpActive)
+            Universe.AutoWarpStop(true);
+        _s.Upfg.Reset();
+        _s.LandingPhase = LandingPhase.Prep;
     }
 
     // The phases that are flying the vehicle down under power, and so are the ones
@@ -399,17 +435,9 @@ public static partial class GuidanceWindow
             return;
         }
 
+        // The coast turned into Prep in StepLandingCoast, ahead of the claim, so a coast that reaches this step is still waiting.
         if (_s.LandingPhase == LandingPhase.Coast)
-        {
-            if (now >= _s.BurnStartTime - PrepLeadTime)
-            {
-                if (Universe.IsAutoWarpActive)
-                    Universe.AutoWarpStop(true);
-                _s.Upfg.Reset();
-                _s.LandingPhase = LandingPhase.Prep;
-            }
             return;
-        }
 
         // Prep / Burn: run Mode-3 guidance on the live vehicle. The landing target
         // is re-derived every step: the site rotates with the body, and the plane
@@ -445,6 +473,18 @@ public static partial class GuidanceWindow
                 _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, live, 3);
                 _s.CommandDir = _s.Upfg.Steering;
                 _s.HasCommand = _s.CommandDir.Length() > 0.5;
+
+                // The same sample the ascent logs, so a burn that dives or overshoots can be read after the flight.
+                if (GuidanceLog.Enabled && now - _s.LastGuidanceLogTime >= GuidanceLogIntervalS)
+                {
+                    _s.LastGuidanceLogTime = now;
+                    double3 up = double3.Normalize(r);
+                    double siteDistanceKm = AngleBetween(r, SiteDirCciAt(parent, 0)) * bodyRadius / 1000.0;
+                    GuidanceLog.Debug(vehicle, $"UPFG {_s.LandingPhase}: tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s, converged {_s.Upfg.Converged}"
+                        + $", throttle {_s.Upfg.Throttle:F2}, steer pitch {PitchOf(up, _s.Upfg.Steering):F1} deg, command pitch {PitchOf(up, _s.CommandDir):F1} deg"
+                        + $", alt {(r.Length() - gateRadius + _s.AimAltKm * 1000.0) / 1000.0:F1} km over the site, {siteDistanceKm:F1} km to it"
+                        + $", speed {v.Length():F0} m/s, sink {-double3.Dot(v, up):F0} m/s, mass {vehicle.TotalMass / 1000.0:F1} t, model {live.Stages.Count} stage(s).");
+                }
             }
             _s.FailStreak = 0;
             _s.GuidanceError = "";
@@ -503,6 +543,7 @@ public static partial class GuidanceWindow
                     _s.GfoldFailStreak = 0;
                     _s.GfoldTrackInit = false;
                     _s.GfoldEngineOn = false;
+                    _s.GfoldHoverRefused = false;
                     _s.LandingStatus = "Handoff to G-FOLD descent.";
                 }
                 _s.GfoldTabSelectPending = true;   // focus the powered-landing page
@@ -575,11 +616,21 @@ public static partial class GuidanceWindow
         return double.IsFinite(d) ? d : 1e12;
     }
 
-    // First future moment the along-track distance to the site shrinks through the
-    // given threshold (approaching), within the next 5 orbits; NaN if never.
-    private static double FindBurnStartTime(Orbit orbit, IParentBody parent, double mu,
-                                            double bodyRadius, double thresholdMeters)
+    // Why the pass search found no burn point, with the distances, so the player can move the site or the orbit instead of guessing.
+    private static string NoPassReason(double downrangeMeters, double startDistanceMeters, double closestMeters, double bodyRadius)
     {
+        if (startDistanceMeters >= Math.PI * bodyRadius)
+            return $"The braking burn from this orbit reaches {downrangeMeters / 1000.0:F0} km downrange, more than half way round the body, so no burn point exists. Lower the orbit first.";
+        return $"No pass within 5 orbits comes within {startDistanceMeters / 1000.0:F0} km of the site, the burn start distance; the closest is {closestMeters / 1000.0:F0} km. Move the site under the ground track or lower the orbit.";
+    }
+
+    // First future moment the along-track distance to the site shrinks through the
+    // given threshold (approaching), within the next 5 orbits; NaN if never, with the
+    // closest approach seen in closestMeters.
+    private static double FindBurnStartTime(Orbit orbit, IParentBody parent, double mu,
+                                            double bodyRadius, double thresholdMeters, out double closestMeters)
+    {
+        closestMeters = double.PositiveInfinity;
         double sma = (orbit.Periapsis + orbit.Apoapsis) / 2.0;
         if (sma <= 0 || double.IsNaN(sma))
             return double.NaN;
@@ -615,6 +666,8 @@ public static partial class GuidanceWindow
                 d = 1e12;
                 cs = CseState.Zero;
             }
+            else if (d < closestMeters)
+                closestMeters = d;
             if (!double.IsNaN(prev) && prev > thresholdMeters && d <= thresholdMeters)
             {
                 double lo = t - step, hi = t;

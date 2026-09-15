@@ -3,7 +3,6 @@ using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
-using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
@@ -19,7 +18,7 @@ namespace AdvancedFlightComputer;
 [StarMapMod]
 public sealed class Mod
 {
-    private const string TestedGameVersion = "v2026.9.7.5402";
+    private const string TestedGameVersion = "v2026.9.10.5438";
 
     private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
     private static bool _maneuverTypesInjected;
@@ -81,11 +80,6 @@ public sealed class Mod
             if (!SharedVehicleHooks.GuidanceEnabled)
                 GuidanceFeature.DisableDriver();
         }
-
-        // The solid-motor pacing of the staging drain model, which the game's staging window and the ascent stage model both read. Independent of the driver, so a stock staging readout is right whether or not guidance flies.
-        if (Validated("GuidanceStaging", GameReflection.ValidateGuidanceStaging)
-            && !_patches.TryApply("GuidanceStaging", SolidPacingPatch.Apply))
-            SolidPacingPatch.Disable();
 
         if (coreReady && Validated("AutoStage", GameReflection.ValidateAutoStage)
             && AutoStageFeature.StandaloneModAbsent())
@@ -236,7 +230,6 @@ public sealed class Mod
         SharedVehicleHooks.Reset();
         _patches.UnpatchAll();
         GuidanceFeature.Reset();
-        SolidPacingPatch.Disable();
         RemoveTransferTypes();
 
         // Persistence is driven by UncompressedSave.Write, so a quit without saving drops

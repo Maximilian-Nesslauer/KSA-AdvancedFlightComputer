@@ -26,16 +26,28 @@ public static partial class GuidanceWindow
     // Public because the per-vehicle state holds three of these.
     public struct Pid { public double I, PrevErr; }
 
-    private static void StartTerminalHover(Vehicle vehicle)
+    // Whether the hover can take the craft now, with the reason in the status and the log when it cannot. A hand-over checks this before it lets go of the craft, because the hover claims nothing when it refuses.
+    private static bool TerminalHoverAvailable(Vehicle vehicle, out bool enginesLit)
     {
         // Staging may supply a liquid engine, so allow a pending staging wait.
-        if (!KsaEnginePerf.SupportsThrottleControl(vehicle)
+        enginesLit = KsaEnginePerf.SupportsThrottleControl(vehicle);
+        if (!enginesLit
             && !(_s.Engage && _s.AutoStage && _s.StagingActive
                 && KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.NoAuthority))
         {
             _s.LandingStatus = "Terminal hover requires active, supplied liquid engines with shutdown control.";
-            return;
+            GuidanceLog.Info(vehicle, _s.LandingStatus);
+            return false;
         }
+        Orbit orbit = vehicle.Orbit;
+        IParentBody parent = orbit?.Parent;
+        return !enginesLit || parent == null || !TerminalHoverRefused(vehicle, orbit, parent.Mu);
+    }
+
+    private static void StartTerminalHover(Vehicle vehicle)
+    {
+        if (!TerminalHoverAvailable(vehicle, out bool enginesLit))
+            return;
         // BEFORE the phase is read below, because the claim does not touch
         // LandingPhase - hover is the same machine - and the trace decision depends on
         // what that phase was.
@@ -50,6 +62,7 @@ public static partial class GuidanceWindow
         _s.LandingPhase = LandingPhase.TerminalHover;
         _s.TermPidUp = _s.TermPidE = _s.TermPidN = default;
         _s.TermInit = false;
+        _s.TermMinThrustChecked = enginesLit;
         _s.TermSetE = _s.TermSetN = _s.TermSetUp = 0.0;
         _s.HasCommand = false;
         _s.GfoldThrustStatus = "";
@@ -58,15 +71,32 @@ public static partial class GuidanceWindow
         _s.LandingStatus = "Terminal hover engaged.";
     }
 
-    // Thrust-to-weight at the current mass and local gravity - hover needs > 1.
-    private static double TerminalTwr(Vehicle vehicle, Orbit orbit, double mu)
+    // Thrust-to-weight at the given throttle, at the current mass and local gravity. A hover needs more than one at full throttle and less than one at the minimum, or the engine cannot hold the weight on one side and cannot stop climbing on the other.
+    private static double TerminalTwrAt(Vehicle vehicle, Orbit orbit, double mu, double throttle)
     {
         double rLen = orbit.StateVectors.PositionCci.Length();
         double pressure = KsaEnginePerf.AmbientPressureAt(vehicle.Parent, rLen - vehicle.Parent.MeanRadius);
-        double thrustMax = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure);
+        double thrust = KsaEnginePerf.ThrustAtThrottle(vehicle, throttle, pressure);
         double g = mu / (rLen * rLen);
         double weight = vehicle.TotalMass * g;
-        return weight > 0 ? thrustMax / weight : 0.0;
+        return weight > 0 ? thrust / weight : 0.0;
+    }
+
+    private static double TerminalTwr(Vehicle vehicle, Orbit orbit, double mu)
+        => TerminalTwrAt(vehicle, orbit, mu, 1.0);
+
+    private static double TerminalMinThrottleTwr(Vehicle vehicle, Orbit orbit, double mu)
+        => TerminalTwrAt(vehicle, orbit, mu, vehicle.GetMinThrottle());
+
+    // A craft that out-thrusts its weight at the minimum throttle climbs whenever the engine runs, so no rate profile can bring it down. Checked at the engage when the engine is lit, or on the first step after staging lights it, so a craft that crosses the line while it burns propellant keeps the hover and shows the readout.
+    private static bool TerminalHoverRefused(Vehicle vehicle, Orbit orbit, double mu)
+    {
+        double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
+        if (!(minTwr > 1.0))
+            return false;
+        _s.LandingStatus = $"Terminal hover refused: the thrust at minimum throttle is {minTwr:F2} times the weight, so the craft climbs whenever the engine runs.";
+        GuidanceLog.Info(vehicle, _s.LandingStatus);
+        return true;
     }
 
     // Height of the touchdown plane above the terrain DIRECTLY BELOW the vehicle
@@ -88,6 +118,18 @@ public static partial class GuidanceWindow
     {
         if (!PrepareLandingEngines(vehicle, parent, now, requireAirless: false))
             return;
+
+        // A hover that engaged while it waited for staging checks the engine once it is lit, and a refusal cuts it, because the engine was off before the hover.
+        if (!_s.TermMinThrustChecked)
+        {
+            _s.TermMinThrustChecked = true;
+            if (TerminalHoverRefused(vehicle, orbit, mu))
+            {
+                ClearLandingEngineCommand();
+                _s.LandingPhase = LandingPhase.Done;
+                return;
+            }
+        }
 
         double3 r = orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(r);
@@ -175,6 +217,10 @@ public static partial class GuidanceWindow
                 $"TWR {twr:F2} < 1 - hover NOT possible (thrust cannot hold weight).");
         else
             ImGui.Text($"TWR {twr:F2} (local gravity)");
+        double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
+        if (minTwr > 1.0)
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
+                $"TWR {minTwr:F2} at minimum throttle > 1 - hover NOT possible (the craft climbs whenever the engine runs).");
 
         if (!active)
         {
@@ -193,7 +239,7 @@ public static partial class GuidanceWindow
             ImGui.Text($"Alt (legs) {h,7:F1} m    v-up {double3.Dot(vSrf, up),6:F1} m/s    throttle {_s.GfoldThrottle * 100,4:F0} %");
             ImGui.Text($"v East {double3.Dot(vSrf, east),6:F1}  v North {double3.Dot(vSrf, north),6:F1} m/s");
 
-            if (ImGui.Button("Abort (engines off)"))
+            if (ImGui.Button("Abort (engine left as it is)"))
                 AbortLanding();
         }
 

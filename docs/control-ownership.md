@@ -66,6 +66,7 @@ A mismatch means a player or another mod steers now, so the modes that need that
 Stopping is not a shutdown request. The release hands back the rate and the gimbal override as it always does, keeps the player's attitude fields, leaves the engine command where the flight left it, and says why guidance stopped.
 A takeover moves the attitude and nothing else, so an engine cut guidance already decided on still happens.
 That covers the queued one-shot cut, which touchdown, a failed landing solve, an engine-wait failure, a boostback abort and a 6-DOF disengage all set, and it covers a release that shuts down by itself, which the ascent release records in `ShutdownRequested`.
+A landing abort queues that cut from every other phase, and hands the craft back with the engine as it is from the powered descent and the terminal hover, because a cut in the air drops the craft. `afc-guidance-landing-abort` covers both.
 Only a takeover with neither of those pending leaves the engine command alone.
 The release makes that call, not the takeover, so a cut decided after the takeover still happens. That matters when a cleanup failed, because the no-cut request waits for the retry and an abort can arrive between the two.
 

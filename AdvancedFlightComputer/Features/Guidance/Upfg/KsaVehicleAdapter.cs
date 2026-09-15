@@ -11,11 +11,11 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 //
 // The game models staging through PartTree.PerformanceSequences. It holds one SequencePerformance per entry in SequenceList.Sequences and drives the in-game stage menu's delta-v and TWR readout. Its mole masses are seeded from the live tank and grain states, so every figure describes the remaining vehicle.
 //
-// ALWAYS START AT INDEX 0. The game's Recompute() seeds its simulated mole masses from the live tanks at index 0 and then drains them forward, so index 0 is the burn in progress and every later index continues from the state the previous one left. It is tempting to skip ahead to the entry matching SequenceList.ActiveSequence, but that entry's propellant has already been consumed by index 0's own simulation: a spent sequence survives in the list as long as any of its parts are still attached, which is the normal SRB layout (sequence 0 ignites core + boosters, sequence 1 drops the boosters, sequence 0 stays because the core engine hangs off it). Skipping forward then reads a drained, fuel-less entry, yields no stages at all, and silently falls back to the single-stage live-engine model. Leftover spent sequences are harmless read in order - they simply produce zero-duration phases, which are filtered below.
+// ALWAYS START AT INDEX 0. The game's Recompute() seeds its simulated mole masses from the live tanks once and drains them forward through the list, so every index continues from the state the previous one left. In flight a sequence numbered below SequenceList.ActiveSequence registers no engines, so its entry carries no phases, and the first entry with phases is the burn in progress. Reading in order steps over those spent entries, and a later entry with nothing left to burn yields no usable phase, which the filter below drops.
 //
 // We consume SequencePerformance.Phases rather than the headline Thrust/Isp. A sequence is split into phases wherever the number of burning engines changes - solid boosters flaming out under a still-burning core, asparagus drops - and each phase is constant-thrust, so it maps one-to-one onto a UPFG Mode 1 stage. The headline Thrust/MassFlowRate are only phase 0's, and in flight mode they are the *live throttled* values for the active sequence while DeltaV still comes from the design-condition drain sim, so the two must never be combined.
 //
-// Solid boosters come out right for free. Their grain lives in SolidGrainSegment rather than a Tank (so a tank walk sees no propellant at all), part of it is permanently unburnable, and thrust follows the burning area over the burn - the game's sim handles all three, linearising the thrust curve to a constant mass flow of usable-grain/BurnSeconds with thrust scaled to preserve Isp.
+// Solid boosters come out right for free. Their grain lives in SolidGrainSegment rather than a Tank (so a tank walk sees no propellant at all), part of it is permanently unburnable, and thrust follows the burning area over the burn. The game's sim handles all three, and it paces each solid at the mean mass flow and the mean thrust of the burn it has left, which it reads from SolidMotor.VacuumThrustProfile or AtmosphericThrustProfile by the sequence's environment.
 //
 // Pressure: the drain sim uses each sequence's own Environment setting (Vacuum = 0 Pa, Atmospheric = 101325 Pa), NOT the ambient pressure passed to RecomputeForFlight. ApplyAmbientPressure scales only the burning stage to the craft's pressure, because later stages burn where the model puts them. AnyAtmosphericSequence reports a sequence the player set to sea level so the UI can flag it.
 public static class KsaVehicleAdapter
@@ -24,14 +24,6 @@ public static class KsaVehicleAdapter
 
     // Phases shorter than this are numerical dust from the drain simulation's fixed iteration budget; their mass change is still carried forward so the stage chain stays continuous.
     private const double MinPhaseSeconds = 1e-3;
-
-    /// <summary>
-    /// How far past the engines' own capability a phase's mass flow has to be before
-    /// <see cref="CorrectDuplicateRegistration"/> treats it as double-counted. The
-    /// real fault is a whole multiple - x2, x3 - so this sits well above anything a
-    /// modelling difference could produce and well below the smallest real case.
-    /// </summary>
-    private const double DuplicateFlowRatio = 1.5;
 
     // ...and a phase can be long enough to survive that and still be dust: a tank trickling out its last few grams paces a "burn" of seconds that delivers no dV worth planning around. A stage under this is dropped rather than shown.
     private const double MinStageDv = 1.0;   // m/s
@@ -77,9 +69,7 @@ public static class KsaVehicleAdapter
                 if (!(thrust > 0.0) || !(massFlow > 0.0) || !(duration > 0.0))
                     continue;
 
-                // Cross-check the model against the engines that are actually in this phase, and believe them (see CorrectDuplicateRegistration).
-                CorrectDuplicateRegistration(perf, i, j, sequences[i].Environment,
-                                             ref thrust, ref massFlow, ref duration);
+                CorrectDuplicateRegistration(tree, sequences, perf, i, j, ref thrust, ref massFlow, ref duration);
 
                 double burnout = mass - massFlow * duration;
                 if (duration >= MinPhaseSeconds && mass > 0.0 && burnout > 0.0)
@@ -100,15 +90,13 @@ public static class KsaVehicleAdapter
                     {
                         burningStage = stage;
                         burningPhaseParts = PhaseParts(perf, j);
-                        burningModelPressure = sequences[i].Environment == PerformanceEnvironment.Atmospheric
-                            ? SeaLevelPressure : 0.0;
+                        burningModelPressure = ModelPressure(sequences[i].Environment);
                     }
                 }
                 mass = burnout;
             }
         }
 
-        CorrectBurningSolids(vehicle, result, burningModelPressure);
         Coalesce(result);
         // Coalesce can drop the first stage, and the phase parts describe that stage only.
         if (burningStage != null && result.Stages.Count > 0 && ReferenceEquals(result.Stages[0], burningStage))
@@ -151,197 +139,115 @@ public static class KsaVehicleAdapter
     private static bool Close(double a, double b) =>
         Math.Abs(a - b) <= 1e-3 * Math.Max(Math.Abs(a), Math.Abs(b));
 
-    /// <summary>
-    /// Adjusts a phase when KSA's drain simulation counts an engine more than once.
-    ///
-    /// A part can be in several sequences. SnapshotSequenceParts assigns the part to every sequence that contains one of its sequenced modules.
-    ///
-    ///     if (part.Sequenceable &amp;&amp; _sequenceIdxByNumber.TryGetValue(part.Sequence, ...))
-    ///         _sequencePartsScratch[value].Add(part);
-    ///
-    /// It now walks each part's sequenced MODULES and adds the part to every sequence
-    /// any of them belongs to. A part carrying an engine module in one sequence and a
-    /// decoupler module in another therefore appears in two lists - and Recompute's
-    /// registration loop, which is unchanged, walks sequences 0..k and registers every
-    /// EngineController of every part it finds, with no de-duplication:
-    ///
-    ///     for (int n = 0; n &lt;= k; n++)
-    ///         foreach (Part item in _sequencePartsScratch[n])
-    ///             ... RegisterDrainCore(item, core2, ...)
-    ///
-    /// So that part's cores are registered once per list it appears in. Thrust and
-    /// mass flow are both multiplied; the MASS RATIO is not, because the same
-    /// propellant is still drained - just faster. Which is why the stock delta-v
-    /// readout looks correct while thrust reads double and the burn time reads half,
-    /// and those two are exactly what UPFG steers on. (The same shape of error as the
-    /// burning-solid pacing below, from an unrelated cause.)
-    ///
-    /// The repair takes the engines the game itself says are in this phase -
-    /// PhaseEngineParts is a HashSet, so it holds each part ONCE however many times it
-    /// was registered - and sums their vacuum capability. If the model claims
-    /// materially more than those engines can produce, the measured figures replace
-    /// it and the duration is stretched to keep the propellant burned unchanged.
-    ///
-    /// Deliberately conservative. It only ever reduces thrust, it needs a discrepancy
-    /// far larger than modelling noise (duplication is a factor of two or more), and
-    /// it stands down where the comparison is not like-for-like: an atmospheric
-    /// sequence is not computed at vacuum, and a solid is deliberately paced away from
-    /// its design flow. Where KSA is behaving, this is a no-op.
-    /// </summary>
-    private static void CorrectDuplicateRegistration(
-        SequencePerformance perf, int seqIdx, int phaseIdx, PerformanceEnvironment environment,
+    // Adjusts a phase when KSA's drain simulation registers an engine part more than once.
+    //
+    // SequencePerformanceList.SnapshotSequenceParts lists a part under every sequence that a sequenced module of the part or of its sub-parts belongs to, and Recompute registers the engine controllers of every listed part for every sequence up to the one it computes, with no de-duplication.
+    // A part with an engine in one sequence and another sequenced module in a later sequence is therefore registered twice from that later sequence on, as long as it is still attached.
+    // Thrust and mass flow are multiplied and the propellant is not, so the mass ratio and the stock delta-v readout stay right while the thrust reads double and the burn time half, which are the two figures UPFG steers on.
+    //
+    // The count is taken the way the game lists the parts, so the repair is exact when every engine part of the phase is registered the same number of times, liquid or solid: the phase is divided by that count and its duration stretched to keep the propellant burned unchanged.
+    // With mixed counts the liquid parts are taken out at their single registration, computed from their design conditions at the sequence's own pressure the way the model registered them, and the solid parts, whose flow the model paces from the grain, share what is left.
+    // That leaves thrust and flow right and the phase boundaries approximate, because the model drained the doubled tanks at the wrong rate, and it stands down when the solids of one phase carry different counts.
+    // The liquid figures count every core of a part, so a part with a core the model did not register is over-attributed, and the guard on the liquid total catches the large version.
+    // Where KSA registers every part once, this is a no-op.
+    internal static void CorrectDuplicateRegistration(
+        PartTree tree, ReadOnlySpan<Sequence> sequences, SequencePerformance perf, int seqIdx, int phaseIdx,
         ref double thrust, ref double massFlow, ref double duration)
     {
-        if (environment != PerformanceEnvironment.Vacuum)
-            return;                             // model is at sea level; VacuumData is not
-
-        List<HashSet<Part>> phaseParts = perf.PhaseEngineParts;
-        if (phaseParts == null || phaseIdx >= phaseParts.Count)
-            return;
-        HashSet<Part> parts = phaseParts[phaseIdx];
+        HashSet<Part> parts = PhaseParts(perf, phaseIdx);
         if (parts == null || parts.Count == 0)
             return;
 
-        double realThrust = 0.0, realFlow = 0.0;
+        int first = 0, maxCount = 0;
+        bool uniform = true;
+        var registrations = new List<(Part part, int count)>(parts.Count);
         foreach (Part part in parts)
         {
-            Span<EngineController> engines = part.Modules.Get<EngineController>();
-            for (int i = 0; i < engines.Length; i++)
-            {
-                // A solid's modelled flow is paced from the grain remaining, not its design figure, so it is not comparable - leave the whole phase to CorrectBurningSolids rather than half-correcting it here.
-                RocketCore[] cores = engines[i].Cores;
-                for (int j = 0; j < cores.Length; j++)
-                    if (cores[j] is SolidMotor)
-                        return;
-
-                realThrust += engines[i].VacuumData.ThrustMax.Length();
-                realFlow += engines[i].VacuumData.MassFlowRateMax;
-            }
+            // A part the model burned was registered at least once, so a count the mirror cannot see leaves it alone.
+            int count = Math.Max(1, RegistrationCount(sequences, seqIdx, part));
+            registrations.Add((part, count));
+            if (first == 0)
+                first = count;
+            uniform &= count == first;
+            maxCount = Math.Max(maxCount, count);
         }
-        if (!(realThrust > 0.0) || !(realFlow > 0.0))
-            return;
-
-        // Duplication is x2 at least. Anything smaller is the difference between a vector thrust sum and a scalar one, or a throttle, and is not ours to touch.
-        if (massFlow < realFlow * DuplicateFlowRatio)
+        if (maxCount <= 1)
             return;
 
         double burned = massFlow * duration;    // the one figure the model gets right
-        thrust = realThrust;
-        massFlow = realFlow;
-        duration = burned / realFlow;
-    }
-
-    // Adjust the staging model when a solid motor is already burning and the game paces it the way it ships. With SolidPacingPatch installed the drain simulation already paces a burning solid correctly, so this correction stands down, because it would otherwise add the same difference a second time.
-    //
-    // SequencePerformanceList.ComputeSolidPacingMassFlowRate paces a solid at (usable grain REMAINING) / (BurnSeconds of a FULL grain), and scales its thrust by the same ratio to preserve exhaust velocity. For a grain that holds less than its geometry that is long even at ignition, and part-way through it is worse: with a fraction f of the grain left the model reports f x the true thrust and mass flow, and - because the burn time it implies is remaining/(remaining/BurnSeconds) - predicts a further FULL BurnSeconds of burn no matter how little grain is left.
-    //
-    // The mass ratio survives that (f cancels), which is why the stock stage menu's delta-v looks right, but thrust and burn time are exactly what UPFG steers on - hence the visible attitude jump when the boosters finally go.
-    //
-    // The adjustment uses the solid's live chamber conditions as the reference. Solids that are attached but not yet lit have a full grain, so f = 1 and no adjustment is needed.
-    //
-    // The motor's thrust is recomputed at modelPressure, because RocketNozzle.UpdateState fills the live state at the craft's pressure and ApplyAmbientPressure scales the whole stage to that afterwards.
-    private static void CorrectBurningSolids(Vehicle vehicle, UpfgVehicle result, double modelPressure)
-    {
-        if (SolidPacingPatch.Active || result.Stages.Count == 0)
-            return;
-
-        PartTree tree = vehicle.Parts;
-        if (tree?.Moles == null || tree.RocketNozzles == null
-            || !ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>
-                .TryGetFrom(tree.States, out var coreStates))
-            return;
-        ReadOnlySpan<MoleState> moles = tree.Moles.States;
-        float modelPa = (float)Math.Clamp(modelPressure, 0.0, float.MaxValue);
-
-        double deltaThrust = 0.0, deltaFlow = 0.0;
-        double solidBurnLeft = double.PositiveInfinity;
-
-        // We want the preview's BurnSeconds, not the curve. As of KSA 2026.8.19 the samples are a ThrustCurveSamples of three parallel spans rather than one Span<float>, and an EMPTY one is explicitly valid (IsValid short-circuits on IsEmpty) - the resample loop at the end of TrySampleThrustCurve simply runs zero times while the preview is still filled in. So ask for no samples at all and skip the buffer entirely, rather than stackallocing one we never read.
-        var curve = new SolidMotor.ThrustCurveSamples
+        if (uniform)
         {
-            ThrustNewtons = default,
-            IspSeconds = default,
-            ChamberPressurePascals = default,
-        };
-
-        Span<EngineController> engines = tree.Modules.Get<EngineController>();
-        for (int i = 0; i < engines.Length; i++)
-        {
-            if (!engines[i].IsActive)
-                continue;
-            RocketCore[] cores = engines[i].Cores;
-            for (int j = 0; j < cores.Length; j++)
-            {
-                if (cores[j] is not SolidMotor solid || solid.Rocket == null || !solid.Stack.IsValid)
-                    continue;
-
-                // What this motor is actually doing right now.
-                RocketCoreConditions conditions = coreStates.States[solid.StatesIdx].Conditions;
-                double modelThrust = 0.0, liveFlow = 0.0;
-                var nozzles = tree.RocketNozzles.GetModulesAndStates(solid.Rocket.Nozzles.AsSpan());
-                foreach (var nozzle in nozzles)
-                {
-                    modelThrust += nozzle.Module.ComputePerformance(in conditions, modelPa).GetRocketPerformance().TotalThrust;
-                    liveFlow += nozzle.State.Performance.MassFlowRate;
-                }
-                if (modelThrust <= 0.0 || liveFlow <= 0.0)
-                    continue;   // mid-transient; leave the model alone this step
-
-                // Grain left that can actually burn - the residue never does.
-                double usable = 0.0;
-                SolidGrainSegment[] segments = solid.Stack.Segments;
-                for (int k = 0; k < segments.Length; k++)
-                {
-                    Mole grain = segments[k].Grain;
-                    if (grain != null)
-                        usable += Math.Max(0.0,
-                            moles[grain.StatesIdx].Mass - segments[k].UnburnableGrainMass);
-                }
-                if (usable <= 0.0)
-                    continue;
-
-                if (!solid.TrySampleThrustCurve(curve, out SolidMotor.ThrustCurvePreview preview)
-                    || preview.BurnSeconds <= 0.0f)
-                    continue;
-
-                // The pacing the model used, and the exhaust velocity it kept.
-                double modelFlow = usable / preview.BurnSeconds;
-                double exhaustVel = modelThrust / liveFlow;
-
-                deltaFlow += liveFlow - modelFlow;
-                deltaThrust += exhaustVel * (liveFlow - modelFlow);
-                solidBurnLeft = Math.Min(solidBurnLeft, usable / liveFlow);
-            }
+            thrust /= first;
+            massFlow /= first;
+            duration = burned / massFlow;
+            return;
         }
 
-        if (deltaFlow == 0.0 && double.IsPositiveInfinity(solidBurnLeft))
+        double pressure = ModelPressure(sequences[seqIdx].Environment);
+        double liquidThrustOnce = 0.0, liquidFlowOnce = 0.0, liquidThrustModel = 0.0, liquidFlowModel = 0.0;
+        int solidCount = 0;
+        foreach ((Part part, int count) in registrations)
+        {
+            if (HasSolidCore(part))
+            {
+                if (solidCount != 0 && count != solidCount)
+                    return;
+                solidCount = count;
+                continue;
+            }
+            (float3 thrustVec, double flow) = PartDesignPerformance(tree, part, pressure);
+            double force = thrustVec.Length();
+            liquidThrustOnce += force;
+            liquidFlowOnce += flow;
+            liquidThrustModel += force * count;
+            liquidFlowModel += flow * count;
+        }
+        // The liquids at their counts cannot exceed the model's phase, so a model that reads less than that is one the mirror does not describe.
+        if (liquidFlowModel > massFlow * (1.0 + 1e-3))
             return;
 
-        UpfgStage stage = result.Stages[0];
-        double modelStageFlow = stage.Thrust / (stage.Isp * G0);
-        double thrust = stage.Thrust + deltaThrust;
-        double flow = modelStageFlow + deltaFlow;
-        if (!(thrust > 0.0) || !(flow > 0.0))
+        // What the liquids do not explain is the solids at their count, plus the difference between the model's vector sum and this scalar one.
+        int divisor = Math.Max(solidCount, 1);
+        double correctedThrust = liquidThrustOnce + (thrust - liquidThrustModel) / divisor;
+        double correctedFlow = liquidFlowOnce + (massFlow - liquidFlowModel) / divisor;
+        if (!(correctedThrust > 0.0) || !(correctedFlow > 0.0) || correctedFlow >= massFlow)
             return;
 
-        // The model's own phase length still bounds us - whatever else runs dry first (a core tank) is unaffected by the solid's pacing.
-        double duration = (stage.MassTotal - stage.MassDry) / modelStageFlow;
-        if (!double.IsPositiveInfinity(solidBurnLeft))
-            duration = Math.Min(duration, solidBurnLeft);
-
-        double burnout = stage.MassTotal - flow * duration;
-        if (!(burnout > 0.0) || burnout >= stage.MassTotal)
-            return;
-
-        // Propellant the model burned during a stage that is now shorter is still aboard. It is whatever the non-solid engines would not have consumed, and it lives in the tanks the next stage burns to depletion - so hand it to that stage's start mass and leave its burnout mass alone.
-        double restored = burnout - stage.MassDry;
-        if (restored > 0.0 && result.Stages.Count > 1)
-            result.Stages[1].MassTotal += restored;
-
-        stage.Thrust = thrust;
-        stage.Isp = thrust / (flow * G0);
-        stage.MassDry = burnout;
+        thrust = correctedThrust;
+        massFlow = correctedFlow;
+        duration = burned / correctedFlow;
     }
+
+    // How many times Recompute registers this part's engines for the sequence at seqIdx: once per sequence up to it that lists the part, which SnapshotSequenceParts decides by the sequenced modules of the part and its sub-parts.
+    internal static int RegistrationCount(ReadOnlySpan<Sequence> sequences, int seqIdx, Part part)
+    {
+        if (part == null || !part.IsSequenceable)
+            return 0;
+        int count = 0;
+        for (int n = 0; n <= seqIdx && n < sequences.Length; n++)
+            if (part.HasSubtreeSequencedModule(sequences[n].Number))
+                count++;
+        return count;
+    }
+
+    private static bool HasSolidCore(Part part)
+    {
+        Span<EngineController> engines = part.Modules.Get<EngineController>();
+        for (int i = 0; i < engines.Length; i++)
+        {
+            RocketCore[] cores = engines[i].Cores;
+            if (cores == null)
+                continue;
+            for (int j = 0; j < cores.Length; j++)
+                if (cores[j] is SolidMotor)
+                    return true;
+        }
+        return false;
+    }
+
+    // The pressure the drain simulation registers a sequence's engines at.
+    private static double ModelPressure(PerformanceEnvironment environment)
+        => environment == PerformanceEnvironment.Atmospheric ? SeaLevelPressure : 0.0;
 
     private static void ApplyAmbientPressure(PartTree tree, UpfgVehicle result, UpfgStage stage,
                                              HashSet<Part> phaseParts, double modelPressure, double ambientPressure)
@@ -367,32 +273,44 @@ public static class KsaVehicleAdapter
         result.BurningStageThrustRatio = ratio;
     }
 
-    // Mirrors SequencePerformanceList.AccumulateCoreThrustAtPressure. Design conditions, not live ones, make the ratio of two calls a pure pressure response, also for a solid part way through its grain.
+    // Design conditions, not live ones, make the ratio of two calls a pure pressure response, also for a solid part way through its grain.
     private static double PhaseThrustAtPressure(PartTree tree, HashSet<Part> parts, double pressure)
     {
-        if (tree?.RocketNozzles == null)
-            return 0.0;
-        float ambient = (float)Math.Clamp(pressure, 0.0, float.MaxValue);
         float3 thrustVec = float3.Zero;
         foreach (Part part in parts)
+            thrustVec += PartDesignPerformance(tree, part, pressure).thrustVec;
+        return thrustVec.Length();
+    }
+
+    // The part's engines at their design conditions and the given pressure, the way SequencePerformanceList.AccumulateCoreThrustAtPressure registers them.
+    internal static (float3 thrustVec, double massFlow) PartDesignPerformance(PartTree tree, Part part, double pressure)
+    {
+        float3 thrustVec = float3.Zero;
+        double massFlow = 0.0;
+        if (tree?.RocketNozzles == null)
+            return (thrustVec, massFlow);
+        float ambient = (float)Math.Clamp(pressure, 0.0, float.MaxValue);
+        Span<EngineController> engines = part.Modules.Get<EngineController>();
+        for (int i = 0; i < engines.Length; i++)
         {
-            Span<EngineController> engines = part.Modules.Get<EngineController>();
-            for (int i = 0; i < engines.Length; i++)
+            RocketCore[] cores = engines[i].Cores;
+            if (cores == null)
+                continue;
+            for (int j = 0; j < cores.Length; j++)
             {
-                RocketCore[] cores = engines[i].Cores;
-                for (int j = 0; j < cores.Length; j++)
+                RocketNozzle[] nozzles = cores[j]?.Rocket?.Nozzles;
+                if (nozzles == null)
+                    continue;
+                ref readonly RocketCoreConditions conditions = ref cores[j].DesignConditions;
+                foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(nozzles.AsSpan()))
                 {
-                    RocketNozzle[] nozzles = cores[j]?.Rocket?.Nozzles;
-                    if (nozzles == null)
-                        continue;
-                    RocketCoreConditions conditions = cores[j].ComputeDesignConditions();
-                    foreach (var nozzle in tree.RocketNozzles.GetModulesAndStates(nozzles.AsSpan()))
-                        thrustVec += nozzle.Module.ComputePerformance(in conditions, ambient)
-                            .GetRocketPerformance().TotalThrust * nozzle.State.ThrustDirectionVehicleAsmb;
+                    RocketPerformance performance = nozzle.Module.ComputePerformance(in conditions, ambient).GetRocketPerformance();
+                    thrustVec += performance.TotalThrust * nozzle.State.ThrustDirectionVehicleAsmb;
+                    massFlow += performance.MassFlowRate;
                 }
             }
         }
-        return thrustVec.Length();
+        return (thrustVec, massFlow);
     }
 
     // RunDrainSimulation fills PhaseEngineParts in step with Phases. It holds the engines the model burns, lit or not, and as a set it counts a double-registered engine once.

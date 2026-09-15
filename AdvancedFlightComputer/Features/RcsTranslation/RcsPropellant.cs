@@ -46,15 +46,13 @@ internal static class RcsPropellant
 
     private static void CollectReachableTanks(ResourceManager? rm, HashSet<Tank> tanks)
     {
-        // ConsumptionOrder is null until the resource graph exists.
-        Tank[][]? groups = rm?.ConsumptionOrder;
-        if (groups == null)
+        if (rm == null)
             return;
-        foreach (Tank[]? group in groups)
+        // The order has no levels until the resource graph exists.
+        FlowOrder<Tank> levels = rm.ConsumptionOrder;
+        for (int i = 0; i < levels.LevelCount; i++)
         {
-            if (group == null)
-                continue;
-            foreach (Tank? tank in group)
+            foreach (Tank? tank in levels[i])
             {
                 if (tank != null)
                     tanks.Add(tank);

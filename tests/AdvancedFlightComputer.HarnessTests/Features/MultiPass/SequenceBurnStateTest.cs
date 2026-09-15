@@ -9,7 +9,7 @@ using KSA;
 namespace AdvancedFlightComputer.HarnessTests;
 
 // Compare the adapter with a private SequencePerformanceList calculation for each vehicle.
-// Check sequence numbers, fuel, mass flow, exhaust velocity, and the correction for inert mass in subparts.
+// Check sequence numbers, fuel, mass flow, exhaust velocity, and start mass.
 // Vehicle.TotalMass provides a separate mass check when no parts were jettisoned.
 // These checks verify the adapter rather than the stock performance model.
 public sealed class SequenceBurnStateTest : AfcTest
@@ -148,36 +148,21 @@ public sealed class SequenceBurnStateTest : AfcTest
                 t.Fail($"{label} seq {s.Number}", "no matching stock sequence");
                 continue;
             }
-            double stockVe = p.MassFlowRate > 0f ? p.Thrust / p.MassFlowRate : 0.0;
+            double stockVe = p.Isp * 9.80665;
             bool fuelOk = Approx.Rel(s.FuelMassKg, p.BurnedFuelMass, FuelTol, ElementFloor);
             bool mDotOk = Approx.Rel(s.MassFlowKgPerSec, p.MassFlowRate, MDotTol, ElementFloor);
             bool veOk = Approx.Rel(s.ExhaustVelocityMs, stockVe, VeTol, ElementFloor);
 
-            // Stock WetMass omits inert mass from subparts.
-            // Calculate that mass independently from the attached parts to check the adapter correction.
-            double subPartInert = 0.0;
-            int attachedCount = 0;
-            if (p.AttachedParts != null)
-            {
-                attachedCount = p.AttachedParts.Count;
-                foreach (Part part in p.AttachedParts)
-                {
-                    ReadOnlySpan<Part> subParts = part.SubParts;
-                    for (int i = 0; i < subParts.Length; i++)
-                        subPartInert += subParts[i].InertMass?.MassPropertiesAsmb.Props.Mass ?? 0f;
-                }
-            }
-            bool startOk = Approx.Mixed(s.StartMassKg, p.WetMass + subPartInert, 0.5, 1e-6);
-            // When nothing has been jettisoned, the corrected start mass must also match Vehicle.TotalMass.
-            if (attachedCount == vehicle.Parts.Parts.Length)
+            bool startOk = Approx.Mixed(s.StartMassKg, p.WetMass, 0.5, 1e-6);
+            // When nothing has been jettisoned, the start mass must also match Vehicle.TotalMass, which holds only while stock's model counts the inert mass of sub-parts.
+            if ((p.AttachedParts?.Count ?? 0) == vehicle.Parts.Parts.Length)
                 startOk &= Approx.Rel(s.StartMassKg, vehicle.TotalMass, 1e-3, ElementFloor);
 
             t.Check($"{label} seq {s.Number}", fuelOk && mDotOk && veOk && startOk,
                 $"fuel {s.FuelMassKg:F1}/{p.BurnedFuelMass:F1} " +
                 $"mDot {s.MassFlowKgPerSec:F2}/{p.MassFlowRate:F2} " +
                 $"Ve {s.ExhaustVelocityMs:F1}/{stockVe:F1} " +
-                $"start {s.StartMassKg:F1} (wet {p.WetMass:F1} + subInert {subPartInert:F1}, " +
-                $"total {vehicle.TotalMass:F1})");
+                $"start {s.StartMassKg:F1} (wet {p.WetMass:F1}, total {vehicle.TotalMass:F1})");
         }
     }
 
@@ -354,12 +339,10 @@ public sealed class SequenceBurnStateTest : AfcTest
                 {
                     if (core is not Combustor { ResourceManager: not null } combustor)
                         continue;
-                    Tank[][]? levels = combustor.ResourceManager.ConsumptionOrder;
-                    if (levels == null) continue;
-                    foreach (Tank[]? level in levels)
+                    FlowOrder<Tank> levels = combustor.ResourceManager.ConsumptionOrder;
+                    for (int level = 0; level < levels.LevelCount; level++)
                     {
-                        if (level == null) continue;
-                        foreach (Tank? candidateDonor in level)
+                        foreach (Tank? candidateDonor in levels[level])
                         {
                             if (candidateDonor == null || !candidateDonor.PropellantUseEnabled)
                                 continue;
