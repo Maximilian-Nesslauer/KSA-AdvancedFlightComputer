@@ -374,6 +374,18 @@ public sealed class VehicleAutopilotState
     public bool MatchTargetArgPe = true;
 
     /// <summary>
+    /// With the argument of periapsis free, insert wherever UPFG prices the burn cheapest
+    /// instead of always at periapsis - see UpfgInsertionSearch. On by default: it only moves
+    /// the insertion when that saves dV, and it stands aside while the argument of periapsis
+    /// is fixed, which decides the insertion point by itself.
+    /// </summary>
+    public bool OptimiseInsertion = true;
+
+    /// <summary>This craft's search for the cheapest free insertion. Per vehicle, like the
+    /// solver it copies.</summary>
+    public readonly UpfgInsertionSearch InsertionSearch = new UpfgInsertionSearch();
+
+    /// <summary>
     /// Absolute sim time of the launch window, LATCHED when EXECUTE arms the launch.
     /// An absolute instant rather than a countdown because the countdown is derived
     /// from a wrapped angle: overshoot the window under time warp and it does not go

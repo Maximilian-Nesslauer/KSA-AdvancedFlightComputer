@@ -12,17 +12,20 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// The ascent's argument-of-periapsis target, against orbits the game itself propagates.
+// The ascent's insertion target, against orbits the game itself propagates.
 //
 // Geometry, with no save: around inclined eccentric orbits, one of them retrograde, the insertion UpfgTarget
 // aims at under each propagated position has that position's radius, speed and flight-path angle, and the
 // argument of periapsis it reads off the state vectors is the game's own element. Then the free insertion at
-// periapsis, the insertion where the orbit climbs through a floor above periapsis, the per-solve rate limit,
-// the floor holding the side it entered from, and the near-circular fallback to free.
+// periapsis and placed past it, the insertion where the orbit climbs through a floor above periapsis, the
+// per-solve rate limit, the floor holding the side it entered from, and the near-circular fallback to free.
 //
 // Chase orbit: against a spawned eccentric target, launch-to-target plans a co-elliptic orbit - the target's
 // eccentricity and argument of periapsis on a semi-major axis the offset below its own - and copies the
 // argument of periapsis only while that is switched on.
+//
+// Insertion search: on the flight's own stage model and start state, the free insertion the search settles on
+// costs no more than the cheapest one found by pricing every degree, beyond the search's own threshold.
 //
 // Flight: the real UPFG ascent with the production hooks, from an inclined circular orbit to an eccentric
 // orbit in the same plane, with the argument of periapsis set so the burn has to insert InsertionAnomalyDeg
@@ -38,8 +41,16 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
     private const int GeometrySamples = 16;
     private const double GeometryRelTol = 1e-7;
     private const double GeometryAngleTolDeg = 1e-4;
+    private const double PlacedInsertionDeg = 20.0;
 
     private const double ChaseOffsetKm = 20.0;
+
+    // Enough to converge a solver from the preview onto one instant, so the search and the brute force read the same cost curve.
+    private const int SettleSolves = 300;
+    // The goal moves at most MaxGoalStepDeg a search, so this reaches the far end of the search's range from periapsis.
+    private const int SearchCycles = 12;
+    // What the parabola's reading of the curve may leave on top of the search's own threshold, m/s.
+    private const double SearchSettleSlackMs = 3.0;
 
     // Inclined, so the node and with it the game's argument of periapsis are well defined for the flown orbit.
     private const double SpawnInclinationDeg = 28.5;
@@ -92,7 +103,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(DefaultSaves);
         if (saves.Count == 0)
         {
-            t.Skip($"neither '{DefaultSaves[0]}' nor '{DefaultSaves[1]}' is in the game's Vehicles folder, so the chase orbit and the flight are not covered.");
+            t.Skip($"neither '{DefaultSaves[0]}' nor '{DefaultSaves[1]}' is in the game's Vehicles folder, so the chase orbit, the insertion search and the flight are not covered.");
             return;
         }
         if (VehicleAutopilotState.Snapshot().Length != 0)
@@ -201,6 +212,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
             t.CheckAbs($"{tag}: argument of periapsis read off the state vectors against the game's, worst error deg", worstArgPeDeg, 0.0, GeometryAngleTolDeg);
 
             StateVectors atPe = orbit.GetStateVectorsAt(orbit.TimeAtPeriapsis);
+            double h = double3.Cross(atPe.PositionCci, atPe.VelocityCci).Length();
             UpfgTarget free = UpfgTarget.FromOrbit(peKm, apKm, incDeg, lanDeg, home.MeanRadius, home.Mu);
             UpfgTarget.Insertion freeAim = free.InsertionToward(orbit.StateVectors.PositionCci, default, double.PositiveInfinity);
             t.Check($"{tag}: a free target inserts at periapsis, level, whatever the direction",
@@ -210,10 +222,28 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
                 && Math.Abs(freeAim.Fpa) < 1e-12,
                 $"radius {freeAim.Radius:F1} m against {atPe.PositionCci.Length():F1}, speed {freeAim.Speed:F4} m/s against {atPe.VelocityCci.Length():F4}, FPA {Deg(freeAim.Fpa):E2} deg");
 
+            // Placed past periapsis, a free insertion is the orbit's own state there: on its radius, with its angular momentum and its energy.
+            UpfgTarget placed = UpfgTarget.FromOrbit(peKm, apKm, incDeg, lanDeg, home.MeanRadius, home.Mu, double.NaN, 0.0, PlacedInsertionDeg);
+            UpfgTarget.Insertion placedAim = placed.InsertionToward(orbit.StateVectors.PositionCci, default, double.PositiveInfinity);
+            UpfgTarget.Insertion clonedAim = target.WithFreeInsertion(Rad(PlacedInsertionDeg))
+                .InsertionToward(orbit.StateVectors.PositionCci, default, double.PositiveInfinity);
+            double semiLatus = orbit.SemiMajorAxis * (1.0 - orbit.Eccentricity * orbit.Eccentricity);
+            double placedRadius = semiLatus / (1.0 + orbit.Eccentricity * Math.Cos(Rad(PlacedInsertionDeg)));
+            t.Check($"{tag}: a free insertion placed {PlacedInsertionDeg:F0} deg past periapsis is the orbit's own state there",
+                !placedAim.FloorLimited && placedAim.Fpa > 0.0
+                && Math.Abs(Deg(placedAim.TrueAnomaly) - PlacedInsertionDeg) < 1e-9
+                && Math.Abs(placedAim.Radius / placedRadius - 1.0) <= GeometryRelTol
+                && Math.Abs(placedAim.Radius * placedAim.Speed * Math.Cos(placedAim.Fpa) / h - 1.0) <= GeometryRelTol
+                && Math.Abs(placedAim.Speed * placedAim.Speed / (home.Mu * (2.0 / placedRadius - 1.0 / orbit.SemiMajorAxis)) - 1.0) <= GeometryRelTol,
+                Describe(placedAim));
+            t.Check($"{tag}: the same insertion made from the fixed target frees its argument of periapsis",
+                clonedAim.Radius == placedAim.Radius && clonedAim.Speed == placedAim.Speed && clonedAim.Fpa == placedAim.Fpa
+                && !target.WithFreeInsertion(Rad(PlacedInsertionDeg)).ArgPeFixed && target.ArgPeFixed,
+                $"{Describe(clonedAim)} against {Describe(placedAim)}");
+
             double floor = orbit.Periapsis + 0.25 * (orbit.Apoapsis - orbit.Periapsis);
             UpfgTarget floored = UpfgTarget.FromOrbit(peKm, apKm, incDeg, lanDeg, home.MeanRadius, home.Mu, double.NaN, floor);
             UpfgTarget.Insertion floorAim = floored.InsertionToward(atPe.PositionCci, default, double.PositiveInfinity);
-            double h = double3.Cross(atPe.PositionCci, atPe.VelocityCci).Length();
             double visViva = home.Mu * (2.0 / floor - 1.0 / orbit.SemiMajorAxis);
             t.Check($"{tag}: a periapsis under the floor inserts where the orbit climbs through it",
                 floorAim.FloorLimited && floorAim.Fpa > 0.0
@@ -324,6 +354,67 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         }
     }
 
+    // The search against brute force, on the stage model and state the flight starts from. Every degree of free
+    // insertion the search may use is priced the way the search prices a probe - the same number of solves from
+    // the same solution - and the search is then stepped cycle after cycle from that state, the live solver
+    // re-converged on each insertion it moves to. Where it settles has to cost no more than the cheapest degree,
+    // beyond the threshold the search itself refuses to chase.
+    private static void CheckInsertionSearch(TestContext t, UpfgGuidance preview, UpfgTarget free,
+                                             double3 r, double3 v, double mass, double mu, UpfgVehicle model)
+    {
+        if (preview.Tgo < UpfgInsertionSearch.FreezeTgoS)
+        {
+            t.Skip($"the burn is {preview.Tgo:F0} s, too short for the insertion search to run.");
+            return;
+        }
+
+        UpfgGuidance settled = preview.Clone();
+        for (int i = 0; i < SettleSolves; i++)
+            settled.Step(r, v, mass, mu, free, model);
+
+        double Price(double nu)
+        {
+            UpfgGuidance probe = settled.Clone();
+            UpfgTarget pinned = free.WithFreeInsertion(nu);
+            for (int i = 0; i < UpfgInsertionSearch.ProbeSolves; i++)
+                probe.Step(r, v, mass, mu, pinned, model);
+            return probe.VgoMag;
+        }
+
+        double atPeriapsis = Price(0.0);
+        double bestDeg = 0.0, bestCost = atPeriapsis;
+        for (int deg = 1; deg <= (int)UpfgInsertionSearch.MaxNuDeg; deg++)
+        {
+            double cost = Price(Rad(deg));
+            if (cost < bestCost)
+            {
+                bestCost = cost;
+                bestDeg = deg;
+            }
+        }
+
+        var search = new UpfgInsertionSearch();
+        UpfgGuidance live = settled.Clone();
+        for (int cycle = 0; cycle < SearchCycles; cycle++)
+        {
+            UpfgTarget flown = free.WithFreeInsertion(search.Nu);
+            for (int i = 0; i < SettleSolves; i++)
+                live.Step(r, v, mass, mu, flown, model);
+            search.Step(cycle * UpfgInsertionSearch.SearchIntervalS, UpfgInsertionSearch.SearchIntervalS,
+                true, true, live, flown, r, v, mass, mu, model);
+        }
+
+        double goalDeg = Deg(search.GoalNu);
+        double goalCost = Price(search.GoalNu);
+        t.Info($"insertion search: brute force cheapest at {bestDeg:F0} deg past periapsis, {atPeriapsis - bestCost:F1} m/s under periapsis; "
+             + $"search settled at {goalDeg:F2} deg, {atPeriapsis - goalCost:F1} m/s under periapsis by the same pricing, "
+             + $"reporting {search.SavingMs:F1} m/s after {search.LastSearchSolves} solves in its last search");
+        t.Check("the insertion search settles on the climbing side, inside its range",
+            goalDeg >= 0.0 && goalDeg <= UpfgInsertionSearch.MaxNuDeg + 1e-9, $"{goalDeg:F3} deg");
+        t.CheckAbs("the insertion the search settles on, m/s above the brute-force cheapest (floored at zero)",
+            Math.Max(goalCost - bestCost, 0.0), 0.0, UpfgInsertionSearch.MinSavingMs + SearchSettleSlackMs);
+    }
+
     private static void Fly(TestContext t, Vehicle vehicle, VehicleAutopilotState state, IParentBody home, SimDriver driver)
     {
         // The spawn orbit's own plane, from its state vectors, so the burn reshapes the orbit and turns its periapsis without a plane change.
@@ -382,6 +473,8 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
                 $"converged {preview.Converged}, tgo {preview.Tgo:F1} s, stage model {GuidanceLog.DescribeStages(model)}"))
             return;
 
+        CheckInsertionSearch(t, preview, free, r, v, vehicle.TotalMass, home.Mu, model);
+
         double argPeDeg = WrapDeg(freeCutoffDeg - InsertionAnomalyDeg);
         state.ArgPeFixed = true;
         state.ArgPeDeg = argPeDeg;
@@ -418,20 +511,20 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
             return;
         driver.Step(StepDt, 8);
 
-        Orbit flown = vehicle.Orbit;
+        Orbit flownOrbit = vehicle.Orbit;
         double radius = home.MeanRadius;
-        t.Info($"flown {(flown.Periapsis - radius) / 1000.0:F1} x {(flown.Apoapsis - radius) / 1000.0:F1} km, inc {Deg(flown.Inclination):F3} deg, "
-             + $"LAN {Deg(flown.LongitudeOfAscendingNode):F3} deg, arg. Pe {Deg(flown.ArgumentOfPeriapsis):F3} deg; target {peKm:F1} x {apKm:F1} km, "
+        t.Info($"flown {(flownOrbit.Periapsis - radius) / 1000.0:F1} x {(flownOrbit.Apoapsis - radius) / 1000.0:F1} km, inc {Deg(flownOrbit.Inclination):F3} deg, "
+             + $"LAN {Deg(flownOrbit.LongitudeOfAscendingNode):F3} deg, arg. Pe {Deg(flownOrbit.ArgumentOfPeriapsis):F3} deg; target {peKm:F1} x {apKm:F1} km, "
              + $"inc {incDeg:F3} deg, LAN {lanDeg:F3} deg, arg. Pe {argPeDeg:F3} deg; last aim {Describe(lastAim)}");
         t.Check("UPFG converged on the fixed target", converged);
         // Otherwise the flight proves nothing about steering: a burn that inserted at periapsis would pass on a free target.
         t.Check("the burn aimed well off periapsis, as the fixed argument of periapsis asks",
             lastAim.Valid && Math.Abs(Deg(lastAim.TrueAnomaly)) > InsertionAnomalyDeg / 2.0, Describe(lastAim));
         t.CheckAbs("flown argument of periapsis against the target's, deg",
-            AngleDiffDeg(Deg(flown.ArgumentOfPeriapsis), argPeDeg), 0.0, ArgPeTolDeg);
-        t.CheckAbs("flown periapsis altitude, km", (flown.Periapsis - radius) / 1000.0, peKm, PeriapsisTolKm);
-        t.CheckRel("flown apoapsis altitude, km", (flown.Apoapsis - radius) / 1000.0, apKm, ApoapsisRelTol);
-        t.CheckAbs("flown inclination, deg", Deg(flown.Inclination), incDeg, InclinationTolDeg);
+            AngleDiffDeg(Deg(flownOrbit.ArgumentOfPeriapsis), argPeDeg), 0.0, ArgPeTolDeg);
+        t.CheckAbs("flown periapsis altitude, km", (flownOrbit.Periapsis - radius) / 1000.0, peKm, PeriapsisTolKm);
+        t.CheckRel("flown apoapsis altitude, km", (flownOrbit.Apoapsis - radius) / 1000.0, apKm, ApoapsisRelTol);
+        t.CheckAbs("flown inclination, deg", Deg(flownOrbit.Inclination), incDeg, InclinationTolDeg);
     }
 
     private static string Describe(UpfgTarget.Insertion aim) =>

@@ -102,6 +102,8 @@ public static partial class GuidanceWindow
             ImGui.SameLine();
             using (new ImGuiDisabledScope(!_s.ArgPeFixed))
                 ImGui.InputDouble("Arg. of periapsis (deg)", ref _s.ArgPeDeg);
+            using (new ImGuiDisabledScope(_s.ArgPeFixed))
+                ImGui.Checkbox("Optimise insertion for dV", ref _s.OptimiseInsertion);
         }
 
         if (ImGui.CollapsingHeader("Ascent params", ImGuiTreeNodeFlags.DefaultOpen))
@@ -427,12 +429,26 @@ public static partial class GuidanceWindow
                     ApplyGLimit(live, _s.GLimitG);
                 _s.Status = "";
                 _s.UpfgVehicle = live;
-                // The insertion floor is the top of the atmosphere, zero for an airless body: an insertion under it would cut the engines in the air.
+                // The first solve of a flight: the insertion search starts again from periapsis.
+                bool firstSolve = double.IsNegativeInfinity(_s.LastSolveTime);
+                if (firstSolve)
+                    _s.InsertionSearch.Reset();
+                // The insertion floor is the top of the atmosphere, zero for an airless body: an insertion under it would cut the engines in the air. A free insertion goes where the search has moved it, which is periapsis until it has.
                 var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu,
-                    _s.ArgPeFixed ? _s.ArgPeDeg : double.NaN, parent?.GetAtmosphereRadius() ?? 0.0);
+                    _s.ArgPeFixed ? _s.ArgPeDeg : double.NaN, parent?.GetAtmosphereRadius() ?? 0.0,
+                    UpfgTarget.RadToDeg(_s.InsertionSearch.Nu));
                 // dt is the interval this solve covers, which is what makes the convergence test rate-independent (see UpfgGuidance.Step).
-                double solveDt = double.IsNegativeInfinity(_s.LastSolveTime) ? 0.0 : now - _s.LastSolveTime;
+                double solveDt = firstSolve ? 0.0 : now - _s.LastSolveTime;
                 _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
+
+                // Straight after the solve, from the same state and model: where a free insertion costs least. Searched only from a converged closed-loop solution, because the open-loop turn is not flying the steering the costs assume.
+                double goalBefore = _s.InsertionSearch.GoalNu;
+                _s.InsertionSearch.Step(now, solveDt, _s.OptimiseInsertion && !_s.ArgPeFixed,
+                    _s.Phase == AscentPhase.ClosedLoop && _s.Upfg.Converged,
+                    _s.Upfg, target, r, v, vehicle.TotalMass, mu, _s.UpfgVehicle);
+                if (_s.InsertionSearch.GoalNu != goalBefore)
+                    GuidanceLog.Debug(vehicle, $"insertion search moved the goal from {UpfgTarget.RadToDeg(goalBefore):F1} to {UpfgTarget.RadToDeg(_s.InsertionSearch.GoalNu):F1} deg past periapsis"
+                        + $" ({_s.InsertionSearch.SavingMs:F0} m/s under inserting at periapsis, {_s.InsertionSearch.LastSearchSolves} solves).");
                 _s.LastSolveTime = now;
 
                 // A sample of the solution every few seconds, so a log shows the steering the craft was given without a line per cycle.
@@ -442,7 +458,7 @@ public static partial class GuidanceWindow
                     double3 up = double3.Normalize(r);
                     UpfgTarget.Insertion aim = _s.Upfg.Aim;
                     GuidanceLog.Debug(vehicle, $"UPFG {PhaseName(_s.Phase)}: tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s, converged {_s.Upfg.Converged}"
-                        + (aim.Valid && (target.ArgPeFixed || aim.FloorLimited)
+                        + (aim.Valid && (target.ArgPeFixed || aim.FloorLimited || aim.TrueAnomaly != 0.0)
                             ? $", insertion {UpfgTarget.RadToDeg(aim.TrueAnomaly):F1} deg from Pe at {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {UpfgTarget.RadToDeg(aim.Fpa):F2} deg"
                             : "")
                         + $", steer pitch {PitchOf(up, _s.Upfg.Steering):F1} deg, command pitch {PitchOf(up, _s.CommandDir):F1} deg"

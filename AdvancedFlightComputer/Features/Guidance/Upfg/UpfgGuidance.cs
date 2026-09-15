@@ -84,6 +84,32 @@ public sealed class UpfgGuidance
         _prev = new State();
     }
 
+    /// <summary>
+    /// An independent copy of this solver, recursive state and all. UpfgInsertionSearch prices each candidate insertion on one: warm-started from the live solution, a copy steps toward a nearby target without the transient a cold solver starts with, and the live solver is left exactly as it was.
+    /// </summary>
+    public UpfgGuidance Clone()
+    {
+        return new UpfgGuidance
+        {
+            _prev = new State
+            {
+                Cser = _prev.Cser, Rbias = _prev.Rbias, Rd = _prev.Rd, Rgrav = _prev.Rgrav, Tgo = _prev.Tgo,
+                V = _prev.V, Vgo = _prev.Vgo, K = _prev.K, Aim = _prev.Aim,
+            },
+            _setup = _setup,
+            _mode = _mode,
+            Converged = Converged,
+            Steering = Steering,
+            VgoMag = VgoMag,
+            Vgo = Vgo,
+            Rgo = Rgo,
+            Throttle = Throttle,
+            Lambda = Lambda,
+            LambdaDot = LambdaDot,
+            TLambda = TLambda,
+        };
+    }
+
     // r, v: inertial (CCI) state in metres and m/s. vehicle: the staged model, rebuilt by the caller from live data so stage 0 reflects the current mass. mode is latched at setup (after Reset); pass 2/3 for the landing modes.
     //
     // dt is the sim interval this call covers. Pass it when the caller runs on a fixed guidance cycle: convergence is then measured against how far tgo SHOULD have moved (a converged solution's tgo falls one second per second) rather than against how far it moved at all, which is a test that any high enough call rate passes by definition. Zero (the default) keeps the original rate-dependent test.

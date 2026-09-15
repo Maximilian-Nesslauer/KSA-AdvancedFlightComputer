@@ -9,7 +9,7 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 //
 // This target builder converts UI inputs in km and degrees into the inertial CCI values that UPFG requires. The body radius and gravitational parameter come from the live KSA celestial body.
 //
-// THE ARGUMENT OF PERIAPSIS IS FREE OR FIXED. Free is the classic ascent target: insert at periapsis with the downrange position left to the solver, so the shape and plane of the orbit are hit and its periapsis falls wherever the burn happens to end. Fixed pins the whole ellipse in its plane and lets the insertion point slide along it instead: each solve finds the true anomaly the ellipse has under the predicted cutoff and aims at the radius, speed and flight-path angle it has there (InsertionToward). The downrange position is still free either way - with the argument of periapsis fixed it decides WHERE on the ellipse the vehicle arrives, rather than where the ellipse is.
+// THE ARGUMENT OF PERIAPSIS IS FREE OR FIXED. Free is the classic ascent target: insert at one chosen point of the ellipse - periapsis, unless UpfgInsertionSearch has found a cheaper one further round - with the downrange position left to the solver, so the shape and plane of the orbit are hit and its periapsis falls wherever the burn happens to end. Fixed pins the whole ellipse in its plane and lets the insertion point slide along it instead: each solve finds the true anomaly the ellipse has under the predicted cutoff and aims at the radius, speed and flight-path angle it has there (InsertionToward). The downrange position is still free either way - with the argument of periapsis fixed it decides WHERE on the ellipse the vehicle arrives, rather than where the ellipse is.
 public sealed class UpfgTarget
 {
     /// <summary>
@@ -33,10 +33,14 @@ public sealed class UpfgTarget
     public double3 Rdes;      // desired cutoff/landing position, CCI (modes 2/3)
     public double DescentRate; // desired downward speed at Rdes, m/s (mode 3)
 
-    // True anomaly of the free insertion: zero at periapsis, or where the ellipse climbs through the floor.
+    // The free insertion: its true anomaly, and whether the floor rather than the point asked for decided it.
     private double _freeNu;
+    private bool _freeFloorLimited;
 
     public bool ArgPeFixed => !double.IsNaN(ArgPe);
+
+    /// <summary>True anomaly a free target inserts at, rad in [0, pi]: zero is periapsis.</summary>
+    public double FreeInsertionAnomaly => _freeNu;
 
     /// <summary>
     /// A point on the target ellipse to insert at. TrueAnomaly is measured from periapsis in (-pi, pi], so its sign is the sign of the flight-path angle. RawTrueAnomaly is the point asked for before the cutoff floor moved it, which is what the next solve's rate limit continues from. The default value is not Valid: nothing has been aimed at yet.
@@ -52,10 +56,11 @@ public sealed class UpfgTarget
         public bool FloorLimited;     // the floor moved the insertion off the point asked for
     }
 
-    // peKm / apKm are altitudes above the surface; incDeg / lanDeg define the plane. argPeDeg fixes the argument of periapsis, and NaN leaves it free. minCutoffRadius is the lowest radius an insertion may be placed at - the top of the atmosphere, so the engines are never cut inside it.
+    // peKm / apKm are altitudes above the surface; incDeg / lanDeg define the plane. argPeDeg fixes the argument of periapsis, and NaN leaves it free. minCutoffRadius is the lowest radius an insertion may be placed at - the top of the atmosphere, so the engines are never cut inside it. freeInsertionNuDeg is where a free target inserts, as a true anomaly on the climbing side: zero is periapsis.
     public static UpfgTarget FromOrbit(double peKm, double apKm, double incDeg, double lanDeg,
                                        double bodyRadius, double mu,
-                                       double argPeDeg = double.NaN, double minCutoffRadius = 0.0)
+                                       double argPeDeg = double.NaN, double minCutoffRadius = 0.0,
+                                       double freeInsertionNuDeg = 0.0)
     {
         var t = new UpfgTarget();
 
@@ -77,15 +82,33 @@ public sealed class UpfgTarget
         if (!double.IsNaN(argPeDeg) && t.Ecc >= MinArgPeEccentricity)
             t.ArgPe = WrapTwoPi(DegToRad(argPeDeg));
 
-        // Insert at periapsis (flight-path angle zero there) - unless periapsis is under the floor, in which case the ellipse is joined where it climbs through the floor, the way PEGAS inserts at a cutoff altitude above periapsis. An ellipse entirely under the floor inserts at apoapsis, the highest it has.
-        t._freeNu = t.TrueAnomalyAtRadius(t.MinCutoffRadius);
-        t.StateAt(t._freeNu, out t.Radius, out t.Velocity, out t.Fpa);
-
+        t.SetFreeInsertion(DegToRad(freeInsertionNuDeg));
         return t;
     }
 
     /// <summary>
-    /// Where a cutoff in direction <paramref name="dir"/> should insert. FREE: the insertion FromOrbit built, whatever the direction. FIXED: the point of the ellipse under the direction, whose true anomaly is the direction's argument of latitude less the argument of periapsis.
+    /// This target with the argument of periapsis left free and the insertion at true anomaly <paramref name="nu"/>, the floor still applying - the candidates UpfgInsertionSearch prices.
+    /// </summary>
+    public UpfgTarget WithFreeInsertion(double nu)
+    {
+        var t = (UpfgTarget)MemberwiseClone();
+        t.ArgPe = double.NaN;
+        t.SetFreeInsertion(nu);
+        return t;
+    }
+
+    // Insert at the point asked for on the climbing side, periapsis by default (flight-path angle zero there) - unless that is under the floor, in which case the ellipse is joined where it climbs through the floor, the way PEGAS inserts at a cutoff altitude above periapsis. An ellipse entirely under the floor inserts at apoapsis, the highest it has.
+    private void SetFreeInsertion(double nu)
+    {
+        double asked = double.IsFinite(nu) ? Math.Clamp(nu, 0.0, Math.PI) : 0.0;
+        double floorNu = TrueAnomalyAtRadius(MinCutoffRadius);
+        _freeFloorLimited = floorNu > asked;
+        _freeNu = Math.Max(asked, floorNu);
+        StateAt(_freeNu, out Radius, out Velocity, out Fpa);
+    }
+
+    /// <summary>
+    /// Where a cutoff in direction <paramref name="dir"/> should insert. FREE: the insertion SetFreeInsertion chose, whatever the direction. FIXED: the point of the ellipse under the direction, whose true anomaly is the direction's argument of latitude less the argument of periapsis.
     ///
     /// RATE-LIMITED against <paramref name="previous"/>, to at most maxStep radians of true anomaly per call. The direction is UPFG's predicted cutoff, which is far from converged on the first solves after engaging, and passing it straight through would move the target radius with it - which moves the prediction in turn. In converged flight the predicted cutoff barely moves in inertial space, so the limit only binds while the solution settles.
     ///
@@ -98,7 +121,7 @@ public sealed class UpfgTarget
             return new Insertion
             {
                 Valid = true, Radius = Radius, Speed = Velocity, Fpa = Fpa,
-                TrueAnomaly = _freeNu, RawTrueAnomaly = 0.0, FloorLimited = _freeNu > 0.0,
+                TrueAnomaly = _freeNu, RawTrueAnomaly = _freeNu, FloorLimited = _freeFloorLimited,
             };
         }
 
