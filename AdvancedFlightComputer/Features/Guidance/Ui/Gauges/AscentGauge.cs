@@ -6,6 +6,7 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // The Ascent tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT buttons live in Ui/Panel.cs; everything here draws inside the body child that panel opens, so it is plain ImGui under ImGaugeDressing's styling.
 //  The point of the restructure is that the legacy tab put thirty controls in one flat list, so the four that matter - the target orbit - sat among solver tuning.
@@ -50,8 +51,13 @@ public static partial class GuidanceWindow
 
         using (new ImGuiDisabledScope(driven))
         {
+            // Periapsis is always the lower: a pair entered the other way round swaps once the field is left (see OrderApsides).
             GaugeRow("Periapsis (km)", "##pe", ref _s.PeKm);
+            if (ImGui.IsItemDeactivatedAfterEdit())
+                OrderApsides();
             GaugeRow("Apoapsis (km)", "##ap", ref _s.ApKm);
+            if (ImGui.IsItemDeactivatedAfterEdit())
+                OrderApsides();
             // A new inclination makes the old LAN meaningless - the plane it named no longer passes overhead - so re-seed it from where the vehicle is.
             if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
@@ -64,7 +70,11 @@ public static partial class GuidanceWindow
 
         // Outside the target's greying, since it is how to fly rather than where to go. Greyed instead while the argument of periapsis is fixed: that decides the insertion point by itself.
         using (new ImGuiDisabledScope(_s.ArgPeFixed))
+        {
             GaugeRowCheck("Optimise insertion", "##optinsertion", ref _s.OptimiseInsertion);
+            // Where the insertion is looked for: past periapsis, or short of apoapsis for a vehicle whose burn is better ended high - still climbing, so it coasts up to apoapsis to circularise.
+            GaugeRowCheck("Insert before Ap", "##insertap", ref _s.InsertBeforeApoapsis);
+        }
 
         if (!driven)
         {
@@ -125,7 +135,7 @@ public static partial class GuidanceWindow
     {
         var aim = _s.Upfg.Aim;
         // A free insertion off periapsis that the floor did not put there is the search's doing.
-        bool searched = !_s.ArgPeFixed && !aim.FloorLimited && aim.TrueAnomaly > 0.0;
+        bool searched = !_s.ArgPeFixed && !aim.FloorLimited && aim.TrueAnomaly != 0.0;
         if (!_s.Running || !aim.Valid || !(_s.ArgPeFixed || aim.FloorLimited || searched))
             return;
 
@@ -147,7 +157,7 @@ public static partial class GuidanceWindow
         else if (descending)
             GaugeRowText("", "before Pe - a burn from orbit may not converge", warn);
         if (searched && double.IsFinite(_s.InsertionSearch.SavingMs))
-            GaugeRowText("", $"placed for dV, {Math.Max(_s.InsertionSearch.SavingMs, 0.0):F0} m/s under inserting at Pe", fine);
+            GaugeRowText("", $"placed for dV, {Math.Max(_s.InsertionSearch.SavingS, 0.0):F1} s of burn ({Math.Max(_s.InsertionSearch.SavingMs, 0.0):F0} m/s) under inserting {(_s.InsertionSearch.AtApoapsis ? $"{UpfgInsertionSearch.ApoapsisLeadDeg:F0} deg before Ap" : "at Pe")}", fine);
     }
 
     private static void DrawTargetPicker(Vehicle vehicle)

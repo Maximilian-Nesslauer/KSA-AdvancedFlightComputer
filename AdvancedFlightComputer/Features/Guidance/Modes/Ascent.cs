@@ -97,7 +97,11 @@ public static partial class GuidanceWindow
         if (ImGui.CollapsingHeader("Target orbit", ImGuiTreeNodeFlags.DefaultOpen))
         {
             ImGui.InputDouble("Periapsis (km)", ref _s.PeKm);
+            if (ImGui.IsItemDeactivatedAfterEdit())
+                OrderApsides();
             ImGui.InputDouble("Apoapsis (km)", ref _s.ApKm);
+            if (ImGui.IsItemDeactivatedAfterEdit())
+                OrderApsides();
             ImGui.InputDouble("Inclination (deg)", ref _s.IncDeg);
             ImGui.InputDouble("LAN (deg)", ref _s.LanDeg);
             ImGui.SameLine();
@@ -108,7 +112,11 @@ public static partial class GuidanceWindow
             using (new ImGuiDisabledScope(!_s.ArgPeFixed))
                 ImGui.InputDouble("Arg. of periapsis (deg)", ref _s.ArgPeDeg);
             using (new ImGuiDisabledScope(_s.ArgPeFixed))
+            {
                 ImGui.Checkbox("Optimise insertion for dV", ref _s.OptimiseInsertion);
+                ImGui.SameLine();
+                ImGui.Checkbox("Insert before apoapsis", ref _s.InsertBeforeApoapsis);
+            }
         }
 
         if (ImGui.CollapsingHeader("Ascent params", ImGuiTreeNodeFlags.DefaultOpen))
@@ -283,8 +291,19 @@ public static partial class GuidanceWindow
     }
 
     // The EXECUTE button's action - also fired automatically at the launch window.
+    /// <summary>
+    /// Periapsis is the lower apsis: a pair entered the other way round is swapped rather than flown as given. Called when either field is left after an edit - swapping on every keystroke would swap a value half typed - and again at launch, for a pair that reached the state any other way.
+    /// </summary>
+    private static void OrderApsides()
+    {
+        if (_s.ApKm < _s.PeKm)
+            (_s.PeKm, _s.ApKm) = (_s.ApKm, _s.PeKm);
+    }
+
     private static void StartGuidance(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        OrderApsides();
+
         // A target orbit wholly inside the atmosphere has nowhere the insertion floor allows (see UpfgTarget.InsideFloor): refused here rather than flown to a cutoff in the air.
         double atmosphere = parent?.GetAtmosphereRadius() ?? 0.0;
         if (atmosphere > 0.0 && Math.Max(_s.PeKm, _s.ApKm) * 1000.0 + parent.MeanRadius <= atmosphere)
@@ -457,6 +476,8 @@ public static partial class GuidanceWindow
                 bool firstSolve = double.IsNegativeInfinity(_s.LastSolveTime);
                 if (firstSolve)
                     _s.InsertionSearch.Reset();
+                // Before the target is built from the search's insertion, so a change of apsis is flown from this solve.
+                _s.InsertionSearch.SetAnchor(_s.InsertBeforeApoapsis && !_s.ArgPeFixed);
                 // The insertion floor is the top of the atmosphere, zero for an airless body: an insertion under it would cut the engines in the air. A free insertion goes where the search has moved it, which is periapsis until it has.
                 var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu,
                     _s.ArgPeFixed ? _s.ArgPeDeg : double.NaN, parent?.GetAtmosphereRadius() ?? 0.0,
@@ -477,7 +498,7 @@ public static partial class GuidanceWindow
                     _s.InsertionSearchTick = tick;
                 if (_s.InsertionSearch.GoalNu != goalBefore)
                     GuidanceLog.Debug(vehicle, $"insertion search moved the goal from {UpfgTarget.RadToDeg(goalBefore):F1} to {UpfgTarget.RadToDeg(_s.InsertionSearch.GoalNu):F1} deg past periapsis"
-                        + $" ({_s.InsertionSearch.SavingMs:F0} m/s under inserting at periapsis, {_s.InsertionSearch.LastSearchSolves} solves).");
+                        + $" ({_s.InsertionSearch.SavingS:F1} s of burn, {_s.InsertionSearch.SavingMs:F0} m/s under inserting {(_s.InsertionSearch.AtApoapsis ? $"{UpfgInsertionSearch.ApoapsisLeadDeg:F0} deg before apoapsis" : "at periapsis")}; {_s.InsertionSearch.LastSearchPriced} of {_s.InsertionSearch.LastSearchPoints} insertions priced in {_s.InsertionSearch.LastSearchSolves} solves).");
                 _s.LastSolveTime = now;
 
                 // A sample of the solution every few seconds, so a log shows the steering the craft was given without a line per cycle.

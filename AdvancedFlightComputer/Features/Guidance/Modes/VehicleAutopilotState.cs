@@ -195,8 +195,8 @@ public sealed class VehicleAutopilotState
     /// the box would do nothing. Ticking this therefore also puts the flight computer
     /// into a roll-tracking mode; see GuidanceWindow.CommandAttitude.
     /// </summary>
-    public bool ForceRoll;
-    public double ForceRollDeg;
+    public bool ForceRoll = true;
+    public double ForceRollDeg = 180.0;
 
     public bool CutoffDone;
     public bool StagingActive;
@@ -383,6 +383,15 @@ public sealed class VehicleAutopilotState
     /// is fixed, which decides the insertion point by itself.
     /// </summary>
     public bool OptimiseInsertion = true;
+
+    /// <summary>
+    /// With the argument of periapsis free, insert short of apoapsis instead of at periapsis:
+    /// 5 degrees before it, or with Optimise insertion on wherever is cheapest from 45 to 5
+    /// degrees before it (see UpfgInsertionSearch). Never at or past apoapsis, so the vehicle
+    /// cuts off still climbing and coasts up to apoapsis to circularise. Off by default - for
+    /// most vehicles a burn that ends high costs more than one that ends near periapsis.
+    /// </summary>
+    public bool InsertBeforeApoapsis;
 
     /// <summary>This craft's search for the cheapest free insertion. Per vehicle, like the
     /// solver it copies.</summary>

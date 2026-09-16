@@ -47,7 +47,7 @@ public sealed class UpfgTarget
     /// <summary>The lowest true anomaly an insertion may use on the climbing side, rad in [0, pi): where the ellipse climbs through the floor, or periapsis when the floor is under it or cannot be met at all.</summary>
     public double FloorAnomaly => InsideFloor ? 0.0 : TrueAnomalyAtRadius(MinCutoffRadius);
 
-    /// <summary>True anomaly a free target inserts at, rad in [0, pi]: zero is periapsis.</summary>
+    /// <summary>True anomaly a free target inserts at, rad in (-pi, pi]: zero is periapsis, pi apoapsis, negative the descending half.</summary>
     public double FreeInsertionAnomaly => _freeNu;
 
     /// <summary>
@@ -64,7 +64,7 @@ public sealed class UpfgTarget
         public bool FloorLimited;     // the floor moved the insertion off the point asked for
     }
 
-    // peKm / apKm are altitudes above the surface; incDeg / lanDeg define the plane. argPeDeg fixes the argument of periapsis, and NaN leaves it free. minCutoffRadius is the lowest radius an insertion may be placed at - the top of the atmosphere, so the engines are never cut inside it. freeInsertionNuDeg is where a free target inserts, as a true anomaly on the climbing side: zero is periapsis.
+    // peKm / apKm are altitudes above the surface; incDeg / lanDeg define the plane. argPeDeg fixes the argument of periapsis, and NaN leaves it free. minCutoffRadius is the lowest radius an insertion may be placed at - the top of the atmosphere, so the engines are never cut inside it. freeInsertionNuDeg is where a free target inserts, as a true anomaly anywhere round the ellipse: zero is periapsis, 180 apoapsis, negative the descending half.
     public static UpfgTarget FromOrbit(double peKm, double apKm, double incDeg, double lanDeg,
                                        double bodyRadius, double mu,
                                        double argPeDeg = double.NaN, double minCutoffRadius = 0.0,
@@ -105,13 +105,13 @@ public sealed class UpfgTarget
         return t;
     }
 
-    // Insert at the point asked for on the climbing side, periapsis by default (flight-path angle zero there) - unless that is under the floor, in which case the ellipse is joined where it climbs through the floor, the way PEGAS inserts at a cutoff altitude above periapsis. An ellipse entirely under the floor has no such crossing, and the floor is left out (see InsideFloor).
+    // Insert at the point asked for, anywhere round the ellipse, periapsis by default (flight-path angle zero there) - unless that is under the floor, in which case the ellipse is joined where it crosses the floor on the same side: climbing out of it for a point on the climbing half, periapsis included, the way PEGAS inserts at a cutoff altitude above periapsis, and descending into it for one on the descending half. An ellipse entirely under the floor has no such crossing, and the floor is left out (see InsideFloor).
     private void SetFreeInsertion(double nu)
     {
-        double asked = double.IsFinite(nu) ? Math.Clamp(nu, 0.0, Math.PI) : 0.0;
+        double asked = double.IsFinite(nu) ? WrapPi(nu) : 0.0;
         double floorNu = FloorAnomaly;
-        _freeFloorLimited = floorNu > asked;
-        _freeNu = Math.Max(asked, floorNu);
+        _freeFloorLimited = Math.Abs(asked) < floorNu;
+        _freeNu = _freeFloorLimited ? (asked < 0.0 ? -floorNu : floorNu) : asked;
         StateAt(_freeNu, out Radius, out Velocity, out Fpa);
     }
 
