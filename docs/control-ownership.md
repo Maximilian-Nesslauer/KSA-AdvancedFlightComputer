@@ -71,6 +71,7 @@ Only a takeover with neither of those pending leaves the engine command alone.
 The release makes that call, not the takeover, so a cut decided after the takeover still happens. That matters when a cleanup failed, because the no-cut request waits for the retry and an abort can arrive between the two.
 
 A step that hands the craft to another guidance mode is not a stop either. The 6-DOF dispatch releases only when the step left no mode running, because the handover to terminal hover claims the craft again, and a release in the same step would cut the engine the handover kept lit and reset the mode that just started.
+The deorbit burn's handover to 6-DOF is the same rule in the other direction. The burn queues an engage that the next step's dispatch runs, so the release after mode processing keeps a craft that has a 6-DOF engage queued, and the engine holds the burn's command until the engage runs. The handover to G-FOLD writes the descent's engine command on the step it switches, before G-FOLD has a plan, so the burn's throttle carries over until the first plan replaces it. `afc-guidance-landing-handoff` steps both handovers.
 The no-cut request and the reason both survive a failed cleanup, so a retry can neither deliver a late shutdown nor lose why guidance stopped.
 Holding the last throttle is not a claim that the trajectory is safe, and continuing an automatic throttle under player steering would be a separate mode capability with its own tests.
 `afc-guidance-player-takeover` covers the stop, the queued cut, and the failed cleanup with its retry.

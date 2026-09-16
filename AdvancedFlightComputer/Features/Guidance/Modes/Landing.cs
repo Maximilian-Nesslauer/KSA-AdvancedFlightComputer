@@ -526,10 +526,12 @@ public static partial class GuidanceWindow
                     // consumed by the next guidance step, which runs the cold solve
                     // off the draw.
                     //
-                    // Reached from the sim step rather than a button, which changes
-                    // nothing: the claim releases the landing machine that got us here
-                    // and finds no 6-DOF engaged, so it touches neither the engine nor
-                    // the gimbals on the way through.
+                    // Reached from the sim step rather than a button, so the release at
+                    // the end of this same step sees the queued request and keeps the
+                    // craft for it (see ApplyAutopilot). The claim releases the landing
+                    // machine that got us here and finds no 6-DOF engaged, so it touches
+                    // neither the engine nor the gimbals on the way through, and the
+                    // engine holds the burn's command until the engage runs.
                     Engage6Dof(vehicle);
                     _s.LandingStatus = "Handoff to 6-DOF descent.";
                 }
@@ -544,6 +546,8 @@ public static partial class GuidanceWindow
                     _s.GfoldTrackInit = false;
                     _s.GfoldEngineOn = false;
                     _s.GfoldHoverRefused = false;
+                    // This step already writes the descent's engine command, and G-FOLD has no throttle until its first plan on the next step, so the burn's throttle carries over. Left at zero, the braking burn stops for a step, and for as long as the first solves find no plan. The tracker does not smooth from the carried value, because GfoldTrackInit is reset above.
+                    _s.GfoldThrottle = _s.Upfg.Throttle;
                     _s.LandingStatus = "Handoff to G-FOLD descent.";
                 }
                 _s.GfoldTabSelectPending = true;   // focus the powered-landing page
