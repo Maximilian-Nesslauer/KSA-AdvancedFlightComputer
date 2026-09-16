@@ -10,6 +10,10 @@
 
 - A target entered with its apoapsis below its periapsis now swaps the two when the field is left, so periapsis is always the lower.
 
+- Launch to target now waits for whichever plane crossing comes next, ascending or descending, instead of the one picked by hand. The node choice is greyed out while a target is picked and stays yours for an ascent without one.
+
+- **Launch now**, beside Warp and Stay at 1x when an armed launch offers to warp to its window, starts the ascent to the target's chase orbit straight away instead - for a window just missed. It cancels the armed countdown and heads for the nearest crossing; UPFG steers out the difference in plane on the way up, which costs more dV the further from the window the launch is.
+
 - Launch to target now flies a **co-elliptic** chase orbit, with the target's eccentricity and argument of periapsis on a semi-major axis the offset below its own, instead of a circular one. Clear **Copy target arg. Pe** to leave the argument of periapsis free.
 
 - An ascent to a periapsis inside the atmosphere now inserts where the orbit climbs out of it, rather than cutting the engines in the air. An ascent to an orbit entirely inside the atmosphere is refused.

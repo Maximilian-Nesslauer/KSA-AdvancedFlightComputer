@@ -176,6 +176,32 @@ public static partial class GuidanceWindow
         StartGuidance(vehicle, orbit, parent);
     }
 
+    /// <summary>
+    /// LAUNCH NOW, to the target's chase orbit, without waiting for the window - for a window just missed, or one too far off to wait for. Any armed countdown and the warp toward it are dropped, the chase orbit is applied as it stands, and the ascent heads for whichever crossing is nearest in time, the one just missed included.
+    ///
+    /// Off the window the launch site is out of the target's plane, so UPFG steers the difference out on the way up. That costs dV growing with how far off the window the launch is, and far enough off it costs more than the vehicle has.
+    /// </summary>
+    private static void LaunchNowAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, in ChasePlan plan)
+    {
+        if (_s.Running)
+            return;
+        if (_s.LaunchArmed && Universe.IsAutoWarpActive)
+            Universe.AutoWarpStop(true);
+        _s.LaunchArmed = false;
+        // The offer to warp to this window is answered by not waiting for it, wherever Launch now was pressed from.
+        if (_warpLabel == LaunchWindowWarpLabel)
+            _warpPromptActive = false;
+        ApplyChaseOrbit(in plan);
+        _s.LaunchDescending = plan.NearestDescending;
+        GuidanceLog.Info(vehicle, $"launching now, off the window: next {(plan.Descending ? "descending" : "ascending")} crossing in {plan.WaitSec:F0} s, "
+            + $"heading for the nearest, {(plan.NearestDescending ? "descending" : "ascending")}.");
+        StartGuidance(vehicle, orbit, parent);
+    }
+
+    /// <summary>The crossing a launch to the target goes for: the latched one once armed or flying, the next one otherwise.</summary>
+    private static bool LaunchNodeDescending(in ChasePlan plan)
+        => _s.LaunchArmed || _s.Running ? _s.LaunchDescending : plan.Descending;
+
     /// <summary>Stop everything, including a pending armed launch. A panel action, so the craft is the focused one.</summary>
     private static void AbortAscent() => ReleaseAscent("", Program.ControlledVehicle);
 
@@ -233,7 +259,7 @@ public static partial class GuidanceWindow
             }
             else if (_s.AutoLaunch && waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
             {
-                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, "the launch window");
+                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, LaunchWindowWarpLabel);
             }
             return;
         }
@@ -356,11 +382,15 @@ public static partial class GuidanceWindow
 
         DrawTargetPicker(vehicle);
         ImGui.InputDouble("SMA offset below target (km)", ref _s.ChaseOffsetKm);
-        if (ImGui.RadioButton("Ascending (NE)", !_s.LaunchDescending))
-            _s.LaunchDescending = false;
-        ImGui.SameLine();
-        if (ImGui.RadioButton("Descending (SE)", _s.LaunchDescending))
-            _s.LaunchDescending = true;
+        // With a target the node is chosen for you - whichever crossing comes next (see TryChaseOrbit) - so the choice is only yours for an ascent without one.
+        using (new ImGuiDisabledScope(_s.TargetId.Length > 0))
+        {
+            if (ImGui.RadioButton("Ascending (NE)", !_s.LaunchDescending))
+                _s.LaunchDescending = false;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Descending (SE)", _s.LaunchDescending))
+                _s.LaunchDescending = true;
+        }
         ImGui.Checkbox("Auto warp to window", ref _s.AutoLaunch);
 
         // The geometry itself lives in Guidance/ChaseOrbit.cs, shared with the gauge panel so the two can never drift apart.
@@ -394,7 +424,7 @@ public static partial class GuidanceWindow
 
         double waitSec = plan.WaitSec;
         // The countdown is to IGNITION, which leads the plane crossing - see LanLeadSeconds - so the lead is named rather than left as an apparent discrepancy between T-0 and the site being in the plane.
-        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")} crossing, "
+        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")} crossing, "
                  + $"{LanLeadSeconds:F0} s lead)");
 
         if (ImGui.Button("Copy chase orbit to target inputs") || _s.AutoLaunch)

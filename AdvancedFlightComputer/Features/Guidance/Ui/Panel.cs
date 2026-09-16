@@ -113,7 +113,7 @@ public static partial class GuidanceWindow
             ImGui.TextColored(statusColor, _s.Status);
 
         // Above the tabs because it is not a phase's concern: both the ascent launch window and the deorbit burn request warps, and a prompt that vanished on a tab switch would strand whichever flow was waiting on it.
-        DrawWarpPrompt();
+        DrawWarpPrompt(vehicle, orbit, parent, bodyRadius);
 
         // The guidance handed over to a powered descent: follow it, at both levels of the tab bar, and make the solver shown agree with the one that actually started. Read here and consumed after the bar, so both levels see it.
         bool followGfold = _s.GfoldTabSelectPending;

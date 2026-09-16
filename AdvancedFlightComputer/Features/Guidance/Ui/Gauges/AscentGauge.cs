@@ -107,7 +107,7 @@ public static partial class GuidanceWindow
                     $"{plan.TargetPeKm:F1} x {plan.TargetApKm:F1} km, inc {plan.IncDeg:F2} deg");
                 // To IGNITION, which leads the plane crossing by LanLeadSeconds.
                 GaugeRowText("Launch window",
-                    $"T-{plan.WaitSec:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")}, "
+                    $"T-{plan.WaitSec:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")}, "
                     + $"{LanLeadSeconds:F0} s lead)");
                 break;
         }
@@ -345,7 +345,9 @@ public static partial class GuidanceWindow
             return;
 
         GaugeRowCheck("Engage autopilot", "##engage", ref _s.Engage);
-        GaugeRowCheck("Descending node (SE)", "##descending", ref _s.LaunchDescending);
+        // With a target the node is the next crossing, chosen for you; the box only decides for an ascent without one.
+        using (new ImGuiDisabledScope(_s.TargetId.Length > 0))
+            GaugeRowCheck("Descending node (SE)", "##descending", ref _s.LaunchDescending);
         GaugeRowCheck("Show orbit & track", "##overlay", ref _showAscentOverlay);
 
         ImGui.Text("");

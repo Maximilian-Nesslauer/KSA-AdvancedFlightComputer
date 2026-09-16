@@ -33,7 +33,9 @@ public static partial class GuidanceWindow
         public double IncDeg, LanDeg, PeKm, ApKm;    // the chase orbit
         public double ArgPeDeg;                      // the chase orbit's, which is the target's; NaN when the target is too round to have one
         public double TargetPeKm, TargetApKm;        // the target's own, for display
-        public double WaitSec;
+        public double WaitSec;                       // to ignition for the next crossing, whichever node that is
+        public bool Descending;                      // the next crossing is the descending one (south-easterly launch)
+        public bool NearestDescending;               // the crossing nearest in time, just missed or coming up, is the descending one
     }
 
     private static ChaseStatus TryChaseOrbit(Vehicle vehicle, Orbit orbit, IParentBody parent,
@@ -86,7 +88,8 @@ public static partial class GuidanceWindow
         plan.ArgPeDeg = double.IsNaN(argPe) ? double.NaN : UpfgTarget.RadToDeg(argPe);
 
         // Launch window: how long until the body's rotation carries the launch site
-        // under the target plane, at the requested (ascending/descending) crossing.
+        // under the target plane, at whichever crossing - ascending or descending - comes
+        // first. Either puts the vehicle in the same plane; they differ only in heading.
         double3 r = orbit.StateVectors.PositionCci;
         double lat = Math.Asin(Math.Clamp(r.Z / r.Length(), -1.0, 1.0));
         double ra = Math.Atan2(r.Y, r.X);
@@ -98,7 +101,6 @@ public static partial class GuidanceWindow
         }
 
         double delta = Math.Asin(Math.Clamp(tanRatio, -1.0, 1.0));
-        double raRequired = _s.LaunchDescending ? lanT + Math.PI - delta : lanT + delta;
         double omega = parent.GetAngularVelocity();
 
         // LAUNCH EARLY, by the same lead the LAN seeding uses (see LanLeadSeconds).
@@ -119,20 +121,34 @@ public static partial class GuidanceWindow
         }
 
         double raNow = ra + omega * LanLeadSeconds;
-        double wait = Wrap2Pi(raRequired - raNow) / omega;
-
-        // ... AND THE WRAP IS NOT ALLOWED TO COST A WHOLE REVOLUTION. Inside the lead
-        // window - the ideal ignition is behind us but the plane crossing itself is
-        // still ahead - the wrap reports the NEXT revolution's launch, so pressing
-        // EXECUTE armed a countdown of most of a day and looked like a dead button.
-        // Going now is at most LanLeadSeconds late, which only means the crossing
-        // lands earlier in the ascent than the lead intends; waiting a revolution for
-        // that is absurd.
         double period = 2.0 * Math.PI / omega;
-        if (wait > period - LanLeadSeconds)
-            wait = 0.0;
 
-        plan.WaitSec = wait;
+        double WaitFor(bool descending)
+        {
+            double raRequired = descending ? lanT + Math.PI - delta : lanT + delta;
+            double wait = Wrap2Pi(raRequired - raNow) / omega;
+
+            // ... AND THE WRAP IS NOT ALLOWED TO COST A WHOLE REVOLUTION. Inside the lead
+            // window - the ideal ignition is behind us but the plane crossing itself is
+            // still ahead - the wrap reports the NEXT revolution's launch, so pressing
+            // EXECUTE armed a countdown of most of a day and looked like a dead button.
+            // Going now is at most LanLeadSeconds late, which only means the crossing
+            // lands earlier in the ascent than the lead intends; waiting a revolution for
+            // that is absurd.
+            if (wait > period - LanLeadSeconds)
+                wait = 0.0;
+            return wait;
+        }
+
+        double waitAscending = WaitFor(false);
+        double waitDescending = WaitFor(true);
+        plan.Descending = waitDescending < waitAscending;
+        plan.WaitSec = Math.Min(waitAscending, waitDescending);
+
+        // For launching off the window: the crossing nearest in time, counting one just
+        // missed as behind by the rest of the revolution it would otherwise wait.
+        plan.NearestDescending = Math.Min(waitDescending, period - waitDescending)
+                               < Math.Min(waitAscending, period - waitAscending);
         return ChaseStatus.Ok;
     }
 
@@ -156,5 +172,8 @@ public static partial class GuidanceWindow
             _s.ArgPeDeg = plan.ArgPeDeg;
         _s.ArgPeFixed = _s.MatchTargetArgPe && hasArgPe;
         _s.LanSeeded = true;
+        // The node follows the next crossing only until a launch is committed: an armed countdown is to one particular crossing, and once flying, the other becoming the next must not turn the ascent's heading round.
+        if (!_s.Running && !_s.LaunchArmed)
+            _s.LaunchDescending = plan.Descending;
     }
 }

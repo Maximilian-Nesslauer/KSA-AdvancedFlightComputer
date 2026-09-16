@@ -59,7 +59,10 @@ public static partial class GuidanceWindow
         _warpTargetSimSec = targetSimSec;
     }
 
-    private static void DrawWarpPrompt()
+    /// <summary>The label an armed launch asks to warp to its window under - how the prompt knows to offer Launch now beside the warp.</summary>
+    private const string LaunchWindowWarpLabel = "the launch window";
+
+    private static void DrawWarpPrompt(Vehicle vehicle, Orbit orbit, IParentBody parent, double bodyRadius)
     {
         if (!_warpPromptActive)
             return;
@@ -87,6 +90,18 @@ public static partial class GuidanceWindow
         {
             _warpPromptActive = false;
             _warpDeclinedLabel = _warpLabel;
+        }
+
+        // Offered to warp to a launch window, the other answer is not to wait for it at all - for a window just missed, whose next one is most of a revolution away (see LaunchNowAscent).
+        if (_warpLabel == LaunchWindowWarpLabel && !_s.Running)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Launch now"))
+            {
+                ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
+                if (status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable)
+                    LaunchNowAscent(vehicle, orbit, parent, in plan);
+            }
         }
     }
 
