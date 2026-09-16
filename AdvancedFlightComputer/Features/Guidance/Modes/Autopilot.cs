@@ -1132,7 +1132,9 @@ public static partial class GuidanceWindow
         }
 
         // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input. A coast that EXECUTE queued while another mode still owned the craft stays through that release, and claims again at Prep.
-        bool stillNeedsCraft = _s.Engage && (_s.Running || landingGuides || boostbackGuides);
+        // A 6-DOF engage queued on this step is a handover, not an end: the deorbit burn queues one at its handoff, and the next step's 6-DOF dispatch runs it. Releasing here would drop the request and cut the engine the burn left lit, so the craft falls with nothing flying it.
+        bool stillNeedsCraft = _s.Active || _s.EngagePending
+            || (_s.Engage && (_s.Running || landingGuides || boostbackGuides));
         if (_s.ControlAcquired && !_s.LaunchArmed && !stillNeedsCraft)
             ReleaseVehicle(vehicle, keepWaitingCoast: true);
     }
