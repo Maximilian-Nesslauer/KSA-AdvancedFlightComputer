@@ -25,7 +25,8 @@ namespace AdvancedFlightComputer.HarnessTests;
 // argument of periapsis only while that is switched on.
 //
 // Insertion search: on the flight's own stage model and start state, the free insertion the search settles on
-// costs no more than the cheapest one found by pricing every degree, beyond the search's own threshold.
+// burns no longer than the cheapest one found by pricing every degree, beyond the search's own threshold, and
+// the saving it reports is that insertion's. With the apoapsis anchor it stays short of apoapsis.
 //
 // Flight: the real UPFG ascent with the production hooks, from an inclined circular orbit to an eccentric
 // orbit in the same plane, with the argument of periapsis set so the burn has to insert InsertionAnomalyDeg
@@ -48,12 +49,12 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
 
     private const double ChaseOffsetKm = 20.0;
 
-    // Enough to converge a solver from the preview onto one instant, so the search and the brute force read the same cost curve.
+    // Enough to settle a live solver from the preview onto one instant before each search.
     private const int SettleSolves = 300;
-    // The goal moves at most MaxGoalStepDeg a search, so this reaches the far end of the search's range from periapsis.
-    private const int SearchCycles = 12;
-    // What the parabola's reading of the curve may leave on top of the search's own threshold, m/s.
-    private const double SearchSettleSlackMs = 3.0;
+    // The grid sees the whole range every search, so a few are enough to show the goal settles and stays.
+    private const int SearchCycles = 3;
+    // What the grid's spacing and parabola may leave on top of the search's own threshold, s of burn.
+    private const double SearchSettleSlackS = 0.3;
 
     // Inclined, so the node and with it the game's argument of periapsis are well defined for the flown orbit.
     private const double SpawnInclinationDeg = 28.5;
@@ -342,6 +343,14 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
             ApplyChaseOrbit.Invoke(null, new object[] { plan });
             t.Check("with the copy on, the chase fixes the target's argument of periapsis",
                 state.ArgPeFixed && state.ArgPeDeg == plan.ArgPeDeg, $"fixed={state.ArgPeFixed}, arg. Pe {state.ArgPeDeg:F4} deg");
+            // The launch goes for whichever crossing of the target's plane comes next; before anything is armed the node follows the plan.
+            if (status == GuidanceWindow.ChaseStatus.Ok)
+            {
+                t.Info($"next crossing {(plan.Descending ? "descending" : "ascending")} in {plan.WaitSec:F0} s, nearest {(plan.NearestDescending ? "descending" : "ascending")}");
+                t.Check("the launch node is the next crossing the plan found",
+                    state.LaunchDescending == plan.Descending && double.IsFinite(plan.WaitSec) && plan.WaitSec >= 0.0,
+                    $"state descending {state.LaunchDescending}, plan descending {plan.Descending}, wait {plan.WaitSec:F1} s");
+            }
             state.MatchTargetArgPe = false;
             ApplyChaseOrbit.Invoke(null, new object[] { plan });
             t.Check("with the copy off, the chase leaves the argument of periapsis free", !state.ArgPeFixed);
@@ -357,11 +366,15 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
 
     // The search against brute force, on the stage model and state the flight starts from. Every degree of free
     // insertion the search may use is priced the way the search prices a probe - a solver re-solved from that
-    // instant until it has converged (UpfgInsertionSearch.TryPrice) - and the search is then stepped cycle after
-    // cycle from that state, the live solver re-settled on each insertion it moves to. Where it settles has to cost
-    // no more than the cheapest degree, beyond the threshold the search itself refuses to chase. The state stands
-    // still throughout, which is harder on the search than flight: nothing moves on between searches, so any bias
-    // its own solution puts into the costs compounds cycle after cycle instead of being flown out.
+    // instant until its burn time has converged (UpfgInsertionSearch.TryPrice), each degree warm-started from the
+    // last one that priced, as the search's own grid is - and the search is then stepped a few cycles from that
+    // state, the live solver re-settled on each insertion it moves to. Where it settles has to burn no longer than
+    // the cheapest degree, beyond the threshold the search itself refuses to chase, and the saving it reports has
+    // to be the one its goal has. The state stands still throughout, which is harder on the search than flight:
+    // any bias its own solution put into the costs would compound cycle after cycle instead of being flown out.
+    //
+    // Then the apoapsis anchor from the same state: wherever that search puts the goal, it is short of apoapsis,
+    // so the burn ends climbing and there is a coast left to circularise.
     private static void CheckInsertionSearch(TestContext t, UpfgGuidance preview, UpfgTarget free,
                                              double3 r, double3 v, double mass, double mu, UpfgVehicle model)
     {
@@ -375,21 +388,27 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         for (int i = 0; i < SettleSolves; i++)
             settled.Step(r, v, mass, mu, free, model);
 
+        // Burn time, s. Periapsis itself can have no converged solution from here - UPFG diverges on it from some burns - so it is priced like any other degree, not required.
         int unpriced = 0;
+        UpfgGuidance warm = settled;
         double Price(double nu)
         {
-            if (UpfgInsertionSearch.TryPrice(settled, free, nu, r, v, mass, mu, model, out double cost, out _, out _))
+            if (UpfgInsertionSearch.TryPrice(warm, free, nu, r, v, mass, mu, model, out double cost, out UpfgGuidance probe, out _))
+            {
+                warm = probe;
                 return cost;
+            }
             unpriced++;
             return double.NaN;
         }
 
-        // Periapsis itself can have no converged solution from here - UPFG diverges on it from some burns - so it is priced like any other degree, not required.
-        double atPeriapsis = Price(0.0);
+        double atPeriapsis = double.NaN;
         double bestDeg = double.NaN, bestCost = double.PositiveInfinity;
         for (int deg = 0; deg <= (int)UpfgInsertionSearch.MaxNuDeg; deg++)
         {
-            double cost = deg == 0 ? atPeriapsis : Price(Rad(deg));
+            double cost = Price(Rad(deg));
+            if (deg == 0)
+                atPeriapsis = cost;
             if (cost < bestCost)
             {
                 bestCost = cost;
@@ -400,33 +419,50 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
                 $"none of 0..{UpfgInsertionSearch.MaxNuDeg:F0} deg converged within {UpfgInsertionSearch.MaxProbeSolves} solves"))
             return;
 
-        var search = new UpfgInsertionSearch();
-        UpfgGuidance live = settled.Clone();
-        for (int cycle = 0; cycle < SearchCycles; cycle++)
-        {
-            UpfgTarget flown = free.WithFreeInsertion(search.Nu);
-            for (int i = 0; i < SettleSolves; i++)
-                live.Step(r, v, mass, mu, flown, model);
-            search.Step(cycle * UpfgInsertionSearch.SearchIntervalS, UpfgInsertionSearch.SearchIntervalS,
-                true, true, live, flown, r, v, mass, mu, model);
-        }
-
+        UpfgInsertionSearch search = RunSearch(false);
         double goalDeg = Deg(search.GoalNu);
+        warm = settled;
         double goalCost = Price(search.GoalNu);
-        t.Info($"insertion search: brute force cheapest at {bestDeg:F0} deg past periapsis, "
-             + (double.IsFinite(atPeriapsis) ? $"{atPeriapsis - bestCost:F1} m/s under periapsis" : $"{bestCost:F1} m/s, periapsis itself not converging")
+        t.Info($"insertion search: brute force cheapest at {bestDeg:F0} deg past periapsis, {bestCost:F1} s of burn, "
+             + (double.IsFinite(atPeriapsis) ? $"{atPeriapsis - bestCost:F2} s under periapsis" : "periapsis itself not converging")
              + $"{(unpriced > 0 ? $" ({unpriced} insertions did not converge and were left out)" : "")}; "
-             + $"search settled at {goalDeg:F2} deg, {goalCost:F1} m/s by the same pricing, "
-             + $"reporting a saving of {search.SavingMs:F1} m/s after {search.LastSearchSolves} solves in its last search");
+             + $"search settled at {goalDeg:F2} deg, {goalCost:F1} s by the same pricing, reporting a saving of {search.SavingS:F2} s ({search.SavingMs:F1} m/s), "
+             + $"{search.LastSearchPriced} of {search.LastSearchPoints} insertions priced in {search.LastSearchSolves} solves in its last search");
         t.Check("the insertion search settles on the climbing side, inside its range",
             goalDeg >= 0.0 && goalDeg <= UpfgInsertionSearch.MaxNuDeg + 1e-9, $"{goalDeg:F3} deg");
-        t.CheckAbs("the insertion the search settles on, m/s above the brute-force cheapest (floored at zero)",
+        t.CheckAbs("the insertion the search settles on, s of burn above the brute-force cheapest (floored at zero)",
             double.IsFinite(goalCost) ? Math.Max(goalCost - bestCost, 0.0) : double.PositiveInfinity,
-            0.0, UpfgInsertionSearch.MinSavingMs + SearchSettleSlackMs);
-        // Priced the same way, the saving the search reports is the one its goal has: the old fixed-count probes claimed 10 km/s here. Only where periapsis prices, because that is what the saving is measured from.
-        if (double.IsFinite(atPeriapsis) && double.IsFinite(search.SavingMs))
-            t.CheckAbs("the saving the search reports against the brute-force price of its goal, m/s",
-                search.SavingMs, atPeriapsis - goalCost, UpfgInsertionSearch.MinSavingMs + SearchSettleSlackMs);
+            0.0, UpfgInsertionSearch.MinSavingS + SearchSettleSlackS);
+        // Priced the same way, the saving the search reports is the one its goal has: fixed-count probes once claimed 10 km/s here. Only where periapsis prices, because that is what the saving is measured from.
+        if (double.IsFinite(atPeriapsis) && double.IsFinite(search.SavingS))
+            t.CheckAbs("the saving the search reports against the brute-force price of its goal, s of burn",
+                search.SavingS, atPeriapsis - goalCost, UpfgInsertionSearch.MinSavingS + SearchSettleSlackS);
+
+        UpfgInsertionSearch apoapsis = RunSearch(true);
+        double beforeApDeg = 180.0 - WrapDeg(Deg(apoapsis.GoalNu));
+        double flownBeforeApDeg = 180.0 - WrapDeg(Deg(apoapsis.Nu));
+        t.Info($"apoapsis anchor: goal {beforeApDeg:F2} deg before apoapsis, flown insertion {flownBeforeApDeg:F2} deg before it, "
+             + $"{apoapsis.LastSearchPriced} of {apoapsis.LastSearchPoints} insertions priced");
+        t.Check("with the apoapsis anchor the insertion stays short of apoapsis, inside its range",
+            beforeApDeg >= UpfgInsertionSearch.ApoapsisLeadDeg - 1e-9 && beforeApDeg <= UpfgInsertionSearch.MaxNuDeg + 1e-9
+            && flownBeforeApDeg >= UpfgInsertionSearch.ApoapsisLeadDeg - 1e-9 && flownBeforeApDeg <= UpfgInsertionSearch.MaxNuDeg + 1e-9,
+            $"goal {beforeApDeg:F3} deg, flown {flownBeforeApDeg:F3} deg before apoapsis");
+
+        UpfgInsertionSearch RunSearch(bool atApoapsis)
+        {
+            var s = new UpfgInsertionSearch();
+            s.SetAnchor(atApoapsis);
+            UpfgGuidance live = settled.Clone();
+            for (int cycle = 0; cycle < SearchCycles; cycle++)
+            {
+                UpfgTarget flown = free.WithFreeInsertion(s.Nu);
+                for (int i = 0; i < SettleSolves; i++)
+                    live.Step(r, v, mass, mu, flown, model);
+                s.Step(cycle * UpfgInsertionSearch.SearchIntervalS, UpfgInsertionSearch.SearchIntervalS,
+                    true, true, live, flown, r, v, mass, mu, model);
+            }
+            return s;
+        }
     }
 
     private static void Fly(TestContext t, Vehicle vehicle, VehicleAutopilotState state, IParentBody home, SimDriver driver)
