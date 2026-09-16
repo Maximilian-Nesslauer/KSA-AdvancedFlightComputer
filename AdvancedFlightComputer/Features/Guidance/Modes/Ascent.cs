@@ -72,6 +72,11 @@ public static partial class GuidanceWindow
     /// <summary>Wall-clock gate on re-deriving an unarmed launch window, ms.</summary>
     private const long LaunchWindowIntervalMs = 250;
 
+    /// <summary>
+    /// Wall-clock gate on the insertion search, ms. The search's own interval is sim time, and warp packs several guidance cycles into one frame, so without this a warped frame could run a search every frame. A search is milliseconds of solving (see UpfgInsertionSearch), and it is advisory - the goal it moves slews in over tens of seconds anyway - so under warp it simply runs less often.
+    /// </summary>
+    private const long InsertionSearchIntervalMs = 1000;
+
     public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
 
     // Reset at the top of every Draw; see DrawAutoLaunchArming.
@@ -280,6 +285,23 @@ public static partial class GuidanceWindow
     // The EXECUTE button's action - also fired automatically at the launch window.
     private static void StartGuidance(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        // A target orbit wholly inside the atmosphere has nowhere the insertion floor allows (see UpfgTarget.InsideFloor): refused here rather than flown to a cutoff in the air.
+        double atmosphere = parent?.GetAtmosphereRadius() ?? 0.0;
+        if (atmosphere > 0.0 && Math.Max(_s.PeKm, _s.ApKm) * 1000.0 + parent.MeanRadius <= atmosphere)
+        {
+            string refusal = $"Target apoapsis is inside the atmosphere (top at {(atmosphere - parent.MeanRadius) / 1000.0:F0} km) - not launching.";
+            if (_s.LaunchArmed)
+            {
+                ReleaseAscent(refusal, vehicle);
+            }
+            else
+            {
+                GuidanceLog.Info(vehicle, $"ascent refused: {refusal}");
+                _s.Status = refusal;
+            }
+            return;
+        }
+
         // Ascent takes over from every other mode: all four drive the same flight-computer command path, and two of them writing it would fight.
         ClaimVehicle(GuidanceMode.Ascent, vehicle);
         // Ours to reset, not the claim's - the deorbit burn flies this same instance.
@@ -338,7 +360,9 @@ public static partial class GuidanceWindow
 
         ImGui.Text($"Target orbit:  {plan.TargetPeKm,7:F1} x {plan.TargetApKm,7:F1} km  inc {plan.IncDeg,6:F2} deg");
         ImGui.Text($"Chase orbit:   {plan.PeKm,7:F1} x {plan.ApKm,7:F1} km co-elliptic  (SMA {_s.ChaseOffsetKm:F0} km below target)");
-        ImGui.Checkbox("Copy target arg. of periapsis", ref _s.MatchTargetArgPe);
+        // Applied as soon as it changes, not only by the copy button or auto-launch below, so an ascent started straight from this tab flies the choice on screen.
+        if (ImGui.Checkbox("Copy target arg. of periapsis", ref _s.MatchTargetArgPe))
+            ApplyChaseOrbit(in plan);
         ImGui.SameLine();
         ImGui.Text(double.IsNaN(plan.ArgPeDeg) ? "(target has none)" : $"({plan.ArgPeDeg:F2} deg)");
 
@@ -441,11 +465,16 @@ public static partial class GuidanceWindow
                 double solveDt = firstSolve ? 0.0 : now - _s.LastSolveTime;
                 _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
 
-                // Straight after the solve, from the same state and model: where a free insertion costs least. Searched only from a converged closed-loop solution, because the open-loop turn is not flying the steering the costs assume.
+                // Straight after the solve, from the same state and model: where a free insertion costs least. Searched only from a converged closed-loop solution, because the open-loop turn is not flying the steering the costs assume, and at most once per InsertionSearchIntervalMs of wall clock.
                 double goalBefore = _s.InsertionSearch.GoalNu;
+                double searchedBefore = _s.InsertionSearch.LastSearchTime;
+                long tick = Environment.TickCount64;
                 _s.InsertionSearch.Step(now, solveDt, _s.OptimiseInsertion && !_s.ArgPeFixed,
-                    _s.Phase == AscentPhase.ClosedLoop && _s.Upfg.Converged,
+                    _s.Phase == AscentPhase.ClosedLoop && _s.Upfg.Converged
+                        && tick - _s.InsertionSearchTick >= InsertionSearchIntervalMs,
                     _s.Upfg, target, r, v, vehicle.TotalMass, mu, _s.UpfgVehicle);
+                if (_s.InsertionSearch.LastSearchTime != searchedBefore)
+                    _s.InsertionSearchTick = tick;
                 if (_s.InsertionSearch.GoalNu != goalBefore)
                     GuidanceLog.Debug(vehicle, $"insertion search moved the goal from {UpfgTarget.RadToDeg(goalBefore):F1} to {UpfgTarget.RadToDeg(_s.InsertionSearch.GoalNu):F1} deg past periapsis"
                         + $" ({_s.InsertionSearch.SavingMs:F0} m/s under inserting at periapsis, {_s.InsertionSearch.LastSearchSolves} solves).");
@@ -459,7 +488,7 @@ public static partial class GuidanceWindow
                     UpfgTarget.Insertion aim = _s.Upfg.Aim;
                     GuidanceLog.Debug(vehicle, $"UPFG {PhaseName(_s.Phase)}: tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s, converged {_s.Upfg.Converged}"
                         + (aim.Valid && (target.ArgPeFixed || aim.FloorLimited || aim.TrueAnomaly != 0.0)
-                            ? $", insertion {UpfgTarget.RadToDeg(aim.TrueAnomaly):F1} deg from Pe at {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {UpfgTarget.RadToDeg(aim.Fpa):F2} deg"
+                            ? $", insertion {UpfgTarget.RadToDeg(aim.TrueAnomaly):F1} deg from Pe at {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {UpfgTarget.RadToDeg(aim.Fpa):F2} deg{(_s.Upfg.AimHeld ? " (held)" : "")}"
                             : "")
                         + $", steer pitch {PitchOf(up, _s.Upfg.Steering):F1} deg, command pitch {PitchOf(up, _s.CommandDir):F1} deg"
                         + $", alt {(r.Length() - bodyRadius) / 1000.0:F1} km, speed {v.Length():F0} m/s, mass {vehicle.TotalMass / 1000.0:F1} t"

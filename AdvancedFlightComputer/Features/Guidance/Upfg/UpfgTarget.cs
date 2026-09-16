@@ -39,6 +39,14 @@ public sealed class UpfgTarget
 
     public bool ArgPeFixed => !double.IsNaN(ArgPe);
 
+    /// <summary>
+    /// True when the whole ellipse lies under the floor: its apoapsis is no higher than MinCutoffRadius, so there is no point on it the floor allows and no crossing to move an insertion to. The floor is then not applied at all - nothing about the insertion is FloorLimited - and it is for the caller to refuse the target, as the ascent does, rather than fly an insertion that only looks guarded.
+    /// </summary>
+    public bool InsideFloor => MinCutoffRadius > 0.0 && Ap <= MinCutoffRadius;
+
+    /// <summary>The lowest true anomaly an insertion may use on the climbing side, rad in [0, pi): where the ellipse climbs through the floor, or periapsis when the floor is under it or cannot be met at all.</summary>
+    public double FloorAnomaly => InsideFloor ? 0.0 : TrueAnomalyAtRadius(MinCutoffRadius);
+
     /// <summary>True anomaly a free target inserts at, rad in [0, pi]: zero is periapsis.</summary>
     public double FreeInsertionAnomaly => _freeNu;
 
@@ -97,11 +105,11 @@ public sealed class UpfgTarget
         return t;
     }
 
-    // Insert at the point asked for on the climbing side, periapsis by default (flight-path angle zero there) - unless that is under the floor, in which case the ellipse is joined where it climbs through the floor, the way PEGAS inserts at a cutoff altitude above periapsis. An ellipse entirely under the floor inserts at apoapsis, the highest it has.
+    // Insert at the point asked for on the climbing side, periapsis by default (flight-path angle zero there) - unless that is under the floor, in which case the ellipse is joined where it climbs through the floor, the way PEGAS inserts at a cutoff altitude above periapsis. An ellipse entirely under the floor has no such crossing, and the floor is left out (see InsideFloor).
     private void SetFreeInsertion(double nu)
     {
         double asked = double.IsFinite(nu) ? Math.Clamp(nu, 0.0, Math.PI) : 0.0;
-        double floorNu = TrueAnomalyAtRadius(MinCutoffRadius);
+        double floorNu = FloorAnomaly;
         _freeFloorLimited = floorNu > asked;
         _freeNu = Math.Max(asked, floorNu);
         StateAt(_freeNu, out Radius, out Velocity, out Fpa);
@@ -130,12 +138,28 @@ public sealed class UpfgTarget
             raw = WrapPi(previous.RawTrueAnomaly
                 + Math.Clamp(WrapPi(raw - previous.RawTrueAnomaly), -maxStep, maxStep));
 
+        return FixedInsertionAt(raw, !previous.Valid || previous.TrueAnomaly >= 0.0);
+    }
+
+    /// <summary>
+    /// A fixed target's insertion held at <paramref name="held"/>'s true anomaly rather than following the cutoff - how UpfgGuidance flies the end of the burn (see its AimHoldTgoS). Radius, speed and flight-path angle are read again from this target, so a target edited while the aim is held still applies, and so does the floor, on the side the held insertion is on.
+    /// </summary>
+    public Insertion HeldInsertion(Insertion held)
+    {
+        if (!ArgPeFixed || !held.Valid)
+            return InsertionToward(default, held, 0.0);
+        return FixedInsertionAt(held.RawTrueAnomaly, held.TrueAnomaly >= 0.0);
+    }
+
+    // The fixed ellipse's insertion at raw true anomaly raw, moved to the floor crossing on the climbing side or the descending one when raw is under the floor.
+    private Insertion FixedInsertionAt(double raw, bool climbingSide)
+    {
         double nu = raw;
         bool floorLimited = false;
-        if (RadiusAt(raw) < MinCutoffRadius)
+        if (!InsideFloor && RadiusAt(raw) < MinCutoffRadius)
         {
-            double crossing = TrueAnomalyAtRadius(MinCutoffRadius);
-            nu = !previous.Valid || previous.TrueAnomaly >= 0.0 ? crossing : -crossing;
+            double crossing = FloorAnomaly;
+            nu = climbingSide ? crossing : -crossing;
             floorLimited = true;
         }
 
@@ -147,7 +171,7 @@ public sealed class UpfgTarget
         };
     }
 
-    // The true anomaly at which the ellipse climbs through radius r, in [0, pi]: zero at or below periapsis, pi at or above apoapsis.
+    // The true anomaly at which the ellipse climbs through radius r, in [0, pi]: zero at or below periapsis, pi at or above apoapsis - the highest point, not a crossing (see InsideFloor).
     public double TrueAnomalyAtRadius(double r)
     {
         if (r <= Pe || Ecc < 1e-12)

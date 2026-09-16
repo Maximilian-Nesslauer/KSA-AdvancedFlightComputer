@@ -31,7 +31,10 @@ namespace AdvancedFlightComputer.HarnessTests;
 // orbit in the same plane, with the argument of periapsis set so the burn has to insert InsertionAnomalyDeg
 // past periapsis rather than at it. The orbit the game reports after cutoff must have that argument of
 // periapsis. The burn is a long one under the staging test's g-limit: a short burn that has to climb is where
-// this UPFG diverges whatever the target, which would say nothing about the argument of periapsis.
+// this UPFG diverges whatever the target, which would say nothing about the argument of periapsis. For the same
+// reason the insertion stays well inside the band a burn from orbit can be flown in at all: in closed-loop
+// simulation of this flight a free insertion pinned 18 deg past the natural cutoff already diverged, so asking
+// the fixed target for that would test UPFG's reach rather than the argument of periapsis.
 public sealed class GuidanceAscentArgPeTest : AfcTest
 {
     public override string Name => "afc-guidance-ascent-argpe";
@@ -63,7 +66,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
     // The apoapsis stays this far inside the home body's sphere of influence.
     private const double SoiFraction = 0.4;
     private const double GLimitG = 2.0;
-    private const double InsertionAnomalyDeg = 15.0;
+    private const double InsertionAnomalyDeg = 10.0;
     private const double ArgPeTolDeg = 3.0;
     private const double PeriapsisTolKm = 25.0;
     // Relative, because an apoapsis this high moves by kilometres per centimetre per second at cutoff.
@@ -353,10 +356,12 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
     }
 
     // The search against brute force, on the stage model and state the flight starts from. Every degree of free
-    // insertion the search may use is priced the way the search prices a probe - the same number of solves from
-    // the same solution - and the search is then stepped cycle after cycle from that state, the live solver
-    // re-converged on each insertion it moves to. Where it settles has to cost no more than the cheapest degree,
-    // beyond the threshold the search itself refuses to chase.
+    // insertion the search may use is priced the way the search prices a probe - a solver re-solved from that
+    // instant until it has converged (UpfgInsertionSearch.TryPrice) - and the search is then stepped cycle after
+    // cycle from that state, the live solver re-settled on each insertion it moves to. Where it settles has to cost
+    // no more than the cheapest degree, beyond the threshold the search itself refuses to chase. The state stands
+    // still throughout, which is harder on the search than flight: nothing moves on between searches, so any bias
+    // its own solution puts into the costs compounds cycle after cycle instead of being flown out.
     private static void CheckInsertionSearch(TestContext t, UpfgGuidance preview, UpfgTarget free,
                                              double3 r, double3 v, double mass, double mu, UpfgVehicle model)
     {
@@ -370,26 +375,30 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         for (int i = 0; i < SettleSolves; i++)
             settled.Step(r, v, mass, mu, free, model);
 
+        int unpriced = 0;
         double Price(double nu)
         {
-            UpfgGuidance probe = settled.Clone();
-            UpfgTarget pinned = free.WithFreeInsertion(nu);
-            for (int i = 0; i < UpfgInsertionSearch.ProbeSolves; i++)
-                probe.Step(r, v, mass, mu, pinned, model);
-            return probe.VgoMag;
+            if (UpfgInsertionSearch.TryPrice(settled, free, nu, r, v, mass, mu, model, out double cost, out _, out _))
+                return cost;
+            unpriced++;
+            return double.NaN;
         }
 
+        // Periapsis itself can have no converged solution from here - UPFG diverges on it from some burns - so it is priced like any other degree, not required.
         double atPeriapsis = Price(0.0);
-        double bestDeg = 0.0, bestCost = atPeriapsis;
-        for (int deg = 1; deg <= (int)UpfgInsertionSearch.MaxNuDeg; deg++)
+        double bestDeg = double.NaN, bestCost = double.PositiveInfinity;
+        for (int deg = 0; deg <= (int)UpfgInsertionSearch.MaxNuDeg; deg++)
         {
-            double cost = Price(Rad(deg));
+            double cost = deg == 0 ? atPeriapsis : Price(Rad(deg));
             if (cost < bestCost)
             {
                 bestCost = cost;
                 bestDeg = deg;
             }
         }
+        if (!t.Check("some insertion the search may use prices from the flight's start state", double.IsFinite(bestCost),
+                $"none of 0..{UpfgInsertionSearch.MaxNuDeg:F0} deg converged within {UpfgInsertionSearch.MaxProbeSolves} solves"))
+            return;
 
         var search = new UpfgInsertionSearch();
         UpfgGuidance live = settled.Clone();
@@ -404,13 +413,20 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
 
         double goalDeg = Deg(search.GoalNu);
         double goalCost = Price(search.GoalNu);
-        t.Info($"insertion search: brute force cheapest at {bestDeg:F0} deg past periapsis, {atPeriapsis - bestCost:F1} m/s under periapsis; "
-             + $"search settled at {goalDeg:F2} deg, {atPeriapsis - goalCost:F1} m/s under periapsis by the same pricing, "
-             + $"reporting {search.SavingMs:F1} m/s after {search.LastSearchSolves} solves in its last search");
+        t.Info($"insertion search: brute force cheapest at {bestDeg:F0} deg past periapsis, "
+             + (double.IsFinite(atPeriapsis) ? $"{atPeriapsis - bestCost:F1} m/s under periapsis" : $"{bestCost:F1} m/s, periapsis itself not converging")
+             + $"{(unpriced > 0 ? $" ({unpriced} insertions did not converge and were left out)" : "")}; "
+             + $"search settled at {goalDeg:F2} deg, {goalCost:F1} m/s by the same pricing, "
+             + $"reporting a saving of {search.SavingMs:F1} m/s after {search.LastSearchSolves} solves in its last search");
         t.Check("the insertion search settles on the climbing side, inside its range",
             goalDeg >= 0.0 && goalDeg <= UpfgInsertionSearch.MaxNuDeg + 1e-9, $"{goalDeg:F3} deg");
         t.CheckAbs("the insertion the search settles on, m/s above the brute-force cheapest (floored at zero)",
-            Math.Max(goalCost - bestCost, 0.0), 0.0, UpfgInsertionSearch.MinSavingMs + SearchSettleSlackMs);
+            double.IsFinite(goalCost) ? Math.Max(goalCost - bestCost, 0.0) : double.PositiveInfinity,
+            0.0, UpfgInsertionSearch.MinSavingMs + SearchSettleSlackMs);
+        // Priced the same way, the saving the search reports is the one its goal has: the old fixed-count probes claimed 10 km/s here. Only where periapsis prices, because that is what the saving is measured from.
+        if (double.IsFinite(atPeriapsis) && double.IsFinite(search.SavingMs))
+            t.CheckAbs("the saving the search reports against the brute-force price of its goal, m/s",
+                search.SavingMs, atPeriapsis - goalCost, UpfgInsertionSearch.MinSavingMs + SearchSettleSlackMs);
     }
 
     private static void Fly(TestContext t, Vehicle vehicle, VehicleAutopilotState state, IParentBody home, SimDriver driver)
@@ -486,11 +502,13 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         double time = 0.0, nextSample = 0.0;
         bool converged = false;
         UpfgTarget.Insertion lastAim = default;
+        bool held = false;
         while (time < MaxFlightSeconds && state.Running)
         {
             driver.Step(StepDt);
             time += StepDt;
             converged |= state.Upfg.Converged;
+            held |= state.Upfg.AimHeld;
             if (state.Upfg.Aim.Valid)
                 lastAim = state.Upfg.Aim;
             if (time >= nextSample)
@@ -498,7 +516,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
                 nextSample += SampleIntervalS;
                 double altNowKm = (vehicle.Orbit.StateVectors.PositionCci.Length() - home.MeanRadius) / 1000.0;
                 t.Info($"t={time,6:F1}s phase={state.Phase} tgo={state.Upfg.Tgo,6:F1}s vgo={state.Upfg.VgoMag,6:F0}m/s converged={state.Upfg.Converged} "
-                     + $"aim={Deg(lastAim.TrueAnomaly),6:F2}deg from Pe at {(lastAim.Radius - home.MeanRadius) / 1000.0,7:F1}km FPA={Deg(lastAim.Fpa),5:F2}deg "
+                     + $"aim={Deg(lastAim.TrueAnomaly),6:F2}deg{(state.Upfg.AimHeld ? " held" : "")} from Pe at {(lastAim.Radius - home.MeanRadius) / 1000.0,7:F1}km FPA={Deg(lastAim.Fpa),5:F2}deg "
                      + $"alt={altNowKm,7:F1}km mass={vehicle.TotalMass / 1000.0,6:F1}t status='{state.Status}'");
             }
         }
@@ -515,6 +533,8 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
              + $"LAN {Deg(flownOrbit.LongitudeOfAscendingNode):F3} deg, arg. Pe {Deg(flownOrbit.ArgumentOfPeriapsis):F3} deg; target {peKm:F1} x {apKm:F1} km, "
              + $"inc {incDeg:F3} deg, LAN {lanDeg:F3} deg, arg. Pe {argPeDeg:F3} deg; last aim {Describe(lastAim)}");
         t.Check("UPFG converged on the fixed target", converged);
+        // The end of the burn flies the held insertion, not the one under the cutoff, or the aim can run away from the vehicle (see UpfgGuidance.AimHoldTgoS).
+        t.Check($"the aim was held for the last {UpfgGuidance.AimHoldTgoS:F0} s of the burn", held);
         // Otherwise the flight proves nothing about steering: a burn that inserted at periapsis would pass on a free target.
         t.Check("the burn aimed well off periapsis, as the fixed argument of periapsis asks",
             lastAim.Valid && Math.Abs(Deg(lastAim.TrueAnomaly)) > InsertionAnomalyDeg / 2.0, Describe(lastAim));

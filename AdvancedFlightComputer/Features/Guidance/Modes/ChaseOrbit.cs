@@ -56,11 +56,14 @@ public static partial class GuidanceWindow
 
         // Target plane straight from its state vectors: n = r * v. With our LAN
         // convention Normal = (sin i sin Omega, -sin i cos Omega, cos i), so Omega = atan2(nx, -ny).
+        // An exactly equatorial plane has no node, and atan2(0, -0) would call it pi: KSA's own
+        // elements put the node on +X there (LAN 0), and the argument of periapsis copied below
+        // is measured from it, so it has to be the same node.
         double3 rt = targetOrbit.StateVectors.PositionCci;
         double3 vt = targetOrbit.StateVectors.VelocityCci;
         double3 n = double3.Normalize(double3.Cross(rt, vt));
         double incT = Math.Acos(Math.Clamp(n.Z, -1.0, 1.0));
-        double lanT = Wrap2Pi(Math.Atan2(n.X, -n.Y));
+        double lanT = n.X == 0.0 && n.Y == 0.0 ? 0.0 : Wrap2Pi(Math.Atan2(n.X, -n.Y));
 
         plan.TargetPeKm = (targetOrbit.Periapsis - bodyRadius) / 1000.0;
         plan.TargetApKm = (targetOrbit.Apoapsis - bodyRadius) / 1000.0;

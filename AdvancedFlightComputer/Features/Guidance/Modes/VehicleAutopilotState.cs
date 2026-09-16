@@ -388,6 +388,10 @@ public sealed class VehicleAutopilotState
     /// solver it copies.</summary>
     public readonly UpfgInsertionSearch InsertionSearch = new UpfgInsertionSearch();
 
+    /// <summary>Wall-clock tick of the last insertion search that ran, bounding how often
+    /// one can under warp - see the gate in Ascent.StepGuidance.</summary>
+    public long InsertionSearchTick = long.MinValue / 2;
+
     /// <summary>
     /// Absolute sim time of the launch window, LATCHED when EXECUTE arms the launch.
     /// An absolute instant rather than a countdown because the countdown is derived
