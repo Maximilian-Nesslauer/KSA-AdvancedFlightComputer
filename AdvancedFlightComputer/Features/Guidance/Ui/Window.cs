@@ -154,7 +154,7 @@ public static partial class GuidanceWindow
 
         // Any warp the mod wants needs the user's OK first. Drawn here only when the gauge panel is not up: it renders the same prompt, and two of them would both be live at once.
         if (!PanelVisible)
-            DrawWarpPrompt();
+            DrawWarpPrompt(vehicle, orbit, parent, bodyRadius);
 
         // NOTHING IS STEPPED FROM THE DRAW. The ascent and landing flows previously run here, which quietly made them focused-vehicle-only: the draw happens once per frame for the craft the player is looking at, so any other vehicle's guidance froze the moment the camera left it. They run from ApplyAutopilot now - the per-vehicle PrepareWorker prefix - and this panel is purely a readout of whichever flight computer is focused.
 
@@ -304,6 +304,11 @@ public static partial class GuidanceWindow
         ImGui.Text($"Periapsis  {(orbit.Periapsis - bodyRadius) / 1000.0,8:F1}   {_s.PeKm,8:F1} km");
         ImGui.Text($"Apoapsis   {(orbit.Apoapsis - bodyRadius) / 1000.0,8:F1}   {_s.ApKm,8:F1} km");
         ImGui.Text($"Inclination{AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.RadToDeg(orbit.Inclination),8:F2}   {_s.IncDeg,8:F2} deg");
+        // The game's own argument of periapsis, which UpfgTarget measures the same way. Dashes where the orbit is too round to have one.
+        string argPeNow = orbit.Eccentricity >= AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.MinArgPeEccentricity
+            ? AdvancedFlightComputer.Features.Guidance.Upfg.UpfgTarget.RadToDeg(orbit.ArgumentOfPeriapsis).ToString("F2")
+            : "--";
+        ImGui.Text($"Arg. Pe    {argPeNow,8}   {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") : "free"),8} deg");
 
         // --- Autopilot ---
         ImGui.SeparatorText("Autopilot");

@@ -12,7 +12,9 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 //
 // Guidance modes (the original's `mode` field):
 //   1 - standard ascent: insert at target radius/velocity/FPA in the target plane,
-//       cutoff position free.
+//       cutoff position free. With the argument of periapsis fixed, radius,
+//       velocity and FPA are re-read every solve from the target ellipse under the
+//       predicted cutoff (UpfgTarget.InsertionToward), so the ellipse is hit whole.
 //   2 - predictive landing: soft target (vd = current v) so the solution converges
 //       on *where the braking burn would end* (Rd) - run synchronously to
 //       convergence to measure the burn's downrange before committing.
@@ -28,6 +30,20 @@ public sealed class UpfgGuidance
 {
     private const double G0 = 9.80665;
 
+    /// <summary>
+    /// Most the aimed-at true anomaly may move in one mode 1 solve, deg - the early-solve guard described on UpfgTarget.InsertionToward. The ascent solves once a second, and a converged prediction moves by far less than this between solves even across a staging, so it binds only while the solution settles.
+    /// </summary>
+    private const double MaxAimStepDeg = 5.0;
+
+    /// <summary>
+    /// Once a converged solution has less than this left to burn, s, a fixed argument of periapsis stops following the predicted cutoff and holds the true anomaly it last aimed at, to cutoff.
+    ///
+    /// WHY: near cutoff the ellipse under the prediction climbs as fast as the vehicle does - they share a flight-path angle there, which is the whole point - so a longer burn moves the aimed radius up by as much as it moves the cutoff radius up, and a radius still missing cannot be closed by burning longer. What UPFG does instead is steer harder, which raises vgo, which lengthens the burn, which moves the aim further round: a loop with nothing left to stop it. In the harness flight the aim walked from 18 to 65 deg past periapsis from 17 s before cutoff while vgo rose to 7 km/s. Held, the end of the burn is an ordinary insertion at a fixed radius, speed and flight-path angle, and the argument of periapsis misses only by how far the cutoff still moves after the hold - tenths of a degree in simulation.
+    ///
+    /// WHY THIS LATE: earlier on, following the cutoff is what lets the aim absorb a vehicle climbing faster than planned, by sliding the insertion up the ellipse to meet it. Swept in closed-loop simulation across insertions from 10 deg before to 40 deg past the natural cutoff, from orbit and from ascent-like starts, holding at 45 s flew the most of them to the requested orbit: holding at 60 s or more froze insertions the vehicle then climbed past, and holding at 20 s or less changed nothing. None of it widens the band an insertion from orbit can be flown in at all - about 5 to 20 deg past the natural cutoff there, where a free insertion pinned outside it diverges the same way; that limit is UPFG's.
+    /// </summary>
+    public const double AimHoldTgoS = 45.0;
+
     private sealed class State
     {
         public CseState Cser;
@@ -38,6 +54,9 @@ public sealed class UpfgGuidance
         public double3 V;
         public double3 Vgo;
         public double K;
+        public UpfgTarget.Insertion Aim;
+        public double AimArgPe;   // the argument of periapsis Aim was aimed for, NaN when free
+        public bool AimHeld;
     }
 
     private State _prev = new State();
@@ -45,6 +64,14 @@ public sealed class UpfgGuidance
     private int _mode = 1;
 
     public int Mode => _mode;
+
+    /// <summary>
+    /// Where on the target ellipse the last mode 1 solve aimed the insertion: radius, speed, signed flight-path angle and true anomaly. Not Valid before the first solve, nor in the landing modes.
+    /// </summary>
+    public UpfgTarget.Insertion Aim => _prev.Aim;
+
+    /// <summary>True once a fixed argument of periapsis has stopped following the cutoff and holds its insertion to cutoff (see AimHoldTgoS).</summary>
+    public bool AimHeld => _prev.AimHeld;
 
     public bool Converged { get; private set; }
     public double3 Steering { get; private set; }    // unit thrust direction, CCI
@@ -71,6 +98,32 @@ public sealed class UpfgGuidance
         _prev = new State();
     }
 
+    /// <summary>
+    /// An independent copy of this solver, recursive state and all. UpfgInsertionSearch prices each candidate insertion on one: warm-started from the live solution, a copy steps toward a nearby target without the transient a cold solver starts with, and the live solver is left exactly as it was.
+    /// </summary>
+    public UpfgGuidance Clone()
+    {
+        return new UpfgGuidance
+        {
+            _prev = new State
+            {
+                Cser = _prev.Cser, Rbias = _prev.Rbias, Rd = _prev.Rd, Rgrav = _prev.Rgrav, Tgo = _prev.Tgo,
+                V = _prev.V, Vgo = _prev.Vgo, K = _prev.K, Aim = _prev.Aim, AimArgPe = _prev.AimArgPe, AimHeld = _prev.AimHeld,
+            },
+            _setup = _setup,
+            _mode = _mode,
+            Converged = Converged,
+            Steering = Steering,
+            VgoMag = VgoMag,
+            Vgo = Vgo,
+            Rgo = Rgo,
+            Throttle = Throttle,
+            Lambda = Lambda,
+            LambdaDot = LambdaDot,
+            TLambda = TLambda,
+        };
+    }
+
     // r, v: inertial (CCI) state in metres and m/s. vehicle: the staged model, rebuilt by the caller from live data so stage 0 reflects the current mass. mode is latched at setup (after Reset); pass 2/3 for the landing modes.
     //
     // dt is the sim interval this call covers. Pass it when the caller runs on a fixed guidance cycle: convergence is then measured against how far tgo SHOULD have moved (a converged solution's tgo falls one second per second) rather than against how far it moved at all, which is a test that any high enough call rate passes by definition. Zero (the default) keeps the original rate-dependent test.
@@ -93,6 +146,7 @@ public sealed class UpfgGuidance
     {
         double3 desR;
         double3 tgoV;
+        UpfgTarget.Insertion aim = default;
         if (_mode == 3)
         {
             // Precision landing: aim straight at the desired landing vector and start from "cancel all current velocity".
@@ -108,10 +162,13 @@ public sealed class UpfgGuidance
         }
         else
         {
+            // Seeded 15 deg ahead, at the insertion the target has under that direction - the first solve's rate limit continues from this aim.
             double3 unit = RodriguesRotation(r, target.Normal, DegToRad(15));
-            desR = unit * (target.Radius / unit.Length());
+            aim = target.InsertionToward(unit, default, double.PositiveInfinity);
+            desR = unit * (aim.Radius / unit.Length());
             double3 temp = double3.Cross(target.Normal, desR);
-            tgoV = target.Velocity * (temp * (1.0 / temp.Length())) - v;
+            tgoV = aim.Speed * (Math.Cos(aim.Fpa) * (temp * (1.0 / temp.Length()))
+                              + Math.Sin(aim.Fpa) * (desR * (1.0 / desR.Length()))) - v;
         }
 
         _prev = new State
@@ -124,6 +181,8 @@ public sealed class UpfgGuidance
             V = v,
             Vgo = tgoV,
             K = 1,
+            Aim = aim,
+            AimArgPe = _mode == 1 ? target.ArgPe : double.NaN,
         };
     }
 
@@ -132,7 +191,6 @@ public sealed class UpfgGuidance
     {
         double prevTgoForConvergence = _prev.Tgo;
 
-        double gamma = target.Fpa;
         double3 iy = -target.Normal;
         double rdval = target.Radius;
         double vdval = target.Velocity;
@@ -246,6 +304,8 @@ public sealed class UpfgGuidance
         double3 rp = r + v * tgo + rgrav + rthrust;
         double3 vgrav = vend - vc1;
         double3 vd;
+        UpfgTarget.Insertion aim = default;
+        bool aimHeld = false;
         if (_mode == 2)
         {
             // Predictive: pin the cutoff to the target sphere in the plane, keep current velocity as the soft target - rd converges on where the braking burn actually ends.
@@ -275,15 +335,23 @@ public sealed class UpfgGuidance
         else
         {
             rp -= double3.Dot(rp, iy) * iy;
-            rd = rdval * rp * (1.0 / rp.Length());
+            // Where on the target ellipse this cutoff inserts: periapsis while the argument of periapsis is free, the point of the ellipse under the predicted cutoff while it is fixed (see UpfgTarget.InsertionToward) - until the end of the burn, where a fixed one holds its last aim (see AimHoldTgoS).
+            // Only an aim made for this same argument of periapsis is held: one made while it was free, or set to something else, is a true anomaly from a different periapsis.
+            aimHeld = target.ArgPeFixed && _prev.Aim.Valid && _prev.AimArgPe == target.ArgPe
+                && (_prev.AimHeld || (Converged && _prev.Tgo < AimHoldTgoS));
+            aim = aimHeld
+                ? target.HeldInsertion(_prev.Aim)
+                : target.InsertionToward(rp, _prev.Aim, DegToRad(MaxAimStepDeg));
+            // rd lies along the predicted cutoff even when the aim is not under it (rate-limited, floored or held): only its radius is a constraint, because mode 1 replaces the downrange part of rgo with what the thrust integrals deliver. The direction frames the velocity target, and the flight-path angle has to be measured from the horizontal where the burn actually ends, not where the aimed point is.
+            rd = aim.Radius * rp * (1.0 / rp.Length());
             double3 ix = double3.Normalize(rd);
             double3 iz = double3.Cross(ix, iy);
-            // Velocity target: desired speed at flight-path angle gamma in the plane.
-            double3 vop = new double3(Math.Sin(gamma), 0, Math.Cos(gamma));
+            // Velocity target: the insertion's speed at its flight-path angle in the plane.
+            double3 vop = new double3(Math.Sin(aim.Fpa), 0, Math.Cos(aim.Fpa));
             vd = new double3(
                 ix.X * vop.X + iy.X * vop.Y + iz.X * vop.Z,
                 ix.Y * vop.X + iy.Y * vop.Y + iz.Y * vop.Z,
-                ix.Z * vop.X + iy.Z * vop.Y + iz.Z * vop.Z) * vdval;
+                ix.Z * vop.X + iy.Z * vop.Y + iz.Z * vop.Z) * aim.Speed;
             K = 1;
         }
         vgo = vd - v - vgrav + vbias;
@@ -308,6 +376,9 @@ public sealed class UpfgGuidance
             V = v,
             Vgo = vgo,
             K = K,
+            Aim = aim,
+            AimArgPe = _mode == 1 ? target.ArgPe : double.NaN,
+            AimHeld = aimHeld,
         };
 
         Steering = double3.Normalize(iF);

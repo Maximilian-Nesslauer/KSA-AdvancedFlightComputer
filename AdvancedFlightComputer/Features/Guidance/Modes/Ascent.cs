@@ -72,6 +72,11 @@ public static partial class GuidanceWindow
     /// <summary>Wall-clock gate on re-deriving an unarmed launch window, ms.</summary>
     private const long LaunchWindowIntervalMs = 250;
 
+    /// <summary>
+    /// Wall-clock gate on the insertion search, ms. The search's own interval is sim time, and warp packs several guidance cycles into one frame, so without this a warped frame could run a search every frame. A search is milliseconds of solving (see UpfgInsertionSearch), and it is advisory - the goal it moves slews in over tens of seconds anyway - so under warp it simply runs less often.
+    /// </summary>
+    private const long InsertionSearchIntervalMs = 1000;
+
     public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
 
     // Reset at the top of every Draw; see DrawAutoLaunchArming.
@@ -92,12 +97,26 @@ public static partial class GuidanceWindow
         if (ImGui.CollapsingHeader("Target orbit", ImGuiTreeNodeFlags.DefaultOpen))
         {
             ImGui.InputDouble("Periapsis (km)", ref _s.PeKm);
+            if (ImGui.IsItemDeactivatedAfterEdit())
+                OrderApsides();
             ImGui.InputDouble("Apoapsis (km)", ref _s.ApKm);
+            if (ImGui.IsItemDeactivatedAfterEdit())
+                OrderApsides();
             ImGui.InputDouble("Inclination (deg)", ref _s.IncDeg);
             ImGui.InputDouble("LAN (deg)", ref _s.LanDeg);
             ImGui.SameLine();
             if (ImGui.Button("From position"))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
+            ImGui.Checkbox("Fix arg. of periapsis", ref _s.ArgPeFixed);
+            ImGui.SameLine();
+            using (new ImGuiDisabledScope(!_s.ArgPeFixed))
+                ImGui.InputDouble("Arg. of periapsis (deg)", ref _s.ArgPeDeg);
+            using (new ImGuiDisabledScope(_s.ArgPeFixed))
+            {
+                ImGui.Checkbox("Optimise insertion for dV", ref _s.OptimiseInsertion);
+                ImGui.SameLine();
+                ImGui.Checkbox("Insert before apoapsis", ref _s.InsertBeforeApoapsis);
+            }
         }
 
         if (ImGui.CollapsingHeader("Ascent params", ImGuiTreeNodeFlags.DefaultOpen))
@@ -157,6 +176,32 @@ public static partial class GuidanceWindow
         StartGuidance(vehicle, orbit, parent);
     }
 
+    /// <summary>
+    /// LAUNCH NOW, to the target's chase orbit, without waiting for the window - for a window just missed, or one too far off to wait for. Any armed countdown and the warp toward it are dropped, the chase orbit is applied as it stands, and the ascent heads for whichever crossing is nearest in time, the one just missed included.
+    ///
+    /// Off the window the launch site is out of the target's plane, so UPFG steers the difference out on the way up. That costs dV growing with how far off the window the launch is, and far enough off it costs more than the vehicle has.
+    /// </summary>
+    private static void LaunchNowAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, in ChasePlan plan)
+    {
+        if (_s.Running)
+            return;
+        if (_s.LaunchArmed && Universe.IsAutoWarpActive)
+            Universe.AutoWarpStop(true);
+        _s.LaunchArmed = false;
+        // The offer to warp to this window is answered by not waiting for it, wherever Launch now was pressed from.
+        if (_warpLabel == LaunchWindowWarpLabel)
+            _warpPromptActive = false;
+        ApplyChaseOrbit(in plan);
+        _s.LaunchDescending = plan.NearestDescending;
+        GuidanceLog.Info(vehicle, $"launching now, off the window: next {(plan.Descending ? "descending" : "ascending")} crossing in {plan.WaitSec:F0} s, "
+            + $"heading for the nearest, {(plan.NearestDescending ? "descending" : "ascending")}.");
+        StartGuidance(vehicle, orbit, parent);
+    }
+
+    /// <summary>The crossing a launch to the target goes for: the latched one once armed or flying, the next one otherwise.</summary>
+    private static bool LaunchNodeDescending(in ChasePlan plan)
+        => _s.LaunchArmed || _s.Running ? _s.LaunchDescending : plan.Descending;
+
     /// <summary>Stop everything, including a pending armed launch. A panel action, so the craft is the focused one.</summary>
     private static void AbortAscent() => ReleaseAscent("", Program.ControlledVehicle);
 
@@ -214,7 +259,7 @@ public static partial class GuidanceWindow
             }
             else if (_s.AutoLaunch && waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
             {
-                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, "the launch window");
+                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, LaunchWindowWarpLabel);
             }
             return;
         }
@@ -272,8 +317,36 @@ public static partial class GuidanceWindow
     }
 
     // The EXECUTE button's action - also fired automatically at the launch window.
+    /// <summary>
+    /// Periapsis is the lower apsis: a pair entered the other way round is swapped rather than flown as given. Called when either field is left after an edit - swapping on every keystroke would swap a value half typed - and again at launch, for a pair that reached the state any other way.
+    /// </summary>
+    private static void OrderApsides()
+    {
+        if (_s.ApKm < _s.PeKm)
+            (_s.PeKm, _s.ApKm) = (_s.ApKm, _s.PeKm);
+    }
+
     private static void StartGuidance(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        OrderApsides();
+
+        // A target orbit wholly inside the atmosphere has nowhere the insertion floor allows (see UpfgTarget.InsideFloor): refused here rather than flown to a cutoff in the air.
+        double atmosphere = parent?.GetAtmosphereRadius() ?? 0.0;
+        if (atmosphere > 0.0 && Math.Max(_s.PeKm, _s.ApKm) * 1000.0 + parent.MeanRadius <= atmosphere)
+        {
+            string refusal = $"Target apoapsis is inside the atmosphere (top at {(atmosphere - parent.MeanRadius) / 1000.0:F0} km) - not launching.";
+            if (_s.LaunchArmed)
+            {
+                ReleaseAscent(refusal, vehicle);
+            }
+            else
+            {
+                GuidanceLog.Info(vehicle, $"ascent refused: {refusal}");
+                _s.Status = refusal;
+            }
+            return;
+        }
+
         // Ascent takes over from every other mode: all four drive the same flight-computer command path, and two of them writing it would fight.
         ClaimVehicle(GuidanceMode.Ascent, vehicle);
         // Ours to reset, not the claim's - the deorbit burn flies this same instance.
@@ -296,6 +369,7 @@ public static partial class GuidanceWindow
         _s.VgoPeak = 0.0;
         _s.LastGuidanceLogTime = double.NegativeInfinity;
         GuidanceLog.Info(vehicle, $"ascent started to {_s.PeKm:F0} x {_s.ApKm:F0} km, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg"
+            + $", arg. Pe {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") + " deg" : "free")}"
             + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}"
             + $", reserve {(_s.ReserveArmed ? _s.ReserveKg.ToString("F0") + " kg" : "off")}, turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s).");
     }
@@ -308,11 +382,15 @@ public static partial class GuidanceWindow
 
         DrawTargetPicker(vehicle);
         ImGui.InputDouble("SMA offset below target (km)", ref _s.ChaseOffsetKm);
-        if (ImGui.RadioButton("Ascending (NE)", !_s.LaunchDescending))
-            _s.LaunchDescending = false;
-        ImGui.SameLine();
-        if (ImGui.RadioButton("Descending (SE)", _s.LaunchDescending))
-            _s.LaunchDescending = true;
+        // With a target the node is chosen for you - whichever crossing comes next (see TryChaseOrbit) - so the choice is only yours for an ascent without one.
+        using (new ImGuiDisabledScope(_s.TargetId.Length > 0))
+        {
+            if (ImGui.RadioButton("Ascending (NE)", !_s.LaunchDescending))
+                _s.LaunchDescending = false;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Descending (SE)", _s.LaunchDescending))
+                _s.LaunchDescending = true;
+        }
         ImGui.Checkbox("Auto warp to window", ref _s.AutoLaunch);
 
         // The geometry itself lives in Guidance/ChaseOrbit.cs, shared with the gauge panel so the two can never drift apart.
@@ -330,7 +408,12 @@ public static partial class GuidanceWindow
         }
 
         ImGui.Text($"Target orbit:  {plan.TargetPeKm,7:F1} x {plan.TargetApKm,7:F1} km  inc {plan.IncDeg,6:F2} deg");
-        ImGui.Text($"Chase orbit:   {plan.PeKm,7:F1} km circular  (SMA {_s.ChaseOffsetKm:F0} km below target)");
+        ImGui.Text($"Chase orbit:   {plan.PeKm,7:F1} x {plan.ApKm,7:F1} km co-elliptic  (SMA {_s.ChaseOffsetKm:F0} km below target)");
+        // Applied as soon as it changes, not only by the copy button or auto-launch below, so an ascent started straight from this tab flies the choice on screen.
+        if (ImGui.Checkbox("Copy target arg. of periapsis", ref _s.MatchTargetArgPe))
+            ApplyChaseOrbit(in plan);
+        ImGui.SameLine();
+        ImGui.Text(double.IsNaN(plan.ArgPeDeg) ? "(target has none)" : $"({plan.ArgPeDeg:F2} deg)");
 
         if (status == ChaseStatus.PlaneUnreachable)
         {
@@ -341,7 +424,7 @@ public static partial class GuidanceWindow
 
         double waitSec = plan.WaitSec;
         // The countdown is to IGNITION, which leads the plane crossing - see LanLeadSeconds - so the lead is named rather than left as an apparent discrepancy between T-0 and the site being in the plane.
-        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(_s.LaunchDescending ? "descending" : "ascending")} crossing, "
+        ImGui.Text($"Launch window: T-{waitSec,7:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")} crossing, "
                  + $"{LanLeadSeconds:F0} s lead)");
 
         if (ImGui.Button("Copy chase orbit to target inputs") || _s.AutoLaunch)
@@ -419,10 +502,33 @@ public static partial class GuidanceWindow
                     ApplyGLimit(live, _s.GLimitG);
                 _s.Status = "";
                 _s.UpfgVehicle = live;
-                var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu);
+                // The first solve of a flight: the insertion search starts again from periapsis.
+                bool firstSolve = double.IsNegativeInfinity(_s.LastSolveTime);
+                if (firstSolve)
+                    _s.InsertionSearch.Reset();
+                // Before the target is built from the search's insertion, so a change of apsis is flown from this solve.
+                _s.InsertionSearch.SetAnchor(_s.InsertBeforeApoapsis && !_s.ArgPeFixed);
+                // The insertion floor is the top of the atmosphere, zero for an airless body: an insertion under it would cut the engines in the air. A free insertion goes where the search has moved it, which is periapsis until it has.
+                var target = UpfgTarget.FromOrbit(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg, bodyRadius, mu,
+                    _s.ArgPeFixed ? _s.ArgPeDeg : double.NaN, parent?.GetAtmosphereRadius() ?? 0.0,
+                    UpfgTarget.RadToDeg(_s.InsertionSearch.Nu));
                 // dt is the interval this solve covers, which is what makes the convergence test rate-independent (see UpfgGuidance.Step).
-                double solveDt = double.IsNegativeInfinity(_s.LastSolveTime) ? 0.0 : now - _s.LastSolveTime;
+                double solveDt = firstSolve ? 0.0 : now - _s.LastSolveTime;
                 _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
+
+                // Straight after the solve, from the same state and model: where a free insertion costs least. Searched only from a converged closed-loop solution, because the open-loop turn is not flying the steering the costs assume, and at most once per InsertionSearchIntervalMs of wall clock.
+                double goalBefore = _s.InsertionSearch.GoalNu;
+                double searchedBefore = _s.InsertionSearch.LastSearchTime;
+                long tick = Environment.TickCount64;
+                _s.InsertionSearch.Step(now, solveDt, _s.OptimiseInsertion && !_s.ArgPeFixed,
+                    _s.Phase == AscentPhase.ClosedLoop && _s.Upfg.Converged
+                        && tick - _s.InsertionSearchTick >= InsertionSearchIntervalMs,
+                    _s.Upfg, target, r, v, vehicle.TotalMass, mu, _s.UpfgVehicle);
+                if (_s.InsertionSearch.LastSearchTime != searchedBefore)
+                    _s.InsertionSearchTick = tick;
+                if (_s.InsertionSearch.GoalNu != goalBefore)
+                    GuidanceLog.Debug(vehicle, $"insertion search moved the goal from {UpfgTarget.RadToDeg(goalBefore):F1} to {UpfgTarget.RadToDeg(_s.InsertionSearch.GoalNu):F1} deg past periapsis"
+                        + $" ({_s.InsertionSearch.SavingS:F1} s of burn, {_s.InsertionSearch.SavingMs:F0} m/s under inserting {(_s.InsertionSearch.AtApoapsis ? $"{UpfgInsertionSearch.ApoapsisLeadDeg:F0} deg before apoapsis" : "at periapsis")}; {_s.InsertionSearch.LastSearchPriced} of {_s.InsertionSearch.LastSearchPoints} insertions priced in {_s.InsertionSearch.LastSearchSolves} solves).");
                 _s.LastSolveTime = now;
 
                 // A sample of the solution every few seconds, so a log shows the steering the craft was given without a line per cycle.
@@ -430,7 +536,11 @@ public static partial class GuidanceWindow
                 {
                     _s.LastGuidanceLogTime = now;
                     double3 up = double3.Normalize(r);
+                    UpfgTarget.Insertion aim = _s.Upfg.Aim;
                     GuidanceLog.Debug(vehicle, $"UPFG {PhaseName(_s.Phase)}: tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s, converged {_s.Upfg.Converged}"
+                        + (aim.Valid && (target.ArgPeFixed || aim.FloorLimited || aim.TrueAnomaly != 0.0)
+                            ? $", insertion {UpfgTarget.RadToDeg(aim.TrueAnomaly):F1} deg from Pe at {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {UpfgTarget.RadToDeg(aim.Fpa):F2} deg{(_s.Upfg.AimHeld ? " (held)" : "")}"
+                            : "")
                         + $", steer pitch {PitchOf(up, _s.Upfg.Steering):F1} deg, command pitch {PitchOf(up, _s.CommandDir):F1} deg"
                         + $", alt {(r.Length() - bodyRadius) / 1000.0:F1} km, speed {v.Length():F0} m/s, mass {vehicle.TotalMass / 1000.0:F1} t"
                         + $", model {live.Stages.Count} stage(s), S1 {live.Stages[0].Thrust / 1000.0:F0} kN {(live.Stages[0].MassTotal - live.Stages[0].MassDry) / (live.Stages[0].Thrust / (live.Stages[0].Isp * 9.80665)):F0} s.");

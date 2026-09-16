@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+- Added **argument of periapsis** to the ascent target. Tick **Fix arg. of Pe** and the ascent holds the whole ellipse in place, inserting wherever along it the burn ends instead of always at periapsis. While it flies, an **Insertion** row shows how far round from periapsis that is, and turns amber once that starts to cost real dV, or when the insertion is before periapsis, which a burn that starts from orbit may not converge on. For its last 45 seconds the burn holds the insertion it is aiming at rather than following the cutoff, so it cannot chase itself round the ellipse. A burn from orbit can only reach an argument of periapsis that puts the insertion a little past where it would naturally end, up to about 20 degrees; further round it runs out of propellant just as a free insertion placed there would. Left unticked, the argument of periapsis falls wherever the burn ends, as before.
+
+- With the argument of periapsis free, the ascent now inserts where the burn is shortest instead of always at periapsis. Through the first half of the burn it prices every insertion from periapsis to 45 degrees past it every ten seconds, each on a copy of the live solution solved to convergence, and moves the insertion to the cheapest when that saves at least a fifth of a second of burn. The saving is a few m/s into a low orbit and can reach hundreds on a long burn into a very eccentric one. The Insertion row shows it in seconds of burn and m/s, and **Optimise insertion** switches it off.
+
+- **Insert before apoapsis** moves a free insertion to 5 degrees short of apoapsis, and with Optimise insertion on searches from 45 to 5 degrees before it instead of past periapsis. The burn always ends still climbing, so the vehicle coasts up to apoapsis and can circularise there. It is off by default: for most vehicles a burn that ends high costs more than one that ends near periapsis.
+
+- A target entered with its apoapsis below its periapsis now swaps the two when the field is left, so periapsis is always the lower.
+
+- Launch to target now waits for whichever plane crossing comes next, ascending or descending, instead of the one picked by hand. The node choice is greyed out while a target is picked and stays yours for an ascent without one.
+
+- **Launch now**, beside Warp and Stay at 1x when an armed launch offers to warp to its window, starts the ascent to the target's chase orbit straight away instead - for a window just missed. It cancels the armed countdown and heads for the nearest crossing; UPFG steers out the difference in plane on the way up, which costs more dV the further from the window the launch is.
+
+- Launch to target now flies a **co-elliptic** chase orbit, with the target's eccentricity and argument of periapsis on a semi-major axis the offset below its own, instead of a circular one. Clear **Copy target arg. Pe** to leave the argument of periapsis free.
+
+- An ascent to a periapsis inside the atmosphere now inserts where the orbit climbs out of it, rather than cutting the engines in the air. An ascent to an orbit entirely inside the atmosphere is refused.
+
+- The target orbit overlay draws periapsis where a fixed argument of periapsis puts it. With it free, periapsis no longer rides along with the vehicle: it sits where the ascent's predicted cutoff and insertion angle put it, and after cutoff on the orbit actually reached.
+
 ## [0.4.0]
 
 Boosters fly themselves home. Returnable stages with their own landing sites, and a move to MIT.

@@ -34,6 +34,9 @@ public static partial class GuidanceWindow
 
     private const double WarpLeadTime = 10.0;  // end auto-warp this many s early
 
+    // Forced roll stays decoupled below this altitude AGL, m: near the pad the vehicle has the least control authority and the least room to recover from a roll it didn't lift off with, so a forced roll only engages once it has some clearance.
+    private const double ForceRollMinAltM = 200.0;
+
     // The game's own ignite and shutdown actions write EngineOn in this private field.
     private static AccessTools.FieldRef<Vehicle, ManualControlInputs> ManualInputs =>
         GameReflection.Vehicle_manualControlInputsRef!;
@@ -56,7 +59,10 @@ public static partial class GuidanceWindow
         _warpTargetSimSec = targetSimSec;
     }
 
-    private static void DrawWarpPrompt()
+    /// <summary>The label an armed launch asks to warp to its window under - how the prompt knows to offer Launch now beside the warp.</summary>
+    private const string LaunchWindowWarpLabel = "the launch window";
+
+    private static void DrawWarpPrompt(Vehicle vehicle, Orbit orbit, IParentBody parent, double bodyRadius)
     {
         if (!_warpPromptActive)
             return;
@@ -84,6 +90,18 @@ public static partial class GuidanceWindow
         {
             _warpPromptActive = false;
             _warpDeclinedLabel = _warpLabel;
+        }
+
+        // Offered to warp to a launch window, the other answer is not to wait for it at all - for a window just missed, whose next one is most of a revolution away (see LaunchNowAscent).
+        if (_warpLabel == LaunchWindowWarpLabel && !_s.Running)
+        {
+            ImGui.SameLine();
+            if (ImGui.Button("Launch now"))
+            {
+                ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
+                if (status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable)
+                    LaunchNowAscent(vehicle, orbit, parent, in plan);
+            }
         }
     }
 
@@ -1338,11 +1356,16 @@ public static partial class GuidanceWindow
 
         // WHETHER THE FLIGHT COMPUTER LOOKS AT THE ROLL WE JUST COMMANDED. UpdateAttitudeTrackError computes a roll term only when RollMode is not Decoupled; decoupled is the default and discards the target's roll entirely, tracking pointing alone. That is the right behaviour for an ascent - roll is the axis a launch vehicle has least authority about and nothing in the trajectory needs a particular one - so it stays decoupled unless the roll is being forced deliberately.
         //
+        // Also decoupled below ForceRollMinAltM even with the box ticked: right off the pad is exactly where the vehicle has the least authority to fight a commanded roll and the least room to recover if it can't, so a forced roll waits for some clearance first.
+        //
         // Written every step, not only on engagement: the box can be ticked mid-ascent, and un-ticking it has to give the roll freedom back.
         if (_s.Running)
-            fc.RollMode = _s.ForceRoll
+        {
+            double altM = r.Length() - parent.MeanRadius;
+            fc.RollMode = _s.ForceRoll && altM >= ForceRollMinAltM
                 ? FlightComputerRollMode.Up
                 : FlightComputerRollMode.Decoupled;
+        }
 
         if (fullEngage)
         {
