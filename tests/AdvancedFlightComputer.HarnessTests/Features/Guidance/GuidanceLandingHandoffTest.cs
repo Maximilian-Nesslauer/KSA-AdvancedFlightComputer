@@ -1,5 +1,6 @@
 using System.Reflection;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
@@ -84,6 +85,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             _sixDofSteps = 0;
             if (craft != null)
             {
+                StagingDetector.Arm(craft, false);
                 VehicleControlOwnership.ReleaseAll(craft);
                 VehicleAutopilotState.Remove(craft);
             }
@@ -110,6 +112,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle,
             $"engine on {Inputs(craft).EngineOn}, throttle {Inputs(craft).EngineThrottle}");
         t.Check("6-DOF: the attitude is given back for the allocator", !state.WasEngaged);
+        t.Check("6-DOF: AutoStage stays armed through the handoff",
+            StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
         GuidanceWindow.ApplyAutopilot(craft);
         t.Check("6-DOF: the next step dispatches the queued engage", _sixDofSteps == 1, $"{_sixDofSteps} dispatches");
@@ -117,6 +121,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.Active && state.ControlAcquired
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
         t.Check("6-DOF: the engine is still lit when the engage runs", Inputs(craft).EngineOn);
+        t.Check("6-DOF: AutoStage is still armed when the engage runs",
+            StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
         VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);
@@ -138,19 +144,25 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             $"engine on {Inputs(craft).EngineOn}, throttle {Inputs(craft).EngineThrottle}");
         t.Check("G-FOLD: the descent starts without a plan or a tracker history",
             state.GfoldPlan == null && !state.GfoldTrackInit);
+        t.Check("G-FOLD: AutoStage stays armed through the handoff",
+            StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
         VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);
     }
 
     // A deorbit burn on the step it reaches the handoff: guidance owns and steers the craft, the
-    // engine is lit at the throttle the burn wrote last, and UPFG reads converged inside the gate.
+    // engine is lit at the throttle the burn wrote last, guidance armed AutoStage for the flight, and
+    // UPFG reads converged inside the gate.
     private static VehicleAutopilotState BurnAtHandoff(Vehicle craft, bool sixDof)
     {
         TestSupport.SetManualControlInputs(craft, BurnThrottle, engineOn: true);
         craft.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
+        StagingDetector.Arm(craft, true);
 
         VehicleAutopilotState state = VehicleAutopilotState.For(craft);
+        state.StagingArmChecked = true;
+        state.ArmedStaging = true;
         state.Engage = true;
         state.AutoStage = true;
         state.UseSixDofLanding = sixDof;
