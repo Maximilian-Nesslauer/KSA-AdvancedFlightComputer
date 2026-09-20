@@ -26,6 +26,14 @@ public static partial class GuidanceWindow
     private static double GfoldSolverTargetAltM => _s.VehicleHeightM;
     private const double GfoldMinTf = 4.0;
 
+    // A planned coast is flown as a real coast. The engine cannot deliver less than its minimum throttle, so a demand under this fraction of full thrust switches it off, and it lights again only above the re-light fraction, so a command that sits near the threshold does not toggle the engine every step.
+    private const double GfoldCoastFraction = 0.02;
+    private const double GfoldRelightFraction = 0.06;
+
+    // Ignition after a coast waits until the thrust axis points along the command, because an engine lit during the slew throws its thrust sideways. The wait is bounded, because a craft that cannot align in time is still better off braking.
+    private const double GfoldIgnitionAlignDeg = 15.0;
+    private const double GfoldIgnitionAlignLimitS = 3.0;
+
     // Flight-time search bounds. SearchTfMax is the cold-start ceiling; the two
     // bracket factors are the window searched around the previous solution's
     // remaining time when one is available (see SolveGfoldPlan). Wide enough to
@@ -111,6 +119,9 @@ public static partial class GuidanceWindow
     private static void SolveGfoldPlan(Vehicle vehicle, IParentBody parent,
                                        KsaGfold.Frame frame, double3 siteCci, double3 comPos, double now)
     {
+#if DEBUG
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.SolveGfoldPlan");
+#endif
         GfoldParams p = KsaGfold.BuildParams(
             vehicle, parent, frame, siteCci, comPos, _s.GfoldGlideSlopeDeg, _s.GfoldPointingDeg, _s.GfoldVMaxMs,
             GfoldSolverTargetAltM, 0.0, _s.GfoldThrottleMin, _s.GfoldThrottleMax, out string refusal);
@@ -250,6 +261,9 @@ public static partial class GuidanceWindow
     private static void TrackGfoldPlan(Vehicle vehicle, IParentBody parent, KsaGfold.Frame f,
                                        double3 r, double3 vSrf, double mass, double now)
     {
+#if DEBUG
+        using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.TrackGfoldPlan");
+#endif
         GfoldTrajectory plan = _s.GfoldPlan;
         int n = plan.Nodes;
         double elapsed = now - _s.GfoldPlanStart;
@@ -280,10 +294,15 @@ public static partial class GuidanceWindow
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, r.Length() - parent.MeanRadius);
         double demand = cmd.Length() * mass;
 
-        // Direction: clamp the command to within the pointing cone of local up. The
-        // plan respects the pointing limit, but the PD feedback can tilt past it, so
-        // the limit must be re-applied here or it isn't enforced on the vehicle.
-        double3 dirLocal = ClampToCone(cmd, _s.GfoldPointingDeg);
+        // The plan may coast, and the engine cannot follow a demand under its minimum throttle, so the coast is flown with the engine off. The decision is made on the unsmoothed demand as a fraction of full thrust with hysteresis, because a demand between the minimum and zero would otherwise be clamped up to the minimum and the craft would brake far harder than the plan. The smoothed demand cannot decide it, because the smoothing restarts from an engine that is off.
+        double fullThrust = KsaEnginePerf.ThrustAtThrottle(vehicle, 1.0, pressure);
+        double fraction = fullThrust > 0.0 && double.IsFinite(fullThrust) ? demand / fullThrust : 0.0;
+        bool wantsBurn = fraction > GfoldRelightFraction;
+        if (fraction < GfoldCoastFraction)
+            _s.GfoldEngineOn = false;
+
+        // Direction. While the engine burns, the command is the plan's feed-forward plus the tracking feedback, clamped to the pointing cone of local up, because the feedback can tilt past the cone the plan respects. While the engine is off the feedback has nothing to act on and its direction is noise, so the craft is aligned in advance to the first burn the plan still holds, and to local up when the plan holds none.
+        double3 dirLocal = ClampToCone(_s.GfoldEngineOn ? cmd : NextBurnDirection(plan, t0, mass, fullThrust), _s.GfoldPointingDeg);
         double3 targetDir = double3.Normalize(f.VecToCci(dirLocal));
         if (!double.IsFinite(targetDir.X) || !double.IsFinite(targetDir.Y) || !double.IsFinite(targetDir.Z))
             targetDir = _s.CommandDir.Length() > 0.5 ? _s.CommandDir : f.Ex;
@@ -297,16 +316,55 @@ public static partial class GuidanceWindow
             : 1.0 - Math.Exp(-dt / _s.GfoldSmoothTau);
         _s.GfoldTrackInit = true;
 
+        double3 blended = _s.CommandDir.Length() > 0.5 ? _s.CommandDir + a * (targetDir - _s.CommandDir) : targetDir;
+        if (blended.Length() > 1e-6)
+            _s.CommandDir = double3.Normalize(blended);
+
+        // Ignition after a coast waits for the attitude, because the flight computer lags the command and an engine lit during the slew throws its thrust sideways.
+        if (wantsBurn && !_s.GfoldEngineOn)
+        {
+            if (double.IsNaN(_s.GfoldRelightRequestTime))
+                _s.GfoldRelightRequestTime = now;
+            double alignErrorDeg = AngleBetween(ThrustAxisCci(vehicle), _s.CommandDir) * 180.0 / Math.PI;
+            if (alignErrorDeg <= GfoldIgnitionAlignDeg || now - _s.GfoldRelightRequestTime >= GfoldIgnitionAlignLimitS)
+                _s.GfoldEngineOn = true;
+        }
+        if (!wantsBurn || _s.GfoldEngineOn)
+            _s.GfoldRelightRequestTime = double.NaN;
+
         double previousThrust = _s.GfoldThrottle > 0.0
             ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.GfoldThrottle, pressure) : 0.0;
         double smoothedDemand = demand > 0.0 ? previousThrust + a * (demand - previousThrust) : demand;
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, smoothedDemand, pressure);
-        _s.GfoldThrottle = command.Throttle;
-        _s.GfoldThrustStatus = command.Message;
-        double3 blended = _s.CommandDir.Length() > 0.5 ? _s.CommandDir + a * (targetDir - _s.CommandDir) : targetDir;
-        if (blended.Length() > 1e-6)
-            _s.CommandDir = double3.Normalize(blended);
+        if (_s.GfoldEngineOn)
+        {
+            _s.GfoldThrottle = command.Throttle;
+            _s.GfoldThrustStatus = command.Message;
+        }
+        else
+        {
+            _s.GfoldThrottle = 0.0;
+            bool engineUsable = command.Status == KsaEnginePerf.ThrustStatus.Available
+                || command.Status == KsaEnginePerf.ThrustStatus.BelowMinimum
+                || command.Status == KsaEnginePerf.ThrustStatus.Off;
+            _s.GfoldThrustStatus = !engineUsable ? command.Message
+                : wantsBurn ? "Aligning for ignition." : "Planned coast, engine off.";
+        }
         _s.HasCommand = true;
+    }
+
+    // The thrust direction of the first plan node from the given one whose thrust exceeds the re-light fraction, in the plan's local frame, or local up when the rest of the plan coasts.
+    private static double3 NextBurnDirection(GfoldTrajectory plan, int from, double mass, double fullThrust)
+    {
+        if (fullThrust > 0.0 && double.IsFinite(fullThrust))
+            for (int k = Math.Max(from, 1); k < plan.Nodes; k++)
+            {
+                double3 accel = Node(plan.AccelCmd, k);
+                double len = accel.Length();
+                if (len * mass > GfoldRelightFraction * fullThrust)
+                    return accel * (1.0 / len);
+            }
+        return new double3(1, 0, 0);
     }
 
     // Unit thrust direction of v, clamped to within maxAngleDeg of local up (+X).

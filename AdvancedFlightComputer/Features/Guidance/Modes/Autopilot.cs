@@ -450,6 +450,9 @@ public static partial class GuidanceWindow
             return;
         _s.StageModelTick = now;
         _s.StageModelDirty = false;
+#if DEBUG
+        using var _perf = new PerfTracker.Scope("Guidance.RefreshStageModel");
+#endif
 
         // A staging frame can catch the part tree mid-rebuild. Losing one refresh is harmless, because the previous snapshot stays valid, but letting it escape would skip the attitude command for that step, which is not. The first failure retries on the next step, and a repeat waits for the normal interval, so a refresh that keeps failing does not throw on every step.
         try
@@ -886,6 +889,9 @@ public static partial class GuidanceWindow
     // Every mode is stepped here for every vehicle from the per-vehicle simulation hook.
     public static void ApplyAutopilot(Vehicle vehicle)
     {
+#if DEBUG
+        using var _perf = new PerfTracker.Scope("Guidance.ApplyAutopilot");
+#endif
         // Do not create state while guidance is disabled. Release each vehicle in its PrepareWorker prefix so cleanup reaches the next worker snapshot.
         if (!ModActive)
         {
@@ -1075,7 +1081,7 @@ public static partial class GuidanceWindow
                 }
                 else if (_s.LandingPhase == LandingPhase.GfoldDescent)
                 {
-                    // Positive demands below minimum thrust are clamped to the engine minimum. Keep the engine on for every positive command.
+                    // The tracker decides whether the plan coasts, and writes zero throttle for a coast, so a positive throttle here is a burn the engine can hold.
                     inputs.EngineOn = _s.GfoldThrottle > 0.0;
                     inputs.EngineThrottle = (float)_s.GfoldThrottle;
                 }
