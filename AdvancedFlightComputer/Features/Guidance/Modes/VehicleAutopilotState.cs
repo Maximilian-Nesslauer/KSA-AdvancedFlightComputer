@@ -567,6 +567,7 @@ public sealed class VehicleAutopilotState
     public double GfoldLastTrackTime;
     public bool GfoldTrackInit;
     public bool GfoldEngineOn;             // hysteretic engine state
+    public double GfoldRelightRequestTime = double.NaN;   // sim time the plan first asked for a burn while the engine was off
 
     // The G-FOLD trace stores the flown path in the pad frame as horizontal range to the pad and height above touchdown in metres.
     public float2[] GfoldTrace;

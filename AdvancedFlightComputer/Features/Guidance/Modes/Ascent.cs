@@ -514,16 +514,26 @@ public static partial class GuidanceWindow
                     UpfgTarget.RadToDeg(_s.InsertionSearch.Nu));
                 // dt is the interval this solve covers, which is what makes the convergence test rate-independent (see UpfgGuidance.Step).
                 double solveDt = firstSolve ? 0.0 : now - _s.LastSolveTime;
-                _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
+#if DEBUG
+                using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.UpfgSolve"))
+#endif
+                {
+                    _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, _s.UpfgVehicle, 1, solveDt);
+                }
 
                 // Straight after the solve, from the same state and model: where a free insertion costs least. Searched only from a converged closed-loop solution, because the open-loop turn is not flying the steering the costs assume, and at most once per InsertionSearchIntervalMs of wall clock.
                 double goalBefore = _s.InsertionSearch.GoalNu;
                 double searchedBefore = _s.InsertionSearch.LastSearchTime;
                 long tick = Environment.TickCount64;
-                _s.InsertionSearch.Step(now, solveDt, _s.OptimiseInsertion && !_s.ArgPeFixed,
-                    _s.Phase == AscentPhase.ClosedLoop && _s.Upfg.Converged
-                        && tick - _s.InsertionSearchTick >= InsertionSearchIntervalMs,
-                    _s.Upfg, target, r, v, vehicle.TotalMass, mu, _s.UpfgVehicle);
+#if DEBUG
+                using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.InsertionSearch"))
+#endif
+                {
+                    _s.InsertionSearch.Step(now, solveDt, _s.OptimiseInsertion && !_s.ArgPeFixed,
+                        _s.Phase == AscentPhase.ClosedLoop && _s.Upfg.Converged
+                            && tick - _s.InsertionSearchTick >= InsertionSearchIntervalMs,
+                        _s.Upfg, target, r, v, vehicle.TotalMass, mu, _s.UpfgVehicle);
+                }
                 if (_s.InsertionSearch.LastSearchTime != searchedBefore)
                     _s.InsertionSearchTick = tick;
                 if (_s.InsertionSearch.GoalNu != goalBefore)

@@ -188,6 +188,7 @@ public static partial class GuidanceWindow
         _s.GfoldFailStreak = 0;
         _s.GfoldTrackInit = false;
         _s.GfoldEngineOn = false;
+        _s.GfoldRelightRequestTime = double.NaN;
         _s.GfoldHoverRefused = false;
         _s.HasCommand = false;
         _s.LandingStatus = "G-FOLD started from current state.";
@@ -470,7 +471,12 @@ public static partial class GuidanceWindow
                     Normal = planeNormal,
                     Rdes = gateDir * gateRadius,
                 };
-                _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, live, 3);
+#if DEBUG
+                using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.DeorbitSolve"))
+#endif
+                {
+                    _s.Upfg.Step(r, v, vehicle.TotalMass, mu, target, live, 3);
+                }
                 _s.CommandDir = _s.Upfg.Steering;
                 _s.HasCommand = _s.CommandDir.Length() > 0.5;
 
@@ -544,7 +550,9 @@ public static partial class GuidanceWindow
                     _s.GfoldPlan = null;
                     _s.GfoldFailStreak = 0;
                     _s.GfoldTrackInit = false;
-                    _s.GfoldEngineOn = false;
+                    // The engine is lit from the burn, so the tracker's coast hysteresis starts from a lit engine and switches it off only when the plan really coasts.
+                    _s.GfoldEngineOn = true;
+                    _s.GfoldRelightRequestTime = double.NaN;
                     _s.GfoldHoverRefused = false;
                     // This step already writes the descent's engine command, and G-FOLD has no throttle until its first plan on the next step, so the burn's throttle carries over. Left at zero, the braking burn stops for a step, and for as long as the first solves find no plan. The tracker does not smooth from the carried value, because GfoldTrackInit is reset above.
                     _s.GfoldThrottle = _s.Upfg.Throttle;

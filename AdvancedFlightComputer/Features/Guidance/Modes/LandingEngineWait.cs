@@ -82,6 +82,7 @@ public static partial class GuidanceWindow
         _s.GfoldPlan = null;
         _s.GfoldThrottle = 0.0;
         _s.GfoldEngineOn = false;
+        _s.GfoldRelightRequestTime = double.NaN;
         _s.GfoldTrackInit = false;
         _s.GfoldLastSolveTime = double.NegativeInfinity;
         _s.GfoldThrustStatus = "";
