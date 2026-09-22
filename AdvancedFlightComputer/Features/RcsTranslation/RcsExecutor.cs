@@ -144,8 +144,7 @@ internal static partial class RcsExecutor
     {
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? pending) && pending.CleanupPending)
         {
-            // The request is suppressed, but it still says the player wants AFC to stop, so the
-            // retry that follows must not arm stock Auto instead.
+            // The request is suppressed, but it still says the player wants AFC to stop, so the retry that follows must not arm stock Auto instead.
             pending.ForcedBurnManual = false;
             RequestCancel(pending, "retry fault cleanup");
             return false;
@@ -453,9 +452,8 @@ internal static partial class RcsExecutor
                 exec.AlignCommanded = false;
             }
 
-            // FlightComputer.UpdateAttitudeTarget reads custom coordinates as rotation rates while
-            // tracking is None, and both the rate hold and this release select None. Coordinates left
-            // there are a standing turn, and the tracker they pointed with is already gone, so they go too.
+            // FlightComputer.UpdateAttitudeTarget reads custom coordinates as rotation rates while tracking is None, and both the rate hold and this release select None.
+            // Coordinates left there are a standing turn, and the tracker they pointed with is already gone, so they go too.
             if (tookTheAttitude
                 && fc.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.None
                 && !fc.CustomAttitudeTarget.Equals(default(double3)))

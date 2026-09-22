@@ -52,8 +52,9 @@ public static partial class GuidanceWindow
         _autoLaunchStepped = false;
 
         // The End() is in a finally so that an exception anywhere below cannot leave ImGui inside this window.
-        //  ImGui keeps a window STACK, so an unwound Begin does not fail where the fault is - it fails at the end of the frame, as "window Powered Guidance:
-        // missing End", and then keeps failing every frame afterwards. That message names this function no matter what actually threw, so the real fault (twice now, a null KSA reference several calls deep) is completely hidden. The exception still propagates and is still logged with its stack trace; this only guarantees the ImGui stack is balanced on the way out, so what the game reports is the actual error rather than a misleading structural one.
+        // ImGui keeps a window STACK, so an unwound Begin does not fail where the fault is - it fails at the end of the frame, as "window Powered Guidance: missing End", and then keeps failing every frame afterwards.
+        // That message names this function no matter what actually threw, so the real fault (twice now, a null KSA reference several calls deep) is completely hidden.
+        // The exception still propagates and is still logged with its stack trace; this only guarantees the ImGui stack is balanced on the way out, so what the game reports is the actual error rather than a misleading structural one.
         Vehicle vehicle;
         if (ShowLegacyWindow)
         {

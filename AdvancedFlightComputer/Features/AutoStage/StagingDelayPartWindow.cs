@@ -7,8 +7,8 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
-// Delay settings in the pinned part window, one block per (module kind, sequence) the part fires
-// in. A tower with a motor and two mounts on three rows gets three blocks.
+// Delay settings in the pinned part window, one block per (module kind, sequence) the part fires in.
+// A tower with a motor and two mounts on three rows gets three blocks.
 [HarmonyPatch(typeof(Part), nameof(Part.DrawPartInfo), new Type[0])]
 internal static class StagingDelayPartWindow
 {

@@ -8,30 +8,18 @@ using KSA;
 
 // Upcoming site passes, in closed form.
 //
-// This replaced a sampled scan: 240 conic propagations per revolution over five
-// revolutions, time-sliced across ~25 frames, suspended under time warp and rerun on
-// a 5 s timer. That is a lot of machinery for a question with an analytic answer, and
-// it made the readout lag the orbit badly enough to be misleading.
+// This replaced a sampled scan: 240 conic propagations per revolution over five revolutions, time-sliced across ~25 frames, suspended under time warp and rerun on a 5 s timer.
+// That is a lot of machinery for a question with an analytic answer, and it made the readout lag the orbit badly enough to be misleading.
 //
-// The geometry: the closest a revolution brings the ground track to the site is the
-// perpendicular distance from the site to the orbit plane, asin(s*n)*R - and the
-// moment it happens is when the vehicle's true anomaly matches that of the site
-// PROJECTED into the plane. Both are one dot product and one Kepler conversion, so a
-// revolution costs a handful of trig calls instead of 240 propagations and the whole
-// set can be rebuilt every frame.
+// The geometry: the closest a revolution brings the ground track to the site is the perpendicular distance from the site to the orbit plane, asin(s*n)*R - and the moment it happens is when the vehicle's true anomaly matches that of the site PROJECTED into the plane.
+// Both are one dot product and one Kepler conversion, so a revolution costs a handful of trig calls instead of 240 propagations and the whole set can be rebuilt every frame.
 //
-// The passes are then indexed by PHASE - how many times the vehicle has lapped that
-// projection - rather than by revolution number. See RefreshPasses: that is what makes
-// flying over the site advance the list by exactly one, seamlessly, instead of briefly
-// inventing a close approach that is not there.
+// The passes are then indexed by PHASE - how many times the vehicle has lapped that projection - rather than by revolution number.
+// See RefreshPasses: that is what makes flying over the site advance the list by exactly one, seamlessly, instead of briefly inventing a close approach that is not there.
 //
-// WHAT THIS ASSUMES: that the closest approach sits at the foot of the perpendicular
-// from the site to the orbit plane. That is exact for a non-rotating body; the body
-// does turn during a pass, which the iteration below absorbs by re-evaluating the
-// site where the vehicle will actually meet it. What remains is the track's own
-// curvature away from the great circle within a single pass - small over the few
-// minutes a pass lasts, and well inside what this display is for, which is choosing
-// which revolution to commit to rather than aiming with it.
+// WHAT THIS ASSUMES: that the closest approach sits at the foot of the perpendicular from the site to the orbit plane.
+// That is exact for a non-rotating body; the body does turn during a pass, which the iteration below absorbs by re-evaluating the site where the vehicle will actually meet it.
+// What remains is the track's own curvature away from the great circle within a single pass - small over the few minutes a pass lasts, and well inside what this display is for, which is choosing which revolution to commit to rather than aiming with it.
 public static partial class GuidanceWindow
 {
     private static void RefreshPasses(Orbit orbit, IParentBody parent, double mu,
@@ -54,9 +42,8 @@ public static partial class GuidanceWindow
             return;
         double3 n = double3.Normalize(h);
 
-        // In-plane reference direction. The eccentricity vector is the natural one,
-        // but it vanishes on a circular orbit - and any fixed in-plane direction will
-        // do, because only DIFFERENCES of anomalies are used below.
+        // In-plane reference direction.
+        // The eccentricity vector is the natural one, but it vanishes on a circular orbit - and any fixed in-plane direction will do, because only DIFFERENCES of anomalies are used below.
         double3 eVec = double3.Cross(v0, h) * (1.0 / mu) - r0 * (1.0 / rMag);
         double ecc = eVec.Length();
         double3 u = ecc > 1e-8 ? double3.Normalize(eVec) : double3.Normalize(r0);
@@ -66,29 +53,22 @@ public static partial class GuidanceWindow
 
         // PHASE, not position, is what has to be bracketed.
         //
-        // Let phi(t) = (vehicle mean anomaly) - (mean anomaly of the site PROJECTED
-        // into the orbit plane). The vehicle laps that projection once per revolution,
-        // so phi rises steadily and every crossing is phi = 2*pi*j for an integer j.
+        // Let phi(t) = (vehicle mean anomaly) - (mean anomaly of the site PROJECTED into the orbit plane).
+        // The vehicle laps that projection once per revolution, so phi rises steadily and every crossing is phi = 2*pi*j for an integer j.
         // Choosing j picks the pass, and j only ever increases.
         //
-        // Bracketing in vehicle anomaly instead - "the crossing in [0, 2pi)" - is what
-        // produced a false close approach the moment one was flown. The site rotates
-        // roughly 22 degrees of a low orbit's period, so re-evaluating it at the newly
-        // estimated time moved the target enough to land back at the START of that
-        // window, and the solve settled on a crossing a few minutes away that does not
-        // exist. In phi the same event simply increments j.
+        // Bracketing in vehicle anomaly instead - "the crossing in [0, 2pi)" - is what produced a false close approach the moment one was flown.
+        // The site rotates roughly 22 degrees of a low orbit's period, so re-evaluating it at the newly estimated time moved the target enough to land back at the START of that window, and the solve settled on a crossing a few minutes away that does not exist.
+        // In phi the same event simply increments j.
         double ms0 = SiteMeanAnomaly(parent, 0.0, n, u, w, ecc, bodyRadius, m0, out _);
         if (double.IsNaN(ms0))
             return;   // site on the orbit axis: no perpendicular foot to solve for
 
-        // ms0 was unwrapped toward m0, so phi0 lands in [-pi, pi): a crossing is
-        // imminent when it is just below zero and just flown when it is just above.
+        // ms0 was unwrapped toward m0, so phi0 lands in [-pi, pi): a crossing is imminent when it is just below zero and just flown when it is just above.
         double phi0 = m0 - ms0;
 
-        // Roughly how fast phi rises: the vehicle's mean motion less the rate the
-        // site's projection drifts. Only ever used to pick a step size - the drift is
-        // strongly non-uniform over a lap, so this is nowhere near good enough to
-        // extrapolate a root from.
+        // Roughly how fast phi rises: the vehicle's mean motion less the rate the site's projection drifts.
+        // Only ever used to pick a step size - the drift is strongly non-uniform over a lap, so this is nowhere near good enough to extrapolate a root from.
         double probe = period * 0.01;
         double msProbe = SiteMeanAnomaly(parent, probe, n, u, w, ecc, bodyRadius, ms0, out _);
         double phiDot = double.IsNaN(msProbe)
@@ -100,13 +80,9 @@ public static partial class GuidanceWindow
         double lap = TwoPi / phiDot;
         double step = Math.Max(lap / 12.0, period / 24.0);
 
-        // BRACKET, then refine. phi is monotonic but distinctly non-linear across a
-        // lap, so walking it in steps and refining inside whichever step contains the
-        // crossing finds every root, in order, and cannot invent or skip one.
+        // BRACKET, then refine. phi is monotonic but distinctly non-linear across a lap, so walking it in steps and refining inside whichever step contains the crossing finds every root, in order, and cannot invent or skip one.
         //
-        // Extrapolating instead - Newton against a single measured slope - was wrong
-        // by about a fifth over several laps, which is comparable to a whole lap by
-        // the fourth pass: it walked into the NEXT root and dropped one entirely.
+        // Extrapolating instead - Newton against a single measured slope - was wrong by about a fifth over several laps, which is comparable to a whole lap by the fourth pass: it walked into the NEXT root and dropped one entirely.
         // Still only a few dozen trig evaluations, against 1200 propagations before.
         long j = (long)Math.Floor(phi0 / TwoPi) + 1;
         double tA = 0.0, phiA = phi0, msPrev = ms0;
@@ -119,16 +95,14 @@ public static partial class GuidanceWindow
                 break;
             double phiB = m0 + meanMotion * tB - msB;
 
-            // A single step can straddle more than one target if the orbit is short
-            // against the step, so drain them all before moving on.
+            // A single step can straddle more than one target if the orbit is short against the step, so drain them all before moving on.
             while (_s.Passes.Count < PassesToShow && phiB >= TwoPi * j)
             {
                 double target = TwoPi * j;
                 double lo = tA, phiLo = phiA, hi = tB, phiHi = phiB;
                 double t = lo + (target - phiLo) * (hi - lo) / (phiHi - phiLo);
 
-                // False position: the bracket is kept valid at every step, so this
-                // cannot leave the interval however non-linear phi is inside it.
+                // False position: the bracket is kept valid at every step, so this cannot leave the interval however non-linear phi is inside it.
                 for (int i = 0; i < 4; i++)
                 {
                     double msT = SiteMeanAnomaly(parent, t, n, u, w, ecc, bodyRadius, msPrev, out _);

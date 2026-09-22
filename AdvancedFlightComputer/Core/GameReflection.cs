@@ -95,8 +95,8 @@ internal static class GameReflection
     public static readonly FieldInfo? TransferPlanner_showPlanWindow =
         AccessTools.Field(typeof(TransferPlanner), "_showPlanWindow");
 
-    // Stock's "Preview Selected Transfer" checkbox. The Hohmann multi-pass overlay rides the same
-    // toggle, so the user manages one preview switch for stock's single burn and the passes.
+    // Stock's "Preview Selected Transfer" checkbox.
+    // The Hohmann multi-pass overlay rides the same toggle, so the user manages one preview switch for stock's single burn and the passes.
     [UsedBy(Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_displaySelectedTransfer =
         AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
@@ -106,10 +106,8 @@ internal static class GameReflection
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
-    // Typed accessors over the handles above for the plan-window state StockPlanner reads per
-    // frame, one delegate each and no boxing per read. An accessor is null when its handle is
-    // null or the field no longer holds the expected type, so the validation reports it like any
-    // other missing handle.
+    // Typed accessors over the handles above for the plan-window state StockPlanner reads per frame, one delegate each and no boxing per read.
+    // An accessor is null when its handle is null or the field no longer holds the expected type, so the validation reports it like any other missing handle.
     [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<TransferObject>? TransferPlanner_sourceBodyRef =
         StaticFieldRef<TransferObject>(TransferPlanner_sourceBody);
@@ -176,19 +174,14 @@ internal static class GameReflection
 
     #region Save, tick and vehicle lifetime
 
-    // The per-frame tick MultiPass and RcsTranslation drive their state machines from. It runs on
-    // the main thread after the solver results are applied to every vehicle and before
-    // InputEvents.ApplyInputEvents, so a driver reads fresh FlightComputer state and can still queue
-    // burn mutations for the same frame's drain. Neither per-vehicle half of the apply is a sound
-    // host, because Vehicle.UpdateFromTaskResultsUnsynchronized runs one worker per physics bubble
-    // and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined, which a Harmony detour
-    // on the callee cannot survive.
+    // The per-frame tick MultiPass and RcsTranslation drive their state machines from.
+    // It runs on the main thread after the solver results are applied to every vehicle and before InputEvents.ApplyInputEvents, so a driver reads fresh FlightComputer state and can still queue burn mutations for the same frame's drain.
+    // Neither per-vehicle half of the apply is a sound host, because Vehicle.UpdateFromTaskResultsUnsynchronized runs one worker per physics bubble and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined, which a Harmony detour on the callee cannot survive.
     [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage | Feature.AutoRemove)]
     public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
         AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers), Type.EmptyTypes);
 
-    // UncompressedSave is the concrete path that calls Universe.DeserializeSave, and its Id is the
-    // save-game discriminator the registries scope their entries by.
+    // UncompressedSave is the concrete path that calls Universe.DeserializeSave, and its Id is the save-game discriminator the registries scope their entries by.
     [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]
     public static readonly MethodInfo? UncompressedSave_Load =
         AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Load), Type.EmptyTypes);
@@ -197,8 +190,7 @@ internal static class GameReflection
     public static readonly MethodInfo? UncompressedSave_Write =
         AccessTools.Method(typeof(UncompressedSave), nameof(UncompressedSave.Write), Type.EmptyTypes);
 
-    // Registry entries drop with their vehicle, or a recycled vehicle id could pick up an orphaned
-    // execution.
+    // Registry entries drop with their vehicle, or a recycled vehicle id could pick up an orphaned execution.
     [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage)]
     public static readonly MethodInfo? Vehicle_Dispose =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) });
@@ -212,8 +204,7 @@ internal static class GameReflection
 
     #region AutoStage
 
-    // The gauge button resolves its bound enum by Type.Name from this list, so the AUTOSTAGE
-    // button's own enum type is appended to it at immediate load.
+    // The gauge button resolves its bound enum by Type.Name from this list, so the AUTOSTAGE button's own enum type is appended to it at immediate load.
     [UsedBy(Feature.AutoStage)]
     public static readonly FieldInfo? GaugeButtonFlightComputer_EnumTypes =
         AccessTools.Field(typeof(GaugeButtonFlightComputer), "EnumTypes");
@@ -227,8 +218,8 @@ internal static class GameReflection
     public static readonly MethodInfo? Vehicle_IsFlightComputerDisabled_Enum =
         GenericVehicleMethod(nameof(Vehicle.IsFlightComputerDisabled), parameterCount: 1)?.MakeGenericMethod(typeof(Enum));
 
-    // Private setter. The public SetActiveSequence rewrites Activated list-wide and resets caches,
-    // which stock's own activation does not.
+    // Private setter.
+    // The public SetActiveSequence rewrites Activated list-wide and resets caches, which stock's own activation does not.
     [UsedBy(Feature.AutoStage)]
     public static readonly PropertyInfo? SequenceList_ActiveSequence =
         AccessTools.Property(typeof(SequenceList), nameof(SequenceList.ActiveSequence));
@@ -238,9 +229,9 @@ internal static class GameReflection
     public static readonly FieldInfo? SequenceList_updatingSequence =
         AccessTools.Field(typeof(SequenceList), "_updatingSequence");
 
-    // Which settings page the nav rail has open, read by the shared Mods settings section host. The
-    // enum is private to GameSettings, so its Mods member is resolved as a boxed value once and
-    // compared by equality. Its own feature, so a settings-window rename costs the sections only.
+    // Which settings page the nav rail has open, read by the shared Mods settings section host.
+    // The enum is private to GameSettings, so its Mods member is resolved as a boxed value once and compared by equality.
+    // Its own feature, so a settings-window rename costs the sections only.
     [UsedBy(Feature.SettingsPage)]
     public static readonly FieldInfo? GameSettings_openTab =
         AccessTools.Field(typeof(GameSettings), "_openTab");
@@ -269,20 +260,17 @@ internal static class GameReflection
 
     #region RcsTranslation
 
-    // The gauge button keeps its bound enum private, and the RCS gauge patches need it to recognize
-    // the BurnMode button instance.
+    // The gauge button keeps its bound enum private, and the RCS gauge patches need it to recognize the BurnMode button instance.
     [UsedBy(Feature.RcsTranslation)]
     public static readonly FieldInfo? GaugeButtonFlightComputer_enumValue =
         AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumValue");
 
-    // Private tooltip hook for the Auto button, replaced with the RCS explanation when a burn
-    // resolves to RCS execution.
+    // Private tooltip hook for the Auto button, replaced with the RCS explanation when a burn resolves to RCS execution.
     [UsedBy(Feature.RcsTranslation)]
     public static readonly MethodInfo? Vehicle_Hovered_BurnMode =
         AccessTools.Method(typeof(Vehicle), "Hovered", new[] { typeof(FlightComputerBurnMode) });
 
-    // The flight burn editor draws through this static gauge-canvas host, which the RCS burn panel
-    // postfixes.
+    // The flight burn editor draws through this static gauge-canvas host, which the RCS burn panel postfixes.
     [UsedBy(Feature.RcsTranslation)]
     public static readonly MethodInfo? BurnCanvasHost_Draw =
         AccessTools.Method(typeof(BurnCanvasHost), "Draw",
@@ -292,20 +280,15 @@ internal static class GameReflection
 
     #region Guidance
 
-    // The per-vehicle guidance step runs as a prefix here. Universe.PrepareVehicleWorkers calls it
-    // after InputEvents.ApplyInputEvents drained the player's input and before
-    // VehicleUpdateState.PrepareFromVehicle snapshots the flight computer and the manual inputs for
-    // the worker, so it is the last main-thread site before the snapshot and the only one after
-    // the drain. The rest of the method still runs after the prefix and clears EngineOn while
-    // BurnMode is Auto, which is why guidance holds the mode in Manual.
+    // The per-vehicle guidance step runs as a prefix here.
+    // Universe.PrepareVehicleWorkers calls it after InputEvents.ApplyInputEvents drained the player's input and before VehicleUpdateState.PrepareFromVehicle snapshots the flight computer and the manual inputs for the worker, so it is the last main-thread site before the snapshot and the only one after the drain.
+    // The rest of the method still runs after the prefix and clears EngineOn while BurnMode is Auto, which is why guidance holds the mode in Manual.
     [UsedBy(Feature.Guidance)]
     public static readonly MethodInfo? Vehicle_PrepareWorker =
         AccessTools.Method(typeof(Vehicle), nameof(Vehicle.PrepareWorker), new[] { typeof(SimStep) });
 
-    // Stock builds AttitudeTarget here and reads it in UpdateAttitudeError right after, so a postfix
-    // can add the commanded turning rate without changing where the craft points. It is a private
-    // method with one call site, so an inlining attribute added on a game update would leave this
-    // handle resolving and the postfix silent. afc-guidance-driver checks that the rate arrives.
+    // Stock builds AttitudeTarget here and reads it in UpdateAttitudeError right after, so a postfix can add the commanded turning rate without changing where the craft points.
+    // It is a private method with one call site, so an inlining attribute added on a game update would leave this handle resolving and the postfix silent. afc-guidance-driver checks that the rate arrives.
     [UsedBy(Feature.Guidance)]
     public static readonly MethodInfo? FlightComputer_UpdateAttitudeTarget =
         AccessTools.Method(typeof(FlightComputer), "UpdateAttitudeTarget",
@@ -377,9 +360,8 @@ internal static class GameReflection
         return allOk;
     }
 
-    // "TransferPlanner_sourceBody" and "TransferPlanner_sourceBodyRef" both read as
-    // "TransferPlanner._sourceBody". A method handle keeps its name, so "Vehicle_Hovered_BurnMode"
-    // reads as "Vehicle.Hovered_BurnMode".
+    // "TransferPlanner_sourceBody" and "TransferPlanner_sourceBodyRef" both read as "TransferPlanner._sourceBody".
+    // A method handle keeps its name, so "Vehicle_Hovered_BurnMode" reads as "Vehicle.Hovered_BurnMode".
     private static string DisplayName(FieldInfo handle)
     {
         string name = handle.Name;

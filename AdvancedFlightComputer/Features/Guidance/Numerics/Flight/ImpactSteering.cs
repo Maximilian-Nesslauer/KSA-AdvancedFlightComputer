@@ -135,14 +135,11 @@ public static class ImpactSteering
             if (!double.IsFinite(dGroundDv[i]))
                 return false;
 
-        // Drop the part of the miss that points out of the surface. There usually IS
-        // one - the site sits at its terrain height and the impact at its own, so the
-        // two radii differ - and no velocity change can fix it.
+        // Drop the part of the miss that points out of the surface.
+        // There usually IS one - the site sits at its terrain height and the impact at its own, so the two radii differ - and no velocity change can fix it.
         //
-        // The solve would discard it anyway: n is a left null vector of J, so both
-        // J^T m and the damped solve annihilate the radial part on their own. This is
-        // insurance against a future where the target radius varies with position,
-        // not a correction to the present answer.
+        // The solve would discard it anyway: n is a left null vector of J, so both J^T m and the damped solve annihilate the radial part on their own.
+        // This is insurance against a future where the target radius varies with position, not a correction to the present answer.
         Span<double> m = stackalloc double[3] { miss[0], miss[1], miss[2] };
         if (surfaceNormal.Length >= 3)
         {
@@ -243,9 +240,8 @@ public static class ImpactSteering
                 }
             }
 
-        // A cross product of two rows of a matrix whose entries are O(scale) is
-        // O(scale^2) when the rows are independent. Well below that and the two rows
-        // were parallel to within noise, so the "direction" is numerical dust.
+        // A cross product of two rows of a matrix whose entries are O(scale) is O(scale^2) when the rows are independent.
+        // Well below that and the two rows were parallel to within noise, so the "direction" is numerical dust.
         if (best < 1e-6 * scale * scale)
         {
             freeDir[0] = freeDir[1] = freeDir[2] = 0.0;

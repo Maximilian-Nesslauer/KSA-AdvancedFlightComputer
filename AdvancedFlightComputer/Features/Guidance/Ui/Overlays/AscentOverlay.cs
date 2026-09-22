@@ -13,8 +13,8 @@ public static partial class GuidanceWindow
 {
     private static bool _showAscentOverlay = true;
 
-    // Flown trajectory, in the parent body's inertial (CCI) frame - the frame the target orbit lives in, so the two are directly comparable. A ring buffer:
-    // once full, the oldest sample is dropped, so a long flight shows its most recent stretch rather than growing without bound.
+    // Flown trajectory, in the parent body's inertial (CCI) frame - the frame the target orbit lives in, so the two are directly comparable.
+    // A ring buffer: once full, the oldest sample is dropped, so a long flight shows its most recent stretch rather than growing without bound.
     // Public because each vehicle owns its own ring buffer of this size - the track belongs to the craft that flew it, so switching focus shows that craft's path instead of throwing away whichever one was on screen.
     public const int TraceCapacity = 2400;
     private const double TraceIntervalSec = 0.5;

@@ -76,10 +76,8 @@ public sealed class Scvx6DofSubproblemScs
         _xs = cfg.XScale;
         _us = cfg.ResolvedUScale;
 
-        // Path constraints apply from node 1 onward, NEVER at node 0 - see
-        // Scvx6DofConfig.GlideSlopeWeight for why that is a correctness
-        // requirement rather than a tidiness choice. Zero when disabled, so a
-        // config without them assembles exactly the problem it did before.
+        // Path constraints apply from node 1 onward, NEVER at node 0 - see Scvx6DofConfig.GlideSlopeWeight for why that is a correctness requirement rather than a tidiness choice.
+        // Zero when disabled, so a config without them assembles exactly the problem it did before.
         _nGs = cfg.GlideSlopeEnabled ? _n - 1 : 0;
         _nVz = cfg.VzLimitEnabled ? _n - 1 : 0;
 
@@ -89,29 +87,24 @@ public sealed class Scvx6DofSubproblemScs
         _iSig = _oW + (_n - 1) * NX;
         _oGs = _iSig + 1;             // glideslope slacks, one per constrained node
         _oVz = _oGs + _nGs;           // climb-rate slacks, likewise
-        // Terminal miss: a POSITIVE and a NEGATIVE slack per position axis, so the
-        // miss can go either way while both parts stay non-negative and the penalty
-        // stays linear. Six variables in total, or none when the terminal is hard.
+        // Terminal miss: a POSITIVE and a NEGATIVE slack per position axis, so the miss can go either way while both parts stay non-negative and the penalty stays linear.
+        // Six variables in total, or none when the terminal is hard.
         _oTm = _oVz + _nVz;
-        // Six per softened block: a positive and a negative slack per axis, so the
-        // miss may go either way while both stay non-negative and the penalty linear.
+        // Six per softened block: a positive and a negative slack per axis, so the miss may go either way while both stay non-negative and the penalty linear.
         _nTmPos = cfg.TerminalMissWeight > 0.0 ? 6 : 0;
         _nTmVel = cfg.TerminalSpeedWeight > 0.0 ? 6 : 0;
         _nTm = _nTmPos + _nTmVel;
         _nVars = _oTm + _nTm;
 
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2);
-        // FIVE orthant rows per node, not six. The sixth was the LINEARISED tilt
-        // constraint; it is now an exact second-order cone in the block below, so the
-        // row is gone rather than merely changed. See AssembleCone's tilt block.
-        // + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows
-        // + _nTm non-negativity rows for the terminal-miss slacks
+        // FIVE orthant rows per node, not six.
+        // The sixth was the LINEARISED tilt constraint; it is now an exact second-order cone in the block below, so the row is gone rather than merely changed.
+        // See AssembleCone's tilt block. + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows + _nTm non-negativity rows for the terminal-miss slacks
         _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm;
         _socDims = new int[_n + _nGs + _n];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
-        // Tilt cones LAST, so adding them leaves every pre-existing block at the row
-        // offset it already had - anything reading a cone index keeps its meaning.
+        // Tilt cones LAST, so adding them leaves every pre-existing block at the row offset it already had - anything reading a cone index keeps its meaning.
         for (int k = 0; k < _n; k++) _socDims[_n + _nGs + k] = 3; // tilt cone per node
         _nCone = _nEq + _lDim + _socDims.Sum();
 
@@ -120,11 +113,7 @@ public sealed class Scvx6DofSubproblemScs
         _b = new double[_nCone];
         _c = new double[_nVars];
 
-        // Same physical-unit column scaling as the ECOS port, and for the same
-        // reason: raw SI is not solvable, confirmed by three-way validation
-        // there. x = diag(scale) x~; linear coefficients pick up one factor of
-        // scale (the column's), quadratic (P) coefficients pick up two (row AND
-        // column), since x'Px = (S x~)'P(S x~) = x~'(S'PS)x~.
+        // Same physical-unit column scaling as the ECOS port, and for the same reason: raw SI is not solvable, confirmed by three-way validation there. x = diag(scale) x~; linear coefficients pick up one factor of scale (the column's), quadratic (P) coefficients pick up two (row AND column), since x'Px = (S x~)'P(S x~) = x~'(S'PS)x~.
         _colScale = new double[_nVars];
         for (int k = 0; k < _n; k++)
         {
@@ -134,8 +123,7 @@ public sealed class Scvx6DofSubproblemScs
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++) _colScale[IW(k, i)] = _xs[i];
         _colScale[_iSig] = cfg.SigmaScale;
-        // Slacks carry the units of what they relax, so they take the same scale as
-        // the quantity being violated: metres of horizontal miss, m/s of climb.
+        // Slacks carry the units of what they relax, so they take the same scale as the quantity being violated: metres of horizontal miss, m/s of climb.
         for (int k = 0; k < _nGs; k++) _colScale[IGs(k)] = _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
@@ -170,14 +158,9 @@ public sealed class Scvx6DofSubproblemScs
         if (!_frozen) { _A.Freeze(); _P.Freeze(); _frozen = true; }
         else { _A.EndRefill(); _P.EndRefill(); }
 
-        // Same row equilibration as the ECOS port, and for the same reason:
-        // column scaling to physical units is not enough. Here the symptom was
-        // different - not a numerical breakdown but ADMM refusing to converge
-        // (100k iterations, still 5% off the reference) - but first-order
-        // methods are, if anything, MORE sensitive to row-scale disparity than
-        // an interior-point method, so the same fix applies. SCS's own
-        // `normalize` does its own equilibration internally, but evidently
-        // doesn't fully absorb a problem this poorly scaled to start with.
+        // Same row equilibration as the ECOS port, and for the same reason: column scaling to physical units is not enough.
+        // Here the symptom was different - not a numerical breakdown but ADMM refusing to converge (100k iterations, still 5% off the reference) - but first-order methods are, if anything, MORE sensitive to row-scale disparity than an interior-point method, so the same fix applies.
+        // SCS's own `normalize` does its own equilibration internally, but evidently doesn't fully absorb a problem this poorly scaled to start with.
         EquilibrateRows();
     }
 
@@ -193,10 +176,8 @@ public sealed class Scvx6DofSubproblemScs
                 if (a > rowMax[ir[k]]) rowMax[ir[k]] = a;
             }
 
-        // Every row of a second-order cone must share one scale - scaling them
-        // independently would deform the cone rather than just rescale it. The
-        // gimbal block sits at the tail of the combined matrix, after the
-        // equality and positive-orthant rows.
+        // Every row of a second-order cone must share one scale - scaling them independently would deform the cone rather than just rescale it.
+        // The gimbal block sits at the tail of the combined matrix, after the equality and positive-orthant rows.
         int off = _nEq + _lDim;
         foreach (int d in _socDims)
         {
@@ -206,33 +187,18 @@ public sealed class Scvx6DofSubproblemScs
             off += d;
         }
 
-        // Bound the row norms before inverting, exactly as SCS's own Ruiz
-        // equilibration does (apply_limit in scs_matrix.c, "need to bound to 1
-        // for rows of all zeros, otherwise blows up").
+        // Bound the row norms before inverting, exactly as SCS's own Ruiz equilibration does (apply_limit in scs_matrix.c, "need to bound to 1 for rows of all zeros, otherwise blows up").
         //
-        // HISTORY, because this looks like defensive padding and was not. The tilt
-        // constraint used to be an orthant row linearising R22 >= cos(tilt_max)
-        // about the reference quaternion, with gradient (-4*qx, -4*qy) - EXACTLY
-        // ZERO for a perfectly vertical booster and tiny for a nearly-vertical one,
-        // which is the whole flight - against a constant term of O(0.13). Dividing
-        // that row by a ~1e-3 norm amplified the right-hand side by a thousand and
-        // wrecked the conditioning of an otherwise well-scaled problem. Unbounded,
-        // it made every SCvx iteration past the first fail to converge in 100k ADMM
-        // iterations at any trust-region size - and shrinking the trust region did
-        // not help, which is what gave it away.
+        // HISTORY, because this looks like defensive padding and was not.
+        // The tilt constraint used to be an orthant row linearising R22 >= cos(tilt_max) about the reference quaternion, with gradient (-4*qx, -4*qy) - EXACTLY ZERO for a perfectly vertical booster and tiny for a nearly-vertical one, which is the whole flight - against a constant term of O(0.13).
+        // Dividing that row by a ~1e-3 norm amplified the right-hand side by a thousand and wrecked the conditioning of an otherwise well-scaled problem.
+        // Unbounded, it made every SCvx iteration past the first fail to converge in 100k ADMM iterations at any trust-region size - and shrinking the trust region did not help, which is what gave it away.
         //
-        // That row no longer exists: the tilt limit is an exact SOC now (see
-        // AssembleCone), whose radius row is genuinely empty but takes its block's
-        // shared scale from the two quaternion rows beside it, so it never reaches
-        // the clamp. The clamp stays because SCS applies the same one for the same
-        // reason, and a future row that vanishes should degrade rather than explode.
-        // Only the LOWER bound is applied. SCS pairs it with an upper clamp of
-        // 1e4, but that is inside its own Ruiz iteration on already-scaled data;
-        // imposing it on raw rows here is actively harmful - the mass trust-region
-        // rows legitimately have norm ~2.5e5 (Xscale for mass), and clamping
-        // leaves them 25x unnormalised, which broke the FIRST iteration that had
-        // previously converged. Large rows are exactly the ones equilibration
-        // exists to fix; only vanishing ones need protecting from inversion.
+        // That row no longer exists: the tilt limit is an exact SOC now (see AssembleCone), whose radius row is genuinely empty but takes its block's shared scale from the two quaternion rows beside it, so it never reaches the clamp.
+        // The clamp stays because SCS applies the same one for the same reason, and a future row that vanishes should degrade rather than explode.
+        // Only the LOWER bound is applied.
+        // SCS pairs it with an upper clamp of 1e4, but that is inside its own Ruiz iteration on already-scaled data; imposing it on raw rows here is actively harmful - the mass trust-region rows legitimately have norm ~2.5e5 (Xscale for mass), and clamping leaves them 25x unnormalised, which broke the FIRST iteration that had previously converged.
+        // Large rows are exactly the ones equilibration exists to fix; only vanishing ones need protecting from inversion.
         const double MinRowNorm = 1e-4;
         var inv = new double[_nCone];
         for (int i = 0; i < _nCone; i++)
@@ -336,10 +302,8 @@ public sealed class Scvx6DofSubproblemScs
                 AddP(IX(k, Dynamics6Dof.IW + i), IX(k, Dynamics6Dof.IW + i), 2.0 * _cfg.WW);
 
         // Proximal term: ProximalWeight * sum_k ||(X[k]-Xbar[k])/Xscale||^2.
-        // Expanding gives a diagonal P contribution 2*w/xs^2 and a LINEAR term
-        // -2*w*xbar/xs^2; the constant xbar'xbar is dropped as it cannot change the
-        // argmin. Conditions P exactly as WW did but centred on the reference, so it
-        // biases nothing and is zero at convergence.
+        // Expanding gives a diagonal P contribution 2*w/xs^2 and a LINEAR term -2*w*xbar/xs^2; the constant xbar'xbar is dropped as it cannot change the argmin.
+        // Conditions P exactly as WW did but centred on the reference, so it biases nothing and is zero at convergence.
         if (_cfg.ProximalWeight > 0.0)
             for (int k = 0; k < _n; k++)
                 for (int i = 0; i < NX; i++)
@@ -358,21 +322,12 @@ public sealed class Scvx6DofSubproblemScs
                 AddP(IW(k, i), IW(k, i), 2.0 * w);
             }
 
-        // Path-constraint slacks: LINEAR (L1) penalties, not quadratic. An L1
-        // penalty is EXACT - above a finite weight the solution is identical to the
-        // hard-constrained one, so the slack sits at zero whenever the corridor is
-        // reachable and only opens when the alternative is having no plan at all. A
-        // quadratic penalty would instead always trade a little violation for a
-        // little objective, quietly flying just outside the cone forever.
+        // Path-constraint slacks: LINEAR (L1) penalties, not quadratic.
+        // An L1 penalty is EXACT - above a finite weight the solution is identical to the hard-constrained one, so the slack sits at zero whenever the corridor is reachable and only opens when the alternative is having no plan at all.
+        // A quadratic penalty would instead always trade a little violation for a little objective, quietly flying just outside the cone forever.
         //
-        // The penalty applies to the NORMALISED slack (violation / XScale), which is
-        // what makes the weight dimensionless and comparable with the rest of the
-        // objective - the fuel term is -m_final/m_init, so everything here is order
-        // 1. Penalising the RAW slack instead puts a coefficient of
-        // weight * XScale = 1e6 next to terms of order 1e-2, and SCS does not merely
-        // solve that slowly: it returns "unbounded", because a cost that lopsided
-        // makes the dual infeasible to working precision. Dividing by the same scale
-        // the column already carries keeps the two in step even if that scale changes.
+        // The penalty applies to the NORMALISED slack (violation / XScale), which is what makes the weight dimensionless and comparable with the rest of the objective - the fuel term is -m_final/m_init, so everything here is order
+        // 1. Penalising the RAW slack instead puts a coefficient of weight * XScale = 1e6 next to terms of order 1e-2, and SCS does not merely solve that slowly: it returns "unbounded", because a cost that lopsided makes the dual infeasible to working precision. Dividing by the same scale the column already carries keeps the two in step even if that scale changes.
         for (int k = 0; k < _nGs; k++)
             _c[IGs(k)] += _cfg.GlideSlopeWeight * _colScale[IGs(k)] / _xs[Dynamics6Dof.IR];
         for (int k = 0; k < _nVz; k++)
@@ -386,12 +341,7 @@ public sealed class Scvx6DofSubproblemScs
 
     // -------------------------------------------------------------- equalities
 
-    // Identical construction to the deleted ECOS port's AssembleEqualities - same
-    // trapezoidal, time-dilated, virtual-controlled dynamics, same interior-only
-    // quaternion tangent plane (nodes 0 and N-1 are pinned outright, so including
-    // them there is a linearly dependent row; that redundancy was diagnosed
-    // against ECOS but is a property of the constraint set, not the solver, so it
-    // applies here too).
+    // Identical construction to the deleted ECOS port's AssembleEqualities - same trapezoidal, time-dilated, virtual-controlled dynamics, same interior-only quaternion tangent plane (nodes 0 and N-1 are pinned outright, so including them there is a linearly dependent row; that redundancy was diagnosed against ECOS but is a property of the constraint set, not the solver, so it applies here too).
     private void AssembleEqualities(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf,
                                     double[] xbar, double[] ubar, double sigBar,
                                     double[] A, double[] B, double[] f0)
@@ -406,8 +356,8 @@ public sealed class Scvx6DofSubproblemScs
         for (int i = 0; i < NX - 1; i++)
         {
             AddA(row, IX(_n - 1, i), 1.0);
-            // Terminal POSITION may miss, if softened: X[n-1] - (s+ - s-) = xf, with
-            // both slacks non-negative and penalised. Velocity and attitude stay hard
+            // Terminal POSITION may miss, if softened: X[n-1] - (s+ - s-) = xf, with both slacks non-negative and penalised.
+            // Velocity and attitude stay hard
             // - arriving at rest and upright is the part that must not be traded.
             if (_nTmPos > 0 && i >= Dynamics6Dof.IR && i < Dynamics6Dof.IR + 3)
             {
@@ -476,9 +426,7 @@ public sealed class Scvx6DofSubproblemScs
 
     // ------------------------------------------------------------------- cone
 
-    // Same positive-orthant rows as the ECOS port's AssembleCone, minus the
-    // three epigraph cones (now handled by P instead), written starting at row
-    // offset _nEq since SCS stacks equalities and cone rows into one matrix.
+    // Same positive-orthant rows as the ECOS port's AssembleCone, minus the three epigraph cones (now handled by P instead), written starting at row offset _nEq since SCS stacks equalities and cone rows into one matrix.
     private void AssembleCone(ReadOnlySpan<double> xf, double[] xbar, double[] ubar,
                               double sigBar, double tr)
     {
@@ -522,11 +470,8 @@ public sealed class Scvx6DofSubproblemScs
 
         // CLIMB RATE, from node 1 onward: v_z - d_k <= VzMax, d_k >= 0.
         //
-        // Node 0 is excluded on purpose. It is pinned by an equality to the measured
-        // state, so constraining it constrains a value the solver cannot change -
-        // and a vehicle that happens to be moving upward at that instant (a gust, a
-        // wobble, the pitch-over after ignition) would make the whole problem
-        // infeasible rather than merely expensive.
+        // Node 0 is excluded on purpose.
+        // It is pinned by an equality to the measured state, so constraining it constrains a value the solver cannot change - and a vehicle that happens to be moving upward at that instant (a gust, a wobble, the pitch-over after ignition) would make the whole problem infeasible rather than merely expensive.
         for (int k = 0; k < _nVz; k++)
         {
             AddA(row, IX(k + 1, Dynamics6Dof.IV + 2), 1.0);
@@ -574,15 +519,10 @@ public sealed class Scvx6DofSubproblemScs
         // GLIDESLOPE, from node 1 onward, as a second-order cone:
         //     ||r_xy[k] - target_xy||  <=  cot(angle) * (r_z[k] - target_z) + g_k
         //
-        // SCS reads a SOC block as s = b - Ax with s[0] >= ||s[1:]||, so the three
-        // rows carry the cone's height and its two horizontal offsets. Excluded at
-        // node 0 for the same reason as the climb rate, and slackened by g_k for a
-        // sharper one: alone, either constraint is survivable, but a vehicle that is
-        // both outside the cone and too low can only get back inside by CLIMBING -
-        // which the climb-rate row forbids. Hard versions of the two together can
-        // trap the vehicle in a region with no feasible exit at all. Soft versions
-        // cannot, and the L1 penalty keeps the slack at exactly zero whenever the
-        // corridor is actually reachable.
+        // SCS reads a SOC block as s = b - Ax with s[0] >= ||s[1:]||, so the three rows carry the cone's height and its two horizontal offsets.
+        // Excluded at node 0 for the same reason as the climb rate, and slackened by g_k for a sharper one: alone, either constraint is survivable, but a vehicle that is both outside the cone and too low can only get back inside by CLIMBING - which the climb-rate row forbids.
+        // Hard versions of the two together can trap the vehicle in a region with no feasible exit at all.
+        // Soft versions cannot, and the L1 penalty keeps the slack at exactly zero whenever the corridor is actually reachable.
         double cot = _cfg.CotGlideSlope;
         for (int k = 0; k < _nGs; k++)
         {
@@ -598,11 +538,10 @@ public sealed class Scvx6DofSubproblemScs
             _b[row++] = -xf[Dynamics6Dof.IR + 1];
         }
 
-        // TILT, as an EXACT second-order cone:  ||(qx[k], qy[k])|| <= sin(tiltMax/2).
+        // TILT, as an EXACT second-order cone: ||(qx[k], qy[k])|| <= sin(tiltMax/2).
         //
-        // WHAT THIS REPLACED. The tilt limit is tilt <= tiltMax with
-        // tilt = acos(R22) and R22 = 1 - 2(qx^2 + qy^2), and it used to be enforced
-        // by LINEARISING R22 >= cos(tiltMax) about the reference quaternion:
+        // WHAT THIS REPLACED.
+        // The tilt limit is tilt <= tiltMax with tilt = acos(R22) and R22 = 1 - 2(qx^2 + qy^2), and it used to be enforced by LINEARISING R22 >= cos(tiltMax) about the reference quaternion:
         //
         //     r22  = 1 - 2*(qx^2 + qy^2)                 evaluated at the reference
         //     dqx  = -4*qx,  dqy = -4*qy                 its gradient
@@ -610,40 +549,24 @@ public sealed class Scvx6DofSubproblemScs
         //
         // one ORTHANT row per node, rebuilt every SCvx iteration from xbar.
         //
-        // WHY THAT FAILED, AND ONLY WHEN VERTICAL. The gradient (-4*qx, -4*qy) is
-        // EXACTLY ZERO for a perfectly vertical vehicle and tiny for a nearly
-        // vertical one - so the row degenerated to 0 <= 1 - cos(tiltMax), which is
-        // trivially true and carries no information about qx or qy at all. To first
-        // order the subproblem could not see the tilt limit.
+        // WHY THAT FAILED, AND ONLY WHEN VERTICAL.
+        // The gradient (-4*qx, -4*qy) is EXACTLY ZERO for a perfectly vertical vehicle and tiny for a nearly vertical one - so the row degenerated to 0 <= 1 - cos(tiltMax), which is trivially true and carries no information about qx or qy at all.
+        // To first order the subproblem could not see the tilt limit.
         //
-        // Worse than merely blind: R22 is CONCAVE in (qx, qy), so its linearisation
-        // OVER-estimates it, and the linearised feasible set is a RELAXATION. The
-        // subproblem would tilt to the trust-region bound believing it free, the
-        // nonlinear defect check would reject the step, and the next iteration -
-        // linearising about a now-tilted reference with a large gradient - would haul
-        // it back. That oscillation is why a descent that was already vertical
-        // converged far worse than a bellyflop, and why nudging the vehicle a few
-        // degrees off vertical fixed it: a non-zero qx, qy restores the gradient.
-        // No amount of proximal weight can help, because the fault is in the
-        // FEASIBLE SET, not in the conditioning of the objective.
+        // Worse than merely blind: R22 is CONCAVE in (qx, qy), so its linearisation OVER-estimates it, and the linearised feasible set is a RELAXATION.
+        // The subproblem would tilt to the trust-region bound believing it free, the nonlinear defect check would reject the step, and the next iteration - linearising about a now-tilted reference with a large gradient - would haul it back.
+        // That oscillation is why a descent that was already vertical converged far worse than a bellyflop, and why nudging the vehicle a few degrees off vertical fixed it: a non-zero qx, qy restores the gradient.
+        // No amount of proximal weight can help, because the fault is in the FEASIBLE SET, not in the conditioning of the objective.
         //
-        // WHY THIS FORM IS EXACT. Squaring out the same inequality:
-        //     1 - 2(qx^2 + qy^2) >= cos(tiltMax)
-        //       <=> qx^2 + qy^2 <= (1 - cos(tiltMax))/2 = sin^2(tiltMax/2)
-        // which is a norm ball of CONSTANT radius on (qx, qy) - already convex, so
-        // it needs no linearisation, has no reference dependence, and is identical
-        // at every iteration including one seeded dead vertical.
+        // WHY THIS FORM IS EXACT.
+        // Squaring out the same inequality:
+        // 1 - 2(qx^2 + qy^2) >= cos(tiltMax) <=> qx^2 + qy^2 <= (1 - cos(tiltMax))/2 = sin^2(tiltMax/2) which is a norm ball of CONSTANT radius on (qx, qy) - already convex, so it needs no linearisation, has no reference dependence, and is identical at every iteration including one seeded dead vertical.
         //
         // It relies on ||q|| = 1, but so did the expression it replaces: R22 is only
-        // 1 - 2(qx^2 + qy^2) for a unit quaternion. The unit-norm equality is itself
-        // linearised (see the qbar.q = 1 rows in AssembleEqualities), so this cone is
-        // exact to precisely the degree the orthant row already was.
+        // 1 - 2(qx^2 + qy^2) for a unit quaternion. The unit-norm equality is itself linearised (see the qbar.q = 1 rows in AssembleEqualities), so this cone is exact to precisely the degree the orthant row already was.
         //
-        // SOC rows are s = b - Ax with s[0] >= ||s[1:]||, so s[0] is the constant
-        // radius - a row with NO matrix entries at all - and s[1], s[2] are qx, qy.
-        // The all-zero row is harmless: EquilibrateRows gives every row of a SOC
-        // block the block's shared scale, and rows 1 and 2 carry the quaternion
-        // scale, so nothing is divided by a vanishing norm.
+        // SOC rows are s = b - Ax with s[0] >= ||s[1:]||, so s[0] is the constant radius - a row with NO matrix entries at all - and s[1], s[2] are qx, qy.
+        // The all-zero row is harmless: EquilibrateRows gives every row of a SOC block the block's shared scale, and rows 1 and 2 carry the quaternion scale, so nothing is divided by a vanishing norm.
         double tiltRadius = _cfg.SinHalfTilt;
         for (int k = 0; k < _n; k++)
         {
@@ -769,9 +692,8 @@ public sealed class Scvx6DofSubproblemScs
         for (int col = 0; col < _nVars; col++)
         {
             bool hasQuadratic = pjc[col + 1] > pjc[col];
-            // A column only BOUNDS its variable through rows that can stop it: a
-            // nonneg or SOC row. An equality row constrains it relative to others
-            // but cannot on its own stop it running off.
+            // A column only BOUNDS its variable through rows that can stop it: a nonneg or SOC row.
+            // An equality row constrains it relative to others but cannot on its own stop it running off.
             bool bounded = false;
             for (int k = ajc[col]; k < ajc[col + 1]; k++)
                 if (air[k] >= _nEq && apr[k] != 0.0) { bounded = true; break; }
@@ -835,9 +757,7 @@ public sealed class Scvx6DofSubproblemScs
         if (_socDims.Any(d => d < 0))
             sb.AppendLine("  FAIL (validate_cones): a SOC dimension is negative");
 
-        // c and b finiteness - SCS doesn't explicitly validate this, but a NaN
-        // or Infinity here is exactly the kind of thing that would otherwise
-        // masquerade as an opaque setup failure.
+        // c and b finiteness - SCS doesn't explicitly validate this, but a NaN or Infinity here is exactly the kind of thing that would otherwise masquerade as an opaque setup failure.
         int badC = Array.FindIndex(_c, v => !double.IsFinite(v));
         int badB = Array.FindIndex(_b, v => !double.IsFinite(v));
         if (badC >= 0) sb.AppendLine($"  WARN: c[{badC}] = {_c[badC]} is not finite");

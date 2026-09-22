@@ -58,9 +58,7 @@ public sealed class CubicBSplineNd
     /// <summary>Fixed at construction: evaluation must not change behaviour mid-flight.</summary>
     public EdgeMode EdgeMode { get; }
 
-    // ---------------------------------------------------------------
-    // Construction
-    // ---------------------------------------------------------------
+    // --------------------------------------------------------------- Construction ---------------------------------------------------------------
 
     /// <param name="grids">One array per axis, each strictly increasing, length >= 2.</param>
     /// <param name="values">
@@ -97,10 +95,9 @@ public sealed class CubicBSplineNd
         var axes = new Axis[rank];
         for (int a = 0; a < rank; a++) axes[a] = new Axis(grids[a]);
 
-        // Successively replace sample values along each axis by B-spline
-        // coefficients. After axis a is processed that axis has grown from
-        // n to n + 2. Because the spline is a tensor product, doing this one
-        // axis at a time is exact -- there is no N-dimensional system.
+        // Successively replace sample values along each axis by B-spline coefficients.
+        // After axis a is processed that axis has grown from n to n + 2.
+        // Because the spline is a tensor product, doing this one axis at a time is exact -- there is no N-dimensional system.
         var shape = new int[rank];
         for (int a = 0; a < rank; a++) shape[a] = grids[a].Length;
 
@@ -163,9 +160,7 @@ public sealed class CubicBSplineNd
         return dst;
     }
 
-    // ---------------------------------------------------------------
-    // Evaluation
-    // ---------------------------------------------------------------
+    // --------------------------------------------------------------- Evaluation ---------------------------------------------------------------
 
     public double[] Evaluate(params double[] point)
     {
@@ -252,13 +247,10 @@ public sealed class CubicBSplineNd
             for (int c = 0; c < OutputDim; c++) value[c] += delta[a] * g[c];
         }
 
-        // For an axis b that is OUTSIDE, d f_ext / d u_b is exactly df/dx_b(t):
-        // the boundary point does not move, so the slope is constant out there
-        // and the gradient already holds the right number.
+        // For an axis b that is OUTSIDE, d f_ext / d u_b is exactly df/dx_b(t): the boundary point does not move, so the slope is constant out there and the gradient already holds the right number.
         //
-        // For an axis b that is INSIDE, moving u_b moves the boundary point that
-        // the outside axes extrapolate from, which brings in one mixed second
-        // derivative per outside axis. No diagonal second derivatives are needed.
+        // For an axis b that is INSIDE, moving u_b moves the boundary point that the outside axes extrapolate from, which brings in one mixed second derivative per outside axis.
+        // No diagonal second derivatives are needed.
         Span<double> mixed = OutputDim <= 8 ? stackalloc double[8] : new double[OutputDim];
         for (int b = 0; b < rank; b++)
         {
@@ -400,9 +392,7 @@ public sealed class CubicBSplineNd
         }
     }
 
-    // ---------------------------------------------------------------
-    // Per-axis machinery
-    // ---------------------------------------------------------------
+    // --------------------------------------------------------------- Per-axis machinery ---------------------------------------------------------------
 
     /// <summary>
     /// Knot vector, span search, basis evaluation, and a prefactored tridiagonal
@@ -421,8 +411,8 @@ public sealed class CubicBSplineNd
         private readonly double _bcStart; // basis 2nd-deriv weight on c[0]
         private readonly double _bcEnd;   // basis 2nd-deriv weight on c[nc-1]
 
-        // End-curvature estimator: f''(x[0]) ~ sum_j _w0[j]*y[j], and
-        // f''(x[n-1]) ~ sum_j _w1[j]*y[n-_endM+j]. Depends only on the grid.
+        // End-curvature estimator: f''(x[0]) ~ sum_j _w0[j]*y[j], and f''(x[n-1]) ~ sum_j _w1[j]*y[n-_endM+j].
+        // Depends only on the grid.
         private readonly double[] _w0 = new double[Order];
         private readonly double[] _w1 = new double[Order];
         private readonly int _endM;
@@ -437,17 +427,14 @@ public sealed class CubicBSplineNd
             Min = x[0];
             Max = x[_n - 1];
 
-            // Clamped knot vector with knots at the interior data sites:
-            // [x0 x0 x0 x0, x1 .. x(n-2), x(n-1) x(n-1) x(n-1) x(n-1)]
+            // Clamped knot vector with knots at the interior data sites: [x0 x0 x0 x0, x1 .. x(n-2), x(n-1) x(n-1) x(n-1) x(n-1)]
             _knots = new double[_n + 6];
             for (int i = 0; i < 4; i++) _knots[i] = x[0];
             for (int i = 1; i < _n - 1; i++) _knots[i + 3] = x[i];
             for (int i = 0; i < 4; i++) _knots[_n + 2 + i] = x[_n - 1];
 
             // End curvature from a local cubic (or quadratic if only 3 samples).
-            // With 2 samples there is no curvature information and the weights
-            // stay zero, which reproduces the natural condition and the straight
-            // line -- the right answer for two points.
+            // With 2 samples there is no curvature information and the weights stay zero, which reproduces the natural condition and the straight line -- the right answer for two points.
             _endM = Math.Min(Order, _n);
             if (_endM >= 3)
             {
@@ -462,10 +449,7 @@ public sealed class CubicBSplineNd
             var row = new double[nc];
             Span<double> ders = stackalloc double[PerAxis];
 
-            // The two endpoint interpolation conditions collapse to
-            // c[0] = y[0] and c[nc-1] = y[n-1] because the knot vector is
-            // clamped, which is what leaves a genuinely tridiagonal system
-            // in the remaining n unknowns c[1..n].
+            // The two endpoint interpolation conditions collapse to c[0] = y[0] and c[nc-1] = y[n-1] because the knot vector is clamped, which is what leaves a genuinely tridiagonal system in the remaining n unknowns c[1..n].
 
             // Row 0: S''(x[0]) = estimated end curvature.
             int span = FindSpan(x[0]);
@@ -497,10 +481,8 @@ public sealed class CubicBSplineNd
             dia[_n - 1] = row[_n];
             _bcEnd = row[_n + 1];
 
-            // Forward elimination, storing multipliers for reuse. The interior
-            // rows are B-spline collocation rows and the two end rows are
-            // second-derivative rows; the assembled system is diagonally
-            // dominant, so elimination without pivoting is safe here.
+            // Forward elimination, storing multipliers for reuse.
+            // The interior rows are B-spline collocation rows and the two end rows are second-derivative rows; the assembled system is diagonally dominant, so elimination without pivoting is safe here.
             _mult = new double[_n];
             for (int i = 1; i < _n; i++)
             {
@@ -531,8 +513,7 @@ public sealed class CubicBSplineNd
                     for (int j = m - 1; j >= k; j--)
                         dd[j] = (dd[j] - dd[j - 1]) / (x[offset + j] - x[offset + j - k]);
 
-                // p(t) = c0 + c1(t-x0) + c2(t-x0)(t-x1) + c3(t-x0)(t-x1)(t-x2)
-                // p''(t) = 2*c2 + 2*c3*(3t - x0 - x1 - x2)
+                // p(t) = c0 + c1(t-x0) + c2(t-x0)(t-x1) + c3(t-x0)(t-x1)(t-x2) p''(t) = 2*c2 + 2*c3*(3t - x0 - x1 - x2)
                 double v = 2.0 * dd[2];
                 if (m == 4)
                     v += 2.0 * dd[3] *

@@ -87,8 +87,8 @@ public struct DragCoastSystem : IOdeSystem
         dx[1] = vy;
         dx[2] = vz;
 
-        // Newtonian gravity. The floor keeps Sqrt's derivative finite at the origin,
-        // which the integrator should never visit but a diverged iterate might.
+        // Newtonian gravity.
+        // The floor keeps Sqrt's derivative finite at the origin, which the integrator should never visit but a diverged iterate might.
         Dual r2 = rx * rx + ry * ry + rz * rz + 1e-12;
         Dual rlen = Dual.Sqrt(r2);
         Dual gk = -Mu / (r2 * rlen);
@@ -100,8 +100,7 @@ public struct DragCoastSystem : IOdeSystem
         if (!HasDrag)
             return;
 
-        // Air-relative velocity: v - omega x r, with omega = (0, 0, w) so
-        // omega x r = (-w*ry, w*rx, 0).
+        // Air-relative velocity: v - omega x r, with omega = (0, 0, w) so omega x r = (-w*ry, w*rx, 0).
         Dual ax = vx + OmegaZ * ry;
         Dual ay = vy - OmegaZ * rx;
         Dual az = vz;
@@ -110,9 +109,7 @@ public struct DragCoastSystem : IOdeSystem
         Dual speed = Dual.Sqrt(speed2);
 
         Dual rho = Atmosphere.Density(rlen - MeanRadius);
-        // Above the atmosphere Density returns a hard zero with a zero derivative, so
-        // this short-circuits to no drag AND no drag sensitivity - which is correct,
-        // not merely convenient: there is no air there to be sensitive to.
+        // Above the atmosphere Density returns a hard zero with a zero derivative, so this short-circuits to no drag AND no drag sensitivity - which is correct, not merely convenient: there is no air there to be sensitive to.
         if (rho.V == 0.0)
             return;
 
@@ -296,16 +293,11 @@ public static class ImpactPredictor
             return result;
         }
 
-        // WHERE THE FINE STEP STARTS. Not the atmosphere's top: KSA puts that where
-        // density reaches 1e-9 kg/m^3, which is 167 km on Earth, so switching there
-        // would put essentially every suborbital trajectory on the fine step for its
-        // entire flight - which is exactly what it used to do, and what made a
-        // prediction cost milliseconds it did not need to.
+        // WHERE THE FINE STEP STARTS.
+        // Not the atmosphere's top: KSA puts that where density reaches 1e-9 kg/m^3, which is 167 km on Earth, so switching there would put essentially every suborbital trajectory on the fine step for its entire flight - which is exactly what it used to do, and what made a prediction cost milliseconds it did not need to.
         //
-        // Eight scale heights is where density is down by e^-8, about a three
-        // thousandth of sea level. Above that the drag acceleration on a booster is
-        // small AND slowly varying, which is the condition a coarse RK4 step wants;
-        // below it, drag is the fastest thing in the dynamics.
+        // Eight scale heights is where density is down by e^-8, about a three thousandth of sea level.
+        // Above that the drag acceleration on a booster is small AND slowly varying, which is the condition a coarse RK4 step wants; below it, drag is the fastest thing in the dynamics.
         double fineAltitude = sys.Atmosphere != null
             ? FineStepScaleHeights * sys.Atmosphere.ScaleHeight
             : 0.0;
@@ -332,10 +324,8 @@ public static class ImpactPredictor
                 break;
             }
 
-            // Coarse above the air, fine inside it. The switch is on the CURRENT
-            // altitude, so a step that enters the atmosphere is the last coarse one -
-            // which is why the boundary is checked against the atmosphere top rather
-            // than the target radius, giving a full step of margin.
+            // Coarse above the air, fine inside it.
+            // The switch is on the CURRENT altitude, so a step that enters the atmosphere is the last coarse one - which is why the boundary is checked against the atmosphere top rather than the target radius, giving a full step of margin.
             double alt = Radius(x) - sys.MeanRadius;
             double h = alt > fineAltitude ? opt.StepVacuum : opt.StepAir;
             if (t.V + h > opt.MaxTime)
@@ -355,30 +345,19 @@ public static class ImpactPredictor
 
             if (rNext <= opt.TargetRadius)
             {
-                // The step crossed the surface. Solve g(dt) = |x(t + dt)| - R = 0 for
-                // the partial step that lands exactly on it, by NEWTON'S METHOD in
-                // Dual arithmetic:
+                // The step crossed the surface.
+                // Solve g(dt) = |x(t + dt)| - R = 0 for the partial step that lands exactly on it, by NEWTON'S METHOD in Dual arithmetic:
                 //
                 //     dt <- dt - g(dt) / (d|r|/dt),    d|r|/dt = (r . v) / |r|
                 //
-                // Newton rather than the bisection or regula falsi this obviously
-                // wants, for a reason that is entirely about the derivative. A bracket
-                // method's iterate is a SECANT estimate of the root, so differentiating
-                // it gives a secant estimate of the root's sensitivity - converging,
-                // but a good deal slower than the value, and silently short by a few
-                // percent at any iteration count you would actually use.
+                // Newton rather than the bisection or regula falsi this obviously wants, for a reason that is entirely about the derivative.
+                // A bracket method's iterate is a SECANT estimate of the root, so differentiating it gives a secant estimate of the root's sensitivity - converging, but a good deal slower than the value, and silently short by a few percent at any iteration count you would actually use.
                 //
-                // Newton in Duals converges the derivative EXACTLY, and does it in one
-                // step from a converged value, whatever derivative the starting guess
-                // carried. Differentiating dt' = dt - g/g_dot and using g -> 0 leaves
-                // dt' = -(dg/dx0)/g_dot, which is the implicit function theorem - the
-                // exact d(time of flight)/d(initial state). That is the term an
-                // event-terminated integration usually loses, and losing it makes the
-                // impact point's Jacobian wrong by more than a factor of two here.
+                // Newton in Duals converges the derivative EXACTLY, and does it in one step from a converged value, whatever derivative the starting guess carried.
+                // Differentiating dt' = dt - g/g_dot and using g -> 0 leaves dt' = -(dg/dx0)/g_dot, which is the implicit function theorem - the exact d(time of flight)/d(initial state).
+                // That is the term an event-terminated integration usually loses, and losing it makes the impact point's Jacobian wrong by more than a factor of two here.
                 //
-                // The bracket is still computed, purely as a guard: a grazing pass
-                // makes r . v small and Newton's step unbounded, and there the
-                // interpolated value is the safe answer.
+                // The bracket is still computed, purely as a guard: a grazing pass makes r . v small and Newton's step unbounded, and there the interpolated value is the safe answer.
                 double gLo = Radius(x) - opt.TargetRadius;      // > 0
                 double gHi = rNext - opt.TargetRadius;          // <= 0
                 double frac = gLo / (gLo - gHi);
@@ -395,8 +374,8 @@ public static class ImpactPredictor
                     Dual rlen = Dual.Sqrt(rx * rx + ry * ry + rz * rz + 1e-12);
                     Dual g = rlen - opt.TargetRadius;
 
-                    // d|r|/dt along the trajectory. Negative on the way down, and the
-                    // steeper the descent the better conditioned this is.
+                    // d|r|/dt along the trajectory.
+                    // Negative on the way down, and the steeper the descent the better conditioned this is.
                     Dual rdot = (rx * xTrial[3] + ry * xTrial[4] + rz * xTrial[5]) / rlen;
                     if (System.Math.Abs(rdot.V) < 1e-6)
                         break;                      // grazing: keep the bracketed value
@@ -415,8 +394,8 @@ public static class ImpactPredictor
                 result.Rx = xTrial[0]; result.Ry = xTrial[1]; result.Rz = xTrial[2];
                 result.Vx = xTrial[3]; result.Vy = xTrial[4]; result.Vz = xTrial[5];
 
-                // Into the co-rotating frame, IN DUAL, so the time-of-flight term in
-                // the rotation angle survives. See ImpactPrediction.Fx.
+                // Into the co-rotating frame, IN DUAL, so the time-of-flight term in the rotation angle survives.
+                // See ImpactPrediction.Fx.
                 Dual ang = -sys.OmegaZ * result.TimeOfFlight;
                 Dual ca = Dual.Cos(ang), sa = Dual.Sin(ang);
                 result.Fx = result.Rx * ca - result.Ry * sa;
@@ -485,8 +464,7 @@ public static class ImpactPredictor
 
         for (int j = 0; j < 3; j++)
         {
-            // Seed one velocity component; everything else, including the whole
-            // position, is a constant of this sweep.
+            // Seed one velocity component; everything else, including the whole position, is a constant of this sweep.
             for (int i = 0; i < N; i++)
                 x[i] = i == 3 + j ? Dual.Seed(x0[i]) : new Dual(x0[i]);
 

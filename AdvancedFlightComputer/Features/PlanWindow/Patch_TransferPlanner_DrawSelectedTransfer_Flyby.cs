@@ -39,8 +39,8 @@ internal static class Patch_TransferPlanner_DrawSelectedTransfer_Flyby
         }
         catch (Exception ex)
         {
-            // Fails open, because a broken check must never remove stock's own
-            // preview. Deduped because it runs per frame.
+            // Fails open, because a broken check must never remove stock's own preview.
+            // Deduped because it runs per frame.
             LogHelper.WarnOnce("flyby-suppress-lines:" + ex.GetType().Name,
                 $"[AFC] Flyby DrawSelectedTransfer prefix: {ex}; leaving stock preview on.");
             return true;

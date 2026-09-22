@@ -8,11 +8,13 @@ using Brutal.Numerics;
 using KSA;
 
 // "Gimbal" tab - a manual probe for KsaGimbalControl.
-//  Not a guidance mode. Its job is to answer the question the 6-DOF port is blocked on: can the mod command thrust vectoring directly, and at what layer? Two modes:
-//  Direct  - same normalized deflection to every gimbal. Proves the write lands.
+// Not a guidance mode.
+// Its job is to answer the question the 6-DOF port is blocked on: can the mod command thrust vectoring directly, and at what layer?
+// Two modes: Direct - same normalized deflection to every gimbal.
+// Proves the write lands.
 //   Torque  - body-frame roll/pitch/yaw through KSA's own per-gimbal geometry.
 //             This is the layer a guidance mode should actually use.
-//  The per-gimbal table shows which body axes each gimbal has leverage over, which is how a main engine and its roll verniers visibly separate.
+// The per-gimbal table shows which body axes each gimbal has leverage over, which is how a main engine and its roll verniers visibly separate.
 public static partial class GuidanceWindow
 {
 

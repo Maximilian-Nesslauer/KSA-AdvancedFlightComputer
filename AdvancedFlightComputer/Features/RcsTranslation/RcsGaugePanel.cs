@@ -91,8 +91,7 @@ internal static class RcsGaugePanel
         // OffsetUv is relative to the main viewport, hence the Pos subtraction.
         float2 topLeft = canvasMinPixels + new float2(0f, canvasSizePixels.Y)
             - ImGui.GetMainViewport().Pos;
-        // ImGauge's window registry has no removal API, so these resources
-        // outlive a mod unload; a stable id caps that at one reused entry.
+        // ImGauge's window registry has no removal API, so these resources outlive a mod unload; a stable id caps that at one reused entry.
         var window = new ImGaugeWindow(
             "AfcRcsBurn", "AFC RCS Burn",
             anchorUv: float2.Zero,
@@ -132,8 +131,7 @@ internal static class RcsGaugePanel
             {
                 if (!label.IsEmpty)
                     ImGauge.Label(new float2(labelX, y), labelSize, label, in text);
-                // ImGauge.Button lays its hit area at the ImGui cursor; there
-                // is no positioned overload.
+                // ImGauge.Button lays its hit area at the ImGui cursor; there is no positioned overload.
                 ImGui.SetCursorScreenPos(new float2(valueX, y));
                 bool clicked = ImGauge.Button(value, valueSize, in style);
                 y += rowH + gap;

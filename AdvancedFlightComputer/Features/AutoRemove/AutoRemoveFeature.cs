@@ -11,8 +11,8 @@ internal static class AutoRemoveFeature
 {
     private const string StandaloneModType = "AutoRemoveFinishedBurns.Mod";
 
-    // No patch of its own. The tick runs through SharedVehicleHooks, the RCS completion through
-    // AFC's own event, and the settings section through ModSettingsPage.
+    // No patch of its own.
+    // The tick runs through SharedVehicleHooks, the RCS completion through AFC's own event, and the settings section through ModSettingsPage.
     internal static void ApplyPatches(Harmony harmony)
     {
         AutoRemoveConfig.Init();
@@ -20,8 +20,7 @@ internal static class AutoRemoveFeature
         ModSettingsPage.Register(DrawSection);
     }
 
-    // The standalone mod removes the same burn a tick earlier or later, which the plan lookup
-    // tolerates, so this is a hint rather than a stand-down.
+    // The standalone mod removes the same burn a tick earlier or later, which the plan lookup tolerates, so this is a hint rather than a stand-down.
     internal static void WarnIfStandaloneInstalled()
     {
         if (AccessTools.TypeByName(StandaloneModType) != null)

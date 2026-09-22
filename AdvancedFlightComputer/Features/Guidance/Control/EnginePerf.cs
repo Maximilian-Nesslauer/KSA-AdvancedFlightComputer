@@ -186,8 +186,7 @@ internal static class KsaEnginePerf
         if (demandN >= full)
             return new(hi, full, demandN > full ? ThrustStatus.AboveMaximum : ThrustStatus.Available);
 
-        // Illinois false position: keeps the bracket thrust(lo) < demand <= thrust(hi) like bisection, and
-        // takes the midpoint when the secant point is degenerate or the bracket stops halving.
+        // Illinois false position: keeps the bracket thrust(lo) < demand <= thrust(hi) like bisection, and takes the midpoint when the secant point is degenerate or the bracket stops halving.
         double fLo = minimum - demandN, fHi = full - demandN;
         double tolerance = full * 1e-7;
         int lastSide = 0, stalls = 0;

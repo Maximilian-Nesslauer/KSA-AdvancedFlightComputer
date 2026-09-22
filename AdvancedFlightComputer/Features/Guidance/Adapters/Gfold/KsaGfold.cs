@@ -7,11 +7,13 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
-// Bridges KSA's live vehicle/world state to the standalone G-FOLD convex powered-descent solver (Gfold.Core) and back. G-FOLD works in a local "x is up" frame at the landing site, with uniform gravity and a frame it treats as inertial. We build that frame, express the vehicle state in it (surface-relative, so vf = 0 means at rest on the ground), and after a solve map the first commanded acceleration back to a CCI thrust direction + throttle.
-//  Approximations (all good for a short lunar terminal descent, flagged because they matter for fast-rotating or atmospheric bodies):
-//  - constant gravity, evaluated at the site;
-//  - the site frame rotates with the body but is treated as inertial - the Coriolis/centrifugal terms the original paper carries are dropped, the same simplification as Gfold.Core's v_dot = g + u dynamics;
-//  - no aerodynamics (correct for vacuum worlds; would need a separate entry phase in atmosphere).
+// Bridges KSA's live vehicle/world state to the G-FOLD powered-descent solver and maps its result back.
+// G-FOLD uses a local "x is up" frame at the landing site, with uniform gravity and an inertial frame.
+// This builds that frame, expresses the vehicle state in it, and maps the first commanded acceleration back to a CCI thrust direction and throttle.
+// The following approximations suit a short lunar terminal descent, but matter on fast-rotating or atmospheric bodies:
+// - It uses constant gravity evaluated at the site.
+// - It treats the body-fixed site frame as inertial, so it omits Coriolis and centrifugal terms as Gfold.Core does in v_dot = g + u dynamics.
+// - It omits aerodynamics, which requires a separate entry phase in an atmosphere.
 internal static class KsaGfold
 {
     private const double G0 = 9.80665;
@@ -127,8 +129,8 @@ internal static class KsaGfold
         return "";
     }
 
-    // The first-node control of a solved trajectory, mapped back to the world:
-    // a unit CCI thrust direction and a throttle fraction (commanded thrust over max). G-FOLD's u already excludes gravity, so thrust = mass * |u|.
+    // Maps the solved first-node control to a unit CCI thrust direction and throttle fraction.
+    // G-FOLD's u excludes gravity, so thrust = mass * |u|.
     internal static (double3 dirCci, double throttle) FirstControl(
         GfoldTrajectory traj, Frame frame, double mass, double thrustMax)
     {
@@ -136,8 +138,7 @@ internal static class KsaGfold
         var uLocal = new double3(u0[0], u0[1], u0[2]);
         double accel = uLocal.Length();
 
-        // Guard against a non-finite or zero command (degenerate/inaccurate solve):
-        // point up at the throttle the magnitude implies.
+        // A non-finite or zero command is degenerate or inaccurate, so point up at the throttle implied by its magnitude.
         if (!IsFinite(uLocal) || accel < 1e-9)
             return (frame.Ex, Throttle(accel, mass, thrustMax));
 

@@ -122,8 +122,7 @@ internal static class RcsGaugePatches
             }
             catch (Exception ex)
             {
-                // Cosmetic, but a silent swallow would hide a signature
-                // drift after the prefix already suppressed stock's tooltip.
+                // Cosmetic, but a silent swallow would hide a signature drift after the prefix already suppressed stock's tooltip.
                 LogHelper.WarnOnce("rcs-gauge-tooltip",
                     $"[AFC] RCS gauge tooltip failed to draw: {ex.Message}");
             }

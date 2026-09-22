@@ -123,8 +123,7 @@ public static class ClarabelSolver
         if (problem.A != null && problem.B?.Length != p)
             throw new ArgumentException($"b has length {problem.B?.Length}, expected p={p}");
 
-        // Same stacking as the SCS path: equalities on top as a zero cone, then the
-        // orthant, then the second-order cones, matching the cone list built below.
+        // Same stacking as the SCS path: equalities on top as a zero cone, then the orthant, then the second-order cones, matching the cone list built below.
         SparseCcs stacked = problem.A != null
             ? SparseCcs.VStack(problem.A, problem.G)
             : problem.G;
@@ -135,9 +134,9 @@ public static class ClarabelSolver
 
         (double[] pr, int[] jc, int[] ir) = stacked.Build();
 
-        // WIDEN THE INDICES. Clarabel's CSC arrays are uintptr_t; SparseCcs speaks the
-        // 32-bit ints ECOS and SCS both want. Handing the int arrays over directly
-        // would have the native side read them at twice the stride.
+        // WIDEN THE INDICES.
+        // Clarabel's CSC arrays are uintptr_t; SparseCcs speaks the 32-bit ints ECOS and SCS both want.
+        // Handing the int arrays over directly would have the native side read them at twice the stride.
         var colPtr = new nuint[jc.Length];
         for (int i = 0; i < jc.Length; i++) colPtr[i] = (nuint)jc[i];
         var rowVal = new nuint[ir.Length];
@@ -172,10 +171,8 @@ public static class ClarabelSolver
                 ColPtr = Pin(colPtr), RowVal = Pin(rowVal), NzVal = Pin(pr),
             };
 
-            // P is the zero matrix: a linear objective. Clarabel still wants a
-            // well-formed n x n CSC, so hand it one with no entries - an all-zero
-            // column pointer array of length n+1 and null index/value pointers, which
-            // is the representation CscMatrix.h documents for a zero matrix.
+            // P is the zero matrix: a linear objective.
+            // Clarabel still wants a well-formed n x n CSC, so hand it one with no entries - an all-zero column pointer array of length n+1 and null index/value pointers, which is the representation CscMatrix.h documents for a zero matrix.
             var pMat = new ClarabelNative.ClarabelCscMatrix
             {
                 M = (nuint)n, N = (nuint)n,
@@ -186,12 +183,10 @@ public static class ClarabelSolver
                 ClarabelNative.clarabel_DefaultSettings_f64_default();
             settings.Verbose = verbose;
             settings.MaxIter = (uint)Math.Max(1, maxIterations);
-            // INFINITY, NOT ZERO, FOR "NO LIMIT". SCS guards its time limit with
-            // `if (stgs->time_limit_secs)`, so 0 there means "unset"; Clarabel takes
-            // the number literally and its own default is f64::INFINITY. Passing SCS's
-            // 0 made every solve exit immediately with MaxTime after 0 iterations -
-            // while still returning the correct answer, because it had already been
-            // computed. The same parameter name, opposite meanings for the same value.
+            // INFINITY, NOT ZERO, FOR "NO LIMIT".
+            // SCS guards its time limit with `if (stgs->time_limit_secs)`, so 0 there means "unset"; Clarabel takes the number literally and its own default is f64::INFINITY.
+            // Passing SCS's 0 made every solve exit immediately with MaxTime after 0 iterations - while still returning the correct answer, because it had already been computed.
+            // The same parameter name, opposite meanings for the same value.
             settings.TimeLimit = timeLimitS > 0 ? timeLimitS : double.PositiveInfinity;
             settings.TolGapAbs = eps;
             settings.TolGapRel = eps;

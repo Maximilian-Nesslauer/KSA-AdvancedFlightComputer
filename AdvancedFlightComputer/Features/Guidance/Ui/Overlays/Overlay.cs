@@ -80,8 +80,7 @@ public static partial class GuidanceWindow
         // First pass against the mean-radius sphere.
         if (!IntersectSphere(origin, dir, center, parent.MeanRadius, out double t))
             return false;
-        // Hit direction from the body centre -> CCF -> lat/lon (inverse of SiteDirCcf:
-        // lat = asin(z), lon = atan2(y, x)).
+        // Hit direction from the body centre -> CCF -> lat/lon (inverse of SiteDirCcf: lat = asin(z), lon = atan2(y, x)).
         double3 ccf = double3.Normalize(origin + dir * t - center).Transform(ecl2ccf);
 
         // Refine once to the terrain height there: the visible surface sits at MeanRadius + terrain, so the mean sphere reads slightly off (worse at grazing angles) - this pulls the hit onto the surface actually under the cursor.

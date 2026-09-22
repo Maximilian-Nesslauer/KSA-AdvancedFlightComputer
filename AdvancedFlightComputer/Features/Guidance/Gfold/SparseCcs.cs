@@ -1,8 +1,7 @@
 namespace AdvancedFlightComputer.Guidance.Gfold;
 
-// Builds a sparse matrix in the column-compressed storage (CCS) format both solvers
-// expect, from arbitrary-order (row, col, value) triplets. Duplicate entries
-// at the same position are summed; explicit zeros are kept (harmless).
+// Builds a sparse matrix in the column-compressed storage (CCS) format both solvers expect, from arbitrary-order (row, col, value) triplets.
+// Duplicate entries at the same position are summed; explicit zeros are kept (harmless).
 public sealed class SparseCcs
 {
     public int Rows { get; }
@@ -61,8 +60,7 @@ public sealed class SparseCcs
                 yield return (row, j, value);
     }
 
-    // (values, column pointers of length Cols+1, row indices), rows sorted
-    // ascending within each column as both solvers require.
+    // (values, column pointers of length Cols+1, row indices), rows sorted ascending within each column as both solvers require.
     public (double[] Pr, int[] Jc, int[] Ir) Build()
     {
         var pr = new List<double>();

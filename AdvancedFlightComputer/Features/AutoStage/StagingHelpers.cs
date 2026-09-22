@@ -4,9 +4,9 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 
 internal static class StagingHelpers
 {
-    // One frame's tally. The outside counters only count active engines, because they answer "is
-    // the vehicle still under thrust". The inside counters count every engine a pending jettison
-    // would carry away, active or not, because they answer "is it safe to let these go".
+    // One frame's tally.
+    // The outside counters only count active engines, because they answer "is the vehicle still under thrust".
+    // The inside counters count every engine a pending jettison would carry away, active or not, because they answer "is it safe to let these go".
     internal struct EngineSurvey
     {
         public int FueledOutside;
@@ -33,8 +33,7 @@ internal static class StagingHelpers
         return false;
     }
 
-    // Pass the parts a pending jettison would shed to learn whether it drops only spent engines,
-    // or null to only count thrust.
+    // Pass the parts a pending jettison would shed to learn whether it drops only spent engines, or null to only count thrust.
     public static EngineSurvey SurveyActiveEngines(Vehicle vehicle, IReadOnlySet<Part>? jettisonSet)
     {
         EngineSurvey survey = default;
@@ -46,9 +45,8 @@ internal static class StagingHelpers
             EngineController engine = engines[i];
             bool inside = jettisonSet != null && jettisonSet.Contains(engine.Parent.FullPart);
 
-            // Staging only queues the activation, so a booster staged this frame is still inactive
-            // and full. An engine that has not run has not proven it is spent, and is counted
-            // apart so it can never license a drop.
+            // Staging only queues the activation, so a booster staged this frame is still inactive and full.
+            // An engine that has not run has not proven it is spent, and is counted apart so it can never license a drop.
             if (!engine.IsActive)
             {
                 if (inside)
@@ -87,9 +85,8 @@ internal static class StagingHelpers
         broken = false;
         foreach (RocketCore core in engine.Cores)
         {
-            // Mirrors Rocket.UpdateRockets: a core burns above zero throttle. A lit solid motor
-            // counts its remaining grain as propellant, while a quenched one falls back to the
-            // equilibrium-pressure check and reads as spent.
+            // Mirrors Rocket.UpdateRockets: a core burns above zero throttle.
+            // A lit solid motor counts its remaining grain as propellant, while a quenched one falls back to the equilibrium-pressure check and reads as spent.
             bool isBurning = coreStates[core.StatesIdx].Throttle > 0f;
             burning |= isBurning;
             fueled |= core.ComputePropellantAvailable(moleStates, isBurning);
@@ -100,8 +97,8 @@ internal static class StagingHelpers
         return fueled;
     }
 
-    // Bumped on every sequence activation and cache reset, for every vehicle, so the per-vehicle
-    // answers below refresh. Deliberately never reset: every consumer starts at -1.
+    // Bumped on every sequence activation and cache reset, for every vehicle, so the per-vehicle answers below refresh.
+    // Deliberately never reset: every consumer starts at -1.
     private static int _sequenceGeneration;
 
     public static int SequenceGeneration => _sequenceGeneration;

@@ -8,21 +8,43 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // WHERE A FREE INSERTION COSTS THE LEAST.
 //
-// With the argument of periapsis free, every point of the target ellipse is an equally good place to arrive: the orbit is the same whichever one the burn ends at, so periapsis is a choice rather than a requirement. It is the cheapest choice only for a burn that arrives level. A vehicle still climbing when it gets there pays to flatten out at exactly the lowest point of the ellipse, where a few degrees further round the ellipse is itself climbing. How much that is worth depends on the ellipse and on the vehicle, so it is measured rather than assumed.
+// With the argument of periapsis free, every point of the target ellipse is an equally good place to arrive: the orbit is the same whichever one the burn ends at, so periapsis is a choice rather than a requirement.
+// It is the cheapest choice only for a burn that arrives level.
+// A vehicle still climbing when it gets there pays to flatten out at exactly the lowest point of the ellipse, where a few degrees further round the ellipse is itself climbing.
+// How much that is worth depends on the ellipse and on the vehicle, so it is measured rather than assumed.
 //
-// THE ANCHOR. By default the search works from periapsis, over the climbing side only: from periapsis (or the floor crossing) to MaxNuDeg past it. Insertions before periapsis were tried and left out: on a GTO ascent the search chased them into a flight that ran dry. With the apoapsis anchor it works on the climbing side of apoapsis instead, from MaxNuDeg before it to ApoapsisLeadDeg before it, and never at or past it: the burn ends still climbing, so the vehicle coasts up to apoapsis and can circularise there. That is for a vehicle whose burn is better ended high - a weak one on a long burn. A continuous burn can end high; for most vehicles it is simply dearer, and far from where a burn would naturally end UPFG's prices stop meaning much, so the anchor is the player's choice rather than something the search wanders to.
+// THE ANCHOR.
+// By default the search works from periapsis, over the climbing side only: from periapsis (or the floor crossing) to MaxNuDeg past it.
+// Insertions before periapsis were tried and left out: on a GTO ascent the search chased them into a flight that ran dry.
+// With the apoapsis anchor it works on the climbing side of apoapsis instead, from MaxNuDeg before it to ApoapsisLeadDeg before it, and never at or past it: the burn ends still climbing, so the vehicle coasts up to apoapsis and can circularise there.
+// That is for a vehicle whose burn is better ended high - a weak one on a long burn.
+// A continuous burn can end high; for most vehicles it is simply dearer, and far from where a burn would naturally end UPFG's prices stop meaning much, so the anchor is the player's choice rather than something the search wanders to.
 //
-// THE COST IS BURN TIME. UPFG's tgo is the time the stage list still has to burn to reach the insertion, gravity and steering losses included, worked through the real thrust, Isp, masses, g-limit and staging. The engines run at fixed thrust, so the propellant an insertion costs rises with the time it takes to fly.
+// THE COST IS BURN TIME.
+// UPFG's tgo is the time the stage list still has to burn to reach the insertion, gravity and steering losses included, worked through the real thrust, Isp, masses, g-limit and staging.
+// The engines run at fixed thrust, so the propellant an insertion costs rises with the time it takes to fly.
 //
-// A GRID, NOT A LINE SEARCH. Every SearchIntervalS the search prices insertions CoarseStepDeg apart across its whole range - skipping any under the floor - then prices FineStepDeg points either side of the cheapest, and puts the goal at the cheapest of everything, refined by the parabola through it and its neighbours. A local search that walks from where it is can only see the slope under it: it stalls against an insertion that does not price, and cannot know a cheaper basin lies further along. The grid sees the whole range every time. The insertion actually flown slews toward the goal at NuRateDegS, so the target the steering is solved for never jumps.
+// A GRID, NOT A LINE SEARCH.
+// Every SearchIntervalS the search prices insertions CoarseStepDeg apart across its whole range - skipping any under the floor - then prices FineStepDeg points either side of the cheapest, and puts the goal at the cheapest of everything, refined by the parabola through it and its neighbours.
+// A local search that walks from where it is can only see the slope under it: it stalls against an insertion that does not price, and cannot know a cheaper basin lies further along.
+// The grid sees the whole range every time.
+// The insertion actually flown slews toward the goal at NuRateDegS, so the target the steering is solved for never jumps.
 //
-// A PRICE IS A CONVERGED SOLUTION. Re-solved again and again from one instant, UPFG settles on a tgo that depends only on that instant and the insertion - but slowly on a long burn, over hundreds of solves, and not steadily: it can creep along for a few hundred solves and then drop within fifty. A price read before that depends on where the solver started. An earlier version compared probes after a fixed 40 solves and read its own trajectory into the costs: from a frozen state its goal walked to the end of its range. So each probe is solved until tgo has stayed within SettleTgoS for a whole SettleWindowSolves (TryPrice). One that has not by MaxProbeSolves, or that blows out past DivergedVgoFactor, prices nothing - some insertions have no fixed point at all from a given instant, periapsis among them on a long burn from orbit behind a weak upper stage - and the grid simply has a gap there. The probes are warm-started from their grid neighbours, whose converged solutions are a far closer start than the live one, and MaxSearchSolves caps a search regardless.
+// A PRICE IS A CONVERGED SOLUTION.
+// Re-solved again and again from one instant, UPFG settles on a tgo that depends only on that instant and the insertion - but slowly on a long burn, over hundreds of solves, and not steadily: it can creep along for a few hundred solves and then drop within fifty.
+// A price read before that depends on where the solver started.
+// An earlier version compared probes after a fixed 40 solves and read its own trajectory into the costs: from a frozen state its goal walked to the end of its range.
+// So each probe is solved until tgo has stayed within SettleTgoS for a whole SettleWindowSolves (TryPrice).
+// One that has not by MaxProbeSolves, or that blows out past DivergedVgoFactor, prices nothing - some insertions have no fixed point at all from a given instant, periapsis among them on a long burn from orbit behind a weak upper stage - and the grid simply has a gap there.
+// The probes are warm-started from their grid neighbours, whose converged solutions are a far closer start than the live one, and MaxSearchSolves caps a search regardless.
 //
-// THE INSERTION IS DECIDED EARLY. Where to arrive is a question about the whole burn, and it has a meaningful answer only while most of the burn is still to fly: late on, the trajectory is committed to the insertion it has been steering for, and moving it then spends more on the change than the new insertion could save. So the goal freezes once FreezeVgoFraction of the dV the first search saw has been flown, or once tgo is under FreezeTgoS, whichever comes first.
+// THE INSERTION IS DECIDED EARLY.
+// Where to arrive is a question about the whole burn, and it has a meaningful answer only while most of the burn is still to fly: late on, the trajectory is committed to the insertion it has been steering for, and moving it then spends more on the change than the new insertion could save.
+// So the goal freezes once FreezeVgoFraction of the dV the first search saw has been flown, or once tgo is under FreezeTgoS, whichever comes first.
 //
 // THE OTHER GUARDS:
-//  - A move has to save MinSavingS of burn. On an ordinary low orbit the whole cost curve is a fraction of a second deep, and following noise that shallow would only stir the steering.
-//  - A near-circular target is left alone: every point of a circle is the same insertion.
+// - A move has to save MinSavingS of burn. On an ordinary low orbit the whole cost curve is a fraction of a second deep, and following noise that shallow would only stir the steering.
+// - A near-circular target is left alone: every point of a circle is the same insertion.
 //
 // The caller bounds how often a search runs in wall-clock time as well (see Ascent.cs): the interval here is sim time, which warp compresses.
 public sealed class UpfgInsertionSearch

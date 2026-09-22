@@ -6,10 +6,9 @@ using KSA;
 
 namespace AdvancedFlightComputer.Core;
 
-// The one owner of the Mods settings page hook. Every settings page renders into one body child
-// closed by a single ConsoleStyle.PopWidgetStyle, so a call inserted before it lands inside the
-// body with the widget style still pushed. Features register a section; nothing stock is replaced,
-// so other mods can do the same.
+// The one owner of the Mods settings page hook.
+// Every settings page renders into one body child closed by a single ConsoleStyle.PopWidgetStyle, so a call inserted before it lands inside the body with the widget style still pushed.
+// Features register a section; nothing stock is replaced, so other mods can do the same.
 [HarmonyPatch(typeof(GameSettings), nameof(GameSettings.OnDrawUi), new[] { typeof(Camera) })]
 internal static class ModSettingsPage
 {

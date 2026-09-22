@@ -15,9 +15,8 @@ internal static class AutoStageFeature
     internal static bool GaugeEnumInjected =>
         TryGetEnumTypes(out List<EnumTypeOption> list) && list.Any(o => o.Type == typeof(AfcAutoStageToggle));
 
-    // Runs at immediate load, before the game reads Gauges.xml and binds the AUTOSTAGE button's
-    // Action="AfcAutoStageToggle" once. The binding cannot be undone later, so a build whose
-    // staging keys do not resolve gets no entry and one warning instead of a live-looking button.
+    // Runs at immediate load, before the game reads Gauges.xml and binds the AUTOSTAGE button's Action="AfcAutoStageToggle" once.
+    // The binding cannot be undone later, so a build whose staging keys do not resolve gets no entry and one warning instead of a live-looking button.
     internal static void InjectGaugeEnumAtLoad()
     {
         if (!GameReflection.ValidateAutoStage())
@@ -47,9 +46,8 @@ internal static class AutoStageFeature
         _enumInjected = false;
     }
 
-    // Two stagers on one burnout would activate two rows, so the built-in one stands down while
-    // the standalone mod is installed. Its marker is visible here because every immediate load
-    // runs before any AllModsLoaded hook.
+    // Two stagers on one burnout would activate two rows, so the built-in one stands down while the standalone mod is installed.
+    // Its marker is visible here because every immediate load runs before any AllModsLoaded hook.
     internal static bool StandaloneModAbsent()
     {
         if (!TryGetEnumTypes(out List<EnumTypeOption> list))

@@ -6,26 +6,19 @@ using Brutal.Numerics;
 
 namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// Unified Powered Flight Guidance - the closed-loop ascent algorithm flown by the Space Shuttle. Each call to Step() refines a thrust-direction estimate that, if followed, places the vehicle on the target orbit at engine cutoff.
+// Unified Powered Flight Guidance - the closed-loop ascent algorithm flown by the Space Shuttle.
+// Each call to Step() refines a thrust-direction estimate that, if followed, places the vehicle on the target orbit at engine cutoff.
 //
-// This is a standalone UPFG implementation that uses double precision over Brutal's double3. It takes vehicle state as plain inertial CCI inputs, so it has no external dependencies.
+// This is a standalone UPFG implementation that uses double precision over Brutal's double3.
+// It takes vehicle state as plain inertial CCI inputs, so it has no external dependencies.
 //
 // Guidance modes (the original's `mode` field):
-//   1 - standard ascent: insert at target radius/velocity/FPA in the target plane,
-//       cutoff position free. With the argument of periapsis fixed, radius,
-//       velocity and FPA are re-read every solve from the target ellipse under the
-//       predicted cutoff (UpfgTarget.InsertionToward), so the ellipse is hit whole.
-//   2 - predictive landing: soft target (vd = current v) so the solution converges
-//       on *where the braking burn would end* (Rd) - run synchronously to
-//       convergence to measure the burn's downrange before committing.
-//   3 - precision landing: drive the cutoff to target.Rdes at target.Velocity,
-//       with a throttle command (K, exposed as Throttle) stretching the burn to
-//       null the downrange error. Unlike the original (which propagated a CSE
-//       reference trajectory with a hard-coded t_ref), the reference here is
-//       simply the desired state at the landing point - equivalent for the
-//       zero-speed-at-site target and free of the absolute-time dependence.
+// 1 - standard ascent: insert at target radius/velocity/FPA in the target plane, cutoff position free. With the argument of periapsis fixed, radius, velocity and FPA are re-read every solve from the target ellipse under the predicted cutoff (UpfgTarget.InsertionToward), so the ellipse is hit whole.
+// 2 - predictive landing: soft target (vd = current v) so the solution converges on *where the braking burn would end* (Rd) - run synchronously to convergence to measure the burn's downrange before committing.
+// 3 - precision landing: drive the cutoff to target.Rdes at target.Velocity, with a throttle command (K, exposed as Throttle) stretching the burn to null the downrange error. Unlike the original (which propagated a CSE reference trajectory with a hard-coded t_ref), the reference here is simply the desired state at the landing point - equivalent for the zero-speed-at-site target and free of the absolute-time dependence.
 //
-// The vehicle model carries current data. Callers rebuild the stage list from the live vehicle every step, so Stages[0].MassTotal is the present mass and its burn time is time remaining.
+// The vehicle model carries current data.
+// Callers rebuild the stage list from the live vehicle every step, so Stages[0].MassTotal is the present mass and its burn time is time remaining.
 public sealed class UpfgGuidance
 {
     private const double G0 = 9.80665;
@@ -84,9 +77,11 @@ public sealed class UpfgGuidance
 
     // --- The steering LAW, not just its value at the solve instant ---
     //
-    // i_f(tau) = unit[ lambda + lambdadot * (tau - J/L) ],  tau = seconds since this solve. The original document is explicit that this block "will receive the vectors lambda and lambdadot" and that "during active guidance calls a turning rate may be implied" - the law is a function of time and the caller is meant to evaluate it, not to hold the tau = 0 sample until the next cycle.
+    // i_f(tau) = unit[ lambda + lambdadot * (tau - J/L) ], tau = seconds since this solve.
+    // The original document is explicit that this block "will receive the vectors lambda and lambdadot" and that "during active guidance calls a turning rate may be implied" - the law is a function of time and the caller is meant to evaluate it, not to hold the tau = 0 sample until the next cycle.
     //
-    // lambdadot is PERPENDICULAR to lambda by construction: rgo is built to satisfy dot(lambda, rgo) = S, so dot(lambda, rgo - S*lambda) = 0. That is what makes it a pure turning rate, and what makes the law a linear TANGENT law - the angle off lambda is atan(|lambdadot| * (tau - J/L)), so its tangent is linear in time.
+    // lambdadot is PERPENDICULAR to lambda by construction: rgo is built to satisfy dot(lambda, rgo) = S, so dot(lambda, rgo - S*lambda) = 0.
+    // That is what makes it a pure turning rate, and what makes the law a linear TANGENT law - the angle off lambda is atan(|lambdadot| * (tau - J/L)), so its tangent is linear in time.
     public double3 Lambda { get; private set; }       // unit primer direction at tau = J/L
     public double3 LambdaDot { get; private set; }    // its turning rate, rad/s, CCI
     public double TLambda { get; private set; }       // J/L, s: when lambda is the direction

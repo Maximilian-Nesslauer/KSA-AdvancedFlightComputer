@@ -1,13 +1,10 @@
 namespace AdvancedFlightComputer.Guidance.Gfold;
 
-// The G-FOLD powered-descent problems from Acikmese and Ploen and from Blackmore are
-// expressed in standard conic form. Time of flight is an input, so callers can
-// search over tf when needed.
+// The G-FOLD powered-descent problems from Acikmese and Ploen and from Blackmore are expressed in standard conic form.
+// Time of flight is an input, so callers can search over tf when needed.
 //
-//   Problem 3 (minimum landing error): minimize ||r(tf) - rf||, final
-//   altitude pinned to zero.
-//   Problem 4 (minimum fuel): maximize final mass, landing point pinned to
-//   the point P3 found (or any chosen reachable point).
+// - Problem 3 minimizes ||r(tf) - rf|| with final altitude pinned to zero.
+// - Problem 4 maximizes final mass at the point found by P3 or another reachable landing point.
 //
 // Decision variables per node n (N nodes):
 //   x[6]  position r, velocity v          (leapfrog/trapezoid dynamics)
@@ -17,41 +14,32 @@ namespace AdvancedFlightComputer.Guidance.Gfold;
 // plus, for P3, one epigraph variable t bounding the landing error norm.
 //
 // The formulation uses two deliberate choices:
-//  - The glideslope cone uses the horizontal components (y,z) against
-//    altitude x: ||(r-rf)_{y,z}|| <= (x-rf_x)/tan(gs). The Python's "fast"
-//    line normed components [0:2] (altitude and y), which does not match its
-//    commented-out general form.
-//  - The thrust lower bound rows match the reference's upper bound and z box
-//    bounds. The paper's quadratic lower-bound cut is not part of that reference.
-// The default options reproduce the reference formulation. Real-time guidance
-// enables the options that improve receding-horizon control.
+// - The glideslope cone uses horizontal components (y,z) against altitude x: ||(r-rf)_{y,z}|| <= (x-rf_x)/tan(gs).
+// - The thrust lower bound rows match the reference upper bound and z box bounds.
+// - Reference options preserve that formulation, while real-time guidance enables receding-horizon options.
 public sealed record GfoldOptions
 {
-    // Enforce the engine's thrust floor, rho1 <= ||T||. Without it, a min-fuel
-    // plan can coast and then brake late, so node 0 may have almost no thrust.
+    // Enforce the engine's thrust floor, rho1 <= ||T||.
+    // Without it, a min-fuel plan can coast and then brake late, so node 0 may have almost no thrust.
     // With it, the descent thrusts continuously and node 0 is a trackable command.
     public bool EnforceLowerThrust { get; init; }
 
-    // Allow the first thrust vector to steer horizontally. A vertical boundary
-    // condition is useful for a one-shot trajectory but prevents horizontal
-    // steering when the problem is solved again each cycle.
+    // Allow the first thrust vector to steer horizontally.
+    // A vertical boundary condition is useful for a one-shot trajectory but prevents horizontal steering when the problem is solved again each cycle.
     public bool FreeInitialThrust { get; init; }
 
-    // Skip the path inequalities on node 0. The initial state is pinned by
-    // equality, so imposing an inequality that the handoff might violate can
-    // make every tf infeasible. The trajectory still satisfies the constraints
-    // from node 1 on.
+    // Skip the path inequalities on node 0.
+    // The initial state is pinned by equality, so imposing an inequality that the handoff might violate can make every tf infeasible.
+    // The trajectory still satisfies the constraints from node 1 on.
     public bool RelaxInitialPath { get; init; }
 
-    // Add a small fuel weight to the P3 landing-error objective. Pure minimum
-    // error is indifferent to thrust, so this tiebreaker selects the lowest
-    // thrust among equally accurate trajectories.
+    // Add a small fuel weight to the P3 landing-error objective.
+    // Pure minimum error is indifferent to thrust, so this tiebreaker selects the lowest thrust among equally accurate trajectories.
     public double LandingFuelReg { get; init; }
 
-    // Penalize the L2 norm of adjacent thrust-vector differences for P4. This
-    // spreads direction and throttle changes over time instead of demanding
-    // rapid slews. Larger values trade some fuel for smoother commands, and 0
-    // disables the regularizer.
+    // Penalize the L2 norm of adjacent thrust-vector differences for P4.
+    // This spreads direction and throttle changes over time instead of demanding rapid slews.
+    // Larger values trade some fuel for smoother commands, and 0 disables the regularizer.
     public double SlewReg { get; init; }
 
     public static readonly GfoldOptions Reference = new();
@@ -61,9 +49,8 @@ public sealed record GfoldOptions
         LandingFuelReg = 0.001,
     };
 
-    // Use no thrust floor for committed-trajectory tracking. The min-fuel plan
-    // can coast where optimal and brake where needed, while the caller follows
-    // the whole trajectory by time index.
+    // Use no thrust floor for committed-trajectory tracking.
+    // The min-fuel plan can coast where optimal and brake where needed, while the caller follows the whole trajectory by time index.
     public static readonly GfoldOptions Descent = new()
     { FreeInitialThrust = true, RelaxInitialPath = true };
 }
@@ -88,14 +75,12 @@ public static class GfoldPlanner
     public sealed record SearchResult(GfoldTrajectory Trajectory, double TimeOfFlight,
                                       double FuelUsed, int Solves);
 
-    // Search over time of flight for the minimum-fuel landing. Fuel(tf) is
-    // +inf when the target is unreachable and is usually U-shaped otherwise,
-    // so a coarse bracket and golden-section refinement find the minimum.
+    // Search over time of flight for the minimum-fuel landing.
+    // Fuel(tf) is +inf when the target is unreachable and is usually U-shaped otherwise, so a coarse bracket and golden-section refinement find the minimum.
     // Each evaluation is a P3 (reachability) + P4 (min fuel) solve pair.
     //
-    // The caller checks whether the answer fits the available fuel because the
-    // formulation has no fuel-budget constraint. The overshoot is useful
-    // go/no-go information.
+    // The caller checks whether the answer fits the available fuel because the formulation has no fuel-budget constraint.
+    // The overshoot is useful go/no-go information.
     public static SearchResult? SearchMinFuel(GfoldParams p, int nodes,
                                               double landingToleranceM = 10.0,
                                               double tfToleranceS = 0.25,
@@ -136,9 +121,7 @@ public static class GfoldPlanner
             return result;
         }
 
-        // Coarse scan between the physical bounds (or a caller-supplied window,
-        // e.g. to keep a terminal-descent search in a sensible range rather than
-        // the full fuel-limited horizon).
+        // Coarse scan between the physical bounds (or a caller-supplied window, e.g. to keep a terminal-descent search in a sensible range rather than the full fuel-limited horizon).
         double lo = Math.Max(tfLo ?? p.TfMin, 1.0);
         double hi = Math.Min(tfHi ?? double.MaxValue, p.TfMax * 0.99);
         if (hi <= lo)
@@ -199,14 +182,10 @@ public static class GfoldPlanner
         bool p3 = fixedLanding == null;
         double dtPhys = tf / (N - 1);
 
-        // Nondimensionalize: solve in units where lengths, velocities and
-        // accelerations are all O(1) (length scale ~ the problem size, time
-        // scale such that gravity is ~1). An interior-point solver breaks down
-        // ("unreliable search direction") on the raw SI problem - metre-scale
-        // coordinates against unit-scale ln-mass rows condition the KKT system
-        // badly - and returns visibly suboptimal iterates. In scaled units it
-        // converges cleanly. Mass stays in kg: every mass term enters through
-        // ln(m) or the invariant combination alpha*r*t.
+        // Nondimensionalize: solve in units where lengths, velocities and accelerations are all O(1) (length scale ~ the problem size, time scale such that gravity is ~1).
+        // An interior-point solver breaks down ("unreliable search direction") on the raw SI problem - metre-scale coordinates against unit-scale ln-mass rows condition the KKT system badly - and returns visibly suboptimal iterates.
+        // In scaled units it converges cleanly.
+        // Mass stays in kg: every mass term enters through ln(m) or the invariant combination alpha*r*t.
         double lenScale = Math.Max(1000.0, Math.Sqrt(P.R0.Sum(x => x * x)));
         double timeScale = Math.Sqrt(lenScale / P.GravityMag);
         double velScale = lenScale / timeScale;
@@ -232,17 +211,14 @@ public static class GfoldPlanner
         int IZ(int n) => 9 * N + n;
         int IS(int n) => 10 * N + n;
         int IT = 11 * N;                          // P3 epigraph variable
-        // Thrust-slew smoothing adds one variable bounding the L2 norm of the stacked
-        // thrust differences. Min-fuel (P4) only, so it never distorts P3 reachability.
+        // Thrust-slew smoothing adds one variable bounding the L2 norm of the stacked thrust differences.
+        // Min-fuel (P4) only, so it never distorts P3 reachability.
         // In P4 there is no IT, so its slot (11*N) is reused for the slew variable.
         bool smooth = !p3 && opt.SlewReg > 0;
         int IQ = 11 * N + (p3 ? 1 : 0);           // slew-norm variable (when smoothing)
         int nv = 11 * N + (p3 ? 1 : 0) + (smooth ? 1 : 0);
 
-        // --- equality constraints  A x = b ---
-        // Boundary rows: r0 (3) + v0 (3) + vf (3) + s_end (1) + u_end (3) +
-        // z0 (1) = 14, plus u_start (3) unless the initial thrust is free, then
-        // the landing rows and the dynamics.
+        // --- equality constraints A x = b --- Boundary rows: r0 (3) + v0 (3) + vf (3) + s_end (1) + u_end (3) + z0 (1) = 14, plus u_start (3) unless the initial thrust is free, then the landing rows and the dynamics.
         int pEq = 14 + (opt.FreeInitialThrust ? 0 : 3) + (p3 ? 1 : 3) + 7 * (N - 1);
         var A = new SparseCcs(pEq, nv);
         var b = new double[pEq];
@@ -271,10 +247,7 @@ public static class GfoldPlanner
 
         if (p3)
         {
-            // Reach the target altitude, floating only the horizontal landing point
-            // to minimize the miss. rf_x is 0 for a ground landing and > 0 for an
-            // above-the-pad arrival (Option B) - hardcoding 0 here made every P3
-            // miss by the arrival altitude, so SearchMinFuel judged it unreachable.
+            // Reach the target altitude, floating only the horizontal landing point to minimize the miss. rf_x is 0 for a ground landing and > 0 for an above-the-pad arrival (Option B) - hardcoding 0 here made every P3 miss by the arrival altitude, so SearchMinFuel judged it unreachable.
             A.Add(row, IX(N - 1, 0), 1); b[row++] = rf[0]; // reach the target altitude
         }
         else
@@ -312,11 +285,7 @@ public static class GfoldPlanner
             b[row++] = 0;
         }
 
-        // --- cone constraints  G x + s = h,  s in R+^l x SOC(q...) ---
-        // Path inequalities (pointing/glideslope/velocity) run from node p0: when
-        // relaxing the initial state, skip node 0 so a fast/shallow handoff can't
-        // make every tf infeasible. Thrust magnitude (lossless ||u|| <= s) and the
-        // ground constraint stay on every node.
+        // --- cone constraints G x + s = h, s in R+^l x SOC(q...) --- Path inequalities (pointing/glideslope/velocity) run from node p0: when relaxing the initial state, skip node 0 so a fast/shallow handoff can't make every tf infeasible. Thrust magnitude (lossless ||u|| <= s) and the ground constraint stay on every node.
         int p0 = opt.RelaxInitialPath ? 1 : 0;
         int pathNodes = (N - 1) - p0;
         int lp = pathNodes               // thrust pointing
@@ -345,8 +314,7 @@ public static class GfoldPlanner
         // convexified thrust bound + ln-mass box (reference eq. 34-36)
         for (int n = 1; n < N - 1; n++)
         {
-            // alpha' * r' * t' == alpha * r * t, so these mass terms are the
-            // same numbers as in physical units.
+            // alpha' * r' * t' == alpha * r * t, so these mass terms are the same numbers as in physical units.
             double z0Term = P.WetMass - alpha * r2Acc * n * dt;
             double z1Term = P.WetMass - alpha * r1Acc * n * dt;
             if (z0Term <= 0)
@@ -412,12 +380,9 @@ public static class GfoldPlanner
             soc.Add(4);
         }
 
-        // Thrust floor (continuous thrust): s[n] >= mu1*(1 - w + w^2/2), w = z - z0,
-        // mu1 = rho1/z0Term. The RHS is convex quadratic in z, so it becomes a
-        // rotated cone L >= u^2 (L affine, u = sqrt(mu1/2)*w) written as the SOC
-        // ||(L-1, 2u)|| <= L+1, with L = s[n] + mu1*z[n] - mu1*(1+z0). Applied on
-        // the same interior nodes as the box (n = 1..N-2, where z0 <= z <= z1
-        // keeps w >= 0 and the Taylor cut conservative).
+        // Thrust floor (continuous thrust): s[n] >= mu1*(1 - w + w^2/2), w = z - z0, mu1 = rho1/z0Term.
+        // The RHS is convex quadratic in z, so it becomes a rotated cone L >= u^2 (L affine, u = sqrt(mu1/2)*w) written as the SOC ||(L-1, 2u)|| <= L+1, with L = s[n] + mu1*z[n] - mu1*(1+z0).
+        // Applied on the same interior nodes as the box (n = 1..N-2, where z0 <= z <= z1 keeps w >= 0 and the Taylor cut conservative).
         if (opt.EnforceLowerThrust)
         {
             for (int n = 1; n < N - 1; n++)
@@ -455,9 +420,8 @@ public static class GfoldPlanner
             soc.Add(4);
         }
 
-        // Thrust-slew smoothing cone: q >= || (u[1]-u[0], ..., u[N-1]-u[N-2]) ||. With
-        // c[IQ] = SlewReg in the objective, minimizing pulls the stacked thrust
-        // differences toward zero, spreading changes out into a gradual command.
+        // Thrust-slew smoothing cone: q >= || (u[1]-u[0], ..., u[N-1]-u[N-2]) ||.
+        // With c[IQ] = SlewReg in the objective, minimizing pulls the stacked thrust differences toward zero, spreading changes out into a gradual command.
         if (smooth)
         {
             G.Add(row, IQ, -1);

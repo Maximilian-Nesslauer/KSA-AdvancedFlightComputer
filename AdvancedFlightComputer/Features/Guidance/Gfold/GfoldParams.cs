@@ -2,13 +2,9 @@ namespace AdvancedFlightComputer.Guidance.Gfold;
 
 // Problem parameters for the G-FOLD powered-descent solve.
 //
-// Coordinate convention (matches the reference Python): x is UP (altitude),
-// y/z span the horizontal plane, gravity acts along -x, and the landing
-// target Rf is the origin of the frame.
+// Coordinate convention (matches the reference Python): x is UP (altitude), y/z span the horizontal plane, gravity acts along -x, and the landing target Rf is the origin of the frame.
 //
-// Defaults are "Numerical Example 1" from the reference implementation
-// (G-FOLD-Python Static_Solution/GFOLD_Static_Parms.py - the original
-// paper's Mars case) so results can be compared against it directly.
+// Defaults are "Numerical Example 1" from the reference implementation (G-FOLD-Python Static_Solution/GFOLD_Static_Parms.py - the original paper's Mars case) so results can be compared against it directly.
 public sealed record GfoldParams
 {
     public const double G0 = 9.80665;
@@ -34,9 +30,7 @@ public sealed record GfoldParams
     public double R1 => ThrottleMin * ThrustMax;
     public double R2 => ThrottleMax * ThrustMax;
 
-    // Bounds on the time of flight from the reference: below tf_min the
-    // vehicle cannot brake in time even at full thrust; above tf_max the
-    // minimum throttle burns all fuel before touchdown.
+    // Bounds on the time of flight from the reference: below tf_min the vehicle cannot brake in time even at full thrust; above tf_max the minimum throttle burns all fuel before touchdown.
     public double TfMin => DryMass * Math.Sqrt(V0.Sum(v => v * v)) / R2;
     public double TfMax => FuelMass / (Alpha * R1);
 }

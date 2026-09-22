@@ -2,9 +2,8 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
-// A sequence is a set of ISequenced modules, not of parts: one part can put each of its modules in
-// a different row, so Sequence.Parts lists a part once per row any of its modules sits in. Scope is
-// the part plus its direct sub-parts, matching Part.ActivateSubtreeInStage.
+// A sequence is a set of ISequenced modules, not of parts: one part can put each of its modules in a different row, so Sequence.Parts lists a part once per row any of its modules sits in.
+// Scope is the part plus its direct sub-parts, matching Part.ActivateSubtreeInStage.
 internal static class SequencedModules
 {
     // Yields in the order the game activates them.

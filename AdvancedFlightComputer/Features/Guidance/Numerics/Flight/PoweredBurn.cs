@@ -121,8 +121,8 @@ public struct PoweredBurnSystem : IOdeSystem
         if (rho.V == 0.0)
             return;
 
-        // Angle of attack, retrograde-first: the angle between the TAIL (-thrust) and
-        // the relative wind. Zero when the burn is aimed straight back.
+        // Angle of attack, retrograde-first: the angle between the TAIL (-thrust) and the relative wind.
+        // Zero when the burn is aimed straight back.
         Dual wx = ax / sp, wy = ay / sp, wz = az / sp;
         Dual dot = -(ix * wx + iy * wy + iz * wz);
         Dual cx = -(iy * wz - iz * wy);
@@ -285,10 +285,7 @@ public static class BoostbackShooter
             double hintLen = System.Math.Sqrt(hintX * hintX + hintY * hintY + hintZ * hintZ);
             bool haveHint = hintLen > 0.5;   // it is a unit vector or it is nothing
 
-            // Collapsed: |r x v| is |r||v|sin(angle), so this is the angle between the
-            // position and the velocity coming within a milliradian of zero or pi - the
-            // vehicle flying straight up or straight down, with no horizontal velocity
-            // left to define a downrange direction with.
+            // Collapsed: |r x v| is |r||v|sin(angle), so this is the angle between the position and the velocity coming within a milliradian of zero or pi - the vehicle flying straight up or straight down, with no horizontal velocity left to define a downrange direction with.
             double vl = System.Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
             bool collapsed = hl <= 1e-3 * rl * vl;
 
@@ -439,8 +436,7 @@ public static class BoostbackShooter
         if (duration.V < 0.0 || !double.IsFinite(duration.V))
             return result;
 
-        // The law, from the one place that builds it - so the arc integrated here and
-        // the direction the vehicle is pointed cannot drift apart.
+        // The law, from the one place that builds it - so the arc integrated here and the direction the vehicle is pointed cannot drift apart.
         SteeringVectors(in frame, pitch, yaw, pitchRate, yawRate,
                         out Dual lx, out Dual ly, out Dual lz,
                         out Dual tdx, out Dual tdy, out Dual tdz);
@@ -477,17 +473,15 @@ public static class BoostbackShooter
                 return result;
         if (end[6].V <= 0.0)
         {
-            // Not a numerical failure: the vehicle has not the propellant for this
-            // burn. Steeply nose-down burns need far more of it, so this is how the
-            // infeasible end of the pitch range announces itself.
+            // Not a numerical failure: the vehicle has not the propellant for this burn.
+            // Steeply nose-down burns need far more of it, so this is how the infeasible end of the pitch range announces itself.
             result.OutOfPropellant = true;
             result.Infeasible = true;
             return result;
         }
 
-        // Did the burn itself fly the vehicle into the ground? A steeply nose-down
-        // burn will, and it is the other way the nose-down end of the pitch range
-        // announces that it is out of reach.
+        // Did the burn itself fly the vehicle into the ground?
+        // A steeply nose-down burn will, and it is the other way the nose-down end of the pitch range announces that it is out of reach.
         {
             Dual rEnd = Dual.Sqrt(end[0] * end[0] + end[1] * end[1] + end[2] * end[2]);
             if (rEnd.V <= sys.MeanRadius)
@@ -498,9 +492,7 @@ public static class BoostbackShooter
             }
         }
 
-        // --- the coast ---
-        // The vehicle flips to retrograde at cutoff, taken as instantaneous, so the
-        // coast is the alpha = 0 model the predictor already assumes.
+        // --- the coast --- The vehicle flips to retrograde at cutoff, taken as instantaneous, so the coast is the alpha = 0 model the predictor already assumes.
         var coastSys = new DragCoastSystem
         {
             Mu = sys.Mu,
@@ -518,9 +510,8 @@ public static class BoostbackShooter
                                                      coastScratch, default);
         if (!p.Hit)
         {
-            // The powered arc was fine, so this is a statement about the trajectory it
-            // produced - it never comes back down, or it started underground. Physical
-            // either way.
+            // The powered arc was fine, so this is a statement about the trajectory it produced - it never comes back down, or it started underground.
+            // Physical either way.
             result.Infeasible = true;
             return result;
         }
@@ -537,18 +528,16 @@ public static class BoostbackShooter
         result.CutoffAltitude = rl - sys.MeanRadius;
         result.CutoffSpeed = Dual.Sqrt(end[3] * end[3] + end[4] * end[4] + end[5] * end[5]);
 
-        // Resolve the miss into the two steerable directions at the TARGET: along the
-        // ground track and across it. The third (radial) component is unreachable by
-        // construction and is deliberately not part of the inner solve.
+        // Resolve the miss into the two steerable directions at the TARGET: along the ground track and across it.
+        // The third (radial) component is unreachable by construction and is deliberately not part of the inner solve.
         double tl = System.Math.Sqrt(target[0] * target[0] + target[1] * target[1]
                                    + target[2] * target[2]);
         if (tl <= 0.0)
             return result;
         double nx = target[0] / tl, ny = target[1] / tl, nz = target[2] / tl;
 
-        // Along-track at the target: the component of the site-to-vehicle direction
-        // perpendicular to the radial. Built from the frame's retrograde axis, which
-        // is in the orbit plane, so "downrange" means along the ground track.
+        // Along-track at the target: the component of the site-to-vehicle direction perpendicular to the radial.
+        // Built from the frame's retrograde axis, which is in the orbit plane, so "downrange" means along the ground track.
         double ax2 = frame.Bx, ay2 = frame.By, az2 = frame.Bz;
         double d = ax2 * nx + ay2 * ny + az2 * nz;
         ax2 -= d * nx; ay2 -= d * ny; az2 -= d * nz;
@@ -653,10 +642,8 @@ public static class BoostbackShooter
                 return res;
             }
 
-            // Not improving. Either the iterate is at the propellant bound and cannot
-            // buy any more, or it has found a local minimum of the miss that is not
-            // zero - both mean there is no solution here, and grinding out the
-            // remaining iterations would only disguise that.
+            // Not improving.
+            // Either the iterate is at the propellant bound and cannot buy any more, or it has found a local minimum of the miss that is not zero - both mean there is no solution here, and grinding out the remaining iterations would only disguise that.
             if (res.MissM > 0.99 * prevMiss)
             {
                 if (++stalledFor >= 3)
@@ -664,10 +651,8 @@ public static class BoostbackShooter
                     bool atBound = res.Duration >= maxDuration - 1e-6;
                     res.PropellantLimited = atBound;
 
-                    // A stall FAR from the target is a local minimum of the miss -
-                    // there is no solution at this pitch, and no amount of iterating
-                    // will find one. Only a stall CLOSE to the target is a convergence
-                    // problem, and that is the one worth calling a solver fault.
+                    // A stall FAR from the target is a local minimum of the miss - there is no solution at this pitch, and no amount of iterating will find one.
+                    // Only a stall CLOSE to the target is a convergence problem, and that is the one worth calling a solver fault.
                     bool nearTarget = res.MissM < 20.0 * tolM;
                     res.Stalled = nearTarget && !atBound;
                     res.Infeasible = atBound || !nearTarget;
@@ -687,8 +672,7 @@ public static class BoostbackShooter
             if (!fy.Valid || !ft.Valid)
                 return res;
 
-            // [ d(down)/d(yaw)  d(down)/d(T) ] [ dyaw ]     [ down ]
-            // [ d(cross)/d(yaw) d(cross)/d(T)] [ dT   ]  = -[ cross]
+            // [ d(down)/d(yaw) d(down)/d(T) ] [ dyaw ] [ down ] [ d(cross)/d(yaw) d(cross)/d(T)] [ dT ] = -[ cross]
             double a11 = fy.MissDownrange.D, a12 = ft.MissDownrange.D;
             double a21 = fy.MissCrossrange.D, a22 = ft.MissCrossrange.D;
             double det = a11 * a22 - a12 * a21;
@@ -698,9 +682,8 @@ public static class BoostbackShooter
             double dyaw = (-dr * a22 + cr * a12) / det;
             double dT = (-cr * a11 + dr * a21) / det;
 
-            // Damped, because the first step from a poor guess can be enormous and the
-            // linearisation is only local. Duration is also floored - a negative burn
-            // is not a solution, it is a diverged iterate.
+            // Damped, because the first step from a poor guess can be enormous and the linearisation is only local.
+            // Duration is also floored - a negative burn is not a solution, it is a diverged iterate.
             double scale = 1.0;
             double yawStepDeg = dyaw / Deg;
             if (System.Math.Abs(yawStepDeg) > 20.0) scale = System.Math.Min(scale, 20.0 / System.Math.Abs(yawStepDeg));
@@ -754,9 +737,8 @@ public static class BoostbackShooter
                                     double initialPitchStepDeg = 8.0,
                                     double hintX = 0.0, double hintY = 0.0, double hintZ = 0.0)
     {
-        // The hint is what keeps a warm start meaningful across the moment the burn
-        // reverses the horizontal velocity - see Frame.FromState. Callers holding a
-        // previous plan should always pass its frame's S axis.
+        // The hint is what keeps a warm start meaningful across the moment the burn reverses the horizontal velocity - see Frame.FromState.
+        // Callers holding a previous plan should always pass its frame's S axis.
         Frame frame = Frame.FromState(x0, hintX, hintY, hintZ);
         var res = new SolveResult { Parameters = guess };
 
@@ -772,10 +754,8 @@ public static class BoostbackShooter
         if (!bestInner.Converged)
             return res;
 
-        // The pattern search's first step should match how far the answer is expected
-        // to have moved. Cold, that is the whole plausible range; warm - re-solving a
-        // couple of seconds later from the last plan - it is a degree or two, and
-        // starting at 8 degrees there wastes most of the search overshooting.
+        // The pattern search's first step should match how far the answer is expected to have moved.
+        // Cold, that is the whole plausible range; warm - re-solving a couple of seconds later from the last plan - it is a degree or two, and starting at 8 degrees there wastes most of the search overshooting.
         double stepP = System.Math.Max(initialPitchStepDeg, 0.25), stepR = 0.25;
         for (int sweep = 0; sweep < maxSweeps; sweep++)
         {
@@ -855,8 +835,7 @@ public static class BoostbackShooter
         if (!inner.Converged)
             return double.PositiveInfinity;
 
-        // Warm-start the next inner solve from this one: neighbouring candidates have
-        // near-identical answers, and this roughly halves the iteration count.
+        // Warm-start the next inner solve from this one: neighbouring candidates have near-identical answers, and this roughly halves the iteration count.
         yawSeed = inner.YawDeg;
         durSeed = inner.Duration;
         return inner.Duration;

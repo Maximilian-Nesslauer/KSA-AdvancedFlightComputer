@@ -5,9 +5,9 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
-// Stock's SequenceList.ActivateNextSequence, reimplemented so decouplers and engines can be held
-// back independently. Both delays run from the staging trigger. Sorting per module lets one part
-// fire its motor and its two mounts on three different rows.
+// Stock's SequenceList.ActivateNextSequence, reimplemented so decouplers and engines can be held back independently.
+// Both delays run from the staging trigger.
+// Sorting per module lets one part fire its motor and its two mounts on three different rows.
 internal static class StagingExecution
 {
     public static PendingStaging? ActivateNextSequenceSplit(Vehicle vehicle)
@@ -44,8 +44,7 @@ internal static class StagingExecution
         GameReflection.SequenceList_ActiveSequence!.SetValue(seqList, seqNumber);
         TimedAlert.Create($"Sequence {seqNumber} activated", Color.Yellow, 3.0);
 
-        // Stock's own guard: ResetCaches early-returns while this is set, so a re-entrant reset
-        // cannot rebuild the parts cache under the span below.
+        // Stock's own guard: ResetCaches early-returns while this is set, so a re-entrant reset cannot rebuild the parts cache under the span below.
         GameReflection.SequenceList_updatingSequence!.SetValue(seqList, true);
         target.Activated = true;
 
@@ -82,10 +81,9 @@ internal static class StagingExecution
         seqList.RemoveSpentSequences();
         StagingHelpers.InvalidateSequenceCache();
 
-        // Nothing is drained or refreshed here. Activation only appends to IActivateInputBuffer;
-        // stock drains it in Program.PrepareFrame and refreshes from Vehicle.Split at the frame
-        // sync point. Doing either from the solver apply would mutate a list PhysicsBubble is
-        // iterating.
+        // Nothing is drained or refreshed here.
+        // Activation only appends to IActivateInputBuffer; stock drains it in Program.PrepareFrame and refreshes from Vehicle.Split at the frame sync point.
+        // Doing either from the solver apply would mutate a list PhysicsBubble is iterating.
 
         if (DebugConfig.AutoStage)
             DefaultCategory.Log.Debug(
@@ -120,8 +118,7 @@ internal static class StagingExecution
     }
 }
 
-// Deadlines in sim time, not a countdown fed by DeltaTime: the detector also runs on frames the
-// game spends paused, where the last non-zero DeltaTime would keep draining a countdown.
+// Deadlines in sim time, not a countdown fed by DeltaTime: the detector also runs on frames the game spends paused, where the last non-zero DeltaTime would keep draining a countdown.
 internal sealed class PendingStaging
 {
     public List<ISequenced>? DecouplerModules { get; private set; }

@@ -96,9 +96,7 @@ internal static class Patch_TryFindIntercept
             if (patch.PrimaryBody?.Hash != targetOrbit.Parent.Hash)
                 continue;
 
-            // Offsets from the patch start rather than absolute sim seconds, because
-            // a UniverseTime holds 128 bit nanoseconds and an absolute double would
-            // spend its mantissa on the epoch instead of on the window.
+            // Offsets from the patch start rather than absolute sim seconds, because a UniverseTime holds 128 bit nanoseconds and an absolute double would spend its mantissa on the epoch instead of on the window.
             UniverseTime patchStart = patch.StartTime;
             double end = Math.Min(transitSeconds * 2.0, (patch.EndTime - patchStart).Seconds());
 
@@ -160,9 +158,8 @@ internal static class Patch_FindClosestApproaches
     {
         try
         {
-            // Mirrors the branch selection in the original. The window comes from
-            // the second body's Period only when neither eccentricity is below 1
-            // and the patch has a finite end time.
+            // Mirrors the branch selection in the original.
+            // The window comes from the second body's Period only when neither eccentricity is below 1 and the patch has a finite end time.
             Orbit? target = secondBody?.Orbit;
             if (target == null || target.IsBound()) return true;
             if (__instance.EndTime.IsEndOfTime()) return true;
@@ -171,9 +168,8 @@ internal static class Patch_FindClosestApproaches
         }
         catch (Exception ex)
         {
-            // Fails open, because the original reads the same orbit right away and
-            // reports its own failure. Deduped because the scan runs per patch per
-            // frame.
+            // Fails open, because the original reads the same orbit right away and reports its own failure.
+            // Deduped because the scan runs per patch per frame.
             LogHelper.WarnOnce("find-closest-approaches:" + ex.GetType().Name,
                 $"[AFC] FindClosestApproaches prefix: {ex}; running stock search.");
             return true;
