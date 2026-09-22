@@ -13,12 +13,9 @@ public readonly record struct ScvxIteration(
     double Cost,          // true merit at the reference after this iteration
     int SolverIterations,
     double ElapsedMs,
-    // WHERE that worst defect is. The magnitude alone cannot be read: DefectNorm is a
-    // max over all 14 state channels, each divided by its OWN scale, and the position
-    // scale is metres while the quaternion and body-rate scales are 1. Callers that
-    // multiply by the length scale to report "metres" are therefore only reporting a
-    // distance when the worst channel happens to be a position - otherwise the units
-    // are a rate error times a length. -1 when no defect was evaluated.
+    // WHERE that worst defect is.
+    // The magnitude alone cannot be read: DefectNorm is a max over all 14 state channels, each divided by its OWN scale, and the position scale is metres while the quaternion and body-rate scales are 1.
+    // Callers that multiply by the length scale to report "metres" are therefore only reporting a distance when the worst channel happens to be a position - otherwise the units are a rate error times a length. -1 when no defect was evaluated.
     int DefectChannel,    // state index 0..13, or -1
     int DefectNode);      // interval k (between node k and k+1), or -1
 
@@ -193,8 +190,7 @@ public sealed class Scvx6DofSolver
     public bool WarmStart { get; init; } = true;
     public double DefectTolerance { get; init; } = 1e-3;
 
-    // Reference trajectory - the SCvx state that persists across iterations and,
-    // in receding-horizon use, across guidance cycles.
+    // Reference trajectory - the SCvx state that persists across iterations and, in receding-horizon use, across guidance cycles.
     private double[] _xbar = [], _ubar = [];
     private double _sigBar;
     private double _jRef;
@@ -311,8 +307,7 @@ public sealed class Scvx6DofSolver
                 return _trace.Any(t => t.Accepted) ? ScvxStatus.TrustRegionCollapsed : ScvxStatus.Failed;
             if (it.Accepted && it.Step < StepTolerance && it.DefectNorm < DefectTolerance)
                 return ScvxStatus.Converged;
-            // At least one iteration always runs: a cycle that returns without taking
-            // a step hands back the stale plan, which is worse than being late once.
+            // At least one iteration always runs: a cycle that returns without taking a step hands back the stale plan, which is worse than being late once.
             if (deadlineMs > 0.0 && sw.Elapsed.TotalMilliseconds >= deadlineMs)
             {
                 TimedOut = true;
@@ -368,24 +363,16 @@ public sealed class Scvx6DofSolver
                 _a.AsSpan(k * NX * NX, NX * NX),
                 _b.AsSpan(k * NX * NU, NX * NU));
 
-        // 2. Solve the convex subproblem inside the current trust region.
-        //    Warm-started from the previous solve's iterate: the problem changes
-        //    between iterations, but only within the trust region, so the last
-        //    point is a good ADMM start. ScsWorkspace refuses to carry forward an
-        //    unusable solution, so a failed solve cannot poison this.
+        // 2. Solve the convex subproblem inside the current trust region. Warm-started from the previous solve's iterate: the problem changes between iterations, but only within the trust region, so the last point is a good ADMM start. ScsWorkspace refuses to carry forward an unusable solution, so a failed solve cannot poison this.
         _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigBar, TrustRegion, _a, _b, _f0);
         ScsStatus st = _sub.Run(warmStart: WarmStart && _sub.HasWarmStart,
                                 maxIterations: MaxSubproblemIterations,
                                 epsAbs: SubproblemEps, epsRel: SubproblemEps);
 
-        // A truncated solve counts as a failure, not a step. SCS returns
-        // SolvedInaccurate when it runs out of iterations, and that iterate can
-        // sit far outside the trust region - accepting it produced a step 100x
-        // the radius and a rho of +335 before this guard existed.
-        // Truncation is a BUDGET problem, not a trajectory problem: retry the same
-        // already-assembled subproblem with more iterations rather than shrinking the
-        // trust region, which would only make it harder. Warm-started from the last
-        // GOOD iterate, since truncated ones are no longer carried forward.
+        // A truncated solve counts as a failure, not a step.
+        // SCS returns SolvedInaccurate when it runs out of iterations, and that iterate can sit far outside the trust region - accepting it produced a step 100x the radius and a rho of +335 before this guard existed.
+        // Truncation is a BUDGET problem, not a trajectory problem: retry the same already-assembled subproblem with more iterations rather than shrinking the trust region, which would only make it harder.
+        // Warm-started from the last GOOD iterate, since truncated ones are no longer carried forward.
         if (_sub.HitIterationLimit && EscalatedSubproblemIterations > MaxSubproblemIterations)
         {
             Escalations++;
@@ -396,9 +383,8 @@ public sealed class Scvx6DofSolver
 
         if (!st.IsUsable() || _sub.HitIterationLimit)
         {
-            // Subproblem failure is not fatal - shrink and retry from the same
-            // reference. A trust region that keeps collapsing is the signal that
-            // something is actually wrong.
+            // Subproblem failure is not fatal - shrink and retry from the same reference.
+            // A trust region that keeps collapsing is the signal that something is actually wrong.
             TrustRegion = Math.Max(TrustRegionMin, TrustRegion * Shrink);
             LastFailureReason = $"{st} \"{_sub.StatusText}\"" +
                                 (_sub.HitIterationLimit ? " [truncated at iteration cap]" : "");
@@ -412,9 +398,7 @@ public sealed class Scvx6DofSolver
         double[] x = _sub.SolutionX, u = _sub.SolutionU, wv = _sub.SolutionWv;
         double sigma = _sub.SolutionSigma;
 
-        // 3. Ratio test. Predicted reduction uses the subproblem's own defect
-        //    proxy (the virtual control); actual reduction uses the true
-        //    nonlinear defect at the new point.
+        // 3. Ratio test. Predicted reduction uses the subproblem's own defect proxy (the virtual control); actual reduction uses the true nonlinear defect at the new point.
         double jLin = Fuel(x) + Smoothing(x, u) + _cfg.RhoVc * SumSquaresScaled(wv, _xs);
         (double jTrue, double defectNorm) = TrueCost(x, u, sigma,
                                                      out int defectChannel, out int defectNode);
@@ -437,18 +421,15 @@ public sealed class Scvx6DofSolver
         {
             _xbar = x;
             _ubar = u;
-            // Reproject onto the unit sphere: the subproblem only enforces the
-            // tangent plane at the reference, which is exact only at the
-            // fixpoint. Skipping this lets |q| drift and quietly degrades every
-            // subsequent linearisation.
+            // Reproject onto the unit sphere: the subproblem only enforces the tangent plane at the reference, which is exact only at the fixpoint.
+            // Skipping this lets |q| drift and quietly degrades every subsequent linearisation.
             NormaliseQuaternions(_xbar);
             _sigBar = sigma;
             _jRef = jTrue;
             step = Math.Max(dX, dSigma);   // matches the reference: dU is not part of the measure
         }
 
-        // 5. Trust-region update. Grow only if the step actually used most of the
-        //    radius - otherwise the radius is not what is limiting progress.
+        // 5. Trust-region update. Grow only if the step actually used most of the radius - otherwise the radius is not what is limiting progress.
         if (rho < RhoShrink)
             TrustRegion = Math.Max(TrustRegionMin, TrustRegion * Shrink);
         else if (rho >= RhoGrow && used >= 0.8 * TrustRegion)
@@ -582,10 +563,8 @@ public sealed class Scvx6DofSolver
         {
             Dynamics6Dof.Eval(_xbar.AsSpan((k + 1) * NX, NX), _ubar.AsSpan((k + 1) * NU, NU), _dyn, fk1);
 
-            // Allowance is 1 across the commit window, then rises LINEARLY to slack at
-            // the last interval. Linear in the ALLOWANCE rather than in its reciprocal,
-            // because the allowance is the half with a physical reading: "this interval
-            // may carry N times its tolerance".
+            // Allowance is 1 across the commit window, then rises LINEARLY to slack at the last interval.
+            // Linear in the ALLOWANCE rather than in its reciprocal, because the allowance is the half with a physical reading: "this interval may carry N times its tolerance".
             double frac = k <= commit ? 0.0 : (k - commit) / span;
             double allowance = 1.0 + frac * (slack - 1.0);
 

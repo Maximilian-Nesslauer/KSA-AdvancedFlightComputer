@@ -8,21 +8,18 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
-// Convex (G-FOLD) powered descent from the high gate to the surface, flown as
-// committed-trajectory tracking: solve a min-fuel plan, fly it by time index
-// (feed-forward the planned thrust + PD feedback on the planned state), re-solve
-// on a cadence. Also home to the G-FOLD debug window, which plots every series
-// of the committed optimal trajectory.
+// Convex (G-FOLD) powered descent from the high gate to the surface, flown as committed-trajectory tracking: solve a min-fuel plan, fly it by time index (feed-forward the planned thrust + PD feedback on the planned state), re-solve on a cadence.
+// Also home to the G-FOLD debug window, which plots every series of the committed optimal trajectory.
 public static partial class GuidanceWindow
 {
-    // Every knob and every piece of committed state this descent runs on lives on the
-    // vehicle (VehicleAutopilotState): the pointing cone, the throttle bounds and the
-    // vehicle height are airframe properties, the feedback gains are tuned per craft,
-    // and the plan itself obviously belongs to the craft flying it.
+    // Every knob and committed state for this descent lives on the vehicle (VehicleAutopilotState).
+    // The pointing cone, throttle bounds, and vehicle height are airframe properties.
+    // Feedback gains are tuned for each craft.
+    // The committed plan belongs to the craft that flies it.
 
-    // What the solver aims the CoM at: the surface plus the vehicle height, so the
-    // legs (not the CoM) meet the ground at rest. G-FOLD always plans the whole way
-    // to the surface; the hover handoff simply cuts over in the last stretch.
+    // The solver aims the CoM at the surface plus the vehicle height.
+    // The legs, not the CoM, then meet the ground at rest.
+    // G-FOLD plans to the surface, while terminal hover takes the last stretch.
     private static double GfoldSolverTargetAltM => _s.VehicleHeightM;
     private const double GfoldMinTf = 4.0;
 
@@ -34,10 +31,9 @@ public static partial class GuidanceWindow
     private const double GfoldIgnitionAlignDeg = 15.0;
     private const double GfoldIgnitionAlignLimitS = 3.0;
 
-    // Flight-time search bounds. SearchTfMax is the cold-start ceiling; the two
-    // bracket factors are the window searched around the previous solution's
-    // remaining time when one is available (see SolveGfoldPlan). Wide enough to
-    // absorb a plan that has drifted, narrow enough to cut most of the coarse scan.
+    // Flight-time search bounds.
+    // SearchTfMax is the cold-start ceiling; the two bracket factors are the window searched around the previous solution's remaining time when one is available (see SolveGfoldPlan).
+    // Wide enough to absorb a plan that has drifted, narrow enough to cut most of the coarse scan.
     private const double SearchTfMax = 120.0;
     private const double SearchBracketLo = 0.5;
     private const double SearchBracketHi = 2.0;
@@ -48,14 +44,9 @@ public static partial class GuidanceWindow
     // Shown while the plan flies to touchdown after a refused handoff, and kept through the re-solves that clear the status on success. The reason is in the guidance log.
     private const string GfoldHoverRefusedStatus = "Terminal hover refused, G-FOLD flies its plan to touchdown.";
 
-    // Committed-trajectory tracking: the solved descent plan is flown by time
-    // index (feed-forward the planned thrust at the current time + light PD
-    // feedback on the reference state) and re-solved on a cadence, rather than
-    // applying node 0. This follows the plan's coast (throttle down) and brake
-    // arcs instead of freezing the first node.
-    // Command smoothing: the throttle and thrust direction are low-pass filtered
-    // toward the freshly-computed command with this time constant, so per-frame
-    // feedback noise and re-solve steps don't reach the engine/gimbal as chatter.
+    // Committed-trajectory tracking: the solved descent plan is flown by time index (feed-forward the planned thrust at the current time + light PD feedback on the reference state) and re-solved on a cadence, rather than applying node 0.
+    // This follows the plan's coast (throttle down) and brake arcs instead of freezing the first node.
+    // Command smoothing: the throttle and thrust direction are low-pass filtered toward the freshly-computed command with this time constant, so per-frame feedback noise and re-solve steps don't reach the engine/gimbal as chatter.
 
     private static void StepGfoldDescent(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                          double bodyRadius, double now)
@@ -67,10 +58,7 @@ public static partial class GuidanceWindow
         var frame = KsaGfold.BuildFrame(siteCci);
         double3 v = orbit.StateVectors.VelocityCci;
 
-        // The flown state is the CoM - the vehicle-height allowance lives in the
-        // solver TARGET (see GfoldSolverTargetAltM), so attitude changes don't
-        // perturb the reference state. _s.GfoldAltM is height above touchdown: zero
-        // when the CoM sits _s.VehicleHeightM over the pad, i.e. legs on the ground.
+        // The flown state is the CoM - the vehicle-height allowance lives in the solver TARGET (see GfoldSolverTargetAltM), so attitude changes don't perturb the reference state. _s.GfoldAltM is height above touchdown: zero when the CoM sits _s.VehicleHeightM over the pad, i.e. legs on the ground.
         double3 r = orbit.StateVectors.PositionCci;
         double3 vSrf = v - double3.Cross(parent.GetAngularVelocityCci(), r);
         _s.GfoldAltM = double3.Dot(r - siteCci, frame.Ex) - _s.VehicleHeightM;
@@ -78,9 +66,8 @@ public static partial class GuidanceWindow
         double3 gfLocal = frame.PointToLocal(r);   // X-up frame
         RecordGfoldTrace(Math.Sqrt(gfLocal.Y * gfLocal.Y + gfLocal.Z * gfLocal.Z), gfLocal.X);
 
-        // Hand off to the terminal hover controller for the last stretch: G-FOLD
-        // brings the vehicle down to the handoff height (slow and near-vertical),
-        // and the hover flies the final touchdown. A hover that refuses the craft is asked once, and the plan, which ends at the surface anyway, is flown to the touchdown StepLanding detects.
+        // Hand off to the terminal hover controller for the last stretch: G-FOLD brings the vehicle down to the handoff height (slow and near-vertical), and the hover flies the final touchdown.
+        // A hover that refuses the craft is asked once, and the plan, which ends at the surface anyway, is flown to the touchdown StepLanding detects.
         if (_s.GfoldAltM <= _s.GfoldHoverHandoffAltM && !_s.GfoldHoverRefused)
         {
             StartTerminalHover(vehicle);
@@ -94,28 +81,21 @@ public static partial class GuidanceWindow
             _s.LandingStatus = GfoldHoverRefusedStatus;
         }
 
-        // Inside the last GfoldMinTf seconds before the planned arrival, the distance
-        // still to fly is too small for any valid flight time: tf >= TfMin (the search
-        // floor) overshoots it, so a re-solve goes degenerate and reports the target
-        // unreachable right before the handoff. Freeze the committed plan there - it
-        // already terminates at the target - and just fly it down.
+        // Inside the last GfoldMinTf seconds before the planned arrival, the distance still to fly is too small for any valid flight time: tf >= TfMin (the search floor) overshoots it, so a re-solve goes degenerate and reports the target unreachable right before the handoff.
+        // Freeze the committed plan there - it already terminates at the target - and just fly it down.
         bool terminalWindow = _s.GfoldPlan != null && _s.GfoldArrivalTime - now <= GfoldMinTf;
         if (!terminalWindow &&
             (_s.GfoldPlan == null || now - _s.GfoldLastSolveTime >= _s.GfoldIntervalS))
             SolveGfoldPlan(vehicle, parent, frame, siteCci, r, now);
 
-        // Fly the committed plan by time index every frame (feed-forward + PD). Track
-        // in the LIVE site frame (rebuilt this step), not the solve-time frame: the
-        // site is body-fixed, so its CCI position rotates with the body, and the live
-        // frame carries the plan around with it so we keep aiming at the real pad.
+        // Fly the committed plan by time index every frame (feed-forward + PD).
+        // Track in the LIVE site frame (rebuilt this step), not the solve-time frame: the site is body-fixed, so its CCI position rotates with the body, and the live frame carries the plan around with it so we keep aiming at the real pad.
         if (_s.GfoldPlan != null)
             TrackGfoldPlan(vehicle, parent, frame, r, vSrf, vehicle.TotalMass, now);
     }
 
-    // Solve a fresh descent plan from the current state and commit it. A min-fuel
-    // search (so it coasts/brakes optimally - "throttles down") to the site; if the
-    // site is unreachable in the remaining time the search floats the touchdown to
-    // the closest point, so this degrades gracefully instead of going infeasible.
+    // Solve a fresh descent plan from the current state and commit it.
+    // A min-fuel search (so it coasts/brakes optimally - "throttles down") to the site; if the site is unreachable in the remaining time the search floats the touchdown to the closest point, so this degrades gracefully instead of going infeasible.
     private static void SolveGfoldPlan(Vehicle vehicle, IParentBody parent,
                                        KsaGfold.Frame frame, double3 siteCci, double3 comPos, double now)
     {
@@ -137,23 +117,17 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // Mark the attempt now (not only on success) so a failing solve retries on the
-        // normal cadence rather than every frame while we keep flying the last plan.
+        // Mark the attempt now (not only on success) so a failing solve retries on the normal cadence rather than every frame while we keep flying the last plan.
         _s.GfoldLastSolveTime = now;
 
-        // GfoldPlanner.SolveTimeLimitS is process-wide, which is safe ONLY because the
-        // solve below is synchronous and on this thread: each vehicle sets it
-        // immediately before its own call and the call has returned before any other
-        // vehicle is serviced. Move the solve to a worker and this becomes a race -
-        // see GfoldSolveMs for why that move is worth making anyway.
+        // GfoldPlanner.SolveTimeLimitS is process-wide, which is safe ONLY because the solve below is synchronous and on this thread: each vehicle sets it immediately before its own call and the call has returned before any other vehicle is serviced.
+        // Move the solve to a worker and this becomes a race - see GfoldSolveMs for why that move is worth making anyway.
         GfoldPlanner.SolveTimeLimitS = _s.GfoldSolveTimeLimitS > 0 ? _s.GfoldSolveTimeLimitS : null;
         var solveClock = System.Diagnostics.Stopwatch.StartNew();
 
         try
         {
-            // On the cadence, prefer to keep the arrival time set at handoff (solve
-            // the remaining time); only re-run the full search when that fails or
-            // we have no plan yet.
+            // On the cadence, prefer to keep the arrival time set at handoff (solve the remaining time); only re-run the full search when that fails or we have no plan yet.
             GfoldTrajectory traj = null;
             if (!_s.GfoldForceSearch && _s.GfoldPlan != null && _s.GfoldArrivalTime - now > GfoldMinTf)
             {
@@ -172,28 +146,16 @@ public static partial class GuidanceWindow
             }
             if (traj == null)
             {
-                // Warm-start the SEARCH from the last solution. The solver itself
-                // can't be warm started - ECOS is an interior-point method and the
-                // previous optimum sits on the boundary, the worst possible starting
-                // iterate - but the flight-time search around it can be.
+                // Warm-start the SEARCH from the last solution.
+                // The solver itself can't be warm started - ECOS is an interior-point method and the previous optimum sits on the boundary, the worst possible starting iterate - but the flight-time search around it can be.
                 //
-                // The committed plan's remaining time IS the previous solution
-                // carried forward: _s.GfoldArrivalTime was set to now + tf* when that
-                // search ran, so (_s.GfoldArrivalTime - now) is tf* minus the time
-                // since. That's the best available estimate of the new optimum, so
-                // bracket it instead of rescanning the full range. Searching
-                // [4, 120] from cold spends 8 coarse points plus ~10 golden-section
-                // steps, at up to two SOCP solves each - 35-40 solves. A tight
-                // bracket collapses the coarse scan onto the plausible range.
+                // The committed plan's remaining time IS the previous solution carried forward: _s.GfoldArrivalTime was set to now + tf* when that search ran, so (_s.GfoldArrivalTime - now) is tf* minus the time since.
+                // That's the best available estimate of the new optimum, so bracket it instead of rescanning the full range.
+                // Searching [4, 120] from cold spends 8 coarse points plus ~10 golden-section steps, at up to two SOCP solves each - 35-40 solves.
+                // A tight bracket collapses the coarse scan onto the plausible range.
                 //
-                // Both bounds move, not just the upper one: with a 20 s remaining
-                // flight the old floor of 4 s was as wasteful as the old 120 s
-                // ceiling, just at the other end.
-                // _s.GfoldForceSearch means the previous solution is no longer a valid
-                // guess - a retarget replaces _s.GfoldArrivalTime with a placeholder
-                // far in the future purely to escape the terminal freeze, so
-                // bracketing around it would spend a narrow search on a fabricated
-                // centre and then fall back anyway. Go straight to the full range.
+                // Both bounds move, not just the upper one: with a 20 s remaining flight the old floor of 4 s was as wasteful as the old 120 s ceiling, just at the other end. _s.GfoldForceSearch means the previous solution is no longer a valid guess - a retarget replaces _s.GfoldArrivalTime with a placeholder far in the future purely to escape the terminal freeze, so bracketing around it would spend a narrow search on a fabricated centre and then fall back anyway.
+                // Go straight to the full range.
                 double tfLo = GfoldMinTf, tfHi = SearchTfMax;
                 bool bracketed = !_s.GfoldForceSearch
                     && _s.GfoldPlan != null && _s.GfoldArrivalTime - now > GfoldMinTf;
@@ -211,12 +173,10 @@ public static partial class GuidanceWindow
                         options: GfoldOptions.Descent with { SlewReg = _s.GfoldSlewReg })
                     : null;
 
-                // A bracket can only lose solutions that lie outside it, so the full
-                // range is still tried before declaring the site unreachable. Costs
-                // the old price only when the cheap window genuinely found nothing -
-                // which is also exactly when the vehicle's situation has changed
-                // enough that the previous solution was a bad guess.
-                // A plan the tanks cannot supply is no better than none, so the full range is also searched for a cheaper one. The bracket's plan is kept when that finds nothing, so the refusal below can say how much propellant it was short.
+                // A bracket can only lose solutions that lie outside it, so the full range is still tried before declaring the site unreachable.
+                // Costs the old price only when the cheap window genuinely found nothing - which is also exactly when the vehicle's situation has changed enough that the previous solution was a bad guess.
+                // A plan the tanks cannot supply is no better than none, so the full range is also searched for a cheaper one.
+                // The bracket's plan is kept when that finds nothing, so the refusal below can say how much propellant it was short.
                 if (best == null || !FitsFuel(best.Trajectory, p))
                     best = GfoldPlanner.SearchMinFuel(
                         p, _s.GfoldNodes, tfLo: GfoldMinTf, tfHi: SearchTfMax,
@@ -255,9 +215,7 @@ public static partial class GuidanceWindow
         }
     }
 
-    // Fly the committed plan: feed-forward the planned thrust at the current time
-    // plus PD feedback on the planned state, expressed in the given (live) site
-    // frame so the plan stays locked to the body-fixed, rotating landing pad.
+    // Fly the committed plan: feed-forward the planned thrust at the current time plus PD feedback on the planned state, expressed in the given (live) site frame so the plan stays locked to the body-fixed, rotating landing pad.
     private static void TrackGfoldPlan(Vehicle vehicle, IParentBody parent, KsaGfold.Frame f,
                                        double3 r, double3 vSrf, double mass, double now)
     {
@@ -268,19 +226,15 @@ public static partial class GuidanceWindow
         int n = plan.Nodes;
         double elapsed = now - _s.GfoldPlanStart;
 
-        // Reference STATE at the current time: interpolate from node 0. The plan
-        // starts at the current state, so tracking error is ~0 just after a solve;
-        // reading it one node ahead (as the feed-forward does) would feed a whole
-        // step of expected motion ~v*dt back as phantom error and tilt the command
-        // past the pointing cone.
+        // Reference STATE at the current time: interpolate from node 0.
+        // The plan starts at the current state, so tracking error is ~0 just after a solve; reading it one node ahead (as the feed-forward does) would feed a whole step of expected motion ~v*dt back as phantom error and tilt the command past the pointing cone.
         double sf = Math.Clamp(elapsed / plan.Dt, 0.0, n - 1);
         int s0 = Math.Clamp((int)Math.Floor(sf), 0, n - 2);
         double sfrac = Math.Clamp(sf - s0, 0.0, 1.0);
         double3 refPos = Lerp(Node(plan.Position, s0), Node(plan.Position, s0 + 1), sfrac);
         double3 refVel = Lerp(Node(plan.Velocity, s0), Node(plan.Velocity, s0 + 1), sfrac);
 
-        // Feed-forward THRUST: skip node 0 (its control is the unconstrained
-        // artifact), so the first step uses node 1's real, cone-respecting thrust.
+        // Feed-forward THRUST: skip node 0 (its control is the unconstrained artifact), so the first step uses node 1's real, cone-respecting thrust.
         double tf = Math.Max(elapsed / plan.Dt, 1.0);
         int t0 = Math.Clamp((int)Math.Floor(tf), 1, n - 2);
         double tfrac = Math.Clamp(tf - t0, 0.0, 1.0);
@@ -307,8 +261,7 @@ public static partial class GuidanceWindow
         if (!double.IsFinite(targetDir.X) || !double.IsFinite(targetDir.Y) || !double.IsFinite(targetDir.Z))
             targetDir = _s.CommandDir.Length() > 0.5 ? _s.CommandDir : f.Ex;
 
-        // First-order low-pass toward the fresh command, so feedback noise and
-        // re-solve steps don't reach the engine/gimbal as chatter.
+        // First-order low-pass toward the fresh command, so feedback noise and re-solve steps don't reach the engine/gimbal as chatter.
         double dt = Math.Clamp(now - _s.GfoldLastTrackTime, 0.0, 0.25);
         _s.GfoldLastTrackTime = now;
         double a = (!_s.GfoldTrackInit || _s.GfoldSmoothTau <= 1e-3)
@@ -386,14 +339,11 @@ public static partial class GuidanceWindow
     // The formulation carries no fuel budget, so a usable conic status can still describe a burn the tanks cannot supply. FuelMass counts every tank on the craft, so this can refuse a plan but cannot prove that the landing engines reach that propellant.
     private static bool FitsFuel(GfoldTrajectory plan, GfoldParams p) => plan.FuelUsed <= p.FuelMass;
 
-    // A failed solve holds the last command briefly; a short run of failures gives
-    // the vehicle back rather than flying a stale (often sideways) command in.
+    // A failed solve holds the last command briefly; a short run of failures gives the vehicle back rather than flying a stale (often sideways) command in.
     private static void FailGfold(Vehicle vehicle, string message)
     {
         _s.GfoldFailStreak++;
-        // A failed re-solve is not fatal once we hold a feasible plan: keep flying the
-        // last committed trajectory (the solver usually only chokes on the degenerate
-        // last few metres, where the existing plan lands fine) and just tell the user.
+        // A failed re-solve is not fatal once we hold a feasible plan: keep flying the last committed trajectory (the solver usually only chokes on the degenerate last few metres, where the existing plan lands fine) and just tell the user.
         // Only give up when there's nothing to fly - no plan was ever found.
         if (_s.GfoldPlan != null)
         {
@@ -420,9 +370,7 @@ public static partial class GuidanceWindow
         if (!_showGfoldParams)
             return;
 
-        // Note: the UPFG->G-FOLD handoff gate lives in the Deorbit sub-tab, not
-        // here - it governs when the braking burn ends, which is a deorbit-phase
-        // decision, not a G-FOLD tuning one.
+        // Note: the UPFG->G-FOLD handoff gate lives in the Deorbit sub-tab, not here - it governs when the braking burn ends, which is a deorbit-phase decision, not a G-FOLD tuning one.
         ImGui.Begin("G-FOLD params", ImGuiWindowFlags.AlwaysAutoResize);
         using WindowEnd end = default;
         ImGui.InputDouble("Glide slope (deg)", ref _s.GfoldGlideSlopeDeg);
@@ -434,17 +382,13 @@ public static partial class GuidanceWindow
         ImGui.InputDouble("Re-solve interval (s)", ref _s.GfoldIntervalS);
         ImGui.InputInt("Nodes", ref _s.GfoldNodes);
 
-        // The solver swap, in front of whoever is flying it. Clarabel is the default and
-        // is GPLv3; SCS is MIT and is what an MIT release needs. They are fed the
-        // identical assembled problem, so switching mid-descent compares like with
-        // like - and the solve time beside the status is the number that decides it.
+        // The solver swap, in front of whoever is flying it.
+        // Clarabel is the default and is GPLv3; SCS is MIT and is what an MIT release needs.
+        // They are fed the identical assembled problem, so switching mid-descent compares like with like - and the solve time beside the status is the number that decides it.
         //
-        // The solver selector that used to sit here is gone: Clarabel is the only
-        // backend now. There is no tolerance knob either, and that is a property of the
-        // algorithm rather than an omission - an interior-point method's cost scales
-        // with log(1/eps) rather than 1/eps, so accuracy is nearly free and the
-        // tolerance stops being something a pilot should be tuning. The time limit
-        // stays, because Clarabel reports hitting it as a first-class status.
+        // The solver selector that used to sit here is gone: Clarabel is the only backend now.
+        // There is no tolerance knob either, and that is a property of the algorithm rather than an omission - an interior-point method's cost scales with log(1/eps) rather than 1/eps, so accuracy is nearly free and the tolerance stops being something a pilot should be tuning.
+        // The time limit stays, because Clarabel reports hitting it as a first-class status.
         ImGui.InputDouble("Solve time limit (s, 0=none)", ref _s.GfoldSolveTimeLimitS);
 
         ImGui.InputDouble("Hover handoff alt (m)", ref _s.GfoldHoverHandoffAltM);
@@ -460,9 +404,8 @@ public static partial class GuidanceWindow
 
     private static bool _showGfoldDebug;
 
-    // Every series of the committed optimal trajectory plotted against plan time,
-    // with a cursor at "now" so you can watch the vehicle walk along the plan and
-    // each re-solve reshape it. Reads only the committed plan - pure display.
+    // Every series of the committed optimal trajectory plotted against plan time, with a cursor at "now" so you can watch the vehicle walk along the plan and each re-solve reshape it.
+    // Reads only the committed plan - pure display.
     private static void DrawGfoldDebugWindow()
     {
         if (!_showGfoldDebug)
@@ -481,9 +424,7 @@ public static partial class GuidanceWindow
         float cursor = plan.TimeOfFlight > 1e-9 ? (float)(elapsed / plan.TimeOfFlight) : 0f;
         int n = plan.Nodes;
 
-        // Solve cost is a first-class readout, not a diagnostic: this runs on the sim
-        // thread, so anything past a frame time (16.7 ms at 60 Hz) is a stutter the
-        // player feels once every re-solve interval.
+        // Solve cost is a first-class readout, not a diagnostic: this runs on the sim thread, so anything past a frame time (16.7 ms at 60 Hz) is a stutter the player feels once every re-solve interval.
         ImGui.Text($"status {_s.GfoldStatus}   nodes {n}   dt {plan.Dt:F2} s   tf {plan.TimeOfFlight:F1} s");
         if (_s.GfoldThrustStatus.Length > 0)
             ImGui.Text(_s.GfoldThrustStatus);
@@ -519,8 +460,7 @@ public static partial class GuidanceWindow
         PlotSeries(labelB, b, n, cursor);
     }
 
-    // A small draw-list line plot of one plan series vs node index (= plan time),
-    // with min/max labels, the value at the time cursor, and the cursor itself.
+    // A small draw-list line plot of one plan series vs node index (= plan time), with min/max labels, the value at the time cursor, and the cursor itself.
     private static void PlotSeries(string label, Func<int, double> series, int n, float cursor)
     {
         var size = new float2(280f, 84f);

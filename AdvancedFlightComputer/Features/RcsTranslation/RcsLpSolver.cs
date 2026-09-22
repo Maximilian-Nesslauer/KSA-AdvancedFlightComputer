@@ -89,8 +89,7 @@ internal static class RcsLpSolver
             }
             if (!anyCoeff)
             {
-                // No thruster influences this row; feasible only if the
-                // demand on it is (relatively) zero.
+                // No thruster influences this row; feasible only if the demand on it is (relatively) zero.
                 if (Math.Abs(b[r]) > 1e-6 * max)
                     return false;
                 rowActive[r] = false;
@@ -138,8 +137,7 @@ internal static class RcsLpSolver
         if (phase1Objective > 1e-7)
             return false;
 
-        // Drive leftover artificials out of the basis; a row where no
-        // structural column can pivot is redundant and is zeroed out.
+        // Drive leftover artificials out of the basis; a row where no structural column can pivot is redundant and is zeroed out.
         for (int r2 = 0; r2 < m; r2++)
         {
             if (basis[r2] < n)
@@ -192,8 +190,8 @@ internal static class RcsLpSolver
         int numVars = width - 1;
         while (true)
         {
-            // Reduced cost per nonbasic column: c_j - c_B . B^-1 A_j, with
-            // the tableau already expressing B^-1 A.
+            // Reduced cost per nonbasic column: c_j - c_B .
+            // B^-1 A_j, with the tableau already expressing B^-1 A.
             int entering = -1;
             for (int j = 0; j < numVars; j++)
             {

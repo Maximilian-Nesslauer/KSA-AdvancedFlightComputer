@@ -238,8 +238,7 @@ public static partial class GuidanceWindow
             GaugeRowText("Correction", "no solution", warn);
         }
 
-        // The assumption, stated where the numbers are rather than only in the code:
-        // it is the model's biggest simplification and the first thing to doubt if a prediction disagrees with what the vehicle does.
+        // The assumption, stated where the numbers are rather than only in the code: it is the model's biggest simplification and the first thing to doubt if a prediction disagrees with what the vehicle does.
         ImGui.Text("");
         ImGui.NextColumn();
         ImGui.TextWrapped("Assumes retrograde attitude (alpha 0) for the whole coast, "

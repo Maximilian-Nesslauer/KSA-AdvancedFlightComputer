@@ -37,8 +37,8 @@ internal static class SaveLoadObserver
     {
         static void Postfix(UncompressedSave __instance)
         {
-            // UncompressedSave.Load returns normally when GameSaves.RefusedInEditor refuses the load,
-            // so its postfix still runs. Read the same editor state without raising a second alert.
+            // UncompressedSave.Load returns normally when GameSaves.RefusedInEditor refuses the load, so its postfix still runs.
+            // Read the same editor state without raising a second alert.
             if (Program.IsEditorOpen)
             {
                 if (DebugConfig.MultiPass)

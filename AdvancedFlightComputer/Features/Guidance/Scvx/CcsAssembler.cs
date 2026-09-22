@@ -73,9 +73,7 @@ public sealed class CcsAssembler
             throw new InvalidOperationException(
                 $"assembly produced more than the {_slot.Length} entries in the frozen " +
                 "pattern - the Add sequence must be identical every pass");
-        // Accumulate, not assign: BeginRefill zeroes the values, and duplicate
-        // (row, col) entries share a slot, so they must sum the same way Freeze
-        // summed them on the first pass.
+        // Accumulate, not assign: BeginRefill zeroes the values, and duplicate (row, col) entries share a slot, so they must sum the same way Freeze summed them on the first pass.
         _pr[_slot[_cursor++]] += value;
     }
 
@@ -111,8 +109,8 @@ public sealed class CcsAssembler
             int e = order[k];
             while (col < _col[e]) _jc[++col] = prList.Count;
 
-            // Same position as the previous entry? Fold into it (summed), and map
-            // this ordinal to the same slot so a refill accumulates identically.
+            // Same position as the previous entry?
+            // Fold into it (summed), and map this ordinal to the same slot so a refill accumulates identically.
             bool same = k > 0 && _col[order[k - 1]] == _col[e] && _row[order[k - 1]] == _row[e];
             if (same)
             {

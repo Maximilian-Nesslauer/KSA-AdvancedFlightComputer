@@ -317,9 +317,11 @@ internal static class SixDofLog
         public int DefectNode;
         // The HORIZON-WEIGHTED figure the gate actually tested, and where it was worst.
         // DefectM above stays the honest full-horizon max, so the two together say both "how bad is this plan anywhere" and "how bad is it where we are about to fly".
-        // CommitIntervals is how many intervals were judged at full strength this cycle;
-        // it moves with dt, so it is recorded rather than inferred. See Scvx6DofSolver.WeightedDefect.
-        // GatedRatio is DIMENSIONLESS - the worst channel as a multiple of its own tolerance, after horizon weighting - so 1.0 is the gate. GatedRaw and GatedTolerance are that channel's numbers in its own units, so the row can be read without knowing the tolerance table. DefectM above stays the legacy metre-scaled full-horizon max.
+        // CommitIntervals is how many intervals were judged at full strength this cycle; it moves with dt, so it is recorded rather than inferred.
+        // See Scvx6DofSolver.WeightedDefect.
+        // GatedRatio is DIMENSIONLESS - the worst channel as a multiple of its own tolerance, after horizon weighting - so 1.0 is the gate.
+        // GatedRaw and GatedTolerance are that channel's numbers in its own units, so the row can be read without knowing the tolerance table.
+        // DefectM above stays the legacy metre-scaled full-horizon max.
         public double GatedRatio, GatedRaw, GatedTolerance;
         public string GatedDefectChan;
         public int GatedDefectNode, CommitIntervals;

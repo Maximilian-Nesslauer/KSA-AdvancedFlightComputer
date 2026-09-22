@@ -181,8 +181,8 @@ public static class KsaTvcAllocator
         result.AchievedTorque = torque;
         result.AchievedForce = force;
 
-        // Per-axis capability, for scaling a UI slider or clamping a guidance demand:
-        // the torque produced by driving the min-norm solution for that axis to saturation. Unlike KSA's TvcTorqueAuthority (a sum of absolute values, so an optimistic bound that assumes every gimbal serves that axis maximally), this is achievable by construction.
+        // Per-axis capability, for scaling a UI slider or clamping a guidance demand: the torque produced by driving the min-norm solution for that axis to saturation.
+        // Unlike KSA's TvcTorqueAuthority (a sum of absolute values, so an optimistic bound that assumes every gimbal serves that axis maximally), this is achievable by construction.
         result.MaxTorque = new double3(
             AxisCapability(bTorque, cols, inv, 0),
             AxisCapability(bTorque, cols, inv, 1),

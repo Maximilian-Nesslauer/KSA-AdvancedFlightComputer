@@ -257,10 +257,7 @@ public sealed class ScsWorkspace
                 {
                     X = Pin(xBuf), Y = Pin(yBuf), S = Pin(sBuf),
                 };
-                // Status/LinSysSolver are ByValArray-marshaled fixed-size buffers:
-                // the managed arrays must already be allocated at the declared
-                // SizeConst before the call, or the marshaler has nothing to copy
-                // the native bytes into.
+                // Status/LinSysSolver are ByValArray-marshaled fixed-size buffers: the managed arrays must already be allocated at the declared SizeConst before the call, or the marshaler has nothing to copy the native bytes into.
                 var info = new ScsNative.ScsInfo { Status = new byte[128], LinSysSolver = new byte[128] };
                 long t1 = System.Diagnostics.Stopwatch.GetTimestamp();
                 int exit = ScsNative.scs_solve(work, ref sol, ref info, useWarmStart ? 1 : 0);
@@ -276,20 +273,11 @@ public sealed class ScsWorkspace
                 var status = Enum.IsDefined(typeof(ScsStatus), exit)
                     ? (ScsStatus)exit : ScsStatus.Failed;
 
-                // Only carry a USABLE solution forward. On infeasible/unbounded/
-                // failed exits SCS leaves a certificate (or nothing meaningful) in
-                // x/y/s, not a primal point - seeding the next ADMM run with that
-                // would poison every subsequent solve, and silently, since a bad
-                // warm start degrades convergence rather than erroring. The SCvx
-                // loop retries after shrinking the trust region, so this is a live
-                // path, not a theoretical one.
-                // ...and NOT a TRUNCATED one either. SolvedInaccurate passes
-                // IsUsable(), so before this check a solve that merely ran out of
-                // ADMM iterations was stored and became the next solve's starting
-                // point - seeding the next run from a half-converged iterate, which
-                // makes IT more likely to truncate too. That is the mechanism behind
-                // long solves arriving in BURSTS rather than singly: one truncation
-                // poisons the warm start and the next few inherit it.
+                // Only carry a USABLE solution forward.
+                // On infeasible/unbounded/ failed exits SCS leaves a certificate (or nothing meaningful) in x/y/s, not a primal point - seeding the next ADMM run with that would poison every subsequent solve, and silently, since a bad warm start degrades convergence rather than erroring.
+                // The SCvx loop retries after shrinking the trust region, so this is a live path, not a theoretical one. ...and NOT a TRUNCATED one either.
+                // SolvedInaccurate passes IsUsable(), so before this check a solve that merely ran out of ADMM iterations was stored and became the next solve's starting point - seeding the next run from a half-converged iterate, which makes IT more likely to truncate too.
+                // That is the mechanism behind long solves arriving in BURSTS rather than singly: one truncation poisons the warm start and the next few inherit it.
                 if (status.IsUsable() && !HitIterationLimit)
                 {
                     _prevX = xBuf; _prevY = yBuf; _prevS = sBuf;

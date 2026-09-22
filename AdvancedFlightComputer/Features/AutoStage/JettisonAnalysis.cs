@@ -4,9 +4,9 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
-// Which parts the next row would throw overboard, without activating it. Mirrors Vehicle.Split: a
-// decoupler sheds the subtree below the child side of its connection. Only the shape is cached,
-// per vehicle, because only the shape is fixed between tree and sequence edits.
+// Which parts the next row would throw overboard, without activating it.
+// Mirrors Vehicle.Split: a decoupler sheds the subtree below the child side of its connection.
+// Only the shape is cached, per vehicle, because only the shape is fixed between tree and sequence edits.
 internal static class JettisonAnalysis
 {
     // Scratch for the control-loss guard, which is not cached.
@@ -24,8 +24,7 @@ internal static class JettisonAnalysis
             || state.JettisonPartCount != partCount
             || state.JettisonSequenceNumber != sequenceNumber)
         {
-            // The key is written before the rebuild, so a throw mid-rebuild leaves the set
-            // unusable until the inputs change instead of throwing again every frame.
+            // The key is written before the rebuild, so a throw mid-rebuild leaves the set unusable until the inputs change instead of throwing again every frame.
             state.JettisonGeneration = generation;
             state.JettisonPartCount = partCount;
             state.JettisonSequenceNumber = sequenceNumber;
@@ -140,8 +139,8 @@ internal static class JettisonAnalysis
         return false;
     }
 
-    // The crossfeed case: a booster whose own engine is spent may still feed the core. Live, not
-    // cached, so the caller runs it as the last gate before staging.
+    // The crossfeed case: a booster whose own engine is spent may still feed the core.
+    // Live, not cached, so the caller runs it as the last gate before staging.
     public static bool CarriesOffUsablePropellant(Vehicle vehicle, IReadOnlySet<Part> jettison, out string? reason)
     {
         reason = null;
@@ -157,8 +156,7 @@ internal static class JettisonAnalysis
                 if (tank.ComputeSubstanceMass(moleStates) <= 0f)
                     continue;
 
-                // AvailableConsumers is narrower than what a FurtherestToNearest flow rule drains,
-                // which is fine on stock parts, whose decoupler joints carry no BulkFluid capability.
+                // AvailableConsumers is narrower than what a FurtherestToNearest flow rule drains, which is fine on stock parts, whose decoupler joints carry no BulkFluid capability.
                 foreach ((ResourceManager manager, int _) in tank.AvailableConsumers)
                 {
                     if (manager.Consumer is not Combustor consumer)
@@ -195,8 +193,8 @@ internal static class JettisonAnalysis
     {
         root = null;
 
-        // Mirrors the guard in Decoupler.SetIsActive. IsActive never flips, so a spent decoupler
-        // is recognised by its connector having lost the connection.
+        // Mirrors the guard in Decoupler.SetIsActive.
+        // IsActive never flips, so a spent decoupler is recognised by its connector having lost the connection.
         if (!decoupler.IsEnabled)
             return Separation.None;
 
@@ -208,8 +206,8 @@ internal static class JettisonAnalysis
         Part near = decoupler.Connector.ConnectionPart;
         Part far = connection.OtherPart(near);
 
-        // Vehicle.Split keeps whichever endpoint is not a tree child of the other. When neither or
-        // both are, its pick depends on connector order, so no side is predicted.
+        // Vehicle.Split keeps whichever endpoint is not a tree child of the other.
+        // When neither or both are, its pick depends on connector order, so no side is predicted.
         bool nearIsParent = near.TreeChildren.Contains(far);
         bool farIsParent = far.TreeChildren.Contains(near);
         if (nearIsParent == farIsParent)

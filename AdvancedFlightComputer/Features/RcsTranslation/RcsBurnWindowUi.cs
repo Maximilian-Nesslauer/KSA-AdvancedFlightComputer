@@ -24,8 +24,7 @@ internal static class RcsBurnWindowUi
         }
         catch (Exception ex)
         {
-            // Once per load: this runs every frame the editor is open, and a
-            // persistent draw failure would otherwise flood the log.
+            // Once per load: this runs every frame the editor is open, and a persistent draw failure would otherwise flood the log.
             LogHelper.WarnOnce("rcs-burn-window:" + ex.GetType().Name,
                 $"[AFC] RcsBurnWindowUi failed for vehicle='{vehicle.Id}': {ex}");
         }

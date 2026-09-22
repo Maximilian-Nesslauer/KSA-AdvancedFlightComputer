@@ -9,11 +9,18 @@ using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 using AdvancedFlightComputer.Guidance.Numerics;
 
-// World-space overlay for the drag-integrated impact point, matching the G-FOLD and 6-DOF overlays so all three read the same way. Shares the projection plumbing in Ui/Overlays/OverlayCore.cs.
-//  WHAT IT SHOWS. Where the vehicle lands if it does nothing from here: RK4 through KSA's own drag model and a mirror of KSA's atmosphere, holding the retrograde attitude, down to the terrain. That is the drag landing point, as opposed to the vacuum instantaneous impact point the closed-form guidance would use - and the two are not close. On a boostback-shaped coast the drag point lands LONG of the vacuum one, which is the opposite of what most people expect; see Scvx.Console --impact.
-//  EVERYTHING DRAWN HERE IS BODY-FIXED, and that is the fix for a marker that would otherwise crawl. The trajectory is integrated in CCI, which is inertial, but it lands on ground that has been turning underneath it the whole time - a 200 s coast lets the equator move about 93 km. So the path and the impact point are converted to CCF ONCE, at prediction time, each sample carried back by the rotation that will have happened by the time the vehicle reaches it. After that nothing moves until the prediction itself changes: a cached INERTIAL path would slide across the terrain by about 90 m per 200 ms of its own age and snap back on every recompute.
-//  THREE SEPARATE THINGS MADE THE MARKER JUMP, and they wanted three different fixes:
-//  the frame           the drift just described. Fixed by storing CCF, above.
+// World-space overlay for the drag-integrated impact point, matching the G-FOLD and 6-DOF overlays so all three read the same way.
+// Shares the projection plumbing in Ui/Overlays/OverlayCore.cs.
+// WHAT IT SHOWS.
+// Where the vehicle lands if it does nothing from here: RK4 through KSA's own drag model and a mirror of KSA's atmosphere, holding the retrograde attitude, down to the terrain.
+// That is the drag landing point, as opposed to the vacuum instantaneous impact point the closed-form guidance would use - and the two are not close.
+// On a boostback-shaped coast the drag point lands LONG of the vacuum one, which is the opposite of what most people expect; see Scvx.Console --impact.
+// EVERYTHING DRAWN HERE IS BODY-FIXED, and that is the fix for a marker that would otherwise crawl.
+// The trajectory is integrated in CCI, which is inertial, but it lands on ground that has been turning underneath it the whole time - a 200 s coast lets the equator move about 93 km.
+// So the path and the impact point are converted to CCF ONCE, at prediction time, each sample carried back by the rotation that will have happened by the time the vehicle reaches it.
+// After that nothing moves until the prediction itself changes: a cached INERTIAL path would slide across the terrain by about 90 m per 200 ms of its own age and snap back on every recompute.
+// THREE SEPARATE THINGS MADE THE MARKER JUMP, and they wanted three different fixes: the frame the drift just described.
+// Fixed by storing CCF, above.
 //   terrain feedback    the target radius is the terrain height wherever the last pass landed, so a moving impact point resamples a moving height, and at a shallow descent angle that is amplified several-fold back into the impact point. Low-passed below.
 //   the recompute rate  a prediction is milliseconds, so it cannot run every frame;
 //                       whatever genuine motion happens between recomputes arrives all at once. Blended below.

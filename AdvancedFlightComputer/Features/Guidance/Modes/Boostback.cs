@@ -8,96 +8,61 @@ using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 using AdvancedFlightComputer.Guidance.Numerics;
 
-// THE BOOSTBACK STATE MACHINE: separate, turn round, burn back, and set up for entry.
+// The boostback state machine separates, turns, burns back, and prepares for entry.
 //
-// Four phases, flown in order, each ending on a condition rather than a timer where
-// one exists:
+// These phases run in order and end on a condition where possible:
 //
-//   Separation     2 s at the vehicle's LOWEST throttle. Not a manoeuvre - it settles
-//                  propellant and pushes the booster clear of whatever it just let go
-//                  of, while the attitude is simply held where separation left it.
-//   Rotation       slew the commanded thrust axis onto the boostback dV, at a limited
-//                  rate, with the engine STILL LIT at that same minimum throttle - the
-//                  gimbals are what turn a booster this size and they need thrust to
-//                  deflect. The flight computer flies it: we publish both the attitude
-//                  AND the rate the attitude is turning at (see KsaAttitudeRate), so
-//                  the FC tracks the slew instead of nulling a sequence of stationary
-//                  targets.
-//   Boostback      full throttle, in three stages. Most of it flies the PLAN - a shot:
-//                  an integrated powered arc whose pitch, yaw and duration were
-//                  optimised for propellant (see BoostbackShooter) - re-solved every
-//                  two seconds, steering along its law evaluated at the elapsed time.
-//                  At tgo <= 5 s the plan HANDS OVER to the impulsive correction, which
-//                  is nearly exact at that timescale and is re-solved at 10 Hz. At
-//                  tgo <= 2 s that command FREEZES and the rest runs open loop, cutting
-//                  off on sensed dV. See BoostbackTerminalS and BoostbackLockTgo.
-//   EntryOrient    slew to surface retrograde and HOLD there. Terminal: nothing ends
-//                  it but an abort or another mode taking the vehicle.
+// - Separation uses the vehicle's lowest throttle for 2 s to settle propellant and move the booster clear while holding its attitude.
+// - Rotation slews the thrust axis to the boostback dV at a limited rate while gimbals turn the booster at minimum throttle.
+// - The flight computer receives both the attitude and its rate through KsaAttitudeRate, so it tracks the slew instead of stationary targets.
+// - Boostback follows a BoostbackShooter arc at full throttle and resolves it every 2 s.
+// - At tgo <= 5 s it uses the 10 Hz impulsive correction, then freezes that command at tgo <= 2 s and cuts off on sensed dV.
+// - EntryOrient holds surface retrograde until an abort or another mode takes the vehicle.
 //
 // TWO GUIDANCE LAWS RUN HERE, AND THEY DO DIFFERENT JOBS.
 //
-// ImpactSteering.Correction answers "what is the smallest impulse, applied NOW, that
-// puts the predicted impact on the site". It is cheap (about 3.6 ms) and it is the
-// right question to ask ABOUT A BURN THAT HAS NOT STARTED: is there anything worth
-// lighting an engine for, and is there anything left to correct. That is all it is used
-// for here - see the two magnitudes in StepBoostback.
+// ImpactSteering.Correction answers "what is the smallest impulse, applied NOW, that puts the predicted impact on the site".
+// It is cheap (about 3.6 ms) and it is the right question to ask ABOUT A BURN THAT HAS NOT STARTED: is there anything worth lighting an engine for, and is there anything left to correct.
+// That is all it is used for here - see the two magnitudes in StepBoostback.
 //
-// It is the wrong thing to FLY, and measurably so. A boostback burn is not an impulse:
-// it lasts tens of seconds and the vehicle falls through all of them. Pretending
-// otherwise makes the cheapest-looking correction point at the ground - 33 degrees
-// below the horizon on the reference arc, which is the documented failure of
-// instantaneous impact-point guidance. BoostbackShooter integrates the powered arc
-// instead and optimises the burn as a whole; on that same arc it comes out 25 degrees
-// ABOVE the horizon for 18% less propellant, and below the horizon the burn is not
-// merely dear but impossible for the vehicle. So the plan flies the burn.
+// It is the wrong thing to FLY, and measurably so.
+// A boostback burn is not an impulse: it lasts tens of seconds and the vehicle falls through all of them.
+// Pretending otherwise makes the cheapest-looking correction point at the ground - 33 degrees below the horizon on the reference arc, which is the documented failure of instantaneous impact-point guidance.
+// BoostbackShooter integrates the powered arc instead and optimises the burn as a whole; on that same arc it comes out 25 degrees ABOVE the horizon for 18% less propellant, and below the horizon the burn is not merely dear but impossible for the vehicle.
+// So the plan flies the burn.
 //
-// AND THE PLAN IS RE-SOLVED RATHER THAN PLANNED ONCE, on a receding horizon: every
-// solve plans a burn starting NOW, from the live state, and the vehicle flies the head
-// of the freshest one. What that absorbs is everything the shot does not model - thrust
-// that differs from the engine table, the attitude lagging the command, drag that is
-// not quite the surrogate. Two seconds is the cadence because the plan answers a slow
-// question ("what shape of burn is cheapest from here") whose answer barely moves in
-// two seconds, which is also what makes the warm re-solve cheap enough to run at all.
+// AND THE PLAN IS RE-SOLVED RATHER THAN PLANNED ONCE, on a receding horizon: every solve plans a burn starting NOW, from the live state, and the vehicle flies the head of the freshest one.
+// What that absorbs is everything the shot does not model - thrust that differs from the engine table, the attitude lagging the command, drag that is not quite the surrogate.
+// Two seconds is the cadence because the plan answers a slow question ("what shape of burn is cheapest from here") whose answer barely moves in two seconds, which is also what makes the warm re-solve cheap enough to run at all.
 //
-// THE BURN ATTITUDE AND THE PREDICTION'S ASSUMPTION AGREE, which is load-bearing and
-// not a coincidence worth leaving unstated. DragCoastSystem holds alpha = 0 for the
-// whole coast - engine into the wind - and both flown attitudes land there: the
-// boostback dV is very nearly anti-parallel to the velocity, so thrusting along it
-// points body +x aft, and the entry phase commands exactly that direction outright. The
-// only stretch of the flight where the vehicle is NOT near alpha 0 is the rotation, and
-// nothing is being predicted through it. If the burn ever became a large plane change,
-// that assumption would stop holding and the prediction would need the flown alpha.
+// THE BURN ATTITUDE AND THE PREDICTION'S ASSUMPTION AGREE, which is load-bearing and not a coincidence worth leaving unstated.
+// DragCoastSystem holds alpha = 0 for the whole coast - engine into the wind - and both flown attitudes land there: the boostback dV is very nearly anti-parallel to the velocity, so thrusting along it points body +x aft, and the entry phase commands exactly that direction outright.
+// The only stretch of the flight where the vehicle is NOT near alpha 0 is the rotation, and nothing is being predicted through it.
+// If the burn ever became a large plane change, that assumption would stop holding and the prediction would need the flown alpha.
 //
-// AND THE END OF THE BURN IS RE-SOLVED FASTER, NOT DIFFERENTLY. Two seconds of stale
-// plan costs little with fifty seconds to run and everything with five, because there is
-// no time left to absorb it - so inside T-5 the cadence goes to 5 Hz. Those solves are
-// the warmest the burn produces, which is what makes it affordable.
+// AND THE END OF THE BURN IS RE-SOLVED FASTER, NOT DIFFERENTLY.
+// Two seconds of stale plan costs little with fifty seconds to run and everything with five, because there is no time left to absorb it - so inside T-5 the cadence goes to 5 Hz.
+// Those solves are the warmest the burn produces, which is what makes it affordable.
 //
-// Two earlier arrangements flew something OTHER than the plan there, and both were
-// worse. Freezing it and evaluating its law out to cutoff is five seconds of open-loop
-// tracking. Handing over to the impulsive correction closes the loop again - that law is
-// nearly exact over a short burn - but closes it around an APPROXIMATION where the plan
-// is not one. Against an engine 3% down on thrust: 875 m frozen, 538 m handed over,
-// 177 m simply re-solving the plan faster.
+// Two earlier arrangements flew something OTHER than the plan there, and both were worse.
+// Freezing it and evaluating its law out to cutoff is five seconds of open-loop tracking.
+// Handing over to the impulsive correction closes the loop again - that law is nearly exact over a short burn - but closes it around an APPROXIMATION where the plan is not one.
+// Against an engine 3% down on thrust: 875 m frozen, 538 m handed over, 177 m simply re-solving the plan faster.
 //
-// AND THE LAST SECOND STOPS LISTENING. The plan is not re-solved inside T-1; its linear
-// tangent law is simply evaluated out to cutoff, still turning, on the plan's own clock.
+// AND THE LAST SECOND STOPS LISTENING.
+// The plan is not re-solved inside T-1; its linear tangent law is simply evaluated out to cutoff, still turning, on the plan's own clock.
 //
-// THE REASON IS MODEL MISMATCH RATHER THAN NOISE. The shot integrates a model - a
-// surrogate aero table, an exponential atmosphere, an engine table, a coast at alpha
-// zero, an attitude assumed to be where it was commanded - and none of that is the game.
-// What is left over is a BIAS the solver cannot null, since nulling it would require the
-// model to be right, so re-solving into the last second has the vehicle chasing a miss
-// that moves every time it looks. Stopping is what breaks the chase.
+// THE REASON IS MODEL MISMATCH RATHER THAN NOISE.
+// The shot integrates a model - a surrogate aero table, an exponential atmosphere, an engine table, a coast at alpha zero, an attitude assumed to be where it was commanded - and none of that is the game.
+// What is left over is a BIAS the solver cannot null, since nulling it would require the model to be right, so re-solving into the last second has the vehicle chasing a miss that moves every time it looks.
+// Stopping is what breaks the chase.
 //
-// --shoot measures it both ways and the sign flips: against a 3% thrust scale, which the
-// solver can null, the tail costs 160 m; against a drag model 25% off, which it cannot,
-// the tail saves 321 m. The real vehicle is the second kind. Read the thrust-only table
-// alone and it recommends dropping the tail - which was done once, and flew worse.
+// --shoot measures it both ways and the sign flips: against a 3% thrust scale, which the solver can null, the tail costs 160 m; against a drag model 25% off, which it cannot, the tail saves 321 m.
+// The real vehicle is the second kind.
+// Read the thrust-only table alone and it recommends dropping the tail - which was done once, and flew worse.
 public static partial class GuidanceWindow
 {
-    // Public because VehicleAutopilotState holds a vehicle's phase - every craft runs
-    // this machine on its own, exactly like AscentPhase and LandingPhase.
+    // Public because VehicleAutopilotState holds a vehicle's phase - every craft runs this machine on its own, exactly like AscentPhase and LandingPhase.
     public enum BoostbackPhase { Idle, Separation, Rotation, Boostback, EntryOrient, Done }
 
     /// <summary>
@@ -274,8 +239,8 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // Boostback owns the vehicle now. Every mode drives the same flight-computer
-        // command path, and two of them writing it would fight.
+        // Boostback owns the vehicle now.
+        // Every mode drives the same flight-computer command path, and two of them writing it would fight.
         ClaimVehicle(GuidanceMode.Boostback, vehicle);
 
         _s.BoostbackPhase = BoostbackPhase.Separation;
@@ -296,9 +261,8 @@ public static partial class GuidanceWindow
         _s.BoostbackThrottle = 0.0;
         _s.BoostbackEngineOn = false;
 
-        // The attitude separation left us in, latched so the hold is a fixed inertial
-        // direction rather than a fresh reading of a vehicle that is drifting. It is
-        // also what the rotation slews FROM, so the two phases join continuously.
+        // The attitude separation left us in, latched so the hold is a fixed inertial direction rather than a fresh reading of a vehicle that is drifting.
+        // It is also what the rotation slews FROM, so the two phases join continuously.
         _s.BoostbackHoldDir = ThrustAxisCci(vehicle);
         _s.CommandDir = _s.BoostbackHoldDir;
         _s.CommandRate = default;
@@ -343,9 +307,7 @@ public static partial class GuidanceWindow
             return;
 
         double now = SimNow();
-        // Sim time, so a warp step is the long interval it really is; clamped because
-        // the first step after EXECUTE (and any warp jump) would otherwise make the
-        // slew limit and the dV integration meaningless in one direction or the other.
+        // Sim time, so a warp step is the long interval it really is; clamped because the first step after EXECUTE (and any warp jump) would otherwise make the slew limit and the dV integration meaningless in one direction or the other.
         double dt = Math.Clamp(now - _s.BoostbackLastStep, 0.0, 1.0);
         _s.BoostbackLastStep = now;
 
@@ -356,40 +318,26 @@ public static partial class GuidanceWindow
         double3 r = orbit.StateVectors.PositionCci;
         double altAsl = r.Length() - parent.MeanRadius;
 
-        // --- the impulsive correction, and what it is still for ---------------
-        //
-        // NEITHER OF THESE IS FLOWN. Both come from the impulsive linearisation, which
-        // is wrong about a burn lasting a minute in exactly the way that matters - it
-        // points at the ground. The direction and the duration come from the plan
-        // below. What survives is the one question the linearisation answers well:
-        //
-        //   missDv       the targeting correction alone: is there any targeting work
-        //                LEFT. That is what starts the burn and what ends it early.
-        //                Shaping is deliberately NOT in it - folding it in would hold
-        //                the number up after the miss was nulled and the burn would
-        //                never stop on its own. See VehicleAutopilotState.SteerShape.
-        //   dvMag        the whole impulsive command including shaping. A size estimate
-        //                only, and the cold guess the first shot starts from.
+        // Neither impulsive figure is flown.
+        // The plan below provides the burn direction and duration.
+        // - missDv is the targeting correction that starts the burn and can end it early.
+        // - missDv excludes shaping, because including it would hold the value above zero after the miss is nulled and the burn would not stop on its own.
+        // - VehicleAutopilotState.SteerShape is the reference for the separate shaping command.
+        // - dvMag is the full impulsive command including shaping and seeds the first shot.
         double3 dvVec = _s.HasSteer ? _s.SteerCommand : default;
         double dvMag = dvVec.Length();
         double missDv = _s.HasSteer ? _s.SteerDv.Length() : 0.0;
 
         if (_s.HasSteer)
             _s.BoostbackDvGo = dvMag;
-        // else: HOLD the last figure rather than zeroing it. A solve that fails - a
-        // prediction that stops reaching the ground inside the horizon, a staging frame
-        // with no mass - means "no news", and reporting no news as "no dV left" would
-        // put a zero on the readout mid-burn and make the burn-time estimate agree
-        // with it.
+        // else: HOLD the last figure rather than zeroing it.
+        // A solve that fails - a prediction that stops reaching the ground inside the horizon, a staging frame with no mass - means "no news", and reporting no news as "no dV left" would put a zero on the readout mid-burn and make the burn-time estimate agree with it.
 
         _s.BoostbackTgo = BoostbackBurnTime(vehicle, parent, altAsl, _s.BoostbackDvGo);
 
-        // SENSED dV through the open-loop tail, integrated from the thrust the lit
-        // engines are ACTUALLY producing at this altitude rather than from any plan.
-        // A readout, not a cutoff - the plan clock is that - but it is the one
-        // measurement that says whether the engine model the plan was built on matches
-        // the engine, which is the first thing that would explain a burn ending off
-        // target. Over one second it is small either way, which is the point.
+        // SENSED dV through the open-loop tail, integrated from the thrust the lit engines are ACTUALLY producing at this altitude rather than from any plan.
+        // A readout, not a cutoff - the plan clock is that - but it is the one measurement that says whether the engine model the plan was built on matches the engine, which is the first thing that would explain a burn ending off target.
+        // Over one second it is small either way, which is the point.
         if (_s.BoostbackLocked)
         {
             double paNow = KsaEnginePerf.AmbientPressureAt(parent, altAsl);
@@ -401,12 +349,10 @@ public static partial class GuidanceWindow
 
         // --- the plan ---------------------------------------------------------
         //
-        // Only in the two phases that fly it. Solving during separation would spend a
-        // solve planning a burn from a state the settling thrust is still changing, and
-        // the entry phase has no burn to plan.
+        // Only in the two phases that fly it.
+        // Solving during separation would spend a solve planning a burn from a state the settling thrust is still changing, and the entry phase has no burn to plan.
         //
-        // The handover is checked BEFORE the re-solve, so nothing is spent planning a
-        // burn the plan is about to stop flying.
+        // The handover is checked BEFORE the re-solve, so nothing is spent planning a burn the plan is about to stop flying.
         if (_s.BoostbackPhase == BoostbackPhase.Rotation
             || _s.BoostbackPhase == BoostbackPhase.Boostback)
         {
@@ -427,20 +373,15 @@ public static partial class GuidanceWindow
         double planTgo = BoostbackPlanTgo(now);
         double3 planDir = BoostbackPlanDirection(now);
 
-        // THE PLAN OWNS THE NUMBERS, all the way to cutoff. Its clock says how much
-        // burn is left, not the rocket equation over an impulsive dV - the two disagree
-        // by whatever the impulsive model gets wrong about a finite burn, which is the
-        // entire reason the shooter is here.
+        // THE PLAN OWNS THE NUMBERS, all the way to cutoff.
+        // Its clock says how much burn is left, not the rocket equation over an impulsive dV - the two disagree by whatever the impulsive model gets wrong about a finite burn, which is the entire reason the shooter is here.
         if (_s.BoostbackHasPlan)
         {
             _s.BoostbackTgo = planTgo;
             _s.BoostbackDvGo = BoostbackPlanDvGo(vehicle, parent, altAsl, planTgo);
         }
 
-        // --- transitions ------------------------------------------------------
-        // Written as a cascade over successive steps, like the ascent's: each one only
-        // decides whether to leave the phase it is in, and the command below is built
-        // from whatever phase that leaves us in.
+        // --- transitions ------------------------------------------------------ Written as a cascade over successive steps, like the ascent's: each one only decides whether to leave the phase it is in, and the command below is built from whatever phase that leaves us in.
         switch (_s.BoostbackPhase)
         {
             case BoostbackPhase.Separation:
@@ -457,10 +398,9 @@ public static partial class GuidanceWindow
                 }
                 if (missDv < BoostbackMinDvMs)
                 {
-                    // Already on the site. Nothing to burn, so go straight to the entry
-                    // attitude rather than lighting an engine to prove a point. Judged
-                    // on the TARGETING correction: shaping is optional, and a burn is
-                    // not worth lighting for it alone.
+                    // Already on the site.
+                    // Nothing to burn, so go straight to the entry attitude rather than lighting an engine to prove a point.
+                    // Judged on the TARGETING correction: shaping is optional, and a burn is not worth lighting for it alone.
                     _s.BoostbackStatus = $"Correction is only {missDv:F1} m/s - skipping the burn.";
                     EnterBoostbackPhase(BoostbackPhase.EntryOrient, now);
                     break;
@@ -475,10 +415,8 @@ public static partial class GuidanceWindow
                     break;
                 }
 
-                // BOTH the command and the vehicle. The command reaching the target
-                // only says the slew has finished issuing; the flight computer is still
-                // some way behind it, and lighting the engine there points the thrust
-                // at the last of the turn instead of at the target.
+                // BOTH the command and the vehicle.
+                // The command reaching the target only says the slew has finished issuing; the flight computer is still some way behind it, and lighting the engine there points the thrust at the last of the turn instead of at the target.
                 double cmdErr = AngleBetween(_s.CommandDir, planDir) * 180.0 / Math.PI;
                 double fcErr = vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI;
                 if (cmdErr <= BoostbackAlignDeg && fcErr <= BoostbackAlignDeg)
@@ -486,16 +424,13 @@ public static partial class GuidanceWindow
                     EnterBoostbackPhase(BoostbackPhase.Boostback, now);
 
                     // A FRESH PLAN AT THE INSTANT THE ENGINE LIGHTS, off the interval.
-                    // The plan in hand is up to two seconds old and its duration is
-                    // measured from when it was solved, so flying it from here would
-                    // cut the burn short by however long it has been sitting. Ignition
-                    // is precisely the moment worth paying an off-cadence solve for.
+                    // The plan in hand is up to two seconds old and its duration is measured from when it was solved, so flying it from here would cut the burn short by however long it has been sitting.
+                    // Ignition is precisely the moment worth paying an off-cadence solve for.
                     UpdateBoostbackPlan(vehicle, orbit, parent, now, intervalS: 0.0);
                     planTgo = BoostbackPlanTgo(now);
                     planDir = BoostbackPlanDirection(now);
 
-                    // The backstop, sized off the burn the PLAN says we are about to
-                    // fly - which is the burn we are about to fly.
+                    // The backstop, sized off the burn the PLAN says we are about to fly - which is the burn we are about to fly.
                     _s.BoostbackBurnLimit = now + (double.IsFinite(planTgo)
                         ? Math.Max(planTgo * BoostbackBurnLimitFactor, 30.0)
                         : 120.0);
@@ -505,26 +440,19 @@ public static partial class GuidanceWindow
 
             case BoostbackPhase.Boostback:
             {
-                // The plan runs out. This is the cutoff, and it is a CLOCK rather than a
-                // threshold on a shrinking vector: the shot answered "burn for this
-                // long" and the burn is over when it has.
+                // The plan runs out.
+                // This is the cutoff, and it is a CLOCK rather than a threshold on a shrinking vector: the shot answered "burn for this long" and the burn is over when it has.
                 bool done = _s.BoostbackHasPlan && planTgo <= 0.0;
                 bool overrun = now >= _s.BoostbackBurnLimit;
 
-                // Propellant, but not for the first second. The engine has only just
-                // been commanded on at this point and the master switch does not reach
-                // it until ApplyAutopilot runs at the foot of this same step, so the
-                // very frames where the burn begins are also the frames most likely to
-                // report nothing lit and nothing fed - and cutting on that would end
-                // the burn before it started.
+                // Propellant, but not for the first second.
+                // The engine has only just been commanded on at this point and the master switch does not reach it until ApplyAutopilot runs at the foot of this same step, so the very frames where the burn begins are also the frames most likely to report nothing lit and nothing fed - and cutting on that would end the burn before it started.
                 bool dry = now - _s.BoostbackPhaseStart > 1.0
                         && !vehicle.IsAnyEnginePropellantAvailable();
 
-                // The closed-loop cutoff: the ballistic impact is already ON the site,
-                // so continuing would take it back off. Targeting only, not the
-                // commanded total - shaping would hold this number up after the miss was
-                // nulled and the burn would never end on its own. Disabled once locked,
-                // where the whole point is that nothing new is listened to.
+                // The closed-loop cutoff: the ballistic impact is already ON the site, so continuing would take it back off.
+                // Targeting only, not the commanded total - shaping would hold this number up after the miss was nulled and the burn would never end on its own.
+                // Disabled once locked, where the whole point is that nothing new is listened to.
                 bool nulled = !_s.BoostbackLocked && _s.HasSteer
                            && missDv < BoostbackMinDvMs;
 
@@ -541,11 +469,8 @@ public static partial class GuidanceWindow
 
         // --- where to point, and how fast that point is moving ----------------
         //
-        // Both, every step. The flight computer tracks a target's RATE as well as its
-        // angle (see KsaAttitudeRate), and handing it only the angle declares a moving
-        // target stationary - the difference between tracking and chasing, and the
-        // whole reason the rotation and the entry slew read as manoeuvres rather than
-        // as a series of settling steps.
+        // Both, every step.
+        // The flight computer tracks a target's RATE as well as its angle (see KsaAttitudeRate), and handing it only the angle declares a moving target stationary - the difference between tracking and chasing, and the whole reason the rotation and the entry slew read as manoeuvres rather than as a series of settling steps.
         double3 want;
         switch (_s.BoostbackPhase)
         {
@@ -554,21 +479,15 @@ public static partial class GuidanceWindow
                 break;
 
             case BoostbackPhase.Rotation:
-                // Where the optimised burn STARTS - the plan is re-solved through the
-                // turn, so this tracks a burn that begins whenever the turn finishes.
-                // Not where the impulsive correction points, which on the reference arc
-                // is most of sixty degrees away and would leave the vehicle having to
-                // turn again as soon as the engine lit.
+                // Where the optimised burn STARTS - the plan is re-solved through the turn, so this tracks a burn that begins whenever the turn finishes.
+                // Not where the impulsive correction points, which on the reference arc is most of sixty degrees away and would leave the vehicle having to turn again as soon as the engine lit.
                 want = planDir.Length() > 0.5 ? planDir : _s.BoostbackHoldDir;
                 break;
 
             case BoostbackPhase.Boostback:
-                // ONE SOURCE, throughout: the plan's steering law evaluated at the time
-                // elapsed since it was solved. What changes across the burn is how often
-                // the plan behind it is re-solved - every 2 s, then every 0.2 s inside
-                // T-5, then not at all inside T-1 - and not what is being flown. The law
-                // goes on turning even in the last second, which is the whole reason
-                // nothing is latched.
+                // ONE SOURCE, throughout: the plan's steering law evaluated at the time elapsed since it was solved.
+                // What changes across the burn is how often the plan behind it is re-solved - every 2 s, then every 0.2 s inside T-5, then not at all inside T-1 - and not what is being flown.
+                // The law goes on turning even in the last second, which is the whole reason nothing is latched.
                 want = planDir.Length() > 0.5 ? planDir : _s.CommandDir;
                 break;
 
@@ -583,9 +502,7 @@ public static partial class GuidanceWindow
 
         if (want.Length() < 0.5)
         {
-            // Nothing usable to point at: hold, rather than commanding a zero vector
-            // that CommandAttitude would normalise into whatever the last frame's
-            // rounding produced.
+            // Nothing usable to point at: hold, rather than commanding a zero vector that CommandAttitude would normalise into whatever the last frame's rounding produced.
             _s.CommandRate = default;
             ApplyBoostbackActuation(vehicle, now);
             return;
@@ -594,12 +511,8 @@ public static partial class GuidanceWindow
 
         double3 wantRate = BoostbackTargetRate(want, dt);
 
-        // The command SLEWS toward the target rather than jumping to it, and the slew
-        // is the manoeuvre in the rotation and entry phases rather than a guard on one:
-        // BoostbackSlewDegS is the rate the booster actually turns at. When the slew
-        // binds, the published rate is the SLEW's, not the target's - a feedforward the
-        // command is not following would have the FC drive toward one rate while the
-        // target it can see moved at another.
+        // The command SLEWS toward the target rather than jumping to it, and the slew is the manoeuvre in the rotation and entry phases rather than a guard on one: BoostbackSlewDegS is the rate the booster actually turns at.
+        // When the slew binds, the published rate is the SLEW's, not the target's - a feedforward the command is not following would have the FC drive toward one rate while the target it can see moved at another.
         double maxRad = _s.BoostbackSlewDegS * Math.PI / 180.0 * dt;
         double3 slewed = SlewToward(_s.CommandDir, want, maxRad, out bool clamped);
         if (clamped && dt > 1e-9)
@@ -675,29 +588,19 @@ public static partial class GuidanceWindow
         double3 v0 = orbit.StateVectors.VelocityCci;
         Span<double> x0 = stackalloc double[6] { r0.X, r0.Y, r0.Z, v0.X, v0.Y, v0.Z };
 
-        // The site in the frame the shot reports its impact in - the co-rotating one,
-        // which is the current body-fixed frame turned back into CCI axes. Exactly the
-        // conversion UpdateSteering makes, for the same reason: the site is body-fixed,
-        // and getting this backwards aims the whole burn off by the body's rotation.
+        // The site in the frame the shot reports its impact in - the co-rotating one, which is the current body-fixed frame turned back into CCI axes.
+        // Exactly the conversion UpdateSteering makes, for the same reason: the site is body-fixed, and getting this backwards aims the whole burn off by the body's rotation.
         // THE SITE'S SURFACE, ON BOTH SIDES OF THE MISS.
         //
-        // The prediction that DRAWS the impact marker terminates on the terrain under
-        // the impact point, which is right for drawing: that is where the vehicle would
-        // actually touch. It is wrong for TARGETING, twice over. It puts the hit and the
-        // target on two different spheres, so the miss carries a radial component that
-        // is a difference of terrain heights rather than a distance to fly; and that
-        // height MOVES as the impact point walks across the terrain, so the surface the
-        // solution is converging onto wanders under it - a low-passed wander, at that,
-        // which is worse than a noisy one because it lags.
+        // The prediction that DRAWS the impact marker terminates on the terrain under the impact point, which is right for drawing: that is where the vehicle would actually touch.
+        // It is wrong for TARGETING, twice over.
+        // It puts the hit and the target on two different spheres, so the miss carries a radial component that is a difference of terrain heights rather than a distance to fly; and that height MOVES as the impact point walks across the terrain, so the surface the solution is converging onto wanders under it - a low-passed wander, at that, which is worse than a noisy one because it lags.
         //
-        // Aiming both at the site's own radius makes the miss purely tangential and
-        // makes it mean what it says: how far along the ground the impact is from the
-        // pad. The site's terrain is cached per lat/lon, so it is also a constant, and
-        // the burn converges onto a surface that is standing still.
+        // Aiming both at the site's own radius makes the miss purely tangential and makes it mean what it says: how far along the ground the impact is from the pad.
+        // The site's terrain is cached per lat/lon, so it is also a constant, and the burn converges onto a surface that is standing still.
         //
-        // It matters more than it looks. At a steep impact the downrange error from a
-        // wrong landing radius is dh/tan(gamma) - a couple of hundred metres of terrain
-        // is over a hundred metres of miss, which is the same size as the miss itself.
+        // It matters more than it looks.
+        // At a steep impact the downrange error from a wrong landing radius is dh/tan(gamma) - a couple of hundred metres of terrain is over a hundred metres of miss, which is the same size as the miss itself.
         double siteRadius = parent.MeanRadius + SiteTerrainHeight(parent);
 
         double3 siteCcf = SiteDirCcf() * siteRadius;
@@ -711,17 +614,14 @@ public static partial class GuidanceWindow
         opt.StepVacuum = BoostbackPlanCoastStepVac;
         opt.TargetRadius = siteRadius;
 
-        // The burn cannot outlast the tanks. Given to the solve as a BOUND rather than
-        // checked afterwards, so a site the vehicle cannot reach comes back as "not
-        // enough propellant" instead of as a converged plan that runs dry mid-flight.
+        // The burn cannot outlast the tanks.
+        // Given to the solve as a BOUND rather than checked afterwards, so a site the vehicle cannot reach comes back as "not enough propellant" instead of as a converged plan that runs dry mid-flight.
         double usable = vehicle.PropellantMass;
         double maxBurn = usable > 0.0 ? usable / massFlow : double.PositiveInfinity;
 
         _s.BoostbackPlanScratch ??= new Dual[BoostbackShooter.ScratchLength];
 
-        // Warm from the last plan; cold, guess a burn as long as the impulsive
-        // correction says it needs, which is the only estimate available before any
-        // shot has been flown.
+        // Warm from the last plan; cold, guess a burn as long as the impulsive correction says it needs, which is the only estimate available before any shot has been flown.
         bool warm = _s.BoostbackHasPlan;
         var guess = warm
             ? _s.BoostbackPlan
@@ -733,11 +633,9 @@ public static partial class GuidanceWindow
             };
         if (warm)
         {
-            // THE SEED HAS TO MOVE WITH THE CLOCK. The stored duration was measured from
-            // the moment that plan was SOLVED, so handing it over unchanged seeds the
-            // inner Newton a whole re-plan interval too long - every single time, in the
-            // one direction. Measured on --shoot: 1701 shots against 1584 with the seed
-            // advanced, for the same answer.
+            // THE SEED HAS TO MOVE WITH THE CLOCK.
+            // The stored duration was measured from the moment that plan was SOLVED, so handing it over unchanged seeds the inner Newton a whole re-plan interval too long - every single time, in the one direction.
+            // Measured on --shoot: 1701 shots against 1584 with the seed advanced, for the same answer.
             double elapsed = Math.Max(now - _s.BoostbackPlanTime, 0.0);
             guess.Duration = Math.Max(guess.Duration - elapsed, 0.1);
             guess.PitchDeg += guess.PitchRateDegS * elapsed;
@@ -747,23 +645,17 @@ public static partial class GuidanceWindow
         long t0 = System.Diagnostics.Stopwatch.GetTimestamp();
         BoostbackShooter.SolveResult sol = BoostbackShooter.Solve(
             in sys, x0, mass, target, in guess, in opt, _s.BoostbackPlanScratch,
-            // The user knob, entering as a hard BOUND on the optimisation rather than
-            // as the null-space nudge ShapeFlightPathAngle buys it with. Same knob, but
-            // here it constrains the burn that is actually flown - and if the
-            // unconstrained optimum already clears it, which it usually does (the
-            // measured optimum is +25 deg), it never binds and costs nothing.
+            // The user knob, entering as a hard BOUND on the optimisation rather than as the null-space nudge ShapeFlightPathAngle buys it with.
+            // Same knob, but here it constrains the burn that is actually flown - and if the unconstrained optimum already clears it, which it usually does (the measured optimum is +25 deg), it never binds and costs nothing.
             minPitchDeg: _s.BoostbackPitchDeg,
             maxDuration: maxBurn,
-            // Rates left at zero. A warm re-solve every two seconds re-datums the whole
-            // law against the live state, which is the same correction a turn rate
-            // would make and a more honest one; searching them as well would triple the
-            // shots per solve to refine something about to be thrown away.
+            // Rates left at zero.
+            // A warm re-solve every two seconds re-datums the whole law against the live state, which is the same correction a turn rate would make and a more honest one; searching them as well would triple the shots per solve to refine something about to be thrown away.
             searchRates: false,
             maxSweeps: warm ? 4 : 10,
             initialPitchStepDeg: warm ? 2.0 : 8.0,
-            // The previous frame's orbit normal, so the new frame cannot flip its zero
-            // out from under the angles we just seeded. A boostback exists to reverse
-            // the horizontal velocity, and r x v reverses with it - see Frame.FromState.
+            // The previous frame's orbit normal, so the new frame cannot flip its zero out from under the angles we just seeded.
+            // A boostback exists to reverse the horizontal velocity, and r x v reverses with it - see Frame.FromState.
             hintX: warm ? _s.BoostbackPlanFrame.Sx : 0.0,
             hintY: warm ? _s.BoostbackPlanFrame.Sy : 0.0,
             hintZ: warm ? _s.BoostbackPlanFrame.Sz : 0.0);
@@ -773,11 +665,9 @@ public static partial class GuidanceWindow
 
         if (!sol.Converged)
         {
-            // The PREVIOUS plan is kept and goes on being flown. A burn already under
-            // way is better served by a two-second-old plan than by none, the usual
-            // failure is the coast momentarily not reaching the ground, and the next
-            // attempt is two seconds off. What must not happen is silence, so the
-            // reason goes on the tab either way.
+            // The PREVIOUS plan is kept and goes on being flown.
+            // A burn already under way is better served by a two-second-old plan than by none, the usual failure is the coast momentarily not reaching the ground, and the next attempt is two seconds off.
+            // What must not happen is silence, so the reason goes on the tab either way.
             _s.BoostbackPlanError = sol.Shot.OutOfPropellant ? "not enough propellant"
                 : sol.Shot.FlewIntoGround ? "the burn flies into the ground"
                 : sol.Shot.Infeasible ? "no burn reaches the site"
@@ -856,20 +746,13 @@ public static partial class GuidanceWindow
                 break;
 
             case BoostbackPhase.Rotation:
-                // LIT THROUGH THE TURN, AND THAT IS THE POINT. A booster's RCS is
-                // sized for attitude hold, not for throwing a half-empty first stage
-                // through 180 degrees; the gimbals are what turn it, and a gimbal
-                // produces torque in proportion to the thrust it is deflecting. Shut
-                // the engine down for the flip and the only authority left is the one
-                // that cannot do it.
+                // LIT THROUGH THE TURN, AND THAT IS THE POINT.
+                // A booster's RCS is sized for attitude hold, not for throwing a half-empty first stage through 180 degrees; the gimbals are what turn it, and a gimbal produces torque in proportion to the thrust it is deflecting.
+                // Shut the engine down for the flip and the only authority left is the one that cannot do it.
                 //
-                // At the same minimum throttle the settling burn uses, which is the
-                // trade: gimbal torque scales with it, and so does the dV the sweeping
-                // thrust axis lays down. That dV is NOT a targeting error - the
-                // correction is re-derived from the live state at 10 Hz and the burn
-                // does not start until the turn is finished, so what the flip does to
-                // the trajectory is simply part of the state the first solve sees. It
-                // costs propellant, not accuracy.
+                // At the same minimum throttle the settling burn uses, which is the trade: gimbal torque scales with it, and so does the dV the sweeping thrust axis lays down.
+                // That dV is NOT a targeting error - the correction is re-derived from the live state at 10 Hz and the burn does not start until the turn is finished, so what the flip does to the trajectory is simply part of the state the first solve sees.
+                // It costs propellant, not accuracy.
                 _s.BoostbackThrottle = SettleThrottle(vehicle);
                 _s.BoostbackEngineOn = true;
                 break;
@@ -890,16 +773,12 @@ public static partial class GuidanceWindow
     {
         _s.BoostbackPhase = phase;
         _s.BoostbackPhaseStart = now;
-        // The target changes discontinuously across a phase boundary (the dV direction
-        // to surface retrograde is most of a half turn), so the differencing filter has
-        // to be re-seeded or the first step of the new phase publishes that whole jump
-        // as a turning rate.
+        // The target changes discontinuously across a phase boundary (the dV direction to surface retrograde is most of a half turn), so the differencing filter has to be re-seeded or the first step of the new phase publishes that whole jump as a turning rate.
         _s.BoostbackPrevWantValid = false;
         _s.BoostbackWantRate = default;
 
-        // The plan belongs to the burn. Past it there is nothing to fly and nothing to
-        // warm-start from, and leaving it set would put a stale burn on the tab beside
-        // a vehicle that is coasting.
+        // The plan belongs to the burn.
+        // Past it there is nothing to fly and nothing to warm-start from, and leaving it set would put a stale burn on the tab beside a vehicle that is coasting.
         if (phase != BoostbackPhase.Rotation && phase != BoostbackPhase.Boostback)
         {
             _s.BoostbackHasPlan = false;

@@ -319,13 +319,16 @@ public static class Ksa6DofSetup
         double velocityScale = Math.Max(Math.Max(speed0, Math.Sqrt(lengthScale * gScale)), 1.0);
         // Burn-time bounds must BRACKET the seed. Scvx6DofConfig's defaults (5..25 s, scale 12) describe the Python test case; leaving them while seeding sigma elsewhere gives the solver a starting point outside its own feasible range and a badly conditioned scale. Both are set from the seed instead.
         double sigma = Math.Max(sigmaSeed, 1.0);
-        // REGULARISER WEIGHTS SIZED FOR THIS PROBLEM, not the Python test case.
-        //  6dof.py uses W_DU = 0.2, W_W = 1.0, and at its converged solution those contribute 41% and 80% of the fuel term respectively - 121% combined.
+        // REGULARISER WEIGHTS SIZED FOR THIS PROBLEM, not the Python test case. 6dof.py uses W_DU = 0.2, W_W = 1.0, and at its converged solution those contribute 41% and 80% of the fuel term respectively - 121% combined.
         // They are not regularising the objective, they ARE the objective.
-        //  That matters because BOTH GET CHEAPER AS SIGMA GROWS: stretch the same manoeuvre over a longer burn and the node-to-node control deltas shrink, and the rotation rates shrink. Only the fuel term pushes back. W_W scales as N*3*omega^2, so at a perfectly ordinary 0.1 rad/s it is ~10x fuel and at 0.2 rad/s ~40x - at which point the optimiser is simply minimising rotation rate, and the cheapest way to rotate slowly is to take as long as possible. Sigma pins to its upper bound and the vehicle loops.
-        //  Fix: size W_W so the rate penalty is a SMALL FRACTION of fuel at the rate this manoeuvre actually needs - roughly the tilt range swept over half the burn. Scvx6DofConfig's defaults stay at the Python values so the reference validation and the constants drift guard remain valid;
-        // only flight overrides them.
-        // rateDampShare is the fraction of a typical (~0.1) fuel term the rate penalty should cost at the manoeuvre's characteristic rate. Turned right down after flight testing: these terms only need to discourage chatter and spin, and anything large enough to show up against fuel is steering the trajectory instead. There IS a floor - at zero the control can go bang-bang between nodes and the attitude can oscillate - so the objective panel and the plan overlay are the check when reducing further.
+        // That matters because BOTH GET CHEAPER AS SIGMA GROWS: stretch the same manoeuvre over a longer burn and the node-to-node control deltas shrink, and the rotation rates shrink.
+        // Only the fuel term pushes back.
+        // W_W scales as N*3*omega^2, so at a perfectly ordinary 0.1 rad/s it is ~10x fuel and at 0.2 rad/s ~40x - at which point the optimiser is simply minimising rotation rate, and the cheapest way to rotate slowly is to take as long as possible.
+        // Sigma pins to its upper bound and the vehicle loops.
+        // Fix: size W_W so the rate penalty is a SMALL FRACTION of fuel at the rate this manoeuvre actually needs - roughly the tilt range swept over half the burn.
+        // Scvx6DofConfig's defaults stay at the Python values so the reference validation and the constants drift guard remain valid; only flight overrides them. rateDampShare is the fraction of a typical (~0.1) fuel term the rate penalty should cost at the manoeuvre's characteristic rate.
+        // Turned right down after flight testing: these terms only need to discourage chatter and spin, and anything large enough to show up against fuel is steering the trajectory instead.
+        // There IS a floor - at zero the control can go bang-bang between nodes and the attitude can oscillate - so the objective panel and the plan overlay are the check when reducing further.
         double omegaScale = Math.Max(tiltMaxDeg * Math.PI / 180.0 / Math.Max(sigma * 0.5, 1.0), 1e-3);
         double wW = Math.Max(rateDampShare, 0.0) / (nodes * 3.0 * omegaScale * omegaScale);
 

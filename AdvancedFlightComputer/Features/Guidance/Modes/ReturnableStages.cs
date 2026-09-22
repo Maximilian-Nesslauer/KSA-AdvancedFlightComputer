@@ -9,41 +9,29 @@ using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 using AdvancedFlightComputer.Guidance.Numerics;
 
-// WHICH STAGES CAN FLY THEMSELVES HOME, AND WHAT IT WOULD COST THEM.
+// Which stages can return under guidance, and their estimated return cost.
 //
-// A stage is worth returning if it can be flown, and it can be flown if it has a
-// command pod - Vehicle.IsControllable is Parts.Controls.NumModules > 0, and every
-// attitude profile in the flight computer gates on it. So the test is not "is this a
-// big expensive-looking booster" but the same one the game applies: does the subtree
-// that separates carry a Control module. An interstage does not. A booster with
-// avionics does.
+// A stage can return only when its separating subtree has a Control module.
+// Vehicle.IsControllable and flight-computer attitude profiles use the same condition, Parts.Controls.NumModules > 0.
+// An interstage does not.
+// A booster with avionics does.
 //
-// WHY THE JACOBIAN IS COMPUTED ONCE FOR ALL OF THEM. The cost of coming back is
-// ImpactSteering.Correction - the impulse that drags the ballistic impact point onto a
-// site - and that decomposes cleanly: the impact prediction and its velocity Jacobian
-// depend only on where the VEHICLE is and how it flies, not on where anyone wants to
-// land. Only the miss depends on the target. So one prediction and one Jacobian serve
-// every stage in the list, and each extra target is a 3x3 solve. Listing five stages
-// costs what listing one does.
+// Why the Jacobian is computed once for every stage.
+// ImpactSteering.Correction needs an impact prediction and velocity Jacobian that depend on the vehicle state, not the landing target.
+// Only the miss depends on the target.
+// So one prediction and one Jacobian serve every stage in the list, and each extra target is a 3x3 solve.
+// Listing five stages costs what listing one does.
 //
-// WHAT THE NUMBER MEANS, AND WHAT IT DOES NOT. It is "if this separated NOW, what
-// impulse puts it on its site" - exactly the question for the next separation, and a
-// hypothetical for anything further down the stack, which has no business separating
-// here. Two approximations are worth naming rather than burying:
+// The value estimates the impulse that would return a stage if it separated now.
+// It is exact only for the next separation and remains hypothetical for stages below it.
+// The estimate has two important approximations:
 //
-//   THE BALLISTIC COEFFICIENT IS THE STACK'S. The coast is integrated with the aero
-//   surrogate fitted to the vehicle as it is now and its current mass, because a
-//   subtree that has not separated has no bounding box of its own to sweep - KSA
-//   computes CdA from the live assembly. A booster alone is shorter, so its CdA is
-//   smaller and its true return cost differs. The nose area is much the same, and drag
-//   moves this number by single-digit percent on a boostback-shaped arc (--impact
-//   prices it), so it is a good gauge and not a plan.
+// - The coast uses the current stack's aerodynamic surrogate because an attached subtree has no separate bounding box.
+// - A separated booster has a smaller CdA, so this value is a gauge rather than a flight plan.
 //
-//   IT IS AN IMPULSE. A real return burn lasts tens of seconds and costs more - the
-//   shooter measures 18% more than the impulsive figure on the reference arc, and the
-//   impulsive answer points at the ground besides. BoostbackShooter is what plans the
-//   actual burn once the booster exists. This is the number that says whether to stage
-//   yet, not the number that flies it.
+// - The estimate is impulsive, while a real return burn takes time and costs more.
+// - BoostbackShooter plans the actual burn after separation.
+// - This value says whether to stage yet, not how to fly the burn.
 public static partial class GuidanceWindow
 {
     /// <summary>How often the returnable-stage costs are re-solved, ms.</summary>
@@ -89,10 +77,9 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void RefreshReturnableStages(Vehicle vehicle)
     {
-        // REUSED, NOT REBUILT. This runs at 4 Hz and the costs are solved at 1 Hz, so
-        // handing out fresh objects would blank three readings in four and make a live
-        // number look like it was failing. Reuse also means the 4 Hz tick allocates
-        // nothing on the sim path after the first pass.
+        // REUSED, NOT REBUILT.
+        // This runs at 4 Hz and the costs are solved at 1 Hz, so handing out fresh objects would blank three readings in four and make a live number look like it was failing.
+        // Reuse also means the 4 Hz tick allocates nothing on the sim path after the first pass.
         List<ReturnableStage> list = _s.ReturnableStages;
         Dictionary<uint, ReturnableStage> cache = _s.ReturnableStageCache;
         list.Clear();
@@ -131,15 +118,14 @@ public static partial class GuidanceWindow
             if (detached == null || _returnDrops.Count == 0)
                 continue;   // an ignition-only sequence: it separates nothing
 
-            // THE TEST. A command pod on the side that leaves is what makes the thing
-            // that leaves a vehicle rather than debris.
+            // THE TEST.
+            // A command pod on the side that leaves is what makes the thing that leaves a vehicle rather than debris.
             bool controllable = false;
             for (int c = 0; c < controls.Length && !controllable; c++)
                 controllable = _returnDrops.Contains(controls[c].Parent.FullPart);
             if (!controllable)
             {
-                // Still a separation, so the NEXT flag has to move past it: a dumb
-                // interstage coming off first does not make the booster behind it next.
+                // Still a separation, so the NEXT flag has to move past it: a dumb interstage coming off first does not make the booster behind it next.
                 first = false;
                 continue;
             }
@@ -165,8 +151,8 @@ public static partial class GuidanceWindow
         }
     }
 
-    // Scratch for the subtree walk. Same contract as _stagingDropped: filled and
-    // consumed inside one call, never read across calls.
+    // Scratch for the subtree walk.
+    // Same contract as _stagingDropped: filled and consumed inside one call, never read across calls.
     private static readonly HashSet<Part> _returnDrops = new HashSet<Part>();
 
     /// <summary>
@@ -229,8 +215,7 @@ public static partial class GuidanceWindow
             sys, x0, opt, _s.ReturnScratch, dG, default, default);
         if (!nom.Hit)
         {
-            // Normal, not a fault: a vehicle still climbing has no ballistic impact
-            // inside the horizon, so there is nothing yet to drag onto a site.
+            // Normal, not a fault: a vehicle still climbing has no ballistic impact inside the horizon, so there is nothing yet to drag onto a site.
             _s.ReturnDvNote = nom.Status == ImpactStatus.NoImpactWithinHorizon
                 ? $"no ballistic impact within {ImpactHorizonMinutes:F0} min"
                 : nom.Status.ToString();
@@ -249,13 +234,10 @@ public static partial class GuidanceWindow
         Span<double> dv = stackalloc double[3];
         Span<double> greedy = stackalloc double[3];
 
-        // MEAN RADIUS ON BOTH SIDES, deliberately. The prediction above terminates at
-        // MeanRadius, so placing the sites at MeanRadius + terrain would put a terrain
-        // height into the miss that is an artefact of mixing two surfaces rather than a
-        // real distance. Sampling terrain per site would not fix it either: one
-        // prediction serves every stage, so its termination radius has to be common.
-        // Self-consistent is what this number needs; the boostback overlay is where the
-        // low-passed terrain height belongs.
+        // MEAN RADIUS ON BOTH SIDES, deliberately.
+        // The prediction above terminates at MeanRadius, so placing the sites at MeanRadius + terrain would put a terrain height into the miss that is an artefact of mixing two surfaces rather than a real distance.
+        // Sampling terrain per site would not fix it either: one prediction serves every stage, so its termination radius has to be common.
+        // Self-consistent is what this number needs; the boostback overlay is where the low-passed terrain height belongs.
         double siteRadius = parent.MeanRadius;
 
         for (int i = 0; i < list.Count; i++)
@@ -264,9 +246,8 @@ public static partial class GuidanceWindow
             if (!stage.HasTarget)
                 continue;
 
-            // The site in the frame the Jacobian's rows are written in - the co-rotating
-            // one. Same conversion UpdateSteering makes, and getting it backwards would
-            // report a cost that is right in size and wrong by the body's rotation.
+            // The site in the frame the Jacobian's rows are written in - the co-rotating one.
+            // Same conversion UpdateSteering makes, and getting it backwards would report a cost that is right in size and wrong by the body's rotation.
             double3 siteCcf = SiteDirCcfAt(stage.TargetLatDeg, stage.TargetLonDeg) * siteRadius;
             double3 siteF = siteCcf.Transform(parent.GetCcf2Cci());
             double3 missF = hitF - siteF;

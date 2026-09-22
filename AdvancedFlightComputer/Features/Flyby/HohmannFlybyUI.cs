@@ -33,20 +33,16 @@ internal static class HohmannFlybyUI
     private static FlybyPrediction _prediction;
     private static bool _displayingMultiPass;
     private static bool _belowFloor;
-    // Readouts are formatted once per cache update, not per frame. The departure
-    // dV line is the exception, because stock's refine worker rewrites the selected
-    // entry's dV in place after the click, so its baseline is read again every
-    // frame and the line is formatted again only when that value moves.
+    // Readouts are formatted once per cache update, not per frame.
+    // The departure dV line is the exception, because stock's refine worker rewrites the selected entry's dV in place after the click, so its baseline is read again every frame and the line is formatted again only when that value moves.
     private static string _approachSpeedText = string.Empty;
     private static string _impactParameterText = string.Empty;
     private static string _departureDvText = string.Empty;
     private static string? _predictedPeText;
     private static double _cachedFlybyDv = double.NaN;
     private static double _cachedStockDv = double.NaN;
-    // Propagated periapsis from the target's center, and the floor it is judged
-    // against. The requested radius is not enough, because the achieved periapsis
-    // comes out of the patched conic propagation and can land below the body even
-    // when the input was above it.
+    // Propagated periapsis from the target's center, and the floor it is judged against.
+    // The requested radius is not enough, because the achieved periapsis comes out of the patched conic propagation and can land below the body even when the input was above it.
     private static double _minFlybyRadius = double.NaN;
     private static FlightPlan? _previewPlan;
     private static bool _previewHadCoveringPatch;
@@ -123,8 +119,7 @@ internal static class HohmannFlybyUI
 
         if (_belowFloor)
         {
-            // The floor is the terrain ceiling on an airless body and the top of
-            // the atmosphere on one with an atmosphere, so it is not "the surface".
+            // The floor is the terrain ceiling on an airless body and the top of the atmosphere on one with an atmosphere, so it is not "the surface".
             ConsoleUi.WarningWrapped(string.Format(Inv,
                 "Periapsis is below the safe flyby floor ({0} from center). Raise the altitude.",
                 ManeuverToolsWindow.FormatDistance(minRadius)));
@@ -228,9 +223,7 @@ internal static class HohmannFlybyUI
 
         if (_prediction.Status != FlybyPredictionStatus.Available)
         {
-            // Advisory rather than a block, because the propagation is best effort
-            // and has been seen to miss an encounter that a later recompute
-            // resolves, so refusing here could strand a valid plan.
+            // Advisory rather than a block, because the propagation is best effort and has been seen to miss an encounter that a later recompute resolves, so refusing here could strand a valid plan.
             ConsoleUi.WarningWrapped(_prediction.Reason);
             return;
         }
@@ -366,15 +359,12 @@ internal static class HohmannFlybyUI
         source = null;
         if (!Enabled || !_flybyOn || _belowFloor || _displayingMultiPass) return false;
         if (CachedResult == null || _previewPlan == null) return false;
-        // An elapsed departure cannot be flown, so neither draw it nor keep stock's
-        // preview hidden for it.
+        // An elapsed departure cannot be flown, so neither draw it nor keep stock's preview hidden for it.
         if (IsCacheExpired()) return false;
         if (!StockPlanner.ShowPlanWindow) return false;
         if (!StockPlanner.DisplaySelectedTransfer) return false;
-        // Stock clears _transferCalculated on a source or destination change and
-        // once the created burn's time passes, while keeping _selectedEntry. Without
-        // this gate the cached plan, which only tracks the source id, would keep
-        // painting the previous target's flyby over the live trajectory.
+        // Stock clears _transferCalculated on a source or destination change and once the created burn's time passes, while keeping _selectedEntry.
+        // Without this gate the cached plan, which only tracks the source id, would keep painting the previous target's flyby over the live trajectory.
         if (!StockPlanner.TransferCalculated) return false;
 
         if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
@@ -459,12 +449,10 @@ internal static class HohmannFlybyUI
         if (!FlybyRequested || _belowFloor) return false;
         if (CachedResult is not FlybyTargeting.FlybyResult cached) return false;
         if (!ReferenceEquals(_displayedDeparture?.Key.Source, vehicle)) return false;
-        // A past burn time has no patch for Burn.Create, and the interceptor would
-        // fall back to the stock burn aimed at the center.
+        // A past burn time has no patch for Burn.Create, and the interceptor would fall back to the stock burn aimed at the center.
         if (IsCacheExpired()) return false;
-        // The propagated trajectory, not the typed altitude, decides whether this is
-        // a flyby at all. A preview without an encounter is only advisory, see
-        // DrawResult.
+        // The propagated trajectory, not the typed altitude, decides whether this is a flyby at all.
+        // A preview without an encounter is only advisory, see DrawResult.
         if (PredictedFlybyBelowFloor) return false;
         result = cached;
         return true;

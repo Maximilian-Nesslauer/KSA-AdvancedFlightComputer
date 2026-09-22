@@ -11,8 +11,7 @@ internal static class SequenceListPatches
         static void Postfix() => StagingHelpers.InvalidateSequenceCache();
     }
 
-    // The staging window's drag-drop still works in flight and runs through Part.SetSequence, which
-    // activates nothing, so ResetCaches is the one place that sees every one of those edits.
+    // The staging window's drag-drop still works in flight and runs through Part.SetSequence, which activates nothing, so ResetCaches is the one place that sees every one of those edits.
     [HarmonyPatch(typeof(SequenceList), nameof(SequenceList.ResetCaches), new Type[0])]
     internal static class ResetCachesPatch
     {

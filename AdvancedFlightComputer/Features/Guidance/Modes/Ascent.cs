@@ -13,7 +13,8 @@ using AdvancedFlightComputer.Features.Guidance.Upfg;
 // Vertical flight continues straight up from the pad until the turn-start altitude.
 // The turn phase pitches down from vertical at a fixed rate in deg/s toward the launch azimuth until the commanded pitch meets UPFG's command or reaches the failsafe altitude.
 // The closed-loop phase flies the converged UPFG steering.
-// At tgo <= 10 s, the terminal phase freezes the commanded attitude and counts down to cutoff. UPFG keeps iterating for the readouts.
+// At tgo <= 10 s, the terminal phase freezes the commanded attitude and counts down to cutoff.
+// UPFG keeps iterating for the readouts.
 public static partial class GuidanceWindow
 {
     // The target orbit, launch-to-target pick, and gravity-turn shaping are stored in VehicleAutopilotState for the vehicle they describe. LAN is seeded from the vessel's position when its panel first draws and can be re-seeded with the adjacent button.

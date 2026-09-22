@@ -89,9 +89,8 @@ internal static partial class ScsNative
         public IntPtr S;   // scs_float*, length m - slack
     }
 
-    // ScsInfo carries two fixed 128-byte char buffers (status, lin_sys_solver)
-    // followed by scs_int/scs_float fields. Marshal the strings by size rather
-    // than by pointer since scs_solve fills them in place inside our struct.
+    // ScsInfo carries two fixed 128-byte char buffers (status, lin_sys_solver) followed by scs_int/scs_float fields.
+    // Marshal the strings by size rather than by pointer since scs_solve fills them in place inside our struct.
     [StructLayout(LayoutKind.Sequential)]
     internal struct ScsInfo
     {

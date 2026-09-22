@@ -6,9 +6,8 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoRemove;
 
-// Watches the controlled vehicle's burn mode on the shared tick and drops an auto-burn from the
-// plan on the tick the flight computer reports it finished. An RCS burn never leaves Manual, so
-// its completion arrives through RcsBurnCompletions instead.
+// Watches the controlled vehicle's burn mode on the shared tick and drops an auto-burn from the plan on the tick the flight computer reports it finished.
+// An RCS burn never leaves Manual, so its completion arrives through RcsBurnCompletions instead.
 internal static class FinishedBurnRemover
 {
     private static Vehicle? _sampledVehicle;
@@ -55,8 +54,7 @@ internal static class FinishedBurnRemover
         bool sameVehicle = ReferenceEquals(_sampledVehicle, vehicle);
         FlightComputerBurnMode previousMode = _sampledMode;
 
-        // The sample advances while the feature is switched off, so switching it back on cannot
-        // act on a transition it never observed.
+        // The sample advances while the feature is switched off, so switching it back on cannot act on a transition it never observed.
         _sampledVehicle = vehicle;
         _sampledMode = currentMode;
 
@@ -69,9 +67,8 @@ internal static class FinishedBurnRemover
         if (target == null)
             return;
 
-        // A node with no delta-V cannot finish, yet its DeltaVToGoCci is zero too, so the reversal
-        // test would read it as finished. Stock creates such nodes, and adding one ahead of the
-        // running burn produces the Auto to Manual transition on its own.
+        // A node with no delta-V cannot finish, yet its DeltaVToGoCci is zero too, so the reversal test would read it as finished.
+        // Stock creates such nodes, and adding one ahead of the running burn produces the Auto to Manual transition on its own.
         if (target.DeltaVTargetCci.LengthSquared() <= 0f)
             return;
 
@@ -80,8 +77,7 @@ internal static class FinishedBurnRemover
         if (float3.Dot(target.DeltaVToGoCci, target.DeltaVTargetCci) > 0f)
             return;
 
-        // Parent departure burns stay in the plan without ever being loaded, so the finished entry
-        // is the first executable one, the same burn stock's own removal resolves.
+        // Parent departure burns stay in the plan without ever being loaded, so the finished entry is the first executable one, the same burn stock's own removal resolves.
         Burn? finished = fc.BurnPlan.FindFirstExecutableBurn();
         if (finished == null)
             return;
@@ -94,10 +90,9 @@ internal static class FinishedBurnRemover
         fc.RemoveBurn(finished);
     }
 
-    // Same policy for an RCS burn: only while enabled, only on the controlled vehicle, and only
-    // while the burn is still in the plan. The raiser isolates each subscriber, so no catch here.
-    // Burn equality is by time and delta-V, so the plan's own instance is resolved first and the
-    // removed object is the disposed one, as on the tick path.
+    // Same policy for an RCS burn: only while enabled, only on the controlled vehicle, and only while the burn is still in the plan.
+    // The raiser isolates each subscriber, so no catch here.
+    // Burn equality is by time and delta-V, so the plan's own instance is resolved first and the removed object is the disposed one, as on the tick path.
     internal static void OnRcsBurnCompleted(Vehicle vehicle, Burn burn)
     {
         if (!AutoRemoveConfig.Enabled || Program.ControlledVehicle != vehicle)

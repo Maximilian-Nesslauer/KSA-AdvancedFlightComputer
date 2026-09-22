@@ -7,20 +7,13 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
-// Terminal hover: a simple pilot-in-the-loop final descent. Nulls the rates
-// (velocity setpoints start at zero laterally), then descends on a quadratic
-// velocity profile - v = touchdown rate + k*(h - h0)2 - dropping to a constant
-// touchdown rate for the last h0 metres. A per-axis PID on vertical and lateral
-// velocity turns the setpoint errors into a thrust command (gravity fed forward
-// on the vertical axis). The velocity setpoints can be nudged around with the
-// numpad (8/2 = N/S, 4/6 = W/E, 9/3 = up/down, 5 = zero) or the on-screen
-// buttons, so the touchdown point can be steered by eye.
+// Terminal hover: a simple pilot-in-the-loop final descent.
+// Nulls the rates (velocity setpoints start at zero laterally), then descends on a quadratic velocity profile - v = touchdown rate + k*(h - h0)2 - dropping to a constant touchdown rate for the last h0 metres.
+// A per-axis PID on vertical and lateral velocity turns the setpoint errors into a thrust command (gravity fed forward on the vertical axis).
+// The velocity setpoints can be nudged around with the numpad (8/2 = N/S, 4/6 = W/E, 9/3 = up/down, 5 = zero) or the on-screen buttons, so the touchdown point can be steered by eye.
 public static partial class GuidanceWindow
 {
-    // The descent profile, the PID gains, the integrator state and the player's
-    // velocity setpoints are all per vehicle (VehicleAutopilotState) - a hovering
-    // craft's integrators and nudged setpoints are the last thing that should follow
-    // the camera to another vehicle.
+    // The descent profile, the PID gains, the integrator state and the player's velocity setpoints are all per vehicle (VehicleAutopilotState) - a hovering craft's integrators and nudged setpoints are the last thing that should follow the camera to another vehicle.
     private const double TermILimit = 3.0;           // integrator clamp, m/s2
 
     // Public because the per-vehicle state holds three of these.
@@ -48,15 +41,11 @@ public static partial class GuidanceWindow
     {
         if (!TerminalHoverAvailable(vehicle, out bool enginesLit))
             return;
-        // BEFORE the phase is read below, because the claim does not touch
-        // LandingPhase - hover is the same machine - and the trace decision depends on
-        // what that phase was.
+        // BEFORE the phase is read below, because the claim does not touch LandingPhase - hover is the same machine - and the trace decision depends on what that phase was.
         ClaimVehicle(GuidanceMode.Landing, vehicle);
         _s.Engage = true;
         _s.AutoStage = true;
-        // Continue the flown path when hover takes over from G-FOLD - it is the same
-        // descent - but start clean when it is engaged cold, so the plot is not
-        // showing a previous attempt.
+        // Continue the flown path when hover takes over from G-FOLD - it is the same descent - but start clean when it is engaged cold, so the plot is not showing a previous attempt.
         if (_s.LandingPhase != LandingPhase.GfoldDescent)
             ResetGfoldTrace();
         _s.LandingPhase = LandingPhase.TerminalHover;
@@ -99,9 +88,7 @@ public static partial class GuidanceWindow
         return true;
     }
 
-    // Height of the touchdown plane above the terrain DIRECTLY BELOW the vehicle
-    // (not the landing site - a hover can drift anywhere), minus the vehicle
-    // height so zero means legs on the ground.
+    // Height of the touchdown plane above the terrain DIRECTLY BELOW the vehicle (not the landing site - a hover can drift anywhere), minus the vehicle height so zero means legs on the ground.
     private static double TerminalHeight(Orbit orbit, IParentBody parent, double bodyRadius)
     {
         double3 r = orbit.StateVectors.PositionCci;
@@ -139,24 +126,20 @@ public static partial class GuidanceWindow
         _s.GfoldAltM = h;
         _s.GfoldSpeedMs = vSrf.Length();
 
-        // Same trace the G-FOLD plot draws: hover is the last stretch of the same
-        // descent, so the flown path carries straight on rather than starting again.
+        // Same trace the G-FOLD plot draws: hover is the last stretch of the same descent, so the flown path carries straight on rather than starting again.
         double3 padCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
         double3 padLocal = KsaGfold.BuildFrame(padCci).PointToLocal(r);   // X-up frame
         RecordGfoldTrace(Math.Sqrt(padLocal.Y * padLocal.Y + padLocal.Z * padLocal.Z), padLocal.X);
 
         double vUp = double3.Dot(vSrf, up);
 
-        // No altitude-based cutoff here. Touchdown is decided solely by KSA's own
-        // contact flag, in StepLanding - see HasTouchedDown. The old test cut at
-        // h <= 0.05 m, but h is a terrain-height sample minus an assumed vehicle
-        // height, so it could sit above zero with the legs already down (or trip
-        // early over rough ground). The hover just keeps flying the profile until
-        // something actually touches.
+        // No altitude-based cutoff here.
+        // Touchdown is decided solely by KSA's own contact flag, in StepLanding - see HasTouchedDown.
+        // The old test cut at h <= 0.05 m, but h is a terrain-height sample minus an assumed vehicle height, so it could sit above zero with the legs already down (or trip early over rough ground).
+        // The hover just keeps flying the profile until something actually touches.
 
-        // Descent-rate setpoint from the quadratic profile, plus the user's
-        // vertical nudge bias. Above _s.TermConstAltM the rate grows with height
-        // squared (gentle flare); inside it the rate is constant for touchdown.
+        // Descent-rate setpoint from the quadratic profile, plus the user's vertical nudge bias.
+        // Above _s.TermConstAltM the rate grows with height squared (gentle flare); inside it the rate is constant for touchdown.
         double dh = Math.Max(h - _s.TermConstAltM, 0.0);
         double vDesc = Math.Min(_s.TermTouchdownRate + _s.TermQuadK * dh * dh, _s.TermMaxDescRate);
         double vSetUp = -vDesc + _s.TermSetUp;
@@ -178,8 +161,7 @@ public static partial class GuidanceWindow
         double aE = StepPid(ref _s.TermPidE, _s.TermSetE - vE, _s.TermKpL, _s.TermKiL, _s.TermKdL, dt);
         double aN = StepPid(ref _s.TermPidN, _s.TermSetN - vN, _s.TermKpL, _s.TermKiL, _s.TermKdL, dt);
 
-        // Local (x = up) command: throttle from the magnitude, direction clamped
-        // to the tilt cone so lateral authority never flips the vehicle over.
+        // Local (x = up) command: throttle from the magnitude, direction clamped to the tilt cone so lateral authority never flips the vehicle over.
         var local = new double3(Math.Max(aUp, 0.0), aE, aN);
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, r.Length() - parent.MeanRadius);
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(
@@ -249,8 +231,8 @@ public static partial class GuidanceWindow
 
         if (active)
         {
-            // Numpad nudges (repeat on hold). Numpad keys are unlikely to clash
-            // with game bindings; the buttons below always work regardless.
+            // Numpad nudges (repeat on hold).
+            // Numpad keys are unlikely to clash with game bindings; the buttons below always work regardless.
             if (ImGui.IsKeyPressed(ImGuiKey.Keypad8)) _s.TermSetN += _s.TermNudgeStep;
             if (ImGui.IsKeyPressed(ImGuiKey.Keypad2)) _s.TermSetN -= _s.TermNudgeStep;
             if (ImGui.IsKeyPressed(ImGuiKey.Keypad6)) _s.TermSetE += _s.TermNudgeStep;

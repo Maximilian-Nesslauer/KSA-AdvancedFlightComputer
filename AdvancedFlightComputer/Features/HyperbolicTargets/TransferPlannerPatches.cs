@@ -29,9 +29,8 @@ internal static class Patch_PopulateWithPlanets
             StellarBody? star = HyperbolicTargets.GetParentStar(source);
             if (star == null) return;
 
-            // Heliocentric source frames only, so the vehicle orbits the star or a
-            // planet that does. From a moon orbit stock lists sibling bodies, and a
-            // heliocentric comet there would produce a plan that means nothing.
+            // Heliocentric source frames only, so the vehicle orbits the star or a planet that does.
+            // From a moon orbit stock lists sibling bodies, and a heliocentric comet there would produce a plan that means nothing.
             IParentBody? sourceParent = source.Parent;
             if (sourceParent != star && (sourceParent as Celestial)?.Parent != star)
                 return;
@@ -84,10 +83,9 @@ internal static class Patch_HohmannFlight
         double transferSma = (r1 + r2) * 0.5;
         double tof = Math.PI * Math.Sqrt(transferSma * transferSma * transferSma / origin.Mu);
 
-        // UniverseTime throws on NaN, and running the original instead would build
-        // one from the NaN apoapsis. Zero is what every consumer of the estimate
-        // already tests for. This runs on the porkchop worker as well as the draw
-        // thread, so the dedup set is the only shared state touched here.
+        // UniverseTime throws on NaN, and running the original instead would build one from the NaN apoapsis.
+        // Zero is what every consumer of the estimate already tests for.
+        // This runs on the porkchop worker as well as the draw thread, so the dedup set is the only shared state touched here.
         if (!double.IsFinite(tof))
         {
             LogHelper.WarnOnce(
@@ -137,9 +135,8 @@ internal static class Patch_SetTransferInfo
             double hohmannSec = info.HohmannTimeOfFlight.Seconds();
             if (!(hohmannSec > 0.0))
             {
-                // No estimate to size a window from. A null TransferInfo is stock's
-                // own "nothing selected" state, so the window degrades instead of
-                // throwing out of the draw every frame.
+                // No estimate to size a window from.
+                // A null TransferInfo is stock's own "nothing selected" state, so the window degrades instead of throwing out of the draw every frame.
                 if (GameReflection.TransferPlanner_transferInfoRef is { } infoRef)
                     infoRef() = null;
                 LogHelper.WarnOnce(
@@ -201,9 +198,7 @@ internal static class Patch_SetTransferInfo
         string targetId = (info.Target as Astronomical)?.Id ?? "?";
         if (!_alertedTargets.Add(targetId)) return;
 
-        // An unbound target has one periapsis passage, and TransferTask.Run sweeps
-        // from the current sim time whatever AlignmentTime returned, so this does
-        // not promise a later window.
+        // An unbound target has one periapsis passage, and TransferTask.Run sweeps from the current sim time whatever AlignmentTime returned, so this does not promise a later window.
         TimedAlert.Create(
             $"{targetId}: the ideal departure, one transfer time before its periapsis, " +
             "has already passed. The porkchop window starts from the current time.",
@@ -233,9 +228,8 @@ internal static class Patch_AlignmentTime
     {
         try
         {
-            // Celestial targets only. Stock lists vehicles as targets with no
-            // eccentricity filter, and a vehicle on an escape trajectory in the same
-            // SOI has nothing to do with a heliocentric periapsis model.
+            // Celestial targets only.
+            // Stock lists vehicles as targets with no eccentricity filter, and a vehicle on an escape trajectory in the same SOI has nothing to do with a heliocentric periapsis model.
             if (transferInfo.Target is not Celestial
                 || transferInfo.Target.Orbit == null
                 || transferInfo.Target.Orbit.IsBound())
@@ -245,9 +239,7 @@ internal static class Patch_AlignmentTime
             UniverseTime hohmannToF = transferInfo.HohmannTimeOfFlight;
             if (!(hohmannToF.Seconds() > 0.0))
             {
-                // The alignment block builds a fresh TransferInfo per frame, and only
-                // SetTransferInfo ever assigns HohmannTimeOfFlight, so derive it the
-                // same way or the lead time this patch exists for vanishes.
+                // The alignment block builds a fresh TransferInfo per frame, and only SetTransferInfo ever assigns HohmannTimeOfFlight, so derive it the same way or the lead time this patch exists for vanishes.
                 hohmannToF = OrbitalTransfers.HohmannFlight(
                     transferInfo.Source.Orbit, transferInfo.Target.Orbit);
                 if (!(hohmannToF.Seconds() > 0.0)) return true;
@@ -278,8 +270,8 @@ internal static class Patch_AlignmentTime
         }
         catch (Exception ex)
         {
-            // TransferTask.Run rethrows this on a ThreadPool thread. Log each fault type once
-            // because the plan window can call this on every frame.
+            // TransferTask.Run rethrows this on a ThreadPool thread.
+            // Log each fault type once because the plan window can call this on every frame.
             LogHelper.WarnOnce("alignment-time:" + ex.GetType().Name,
                 $"[AFC] AlignmentTime prefix for target " +
                 $"'{(transferInfo?.Target as Astronomical)?.Id ?? "?"}' at sim " +

@@ -23,8 +23,7 @@ public sealed class Mod
     private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
     private static bool _maneuverTypesInjected;
 
-    // The AUTOSTAGE gauge button resolves its enum by name while the game reads Gauges.xml, which
-    // happens before any AllModsLoaded hook.
+    // The AUTOSTAGE gauge button resolves its enum by name while the game reads Gauges.xml, which happens before any AllModsLoaded hook.
     [StarMapImmediateLoad]
     public void OnImmediateLoad(KSA.Mod mod) => AutoStageFeature.InjectGaugeEnumAtLoad();
 
@@ -69,8 +68,8 @@ public sealed class Mod
                 DisableRcsTranslation();
         }
 
-        // Keep the menu available when the driver fails. The driver still requires the menu because
-        // it contains the off switch.
+        // Keep the menu available when the driver fails.
+        // The driver still requires the menu because it contains the off switch.
         bool guidanceMenu = Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
             && _patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyDiagnosticPatches);
 
@@ -151,8 +150,7 @@ public sealed class Mod
             + "Stock keeps drawing its own preview next to the flyby trajectory.");
     }
 
-    // With the DrawPlanWindow prefix possibly missing, the injected types would sit in stock's
-    // dropdown with no window body.
+    // With the DrawPlanWindow prefix possibly missing, the injected types would sit in stock's dropdown with no window body.
     private static void DisableManeuverTools()
     {
         BurnMenuLauncher.Enabled = false;
@@ -176,8 +174,8 @@ public sealed class Mod
                 "[AFC] HohmannMultiPass disabled - DrawCorrectionTransfer anchor not found.");
     }
 
-    // A mid-block failure can leave a flag set for a patch that never applied. Every flag here
-    // belongs to that block, so clearing them wholesale is safe.
+    // A mid-block failure can leave a flag set for a patch that never applied.
+    // Every flag here belongs to that block, so clearing them wholesale is safe.
     private static void DisableMultiPass()
     {
         RcsBurnCompletions.Completed -= PassCompletionPatch.OnRcsBurnCompleted;
@@ -217,8 +215,7 @@ public sealed class Mod
         _maneuverTypesInjected = false;
     }
 
-    // The guidance panel is its own set of ImGui windows rather than a patch on a stock window, so
-    // it draws from the loader's hook after stock has drawn its viewports.
+    // The guidance panel is its own set of ImGui windows rather than a patch on a stock window, so it draws from the loader's hook after stock has drawn its viewports.
     [StarMapAfterGui]
     public void DrawGui(double dt) => GuidanceFeature.DrawGui();
 
@@ -232,14 +229,11 @@ public sealed class Mod
         GuidanceFeature.Reset();
         RemoveTransferTypes();
 
-        // Persistence is driven by UncompressedSave.Write, so a quit without saving drops
-        // in-memory registry mutations on purpose.
+        // Persistence is driven by UncompressedSave.Write, so a quit without saving drops in-memory registry mutations on purpose.
         SaveScopedState.ResetAll();
 
-        // Everything below resets only on unload, because the feature gates belong to the patch
-        // state, the load path reloads the registries from disk instead of clearing them, and the
-        // dedup sets live for the whole mod load. LogHelper stays after UnpatchAll, or the
-        // transpiler re-runs that unpatching triggers print their once-only lines again.
+        // Everything below resets only on unload, because the feature gates belong to the patch state, the load path reloads the registries from disk instead of clearing them, and the dedup sets live for the whole mod load.
+        // LogHelper stays after UnpatchAll, or the transpiler re-runs that unpatching triggers print their once-only lines again.
         DisableMultiPass();
         BurnMenuLauncher.Enabled = false;
         RcsExecRegistry.Reset();

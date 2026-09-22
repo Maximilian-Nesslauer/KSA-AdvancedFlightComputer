@@ -36,10 +36,9 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// </summary>
 public sealed class AeroTable
 {
-    // Mach breakpoints. Spacing is deliberately fine through 0.85 - 1.30: a cubic
-    // fit through a coarsely sampled drag rise overshoots the peak, and the
-    // overshoot is larger in dCd/dM than in Cd. Real aero tables are sampled this
-    // way through the transonic region for the same reason.
+    // Mach breakpoints.
+    // Spacing is deliberately fine through 0.85 - 1.30: a cubic fit through a coarsely sampled drag rise overshoots the peak, and the overshoot is larger in dCd/dM than in Cd.
+    // Real aero tables are sampled this way through the transonic region for the same reason.
     private static readonly double[] DefaultMachGrid =
     {
         0.00, 0.20, 0.40, 0.60, 0.70, 0.80, 0.85, 0.90,
@@ -169,9 +168,8 @@ public sealed class AeroTable
                 + $"{machGrid.Length * alphaGridDeg.Length} values, got {cdTable.Length}.",
                 nameof(cdTable));
 
-        // A single NaN here would propagate through Cd into the Jacobian and on into
-        // SCS, which is native and does not validate its input. Catch it at the
-        // boundary, where the message can still say which value was bad.
+        // A single NaN here would propagate through Cd into the Jacobian and on into SCS, which is native and does not validate its input.
+        // Catch it at the boundary, where the message can still say which value was bad.
         for (int i = 0; i < cdTable.Length; i++)
             if (!double.IsFinite(cdTable[i]))
                 throw new ArgumentException($"Cd[{i}] is not finite ({cdTable[i]}).", nameof(cdTable));
@@ -182,12 +180,9 @@ public sealed class AeroTable
             alphaRad[j] = alphaGridDeg[j] * Math.PI / 180.0;
         AlphaMaxRad = alphaRad[^1];
 
-        // EdgeMode.Linear matters more than it looks. The optimiser's iterate
-        // wanders off the table routinely - past the last Mach breakpoint early in a
-        // descent, or to an alpha the table never covered on a bad iteration - and
-        // clamping would drop the gradient discontinuously to zero exactly there.
-        // Linear extension keeps the slope continuous across the boundary, so a step
-        // off the table costs accuracy rather than breaking the linearisation.
+        // EdgeMode.Linear matters more than it looks.
+        // The optimiser's iterate wanders off the table routinely - past the last Mach breakpoint early in a descent, or to an alpha the table never covered on a bad iteration - and clamping would drop the gradient discontinuously to zero exactly there.
+        // Linear extension keeps the slope continuous across the boundary, so a step off the table costs accuracy rather than breaking the linearisation.
         _cd = CubicBSplineNd.Fit(new[] { _machGrid, alphaRad }, (double[])cdTable.Clone(),
                                  1, EdgeMode.Linear);
     }
@@ -231,16 +226,12 @@ public sealed class AeroTable
     /// </summary>
     public Dual Cd(Dual mach, Dual alpha)
     {
-        // UNSEEDED FAST PATH. If neither input carries a derivative then the chain
-        // rule below produces exactly zero whatever the gradient is, so computing the
-        // gradient is pure waste - and it is not cheap: EvaluateWithGradient costs
-        // roughly 2.2x Evaluate (see --aero). This is not an approximation; the two
-        // branches return bit-identical results.
+        // UNSEEDED FAST PATH.
+        // If neither input carries a derivative then the chain rule below produces exactly zero whatever the gradient is, so computing the gradient is pure waste - and it is not cheap: EvaluateWithGradient costs roughly 2.2x Evaluate (see --aero).
+        // This is not an approximation; the two branches return bit-identical results.
         //
-        // It matters because the same integrator serves both jobs. A Jacobian sweep
-        // seeds one input and needs the slope; an impact prediction for the overlay
-        // seeds nothing and needs only the value, and that path calls this four times
-        // per RK4 step for hundreds of steps, several times a second.
+        // It matters because the same integrator serves both jobs.
+        // A Jacobian sweep seeds one input and needs the slope; an impact prediction for the overlay seeds nothing and needs only the value, and that path calls this four times per RK4 step for hundreds of steps, several times a second.
         if (mach.D == 0.0 && alpha.D == 0.0)
             return new Dual(Cd(mach.V, alpha.V), 0.0);
 
@@ -276,9 +267,8 @@ public sealed class AeroTable
     /// </summary>
     public static Dual AngleOfAttack(Dual vbx, Dual vby, Dual vbz)
     {
-        // Floor the cross-flow term so the Sqrt derivative stays finite when the
-        // velocity is exactly on the body axis. At 1e-9 m/s the floor is far below
-        // anything physical and alpha is 0 to every digit that matters.
+        // Floor the cross-flow term so the Sqrt derivative stays finite when the velocity is exactly on the body axis.
+        // At 1e-9 m/s the floor is far below anything physical and alpha is 0 to every digit that matters.
         Dual cross = Dual.Sqrt(vbx * vbx + vby * vby + 1e-18);
         // Negated: alpha is measured from -z, so velocity along -z gives alpha = 0.
         return Dual.Atan2(cross, -vbz);

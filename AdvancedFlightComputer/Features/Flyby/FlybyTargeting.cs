@@ -31,14 +31,11 @@ internal static partial class FlybyTargeting
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    // Coarse samples over the arrival window before Brent refinement. 48 resolves
-    // the minimum well below the Brent tolerance for Earth to Luna and Earth to
-    // Mars.
+    // Coarse samples over the arrival window before Brent refinement. 48 resolves the minimum well below the Brent tolerance for Earth to Luna and Earth to Mars.
     private const int ClosestApproachCoarseSteps = 48;
 
-    // Fixed point passes for v_soi. The aim offset is about b, a few thousand km
-    // for a moon, so v_soi shifts by well under one percent per pass and three
-    // passes converge with margin.
+    // Fixed point passes for v_soi.
+    // The aim offset is about b, a few thousand km for a moon, so v_soi shifts by well under one percent per pass and three passes converge with margin.
     private const int DefaultIterations = 3;
 
     /// <summary>Smallest usable axis alignment, which is the sine of the angle
@@ -170,8 +167,7 @@ internal static partial class FlybyTargeting
         Vehicle source, IOrbiter target, UniverseTime start, UniverseTime transit,
         double targetPeRadius, FlybySide side, int iterations = DefaultIterations)
     {
-        // Vehicle.Orbit throws on an empty plan rather than returning null, so only
-        // the target orbit and parent need a null guard.
+        // Vehicle.Orbit throws on an empty plan rather than returning null, so only the target orbit and parent need a null guard.
         if (target.Orbit?.Parent == null) return FlybyOutcome.Unavailable;
         if (target is not IParentBody targetBody) return FlybyOutcome.Unavailable;
         if (!(targetPeRadius > 0.0)) return FlybyOutcome.Unavailable;
@@ -185,15 +181,13 @@ internal static partial class FlybyTargeting
 
         bool isCross = IsCrossParentTransfer(source, target);
 
-        // OrbitalTransfers.SingleImpulseHyperbolicEscape throws on a hyperbolic
-        // parking orbit and nothing downstream would catch it. Stock guards the same
-        // way at its own call sites.
+        // OrbitalTransfers.SingleImpulseHyperbolicEscape throws on a hyperbolic parking orbit and nothing downstream would catch it.
+        // Stock guards the same way at its own call sites.
         if (isCross && source.Orbit.Eccentricity >= 1.0) return FlybyOutcome.Unavailable;
 
-        // The Lambert is solved in the CCI frame of the target's parent. When the
-        // vehicle shares that parent the departure body is the vehicle. Otherwise it
-        // is the celestial the vehicle is parked at, whose orbit shares the target's
-        // parent, as in stock's SolveLambert.
+        // The Lambert is solved in the CCI frame of the target's parent.
+        // When the vehicle shares that parent the departure body is the vehicle.
+        // Otherwise it is the celestial the vehicle is parked at, whose orbit shares the target's parent, as in stock's SolveLambert.
         Orbit sourceInFrame;
         if (isCross)
         {
@@ -301,8 +295,8 @@ internal static partial class FlybyTargeting
             UniverseTime caTime = FindClosestApproach(
                 transfer, targetOrbit, start, start + lastTransit);
 
-            // The relative velocity at closest approach sets the offset plane. A
-            // little earlier, at the SOI boundary, it sets the flyby energy.
+            // The relative velocity at closest approach sets the offset plane.
+            // A little earlier, at the SOI boundary, it sets the flyby energy.
             double3 vRelCa = transfer.GetStateVectorsAt(caTime).VelocityCci
                              - targetOrbit.GetStateVectorsAt(caTime).VelocityCci;
             double vRelCaLen = vRelCa.Length();
@@ -373,8 +367,8 @@ internal static partial class FlybyTargeting
     private static FlybyResult BuildSameParentDeparture(
         Vehicle source, UniverseTime start, OffsetSolve s, double rpRadius)
     {
-        // DepartureDeltaCci is the injection dV directly, as in FinalizeLambert's
-        // Source == Vehicle branch. The burn is at the transfer Start.
+        // DepartureDeltaCci is the injection dV directly, as in FinalizeLambert's Source == Vehicle branch.
+        // The burn is at the transfer Start.
         double3 dvCci = s.DepartureDeltaCci;
         StateVectors sv = source.Orbit.GetStateVectorsAt(start);
         double3 dvVlf = ToVlf(sv, dvCci);
@@ -393,10 +387,8 @@ internal static partial class FlybyTargeting
         Vehicle source, IParentBody lambertParent, UniverseTime start,
         OffsetSolve s, double rpRadius)
     {
-        // DepartureDeltaCci is the heliocentric excess relative to the parking
-        // parent. Rotate it into the parking parent's frame and solve the single
-        // impulse escape, as FinalizeLambert's Source != Vehicle branch does,
-        // including its true anomaly shift of the burn.
+        // DepartureDeltaCci is the heliocentric excess relative to the parking parent.
+        // Rotate it into the parking parent's frame and solve the single impulse escape, as FinalizeLambert's Source != Vehicle branch does, including its true anomaly shift of the burn.
         IParentBody parkingParent = source.Orbit.Parent!;
         double muParking = parkingParent.Mu;
 
@@ -406,8 +398,7 @@ internal static partial class FlybyTargeting
         double3 velSoiExit = s.DepartureDeltaCci.Transform(toParking);
 
         StateVectors sv = source.Orbit.GetStateVectorsAt(start);
-        // Null when the parking orbit cannot reach the requested velocity at the
-        // SOI exit, which stock reports as an infeasible departure.
+        // Null when the parking orbit cannot reach the requested velocity at the SOI exit, which stock reports as an infeasible departure.
         if (OrbitalTransfers.SingleImpulseHyperbolicEscape(
                 muParking, source.Orbit, sv.PositionCci, sv.VelocityCci, velSoiExit)
             is not OrbitalTransfers.SingleImpulseTransfer impulse)
@@ -448,10 +439,7 @@ internal static partial class FlybyTargeting
     private static UniverseTime FindClosestApproach(
         Orbit transfer, Orbit target, UniverseTime tStart, UniverseTime tEnd)
     {
-        // Skip the first second so the search never latches onto the departure
-        // point, where the distance is small from a low parking orbit, and widen
-        // past the seed arrival so an offset transfer's true closest approach, a
-        // touch later or earlier, stays bracketed.
+        // Skip the first second so the search never latches onto the departure point, where the distance is small from a low parking orbit, and widen past the seed arrival so an offset transfer's true closest approach, a touch later or earlier, stays bracketed.
         double span = (tEnd - tStart).Seconds();
         double a = 1.0;
         double bEnd = span * 1.25;

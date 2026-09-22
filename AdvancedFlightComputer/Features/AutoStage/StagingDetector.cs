@@ -14,10 +14,8 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 //   AwaitingIgnition -> both delays elapsed -> AwaitingPropagation
 //   AwaitingPropagation -> new engines fueled -> Monitoring, else cascade stage
 //
-// AwaitingPropagation exists because a freshly activated engine reports propellant only a tick
-// after activation, and BurnMode is held at Auto across that window so the worker cannot abort
-// the burn. Each vehicle runs its own machine, so an armed craft keeps staging when it is not the
-// controlled one.
+// AwaitingPropagation exists because a freshly activated engine reports propellant only a tick after activation, and BurnMode is held at Auto across that window so the worker cannot abort the burn.
+// Each vehicle runs its own machine, so an armed craft keeps staging when it is not the controlled one.
 internal static class StagingDetector
 {
     private static readonly Dictionary<Vehicle, StagingState> _states = new();
@@ -41,8 +39,7 @@ internal static class StagingDetector
         state.Active = active;
         if (!active)
         {
-            // Dropped rather than frozen: sim time runs on while the switch is off, so a dwell left
-            // armed would already be expired on the frame it is switched back on.
+            // Dropped rather than frozen: sim time runs on while the switch is off, so a dwell left armed would already be expired on the frame it is switched back on.
             state.PropagationFrames = 0;
             state.ResetDwell();
             state.HeldForControl = false;
@@ -63,9 +60,8 @@ internal static class StagingDetector
         Busy,
     }
 
-    // Asks for one row, for a caller with a cue of its own such as a planned stage boundary or a
-    // cold ignition. The answer says whether the row is on its way, so a caller that records
-    // something for the separation records it only for a request that was kept.
+    // Asks for one row, for a caller with a cue of its own such as a planned stage boundary or a cold ignition.
+    // The answer says whether the row is on its way, so a caller that records something for the separation records it only for a request that was kept.
     internal static StagingRequest RequestStaging(Vehicle vehicle)
     {
         StagingState state = StateOf(vehicle);
@@ -93,8 +89,7 @@ internal static class StagingDetector
         return state;
     }
 
-    // Both values are edges the applied worker results destroy, and ApplyInputEvents drains in
-    // between, so an engine the player shut down would otherwise look like a burnout.
+    // Both values are edges the applied worker results destroy, and ApplyInputEvents drains in between, so an engine the player shut down would otherwise look like a burnout.
     internal static void Sample()
     {
         foreach (KeyValuePair<Vehicle, StagingState> entry in _states)
@@ -127,8 +122,7 @@ internal static class StagingDetector
                 continue;
             }
 
-            // First, armed or not: the row is already marked activated and stock skips activated
-            // rows forever, so a module dropped here could never fire again.
+            // First, armed or not: the row is already marked activated and stock skips activated rows forever, so a module dropped here could never fire again.
             TickPendingStaging(vehicle, state, now);
 
             bool sampled = state.Sampled;
@@ -151,8 +145,7 @@ internal static class StagingDetector
             ? JettisonAnalysis.GetPendingJettison(vehicle, state)
             : null;
 
-        // Only the spent-jettison trigger needs the full tally; for a quenched solid motor the
-        // per-core answer runs a fixed-point pressure solve.
+        // Only the spent-jettison trigger needs the full tally; for a quenched solid motor the per-core answer runs a fixed-point pressure solve.
         StagingHelpers.EngineSurvey survey = default;
         bool hasPropellant;
         if (jettison != null)
@@ -216,9 +209,8 @@ internal static class StagingDetector
         }
     }
 
-    // Stages while the vehicle is still under thrust, when the next sequence would shed nothing
-    // but burnt-out engines. Requires thrust to remain afterwards, so a stack that is simply
-    // running out falls to the all-dry trigger and keeps its cascade behaviour.
+    // Stages while the vehicle is still under thrust, when the next sequence would shed nothing but burnt-out engines.
+    // Requires thrust to remain afterwards, so a stack that is simply running out falls to the all-dry trigger and keeps its cascade behaviour.
     private static void TickSpentJettison(Vehicle vehicle, StagingState state, FlightComputer fc, double now,
         in StagingHelpers.EngineSurvey survey, IReadOnlySet<Part>? jettison)
     {
@@ -334,8 +326,7 @@ internal static class StagingDetector
         }
     }
 
-    // A held staging cannot be dropped: its already-activated row would stay unfired for good,
-    // and firing it early only shortens a delay that exists for looks.
+    // A held staging cannot be dropped: its already-activated row would stay unfired for good, and firing it early only shortens a delay that exists for looks.
     private static void FlushPendingStaging(Vehicle vehicle, StagingState state)
     {
         if (state.Pending == null)
@@ -401,8 +392,7 @@ internal static class StagingDetector
         }
     }
 
-    // FlightComputer.ComputeControl drops BurnMode to Manual after two denied ignitions, which is
-    // what a freshly staged engine looks like until its propellant state propagates.
+    // FlightComputer.ComputeControl drops BurnMode to Manual after two denied ignitions, which is what a freshly staged engine looks like until its propellant state propagates.
     private static void MaintainBurnMode(StagingState state, FlightComputer fc)
     {
         if (state.TriggeredMode == FlightComputerBurnMode.Auto
@@ -414,9 +404,8 @@ internal static class StagingDetector
         }
     }
 
-    // True once what is left to go no longer points along the target. Burn outlives its BurnPlan
-    // entry and is saved, so a vehicle can load with a zero DeltaVTargetCci, which would pass the
-    // overshoot test forever and disable both triggers for the flight.
+    // True once what is left to go no longer points along the target.
+    // Burn outlives its BurnPlan entry and is saved, so a vehicle can load with a zero DeltaVTargetCci, which would pass the overshoot test forever and disable both triggers for the flight.
     private static bool IsBurnComplete(FlightComputer fc)
     {
         BurnTarget? burn = fc.Burn;

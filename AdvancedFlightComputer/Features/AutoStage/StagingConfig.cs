@@ -5,8 +5,8 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
 
-// Two layers: autostage.toml holds the per-part-variant delays and the behaviour switches,
-// autostage-vehicles/{id}.toml the per-sequence overrides, which win. Nothing lives in a save.
+// Two layers: autostage.toml holds the per-part-variant delays and the behaviour switches, autostage-vehicles/{id}.toml the per-sequence overrides, which win.
+// Nothing lives in a save.
 internal static class StagingConfig
 {
     public const bool DropSpentStagesDefault = true;

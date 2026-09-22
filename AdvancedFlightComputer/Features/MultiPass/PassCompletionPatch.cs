@@ -501,8 +501,8 @@ internal static class PassCompletionPatch
         }
         catch (Exception ex)
         {
-            // CelestialSystem.GetIndex can throw for an invalid source index. Do not let that escape
-            // from the ApplyVehicleSolvers postfix.
+            // CelestialSystem.GetIndex can throw for an invalid source index.
+            // Do not let that escape from the ApplyVehicleSolvers postfix.
             LogHelper.WarnOnce("multipass-plan-window-source:" + ex.GetType().Name,
                 $"[AFC] PassCompletionPatch: could not read the stock plan-window source for " +
                 $"vehicle='{execVehicle.Id}': {ex}");

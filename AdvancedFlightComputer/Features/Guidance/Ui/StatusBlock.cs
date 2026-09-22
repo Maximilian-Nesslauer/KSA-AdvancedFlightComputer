@@ -166,8 +166,7 @@ public static partial class GuidanceWindow
         DrawStartMarker(dl, ArcPoint(centre, radius + vgoOff + thick * 1.7f, -half), -half,
             MathF.Max(5f, size.Y * 0.11f), decelerating);
 
-        // The three numbers on one line, in the order the bands beneath them run:
-        // what is left to fly, how long it takes, and what it costs.
+        // The three numbers on one line, in the order the bands beneath them run: what is left to fly, how long it takes, and what it costs.
         string rgoText = live ? $"RGO {_s.Upfg.Rgo.Length() / 1000.0:F0} km" : "RGO  --- km";
         string tgoText = live ? $"T-GO {tgoSec:F1} s" : "T-GO  --.- s";
         string vgoText = live ? $"VGO {_s.Upfg.VgoMag:F0} m/s" : "VGO  --- m/s";

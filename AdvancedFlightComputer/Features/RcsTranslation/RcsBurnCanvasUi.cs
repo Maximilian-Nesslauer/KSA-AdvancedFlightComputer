@@ -36,8 +36,7 @@ internal static class RcsBurnCanvasUi
         }
         catch (Exception ex)
         {
-            // Once per load: this runs every frame the editor is open, and a
-            // persistent draw failure would otherwise flood the log.
+            // Once per load: this runs every frame the editor is open, and a persistent draw failure would otherwise flood the log.
             LogHelper.WarnOnce("rcs-burn-canvas:" + ex.GetType().Name,
                 $"[AFC] RcsBurnCanvasUi failed for vehicle='{vehicle.Id}': {ex}");
         }
@@ -46,8 +45,7 @@ internal static class RcsBurnCanvasUi
     private static void DrawImGuiFallback(
         Burn burn, Vehicle vehicle, float2 canvasMinPixels, float2 canvasSizePixels)
     {
-        // Top-right pinned to the gauge's bottom-right corner; AlwaysAutoResize
-        // then grows the window down and to the left.
+        // Top-right pinned to the gauge's bottom-right corner; AlwaysAutoResize then grows the window down and to the left.
         float2 anchor = new float2(
             canvasMinPixels.X + canvasSizePixels.X,
             canvasMinPixels.Y + canvasSizePixels.Y);
@@ -62,8 +60,7 @@ internal static class RcsBurnCanvasUi
         }
         finally
         {
-            // The matching End must run even if the block throws, or every
-            // later ImGui window nests inside this one.
+            // The matching End must run even if the block throws, or every later ImGui window nests inside this one.
             ImGui.End();
         }
     }

@@ -18,8 +18,7 @@ public static partial class GuidanceWindow
         if (KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
             return RefuseLandingEngines("Landing control requires liquid engines with shutdown control.");
 
-        // A wait that is already over must not buy one more staging action on its way out,
-        // because staging cannot be taken back once the sequence fires.
+        // A wait that is already over must not buy one more staging action on its way out, because staging cannot be taken back once the sequence fires.
         if (double.IsFinite(_s.LandingEngineWaitStart)
             && (!double.IsFinite(now) || LandingEngineWaitExpired(now)))
             return RefuseLandingEngines("Landing engine wait timed out without usable thrust.");
