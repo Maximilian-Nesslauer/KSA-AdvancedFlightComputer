@@ -841,6 +841,8 @@ public static partial class GuidanceWindow
         ResetLandingEngineWait();
         ClearDeorbitPlanState();
         _s.GfoldApproach = GfoldApproach.Direct;
+        _s.TerminalIgnitionHeight = 0;
+        _s.TerminalBurnSeconds = 0;
         _s.ReleaseWithoutEngineCut = false;
         _s.ShutdownRequested = false;
         _s.TakeoverStop = false;
@@ -1090,13 +1092,8 @@ public static partial class GuidanceWindow
                     // Mode 3's throttle command stretches the burn onto the site.
                     inputs.EngineThrottle = (float)_s.Upfg.Throttle;
                 }
-                else if (_s.LandingPhase == LandingPhase.GfoldDescent)
-                {
-                    // The tracker decides whether the plan coasts, and writes zero throttle for a coast, so a positive throttle here is a burn the engine can hold.
-                    inputs.EngineOn = _s.GfoldThrottle > 0.0;
-                    inputs.EngineThrottle = (float)_s.GfoldThrottle;
-                }
-                else if (_s.LandingPhase == LandingPhase.TerminalHover)
+                else if (_s.LandingPhase is LandingPhase.GfoldDescent or LandingPhase.TerminalHover
+                    or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake)
                 {
                     inputs.EngineOn = _s.GfoldThrottle > 0.0;
                     inputs.EngineThrottle = (float)_s.GfoldThrottle;

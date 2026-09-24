@@ -126,6 +126,11 @@ public static partial class GuidanceWindow
         double3 localVelocity = frame.VecToLocal(vSrf);
         double horizontalSpeed = HorizontalLength(localVelocity);
         double tilt = AngleBetween(ThrustAxisCci(vehicle), frame.Ex) * 180 / Math.PI;
+        if (TryStartTerminalBurn(vehicle, _s.GfoldAltM, horizontalSpeed, horizontalDistance, now))
+        {
+            StepTerminalBurn(vehicle, orbit, parent, now);
+            return;
+        }
         if (TryBeginVerticalDescent(_s.GfoldAltM, horizontalSpeed, horizontalDistance, tilt, now))
             GuidanceLog.Info(vehicle, $"vertical descent starts: {ApproachState()}.");
         else if (TryAbandonVerticalGate(_s.GfoldAltM, now))

@@ -29,6 +29,8 @@ public static partial class GuidanceWindow
             case LandingPhase.Burn: return "BRAKING BURN";
             case LandingPhase.GfoldDescent: return "G-FOLD";
             case LandingPhase.TerminalHover: return "HOVER";
+            case LandingPhase.TerminalCoast: return "TERMINAL COAST";
+            case LandingPhase.TerminalBrake: return "LANDING BURN";
             case LandingPhase.Done: return "DONE";
             default: return "IDLE";
         }
@@ -64,6 +66,12 @@ public static partial class GuidanceWindow
                 break;
             case LandingPhase.GfoldDescent:
                 tgoSec = Math.Max(0.0, _s.GfoldArrivalTime - SimNow());
+                break;
+            case LandingPhase.TerminalCoast:
+                tgoSec = double.NaN;
+                break;
+            case LandingPhase.TerminalBrake:
+                tgoSec = _s.TerminalBurnSeconds;
                 break;
             default:
                 tgoSec = _s.Upfg.Tgo;

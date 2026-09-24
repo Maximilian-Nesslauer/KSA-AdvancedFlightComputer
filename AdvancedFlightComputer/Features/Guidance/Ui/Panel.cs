@@ -189,9 +189,12 @@ public static partial class GuidanceWindow
                 ? _s.LandingPhase == LandingPhase.TerminalHover
                 : _s.UseSixDofLanding
                     ? (_s.Active || _s.EngagePending)
-                    : _s.LandingPhase == LandingPhase.GfoldDescent;
+                    : _s.LandingPhase == LandingPhase.GfoldDescent || TerminalBurnActive;
 
-        if (TintedButton("EXECUTE", size, green, lit))
+        bool terminalLanding = _panelTab == GuidanceTab.Landing
+            && _landingSubTab == LandingSubTab.Powered && TerminalBurnActive;
+        if (TintedButton(terminalLanding ? "LANDING ACTIVE" : "EXECUTE", size, green, lit)
+            && !terminalLanding)
         {
             if (_panelTab == GuidanceTab.Boostback)
                 ExecuteBoostback(vehicle, orbit, parent);

@@ -54,6 +54,14 @@ public sealed class GuidanceVerticalApproachTest : AfcTest
             t.Check("a craft below the gate outside its limits lands on the site directly", Abandon(450)
                 && state.GfoldApproach == GuidanceWindow.GfoldApproach.Direct && HoverReady() && state.GfoldForceSearch);
             t.CheckAbs("the direct target puts the landing legs at the surface", Read("GfoldSolverTargetAltM"), 15, 0.001);
+            state.GfoldApproach = GuidanceWindow.GfoldApproach.BrakeAtGate;
+            state.GfoldThrottle = 0.4;
+            state.GfoldEngineOn = true;
+            bool coast = (bool)AccessTools.Method(typeof(GuidanceWindow), "TryStartTerminalBurn")
+                .Invoke(null, new object[] { fixture.Vehicle, 480.0, 2.0, 50.0, 100.0 })!;
+            t.Check("the high-thrust fixture starts an engine-off terminal coast", coast
+                && state.LandingPhase == GuidanceWindow.LandingPhase.TerminalCoast
+                && state.GfoldThrottle == 0 && !state.GfoldEngineOn && state.GfoldPlan == null);
             state.UseSixDofLanding = true;
             state.LandingVerticalGateM = double.NaN;
             t.CheckAbs("6-DOF ignores the G-FOLD gate setting", Read("LandingBrakeGateAltitude"), 100, 0.001);

@@ -68,6 +68,8 @@ public sealed class GuidanceLandingAbortTest : AfcTest
 
             AnAbortInTheAirLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TerminalHover);
             AnAbortInTheAirLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.GfoldDescent);
+            AnAbortInTheAirLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TerminalCoast);
+            AnAbortInTheAirLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TerminalBrake);
             AnAbortOfTheBurnCutsTheEngine(t, vehicle, GuidanceWindow.LandingPhase.Burn);
             AnAbortOfTheBurnCutsTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TransferPlanning);
             AnAbortOfTheBurnCutsTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TransferCoast);

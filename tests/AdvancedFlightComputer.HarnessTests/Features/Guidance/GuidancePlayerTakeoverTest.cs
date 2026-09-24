@@ -64,7 +64,8 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
             AnAbortKeepsItsShutdownThroughATakeover(t, vehicle);
             AFailedReleaseKeepsTheNoCutRequest(t, vehicle);
             foreach (GuidanceWindow.LandingPhase phase in new[] { GuidanceWindow.LandingPhase.TransferPlanning,
-                GuidanceWindow.LandingPhase.TransferCoast })
+                GuidanceWindow.LandingPhase.TransferCoast, GuidanceWindow.LandingPhase.TerminalCoast,
+                GuidanceWindow.LandingPhase.TerminalBrake })
             {
                 ATakeoverStopsTheModeAndLeavesTheEngine(t, vehicle, phase);
                 AFailedReleaseKeepsTheNoCutRequest(t, vehicle, phase);

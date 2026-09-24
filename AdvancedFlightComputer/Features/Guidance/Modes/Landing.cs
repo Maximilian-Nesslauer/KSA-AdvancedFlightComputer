@@ -15,7 +15,7 @@ public static partial class GuidanceWindow
     // Every landing starts in DeorbitPlanning. A transfer continues through the stock node phases to TransferCoast, a direct approach continues at Coast, and both brake from Prep.
     public enum LandingPhase { Idle,
         DeorbitPlanning, DeorbitCoast, DeorbitNodePending, DeorbitBurn, TransferPlanning, TransferCoast,
-        Coast, Prep, Burn, GfoldDescent, TerminalHover, Done }
+        Coast, Prep, Burn, GfoldDescent, TerminalHover, TerminalCoast, TerminalBrake, Done }
 
     // The site, the approach shaping (downrange factor, gate altitude/uprange, sink rate) and the whole pass scan live on the vehicle - see VehicleAutopilotState.
     private const double PrepLeadTime = 30.0;      // converge + point before ignition
@@ -200,7 +200,7 @@ public static partial class GuidanceWindow
         _s.DeorbitPlanner = null;
         if (!_s.ControlAcquired && !_s.DeorbitNodeClaimed) ClearDeorbitPlanState();
         bool airborne = _s.LandingPhase == LandingPhase.GfoldDescent
-            || _s.LandingPhase == LandingPhase.TerminalHover;
+            || _s.LandingPhase == LandingPhase.TerminalHover || TerminalBurnActive;
         _s.LandingPhase = LandingPhase.Done;
         if (airborne)
         {
@@ -235,6 +235,8 @@ public static partial class GuidanceWindow
                 LandingPhase.Burn => $"BURNING - cmd {_s.Upfg.Throttle * 100,4:F0} % / engine {vehicle.GetManualThrottle() * 100,4:F0} %, tgo {_s.Upfg.Tgo,6:F1} s",
                 LandingPhase.GfoldDescent => $"G-FOLD [{_s.GfoldStatus}] alt {_s.GfoldAltM,6:F0} m, {_s.GfoldSpeedMs,5:F0} m/s, throttle {_s.GfoldThrottle * 100,3:F0} %, tf~{Math.Max(_s.GfoldArrivalTime - SimNow(), 0),4:F0} s",
                 LandingPhase.TerminalHover => $"TERMINAL HOVER alt {_s.GfoldAltM,6:F1} m, {_s.GfoldSpeedMs,5:F1} m/s, throttle {_s.GfoldThrottle * 100,3:F0} %",
+                LandingPhase.TerminalCoast => $"TERMINAL COAST alt {_s.GfoldAltM:F1} m, ignition height {_s.TerminalIgnitionHeight:F1} m",
+                LandingPhase.TerminalBrake => $"LANDING BURN alt {_s.GfoldAltM:F1} m, {_s.GfoldSpeedMs:F1} m/s, throttle {_s.GfoldThrottle * 100:F0} %",
                 LandingPhase.Done => "Landing guidance ended.",
                 _ => "",
             };
@@ -251,6 +253,8 @@ public static partial class GuidanceWindow
     private static bool IsStockDeorbitPhase(LandingPhase phase) =>
         phase is LandingPhase.DeorbitCoast or LandingPhase.DeorbitNodePending or LandingPhase.DeorbitBurn;
 
+    private static bool TerminalBurnActive => _s.LandingPhase is LandingPhase.TerminalCoast or LandingPhase.TerminalBrake;
+
     private static bool LandingSwitchesOff => !_s.Engage || !_s.AutoStage;
 
     private const string LandingSwitchesChangedStatus = "Automatic landing stopped because its control switches changed.";
@@ -259,7 +263,8 @@ public static partial class GuidanceWindow
     // The direct coast waits until Prep, and the stock node takes a separate claim without forcing Manual.
     private static bool LandingCommands(LandingPhase phase) =>
         phase is LandingPhase.TransferPlanning or LandingPhase.TransferCoast or LandingPhase.Prep
-            or LandingPhase.Burn or LandingPhase.GfoldDescent or LandingPhase.TerminalHover;
+            or LandingPhase.Burn or LandingPhase.GfoldDescent or LandingPhase.TerminalHover
+            or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake;
 
     // Runs from ApplyAutopilot ahead of the claim, so the step that turns the coast into Prep is the step that claims the craft.
     private static void StepLandingCoast()
@@ -280,7 +285,7 @@ public static partial class GuidanceWindow
     // The phases that a ground contact ends. Touchdown arming carries across a change between two of them.
     private static bool IsPoweredDescentPhase(LandingPhase phase) =>
         phase is LandingPhase.DeorbitBurn or LandingPhase.TransferCoast or LandingPhase.Burn
-            or LandingPhase.GfoldDescent or LandingPhase.TerminalHover;
+            or LandingPhase.GfoldDescent or LandingPhase.TerminalHover or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake;
 
     // KSA's own contact switch.
     // The physics step raises a terrain-contact flag on the vehicle whenever ANY part of it makes a Bepu contact with the terrain or launch-pad collider (ConstraintSim.DetectTerrainContact), and ocean entry sets the matching ocean flag - so this fires on the legs, or on whatever else reaches the ground first, without us guessing at leg geometry.
@@ -327,10 +332,16 @@ public static partial class GuidanceWindow
 
         if (StepDeorbit(vehicle, orbit, parent, now)) return;
 
-        if (_s.DeorbitRequest != null && LandingSwitchesOff)
+        if ((_s.DeorbitRequest != null || TerminalBurnActive) && LandingSwitchesOff)
         {
             AbortLanding();
             _s.LandingStatus = LandingSwitchesChangedStatus;
+            return;
+        }
+
+        if (TerminalBurnActive)
+        {
+            StepTerminalBurn(vehicle, orbit, parent, now);
             return;
         }
 
