@@ -213,7 +213,7 @@ public static partial class GuidanceWindow
         // --- Glideslope cone (drawn first so the path sits on top of it). The constraint is ||r_horizontal|| <= cot(gs) * height-above-target, i.e. a cone with apex at the target opening upward; rings + a few ribs show it.
         double tx = plan.Position[n - 1][0];                       // target altitude (local up)
         double topAlt = Math.Max(plan.Position[0][0], _s.GfoldAltM); // draw up to the start/current
-        double cot = 1.0 / Math.Tan(Math.Max(_s.GfoldGlideSlopeDeg, 1.0) * Math.PI / 180.0);
+        double cot = 1.0 / Math.Tan(Math.Max(GfoldActiveGlideSlopeDeg, 1.0) * Math.PI / 180.0);
         double3 apex = PlanCci(f, new double3(tx, 0, 0));
         const int rings = 4, seg = 28;
         for (int k = 1; k <= rings; k++)

@@ -151,6 +151,7 @@ public static partial class GuidanceWindow
         GaugeRow("Gate uprange (km)", "##gateuprange", ref _s.GateUprangeKm);
         // Where the braking burn ends and G-FOLD takes over. It shapes this phase, so it belongs here rather than with the G-FOLD tuning.
         GaugeRow("G-FOLD handoff T-gate (s)", "##gfoldhandoff", ref _s.GfoldHandoffTgo);
+        GaugeRow("Vertical approach height (m)", "##verticalgate", ref _s.LandingVerticalGateM);
         ImGui.EndDisabled();
 
         ImGuiHelper.EndRegion();

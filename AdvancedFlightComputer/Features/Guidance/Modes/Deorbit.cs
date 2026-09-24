@@ -14,10 +14,12 @@ public static partial class GuidanceWindow
     // A source change or another burn must settle this long before the state is captured, and a captured request is compared with the flown state at the shorter interval.
     private const long DeorbitSettleMs = 500;
     private const long DeorbitRevalidateMs = 250;
+    private const double MinimumVerticalGateM = 100;
 
     private static double EffectiveGLimit => _s.GLimitEnabled ? _s.GLimitG : 0;
 
-    private static double LandingBrakeGateAltitude => _s.AimAltKm * 1000;
+    private static double LandingBrakeGateAltitude => Math.Max(_s.AimAltKm * 1000,
+        _s.UseSixDofLanding ? 0 : _s.LandingVerticalGateM + _s.VehicleHeightM);
 
     private static DeorbitSettings CurrentDeorbitSettings() => new(_s.SiteLatDeg, _s.SiteLonDeg,
         _s.BrakingAltitudeKm * 1000, LandingBrakeGateAltitude, _s.GateUprangeKm * 1000,
@@ -39,6 +41,8 @@ public static partial class GuidanceWindow
             return "Set the deorbit arrival angle between 0 and 30 degrees downward.";
         if (!settings.IsValid || (_s.GLimitEnabled && (!double.IsFinite(_s.GLimitG) || _s.GLimitG <= 0.1)))
             return "Check the landing approach settings.";
+        if (!_s.UseSixDofLanding && !(_s.LandingVerticalGateM >= MinimumVerticalGateM))
+            return $"The vertical approach height must be at least {MinimumVerticalGateM:F0} m.";
         return "";
     }
 

@@ -12,15 +12,72 @@ using KSA;
 // Also home to the G-FOLD debug window, which plots every series of the committed optimal trajectory.
 public static partial class GuidanceWindow
 {
-    // Every knob and committed state for this descent lives on the vehicle (VehicleAutopilotState).
-    // The pointing cone, throttle bounds, and vehicle height are airframe properties.
-    // Feedback gains are tuned for each craft.
-    // The committed plan belongs to the craft that flies it.
+    // Orbital landings remove horizontal speed at an elevated gate before the solver targets the surface.
+    internal enum GfoldApproach { Direct, BrakeAtGate, VerticalFinal }
 
-    // The solver aims the CoM at the surface plus the vehicle height.
-    // The legs, not the CoM, then meet the ground at rest.
-    // G-FOLD plans to the surface, while terminal hover takes the last stretch.
-    private static double GfoldSolverTargetAltM => _s.VehicleHeightM;
+    // The surface descent may start early inside this band above the gate, once the craft is slow, near the site and upright.
+    private const double VerticalGateBandM = 100;
+    private const double VerticalGateSpeedMs = 5;
+    private const double VerticalGateMinDistanceM = 100;
+    private const double VerticalGateDistanceFraction = 0.2;
+    private const double VerticalFinalPointingDeg = 15;
+    private const double VerticalFinalGlideSlopeDeg = 30;
+
+    private static bool GfoldBrakingToGate => _s.GfoldApproach == GfoldApproach.BrakeAtGate;
+    private static bool GfoldVerticalFinal => _s.GfoldApproach == GfoldApproach.VerticalFinal;
+    private static double GfoldSolverTargetAltM => _s.VehicleHeightM + (GfoldBrakingToGate ? _s.LandingVerticalGateM : 0);
+    // The gate is passed sinking at the gate descent rate, because a craft whose minimum thrust exceeds its weight cannot stop and hold there.
+    private static double GfoldSolverArrivalRateMs => GfoldBrakingToGate ? _s.DescentRate : 0;
+    private static double GfoldActivePointingDeg => GfoldVerticalFinal
+        ? Math.Min(VerticalFinalPointingDeg, _s.GfoldPointingDeg) : _s.GfoldPointingDeg;
+    private static double GfoldActiveGlideSlopeDeg => GfoldVerticalFinal
+        ? Math.Max(VerticalFinalGlideSlopeDeg, _s.GfoldGlideSlopeDeg) : _s.GfoldGlideSlopeDeg;
+    private static bool GfoldReadyForHover => !GfoldBrakingToGate
+        && _s.GfoldAltM <= _s.GfoldHoverHandoffAltM && !_s.GfoldHoverRefused;
+
+    private static bool AtVerticalApproachGate(double altitude, double horizontalSpeed, double distance) =>
+        GfoldBrakingToGate && double.IsFinite(altitude + horizontalSpeed + distance)
+        && altitude <= _s.LandingVerticalGateM + VerticalGateBandM && horizontalSpeed <= VerticalGateSpeedMs
+        && distance <= Math.Max(VerticalGateMinDistanceM, _s.LandingVerticalGateM * VerticalGateDistanceFraction);
+
+    private static bool TryBeginVerticalDescent(double altitude, double horizontalSpeed, double distance, double tilt, double now)
+    {
+        if (!AtVerticalApproachGate(altitude, horizontalSpeed, distance)
+            || !double.IsFinite(tilt) || tilt > VerticalFinalPointingDeg) return false;
+        ChangeGfoldApproach(GfoldApproach.VerticalFinal, now);
+        _s.LandingStatus = "Horizontal braking complete. Descending with the engines down.";
+        return true;
+    }
+
+    // A craft that passes below the gate outside its limits, or outlives the plan to it, cannot reach the gate any more.
+    // It lands on the site directly, which also allows the hover handoff again.
+    private static bool TryAbandonVerticalGate(double altitude, double now)
+    {
+        bool missed = altitude <= _s.LandingVerticalGateM || (_s.GfoldPlan != null && now > _s.GfoldArrivalTime);
+        if (!GfoldBrakingToGate || !missed) return false;
+        ChangeGfoldApproach(GfoldApproach.Direct, now);
+        _s.LandingStatus = "The vertical approach gate was missed. G-FOLD lands on the site directly.";
+        return true;
+    }
+
+    // A new target makes the previous flight time a wrong guess, so the next solve searches the full range.
+    private static void ChangeGfoldApproach(GfoldApproach approach, double now)
+    {
+        _s.GfoldApproach = approach;
+        _s.GfoldForceSearch = true;
+        _s.GfoldArrivalTime = now + SearchTfMax;
+        _s.GfoldLastSolveTime = double.NegativeInfinity;
+        _s.GfoldSearchRetryTime = double.NegativeInfinity;
+        _s.GfoldTrackInit = false;
+    }
+
+    // The length across the X-up site frame's horizontal plane.
+    private static double HorizontalLength(double3 local) => Math.Sqrt(local.Y * local.Y + local.Z * local.Z);
+
+    // Keep the checked plan through its final seconds. A missed arrival needs a fresh solve.
+    private static bool GfoldInTerminalWindow(double now) => _s.GfoldPlan != null
+        && _s.GfoldArrivalTime >= now && _s.GfoldArrivalTime - now <= GfoldMinTf;
+
     private const double GfoldMinTf = 4.0;
 
     // A planned coast is flown as a real coast. The engine cannot deliver less than its minimum throttle, so a demand under this fraction of full thrust switches it off, and it lights again only above the re-light fraction, so a command that sits near the threshold does not toggle the engine every step.
@@ -64,11 +121,25 @@ public static partial class GuidanceWindow
         _s.GfoldAltM = double3.Dot(r - siteCci, frame.Ex) - _s.VehicleHeightM;
         _s.GfoldSpeedMs = vSrf.Length();
         double3 gfLocal = frame.PointToLocal(r);   // X-up frame
-        RecordGfoldTrace(Math.Sqrt(gfLocal.Y * gfLocal.Y + gfLocal.Z * gfLocal.Z), gfLocal.X);
+        double horizontalDistance = HorizontalLength(gfLocal);
+        RecordGfoldTrace(horizontalDistance, gfLocal.X);
+        double3 localVelocity = frame.VecToLocal(vSrf);
+        double horizontalSpeed = HorizontalLength(localVelocity);
+        double tilt = AngleBetween(ThrustAxisCci(vehicle), frame.Ex) * 180 / Math.PI;
+        if (TryBeginVerticalDescent(_s.GfoldAltM, horizontalSpeed, horizontalDistance, tilt, now))
+            GuidanceLog.Info(vehicle, $"vertical descent starts: {ApproachState()}.");
+        else if (TryAbandonVerticalGate(_s.GfoldAltM, now))
+            GuidanceLog.Info(vehicle, $"vertical approach gate missed: {ApproachState()}.");
+        if (GuidanceLog.Enabled && now - _s.LastGuidanceLogTime >= GuidanceLogIntervalS)
+        {
+            _s.LastGuidanceLogTime = now;
+            GuidanceLog.Debug(vehicle, $"G-FOLD approach: {ApproachState()}"
+                + $", target height {GfoldSolverTargetAltM - _s.VehicleHeightM:F1} m, approach {_s.GfoldApproach}.");
+        }
 
         // Hand off to the terminal hover controller for the last stretch: G-FOLD brings the vehicle down to the handoff height (slow and near-vertical), and the hover flies the final touchdown.
         // A hover that refuses the craft is asked once, and the plan, which ends at the surface anyway, is flown to the touchdown StepLanding detects.
-        if (_s.GfoldAltM <= _s.GfoldHoverHandoffAltM && !_s.GfoldHoverRefused)
+        if (GfoldReadyForHover)
         {
             StartTerminalHover(vehicle);
             if (_s.LandingPhase == LandingPhase.TerminalHover)
@@ -83,8 +154,7 @@ public static partial class GuidanceWindow
 
         // Inside the last GfoldMinTf seconds before the planned arrival, the distance still to fly is too small for any valid flight time: tf >= TfMin (the search floor) overshoots it, so a re-solve goes degenerate and reports the target unreachable right before the handoff.
         // Freeze the committed plan there - it already terminates at the target - and just fly it down.
-        bool terminalWindow = _s.GfoldPlan != null && _s.GfoldArrivalTime - now <= GfoldMinTf;
-        if (!terminalWindow &&
+        if (!GfoldInTerminalWindow(now) &&
             (_s.GfoldPlan == null || now - _s.GfoldLastSolveTime >= _s.GfoldIntervalS))
             SolveGfoldPlan(vehicle, parent, frame, siteCci, r, now);
 
@@ -92,6 +162,9 @@ public static partial class GuidanceWindow
         // Track in the LIVE site frame (rebuilt this step), not the solve-time frame: the site is body-fixed, so its CCI position rotates with the body, and the live frame carries the plan around with it so we keep aiming at the real pad.
         if (_s.GfoldPlan != null)
             TrackGfoldPlan(vehicle, parent, frame, r, vSrf, vehicle.TotalMass, now);
+
+        string ApproachState() => $"altitude {_s.GfoldAltM:F1} m, horizontal speed {horizontalSpeed:F2} m/s"
+            + $", sink {-localVelocity.X:F2} m/s, distance {horizontalDistance:F1} m, thrust-axis tilt {tilt:F1} deg";
     }
 
     // Solve a fresh descent plan from the current state and commit it.
@@ -103,8 +176,8 @@ public static partial class GuidanceWindow
         using var _perf = new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.SolveGfoldPlan");
 #endif
         GfoldParams p = KsaGfold.BuildParams(
-            vehicle, parent, frame, siteCci, comPos, _s.GfoldGlideSlopeDeg, _s.GfoldPointingDeg, _s.GfoldVMaxMs,
-            GfoldSolverTargetAltM, 0.0, _s.GfoldThrottleMin, _s.GfoldThrottleMax, out string refusal);
+            vehicle, parent, frame, siteCci, comPos, GfoldActiveGlideSlopeDeg, GfoldActivePointingDeg, _s.GfoldVMaxMs,
+            GfoldSolverTargetAltM, GfoldSolverArrivalRateMs, _s.GfoldThrottleMin, _s.GfoldThrottleMax, out string refusal);
         if (p == null)
         {
             _s.LandingStatus = refusal;
@@ -206,7 +279,9 @@ public static partial class GuidanceWindow
             _s.GfoldFailStreak = 0;
             _s.GfoldForceSearch = false;
             _s.GfoldSearchRetryTime = double.NegativeInfinity;
-            _s.LandingStatus = _s.GfoldHoverRefused ? GfoldHoverRefusedStatus : "";
+            _s.LandingStatus = _s.GfoldHoverRefused ? GfoldHoverRefusedStatus
+                : GfoldBrakingToGate ? $"Braking to the vertical approach at {_s.LandingVerticalGateM:F0} m."
+                : GfoldVerticalFinal ? "Vertical final descent." : "";
         }
         catch (Exception e)
         {
@@ -239,6 +314,9 @@ public static partial class GuidanceWindow
         int t0 = Math.Clamp((int)Math.Floor(tf), 1, n - 2);
         double tfrac = Math.Clamp(tf - t0, 0.0, 1.0);
         double3 ff = Lerp(Node(plan.AccelCmd, t0), Node(plan.AccelCmd, t0 + 1), tfrac);
+        // The final burn sample is valid only until arrival. A failed re-plan must not repeat it indefinitely.
+        if (elapsed >= plan.TimeOfFlight)
+            ff = new double3(parent.Mu / r.LengthSquared(), 0, 0);
 
         double3 curPos = f.PointToLocal(r);
         double3 curVel = f.VecToLocal(vSrf);
@@ -256,7 +334,7 @@ public static partial class GuidanceWindow
             _s.GfoldEngineOn = false;
 
         // Direction. While the engine burns, the command is the plan's feed-forward plus the tracking feedback, clamped to the pointing cone of local up, because the feedback can tilt past the cone the plan respects. While the engine is off the feedback has nothing to act on and its direction is noise, so the craft is aligned in advance to the first burn the plan still holds, and to local up when the plan holds none.
-        double3 dirLocal = ClampToCone(_s.GfoldEngineOn ? cmd : NextBurnDirection(plan, t0, mass, fullThrust), _s.GfoldPointingDeg);
+        double3 dirLocal = ClampToCone(_s.GfoldEngineOn ? cmd : NextBurnDirection(plan, t0, mass, fullThrust), GfoldActivePointingDeg);
         double3 targetDir = double3.Normalize(f.VecToCci(dirLocal));
         if (!double.IsFinite(targetDir.X) || !double.IsFinite(targetDir.Y) || !double.IsFinite(targetDir.Z))
             targetDir = _s.CommandDir.Length() > 0.5 ? _s.CommandDir : f.Ex;

@@ -840,6 +840,7 @@ public static partial class GuidanceWindow
         GuidanceLog.Debug(vehicle, $"{mode} claims the craft.");
         ResetLandingEngineWait();
         ClearDeorbitPlanState();
+        _s.GfoldApproach = GfoldApproach.Direct;
         _s.ReleaseWithoutEngineCut = false;
         _s.ShutdownRequested = false;
         _s.TakeoverStop = false;

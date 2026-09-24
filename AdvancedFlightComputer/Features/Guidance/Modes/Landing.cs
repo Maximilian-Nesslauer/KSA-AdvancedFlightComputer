@@ -101,6 +101,8 @@ public static partial class GuidanceWindow
             // Where the braking burn ends and G-FOLD takes over.
             // It shapes this phase, so it belongs here rather than with the G-FOLD tuning.
             ImGui.InputDouble("Hand off to G-FOLD at T-gate (s)", ref _s.GfoldHandoffTgo);
+            ImGui.InputDouble("Vertical approach height (m)", ref _s.LandingVerticalGateM);
+            ImGui.TextWrapped($"The braking target is at least {LandingBrakeGateAltitude:F0} m above the site. G-FOLD removes horizontal speed before the final descent.");
             ImGui.EndDisabled();
         }
 
@@ -446,6 +448,7 @@ public static partial class GuidanceWindow
                     _s.GfoldHandoffTime = now;
                     _s.GfoldLastSolveTime = double.NegativeInfinity;
                     _s.GfoldPlan = null;
+                    _s.GfoldApproach = GfoldApproach.BrakeAtGate;
                     _s.GfoldFailStreak = 0;
                     _s.GfoldTrackInit = false;
                     // The engine is lit from the burn, so the tracker's coast hysteresis starts from a lit engine and switches it off only when the plan really coasts.

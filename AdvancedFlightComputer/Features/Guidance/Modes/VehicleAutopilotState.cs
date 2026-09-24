@@ -564,6 +564,8 @@ public sealed class VehicleAutopilotState
     public double VehicleHeightM = 15.0;
 
     public double GfoldHandoffTgo = 40.0;  // hand UPFG braking over this long before the gate
+    public double LandingVerticalGateM = 500.0;
+    internal GuidanceWindow.GfoldApproach GfoldApproach;
     public double GfoldThrottle;
 
     /// <summary>Why the last thrust command could not be met, empty when it could.</summary>
