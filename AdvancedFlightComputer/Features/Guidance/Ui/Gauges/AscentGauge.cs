@@ -17,6 +17,15 @@ public static partial class GuidanceWindow
     private static void DrawAscentTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                              double bodyRadius, float innerW)
     {
+        // Which ascent, above everything else, because it decides what the rest of the page is.
+        DrawAscentMethodRadios();
+        ImGui.Separator();
+        if (_s.AscentMethod == AscentMethod.GravityTurn)
+        {
+            DrawGravityTurnTabContent(innerW);
+            return;
+        }
+
         // Status first: what the guidance is doing now, before anything you set.
         DrawAscentStatus(ImGui.GetCursorScreenPos(), ImGui.GetContentRegionAvail().X,
             ImGui.GetTextLineHeightWithSpacing());
@@ -27,6 +36,23 @@ public static partial class GuidanceWindow
         DrawAscentSettingsSection(innerW);
         DrawReturnableStagesSection(innerW);
         DrawExpertSettingsSection(innerW);
+    }
+
+    /// <summary>
+    /// The CAT-S / UPFG ascent or the gravity-turn one. Locked while an ascent is flying or armed for its window, so the page and EXECUTE cannot switch away from the one that is committed.
+    /// </summary>
+    private static void DrawAscentMethodRadios()
+    {
+        ImGui.Text("Method");
+        ImGui.SameLine();
+        using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed))
+        {
+            if (ImGui.RadioButton("CAT-S / UPFG", _s.AscentMethod == AscentMethod.CatsUpfg))
+                _s.AscentMethod = AscentMethod.CatsUpfg;
+            ImGui.SameLine();
+            if (ImGui.RadioButton("Gravity turn", _s.AscentMethod == AscentMethod.GravityTurn))
+                _s.AscentMethod = AscentMethod.GravityTurn;
+        }
     }
 
     // --- Target orbit ------------------------------------------------------- The main levers. Picking a target turns the four orbit inputs into OUTPUTS of that pick - continuously recomputed and greyed out - because a chase orbit that disagreed with the target it was chasing was never anything but a mistake.

@@ -332,6 +332,11 @@ public sealed class VehicleAutopilotState
 
     internal readonly AttitudeOwnership AttitudeOwnership = new();
 
+    /// <summary>
+    /// Which ascent the Ascent tab shows and EXECUTE starts: the CAT-S / UPFG ascent, or the separate gravity-turn one. Per vehicle, like the landing solver, because it decides what this craft's launch does.
+    /// </summary>
+    public GuidanceWindow.AscentMethod AscentMethod = GuidanceWindow.AscentMethod.CatsUpfg;
+
     // Ascent state.
     public GuidanceWindow.AscentPhase Phase = GuidanceWindow.AscentPhase.Vertical;
     public double TurnStartTime;
