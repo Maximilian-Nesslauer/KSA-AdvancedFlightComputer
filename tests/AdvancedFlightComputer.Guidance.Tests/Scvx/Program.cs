@@ -36,6 +36,9 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --aero          tabulated Cd(Mach, alpha) and its slopes under forward-mode AD
           --impact        RK4 impact prediction: convergence, and d(impact)/d(x0)
           --shoot         direct shooting on a boostback burn: is there an optimal pitch
+          --ascent        the convex ascent against launch3dof.py's Saturn V result
+          --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f] [--diag]
+                          solve an ascent problem the game dumped, with the full trace
 
         BEHAVIOUR - properties the guidance depends on
           --path          path constraints bind, and stay solvable when violated
@@ -123,6 +126,17 @@ if (args.Contains("--defect"))
 if (args.Contains("--impact"))
 {
     return ImpactCheck.Run();
+}
+
+if (args.Contains("--ascent-replay"))
+{
+    int at = Array.IndexOf(args, "--ascent-replay");
+    return AscentCheck.Replay(at + 1 < args.Length ? args[at + 1] : "", args);
+}
+
+if (args.Contains("--ascent"))
+{
+    return AscentCheck.Run(verbose);
 }
 
 if (args.Contains("--shoot"))

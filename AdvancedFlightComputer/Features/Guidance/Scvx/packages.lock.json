@@ -2,6 +2,9 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
+      "advancedflightcomputer.guidance.gfold": {
+        "type": "Project"
+      },
       "advancedflightcomputer.guidance.numerics": {
         "type": "Project"
       }

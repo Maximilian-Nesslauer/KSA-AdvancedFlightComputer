@@ -421,6 +421,43 @@ public sealed class VehicleAutopilotState
     public double TurnStartAltKm = 0.5;
     public double TurnRateDegS = 1.0;
 
+    // Convex ascent: the minimum-propellant ascent solved offline by SCvx and flown open loop to the UPFG hand-over. See Modes/ConvexAscent.cs.
+
+    /// <summary>The last finished plan, or null. Replaced whole by a recalculation, never edited.</summary>
+    public AscentPlan AscentPlan;
+
+    /// <summary>The solve in progress, or null.</summary>
+    public AscentPlanJob AscentPlanJob;
+
+    /// <summary>Set by the Calculate button; the sim step builds the problem, since only it may read the part tree.</summary>
+    public bool AscentPlanRequested;
+
+    public string AscentPlanStatus = "";
+
+    /// <summary>EXECUTE flies the plan in place of the vertical rise and gravity turn when there is a usable one.</summary>
+    public bool FlyConvexAscent = true;
+
+    /// <summary>The script's Saturn V limits: max-q 35 kPa and q-alpha 3500 Pa rad.</summary>
+    public double ConvexQMaxKpa = 35.0;
+    public double ConvexQAlphaMax = 3500.0;
+
+    /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
+    public double ConvexHandoverAltKm = 80.0;
+
+    public bool ShowConvexPlan = true;
+
+    /// <summary>The plan this flight is flying, latched at EXECUTE so a recalculation cannot swap it mid-climb; and when the climb began, which fixes where the drawn plan sits.</summary>
+    public AscentPlan FlyingPlan;
+    public double FlyingPlanLaunchTime = double.NaN;
+
+    /// <summary>The profile's previous command, which its turning rate is differenced against.</summary>
+    public double3 ConvexLastWant;
+
+    /// <summary>Where the flight is on the plan, as plan time; the fastest air speed it has had; and the sim time of the last profile step. See ConvexAscentProfile.Advance.</summary>
+    public double ConvexPlanTime;
+    public double ConvexFastest;
+    public double ConvexLastTime = double.NaN;
+
     // Landing state.
     public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;
 
