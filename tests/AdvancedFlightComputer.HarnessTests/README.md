@@ -139,6 +139,8 @@ The staging tests apply the feature's patches on a test-scoped Harmony owner thr
 ### Core
 
 - `afc-save-scoped-reset` asserts that the save-scoped reset list runs cold, populated, and twice in a row without throwing, and clears the plan-window inputs that it covers.
+- `afc-refused-load` drives the save-load patch directly. A load that did not replace the save's universe data, as when the editor refuses it or the universe file cannot be read, keeps the save scope, the registry, and the save-scoped state and raises no `SaveLoaded`. A completed load moves all of them.
+- `afc-failed-write` drives the save-write patch directly. A write that `UncompressedSave.Write` reports as failed keeps the save scope and the registry on the previous save, raises no `SaveWritten`, and persists no registry file. A completed write moves the scope and persists the registry.
 - `afc-stock-pin-guard` asserts the guard that decides whether stock's selected-transfer block can index the porkchop array, against fresh, in-flight, populated, zero-sized, and out-of-range `TransferInfo` states.
 - `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature. It also checks the AUTOSTAGE gauge enum injection and that stock still activates a sequence row through `Part.ActivateSubtreeInStage`, which the staging execution clones.
 - `afc-feature-patch-rollback` checks that a failed feature block removes only its partial patches, keeps other owners intact, and does not prevent a later block or unload.

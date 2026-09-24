@@ -35,16 +35,17 @@ internal static class SaveLoadObserver
     [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Load), new Type[0])]
     private static class LoadPatch
     {
-        static void Postfix(UncompressedSave __instance)
+        static void Prefix(UncompressedSave __instance, out UniverseData __state) => __state = __instance.UniverseData;
+
+        static void Postfix(UncompressedSave __instance, UniverseData __state)
         {
-            // UncompressedSave.Load returns normally when GameSaves.RefusedInEditor refuses the load, so its postfix still runs.
-            // Read the same editor state without raising a second alert.
-            if (Program.IsEditorOpen)
+            // UncompressedSave.Load returns normally when GameSaves.RefusedInEditor refuses the load or the universe file cannot be read.
+            // Only a completed load replaces UniverseData.
+            if (ReferenceEquals(__instance.UniverseData, __state))
             {
                 if (DebugConfig.MultiPass)
                     DefaultCategory.Log.Debug(
-                        $"[AFC] SaveLoadObserver.LoadPatch: ignored the refused load of " +
-                        $"'{__instance.Id}' because the vehicle editor is open.");
+                        $"[AFC] SaveLoadObserver.LoadPatch: ignored save '{__instance.Id}' because it did not load.");
                 return;
             }
 
@@ -124,8 +125,12 @@ internal static class SaveLoadObserver
     [HarmonyPatch(typeof(UncompressedSave), nameof(UncompressedSave.Write), new Type[0])]
     private static class WritePatch
     {
-        static void Postfix(UncompressedSave __instance)
+        static void Postfix(UncompressedSave __instance, bool __result)
         {
+            // A failed write keeps the registry on the previous save.
+            if (!__result)
+                return;
+
             try
             {
                 OnSaveWritten(__instance.Id ?? string.Empty);
