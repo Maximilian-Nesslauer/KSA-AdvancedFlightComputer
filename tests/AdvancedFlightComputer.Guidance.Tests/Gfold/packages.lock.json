@@ -2,8 +2,14 @@
   "version": 1,
   "dependencies": {
     "net10.0": {
-      "advancedflightcomputer.guidance.gfold": {
+      "advancedflightcomputer.guidance.conic": {
         "type": "Project"
+      },
+      "advancedflightcomputer.guidance.gfold": {
+        "type": "Project",
+        "dependencies": {
+          "AdvancedFlightComputer.Guidance.Conic": "[1.0.0, )"
+        }
       }
     },
     "net10.0/linux-x64": {},

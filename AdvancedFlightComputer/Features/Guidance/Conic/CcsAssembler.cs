@@ -1,4 +1,4 @@
-namespace AdvancedFlightComputer.Guidance.Scvx;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 /// <summary>
 /// A sparse matrix in the column-compressed storage ECOS expects, built once and

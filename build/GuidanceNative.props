@@ -1,6 +1,6 @@
 <Project>
   <!-- The one place that knows how the guidance native libraries are laid out.
-       The loaders, the two solver projects and the payload list all read these
+       The loader, the Conic solver project and the payload list all read these
        properties, so a new runtime identifier is added here and nowhere else. -->
   <PropertyGroup>
     <GuidanceNativeDir>$(MSBuildThisFileDirectory)native/</GuidanceNativeDir>

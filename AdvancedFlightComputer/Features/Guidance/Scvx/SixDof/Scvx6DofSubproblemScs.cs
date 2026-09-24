@@ -1,4 +1,6 @@
-namespace AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Conic;
+
+namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// The SCvx subproblem in SCS's native form:

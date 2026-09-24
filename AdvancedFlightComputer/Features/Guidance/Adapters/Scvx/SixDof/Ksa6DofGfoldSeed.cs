@@ -4,7 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using AdvancedFlightComputer.Guidance.Gfold;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Builds the 6-DOF cold-start seed by solving the 3-DOF G-FOLD problem first.

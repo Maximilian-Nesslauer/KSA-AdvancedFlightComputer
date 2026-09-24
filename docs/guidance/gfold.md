@@ -416,7 +416,7 @@ For **P3** instead: add a 56th column for `t`, change the objective to `c[55] = 
 - `clarabel/` - vendored Clarabel sources (oxfordcontrol/Clarabel.cpp plus its Clarabel.rs submodule). Apache-2.0.
 - `build-clarabel.ps1` - builds `native/clarabel_c.dll` with cargo. Needs a Rust toolchain; no CMake (see the script for why).
 - `native/` - build output (gitignored). Rebuild with the script.
-- `Gfold.Core/` - the managed library: `ClarabelSolver.Solve(ConicProblem)` (standard conic form: min c'x s.t. Ax=b, Gx+s=h, s in R+^l x SOC(q...)), `SparseCcs` triplet->CCS builder, P/Invoke bindings with pinned-array lifetime management.
+- `Gfold.Core/` - the managed library, now split between `Features/Guidance/Gfold` (the planner) and `Features/Guidance/Conic` (the solver side, shared with the 6-DOF solver and the convex ascent): `ClarabelSolver.Solve(ConicProblem)` (standard conic form: min c'x s.t. Ax=b, Gx+s=h, s in R+^l x SOC(q...)), `SparseCcs` triplet->CCS builder, P/Invoke bindings with pinned-array lifetime management.
 - `Gfold.Console/` - runs the P3 -> P4 flow on the reference "Numerical Example 1" case, verifies the result physically (dynamics replay, bounds), writes CSVs. `--check <csv>` audits any trajectory against the constraint set; `--frame` times a solve at the shape the mod flies; `--clarabel-smoke` and `--clarabel-layout` check the binding.
 - `python_ref/` - CVXPY/Clarabel replica of the original Python for cross-validation (`gfold_ref.py [tf] [N] [--scaled] [--feascheck csv]`).
 

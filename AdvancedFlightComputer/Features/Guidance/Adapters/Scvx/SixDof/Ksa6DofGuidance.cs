@@ -1,11 +1,12 @@
 #nullable disable
 
+
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using Brutal.Numerics;
 using KSA;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// 6-DOF powered descent as straight model-predictive control.

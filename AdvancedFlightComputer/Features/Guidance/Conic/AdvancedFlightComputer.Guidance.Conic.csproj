@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- The conic solvers every planner calls: the problem form, the sparse builders, and the Clarabel and SCS bindings. The native libraries sit beside this assembly. -->
+  <Import Project="../../../../build/GuidanceNative.props" />
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>AdvancedFlightComputer.Guidance.Conic</RootNamespace>
+  </PropertyGroup>
+  <ItemGroup>
+    <None Include="$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostClarabel)" Link="$(GuidanceHostClarabel)"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostClarabel)')" />
+    <None Include="$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostScs)" Link="$(GuidanceHostScs)"
+          CopyToOutputDirectory="PreserveNewest"
+          Condition="Exists('$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostScs)')" />
+  </ItemGroup>
+</Project>

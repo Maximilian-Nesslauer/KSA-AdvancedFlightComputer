@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 
 // Replicates the reference Python P3_P4 flow on the Mars static test case:
