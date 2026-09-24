@@ -98,8 +98,8 @@ public static partial class GuidanceWindow
             ImGui.InputDouble("Aim altitude (km)", ref _s.AimAltKm);
             ImGui.InputDouble("Descent rate (m/s)", ref _s.DescentRate);
             ImGui.InputDouble("Gate uprange (km)", ref _s.GateUprangeKm);
-            // Where the braking burn ends and G-FOLD takes over.
-            // It shapes this phase, so it belongs here rather than with the G-FOLD tuning.
+            // Where the braking burn ends and the powered descent, 6-DOF or G-FOLD, takes over.
+            // It shapes this phase, so it belongs here rather than with either solver's tuning.
             ImGui.InputDouble("Hand off to the descent at T-gate (s)", ref _s.GfoldHandoffTgo);
             ImGui.InputDouble("Vertical approach height (m)", ref _s.LandingVerticalGateM);
             ImGui.TextWrapped($"The braking target is at least {LandingBrakeGateAltitude:F0} m above the site. G-FOLD removes horizontal speed before the final descent.");
@@ -438,8 +438,8 @@ public static partial class GuidanceWindow
 
         if (_s.LandingPhase == LandingPhase.Burn)
         {
-            // Hand straight to G-FOLD a set time before gate arrival, skipping the UPFG terminal freeze.
-            // G-FOLD plans from the current state down.
+            // Hand straight to the powered descent a set time before gate arrival, skipping the UPFG terminal freeze.
+            // Both descents plan from the current state down.
             if (_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo)
             {
                 // 6-DOF is the default, but it needs thrust vectoring and a throttle floor it can land on, and G-FOLD needs neither. A craft 6-DOF would refuse goes to G-FOLD, and the craft's solver choice follows it, so the panel shows and aborts the descent that is actually flying.

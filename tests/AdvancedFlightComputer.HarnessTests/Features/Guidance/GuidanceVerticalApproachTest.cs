@@ -19,6 +19,8 @@ public sealed class GuidanceVerticalApproachTest : AfcTest
         try
         {
             ambient.SetValue(null, state);
+            // The vertical approach is G-FOLD's, and 6-DOF is the default solver.
+            state.UseSixDofLanding = false;
             state.GfoldApproach = GuidanceWindow.GfoldApproach.BrakeAtGate;
             state.VehicleHeightM = 15;
             state.LandingVerticalGateM = 500;
