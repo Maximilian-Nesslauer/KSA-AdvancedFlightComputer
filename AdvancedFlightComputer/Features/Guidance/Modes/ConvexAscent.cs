@@ -30,6 +30,12 @@ public static partial class GuidanceWindow
     /// <summary>Stages the first attempt plans: the fewest whose ideal dV reaches this multiple of the insertion speed.</summary>
     private const double InitialStagesDvMargin = 1.1;
 
+    /// <summary>The script's throttle floor, and the one a stage that cannot throttle is held at. Never 100 %: see AscentSettings.ThrottleMin.</summary>
+    private const double FullThrottleFloor = 0.99;
+
+    /// <summary>How long the command takes to turn from the profile's attitude to UPFG's after the hand-over, s.</summary>
+    private const double ConvexBlendSeconds = 15.0;
+
     // --- request and collection, from the sim step ---------------------------
 
     /// <summary>Picks up a Calculate request and collects a finished solve. Runs from the vehicle's sim step for the focused craft; a fault costs the plan, never the step.</summary>
@@ -105,6 +111,15 @@ public static partial class GuidanceWindow
         }
     }
 
+    /// <summary>How many of the first <paramref name="stages"/> stages cannot throttle.</summary>
+    private static int CountHeld(bool[] canThrottle, int stages)
+    {
+        int n = 0;
+        for (int i = 0; i < stages && i < canThrottle.Length; i++)
+            if (!canThrottle[i]) n++;
+        return n;
+    }
+
     private static double Max(double[] v)
     {
         double m = double.NegativeInfinity;
@@ -174,6 +189,10 @@ public static partial class GuidanceWindow
         var jettison = new double[count];
         var grids = new double[count][];
         var tables = new double[count][];
+        var floors = new double[count];
+        var canThrottle = new bool[count];
+        // The floor on the panel, but never under what the engines can throttle to, and never at 100 %, which would freeze the thrust direction. A stage with a solid motor burning cannot throttle at all and is held at full thrust.
+        double floor = Math.Clamp(Math.Max(_s.ConvexThrottleMinPct / 100.0, vehicle.GetMinThrottle()), 0.01, FullThrottleFloor);
         var dvCum = new double[count];
         double dvSum = 0.0;
         for (int i = 0; i < count; i++)
@@ -186,6 +205,8 @@ public static partial class GuidanceWindow
             jettison[i] = i + 1 < count ? Math.Max(0.0, st.MassDry - model.Stages[i + 1].MassTotal) : 0.0;
             grids[i] = st.PressureGrid;
             tables[i] = st.ThrustAtPressure;
+            canThrottle[i] = st.Throttleable;
+            floors[i] = st.Throttleable ? floor : FullThrottleFloor;
             if (!(prop[i] > 1.0) || !(massFlow[i] > 0.0))
             {
                 error = $"stage {i + 1} has nothing left to burn";
@@ -231,7 +252,7 @@ public static partial class GuidanceWindow
             var list = new AscentStage[stages];
             for (int i = 0; i < stages; i++)
                 list[i] = new AscentStage(thrust[i], massFlow[i], prop[i],
-                                          i < stages - 1 ? jettison[i] : 0.0, dragArea, grids[i], tables[i]);
+                                          i < stages - 1 ? jettison[i] : 0.0, dragArea, grids[i], tables[i], floors[i]);
             return new AscentProblem
             {
                 Mu = mu,
@@ -286,6 +307,8 @@ public static partial class GuidanceWindow
             ApKm = apKm,
             IncDeg = incDeg,
             LanDeg = lanDeg,
+            ThrottleMinPct = floor * 100.0,
+            SolidStages = CountHeld(canThrottle, stages),
             QMaxKpa = qUsed / 1000.0,
             QMaxRequestedKpa = qMaxKpa,
             QAlphaMax = qAlphaMax,
@@ -313,7 +336,7 @@ public static partial class GuidanceWindow
 
         GuidanceLog.Info(vehicle, $"convex ascent requested (problem {dump}): {count} stage(s) available, trying {initial} first; "
             + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg, "
-            + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, drag area {dragArea:F1} m^2, "
+            + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", Array.ConvertAll(floors, f => (f * 100.0).ToString("F0")))} by stage), drag area {dragArea:F1} m^2, "
             + (atmosphere != null ? $"air {atmosphere}" : "no air") + ".");
 
         job = new AscentPlanJob(Build, count, initial, qMax, Publish);
@@ -364,36 +387,99 @@ public static partial class GuidanceWindow
         => (v - double3.Cross(new double3(0, 0, parent.GetAngularVelocity()), r)).Length();
 
     /// <summary>
-    /// The open-loop phase's command: the plan's attitude where the vehicle is on the plan, and the rate that command is turning at.
-    ///
-    /// Where it is on the plan is a plan time, carried from step to step and moved on by the vehicle's air speed (see ConvexAscentProfile.Advance): pitch against speed while the vehicle is gaining speed it has never had, the plan's own clock while it is not. The clock runs on SIM time since the last step, not the slew's clamped step, so a warped step moves the plan as far as it moved the vehicle.
-    ///
-    /// The rate is the command's own, differenced step to step - it includes the local horizon turning under the vehicle as well as the programme itself.
+    /// The open-loop phase's command: the plan's attitude where the vehicle is on the plan, and the rate that command is turning at. See <see cref="ConvexProfileDirection"/> for where it is on the plan; the rate is the command's own, differenced step to step, so it includes the local horizon turning under the vehicle as well as the programme itself.
     /// </summary>
     private static double3 ConvexProfileCommand(double3 r, double3 v, IParentBody parent, double stepDt,
                                                 out double3 rate)
     {
-        rate = default;
+        double3 want = ConvexProfileDirection(r, v, parent);
+        rate = DifferencedRate(ref _s.ConvexLastWant, want, stepDt);
+        return want;
+    }
+
+    /// <summary>
+    /// The plan's attitude where the vehicle is on the plan, moving the plan on first. Where it is on the plan is a plan time, carried from step to step and moved on by the vehicle's air speed (see ConvexAscentProfile.Advance): pitch against speed while the vehicle is gaining speed it has never had, the plan's own clock while it is not. The clock runs on SIM time since the last step, not the slew's clamped step, so a warped step moves the plan as far as it moved the vehicle.
+    /// </summary>
+    private static double3 ConvexProfileDirection(double3 r, double3 v, IParentBody parent)
+    {
         ConvexAscentProfile profile = _s.FlyingPlan?.Profile;
         if (profile == null)
             return double3.Normalize(r);
-
         double now = SimNow();
         double dt = double.IsFinite(_s.ConvexLastTime) ? Math.Max(0.0, now - _s.ConvexLastTime) : 0.0;
         _s.ConvexLastTime = now;
         _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), dt, ref _s.ConvexFastest);
+        return profile.Direction(r, _s.ConvexPlanTime);
+    }
 
-        double3 want = profile.Direction(r, _s.ConvexPlanTime);
-        double3 last = _s.ConvexLastWant;
+    /// <summary>The rotation rate that takes <paramref name="last"/> to <paramref name="want"/> in one step, rad/s about their common normal; and <paramref name="last"/> moved on to <paramref name="want"/>.</summary>
+    private static double3 DifferencedRate(ref double3 last, double3 want, double stepDt)
+    {
+        double3 rate = default;
         if (last.Length() > 0.5 && stepDt > 1e-6)
         {
             double3 axis = double3.Cross(last, want);
-            double angle = AngleBetween(last, want);
             if (axis.Length() > 1e-12)
-                rate = double3.Normalize(axis) * (angle / stepDt);
+                rate = double3.Normalize(axis) * (AngleBetween(last, want) / stepDt);
         }
-        _s.ConvexLastWant = want;
+        last = want;
+        return rate;
+    }
+
+    /// <summary>
+    /// How far the command has turned from the profile's attitude to UPFG's since the hand-over: 0 at the hand-over, 1 once <see cref="ConvexBlendSeconds"/> have passed, and 1 when there is no blend. A smoothstep, so the turn starts and ends at zero rate rather than kinking the command twice.
+    ///
+    /// WHY BLEND. At the hand-over UPFG's steering and the plan's attitude differ by up to ten degrees - the plan was solved to insertion with the whole climb in view, UPFG from the state it is handed - and the command slew limit turned that difference into a five-degree-a-second snap, which reads as a jerk. Blended over fifteen seconds the same difference is under one degree a second, and UPFG, which re-solves every cycle regardless, loses only the fraction of a second of optimality the blend holds it off its own steering.
+    /// </summary>
+    private static double ConvexBlendWeight()
+    {
+        if (!double.IsFinite(_s.ConvexBlendStart) || _s.FlyingPlan?.Profile == null)
+            return 1.0;
+        double x = (SimNow() - _s.ConvexBlendStart) / ConvexBlendSeconds;
+        if (x >= 1.0)
+        {
+            _s.ConvexBlendStart = double.NaN;
+            return 1.0;
+        }
+        x = Math.Max(x, 0.0);
+        return x * x * (3.0 - 2.0 * x);
+    }
+
+    /// <summary>The ClosedLoop command while the hand-over blend runs: the profile's attitude turned toward UPFG's by the blend weight, about their common normal.</summary>
+    private static double3 ConvexBlendCommand(double3 r, double3 v, IParentBody parent, double3 upfgDir,
+                                              double weight, double stepDt, out double3 rate)
+    {
+        double3 from = double3.Normalize(ConvexProfileDirection(r, v, parent));
+        double3 to = double3.Normalize(upfgDir);
+        double3 axis = double3.Cross(from, to);
+        double3 want = axis.Length() > 1e-12
+            ? RotateAbout(from, double3.Normalize(axis), weight * AngleBetween(from, to))
+            : to;
+        rate = DifferencedRate(ref _s.ConvexLastWant, want, stepDt);
         return want;
+    }
+
+    /// <summary>
+    /// The profile's throttle, as the engines take it. The plan's throttle is a fraction of full thrust at the altitude flown, and thrust is not proportional to the throttle setting in air (see KsaEnginePerf.ThrustAtThrottle), so the demand is turned into a setting through the engines' own curve. Full throttle whenever the plan is within half a percent of it - which, at the script's 99 % floor, is all the time - and whenever the vehicle cannot throttle: a solid stage, which the plan holds at full thrust anyway.
+    /// </summary>
+    private static float ConvexThrottle(Vehicle vehicle, IParentBody parent)
+    {
+        ConvexAscentProfile profile = _s.FlyingPlan?.Profile;
+        if (profile == null)
+            return 1f;
+        double fraction = profile.Throttle(_s.ConvexPlanTime);
+        if (!(fraction < 0.995))
+            return 1f;
+        double altitude = vehicle.Orbit.StateVectors.PositionCci.Length() - parent.MeanRadius;
+        double pressure = KsaEnginePerf.AmbientPressureAt(parent, altitude);
+        double full = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure);
+        if (!(full > 0.0))
+            return 1f;
+        KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, fraction * full, pressure);
+        return command.Status is KsaEnginePerf.ThrustStatus.Available or KsaEnginePerf.ThrustStatus.BelowMinimum
+                                 or KsaEnginePerf.ThrustStatus.AboveMaximum
+            ? (float)command.Throttle
+            : 1f;
     }
 
     /// <summary>

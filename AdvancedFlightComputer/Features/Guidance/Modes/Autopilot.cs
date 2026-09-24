@@ -1120,8 +1120,8 @@ public static partial class GuidanceWindow
                 else if (!_s.CutoffDone)
                 {
                     inputs.EngineOn = true;
-                    // Full throttle unless UPFG is holding the acceleration limit. Not while the convex profile flies: that plan is a full-throttle one, as the script's is, and a g-limit throttling it back would fly a different trajectory under the same attitudes.
-                    inputs.EngineThrottle = _s.Phase == AscentPhase.Profile ? 1f : (float)_s.Upfg.Throttle;
+                    // Full throttle unless UPFG is holding the acceleration limit. Not while the convex profile flies: that flies the plan's own throttle, full at the script's floor, and a g-limit throttling it back would fly a different trajectory under the same attitudes.
+                    inputs.EngineThrottle = _s.Phase == AscentPhase.Profile ? ConvexThrottle(vehicle, parent) : (float)_s.Upfg.Throttle;
                 }
             }
         }

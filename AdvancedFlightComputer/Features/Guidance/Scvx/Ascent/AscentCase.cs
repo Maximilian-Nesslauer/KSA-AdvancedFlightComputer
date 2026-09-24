@@ -30,6 +30,7 @@ internal sealed class AscentCase
     public readonly double RFloor, MFloor;
     public readonly double[] PropC, DryC;
     public readonly double[] SigMin, SigMax;
+    public readonly double[] ThrottleMin;
     public readonly double SigScale;
     public readonly double[] XScale = new double[NX];
     public readonly double[] DScale = new double[NX];
@@ -112,15 +113,17 @@ internal sealed class AscentCase
         DryC = new double[S];
         SigMin = new double[S];
         SigMax = new double[S];
+        ThrottleMin = new double[S];
         for (int i = 0; i < S; i++)
         {
             AscentStage stg = p.Stages[i];
             PropC[i] = stg.PropellantMass / mu;
             DryC[i] = i < S - 1 ? stg.JettisonMass / mu : 0.0;
             double full = stg.FullBurnTime;
+            ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
             // The script's 20-700 s, widened only for a stage that could not otherwise burn its load: a long upper-stage burn, or one shorter than the floor.
             SigMin[i] = Math.Min(st.SigmaMinSeconds, 0.5 * full) / tu;
-            SigMax[i] = Math.Max(st.SigmaMaxSeconds, 1.1 * full / st.ThrottleMin) / tu;
+            SigMax[i] = Math.Max(st.SigmaMaxSeconds, 1.1 * full / ThrottleMin[i]) / tu;
         }
         SigScale = st.SigmaTrustSeconds / tu;
 

@@ -87,6 +87,10 @@ public static class KsaVehicleAdapter
                     };
                     if (pressureGrid != null)
                         SampleThrustVsPressure(tree, stage, PhaseParts(perf, j), ModelPressure(sequences[i].Environment), pressureGrid);
+                    HashSet<Part> parts = PhaseParts(perf, j);
+                    if (parts != null)
+                        foreach (Part part in parts)
+                            stage.Throttleable &= !HasSolidCore(part);
                     result.Stages.Add(stage);
                     if (burningStage == null)
                     {
@@ -125,6 +129,7 @@ public static class KsaVehicleAdapter
 
             a.MassDry = b.MassDry;
             a.Engines = Math.Max(a.Engines, b.Engines);
+            a.Throttleable &= b.Throttleable;
             stages.RemoveAt(i + 1);
         }
 

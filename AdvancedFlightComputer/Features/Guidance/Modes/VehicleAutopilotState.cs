@@ -444,6 +444,9 @@ public sealed class VehicleAutopilotState
     /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
     public double ConvexHandoverAltKm = 80.0;
 
+    /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. A stage burning a solid motor is held at 99 % whatever this says.</summary>
+    public double ConvexThrottleMinPct = 99.0;
+
     public bool ShowConvexPlan = true;
 
     /// <summary>The plan this flight is flying, latched at EXECUTE so a recalculation cannot swap it mid-climb; and when the climb began, which fixes where the drawn plan sits.</summary>
@@ -457,6 +460,9 @@ public sealed class VehicleAutopilotState
     public double ConvexPlanTime;
     public double ConvexFastest;
     public double ConvexLastTime = double.NaN;
+
+    /// <summary>Sim time the profile handed over to UPFG, while the command is still blending from the one to the other; NaN otherwise.</summary>
+    public double ConvexBlendStart = double.NaN;
 
     // Landing state.
     public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;

@@ -231,6 +231,7 @@ public static partial class GuidanceWindow
         _s.VgoPeak = 0.0;
         _s.FlyingPlan = null;
         _s.FlyingPlanLaunchTime = double.NaN;
+        _s.ConvexBlendStart = double.NaN;
         _s.Status = status;
     }
 
@@ -368,6 +369,7 @@ public static partial class GuidanceWindow
         _s.ConvexPlanTime = 0.0;
         _s.ConvexFastest = 0.0;
         _s.ConvexLastTime = double.NaN;
+        _s.ConvexBlendStart = double.NaN;
         string convexWhy = "";
         if (_s.FlyConvexAscent && ConvexPlanFlyable(vehicle, orbit, parent, out convexWhy))
         {
@@ -629,8 +631,11 @@ public static partial class GuidanceWindow
                 if (ConvexProfileDone(r, v, parent, bodyRadius, out string doneWhy))
                 {
                     _s.Phase = AscentPhase.ClosedLoop;
+                    // The command turns onto UPFG's steering over ConvexBlendSeconds rather than slewing onto it: see ConvexBlendWeight.
+                    _s.ConvexBlendStart = SimNow();
                     GuidanceLog.Debug(vehicle, $"closed loop from {alt / 1000.0:F1} km ({doneWhy}), air speed {AirSpeed(r, v, parent):F0} m/s, "
-                        + $"UPFG pitch {upfgPitch:F1} deg, converged {_s.Upfg.Converged}.");
+                        + $"plan pitch {PitchOf(up, _s.CommandDir):F1} deg, UPFG pitch {upfgPitch:F1} deg, converged {_s.Upfg.Converged}; "
+                        + $"blending onto UPFG over {ConvexBlendSeconds:F0} s.");
                 }
                 break;
 
@@ -639,6 +644,7 @@ public static partial class GuidanceWindow
                 {
                     _s.Phase = AscentPhase.Terminal;
                     _s.FrozenDir = steerNow;
+                    _s.ConvexBlendStart = double.NaN;   // a blend still running ends with the burn
                     // tgo is measured from the SOLVE, not from now - the solution can be most of a guidance cycle old by the time this trips, and counting that cycle twice is a whole second of extra burn.
                     _s.CutoffTime = _s.LastSolveTime + _s.Upfg.Tgo;
                     GuidanceLog.Debug(vehicle, $"terminal phase, attitude frozen at pitch {upfgPitch:F1} deg, cutoff in {_s.CutoffTime - SimNow():F1} s.");
@@ -674,6 +680,10 @@ public static partial class GuidanceWindow
                 // The law and the rate it implies, both from the evaluation above. i_f(tau) is continuous between cycles, so the guidance cadence stops being something the attitude has to be protected from.
                 want = steerNow;
                 wantRate = steerRate;
+                // Straight after a convex profile, turned onto that law over ConvexBlendSeconds.
+                double blend = ConvexBlendWeight();
+                if (blend < 1.0)
+                    want = ConvexBlendCommand(r, v, parent, steerNow, blend, stepDt, out wantRate);
                 break;
 
             case AscentPhase.Terminal:

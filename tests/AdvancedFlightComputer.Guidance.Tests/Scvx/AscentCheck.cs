@@ -116,8 +116,6 @@ internal static class AscentCheck
                 PlaneNormal = p.PlaneNormal, QMax = qMax, QAlphaMax = qaMax,
             };
         p.Settings.ThrottleMin = Arg("--floor", p.Settings.ThrottleMin);
-        if (args.Contains("--diag"))
-            p.Settings.Diagnostics = line => Console.WriteLine("   " + line);
         double r0 = Math.Sqrt(p.R0.Sum(x => x * x));
         Console.WriteLine($"body R {p.BodyRadius / 1000.0:F1} km, mu {p.Mu:E4}, omega {p.Omega:E4}; lift-off {(r0 - p.BodyRadius):F0} m up, {p.M0 / 1000.0:F2} t");
         Console.WriteLine($"target {(p.TargetRadius - p.BodyRadius) / 1000.0:F1} km at {p.TargetSpeed:F1} m/s, r.v {p.TargetRadialRate:E3}; q {p.QMax / 1000.0:F1} kPa, q-alpha {p.QAlphaMax:F0}; floor {p.FinalMassFloor / 1000.0:F2} t");

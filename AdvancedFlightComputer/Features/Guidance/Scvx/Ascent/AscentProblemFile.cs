@@ -18,6 +18,7 @@ public static class AscentProblemFile
         public double DragArea { get; set; }
         public double[]? PressureGrid { get; set; }
         public double[]? ThrustAtPressure { get; set; }
+        public double? ThrottleMin { get; set; }
     }
 
     private sealed class ProblemDto
@@ -62,6 +63,7 @@ public static class AscentProblemFile
                 DragArea = s.DragArea,
                 PressureGrid = s.PressureGrid,
                 ThrustAtPressure = s.ThrustAtPressure,
+                ThrottleMin = double.IsNaN(s.ThrottleMin) ? null : s.ThrottleMin,
             }).ToArray(),
             GroundRadius = p.GroundRadius,
             TargetRadius = p.TargetRadius,
@@ -110,7 +112,8 @@ public static class AscentProblemFile
             V0 = dto.V0,
             M0 = dto.M0,
             Stages = dto.Stages.Select(s => new AscentStage(s.Thrust, s.MassFlow, s.PropellantMass, s.JettisonMass,
-                                                            s.DragArea, s.PressureGrid, s.ThrustAtPressure)).ToArray(),
+                                                            s.DragArea, s.PressureGrid, s.ThrustAtPressure,
+                                                            s.ThrottleMin ?? double.NaN)).ToArray(),
             Atmosphere = air,
             GroundRadius = dto.GroundRadius,
             TargetRadius = dto.TargetRadius,
