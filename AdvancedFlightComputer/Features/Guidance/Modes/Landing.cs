@@ -9,13 +9,13 @@ using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// The Landing tab and its state machine (UPFG modes 2/3 + the G-FOLD handoff).
-// Flow: EXECUTE runs Mode 2 synchronously to convergence to measure how far downrange the braking burn reaches, finds when the along-track distance to the site shrinks to (factor * that distance), asks to warp there, converges Mode 3 during a prep window, then burns with UPFG's throttle command driving the cutoff to zero speed over the site.
-// Burn = UPFG braking to the high gate; GfoldDescent = convex (G-FOLD) powered descent from the gate to the surface (see Guidance/GfoldDescent.cs).
 public static partial class GuidanceWindow
 {
     // Public because VehicleAutopilotState holds a vehicle's phase: every craft runs this machine on its own, so the phase is a field on the flight computer rather than one global "the landing".
-    public enum LandingPhase { Idle, Coast, Prep, Burn, GfoldDescent, TerminalHover, Done }
+    // Every landing starts in DeorbitPlanning. A transfer continues through the stock node phases to TransferCoast, a direct approach continues at Coast, and both brake from Prep.
+    public enum LandingPhase { Idle,
+        DeorbitPlanning, DeorbitCoast, DeorbitNodePending, DeorbitBurn, TransferPlanning, TransferCoast,
+        Coast, Prep, Burn, GfoldDescent, TerminalHover, Done }
 
     // The site, the approach shaping (downrange factor, gate altitude/uprange, sink rate) and the whole pass scan live on the vehicle - see VehicleAutopilotState.
     private const double PrepLeadTime = 30.0;      // converge + point before ignition
@@ -79,12 +79,21 @@ public static partial class GuidanceWindow
     {
         if (ImGui.CollapsingHeader("Landing site"))
         {
+            ImGui.BeginDisabled(DeorbitTargetLocked);
             ImGui.InputDouble("Latitude (deg)", ref _s.SiteLatDeg);
             ImGui.InputDouble("Longitude (deg)", ref _s.SiteLonDeg);
+            ImGui.EndDisabled();
         }
 
         if (ImGui.CollapsingHeader("Approach parameters", ImGuiTreeNodeFlags.DefaultOpen))
         {
+            ImGui.BeginDisabled(DeorbitTargetLocked);
+            ImGui.InputDouble("Braking altitude above site (km)", ref _s.BrakingAltitudeKm);
+            ImGui.Checkbox("Set deorbit arrival angle", ref _s.DeorbitArrivalAngleEnabled);
+            ImGui.BeginDisabled(!_s.DeorbitArrivalAngleEnabled);
+            ImGui.InputDouble("Arrival angle down (deg)", ref _s.DeorbitArrivalDescentDeg);
+            ImGui.EndDisabled();
+            ImGui.TextWrapped($"Positive angles point down. The arrival tolerance is +/-{DeorbitPlanner.ArrivalAngleToleranceDeg:F0} deg at the braking point.");
             ImGui.InputDouble("Downrange factor", ref _s.DownrangeFactor);
             ImGui.InputDouble("Aim altitude (km)", ref _s.AimAltKm);
             ImGui.InputDouble("Descent rate (m/s)", ref _s.DescentRate);
@@ -92,6 +101,7 @@ public static partial class GuidanceWindow
             // Where the braking burn ends and G-FOLD takes over.
             // It shapes this phase, so it belongs here rather than with the G-FOLD tuning.
             ImGui.InputDouble("Hand off to G-FOLD at T-gate (s)", ref _s.GfoldHandoffTgo);
+            ImGui.EndDisabled();
         }
 
         double3 r = orbit.StateVectors.PositionCci;
@@ -99,6 +109,9 @@ public static partial class GuidanceWindow
         double distNowKm = AngleBetween(r, siteDir) * bodyRadius / 1000.0;
         ImGui.Text($"Ground distance to site now: {distNowKm,8:F1} km");
         ImGui.Text($"Site terrain height: {SiteTerrainHeight(parent),7:F0} m (gate referenced to it)");
+        foreach (var row in DeorbitReadout()) ImGui.TextWrapped($"{row.label}: {row.value}");
+        DrawStockDeorbitActions();
+        if (DeorbitTargetLocked) ImGui.TextWrapped("Abort and plan again to change the transfer target.");
 
         // --- Upcoming passes: how close the ground track comes to the site --- Time-sliced: start a scan while idle at normal speed, advance it a fixed sample budget per frame - never a whole-scan hitch in one frame.
         ImGui.SeparatorText("Upcoming passes");
@@ -115,7 +128,7 @@ public static partial class GuidanceWindow
             _retargetArmed = !_retargetArmed;
 
         if (ImGui.Button("EXECUTE LANDING"))
-            ExecuteLanding(vehicle, orbit, parent, mu, bodyRadius);
+            ExecuteLanding(vehicle);
         ImGui.SameLine();
         if (ImGui.Button("Abort landing"))
             AbortLanding();
@@ -181,6 +194,9 @@ public static partial class GuidanceWindow
     private static void AbortLanding()
     {
         ResetLandingEngineWait();
+        _s.DeorbitPlanner?.Dispose();
+        _s.DeorbitPlanner = null;
+        if (!_s.ControlAcquired && !_s.DeorbitNodeClaimed) ClearDeorbitPlanState();
         bool airborne = _s.LandingPhase == LandingPhase.GfoldDescent
             || _s.LandingPhase == LandingPhase.TerminalHover;
         _s.LandingPhase = LandingPhase.Done;
@@ -206,6 +222,12 @@ public static partial class GuidanceWindow
             double tIgn = _s.BurnStartTime - SimNow();
             string phaseText = _s.LandingPhase switch
             {
+                LandingPhase.DeorbitPlanning => "Planning the deorbit transfer",
+                LandingPhase.DeorbitCoast => "Waiting to create the stock deorbit node",
+                LandingPhase.DeorbitNodePending => "Checking stock ignition timing",
+                LandingPhase.DeorbitBurn => $"STOCK AUTO - remaining correction {_s.DeorbitLastResidual:F2} m/s",
+                LandingPhase.TransferPlanning => "Calculating braking from the actual orbit",
+                LandingPhase.TransferCoast => $"Transfer coast - braking ignition T-{tIgn:F1} s",
                 LandingPhase.Coast => $"Coasting to burn point - ignition T-{tIgn,6:F0} s",
                 LandingPhase.Prep => $"Converging guidance - ignition T-{tIgn,5:F1} s",
                 LandingPhase.Burn => $"BURNING - cmd {_s.Upfg.Throttle * 100,4:F0} % / engine {vehicle.GetManualThrottle() * 100,4:F0} %, tgo {_s.Upfg.Tgo,6:F1} s",
@@ -219,128 +241,44 @@ public static partial class GuidanceWindow
         }
     }
 
-    // EXECUTE: measure the braking burn with a synchronous Mode-2 convergence, find the moment our along-track distance to the site equals factor * that length, and ask to warp there.
-    // The actual Mode-3 burn starts via StepLanding.
-    private static void ExecuteLanding(Vehicle vehicle, Orbit orbit, IParentBody parent,
-                                       double mu, double bodyRadius)
-    {
-        ResetLandingEngineWait();
-        _s.LandingStatus = "";
-        UpfgVehicle model = BuildUpfgVehicle(vehicle);
-        if (model == null)
-        {
-            _s.LandingStatus = "No usable engine model on the vehicle.";
-            return;
-        }
-        if (_s.GLimitEnabled && _s.GLimitG > 0.1)
-            ApplyGLimit(model, _s.GLimitG);
+    // These phases wait without control, and a release keeps them queued.
+    private static bool LandingWaits(LandingPhase phase) =>
+        phase is LandingPhase.Coast or LandingPhase.DeorbitPlanning or LandingPhase.DeorbitCoast;
 
-        double3 r = orbit.StateVectors.PositionCci;
-        double3 v = orbit.StateVectors.VelocityCci;
+    // Stock Auto flies the deorbit node in these phases while guidance holds only the claim.
+    private static bool IsStockDeorbitPhase(LandingPhase phase) =>
+        phase is LandingPhase.DeorbitCoast or LandingPhase.DeorbitNodePending or LandingPhase.DeorbitBurn;
 
-        // First pass: predict the braking-burn downrange from the current state and solve the ignition time from it.
-        double downrange = PredictBurnDownrange(r, v, vehicle.TotalMass, mu, model, parent, bodyRadius);
-        if (double.IsNaN(downrange) || downrange <= 0)
-        {
-            _s.LandingStatus = "Burn prediction failed to converge.";
-            return;
-        }
-        double startDistance = downrange * _s.DownrangeFactor;
-        double wait = FindBurnStartTime(orbit, parent, mu, bodyRadius, startDistance, out double closest);
-        if (double.IsNaN(wait))
-        {
-            _s.LandingStatus = NoPassReason(downrange, startDistance, closest, bodyRadius);
-            GuidanceLog.Info(vehicle, _s.LandingStatus);
-            return;
-        }
+    private static bool LandingSwitchesOff => !_s.Engage || !_s.AutoStage;
 
-        // Second pass: on an elliptical orbit the speed/altitude at the ignition point differ from here, so re-predict at the propagated ignition state and re-solve the window with the corrected distance.
-        (double3 rIgn, double3 vIgn, _) = CseRoutine.Run(r, v, Math.Max(wait, 1e-3), mu, CseState.Zero);
-        double refined = PredictBurnDownrange(rIgn, vIgn, vehicle.TotalMass, mu, model, parent, bodyRadius);
-        if (!double.IsNaN(refined) && refined > 0)
-        {
-            double refinedWait = FindBurnStartTime(orbit, parent, mu, bodyRadius, refined * _s.DownrangeFactor, out _);
-            if (!double.IsNaN(refinedWait))
-            {
-                downrange = refined;
-                wait = refinedWait;
-            }
-        }
-        _s.BurnDownrangeKm = downrange / 1000.0;
+    private const string LandingSwitchesChangedStatus = "Automatic landing stopped because its control switches changed.";
 
-        _s.BurnStartTime = SimNow() + wait;
-        GuidanceLog.Info(vehicle, $"deorbit burn planned: braking downrange {downrange / 1000.0:F1} km, ignition in {wait:F0} s"
-            + $" at alt {(r.Length() - bodyRadius) / 1000.0:F1} km and {v.Length():F0} m/s, gate {_s.AimAltKm * 1000.0:F0} m above the site"
-            + $" at lat {_s.SiteLatDeg:F3} lon {_s.SiteLonDeg:F3}, {_s.DescentRate:F0} m/s sink at the gate.");
-        _s.LastGuidanceLogTime = double.NegativeInfinity;
-        ClaimVehicle(GuidanceMode.Landing, vehicle);   // landing owns the vehicle now
-        // Not part of the claim: AutoLaunch is a SETTING (offer to warp to the window) rather than a live mode, and clearing it here stops the ascent panel offering a launch warp to a craft that is now committed to coming down.
-        _s.AutoLaunch = false;
-        _s.CutoffDone = false;
-        _s.StagingActive = false;
-        _s.HasCommand = false;
-        _s.LandingPhase = LandingPhase.Coast;
-        // A fresh EXECUTE re-arms the prompt even if an earlier one was declined.
-        _warpDeclinedLabel = "";
-        if (wait > PrepLeadTime + WarpLeadTime)
-            RequestWarp(_s.BurnStartTime - PrepLeadTime - WarpLeadTime, "the deorbit burn point");
-    }
-
-    // How far downrange the braking burn ends if lit at the given state, iterated synchronously to convergence (UPFG is pure math, so unlike the original - which flew its Mode 2 live while already braking - we can converge before ignition in one frame).
-    // This is Mode 1 with the same high-gate end state the real burn will fly (aim altitude, sink rate as a straight-down velocity via fpa = -90 deg), cutoff position free.
-    // NaN if it fails to converge.
-    private static double PredictBurnDownrange(double3 r, double3 v, double mass, double mu,
-                                               UpfgVehicle model, IParentBody parent, double bodyRadius)
-    {
-        double gateRadius = bodyRadius + SiteTerrainHeight(parent) + _s.AimAltKm * 1000.0;
-        var predict = new UpfgTarget
-        {
-            Radius = gateRadius,
-            Velocity = _s.DescentRate,
-            Fpa = -Math.PI / 2.0,
-            Normal = double3.Normalize(double3.Cross(r, v)),
-            Rdes = SiteDirCciAt(parent, 0) * gateRadius,
-        };
-        // A SCRATCH SOLVER, not the vehicle's.
-        // This is a what-if run off the flight path - 400 iterations against a state that may be an hour in the future - and the vehicle's own UPFG may be mid-burn on something else.
-        // It used to borrow the shared instance and bracket the loop with Reset() to put it back, which is exactly the kind of state laundering that stops working the moment two craft are flying at once.
-        var scratch = new UpfgGuidance();
-        bool converged = false;
-        for (int i = 0; i < 400; i++)
-        {
-            scratch.Step(r, v, mass, mu, predict, model, 1);
-            if (scratch.Converged)
-            {
-                converged = true;
-                break;
-            }
-        }
-        return converged ? AngleBetween(r, scratch.Rd) * bodyRadius : double.NaN;
-    }
-
-    // The phases that fly the craft and so need the claim. Coast waits for its burn without the craft, the way an armed launch does, so stock's burn mode and the RCS executor stay free until Prep.
+    // These phases use AFC's manual engine and attitude control.
+    // The direct coast waits until Prep, and the stock node takes a separate claim without forcing Manual.
     private static bool LandingCommands(LandingPhase phase) =>
-        phase == LandingPhase.Prep
-        || phase == LandingPhase.Burn
-        || phase == LandingPhase.GfoldDescent
-        || phase == LandingPhase.TerminalHover;
+        phase is LandingPhase.TransferPlanning or LandingPhase.TransferCoast or LandingPhase.Prep
+            or LandingPhase.Burn or LandingPhase.GfoldDescent or LandingPhase.TerminalHover;
 
     // Runs from ApplyAutopilot ahead of the claim, so the step that turns the coast into Prep is the step that claims the craft.
     private static void StepLandingCoast()
     {
-        if (_s.LandingPhase != LandingPhase.Coast || SimNow() < _s.BurnStartTime - PrepLeadTime)
-            return;
+        if (_s.LandingPhase == LandingPhase.Coast && SimNow() >= _s.BurnStartTime - PrepLeadTime)
+            EnterBrakingPrep();
+    }
+
+    private static void EnterBrakingPrep()
+    {
         if (Universe.IsAutoWarpActive)
             Universe.AutoWarpStop(true);
         _s.Upfg.Reset();
         _s.LandingPhase = LandingPhase.Prep;
+        _s.LandingStatus = "Converging the braking guidance.";
     }
 
-    // The phases that are flying the vehicle down under power, and so are the ones a ground contact should terminate.
+    // The phases that a ground contact ends. Touchdown arming carries across a change between two of them.
     private static bool IsPoweredDescentPhase(LandingPhase phase) =>
-        phase == LandingPhase.Burn
-        || phase == LandingPhase.GfoldDescent
-        || phase == LandingPhase.TerminalHover;
+        phase is LandingPhase.DeorbitBurn or LandingPhase.TransferCoast or LandingPhase.Burn
+            or LandingPhase.GfoldDescent or LandingPhase.TerminalHover;
 
     // KSA's own contact switch.
     // The physics step raises a terrain-contact flag on the vehicle whenever ANY part of it makes a Bepu contact with the terrain or launch-pad collider (ConstraintSim.DetectTerrainContact), and ocean entry sets the matching ocean flag - so this fires on the legs, or on whatever else reaches the ground first, without us guessing at leg geometry.
@@ -363,12 +301,13 @@ public static partial class GuidanceWindow
         // Checked before any powered phase steps, so the engine is cut on the frame contact is reported instead of the controller fighting the ground.
         //
         // Armed only once the vehicle has actually been off the ground: a vehicle sitting on the pad already reports terrain contact (the launch-pad collider counts), so without this, taking over with terminal hover from the ground would cut the engine on its first step.
-        // Re-armed on every phase change, which is free in the air - the same frame clears it.
+        // Preserve arming across descent transitions because contact can arrive on the transition step.
         bool contact = HasTouchedDown(vehicle);
         if (_s.LandingPhase != _s.TouchdownPrevPhase)
         {
+            bool continuesDescent = IsPoweredDescentPhase(_s.TouchdownPrevPhase) && IsPoweredDescentPhase(_s.LandingPhase);
             _s.TouchdownPrevPhase = _s.LandingPhase;
-            _s.LandingTouchdownArmed = false;
+            if (!continuesDescent) _s.LandingTouchdownArmed = false;
         }
         if (!contact)
             _s.LandingTouchdownArmed = true;
@@ -381,6 +320,15 @@ public static partial class GuidanceWindow
             _s.LandingPhase = LandingPhase.Done;
             _s.LandingCutPending = true;
             _s.LandingStatus = $"TOUCHDOWN - contact detected, engine cut ({_s.GfoldSpeedMs:F1} m/s).";
+            return;
+        }
+
+        if (StepDeorbit(vehicle, orbit, parent, now)) return;
+
+        if (_s.DeorbitRequest != null && LandingSwitchesOff)
+        {
+            AbortLanding();
+            _s.LandingStatus = LandingSwitchesChangedStatus;
             return;
         }
 
@@ -400,6 +348,10 @@ public static partial class GuidanceWindow
         if (_s.LandingPhase == LandingPhase.Coast)
             return;
 
+        string engineRefusal = BrakingEngineRefusal(vehicle);
+        if (engineRefusal.Length > 0) { RefuseDeorbit(engineRefusal); return; }
+        if (!PrepareLandingEngines(vehicle, parent, now, requireAirless: false)) return;
+
         // Prep / Burn: run Mode-3 guidance on the live vehicle.
         // The landing target is re-derived every step: the site rotates with the body, and the plane is whatever we are actually flying in.
         try
@@ -415,7 +367,7 @@ public static partial class GuidanceWindow
                 double3 v = orbit.StateVectors.VelocityCci;
                 double3 planeNormal = double3.Normalize(double3.Cross(r, v));
                 // The gate: above the site (terrain-referenced, not the mean sphere) and uprange of it along the approach (rotating a position about +h moves it downrange, so uprange is the negative rotation).
-                double gateRadius = bodyRadius + SiteTerrainHeight(parent) + _s.AimAltKm * 1000.0;
+                double gateRadius = bodyRadius + SiteTerrainHeight(parent) + LandingBrakeGateAltitude;
                 double3 gateDir = RotateAbout(SiteDirCciAt(parent, 0), planeNormal,
                     -_s.GateUprangeKm * 1000.0 / bodyRadius);
                 var target = new UpfgTarget
@@ -444,7 +396,7 @@ public static partial class GuidanceWindow
                     double siteDistanceKm = AngleBetween(r, SiteDirCciAt(parent, 0)) * bodyRadius / 1000.0;
                     GuidanceLog.Debug(vehicle, $"UPFG {_s.LandingPhase}: tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s, converged {_s.Upfg.Converged}"
                         + $", throttle {_s.Upfg.Throttle:F2}, steer pitch {PitchOf(up, _s.Upfg.Steering):F1} deg, command pitch {PitchOf(up, _s.CommandDir):F1} deg"
-                        + $", alt {(r.Length() - gateRadius + _s.AimAltKm * 1000.0) / 1000.0:F1} km over the site, {siteDistanceKm:F1} km to it"
+                        + $", alt {(r.Length() - bodyRadius - SiteTerrainHeight(parent)) / 1000.0:F1} km over the site, {siteDistanceKm:F1} km to it"
                         + $", speed {v.Length():F0} m/s, sink {-double3.Dot(v, up):F0} m/s, mass {vehicle.TotalMass / 1000.0:F1} t, model {live.Stages.Count} stage(s).");
                 }
             }
@@ -466,14 +418,13 @@ public static partial class GuidanceWindow
         }
 
         if (_s.LandingPhase == LandingPhase.Prep && now >= _s.BurnStartTime)
+        {
+            if (!CheckBrakingIgnition(vehicle, orbit, now)) return;
             _s.LandingPhase = LandingPhase.Burn;
+        }
 
         if (_s.LandingPhase == LandingPhase.Burn)
         {
-            // Staging support during the descent burn (ignites the deorbit engine too if its sequence was never fired).
-            if (_s.Engage && _s.AutoStage)
-                AutoSequence(vehicle);
-
             // Hand straight to G-FOLD a set time before gate arrival, skipping the UPFG terminal freeze.
             // G-FOLD plans from the current state down.
             if (_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo)
@@ -552,91 +503,4 @@ public static partial class GuidanceWindow
         return _s.SiteTerrainHeightM;
     }
 
-    // ----- Upcoming-passes scan -----
-
-    private static double GroundDistanceAt(double3 r0, double3 v0, double t,
-                                           IParentBody parent, double mu, double bodyRadius)
-    {
-        // Keep the conic solver single-revolution (see StepPassScan): position is periodic, only the site rotation needs the full t.
-        double tProp = t;
-        double sma = 1.0 / (2.0 / r0.Length() - double3.Dot(v0, v0) / mu);
-        if (sma > 0)
-        {
-            double period = 2.0 * Math.PI * Math.Sqrt(sma * sma * sma / mu);
-            tProp = t % period;
-        }
-
-        double3 rr = r0;
-        if (tProp > 1e-3)
-            (rr, _, _) = CseRoutine.Run(r0, v0, tProp, mu, CseState.Zero);
-        double d = AngleBetween(rr, SiteDirCciAt(parent, t)) * bodyRadius;
-        return double.IsFinite(d) ? d : 1e12;
-    }
-
-    // Why the pass search found no burn point, with the distances, so the player can move the site or the orbit instead of guessing.
-    private static string NoPassReason(double downrangeMeters, double startDistanceMeters, double closestMeters, double bodyRadius)
-    {
-        if (startDistanceMeters >= Math.PI * bodyRadius)
-            return $"The braking burn from this orbit reaches {downrangeMeters / 1000.0:F0} km downrange, more than half way round the body, so no burn point exists. Lower the orbit first.";
-        return $"No pass within 5 orbits comes within {startDistanceMeters / 1000.0:F0} km of the site, the burn start distance; the closest is {closestMeters / 1000.0:F0} km. Move the site under the ground track or lower the orbit.";
-    }
-
-    // First future moment the along-track distance to the site shrinks through the given threshold (approaching), within the next 5 orbits; NaN if never, with the closest approach seen in closestMeters.
-    private static double FindBurnStartTime(Orbit orbit, IParentBody parent, double mu,
-                                            double bodyRadius, double thresholdMeters, out double closestMeters)
-    {
-        closestMeters = double.PositiveInfinity;
-        double sma = (orbit.Periapsis + orbit.Apoapsis) / 2.0;
-        if (sma <= 0 || double.IsNaN(sma))
-            return double.NaN;
-        double period = 2.0 * Math.PI * Math.Sqrt(sma * sma * sma / mu);
-
-        double3 r0 = orbit.StateVectors.PositionCci;
-        double3 v0 = orbit.StateVectors.VelocityCci;
-
-        double step = period / 720.0;
-        double prev = double.NaN;
-        CseState cs = CseState.Zero; // warm-started across the sequential samples
-        for (double t = 0; t <= 5.0 * period; t += step)
-        {
-            // Single-revolution propagation (see StepPassScan); reset the warm start at each period wrap.
-            double tProp = t % period;
-            if (t > 0 && tProp < step)
-                cs = CseState.Zero;
-
-            double d;
-            if (tProp < 1e-3)
-            {
-                d = AngleBetween(r0, SiteDirCciAt(parent, t)) * bodyRadius;
-            }
-            else
-            {
-                double3 rr;
-                (rr, _, cs) = CseRoutine.Run(r0, v0, tProp, mu, cs);
-                d = AngleBetween(rr, SiteDirCciAt(parent, t)) * bodyRadius;
-            }
-            if (!double.IsFinite(d))
-            {
-                d = 1e12;
-                cs = CseState.Zero;
-            }
-            else if (d < closestMeters)
-                closestMeters = d;
-            if (!double.IsNaN(prev) && prev > thresholdMeters && d <= thresholdMeters)
-            {
-                double lo = t - step, hi = t;
-                for (int i = 0; i < 30; i++)
-                {
-                    double mid = 0.5 * (lo + hi);
-                    if (GroundDistanceAt(r0, v0, mid, parent, mu, bodyRadius) > thresholdMeters)
-                        lo = mid;
-                    else
-                        hi = mid;
-                }
-                return hi;
-            }
-            prev = d;
-        }
-        return double.NaN;
-    }
 }

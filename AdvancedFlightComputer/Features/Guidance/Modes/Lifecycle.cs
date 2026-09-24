@@ -54,6 +54,9 @@ public static partial class GuidanceWindow
 
     private static void DiscardResources()
     {
+        StopOwnedDeorbitWarp();
+        ClearStockDeorbitState();
+        ClearDeorbitPlanState();
         try
         {
             _s.Worker?.Dispose();

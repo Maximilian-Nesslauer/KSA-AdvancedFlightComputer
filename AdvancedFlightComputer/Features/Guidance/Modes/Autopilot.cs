@@ -839,6 +839,7 @@ public static partial class GuidanceWindow
     {
         GuidanceLog.Debug(vehicle, $"{mode} claims the craft.");
         ResetLandingEngineWait();
+        ClearDeorbitPlanState();
         _s.ReleaseWithoutEngineCut = false;
         _s.ShutdownRequested = false;
         _s.TakeoverStop = false;
@@ -920,6 +921,12 @@ public static partial class GuidanceWindow
             return;
         }
 
+        if (_s.DeorbitNodeClaimed && _s.LandingPhase is not (LandingPhase.DeorbitNodePending or LandingPhase.DeorbitBurn))
+        {
+            ReleaseStockDeorbit(vehicle);
+            if (_s.LandingPhase == LandingPhase.Done) ClearDeorbitPlanState();
+        }
+
         bool sixDof = _s.Active || _s.EngagePending;
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire EXECUTE. A booster adopted at separation also counts as flying until boostback engages.
@@ -998,7 +1005,10 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // The coast to a deorbit burn waits without the craft, like an armed launch, and turns into Prep here, ahead of the claim below, so the step that starts Prep is the step that claims, and Prep never commands an unowned craft.
+        // Planning waits without control, and the stock node takes its claim before Auto is armed.
+        // A direct braking coast enters Prep before the manual control claim below.
+        StepDeorbitPlanning(vehicle, orbit, parent);
+        if (StepStockDeorbit(vehicle, orbit, parent)) return;
         StepLandingCoast();
 
         sixDof = _s.Active || _s.EngagePending;
@@ -1226,7 +1236,7 @@ public static partial class GuidanceWindow
         // Clear the wait even when no guidance resources need release.
         ResetLandingEngineWait();
         DisarmStaging(vehicle);
-        if (!_s.ControlAcquired && !_s.FcResetPending && _s.Worker == null
+        if (!_s.ControlAcquired && !_s.DeorbitNodeClaimed && !_s.FcResetPending && _s.Worker == null
             && !_s.Active && !_s.EngagePending && !_s.Converging && !_s.Running
             && !_s.LaunchArmed && !_s.LandingCutPending
             && !_s.HasCommand && _s.GimbalMode == 0 && _s.Guidance == null
@@ -1241,9 +1251,13 @@ public static partial class GuidanceWindow
             return true;
         }
 
-        bool coastWaits = keepWaitingCoast && _s.LandingPhase == LandingPhase.Coast;
+        bool coastWaits = keepWaitingCoast && LandingWaits(_s.LandingPhase);
         _s.Running = false;
-        _s.LandingPhase = coastWaits ? LandingPhase.Coast : LandingPhase.Idle;
+        if (!coastWaits)
+        {
+            _s.LandingPhase = LandingPhase.Idle;
+            ClearDeorbitPlanState();
+        }
         _s.BoostbackPhase = BoostbackPhase.Idle;
         _s.LaunchArmed = false;
         _s.HasCommand = false;
@@ -1265,6 +1279,7 @@ public static partial class GuidanceWindow
             }
         }
 
+        Attempt(() => ReleaseStockDeorbit(vehicle, keepClaim: true, preserve: _s.ReleaseWithoutEngineCut));
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
 

@@ -151,6 +151,12 @@ public static partial class GuidanceWindow
             return;
         }
 
+        if (DeorbitTargetLocked)
+        {
+            _s.LandingStatus = "Abort and plan again to change the transfer target.";
+            return;
+        }
+
         _s.SiteLatDeg = latDeg;
         _s.SiteLonDeg = lonDeg;
         _s.LandingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";

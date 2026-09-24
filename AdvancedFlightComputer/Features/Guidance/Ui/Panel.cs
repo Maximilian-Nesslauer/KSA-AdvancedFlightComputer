@@ -198,7 +198,7 @@ public static partial class GuidanceWindow
             else if (_panelTab == GuidanceTab.Ascent)
                 ExecuteAscent(vehicle, orbit, parent);
             else if (_panelTab == GuidanceTab.Descent)
-                ExecuteLanding(vehicle, orbit, parent, parent.Mu, bodyRadius);
+                ExecuteLanding(vehicle);
             else if (_landingSubTab == LandingSubTab.Hover)
                 StartTerminalHover(vehicle);
             else if (_s.UseSixDofLanding)
@@ -286,11 +286,14 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void DrawSolverRadios()
     {
+        // The solver choice changes the braking gate. Keep it fixed while a committed deorbit is in flight.
+        ImGui.BeginDisabled(DeorbitTargetLocked);
         if (ImGui.RadioButton("G-FOLD", !_s.UseSixDofLanding))
             _s.UseSixDofLanding = false;
         ImGui.SameLine();
         if (ImGui.RadioButton("6-DOF", _s.UseSixDofLanding))
             _s.UseSixDofLanding = true;
+        ImGui.EndDisabled();
     }
 
     private static void DrawPoweredLandingContent(Vehicle vehicle, float innerW)

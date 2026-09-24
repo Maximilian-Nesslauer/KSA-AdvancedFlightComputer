@@ -68,7 +68,11 @@ public sealed class GuidanceLandingAbortTest : AfcTest
 
             AnAbortInTheAirLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TerminalHover);
             AnAbortInTheAirLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.GfoldDescent);
-            AnAbortOfTheBurnCutsTheEngine(t, vehicle);
+            AnAbortOfTheBurnCutsTheEngine(t, vehicle, GuidanceWindow.LandingPhase.Burn);
+            AnAbortOfTheBurnCutsTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TransferPlanning);
+            AnAbortOfTheBurnCutsTheEngine(t, vehicle, GuidanceWindow.LandingPhase.TransferCoast);
+            AnUnownedAbortLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.DeorbitPlanning);
+            AnUnownedAbortLeavesTheEngine(t, vehicle, GuidanceWindow.LandingPhase.DeorbitCoast);
             TheHoverRefusesAnEngineThatOutThrustsTheWeight(t, vehicle);
             TheDescentFliesOnWhenTheHoverRefuses(t, vehicle);
         }
@@ -104,9 +108,9 @@ public sealed class GuidanceLandingAbortTest : AfcTest
         VehicleAutopilotState.Remove(vehicle);
     }
 
-    private static void AnAbortOfTheBurnCutsTheEngine(TestContext t, Vehicle vehicle)
+    private static void AnAbortOfTheBurnCutsTheEngine(TestContext t, Vehicle vehicle, GuidanceWindow.LandingPhase phase)
     {
-        VehicleAutopilotState state = Landing(vehicle, GuidanceWindow.LandingPhase.Burn);
+        VehicleAutopilotState state = Landing(vehicle, phase);
         Ambient() = state;
         Method("AbortLanding").Invoke(null, Array.Empty<object>());
         t.Check("a burn abort records its cut", state.LandingCutPending && !state.ReleaseWithoutEngineCut);
@@ -115,6 +119,21 @@ public sealed class GuidanceLandingAbortTest : AfcTest
         t.Check("a burn abort gives the craft back", !state.ControlAcquired);
         t.Check("a burn abort shuts the engine down", !Inputs(vehicle).EngineOn);
         t.Check("a burn abort leaves no cut pending", !state.LandingCutPending);
+        VehicleAutopilotState.Remove(vehicle);
+    }
+
+    private static void AnUnownedAbortLeavesTheEngine(TestContext t, Vehicle vehicle, GuidanceWindow.LandingPhase phase)
+    {
+        TestSupport.SetManualControlInputs(vehicle, 0.63f, engineOn: true);
+        VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
+        state.Engage = true;
+        state.AutoStage = true;
+        state.LandingPhase = phase;
+        Ambient() = state;
+        Method("AbortLanding").Invoke(null, Array.Empty<object>());
+        GuidanceWindow.ApplyAutopilot(vehicle);
+        t.Check($"{phase}: abort leaves an unowned engine command", Inputs(vehicle).EngineOn && Inputs(vehicle).EngineThrottle == 0.63f);
+        t.Check($"{phase}: abort takes no control", !state.ControlAcquired && VehicleControlOwnership.HolderOf(vehicle) != ControlClaimant.Guidance);
         VehicleAutopilotState.Remove(vehicle);
     }
 

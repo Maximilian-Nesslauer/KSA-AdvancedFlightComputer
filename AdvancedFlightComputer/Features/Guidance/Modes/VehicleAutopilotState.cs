@@ -424,6 +424,30 @@ public sealed class VehicleAutopilotState
     // Landing state.
     public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;
 
+    public double BrakingAltitudeKm = 11;
+    public bool DeorbitArrivalAngleEnabled;
+    public double DeorbitArrivalDescentDeg = 5;
+    internal DeorbitRequest DeorbitRequest;
+    internal DeorbitPlanner DeorbitPlanner;
+    internal DeorbitPlan DeorbitPlan;
+    internal DirectBrakingPlan DirectBrakingPlan;
+    internal int DeorbitEngineSignature;
+    internal double DeorbitLastResidual = double.PositiveInfinity;
+    internal long DeorbitNextValidationTick;
+    internal Burn DeorbitNode;
+    internal BurnTarget DeorbitTarget;
+    internal double3 DeorbitNodeDeltaV;
+    internal double3 DeorbitNodeDeltaVCci;
+    internal double DeorbitNodeTime = double.NaN;
+    internal bool DeorbitNodeClaimed;
+    internal bool DeorbitAutoArmed;
+    internal bool DeorbitWarpRequested;
+    internal double DeorbitWarpTime = double.NaN;
+    internal float DeorbitSavedThrottle;
+    internal float DeorbitPreviewThrottle;
+    internal bool DeorbitThrottleHeld;
+    internal string DirectBrakingRefusal = "";
+
     /// <summary>
     /// This vehicle's landing site. Defaults to the Apollo 11 landmark as KSA itself
     /// defines it (Content/Core/Astronomicals.xml, Landmark Id="Apollo11" on the Moon).
