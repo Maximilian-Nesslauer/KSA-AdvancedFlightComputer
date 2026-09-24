@@ -58,6 +58,18 @@ Leave the deployed test mod disabled for normal play. It only does work inside a
 
 The oracle is always the game's own orbit propagation, never a re-derivation of the math under test.
 
+### Deorbit and landing approach
+
+These cases use the original Low Luna Orbit and High Luna Orbit saves and skip when a required save is absent.
+The geometry cases check the plan against stock orbit propagation and terrain clearance.
+
+- `afc-guidance-deorbit-refusal`, `afc-guidance-deorbit-plan`, `afc-guidance-high-deorbit-plan`, `afc-guidance-arrival-angle-plan`, and `afc-guidance-flight-log-deorbit-plan` cover direct and Lambert search in both transfer directions.
+- `afc-guidance-stock-deorbit` flies a stock Auto node; `afc-guidance-deorbit-lifecycle` covers its claim, warp, sequence edits, cancellation, completion and cleanup.
+- `afc-guidance-vertical-approach` and `afc-guidance-terminal-burn` cover the elevated G-FOLD gate and final burn decisions.
+
+The landing abort, handoff, staging and player takeover cases also cover the new phases.
+The game-free G-FOLD executable accepts `--terminal-braking` for vertical control checks; it does not validate a full landing flight.
+
 ### Maneuver quick-tools
 
 - `afc-set-periapsis` and `afc-set-apoapsis` assert that a computed apse burn reaches the requested altitude and leaves the opposite apse unchanged, and that impossible requests yield no maneuver.

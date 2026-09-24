@@ -14,9 +14,35 @@ The panel is drawn from the loader's after-GUI hook through `GuidanceFeature.Dra
 
 ## Ownership
 
-Every guidance mode takes the per-vehicle claim in `Core/VehicleControlOwnership.cs` where it commits to flying a craft, and gives it back only after its cleanup succeeded. Neither an armed launch nor the coast to a deorbit burn takes the claim on its own, so a waiting craft keeps its burn mode and its RCS executor free, and the step that starts commanding is the step that claims. A launch armed over a craft another mode already owned keeps that claim through the wait. A handover from one mode to the next keeps the claim too: the deorbit burn hands over to 6-DOF by queuing an engage for the next step, and the release at the end of the burn's step keeps the craft, with its engine lit, for that engage. A second claimant is refused by name, never overwritten. While guidance holds a craft, stock's burn mode is held in Manual, and an Auto that appears is an engine takeover by the player that stops guidance without an engine cut.
+Guidance claims a craft when it starts control and releases it after cleanup succeeds.
+An armed launch and a coast to direct braking wait without a new claim; handovers between guidance modes keep the claim.
+The braking burn keeps the engine command through a queued 6-DOF engage.
+While AFC controls the engines, a new stock Auto selection is a player takeover that stops guidance without cutting the engine.
+During the stock deorbit node, guidance holds a claim while stock Auto controls the burn.
 
 A player change to the attitude target that guidance wrote is a takeover as well, detected by comparing the values guidance last wrote against what the flight computer holds. The release restores only the fields guidance replaced.
+
+## Landing approach
+
+The planner first checks for direct braking.
+If the direct approach is refused, it searches a Lambert transfer to a point uprange of the rotating site, 11 km above the site by default.
+The search spans the next orbit, checks at most eight candidates, and limits cumulative planner work to 500 ms.
+It checks braking, timing, atmosphere and terrain clearance with a 1 km terrain margin.
+Automatic transfer arrivals are between 10 degrees down and 0.5 degrees up from the local horizon.
+The optional Set deorbit arrival angle requests 0 to 30 degrees down with a one-degree tolerance; it sets the path angle, not the craft attitude.
+
+Planning waits for 1x time warp, an idle engine and a settled source orbit.
+For a transfer, AFC claims the craft, creates a stock maneuver node and checks stock's minimum-throttle timing preview before it arms Auto.
+Stock flies the node; the optional Auto burn and warp stops before stock alignment starts.
+If the player changes the node or takes control, AFC stops the landing and preserves the player's target.
+After stock completes the burn, AFC plans braking again from the measured orbit and mass, then flies the braking burn.
+The site, approach settings and solver choice stay fixed after the node is committed.
+
+For a G-FOLD landing, Vertical approach height sets the elevated braking gate at 500 m by default, with a 100 m minimum.
+G-FOLD removes horizontal speed before the gate and descends through it.
+If minimum thrust exceeds weight, the engine cuts for an upright coast and a timed final burn.
+The terminal burn uses current speed, height, gravity, thrust and minimum pulse, with at most 15 degrees of commanded tilt.
+The descent modes keep the guidance claim until contact, abort or takeover.
 
 ## Staging
 
