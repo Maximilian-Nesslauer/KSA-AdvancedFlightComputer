@@ -418,7 +418,7 @@ public sealed class SequenceBurnStateTest : AfcTest
             long massBucket = (long)(vehicle.TotalMass / 100.0);
 
             motor.ManualAreaRatio = replacement;
-            vehicle.Parts.RecomputeAllDerivedData();
+            RebuildDerivedData(vehicle);
 
             SequenceBurnState cached = MultiPassPreviewCache.GetSequenceState(vehicle);
             SequenceBurnState fresh = SequenceBurnState.Analyze(vehicle);
@@ -431,9 +431,16 @@ public sealed class SequenceBurnStateTest : AfcTest
         finally
         {
             motor.ManualAreaRatio = original;
-            vehicle.Parts.RecomputeAllDerivedData();
+            RebuildDerivedData(vehicle);
             MultiPassPreviewCache.Reset();
         }
+    }
+
+    // RecomputeAllDerivedData only marks the tree dirty, so rebuild it now instead of waiting for the frame flush.
+    private static void RebuildDerivedData(Vehicle vehicle)
+    {
+        vehicle.Parts.RecomputeAllDerivedData();
+        vehicle.Parts.EnsureDerived(DerivedData.All);
     }
 
     private static void ActiveEngineSubQuantumDrainCacheCase(TestContext t, Vehicle vehicle)

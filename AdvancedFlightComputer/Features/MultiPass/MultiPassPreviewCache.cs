@@ -43,6 +43,8 @@ internal static class MultiPassPreviewCache
     private static int ComputePerformanceInputSignature(Vehicle source)
     {
         if (source.Parts == null) return 0;
+        // Ensure what SequencePerformanceList.Recompute ensures, so the key never reads a stale solid motor stack or sequence list.
+        source.Parts.EnsureDerived(DerivedData.SolidMotorStacks | DerivedData.Sequences);
         var hc = new HashCode();
         hc.Add(source.Parts);
         hc.Add(source.Parts.SequenceList.ActiveSequence);

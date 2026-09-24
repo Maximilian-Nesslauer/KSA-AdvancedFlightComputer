@@ -102,7 +102,7 @@ internal static class KsaEnginePerf
                     if (!coreStates.States[cores[i].StatesIdx].IsPropellantAvailable)
                         continue;
                     RocketControllerData coreData = RocketControllerData.ComputeFromCores(
-                        cores.AsSpan(i, 1), vehicle.TotalMassPropsAsmb.Offset, pressure, command);
+                        cores.AsSpan(i, 1), pressure, command);
                     data.ThrustMax += coreData.ThrustMax;
                     data.MassFlowRateMax += coreData.MassFlowRateMax;
                 }
