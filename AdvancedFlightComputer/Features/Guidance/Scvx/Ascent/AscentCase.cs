@@ -120,7 +120,7 @@ internal sealed class AscentCase
             PropC[i] = stg.PropellantMass / mu;
             DryC[i] = i < S - 1 ? stg.JettisonMass / mu : 0.0;
             double full = stg.FullBurnTime;
-            ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
+ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
             // The script's 20-700 s, widened only for a stage that could not otherwise burn its load: a long upper-stage burn, or one shorter than the floor.
             SigMin[i] = Math.Min(st.SigmaMinSeconds, 0.5 * full) / tu;
             SigMax[i] = Math.Max(st.SigmaMaxSeconds, 1.1 * full / ThrottleMin[i]) / tu;
