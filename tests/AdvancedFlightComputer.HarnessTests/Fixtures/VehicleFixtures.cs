@@ -47,6 +47,9 @@ public static class VehicleFixtures
         {
             vehicle = Vehicle.CreateVehicle(
                 system, doubleQuat.Identity, double3.Zero, parent, id, tree.Root, orbit);
+            // Derived data is built lazily, so build it now as the next frame flush would. SetActiveSequence
+            // needs the sequence list, and a test may refill or read solid motor stacks before any step.
+            vehicle.Parts.EnsureDerived(DerivedData.All);
             vehicle.Parts.SequenceList.SetActiveSequence(data.ActiveSequence);
             vehicle.Parts.SequenceList.ApplyEnvironments(data.SequenceEnvironments);
             vehicle.Parts.FuelLinks.ApplySaveData(data.FuelLinks, design);

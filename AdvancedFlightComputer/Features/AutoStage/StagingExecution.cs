@@ -81,8 +81,8 @@ internal static class StagingExecution
         seqList.RemoveSpentSequences();
         StagingHelpers.InvalidateSequenceCache();
 
-        // Nothing is drained or refreshed here.
-        // Activation only appends to IActivateInputBuffer; stock drains it in Program.PrepareFrame and refreshes from Vehicle.Split at the frame sync point.
+        // Nothing is drained or rebuilt here.
+        // Activation only appends to IActivateInputBuffer. Program.PrepareFrame drains it, and PartTree.FlushDirtyDerived rebuilds the changed trees before the solvers run.
         // Doing either from the solver apply would mutate a list PhysicsBubble is iterating.
 
         if (DebugConfig.AutoStage)

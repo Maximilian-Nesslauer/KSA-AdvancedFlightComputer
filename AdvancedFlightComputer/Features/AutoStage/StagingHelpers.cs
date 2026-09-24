@@ -22,6 +22,8 @@ internal static class StagingHelpers
 
     public static bool HasActiveEngineWithPropellant(Vehicle vehicle)
     {
+        // The staging hooks run in Universe.ApplyVehicleSolvers, before Program.PrepareFrame flushes dirty part trees, and IsFueled reads SolidMotor.Stack.
+        vehicle.Parts.EnsureDerived(DerivedData.SolidMotorStacks);
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
         ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
         Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
@@ -36,6 +38,7 @@ internal static class StagingHelpers
     // Pass the parts a pending jettison would shed to learn whether it drops only spent engines, or null to only count thrust.
     public static EngineSurvey SurveyActiveEngines(Vehicle vehicle, IReadOnlySet<Part>? jettisonSet)
     {
+        vehicle.Parts.EnsureDerived(DerivedData.SolidMotorStacks);
         EngineSurvey survey = default;
         ReadOnlySpan<MoleState> moleStates = vehicle.Parts.Moles.States;
         ReadOnlySpan<RocketCoreState> coreStates = vehicle.Parts.RocketCores.States;
