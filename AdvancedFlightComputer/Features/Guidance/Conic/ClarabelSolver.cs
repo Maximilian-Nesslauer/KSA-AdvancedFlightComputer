@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace AdvancedFlightComputer.Guidance.Gfold;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 /// <summary>
 /// Solves a <see cref="ConicProblem"/> with Clarabel.

@@ -6,7 +6,7 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 // "6dof" sub-tab under Landing - the frame bridge, and the MPC guidance built on it.
 //
@@ -1671,8 +1671,34 @@ public static partial class GuidanceWindow
                  torqueModel, ambientPa);
     }
 
-    private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,
-                                   double[] x, double now)
+    /// <summary>
+    /// Whether 6-DOF can plan for this craft from where it is now, and if not, why. Builds the same configuration the engage would, and throws it away.
+    ///
+    /// The deorbit handoff asks this before it hands over. A craft 6-DOF refuses - no thrust vectoring, a throttle floor it cannot land on - would otherwise be released on the next step with the engine lit and nothing steering it, where G-FOLD could have flown it.
+    /// </summary>
+    private static bool Can6DofTake(Vehicle vehicle, out string error)
+    {
+        // A measurement that throws is a craft 6-DOF cannot take either, and it must not take the handoff down with it.
+        try
+        {
+            IParentBody parent = vehicle.Orbit.Parent;
+            double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+            double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
+            return TryConfigure6Dof(vehicle, parent, siteCci, x, out _, out _, out _, out _, out error);
+        }
+        catch (Exception e)
+        {
+            error = e.Message;
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// The solver configuration for this craft landing at the site from state <paramref name="x"/>: the target state, the node count to engage with, and the model. False, with the reason, if the craft cannot be planned for.
+    /// </summary>
+    private static bool TryConfigure6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x,
+                                         out double[] xf, out int engageNodes,
+                                         out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn, out string error)
     {
         // THE AUTO THROTTLE FLOOR IS RESOLVED HERE, where it is consumed, and nowhere else.
         // KSA knows the vehicle's real minimum throttle; the 0.40 default is the Python test case's value, and overstating it is what makes an otherwise fine vehicle read as "over-powered" and the cold solve come back infeasible.
@@ -1686,24 +1712,29 @@ public static partial class GuidanceWindow
         // Target: hover point above the pad, upright and at rest.
         // Mass is free, so the terminal state carries 13 of the 14 components.
         // Built BEFORE the config because the problem scaling is sized from the x0 -> xf extent.
-        var xf = new double[14];
+        xf = new double[14];
         xf[2] = _s.SixDofTargetAltM;
         TerminalAttitude(x, xf);
 
         // Spread cold solves engage COARSE; everything else uses the configured count.
         // The ladder takes over from the first cycle, so this is a starting point rather than a choice about how the descent is flown.
-        int engageNodes = _s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed
+        engageNodes = _s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed
             ? ColdNodesFor(_s.SixDofSigmaSeed)
             : _s.SixDofNodes;
 
-        if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _s.SixDofTiltDeg,
-                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed,
-                                   _s.SixDofRateDampShare, _s.SixDofControlSmooth,
-                                   _s.SixDofProximal,
-                                   _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
-                                   x, xf,
-                                   out Scvx6DofConfig cfg,
-                                   out Dynamics6Dof.Params dyn, out string error))
+        return Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _s.SixDofTiltDeg,
+                                     _s.SixDofThrottleFloor, _s.SixDofSigmaSeed,
+                                     _s.SixDofRateDampShare, _s.SixDofControlSmooth,
+                                     _s.SixDofProximal,
+                                     _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
+                                     x, xf, out cfg, out dyn, out error);
+    }
+
+    private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                   double[] x, double now)
+    {
+        if (!TryConfigure6Dof(vehicle, parent, siteCci, x, out double[] xf, out int engageNodes,
+                              out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn, out string error))
         {
             _s.Error = "cannot plan: " + error;
             return false;

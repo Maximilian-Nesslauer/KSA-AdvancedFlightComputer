@@ -1,5 +1,5 @@
 using System.Linq;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// How many nodes does each stage of a descent actually need?

@@ -1,4 +1,4 @@
-using AdvancedFlightComputer.Guidance.Gfold;
+using AdvancedFlightComputer.Guidance.Conic;
 
 namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 

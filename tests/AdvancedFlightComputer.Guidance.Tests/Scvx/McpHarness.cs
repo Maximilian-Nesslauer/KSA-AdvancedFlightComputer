@@ -1,5 +1,6 @@
 using System.Globalization;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Conic;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Closed-loop MPC simulator. No game required.

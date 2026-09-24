@@ -3,6 +3,7 @@
   <Project Path="tests/AdvancedFlightComputer.HarnessTests/AdvancedFlightComputer.HarnessTests.csproj" />
   <Folder Name="/Guidance/">
     <Project Path="AdvancedFlightComputer/Features/Guidance/Numerics/AdvancedFlightComputer.Guidance.Numerics.csproj" />
+    <Project Path="AdvancedFlightComputer/Features/Guidance/Conic/AdvancedFlightComputer.Guidance.Conic.csproj" />
     <Project Path="AdvancedFlightComputer/Features/Guidance/Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj" />
     <Project Path="AdvancedFlightComputer/Features/Guidance/Scvx/AdvancedFlightComputer.Guidance.Scvx.csproj" />
   </Folder>

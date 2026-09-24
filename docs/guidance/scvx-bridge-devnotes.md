@@ -5,8 +5,9 @@ This directory is the **bridge** between a successive-convexification solver and
 | Layer | Where | Job |
 |---|---|---|
 | Reference maths | [`scvx.md`](scvx.md), `tests/AdvancedFlightComputer.Guidance.Tests/Scvx/python_ref/` | The algorithm, in JAX, as a spec |
-| Solver | `AdvancedFlightComputer/Features/Guidance/Scvx/` | SCvx loop, subproblem assembly, SCS bindings |
-| **Bridge (here)** | `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/` | Frames, vehicle measurement, MPC, actuator commands |
+| Solver | `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/` | SCvx loop, subproblem assembly |
+| Conic solvers | `AdvancedFlightComputer/Features/Guidance/Conic/` | SCS and Clarabel bindings, sparse assembly |
+| **Bridge (here)** | `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/`, with the shared `Adapters/KsaFrameBridge.cs` | Frames, vehicle measurement, MPC, actuator commands |
 | Host | `AdvancedFlightComputer/Features/Guidance/Modes/SixDof.cs` | UI, stepping, telemetry, hand-off |
 
 **Files here**

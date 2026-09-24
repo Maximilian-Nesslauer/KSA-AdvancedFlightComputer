@@ -1,4 +1,4 @@
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Why does the defect gate start REJECTING plans as the vehicle closes on the

@@ -1,4 +1,6 @@
-namespace AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Conic;
+
+namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>Outcome of one SCvx iteration, for tracing and for the caller's loop control.</summary>
 public readonly record struct ScvxIteration(

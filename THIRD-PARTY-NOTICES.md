@@ -14,8 +14,9 @@ This table says which text belongs to which shipped file.
 | --- | --- | --- |
 | `clarabel_c.dll` | Clarabel, with the vendored AMD and QDLDL | `Clarabel-Apache-2.0.txt`, `AMD-BSD-3-Clause.txt`, `QDLDL-Apache-2.0.txt` |
 | `scs.dll` | SCS, with the vendored AMD and QDLDL, plus the project's own BLAS shim | `SCS-MIT.txt`, `AMD-BSD-3-Clause.txt`, `QDLDL-Apache-2.0.txt` |
-| `AdvancedFlightComputer.Guidance.Gfold.dll` | The G-FOLD planner, original work, calls Clarabel | `../LICENSE` |
-| `AdvancedFlightComputer.Guidance.Scvx.dll` | The 6-DOF solver, original work, calls SCS | `../LICENSE` |
+| `AdvancedFlightComputer.Guidance.Conic.dll` | The conic solver bindings, original work, calls Clarabel and SCS | `../LICENSE` |
+| `AdvancedFlightComputer.Guidance.Gfold.dll` | The G-FOLD planner, original work | `../LICENSE` |
+| `AdvancedFlightComputer.Guidance.Scvx.dll` | The 6-DOF solver and the convex ascent, original work | `../LICENSE` |
 | `AdvancedFlightComputer.Guidance.Numerics.dll` | Original work | `../LICENSE` |
 | `AdvancedFlightComputer.dll` | Original work | `../LICENSE` |
 
@@ -23,7 +24,7 @@ In the source tree the licence texts live at the paths given below.
 
 ## Clarabel, Apache-2.0
 
-Interior-point conic solver, used by the G-FOLD powered-descent planner.
+Interior-point conic solver, used by the G-FOLD powered-descent planner and the convex ascent.
 
 - Source: `third_party/clarabel/`, from [oxfordcontrol/Clarabel.cpp](https://github.com/oxfordcontrol/Clarabel.cpp) and its `Clarabel.rs` submodule.
 - Licence: `third_party/clarabel/LICENSE.md`, shipped as `licenses/Clarabel-Apache-2.0.txt`.

@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using AdvancedFlightComputer.Guidance.Conic;
 
 namespace AdvancedFlightComputer.Guidance.Gfold;
 

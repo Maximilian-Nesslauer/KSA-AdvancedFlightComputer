@@ -34,6 +34,7 @@ if ($RuntimeIdentifier -ne $hostRid) {
 
 $projects = [ordered]@{
     Numerics = "AdvancedFlightComputer/Features/Guidance/Numerics/AdvancedFlightComputer.Guidance.Numerics.csproj"
+    Conic = "AdvancedFlightComputer/Features/Guidance/Conic/AdvancedFlightComputer.Guidance.Conic.csproj"
     Gfold = "AdvancedFlightComputer/Features/Guidance/Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj"
     Scvx = "AdvancedFlightComputer/Features/Guidance/Scvx/AdvancedFlightComputer.Guidance.Scvx.csproj"
     GfoldConsole = "tests/AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj"
@@ -113,13 +114,11 @@ foreach ($project in $projects.GetEnumerator()) {
 }
 
 $targetFramework = "net10.0"
-$gfoldAssembly = Join-Path $RepositoryRoot "AdvancedFlightComputer/Features/Guidance/Gfold/bin/$Configuration/$targetFramework/$RuntimeIdentifier/AdvancedFlightComputer.Guidance.Gfold.dll"
-$scvxAssembly = Join-Path $RepositoryRoot "AdvancedFlightComputer/Features/Guidance/Scvx/bin/$Configuration/$targetFramework/$RuntimeIdentifier/AdvancedFlightComputer.Guidance.Scvx.dll"
+$conicAssembly = Join-Path $RepositoryRoot "AdvancedFlightComputer/Features/Guidance/Conic/bin/$Configuration/$targetFramework/$RuntimeIdentifier/AdvancedFlightComputer.Guidance.Conic.dll"
 $scvxConsoleDir = Join-Path $RepositoryRoot "tests/AdvancedFlightComputer.Guidance.Tests/Scvx/bin/$Configuration/$targetFramework/$RuntimeIdentifier"
 
-Copy-Item -LiteralPath (Join-Path $nativeDir $nativeNames[0]) -Destination (Split-Path -Parent $gfoldAssembly) -Force
-Copy-Item -LiteralPath (Join-Path $nativeDir $nativeNames[1]) -Destination (Split-Path -Parent $scvxAssembly) -Force
 foreach ($fileName in $nativeNames) {
+    Copy-Item -LiteralPath (Join-Path $nativeDir $fileName) -Destination (Split-Path -Parent $conicAssembly) -Force
     Copy-Item -LiteralPath (Join-Path $nativeDir $fileName) -Destination $scvxConsoleDir -Force
 }
 
@@ -137,8 +136,8 @@ $expectedClarabelChecks = 62
 $expectedClarabelExports = 5
 $expectedScsChecks = 73
 $expectedScsExports = 6
-Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("clarabel", $gfoldAssembly, "--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedClarabelChecks, "--expect-exports", $expectedClarabelExports)) -FailureMessage "The Clarabel ABI check failed."
-Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("scs", $scvxAssembly, "--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedScsChecks, "--expect-exports", $expectedScsExports)) -FailureMessage "The SCS ABI check failed."
+Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("clarabel", $conicAssembly,"--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedClarabelChecks, "--expect-exports", $expectedClarabelExports)) -FailureMessage "The Clarabel ABI check failed."
+Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("scs", $conicAssembly,"--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedScsChecks, "--expect-exports", $expectedScsExports)) -FailureMessage "The SCS ABI check failed."
 
 $scvxProject = Join-Path $RepositoryRoot $projects.ScvxConsole
 $scvxBase = @(

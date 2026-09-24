@@ -89,9 +89,9 @@ public static partial class GuidanceWindow
             ImGui.InputDouble("Aim altitude (km)", ref _s.AimAltKm);
             ImGui.InputDouble("Descent rate (m/s)", ref _s.DescentRate);
             ImGui.InputDouble("Gate uprange (km)", ref _s.GateUprangeKm);
-            // Where the braking burn ends and G-FOLD takes over.
-            // It shapes this phase, so it belongs here rather than with the G-FOLD tuning.
-            ImGui.InputDouble("Hand off to G-FOLD at T-gate (s)", ref _s.GfoldHandoffTgo);
+            // Where the braking burn ends and the powered descent, 6-DOF or G-FOLD, takes over.
+            // It shapes this phase, so it belongs here rather than with either solver's tuning.
+            ImGui.InputDouble("Hand off to the descent at T-gate (s)", ref _s.GfoldHandoffTgo);
         }
 
         double3 r = orbit.StateVectors.PositionCci;
@@ -474,10 +474,15 @@ public static partial class GuidanceWindow
             if (_s.Engage && _s.AutoStage)
                 AutoSequence(vehicle);
 
-            // Hand straight to G-FOLD a set time before gate arrival, skipping the UPFG terminal freeze.
-            // G-FOLD plans from the current state down.
+            // Hand straight to the powered descent a set time before gate arrival, skipping the UPFG terminal freeze.
+            // Both descents plan from the current state down.
             if (_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo)
             {
+                // 6-DOF is the default, but it needs thrust vectoring and a throttle floor it can land on, and G-FOLD needs neither. A craft 6-DOF would refuse goes to G-FOLD, and the craft's solver choice follows it, so the panel shows and aborts the descent that is actually flying.
+                string sixDofRefusal = null;
+                if (_s.UseSixDofLanding && !Can6DofTake(vehicle, out sixDofRefusal))
+                    _s.UseSixDofLanding = false;
+
                 if (_s.UseSixDofLanding)
                 {
                     // 6-DOF is EXCLUSIVE - it drives attitude through the TVC allocator rather than the flight computer - so the UPFG landing flow has to let go rather than run alongside it.
@@ -503,7 +508,9 @@ public static partial class GuidanceWindow
                     _s.GfoldHoverRefused = false;
                     // This step already writes the descent's engine command, and G-FOLD has no throttle until its first plan on the next step, so the burn's throttle carries over. Left at zero, the braking burn stops for a step, and for as long as the first solves find no plan. The tracker does not smooth from the carried value, because GfoldTrackInit is reset above.
                     _s.GfoldThrottle = _s.Upfg.Throttle;
-                    _s.LandingStatus = "Handoff to G-FOLD descent.";
+                    _s.LandingStatus = sixDofRefusal == null
+                        ? "Handoff to G-FOLD descent."
+                        : $"Handoff to G-FOLD descent: 6-DOF cannot plan for this craft ({sixDofRefusal}).";
                 }
                 _s.GfoldTabSelectPending = true;   // focus the powered-landing page
             }

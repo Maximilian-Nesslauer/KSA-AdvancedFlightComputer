@@ -1,6 +1,6 @@
 using AdvancedFlightComputer.Guidance.Numerics;
 
-namespace AdvancedFlightComputer.Guidance.Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Six-degree-of-freedom rigid-body booster dynamics, and their Jacobians by

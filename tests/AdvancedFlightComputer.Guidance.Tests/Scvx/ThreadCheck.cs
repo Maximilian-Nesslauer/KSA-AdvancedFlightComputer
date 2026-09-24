@@ -1,4 +1,4 @@
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Does the solve survive being driven from another thread, and does the publish

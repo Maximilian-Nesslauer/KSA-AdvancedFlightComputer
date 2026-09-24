@@ -1,4 +1,4 @@
-namespace AdvancedFlightComputer.Guidance.Scvx;
+namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Vehicle limits and SCvx weights for the 6-DOF subproblem.

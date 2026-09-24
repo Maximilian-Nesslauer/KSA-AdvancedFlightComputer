@@ -1,4 +1,4 @@
-namespace AdvancedFlightComputer.Guidance.Gfold;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 // Builds a sparse matrix in the column-compressed storage (CCS) format both solvers expect, from arbitrary-order (row, col, value) triplets.
 // Duplicate entries at the same position are summed; explicit zeros are kept (harmless).

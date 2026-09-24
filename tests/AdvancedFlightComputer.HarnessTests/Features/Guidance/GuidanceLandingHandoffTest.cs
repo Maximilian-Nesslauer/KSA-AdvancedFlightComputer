@@ -13,9 +13,11 @@ using KSA;
 namespace AdvancedFlightComputer.HarnessTests;
 
 // Steps a deorbit burn at its handoff through the real ApplyAutopilot on a spawned craft, once for
-// each descent solver. The UPFG solve and the staging cue are stubbed for the fixture, so the burn
-// reads a converged solution inside the handoff gate, and the 6-DOF dispatch is counted instead of
-// solved. The step under test is the handoff, not either descent.
+// each descent solver, and once for a craft 6-DOF cannot plan for. The UPFG solve and the staging
+// cue are stubbed for the fixture, so the burn reads a converged solution inside the handoff gate;
+// whether 6-DOF can take the craft is set per case rather than read off the fixture's hardware; and
+// the 6-DOF dispatch is counted instead of solved. The step under test is the handoff, not either
+// descent.
 public sealed class GuidanceLandingHandoffTest : AfcTest
 {
     public override string Name => "afc-guidance-landing-handoff";
@@ -30,8 +32,12 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     private static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs> Inputs =
         AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
 
+    // What the stubbed check says when 6-DOF cannot take the craft.
+    private const string Refusal = "no gimballed engine - 6-DOF needs thrust vectoring";
+
     private static Vehicle? _fixture;
     private static int _sixDofSteps;
+    private static bool _sixDofCanTake;
 
     protected override void Execute(TestContext t)
     {
@@ -74,15 +80,18 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             harmony.Patch(Method("BuildUpfgVehicle"), prefix: Prefix(nameof(NotForFixture)));
             harmony.Patch(Method("AutoSequence"), prefix: Prefix(nameof(NotForFixture)));
             harmony.Patch(Method("Step6Dof"), prefix: Prefix(nameof(CountSixDofEngage)));
+            harmony.Patch(Method("Can6DofTake"), prefix: Prefix(nameof(AnswerCanSixDofTake)));
 
             TheBurnHandsOverToSixDof(t, craft);
             TheBurnHandsOverToGfold(t, craft);
+            ACraftSixDofRefusesGoesToGfold(t, craft);
         }
         finally
         {
             harmony.UnpatchAll(harmony.Id);
             _fixture = null;
             _sixDofSteps = 0;
+            _sixDofCanTake = false;
             if (craft != null)
             {
                 StagingDetector.Arm(craft, false);
@@ -101,6 +110,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     {
         VehicleAutopilotState state = BurnAtHandoff(craft, sixDof: true);
         _sixDofSteps = 0;
+        _sixDofCanTake = true;
 
         GuidanceWindow.ApplyAutopilot(craft);
         t.Check("6-DOF: the handoff ends the burn",
@@ -146,6 +156,32 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.GfoldPlan == null && !state.GfoldTrackInit);
         t.Check("G-FOLD: AutoStage stays armed through the handoff",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
+
+        VehicleControlOwnership.ReleaseAll(craft);
+        VehicleAutopilotState.Remove(craft);
+    }
+
+    // 6-DOF is the default, but a craft it cannot plan for would be refused on the next step with the
+    // engine lit and nothing steering. The handoff gives it to G-FOLD instead, and the craft's solver
+    // choice follows, so the panel shows and aborts the descent that is flying.
+    private static void ACraftSixDofRefusesGoesToGfold(TestContext t, Vehicle craft)
+    {
+        VehicleAutopilotState state = BurnAtHandoff(craft, sixDof: true);
+        _sixDofSteps = 0;
+        _sixDofCanTake = false;
+
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("refused: the handoff starts the G-FOLD descent",
+            state.LandingPhase == GuidanceWindow.LandingPhase.GfoldDescent, state.LandingStatus);
+        t.Check("refused: no 6-DOF engage is queued or run", !state.EngagePending && !state.Active && _sixDofSteps == 0,
+            $"pending {state.EngagePending}, active {state.Active}, {_sixDofSteps} dispatches");
+        t.Check("refused: the craft now lands with G-FOLD", !state.UseSixDofLanding);
+        t.Check("refused: the status says why", state.LandingStatus.Contains(Refusal), state.LandingStatus);
+        t.Check("refused: the handoff keeps the craft",
+            state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
+        t.Check("refused: the engine stays lit through the handoff step",
+            Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == (float)HandoffThrottle,
+            $"engine on {Inputs(craft).EngineOn}, throttle {Inputs(craft).EngineThrottle}");
 
         VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);
@@ -216,6 +252,17 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.EngagePending = false;
             state.Active = true;
         }
+        return false;
+    }
+
+    // Stands in for the handoff's check that 6-DOF can plan for the craft, which would otherwise
+    // depend on the fixture's gimbals and throttle floor.
+    private static bool AnswerCanSixDofTake(Vehicle vehicle, ref string error, ref bool __result)
+    {
+        if (!ReferenceEquals(vehicle, _fixture))
+            return true;
+        error = _sixDofCanTake ? "" : Refusal;
+        __result = _sixDofCanTake;
         return false;
     }
 }

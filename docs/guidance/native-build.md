@@ -26,8 +26,8 @@ On Linux, use `linux-x64` in both commands.
 Windows also needs the Visual Studio C++ build tools and Windows SDK for Rust's MSVC target.
 Linux needs a GNU linker.
 
-The check builds both native libraries and seven game-free managed projects, then checks native layouts and exports against the C# bindings.
-It runs each Scvx check (`--fd`, `--aero`, `--impact`, `--sub-scs`, `--loop`) and `Worker.Tests`, stopping on failure.
+The check builds both native libraries and eight game-free managed projects, then checks native layouts and exports against the C# bindings in the Conic assembly.
+It runs each Scvx check (`--fd`, `--aero`, `--impact`, `--sub-scs`, `--loop`, `--ascent`) and `Worker.Tests`, stopping on failure.
 The default `Gfold 81 120` example is not a CI requirement because its fuel comparison is an example policy.
 
 To build a single library with tools already on PATH, run:

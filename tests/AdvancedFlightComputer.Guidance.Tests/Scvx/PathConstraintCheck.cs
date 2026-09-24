@@ -1,5 +1,5 @@
 using System.Globalization;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Verifies the glideslope and climb-rate path constraints actually bind, and -

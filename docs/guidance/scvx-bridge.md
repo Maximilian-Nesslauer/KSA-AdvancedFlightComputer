@@ -304,13 +304,13 @@ The last few metres are the worst case for this solver and the easiest for a sim
 
 | File | Role |
 |---|---|
-| `AdvancedFlightComputer/Features/Guidance/Scvx/Dynamics6Dof.cs` | The nonlinear dynamics and their Jacobians |
-| `AdvancedFlightComputer/Features/Guidance/Scvx/Scvx6DofSubproblemScs.cs` | Builds one cone program per iteration |
-| `AdvancedFlightComputer/Features/Guidance/Scvx/Scvx6DofSolver.cs` | The SCvx loop: linearise, solve, ratio test, trust region |
-| `AdvancedFlightComputer/Features/Guidance/Scvx/ScsWorkspace.cs` | SCS bindings and iterate-level warm starting |
-| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/KsaFrameBridge.cs` | Frame, body-axis and quaternion conversions |
-| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/Ksa6DofSetup.cs` | Measures the live vehicle into a solver configuration |
-| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/Ksa6DofGuidance.cs` | The MPC loop and the command interface |
+| `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Dynamics6Dof.cs` | The nonlinear dynamics and their Jacobians |
+| `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSubproblemScs.cs` | Builds one cone program per iteration |
+| `AdvancedFlightComputer/Features/Guidance/Scvx/SixDof/Scvx6DofSolver.cs` | The SCvx loop: linearise, solve, ratio test, trust region |
+| `AdvancedFlightComputer/Features/Guidance/Conic/ScsWorkspace.cs` | SCS bindings and iterate-level warm starting |
+| `AdvancedFlightComputer/Features/Guidance/Adapters/KsaFrameBridge.cs` | Frame, body-axis and quaternion conversions |
+| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofSetup.cs` | Measures the live vehicle into a solver configuration |
+| `AdvancedFlightComputer/Features/Guidance/Adapters/Scvx/SixDof/Ksa6DofGuidance.cs` | The MPC loop and the command interface |
 | `AdvancedFlightComputer/Features/Guidance/Control/TvcAllocator.cs` | Body torque -> per-gimbal deflections |
 | `AdvancedFlightComputer/Features/Guidance/Control/EnginePerf.cs` | Engine capability and the thrust-curve inversion |
 | `AdvancedFlightComputer/Features/Guidance/Modes/SixDof.cs` | UI, stepping, telemetry, hand-off |

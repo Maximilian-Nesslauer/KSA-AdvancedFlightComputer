@@ -1,7 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace AdvancedFlightComputer.Guidance.Scvx;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 /// <summary>
 /// P/Invoke surface for the vendored scs.dll (third_party/scs, built by
