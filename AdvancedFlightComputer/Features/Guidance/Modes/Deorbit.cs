@@ -172,12 +172,21 @@ public static partial class GuidanceWindow
         if (LandingSwitchesOff) { RefuseDeorbit(LandingSwitchesChangedStatus); return; }
         string engineRefusal = BrakingEngineRefusal(vehicle);
         if (engineRefusal.Length > 0) { RefuseDeorbit(engineRefusal); return; }
-        if (_s.LandingPhase != LandingPhase.DeorbitCoast
-            && (vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
-                || ManualInputs(vehicle).EngineOn || KsaEnginePerf.RemainingMinimumPulse(vehicle) > 0))
+        // Only the capture waits for idle engines and 1x warp. A direct coast checks its braking model again at ignition.
+        if (_s.LandingPhase == LandingPhase.DeorbitPlanning)
         {
-            RestartDeorbitPlanning("Planning waits for the active burn and engine pulse to finish.");
-            return;
+            if (vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
+                || ManualInputs(vehicle).EngineOn || KsaEnginePerf.RemainingMinimumPulse(vehicle) > 0)
+            {
+                RestartDeorbitPlanning("Planning waits for the active burn and engine pulse to finish.");
+                return;
+            }
+            if (Universe.SimulationSpeed > 1)
+            {
+                ClearDeorbitPlanState();
+                _s.LandingStatus = "Planning waits for time warp at 1x or less.";
+                return;
+            }
         }
         if (_s.DeorbitRequest != null && DeorbitSourceChanged(vehicle, orbit, parent))
         {
@@ -185,12 +194,6 @@ public static partial class GuidanceWindow
             return;
         }
         if (_s.LandingPhase != LandingPhase.DeorbitPlanning) return;
-        if (Universe.SimulationSpeed > 1)
-        {
-            ClearDeorbitPlanState();
-            _s.LandingStatus = "Planning waits for time warp at 1x or less.";
-            return;
-        }
         if (_s.DeorbitRequest == null && !StartDeorbitSearch(vehicle, orbit, parent)) return;
         DeorbitPlanner planner = _s.DeorbitPlanner;
         planner.Step();

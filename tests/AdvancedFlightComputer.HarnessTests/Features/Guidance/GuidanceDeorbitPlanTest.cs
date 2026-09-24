@@ -85,8 +85,11 @@ public sealed class GuidanceDeorbitRefusalTest : AfcTest
     private static void CheckFlownArc(TestContext t, DeorbitRequest request)
     {
         IParentBody parent = request.Parent;
+        // An apoapsis 500 km up and a periapsis at half the mean radius, so the orbit must cross the surface.
+        double apoapsis = parent.MeanRadius + 500_000, periapsisRadius = 0.5 * parent.MeanRadius;
+        double speed = Math.Sqrt(parent.Mu * (2 / apoapsis - 2 / (apoapsis + periapsisRadius)));
         Orbit ellipse = Orbit.CreateFromStateCci(parent, new UniverseTime(request.Epoch),
-            new double3(parent.MeanRadius + 500_000, 0, 0), new double3(0, 1400, 0), request.Source.OrbitLineColor);
+            new double3(apoapsis, 0, 0), new double3(0, speed, 0), request.Source.OrbitLineColor);
         double periapsis = ellipse.TimeAtPeriapsis.Seconds();
         while (periapsis < request.Epoch) periapsis += ellipse.Period;
         StateVectors peri = ellipse.GetStateVectorsAt(new UniverseTime(periapsis));
@@ -113,7 +116,8 @@ public sealed class GuidanceDeorbitRefusalTest : AfcTest
         var elapsed = Stopwatch.StartNew();
         while (!planner.Complete && elapsed.Elapsed.TotalSeconds < 30) planner.Step(3);
         t.Check("the full low-periapsis plan keeps direct braking after its terrain check",
-            planner.Complete && planner.Direct is { Refusal.Length: 0 } && planner.Plan == null, planner.Status);
+            planner.Complete && planner.Direct is { Refusal.Length: 0 } && planner.Plan == null,
+            $"{planner.Status} Direct: {planner.DirectRefusal}");
     }
 
     private static void CheckRuntimeRefusal(TestContext t, DeorbitFixture fixture)

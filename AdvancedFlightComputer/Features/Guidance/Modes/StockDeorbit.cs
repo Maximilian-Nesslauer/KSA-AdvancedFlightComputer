@@ -18,7 +18,9 @@ public static partial class GuidanceWindow
     }
 
     // Stock Auto needs this long before ignition to turn the craft onto the burn.
-    private static double StockPreparationTime(FlightComputer fc) => Math.Max(PrepLeadTime, 2 * fc.ConservativeFlipTime);
+    // FlightComputer.UpdateRcsParams derives the flip time from RCS torque alone and leaves it infinite without RCS, so like stock only a finite value counts.
+    private static double StockPreparationTime(FlightComputer fc) => float.IsFinite(fc.ConservativeFlipTime)
+        ? Math.Max(PrepLeadTime, 2 * fc.ConservativeFlipTime) : PrepLeadTime;
 
     private static double StockDeorbitWarpTime(FlightComputer fc, BurnTarget target) =>
         target.IgnitionTime.Seconds() - StockPreparationTime(fc) - WarpLeadTime;

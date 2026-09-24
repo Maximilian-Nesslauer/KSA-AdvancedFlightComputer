@@ -658,6 +658,7 @@ internal sealed class DeorbitPlanner : IDisposable
         var target = new UpfgTarget { Radius = request.GateRadius, Velocity = 0,
             DescentRate = request.Settings.SinkRate, Normal = normal, Rdes = gate };
         UpfgVehicle model = request.ModelAt(mass);
+        string failure = "does not converge";
         for (int i = 0; i < PredictionIterations; i++)
         {
             solver.Step(position, velocity, mass, request.Parent.Mu, target, model, 3);
@@ -665,7 +666,11 @@ internal sealed class DeorbitPlanner : IDisposable
             if (!solver.Converged) continue;
             double pitch = Math.Asin(Math.Clamp(double3.Dot(solver.Steering, position / position.Length()), -1, 1));
             if (!double.IsFinite(pitch) || pitch < LowestBrakingPitchDeg * Math.PI / 180 || !(solver.Tgo > 0)
-                || !double.IsFinite(solver.Tgo) || !double.IsFinite(solver.VgoMag)) break;
+                || !double.IsFinite(solver.Tgo) || !double.IsFinite(solver.VgoMag))
+            {
+                failure = $"converges at a pitch of {pitch * 180 / Math.PI:F0} deg and {solver.Tgo:F0} s to go, which is not a shallow approach";
+                break;
+            }
             double capacity = 0;
             foreach (UpfgStage stage in model.Stages)
             {
@@ -676,7 +681,7 @@ internal sealed class DeorbitPlanner : IDisposable
             result.Value = "";
             yield break;
         }
-        result.Value = "The braking solve does not give a converged shallow approach. Lower the orbit or change the braking altitude.";
+        result.Value = $"The braking solve {failure}. Lower the orbit or change the braking altitude.";
     }
 
     // Without a selected angle, the automatic range applies.

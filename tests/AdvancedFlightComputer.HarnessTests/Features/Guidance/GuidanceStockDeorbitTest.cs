@@ -60,7 +60,8 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
                 .Invoke(null, new object[] { craft.FlightComputer, target })!;
             t.Check("stock-node warp stops before alignment preparation",
                 warpTime <= target.IgnitionTime.Seconds() - 30 - 10
-                && warpTime <= target.IgnitionTime.Seconds() - 2 * craft.FlightComputer.ConservativeFlipTime - 10);
+                && (!float.IsFinite(craft.FlightComputer.ConservativeFlipTime)
+                    || warpTime <= target.IgnitionTime.Seconds() - 2 * craft.FlightComputer.ConservativeFlipTime - 10));
             state.DeorbitWarpRequested = true;
 
             craft.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
@@ -247,7 +248,18 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
             && ReferenceEquals(fixture.Vehicle.FlightComputer.BurnPlan.FindFirstExecutableBurn(), state.DeorbitNode)
             && fixture.Vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
             && !state.ControlAcquired && VehicleControlOwnership.HolderOf(fixture.Vehicle) == ControlClaimant.Guidance,
-            state.LandingStatus);
+            $"{state.LandingStatus} {StockTiming(fixture.Vehicle, state)}");
+    }
+
+    private static string StockTiming(Vehicle craft, VehicleAutopilotState state)
+    {
+        FlightComputer fc = craft.FlightComputer;
+        BurnTarget? target = state.DeorbitTarget ?? fc.Burn;
+        double now = Universe.GetElapsedTime().Seconds();
+        return target == null ? "No stock target."
+            : $"Ignition in {target.IgnitionTime.Seconds() - now:F1} s, duration {target.BurnDuration:F2} s, flip time {fc.ConservativeFlipTime:F1} s"
+            + $", planned throttle {fc.PlannedBurnThrottle:F3}, engine minimum {fc.ActiveEnginePerformanceMax.MinThrottle:F3}"
+            + $", node in {(state.DeorbitPlan?.DepartureTime ?? double.NaN) - now:F1} s, arrival in {(state.DeorbitPlan?.ArrivalTime ?? double.NaN) - now:F1} s.";
     }
 
     private static void CheckLateIgnition(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)
