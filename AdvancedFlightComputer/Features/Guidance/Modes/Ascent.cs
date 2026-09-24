@@ -368,6 +368,8 @@ public static partial class GuidanceWindow
         _s.ConvexLastWant = default;
         _s.ConvexPlanTime = 0.0;
         _s.ConvexFastest = 0.0;
+        _s.ConvexStage = 0;
+        _s.ConvexStageSpeed = 0.0;
         _s.ConvexLastTime = double.NaN;
         _s.ConvexBlendStart = double.NaN;
         string convexWhy = "";
@@ -673,7 +675,7 @@ public static partial class GuidanceWindow
                 break;
 
             case AscentPhase.Profile:
-                want = ConvexProfileCommand(r, v, parent, stepDt, out wantRate);
+                want = ConvexProfileCommand(r, v, vehicle.TotalMass, parent, stepDt, out wantRate);
                 break;
 
             case AscentPhase.ClosedLoop:
@@ -683,7 +685,7 @@ public static partial class GuidanceWindow
                 // Straight after a convex profile, turned onto that law over ConvexBlendSeconds.
                 double blend = ConvexBlendWeight();
                 if (blend < 1.0)
-                    want = ConvexBlendCommand(r, v, parent, steerNow, blend, stepDt, out wantRate);
+                    want = ConvexBlendCommand(r, v, vehicle.TotalMass, parent, steerNow, blend, stepDt, out wantRate);
                 break;
 
             case AscentPhase.Terminal:

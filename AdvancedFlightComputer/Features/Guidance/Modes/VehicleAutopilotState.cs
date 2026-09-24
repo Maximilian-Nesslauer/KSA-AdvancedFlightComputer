@@ -456,8 +456,10 @@ public sealed class VehicleAutopilotState
     /// <summary>The profile's previous command, which its turning rate is differenced against.</summary>
     public double3 ConvexLastWant;
 
-    /// <summary>Where the flight is on the plan, as plan time; the fastest air speed it has had; and the sim time of the last profile step. See ConvexAscentProfile.Advance.</summary>
+    /// <summary>Where the flight is on the plan, as plan time; the planned stage it is burning, and the air speed it lit it at; the most speed it has gained in that stage; and the sim time of the last profile step. See ConvexAscentProfile.Advance.</summary>
     public double ConvexPlanTime;
+    public int ConvexStage;
+    public double ConvexStageSpeed;
     public double ConvexFastest;
     public double ConvexLastTime = double.NaN;
 
