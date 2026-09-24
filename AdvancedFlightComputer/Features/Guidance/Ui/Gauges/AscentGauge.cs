@@ -47,10 +47,11 @@ public static partial class GuidanceWindow
         ImGui.SameLine();
         using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed))
         {
-            if (ImGui.RadioButton("CAT-S / UPFG", _s.AscentMethod == AscentMethod.CatsUpfg))
+            // Suffixed IDs: the Gravity turn page's section header carries the same label.
+            if (ImGui.RadioButton("CAT-S / UPFG##ascentmethod", _s.AscentMethod == AscentMethod.CatsUpfg))
                 _s.AscentMethod = AscentMethod.CatsUpfg;
             ImGui.SameLine();
-            if (ImGui.RadioButton("Gravity turn", _s.AscentMethod == AscentMethod.GravityTurn))
+            if (ImGui.RadioButton("Gravity turn##ascentmethod", _s.AscentMethod == AscentMethod.GravityTurn))
                 _s.AscentMethod = AscentMethod.GravityTurn;
         }
     }
