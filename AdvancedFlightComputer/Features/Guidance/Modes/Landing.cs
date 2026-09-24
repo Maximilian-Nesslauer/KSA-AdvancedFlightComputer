@@ -514,10 +514,12 @@ public static partial class GuidanceWindow
 
     // The site's body-fixed (CCF) direction.
     // KSA's own convention: lat = asin(z), lon = atan2(y,x) in CCF.
-    private static double3 SiteDirCcf()
+    private static double3 SiteDirCcf() => SiteDirCcf(_s.SiteLatDeg, _s.SiteLonDeg);
+
+    internal static double3 SiteDirCcf(double latDeg, double lonDeg)
     {
-        double lat = UpfgTarget.DegToRad(_s.SiteLatDeg);
-        double lon = UpfgTarget.DegToRad(_s.SiteLonDeg);
+        double lat = UpfgTarget.DegToRad(latDeg);
+        double lon = UpfgTarget.DegToRad(lonDeg);
         return new double3(
             Math.Cos(lat) * Math.Cos(lon),
             Math.Cos(lat) * Math.Sin(lon),

@@ -751,7 +751,7 @@ public static partial class GuidanceWindow
     }
 
     // The vehicle-wide acceleration limit is applied to the stage list on every step. A stage that crosses the limit mid-burn is divided at the mass where full thrust reaches the limit.
-    private static void ApplyGLimit(UpfgVehicle vehicle, double gLim)
+    internal static void ApplyGLimit(UpfgVehicle vehicle, double gLim)
     {
         const double g0 = 9.80665;
         double aLim = gLim * g0;
@@ -1528,7 +1528,7 @@ public static partial class GuidanceWindow
     }
 
     // Rodrigues rotation of vec about a unit axis.
-    private static double3 RotateAbout(double3 vec, double3 axis, double angle)
+    internal static double3 RotateAbout(double3 vec, double3 axis, double angle)
     {
         double c = Math.Cos(angle), s = Math.Sin(angle);
         return vec * c + double3.Cross(axis, vec) * s + axis * (double3.Dot(axis, vec) * (1.0 - c));
