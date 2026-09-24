@@ -18,11 +18,19 @@ public static partial class GuidanceWindow
     {
         switch (_s.LandingPhase)
         {
+            case LandingPhase.DeorbitPlanning: return "PLANNING";
+            case LandingPhase.DeorbitCoast: return "CREATING DEORBIT NODE";
+            case LandingPhase.DeorbitNodePending: return "CHECKING STOCK TIMING";
+            case LandingPhase.DeorbitBurn: return "STOCK AUTO DEORBIT";
+            case LandingPhase.TransferPlanning: return "PLANNING BRAKING";
+            case LandingPhase.TransferCoast: return "TRANSFER COAST";
             case LandingPhase.Coast: return "COAST TO BURN";
             case LandingPhase.Prep: return "CONVERGING";
-            case LandingPhase.Burn: return "DEORBIT BURN";
+            case LandingPhase.Burn: return "BRAKING BURN";
             case LandingPhase.GfoldDescent: return "G-FOLD";
             case LandingPhase.TerminalHover: return "HOVER";
+            case LandingPhase.TerminalCoast: return "TERMINAL COAST";
+            case LandingPhase.TerminalBrake: return "LANDING BURN";
             case LandingPhase.Done: return "DONE";
             default: return "IDLE";
         }
@@ -39,12 +47,31 @@ public static partial class GuidanceWindow
         double tgoSec;
         switch (_s.LandingPhase)
         {
+            case LandingPhase.DeorbitPlanning:
+            case LandingPhase.DeorbitNodePending:
+            case LandingPhase.TransferPlanning:
+                tgoSec = double.NaN;
+                break;
+            case LandingPhase.DeorbitCoast:
+                tgoSec = Math.Max(0, (_s.DeorbitPlan?.DepartureTime ?? SimNow()) - SimNow());
+                break;
+            case LandingPhase.DeorbitBurn:
+                tgoSec = _s.DeorbitTarget == null ? double.NaN
+                    : Math.Max(0, _s.DeorbitTarget.IgnitionTime.Seconds() - SimNow()) + _s.DeorbitTarget.BurnDuration;
+                break;
+            case LandingPhase.TransferCoast:
             case LandingPhase.Coast:
             case LandingPhase.Prep:
                 tgoSec = Math.Max(0.0, _s.BurnStartTime - SimNow());
                 break;
             case LandingPhase.GfoldDescent:
                 tgoSec = Math.Max(0.0, _s.GfoldArrivalTime - SimNow());
+                break;
+            case LandingPhase.TerminalCoast:
+                tgoSec = double.NaN;
+                break;
+            case LandingPhase.TerminalBrake:
+                tgoSec = _s.TerminalBurnSeconds;
                 break;
             default:
                 tgoSec = _s.Upfg.Tgo;
@@ -75,6 +102,7 @@ public static partial class GuidanceWindow
 
         DrawLandingSiteSection(parent, orbit, bodyRadius, innerW);
         DrawApproachSection(innerW);
+        DrawStockDeorbitActions();
     }
 
     // --- Landing site ------------------------------------------------------- The main levers: where to land, and whether the mod is allowed to fly it there.
@@ -85,8 +113,10 @@ public static partial class GuidanceWindow
                 ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
             return;
 
+        ImGui.BeginDisabled(DeorbitTargetLocked);
         GaugeRow("Latitude (deg)", "##sitelat", ref _s.SiteLatDeg);
         GaugeRow("Longitude (deg)", "##sitelon", ref _s.SiteLonDeg);
+        ImGui.EndDisabled();
 
         GaugeRowCheck("Engage autopilot", "##dengage", ref _s.Engage);
         GaugeRowCheck("Auto engines/staging", "##dautostage", ref _s.AutoStage);
@@ -104,6 +134,7 @@ public static partial class GuidanceWindow
         if (DescentLive)
             GaugeRowText("Burn downrange",
                 $"{_s.BurnDownrangeKm:F1} km  ({_s.DownrangeFactor:F2}x)");
+        foreach (var row in DeorbitReadout()) GaugeRowText(row.label, row.value);
 
         ImGuiHelper.EndRegion();
     }
@@ -115,12 +146,21 @@ public static partial class GuidanceWindow
                 ImGuiTreeNodeFlags.SpanAllColumns, innerW))
             return;
 
+        ImGui.BeginDisabled(DeorbitTargetLocked);
+        GaugeRow("Braking altitude above site (km)", "##brakingalt", ref _s.BrakingAltitudeKm);
+        GaugeRowCheck("Set deorbit arrival angle", "##arrivalangleon", ref _s.DeorbitArrivalAngleEnabled);
+        ImGui.BeginDisabled(!_s.DeorbitArrivalAngleEnabled);
+        GaugeRow("Arrival angle down (deg)", "##arrivalangle", ref _s.DeorbitArrivalDescentDeg);
+        ImGui.EndDisabled();
+        GaugeRowText("Angle tolerance", $"+/-{DeorbitPlanner.ArrivalAngleToleranceDeg:F0} deg at the braking point");
         GaugeRow("Downrange factor", "##downrange", ref _s.DownrangeFactor);
         GaugeRow("Aim altitude (km)", "##aimalt", ref _s.AimAltKm);
         GaugeRow("Descent rate (m/s)", "##descrate", ref _s.DescentRate);
         GaugeRow("Gate uprange (km)", "##gateuprange", ref _s.GateUprangeKm);
         // Where the braking burn ends and G-FOLD takes over. It shapes this phase, so it belongs here rather than with the G-FOLD tuning.
         GaugeRow("G-FOLD handoff T-gate (s)", "##gfoldhandoff", ref _s.GfoldHandoffTgo);
+        GaugeRow("Vertical approach height (m)", "##verticalgate", ref _s.LandingVerticalGateM);
+        ImGui.EndDisabled();
 
         ImGuiHelper.EndRegion();
     }

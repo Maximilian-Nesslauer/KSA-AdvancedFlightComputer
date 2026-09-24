@@ -319,7 +319,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             {
                 "ClaimVehicle" => [Enum.Parse(target.GetParameters()[0].ParameterType, "Ascent"), fixture.Vehicle],
                 "HandBackVehicle" => [fixture.Vehicle],
-                "ExecuteLanding" => [fixture.Vehicle, null, null, 1.0, 1.0],
+                "ExecuteLanding" => [fixture.Vehicle],
                 _ => null,
             };
             target.Invoke(null, args);

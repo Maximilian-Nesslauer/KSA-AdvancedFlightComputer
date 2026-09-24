@@ -42,6 +42,31 @@ internal static class KsaEnginePerf
     internal static double ThrustAtThrottle(Vehicle vehicle, double throttle, double ambientPressure)
         => ActivePerformance(vehicle, throttle, ambientPressure).thrust;
 
+    internal static (double thrust, double massFlow) AtThrottle(Vehicle vehicle, double throttle, double ambientPressure)
+        => ActivePerformance(vehicle, throttle, ambientPressure);
+
+    internal static double MinimumPulse(Vehicle vehicle)
+    {
+        double pulse = 0;
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            if (engine.IsActive)
+                foreach (RocketCore core in engine.Cores)
+                    pulse = Math.Max(pulse, core.MinimumPulseTime);
+        return pulse;
+    }
+
+    // RocketCore.UpdateState can keep a started minimum pulse burning after the engine-off command.
+    internal static double RemainingMinimumPulse(Vehicle vehicle)
+    {
+        if (!ModuleStateful<RocketCore, RocketCoreState, RocketCoreGlobalState, EmptyStruct>
+            .TryGetFrom(vehicle.Parts.States, out var states)) return 0;
+        double remaining = 0;
+        foreach (EngineController engine in vehicle.Parts.Modules.Get<EngineController>())
+            foreach (RocketCore core in engine.Cores)
+                remaining = Math.Max(remaining, states.States[core.StatesIdx].MinThrustTimeRemaining);
+        return remaining;
+    }
+
     private static (double thrust, double massFlow) ActivePerformance(Vehicle vehicle, double throttle, double ambientPressure)
     {
         if (vehicle?.Parts?.States == null || !double.IsFinite(throttle) || !double.IsFinite(ambientPressure)

@@ -63,6 +63,13 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
             AnAutomaticCutSurvivesATakeover(t, vehicle);
             AnAbortKeepsItsShutdownThroughATakeover(t, vehicle);
             AFailedReleaseKeepsTheNoCutRequest(t, vehicle);
+            foreach (GuidanceWindow.LandingPhase phase in new[] { GuidanceWindow.LandingPhase.TransferPlanning,
+                GuidanceWindow.LandingPhase.TransferCoast, GuidanceWindow.LandingPhase.TerminalCoast,
+                GuidanceWindow.LandingPhase.TerminalBrake })
+            {
+                ATakeoverStopsTheModeAndLeavesTheEngine(t, vehicle, phase);
+                AFailedReleaseKeepsTheNoCutRequest(t, vehicle, phase);
+            }
             AnAbortBetweenRetriesStillCuts(t, vehicle);
             AHandoverKeepsTheModeItStarted(t, vehicle);
         }
@@ -75,10 +82,12 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
         }
     }
 
-    private static void ATakeoverStopsTheModeAndLeavesTheEngine(TestContext t, Vehicle vehicle)
+    private static void ATakeoverStopsTheModeAndLeavesTheEngine(TestContext t, Vehicle vehicle,
+        GuidanceWindow.LandingPhase phase = GuidanceWindow.LandingPhase.Idle)
     {
         FlightComputer computer = vehicle.FlightComputer;
         VehicleAutopilotState state = Engaged(vehicle);
+        SetLandingPhase(vehicle, state, phase);
 
         TakeTheAttitude(vehicle);
         GuidanceWindow.ApplyAutopilot(vehicle);
@@ -92,9 +101,11 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
         t.Check("the finished release restores the default stop", !state.ReleaseWithoutEngineCut);
     }
 
-    private static void AFailedReleaseKeepsTheNoCutRequest(TestContext t, Vehicle vehicle)
+    private static void AFailedReleaseKeepsTheNoCutRequest(TestContext t, Vehicle vehicle,
+        GuidanceWindow.LandingPhase phase = GuidanceWindow.LandingPhase.Idle)
     {
         VehicleAutopilotState state = Engaged(vehicle);
+        SetLandingPhase(vehicle, state, phase);
         TakeTheAttitude(vehicle);
 
         var harmony = new Harmony("com.maxi.afc.harnesstests.guidance.takeover");
@@ -120,6 +131,14 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
             harmony.UnpatchAll(harmony.Id);
             VehicleAutopilotState.Remove(vehicle);
         }
+    }
+
+    private static void SetLandingPhase(Vehicle vehicle, VehicleAutopilotState state, GuidanceWindow.LandingPhase phase)
+    {
+        if (phase == GuidanceWindow.LandingPhase.Idle) return;
+        state.Running = false;
+        state.LandingPhase = phase;
+        VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out _);
     }
 
     // The production handover, driven through the dispatch that decides whether a 6-DOF step was a

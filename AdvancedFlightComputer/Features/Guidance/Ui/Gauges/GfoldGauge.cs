@@ -84,6 +84,7 @@ public static partial class GuidanceWindow
         // What differs is the PLAN drawn behind it: G-FOLD has a trajectory, 6-DOF has its own, and the hover has none at all because it flies a rate profile.
         bool live = _s.LandingPhase == LandingPhase.GfoldDescent
                  || _s.LandingPhase == LandingPhase.TerminalHover
+                 || TerminalBurnActive
                  || _s.Active;
         if (!live)
         {

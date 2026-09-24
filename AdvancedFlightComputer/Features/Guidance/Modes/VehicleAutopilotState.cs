@@ -424,6 +424,30 @@ public sealed class VehicleAutopilotState
     // Landing state.
     public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;
 
+    public double BrakingAltitudeKm = 11;
+    public bool DeorbitArrivalAngleEnabled;
+    public double DeorbitArrivalDescentDeg = 5;
+    internal DeorbitRequest DeorbitRequest;
+    internal DeorbitPlanner DeorbitPlanner;
+    internal DeorbitPlan DeorbitPlan;
+    internal DirectBrakingPlan DirectBrakingPlan;
+    internal int DeorbitEngineSignature;
+    internal double DeorbitLastResidual = double.PositiveInfinity;
+    internal long DeorbitNextValidationTick;
+    internal Burn DeorbitNode;
+    internal BurnTarget DeorbitTarget;
+    internal double3 DeorbitNodeDeltaV;
+    internal double3 DeorbitNodeDeltaVCci;
+    internal double DeorbitNodeTime = double.NaN;
+    internal bool DeorbitNodeClaimed;
+    internal bool DeorbitAutoArmed;
+    internal bool DeorbitWarpRequested;
+    internal double DeorbitWarpTime = double.NaN;
+    internal float DeorbitSavedThrottle;
+    internal float DeorbitPreviewThrottle;
+    internal bool DeorbitThrottleHeld;
+    internal string DirectBrakingRefusal = "";
+
     /// <summary>
     /// This vehicle's landing site. Defaults to the Apollo 11 landmark as KSA itself
     /// defines it (Content/Core/Astronomicals.xml, Landmark Id="Apollo11" on the Moon).
@@ -540,6 +564,11 @@ public sealed class VehicleAutopilotState
     public double VehicleHeightM = 15.0;
 
     public double GfoldHandoffTgo = 40.0;  // hand UPFG braking over this long before the gate
+    public double LandingVerticalGateM = 500.0;
+    internal GuidanceWindow.GfoldApproach GfoldApproach;
+    internal double TerminalBurnLastTime;
+    internal double TerminalIgnitionHeight;
+    internal double TerminalBurnSeconds;
     public double GfoldThrottle;
 
     /// <summary>Why the last thrust command could not be met, empty when it could.</summary>

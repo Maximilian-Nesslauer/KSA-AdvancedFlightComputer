@@ -73,6 +73,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
 
             harmony.Patch(Method("BuildUpfgVehicle"), prefix: Prefix(nameof(NotForFixture)));
             harmony.Patch(Method("AutoSequence"), prefix: Prefix(nameof(NotForFixture)));
+            // The fixture writes the burn's engine command without an active engine, so the engine wait is stubbed with the staging it depends on.
+            harmony.Patch(Method("PrepareLandingEngines"), prefix: Prefix(nameof(EnginesReadyForFixture)));
             harmony.Patch(Method("Step6Dof"), prefix: Prefix(nameof(CountSixDofEngage)));
 
             TheBurnHandsOverToSixDof(t, craft);
@@ -202,6 +204,14 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     private static HarmonyMethod Prefix(string name) => new(typeof(GuidanceLandingHandoffTest), name);
 
     private static bool NotForFixture(Vehicle vehicle) => !ReferenceEquals(vehicle, _fixture);
+
+    private static bool EnginesReadyForFixture(Vehicle vehicle, ref bool __result)
+    {
+        if (!ReferenceEquals(vehicle, _fixture))
+            return true;
+        __result = true;
+        return false;
+    }
 
     // Stands in for an engage that took: the dispatch is counted and the request consumed, so the
     // step reads a 6-DOF that is flying without building a problem or starting a solve.

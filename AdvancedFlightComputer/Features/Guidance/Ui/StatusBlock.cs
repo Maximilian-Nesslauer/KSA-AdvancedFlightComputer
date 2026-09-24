@@ -138,7 +138,9 @@ public static partial class GuidanceWindow
         float2 centre = new float2(min.X + size.X * 0.5f, apexY + radius);
         float half = MathF.Asin(MathF.Min(1f, span * 0.5f / radius));
 
-        bool live = running && _s.Upfg.Tgo > 0.0;
+        bool live = running && _s.Upfg.Tgo > 0.0
+            && (_s.DeorbitPlan == null || _s.LandingPhase == LandingPhase.Prep || _s.LandingPhase == LandingPhase.Burn);
+        bool timed = running && double.IsFinite(tgoSec) && tgoSec >= 0;
         float thick = MathF.Max(4f, size.Y * 0.09f);
         float rgoOff = thick * 1.6f;
         float vgoOff = thick * 3.2f;
@@ -168,14 +170,14 @@ public static partial class GuidanceWindow
 
         // The three numbers on one line, in the order the bands beneath them run: what is left to fly, how long it takes, and what it costs.
         string rgoText = live ? $"RGO {_s.Upfg.Rgo.Length() / 1000.0:F0} km" : "RGO  --- km";
-        string tgoText = live ? $"T-GO {tgoSec:F1} s" : "T-GO  --.- s";
+        string tgoText = timed ? $"T-GO {tgoSec:F1} s" : "T-GO  --.- s";
         string vgoText = live ? $"VGO {_s.Upfg.VgoMag:F0} m/s" : "VGO  --- m/s";
 
         dl.AddText(new float2(min.X + pad, min.Y + 4f), live ? SchemRgo : SchemDim, rgoText);
 
         float tgoW = ImGui.CalcTextSize(tgoText).X;
         dl.AddText(new float2(min.X + (size.X - tgoW) * 0.5f, min.Y + 4f),
-            live ? SchemInk : SchemDim, tgoText);
+            timed ? SchemInk : SchemDim, tgoText);
 
         float vgoW = ImGui.CalcTextSize(vgoText).X;
         dl.AddText(new float2(min.X + size.X - pad - vgoW, min.Y + 4f),

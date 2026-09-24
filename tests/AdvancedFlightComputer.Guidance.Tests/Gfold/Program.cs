@@ -1,5 +1,8 @@
 using AdvancedFlightComputer.Guidance.Gfold;
 
+if (args.Contains("--terminal-braking"))
+    return TerminalBrakingTests.Run();
+
 // Replicates the reference Python P3_P4 flow on the Mars static test case:
 // Problem 3 (minimum landing error) finds the best reachable landing point,
 // Problem 4 (minimum fuel) re-solves pinned to that point.

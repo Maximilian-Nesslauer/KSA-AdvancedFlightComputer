@@ -751,7 +751,7 @@ public static partial class GuidanceWindow
     }
 
     // The vehicle-wide acceleration limit is applied to the stage list on every step. A stage that crosses the limit mid-burn is divided at the mass where full thrust reaches the limit.
-    private static void ApplyGLimit(UpfgVehicle vehicle, double gLim)
+    internal static void ApplyGLimit(UpfgVehicle vehicle, double gLim)
     {
         const double g0 = 9.80665;
         double aLim = gLim * g0;
@@ -839,6 +839,10 @@ public static partial class GuidanceWindow
     {
         GuidanceLog.Debug(vehicle, $"{mode} claims the craft.");
         ResetLandingEngineWait();
+        ClearDeorbitPlanState();
+        _s.GfoldApproach = GfoldApproach.Direct;
+        _s.TerminalIgnitionHeight = 0;
+        _s.TerminalBurnSeconds = 0;
         _s.ReleaseWithoutEngineCut = false;
         _s.ShutdownRequested = false;
         _s.TakeoverStop = false;
@@ -920,6 +924,12 @@ public static partial class GuidanceWindow
             return;
         }
 
+        if (_s.DeorbitNodeClaimed && _s.LandingPhase is not (LandingPhase.DeorbitNodePending or LandingPhase.DeorbitBurn))
+        {
+            ReleaseStockDeorbit(vehicle);
+            if (_s.LandingPhase == LandingPhase.Done) ClearDeorbitPlanState();
+        }
+
         bool sixDof = _s.Active || _s.EngagePending;
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire EXECUTE. A booster adopted at separation also counts as flying until boostback engages.
@@ -998,7 +1008,10 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // The coast to a deorbit burn waits without the craft, like an armed launch, and turns into Prep here, ahead of the claim below, so the step that starts Prep is the step that claims, and Prep never commands an unowned craft.
+        // Planning waits without control, and the stock node takes its claim before Auto is armed.
+        // A direct braking coast enters Prep before the manual control claim below.
+        StepDeorbitPlanning(vehicle, orbit, parent);
+        if (StepStockDeorbit(vehicle, orbit, parent)) return;
         StepLandingCoast();
 
         sixDof = _s.Active || _s.EngagePending;
@@ -1079,13 +1092,8 @@ public static partial class GuidanceWindow
                     // Mode 3's throttle command stretches the burn onto the site.
                     inputs.EngineThrottle = (float)_s.Upfg.Throttle;
                 }
-                else if (_s.LandingPhase == LandingPhase.GfoldDescent)
-                {
-                    // The tracker decides whether the plan coasts, and writes zero throttle for a coast, so a positive throttle here is a burn the engine can hold.
-                    inputs.EngineOn = _s.GfoldThrottle > 0.0;
-                    inputs.EngineThrottle = (float)_s.GfoldThrottle;
-                }
-                else if (_s.LandingPhase == LandingPhase.TerminalHover)
+                else if (_s.LandingPhase is LandingPhase.GfoldDescent or LandingPhase.TerminalHover
+                    or LandingPhase.TerminalCoast or LandingPhase.TerminalBrake)
                 {
                     inputs.EngineOn = _s.GfoldThrottle > 0.0;
                     inputs.EngineThrottle = (float)_s.GfoldThrottle;
@@ -1226,7 +1234,7 @@ public static partial class GuidanceWindow
         // Clear the wait even when no guidance resources need release.
         ResetLandingEngineWait();
         DisarmStaging(vehicle);
-        if (!_s.ControlAcquired && !_s.FcResetPending && _s.Worker == null
+        if (!_s.ControlAcquired && !_s.DeorbitNodeClaimed && !_s.FcResetPending && _s.Worker == null
             && !_s.Active && !_s.EngagePending && !_s.Converging && !_s.Running
             && !_s.LaunchArmed && !_s.LandingCutPending
             && !_s.HasCommand && _s.GimbalMode == 0 && _s.Guidance == null
@@ -1241,9 +1249,13 @@ public static partial class GuidanceWindow
             return true;
         }
 
-        bool coastWaits = keepWaitingCoast && _s.LandingPhase == LandingPhase.Coast;
+        bool coastWaits = keepWaitingCoast && LandingWaits(_s.LandingPhase);
         _s.Running = false;
-        _s.LandingPhase = coastWaits ? LandingPhase.Coast : LandingPhase.Idle;
+        if (!coastWaits)
+        {
+            _s.LandingPhase = LandingPhase.Idle;
+            ClearDeorbitPlanState();
+        }
         _s.BoostbackPhase = BoostbackPhase.Idle;
         _s.LaunchArmed = false;
         _s.HasCommand = false;
@@ -1265,6 +1277,7 @@ public static partial class GuidanceWindow
             }
         }
 
+        Attempt(() => ReleaseStockDeorbit(vehicle, keepClaim: true, preserve: _s.ReleaseWithoutEngineCut));
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
 
@@ -1528,7 +1541,7 @@ public static partial class GuidanceWindow
     }
 
     // Rodrigues rotation of vec about a unit axis.
-    private static double3 RotateAbout(double3 vec, double3 axis, double angle)
+    internal static double3 RotateAbout(double3 vec, double3 axis, double angle)
     {
         double c = Math.Cos(angle), s = Math.Sin(angle);
         return vec * c + double3.Cross(axis, vec) * s + axis * (double3.Dot(axis, vec) * (1.0 - c));
