@@ -23,6 +23,7 @@ public static partial class GuidanceWindow
         ImGui.Separator();
 
         DrawTargetOrbitSection(vehicle, orbit, parent, bodyRadius, innerW);
+        DrawConvexAscentSection(vehicle, orbit, parent, innerW);
         DrawAscentSettingsSection(innerW);
         DrawReturnableStagesSection(innerW);
         DrawExpertSettingsSection(innerW);

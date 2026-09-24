@@ -150,6 +150,20 @@ public sealed class ExponentialAtmosphere
     }
 
     /// <summary>
+    /// Pressure as a <see cref="Dual"/>, with the same two kinks as <see cref="Density(Dual)"/>. The convex ascent reads it for the engines' back pressure, whose thrust falls as it rises.
+    /// </summary>
+    public Dual Pressure(Dual altitude)
+    {
+        if (altitude.V >= TopAltitude)
+            return new Dual(0.0, 0.0);
+        if (altitude.V <= 0.0)
+            return new Dual(SeaLevelPressure, 0.0);
+
+        Dual e = Dual.Exp(new Dual(-altitude.V / ScaleHeight, -altitude.D / ScaleHeight));
+        return SeaLevelPressure * e;
+    }
+
+    /// <summary>
     /// Dynamic pressure, 1/2 rho V^2, at an altitude and speed. Convenience for
     /// readouts; the dynamics compose the pieces themselves.
     /// </summary>

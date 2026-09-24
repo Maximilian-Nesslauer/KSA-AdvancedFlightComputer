@@ -7,6 +7,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
 // Ascent overlay: the target orbit and the trajectory flown so far, drawn in the world so they can be read straight off the map/orbit view. Uses the shared projection helpers in Ui/Overlays/OverlayCore.cs.
 public static partial class GuidanceWindow
@@ -88,7 +89,78 @@ public static partial class GuidanceWindow
         var traceCol = new ImColor8(255, 60, 220);    // magenta - flown so far
 
         DrawTargetOrbit(dl, orbit, parent, bodyRadius, targetCol);
+        DrawConvexPlan(dl, orbit, parent);
         DrawTrace(dl, traceCol);
+    }
+
+    // Scratch for the drawn plan, grown on demand.
+    private static double3[] _planPoints = new double3[256];
+
+    /// <summary>
+    /// The convex plan's trajectory, from the pad to insertion, with its separations, the UPFG hand-over and the insertion marked.
+    ///
+    /// DRAWN FROM WHERE THE PAD IS NOW. The plan's positions are inertial, from the instant it was solved, and the pad has turned with the body since - so before lift-off the whole plan is turned about the spin axis by the angle the body has turned, which is where the same climb would go if it started now. From EXECUTE on it is frozen at the lift-off instant, so the magenta trace flown lies straight over it. After a flight, or once the vehicle has moved off its pad, the stored plan describes a lift-off that is no longer on offer and is not drawn.
+    /// </summary>
+    private static void DrawConvexPlan(ImDrawListPtr dl, Orbit orbit, IParentBody parent)
+    {
+        if (!_s.ShowConvexPlan)
+            return;
+
+        AscentPlan plan;
+        double tRef;
+        if (_s.Running && _s.FlyingPlan != null)
+        {
+            plan = _s.FlyingPlan;
+            tRef = _s.FlyingPlanLaunchTime;
+        }
+        else
+        {
+            plan = _s.AscentPlan;
+            if (plan?.Solution == null || !ReferenceEquals(plan.Body, parent))
+                return;
+            double3 ccf = orbit.StateVectors.PositionCci.Transform(parent.GetCci2Ccf());
+            if ((ccf - plan.StartCcf).Length() > PlanStartToleranceM)
+                return;
+            tRef = SimNow();
+        }
+        AscentSolution sol = plan.Solution;
+        int n = sol.Nodes;
+        if (n < 2)
+            return;
+
+        if (_planPoints.Length < n)
+            _planPoints = new double3[Math.Max(n, _planPoints.Length * 2)];
+        double turn = plan.Omega * (tRef - plan.SolvedAt);
+        for (int k = 0; k < n; k++)
+            _planPoints[k] = RotZ(new double3(sol.Position[k * 3], sol.Position[k * 3 + 1], sol.Position[k * 3 + 2]), turn);
+
+        var col = sol.Converged ? new ImColor8(255, 170, 40) : new ImColor8(255, 90, 70);
+        DrawCciPolyline(dl, _planPoints.AsSpan(0, n), col, 2.0f);
+
+        foreach (int k in plan.Series.StagingNodes)
+            if (TryProjectCci(_planPoints[k], out float2 s))
+            {
+                dl.AddCircleFilled(s, 3.5f, col);
+                OvText(dl, s + new float2(7f, -6f), col, $"stage {sol.NodeStage[k] + 1} at {plan.Series.AltitudeKm[k]:F0} km");
+            }
+
+        for (int k = 0; k < n; k++)
+            if (plan.Series.AltitudeKm[k] >= _s.ConvexHandoverAltKm)
+            {
+                if (TryProjectCci(_planPoints[k], out float2 s))
+                {
+                    dl.AddCircle(s, 5f, col, 0, 1.5f);
+                    OvText(dl, s + new float2(7f, 6f), col, $"UPFG {_s.ConvexHandoverAltKm:F0} km");
+                }
+                break;
+            }
+
+        if (TryProjectCci(_planPoints[n - 1], out float2 end))
+        {
+            dl.AddCircleFilled(end, 4f, col);
+            OvText(dl, end + new float2(7f, -6f), col,
+                $"insert {plan.Series.AltitudeKm[n - 1]:F0} km, {sol.Time[n - 1]:F0} s, {sol.FinalMass / 1000.0:F1} t");
+        }
     }
 
     // The target orbit as a closed ellipse in the target plane.

@@ -9,6 +9,8 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Numerics/AdvancedFlightComputer.Guidance.Numerics.csproj" />
+    <!-- The convex ascent solves its subproblems with Clarabel, which the G-FOLD project binds. -->
+    <ProjectReference Include="../Gfold/AdvancedFlightComputer.Guidance.Gfold.csproj" />
   </ItemGroup>
   <ItemGroup>
     <None Include="$(GuidanceNativeDir)$(GuidanceHostRid)/$(GuidanceHostScs)" Link="$(GuidanceHostScs)"

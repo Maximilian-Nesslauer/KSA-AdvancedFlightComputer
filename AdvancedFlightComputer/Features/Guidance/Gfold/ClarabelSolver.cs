@@ -19,8 +19,8 @@ namespace AdvancedFlightComputer.Guidance.Gfold;
 ///
 /// which is the single stacked matrix with a leading zero cone - exactly what
 /// <see cref="SparseCcs.VStack"/> builds. That stacking was originally written for the
-/// SCS binding, which took the same form; it outlived it. P is null here: the G-FOLD
-/// objective is linear.
+/// SCS binding, which took the same form; it outlived it. P comes from
+/// <see cref="ConicProblem.P"/> and is empty for G-FOLD, whose objective is linear.
 ///
 /// Cold start, no persistent state: every G-FOLD
 /// call is a new plan, and a static function with no fields is safe to call from the
@@ -122,6 +122,8 @@ public static class ClarabelSolver
             throw new ArgumentException("A and G column counts differ");
         if (problem.A != null && problem.B?.Length != p)
             throw new ArgumentException($"b has length {problem.B?.Length}, expected p={p}");
+        if (problem.P != null && (problem.P.Rows != n || problem.P.Cols != n))
+            throw new ArgumentException($"P is {problem.P.Rows}x{problem.P.Cols}, expected {n}x{n}");
 
         // Same stacking as the SCS path: equalities on top as a zero cone, then the orthant, then the second-order cones, matching the cone list built below.
         SparseCcs stacked = problem.A != null
@@ -171,13 +173,31 @@ public static class ClarabelSolver
                 ColPtr = Pin(colPtr), RowVal = Pin(rowVal), NzVal = Pin(pr),
             };
 
-            // P is the zero matrix: a linear objective.
-            // Clarabel still wants a well-formed n x n CSC, so hand it one with no entries - an all-zero column pointer array of length n+1 and null index/value pointers, which is the representation CscMatrix.h documents for a zero matrix.
+            // Without P the objective is linear, and Clarabel still wants a well-formed n x n CSC: hand it one with no entries - an all-zero column pointer array of length n+1 and null index/value pointers, which is the representation CscMatrix.h documents for a zero matrix.
             var pMat = new ClarabelNative.ClarabelCscMatrix
             {
                 M = (nuint)n, N = (nuint)n,
                 ColPtr = Pin(new nuint[n + 1]), RowVal = IntPtr.Zero, NzVal = IntPtr.Zero,
             };
+            if (problem.P != null)
+            {
+                // UPPER TRIANGLE ONLY. Clarabel keeps the upper triangle of whatever it is given (ProblemData calls to_triu), so a symmetric P passed whole would be read correctly, but a lower-triangle entry passed alone would be silently dropped.
+                (double[] pPr, int[] pJc, int[] pIr) = problem.P.Build();
+                for (int col = 0; col < n; col++)
+                    for (int k = pJc[col]; k < pJc[col + 1]; k++)
+                        if (pIr[k] > col)
+                            throw new ArgumentException($"P has an entry below the diagonal at ({pIr[k]},{col})");
+                var pColPtr = new nuint[pJc.Length];
+                for (int i = 0; i < pJc.Length; i++) pColPtr[i] = (nuint)pJc[i];
+                var pRowVal = new nuint[pIr.Length];
+                for (int i = 0; i < pIr.Length; i++) pRowVal[i] = (nuint)pIr[i];
+                pMat.ColPtr = Pin(pColPtr);
+                if (pPr.Length > 0)
+                {
+                    pMat.RowVal = Pin(pRowVal);
+                    pMat.NzVal = Pin(pPr);
+                }
+            }
 
             ClarabelNative.ClarabelDefaultSettings settings =
                 ClarabelNative.clarabel_DefaultSettings_f64_default();

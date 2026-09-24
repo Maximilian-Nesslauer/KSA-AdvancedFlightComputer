@@ -226,6 +226,10 @@ public static partial class GuidanceWindow
         // NOT ON THE PAD. A reserve bigger than the stage can give would otherwise stage the vehicle where it stands, and a booster dropped at zero altitude is a sillier failure than the one being guarded against. Past the vertical rise the test means what it says.
         if (_s.Phase == AscentPhase.Vertical)
             return false;
+        // The convex profile starts on the pad too, with no vertical-rise phase to wait out; the same kilometre the ascent trace ignores is the pad for this purpose.
+        if (_s.Phase == AscentPhase.Profile && vehicle.Orbit?.Parent is IParentBody body
+            && vehicle.Orbit.StateVectors.PositionCci.Length() - body.MeanRadius < TraceMinAltitude)
+            return false;
 
         UpfgVehicle model = _s.StageModel;
         if (model == null || model.Stages.Count < 2)
@@ -991,6 +995,9 @@ public static partial class GuidanceWindow
         // Likewise the launch window: tracked, and FIRED, from here rather than from the panel. It has to run for a focused vehicle that is not flying yet, which is precisely the state an armed launch sits in. It starts the ascent, so a fault here counts as a failed step like a mode's. See StepLaunchWindow.
         StepLaunchWindow(vehicle, orbit, parent, parent.MeanRadius);
 
+        // The convex ascent's Calculate request is built here for the same reason as the stage model: this is the one point in the frame where the part tree is settled and nothing else is reading it. The solve itself runs on its own thread. It catches its own faults, which cost the plan, never the step.
+        StepAscentPlanner(vehicle, orbit, parent);
+
         // A requested reset runs ahead of everything below: the whole point of the button is to recover when the mod's own state is wrong, so it must not depend on that state saying the autopilot is still active.
         if (_s.FcResetPending)
         {
@@ -1113,8 +1120,8 @@ public static partial class GuidanceWindow
                 else if (!_s.CutoffDone)
                 {
                     inputs.EngineOn = true;
-                    // Full throttle unless UPFG is holding the acceleration limit.
-                    inputs.EngineThrottle = (float)_s.Upfg.Throttle;
+                    // Full throttle unless UPFG is holding the acceleration limit. Not while the convex profile flies: that plan is a full-throttle one, as the script's is, and a g-limit throttling it back would fly a different trajectory under the same attitudes.
+                    inputs.EngineThrottle = _s.Phase == AscentPhase.Profile ? 1f : (float)_s.Upfg.Throttle;
                 }
             }
         }

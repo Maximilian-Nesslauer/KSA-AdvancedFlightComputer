@@ -15,6 +15,10 @@ public sealed class UpfgStage
     // These values identify the staging sequence and the engine-core count for the stage table. The guidance solver does not read them.
     public int Seq = -1;
     public int Engines;
+
+    // Full-throttle thrust (N) at each back pressure of PressureGrid (Pa), for the convex ascent planner, which flies the burning stage through the thinning air. Filled only when KsaVehicleAdapter.Build is given a grid; UPFG does not read them.
+    public double[] PressureGrid;
+    public double[] ThrustAtPressure;
 }
 
 public sealed class UpfgVehicle

@@ -66,6 +66,7 @@ public static partial class GuidanceWindow
         {
             case AscentPhase.Vertical: return "VERTICAL";
             case AscentPhase.Turn: return "GRAVITY TURN";
+            case AscentPhase.Profile: return "CONVEX PROFILE";
             case AscentPhase.ClosedLoop: return "UPFG";
             case AscentPhase.Terminal:
                 return AscentCutoffIn() > 0.0 ? "TERMINAL FREEZE" : "CUTOFF";
