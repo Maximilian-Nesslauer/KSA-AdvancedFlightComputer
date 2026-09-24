@@ -1,3 +1,5 @@
+using AdvancedFlightComputer.Guidance.Conic;
+
 namespace AdvancedFlightComputer.Guidance.Gfold;
 
 // The G-FOLD powered-descent problems from Acikmese and Ploen and from Blackmore are expressed in standard conic form.

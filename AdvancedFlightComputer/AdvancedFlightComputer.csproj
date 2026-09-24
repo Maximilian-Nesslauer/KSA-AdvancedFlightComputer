@@ -58,8 +58,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Compile Remove="Features\Guidance\Numerics\**\*.cs;Features\Guidance\Gfold\**\*.cs;Features\Guidance\Scvx\**\*.cs" />
+    <Compile Remove="Features\Guidance\Numerics\**\*.cs;Features\Guidance\Conic\**\*.cs;Features\Guidance\Gfold\**\*.cs;Features\Guidance\Scvx\**\*.cs" />
     <ProjectReference Include="Features\Guidance\Numerics\AdvancedFlightComputer.Guidance.Numerics.csproj" />
+    <ProjectReference Include="Features\Guidance\Conic\AdvancedFlightComputer.Guidance.Conic.csproj" />
     <ProjectReference Include="Features\Guidance\Gfold\AdvancedFlightComputer.Guidance.Gfold.csproj" />
     <ProjectReference Include="Features\Guidance\Scvx\AdvancedFlightComputer.Guidance.Scvx.csproj" />
   </ItemGroup>

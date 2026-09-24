@@ -1,5 +1,6 @@
 using System.Reflection;
 using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using HarmonyLib;

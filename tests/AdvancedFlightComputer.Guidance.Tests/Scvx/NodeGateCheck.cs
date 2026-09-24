@@ -1,5 +1,5 @@
 using System.Globalization;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Verifies the node-schedule transition: that dropping the node count mid-flight

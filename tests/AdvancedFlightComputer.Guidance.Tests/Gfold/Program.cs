@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 
 if (args.Contains("--terminal-braking"))

@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace AdvancedFlightComputer.Guidance.Scvx;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 /// <summary>
 /// Solves one SCS cone-QP and carries the solution forward for the next call's

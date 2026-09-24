@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
+using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using KSA;
@@ -540,12 +541,13 @@ public sealed class VehicleAutopilotState
     public bool GfoldTabSelectPending;
 
     /// <summary>
-    /// Which solver flies the powered descent: G-FOLD by default, or the 6-DOF
-    /// successive-convexification one. Per vehicle rather than a panel-wide setting,
-    /// because the deorbit handoff READS it to decide what to start - so it describes
-    /// how this craft lands, not what the player last clicked.
+    /// Which solver flies the powered descent: the 6-DOF successive-convexification one
+    /// by default, or G-FOLD. Per vehicle rather than a panel-wide setting, because the
+    /// deorbit handoff READS it to decide what to start - so it describes how this craft
+    /// lands, not what the player last clicked. The handoff turns it off for a craft
+    /// 6-DOF cannot plan for, and hands that craft to G-FOLD instead.
     /// </summary>
-    public bool UseSixDofLanding;
+    public bool UseSixDofLanding = true;
     public bool TermTabSelectPending;
 
     /// <summary>
