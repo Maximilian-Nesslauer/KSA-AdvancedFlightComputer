@@ -91,7 +91,7 @@ public sealed class GuidanceThrustTest : AfcTest
         Vehicle vehicle = Uninitialized<Vehicle>();
         PartTree tree = Uninitialized<PartTree>();
         tree.States = new ModuleStateList();
-        tree.EngineThrottleMin = 0.1f;
+        SetEngineThrottleMin(tree, 0.1f);
         vehicle.Parts = tree;
 
         EngineController active = Engine(1, 1000, isActive: true);
@@ -162,7 +162,7 @@ public sealed class GuidanceThrustTest : AfcTest
         Vehicle vehicle = Uninitialized<Vehicle>();
         PartTree tree = Uninitialized<PartTree>();
         tree.States = new ModuleStateList();
-        tree.EngineThrottleMin = 0.1f;
+        SetEngineThrottleMin(tree, 0.1f);
         vehicle.Parts = tree;
 
         EngineController liquid = Engine(11, 1000, isActive: true);
@@ -200,7 +200,7 @@ public sealed class GuidanceThrustTest : AfcTest
     private static void CoreMinimum(TestContext t)
     {
         ProbeCore core = Probe(0.4f);
-        RocketControllerData.ComputeFromCores(new RocketCore[] { core }, float3.Zero, 101325f, 0.1f);
+        RocketControllerData.ComputeFromCores(new RocketCore[] { core }, 101325f, 0.1f);
         t.CheckAbs("the stock computation applies the per-core floor", core.LastThrottle, 0.4, 1e-7);
     }
 
@@ -230,6 +230,12 @@ public sealed class GuidanceThrustTest : AfcTest
 
     private static void SetActive(EngineController engine, bool isActive)
         => typeof(EngineController).GetProperty(nameof(EngineController.IsActive))!.SetValue(engine, isActive);
+
+    // An uninitialized tree has no dirty derived data, so the getter returns this field as it is.
+    private static void SetEngineThrottleMin(PartTree tree, float value)
+        => (typeof(PartTree).GetField("_engineThrottleMin", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(PartTree).FullName, "_engineThrottleMin"))
+            .SetValue(tree, value);
 
     // Records the throttle passed by RocketControllerData.ComputeFromCores.
     // Other operations throw because this probe cannot simulate a live engine.

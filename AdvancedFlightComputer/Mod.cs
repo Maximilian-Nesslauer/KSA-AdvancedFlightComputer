@@ -18,7 +18,7 @@ namespace AdvancedFlightComputer;
 [StarMapMod]
 public sealed class Mod
 {
-    private const string TestedGameVersion = "v2026.9.10.5438";
+    private const string TestedGameVersion = "v2026.9.22.5482";
 
     private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
     private static bool _maneuverTypesInjected;
