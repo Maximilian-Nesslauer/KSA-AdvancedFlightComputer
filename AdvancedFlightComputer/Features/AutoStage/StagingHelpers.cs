@@ -106,7 +106,8 @@ internal static class StagingHelpers
 
     public static int SequenceGeneration => _sequenceGeneration;
 
-    public static void InvalidateSequenceCache() => _sequenceGeneration++;
+    // Interlocked, because SequencePerformanceList.Recompute can reset sequence caches on a worker thread, in the editor and in flight.
+    public static void InvalidateSequenceCache() => Interlocked.Increment(ref _sequenceGeneration);
 
     // Queried per frame by the gauge button, but it only changes on sequence activation.
     public static bool HasNextEngineSequence(Vehicle vehicle)
