@@ -389,18 +389,18 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The open-loop phase's command: the plan's attitude where the vehicle is on the plan, and the rate that command is turning at. See <see cref="ConvexProfileDirection"/> for where it is on the plan; the rate is the command's own, differenced step to step, so it includes the local horizon turning under the vehicle as well as the programme itself.
     /// </summary>
-    private static double3 ConvexProfileCommand(double3 r, double3 v, IParentBody parent, double stepDt,
+    private static double3 ConvexProfileCommand(double3 r, double3 v, double mass, IParentBody parent, double stepDt,
                                                 out double3 rate)
     {
-        double3 want = ConvexProfileDirection(r, v, parent);
+        double3 want = ConvexProfileDirection(r, v, mass, parent);
         rate = DifferencedRate(ref _s.ConvexLastWant, want, stepDt);
         return want;
     }
 
     /// <summary>
-    /// The plan's attitude where the vehicle is on the plan, moving the plan on first. Where it is on the plan is a plan time, carried from step to step and moved on by the vehicle's air speed (see ConvexAscentProfile.Advance): pitch against speed while the vehicle is gaining speed it has never had, the plan's own clock while it is not. The clock runs on SIM time since the last step, not the slew's clamped step, so a warped step moves the plan as far as it moved the vehicle.
+    /// The plan's attitude where the vehicle is on the plan, moving the plan on first. Where it is on the plan is a plan time, carried from step to step and moved on by the vehicle's air speed within the stage its mass says it is burning (see ConvexAscentProfile.Advance): pitch against speed while the vehicle is gaining speed it has never had in that stage, the plan's own clock while it is not, and back in step with the plan at each separation. The clock runs on SIM time since the last step, not the slew's clamped step, so a warped step moves the plan as far as it moved the vehicle.
     /// </summary>
-    private static double3 ConvexProfileDirection(double3 r, double3 v, IParentBody parent)
+    private static double3 ConvexProfileDirection(double3 r, double3 v, double mass, IParentBody parent)
     {
         ConvexAscentProfile profile = _s.FlyingPlan?.Profile;
         if (profile == null)
@@ -408,7 +408,8 @@ public static partial class GuidanceWindow
         double now = SimNow();
         double dt = double.IsFinite(_s.ConvexLastTime) ? Math.Max(0.0, now - _s.ConvexLastTime) : 0.0;
         _s.ConvexLastTime = now;
-        _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), dt, ref _s.ConvexFastest);
+        _s.ConvexPlanTime = profile.Advance(_s.ConvexPlanTime, AirSpeed(r, v, parent), mass, dt,
+            ref _s.ConvexStage, ref _s.ConvexStageSpeed, ref _s.ConvexFastest);
         return profile.Direction(r, _s.ConvexPlanTime);
     }
 
@@ -446,10 +447,10 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>The ClosedLoop command while the hand-over blend runs: the profile's attitude turned toward UPFG's by the blend weight, about their common normal.</summary>
-    private static double3 ConvexBlendCommand(double3 r, double3 v, IParentBody parent, double3 upfgDir,
+    private static double3 ConvexBlendCommand(double3 r, double3 v, double mass, IParentBody parent, double3 upfgDir,
                                               double weight, double stepDt, out double3 rate)
     {
-        double3 from = double3.Normalize(ConvexProfileDirection(r, v, parent));
+        double3 from = double3.Normalize(ConvexProfileDirection(r, v, mass, parent));
         double3 to = double3.Normalize(upfgDir);
         double3 axis = double3.Cross(from, to);
         double3 want = axis.Length() > 1e-12

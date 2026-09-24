@@ -14,33 +14,43 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///
 /// INDEXED BY SPEED, NOT TIME. An open-loop program indexed by time flies the plan's attitude at the plan's clock whatever the vehicle is actually doing, so a vehicle a few percent heavier or weaker than modelled pitches over too early for the speed it has. Indexed by speed, the vehicle pitches when it has the speed the plan pitched at, which absorbs most of that mismatch - the same reason a gravity turn is programmed on velocity. Air-relative rather than inertial speed because it starts from zero on the pad (inertial speed starts at the pad's co-rotation, and barely moves through the vertical rise) and because it is what the aerodynamic loading the plan was shaped by depends on.
 ///
-/// EXCEPT WHERE SPEED CANNOT BE AN INDEX. A KSA stack drags hard, and an upper stage lit in the thick air behind a short first stage can lose speed for a minute before it gains it back - while the plan pitches it over by thirty degrees. No table in speed can say that. So the profile is really a table in the PLAN'S TIME, and speed only says where on it the vehicle is: while the vehicle is accelerating to speeds it has never had, the plan time is the time the plan reached that speed; while it is not, the plan time runs on with the clock. Where speed rises monotonically that is exactly pitch against speed, and where it does not the plan is flown on its own schedule until speed catches up with it again. See <see cref="Advance"/>.
+/// EXCEPT WHERE SPEED CANNOT BE AN INDEX. A KSA stack drags hard, and an upper stage lit in the thick air behind a short first stage can lose speed for a minute before it gains it back - while the plan pitches it over by thirty degrees. No table in speed can say that. So the profile is really a table in the PLAN'S TIME, and speed only says where on it the vehicle is: while the vehicle is accelerating to speeds it has never had, the plan time is the time the plan reached that speed; while it is not, the plan time runs on with the clock. Where speed rises monotonically that is exactly pitch against speed, and where it does not the plan is flown on its own schedule until speed catches up with it again.
+///
+/// AND STAGE BY STAGE. The plan's stages each own a stretch of plan time, and speed is only ever looked up within the stage the vehicle is actually burning, which its mass says (see <see cref="StageOfMass"/>). A vehicle that stages a little slower than planned would otherwise be sent, by the speeds its upper stage then reaches, to the moments the plan had those speeds - at the end of the plan's FIRST stage, accelerating four times as hard - and fly its upper stage on first-stage attitudes. And after the first stage the index is the speed GAINED since the stage lit, not the speed itself: a vehicle that stages slower than the plan never reaches the plan's upper-stage speeds until long after the plan has pitched on, while the speed gained starts from zero for both. From the pad the two are the same thing, so the first stage is pitch against speed exactly. Staging is where the plan and the vehicle are put back in step. See <see cref="Advance"/>.
 /// </summary>
 public sealed class ConvexAscentProfile
 {
     // The plan by time: every node, one per instant (the second of each staging pair is kept, since it carries the new stage's thrust).
     private readonly double[] _time, _pitch, _azimuth, _altitude, _speed, _throttle;
 
-    // Speed to plan time, over the nodes at which the plan was faster than it had ever been: monotone by construction.
-    private readonly double[] _recordSpeed, _recordTime;
+    // Per planned stage: the stretch of plan time it burns over; the mass it starts at and burns out at; the air speed it lights at; and speed gained since then to plan time over the nodes within it at which the plan had gained more than at any earlier node of the stage - monotone by construction.
+    private readonly double[] _stageStart, _stageEnd, _stageStartMass, _stageEndMass, _stageStartSpeed;
+    private readonly double[][] _recordSpeed, _recordTime;
 
     public int Count => _time.Length;
+    public int Stages => _stageStart.Length;
     public double EndTime => _time[^1];
-    public double MaxSpeed => _recordSpeed[^1];
     public ReadOnlySpan<double> Time => _time;
     public ReadOnlySpan<double> Speed => _speed;
     public ReadOnlySpan<double> PitchRad => _pitch;
     public ReadOnlySpan<double> Altitude => _altitude;
 
     private ConvexAscentProfile(double[] time, double[] pitch, double[] azimuth, double[] altitude, double[] speed,
-                                double[] throttle, double[] recordSpeed, double[] recordTime)
+                                double[] throttle, double[] stageStart, double[] stageEnd,
+                                double[] stageStartMass, double[] stageEndMass, double[] stageStartSpeed,
+                                double[][] recordSpeed, double[][] recordTime)
     {
-        _throttle = throttle;
+        _stageStartSpeed = stageStartSpeed;
         _time = time;
         _pitch = pitch;
         _azimuth = azimuth;
         _altitude = altitude;
         _speed = speed;
+        _throttle = throttle;
+        _stageStart = stageStart;
+        _stageEnd = stageEnd;
+        _stageStartMass = stageStartMass;
+        _stageEndMass = stageEndMass;
         _recordSpeed = recordSpeed;
         _recordTime = recordTime;
     }
@@ -56,6 +66,7 @@ public sealed class ConvexAscentProfile
         var alt = new List<double>(n);
         var speed = new List<double>(n);
         var throttle = new List<double>(n);
+        var stage = new List<int>(n);
         var hasAz = new List<bool>(n);
 
         for (int k = 0; k < n; k++)
@@ -78,7 +89,7 @@ public sealed class ConvexAscentProfile
             double a = defined ? Math.Atan2(double3.Dot(horiz, east), double3.Dot(horiz, north)) : 0.0;
             double sp = (v - double3.Cross(new double3(0, 0, omega), r)).Length();
 
-            // Two nodes share each staging instant: the later one replaces the earlier.
+            // Two nodes share each staging instant: the later one - the new stage's first - replaces the earlier.
             if (time.Count > 0 && !(s.Time[k] > time[^1] + 1e-9))
             {
                 int last = time.Count - 1;
@@ -88,6 +99,7 @@ public sealed class ConvexAscentProfile
                 alt[last] = r.Length() - bodyRadius;
                 speed[last] = sp;
                 throttle[last] = Math.Min(u.Length(), 1.0);
+                stage[last] = s.NodeStage[k];
                 continue;
             }
             time.Add(s.Time[k]);
@@ -97,6 +109,7 @@ public sealed class ConvexAscentProfile
             alt.Add(r.Length() - bodyRadius);
             speed.Add(sp);
             throttle.Add(Math.Min(u.Length(), 1.0));
+            stage.Add(s.NodeStage[k]);
         }
         if (time.Count < 2)
             return null;
@@ -116,47 +129,113 @@ public sealed class ConvexAscentProfile
             while (d < -Math.PI) { az[k] += 2.0 * Math.PI; d += 2.0 * Math.PI; }
         }
 
-        var recordSpeed = new List<double>();
-        var recordTime = new List<double>();
-        for (int k = 0; k < speed.Count; k++)
-            if (recordSpeed.Count == 0 || speed[k] > recordSpeed[^1] + 1e-6)
+        // The stages: where each starts and ends in plan time, and in mass. Masses come from the solution's own nodes, both of each staging pair, so the burnout mass before a jettison is kept.
+        int stages = s.BurnTime.Length;
+        var stageStart = new double[stages];
+        var stageEnd = new double[stages];
+        var startMass = new double[stages];
+        var endMass = new double[stages];
+        for (int i = 0; i < stages; i++)
+        {
+            int first = Array.IndexOf(s.NodeStage, i), lastNode = Array.LastIndexOf(s.NodeStage, i);
+            stageStart[i] = s.Time[first];
+            stageEnd[i] = s.Time[lastNode];
+            startMass[i] = s.Mass[first];
+            endMass[i] = s.Mass[lastNode];
+        }
+        stageEnd[stages - 1] = time[^1];
+
+        var recordSpeed = new double[stages][];
+        var recordTime = new double[stages][];
+        var startSpeed = new double[stages];
+        for (int i = 0; i < stages; i++)
+        {
+            int first = stage.IndexOf(i);
+            // The first stage's records are in speed itself (gained from nothing); the others' in speed gained since the stage lit.
+            startSpeed[i] = i == 0 || first < 0 ? 0.0 : speed[first];
+            var rs = new List<double>();
+            var rt = new List<double>();
+            for (int k = 0; k < speed.Count; k++)
+                if (stage[k] == i && (rs.Count == 0 || speed[k] - startSpeed[i] > rs[^1] + 1e-6))
+                {
+                    rs.Add(speed[k] - startSpeed[i]);
+                    rt.Add(time[k]);
+                }
+            if (rs.Count == 0)
             {
-                recordSpeed.Add(speed[k]);
-                recordTime.Add(time[k]);
+                rs.Add(0.0);
+                rt.Add(stageStart[i]);
             }
+            recordSpeed[i] = rs.ToArray();
+            recordTime[i] = rt.ToArray();
+        }
 
         return new ConvexAscentProfile(time.ToArray(), pitch.ToArray(), az.ToArray(), alt.ToArray(), speed.ToArray(),
-                                       throttle.ToArray(), recordSpeed.ToArray(), recordTime.ToArray());
+                                       throttle.ToArray(), stageStart, stageEnd, startMass, endMass, startSpeed,
+                                       recordSpeed, recordTime);
     }
 
     /// <summary>
-    /// Where on the plan the vehicle is, as plan time, from where it was a step ago. <paramref name="fastest"/> is the highest air speed the vehicle has had, carried between steps.
-    ///
-    /// Faster than ever before: the plan time at which the plan first had this speed. Otherwise: the plan time runs on by the step. The first is pitch against speed; the second carries the vehicle through a stretch of the plan where speed dips - a burnout in thick air - on the plan's own schedule.
-    ///
-    /// NEVER BACKWARD. A vehicle that burns out a little slower than planned comes out of the dip faster than it has ever been while still slower than the plan's own burnout, and the plan first had that speed back in the first stage. Taking the vehicle back there would fly the first stage's attitude on the second stage; holding the plan time instead waits for the vehicle to reach speeds the plan only had after its dip.
+    /// The planned stage a vehicle of this mass is burning. Mass falls monotonically through the ascent and each stage burns through its own band of it, so a separation drops the vehicle into the next band: it is in stage i once it weighs no more than stage i starts at, give or take a quarter of the structure the previous stage drops. A stage boundary with nothing dropped - an engine set changing - is crossed as the previous stage's propellant runs out, which is when the vehicle's own burn changes there too.
     /// </summary>
-    public double Advance(double planTime, double speed, double dt, ref double fastest)
+    public int StageOfMass(double mass)
     {
-        if (speed > fastest)
+        int stage = 0;
+        for (int i = 1; i < _stageStart.Length; i++)
         {
-            fastest = speed;
-            return Math.Max(planTime, TimeAtSpeed(speed));
+            double dropped = Math.Max(_stageEndMass[i - 1] - _stageStartMass[i], 0.0);
+            if (mass <= _stageStartMass[i] + 0.25 * dropped)
+                stage = i;
         }
-        return Math.Min(planTime + Math.Max(dt, 0.0), EndTime);
+        return stage;
     }
 
-    /// <summary>The time the plan first reached an air speed. Held at the ends.</summary>
-    public double TimeAtSpeed(double speed)
+    /// <summary>
+    /// Where on the plan the vehicle is, as plan time, from where it was a step ago. Carried between steps: <paramref name="stage"/>, the planned stage it is burning; <paramref name="stageSpeed"/>, the air speed it lit that stage at (zero for the first); and <paramref name="fastest"/>, the most speed it has gained in that stage.
+    ///
+    /// Gained more than ever before in this stage: the plan time at which the plan's same stage had first gained as much. Otherwise: the plan time runs on by the step. The first is pitch against speed; the second carries the vehicle through a stretch where speed dips - a burnout in thick air - on the plan's own schedule.
+    ///
+    /// ON STAGING the plan time moves up to the plan's own separation if it is short of it, and the speed gained starts again from the speed the vehicle staged at. Within a stage the plan time is held to that stage's stretch of the plan: a vehicle that burns longer than planned holds the plan's burnout attitude until it actually separates, instead of running on into the next stage's.
+    ///
+    /// NEVER BACKWARD. A vehicle that has gained more than ever in this stage but less than the plan at the same point waits for the plan time rather than pulling it back.
+    /// </summary>
+    public double Advance(double planTime, double speed, double mass, double dt, ref int stage, ref double stageSpeed,
+                          ref double fastest)
     {
-        int n = _recordSpeed.Length;
-        if (speed <= _recordSpeed[0]) return _recordTime[0];
-        if (speed >= _recordSpeed[n - 1]) return _recordTime[n - 1];
-        int hi = Array.BinarySearch(_recordSpeed, speed);
+        int now = Math.Max(stage, StageOfMass(mass));
+        if (now != stage)
+        {
+            stage = now;
+            stageSpeed = speed;
+            fastest = 0.0;
+            planTime = Math.Max(planTime, _stageStart[stage]);
+        }
+
+        double gained = speed - stageSpeed;
+        if (gained > fastest)
+        {
+            fastest = gained;
+            planTime = Math.Max(planTime, TimeAtGain(stage, gained));
+        }
+        else
+        {
+            planTime += Math.Max(dt, 0.0);
+        }
+        return Math.Clamp(planTime, _stageStart[stage], _stageEnd[stage]);
+    }
+
+    /// <summary>The time the plan's given stage had first gained this much air speed since it lit - for the first stage, first reached this air speed. Held at the ends of the stage's records.</summary>
+    public double TimeAtGain(int stage, double speed)
+    {
+        double[] rs = _recordSpeed[stage], rt = _recordTime[stage];
+        int n = rs.Length;
+        if (speed <= rs[0]) return rt[0];
+        if (speed >= rs[n - 1]) return rt[n - 1];
+        int hi = Array.BinarySearch(rs, speed);
         if (hi < 0) hi = ~hi;
         int lo = hi - 1;
-        double f = (speed - _recordSpeed[lo]) / (_recordSpeed[hi] - _recordSpeed[lo]);
-        return _recordTime[lo] + f * (_recordTime[hi] - _recordTime[lo]);
+        double f = (speed - rs[lo]) / (rs[hi] - rs[lo]);
+        return rt[lo] + f * (rt[hi] - rt[lo]);
     }
 
     /// <summary>Pitch (above the horizon) and azimuth (from north, toward east) at a plan time, radians. Held at the ends.</summary>

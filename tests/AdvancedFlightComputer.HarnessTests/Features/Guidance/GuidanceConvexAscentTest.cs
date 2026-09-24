@@ -290,9 +290,13 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 double3 up = double3.Normalize(r);
                 double pitch = 90.0 - Math.Acos(Math.Clamp(double3.Dot(up, double3.Normalize(state.CommandDir)), -1.0, 1.0)) * 180.0 / Math.PI;
                 profile.Attitude(state.ConvexPlanTime, out double planPitch, out _);
-                t.Info($"t={time,6:F1}s {state.Phase,-10} alt {altKm,6:F1} km  air {air,6:F0} m/s  plan t {state.ConvexPlanTime,6:F1} s alt {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0,6:F1} km {profile.SpeedAt(state.ConvexPlanTime),6:F0} m/s  "
+                // Full thrust against the plan's at the same point, so a model that over- or under-states the engines shows up here rather than only as drift.
+                double pressure = KsaEnginePerf.AmbientPressureAt(home, altKm * 1000.0);
+                double thrustKn = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure) / 1000.0;
+                double planThrustKn = PlanThrustAt(sol, profile, state.ConvexPlanTime) / 1000.0;
+                t.Info($"t={time,6:F1}s {state.Phase,-10} alt {altKm,6:F1} km  air {air,6:F0} m/s  plan stage {state.ConvexStage + 1} t {state.ConvexPlanTime,6:F1} s alt {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0,6:F1} km {profile.SpeedAt(state.ConvexPlanTime),6:F0} m/s  "
                      + $"cmd pitch {pitch,5:F1} (plan {planPitch * 180.0 / Math.PI,5:F1})  plan throttle {100.0 * profile.Throttle(state.ConvexPlanTime),3:F0} %  "
-                     + $"tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'");
+                     + $"thrust {thrustKn,6:F0} kN (plan {planThrustKn,6:F0})  tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'");
             }
         }
 
@@ -322,6 +326,17 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.CheckAbs("flown periapsis altitude, km", (flown.Periapsis - radius) / 1000.0, TargetAltKm, PeriapsisTolKm);
         t.CheckAbs("flown apoapsis altitude, km", (flown.Apoapsis - radius) / 1000.0, TargetAltKm, ApoapsisTolKm);
         t.CheckAbs("flown inclination, deg", flown.Inclination * 180.0 / Math.PI, TargetIncDeg, InclinationTolDeg);
+    }
+
+    // The plan's full-throttle thrust at a plan time: its node thrust over its node throttle, from the node nearest in time.
+    private static double PlanThrustAt(AscentSolution sol, ConvexAscentProfile profile, double planTime)
+    {
+        int best = 0;
+        for (int k = 1; k < sol.Nodes; k++)
+            if (Math.Abs(sol.Time[k] - planTime) <= Math.Abs(sol.Time[best] - planTime)) best = k;
+        double u = Math.Sqrt(sol.Throttle[best * 3] * sol.Throttle[best * 3] + sol.Throttle[best * 3 + 1] * sol.Throttle[best * 3 + 1]
+                             + sol.Throttle[best * 3 + 2] * sol.Throttle[best * 3 + 2]);
+        return u > 1e-9 ? sol.Thrust[best] / u : double.NaN;
     }
 
     private static void DespawnJettisoned(CelestialSystem system, HashSet<string> preexisting, Vehicle flying)
