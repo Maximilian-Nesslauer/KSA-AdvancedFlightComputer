@@ -4,6 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Scvx.Ascent;
@@ -18,7 +19,7 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 public sealed class ConvexAscentProfile
 {
     // The plan by time: every node, one per instant (the second of each staging pair is kept, since it carries the new stage's thrust).
-    private readonly double[] _time, _pitch, _azimuth, _altitude, _speed;
+    private readonly double[] _time, _pitch, _azimuth, _altitude, _speed, _throttle;
 
     // Speed to plan time, over the nodes at which the plan was faster than it had ever been: monotone by construction.
     private readonly double[] _recordSpeed, _recordTime;
@@ -32,8 +33,9 @@ public sealed class ConvexAscentProfile
     public ReadOnlySpan<double> Altitude => _altitude;
 
     private ConvexAscentProfile(double[] time, double[] pitch, double[] azimuth, double[] altitude, double[] speed,
-                                double[] recordSpeed, double[] recordTime)
+                                double[] throttle, double[] recordSpeed, double[] recordTime)
     {
+        _throttle = throttle;
         _time = time;
         _pitch = pitch;
         _azimuth = azimuth;
@@ -53,6 +55,7 @@ public sealed class ConvexAscentProfile
         var az = new List<double>(n);
         var alt = new List<double>(n);
         var speed = new List<double>(n);
+        var throttle = new List<double>(n);
         var hasAz = new List<bool>(n);
 
         for (int k = 0; k < n; k++)
@@ -84,6 +87,7 @@ public sealed class ConvexAscentProfile
                 hasAz[last] = defined;
                 alt[last] = r.Length() - bodyRadius;
                 speed[last] = sp;
+                throttle[last] = Math.Min(u.Length(), 1.0);
                 continue;
             }
             time.Add(s.Time[k]);
@@ -92,6 +96,7 @@ public sealed class ConvexAscentProfile
             hasAz.Add(defined);
             alt.Add(r.Length() - bodyRadius);
             speed.Add(sp);
+            throttle.Add(Math.Min(u.Length(), 1.0));
         }
         if (time.Count < 2)
             return null;
@@ -121,7 +126,7 @@ public sealed class ConvexAscentProfile
             }
 
         return new ConvexAscentProfile(time.ToArray(), pitch.ToArray(), az.ToArray(), alt.ToArray(), speed.ToArray(),
-                                       recordSpeed.ToArray(), recordTime.ToArray());
+                                       throttle.ToArray(), recordSpeed.ToArray(), recordTime.ToArray());
     }
 
     /// <summary>
@@ -169,6 +174,16 @@ public sealed class ConvexAscentProfile
         return _altitude[lo] + f * (_altitude[hi] - _altitude[lo]);
     }
 
+    /// <summary>The plan's throttle at a plan time, a fraction of full thrust at the altitude flown.</summary>
+    public double Throttle(double planTime)
+    {
+        Interpolate(planTime, out int lo, out int hi, out double f);
+        return _throttle[lo] + f * (_throttle[hi] - _throttle[lo]);
+    }
+
+    /// <summary>The lowest throttle anywhere in the plan.</summary>
+    public double MinThrottle => _throttle.Min();
+
     /// <summary>The plan's air speed at a plan time, m/s.</summary>
     public double SpeedAt(double planTime)
     {
@@ -202,7 +217,7 @@ public sealed class ConvexAscentProfile
 /// <summary>The plan's trajectory as the panel plots it, one entry per node.</summary>
 public sealed class AscentPlanSeries
 {
-    public double[] Time, AltitudeKm, DownrangeKm, AirSpeed, PitchDeg, QFraction, QAlphaFraction;
+    public double[] Time, AltitudeKm, DownrangeKm, AirSpeed, PitchDeg, QFraction, QAlphaFraction, ThrottlePct;
     /// <summary>The first node of every stage after the first: where each separation is.</summary>
     public int[] StagingNodes;
 
@@ -219,6 +234,7 @@ public sealed class AscentPlanSeries
             PitchDeg = new double[n],
             QFraction = new double[n],
             QAlphaFraction = new double[n],
+            ThrottlePct = new double[n],
         };
         var staging = new List<int>();
         if (n == 0)
@@ -243,6 +259,7 @@ public sealed class AscentPlanSeries
             ser.PitchDeg[k] = ul > 1e-9 ? Math.Asin(Math.Clamp(double3.Dot(u, r) / (ul * rl), -1.0, 1.0)) * 180.0 / Math.PI : 90.0;
             ser.QFraction[k] = s.DynamicPressure[k] / qMax;
             ser.QAlphaFraction[k] = s.QAlpha[k] / qAlphaMax;
+            ser.ThrottlePct[k] = 100.0 * Math.Min(ul, 1.0);
             if (k > 0 && s.NodeStage[k] != s.NodeStage[k - 1])
                 staging.Add(k);
         }
@@ -285,6 +302,10 @@ public sealed class AscentPlan
     public bool QRelaxed => QMaxKpa > QMaxRequestedKpa + 1e-6;
     public double QAlphaMax { get; init; }
     public double InsertionAltKm { get; init; }
+
+    /// <summary>The throttle floor the plan was solved to, percent, and how many planned stages were held at full thrust instead because a solid motor burns in them.</summary>
+    public double ThrottleMinPct { get; init; }
+    public int SolidStages { get; init; }
 
     /// <summary>What is left when the last planned stage is empty, kg: the stages above it and the payload.</summary>
     public double FinalMassFloor { get; init; }

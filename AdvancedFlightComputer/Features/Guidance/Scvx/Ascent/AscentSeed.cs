@@ -59,7 +59,6 @@ internal static class AscentSeed
                     : lo + (hi - lo) * i / (nScan - 1);
                 scanF[i] = Fly(c, sig, scanK[i]);
                 evals++;
-                st.Diagnostics?.Invoke($"seed kick {scanK[i] / Deg:F3} deg: {(scanF[i].Ok ? "flyable" : scanF[i].Why)}, miss {scanF[i].Miss:E2}, path {scanF[i].Path:E2}");
                 if (scanF[i].Ok)
                 {
                     pathFloor = Math.Min(pathFloor, scanF[i].Path);
@@ -124,7 +123,7 @@ internal static class AscentSeed
         return new Result(ok, x, u, sig, kickAngle / Deg, cost, evals, note, leastMaxQ);
     }
 
-    private readonly record struct Flight(bool Ok, double Miss, double Path, string Why = "", double MaxQ = double.NaN);
+    private readonly record struct Flight(bool Ok, double Miss, double Path, double MaxQ = double.NaN);
 
     /// <summary>
     /// One seed flight, scored the script's way: insertion altitude and plane miss, and the merit's own path violation. Not flyable if it left the model's validity, or ended RETROGRADE - the subproblem's prograde constraint is a hard one, and a reference that violates it leaves the first subproblem with no feasible point at all.
@@ -132,7 +131,7 @@ internal static class AscentSeed
     private static Flight Fly(AscentCase c, double[] sig, double kick)
     {
         if (!Build(c, sig, kick, out double[] x, out double[] u, out _))
-            return new Flight(false, 0.0, 0.0, "re-entered or diverged");
+            return new Flight(false, 0.0, 0.0);
 
         Span<double> res = stackalloc double[5];
         c.TerminalResidual(x, res);
@@ -143,7 +142,7 @@ internal static class AscentSeed
         double hy = x[o + 2] * x[o + 3] - x[o] * x[o + 5];
         double hz = x[o] * x[o + 4] - x[o + 1] * x[o + 3];
         if (!(hx * c.Nhat[0] + hy * c.Nhat[1] + hz * c.Nhat[2] > 0.0))
-            return new Flight(false, miss, 0.0, "retrograde");
+            return new Flight(false, miss, 0.0);
 
         double path = 0.0, maxQ = 0.0;
         for (int n = 0; n < c.N; n++)
@@ -156,7 +155,7 @@ internal static class AscentSeed
             path += Math.Max(0.0, qa / c.QAlphaMax - 1.0) + Math.Max(0.0, q / c.QMax - 1.0);
         }
         bool finite = double.IsFinite(miss) && double.IsFinite(path);
-        return new Flight(finite, miss, path, "", maxQ);
+        return new Flight(finite, miss, path, maxQ);
     }
 
     /// <summary>

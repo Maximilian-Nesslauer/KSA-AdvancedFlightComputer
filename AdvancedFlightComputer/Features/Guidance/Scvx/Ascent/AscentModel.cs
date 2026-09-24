@@ -85,8 +85,10 @@ public sealed class AscentStage
     /// <param name="dragArea">Area the drag coefficient is referenced to, m^2.</param>
     /// <param name="pressureGrid">Strictly increasing back pressures, Pa, or null for constant thrust.</param>
     /// <param name="thrustAtPressure">Full-throttle thrust at each grid pressure, N.</param>
+    /// <param name="throttleMin">This stage's throttle floor, a fraction of full thrust; NaN takes <see cref="AscentSettings.ThrottleMin"/>. A stage that cannot throttle - a solid motor - keeps the script's 99 % whatever the vehicle-wide floor is.</param>
     public AscentStage(double thrust, double massFlow, double propellantMass, double jettisonMass,
-                       double dragArea, double[]? pressureGrid = null, double[]? thrustAtPressure = null)
+                       double dragArea, double[]? pressureGrid = null, double[]? thrustAtPressure = null,
+                       double throttleMin = double.NaN)
     {
         if (!(thrust > 0.0) || !double.IsFinite(thrust))
             throw new ArgumentOutOfRangeException(nameof(thrust), thrust, "Thrust must be finite and positive.");
@@ -104,6 +106,9 @@ public sealed class AscentStage
         PropellantMass = propellantMass;
         JettisonMass = jettisonMass;
         DragArea = dragArea;
+        if (!double.IsNaN(throttleMin) && !(throttleMin > 0.0 && throttleMin <= 1.0))
+            throw new ArgumentOutOfRangeException(nameof(throttleMin), throttleMin, "The throttle floor must be in (0, 1].");
+        ThrottleMin = throttleMin;
 
         if (pressureGrid != null && thrustAtPressure != null && pressureGrid.Length >= 2)
         {
@@ -124,6 +129,8 @@ public sealed class AscentStage
     public double PropellantMass { get; }
     public double JettisonMass { get; }
     public double DragArea { get; }
+    /// <summary>This stage's own throttle floor, or NaN for the problem's.</summary>
+    public double ThrottleMin { get; }
     public double[]? PressureGrid { get; }
     public double[]? ThrustAtPressure { get; }
 
@@ -155,7 +162,11 @@ public sealed class AscentSettings
 {
     public int NodesPerStage = 60;
 
-    /// <summary>Throttle floor as a fraction of full thrust. The script's 99 %.</summary>
+    /// <summary>
+    /// Throttle floor as a fraction of full thrust, for every stage that does not set its own. The script's 99 %.
+    ///
+    /// NOT 100 %. The floor is imposed as the halfspace tangent to it in the reference thrust direction, and together with the ceiling cone that leaves a spherical cap: at 99 % the thrust can turn up to arccos(0.99) = 8.1 deg per iteration. At 100 % the cap closes to a point and the thrust direction could never move from the seed's.
+    /// </summary>
     public double ThrottleMin = 0.99;
 
     /// <summary>Fraction of the q and q-alpha limits the linearised constraints enforce.</summary>
@@ -238,9 +249,6 @@ public sealed class AscentSettings
     /// <summary>Clarabel tolerance and iteration cap per subproblem. CVXPY's defaults for Clarabel, which are Clarabel's own.</summary>
     public double SubproblemEps = 1e-8;
     public int SubproblemMaxIterations = 200;
-
-    /// <summary>When set, each subproblem reports how far its reference is from its own hard constraints - which should be nowhere. For diagnosis only.</summary>
-    public Action<string>? Diagnostics;
 }
 
 /// <summary>

@@ -30,6 +30,8 @@ public static partial class GuidanceWindow
         {
             GaugeRow("Max q (kPa)", "##cvxq", ref _s.ConvexQMaxKpa);
             GaugeRow("Max q-alpha (Pa rad)", "##cvxqa", ref _s.ConvexQAlphaMax);
+            // The script's 99 % keeps the plan at full throttle. Lower lets it throttle the liquid stages - through max-q, typically - and the profile then flies that throttle too; solid stages stay at full thrust whatever this says.
+            GaugeRow("Min throttle (%)", "##cvxthrottle", ref _s.ConvexThrottleMinPct);
         }
         GaugeRow("UPFG from (km)", "##cvxhandover", ref _s.ConvexHandoverAltKm);
         GaugeRowCheck("Show plan", "##cvxshow", ref _s.ShowConvexPlan);
@@ -103,6 +105,9 @@ public static partial class GuidanceWindow
         double propLeft = sol.FinalMass - plan.FinalMassFloor;
         GaugeRowText("To orbit", $"{sol.FinalMass / 1000.0:F2} t ({Math.Max(propLeft, 0.0) / 1000.0:F2} t propellant left in the last stage)");
         GaugeRowText("Burns", string.Join(" / ", Array.ConvertAll(sol.BurnTime, b => b.ToString("F1"))) + $" s, {sol.TotalDeltaV:F0} m/s ideal");
+        double lowest = plan.Profile != null ? 100.0 * plan.Profile.MinThrottle : double.NaN;
+        GaugeRowText("Throttle", $"floor {plan.ThrottleMinPct:F0} %, lowest planned {lowest:F0} %"
+            + (plan.SolidStages > 0 && plan.ThrottleMinPct < 99.0 ? $", {plan.SolidStages} solid stage(s) held at full" : ""), CvxDim);
 
         int qi = ArgMax(sol.DynamicPressure), qai = ArgMax(sol.QAlpha);
         GaugeRowText("Max q", $"{sol.DynamicPressure[qi] / 1000.0:F1} kPa at {sol.Time[qi]:F0} s (limit {plan.QMaxKpa:F0})",
@@ -172,6 +177,10 @@ public static partial class GuidanceWindow
         }
         ConvexPlot("q (green) and q-alpha (amber), % of limit, against time (s)", s.Time, qPct, qaPct,
             w, h, 100.0, "limit", cursorTime, s.StagingNodes);
+        // Only when the plan throttles at all: at the script's floor it is a flat line at 100.
+        if (plan.Profile != null && plan.Profile.MinThrottle < 0.985)
+            ConvexPlot("throttle (% of full) against time (s)", s.Time, s.ThrottlePct, null,
+                w, h, plan.ThrottleMinPct, "floor", cursorTime, s.StagingNodes);
     }
 
     /// <summary>
@@ -269,6 +278,7 @@ public static partial class GuidanceWindow
         {
             ImGui.InputDouble("Max q (kPa)", ref _s.ConvexQMaxKpa);
             ImGui.InputDouble("Max q-alpha (Pa rad)", ref _s.ConvexQAlphaMax);
+            ImGui.InputDouble("Min throttle (%)", ref _s.ConvexThrottleMinPct);
         }
         ImGui.InputDouble("UPFG from (km)", ref _s.ConvexHandoverAltKm);
         ImGui.Checkbox("Show plan", ref _s.ShowConvexPlan);

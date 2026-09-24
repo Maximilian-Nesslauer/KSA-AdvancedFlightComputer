@@ -63,18 +63,7 @@ internal sealed class AscentSubproblem
     {
         public readonly List<(int Row, int Col, double Val)> Entries = [];
         public readonly List<double> Rhs = [];
-        public readonly List<(int Start, string Name)> Blocks = [];
         public int Count => Rhs.Count;
-
-        public void Mark(string name) => Blocks.Add((Rhs.Count, name));
-
-        public string NameOf(int row)
-        {
-            string name = "?";
-            foreach ((int start, string n) in Blocks)
-                if (start <= row) name = n;
-            return name;
-        }
 
         public int NewRow(double rhs)
         {
@@ -105,7 +94,6 @@ internal sealed class AscentSubproblem
         var socDims = new List<int>();
 
         // ---- lift-off: x_1 = x_0, and u_1 has no component across straight up.
-        eq.Mark("lift-off");
         for (int i = 0; i < NX; i++)
             eq.Add(eq.NewRow(c.X0[i]), IX(0, i), 1.0);
         Perpendiculars(c.LiftoffDir, out double[] p1, out double[] p2);
@@ -117,7 +105,6 @@ internal sealed class AscentSubproblem
         }
 
         // ---- collocation, with virtual control; staging links between the blocks.
-        eq.Mark("collocation");
         for (int k = 0; k < n - 1; k++)
         {
             int s = c.NodeStage[k];
@@ -170,8 +157,6 @@ internal sealed class AscentSubproblem
         }
 
         // ---- propellant: the lower stages burn exactly their load; the last at most its load.
-        eq.Mark("propellant");
-        ineq.Mark("last-stage propellant");
         for (int s = 0; s < c.S - 1; s++)
         {
             int row = eq.NewRow(-c.PropC[s]);
@@ -185,12 +170,11 @@ internal sealed class AscentSubproblem
         }
 
         // ---- per-node: throttle floor (tangent halfspace), mass floor, ground (tangent halfspace).
-        ineq.Mark("throttle floor / mass floor / ground");
         for (int k = 0; k < n; k++)
         {
             double ux = ubar[k * NU], uy = ubar[k * NU + 1], uz = ubar[k * NU + 2];
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
-            int row = ineq.NewRow(-st.ThrottleMin);
+            int row = ineq.NewRow(-c.ThrottleMin[c.NodeStage[k]]);
             if (un > 1e-12)
             {
                 ineq.Add(row, IU(k, 0), -ux / un);
@@ -210,8 +194,6 @@ internal sealed class AscentSubproblem
         }
 
         // ---- q (tangent, backed off, slacked) and q-alpha (a cone on the linearised w, backed off, slacked).
-        ineq.Mark("q");
-        soc.Mark("q-alpha");
         for (int a = 0; a < _act.Length; a++)
         {
             int k = _act[a];
@@ -245,7 +227,6 @@ internal sealed class AscentSubproblem
             }
             socDims.Add(4);
         }
-        ineq.Mark("path slacks >= 0");
         for (int a = 0; a < _nA; a++)
         {
             ineq.Add(ineq.NewRow(0.0), ISq(a), -1.0);
@@ -253,7 +234,6 @@ internal sealed class AscentSubproblem
         }
 
         // ---- thrust ceiling ||u_k|| <= 1, a cone per node.
-        soc.Mark("thrust ceiling");
         for (int k = 0; k < n; k++)
         {
             soc.NewRow(1.0);
@@ -263,8 +243,6 @@ internal sealed class AscentSubproblem
         }
 
         // ---- insertion, linearised about the last node, with slacks; and prograde.
-        eq.Mark("insertion");
-        ineq.Mark("prograde");
         {
             int o = (n - 1) * NX;
             double rbx = xbar[o], rby = xbar[o + 1], rbz = xbar[o + 2];
@@ -310,7 +288,6 @@ internal sealed class AscentSubproblem
         }
 
         // ---- trust region: a box on x (scaled), u, and sigma; and sigma's own bounds.
-        ineq.Mark("trust region / sigma bounds");
         for (int k = 0; k < n; k++)
         {
             for (int i = 0; i < NX; i++)
@@ -386,9 +363,6 @@ internal sealed class AscentSubproblem
             SocDims = [.. socDims],
         };
 
-        if (st.Diagnostics != null)
-            st.Diagnostics(ReferenceReport(lin, xbar, ubar, sigBar, eq, ineq, soc, socDims));
-
         ConicResult res = ClarabelSolver.Solve(problem, out ClarabelSolver.ClarabelSolveInfo info,
             maxIterations: st.SubproblemMaxIterations, eps: st.SubproblemEps);
         if (!res.IsOptimal || res.X.Length != _nVar)
@@ -399,67 +373,6 @@ internal sealed class AscentSubproblem
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)],
             res.Iterations, info.TotalMs);
-    }
-
-    /// <summary>
-    /// How far the REFERENCE is from satisfying this subproblem's hard constraints, block by block. By construction it satisfies all of them - every nonconvex constraint has a slack, and the slacks are set to the reference's own residuals - so a violation here is an assembly error, or a reference the hard constraints cannot hold.
-    /// </summary>
-    private string ReferenceReport(Linearization lin, double[] xbar, double[] ubar, double[] sigBar,
-                                   Rows eq, Rows ineq, Rows soc, List<int> socDims)
-    {
-        AscentCase c = _c;
-        var z = new double[_nVar];
-        Array.Copy(xbar, 0, z, 0, c.N * NX);
-        Array.Copy(ubar, 0, z, _oU, c.N * NU);
-        for (int s = 0; s < c.S; s++) z[ISig(s)] = sigBar[s];
-        foreach (int k in c.Coll)
-        {
-            double half = 0.5 * c.Dtau[k] * sigBar[c.NodeStage[k]];
-            for (int i = 0; i < NX; i++)
-                z[IW(c.CollRow[k], i)] = xbar[(k + 1) * NX + i] - xbar[k * NX + i]
-                                        - half * (lin.F[k * NX + i] + lin.F[(k + 1) * NX + i]);
-        }
-        Span<double> res = stackalloc double[5];
-        c.TerminalResidual(xbar, res);
-        for (int j = 0; j < 5; j++) z[ITerm(j)] = res[j];
-        for (int a = 0; a < _act.Length; a++)
-        {
-            int k = _act[a];
-            double q0 = lin.Q[k];
-            double w0n = Math.Sqrt(lin.W[k * 3] * lin.W[k * 3] + lin.W[k * 3 + 1] * lin.W[k * 3 + 1] + lin.W[k * 3 + 2] * lin.W[k * 3 + 2]);
-            z[ISq(a)] = Math.Max(0.0, q0 / c.QMax - c.Settings.PathBackoff);
-            z[ISqa(a)] = Math.Max(0.0, q0 * w0n / c.QAlphaMax - c.Settings.PathBackoff);
-        }
-
-        static double[] RowValues(Rows rows, double[] z)
-        {
-            var v = new double[rows.Count];
-            foreach ((int row, int col, double val) in rows.Entries) v[row] += val * z[col];
-            return v;
-        }
-
-        double[] ev = RowValues(eq, z);
-        double eqWorst = 0.0; int eqRow = -1;
-        for (int r = 0; r < eq.Count; r++)
-            if (Math.Abs(ev[r] - eq.Rhs[r]) > eqWorst) { eqWorst = Math.Abs(ev[r] - eq.Rhs[r]); eqRow = r; }
-
-        double[] iv = RowValues(ineq, z);
-        double inWorst = double.PositiveInfinity; int inRow = -1;
-        for (int r = 0; r < ineq.Count; r++)
-            if (ineq.Rhs[r] - iv[r] < inWorst) { inWorst = ineq.Rhs[r] - iv[r]; inRow = r; }
-
-        double[] sv = RowValues(soc, z);
-        double socWorst = double.PositiveInfinity; int socRow = -1, off = 0;
-        foreach (int d in socDims)
-        {
-            double t = soc.Rhs[off] - sv[off], nn = 0.0;
-            for (int i = 1; i < d; i++) { double x = soc.Rhs[off + i] - sv[off + i]; nn += x * x; }
-            if (t - Math.Sqrt(nn) < socWorst) { socWorst = t - Math.Sqrt(nn); socRow = off; }
-            off += d;
-        }
-        return $"reference: equality worst {eqWorst:E2} ({(eqRow >= 0 ? eq.NameOf(eqRow) : "-")}, row {eqRow}); "
-             + $"inequality margin {inWorst:E2} ({(inRow >= 0 ? ineq.NameOf(inRow) : "-")}, row {inRow}); "
-             + $"cone margin {socWorst:E2} ({(socRow >= 0 ? soc.NameOf(socRow) : "-")}, row {socRow})";
     }
 
     /// <summary>Two unit vectors perpendicular to d and to each other.</summary>

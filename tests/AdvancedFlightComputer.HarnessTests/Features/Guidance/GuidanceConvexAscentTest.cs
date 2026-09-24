@@ -20,11 +20,16 @@ namespace AdvancedFlightComputer.HarnessTests;
 //
 // What it proves: Calculate builds the problem from the live part tree on the sim step and the worker converges
 // it; EXECUTE flies the profile in place of the gravity turn, from lift-off to the hand-over altitude, with the
-// vehicle's altitude following the plan's; UPFG takes over above it; and the orbit the game
-// reports after cutoff is the one asked for. The planned mass to orbit is reported against the flown one.
-public sealed class GuidanceConvexAscentTest : AfcTest
+// vehicle's altitude following the plan's; the command turns onto UPFG's steering smoothly over the hand-over blend
+// rather than slewing onto it; and the orbit the game reports after cutoff is the one asked for. The planned mass
+// to orbit is reported against the flown one.
+//
+// Twice: at the script's 99 % throttle floor, where the plan is a full-throttle one, and at a 40 % floor, where the
+// plan throttles the liquid stages and the profile has to fly that throttle as well as the attitude.
+public abstract class ConvexAscentFlightTest : AfcTest
 {
-    public override string Name => "afc-guidance-convex-ascent";
+    /// <summary>The plan's throttle floor, percent.</summary>
+    protected abstract double ThrottleFloorPct { get; }
 
     // A liquid-fuelled stack first: the plan models every stage at constant thrust, as the script does, and a solid motor's thrust curve is not that, so a solid first stage flies measurably off its plan (see GuidanceWindow's convex ascent notes).
     private static readonly string[] DefaultSaves = { "Test Vehicle 1", "Test Vehicle 2" };
@@ -44,11 +49,19 @@ public sealed class GuidanceConvexAscentTest : AfcTest
     private const double MaxFlightSeconds = 1500.0;
     private const double SampleIntervalS = 5.0;
 
-    // How far the flown climb may sit off the plan's, at the same air speed, before the hand-over, km. Loose: the plan's drag is the stack's all the way up, and the profile absorbs a heavier or weaker vehicle by flying at the speed it has, not by matching altitude.
-    private const double ProfileAltitudeTolKm = 15.0;
-    private const double PeriapsisTolKm = 10.0;
-    private const double ApoapsisTolKm = 25.0;
-    private const double InclinationTolDeg = 0.5;
+    // How far the flown climb may sit off the plan's altitude, at the flight's place on the plan, before the hand-over, km. On 2stage_new it stays within 4.5 km. Kept at twice that: the plan's drag is the whole stack's all the way up, and a solid motor's thrust curve is not modelled at all (see #73), so a solid first stage flies further off.
+    private const double ProfileAltitudeTolKm = 10.0;
+    // The orbit is UPFG's, not the plan's: the same bounds as its own ascent test (see GuidanceAscentArgPeTest) and wide enough for its cutoff at four g on this step. On 2stage_new it inserted 10 km low at periapsis and 23 km high at apoapsis.
+    private const double PeriapsisTolKm = 25.0;
+    private const double ApoapsisTolKm = 30.0;
+    private const double InclinationTolDeg = 0.25;
+
+    // How fast the command may turn through the hand-over blend, deg/s. The slew limit it replaces is 5 deg/s, which is what a snap onto UPFG's steering reads as; blended, a ten-degree difference turns at a peak of 1 deg/s on top of UPFG's own rate.
+    private const double BlendRateLimitDegS = 2.5;
+    private const double BlendWatchS = 20.0;
+
+    // A throttled plan is one that goes below this anywhere.
+    private const double ThrottledBelow = 0.9;
 
     private static readonly AccessTools.FieldRef<VehicleAutopilotState> AmbientState =
         AccessTools.StaticFieldRefAccess<VehicleAutopilotState>(
@@ -59,6 +72,9 @@ public sealed class GuidanceConvexAscentTest : AfcTest
 
     private static readonly MethodInfo LanOverhead =
         AccessTools.Method(typeof(GuidanceWindow), "LanOverhead");
+
+    private static readonly MethodInfo ConvexThrottle =
+        AccessTools.Method(typeof(GuidanceWindow), "ConvexThrottle");
 
     protected override void Execute(TestContext t)
     {
@@ -143,7 +159,7 @@ public sealed class GuidanceConvexAscentTest : AfcTest
         }
     }
 
-    private static void Fly(TestContext t, Vehicle vehicle, IParentBody home, SimDriver driver, HashSet<string> preexisting)
+    private void Fly(TestContext t, Vehicle vehicle, IParentBody home, SimDriver driver, HashSet<string> preexisting)
     {
         VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
         double3 r0 = vehicle.Orbit.StateVectors.PositionCci;
@@ -155,13 +171,14 @@ public sealed class GuidanceConvexAscentTest : AfcTest
         state.ArgPeFixed = false;
         state.Engage = true;
         state.AutoStage = true;
-        // The g-limit throttles only UPFG's closed loop (the profile flies full throttle, as planned): a stage that ends at ten g against a quarter-second step would otherwise cut off tens of m/s off.
+        // The g-limit throttles only UPFG's closed loop (the profile flies the plan's own throttle): a stage that ends at ten g against a quarter-second step would otherwise cut off tens of m/s off.
         state.GLimitEnabled = true;
         state.GLimitG = GLimitG;
         state.ReserveArmed = false;
         state.TargetId = "";
-        state.FlyConvexAscent = Environment.GetEnvironmentVariable("AFC_CONVEX_BASELINE") != "1";
+        state.FlyConvexAscent = true;
         state.ConvexHandoverAltKm = HandoverAltKm;
+        state.ConvexThrottleMinPct = ThrottleFloorPct;
         AmbientState() = state;
 
         // Calculate, the way the button asks: the sim step builds the problem and starts the worker. The sim is not
@@ -193,7 +210,12 @@ public sealed class GuidanceConvexAscentTest : AfcTest
         }
         AscentSolution sol = plan!.Solution;
         // The script's 35 kPa is a Saturn V's: a KSA stack lifting off at three or five g cannot climb under it at full throttle, and the planner re-plans to a limit it can hold.
-        t.Info($"max q planned to {plan.QMaxKpa:F0} kPa (asked {plan.QMaxRequestedKpa:F0}{(plan.QRelaxed ? ", out of reach" : "")})");
+        t.Info($"max q planned to {plan.QMaxKpa:F0} kPa (asked {plan.QMaxRequestedKpa:F0}{(plan.QRelaxed ? ", out of reach" : "")}), "
+             + $"throttle floor {plan.ThrottleMinPct:F0} %, lowest planned throttle {100.0 * plan.Profile.MinThrottle:F0} %");
+        bool throttled = ThrottleFloorPct < 99.0;
+        if (throttled)
+            t.Check($"the plan throttles below {ThrottledBelow:P0} somewhere", plan.Profile.MinThrottle < ThrottledBelow,
+                $"lowest {plan.Profile.MinThrottle:P0}");
         t.Info($"plan: {sol.Message} in {sol.Iterations} iterations ({sol.Accepted} accepted), {plan.WallSeconds:F1} s wall, seed {sol.SeedSeconds:F1} s, kick {sol.KickDeg:F3} deg; "
              + $"{plan.StagesPlanned} of {plan.StagesAvailable} stages, burns {string.Join("/", sol.BurnTime.Select(b => b.ToString("F1")))} s, "
              + $"{sol.FinalMass / 1000.0:F2} t to orbit, max q {sol.DynamicPressure.Max() / 1000.0:F1} kPa, max q-alpha {sol.QAlpha.Max():F0} Pa rad, "
@@ -209,14 +231,16 @@ public sealed class GuidanceConvexAscentTest : AfcTest
         vehicle.Parts.SequenceList.ActivateNextSequence(vehicle);
         driver.Step(1.0);
         StartGuidance.Invoke(null, new object[] { vehicle, vehicle.Orbit, home });
-        if (!t.Check("EXECUTE flies the convex profile", state.Running && (state.Phase == GuidanceWindow.AscentPhase.Profile || !state.FlyConvexAscent),
+        if (!t.Check("EXECUTE flies the convex profile", state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile,
                 $"running {state.Running}, phase {state.Phase}, status '{state.Status}'"))
             return;
 
         double time = 1.0, nextSample = 0.0;
         double handoverAltKm = double.NaN, handoverTime = double.NaN, handoverSpeed = double.NaN;
         double worstDevKm = 0.0, worstDevSpeed = double.NaN;
-        bool upfgConverged = false;
+        bool upfgConverged = false, blended = false;
+        double lowestCommand = 1.0, blendRate = 0.0;
+        double3 lastCommand = state.CommandDir;
         while (time < MaxFlightSeconds && state.Running)
         {
             // Fine steps through the terminal count: the cutoff lands on a step, and at four g a quarter second is 10 m/s, which is 35 km of apoapsis.
@@ -231,8 +255,18 @@ public sealed class GuidanceConvexAscentTest : AfcTest
             double air = (v - double3.Cross(new double3(0, 0, home.GetAngularVelocity()), r)).Length();
             upfgConverged |= state.Upfg.Converged;
 
+            // How fast the command turns through the hand-over blend.
+            if (double.IsFinite(handoverTime) && time - handoverTime <= BlendWatchS
+                && lastCommand.Length() > 0.5 && state.CommandDir.Length() > 0.5)
+            {
+                double turn = Math.Acos(Math.Clamp(double3.Dot(double3.Normalize(lastCommand), double3.Normalize(state.CommandDir)), -1.0, 1.0));
+                blendRate = Math.Max(blendRate, turn * 180.0 / Math.PI / dt);
+            }
+            lastCommand = state.CommandDir;
+
             if (state.Phase == GuidanceWindow.AscentPhase.Profile)
             {
+                lowestCommand = Math.Min(lowestCommand, (float)ConvexThrottle.Invoke(null, new object[] { vehicle, home })!);
                 double planKm = profile.AltitudeAt(state.ConvexPlanTime) / 1000.0;
                 if (Math.Abs(altKm - planKm) > Math.Abs(worstDevKm))
                 {
@@ -245,6 +279,7 @@ public sealed class GuidanceConvexAscentTest : AfcTest
                 handoverAltKm = altKm;
                 handoverTime = time;
                 handoverSpeed = air;
+                blended = double.IsFinite(state.ConvexBlendStart);
                 t.Info($"hand-over to {state.Phase} at t={time:F1} s, {altKm:F1} km, air speed {air:F0} m/s, plan time {state.ConvexPlanTime:F1} s "
                      + $"(plan there {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0:F1} km, {profile.SpeedAt(state.ConvexPlanTime):F0} m/s)");
             }
@@ -256,7 +291,8 @@ public sealed class GuidanceConvexAscentTest : AfcTest
                 double pitch = 90.0 - Math.Acos(Math.Clamp(double3.Dot(up, double3.Normalize(state.CommandDir)), -1.0, 1.0)) * 180.0 / Math.PI;
                 profile.Attitude(state.ConvexPlanTime, out double planPitch, out _);
                 t.Info($"t={time,6:F1}s {state.Phase,-10} alt {altKm,6:F1} km  air {air,6:F0} m/s  plan t {state.ConvexPlanTime,6:F1} s alt {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0,6:F1} km {profile.SpeedAt(state.ConvexPlanTime),6:F0} m/s  "
-                     + $"cmd pitch {pitch,5:F1} (plan {planPitch * 180.0 / Math.PI,5:F1})  tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'");
+                     + $"cmd pitch {pitch,5:F1} (plan {planPitch * 180.0 / Math.PI,5:F1})  plan throttle {100.0 * profile.Throttle(state.ConvexPlanTime),3:F0} %  "
+                     + $"tgo {state.Upfg.Tgo,6:F1}s  mass {vehicle.TotalMass / 1000.0,7:F1} t  '{state.Status}'");
             }
         }
 
@@ -266,6 +302,12 @@ public sealed class GuidanceConvexAscentTest : AfcTest
         t.CheckAbs("the profile climbs as planned, km off the plan's altitude where the flight is on the plan",
             worstDevKm, 0.0, ProfileAltitudeTolKm);
         t.Info($"worst altitude deviation {worstDevKm:F2} km at {worstDevSpeed:F0} m/s air speed");
+        t.Check("the hand-over blends onto UPFG's steering", blended);
+        t.Check($"the command turns under {BlendRateLimitDegS:F1} deg/s through the blend", blendRate <= BlendRateLimitDegS,
+            $"peak {blendRate:F2} deg/s in the {BlendWatchS:F0} s after the hand-over");
+        if (throttled)
+            t.Check($"the profile throttles the engines below {ThrottledBelow:P0}", lowestCommand < ThrottledBelow,
+                $"lowest command {lowestCommand:P0}");
         t.Check("UPFG converged", upfgConverged);
         if (!t.Check("the ascent cuts off and releases guidance",
                 !state.Running && state.Status.StartsWith("Ascent complete", StringComparison.Ordinal),
@@ -292,4 +334,18 @@ public sealed class GuidanceConvexAscentTest : AfcTest
             foreach (Vehicle v in spent)
                 VehicleSpawner.Despawn(v);
     }
+}
+
+// The script's throttle floor: a full-throttle plan.
+public sealed class GuidanceConvexAscentTest : ConvexAscentFlightTest
+{
+    public override string Name => "afc-guidance-convex-ascent";
+    protected override double ThrottleFloorPct => 99.0;
+}
+
+// A 40 % floor: the plan throttles the liquid stages through the thick air, and the profile flies that throttle.
+public sealed class GuidanceConvexAscentThrottledTest : ConvexAscentFlightTest
+{
+    public override string Name => "afc-guidance-convex-ascent-throttled";
+    protected override double ThrottleFloorPct => 40.0;
 }

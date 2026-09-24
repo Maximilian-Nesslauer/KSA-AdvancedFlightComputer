@@ -37,7 +37,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --impact        RK4 impact prediction: convergence, and d(impact)/d(x0)
           --shoot         direct shooting on a boostback burn: is there an optimal pitch
           --ascent        the convex ascent against launch3dof.py's Saturn V result
-          --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f] [--diag]
+          --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
                           solve an ascent problem the game dumped, with the full trace
 
         BEHAVIOUR - properties the guidance depends on
