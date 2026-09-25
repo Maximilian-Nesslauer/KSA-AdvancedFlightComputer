@@ -459,15 +459,15 @@ public sealed class VehicleAutopilotState
     /// <summary>The player chose the backup gravity turn (deg/s) for this launch, so no convex plan is flown even if one fits. Cleared by the next EXECUTE or by ABORT.</summary>
     public bool BackupAscent;
 
-    /// <summary>The script's Saturn V limits: max-q 35 kPa and q-alpha 3500 Pa rad.</summary>
-    public double ConvexQMaxKpa = 35.0;
+    /// <summary>Max-q 140 kPa, four times the script's Saturn V 35 kPa: a KSA stack lifting off at three to five g cannot hold 35 at full throttle, and the planner then has to retry looser anyway. Q-alpha is the script's 3500 Pa rad.</summary>
+    public double ConvexQMaxKpa = 140.0;
     public double ConvexQAlphaMax = 3500.0;
 
     /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
     public double ConvexHandoverAltKm = 80.0;
 
     /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. A stage burning a solid motor is held at 99 % whatever this says.</summary>
-    public double ConvexThrottleMinPct = 99.0;
+    public double ConvexThrottleMinPct = 90.0;
 
     public bool ShowConvexPlan = true;
 

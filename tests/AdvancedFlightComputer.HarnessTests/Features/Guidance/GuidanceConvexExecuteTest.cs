@@ -15,7 +15,7 @@ namespace AdvancedFlightComputer.HarnessTests;
 // What EXECUTE does on the Ascent tab now that the convex profile is the ascent and the deg/s gravity turn only its
 // backup. Nothing is flown: each case commits, checks what was committed to, and aborts.
 //
-// Without a plan, EXECUTE calculates one and launches on it once it converges. With a plan that fits, it launches at
+// Without a plan, EXECUTE calculates one and launches on it once it converges - asked for the script's 35 kPa, which a KSA stack cannot hold at full throttle, so the first attempt does not converge and the panel is told the retry is looser. With a plan that fits, it launches at
 // once. A plan solved to other limits does not fit, so EXECUTE calculates again, and ABORT cancels that launch. A plan
 // that cannot be calculated launches nothing: the panel says why, and its backup button flies the vertical rise and
 // gravity turn.
@@ -130,6 +130,7 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
         state.TargetId = "";
         state.FlyConvexAscent = true;
         state.ConvexThrottleMinPct = 99.0;
+        state.ConvexQMaxKpa = 35.0;
         state.AscentPlan = null;
         AmbientState() = state;
         object[] args = { vehicle, vehicle.Orbit, home };
@@ -146,8 +147,13 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
             return;
         // The sim is not stepped while it solves, so the vehicle is still on its pad when the plan comes back.
         var clock = System.Diagnostics.Stopwatch.StartNew();
+        string retry = "";
         while (!job!.IsDone && clock.Elapsed.TotalSeconds < PlanTimeoutS)
+        {
+            if (retry.Length == 0)
+                retry = job.Retry;
             Thread.Sleep(50);
+        }
         if (!t.Check($"the solve finishes within {PlanTimeoutS:F0} s", job.IsDone, job.Progress))
         {
             job.Cancel();
@@ -156,6 +162,10 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
         driver.Step(0.02);
         if (!t.Check("the plan converged", state.AscentPlan?.Usable == true, $"status '{state.AscentPlanStatus}', failure '{state.ConvexLaunchFailure}'"))
             return;
+        t.Check("while it ran, the retry said the first attempt did not converge and what was loosened",
+            retry.StartsWith("Did not converge", StringComparison.Ordinal) && retry.Contains("looser constraints", StringComparison.Ordinal), $"'{retry}'");
+        t.Check("and the plan's status says so too", state.AscentPlanStatus.Contains("did not converge", StringComparison.Ordinal)
+            && state.AscentPlanStatus.Contains("looser constraints", StringComparison.Ordinal), $"'{state.AscentPlanStatus}'");
         t.Check("and EXECUTE launches on it without being pressed again",
             state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile && ReferenceEquals(state.FlyingPlan, state.AscentPlan)
             && !state.ConvexLaunchPending,

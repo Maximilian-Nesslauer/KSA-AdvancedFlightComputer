@@ -417,7 +417,9 @@ public sealed class AscentPlan
 /// <summary>
 /// The ascent solve, on its own thread. Seconds of work, so it never runs on the sim or the draw: the sim step builds the problem from the game (main thread only) and hands it here as plain data, and polls for the plan.
 ///
-/// A MAX-Q THE VEHICLE CANNOT HOLD is relaxed here, once. The problem keeps the throttle within 1 % of full, as the script's does, and a KSA stack lifting off at three or five g climbs through the thick air well above the script's 35 kPa however steeply it goes: the problem then has no feasible trajectory, and SCvx can only hide the violation in its virtual control and stall. The seed search measures the least peak q the steepest climb reaches, so when every seed exceeded the limit the same stages are planned again to QRelaxFactor of that, and the plan says so. A vehicle that can hold the limit is planned to it exactly.
+/// A MAX-Q THE VEHICLE CANNOT HOLD is relaxed here, once. The problem keeps the throttle within 1 % of full, as the script's does, and a KSA stack lifting off at three or five g climbs through the thick air well above the script's 35 kPa however steeply it goes - which is why the panel's default is four times that - and one that cannot hold the limit it is given: the problem then has no feasible trajectory, and SCvx can only hide the violation in its virtual control and stall. The seed search measures the least peak q the steepest climb reaches, so when every seed exceeded the limit the same stages are planned again to QRelaxFactor of that. A vehicle that can hold the limit is planned to it exactly.
+///
+/// EVERY RETRY SAYS SO. An attempt that did not converge is followed by one with looser constraints - that max-q, or one more stage to burn - and <see cref="Retry"/> says which and why while it runs, so the panel never shows a second solve as if it were the first.
 ///
 /// HOW MANY STAGES THE PLAN BURNS is decided here, by trying. The script's formulation burns every stage but the last to depletion, which is right for a vehicle whose last stage is the one that reaches orbit and wrong for one that reaches orbit early: a stage that has to burn its whole load when orbit needed half of it can only waste the rest, and the plan it produces lofts and weaves to do so. So the first attempt plans only as many stages as the ideal dV says orbit needs, anything above them riding along as payload; a plan that cannot reach orbit adds the next stage, and one whose last stage is pinned at its shortest allowed burn drops it.
 /// </summary>
@@ -434,6 +436,7 @@ public sealed class AscentPlanJob : IDisposable
     private readonly Func<AscentSolution, int, double, string[], double, AscentPlan> _publish;
     private readonly object _gate = new();
     private string _progress = "starting";
+    private string _retry = "";
     private AscentPlan _result;
     private bool _done;
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
@@ -468,6 +471,9 @@ public sealed class AscentPlanJob : IDisposable
     public double ElapsedSeconds => _clock.Elapsed.TotalSeconds;
 
     public string Progress { get { lock (_gate) return _progress; } }
+
+    /// <summary>Why the attempt running now is a retry: the one before it did not converge, and what was loosened. Empty on the first attempt.</summary>
+    public string Retry { get { lock (_gate) return _retry; } }
 
     public bool IsDone { get { lock (_gate) return _done; } }
 
@@ -517,6 +523,8 @@ public sealed class AscentPlanJob : IDisposable
                     // The last stage pinned at its shortest allowed burn: the stages below it already reach orbit, and forcing it to burn at all distorts the plan.
                     if (stages > 1 && FinalStageIdle(problem, sol) && !tried.Contains(stages - 1))
                     {
+                        lock (_gate)
+                            _retry = $"Converged on {stages} stages, but the last one barely burns: planning {stages - 1} instead.";
                         k = stages - 1;
                         continue;
                     }
@@ -528,8 +536,12 @@ public sealed class AscentPlanJob : IDisposable
                 {
                     double held = Math.Ceiling(QRelaxFactor * sol.SeedLeastMaxQ / 5000.0) * 5000.0;
                     lock (_gate)
-                        _notes.Add($"max q {qMax / 1000.0:F0} kPa is out of reach at full throttle - the steepest climb reaches "
-                                 + $"{sol.SeedLeastMaxQ / 1000.0:F0} kPa - so planning to {held / 1000.0:F0} kPa");
+                    {
+                        _notes.Add($"did not converge at max q {qMax / 1000.0:F0} kPa, which is out of reach at full throttle - the steepest climb reaches "
+                                 + $"{sol.SeedLeastMaxQ / 1000.0:F0} kPa - so retrying with looser constraints, max q {held / 1000.0:F0} kPa");
+                        _retry = $"Did not converge: max q {qMax / 1000.0:F0} kPa is out of this vehicle's reach at full throttle (its steepest climb reaches "
+                               + $"{sol.SeedLeastMaxQ / 1000.0:F0} kPa). Retrying with looser constraints: max q {held / 1000.0:F0} kPa.";
+                    }
                     qMax = held;
                     relaxed = true;
                     tried.Remove(stages);
@@ -549,6 +561,8 @@ public sealed class AscentPlanJob : IDisposable
                 // Short of orbit, or no flyable seed: plan one more stage while there is one.
                 if (stages < _available)
                 {
+                    lock (_gate)
+                        _retry = $"Did not converge on {stages} stage{(stages == 1 ? "" : "s")} ({sol.Message}). Retrying with looser constraints: {stages + 1} stages to burn.";
                     k = stages + 1;
                     continue;
                 }

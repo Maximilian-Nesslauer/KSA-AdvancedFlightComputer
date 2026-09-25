@@ -27,7 +27,12 @@ public static partial class GuidanceWindow
             : _s.ConvexLaunchAtWindow ? " - arms for the launch window when it converges"
             : " - launches when it converges";
         if (job != null)
+        {
+            string retry = job.Retry;
+            if (retry.Length > 0)
+                ColoredWrapped(CvxWarn, "Convex ascent: " + retry);
             ColoredWrapped(CvxLive, $"Convex ascent: {job.Progress} ({job.ElapsedSeconds:F0} s){waiting}");
+        }
         else if (_s.ConvexLaunchPending)
             ColoredWrapped(CvxLive, "Convex ascent: starting the calculation" + waiting);
 
@@ -125,7 +130,11 @@ public static partial class GuidanceWindow
     {
         AscentPlanJob job = _s.AscentPlanJob;
         if (job != null)
+        {
+            if (job.Retry.Length > 0)
+                GaugeRowText("Retrying", job.Retry, CvxWarn);
             GaugeRowText("Status", $"{job.Progress} ({job.ElapsedSeconds:F0} s)", CvxLive);
+        }
         else if (_s.AscentPlanStatus.Length > 0)
             GaugeRowText("Status", _s.AscentPlanStatus, _s.AscentPlan?.Usable == true ? CvxGood : CvxWarn);
 
@@ -151,7 +160,7 @@ public static partial class GuidanceWindow
         GaugeRowText("Max q", $"{sol.DynamicPressure[qi] / 1000.0:F1} kPa at {sol.Time[qi]:F0} s (limit {plan.QMaxKpa:F0})",
             sol.DynamicPressure[qi] > plan.QMaxKpa * 1000.0 * 1.002 ? CvxWarn : CvxDim);
         if (plan.QRelaxed)
-            GaugeRowText("", $"{plan.QMaxRequestedKpa:F0} kPa is out of reach at full throttle", CvxWarn);
+            GaugeRowText("", $"did not converge at {plan.QMaxRequestedKpa:F0} kPa (out of reach at full throttle): retried looser", CvxWarn);
         GaugeRowText("Max q-alpha", $"{sol.QAlpha[qai]:F0} Pa rad at {sol.Time[qai]:F0} s (limit {plan.QAlphaMax:F0})",
             sol.QAlpha[qai] > plan.QAlphaMax * 1.002 ? CvxWarn : CvxDim);
         GaugeRowText("Insertion", $"{plan.InsertionAltKm:F0} km, miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s, "
@@ -322,7 +331,11 @@ public static partial class GuidanceWindow
 
         AscentPlanJob job = _s.AscentPlanJob;
         if (job != null)
+        {
+            if (job.Retry.Length > 0)
+                ColoredWrapped(CvxWarn, job.Retry);
             ImGui.TextColored(CvxLive, $"{job.Progress} ({job.ElapsedSeconds:F0} s)");
+        }
         else if (_s.AscentPlanStatus.Length > 0)
             ImGui.TextColored(_s.AscentPlan?.Usable == true ? CvxGood : CvxWarn, _s.AscentPlanStatus);
         if (_s.AscentPlan?.Usable == true && !_s.Running && _s.FlyConvexAscent)

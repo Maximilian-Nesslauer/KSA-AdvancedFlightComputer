@@ -76,12 +76,15 @@ public static partial class GuidanceWindow
                     ? $" At full throttle even its steepest climb reaches {sol.SeedLeastMaxQ / 1000.0:F0} kPa: raise Max q above that."
                     : "";
                 string relaxed = plan.QRelaxed
-                    ? $" Max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was planned to {plan.QMaxKpa:F0} kPa."
+                    ? $" The first solve did not converge: max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was retried with looser constraints, max q {plan.QMaxKpa:F0} kPa."
                     : "";
                 _s.AscentPlanStatus = plan.Usable
                     ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{relaxed}"
                     : $"No converged plan: {sol.Message}.{relaxed}{hint}";
-                failure = plan.Usable ? "" : $"Convergence was not possible: {sol.Message}.{relaxed}{hint}";
+                // More than one attempt's line means the job retried looser - a relaxed max q or another stage - and that did not converge either.
+                bool retried = plan.QRelaxed || plan.Notes.Count > 1;
+                failure = plan.Usable ? ""
+                    : $"Convergence was not possible{(retried ? ", even after retrying with looser constraints" : "")}: {sol.Message}.{relaxed}{hint}";
                 GuidanceLog.Info(vehicle, $"convex ascent {(plan.Usable ? "planned" : "did not converge")}: {sol.Message}, "
                     + $"{sol.Iterations} iterations ({sol.Accepted} accepted) in {plan.WallSeconds:F1} s, kick {sol.KickDeg:F3} deg, "
                     + (sol.Nodes > 0
