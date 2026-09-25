@@ -98,11 +98,17 @@ function Invoke-B2 {
     if ($Body -is [hashtable]) {
         $Body = $Body | ConvertTo-Json -Compress
     }
+    # PowerShell 7 rejects B2's authorization token as a header value unless validation is
+    # skipped. Windows PowerShell 5.1 has no such check, and no such parameter.
+    $webArgs = @{}
+    if ($PSVersionTable.PSVersion.Major -ge 6) {
+        $webArgs.SkipHeaderValidation = $true
+    }
     try {
         if ($null -eq $Body) {
-            return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers
+            return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers @webArgs
         }
-        return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers -ContentType $ContentType -Body $Body
+        return Invoke-RestMethod -Method $Method -Uri $Uri -Headers $Headers -ContentType $ContentType -Body $Body @webArgs
     }
     catch {
         $detail = if ($_.ErrorDetails -and $_.ErrorDetails.Message) { $_.ErrorDetails.Message } else { $_.Exception.Message }

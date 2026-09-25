@@ -51,19 +51,36 @@ if (-not $Version) {
 }
 $objectName = "$Prefix$Version.zip"
 
+# PowerShell 7 rejects B2's authorization token as a header value unless validation is skipped.
+# Windows PowerShell 5.1 has no such check, and no such parameter.
+$webArgs = @{}
+if ($PSVersionTable.PSVersion.Major -ge 6) {
+    $webArgs.SkipHeaderValidation = $true
+}
+
+# GitHub masks the secrets, but not the credentials derived from them. Errors can quote headers,
+# and the log of a public repository is public.
+function Hide-FromLog([string]$Value) {
+    if ($env:GITHUB_ACTIONS -eq "true" -and $Value) {
+        Write-Host "::add-mask::$Value"
+    }
+}
+
 $basic = [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$($env:B2_APPLICATION_KEY_ID):$($env:B2_APPLICATION_KEY)"))
+Hide-FromLog $basic
 try {
-    $auth = Invoke-RestMethod -Uri "https://api.backblazeb2.com/b2api/v3/b2_authorize_account" -Headers @{ Authorization = "Basic $basic" }
+    $auth = Invoke-RestMethod -Uri "https://api.backblazeb2.com/b2api/v3/b2_authorize_account" -Headers @{ Authorization = "Basic $basic" } @webArgs
 }
 catch {
     throw "B2 rejected the application key: $($_.Exception.Message)"
 }
+Hide-FromLog $auth.authorizationToken
 
 $zipPath = Join-Path ([IO.Path]::GetTempPath()) "ksa-refs-$Version.zip"
 $encodedName = [Uri]::EscapeDataString($objectName).Replace("%2F", "/")
 $uri = "$($auth.apiInfo.storageApi.downloadUrl)/file/$Bucket/$encodedName"
 try {
-    $response = Invoke-WebRequest -Uri $uri -Headers @{ Authorization = $auth.authorizationToken } -OutFile $zipPath -PassThru -UseBasicParsing
+    $response = Invoke-WebRequest -Uri $uri -Headers @{ Authorization = $auth.authorizationToken } -OutFile $zipPath -PassThru -UseBasicParsing @webArgs
 }
 catch {
     $status = $null
