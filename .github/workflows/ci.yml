@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  # nightly.yml runs the same jobs, and releases the mod package they build.
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: native (${{ matrix.runtime }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            runtime: win-x64
+          - os: ubuntu-latest
+            runtime: linux-x64
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      NUGET_XMLDOC_MODE: skip
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Install native tools
+        shell: pwsh
+        run: >-
+          ./build/ci/install-native-tools.ps1
+          -InstallRoot '${{ runner.temp }}/guidance-tools'
+          -RuntimeIdentifier '${{ matrix.runtime }}'
+
+      - name: Build and test guidance
+        shell: pwsh
+        run: >-
+          ./build/ci/test-guidance.ps1
+          -RepositoryRoot '${{ github.workspace }}'
+          -RuntimeIdentifier '${{ matrix.runtime }}'
+          -Configuration Release
+          -ArtifactsRoot '${{ runner.temp }}/guidance-artifacts'
+
+      - name: Upload native libraries
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: guidance-native-${{ matrix.runtime }}
+          path: ${{ runner.temp }}/guidance-artifacts/${{ matrix.runtime }}
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+
+  mod:
+    name: mod release build
+    needs: test
+    # Fork pull requests get no secrets, so they cannot fetch the KSA reference assemblies.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+      DOTNET_NOLOGO: "1"
+      NUGET_XMLDOC_MODE: skip
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install .NET SDK
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: 10.0.400
+
+      - name: Download Windows native libraries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: guidance-native-win-x64
+          path: build/native/win-x64
+
+      - name: Download Linux native libraries
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: guidance-native-linux-x64
+          path: build/native/linux-x64
+
+      # The reference assemblies stay in the runner's temp folder: they must never be uploaded
+      # as an artifact or cached, since both can be read from a public repository.
+      - name: Fetch KSA reference assemblies
+        shell: pwsh
+        env:
+          B2_APPLICATION_KEY_ID: ${{ secrets.KSAREFS_ID }}
+          B2_APPLICATION_KEY: ${{ secrets.KSAREFS_KEY }}
+          B2_BUCKET: ksarefs
+        run: >-
+          ./build/ci/fetch-ksa-refs.ps1
+          -Destination '${{ runner.temp }}/ksa-refs'
+
+      - name: Restore
+        run: dotnet restore AdvancedFlightComputer/AdvancedFlightComputer.csproj --locked-mode
+
+      # Release packages the mod zip and checks it holds exactly the declared payload, so no
+      # game assembly can end up in it.
+      - name: Build and package the mod
+        run: >-
+          dotnet build AdvancedFlightComputer/AdvancedFlightComputer.csproj
+          --configuration Release
+          --no-restore
+          -p:DeployToMods=false
+          -p:GuidanceNativeRids=win-x64%3Blinux-x64
+          "-p:KsaDir=${{ runner.temp }}/ksa-refs"
+
+      - name: Upload mod package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: AdvancedFlightComputer
+          path: AdvancedFlightComputer/bin/Release/net10.0/AdvancedFlightComputer.zip
+          if-no-files-found: error
+          retention-days: 7
