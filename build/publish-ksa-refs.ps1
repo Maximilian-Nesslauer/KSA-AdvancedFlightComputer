@@ -139,11 +139,21 @@ if (-not $NoUpload) {
     $storage = $auth.apiInfo.storageApi
     $headers = @{ Authorization = $auth.authorizationToken }
 
-    # A key restricted to one bucket names it in the authorize response; otherwise look it up.
+    # A key restricted to a bucket names it in the authorize response; otherwise look it up. v3
+    # puts bucketId and bucketName in apiInfo.storageApi.allowed, v2 in a top-level allowed, and
+    # multi-bucket keys (v4) a buckets array of id and name, so all three are read.
     $bucketId = $null
-    foreach ($allowed in @(Get-OptionalProperty (Get-OptionalProperty $storage "allowed") "buckets")) {
-        if ($null -ne $allowed -and (Get-OptionalProperty $allowed "name") -eq $Bucket) {
-            $bucketId = $allowed.id
+    foreach ($allowed in @((Get-OptionalProperty $storage "allowed"), (Get-OptionalProperty $auth "allowed"))) {
+        if ($null -eq $allowed) {
+            continue
+        }
+        if ((Get-OptionalProperty $allowed "bucketName") -eq $Bucket) {
+            $bucketId = $allowed.bucketId
+        }
+        foreach ($entry in @(Get-OptionalProperty $allowed "buckets")) {
+            if ($null -ne $entry -and (Get-OptionalProperty $entry "name") -eq $Bucket) {
+                $bucketId = $entry.id
+            }
         }
     }
     if (-not $bucketId) {

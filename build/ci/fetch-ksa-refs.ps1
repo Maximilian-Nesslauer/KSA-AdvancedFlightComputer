@@ -101,7 +101,7 @@ try {
     }
     $actual = (Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash.ToLowerInvariant()
     if (-not $expected) {
-        Write-Warning "b2://$Bucket/$objectName has no recorded SHA-256, so it could not be checked."
+        throw "b2://$Bucket/$objectName has no recorded SHA-256, so it cannot be checked. Upload it again with build/publish-ksa-refs.ps1 -Force."
     }
     elseif ($expected -ne $actual) {
         throw "b2://$Bucket/$objectName has SHA-256 $actual, but $expected was recorded when it was uploaded."
