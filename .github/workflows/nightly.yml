@@ -2,8 +2,9 @@ name: Nightly
 
 # Builds main with the same jobs as CI and publishes the mod as a pre-release, tagged
 # v<next patch>-nightly.<date>. The content index stamps that as a dev release, so Borea offers it
-# only on its dev channel, and GitHub never marks a pre-release as Latest. Only the newest
-# nightlies are kept, so the releases page does not fill up with them.
+# only on its dev channel, and GitHub never marks a pre-release as Latest.
+# Published nightlies are never deleted: the index keeps listing every version it stamped, so a
+# deleted one would stay on offer in Borea with a dead download.
 # A nightly becomes a stable release through promote.yml, without being built again.
 
 on:
@@ -19,9 +20,6 @@ permissions:
 concurrency:
   group: nightly
   cancel-in-progress: false
-
-env:
-  KEEP_NIGHTLIES: 5
 
 jobs:
   plan:
@@ -156,17 +154,17 @@ jobs:
           --target "$GITHUB_SHA" --title "$TAG" --notes-file body.md
           --prerelease --latest=false
 
-      # Drafts are what a cancelled run leaves behind; nobody else sees them, and the next run
-      # uses a new tag, so they are removed rather than finished.
-      - name: Keep only the newest nightlies
+      # A cancelled run leaves a draft behind. Drafts were never published, so neither the index
+      # nor anyone without write access has seen them, and the next run uses a new tag. They are
+      # removed rather than finished. Published nightlies are left alone.
+      - name: Remove drafts that cancelled runs left
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          gh release list --limit 100 --json tagName,isDraft,isPrerelease,createdAt --jq \
-            "[.[] | select(.isPrerelease and (.tagName | test(\"-nightly\\\\.\")))] | sort_by(.createdAt) | reverse
-             | (map(select(.isDraft)) + (map(select(.isDraft | not)) | .[$KEEP_NIGHTLIES:])) | .[].tagName" |
+          gh release list --limit 100 --json tagName,isDraft --jq \
+            '.[] | select(.isDraft and (.tagName | test("-nightly\\."))) | .tagName' |
             while read -r tag; do
-              echo "Deleting $tag."
-              gh release delete "$tag" --yes --cleanup-tag
+              echo "Deleting the leftover draft $tag."
+              gh release delete "$tag" --yes
             done

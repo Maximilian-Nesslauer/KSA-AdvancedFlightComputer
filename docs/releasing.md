@@ -18,8 +18,10 @@ A nightly is never marked Latest, so the repository page and `/releases/latest` 
 The content index stamps a `-nightly` version as a dev release, so Borea offers nightlies only on its `dev` channel.
 `spacedock-publish.yml` skips pre-releases, so SpaceDock never gets a nightly.
 
-Only the newest five nightlies are kept, and older ones are deleted with their tags.
-The index still lists a deleted nightly, so installing that exact version in Borea fails, while Borea's newest dev release is always one that exists.
+Published nightlies are never deleted, so every version the index lists stays installable.
+The index keeps listing every version it stamped and has no way to expire one yet, so a deleted nightly would stay on offer in Borea with a dead download.
+So nightlies stay on the releases page, labelled Pre-release, and there is one only for each night that `main` changed.
+Only drafts that a cancelled run left behind are removed, because they were never published.
 
 Each nightly carries the zip, named after the version, and `SHA256SUMS.txt`.
 The zip has a build provenance attestation from the nightly workflow.

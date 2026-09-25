@@ -10,7 +10,6 @@
 #   PREVIOUS       the tag the change list starts from; empty lets GitHub pick
 #   INTRO          optional file with the hand-written summary
 #   DIST           folder holding SHA256SUMS.txt
-#   KEEP_NIGHTLIES how many nightlies nightly.yml keeps, for the nightly notes
 #   GH_REPO        owner/repo
 #   GH_TOKEN       a token that can generate release notes (contents: write)
 set -euo pipefail
@@ -40,7 +39,7 @@ if [ "$KIND" = nightly ]; then
   cat <<EOF
 Nightly build of \`main\` at $SHA, for testing. It has not been flown as a release, so it can break things that the latest stable release does not.
 
-Only the newest ${KEEP_NIGHTLIES:-5} nightlies are kept. Borea offers nightlies only on its \`dev\` channel, and SpaceDock never gets them.
+Borea offers nightlies only on its \`dev\` channel, and SpaceDock never gets them.
 
 EOF
 elif [ -n "${INTRO:-}" ] && [ -s "$INTRO" ]; then
