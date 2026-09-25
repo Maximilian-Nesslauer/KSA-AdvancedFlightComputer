@@ -73,27 +73,50 @@ public sealed class KsaAscentAtmosphere : AscentAtmosphere
 /// One burn of the ascent, as launch3dof.py describes a stage: what it burns, what it drops when it is empty, and how hard it pushes.
 ///
 /// THRUST CAN DEPEND ON BACK PRESSURE, which is the one place this departs from the script, where thrust is a constant per stage. KSA's engines lose thrust at sea level (and its nozzle model includes flow separation, so the loss is not linear in pressure), so a stage built from the game carries its thrust at a few pressures, and a spline through them gives the thrust at any altitude. The MASS FLOW does not depend on back pressure (DeLavalNozzleConfig.ComputePerformance), so the burn time to depletion is the same either way. A stage with no pressure table has constant thrust, which is exactly the script's model.
+///
+/// SOLID MOTORS RIDE ON TOP of the throttleable engines (issue #73). A stage splits into its liquid engines - the thrust, mass flow and pressure table above, scaled by the throttle - and the solids burning through it, a <see cref="AscentSolidBurn"/> against the stage's clock that the throttle cannot touch. Each of KSA's phases is a stage of its own, so a stage ends either where a solid burns out or where a liquid load runs dry, and one with a solid in it always has its duration pinned (<see cref="FixedBurnTime"/>). A liquid load can span stages: a core lit with its boosters keeps burning after they are gone, and <see cref="LiquidCarriesOver"/> says the next stage draws on the same load.
 /// </summary>
 public sealed class AscentStage
 {
     private readonly CubicBSplineNd? _thrustVsPressure;
 
-    /// <param name="thrust">Full-throttle thrust, N. Used when there is no pressure table, and as the reference thrust otherwise.</param>
-    /// <param name="massFlow">Full-throttle propellant mass flow, kg/s.</param>
-    /// <param name="propellantMass">Propellant this stage burns, kg.</param>
+    /// <param name="thrust">Full-throttle thrust of the liquid engines, N. Used when there is no pressure table, and as the reference thrust otherwise. Zero only for a stage that burns solids alone.</param>
+    /// <param name="massFlow">Full-throttle propellant mass flow of the liquid engines, kg/s; zero with them.</param>
+    /// <param name="propellantMass">Propellant this stage burns, kg: its solids' grain plus the liquid it burns. For a stage whose liquid carries over, the liquid the seed burns in it; only the sum over the stages that share the load is binding.</param>
     /// <param name="jettisonMass">Structure dropped when this stage separates, kg. Zero for the last stage.</param>
     /// <param name="dragArea">Area the drag coefficient is referenced to, m^2.</param>
     /// <param name="pressureGrid">Strictly increasing back pressures, Pa, or null for constant thrust.</param>
     /// <param name="thrustAtPressure">Full-throttle thrust at each grid pressure, N.</param>
-    /// <param name="throttleMin">This stage's throttle floor, a fraction of full thrust; NaN takes <see cref="AscentSettings.ThrottleMin"/>. A stage that cannot throttle - a solid motor - keeps the script's 99 % whatever the vehicle-wide floor is.</param>
+    /// <param name="throttleMin">This stage's throttle floor, a fraction of full thrust; NaN takes <see cref="AscentSettings.ThrottleMin"/>. A stage that cannot throttle keeps the script's 99 % whatever the vehicle-wide floor is: one of solids alone, whose thrust ignores the throttle anyway, and one whose liquid engines are held at full thrust.</param>
+    /// <param name="solid">The solids burning through this stage, or null for none.</param>
+    /// <param name="fixedBurnTime">This stage's duration, s, when something other than its liquid load ends it; NaN for a free burn time. Required with <paramref name="solid"/>.</param>
+    /// <param name="liquidCarriesOver">The liquid engines keep burning the same load into the next stage.</param>
+    /// <param name="seedThrottle">The liquid throttle the seed flies this stage at: below 1 for a core that has to outlast its boosters.</param>
     public AscentStage(double thrust, double massFlow, double propellantMass, double jettisonMass,
                        double dragArea, double[]? pressureGrid = null, double[]? thrustAtPressure = null,
-                       double throttleMin = double.NaN)
+                       double throttleMin = double.NaN, AscentSolidBurn? solid = null,
+                       double fixedBurnTime = double.NaN, bool liquidCarriesOver = false, double seedThrottle = 1.0)
     {
-        if (!(thrust > 0.0) || !double.IsFinite(thrust))
-            throw new ArgumentOutOfRangeException(nameof(thrust), thrust, "Thrust must be finite and positive.");
-        if (!(massFlow > 0.0) || !double.IsFinite(massFlow))
-            throw new ArgumentOutOfRangeException(nameof(massFlow), massFlow, "Mass flow must be finite and positive.");
+        bool liquid = thrust > 0.0 || massFlow > 0.0;
+        if (liquid || solid == null)
+        {
+            if (!(thrust > 0.0) || !double.IsFinite(thrust))
+                throw new ArgumentOutOfRangeException(nameof(thrust), thrust, "Thrust must be finite and positive.");
+            if (!(massFlow > 0.0) || !double.IsFinite(massFlow))
+                throw new ArgumentOutOfRangeException(nameof(massFlow), massFlow, "Mass flow must be finite and positive.");
+        }
+        else if (thrust != 0.0 || massFlow != 0.0)
+        {
+            throw new ArgumentException("A stage of solids alone has no liquid thrust or mass flow.");
+        }
+        if (solid != null && (!(fixedBurnTime > 0.0) || !double.IsFinite(fixedBurnTime) || fixedBurnTime > solid.Duration * (1.0 + 1e-9)))
+            throw new ArgumentOutOfRangeException(nameof(fixedBurnTime), fixedBurnTime, "A stage with solids needs a burn time within its table.");
+        if (!double.IsNaN(fixedBurnTime) && (!(fixedBurnTime > 0.0) || !double.IsFinite(fixedBurnTime)))
+            throw new ArgumentOutOfRangeException(nameof(fixedBurnTime), fixedBurnTime, "A fixed burn time must be finite and positive.");
+        if (liquidCarriesOver && !liquid)
+            throw new ArgumentException("Only liquid engines can carry a load into the next stage.", nameof(liquidCarriesOver));
+        if (!(seedThrottle > 0.0 && seedThrottle <= 1.0))
+            throw new ArgumentOutOfRangeException(nameof(seedThrottle), seedThrottle, "The seed throttle must be in (0, 1].");
         if (!(propellantMass > 0.0) || !double.IsFinite(propellantMass))
             throw new ArgumentOutOfRangeException(nameof(propellantMass), propellantMass, "Propellant must be finite and positive.");
         if (!(jettisonMass >= 0.0) || !double.IsFinite(jettisonMass))
@@ -109,8 +132,12 @@ public sealed class AscentStage
         if (!double.IsNaN(throttleMin) && !(throttleMin > 0.0 && throttleMin <= 1.0))
             throw new ArgumentOutOfRangeException(nameof(throttleMin), throttleMin, "The throttle floor must be in (0, 1].");
         ThrottleMin = throttleMin;
+        Solid = solid;
+        FixedBurnTime = fixedBurnTime;
+        LiquidCarriesOver = liquidCarriesOver;
+        SeedThrottle = seedThrottle;
 
-        if (pressureGrid != null && thrustAtPressure != null && pressureGrid.Length >= 2)
+        if (liquid && pressureGrid != null && thrustAtPressure != null && pressureGrid.Length >= 2)
         {
             if (thrustAtPressure.Length != pressureGrid.Length)
                 throw new ArgumentException("One thrust per grid pressure.", nameof(thrustAtPressure));
@@ -134,15 +161,46 @@ public sealed class AscentStage
     public double[]? PressureGrid { get; }
     public double[]? ThrustAtPressure { get; }
 
-    /// <summary>Exhaust velocity at the reference thrust, m/s - for the dV readout only.</summary>
-    public double ExhaustVelocity => Thrust / MassFlow;
+    /// <summary>The solids burning through this stage, or null.</summary>
+    public AscentSolidBurn? Solid { get; }
 
-    /// <summary>Full-throttle burn time, s.</summary>
-    public double FullBurnTime => PropellantMass / MassFlow;
+    /// <summary>This stage's duration when a solid burn or a held throttle fixes it, s; NaN when its liquid load does.</summary>
+    public double FixedBurnTime { get; }
 
-    /// <summary>Full-throttle thrust at a back pressure, N.</summary>
+    /// <summary>The liquid engines keep burning the same load in the next stage.</summary>
+    public bool LiquidCarriesOver { get; }
+
+    /// <summary>The liquid throttle the seed flies this stage at.</summary>
+    public double SeedThrottle { get; }
+
+    public bool HasLiquid => MassFlow > 0.0;
+    public bool IsPinned => !double.IsNaN(FixedBurnTime);
+
+    /// <summary>A copy with another jettison mass, propellant and carry-over: what the planner does to the last stage of a truncated stack.</summary>
+    public AscentStage With(double propellantMass, double jettisonMass, bool liquidCarriesOver)
+        => new(Thrust, MassFlow, propellantMass, jettisonMass, DragArea, PressureGrid, ThrustAtPressure,
+               ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle);
+
+    /// <summary>Exhaust velocity at the reference thrust, m/s, solids at their mean over the stage - for the dV readout only.</summary>
+    public double ExhaustVelocity
+    {
+        get
+        {
+            if (Solid == null)
+                return Thrust / MassFlow;
+            double t = FixedBurnTime;
+            return (Thrust * t + Solid.Impulse(0.0, t)) / (MassFlow * t + Solid.Propellant(0.0, t));
+        }
+    }
+
+    /// <summary>Full-throttle burn time, s: the pinned one if there is one.</summary>
+    public double FullBurnTime => IsPinned ? FixedBurnTime : PropellantMass / MassFlow;
+
+    /// <summary>Full-throttle thrust of the liquid engines at a back pressure, N.</summary>
     public Dual MaxThrust(Dual pressure)
     {
+        if (!HasLiquid)
+            return new Dual(0.0);
         if (_thrustVsPressure == null)
             return new Dual(Thrust);
         Span<double> p = stackalloc double[1] { pressure.V };
@@ -321,6 +379,9 @@ public sealed class AscentProblem
                 return "the lift-off state is not finite";
         if (Stages == null || Stages.Length == 0)
             return "there are no stages";
+        for (int i = 0; i < Stages.Length; i++)
+            if (Stages[i].LiquidCarriesOver && (i == Stages.Length - 1 || !Stages[i + 1].HasLiquid))
+                return $"stage {i + 1} carries its liquid load into {(i == Stages.Length - 1 ? "nothing" : "a stage with no liquid engines")}";
         if (!(M0 > 0.0))
             return "the lift-off mass is not positive";
         if (!(FinalMassFloor > 0.0))

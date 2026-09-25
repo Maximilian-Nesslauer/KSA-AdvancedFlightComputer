@@ -67,7 +67,9 @@ internal static class KsaEnginePerf
         return remaining;
     }
 
-    private static (double thrust, double massFlow) ActivePerformance(Vehicle vehicle, double throttle, double ambientPressure)
+    // liquidOnly leaves out every engine with a core that is not a Combustor: a solid motor ignores the throttle.
+    private static (double thrust, double massFlow) ActivePerformance(Vehicle vehicle, double throttle, double ambientPressure,
+                                                                      bool liquidOnly = false)
     {
         if (vehicle?.Parts?.States == null || !double.IsFinite(throttle) || !double.IsFinite(ambientPressure)
             || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
@@ -86,6 +88,8 @@ internal static class KsaEnginePerf
                 || engine.Module.Cores == null || engine.Module.Cores.Length == 0)
                 continue;
             RocketCore[] cores = engine.Module.Cores;
+            if (liquidOnly && Array.Exists(cores, core => core is not Combustor))
+                continue;
             bool allSupplied = true;
             foreach (RocketCore core in cores)
                 allSupplied &= coreStates.States[core.StatesIdx].IsPropellantAvailable;
@@ -181,6 +185,18 @@ internal static class KsaEnginePerf
             return new(0.0, 0.0, status);
         return InvertThrust(demandN, vehicle.GetMinThrottle(),
             throttle => ThrustAtThrottle(vehicle, throttle, ambientPressure));
+    }
+
+    // The throttle that gets a fraction of the liquid engines' full thrust out of them alone, for a plan whose throttle is theirs: solid motors burning alongside ignore it and add their own thrust on top. Everything the throttle reaches is liquid, so CommandForThrust's refusal while a solid burns does not apply.
+    internal static ThrustCommand CommandLiquidFraction(Vehicle vehicle, double fraction, double ambientPressure)
+    {
+        if (!double.IsFinite(fraction))
+            return new(0.0, 0.0, ThrustStatus.InvalidDemand);
+        double full = ActivePerformance(vehicle, 1.0, ambientPressure, liquidOnly: true).thrust;
+        if (!(full > 0.0))
+            return new(0.0, 0.0, ThrustStatus.NoAuthority);
+        return InvertThrust(fraction * full, vehicle.GetMinThrottle(),
+            throttle => ActivePerformance(vehicle, throttle, ambientPressure, liquidOnly: true).thrust);
     }
 
     // Returns -1 when throttle control is unavailable.

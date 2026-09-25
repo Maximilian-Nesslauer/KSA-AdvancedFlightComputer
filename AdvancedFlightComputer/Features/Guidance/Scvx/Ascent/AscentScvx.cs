@@ -48,7 +48,11 @@ public sealed class AscentSolution
     public required double[] Velocity { get; init; }   // 3 per node, m/s
     public required double[] Mass { get; init; }       // kg
     public required double[] Throttle { get; init; }   // u, 3 per node
-    public required double[] Thrust { get; init; }     // N, full-throttle thrust at the node's altitude times |u|
+    public required double[] Thrust { get; init; }     // N delivered: the liquid engines' full-throttle thrust at the node's altitude times |u|, plus the solids'
+    /// <summary>Full-throttle thrust at each node, N: the liquid engines at full throttle plus the solids, which is what the vehicle could deliver there.</summary>
+    public double[] FullThrust { get; init; } = [];
+    /// <summary>The solids' share of each node's thrust, N; zero where none burn.</summary>
+    public double[] SolidThrust { get; init; } = [];
     public required double[] DynamicPressure { get; init; }  // Pa
     public required double[] QAlpha { get; init; }           // Pa rad
     public required double[] BurnTime { get; init; }   // s per stage
@@ -140,7 +144,7 @@ public static class AscentScvx
             }
             catch (Exception e)
             {
-                sol = new AscentSubproblem.Solved(false, "exception: " + e.Message, [], [], [], [], [], [], [], 0, 0.0);
+                sol = new AscentSubproblem.Solved(false, "exception: " + e.Message, [], [], [], [], [], [], [], [], 0, 0.0);
             }
 
             if (!sol.Ok)
@@ -167,7 +171,7 @@ public static class AscentScvx
             double jLin = (1.0 - sol.X[(c.N - 1) * NX + 6]) + Smoothing(c, sol.U)
                 + st.RhoVirtualControl * SumSquaresScaled(sol.Wv, c.DScale)
                 + st.RhoTerminal * SumSquares(sol.STerm)
-                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum());
+                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum());
             Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma);
             double pred = refMerit.J - jLin;
             double actual = refMerit.J - cand.J;
@@ -254,7 +258,7 @@ public static class AscentScvx
         int n = c.N;
         var f = new double[n * NX];
         for (int k = 0; k < n; k++)
-            c.Dyn.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), c.NodeStage[k], f.AsSpan(k * NX, NX));
+            c.Dyn.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, f.AsSpan(k * NX, NX));
 
         double defect = 0.0, worst = 0.0;
         foreach (int k in c.Coll)
@@ -286,13 +290,23 @@ public static class AscentScvx
             double q = c.Dyn.QValue(x.AsSpan(k * NX, NX));
             double vqa = Math.Max(0.0, qa / c.QAlphaMax - 1.0);
             double vq = Math.Max(0.0, q / c.QMax - 1.0);
-            path += vqa + vq;
-            pathWorst = Math.Max(pathWorst, Math.Max(vqa, vq));
+            // Thrust against the airflow, where the subproblem forbids it (AscentSubproblem): the true -v_rel_hat . u.
+            double vpro = q > st.QActive ? Math.Max(0.0, -AirAlong(c, x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU))) : 0.0;
+            path += vqa + vq + vpro;
+            pathWorst = Math.Max(pathWorst, Math.Max(Math.Max(vqa, vq), vpro));
         }
 
         double j0 = (1.0 - x[(n - 1) * NX + 6]) + Smoothing(c, u)
             + st.RhoVirtualControl * defect + st.RhoTerminal * term + st.RhoPath * path;
         return new Merit(j0, worst, pathWorst, termWorst);
+    }
+
+    /// <summary>The throttle vector's component along the air-relative velocity: |u| cos(alpha).</summary>
+    private static double AirAlong(AscentCase c, ReadOnlySpan<double> x, ReadOnlySpan<double> u)
+    {
+        double[] air = c.AirVelocity(x);
+        double an = AscentCase.Norm3(air);
+        return an > 1e-12 ? (air[0] * u[0] + air[1] * u[1] + air[2] * u[2]) / an : 0.0;
     }
 
     private static double Smoothing(AscentCase c, double[] u)
@@ -371,6 +385,8 @@ public static class AscentScvx
         var mass = new double[n];
         var thr = new double[n * 3];
         var thrust = new double[n];
+        var fullThrust = new double[n];
+        var solidThrust = new double[n];
         var q = new double[n];
         var qa = new double[n];
         for (int k = 0; k < n; k++)
@@ -382,8 +398,8 @@ public static class AscentScvx
                 thr[k * 3 + i] = u[k * NU + i];
             }
             mass[k] = x[k * NX + 6] * d.MU;
-            double um = AscentCase.Norm3(u.AsSpan(k * NU, NU));
-            thrust[k] = d.MaxThrustAt(x.AsSpan(k * NX, NX), c.NodeStage[k]) * um;
+            d.ThrustAt(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, out double liquidFull, out thrust[k], out solidThrust[k]);
+            fullThrust[k] = liquidFull + solidThrust[k];
             q[k] = d.QValue(x.AsSpan(k * NX, NX));
             qa[k] = d.QAlpha(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), c.NodeStage[k]);
         }
@@ -391,7 +407,7 @@ public static class AscentScvx
         // True defects of the reference, per channel, in SI.
         var f = new double[n * NX];
         for (int k = 0; k < n; k++)
-            d.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), c.NodeStage[k], f.AsSpan(k * NX, NX));
+            d.Eval(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, f.AsSpan(k * NX, NX));
         double dp = 0, dvv = 0, dm = 0;
         foreach (int k in c.Coll)
         {
@@ -434,6 +450,8 @@ public static class AscentScvx
             Mass = mass,
             Throttle = thr,
             Thrust = thrust,
+            FullThrust = fullThrust,
+            SolidThrust = solidThrust,
             DynamicPressure = q,
             QAlpha = qa,
             BurnTime = burn,

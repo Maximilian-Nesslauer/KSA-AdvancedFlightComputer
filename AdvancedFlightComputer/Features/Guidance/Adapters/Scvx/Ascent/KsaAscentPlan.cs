@@ -382,9 +382,14 @@ public sealed class AscentPlan
     public double QAlphaMax { get; init; }
     public double InsertionAltKm { get; init; }
 
-    /// <summary>The throttle floor the plan was solved to, percent, and how many planned stages were held at full thrust instead because a solid motor burns in them.</summary>
+    /// <summary>The throttle floor the plan was solved to, percent, and how many planned stages have solid motors burning in them (#73).</summary>
     public double ThrottleMinPct { get; init; }
     public int SolidStages { get; init; }
+    /// <summary>A core that would have run dry before its boosters is planned throttled down to outlast them (#32).</summary>
+    public bool CoreThrottledDown { get; init; }
+    /// <summary>One line per planned stage, and what was decided about the solids: for the log and the tests.</summary>
+    public IReadOnlyList<string> StageLines { get; init; } = [];
+    public IReadOnlyList<string> StageNotes { get; init; } = [];
 
     /// <summary>What is left when the last planned stage is empty, kg: the stages above it and the payload.</summary>
     public double FinalMassFloor { get; init; }
@@ -568,6 +573,9 @@ public sealed class AscentPlanJob : IDisposable
     private static bool FinalStageIdle(AscentProblem p, AscentSolution s)
     {
         int last = p.Stages.Length - 1;
+        // A solid burns its whole grain whatever the plan wants: its stage is never idle, only pinned.
+        if (p.Stages[last].IsPinned)
+            return false;
         double floor = Math.Min(p.Settings.SigmaMinSeconds, 0.5 * p.Stages[last].FullBurnTime);
         return s.BurnTime[last] <= floor * 1.05;
     }
