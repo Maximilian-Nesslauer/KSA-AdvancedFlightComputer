@@ -4,6 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
@@ -111,15 +112,6 @@ public static partial class GuidanceWindow
         }
     }
 
-    /// <summary>How many of the first <paramref name="stages"/> stages cannot throttle.</summary>
-    private static int CountHeld(bool[] canThrottle, int stages)
-    {
-        int n = 0;
-        for (int i = 0; i < stages && i < canThrottle.Length; i++)
-            if (!canThrottle[i]) n++;
-        return n;
-    }
-
     private static double Max(double[] v)
     {
         double m = double.NegativeInfinity;
@@ -160,7 +152,7 @@ public static partial class GuidanceWindow
                 grid[g] = atmosphere.SeaLevelPressure * g / (grid.Length - 1);
         }
 
-        // The staging model, as RefreshStageModel builds it, with thrust sampled across back pressure.
+        // The staging model, as RefreshStageModel builds it, with thrust sampled across back pressure, and each stage's engines so its solids can be told from its liquids.
         SequencePerformanceList performance = vehicle.Parts?.PerformanceSequences;
         if (performance == null || vehicle.Parts.SequenceList == null)
         {
@@ -169,50 +161,45 @@ public static partial class GuidanceWindow
         }
         float ambient = vehicle.PhysicsEnvironment.AtmosphericPressure;
         performance.RecomputeForFlight(ambient);
-        UpfgVehicle model = KsaVehicleAdapter.Build(vehicle, ambient, grid);
+        var stageParts = new Dictionary<UpfgStage, HashSet<Part>>();
+        UpfgVehicle model = KsaVehicleAdapter.Build(vehicle, ambient, grid, stageParts);
         if (model.Stages.Count == 0)
         {
             error = "no stage has thrust and propellant";
             return false;
         }
-        // The booster reserve cuts the first burn short, as the ascent itself will: planned on the same copy UPFG flies.
-        if (_s.ReserveArmed)
-            ApplyAscentReserve(model, _s.ReserveKg);
 
-        // The mass chain. Stage 0 starts at the LIVE mass, as UPFG reconciles it; each later stage starts where the model says, and whatever the model drops between one burnout and the next ignition is the jettison.
-        const double g0 = 9.80665;
-        double m0 = vehicle.TotalMass;
-        int count = model.Stages.Count;
-        var thrust = new double[count];
-        var massFlow = new double[count];
-        var prop = new double[count];
-        var jettison = new double[count];
-        var grids = new double[count][];
-        var tables = new double[count][];
-        var floors = new double[count];
-        var canThrottle = new bool[count];
-        // The floor on the panel, but never under what the engines can throttle to, and never at 100 %, which would freeze the thrust direction. A stage with a solid motor burning cannot throttle at all and is held at full thrust.
+        // The stages. Each of the drain model's phases is one, with its solid motors' burns sampled from the game's own model and added on outside the throttle (#73), and a core that would run dry before its boosters throttled down to outlast them where it can (#32). Stage 0 starts at the LIVE mass, as UPFG reconciles it; whatever the model drops between one burnout and the next ignition is the jettison. The booster reserve comes off the first liquid load, as the ascent itself will fly it.
+        // The floor on the panel, but never under what the engines can throttle to, and never at 100 %, which would freeze the thrust direction. A stage of solids alone, or one whose liquids are held at full thrust, keeps the script's 99 %.
         double floor = Math.Clamp(Math.Max(_s.ConvexThrottleMinPct / 100.0, vehicle.GetMinThrottle()), 0.01, FullThrottleFloor);
+        double m0 = vehicle.TotalMass;
+        double dragArea = aero.ReferenceArea;
+        KsaAscentStages.Gathered gathered = KsaAscentStages.Gather(vehicle, model, stageParts, grid);
+        AscentPhasePlan.Result stagePlan;
+        try
+        {
+            stagePlan = AscentPhasePlan.Build(gathered.Phases, gathered.Motors, grid, m0, dragArea, floor, FullThrottleFloor,
+                                              _s.ReserveArmed ? _s.ReserveKg : 0.0);
+        }
+        catch (ArgumentException e)
+        {
+            error = "the stage model is not valid (" + e.Message + ")";
+            return false;
+        }
+        AscentStage[] allStages = stagePlan.Stages;
+        int count = allStages.Length;
         var dvCum = new double[count];
         double dvSum = 0.0;
         for (int i = 0; i < count; i++)
         {
-            UpfgStage st = model.Stages[i];
-            double start = i == 0 ? m0 : st.MassTotal;
-            thrust[i] = st.Thrust;
-            massFlow[i] = st.Thrust / (st.Isp * g0);
-            prop[i] = start - st.MassDry;
-            jettison[i] = i + 1 < count ? Math.Max(0.0, st.MassDry - model.Stages[i + 1].MassTotal) : 0.0;
-            grids[i] = st.PressureGrid;
-            tables[i] = st.ThrustAtPressure;
-            canThrottle[i] = st.Throttleable;
-            floors[i] = st.Throttleable ? floor : FullThrottleFloor;
-            if (!(prop[i] > 1.0) || !(massFlow[i] > 0.0))
+            AscentStage st = allStages[i];
+            double start = stagePlan.StartMass[i];
+            if (!(st.PropellantMass > 1.0) || !(start - st.PropellantMass > 0.0))
             {
                 error = $"stage {i + 1} has nothing left to burn";
                 return false;
             }
-            dvSum += st.Isp * g0 * Math.Log(start / st.MassDry);
+            dvSum += st.ExhaustVelocity * Math.Log(start / (start - st.PropellantMass));
             dvCum[i] = dvSum;
         }
 
@@ -244,15 +231,11 @@ public static partial class GuidanceWindow
         double groundRadius = Math.Min(bodyRadius, r.Length() - 1.0);
         double qMax = Math.Max(_s.ConvexQMaxKpa, 0.1) * 1000.0;
         double qAlphaMax = Math.Max(_s.ConvexQAlphaMax, 1.0);
-        double dragArea = aero.ReferenceArea;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
         AscentProblem Build(int stages, double qLimit)
         {
-            var list = new AscentStage[stages];
-            for (int i = 0; i < stages; i++)
-                list[i] = new AscentStage(thrust[i], massFlow[i], prop[i],
-                                          i < stages - 1 ? jettison[i] : 0.0, dragArea, grids[i], tables[i], floors[i]);
+            AscentStage[] list = AscentPhasePlan.Truncate(allStages, stages);
             return new AscentProblem
             {
                 Mu = mu,
@@ -308,7 +291,10 @@ public static partial class GuidanceWindow
             IncDeg = incDeg,
             LanDeg = lanDeg,
             ThrottleMinPct = floor * 100.0,
-            SolidStages = CountHeld(canThrottle, stages),
+            SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
+            CoreThrottledDown = stagePlan.CoreThrottledDown,
+            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", pinned to {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
+            StageNotes = stagePlan.Notes.ToArray(),
             QMaxKpa = qUsed / 1000.0,
             QMaxRequestedKpa = qMaxKpa,
             QAlphaMax = qAlphaMax,
@@ -336,8 +322,17 @@ public static partial class GuidanceWindow
 
         GuidanceLog.Info(vehicle, $"convex ascent requested (problem {dump}): {count} stage(s) available, trying {initial} first; "
             + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg, "
-            + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", Array.ConvertAll(floors, f => (f * 100.0).ToString("F0")))} by stage), drag area {dragArea:F1} m^2, "
+            + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), drag area {dragArea:F1} m^2, "
             + (atmosphere != null ? $"air {atmosphere}" : "no air") + ".");
+        for (int i = 0; i < count; i++)
+            GuidanceLog.Info(vehicle, $"convex ascent stage {i + 1}: {stagePlan.Describe[i]}"
+                + (allStages[i].IsPinned ? $", pinned to {allStages[i].FixedBurnTime:F1} s" : "")
+                + (allStages[i].JettisonMass > 0.0 ? $", drops {allStages[i].JettisonMass / 1000.0:F2} t" : "") + ".");
+        for (int m = 0; m < gathered.Motors.Count; m++)
+            GuidanceLog.Info(vehicle, $"convex ascent solid '{gathered.Motors[m].Name}': burns {gathered.Motors[m].BurnTime:F1} s stepped through the game's model "
+                + $"(its thrust profile reports {gathered.ProfileSeconds[m]:F1} s for the full grain), flow {gathered.Motors[m].MassFlow[0]:F0} -> {gathered.Motors[m].MassFlow[^1]:F0} kg/s.");
+        foreach (string note in stagePlan.Notes)
+            GuidanceLog.Info(vehicle, "convex ascent: " + note + ".");
 
         job = new AscentPlanJob(Build, count, initial, qMax, Publish);
         error = "";
@@ -461,7 +456,9 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The profile's throttle, as the engines take it. The plan's throttle is a fraction of full thrust at the altitude flown, and thrust is not proportional to the throttle setting in air (see KsaEnginePerf.ThrustAtThrottle), so the demand is turned into a setting through the engines' own curve. Full throttle whenever the plan is within half a percent of it - which, at the script's 99 % floor, is all the time - and whenever the vehicle cannot throttle: a solid stage, which the plan holds at full thrust anyway.
+    /// The profile's throttle, as the engines take it. The plan's throttle is a fraction of the liquid engines' full thrust at the altitude flown, and thrust is not proportional to the throttle setting in air (see KsaEnginePerf.ThrustAtThrottle), so the demand is turned into a setting through the engines' own curve. Full throttle whenever the plan is within half a percent of it - which, at the script's 99 % floor, is all the time - and whenever the vehicle cannot throttle.
+    ///
+    /// WHILE A SOLID BURNS the throttle is the liquid engines' alone: the plan adds the solids' thrust outside it (#73), and a core lit with its boosters may be planned well below full to outlast them (#32). The fraction is then of the liquids' full thrust, set through their curve alone.
     /// </summary>
     private static float ConvexThrottle(Vehicle vehicle, IParentBody parent)
     {
@@ -477,6 +474,8 @@ public static partial class GuidanceWindow
         if (!(full > 0.0))
             return 1f;
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, fraction * full, pressure);
+        if (command.Status == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
+            command = KsaEnginePerf.CommandLiquidFraction(vehicle, fraction, pressure);
         return command.Status is KsaEnginePerf.ThrustStatus.Available or KsaEnginePerf.ThrustStatus.BelowMinimum
                                  or KsaEnginePerf.ThrustStatus.AboveMaximum
             ? (float)command.Throttle

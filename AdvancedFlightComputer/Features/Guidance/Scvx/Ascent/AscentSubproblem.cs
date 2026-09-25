@@ -11,6 +11,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///              x_k+1 = x_k + dtau/2 (g_k + g_k+1) + nu_k               collocation
 ///              r, v continuous, m drops by the dry mass                staging links
 ///              lower stages burn their load, the last at most its load propellant
+///              sigma_i = the solids' burn where one pins it               solids (#73)
 ///              ||u_k|| &lt;= 1,  u_bar_hat . u_k &gt;= throttle floor        throttle
 ///              r_bar_hat . r_k &gt;= R_floor,  m_k &gt;= m_floor              ground, structure
 ///              tangent q &lt;= backoff + s^q,  cone q-alpha &lt;= backoff + s^qa   where q_bar &gt; QActive
@@ -18,6 +19,8 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///              trust box on x, u, sigma;  sigma_min &lt;= sigma &lt;= sigma_max
 ///
 /// with g_k = sigma_i f_k + sigma_bar_i (A_k dx_k + B_k du_k), the time-scaled dynamics linearised in all three of sigma, x and u.
+///
+/// A "stage" in the propellant rows is really a run of stages that share one liquid load: a core lit with its boosters keeps burning after they burn out, and only the load's total is fixed, not how it splits across the burnout (AscentCase.Loads).
 ///
 /// Two departures, both conditioning rather than modelling. The lift-off thrust constraint is two rows (the two directions perpendicular to straight up) instead of the script's three rank-2 rows. And the whole problem is assembled fresh each iteration, as CVXPY rebuilt it: the set of nodes carrying a path limit changes with the reference, so the structure is not fixed.
 /// </summary>
@@ -156,18 +159,23 @@ internal sealed class AscentSubproblem
             }
         }
 
-        // ---- propellant: the lower stages burn exactly their load; the last at most its load.
-        for (int s = 0; s < c.S - 1; s++)
+        // ---- propellant: the lower stages burn exactly their load; the last at most its load. A load is per run of stages sharing one (see AscentCase.Loads): the sum of the run's drops, each stage's own from its first node to its last, so the jettisons between them stay out of it.
+        foreach ((int first, int last, double prop, bool exact) in c.Loads)
         {
-            int row = eq.NewRow(-c.PropC[s]);
-            eq.Add(row, IX(c.Ends[s], 6), 1.0);
-            eq.Add(row, IX(c.Starts[s], 6), -1.0);
+            int row = exact ? eq.NewRow(-prop) : ineq.NewRow(prop);
+            Rows rows = exact ? eq : ineq;
+            double sign = exact ? 1.0 : -1.0;
+            for (int s = first; s <= last; s++)
+            {
+                rows.Add(row, IX(c.Ends[s], 6), sign);
+                rows.Add(row, IX(c.Starts[s], 6), -sign);
+            }
         }
-        {
-            int row = ineq.NewRow(c.PropC[c.S - 1]);
-            ineq.Add(row, IX(c.Starts[c.S - 1], 6), 1.0);
-            ineq.Add(row, IX(c.Ends[c.S - 1], 6), -1.0);
-        }
+
+        // ---- a pinned burn time: a solid's burn, or a liquid held at full thrust, sets it.
+        for (int s = 0; s < c.S; s++)
+            if (double.IsFinite(c.SigFixed[s]))
+                eq.Add(eq.NewRow(c.SigFixed[s]), ISig(s), 1.0);
 
         // ---- per-node: throttle floor (tangent halfspace), mass floor, ground (tangent halfspace).
         for (int k = 0; k < n; k++)
@@ -305,6 +313,8 @@ internal sealed class AscentSubproblem
         }
         for (int s = 0; s < c.S; s++)
         {
+            if (double.IsFinite(c.SigFixed[s]))
+                continue;
             double w = tr * c.SigScale;
             ineq.Add(ineq.NewRow(sigBar[s] + w), ISig(s), 1.0);
             ineq.Add(ineq.NewRow(-sigBar[s] + w), ISig(s), -1.0);
@@ -411,7 +421,7 @@ internal sealed class Linearization
         const int nx = AscentCase.NX, nu = AscentCase.NU;
         for (int k = 0; k < c.N; k++)
         {
-            c.Dyn.Linearize(xbar.AsSpan(k * nx, nx), ubar.AsSpan(k * nu, nu), c.NodeStage[k],
+            c.Dyn.Linearize(xbar.AsSpan(k * nx, nx), ubar.AsSpan(k * nu, nu), k,
                 F.AsSpan(k * nx, nx), A.AsSpan(k * nx * nx, nx * nx), B.AsSpan(k * nx * nu, nx * nu),
                 W.AsSpan(k * 3, 3), JwX.AsSpan(k * 3 * nx, 3 * nx), JwU.AsSpan(k * 3 * nu, 3 * nu),
                 out Q[k], Jq.AsSpan(k * nx, nx));

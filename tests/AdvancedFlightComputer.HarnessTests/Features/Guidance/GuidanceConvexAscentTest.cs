@@ -25,13 +25,19 @@ namespace AdvancedFlightComputer.HarnessTests;
 // to orbit is reported against the flown one.
 //
 // Twice: at the script's 99 % throttle floor, where the plan is a full-throttle one, and at a 40 % floor, where the
-// plan throttles the liquid stages and the profile has to fly that throttle as well as the attitude.
+// plan throttles the liquid stages and the profile has to fly that throttle as well as the attitude. And once on a
+// stack that burns solid motors, whose thrust the plan now follows along each motor's own curve (#73).
 public abstract class ConvexAscentFlightTest : AfcTest
 {
     /// <summary>The plan's throttle floor, percent.</summary>
     protected abstract double ThrottleFloorPct { get; }
 
-    // A liquid-fuelled stack first: the plan models every stage at constant thrust, as the script does, and a solid motor's thrust curve is not that, so a solid first stage flies measurably off its plan (see GuidanceWindow's convex ascent notes).
+    /// <summary>The saves to fly, first found first.</summary>
+    protected virtual string[] Saves => DefaultSaves;
+
+    /// <summary>Skip a save that burns no solids.</summary>
+    protected virtual bool RequiresSolids => false;
+
     private static readonly string[] DefaultSaves = { "Test Vehicle 1", "Test Vehicle 2" };
 
     private const double SiteLatDeg = 28.5;
@@ -49,7 +55,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
     private const double MaxFlightSeconds = 1500.0;
     private const double SampleIntervalS = 5.0;
 
-    // How far the flown climb may sit off the plan's altitude, at the flight's place on the plan, before the hand-over, km. On 2stage_new it stays within 4.5 km. Kept at twice that: the plan's drag is the whole stack's all the way up, and a solid motor's thrust curve is not modelled at all (see #73), so a solid first stage flies further off.
+    // How far the flown climb may sit off the plan's altitude, at the flight's place on the plan, before the hand-over, km. On 2stage_new it stays within 4.5 km. Kept at twice that: the plan's drag is the whole stack's all the way up. Solids fly their own thrust curves in the plan since #73; the solids test reports how far each staging lands off the plan's.
     private const double ProfileAltitudeTolKm = 10.0;
     // The orbit is UPFG's, not the plan's: the same bounds as its own ascent test (see GuidanceAscentArgPeTest) and wide enough for its cutoff at four g on this step. On 2stage_new it inserted 10 km low at periapsis and 23 km high at apoapsis.
     private const double PeriapsisTolKm = 25.0;
@@ -85,10 +91,10 @@ public abstract class ConvexAscentFlightTest : AfcTest
             t.Skip("the home body is not a celestial with terrain.");
             return;
         }
-        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(DefaultSaves);
+        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(Saves);
         if (saves.Count == 0)
         {
-            t.Skip($"none of '{string.Join("', '", DefaultSaves)}' is in the game's Vehicles folder.");
+            t.Skip($"none of '{string.Join("', '", Saves)}' is in the game's Vehicles folder.");
             return;
         }
         if (VehicleAutopilotState.Snapshot().Length != 0)
@@ -209,6 +215,15 @@ public abstract class ConvexAscentFlightTest : AfcTest
             return;
         }
         AscentSolution sol = plan!.Solution;
+        for (int i = 0; i < plan.StageLines.Count; i++)
+            t.Info($"stage {i + 1}: {plan.StageLines[i]}");
+        foreach (string note in plan.StageNotes)
+            t.Info("stages: " + note);
+        if (RequiresSolids && plan.SolidStages == 0)
+        {
+            t.Skip("the save burns no solids in the stages planned.");
+            return;
+        }
         // The script's 35 kPa is a Saturn V's: a KSA stack lifting off at three or five g cannot climb under it at full throttle, and the planner re-plans to a limit it can hold.
         t.Info($"max q planned to {plan.QMaxKpa:F0} kPa (asked {plan.QMaxRequestedKpa:F0}{(plan.QRelaxed ? ", out of reach" : "")}), "
              + $"throttle floor {plan.ThrottleMinPct:F0} %, lowest planned throttle {100.0 * plan.Profile.MinThrottle:F0} %");
@@ -241,6 +256,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
         bool upfgConverged = false, blended = false;
         double lowestCommand = 1.0, blendRate = 0.0;
         double3 lastCommand = state.CommandDir;
+        int lastStage = state.ConvexStage;
+        double worstStagingAltKm = 0.0;
         while (time < MaxFlightSeconds && state.Running)
         {
             // Fine steps through the terminal count: the cutoff lands on a step, and at four g a quarter second is 10 m/s, which is 35 km of apoapsis.
@@ -263,6 +280,24 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 blendRate = Math.Max(blendRate, turn * 180.0 / Math.PI / dt);
             }
             lastCommand = state.CommandDir;
+
+            // Each staging against the plan's own: where the profile moved on to the next planned stage, against where the plan has it.
+            if (state.Phase == GuidanceWindow.AscentPhase.Profile && state.ConvexStage != lastStage)
+            {
+                lastStage = state.ConvexStage;
+                int first = Array.IndexOf(sol.NodeStage, lastStage);
+                if (first > 0)
+                {
+                    var pr = new double3(sol.Position[first * 3], sol.Position[first * 3 + 1], sol.Position[first * 3 + 2]);
+                    var pv = new double3(sol.Velocity[first * 3], sol.Velocity[first * 3 + 1], sol.Velocity[first * 3 + 2]);
+                    double planAlt = (pr.Length() - home.MeanRadius) / 1000.0;
+                    double planAir = (pv - double3.Cross(new double3(0, 0, home.GetAngularVelocity()), pr)).Length();
+                    if (Math.Abs(altKm - planAlt) > Math.Abs(worstStagingAltKm))
+                        worstStagingAltKm = altKm - planAlt;
+                    t.Info($"into plan stage {lastStage + 1} at t={time:F1} s, {altKm:F1} km, air {air:F0} m/s, {vehicle.TotalMass / 1000.0:F1} t; "
+                         + $"the plan at t={sol.Time[first]:F1} s, {planAlt:F1} km, {planAir:F0} m/s, {sol.Mass[first] / 1000.0:F1} t");
+                }
+            }
 
             if (state.Phase == GuidanceWindow.AscentPhase.Profile)
             {
@@ -305,7 +340,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             $"at {handoverAltKm:F1} km, t={handoverTime:F1} s, {handoverSpeed:F0} m/s");
         t.CheckAbs("the profile climbs as planned, km off the plan's altitude where the flight is on the plan",
             worstDevKm, 0.0, ProfileAltitudeTolKm);
-        t.Info($"worst altitude deviation {worstDevKm:F2} km at {worstDevSpeed:F0} m/s air speed");
+        t.Info($"worst altitude deviation {worstDevKm:F2} km at {worstDevSpeed:F0} m/s air speed; worst at a staging {worstStagingAltKm:F2} km");
         t.Check("the hand-over blends onto UPFG's steering", blended);
         t.Check($"the command turns under {BlendRateLimitDegS:F1} deg/s through the blend", blendRate <= BlendRateLimitDegS,
             $"peak {blendRate:F2} deg/s in the {BlendWatchS:F0} s after the hand-over");
@@ -363,4 +398,13 @@ public sealed class GuidanceConvexAscentThrottledTest : ConvexAscentFlightTest
 {
     public override string Name => "afc-guidance-convex-ascent-throttled";
     protected override double ThrottleFloorPct => 40.0;
+}
+
+// A stack with solid motors: Test Vehicle 2's progressive boosters. The plan follows each motor's burn as the game's own model steps it, so the climb stays with the plan through the boosters' burn rather than drifting off it the way a mean thrust did (#73). At a 40 % floor, so a core lit with the boosters is the planner's to throttle.
+public sealed class GuidanceConvexAscentSolidsTest : ConvexAscentFlightTest
+{
+    public override string Name => "afc-guidance-convex-ascent-solids";
+    protected override double ThrottleFloorPct => 40.0;
+    protected override string[] Saves => new[] { "Test Vehicle 2" };
+    protected override bool RequiresSolids => true;
 }

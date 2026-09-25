@@ -30,7 +30,17 @@ internal sealed class AscentCase
     public readonly double RFloor, MFloor;
     public readonly double[] PropC, DryC;
     public readonly double[] SigMin, SigMax;
+    /// <summary>Canonical burn time of a stage whose duration is pinned, NaN where it is free.</summary>
+    public readonly double[] SigFixed;
     public readonly double[] ThrottleMin;
+    /// <summary>The liquid throttle the seed flies each stage at.</summary>
+    public readonly double[] SeedThrottle;
+    /// <summary>
+    /// The propellant constraints, one per run of stages that share a liquid load: the first and last stage of the run, the canonical propellant the run burns, and whether that is exact or a ceiling. A run is exact when a free burn time ends it - its liquid load runs dry - and it is not the last; a ceiling when it is the last, or when a pinned burn ends it and its liquid can come in under the load. A run with no liquid at all needs no row: its solids' drop is fixed by the dynamics.
+    /// </summary>
+    public readonly (int First, int Last, double PropC, bool Exact)[] Loads;
+    /// <summary>Each node's solids, at its fixed second of its stage.</summary>
+    public readonly SolidPoint[] NodeSolid;
     public readonly double SigScale;
     public readonly double[] XScale = new double[NX];
     public readonly double[] DScale = new double[NX];
@@ -113,19 +123,78 @@ internal sealed class AscentCase
         DryC = new double[S];
         SigMin = new double[S];
         SigMax = new double[S];
+        SigFixed = new double[S];
         ThrottleMin = new double[S];
+        SeedThrottle = new double[S];
         for (int i = 0; i < S; i++)
         {
             AscentStage stg = p.Stages[i];
             PropC[i] = stg.PropellantMass / mu;
             DryC[i] = i < S - 1 ? stg.JettisonMass / mu : 0.0;
             double full = stg.FullBurnTime;
-ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
-            // The script's 20-700 s, widened only for a stage that could not otherwise burn its load: a long upper-stage burn, or one shorter than the floor.
-            SigMin[i] = Math.Min(st.SigmaMinSeconds, 0.5 * full) / tu;
-            SigMax[i] = Math.Max(st.SigmaMaxSeconds, 1.1 * full / ThrottleMin[i]) / tu;
+            ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
+            SeedThrottle[i] = Math.Max(stg.SeedThrottle, ThrottleMin[i]);
+            SigFixed[i] = stg.IsPinned ? stg.FixedBurnTime / tu : double.NaN;
+            if (stg.IsPinned)
+            {
+                SigMin[i] = SigMax[i] = SigFixed[i];
+            }
+            else
+            {
+                // The script's 20-700 s, widened only for a stage that could not otherwise burn its load: a long upper-stage burn, or one shorter than the floor.
+                SigMin[i] = Math.Min(st.SigmaMinSeconds, 0.5 * full) / tu;
+                SigMax[i] = Math.Max(st.SigmaMaxSeconds, 1.1 * full / ThrottleMin[i]) / tu;
+            }
         }
         SigScale = st.SigmaTrustSeconds / tu;
+
+        var loads = new List<(int, int, double, bool)>();
+        for (int first = 0; first < S;)
+        {
+            int last = first;
+            while (last < S - 1 && p.Stages[last].LiquidCarriesOver) last++;
+            double prop = 0.0;
+            bool liquid = false;
+            for (int i = first; i <= last; i++)
+            {
+                prop += PropC[i];
+                liquid |= p.Stages[i].HasLiquid;
+            }
+            if (liquid)
+                loads.Add((first, last, prop, last < S - 1 && !p.Stages[last].IsPinned));
+            first = last + 1;
+        }
+        Loads = loads.ToArray();
+
+        NodeSolid = new SolidPoint[N];
+        for (int i = 0; i < S; i++)
+        {
+            AscentSolidBurn? table = p.Stages[i].Solid;
+            if (table == null)
+            {
+                for (int k = Starts[i]; k <= Ends[i]; k++) NodeSolid[k] = SolidPoint.None;
+                continue;
+            }
+            // Each node at its fixed second of the stage. The collocation integrates the mass flow by trapezoid over the nodes, so it is scaled to make that trapezoid burn exactly the table's grain: otherwise the stage's drop and its propellant disagree by the trapezoid's error, which only the virtual control could absorb.
+            double seconds = p.Stages[i].FixedBurnTime;
+            int np = table.Pressures;
+            var flow = new double[per];
+            var rows = new double[per][];
+            double trap = 0.0;
+            for (int j = 0; j < per; j++)
+            {
+                double t = seconds * j / (per - 1);
+                flow[j] = table.MassFlowAt(t);
+                rows[j] = new double[np];
+                table.ThrustRow(t, rows[j]);
+                if (j > 0) trap += 0.5 * (flow[j - 1] + flow[j]) * seconds / (per - 1);
+            }
+            double burned = table.Propellant(0.0, seconds);
+            double scale = trap > 0.0 ? burned / trap : 1.0;
+            for (int j = 0; j < per; j++)
+                NodeSolid[Starts[i] + j] = SolidPoint.AtNode(flow[j] * scale * tu / mu, table.PressureGrid, rows[j]);
+        }
+        Dyn.BindNodes(NodeStage, NodeSolid);
 
         for (int i = 0; i < 3; i++)
         {

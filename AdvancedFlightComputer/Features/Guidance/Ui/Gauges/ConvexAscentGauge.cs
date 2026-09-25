@@ -107,7 +107,8 @@ public static partial class GuidanceWindow
         GaugeRowText("Burns", string.Join(" / ", Array.ConvertAll(sol.BurnTime, b => b.ToString("F1"))) + $" s, {sol.TotalDeltaV:F0} m/s ideal");
         double lowest = plan.Profile != null ? 100.0 * plan.Profile.MinThrottle : double.NaN;
         GaugeRowText("Throttle", $"floor {plan.ThrottleMinPct:F0} %, lowest planned {lowest:F0} %"
-            + (plan.SolidStages > 0 && plan.ThrottleMinPct < 99.0 ? $", {plan.SolidStages} solid stage(s) held at full" : ""), CvxDim);
+            + (plan.SolidStages > 0 ? $", solids burn in {plan.SolidStages} stage(s) on their own curve" : "")
+            + (plan.CoreThrottledDown ? ", core throttled to outlast its boosters" : ""), CvxDim);
 
         int qi = ArgMax(sol.DynamicPressure), qai = ArgMax(sol.QAlpha);
         GaugeRowText("Max q", $"{sol.DynamicPressure[qi] / 1000.0:F1} kPa at {sol.Time[qi]:F0} s (limit {plan.QMaxKpa:F0})",

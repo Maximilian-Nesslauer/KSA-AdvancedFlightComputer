@@ -19,6 +19,14 @@ public static class AscentProblemFile
         public double[]? PressureGrid { get; set; }
         public double[]? ThrustAtPressure { get; set; }
         public double? ThrottleMin { get; set; }
+        public double? FixedBurnTime { get; set; }
+        public bool LiquidCarriesOver { get; set; }
+        public double? SeedThrottle { get; set; }
+        // The solids, as AscentSolidBurn holds them: stage time, mass flow, and thrust row-major against the pressure grid.
+        public double[]? SolidTime { get; set; }
+        public double[]? SolidMassFlow { get; set; }
+        public double[]? SolidPressureGrid { get; set; }
+        public double[]? SolidThrust { get; set; }
     }
 
     private sealed class ProblemDto
@@ -64,6 +72,13 @@ public static class AscentProblemFile
                 PressureGrid = s.PressureGrid,
                 ThrustAtPressure = s.ThrustAtPressure,
                 ThrottleMin = double.IsNaN(s.ThrottleMin) ? null : s.ThrottleMin,
+                FixedBurnTime = s.IsPinned ? s.FixedBurnTime : null,
+                LiquidCarriesOver = s.LiquidCarriesOver,
+                SeedThrottle = s.SeedThrottle < 1.0 ? s.SeedThrottle : null,
+                SolidTime = s.Solid?.Time,
+                SolidMassFlow = s.Solid?.MassFlow,
+                SolidPressureGrid = s.Solid?.PressureGrid,
+                SolidThrust = s.Solid?.Thrust,
             }).ToArray(),
             GroundRadius = p.GroundRadius,
             TargetRadius = p.TargetRadius,
@@ -113,7 +128,12 @@ public static class AscentProblemFile
             M0 = dto.M0,
             Stages = dto.Stages.Select(s => new AscentStage(s.Thrust, s.MassFlow, s.PropellantMass, s.JettisonMass,
                                                             s.DragArea, s.PressureGrid, s.ThrustAtPressure,
-                                                            s.ThrottleMin ?? double.NaN)).ToArray(),
+                                                            s.ThrottleMin ?? double.NaN,
+                                                            s.SolidTime is { } st && s.SolidMassFlow is { } sm
+                                                                && s.SolidPressureGrid is { } sg && s.SolidThrust is { } sf
+                                                                ? new AscentSolidBurn(st, sm, sg, sf) : null,
+                                                            s.FixedBurnTime ?? double.NaN, s.LiquidCarriesOver,
+                                                            s.SeedThrottle ?? 1.0)).ToArray(),
             Atmosphere = air,
             GroundRadius = dto.GroundRadius,
             TargetRadius = dto.TargetRadius,

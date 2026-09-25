@@ -31,7 +31,9 @@ public static class KsaVehicleAdapter
     private const double SeaLevelPressure = 101325.0;
 
     // ambientPressure is in Pa, the pressure the live nozzles run at. With a pressure grid, every stage also carries its full-throttle thrust at each grid pressure (see UpfgStage.ThrustAtPressure), scaled to the drain simulation's own figure at the sequence's model pressure so the duplicate-registration repair carries through.
-    public static UpfgVehicle Build(Vehicle vehicle, double ambientPressure, double[] pressureGrid = null)
+    // stageParts, when given, is filled with the engine parts each stage burns, merged as the stages are: the convex ascent planner splits a stage's solids from its liquids by them.
+    public static UpfgVehicle Build(Vehicle vehicle, double ambientPressure, double[] pressureGrid = null,
+                                    Dictionary<UpfgStage, HashSet<Part>> stageParts = null)
     {
         var result = new UpfgVehicle();
 
@@ -92,6 +94,8 @@ public static class KsaVehicleAdapter
                         foreach (Part part in parts)
                             stage.Throttleable &= !HasSolidCore(part);
                     result.Stages.Add(stage);
+                    if (stageParts != null)
+                        stageParts[stage] = parts != null ? new HashSet<Part>(parts) : new HashSet<Part>();
                     if (burningStage == null)
                     {
                         burningStage = stage;
@@ -103,7 +107,7 @@ public static class KsaVehicleAdapter
             }
         }
 
-        Coalesce(result);
+        Coalesce(result, stageParts);
         // Coalesce can drop the first stage, and the phase parts describe that stage only.
         if (burningStage != null && result.Stages.Count > 0 && ReferenceEquals(result.Stages[0], burningStage))
             ApplyAmbientPressure(tree, result, burningStage, burningPhaseParts, burningModelPressure, ambientPressure);
@@ -115,7 +119,7 @@ public static class KsaVehicleAdapter
     // A UPFG stage is a constant-thrust arc that ends in a discontinuity - a jettison, an engine set changing. The game's phases are not that: they are whatever intervals its drain simulation happened to break the burn into, and it breaks one wherever the number of drawing engine cores changes for even a single iteration. TANKS ARE WHAT DRIVES THAT. Its inner loop steps from one tank emptying to the next, splitting the demand across the tanks in a level and spilling what is left to the next level, so a stack with several tanks - a capsule tank plumbed to the stack, an asymmetric pair, anything that does not run dry at the same instant - takes several iterations to finish the burn, and any core that misses its full draw on one of them drops out and comes back. Each of those became a separate row in the stage table with its own slice of the stage's dV, which is what "one stage showing up as several" is.
     //
     // Two adjacent stages are the same stage if they have the same thrust and the same exhaust velocity and no mass went overboard between them. Merging is exact - dV is ve*ln(m0/m1), so ve*ln(m0/mid) + ve*ln(mid/m1) is the same number - and it leaves every real boundary (a booster drop, an engine cutting out, the g-limit split applied later) intact, because those all change thrust, Isp or mass.
-    private static void Coalesce(UpfgVehicle vehicle)
+    private static void Coalesce(UpfgVehicle vehicle, Dictionary<UpfgStage, HashSet<Part>> stageParts = null)
     {
         List<UpfgStage> stages = vehicle.Stages;
         for (int i = stages.Count - 2; i >= 0; i--)
@@ -130,6 +134,12 @@ public static class KsaVehicleAdapter
             a.MassDry = b.MassDry;
             a.Engines = Math.Max(a.Engines, b.Engines);
             a.Throttleable &= b.Throttleable;
+            if (stageParts != null && stageParts.TryGetValue(b, out HashSet<Part> merged))
+            {
+                if (stageParts.TryGetValue(a, out HashSet<Part> into))
+                    into.UnionWith(merged);
+                stageParts.Remove(b);
+            }
             stages.RemoveAt(i + 1);
         }
 
@@ -139,7 +149,10 @@ public static class KsaVehicleAdapter
             UpfgStage s = stages[i];
             if (!(s.MassTotal > 0.0) || !(s.MassDry > 0.0) || s.MassDry >= s.MassTotal
                 || s.Isp * G0 * Math.Log(s.MassTotal / s.MassDry) < MinStageDv)
+            {
+                stageParts?.Remove(s);
                 stages.RemoveAt(i);
+            }
         }
     }
 
@@ -237,7 +250,7 @@ public static class KsaVehicleAdapter
         return count;
     }
 
-    private static bool HasSolidCore(Part part)
+    internal static bool HasSolidCore(Part part)
     {
         Span<EngineController> engines = part.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
