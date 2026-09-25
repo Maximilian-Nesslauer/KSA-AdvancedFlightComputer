@@ -1,0 +1,172 @@
+name: Nightly
+
+# Builds main with the same jobs as CI and publishes the mod as a pre-release, tagged
+# v<next patch>-nightly.<date>. The content index stamps that as a dev release, so Borea offers it
+# only on its dev channel, and GitHub never marks a pre-release as Latest. Only the newest
+# nightlies are kept, so the releases page does not fill up with them.
+# A nightly becomes a stable release through promote.yml, without being built again.
+
+on:
+  schedule:
+    # Off the hour, when GitHub has the most room for scheduled runs.
+    - cron: "23 3 * * *"
+  # By hand it follows the same rule: it builds only if main has changed.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+env:
+  KEEP_NIGHTLIES: 5
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.plan.outputs.build }}
+      tag: ${{ steps.plan.outputs.tag }}
+      version: ${{ steps.plan.outputs.version }}
+      previous: ${{ steps.plan.outputs.previous }}
+    steps:
+      # A nightly is built only when main has moved since the newest published one. A run that
+      # failed published nothing, so the next run builds that commit again.
+      # The version is the patch after the highest stable release, so every nightly sorts below
+      # the release it leads to. A second nightly on the same day gets a counter.
+      - name: Decide whether to build, and the version
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "Nightlies are built from main, not $GITHUB_REF." >&2
+            exit 1
+          fi
+
+          previous=$(gh release list --limit 100 --json tagName,isDraft,createdAt --jq \
+            '[.[] | select((.isDraft | not) and (.tagName | test("-nightly\\.")))] | sort_by(.createdAt) | last | .tagName // empty')
+          echo "previous=$previous" >> "$GITHUB_OUTPUT"
+          if [ -n "$previous" ]; then
+            built=$(gh api "repos/$GH_REPO/commits/$previous" --jq .sha)
+            if [ "$built" = "$GITHUB_SHA" ]; then
+              echo "main is still at $GITHUB_SHA, which $previous was built from. Nothing to do."
+              echo "build=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          stable=$(gh release list --exclude-pre-releases --exclude-drafts --limit 100 --json tagName --jq '.[].tagName' |
+            sed -n 's/^v\{0,1\}\([0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\)$/\1/p' | sort -V | tail -1)
+          if [ -z "$stable" ]; then
+            echo "There is no stable release to count the nightly version from." >&2
+            exit 1
+          fi
+          IFS=. read -r major minor patch <<< "$stable"
+          base="$major.$minor.$((patch + 1))"
+
+          # A version is taken by its tag, or by a draft that a cancelled run left behind, which has
+          # no tag yet. The draft is removed after this run publishes.
+          version="$base-nightly.$(date -u +%Y%m%d)"
+          candidate=$version
+          n=1
+          while gh api "repos/$GH_REPO/git/ref/tags/v$candidate" --silent 2> /dev/null ||
+            gh release view "v$candidate" --json tagName > /dev/null 2>&1; do
+            n=$((n + 1))
+            candidate="$version.$n"
+          done
+          version=$candidate
+
+          echo "Building v$version from $GITHUB_SHA."
+          {
+            echo "build=true"
+            echo "version=$version"
+            echo "tag=v$version"
+          } >> "$GITHUB_OUTPUT"
+
+  ci:
+    name: ci
+    needs: plan
+    if: needs.plan.outputs.build == 'true'
+    uses: ./.github/workflows/ci.yml
+    secrets: inherit
+
+  release:
+    name: release
+    needs: [plan, ci]
+    if: needs.plan.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download mod package
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: AdvancedFlightComputer
+          path: package
+
+      # The zip is named after the version; the folder inside it is not, so it installs into
+      # mods/AdvancedFlightComputer whatever the version.
+      - name: Name the files and compute the checksums
+        env:
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          mkdir dist
+          mv package/AdvancedFlightComputer.zip "dist/AdvancedFlightComputer-$VERSION.zip"
+          (cd dist && sha256sum AdvancedFlightComputer-*.zip > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      # Ties the zip to this workflow run. promote.yml checks this before it promotes the zip.
+      - name: Attest the files
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4
+        with:
+          subject-path: dist/*
+
+      - name: Write the release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KIND: nightly
+          TAG: ${{ needs.plan.outputs.tag }}
+          SHA: ${{ github.sha }}
+          PREVIOUS: ${{ needs.plan.outputs.previous }}
+          DIST: dist
+        run: bash build/ci/write-release-notes.sh > body.md
+
+      # --latest=false as well as --prerelease, so a nightly can never take Latest from the
+      # stable release. The tag is created on the commit CI built.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        run: >-
+          gh release create "$TAG" dist/*
+          --target "$GITHUB_SHA" --title "$TAG" --notes-file body.md
+          --prerelease --latest=false
+
+      # Drafts are what a cancelled run leaves behind; nobody else sees them, and the next run
+      # uses a new tag, so they are removed rather than finished.
+      - name: Keep only the newest nightlies
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh release list --limit 100 --json tagName,isDraft,isPrerelease,createdAt --jq \
+            "[.[] | select(.isPrerelease and (.tagName | test(\"-nightly\\\\.\")))] | sort_by(.createdAt) | reverse
+             | (map(select(.isDraft)) + (map(select(.isDraft | not)) | .[$KEEP_NIGHTLIES:])) | .[].tagName" |
+            while read -r tag; do
+              echo "Deleting $tag."
+              gh release delete "$tag" --yes --cleanup-tag
+            done

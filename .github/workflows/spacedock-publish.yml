@@ -37,6 +37,9 @@ concurrency:
 
 jobs:
   publish:
+    # Nightlies and other pre-releases are for GitHub and Borea's dev channel, never for SpaceDock.
+    # A manual run has no release in its event and uploads the tag it is given.
+    if: ${{ !github.event.release.prerelease }}
     runs-on: ubuntu-latest
     steps:
       - name: Resolve release tag
@@ -44,11 +47,18 @@ jobs:
         env:
           EVENT_TAG: ${{ github.event.release.tag_name }}
           INPUT_TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           tag="${EVENT_TAG:-$INPUT_TAG}"
           if [ -z "$tag" ]; then
             echo "::error::No tag available from event or workflow_dispatch input"
+            exit 1
+          fi
+          # The job condition covers published pre-releases; this covers a tag typed in by hand.
+          if [ "$(gh release view "$tag" --json isPrerelease --jq .isPrerelease)" = true ]; then
+            echo "::error::$tag is a pre-release, and SpaceDock only gets stable releases"
             exit 1
           fi
           version="${tag#v}"

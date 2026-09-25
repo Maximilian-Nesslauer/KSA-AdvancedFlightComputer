@@ -1,0 +1,168 @@
+name: Promote nightly
+
+# Turns a nightly into a draft stable release, with the nightly's zip as it is: nothing is built
+# again, so the release holds exactly the bytes that were tested. Publishing the draft by hand is
+# the release; it moves Latest, and spacedock-publish.yml uploads it to SpaceDock.
+#
+# A hand-written summary goes in .github/release-notes/<version>.md on main before this runs,
+# or into the draft before publishing it. It is read from main rather than from the nightly's
+# commit, because the summary is usually written after that nightly was built.
+
+on:
+  workflow_dispatch:
+    inputs:
+      nightly:
+        description: Nightly tag to promote, e.g. v0.8.2-nightly.20260925. Empty takes the newest.
+        required: false
+        type: string
+      version:
+        description: Stable version, e.g. 0.8.2. Empty takes the nightly's version without its -nightly part.
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: promote
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      attestations: read
+    steps:
+      - name: Check out main
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Choose the nightly and the version
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NIGHTLY: ${{ inputs.nightly }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "Run this from main, where the release notes are read from, not $GITHUB_REF." >&2
+            exit 1
+          fi
+
+          if [ -z "$NIGHTLY" ]; then
+            NIGHTLY=$(gh release list --limit 100 --json tagName,isDraft,createdAt --jq \
+              '[.[] | select((.isDraft | not) and (.tagName | test("-nightly\\.")))] | sort_by(.createdAt) | last | .tagName // empty')
+            if [ -z "$NIGHTLY" ]; then
+              echo "There is no nightly to promote." >&2
+              exit 1
+            fi
+          fi
+          case "$NIGHTLY" in
+            v*-nightly.*) ;;
+            *) echo "$NIGHTLY is not a nightly tag." >&2; exit 1 ;;
+          esac
+          if ! gh release view "$NIGHTLY" --json isDraft --jq .isDraft | grep -qx false; then
+            echo "$NIGHTLY is not a published release. Only the newest nightlies are kept." >&2
+            exit 1
+          fi
+
+          if [ -z "$VERSION" ]; then
+            VERSION=${NIGHTLY#v}
+            VERSION=${VERSION%%-*}
+          fi
+          VERSION=${VERSION#v}
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "$VERSION is not a stable version like 0.8.2." >&2
+            exit 1
+          fi
+          tag="v$VERSION"
+          if gh api "repos/$GH_REPO/git/ref/tags/$tag" --silent 2> /dev/null; then
+            echo "$tag already exists. A new release needs a new version." >&2
+            exit 1
+          fi
+
+          # The previous stable release starts the change list and must be lower than this one.
+          previous=$(gh release list --exclude-pre-releases --exclude-drafts --limit 100 --json tagName --jq '.[].tagName' |
+            grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)
+          if [ -n "$previous" ] && [ "$(printf '%s\n%s\n' "${previous#v}" "$VERSION" | sort -V | tail -1)" != "$VERSION" ]; then
+            echo "$tag is not above the latest stable release, $previous." >&2
+            exit 1
+          fi
+
+          sha=$(gh api "repos/$GH_REPO/commits/$NIGHTLY" --jq .sha)
+          status=$(gh api "repos/$GH_REPO/compare/$sha...main" --jq .status)
+          if [ "$status" != ahead ] && [ "$status" != identical ]; then
+            echo "$NIGHTLY was built from $sha, which is not on main." >&2
+            exit 1
+          fi
+
+          echo "Promoting $NIGHTLY ($sha) to $tag."
+          {
+            echo "nightly=$NIGHTLY"
+            echo "version=$VERSION"
+            echo "tag=$tag"
+            echo "sha=$sha"
+            echo "previous=$previous"
+          } >> "$GITHUB_OUTPUT"
+
+      # The zip has to be the one the nightly workflow built and attested, with the checksum the
+      # nightly published.
+      - name: Fetch and check the nightly's zip
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          NIGHTLY: ${{ steps.pick.outputs.nightly }}
+          VERSION: ${{ steps.pick.outputs.version }}
+        run: |
+          gh release download "$NIGHTLY" --pattern '*.zip' --pattern SHA256SUMS.txt --dir nightly
+          (cd nightly && sha256sum --check --strict SHA256SUMS.txt)
+          zips=(nightly/*.zip)
+          if [ "${#zips[@]}" -ne 1 ]; then
+            echo "$NIGHTLY has ${#zips[@]} zips instead of one." >&2
+            exit 1
+          fi
+          gh attestation verify "${zips[0]}" --repo "$GH_REPO" \
+            --signer-workflow "$GH_REPO/.github/workflows/nightly.yml"
+
+          mkdir dist
+          cp "${zips[0]}" "dist/AdvancedFlightComputer-$VERSION.zip"
+          (cd dist && sha256sum AdvancedFlightComputer-*.zip > SHA256SUMS.txt)
+          cat dist/SHA256SUMS.txt
+
+      - name: Write the release body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          KIND: stable
+          TAG: ${{ steps.pick.outputs.tag }}
+          SHA: ${{ steps.pick.outputs.sha }}
+          PREVIOUS: ${{ steps.pick.outputs.previous }}
+          INTRO: .github/release-notes/${{ steps.pick.outputs.version }}.md
+          DIST: dist
+        run: bash build/ci/write-release-notes.sh > body.md
+
+      # A draft from an earlier run of this workflow is replaced, so the newest run wins.
+      # A draft has no tag yet: publishing it creates the tag on the nightly's commit.
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ steps.pick.outputs.tag }}
+          SHA: ${{ steps.pick.outputs.sha }}
+          NIGHTLY: ${{ steps.pick.outputs.nightly }}
+        run: |
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft 2> /dev/null)" = true ]; then
+            echo "Replacing the earlier draft of $TAG."
+            gh release delete "$TAG" --yes
+          fi
+          url=$(gh release create "$TAG" dist/* --draft --target "$SHA" --title "$TAG" \
+            --notes-file body.md --latest)
+          {
+            echo "Draft $TAG, from $NIGHTLY: $url"
+            echo
+            echo "Check the notes, add a summary if there is none, then publish it."
+          } >> "$GITHUB_STEP_SUMMARY"
