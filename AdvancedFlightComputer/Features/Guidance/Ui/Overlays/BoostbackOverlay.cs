@@ -26,8 +26,8 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //                       whatever genuine motion happens between recomputes arrives all at once. Blended below.
 public static partial class GuidanceWindow
 {
-    // Off by default, like the other two: it is an instrument, not chrome.
-    private static bool _showImpactOverlay;
+    // On by default.
+    private static bool _showImpactOverlay = true;
 
     /// <summary>How often the prediction is recomputed, ms. A prediction is about a
     /// millisecond, so this cannot be per-frame; at 60 ms the marker's own motion
@@ -84,7 +84,7 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// Recompute this vehicle's impact prediction, throttled.
-    ///  Driven by the overlay rather than by the guidance step, because nothing flies on it - it is a readout - and driven by the OVERLAY rather than by the Boostback tab so that it keeps updating whichever tab is open. The Boostback tab calls it once, with force, when the toggle is switched on.
+    ///  Driven by the overlay rather than by the guidance step while nothing flies on it - it is a readout then - so it runs only while the Boostback tab and its overlay are on screen. A live boostback drives it from its own step instead (see StepBoostback). The Boostback tab calls it once, with force, when the toggle is switched on.
     /// </summary>
     private static void UpdateImpactPrediction(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                                bool force)
@@ -391,7 +391,7 @@ public static partial class GuidanceWindow
             || !VehicleAutopilotState.TryGet(Program.ControlledVehicle, out VehicleAutopilotState st))
             return;
 
-        // THE OVERLAY DRIVES ITS OWN PREDICTION. Doing it from the Boostback tab instead would look identical until you switched tabs, at which point the marker would stop moving and quietly show where the vehicle was going several minutes ago - the worst kind of wrong, because it still looks like an answer. This runs from DrawTrailingWindows every frame regardless of which tab is open, and throttles itself.
+        // THE OVERLAY DRIVES ITS OWN PREDICTION, so the marker and the prediction stop together. DrawTrailingWindows calls this only while the Boostback tab is on screen: off it, neither runs, so a marker showing where the vehicle was going minutes ago is never drawn; back on it, the throttle has long run out and the first frame recomputes.
         UpdateImpactPrediction(vehicle, orbit, parent, force: false);
 
         if (!st.HasImpact || st.ImpactPathCcf == null || st.ImpactPathCount < 2)
