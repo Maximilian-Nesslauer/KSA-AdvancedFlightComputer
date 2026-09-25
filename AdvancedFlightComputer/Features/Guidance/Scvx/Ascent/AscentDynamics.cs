@@ -77,11 +77,13 @@ internal readonly struct SolidPoint
 ///   rdot = v
 ///   vdot = (Tmax(h) u + Ts(h) u/|u|) / m  -  r / |r|^3  +  a_drag
 ///   mdot = -(mdot_max |u| + mdot_s)
-///   a_drag = -(Kd rho(h) Cd(M) |v_rel| / m) v_rel,    v_rel = v - omega x r
+///   a_drag = -(Kd rho(h) Cd(M, alpha) |v_rel| / m) v_rel,    v_rel = v - omega x r
 ///
 /// THE CONTROL IS THROTTLE, NOT THRUST. The script's control is the thrust vector T, bounded by a constant Tmax per stage. Once thrust depends on back pressure (see <see cref="AscentStage"/>) that bound depends on the state, and |T| &lt;= Tmax(h) is no longer a cone. Writing T = Tmax(h) u moves the altitude dependence into the dynamics and leaves |u| &lt;= 1 a cone again. With constant thrust the two are the same problem: the script divides every thrust by its stage's Tmax wherever it bounds, smooths or trusts it, and u is that quotient.
 ///
 /// SOLIDS PUSH ALONG u, WHATEVER ITS LENGTH. The throttle vector's length is the liquid engines' throttle and its direction is the vehicle's attitude; a solid motor ignores the first and follows the second, so its thrust Ts and mass flow mdot_s - read off its table at the node's fixed second of the stage - add on outside the throttle (issue #73). In a stage of solids alone Tmax is zero and only u's direction does anything.
+///
+/// DRAG DEPENDS ON THE ATTITUDE, which launch3dof.py's does not: alpha is the angle between u and v_rel, and KSA's drag grows with it (see <see cref="KsaAscentAtmosphere"/>). It is atan2(|w|, u_hat . v_rel_hat) with the same lateral vector w the q-alpha limit uses, but with |w| rounded to |w|^2 / sqrt(|w|^2 + e^2), e = <see cref="AscentSettings.AlphaRounding"/>. The drag's |sin alpha| has a corner at alpha = 0, exactly where an ascent flies through the thick air, and a linearisation at the corner promises gains the true drag never pays out: the plan stalls there. The rounding is zero at alpha = 0, so nose-on drag is exact, and reads |w| = e 30 % low and larger angles about e^2 / 2|w| low. Its curvature at the corner, 2/e, is why the trust region's floor sits below the script's; see <see cref="AscentSettings.TrustMin"/>. An atmosphere whose drag ignores the attitude - the script's - never reads alpha, so its arithmetic is unchanged.
 ///
 /// Every regularising epsilon is the script's, and T_EPS2 is carried into throttle units, so a constant-thrust problem matches the script's arithmetic exactly.
 /// </summary>
@@ -101,6 +103,7 @@ internal sealed class AscentDynamics
     private readonly AscentAtmosphere _atm;
     private readonly AscentStage[] _stages;
     private readonly double[] _mdotC, _kd, _uEps2;
+    private readonly double _alphaRounding;
     private int[] _nodeStage = [];
     private SolidPoint[] _nodeSolid = [];
 
@@ -116,6 +119,7 @@ internal sealed class AscentDynamics
 
         _atm = p.Atmosphere;
         _stages = p.Stages;
+        _alphaRounding = p.Settings.AlphaRounding;
         int s = _stages.Length;
         _mdotC = new double[s];
         _kd = new double[s];
@@ -177,11 +181,11 @@ internal sealed class AscentDynamics
 
         Dual rho = _atm.Density(h);
         Dual mach = vrn * VU / _atm.SpeedOfSound(h);
-        Dual cd = _atm.DragCoefficient(mach);
         Dual pressure = _atm.Pressure(h);
         Dual tmax = _stages[stage].MaxThrust(pressure) / FU;
 
         Dual umag = Dual.Sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2] + _uEps2[stage]);
+        Dual cd = _atm.DragCoefficient(mach, AngleOfAttack(u, umag, ax, ay, az, vrn));
         Dual kdrag = _kd[stage] * rho * cd * vrn / m;
         Dual rn3 = rn * rn * rn;
         // Liquid thrust scales with u; the solids' along u's direction only, so per unit of u they push ts / |u|.
@@ -196,6 +200,34 @@ internal sealed class AscentDynamics
         dx[4] = tm * u[1] - x[1] / rn3 - kdrag * ay;
         dx[5] = tm * u[2] - x[2] / rn3 - kdrag * az;
         dx[6] = -(_mdotC[stage] * umag + solid.MassFlowC);
+    }
+
+    /// <summary>
+    /// The angle between the thrust axis and the air-relative velocity, radians: atan2(|w|, u_hat . v_rel_hat), with |w| rounded so the corner at alpha = 0 is smooth.
+    /// </summary>
+    private Dual AngleOfAttack(ReadOnlySpan<Dual> u, Dual umag, Dual ax, Dual ay, Dual az, Dual vrn, bool rounded = true)
+    {
+        Dual wx = ax / vrn, wy = ay / vrn, wz = az / vrn;
+        Dual dx = u[0] / umag, dy = u[1] / umag, dz = u[2] / umag;
+        Dual along = dx * wx + dy * wy + dz * wz;
+        Dual lx = dx - along * wx, ly = dy - along * wy, lz = dz - along * wz;
+        Dual w2 = lx * lx + ly * ly + lz * lz;
+        Dual lateral = rounded
+            ? w2 / Dual.Sqrt(w2 + _alphaRounding * _alphaRounding)
+            : Dual.Sqrt(w2);
+        return Dual.Atan2(lateral, along);
+    }
+
+    /// <summary>The true angle of attack at a node, degrees, unrounded, for the report.</summary>
+    public double AngleOfAttackDeg(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int stage)
+    {
+        Span<Dual> dxs = stackalloc Dual[NX];
+        Span<Dual> dus = stackalloc Dual[NU];
+        for (int i = 0; i < NX; i++) dxs[i] = new Dual(x[i]);
+        for (int j = 0; j < NU; j++) dus[j] = new Dual(u[j]);
+        Air(dxs, out _, out Dual ax, out Dual ay, out Dual az, out Dual vrn, out _);
+        Dual umag = Dual.Sqrt(dus[0] * dus[0] + dus[1] * dus[1] + dus[2] * dus[2] + _uEps2[stage]);
+        return AngleOfAttack(dus, umag, ax, ay, az, vrn, rounded: false).V * 180.0 / Math.PI;
     }
 
     /// <summary>Dynamic pressure, Pa, against the co-rotating air.</summary>

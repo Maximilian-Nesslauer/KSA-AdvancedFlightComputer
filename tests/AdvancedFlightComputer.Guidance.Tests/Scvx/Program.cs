@@ -39,6 +39,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --shoot         direct shooting on a boostback burn: is there an optimal pitch
           --ascent        the convex ascent against launch3dof.py's Saturn V result
           --ascent-solids solid motors' thrust curves, pinned burns and a core throttled to outlast its boosters
+          --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
                           solve an ascent problem the game dumped, with the full trace
 
@@ -134,6 +135,11 @@ if (args.Contains("--ascent-replay"))
 {
     int at = Array.IndexOf(args, "--ascent-replay");
     return AscentCheck.Replay(at + 1 < args.Length ? args[at + 1] : "", args);
+}
+
+if (args.Contains("--ascent-aoa"))
+{
+    return AscentAoaCheck.Run(verbose);
 }
 
 if (args.Contains("--ascent-solids"))

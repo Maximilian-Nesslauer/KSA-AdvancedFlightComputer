@@ -19,8 +19,13 @@ public abstract class AscentAtmosphere
     /// <summary>Ambient pressure at an altitude, Pa: the engines' back pressure.</summary>
     public abstract Dual Pressure(Dual altitude);
 
-    /// <summary>Drag coefficient at a Mach number, referenced to each stage's <see cref="AscentStage.DragArea"/>.</summary>
+    /// <summary>Drag coefficient at a Mach number, nose-first, referenced to each stage's <see cref="AscentStage.DragArea"/>.</summary>
     public abstract Dual DragCoefficient(Dual mach);
+
+    /// <summary>
+    /// Drag coefficient at a Mach number and an angle of attack, radians from nose-first: the angle between the thrust axis and the air-relative velocity. The drag still acts straight against the relative wind; only its size depends on the attitude. The default ignores the attitude, which is launch3dof.py's law.
+    /// </summary>
+    public virtual Dual DragCoefficient(Dual mach, Dual angleOfAttack) => DragCoefficient(mach);
 }
 
 /// <summary>
@@ -39,7 +44,7 @@ public sealed class VacuumAscentAtmosphere : AscentAtmosphere
 /// <summary>
 /// KSA's air: the game's isothermal exponential atmosphere and the drag table sampled off the vehicle.
 ///
-/// NOSE-FIRST DRAG, whatever the attitude. launch3dof.py models drag as acting straight against the relative wind with a coefficient that depends on Mach alone, and this keeps that form: the coefficient is the table's value at alpha = 180 deg, which is nose-first in the table's retrograde-first convention. KSA drag hardly depends on attitude near there anyway - its skin term, which is isotropic, dominates (see KsaAeroSweep) - so a few degrees of angle of attack changes it very little.
+/// DRAG DEPENDS ON THE ANGLE OF ATTACK. launch3dof.py's drag depends on Mach alone, and the port kept that, reading the table nose-first on the grounds that KSA's isotropic skin term dominates (see KsaAeroSweep). It doesn't dominate enough. KSA's drag is a six-face box plus the skin term, blended by |v_body|, so the flank faces add drag in proportion to |sin alpha| from the first degree: on 2stage_new about 4 % per degree. With the attitude free of charge, the planner flew 2 to 13 deg off the airflow from max q down, wherever q-alpha allowed it, and the vehicle met 40 to 60 % more drag than planned there, a shortfall of up to 5 m/s^2 that left it 8 km low and 370 m/s slow at staging. So the table is read at the flown angle: alpha from nose-first, which is pi minus the table's retrograde-first angle. The drag still acts straight against the relative wind, as in the game, which has no lift.
 ///
 /// The table is flat in Mach because KSA models no compressibility, so the transonic rise launch3dof.py has is absent here. The Mach axis is still read, so a table that grows one is picked up without any change.
 /// </summary>
@@ -61,12 +66,18 @@ public sealed class KsaAscentAtmosphere : AscentAtmosphere
 
     public ExponentialAtmosphere Atmosphere => _atmosphere;
 
+    /// <summary>The sampled drag table, or null for a constant coefficient.</summary>
+    public AeroTable? Table => _table;
+
     public override Dual Density(Dual altitude) => _atmosphere.Density(altitude);
     public override Dual SpeedOfSound(Dual altitude) => new(_atmosphere.SpeedOfSound);
     public override Dual Pressure(Dual altitude) => _atmosphere.Pressure(altitude);
 
     public override Dual DragCoefficient(Dual mach)
         => _table != null ? _table.Cd(mach, new Dual(_table.AlphaMaxRad)) : new Dual(_cd);
+
+    public override Dual DragCoefficient(Dual mach, Dual angleOfAttack)
+        => _table != null ? _table.Cd(mach, _table.AlphaMaxRad - angleOfAttack) : new Dual(_cd);
 }
 
 /// <summary>
@@ -227,6 +238,11 @@ public sealed class AscentSettings
     /// </summary>
     public double ThrottleMin = 0.99;
 
+    /// <summary>
+    /// How far the drag's angle of attack is rounded at alpha = 0, in sin(alpha): |w| becomes |w|^2 / sqrt(|w|^2 + e^2) (see AscentDynamics). KSA's drag grows with |sin alpha| from a corner at alpha = 0, and SCvx cannot linearise through a corner. Rounding it keeps nose-on drag exact and underestimates the drag of flying off the airflow, by at most 0.3 e in sin(alpha), at sin(alpha) = 0.8 e (2.3 deg at 0.05). A smaller e models more of that drag and costs more iterations: on 2stage_new, 0.02 to 0.1 leave 7 to 34 m/s of it out (263 m/s nose-first) and take 264 to 70 iterations (27 nose-first), and all deliver within 30 kg of each other once that is paid; 0.05 leaves 18 m/s out in 83.
+    /// </summary>
+    public double AlphaRounding = 0.05;
+
     /// <summary>Fraction of the q and q-alpha limits the linearised constraints enforce.</summary>
     public double PathBackoff = 0.98;
 
@@ -256,7 +272,10 @@ public sealed class AscentSettings
 
     // Trust-region schedule.
     public double TrustInitial = 0.10;
-    public double TrustMin = 2e-3;
+    /// <summary>
+    /// The script's floor is 2e-3. Drag that grows with the angle of attack (AscentDynamics) is curved in the thrust direction, and the subproblem, linear in it, runs every step to the edge of its box. At 2e-3 that overshoot leaves dynamics defects whose penalty the next step promises to remove, the predicted gain never falls below about 3e-5, and the plan crawls a kilogram an iteration until it stalls short of converging - 400 kg short on 2stage_new with AlphaRounding 0.02. A smaller floor lets the ratio test shrink the box until the curvature no longer shows. The Saturn V check never shrinks below 8e-3, so its runs are the script's.
+    /// </summary>
+    public double TrustMin = 5e-4;
     public double TrustMax = 0.30;
     public double RhoAccept = 0.0;
     public double RhoShrink = 0.25;
