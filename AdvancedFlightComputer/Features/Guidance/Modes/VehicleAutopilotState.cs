@@ -440,8 +440,24 @@ public sealed class VehicleAutopilotState
 
     public string AscentPlanStatus = "";
 
-    /// <summary>EXECUTE flies the plan in place of the vertical rise and gravity turn when there is a usable one.</summary>
+    /// <summary>The lift-off instant the requested plan is for, sim time: the launch window's, when EXECUTE arms for one. NaN plans a lift-off now.</summary>
+    public double AscentPlanLaunchAt = double.NaN;
+
+    /// <summary>EXECUTE flies the plan in place of the vertical rise and gravity turn. Without one that fits, it calculates one first.</summary>
     public bool FlyConvexAscent = true;
+
+    /// <summary>EXECUTE was pressed and the launch waits on the plan being calculated for it: it starts, or arms for the window when <see cref="ConvexLaunchAtWindow"/>, once the plan converges. See GuidanceWindow.ContinueConvexLaunch.</summary>
+    public bool ConvexLaunchPending;
+    public bool ConvexLaunchAtWindow;
+
+    /// <summary>The plan came back converged but not flyable - solved under time warp, say - and was asked for once more. A second miss fails the launch.</summary>
+    public bool ConvexLaunchRetried;
+
+    /// <summary>Why EXECUTE's plan could not be calculated or did not converge, so nothing launched; empty otherwise. The panel shows it and offers the backup gravity turn until the next EXECUTE or ABORT.</summary>
+    public string ConvexLaunchFailure = "";
+
+    /// <summary>The player chose the backup gravity turn (deg/s) for this launch, so no convex plan is flown even if one fits. Cleared by the next EXECUTE or by ABORT.</summary>
+    public bool BackupAscent;
 
     /// <summary>The script's Saturn V limits: max-q 35 kPa and q-alpha 3500 Pa rad.</summary>
     public double ConvexQMaxKpa = 35.0;

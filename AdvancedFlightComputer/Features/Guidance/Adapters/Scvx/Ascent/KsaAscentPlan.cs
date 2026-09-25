@@ -364,7 +364,7 @@ public sealed class AscentPlan
     public object Body { get; init; }
     public double Omega { get; init; }
     public double BodyRadius { get; init; }
-    /// <summary>Sim time of the state the plan starts from - what the drawn plan is rotated forward from.</summary>
+    /// <summary>Sim time of the state the plan starts from - what the drawn plan is rotated forward from. The lift-off it was solved for: when it was requested, or the launch window's instant when EXECUTE armed for one.</summary>
     public double SolvedAt { get; init; }
     public double Mass0 { get; init; }
     /// <summary>The lift-off position in the body-fixed frame, to tell whether the vehicle has moved since.</summary>
@@ -384,6 +384,8 @@ public sealed class AscentPlan
 
     /// <summary>The throttle floor the plan was solved to, percent, and how many planned stages have solid motors burning in them (#73).</summary>
     public double ThrottleMinPct { get; init; }
+    /// <summary>The floor as the panel asked for it, before the engines' own minimum and the 99 % cap.</summary>
+    public double ThrottleMinRequestedPct { get; init; }
     public int SolidStages { get; init; }
     /// <summary>A core that would have run dry before its boosters is planned throttled down to outlast them (#32).</summary>
     public bool CoreThrottledDown { get; init; }
@@ -405,6 +407,11 @@ public sealed class AscentPlan
     public bool TargetDiffers(double peKm, double apKm, double incDeg, double lanDeg)
         => Math.Abs(peKm - PeKm) > 0.5 || Math.Abs(apKm - ApKm) > 0.5
         || Math.Abs(incDeg - IncDeg) > 0.05 || Math.Abs(Math.IEEERemainder(lanDeg - LanDeg, 360.0)) > 0.5;
+
+    /// <summary>True if the panel's limits are not the ones this plan was solved to.</summary>
+    public bool SettingsDiffer(double qMaxKpa, double qAlphaMax, double throttleMinPct)
+        => Math.Abs(qMaxKpa - QMaxRequestedKpa) > 1e-6 || Math.Abs(qAlphaMax - QAlphaMax) > 1e-6
+        || Math.Abs(throttleMinPct - ThrottleMinRequestedPct) > 1e-6;
 }
 
 /// <summary>

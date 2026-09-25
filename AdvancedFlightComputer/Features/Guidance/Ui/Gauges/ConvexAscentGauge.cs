@@ -15,6 +15,44 @@ public static partial class GuidanceWindow
     private static readonly float4 CvxWarn = new(1f, 0.8f, 0.3f, 1f);
     private static readonly float4 CvxLive = new(0.5f, 0.9f, 1f, 1f);
     private static readonly float4 CvxDim = new(0.7f, 0.7f, 0.7f, 1f);
+    private static readonly float4 CvxFail = new(1f, 0.45f, 0.4f, 1f);
+
+    /// <summary>
+    /// The convex ascent's lines at the top of the window, with the other status messages: the calculation in progress - the one EXECUTE is waiting on, or one asked for to look at - and, when EXECUTE's did not converge, the choice that leaves. Drawn above the tabs in the gauge panel and the legacy window alike, so a launch waiting on its plan, or refused for want of one, is never behind a fold.
+    /// </summary>
+    private static void DrawConvexLaunchBanner(Vehicle vehicle, Orbit orbit, IParentBody parent)
+    {
+        AscentPlanJob job = _s.AscentPlanJob;
+        string waiting = !_s.ConvexLaunchPending ? ""
+            : _s.ConvexLaunchAtWindow ? " - arms for the launch window when it converges"
+            : " - launches when it converges";
+        if (job != null)
+            ColoredWrapped(CvxLive, $"Convex ascent: {job.Progress} ({job.ElapsedSeconds:F0} s){waiting}");
+        else if (_s.ConvexLaunchPending)
+            ColoredWrapped(CvxLive, "Convex ascent: starting the calculation" + waiting);
+
+        if (_s.ConvexLaunchFailure.Length == 0)
+            return;
+        ColoredWrapped(CvxFail, _s.ConvexLaunchFailure);
+        ColoredWrapped(CvxWarn, "Nothing has launched. Change settings and try again, or launch in backup deg/s mode.");
+        // Not while another launch is committed: the backup is an answer to this failure, not a second ascent.
+        using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending))
+        {
+            if (ImGui.Button("LAUNCH IN BACKUP MODE##cvxbackup"))
+                LaunchBackupAscent(vehicle, orbit, parent);
+        }
+        ImGui.SameLine();
+        if (ImGui.Button("Dismiss##cvxfail"))
+            _s.ConvexLaunchFailure = "";
+    }
+
+    /// <summary>Wrapped text in a colour. TextWrapped formats printf-style native-side, so a percent sign in the text is escaped.</summary>
+    private static void ColoredWrapped(float4 color, string text)
+    {
+        ImGui.PushStyleColor(ImGuiCol.Text, color);
+        ImGui.TextWrapped(text.Replace("%", "%%"));
+        ImGui.PopStyleColor();
+    }
 
     private static void DrawConvexAscentSection(Vehicle vehicle, Orbit orbit, IParentBody parent, float innerW)
     {
@@ -56,22 +94,21 @@ public static partial class GuidanceWindow
         bool busy = _s.AscentPlanJob != null || _s.AscentPlanRequested;
         if (busy)
         {
+            // Cancelling the calculation EXECUTE is waiting on cancels that launch too.
             if (ImGui.Button("Cancel calculation##cvx"))
             {
                 _s.AscentPlanJob?.Cancel();
                 _s.AscentPlanRequested = false;
+                _s.ConvexLaunchPending = false;
             }
             return;
         }
 
-        // Not while flying: the flight has latched its plan, and a new one solved from mid-air would start from a state that is not a lift-off.
+        // Not while flying: the flight has latched its plan, and a new one solved from mid-air would start from a state that is not a lift-off. For the lift-off EXECUTE would commit to, so a plan looked at first is the one it flies.
         using (new ImGuiDisabledScope(_s.Running))
         {
             if (ImGui.Button("CALCULATE ASCENT##cvx"))
-            {
-                _s.AscentPlanRequested = true;
-                _s.AscentPlanStatus = "Starting...";
-            }
+                RequestAscentPlan(ExecuteLaunchInstant() > SimNow() ? ExecuteLaunchInstant() : double.NaN);
         }
         if (_s.AscentPlan != null)
         {
@@ -132,12 +169,10 @@ public static partial class GuidanceWindow
             GaugeRowText("EXECUTE", "flies the gravity turn (convex profile off)", CvxDim);
             return;
         }
-        if (ConvexPlanFlyable(vehicle, orbit, parent, out string why))
+        if (ConvexPlanFlyable(vehicle, orbit, parent, ExecuteLaunchInstant(), out string why))
             GaugeRowText("EXECUTE", "flies this plan", CvxGood);
         else
-            GaugeRowText("EXECUTE", "flies the gravity turn: " + why, CvxWarn);
-        if (plan.TargetDiffers(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg))
-            GaugeRowText("", "target orbit changed since - recalculate", CvxWarn);
+            GaugeRowText("EXECUTE", "calculates a new plan first: " + why, CvxWarn);
     }
 
     private static int ArgMax(double[] v)
@@ -290,8 +325,8 @@ public static partial class GuidanceWindow
             ImGui.TextColored(CvxLive, $"{job.Progress} ({job.ElapsedSeconds:F0} s)");
         else if (_s.AscentPlanStatus.Length > 0)
             ImGui.TextColored(_s.AscentPlan?.Usable == true ? CvxGood : CvxWarn, _s.AscentPlanStatus);
-        if (_s.AscentPlan?.Usable == true && !_s.Running)
-            ImGui.TextColored(ConvexPlanFlyable(vehicle, orbit, parent, out string why) ? CvxGood : CvxWarn,
-                why.Length == 0 ? "EXECUTE flies this plan." : "EXECUTE flies the gravity turn: " + why);
+        if (_s.AscentPlan?.Usable == true && !_s.Running && _s.FlyConvexAscent)
+            ImGui.TextColored(ConvexPlanFlyable(vehicle, orbit, parent, ExecuteLaunchInstant(), out string why) ? CvxGood : CvxWarn,
+                why.Length == 0 ? "EXECUTE flies this plan." : "EXECUTE calculates a new plan first: " + why);
     }
 }

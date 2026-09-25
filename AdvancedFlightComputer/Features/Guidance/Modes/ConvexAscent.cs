@@ -14,7 +14,7 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
 // The convex ascent: launch3dof.py's minimum-propellant ascent, solved offline for this vehicle by SCvx and flown open loop in place of the vertical rise and gravity turn, with UPFG taking over for the terminal guidance once the vehicle is high enough.
 //
-// Calculate ascent asks for a plan. The request is picked up by the vehicle's sim step, which is the one place the part tree can be read without racing the game's own recompute, and which builds the problem there as plain data: the staging model with each stage's thrust across back pressure, the drag table sampled off the vehicle, the body's atmosphere, and the target orbit. The solve then runs on its own thread (AscentPlanJob) and publishes an immutable AscentPlan, which the panel draws and EXECUTE flies.
+// EXECUTE asks for a plan when there is none that fits the launch, and launches - or arms for the window - once it converges; one that does not converge launches nothing, and the panel offers the vertical rise and deg/s gravity turn as a backup. Calculate ascent asks for one without launching, to look at it first. The request is picked up by the vehicle's sim step, which is the one place the part tree can be read without racing the game's own recompute, and which builds the problem there as plain data: the staging model with each stage's thrust across back pressure, the drag table sampled off the vehicle, the body's atmosphere, and the target orbit. The solve then runs on its own thread (AscentPlanJob) and publishes an immutable AscentPlan, which the panel draws and EXECUTE flies.
 //
 // What EXECUTE flies is pitch and azimuth against AIR-RELATIVE SPEED (see ConvexAscentProfile), not the plan's clock, until the vehicle is above the hand-over altitude - or the plan's own speed runs out - and UPFG has converged; from there it is the ordinary UPFG ascent.
 public static partial class GuidanceWindow
@@ -36,6 +36,9 @@ public static partial class GuidanceWindow
 
     /// <summary>How long the command takes to turn from the profile's attitude to UPFG's after the hand-over, s.</summary>
     private const double ConvexBlendSeconds = 15.0;
+
+    /// <summary>A plan flown this far from the lift-off instant it was solved for starts from a pad the body has turned under the target plane, s. A minute is a quarter of a degree of spin, which UPFG steers out after the hand-over; a calculation at 1x takes seconds.</summary>
+    private const double PlanLaunchToleranceS = 60.0;
 
     // --- request and collection, from the sim step ---------------------------
 
@@ -62,6 +65,7 @@ public static partial class GuidanceWindow
         {
             _s.AscentPlanJob = null;
             AscentPlan plan = job.Result;
+            string failure;
             if (plan != null)
             {
                 _s.AscentPlan = plan;
@@ -77,6 +81,7 @@ public static partial class GuidanceWindow
                 _s.AscentPlanStatus = plan.Usable
                     ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{relaxed}"
                     : $"No converged plan: {sol.Message}.{relaxed}{hint}";
+                failure = plan.Usable ? "" : $"Convergence was not possible: {sol.Message}.{relaxed}{hint}";
                 GuidanceLog.Info(vehicle, $"convex ascent {(plan.Usable ? "planned" : "did not converge")}: {sol.Message}, "
                     + $"{sol.Iterations} iterations ({sol.Accepted} accepted) in {plan.WallSeconds:F1} s, kick {sol.KickDeg:F3} deg, "
                     + (sol.Nodes > 0
@@ -90,8 +95,11 @@ public static partial class GuidanceWindow
             {
                 string[] notes = job.Notes;
                 _s.AscentPlanStatus = notes.Length > 0 ? "No plan: " + notes[^1] + "." : "No plan.";
+                failure = "Convergence was not possible: " + (notes.Length > 0 ? notes[^1] + "." : "the calculation ended without a plan.");
                 GuidanceLog.Info(vehicle, $"convex ascent calculation ended without a plan: {string.Join("; ", notes)}.");
             }
+            if (_s.ConvexLaunchPending)
+                ContinueConvexLaunch(vehicle, orbit, parent, plan, failure);
         }
 
         if (!_s.AscentPlanRequested)
@@ -109,7 +117,85 @@ public static partial class GuidanceWindow
         {
             _s.AscentPlanStatus = "Cannot calculate: " + error + ".";
             GuidanceLog.Info(vehicle, $"convex ascent not calculated: {error}.");
+            if (_s.ConvexLaunchPending)
+                FailConvexLaunch(vehicle, "The convex ascent cannot be calculated: " + error + ".");
         }
+    }
+
+    // --- EXECUTE: calculate, then launch -----------------------------------------
+
+    /// <summary>The lift-off EXECUTE would commit to: the launch window's instant when there is a target to wait for, now otherwise.</summary>
+    private static double ExecuteLaunchInstant()
+        => _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime) ? Math.Max(_s.LaunchTargetTime, SimNow()) : SimNow();
+
+    /// <summary>Ask the sim step for a plan whose lift-off is at <paramref name="launchAt"/>, sim time, or now for NaN. A solve already running is left to finish: its plan is judged when it lands.</summary>
+    private static void RequestAscentPlan(double launchAt)
+    {
+        _s.AscentPlanLaunchAt = launchAt;
+        if (_s.AscentPlanJob != null)
+            return;
+        _s.AscentPlanRequested = true;
+        _s.AscentPlanStatus = "Starting...";
+    }
+
+    /// <summary>
+    /// EXECUTE without a plan that fits the launch. The convex profile is the ascent and the gravity turn only its backup, so EXECUTE solves a plan first and commits once it converges: starting the ascent, or arming it for the window, which the plan is then solved for. The vehicle is claimed now, as arming claims it, since the launch is committed.
+    /// </summary>
+    private static void RequestConvexLaunch(Vehicle vehicle, bool atWindow, string why)
+    {
+        ClaimVehicle(GuidanceMode.Ascent, vehicle);
+        _s.ConvexLaunchPending = true;
+        _s.ConvexLaunchAtWindow = atWindow;
+        _s.ConvexLaunchRetried = false;
+        _s.ConvexLaunchFailure = "";
+        RequestAscentPlan(atWindow ? ExecuteLaunchInstant() : double.NaN);
+        GuidanceLog.Info(vehicle, $"EXECUTE: calculating the convex ascent before {(atWindow ? "arming for the launch window" : "launching")} ({why}).");
+    }
+
+    /// <summary>
+    /// The plan EXECUTE waited on has landed. Launch on it if it converged and still fits; a converged plan that no longer fits - solved under time warp, or across a change of target - is asked for once more; anything else fails the launch, and the panel offers the backup.
+    /// </summary>
+    private static void ContinueConvexLaunch(Vehicle vehicle, Orbit orbit, IParentBody parent, AscentPlan plan, string failure)
+    {
+        _s.ConvexLaunchPending = false;
+        if (plan == null || !plan.Usable)
+        {
+            FailConvexLaunch(vehicle, failure);
+            return;
+        }
+        double launchAt = _s.ConvexLaunchAtWindow ? ExecuteLaunchInstant() : SimNow();
+        if (!ConvexPlanFlyable(vehicle, orbit, parent, launchAt, out string why))
+        {
+            if (!_s.ConvexLaunchRetried)
+            {
+                _s.ConvexLaunchRetried = true;
+                _s.ConvexLaunchPending = true;
+                RequestAscentPlan(_s.ConvexLaunchAtWindow ? launchAt : double.NaN);
+                GuidanceLog.Info(vehicle, $"EXECUTE: the convex plan came back but does not fit the launch ({why}), calculating it again.");
+                return;
+            }
+            FailConvexLaunch(vehicle, $"The convex plan does not fit the launch: {why}.");
+            return;
+        }
+        GuidanceLog.Info(vehicle, $"EXECUTE: convex plan ready, {(_s.ConvexLaunchAtWindow ? "arming for the launch window" : "launching")}.");
+        LaunchAscent(vehicle, orbit, parent, _s.ConvexLaunchAtWindow);
+    }
+
+    /// <summary>Nothing launches: the panel says why and offers the backup gravity turn, which is the player's call and never taken for them.</summary>
+    private static void FailConvexLaunch(Vehicle vehicle, string failure)
+    {
+        _s.ConvexLaunchPending = false;
+        _s.ConvexLaunchFailure = failure;
+        GuidanceLog.Info(vehicle, $"EXECUTE: not launching. {failure}");
+    }
+
+    /// <summary>The backup the failure offers: the vertical rise and deg/s gravity turn, flown to the same target, now or at the window as EXECUTE asked.</summary>
+    private static void LaunchBackupAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
+    {
+        _s.ConvexLaunchFailure = "";
+        _s.BackupAscent = true;
+        GuidanceLog.Info(vehicle, "launching in the backup deg/s gravity turn, by the player's choice.");
+        LaunchAscent(vehicle, orbit, parent, _s.ConvexLaunchAtWindow);
     }
 
     private static double Max(double[] v)
@@ -221,16 +307,31 @@ public static partial class GuidanceWindow
         double3 normal = UpfgTarget.OrbitNormal(UpfgTarget.DegToRad(_s.IncDeg), UpfgTarget.DegToRad(_s.LanDeg));
 
         // Lift-off. On the pad the air-relative velocity is zero, and the script starts its vehicle rising at 10 m/s, clear of the singularity that makes the angle of attack meaningless at rest.
-        double3 r = orbit.StateVectors.PositionCci;
+        double3 rNow = orbit.StateVectors.PositionCci;
+        double3 r = rNow;
         double3 v = orbit.StateVectors.VelocityCci;
         double3 spin = new double3(0, 0, omega);
         double3 up = double3.Normalize(r);
-        if ((v - double3.Cross(spin, r)).Length() < 10.0)
+        bool atRest = (v - double3.Cross(spin, r)).Length() < 10.0;
+        if (atRest)
             v = double3.Cross(spin, r) + 10.0 * up;
 
+        // A launch armed for a window lifts off later, from the same pad carried round by the body's spin, and the plan starts there: its steering is fixed to the ground and the target plane is not. Only a vehicle at rest on the ground waits for a window.
+        double now = SimNow();
+        double launchAt = now;
+        if (atRest && double.IsFinite(_s.AscentPlanLaunchAt) && _s.AscentPlanLaunchAt > now)
+        {
+            launchAt = _s.AscentPlanLaunchAt;
+            double turn = omega * (launchAt - now);
+            double c = Math.Cos(turn), sn = Math.Sin(turn);
+            r = new double3(c * r.X - sn * r.Y, sn * r.X + c * r.Y, r.Z);
+            v = new double3(c * v.X - sn * v.Y, sn * v.X + c * v.Y, v.Z);
+        }
+
         double groundRadius = Math.Min(bodyRadius, r.Length() - 1.0);
-        double qMax = Math.Max(_s.ConvexQMaxKpa, 0.1) * 1000.0;
-        double qAlphaMax = Math.Max(_s.ConvexQAlphaMax, 1.0);
+        double qMax = ConvexQMaxKpaUsed() * 1000.0;
+        double qAlphaMax = ConvexQAlphaMaxUsed();
+        double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
         AscentProblem Build(int stages, double qLimit)
@@ -267,8 +368,8 @@ public static partial class GuidanceWindow
         // Everything the plan records about what it was for, captured now: the publisher runs on the worker and must not touch the game.
         string vehicleId = vehicle.Id;
         string bodyName = parent.Id;
-        double solvedAt = SimNow();
-        double3 startCcf = r.Transform(parent.GetCci2Ccf());
+        double solvedAt = launchAt;
+        double3 startCcf = rNow.Transform(parent.GetCci2Ccf());
         double peKm = _s.PeKm, apKm = _s.ApKm, incDeg = _s.IncDeg, lanDeg = _s.LanDeg;
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
@@ -291,6 +392,7 @@ public static partial class GuidanceWindow
             IncDeg = incDeg,
             LanDeg = lanDeg,
             ThrottleMinPct = floor * 100.0,
+            ThrottleMinRequestedPct = throttleRequestedPct,
             SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
             CoreThrottledDown = stagePlan.CoreThrottledDown,
             StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", pinned to {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
@@ -321,6 +423,7 @@ public static partial class GuidanceWindow
         }
 
         GuidanceLog.Info(vehicle, $"convex ascent requested (problem {dump}): {count} stage(s) available, trying {initial} first; "
+            + (launchAt > now ? $"lift-off at the window, {launchAt - now:F0} s from now; " : "")
             + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg, "
             + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), drag area {dragArea:F1} m^2, "
             + (atmosphere != null ? $"air {atmosphere}" : "no air") + ".");
@@ -342,9 +445,10 @@ public static partial class GuidanceWindow
     // --- flying the plan ------------------------------------------------------
 
     /// <summary>
-    /// Whether EXECUTE may fly the stored plan on this vehicle as it is now. A plan belongs to the vehicle, place and mass it was solved from; one that has lost any of them flies the legacy gravity turn instead, and the reason says why.
+    /// Whether the stored plan may be flown on this vehicle as it is now. A plan belongs to the vehicle, place, mass, lift-off instant, target and limits it was solved for; EXECUTE calculates a new one for a plan that has lost any of them, and the reason says why.
     /// </summary>
-    private static bool ConvexPlanFlyable(Vehicle vehicle, Orbit orbit, IParentBody parent, out string why)
+    /// <param name="launchAt">The lift-off it would be flown from, sim time: now for a launch, the window's instant for one armed to wait for it.</param>
+    private static bool ConvexPlanFlyable(Vehicle vehicle, Orbit orbit, IParentBody parent, double launchAt, out string why)
     {
         AscentPlan p = _s.AscentPlan;
         if (p == null)
@@ -373,9 +477,31 @@ public static partial class GuidanceWindow
             why = "the vehicle's mass has changed since it was planned";
             return false;
         }
+        if (p.TargetDiffers(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg))
+        {
+            why = "the target orbit has changed since it was planned";
+            return false;
+        }
+        if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct))
+        {
+            why = "the convex settings have changed since it was planned";
+            return false;
+        }
+        double late = launchAt - p.SolvedAt;
+        if (Math.Abs(late) > PlanLaunchToleranceS)
+        {
+            why = late > 0.0
+                ? $"it was planned for a lift-off {late:F0} s earlier"
+                : $"it was planned for a lift-off {-late:F0} s later";
+            return false;
+        }
         why = "";
         return true;
     }
+
+    /// <summary>The panel's max-q and q-alpha as a plan is solved to them, floored away from zero.</summary>
+    private static double ConvexQMaxKpaUsed() => Math.Max(_s.ConvexQMaxKpa, 0.1);
+    private static double ConvexQAlphaMaxUsed() => Math.Max(_s.ConvexQAlphaMax, 1.0);
 
     /// <summary>Air-relative speed: what the profile is indexed by.</summary>
     private static double AirSpeed(double3 r, double3 v, IParentBody parent)
