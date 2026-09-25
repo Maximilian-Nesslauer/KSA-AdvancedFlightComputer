@@ -167,10 +167,31 @@ public static partial class GuidanceWindow
     /// The auto-warp setting is deliberately NOT part of this decision. It only says
     /// whether the mod offers to warp to the window for you or you warp there
     /// yourself; either way the launch waits for the window.
+    ///
+    /// THE CONVEX PROFILE IS THE ASCENT. Without a plan that fits this launch, EXECUTE
+    /// calculates one - for the window's lift-off when it arms - and launches or arms
+    /// once it converges (see RequestConvexLaunch). The vertical rise and deg/s gravity
+    /// turn fly only with the convex profile switched off, or as the backup the panel
+    /// offers when the plan does not converge.
     /// </summary>
     private static void ExecuteAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
-        if (_s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime))
+        bool window = _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime);
+        _s.ConvexLaunchFailure = "";
+        _s.BackupAscent = false;
+        if (_s.FlyConvexAscent && !_s.Running
+            && !ConvexPlanFlyable(vehicle, orbit, parent, ExecuteLaunchInstant(), out string why))
+        {
+            RequestConvexLaunch(vehicle, window, why);
+            return;
+        }
+        LaunchAscent(vehicle, orbit, parent, window);
+    }
+
+    /// <summary>The commit itself: arm for the window, or start now.</summary>
+    private static void LaunchAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, bool atWindow)
+    {
+        if (atWindow && _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime))
         {
             // ARMING TAKES THE VEHICLE TOO. It is a commit - the craft is now waiting to launch and will fire itself at the window - so leaving another mode running underneath it would have that mode flying right up to the moment StepLaunchWindow claimed it out from under itself.
             ClaimVehicle(GuidanceMode.Ascent, vehicle);
@@ -199,6 +220,13 @@ public static partial class GuidanceWindow
         _s.LaunchDescending = plan.NearestDescending;
         GuidanceLog.Info(vehicle, $"launching now, off the window: next {(plan.Descending ? "descending" : "ascending")} crossing in {plan.WaitSec:F0} s, "
             + $"heading for the nearest, {(plan.NearestDescending ? "descending" : "ascending")}.");
+        // A plan solved for the window does not fit a lift-off now, so this one is calculated first too - unless the player has already chosen the backup.
+        if (_s.FlyConvexAscent && !_s.BackupAscent
+            && !ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out string why))
+        {
+            RequestConvexLaunch(vehicle, atWindow: false, why);
+            return;
+        }
         StartGuidance(vehicle, orbit, parent);
     }
 
@@ -219,6 +247,16 @@ public static partial class GuidanceWindow
         if (_s.Running || _s.LaunchArmed)
             GuidanceLog.Info(vehicle, $"ascent {(status.Length > 0 ? "ended: " + status : "stopped by the player")}"
                 + $" (phase {PhaseName(_s.Phase)}, tgo {_s.Upfg.Tgo:F1} s, vgo {_s.Upfg.VgoMag:F0} m/s).");
+        // A launch still waiting on its plan goes too, and its calculation with it; a plan calculated only to look at is left to finish.
+        if (_s.ConvexLaunchPending)
+        {
+            GuidanceLog.Info(vehicle, "launch cancelled while its convex plan was calculating.");
+            _s.AscentPlanJob?.Cancel();
+            _s.AscentPlanRequested = false;
+        }
+        _s.ConvexLaunchPending = false;
+        _s.ConvexLaunchFailure = "";
+        _s.BackupAscent = false;
         // The shutdown for this path comes from the release itself, so record the intent. Nothing here queues a one-shot cut that a later takeover could preserve on its own.
         _s.ShutdownRequested = true;
         _s.Running = false;
@@ -261,6 +299,17 @@ public static partial class GuidanceWindow
             {
                 if (Universe.IsAutoWarpActive)
                     Universe.AutoWarpStop(true);
+                // The plan was solved for this lift-off when EXECUTE armed. One that no longer fits - the vehicle changed while it waited, or a warp step carried it well past the window - is not quietly swapped for the backup gravity turn: that is the player's call, so the launch holds and the panel offers it.
+                if (_s.FlyConvexAscent && !_s.BackupAscent
+                    && !ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out string why))
+                {
+                    ReleaseAscent($"launch held at the window: the convex plan no longer fits ({why}).", vehicle);
+                    // The panel's failure line says it, with the choice it leaves; the status line would only repeat it. The backup it offers goes now: the window is here.
+                    _s.Status = "";
+                    _s.ConvexLaunchAtWindow = false;
+                    _s.ConvexLaunchFailure = $"Launch held at the window: the convex plan no longer fits ({why}).";
+                    return;
+                }
                 StartGuidance(vehicle, orbit, parent);
                 _s.LaunchArmed = false;
             }
@@ -373,7 +422,7 @@ public static partial class GuidanceWindow
         _s.ConvexLastTime = double.NaN;
         _s.ConvexBlendStart = double.NaN;
         string convexWhy = "";
-        if (_s.FlyConvexAscent && ConvexPlanFlyable(vehicle, orbit, parent, out convexWhy))
+        if (_s.FlyConvexAscent && !_s.BackupAscent && ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out convexWhy))
         {
             _s.FlyingPlan = _s.AscentPlan;
             _s.FlyingPlanLaunchTime = SimNow();
@@ -398,7 +447,8 @@ public static partial class GuidanceWindow
             + (_s.FlyingPlan != null
                 ? $"convex profile to {_s.ConvexHandoverAltKm:F0} km, planned {_s.FlyingPlan.Solution.FinalMass / 1000.0:F2} t to orbit"
                 : $"turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s"
-                  + (_s.FlyConvexAscent && _s.AscentPlan != null ? $", convex plan not flown: {convexWhy}" : ""))
+                  + (_s.BackupAscent ? ", the backup the player chose"
+                     : _s.FlyConvexAscent && _s.AscentPlan != null ? $", convex plan not flown: {convexWhy}" : ""))
             + ").");
     }
 

@@ -230,7 +230,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             t.Skip("the save burns no solids in the stages planned.");
             return;
         }
-        // The script's 35 kPa is a Saturn V's: a KSA stack lifting off at three or five g cannot climb under it at full throttle, and the planner re-plans to a limit it can hold.
+        // The panel's 140 kPa is four times the script's Saturn V 35 kPa; a stack that still cannot climb under it at full throttle is retried at a limit it can hold.
         t.Info($"max q planned to {plan.QMaxKpa:F0} kPa (asked {plan.QMaxRequestedKpa:F0}{(plan.QRelaxed ? ", out of reach" : "")}), "
              + $"throttle floor {plan.ThrottleMinPct:F0} %, lowest planned throttle {100.0 * plan.Profile.MinThrottle:F0} %");
         bool throttled = ThrottleFloorPct < 99.0;

@@ -5,7 +5,7 @@ using AdvancedFlightComputer.Guidance.Numerics.Flight;
 namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
 /// <summary>
-/// An ascent problem as plain JSON, so a problem the game built can be solved again offline - the test console's --ascent-replay reads it back. Every number is SI. The drag coefficient is written as a curve against Mach at the attitude the dynamics read it at, which is all of the table they use.
+/// An ascent problem as plain JSON, so a problem the game built can be solved again offline - the test console's --ascent-replay reads it back. Every number is SI. The drag coefficient is written as the whole table, Mach by angle of attack, since the dynamics read it at the flown attitude; a file from before that carries only the nose-first curve, which reads back flat across the angle.
 /// </summary>
 public static class AscentProblemFile
 {
@@ -41,6 +41,9 @@ public static class AscentProblemFile
         public double[]? Atmosphere { get; set; }       // rho0, p0, scale height, gamma; null for none
         public double[]? CdMach { get; set; }
         public double[]? Cd { get; set; }
+        // The whole table, attitude and all, when the problem has one: angles retrograde-first as AeroTable holds them, values row-major Mach by angle. Cd above is its nose-first column, which a file without the table falls back to.
+        public double[]? CdAlphaDeg { get; set; }
+        public double[]? CdTable { get; set; }
         public double GroundRadius { get; set; }
         public double TargetRadius { get; set; }
         public double TargetSpeed { get; set; }
@@ -94,6 +97,11 @@ public static class AscentProblemFile
             dto.Atmosphere = [a.SeaLevelDensity, a.SeaLevelPressure, a.ScaleHeight, a.Gamma];
             dto.CdMach = MachSamples;
             dto.Cd = MachSamples.Select(m => ksa.DragCoefficient(new Dual(m)).V).ToArray();
+            if (ksa.Table is { } table)
+            {
+                dto.CdAlphaDeg = AeroTable.DefaultAlphaBreakpointsDeg;
+                dto.CdTable = MachSamples.SelectMany(m => dto.CdAlphaDeg.Select(a => table.Cd(m, a * Math.PI / 180.0))).ToArray();
+            }
         }
         return JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true });
     }
@@ -107,7 +115,12 @@ public static class AscentProblemFile
         {
             var atm = new ExponentialAtmosphere(a[0], a[1], a[2], a[3]);
             AeroTable? table = null;
-            if (dto.CdMach is { Length: >= 2 } mach && dto.Cd is { } cd && cd.Length == mach.Length)
+            if (dto.CdMach is { Length: >= 2 } machs && dto.CdAlphaDeg is { Length: >= 2 } alphas
+                && dto.CdTable is { } grid && grid.Length == machs.Length * alphas.Length)
+            {
+                table = new AeroTable(machs, alphas, grid);
+            }
+            else if (dto.CdMach is { Length: >= 2 } mach && dto.Cd is { } cd && cd.Length == mach.Length)
             {
                 // The curve is all the dynamics read, so it is laid down flat across alpha.
                 double[] alpha = [0.0, 180.0];

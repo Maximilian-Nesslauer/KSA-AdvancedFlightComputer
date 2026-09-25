@@ -440,18 +440,34 @@ public sealed class VehicleAutopilotState
 
     public string AscentPlanStatus = "";
 
-    /// <summary>EXECUTE flies the plan in place of the vertical rise and gravity turn when there is a usable one.</summary>
+    /// <summary>The lift-off instant the requested plan is for, sim time: the launch window's, when EXECUTE arms for one. NaN plans a lift-off now.</summary>
+    public double AscentPlanLaunchAt = double.NaN;
+
+    /// <summary>EXECUTE flies the plan in place of the vertical rise and gravity turn. Without one that fits, it calculates one first.</summary>
     public bool FlyConvexAscent = true;
 
-    /// <summary>The script's Saturn V limits: max-q 35 kPa and q-alpha 3500 Pa rad.</summary>
-    public double ConvexQMaxKpa = 35.0;
+    /// <summary>EXECUTE was pressed and the launch waits on the plan being calculated for it: it starts, or arms for the window when <see cref="ConvexLaunchAtWindow"/>, once the plan converges. See GuidanceWindow.ContinueConvexLaunch.</summary>
+    public bool ConvexLaunchPending;
+    public bool ConvexLaunchAtWindow;
+
+    /// <summary>The plan came back converged but not flyable - solved under time warp, say - and was asked for once more. A second miss fails the launch.</summary>
+    public bool ConvexLaunchRetried;
+
+    /// <summary>Why EXECUTE's plan could not be calculated or did not converge, so nothing launched; empty otherwise. The panel shows it and offers the backup gravity turn until the next EXECUTE or ABORT.</summary>
+    public string ConvexLaunchFailure = "";
+
+    /// <summary>The player chose the backup gravity turn (deg/s) for this launch, so no convex plan is flown even if one fits. Cleared by the next EXECUTE or by ABORT.</summary>
+    public bool BackupAscent;
+
+    /// <summary>Max-q 140 kPa, four times the script's Saturn V 35 kPa: a KSA stack lifting off at three to five g cannot hold 35 at full throttle, and the planner then has to retry looser anyway. Q-alpha is the script's 3500 Pa rad.</summary>
+    public double ConvexQMaxKpa = 140.0;
     public double ConvexQAlphaMax = 3500.0;
 
     /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
     public double ConvexHandoverAltKm = 80.0;
 
     /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. A stage burning a solid motor is held at 99 % whatever this says.</summary>
-    public double ConvexThrottleMinPct = 99.0;
+    public double ConvexThrottleMinPct = 90.0;
 
     public bool ShowConvexPlan = true;
 

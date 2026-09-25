@@ -111,6 +111,8 @@ public static partial class GuidanceWindow
             ImGui.TextColored(statusColor, phaseStatus);
         if (_s.Status.Length > 0)
             ImGui.TextColored(statusColor, _s.Status);
+        // The convex ascent's calculation, and a launch it could not plan, on every tab: EXECUTE may be waiting on it.
+        DrawConvexLaunchBanner(vehicle, orbit, parent);
 
         // Above the tabs because it is not a phase's concern: both the ascent launch window and the deorbit burn request warps, and a prompt that vanished on a tab switch would strand whichever flow was waiting on it.
         DrawWarpPrompt(vehicle, orbit, parent, bodyRadius);
@@ -180,9 +182,9 @@ public static partial class GuidanceWindow
         float3 red = ColorRgbReference.GetIndexedRgb(IndexedColor.Red);
         float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
 
-        // EXECUTE lights green while that phase is actually doing something: guidance running or a launch armed and waiting for its window on ascent, any live landing phase on the deorbit tab. ABORT is red at all times, so it reads the same whether or not it currently has anything to stop.
+        // EXECUTE lights green while that phase is actually doing something: guidance running, a launch armed and waiting for its window, or one waiting on its convex plan on ascent, any live landing phase on the deorbit tab. ABORT is red at all times, so it reads the same whether or not it currently has anything to stop.
         bool lit = _panelTab == GuidanceTab.Ascent
-            ? (_s.Running || _s.LaunchArmed)
+            ? (_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending)
             : _panelTab == GuidanceTab.Boostback ? BoostbackLive
             : _panelTab == GuidanceTab.Descent ? DescentLive
             : _landingSubTab == LandingSubTab.Hover

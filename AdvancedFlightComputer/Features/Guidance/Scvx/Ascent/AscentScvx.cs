@@ -55,6 +55,8 @@ public sealed class AscentSolution
     public double[] SolidThrust { get; init; } = [];
     public required double[] DynamicPressure { get; init; }  // Pa
     public required double[] QAlpha { get; init; }           // Pa rad
+    /// <summary>Angle between the thrust axis and the air-relative velocity at each node, deg: what the drag's attitude term reads.</summary>
+    public double[] AngleOfAttackDeg { get; init; } = [];
     public required double[] BurnTime { get; init; }   // s per stage
     public required double[] StageDeltaV { get; init; } // m/s per stage, at the reference exhaust velocity
     public required double[] TerminalResidual { get; init; } // SI: m, m/s, m^2/s, m, m/s
@@ -389,6 +391,7 @@ public static class AscentScvx
         var solidThrust = new double[n];
         var q = new double[n];
         var qa = new double[n];
+        var aoa = new double[n];
         for (int k = 0; k < n; k++)
         {
             for (int i = 0; i < 3; i++)
@@ -402,6 +405,7 @@ public static class AscentScvx
             fullThrust[k] = liquidFull + solidThrust[k];
             q[k] = d.QValue(x.AsSpan(k * NX, NX));
             qa[k] = d.QAlpha(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), c.NodeStage[k]);
+            aoa[k] = d.AngleOfAttackDeg(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), c.NodeStage[k]);
         }
 
         // True defects of the reference, per channel, in SI.
@@ -454,6 +458,7 @@ public static class AscentScvx
             SolidThrust = solidThrust,
             DynamicPressure = q,
             QAlpha = qa,
+            AngleOfAttackDeg = aoa,
             BurnTime = burn,
             StageDeltaV = dv,
             TerminalResidual = res,

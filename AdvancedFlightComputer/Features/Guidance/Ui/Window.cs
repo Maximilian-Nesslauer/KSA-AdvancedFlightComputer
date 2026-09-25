@@ -167,6 +167,7 @@ public static partial class GuidanceWindow
             ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Error: " + _s.GuidanceError);
         if (_s.Status.Length > 0)
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f), _s.Status);
+        DrawConvexLaunchBanner(vehicle, orbit, parent);
 
         // The single-thread invariant the ambient state rests on, if it has ever been seen to break - see GuidanceWindow._s. Not per-vehicle and not clearable: once the sim step and the draw are on different threads, every number on this panel is suspect and saying so once is the whole point.
         if (OwnerThreadViolation.Length > 0)

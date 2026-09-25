@@ -39,13 +39,13 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The CAT-S / UPFG ascent or the gravity-turn one. Locked while an ascent is flying or armed for its window, so the page and EXECUTE cannot switch away from the one that is committed.
+    /// The CAT-S / UPFG ascent or the gravity-turn one. Locked while an ascent is flying, armed for its window or waiting on its convex plan, so the page and EXECUTE cannot switch away from the one that is committed.
     /// </summary>
     private static void DrawAscentMethodRadios()
     {
         ImGui.Text("Method");
         ImGui.SameLine();
-        using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed))
+        using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending))
         {
             // Suffixed IDs: the Gravity turn page's section header carries the same label.
             if (ImGui.RadioButton("CAT-S / UPFG##ascentmethod", _s.AscentMethod == AscentMethod.CatsUpfg))

@@ -61,7 +61,7 @@ public static partial class GuidanceWindow
     private static string AscentPhaseLabel()
     {
         if (!_s.Running)
-            return _s.LaunchArmed ? "ARMED" : "IDLE";
+            return _s.LaunchArmed ? "ARMED" : _s.ConvexLaunchPending ? "PLANNING" : "IDLE";
         switch (_s.Phase)
         {
             case AscentPhase.Vertical: return "VERTICAL";
