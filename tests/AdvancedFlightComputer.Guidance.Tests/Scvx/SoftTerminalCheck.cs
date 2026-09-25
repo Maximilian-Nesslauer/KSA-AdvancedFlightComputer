@@ -1,4 +1,4 @@
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Does softening the terminal position turn "no plan" into "imperfect plan"?

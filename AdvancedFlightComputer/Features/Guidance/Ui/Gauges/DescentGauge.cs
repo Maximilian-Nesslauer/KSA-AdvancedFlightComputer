@@ -157,8 +157,8 @@ public static partial class GuidanceWindow
         GaugeRow("Aim altitude (km)", "##aimalt", ref _s.AimAltKm);
         GaugeRow("Descent rate (m/s)", "##descrate", ref _s.DescentRate);
         GaugeRow("Gate uprange (km)", "##gateuprange", ref _s.GateUprangeKm);
-        // Where the braking burn ends and G-FOLD takes over. It shapes this phase, so it belongs here rather than with the G-FOLD tuning.
-        GaugeRow("G-FOLD handoff T-gate (s)", "##gfoldhandoff", ref _s.GfoldHandoffTgo);
+        // Where the braking burn ends and the powered descent, 6-DOF or G-FOLD, takes over. It shapes this phase, so it belongs here rather than with either solver's tuning.
+        GaugeRow("Descent handoff T-gate (s)", "##gfoldhandoff", ref _s.GfoldHandoffTgo);
         GaugeRow("Vertical approach height (m)", "##verticalgate", ref _s.LandingVerticalGateM);
         ImGui.EndDisabled();
 

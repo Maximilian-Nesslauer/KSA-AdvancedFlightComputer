@@ -1,6 +1,6 @@
 using System.Runtime.InteropServices;
 
-namespace AdvancedFlightComputer.Guidance.Gfold;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 /// <summary>
 /// P/Invoke surface for clarabel_c.dll (third_party/clarabel, built by build/build-clarabel.ps1).

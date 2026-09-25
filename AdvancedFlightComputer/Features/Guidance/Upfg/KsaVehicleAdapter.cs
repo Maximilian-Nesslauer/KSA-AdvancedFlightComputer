@@ -30,8 +30,8 @@ public static class KsaVehicleAdapter
 
     private const double SeaLevelPressure = 101325.0;
 
-    // ambientPressure is in Pa, the pressure the live nozzles run at.
-    public static UpfgVehicle Build(Vehicle vehicle, double ambientPressure)
+    // ambientPressure is in Pa, the pressure the live nozzles run at. With a pressure grid, every stage also carries its full-throttle thrust at each grid pressure (see UpfgStage.ThrustAtPressure), scaled to the drain simulation's own figure at the sequence's model pressure so the duplicate-registration repair carries through.
+    public static UpfgVehicle Build(Vehicle vehicle, double ambientPressure, double[] pressureGrid = null)
     {
         var result = new UpfgVehicle();
 
@@ -85,6 +85,12 @@ public static class KsaVehicleAdapter
                         Seq = i,
                         Engines = phase.ActiveEngineCount,
                     };
+                    if (pressureGrid != null)
+                        SampleThrustVsPressure(tree, stage, PhaseParts(perf, j), ModelPressure(sequences[i].Environment), pressureGrid);
+                    HashSet<Part> parts = PhaseParts(perf, j);
+                    if (parts != null)
+                        foreach (Part part in parts)
+                            stage.Throttleable &= !HasSolidCore(part);
                     result.Stages.Add(stage);
                     if (burningStage == null)
                     {
@@ -123,6 +129,7 @@ public static class KsaVehicleAdapter
 
             a.MassDry = b.MassDry;
             a.Engines = Math.Max(a.Engines, b.Engines);
+            a.Throttleable &= b.Throttleable;
             stages.RemoveAt(i + 1);
         }
 
@@ -271,6 +278,27 @@ public static class KsaVehicleAdapter
         stage.Thrust *= ratio;
         stage.Isp *= ratio;
         result.BurningStageThrustRatio = ratio;
+    }
+
+    // The stage's thrust across a range of back pressures, as the ratio of the phase's design thrust at each pressure to its design thrust at the pressure the drain simulation used, times the stage's own thrust. A ratio rather than the raw engine sum so the figure agrees with Thrust at the model pressure exactly. Left unset when the phase's engines cannot be summed.
+    private static void SampleThrustVsPressure(PartTree tree, UpfgStage stage, HashSet<Part> phaseParts,
+                                               double modelPressure, double[] pressureGrid)
+    {
+        if (phaseParts == null || phaseParts.Count == 0)
+            return;
+        double modelThrust = PhaseThrustAtPressure(tree, phaseParts, modelPressure);
+        if (!(modelThrust > 0.0))
+            return;
+        var thrust = new double[pressureGrid.Length];
+        for (int g = 0; g < pressureGrid.Length; g++)
+        {
+            double ratio = PhaseThrustAtPressure(tree, phaseParts, pressureGrid[g]) / modelThrust;
+            if (!double.IsFinite(ratio) || ratio <= 0.0)
+                return;
+            thrust[g] = stage.Thrust * ratio;
+        }
+        stage.PressureGrid = (double[])pressureGrid.Clone();
+        stage.ThrustAtPressure = thrust;
     }
 
     // Design conditions, not live ones, make the ratio of two calls a pure pressure response, also for a solid part way through its grain.

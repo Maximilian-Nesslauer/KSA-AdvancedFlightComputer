@@ -1,4 +1,4 @@
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// How much does a cold solve cost at each node count, and how coarse can it afford

@@ -14,8 +14,14 @@
         "resolved": "0.3.6",
         "contentHash": "wYcs0x7Dtxn0xI3I3mXnUFLAxHFfj+iR8nfz8CIIXRXIPjvxxsfsGLmcvxzwmQR/HiPUW5XLyiWm3ga9MFaV2Q=="
       },
-      "advancedflightcomputer.guidance.gfold": {
+      "advancedflightcomputer.guidance.conic": {
         "type": "Project"
+      },
+      "advancedflightcomputer.guidance.gfold": {
+        "type": "Project",
+        "dependencies": {
+          "AdvancedFlightComputer.Guidance.Conic": "[1.0.0, )"
+        }
       },
       "advancedflightcomputer.guidance.numerics": {
         "type": "Project"
@@ -23,6 +29,7 @@
       "advancedflightcomputer.guidance.scvx": {
         "type": "Project",
         "dependencies": {
+          "AdvancedFlightComputer.Guidance.Conic": "[1.0.0, )",
           "AdvancedFlightComputer.Guidance.Numerics": "[1.0.0, )"
         }
       }

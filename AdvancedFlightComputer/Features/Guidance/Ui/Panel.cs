@@ -198,6 +198,8 @@ public static partial class GuidanceWindow
         {
             if (_panelTab == GuidanceTab.Boostback)
                 ExecuteBoostback(vehicle, orbit, parent);
+            else if (_panelTab == GuidanceTab.Ascent && _s.AscentMethod == AscentMethod.GravityTurn)
+                ExecuteGravityTurn(vehicle, orbit, parent);
             else if (_panelTab == GuidanceTab.Ascent)
                 ExecuteAscent(vehicle, orbit, parent);
             else if (_panelTab == GuidanceTab.Descent)

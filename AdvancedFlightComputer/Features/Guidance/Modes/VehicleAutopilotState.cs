@@ -5,6 +5,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using Brutal.Numerics;
+using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 using KSA;
@@ -331,6 +332,11 @@ public sealed class VehicleAutopilotState
 
     internal readonly AttitudeOwnership AttitudeOwnership = new();
 
+    /// <summary>
+    /// Which ascent the Ascent tab shows and EXECUTE starts: the CAT-S / UPFG ascent, or the separate gravity-turn one. Per vehicle, like the landing solver, because it decides what this craft's launch does.
+    /// </summary>
+    public GuidanceWindow.AscentMethod AscentMethod = GuidanceWindow.AscentMethod.CatsUpfg;
+
     // Ascent state.
     public GuidanceWindow.AscentPhase Phase = GuidanceWindow.AscentPhase.Vertical;
     public double TurnStartTime;
@@ -421,6 +427,51 @@ public sealed class VehicleAutopilotState
     public double TurnStartAltKm = 0.5;
     public double TurnRateDegS = 1.0;
 
+    // Convex ascent: the minimum-propellant ascent solved offline by SCvx and flown open loop to the UPFG hand-over. See Modes/ConvexAscent.cs.
+
+    /// <summary>The last finished plan, or null. Replaced whole by a recalculation, never edited.</summary>
+    public AscentPlan AscentPlan;
+
+    /// <summary>The solve in progress, or null.</summary>
+    public AscentPlanJob AscentPlanJob;
+
+    /// <summary>Set by the Calculate button; the sim step builds the problem, since only it may read the part tree.</summary>
+    public bool AscentPlanRequested;
+
+    public string AscentPlanStatus = "";
+
+    /// <summary>EXECUTE flies the plan in place of the vertical rise and gravity turn when there is a usable one.</summary>
+    public bool FlyConvexAscent = true;
+
+    /// <summary>The script's Saturn V limits: max-q 35 kPa and q-alpha 3500 Pa rad.</summary>
+    public double ConvexQMaxKpa = 35.0;
+    public double ConvexQAlphaMax = 3500.0;
+
+    /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
+    public double ConvexHandoverAltKm = 80.0;
+
+    /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. A stage burning a solid motor is held at 99 % whatever this says.</summary>
+    public double ConvexThrottleMinPct = 99.0;
+
+    public bool ShowConvexPlan = true;
+
+    /// <summary>The plan this flight is flying, latched at EXECUTE so a recalculation cannot swap it mid-climb; and when the climb began, which fixes where the drawn plan sits.</summary>
+    public AscentPlan FlyingPlan;
+    public double FlyingPlanLaunchTime = double.NaN;
+
+    /// <summary>The profile's previous command, which its turning rate is differenced against.</summary>
+    public double3 ConvexLastWant;
+
+    /// <summary>Where the flight is on the plan, as plan time; the planned stage it is burning, and the air speed it lit it at; the most speed it has gained in that stage; and the sim time of the last profile step. See ConvexAscentProfile.Advance.</summary>
+    public double ConvexPlanTime;
+    public int ConvexStage;
+    public double ConvexStageSpeed;
+    public double ConvexFastest;
+    public double ConvexLastTime = double.NaN;
+
+    /// <summary>Sim time the profile handed over to UPFG, while the command is still blending from the one to the other; NaN otherwise.</summary>
+    public double ConvexBlendStart = double.NaN;
+
     // Landing state.
     public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;
 
@@ -495,12 +546,13 @@ public sealed class VehicleAutopilotState
     public bool GfoldTabSelectPending;
 
     /// <summary>
-    /// Which solver flies the powered descent: G-FOLD by default, or the 6-DOF
-    /// successive-convexification one. Per vehicle rather than a panel-wide setting,
-    /// because the deorbit handoff READS it to decide what to start - so it describes
-    /// how this craft lands, not what the player last clicked.
+    /// Which solver flies the powered descent: the 6-DOF successive-convexification one
+    /// by default, or G-FOLD. Per vehicle rather than a panel-wide setting, because the
+    /// deorbit handoff READS it to decide what to start - so it describes how this craft
+    /// lands, not what the player last clicked. The handoff turns it off for a craft
+    /// 6-DOF cannot plan for, and hands that craft to G-FOLD instead.
     /// </summary>
-    public bool UseSixDofLanding;
+    public bool UseSixDofLanding = true;
     public bool TermTabSelectPending;
 
     /// <summary>

@@ -78,7 +78,8 @@ public static partial class GuidanceWindow
     /// </summary>
     private const long InsertionSearchIntervalMs = 1000;
 
-    public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal }
+    // Profile is the convex ascent's open-loop programme (see Modes/ConvexAscent.cs), flown in place of Vertical and Turn when there is a plan.
+    public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal, Profile }
 
     // Reset at the top of every Draw; see DrawAutoLaunchArming.
     private static bool _autoLaunchStepped;
@@ -134,6 +135,8 @@ public static partial class GuidanceWindow
             using (new ImGuiDisabledScope(!_s.ForceRoll))
                 ImGui.InputDouble("Roll angle (deg)", ref _s.ForceRollDeg);
         }
+
+        DrawConvexAscentLegacy(vehicle, orbit, parent);
 
         // Draw the launch-to-target controls, which have their own launch-window logic.
         DrawLaunchToTarget(vehicle, orbit, parent, bodyRadius);
@@ -226,6 +229,9 @@ public static partial class GuidanceWindow
         _s.Upfg.Reset();
         _s.RgoPeak = 0.0;
         _s.VgoPeak = 0.0;
+        _s.FlyingPlan = null;
+        _s.FlyingPlanLaunchTime = double.NaN;
+        _s.ConvexBlendStart = double.NaN;
         _s.Status = status;
     }
 
@@ -356,7 +362,23 @@ public static partial class GuidanceWindow
         _s.Status = "";
         _s.FailStreak = 0;
         _s.Running = true;
-        _s.Phase = AscentPhase.Vertical;
+        // The convex plan replaces the vertical rise and the gravity turn when there is one this vehicle can still fly; latched here, so a recalculation during the climb cannot swap it.
+        _s.FlyingPlan = null;
+        _s.FlyingPlanLaunchTime = double.NaN;
+        _s.ConvexLastWant = default;
+        _s.ConvexPlanTime = 0.0;
+        _s.ConvexFastest = 0.0;
+        _s.ConvexStage = 0;
+        _s.ConvexStageSpeed = 0.0;
+        _s.ConvexLastTime = double.NaN;
+        _s.ConvexBlendStart = double.NaN;
+        string convexWhy = "";
+        if (_s.FlyConvexAscent && ConvexPlanFlyable(vehicle, orbit, parent, out convexWhy))
+        {
+            _s.FlyingPlan = _s.AscentPlan;
+            _s.FlyingPlanLaunchTime = SimNow();
+        }
+        _s.Phase = _s.FlyingPlan != null ? AscentPhase.Profile : AscentPhase.Vertical;
         _s.HasCommand = false;
         _s.CommandDir = default;   // nothing to be continuous with: the slew starts fresh
         _s.LastSolveTime = double.NegativeInfinity;
@@ -372,7 +394,12 @@ public static partial class GuidanceWindow
         GuidanceLog.Info(vehicle, $"ascent started to {_s.PeKm:F0} x {_s.ApKm:F0} km, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg"
             + $", arg. Pe {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") + " deg" : "free")}"
             + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}"
-            + $", reserve {(_s.ReserveArmed ? _s.ReserveKg.ToString("F0") + " kg" : "off")}, turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s).");
+            + $", reserve {(_s.ReserveArmed ? _s.ReserveKg.ToString("F0") + " kg" : "off")}, "
+            + (_s.FlyingPlan != null
+                ? $"convex profile to {_s.ConvexHandoverAltKm:F0} km, planned {_s.FlyingPlan.Solution.FinalMass / 1000.0:F2} t to orbit"
+                : $"turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s"
+                  + (_s.FlyConvexAscent && _s.AscentPlan != null ? $", convex plan not flown: {convexWhy}" : ""))
+            + ").");
     }
 
     // The launch-to-target panel: target picker, chase-orbit offset, node direction, window countdown, and (when armed) a warp request plus the launch trigger.
@@ -559,14 +586,15 @@ public static partial class GuidanceWindow
             }
         }
 
-        UpdatePhase(vehicle, r, bodyRadius, stepDt);
+        UpdatePhase(vehicle, r, v, parent, bodyRadius, stepDt);
     }
 
     private const string NoThrustStatus = "No thrust - holding last solution (staging/coast).";
     private const double GuidanceLogIntervalS = 5.0;
 
     // Ascent phase state machine. Transitions cascade naturally over successive frames, so initializing mid-flight fast-forwards to the right phase. stepDt is the sim time since the previous step, for the command slew limit.
-    private static void UpdatePhase(Vehicle vehicle, double3 r, double bodyRadius, double stepDt)
+    private static void UpdatePhase(Vehicle vehicle, double3 r, double3 v, IParentBody parent,
+                                    double bodyRadius, double stepDt)
     {
         double3 up = double3.Normalize(r);
         double alt = r.Length() - bodyRadius;
@@ -600,11 +628,25 @@ public static partial class GuidanceWindow
                 }
                 break;
 
+            case AscentPhase.Profile:
+                // The convex programme hands over on altitude alone, not on the pitch profiles meeting as the gravity turn does: the plan was optimised through the air, UPFG takes the vacuum part it is good at. See ConvexProfileDone.
+                if (ConvexProfileDone(r, v, parent, bodyRadius, out string doneWhy))
+                {
+                    _s.Phase = AscentPhase.ClosedLoop;
+                    // The command turns onto UPFG's steering over ConvexBlendSeconds rather than slewing onto it: see ConvexBlendWeight.
+                    _s.ConvexBlendStart = SimNow();
+                    GuidanceLog.Debug(vehicle, $"closed loop from {alt / 1000.0:F1} km ({doneWhy}), air speed {AirSpeed(r, v, parent):F0} m/s, "
+                        + $"plan pitch {PitchOf(up, _s.CommandDir):F1} deg, UPFG pitch {upfgPitch:F1} deg, converged {_s.Upfg.Converged}; "
+                        + $"blending onto UPFG over {ConvexBlendSeconds:F0} s.");
+                }
+                break;
+
             case AscentPhase.ClosedLoop:
                 if (_s.Upfg.Converged && _s.Upfg.Tgo <= TerminalTgo)
                 {
                     _s.Phase = AscentPhase.Terminal;
                     _s.FrozenDir = steerNow;
+                    _s.ConvexBlendStart = double.NaN;   // a blend still running ends with the burn
                     // tgo is measured from the SOLVE, not from now - the solution can be most of a guidance cycle old by the time this trips, and counting that cycle twice is a whole second of extra burn.
                     _s.CutoffTime = _s.LastSolveTime + _s.Upfg.Tgo;
                     GuidanceLog.Debug(vehicle, $"terminal phase, attitude frozen at pitch {upfgPitch:F1} deg, cutoff in {_s.CutoffTime - SimNow():F1} s.");
@@ -632,10 +674,18 @@ public static partial class GuidanceWindow
                 }
                 break;
 
+            case AscentPhase.Profile:
+                want = ConvexProfileCommand(r, v, vehicle.TotalMass, parent, stepDt, out wantRate);
+                break;
+
             case AscentPhase.ClosedLoop:
                 // The law and the rate it implies, both from the evaluation above. i_f(tau) is continuous between cycles, so the guidance cadence stops being something the attitude has to be protected from.
                 want = steerNow;
                 wantRate = steerRate;
+                // Straight after a convex profile, turned onto that law over ConvexBlendSeconds.
+                double blend = ConvexBlendWeight();
+                if (blend < 1.0)
+                    want = ConvexBlendCommand(r, v, vehicle.TotalMass, parent, steerNow, blend, stepDt, out wantRate);
                 break;
 
             case AscentPhase.Terminal:
@@ -740,6 +790,7 @@ public static partial class GuidanceWindow
         AscentPhase.Turn => "gravity turn (open loop)",
         AscentPhase.ClosedLoop => "UPFG closed loop",
         AscentPhase.Terminal => "terminal (frozen)",
+        AscentPhase.Profile => "convex profile (open loop)",
         _ => "?",
     };
 

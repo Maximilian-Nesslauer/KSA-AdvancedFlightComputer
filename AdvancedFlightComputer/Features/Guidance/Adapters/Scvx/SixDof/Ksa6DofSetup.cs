@@ -6,7 +6,7 @@ using System;
 using BepuUtilities;
 using Brutal.Numerics;
 using KSA;
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Builds the 6-DOF solver's configuration from the LIVE vehicle and body, instead of the 6dof.py mirror values Scvx6DofConfig defaults to.

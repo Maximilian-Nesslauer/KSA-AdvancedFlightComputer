@@ -1,16 +1,18 @@
-namespace AdvancedFlightComputer.Guidance.Gfold;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 /// <summary>
 /// A conic program in the standard split form, independent of which solver runs it:
 ///
-///   minimize    c'x
+///   minimize    (1/2) x'Px + c'x
 ///   subject to  A x = b
 ///               G x + s = h,   s in K
 ///
 /// where K = R+^l x SOC(q[0]) x SOC(q[1]) x ... (no exponential cones).
 ///
+/// P is optional and G-FOLD leaves it null: its objective is linear. The convex ascent sets it for the squared penalties it prices its approximations with, which Clarabel takes directly rather than as epigraph cones.
+///
 /// The SPLIT form is kept as the assembly target because it is how
-/// <see cref="GfoldPlanner"/> naturally builds the problem - equalities and cone rows
+/// GfoldPlanner naturally builds the problem - equalities and cone rows
 /// are different constraints and are emitted separately. Both solvers want the two
 /// stacked into a single matrix with the equalities expressed as a leading ZERO cone;
 /// <see cref="SparseCcs.VStack"/> does that conversion, which is a concatenation and
@@ -20,6 +22,7 @@ namespace AdvancedFlightComputer.Guidance.Gfold;
 public sealed class ConicProblem
 {
     public required double[] C { get; init; }            // length n
+    public SparseCcs? P { get; init; }                   // n x n, upper triangle only (row <= col), optional
     public required SparseCcs G { get; init; }           // m x n
     public required double[] H { get; init; }            // length m
     public SparseCcs? A { get; init; }                   // p x n, optional

@@ -3,6 +3,7 @@
 
   <ItemGroup>
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Numerics.dll" TargetPath="AdvancedFlightComputer.Guidance.Numerics.dll" />
+    <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Conic.dll" TargetPath="AdvancedFlightComputer.Guidance.Conic.dll" />
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Gfold.dll" TargetPath="AdvancedFlightComputer.Guidance.Gfold.dll" />
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Scvx.dll" TargetPath="AdvancedFlightComputer.Guidance.Scvx.dll" />
   </ItemGroup>

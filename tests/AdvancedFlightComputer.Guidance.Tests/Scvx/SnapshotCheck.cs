@@ -1,4 +1,4 @@
-using AdvancedFlightComputer.Guidance.Scvx;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Is a solve a PURE FUNCTION of its inputs?

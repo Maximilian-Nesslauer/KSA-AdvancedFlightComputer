@@ -173,7 +173,7 @@ public static partial class GuidanceWindow
         bool wasOn = _showImpactOverlay;
         GaugeRowCheck("Show impact overlay", "##impactoverlay", ref _showImpactOverlay);
 
-        // The OVERLAY owns the prediction - see DrawBoostbackOverlay for why it must, rather than this tab. All that happens here is that switching the toggle on clears the throttle, so the first prediction lands on the next frame instead of up to 200 ms later.
+        // The OVERLAY owns the prediction, and runs only while this tab is on screen - see DrawBoostbackOverlay. All that happens here is that switching the toggle on clears the throttle, so the first prediction lands on the next frame instead of up to 200 ms later.
         if (_showImpactOverlay && !wasOn)
         {
             _s.ImpactTick = 0;

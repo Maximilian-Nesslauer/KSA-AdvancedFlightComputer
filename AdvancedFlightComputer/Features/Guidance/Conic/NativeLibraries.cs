@@ -1,12 +1,14 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
-namespace AdvancedFlightComputer.Guidance.Scvx;
+namespace AdvancedFlightComputer.Guidance.Conic;
 
 /// <summary>
 /// Single DllImportResolver registration for the whole assembly.
 ///
-/// NativeLibrary.SetDllImportResolver throws if called twice for the same assembly, so every native library called through P/Invoke from this assembly must use this resolver. A second [ModuleInitializer] would cause an InvalidOperationException during assembly load. Add new native libraries to the switch below, never as a new initializer.
+/// NativeLibrary.SetDllImportResolver throws if called twice for the same assembly, so every native library called through P/Invoke from this assembly must use this resolver. A second [ModuleInitializer] would cause an InvalidOperationException during assembly load. Add new native libraries to the switch, never as a new initializer.
+///
+/// Resolving from next to this assembly rather than the process working directory lets the same assembly work in the console runner, a test host, and the game.
 ///
 /// KSA ships for Windows and Linux, so one mod folder can hold both builds of the same library. Their file names differ, and the running platform loads only its own.
 /// </summary>
@@ -21,6 +23,7 @@ internal static class NativeLibraries
         {
             string? fileName = name switch
             {
+                "clarabel_c" => OperatingSystem.IsWindows() ? "clarabel_c.dll" : "libclarabel_c.so",
                 "scs" => OperatingSystem.IsWindows() ? "scs.dll" : "libscs.so",
                 _ => null,
             };

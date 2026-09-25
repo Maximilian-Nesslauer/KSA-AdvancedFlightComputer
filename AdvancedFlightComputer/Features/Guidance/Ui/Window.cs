@@ -73,8 +73,9 @@ public static partial class GuidanceWindow
             // The legacy window is hidden, but it was never ONLY a readout - it bound the ambient state to the focused vehicle and it gated everything below.
             // AcquireVehicle is that half, Current on the live path; the ImGui window and its tabs are what stop being drawn. Begin/End must stay paired, so this branch does neither rather than skipping just the one.
             vehicle = AcquireVehicle();
-            // Nothing sets this now, but it is a static that outlives a toggle: leave it stale and the ascent overlay would hide itself for the rest of the session. See DrawTrailingWindows.
+            // Nothing sets these now, but they are statics that outlive a toggle: left stale, the hidden window's tab would keep its overlays on screen. See DrawTrailingWindows.
             _landingTabActive = false;
+            _ascentTabActive = false;
         }
 
         // Skipped entirely if DrawBody threw - the exception propagates through the finally above, so this is only reached on a clean frame.
@@ -114,12 +115,15 @@ public static partial class GuidanceWindow
         double mu = parent.Mu;
         double bodyRadius = parent.MeanRadius;
 
-        _landingTabActive = false;   // set true below only while the Landing tab is open
+        // Set true below only while their tab is open.
+        _landingTabActive = false;
+        _ascentTabActive = false;
 
         if (ImGui.BeginTabBar("##navtabs"))
         {
             if (ImGui.BeginTabItem("Ascent"))
             {
+                _ascentTabActive = true;
                 DrawAscentTab(vehicle, orbit, parent, bodyRadius);
                 ImGui.EndTabItem();
             }
@@ -190,24 +194,28 @@ public static partial class GuidanceWindow
         DrawTermParamsWindow();
         DrawGfoldDebugWindow();
 
-        // Are we looking at a descent? Either window can say so - the legacy Landing tab, or the gauge panel sitting on a descent tab. Both the ascent overlay and the landing-site marker key off this, so that retargeting works from the new panel and the two overlays don't clutter each other's view. Guidance itself keeps running regardless of which tab is open.
-        //  Named rather than inverted: this previously read "anything but Ascent", which silently made every tab added afterwards a descent. Boostback is not one - it has no landing site to mark and no retarget click to arm.
-        bool descentUi = _landingTabActive
-            || (PanelVisible && (_panelTab == GuidanceTab.Descent
-                                    || _panelTab == GuidanceTab.Landing));
+        // WHICH TAB IS ON SCREEN, in either window: the legacy window's tabs, or the gauge panel's while it is open. Each phase's overlay is drawn, and does its work, only while its own tab is - with no AFC window open, or on another phase's tab, there is nothing to look at and nothing is computed for it. Guidance itself keeps running regardless of which tab is open.
+        //  Named rather than inverted: the descent test previously read "anything but Ascent", which silently made every tab added afterwards a descent.
+        bool ascentUi = _ascentTabActive || (PanelVisible && _panelTab == GuidanceTab.Ascent);
+        bool boostbackUi = PanelVisible && _panelTab == GuidanceTab.Boostback;
+        bool landingUi = _landingTabActive || (PanelVisible && _panelTab == GuidanceTab.Landing);
+        bool descentUi = landingUi || (PanelVisible && _panelTab == GuidanceTab.Descent);
 
-        // World-space overlays (each its own full-screen window, drawn after the panel so they layer correctly). Each no-ops unless toggled on.
-        if (!descentUi)
+        // World-space overlays (each its own full-screen window, drawn after the panel so they layer correctly). Each also no-ops unless its own toggle is on.
+        if (ascentUi)
             DrawAscentOverlay(viewport, orbit, parent, bodyRadius);
-        DrawGfoldOverlay(viewport, vehicle, orbit, parent);
-        Draw6DofOverlay(viewport, parent);
-        // Not gated on descentUi: an impact prediction is worth seeing on the way UP as well, and it no-ops unless its own toggle is on.
-        DrawBoostbackOverlay(viewport, vehicle, orbit, parent);
+        if (landingUi)
+        {
+            DrawGfoldOverlay(viewport, vehicle, orbit, parent);
+            Draw6DofOverlay(viewport, parent);
+        }
+        if (boostbackUi)
+            DrawBoostbackOverlay(viewport, vehicle, orbit, parent);
 
         // Landing-site marker: shown whenever a descent is on screen, so the target is visible for planning/UPFG, not only during a G-FOLD descent.
         //  AND ON BOOSTBACK, which the comment above previously say it had no business on.
         // That was true while the tab was only an aero workbench; the burn aims the predicted impact point at this same site, so the marker is the other half of the miss line the overlay draws and the thing RETARGET moves.
-        if (descentUi || (PanelVisible && _panelTab == GuidanceTab.Boostback))
+        if (descentUi || boostbackUi)
             DrawLandingSiteMarker(viewport, parent);
 
         // Clickable retargeting: while armed, a world click sets the new landing site.
