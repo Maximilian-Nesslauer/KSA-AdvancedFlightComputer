@@ -44,10 +44,29 @@ ABI checks must run on the target platform.
 
 ## Public CI
 
-`.github/workflows/guidance-native.yml` runs on pull requests, pushes to `main` and `powered-guidance`, and manual dispatch.
-Its Windows and Linux jobs run the same checks and upload exactly two native libraries per runtime.
+`.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and manual dispatch.
+Its Windows and Linux native jobs run the same checks and upload exactly two native libraries per runtime.
 Missing, empty, or extra artifact files fail the job.
-The jobs use read-only repository access and need no game files or private tokens.
+The native jobs use read-only repository access and need no game files or private tokens.
+
+The `mod` job then builds and packages the whole mod in Release, with the native libraries from both runtimes.
+It compiles against KSA reference assemblies, which keep the game's API and strip every method body.
+They live in a private Backblaze B2 bucket, not in this repository.
+`build/ci/fetch-ksa-refs.ps1` downloads the zip for `TestedGameVersion` in `Mod.cs`, using the `KSAREFS_ID` and `KSAREFS_KEY` secrets.
+Pull requests from forks get no secrets, so the job is skipped for them.
+The reference assemblies stay in the runner's temp folder and are never uploaded or cached.
+The package check in `GuidancePayload.targets` keeps game assemblies out of the uploaded mod zip.
+
+After installing a new KSA build, run `build/publish-ksa-refs.ps1` on a machine with the game.
+It reads the installed `KSA.dll` version and does nothing if that zip is already in the bucket.
+Otherwise it runs Refasmer on the game's managed DLLs, skipping the bundled .NET runtime and native libraries, and uploads the result.
+It needs `B2_APPLICATION_KEY_ID`, `B2_APPLICATION_KEY` and `B2_BUCKET`, set to a key that can write to the bucket.
+Until the zip for a new `TestedGameVersion` is uploaded, the `mod` job fails.
+
+`build/hooks/pre-push` runs this check on every push, once enabled with `git config core.hooksPath build/hooks`.
+It reads `TestedGameVersion` from each pushed commit and uploads the zip if it is missing and that build is installed.
+Otherwise it warns, and without the B2 variables it does nothing.
+It never blocks a push.
 
 Actions are pinned to commits.
 `install-native-tools.ps1` holds the Rust and Zig versions and hashes, including the Rust manifest used to verify compiler components.

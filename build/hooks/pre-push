@@ -1,0 +1,47 @@
+#!/bin/sh
+# Makes sure the KSA reference assemblies CI needs are in the B2 bucket before a push.
+#
+# CI's mod job fetches the refs for TestedGameVersion in Mod.cs. For each pushed branch or tag this
+# reads that version from the pushed commit and runs build/publish-ksa-refs.ps1 -Version on it,
+# which uploads the refs if they are missing and that build is installed, and warns otherwise.
+# It never blocks a push: a missing zip only fails the mod job, which says what to do.
+#
+# Enable it once per clone with:  git config core.hooksPath build/hooks
+# It needs B2_APPLICATION_KEY_ID, B2_APPLICATION_KEY and B2_BUCKET, and does nothing without them.
+
+zero=0000000000000000000000000000000000000000
+root=$(git rev-parse --show-toplevel) || exit 0
+script="$root/build/publish-ksa-refs.ps1"
+
+if [ -z "$B2_APPLICATION_KEY_ID" ] || [ -z "$B2_APPLICATION_KEY" ] || [ -z "$B2_BUCKET" ]; then
+    echo "pre-push: B2 credentials are not set, skipping the KSA refs check."
+    exit 0
+fi
+if [ ! -f "$script" ]; then
+    echo "pre-push: $script is not in this checkout, skipping the KSA refs check."
+    exit 0
+fi
+if command -v powershell.exe >/dev/null 2>&1; then
+    ps=powershell.exe
+elif command -v pwsh >/dev/null 2>&1; then
+    ps=pwsh
+else
+    echo "pre-push: PowerShell was not found, skipping the KSA refs check."
+    exit 0
+fi
+
+versions=$(
+    while read -r local_ref local_sha remote_ref remote_sha; do
+        [ "$local_sha" = "$zero" ] && continue
+        git show "$local_sha:AdvancedFlightComputer/Mod.cs" 2>/dev/null |
+            sed -n 's/.*TestedGameVersion *= *"v\{0,1\}\([^"]*\)".*/\1/p'
+    done | sort -u
+)
+
+for version in $versions; do
+    echo "pre-push: checking KSA $version reference assemblies in b2://$B2_BUCKET"
+    "$ps" -NoProfile -NonInteractive -ExecutionPolicy Bypass -File "$script" -Version "$version" ||
+        echo "pre-push: the KSA refs check failed (see above). Pushing anyway; CI's mod job may fail."
+done
+
+exit 0
