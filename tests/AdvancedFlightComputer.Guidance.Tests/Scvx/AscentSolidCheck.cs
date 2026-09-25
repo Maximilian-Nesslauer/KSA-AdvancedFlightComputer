@@ -141,6 +141,7 @@ internal static class AscentSolidCheck
         Console.WriteLine("ASCENT SCVX WITH SOLIDS: thrust curves, pinned burns, shared liquid loads (#73, #32)");
 
         TwoStage(verbose);
+        TwoStageAsFlown(verbose);
         CoreOutlasts(verbose);
         CoreThrottledDown(verbose, 0.4);
         CoreThrottledDown(verbose, 0.9);
@@ -196,6 +197,52 @@ internal static class AscentSolidCheck
             Console.WriteLine($"  to orbit: {before.FinalMass / 1000.0:F2} t with the mean, {after.FinalMass / 1000.0:F2} t with the curve; "
                 + $"altitude at booster burnout {(Radius(before, 0) - Re) / 1000.0:F1} km against {(Radius(after, 0) - Re) / 1000.0:F1} km, "
                 + $"speed {Speed(before, 0):F0} against {Speed(after, 0):F0} m/s");
+    }
+
+    // ---- 1b. 2stage as the game lays it out: the second stage's engine lit with the boosters and burning on after them, at 35 kPa and a 40 % floor. On 2026-09-25 the harness flew this and the plan converged at 35 kPa by pointing the thrust 44 deg below the horizon against the airflow to bleed off the boosters' speed - sin(alpha) is zero again at 180 deg - which no speed-indexed profile can fly. The plan must never thrust against the airflow; the planner then relaxes max-q as it should.
+    private static void TwoStageAsFlown(bool verbose)
+    {
+        Console.WriteLine();
+        Console.WriteLine("2stage as the game lays it out: the second stage lit with the boosters, 35 kPa, 40% floor");
+        const double m0 = 614.2e3, grain = 422.26e3, burn = 68.9, casings = 43.7e3, upperFlow = 222.9, upperLoad = 74.5e3 + 15.35e3;
+        double ve = 17738.714e3 / 6353.6, exitArea = (17738.714e3 - 16446.598e3) / 101325.0 / 2.0;
+        var motors = new[] { Motor("left", Regressive, burn, grain / 2, ve, exitArea), Motor("right", Regressive, burn, grain / 2, ve, exitArea) };
+        double end0 = m0 - grain - upperFlow * burn, start1 = end0 - casings, end1 = start1 - (upperLoad - upperFlow * burn), start2 = end1 - 8.1e3;
+        var phases = new[]
+        {
+            new AscentPhase { StartMass = m0, EndMass = end0, Duration = burn, Solids = [0, 1],
+                              LiquidThrust = 955.5e3, LiquidMassFlow = upperFlow, LiquidThrustAtPressure = LiquidTable(955.5e3, 723.7e3), LiquidEngines = [1] },
+            new AscentPhase { StartMass = start1, EndMass = end1, Duration = (upperLoad - upperFlow * burn) / upperFlow,
+                              LiquidThrust = 955.5e3, LiquidMassFlow = upperFlow, LiquidThrustAtPressure = LiquidTable(955.5e3, 723.7e3), LiquidEngines = [1] },
+            new AscentPhase { StartMass = start2, EndMass = start2 - 44.9e3, Duration = 44.9e3 / 222.7,
+                              LiquidThrust = 952.3e3, LiquidMassFlow = 222.7, LiquidThrustAtPressure = LiquidTable(952.3e3, 721.7e3), LiquidEngines = [2] },
+        };
+        AscentPhasePlan.Result plan = AscentPhasePlan.Build(phases, motors, Grid, m0, DragArea, 0.4, HeldFloor);
+        foreach (string d in plan.Describe) Console.WriteLine("    " + d);
+        AscentProblem p = Problem(plan.Stages, m0);
+        p = new AscentProblem
+        {
+            Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0, Stages = p.Stages,
+            Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
+            TargetRadialRate = p.TargetRadialRate, PlaneNormal = p.PlaneNormal, QMax = 35000.0, QAlphaMax = 3500.0,
+        };
+        p.Settings.ThrottleMin = 0.4;
+        AscentSolution s = Solve("plan", p, verbose);
+        Check("converges", s.Converged, s.Message);
+        if (s.Nodes == 0) return;
+        // The least cos(alpha) wherever the air loads the vehicle.
+        double least = 1.0, omega = OmegaE;
+        for (int k = 0; k < s.Nodes; k++)
+        {
+            if (s.DynamicPressure[k] < 100.0) continue;
+            double rx = s.Position[k * 3], ry = s.Position[k * 3 + 1];
+            double ax = s.Velocity[k * 3] + omega * ry, ay = s.Velocity[k * 3 + 1] - omega * rx, az = s.Velocity[k * 3 + 2];
+            double ux = s.Throttle[k * 3], uy = s.Throttle[k * 3 + 1], uz = s.Throttle[k * 3 + 2];
+            double c = (ax * ux + ay * uy + az * uz) / (Math.Sqrt(ax * ax + ay * ay + az * az) * Math.Sqrt(ux * ux + uy * uy + uz * uz));
+            least = Math.Min(least, c);
+        }
+        Check("thrust never points against the airflow where q loads the vehicle", least > 0.0, $"least cos(alpha) {least:F3}");
+        Check("the boosters' stage lasts their burn", Math.Abs(s.BurnTime[0] - burn) < 1e-6, $"{s.BurnTime[0]:F3} s");
     }
 
     private static double Radius(AscentSolution s, int stage)

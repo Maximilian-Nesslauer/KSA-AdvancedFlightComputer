@@ -15,6 +15,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///              ||u_k|| &lt;= 1,  u_bar_hat . u_k &gt;= throttle floor        throttle
 ///              r_bar_hat . r_k &gt;= R_floor,  m_k &gt;= m_floor              ground, structure
 ///              tangent q &lt;= backoff + s^q,  cone q-alpha &lt;= backoff + s^qa   where q_bar &gt; QActive
+///              -v_rel_bar_hat . u_k &lt;= s^pro                          thrust never against the airflow, there too
 ///              linearised insertion = s,  linearised prograde &gt;= 0     orbit
 ///              trust box on x, u, sigma;  sigma_min &lt;= sigma &lt;= sigma_max
 ///
@@ -32,7 +33,7 @@ internal sealed class AscentSubproblem
     private readonly AscentCase _c;
 
     // Variable layout.
-    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _nVar;
+    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _nVar;
     private readonly int _nA;
     private readonly int[] _act;
 
@@ -48,7 +49,8 @@ internal sealed class AscentSubproblem
         _oTerm = _oSig + c.S;
         _oSq = _oTerm + 5;
         _oSqa = _oSq + _nA;
-        _nVar = _oSqa + _nA;
+        _oSpro = _oSqa + _nA;
+        _nVar = _oSpro + _nA;
     }
 
     public int VariableCount => _nVar;
@@ -60,6 +62,7 @@ internal sealed class AscentSubproblem
     private int ITerm(int j) => _oTerm + j;
     private int ISq(int a) => _oSq + a;
     private int ISqa(int a) => _oSqa + a;
+    private int ISpro(int a) => _oSpro + a;
 
     /// <summary>A growable block of rows: triplets and a right-hand side.</summary>
     private sealed class Rows
@@ -82,7 +85,7 @@ internal sealed class AscentSubproblem
     }
 
     public sealed record Solved(bool Ok, string Status, double[] X, double[] U, double[] Wv,
-                                double[] Sigma, double[] STerm, double[] Sq, double[] Sqa,
+                                double[] Sigma, double[] STerm, double[] Sq, double[] Sqa, double[] Spro,
                                 int SolverIterations, double SolveMs);
 
     public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double tr)
@@ -234,11 +237,23 @@ internal sealed class AscentSubproblem
                     soc.Add(wr, IU(k, j), -lin.JwU[(k * 3 + r) * NU + j]);
             }
             socDims.Add(4);
+
+            // Thrust within 90 deg of the air-relative velocity, as a halfspace on the reference's airflow direction, slacked: -v_rel_hat . u <= s_pro. q-alpha is measured by sin(alpha), which is back to zero at 180 deg, so without this a stack whose thrust it cannot throttle meets the q limit by firing against the airflow to bleed off speed - a trajectory no speed-indexed profile can fly (#73). It never binds on a sane ascent.
+            double[] air = c.AirVelocity(xbar.AsSpan(k * NX, NX));
+            double an = AscentCase.Norm3(air);
+            if (an > 1e-12)
+            {
+                int pro = ineq.NewRow(0.0);
+                for (int j = 0; j < NU; j++)
+                    ineq.Add(pro, IU(k, j), -air[j] / an);
+                ineq.Add(pro, ISpro(a), -1.0);
+            }
         }
         for (int a = 0; a < _nA; a++)
         {
             ineq.Add(ineq.NewRow(0.0), ISq(a), -1.0);
             ineq.Add(ineq.NewRow(0.0), ISqa(a), -1.0);
+            ineq.Add(ineq.NewRow(0.0), ISpro(a), -1.0);
         }
 
         // ---- thrust ceiling ||u_k|| <= 1, a cone per node.
@@ -329,6 +344,7 @@ internal sealed class AscentSubproblem
         {
             cvec[ISq(a)] = st.RhoPath;
             cvec[ISqa(a)] = st.RhoPath;
+            cvec[ISpro(a)] = st.RhoPath;
         }
 
         var p = new SparseCcs(_nVar, _nVar);
@@ -376,12 +392,12 @@ internal sealed class AscentSubproblem
         ConicResult res = ClarabelSolver.Solve(problem, out ClarabelSolver.ClarabelSolveInfo info,
             maxIterations: st.SubproblemMaxIterations, eps: st.SubproblemEps);
         if (!res.IsOptimal || res.X.Length != _nVar)
-            return new Solved(false, res.Status.ToString(), [], [], [], [], [], [], [], res.Iterations, info.TotalMs);
+            return new Solved(false, res.Status.ToString(), [], [], [], [], [], [], [], [], res.Iterations, info.TotalMs);
 
         double[] x = res.X;
         return new Solved(true, res.Status.ToString(),
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
-            x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)],
+            x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
             res.Iterations, info.TotalMs);
     }
 

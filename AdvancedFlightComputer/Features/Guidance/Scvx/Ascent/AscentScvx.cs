@@ -144,7 +144,7 @@ public static class AscentScvx
             }
             catch (Exception e)
             {
-                sol = new AscentSubproblem.Solved(false, "exception: " + e.Message, [], [], [], [], [], [], [], 0, 0.0);
+                sol = new AscentSubproblem.Solved(false, "exception: " + e.Message, [], [], [], [], [], [], [], [], 0, 0.0);
             }
 
             if (!sol.Ok)
@@ -171,7 +171,7 @@ public static class AscentScvx
             double jLin = (1.0 - sol.X[(c.N - 1) * NX + 6]) + Smoothing(c, sol.U)
                 + st.RhoVirtualControl * SumSquaresScaled(sol.Wv, c.DScale)
                 + st.RhoTerminal * SumSquares(sol.STerm)
-                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum());
+                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum());
             Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma);
             double pred = refMerit.J - jLin;
             double actual = refMerit.J - cand.J;
@@ -290,13 +290,23 @@ public static class AscentScvx
             double q = c.Dyn.QValue(x.AsSpan(k * NX, NX));
             double vqa = Math.Max(0.0, qa / c.QAlphaMax - 1.0);
             double vq = Math.Max(0.0, q / c.QMax - 1.0);
-            path += vqa + vq;
-            pathWorst = Math.Max(pathWorst, Math.Max(vqa, vq));
+            // Thrust against the airflow, where the subproblem forbids it (AscentSubproblem): the true -v_rel_hat . u.
+            double vpro = q > st.QActive ? Math.Max(0.0, -AirAlong(c, x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU))) : 0.0;
+            path += vqa + vq + vpro;
+            pathWorst = Math.Max(pathWorst, Math.Max(Math.Max(vqa, vq), vpro));
         }
 
         double j0 = (1.0 - x[(n - 1) * NX + 6]) + Smoothing(c, u)
             + st.RhoVirtualControl * defect + st.RhoTerminal * term + st.RhoPath * path;
         return new Merit(j0, worst, pathWorst, termWorst);
+    }
+
+    /// <summary>The throttle vector's component along the air-relative velocity: |u| cos(alpha).</summary>
+    private static double AirAlong(AscentCase c, ReadOnlySpan<double> x, ReadOnlySpan<double> u)
+    {
+        double[] air = c.AirVelocity(x);
+        double an = AscentCase.Norm3(air);
+        return an > 1e-12 ? (air[0] * u[0] + air[1] * u[1] + air[2] * u[2]) / an : 0.0;
     }
 
     private static double Smoothing(AscentCase c, double[] u)

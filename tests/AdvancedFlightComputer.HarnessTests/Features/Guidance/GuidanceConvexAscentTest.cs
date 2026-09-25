@@ -363,15 +363,13 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.CheckAbs("flown inclination, deg", flown.Inclination * 180.0 / Math.PI, TargetIncDeg, InclinationTolDeg);
     }
 
-    // The plan's full-throttle thrust at a plan time: its node thrust over its node throttle, from the node nearest in time.
+    // The plan's full-throttle thrust at a plan time, liquids and solids, from the node nearest in time.
     private static double PlanThrustAt(AscentSolution sol, ConvexAscentProfile profile, double planTime)
     {
         int best = 0;
         for (int k = 1; k < sol.Nodes; k++)
             if (Math.Abs(sol.Time[k] - planTime) <= Math.Abs(sol.Time[best] - planTime)) best = k;
-        double u = Math.Sqrt(sol.Throttle[best * 3] * sol.Throttle[best * 3] + sol.Throttle[best * 3 + 1] * sol.Throttle[best * 3 + 1]
-                             + sol.Throttle[best * 3 + 2] * sol.Throttle[best * 3 + 2]);
-        return u > 1e-9 ? sol.Thrust[best] / u : double.NaN;
+        return sol.FullThrust.Length > best ? sol.FullThrust[best] : double.NaN;
     }
 
     private static void DespawnJettisoned(CelestialSystem system, HashSet<string> preexisting, Vehicle flying)
