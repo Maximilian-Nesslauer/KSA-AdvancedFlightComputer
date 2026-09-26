@@ -2,6 +2,7 @@ using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.MissionPlanner;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -47,5 +48,7 @@ internal static class SaveScopedState
         // Also disarms the AUTOSTAGE switch, so a loaded save does not stage until the player arms it again.
         StagingDetector.Reset();
         FinishedBurnRemover.Reset();
+        // An arrival is a sim time and the destination a body id, both from the world being replaced.
+        MissionPlannerWindow.Reset();
     }
 }

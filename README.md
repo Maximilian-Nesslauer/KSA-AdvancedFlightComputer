@@ -169,6 +169,16 @@ The hover refuses a craft whose thrust at minimum throttle exceeds its weight, b
 G-FOLD suits airless bodies and agile landers that point with RCS. The 6-DOF solver models the vehicle rotation, so it handles boosters with high rotational inertia and descents through an atmosphere.
 The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [guidance documentation](docs/guidance/README.md) for how it works.
 
+### Mission Planner
+
+Plans a launch to meet a moon of the body you are on, for now a lunar launch from Earth. Open it from **AFC Guidance > Mission planner**.
+
+- Pick when to arrive, starting from the soonest a transfer injected now can make it. The planner assumes an idealised Hohmann transfer from the parking orbit (200 x 200 km by default), injected at the point opposite where the Moon will be at arrival, so it aims at where the Moon will have moved to rather than where it is.
+- The parking orbit's plane has to contain the Moon at arrival, which leaves one of its two angles free. Set the inclination (the default, just above the launch site's latitude for the most easterly launch) and the LAN follows, or set the LAN and the inclination follows. Each inclination fits two planes, one meeting the Moon heading north and one heading south, and each shows its next launch window.
+- **LAUNCH NOW** sets the plane through the launch site and the Moon at arrival, so the window is now.
+- Below that are the next time the site passes under the plane, the launch heading, the injection time and roughly how long the craft coasts in the parking orbit before injecting.
+- **SEND TO ASCENT** makes the plane and the parking orbit the Ascent tab's target. EXECUTE there then arms for the same window, and warps to it with **Auto warp to window** on.
+
 ## Installation
 
 1. Install [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions](https://github.com/tsholmes/KittenExtensions) (the latter is only required for hyperbolic targets and the AUTOSTAGE gauge button).

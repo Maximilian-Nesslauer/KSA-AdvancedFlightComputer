@@ -5,6 +5,7 @@ using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.MissionPlanner;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -215,9 +216,13 @@ public sealed class Mod
         _maneuverTypesInjected = false;
     }
 
-    // The guidance panel is its own set of ImGui windows rather than a patch on a stock window, so it draws from the loader's hook after stock has drawn its viewports.
+    // The guidance panel and the mission planner are their own ImGui windows rather than patches on stock ones, so they draw from the loader's hook after stock has drawn its viewports.
     [StarMapAfterGui]
-    public void DrawGui(double dt) => GuidanceFeature.DrawGui();
+    public void DrawGui(double dt)
+    {
+        GuidanceFeature.DrawGui();
+        MissionPlannerWindow.DrawGui();
+    }
 
     [StarMapUnload]
     public void Unload()

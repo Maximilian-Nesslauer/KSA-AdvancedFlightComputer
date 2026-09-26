@@ -369,6 +369,11 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Launch-to-target: the vehicle to chase, and the chase orbit's offset.</summary>
     public string TargetId = "";
+
+    /// <summary>
+    /// Launch-to-plane: a plane sent from the mission planner, chased like a target vessel's while <see cref="TargetId"/> is empty - a launch window to arm for, and the four orbit inputs driven. Null for none. Picking a vessel or (none) in the target picker drops it.
+    /// </summary>
+    public AscentPlaneTarget PlaneTarget;
     public double ChaseOffsetKm = 20.0;
     public bool LaunchDescending;
     public bool AutoLaunch = true;

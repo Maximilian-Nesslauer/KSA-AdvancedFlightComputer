@@ -1,5 +1,6 @@
 using System.Reflection;
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.MissionPlanner;
 using KSA;
 using Brutal.ImGuiApi;
 using HarmonyLib;
@@ -142,6 +143,11 @@ internal static class GuidanceFeature
                 }
                 else
                     ImGui.Text(UnavailableReason);
+
+                // Plans without flying anything, so it is offered whether or not guidance is on. Sending a plan to the ascent says so when it is not.
+                bool planner = MissionPlannerWindow.Visible;
+                if (ImGui.MenuItem("Mission planner", "", ref planner, true))
+                    MissionPlannerWindow.Visible = planner;
 
                 // Keep release errors visible while the guidance panel is hidden.
                 string failure = GuidanceWindow.ReleaseFailure(Program.ControlledVehicle);

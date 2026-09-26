@@ -69,10 +69,14 @@ public static partial class GuidanceWindow
         if (driven)
         {
             ApplyChaseOrbit(in plan);
-            GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
-            // Greyed for a near-circular target, which has no argument of periapsis to copy.
-            using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))
-                GaugeRowCheck("Copy target arg. Pe", "##matchargpe", ref _s.MatchTargetArgPe);
+            // A target vessel's: a plane from the mission planner brings its own orbit, with no periapsis to copy.
+            if (_s.TargetId.Length > 0)
+            {
+                GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
+                // Greyed for a near-circular target, which has no argument of periapsis to copy.
+                using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))
+                    GaugeRowCheck("Copy target arg. Pe", "##matchargpe", ref _s.MatchTargetArgPe);
+            }
         }
 
         using (new ImGuiDisabledScope(driven))
@@ -129,8 +133,11 @@ public static partial class GuidanceWindow
                     new float4(1f, 0.6f, 0.3f, 1f));
                 break;
             case ChaseStatus.Ok:
-                GaugeRowText("Target orbit",
-                    $"{plan.TargetPeKm:F1} x {plan.TargetApKm:F1} km, inc {plan.IncDeg:F2} deg");
+                if (_s.TargetId.Length > 0)
+                    GaugeRowText("Target orbit",
+                        $"{plan.TargetPeKm:F1} x {plan.TargetApKm:F1} km, inc {plan.IncDeg:F2} deg");
+                else
+                    GaugeRowText("Mission plan", _s.PlaneTarget.Label);
                 // To IGNITION, which leads the plane crossing by LanLeadSeconds.
                 GaugeRowText("Launch window",
                     $"T-{plan.WaitSec:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")}, "
@@ -191,10 +198,22 @@ public static partial class GuidanceWindow
         ImGui.Text("Target");
         ImGui.NextColumn();
         ImGui.PushItemWidth(-1f);
-        if (ImGui.BeginCombo("##ascenttarget", _s.TargetId.Length > 0 ? _s.TargetId : "(none)"))
+        string preview = _s.TargetId.Length > 0 ? _s.TargetId
+            : _s.PlaneTarget != null ? PlaneTargetName(_s.PlaneTarget) : "(none)";
+        if (ImGui.BeginCombo("##ascenttarget", preview))
         {
             // Dropping the target frees the argument of periapsis again: the target's was only ever copied for the chase.
-            if (ImGui.Selectable("(none)", _s.TargetId.Length == 0) && _s.TargetId.Length > 0)
+            if (ImGui.Selectable("(none)", !HasLaunchTarget) && HasLaunchTarget)
+            {
+                _s.TargetId = "";
+                _s.PlaneTarget = null;
+                _s.ArgPeFixed = false;
+            }
+
+            // The plane last sent from the mission planner stays listed while a vessel is picked, so it can be picked back without sending it again.
+            if (_s.PlaneTarget != null
+                && ImGui.Selectable(PlaneTargetName(_s.PlaneTarget) + "##missionplan", _s.TargetId.Length == 0)
+                && _s.TargetId.Length > 0)
             {
                 _s.TargetId = "";
                 _s.ArgPeFixed = false;
@@ -220,6 +239,8 @@ public static partial class GuidanceWindow
         ImGui.PopItemWidth();
         ImGui.NextColumn();
     }
+
+    private static string PlaneTargetName(AscentPlaneTarget target) => "Mission plan: " + target.Label;
 
     // --- Ascent settings ---------------------------------------------------- How the vehicle flies the ascent, as opposed to where it is going.
     private static void DrawAscentSettingsSection(float innerW)
@@ -372,7 +393,7 @@ public static partial class GuidanceWindow
 
         GaugeRowCheck("Engage autopilot", "##engage", ref _s.Engage);
         // With a target the node is the next crossing, chosen for you; the box only decides for an ascent without one.
-        using (new ImGuiDisabledScope(_s.TargetId.Length > 0))
+        using (new ImGuiDisabledScope(HasLaunchTarget))
             GaugeRowCheck("Descending node (SE)", "##descending", ref _s.LaunchDescending);
         GaugeRowCheck("Show orbit & track", "##overlay", ref _showAscentOverlay);
 

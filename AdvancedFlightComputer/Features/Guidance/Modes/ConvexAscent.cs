@@ -129,7 +129,7 @@ public static partial class GuidanceWindow
 
     /// <summary>The lift-off EXECUTE would commit to: the launch window's instant when there is a target to wait for, now otherwise.</summary>
     private static double ExecuteLaunchInstant()
-        => _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime) ? Math.Max(_s.LaunchTargetTime, SimNow()) : SimNow();
+        => HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime) ? Math.Max(_s.LaunchTargetTime, SimNow()) : SimNow();
 
     /// <summary>Ask the sim step for a plan whose lift-off is at <paramref name="launchAt"/>, sim time, or now for NaN. A solve already running is left to finish: its plan is judged when it lands.</summary>
     private static void RequestAscentPlan(double launchAt)

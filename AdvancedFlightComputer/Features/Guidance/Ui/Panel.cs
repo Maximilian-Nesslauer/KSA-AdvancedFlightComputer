@@ -30,6 +30,9 @@ public static partial class GuidanceWindow
     private static GuidanceTab _panelTab = GuidanceTab.Ascent;
     private static LandingSubTab _landingSubTab = LandingSubTab.Powered;
 
+    // Set by the mission planner's SEND TO ASCENT, so the panel opens on the tab that shows what was sent. Consumed by the next tab bar.
+    private static bool _ascentTabSelectPending;
+
     private static void DrawGuidancePanel(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                           double bodyRadius)
     {
@@ -125,7 +128,8 @@ public static partial class GuidanceWindow
         if (ImGui.BeginTabBar("##panel_tabs"))
         {
             // Width is taken INSIDE each tab: the tab bar insets its content, and a region sized to the panel's inner width would overhang it.
-            if (ImGui.BeginTabItem("Ascent"))
+            if (ImGui.BeginTabItem("Ascent", _ascentTabSelectPending
+                    ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
             {
                 _panelTab = GuidanceTab.Ascent;
                 DrawAscentTabContent(vehicle, orbit, parent, bodyRadius,
@@ -162,6 +166,7 @@ public static partial class GuidanceWindow
             }
 
             ImGui.EndTabBar();
+            _ascentTabSelectPending = false;
         }
 
         _s.GfoldTabSelectPending = false;
