@@ -845,7 +845,6 @@ public static partial class GuidanceWindow
         ResetLandingEngineWait();
         ClearDeorbitPlanState();
         _s.GfoldApproach = GfoldApproach.Direct;
-        _s.TerminalIgnitionHeight = 0;
         _s.TerminalBurnSeconds = 0;
         _s.ReleaseWithoutEngineCut = false;
         _s.ShutdownRequested = false;
@@ -981,7 +980,7 @@ public static partial class GuidanceWindow
         // HOUSEKEEPING FIRST, ahead of the 6-DOF dispatch on purpose - that dispatch returns, so anything below it is skipped for a craft flying 6-DOF.
         //
         // Keep the staging model current even while the autopilot is idle: both EXECUTE handlers need a stage list the instant they are pressed, and this is the only point in the frame where it can be built without racing the game's own recompute on the vehicle worker thread. An idle craft needs it only while a panel shows it or a stage has a landing target, so the recompute does not run for every craft the player flies by hand. Gated to ~4 Hz on the wall clock, per vehicle, so time warp doesn't multiply it. It catches its own faults.
-        if (flying || PanelVisible || ShowLegacyWindow || AnyStageTargeted())
+        if (flying || PanelVisible || AnyStageTargeted())
             RefreshStageModel(vehicle);
 
         // After the stage model, because both want a part tree that has finished settling after a separation and this is the first point in the frame where that is true. It engages boostback, so a fault here counts as a failed step like a mode's.
@@ -1244,7 +1243,7 @@ public static partial class GuidanceWindow
         if (!_s.ControlAcquired && !_s.DeorbitNodeClaimed && !_s.FcResetPending && _s.Worker == null
             && !_s.Active && !_s.EngagePending && !_s.Converging && !_s.Running
             && !_s.LaunchArmed && !_s.LandingCutPending
-            && !_s.HasCommand && _s.GimbalMode == 0 && _s.Guidance == null
+            && !_s.HasCommand && _s.Guidance == null
             && _s.HandoverPendingUntil == double.NegativeInfinity
             && !ReferenceEquals(SixDofLog.Owner, _s)
             && _s.LandingPhase == LandingPhase.Idle && _s.BoostbackPhase == BoostbackPhase.Idle)
@@ -1269,7 +1268,6 @@ public static partial class GuidanceWindow
         _s.Active = false;
         _s.EngagePending = false;
         _s.Converging = false;
-        _s.GimbalMode = 0;
         _s.HandoverPendingUntil = double.NegativeInfinity;
 
         string failure = "";

@@ -48,7 +48,6 @@ public sealed class Ksa6DofGuidance
     public int LastIterations { get; private set; }
     public int AcceptedSteps { get; private set; }
     public double LastSolveMs { get; private set; }
-    public int SolveCount { get; private set; }
     public bool HasPlan => _planX.Length > 0;
 
     /// <summary>Plan duration (the solver's free final time), seconds.</summary>
@@ -159,9 +158,6 @@ public sealed class Ksa6DofGuidance
     ///  This is what the 3-DOF Gfold planner already does - fixed time-of-flight per solve with an outer bracket-and-golden-section search over it - and is the classic powered-descent formulation.
     /// </summary>
     public bool FixedTime { get; set; } = true;
-
-    /// <summary>Burn time committed at engage; receding horizon counts down from it.</summary>
-    public double CommittedSigma { get; private set; }
 
     /// <summary>Floor for the counted-down burn time, so the last cycles before arrival cannot divide by ~0.</summary>
     public double MinimumBurnTime { get; init; } = 1.0;
@@ -849,7 +845,6 @@ public sealed class Ksa6DofGuidance
         _planU = bestU;
         _planSigma = bestSigma;
         _published = new Ksa6DofPlan(bestX, bestU, bestSigma, simNow, _n);
-        CommittedSigma = bestSigma;
         _solveTime = simNow;
         PinSigma(bestSigma);
         Error = "";
@@ -959,7 +954,6 @@ public sealed class Ksa6DofGuidance
             MsPerAdmmIteration = 0.8 * MsPerAdmmIteration + 0.2 * sample;
         }
         LastIterations = _solver.IterationCount;
-        SolveCount++;
 
         AcceptedSteps = 0;
         foreach (ScvxIteration it in _solver.Trace)
@@ -1080,7 +1074,6 @@ public sealed class Ksa6DofGuidance
 
         // tau = r_T x T_body with r_T = (0,0,-LArm), i.e. the engine below the centre of mass - the model's own gimbal-torque relation, verbatim.
         torqueModel = new double3(_dyn.LArm * tdy, -_dyn.LArm * tdx, tauRoll);
-        LastLateralForce = new double2(tdx, tdy);
 
         // AXIAL THRUST IN NEWTONS, not a throttle fraction.
         //  This previously return thrust / _cfg.Tmax, and that was the systematic error behind the descend-until-it-loops behaviour. Tmax is fixed when the plan is built, so the moment the vehicle's real capability differs from it - a different ambient pressure, an engine out, propellant starvation - every commanded thrust is wrong by exactly that ratio. It is invisible to the MPC too: re-solving corrects the STATE, but the error is in the actuator mapping, so each new plan is executed just as wrongly as the last.
@@ -1140,41 +1133,6 @@ public sealed class Ksa6DofGuidance
         int k1 = Math.Min(k + 1, _n - 1);
         return a[k * NU + off] * (1 - f) + a[k1 * NU + off] * f;
     }
-
-    /// <summary>
-    /// Objective breakdown at the current plan. Fuel SHOULD dominate - if a regulariser is comparable to or larger than it, the optimiser is no longer solving min-fuel, and because both regularisers get cheaper as sigma grows the visible symptom is burn time pinned at its upper bound.
-    /// </summary>
-    public void ObjectiveTerms(out double fuel, out double controlSmoothing, out double rateDamping)
-    {
-        fuel = controlSmoothing = rateDamping = 0.0;
-        if (!HasPlan)
-            return;
-
-        double m0 = _planX[13];
-        fuel = (m0 - _planX[(_n - 1) * NX + 13]) / Math.Max(m0, 1.0);
-
-        double[] us = _cfg.ResolvedUScale;
-        for (int k = 0; k < _n - 1; k++)
-            for (int j = 0; j < NU; j++)
-            {
-                double d = (_planU[(k + 1) * NU + j] - _planU[k * NU + j]) / us[j];
-                controlSmoothing += _cfg.WDu * d * d;
-            }
-
-        for (int k = 0; k < _n; k++)
-            for (int i = 0; i < 3; i++)
-            {
-                double w = _planX[k * NX + 10 + i];
-                rateDamping += _cfg.WW * w * w;
-            }
-    }
-
-    /// <summary>
-    /// The LATERAL thrust the model believes it is producing, (tdx, tdy) in model body axes, N. The model rigidly couples this to pitch/yaw torque through a SINGLE engine at LArm: tau = r_T x T_body. The real vehicle does not - the allocator makes the requested torque using every gimbal it has, including verniers, and its lateral force is whatever that geometry gives.
-    ///  If the two disagree, the plan's TRANSLATIONAL dynamics are wrong even though attitude tracks: the vehicle gets a different sideways push than planned.
-    /// Compare against KsaGimbalControl.LastAllocation.AchievedForce.
-    /// </summary>
-    public double2 LastLateralForce { get; private set; }
 
     /// <summary>Plan node 0 in model coordinates - where the plan believes the vehicle is.</summary>
     public double3 PlanOrigin => HasPlan

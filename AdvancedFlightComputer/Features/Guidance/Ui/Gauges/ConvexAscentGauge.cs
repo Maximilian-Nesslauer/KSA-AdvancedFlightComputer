@@ -18,7 +18,7 @@ public static partial class GuidanceWindow
     private static readonly float4 CvxFail = new(1f, 0.45f, 0.4f, 1f);
 
     /// <summary>
-    /// The convex ascent's lines at the top of the window, with the other status messages: the calculation in progress - the one EXECUTE is waiting on, or one asked for to look at - and, when EXECUTE's did not converge, the choice that leaves. Drawn above the tabs in the gauge panel and the legacy window alike, so a launch waiting on its plan, or refused for want of one, is never behind a fold.
+    /// The convex ascent's lines at the top of the window, with the other status messages: the calculation in progress - the one EXECUTE is waiting on, or one asked for to look at - and, when EXECUTE's did not converge, the choice that leaves. Drawn above the tabs in the gauge panel, so a launch waiting on its plan, or refused for want of one, is never behind a fold.
     /// </summary>
     private static void DrawConvexLaunchBanner(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
@@ -308,38 +308,5 @@ public static partial class GuidanceWindow
         dl.AddText(origin + new float2(padL, size.Y - padBot + 1f), axisCol, $"{xMin:G4}");
         string xm = $"{xMax:G4}";
         dl.AddText(origin + new float2(size.X - padR - 8f * xm.Length, size.Y - padBot + 1f), axisCol, xm);
-    }
-
-    // --- the legacy window ---------------------------------------------------------
-
-    /// <summary>The same controls in the legacy window's flat style, without the plots.</summary>
-    private static void DrawConvexAscentLegacy(Vehicle vehicle, Orbit orbit, IParentBody parent)
-    {
-        if (!ImGui.CollapsingHeader("Convex ascent (SCvx)", ImGuiTreeNodeFlags.DefaultOpen))
-            return;
-        bool busy = _s.AscentPlanJob != null || _s.AscentPlanRequested;
-        ImGui.Checkbox("Fly convex profile", ref _s.FlyConvexAscent);
-        using (new ImGuiDisabledScope(busy))
-        {
-            ImGui.InputDouble("Max q (kPa)", ref _s.ConvexQMaxKpa);
-            ImGui.InputDouble("Max q-alpha (Pa rad)", ref _s.ConvexQAlphaMax);
-            ImGui.InputDouble("Min throttle (%)", ref _s.ConvexThrottleMinPct);
-        }
-        ImGui.InputDouble("UPFG from (km)", ref _s.ConvexHandoverAltKm);
-        ImGui.Checkbox("Show plan", ref _s.ShowConvexPlan);
-        DrawConvexButtons();
-
-        AscentPlanJob job = _s.AscentPlanJob;
-        if (job != null)
-        {
-            if (job.Retry.Length > 0)
-                ColoredWrapped(CvxWarn, job.Retry);
-            ImGui.TextColored(CvxLive, $"{job.Progress} ({job.ElapsedSeconds:F0} s)");
-        }
-        else if (_s.AscentPlanStatus.Length > 0)
-            ImGui.TextColored(_s.AscentPlan?.Usable == true ? CvxGood : CvxWarn, _s.AscentPlanStatus);
-        if (_s.AscentPlan?.Usable == true && !_s.Running && _s.FlyConvexAscent)
-            ImGui.TextColored(ConvexPlanFlyable(vehicle, orbit, parent, ExecuteLaunchInstant(), out string why) ? CvxGood : CvxWarn,
-                why.Length == 0 ? "EXECUTE flies this plan." : "EXECUTE calculates a new plan first: " + why);
     }
 }

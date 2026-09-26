@@ -375,15 +375,4 @@ public static class KsaVehicleAdapter
         return false;
     }
 
-    // This returns the current start mass from the game's model, which is index 0's WetMass. The UI compares it with Vehicle.TotalMass because the values come from different code paths.
-    public static double CurrentStageWetMass(Vehicle vehicle)
-    {
-        PartTree tree = vehicle?.Parts;
-        SequencePerformanceList performanceList = tree?.PerformanceSequences;
-        if (performanceList == null)
-            return 0.0;
-
-        ReadOnlySpan<SequencePerformance> performance = performanceList.PerformanceSequences;
-        return performance.Length > 0 ? performance[0].WetMass : 0.0;
-    }
 }

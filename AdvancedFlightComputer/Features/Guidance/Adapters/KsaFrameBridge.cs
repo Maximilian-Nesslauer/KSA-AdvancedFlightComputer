@@ -199,31 +199,4 @@ public static class KsaFrameBridge
         c2 = new double3(2 * (qx * qz + qw * qy), 2 * (qy * qz - qw * qx), 1 - 2 * (qx * qx + qy * qy));
     }
 
-    /// <summary>
-    /// Where the model says the vehicle's thrust axis points, in CCI. This is the output a guidance mode would steer on, and the cheapest end-to-end check that the bridge is right: it must agree with the vehicle's ACTUAL thrust axis.
-    /// </summary>
-    public static double3 ModelThrustAxisToCci(double qw, double qx, double qy, double qz,
-                                               in SiteFrame frame)
-    {
-        QuatToMatrix(qw, qx, qy, qz, out _, out _, out double3 c2);   // model body +Z
-        return frame.VecToCci(c2);
-    }
-
-    /// <summary>
-    /// Round-trip check: convert the live attitude into the model and back out, and report how far the recovered thrust axis is from the real one, in degrees.
-    ///  This is the test that justifies trusting everything above. It catches an axis swap, a quaternion handedness error, a transposed site frame, and a sign flip
-    /// - all at once, all of which are otherwise invisible until the vehicle is tumbling. Expect ~1e-13 deg; anything above ~1e-6 deg means a real bug.
-    /// </summary>
-    public static double RoundTripErrorDeg(Vehicle vehicle, in SiteFrame frame)
-    {
-        ModelAttitude(vehicle, frame, out double qw, out double qx, out double qy, out double qz);
-        double3 recovered = ModelThrustAxisToCci(qw, qx, qy, qz, frame);
-
-        BodyToCciColumns(vehicle, out double3 b0, out double3 b1, out double3 b2);
-        BodyAxes(vehicle, out _, out _, out double3 mz);
-        double3 actual = double3.Normalize(mz.X * b0 + mz.Y * b1 + mz.Z * b2);
-
-        double dot = Math.Clamp(double3.Dot(double3.Normalize(recovered), actual), -1.0, 1.0);
-        return Math.Acos(dot) * 180.0 / Math.PI;
-    }
 }

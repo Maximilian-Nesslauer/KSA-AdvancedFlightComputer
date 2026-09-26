@@ -9,9 +9,7 @@ using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // The Ascent tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT buttons live in Ui/Panel.cs; everything here draws inside the body child that panel opens, so it is plain ImGui under ImGaugeDressing's styling.
-//  The point of the restructure is that the legacy tab put thirty controls in one flat list, so the four that matter - the target orbit - sat among solver tuning.
-// Here the two sections that shape a launch are open, and everything else is folded away behind "Expert settings", collapsed until asked for.
-//  It shares VehicleAutopilotState with the legacy Ascent tab, so both drive the same guidance; the tab can be deleted once this has flown.
+//  The two sections that shape a launch - the target orbit above all - are open, and everything else is folded away behind "Expert settings", collapsed until asked for.
 public static partial class GuidanceWindow
 {
     private static void DrawAscentTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,

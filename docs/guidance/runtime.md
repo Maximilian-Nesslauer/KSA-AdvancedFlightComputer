@@ -56,7 +56,7 @@ Guidance has no stager of its own. `AutoSequence` arms AFC's AutoStage feature f
 | `Control` | The actuator boundary: `GimbalControl` and `TvcAllocator` for thrust vectoring, `AttitudeRate` for the rate feedforward, `EnginePerf` for engine capability and thrust inversion, `AttitudeOwnership` for the fields guidance writes. |
 | `Adapters` | Game data conversion for the solvers: `KsaGfold` for G-FOLD; `Scvx/SixDof` for the 6-DOF path, `Ksa6DofSetup` and `Ksa6DofGuidance` with the solve worker and its telemetry log; `Scvx/Ascent` for the convex ascent's `KsaAscentPlan`; and, shared between them, `KsaFrameBridge` and the `KsaAeroSweep` drag table. |
 | `Upfg` | The double-precision UPFG port and `KsaVehicleAdapter`, which builds the stage model from the stock sequence performance and scales the burning stage to the craft's ambient pressure. |
-| `Ui` | The panel shell in `Panel.cs`, the per-tab content in `Gauges`, the world-space overlays in `Overlays`, and the legacy diagnostic window in `Window.cs`, off by default. |
+| `Ui` | The panel shell in `Panel.cs`, the per-tab content in `Gauges`, the world-space overlays in `Overlays`, and the per-frame entry point that draws them in `Window.cs`. |
 | `Numerics`, `Conic`, `Gfold`, `Scvx` | The four game-independent projects, built as their own assemblies so their checks run with no game. `Conic` holds the Clarabel and SCS bindings both planners solve with. |
 
 The whole game-facing part is one `partial class GuidanceWindow` in the `AdvancedFlightComputer.Features.Guidance` namespace, so the folders organise the files without changing their scope.

@@ -15,9 +15,6 @@ public enum GimbalOverrideMode
     /// <summary>Write the same normalized deflection to every gimbal. Plumbing check only.</summary>
     Direct = 1,
 
-    /// <summary>Normalized body-frame demand through a replica of KSA's own per-gimbal heuristic. For comparison.</summary>
-    Torque = 2,
-
     /// <summary>Physical body torque in N*m through a least-squares allocation. The interface guidance should use.</summary>
     Lsq = 3,
 }
@@ -31,16 +28,15 @@ public static class KsaGimbalControl
 {
     /// <summary>
     /// One vehicle's gimbal demand, published whole.
-    ///  A record because the apply side runs on a VehicleSolvers JOB THREAD while the demand is written on the sim thread: reading nine loose fields there could pair a new mode with an old torque. One reference assignment cannot.
+    ///  A record because the apply side runs on a VehicleSolvers JOB THREAD while the demand is written on the sim thread: reading six loose fields there could pair a new mode with an old torque. One reference assignment cannot.
     /// </summary>
     public sealed record Command(
         GimbalOverrideMode Mode,
         float CommandY, float CommandZ,                         // Direct
-        float TorqueRoll, float TorquePitch, float TorqueYaw,   // Torque (normalised)
         double TorqueXNm, double TorqueYNm, double TorqueZNm)   // Lsq (N.m)
     {
         public static readonly Command Off =
-            new(GimbalOverrideMode.Off, 0, 0, 0, 0, 0, 0, 0, 0);
+            new(GimbalOverrideMode.Off, 0, 0, 0, 0, 0);
     }
 
     /// <summary>
@@ -62,11 +58,6 @@ public static class KsaGimbalControl
 
         /// <summary>Diagnostics from the last Lsq allocation, for the UI readout.</summary>
         public TvcAllocationResult LastAllocation;
-
-        /// <summary>
-        /// Commands from the last Lsq allocation, 2 per gimbal (Y then Z). Written by the worker, read by the UI for display only - an occasional torn read just means one frame of a stale number in a readout.
-        /// </summary>
-        public ReadOnlySpan<double> LastCommands => Commands;
     }
 
     /// <summary>
@@ -95,24 +86,16 @@ public static class KsaGimbalControl
     {
         Slot s = SlotFor(vehicle);
         if (s != null)
-            s.Cmd = new Command(GimbalOverrideMode.Lsq, 0, 0, 0, 0, 0,
+            s.Cmd = new Command(GimbalOverrideMode.Lsq, 0, 0,
                                 torqueNm.X, torqueNm.Y, torqueNm.Z);
     }
 
-    /// <summary>Command raw deflections on every gimbal. Manual probe only.</summary>
+    /// <summary>Command raw deflections on every gimbal. A plumbing check, used by the harness.</summary>
     public static void SetDirect(Vehicle vehicle, float y, float z)
     {
         Slot s = SlotFor(vehicle);
         if (s != null)
-            s.Cmd = new Command(GimbalOverrideMode.Direct, y, z, 0, 0, 0, 0, 0, 0);
-    }
-
-    /// <summary>Command a normalised body-frame torque, KSA's own convention.</summary>
-    public static void SetTorque(Vehicle vehicle, float roll, float pitch, float yaw)
-    {
-        Slot s = SlotFor(vehicle);
-        if (s != null)
-            s.Cmd = new Command(GimbalOverrideMode.Torque, 0, 0, roll, pitch, yaw, 0, 0, 0);
+            s.Cmd = new Command(GimbalOverrideMode.Direct, y, z, 0, 0, 0);
     }
 
     /// <summary>Hand this vehicle's gimbals back to the game.</summary>
@@ -141,16 +124,13 @@ public static class KsaGimbalControl
         if (mode == GimbalOverrideMode.Off)
             return;
 
-        float3 com = flightComputer.CenterOfMassAsmb;
-
         if (mode == GimbalOverrideMode.Lsq)
         {
-            ApplyLsq(st, cmd, cfg, com, ref outputs, ref receipt);
+            ApplyLsq(st, cmd, cfg, flightComputer.CenterOfMassAsmb, ref outputs, ref receipt);
             return;
         }
 
-        float directY = cmd.CommandY, directZ = cmd.CommandZ;
-        var demand = new double3(cmd.TorqueRoll, cmd.TorquePitch, cmd.TorqueYaw);
+        // Direct: the same deflection on every gimbal.
         int applied = 0;
 
         foreach (GimbalController gimbal in cfg.Gimbals)
@@ -162,20 +142,9 @@ public static class KsaGimbalControl
             if (slot.Module == null)
                 continue;
 
-            float y, z;
-            if (mode == GimbalOverrideMode.Direct)
-            {
-                y = directY;
-                z = directZ;
-            }
-            else
-            {
-                Allocate(gimbal, com, demand, out y, out z);
-            }
-
             // Deliberately NOT gated on TotalThrust > 0, unlike the game's own ComputeTvcControl. An unlit engine still swings its nozzle visually, which is what makes this testable on the pad before committing to a burn.
-            slot.State.CommandY = y;
-            slot.State.CommandZ = z;
+            slot.State.CommandY = cmd.CommandY;
+            slot.State.CommandZ = cmd.CommandZ;
             applied++;
         }
 
@@ -238,50 +207,4 @@ public static class KsaGimbalControl
         st.AppliedCount = applied;
     }
 
-    /// <summary>
-    /// Distribute one body-frame torque demand onto a single gimbal - a faithful replica of the per-gimbal block inside FlightComputer.ComputeTvcControl.
-    ///  This is the layer worth commanding. KSA does NOT solve a control-allocation matrix; each gimbal independently works out, from pure geometry, which way to push to make torque in the demanded direction about ITS OWN moment arm:
-    ///  arm     = thrust-weighted nozzle position - centre of mass dir     = cross(normalize(cross(demand, armHat)), armHat) i.e. the lateral thrust direction perpendicular to the arm whose moment lies along the demand. That direction is rotated into the gimbal's own frame and its Y/Z components become the deflection command.
-    ///  The consequence - and the reason this is engine-config-agnostic - is that each gimbal is silently excluded from any axis it has no leverage over: an arm with no component in a plane cannot torque about the perpendicular axis, so that component of the demand is ZEROED FOR THIS GIMBAL ONLY. A centreline main engine therefore contributes pitch and yaw but no roll, while an off-axis vernier picks the roll up. Commanding torque rather than deflection means we inherit that split for free on any vehicle layout.
-    ///  Public so the UI can display exactly what the worker will command.
-    /// </summary>
-    public static void Allocate(GimbalController gimbal, float3 comAsmb, double3 demand,
-                                out float commandY, out float commandZ)
-    {
-        commandY = 0f;
-        commandZ = 0f;
-
-        float3 armF = gimbal.Data.ThrustPosVehicleAsmb - comAsmb;
-        var arm = new double3(armF.X, armF.Y, armF.Z);
-        double3 armHat = double3.NormalizeOrZero(arm);
-
-        // Per-axis leverage test, matching KSA's tolerance. Written out on components rather than via the double2 swizzles so the intent is legible: an arm lying along one axis has no moment about it.
-        double3 d = demand;
-        if (Math.Sqrt(armHat.X * armHat.X + armHat.Y * armHat.Y) < 1e-3) d.Z = 0.0;
-        if (Math.Sqrt(armHat.X * armHat.X + armHat.Z * armHat.Z) < 1e-3) d.Y = 0.0;
-        if (Math.Sqrt(armHat.Y * armHat.Y + armHat.Z * armHat.Z) < 1e-3) d.X = 0.0;
-
-        double3 axis = double3.NormalizeOrZero(double3.Cross(d, armHat));
-        double3 dir = double3.Cross(axis, armHat);
-        if (dir.Length() < 1e-3)
-            return;
-
-        dir = double3.NormalizeOrZero(dir);
-        double3 inGimbal = dir.Transform(doubleQuat.Unpack(in gimbal.Data.VehicleAsmb2Gimbal));
-        double3 scaled = inGimbal * d.Length();
-
-        commandY = (float)scaled.Y;
-        commandZ = (float)scaled.Z;
-    }
-
-    /// <summary>Which body axes this gimbal has any leverage over, for the UI readout.</summary>
-    public static void Leverage(GimbalController gimbal, float3 comAsmb,
-                                out bool roll, out bool pitch, out bool yaw)
-    {
-        float3 armF = gimbal.Data.ThrustPosVehicleAsmb - comAsmb;
-        double3 armHat = double3.NormalizeOrZero(new double3(armF.X, armF.Y, armF.Z));
-        yaw = Math.Sqrt(armHat.X * armHat.X + armHat.Y * armHat.Y) >= 1e-3;
-        pitch = Math.Sqrt(armHat.X * armHat.X + armHat.Z * armHat.Z) >= 1e-3;
-        roll = Math.Sqrt(armHat.Y * armHat.Y + armHat.Z * armHat.Z) >= 1e-3;
-    }
 }
