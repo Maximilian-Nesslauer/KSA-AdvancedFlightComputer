@@ -345,7 +345,20 @@ double dt = p4.Dt;
 ok &= Check("initial position", Dist(p4.Position[0], p.R0) < 1e-6);
 ok &= Check("final position", Dist(p4.Position[n1], p3.LandingPoint) < 1e-4);
 ok &= Check("final velocity", Dist(p4.Velocity[n1], p.Vf) < 1e-6);
-ok &= Check("mass >= dry", p4.Mass.All(m => m >= p.DryMass - 1e-6));
+
+// propellant budget: the formulation has none, so the caller compares (GfoldDescent.FitsFuel).
+// This case needs more than it carries, so the plan solves and the caller has to refuse it.
+ok &= Check($"caller refuses (needs {p4.FuelUsed:F1} kg, {p.FuelMass:F0} kg aboard)", p4.FuelUsed > p.FuelMass);
+
+// The same wet mass split with more propellant: the planner sees only the wet mass, so it
+// returns the same plan, and now the caller accepts it and the craft stays above dry mass.
+var pFit = new GfoldParams { DryMass = 1800, FuelMass = 500 };
+GfoldTrajectory p4Fit = GfoldPlanner.SolveMinFuel(pFit, tf, nodes, p3.LandingPoint);
+ok &= Check($"same plan for the same wet mass (fuel {p4Fit.FuelUsed:F1} kg)",
+    p4Fit.Status is ConicStatus.Optimal or ConicStatus.OptimalInaccurate
+    && Math.Abs(p4Fit.FuelUsed - p4.FuelUsed) < 1e-3);
+ok &= Check($"caller accepts (needs {p4Fit.FuelUsed:F1} kg, {pFit.FuelMass:F0} kg aboard)", p4Fit.FuelUsed <= pFit.FuelMass);
+ok &= Check("mass >= dry when it fits", p4Fit.Mass.All(m => m >= pFit.DryMass - 1e-6));
 
 // dynamics replay: trapezoidal integration of u + g must reproduce the states
 double[] g = [-p.GravityMag, 0, 0];
