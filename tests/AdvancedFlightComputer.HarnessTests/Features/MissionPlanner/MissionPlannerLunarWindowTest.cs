@@ -19,11 +19,16 @@ namespace AdvancedFlightComputer.HarnessTests;
 // for putting the site under that plane a lead after ignition, with the site carried by the game's own frames rather than the planner's
 // rotation. LAUNCH NOW's plane has to contain the site and the moon and quote a window of now. SEND TO ASCENT has to become the ascent's
 // target with the same window, which EXECUTE then arms for, and a committed ascent has to refuse the next one.
+//
+// IN-PLANE has to fly the moon's own orbit plane, the game's normal for it, which holds the moon at arrival with no tilt. A second pad,
+// low enough to be inside the moon's declination range, gets a window into it and the ascent the same window; the first pad, near the
+// range's edge, has to be refused exactly when its latitude is outside it.
 public sealed class MissionPlannerLunarWindowTest : AfcTest
 {
     public override string Name => "afc-mission-planner-lunar-window";
 
     private const double SiteLatDeg = 28.5;
+    private const double LowSiteLatDeg = 10.0;
     private const double PadHeightM = 2000.0;
     private const double ParkingKm = 200.0;
     private const double ArrivalAfterSoonestS = 2.0 * 86400.0;
@@ -59,21 +64,16 @@ public sealed class MissionPlannerLunarWindowTest : AfcTest
             return;
         }
 
-        UniverseTime now = Universe.GetElapsedTime();
-        double lat = SiteLatDeg * Math.PI / 180.0;
-        double3 dirCci = double3.Normalize(new double3(Math.Cos(lat), 0.0, Math.Sin(lat)).Transform(home.GetCcf2Cci()));
-        double3 r = dirCci * (home.MeanRadius + PadHeightM);
-        double3 v = double3.Cross(new double3(0.0, 0.0, home.GetAngularVelocity()), r);
-        Orbit pad = Orbit.CreateFromStateCci(home, now, r, v, VehicleSpawner.OrbitLineColor);
-        Vehicle vehicle = VehicleFixtures.SpawnFromSaveData(t.System, home, save.VehicleSaveData, "MissionPlannerPad", pad);
-
+        Vehicle vehicle = SpawnPad(t, home, save, "MissionPlannerPad", SiteLatDeg);
+        Vehicle? low = null;
         VehicleAutopilotState previousAmbient = AmbientState();
         bool previousModActive = GuidanceWindow.ModActive;
         bool previousEnabled = SharedVehicleHooks.GuidanceEnabled;
         bool previousPanel = GuidanceWindow.PanelVisible;
         try
         {
-            Run(t, home, moon, vehicle);
+            low = SpawnPad(t, home, save, "MissionPlannerPadLow", LowSiteLatDeg);
+            Run(t, home, moon, vehicle, low);
         }
         finally
         {
@@ -83,10 +83,26 @@ public sealed class MissionPlannerLunarWindowTest : AfcTest
             GuidanceWindow.PanelVisible = previousPanel;
             AmbientState() = previousAmbient;
             VehicleSpawner.Despawn(vehicle);
+            if (low != null)
+            {
+                VehicleAutopilotState.Remove(low);
+                VehicleSpawner.Despawn(low);
+            }
         }
     }
 
-    private static void Run(TestContext t, IParentBody home, Celestial moon, Vehicle vehicle)
+    // Co-rotating over a pad at the given latitude, a little above the mean radius. Nothing steps the sim, so it stays where it is put.
+    private static Vehicle SpawnPad(TestContext t, IParentBody home, VehicleSave save, string id, double latDeg)
+    {
+        double lat = latDeg * Math.PI / 180.0;
+        double3 dirCci = double3.Normalize(new double3(Math.Cos(lat), 0.0, Math.Sin(lat)).Transform(home.GetCcf2Cci()));
+        double3 r = dirCci * (home.MeanRadius + PadHeightM);
+        double3 v = double3.Cross(new double3(0.0, 0.0, home.GetAngularVelocity()), r);
+        Orbit pad = Orbit.CreateFromStateCci(home, Universe.GetElapsedTime(), r, v, VehicleSpawner.OrbitLineColor);
+        return VehicleFixtures.SpawnFromSaveData(t.System, home, save.VehicleSaveData, id, pad);
+    }
+
+    private static void Run(TestContext t, IParentBody home, Celestial moon, Vehicle vehicle, Vehicle low)
     {
         double now = Universe.GetElapsedSeconds();
         double mu = home.Mu;
@@ -146,6 +162,99 @@ public sealed class MissionPlannerLunarWindowTest : AfcTest
 
         CheckLaunchNow(t, home, moon, vehicle, now, arrival, inputs);
         CheckSendToAscent(t, home, vehicle, now, north);
+        CheckDeclinationSwing(t, moon, vehicle, low, now, arrival, inputs);
+        CheckInPlane(t, home, moon, vehicle, low, now, arrival, inputs);
+    }
+
+    // The moon's declination swings through its orbit, but its plane does not move: the swing peaks at the plane's inclination every
+    // orbit, which is what the in-plane check compares the site with. The swing does move the least inclination of a plane through the
+    // moon at arrival, which is the site's latitude only while the moon is inside it.
+    private static void CheckDeclinationSwing(TestContext t, Celestial moon, Vehicle high, Vehicle low, double now, double arrival,
+                                              LunarLaunchInputs inputs)
+    {
+        LunarLaunchPlan plan = LunarLaunchPlanner.Solve(high, moon, now, inputs);
+        double peak = 0.0;
+        const int Samples = 4000;
+        for (int i = 0; i < Samples; i++)
+        {
+            double3 r = LunarLaunchPlanner.MoonAt(moon, now + i * moon.Orbit.Period / Samples);
+            peak = Math.Max(peak, Math.Abs(Math.Asin(r.Z / r.Length())) * 180.0 / Math.PI);
+        }
+        t.CheckAbs("over an orbit the moon's declination peaks at its plane's inclination, deg", peak, plan.MoonMaxDeclinationDeg, 1e-3);
+
+        // The window's monthly cycle: the next northern and southern peaks, found by search rather than by sampling.
+        LunarLaunchPlanner.DeclinationPeaks peaks = LunarLaunchPlanner.NextDeclinationPeaks(moon, now);
+        double period = moon.Orbit.Period;
+        t.Info($"{moon.Id}'s next peaks: +{peaks.NorthDeg:F4} deg in {(peaks.NorthTime - now) / 86400.0:F2} d, "
+            + $"{peaks.SouthDeg:F4} deg in {(peaks.SouthTime - now) / 86400.0:F2} d.");
+        t.CheckAbs("the next northern peak is the plane's inclination, deg", peaks.NorthDeg, plan.MoonMaxDeclinationDeg, 1e-6);
+        t.CheckAbs("and the southern peak its negative, deg", peaks.SouthDeg, -plan.MoonMaxDeclinationDeg, 1e-6);
+        t.Check("both within the next orbit, about half an orbit apart",
+            peaks.NorthTime >= now && peaks.NorthTime <= now + period && peaks.SouthTime >= now && peaks.SouthTime <= now + period
+            && Math.Abs(Math.Abs(peaks.NorthTime - peaks.SouthTime) / period - 0.5) < 0.1,
+            $"{(peaks.NorthTime - now) / 86400.0:F2} d and {(peaks.SouthTime - now) / 86400.0:F2} d of a {period / 86400.0:F2} d orbit");
+        t.CheckAbs("the declination readout is the moon's position in the equatorial frame, deg", LunarLaunchPlanner.DeclinationAt(moon, arrival),
+            plan.MoonDeclinationDeg, 1e-12);
+        double3 planeNow = double3.Normalize(double3.Cross(moon.Orbit.GetStateVectorsAt(new UniverseTime(now)).PositionCci,
+            moon.Orbit.GetStateVectorsAt(new UniverseTime(now)).VelocityCci));
+        double3 planeThen = UpfgTarget.OrbitNormal(Rad(plan.MoonOrbitIncDeg), Rad(plan.MoonOrbitLanDeg));
+        t.CheckAbs("and the plane it is in at arrival is the plane it is in now, deg",
+            Math.Acos(Math.Clamp(double3.Dot(planeNow, planeThen), -1.0, 1.0)) * 180.0 / Math.PI, 0.0, 1e-5);
+
+        double decAtArrival = Math.Abs(plan.MoonDeclinationDeg);
+        LunarLaunchPlan fromLow = LunarLaunchPlanner.Solve(low, moon, now, inputs);
+        t.Check("the least inclination is the site's latitude while the moon is inside it at arrival",
+            plan.LeastInclinationIsSite == (SiteLatDeg >= decAtArrival)
+            && Math.Abs(plan.LeastInclinationDeg - Math.Max(SiteLatDeg, decAtArrival)) < 1e-9,
+            $"{plan.LeastInclinationDeg:F3} deg from {SiteLatDeg:F1} deg with the moon at {decAtArrival:F3} deg");
+        t.Check("and the moon's declination at arrival once the moon is further out",
+            fromLow.LeastInclinationIsSite == (LowSiteLatDeg >= decAtArrival)
+            && Math.Abs(fromLow.LeastInclinationDeg - Math.Max(LowSiteLatDeg, decAtArrival)) < 1e-9,
+            $"{fromLow.LeastInclinationDeg:F3} deg from {LowSiteLatDeg:F1} deg with the moon at {decAtArrival:F3} deg");
+    }
+
+    private static void CheckInPlane(TestContext t, IParentBody home, Celestial moon, Vehicle high, Vehicle low, double now,
+                                     double arrival, LunarLaunchInputs inputs)
+    {
+        LunarLaunchPlan plan = LunarLaunchPlanner.Solve(low, moon, now, inputs with { Control = PlaneControl.InPlane });
+        t.Info($"{moon.Id}'s orbit plane: inclination {plan.MoonOrbitIncDeg:F3} deg, LAN {plan.MoonOrbitLanDeg:F3} deg, "
+            + $"declination range +/-{plan.MoonMaxDeclinationDeg:F3} deg.");
+        if (!t.Check("in-plane flies the moon's orbit plane", plan.HasPlane
+                && plan.IncDeg == plan.MoonOrbitIncDeg && plan.LanDeg == plan.MoonOrbitLanDeg, plan.Problem))
+            return;
+        double3 n = UpfgTarget.OrbitNormal(Rad(plan.IncDeg), Rad(plan.LanDeg));
+        t.CheckAbs("which is the game's own normal for the moon's orbit", double3.Dot(n, double3.Normalize(moon.Orbit.GetOrbitNormalCci())), 1.0, 1e-9);
+        t.CheckAbs("with no tilt to it, deg", plan.TiltToMoonOrbitDeg, 0.0, 1e-6);
+        t.CheckAbs("and the moon at arrival in it", double3.Dot(n, double3.Normalize(LunarLaunchPlanner.MoonAt(moon, arrival))), 0.0, 1e-9);
+        t.CheckAbs("its declination range is its inclination, deg", plan.MoonMaxDeclinationDeg,
+            Math.Min(plan.IncDeg, 180.0 - plan.IncDeg), 1e-9);
+        CheckWindow(t, home, low, now, plan, "moon's orbit");
+
+        // The check against the launch latitude, from the pad near the edge of the range.
+        LunarLaunchPlan edge = LunarLaunchPlanner.Solve(high, moon, now, inputs with { Control = PlaneControl.InPlane });
+        bool inside = Math.Abs(edge.SiteLatDeg) < edge.MoonMaxDeclinationDeg;
+        t.Check($"from {SiteLatDeg:F1} deg in-plane is offered exactly when the site is inside the declination range",
+            edge.SiteReachesPlane == inside && (inside || edge.Problem.Contains("declination range", StringComparison.Ordinal)),
+            $"{(inside ? "inside" : "outside")}; '{edge.Problem}'");
+
+        // Any other plane reports its tilt to the moon's.
+        LunarLaunchPlan other = LunarLaunchPlanner.Solve(low, moon, now, inputs);
+        double3 otherNormal = UpfgTarget.OrbitNormal(Rad(other.IncDeg), Rad(other.LanDeg));
+        t.CheckAbs("a plane through the moon at arrival reports its tilt to the moon's orbit, deg", other.TiltToMoonOrbitDeg,
+            Math.Acos(Math.Clamp(double3.Dot(otherNormal, n), -1.0, 1.0)) * 180.0 / Math.PI, 1e-6);
+
+        // Sent, the ascent chases the moon's plane with the planner's window.
+        SharedVehicleHooks.GuidanceEnabled = true;
+        GuidanceWindow.SetModActive(true);
+        var target = new AscentPlaneTarget(plan.IncDeg, plan.LanDeg, ParkingKm, ParkingKm, "harness in-plane");
+        if (!t.Check("the in-plane plan is accepted by the ascent", GuidanceWindow.TrySendPlaneTarget(low, target, out string why), why))
+            return;
+        AmbientState() = VehicleAutopilotState.For(low);
+        object?[] args = { low, low.Orbit, home, home.MeanRadius, null };
+        var status = (GuidanceWindow.ChaseStatus)TryChaseOrbit.Invoke(null, args)!;
+        var chase = (GuidanceWindow.ChasePlan)args[4]!;
+        t.Check("and chased with the planner's window", status == GuidanceWindow.ChaseStatus.Ok
+            && Math.Abs(chase.WaitSec - plan.WaitSec) < 1e-6, $"{status}, T-{chase.WaitSec:F1} s against T-{plan.WaitSec:F1} s");
     }
 
     // The site, carried by the game's own rotation, is under the plane when the crossing comes: a lead after ignition.

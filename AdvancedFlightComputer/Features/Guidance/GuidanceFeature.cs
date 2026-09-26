@@ -121,35 +121,24 @@ internal static class GuidanceFeature
         }
     }
 
-    // The menu carries the driver's only off switch, so a fault here is logged once per kind and the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally. The menu is flight UI, so the editor's menu bar does not get it.
+    // The AdvancedFC menu in the game's menu bar: guidance's switches in their own submenu, and the mission planner beside it.
+    // It carries the driver's only off switch, so a fault here is logged once per kind and the menu keeps drawing. BeginMenu and EndMenu stay paired through the finallys. The menu is flight UI, so the editor's menu bar does not get it.
     private static void DrawMenu()
     {
         try
         {
-            if (Program.IsEditorOpen || !ImGui.BeginMenu("AFC Guidance"u8))
+            if (Program.IsEditorOpen || !ImGui.BeginMenu("AdvancedFC"u8))
                 return;
             try
             {
-                if (SharedVehicleHooks.GuidanceEnabled)
-                {
-                    bool active = GuidanceWindow.ModActive;
-                    if (ImGui.MenuItem("Enabled", "", ref active, true))
-                        GuidanceWindow.SetModActive(active);
-
-                    // The panel is the only place a mode is started from, and it starts hidden, so this is how the player reaches it.
-                    bool visible = GuidanceWindow.PanelVisible;
-                    if (ImGui.MenuItem("Show panel", "", ref visible, active))
-                        GuidanceWindow.PanelVisible = visible;
-                }
-                else
-                    ImGui.Text(UnavailableReason);
+                DrawGuidanceMenu();
 
                 // Plans without flying anything, so it is offered whether or not guidance is on. Sending a plan to the ascent says so when it is not.
                 bool planner = MissionPlannerWindow.Visible;
-                if (ImGui.MenuItem("Mission planner", "", ref planner, true))
+                if (ImGui.MenuItem("Mission Planner", "", ref planner, true))
                     MissionPlannerWindow.Visible = planner;
 
-                // Keep release errors visible while the guidance panel is hidden.
+                // Keep release errors visible while the guidance panel is hidden: here, as soon as the menu opens, rather than a level down.
                 string failure = GuidanceWindow.ReleaseFailure(Program.ControlledVehicle);
                 if (failure.Length > 0)
                     ImGui.Text(failure);
@@ -162,7 +151,33 @@ internal static class GuidanceFeature
         catch (Exception ex)
         {
             LogHelper.WarnOnce($"guidance-menu:{ex.GetType().Name}",
-                $"[AFC] Guidance menu failed: {ex}");
+                $"[AFC] AdvancedFC menu failed: {ex}");
+        }
+    }
+
+    private static void DrawGuidanceMenu()
+    {
+        if (!ImGui.BeginMenu("AFC Guidance"u8))
+            return;
+        try
+        {
+            if (SharedVehicleHooks.GuidanceEnabled)
+            {
+                bool active = GuidanceWindow.ModActive;
+                if (ImGui.MenuItem("Enabled", "", ref active, true))
+                    GuidanceWindow.SetModActive(active);
+
+                // The panel is the only place a mode is started from, and it starts hidden, so this is how the player reaches it.
+                bool visible = GuidanceWindow.PanelVisible;
+                if (ImGui.MenuItem("Show panel", "", ref visible, active))
+                    GuidanceWindow.PanelVisible = visible;
+            }
+            else
+                ImGui.Text(UnavailableReason);
+        }
+        finally
+        {
+            ImGui.EndMenu();
         }
     }
 

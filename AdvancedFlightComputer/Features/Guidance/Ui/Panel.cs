@@ -18,11 +18,11 @@ public static partial class GuidanceWindow
     private const string PanelTitle = "AFC GUIDANCE";
     private const string PanelSignature = "AFC-GNC";
 
-    private static float PanelWidthPx => 460f * ImGuiHelper.InterfaceScale;
+    private static float PanelWidthPx => 575f * ImGuiHelper.InterfaceScale;
     private static float PanelHeightPx => 720f * ImGuiHelper.InterfaceScale;
 
     /// <summary>
-    /// Whether the panel is drawn. Off at start, so a game start shows no guidance window until the player opens it from the AFC Guidance menu. The window's close button writes it too. Hiding the panel does not stop guidance, that is the Enabled switch in the same menu.
+    /// Whether the panel is drawn. Off at start, so a game start shows no guidance window until the player opens it from the AdvancedFC > AFC Guidance menu. The window's close button writes it too. Hiding the panel does not stop guidance, that is the Enabled switch in the same menu.
     /// </summary>
     internal static bool PanelVisible;
 

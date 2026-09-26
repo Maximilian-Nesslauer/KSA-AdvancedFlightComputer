@@ -1,7 +1,7 @@
 # AFC guidance
 
 Guidance is part of AFC under `AdvancedFlightComputer/Features/Guidance/`.
-`GuidanceFeature` registers two patch blocks. The diagnostics block owns the AFC Guidance menu, and the driver block owns the per-vehicle step, the worker hooks and the panel.
+`GuidanceFeature` registers two patch blocks. The diagnostics block owns the AdvancedFC menu, with the AFC Guidance submenu and the Mission Planner entry, and the driver block owns the per-vehicle step, the worker hooks and the panel.
 Every guidance write to a craft goes through the ownership described in `../control-ownership.md`.
 Single-craft ascent has been flown in the game from this tree. The other modes have not.
 

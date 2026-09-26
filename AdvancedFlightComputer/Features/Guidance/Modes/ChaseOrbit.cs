@@ -97,7 +97,7 @@ public static partial class GuidanceWindow
         if (!SharedVehicleHooks.GuidanceEnabled)
             return GuidanceFeature.UnavailableReason;
         if (!ModActive)
-            return "Guidance is switched off (AFC Guidance > Enabled).";
+            return "Guidance is switched off (AdvancedFC > AFC Guidance > Enabled).";
         if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState state)
             && (state.Running || state.LaunchArmed || state.ConvexLaunchPending))
             return "The ascent is committed. Abort it before sending a new target.";

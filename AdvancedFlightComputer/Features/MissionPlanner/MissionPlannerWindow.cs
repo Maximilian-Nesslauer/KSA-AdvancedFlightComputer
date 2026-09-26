@@ -8,7 +8,7 @@ using KSA;
 namespace AdvancedFlightComputer.Features.MissionPlanner;
 
 /// <summary>
-/// The MISSION PLANNER window, opened from the AFC Guidance menu. For now it plans one thing: a launch from the home body to meet one of its moons at a chosen arrival (see <see cref="LunarLaunchPlanner"/>).
+/// The MISSION PLANNER window, opened from the AdvancedFC menu. For now it plans one thing: a launch from the home body to meet one of its moons at a chosen arrival (see <see cref="LunarLaunchPlanner"/>).
 /// The player picks the arrival and one of the parking orbit plane's two angles, and the other follows, so the plane always contains the moon at arrival.
 /// SEND TO ASCENT hands the plane and the parking orbit to the ascent as its target, and EXECUTE there arms for the window quoted here.
 ///  A console window like the guidance panel, drawn from the loader's after-GUI hook. Everything it holds is the plan's inputs, so a save load resets it.
@@ -23,7 +23,7 @@ internal static class MissionPlannerWindow
     /// <summary>How far the default inclination sits above the least that reaches both the site and the moon, deg. Exactly at it the plane only grazes the site's latitude.</summary>
     private const double DefaultInclinationMarginDeg = 0.5;
 
-    private static float WidthPx => 440f * ImGuiHelper.InterfaceScale;
+    private static float WidthPx => 550f * ImGuiHelper.InterfaceScale;
     private static float HeightPx => 720f * ImGuiHelper.InterfaceScale;
 
     /// <summary>Whether the window is drawn. The menu entry and the window's close button write it.</summary>
@@ -180,15 +180,41 @@ internal static class MissionPlannerWindow
         if (DrawPlaneSection(vehicle, moon, plan, now))
             plan = Solve(vehicle, moon, now);
 
+        DrawStatus(plan, now, earliest, GuidanceWindow.PlaneTargetRefusal(vehicle));
         DrawWindowSection(plan, now);
-
-        string refusal = GuidanceWindow.PlaneTargetRefusal(vehicle);
-        if (refusal.Length > 0)
-        {
-            ConsoleWidgets.Rule();
-            ConsoleUi.WarningWrapped(refusal);
-        }
         return plan;
+    }
+
+    // --- Status -------------------------------------------------------------
+
+    /// <summary>
+    /// Everything that stops or qualifies the plan, in one place straight under the plane's rows: where the player is looking when they change them, and above the readouts that go blank because of it.
+    /// </summary>
+    private static void DrawStatus(LunarLaunchPlan plan, double now, double earliest, string refusal)
+    {
+        bool arrivalTooSoon = _arrivalTime < earliest;
+        bool blocked = plan.Problem.Length > 0;
+        bool noTurn = !blocked && !double.IsFinite(plan.WaitSec);
+        bool injectionPast = !blocked && !noTurn && !arrivalTooSoon && plan.InjectionTime < now;
+        bool injectionEarly = !blocked && !noTurn && !arrivalTooSoon && !injectionPast && plan.CoastSec < 0.0;
+        if (!(arrivalTooSoon || blocked || noTurn || injectionPast || injectionEarly || plan.Retrograde || refusal.Length > 0))
+            return;
+
+        ConsoleWidgets.Rule();
+        if (blocked)
+            ConsoleUi.DangerWrapped(plan.Problem);
+        if (arrivalTooSoon)
+            ConsoleUi.DangerWrapped($"The arrival is sooner than a transfer from now can make, at {FormatUt(earliest)}. Move it later, or SOONEST.");
+        if (noTurn)
+            ConsoleUi.MutedWrapped("The body does not turn, so the site never comes under a plane it is not in.");
+        if (injectionPast)
+            ConsoleUi.DangerWrapped($"The injection would have been {FormatSpan(now - plan.InjectionTime)} ago. Arrive later.");
+        if (injectionEarly)
+            ConsoleUi.DangerWrapped($"The injection comes {FormatSpan(-plan.CoastSec)} before this window reaches orbit. Arrive later.");
+        if (plan.Retrograde)
+            ConsoleUi.WarningWrapped($"Retrograde, a westward launch. The same plane flown eastward has its node at LAN {WrapDeg(plan.LanDeg + 180.0):F2}.");
+        if (refusal.Length > 0)
+            ConsoleUi.WarningWrapped(refusal);
     }
 
     // --- Launch -------------------------------------------------------------
@@ -248,9 +274,6 @@ internal static class MissionPlannerWindow
             ConsoleWidgets.Tooltip("How much later than a transfer injected now.".AsSpan());
 
         DrawNudgeButtons(earliest);
-
-        if (_arrivalTime < earliest)
-            ConsoleUi.WarningWrapped($"Sooner than a transfer from now can arrive, at {FormatUt(earliest)}. Move it later, or SOONEST.");
     }
 
     private static readonly (string Label, double Seconds)[] Nudges =
@@ -278,7 +301,8 @@ internal static class MissionPlannerWindow
 
     // --- Plane --------------------------------------------------------------
 
-    private static readonly string[] ControlSegments = { "SET INCLINATION", "SET LAN" };
+    // In PlaneControl's order.
+    private static readonly string[] ControlSegments = { "SET INCLINATION", "SET LAN", "IN-PLANE" };
 
     /// <summary>The plane's rows. True when an input changed, so the plan is solved again before it is read.</summary>
     private static bool DrawPlaneSection(Vehicle vehicle, Celestial moon, LunarLaunchPlan plan, double now)
@@ -286,8 +310,9 @@ internal static class MissionPlannerWindow
         ConsoleWidgets.RegionHeader("PARKING ORBIT PLANE".AsSpan());
         bool changed = false;
 
-        int picked = ConsoleWidgets.Segmented("afcmp-control".AsSpan(), ControlSegments.AsSpan(),
-            _control == PlaneControl.Inclination ? 0 : 1);
+        float2 modesMin = ImGui.GetCursorScreenPos();
+        float2 modesMax = modesMin + new float2(ConsoleStyle.ContentAvailWidth(), ConsoleStyle.FrameHeightPx);
+        int picked = ConsoleWidgets.Segmented("afcmp-control".AsSpan(), ControlSegments.AsSpan(), (int)_control);
         if (picked >= 0 && (PlaneControl)picked != _control)
         {
             _control = (PlaneControl)picked;
@@ -297,6 +322,10 @@ internal static class MissionPlannerWindow
                 SelectPlaneNearest(Solve(vehicle, moon, now), lanBefore);
             changed = true;
         }
+        if (ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(modesMin, modesMax))
+            ConsoleWidgets.Tooltip(($"Set one angle and the other follows, so the plane holds {moon.Id} at arrival.\n"
+                + $"IN-PLANE launches into {moon.Id}'s own orbit plane instead,\n"
+                + "so the transfer burn is in-plane with it.").AsSpan());
 
         using (new ImGuiDisabledScope(_control != PlaneControl.Inclination))
         {
@@ -332,10 +361,43 @@ internal static class MissionPlannerWindow
                     + "The first meets it heading north, the second heading south.").AsSpan());
         }
 
-        float buttonWidth = ConsoleStyle.ContentAvailWidth();
-        if (ConsoleWidgets.Button("LAUNCH NOW".AsSpan(), "afcmp-launchnow".AsSpan(), new float2(buttonWidth, ConsoleWidgets.ButtonHeight)))
+        DrawDeclinationCycle(moon, plan, now);
+
+        if (_control == PlaneControl.InPlane)
         {
-            if (LunarLaunchPlanner.TryLaunchNowPlane(vehicle, moon, _arrivalTime, out double inc, out double lan))
+            // The check the mode makes, read off the cycle above: the plane reaches no further north or south than the moon's peak.
+            ConsoleWidgets.Readout("IN-PLANE CHECK".AsSpan(), string.Format(Inv, "site {0:F2} deg, {1} peaks {2:F2} deg",
+                Math.Abs(plan.SiteLatDeg), moon.Id, _peaks.NorthDeg).AsSpan());
+            if (ImGui.IsItemHovered())
+                ConsoleWidgets.Tooltip(($"{moon.Id}'s orbit plane reaches no further from the equator\n"
+                    + "than the peaks of its monthly swing in declination.\n"
+                    + "The site gets under that plane only if its latitude is inside them.").AsSpan());
+        }
+        else
+        {
+            // The floor the cycle puts under the inclination: the moon's declination at arrival, when that is further from the equator than the site.
+            ConsoleWidgets.Readout("LEAST INCLINATION".AsSpan(), string.Format(Inv, "{0:F2} deg, {1}", plan.LeastInclinationDeg,
+                plan.LeastInclinationIsSite ? "the site's latitude" : $"{moon.Id} at arrival").AsSpan());
+            if (ImGui.IsItemHovered())
+                ConsoleWidgets.Tooltip(($"The plane has to be inclined at least as far from the equator\n"
+                    + $"as {moon.Id} is at arrival, a point on its monthly swing.\n"
+                    + "Just above the site's latitude, the most easterly launch,\n"
+                    + "serves only arrivals where the swing is inside the site's band.").AsSpan());
+        }
+        if (plan.HasPlane)
+        {
+            ConsoleWidgets.Readout("TILT TO MOON'S ORBIT".AsSpan(), string.Format(Inv, "{0:F2} deg", plan.TiltToMoonOrbitDeg).AsSpan());
+            if (ImGui.IsItemHovered())
+                ConsoleWidgets.Tooltip("The angle the transfer crosses the moon's path at. IN-PLANE makes it zero.".AsSpan());
+        }
+
+        // Greyed in-plane, where the plane is the moon's and so is its window.
+        float buttonWidth = ConsoleStyle.ContentAvailWidth();
+        using (new ImGuiDisabledScope(_control == PlaneControl.InPlane))
+        {
+            if (ConsoleWidgets.Button("LAUNCH NOW".AsSpan(), "afcmp-launchnow".AsSpan(), new float2(buttonWidth, ConsoleWidgets.ButtonHeight))
+                && _control != PlaneControl.InPlane
+                && LunarLaunchPlanner.TryLaunchNowPlane(vehicle, moon, _arrivalTime, out double inc, out double lan))
             {
                 _lanDeg = WrapDeg(lan);
                 if (_control == PlaneControl.Inclination)
@@ -346,13 +408,123 @@ internal static class MissionPlannerWindow
                 changed = true;
             }
         }
-        if (ImGui.IsItemHovered())
-            ConsoleWidgets.Tooltip($"The plane through the site and {moon.Id} at arrival, so the window is now.".AsSpan());
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ConsoleWidgets.Tooltip((_control == PlaneControl.InPlane
+                ? $"In-plane, the plane is {moon.Id}'s and so is its window."
+                : $"The plane through the site and {moon.Id} at arrival, so the window is now.").AsSpan());
         return changed;
     }
 
     private static string PlaneChoice(double lanDeg, double wait)
         => string.Format(Inv, "LAN {0:F1}, {1}", lanDeg, double.IsFinite(wait) ? "T-" + FormatSpan(wait) : "NO WINDOW");
+
+    // --- The moon's monthly cycle -------------------------------------------
+
+    // The next peaks of the swing, found once a sim minute rather than every frame.
+    private static LunarLaunchPlanner.DeclinationPeaks _peaks;
+    private static string _peaksMoonId = "";
+    private static long _peaksMinute = long.MinValue;
+
+    private const int CycleSamples = 160;
+
+    // The graph runs an orbit and a quarter from now, which takes in every arrival the slider offers.
+    private const double CycleSpanOrbits = 1.25;
+
+    /// <summary>
+    /// The moon's declination through its monthly cycle, measured against Earth's equator in the non-rotating equatorial frame, so Earth's spin does not enter: where it is at arrival and now, when it next peaks, and a graph of it against the site's latitude.
+    /// </summary>
+    private static void DrawDeclinationCycle(Celestial moon, LunarLaunchPlan plan, double now)
+    {
+        long minute = (long)Math.Floor(now / 60.0);
+        if (minute != _peaksMinute || moon.Id != _peaksMoonId)
+        {
+            _peaks = LunarLaunchPlanner.NextDeclinationPeaks(moon, now);
+            _peaksMinute = minute;
+            _peaksMoonId = moon.Id;
+        }
+
+        double period = moon.Orbit.Period;
+        double decNow = LunarLaunchPlanner.DeclinationAt(moon, now);
+        bool rising = LunarLaunchPlanner.DeclinationAt(moon, now + 600.0) > decNow;
+        ConsoleWidgets.Readout((moon.Id.ToUpperInvariant() + " DECLINATION").AsSpan(), string.Format(Inv,
+            "{0:+0.00;-0.00} deg at arrival, {1:+0.00;-0.00} now, {2}", plan.MoonDeclinationDeg, decNow,
+            rising ? "rising" : "falling").AsSpan());
+        if (ImGui.IsItemHovered())
+            ConsoleWidgets.Tooltip(string.Format(Inv,
+                "{0}'s angle north or south of Earth's equator, measured in the\n"
+                + "non-rotating equatorial frame, so Earth's spin does not move it.\n"
+                + "It follows {0}'s {1:F2}-day orbit, swinging between {2:+0.00;-0.00}\n"
+                + "and {3:+0.00;-0.00} deg, the tilt of that orbit to the equator.\n"
+                + "Next northern peak in {4}, southern in {5}.",
+                moon.Id, period / Day, _peaks.NorthDeg, _peaks.SouthDeg,
+                FormatSpan(_peaks.NorthTime - now), FormatSpan(_peaks.SouthTime - now)).AsSpan());
+
+        double span = CycleSpanOrbits * period;
+        DrawCycleGraph(moon, plan, now, span);
+        ConsoleUi.MutedWrapped(string.Format(Inv, "Now to {0:F0} days on. Band: the site's latitude, +/-{1:F1} deg. Amber: the arrival.",
+            span / Day, Math.Abs(plan.SiteLatDeg)));
+    }
+
+    private static void DrawCycleGraph(Celestial moon, LunarLaunchPlan plan, double now, double span)
+    {
+        float scale = ConsoleStyle.EffectiveInterfaceScale;
+        float width = ConsoleStyle.ContentAvailWidth();
+        float2 size = new float2(width, MathF.Round(ConsoleStyle.FrameHeightPx * 2.8f));
+        float2 min = ImGui.GetCursorScreenPos();
+        float2 max = min + size;
+        ConsoleWidgets.InputWell(min, size);
+
+        float pad = MathF.Round(6f * scale);
+        float x0 = min.X + pad, x1 = max.X - pad, yTop = min.Y + pad, yBot = max.Y - pad;
+        double lat = Math.Abs(plan.SiteLatDeg);
+        double peak = Math.Max(Math.Abs(_peaks.NorthDeg), Math.Abs(_peaks.SouthDeg));
+        double reach = Math.Ceiling((Math.Max(peak, Math.Min(lat, 80.0)) + 3.0) / 5.0) * 5.0;
+        float X(double t) => x0 + (float)((t - now) / span) * (x1 - x0);
+        float Y(double dec) => 0.5f * (yTop + yBot) - (float)(dec / reach) * 0.5f * (yBot - yTop);
+
+        ImDrawListPtr draw = ImGui.GetWindowDrawList();
+        float hairline = ConsoleStyle.WindowBorderThicknessPx;
+        uint muted = ConsoleStyle.ApplyAlpha(ConsoleStyle.TextMutedU32);
+        // While the moon is inside this band, a plane just above the site's latitude reaches it. Outside it, the site is outside the moon's swing.
+        if (lat < reach)
+        {
+            draw.AddRectFilled(new float2(x0, Y(lat)), new float2(x1, Y(-lat)), ConsoleStyle.ApplyAlpha(ConsoleStyle.RowHoverWashU32));
+            draw.AddLine(new float2(x0, Y(lat)), new float2(x1, Y(lat)), muted, hairline);
+            draw.AddLine(new float2(x0, Y(-lat)), new float2(x1, Y(-lat)), muted, hairline);
+        }
+        draw.AddLine(new float2(x0, Y(0.0)), new float2(x1, Y(0.0)), ConsoleStyle.ApplyAlpha(ConsoleStyle.HairlineU32), hairline);
+
+        Span<float2> points = stackalloc float2[CycleSamples];
+        for (int i = 0; i < CycleSamples; i++)
+        {
+            double t = now + span * i / (CycleSamples - 1);
+            points[i] = new float2(X(t), Y(LunarLaunchPlanner.DeclinationAt(moon, t)));
+        }
+        draw.AddPolyline(points, ConsoleStyle.ApplyAlpha(ConsoleStyle.TextPrimaryU32), ImDrawFlags.None, 2f * hairline);
+
+        double arrival = Math.Clamp(_arrivalTime, now, now + span);
+        uint amber = ConsoleStyle.ApplyAlpha(ConsoleStyle.PendingU32);
+        float xa = X(arrival);
+        draw.AddLine(new float2(xa, yTop), new float2(xa, yBot), amber, hairline);
+        draw.AddCircleFilled(new float2(xa, Y(LunarLaunchPlanner.DeclinationAt(moon, arrival))), 3.5f * scale, amber);
+
+        ConsoleStyle.PushLabelFont();
+        float fontSize = ImGui.GetFontSize();
+        draw.AddText(new float2(x0 + 2f * scale, yTop), muted, string.Format(Inv, "+{0:F0}", reach));
+        draw.AddText(new float2(x0 + 2f * scale, yBot - fontSize), muted, string.Format(Inv, "-{0:F0}", reach));
+        ConsoleStyle.PopFont();
+
+        ImGui.Dummy(in size);
+
+        if (ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, max))
+        {
+            float mouseX = Math.Clamp(ImGui.GetMousePos().X, x0, x1);
+            double t = now + (mouseX - x0) / (x1 - x0) * span;
+            draw.AddLine(new float2(mouseX, yTop), new float2(mouseX, yBot), muted, hairline);
+            ConsoleWidgets.Tooltip(string.Format(Inv, "In {0}: {1} at {2:+0.00;-0.00} deg",
+                FormatSpan(t - now), moon.Id, LunarLaunchPlanner.DeclinationAt(moon, t)).AsSpan());
+        }
+    }
 
     private static void SelectPlaneNearest(LunarLaunchPlan plan, double lanDeg)
     {
@@ -369,24 +541,19 @@ internal static class MissionPlannerWindow
         ConsoleWidgets.RegionHeader("TRANSFER".AsSpan());
         ConsoleWidgets.Readout("HOHMANN TRANSFER".AsSpan(), FormatSpan(plan.TransferTime).AsSpan());
         ConsoleWidgets.Readout("INJECTION (UT)".AsSpan(), FormatUt(plan.InjectionTime).AsSpan());
-        ConsoleWidgets.Readout("MOON AT ARRIVAL".AsSpan(), string.Format(Inv, "{0:N0} km, dec {1:F2} deg",
-            plan.MoonDistance / 1000.0, plan.MoonDeclinationDeg).AsSpan());
+        // Its declination at arrival is in the monthly cycle under the plane.
+        ConsoleWidgets.Readout("MOON AT ARRIVAL".AsSpan(), string.Format(Inv, "{0:N0} km away",
+            plan.MoonDistance / 1000.0).AsSpan());
         ConsoleWidgets.Readout("MOON MOVES".AsSpan(), string.Format(Inv, "{0:F1} deg, {1:N0} km",
             plan.MoonTravelDeg, plan.MoonTravelDeg * (Math.PI / 180.0) * plan.MoonDistance / 1000.0).AsSpan());
         if (ImGui.IsItemHovered())
-            ConsoleWidgets.Tooltip("How far it travels while the transfer flies: the injection aims at where it will be.".AsSpan());
+            ConsoleWidgets.Tooltip("How far it travels while the transfer flies:\nthe injection aims at where it will be.".AsSpan());
 
+        // Why a row reads "none" is said in the status under the plane.
         ConsoleWidgets.RegionHeader("LAUNCH WINDOW".AsSpan());
-        if (plan.Retrograde)
-            ConsoleUi.WarningWrapped($"Retrograde, a westward launch. The same plane flown eastward has its node at LAN {WrapDeg(plan.LanDeg + 180.0):F2}.");
-        if (plan.Problem.Length > 0)
+        if (plan.Problem.Length > 0 || !double.IsFinite(plan.WaitSec))
         {
-            ConsoleUi.DangerWrapped(plan.Problem);
-            return;
-        }
-        if (!double.IsFinite(plan.WaitSec))
-        {
-            ConsoleUi.MutedWrapped("The body does not turn, so the site never comes under a plane it is not in.");
+            ConsoleWidgets.Readout("NEXT WINDOW".AsSpan(), "none".AsSpan());
             return;
         }
 
@@ -396,26 +563,21 @@ internal static class MissionPlannerWindow
         ConsoleWidgets.Readout("HEADING".AsSpan(), string.Format(Inv, "{0:F1} deg, {1} crossing",
             WrapDeg(plan.AzimuthDeg), plan.Descending ? "descending" : "ascending").AsSpan());
 
-        if (plan.InjectionTime < now)
+        if (plan.InjectionTime < now || plan.CoastSec < 0.0)
         {
-            ConsoleUi.DangerWrapped($"The injection would have been {FormatSpan(now - plan.InjectionTime)} ago. Arrive later.");
-            return;
-        }
-        if (plan.CoastSec < 0.0)
-        {
-            ConsoleUi.DangerWrapped($"The injection comes {FormatSpan(-plan.CoastSec)} before this window reaches orbit. Arrive later.");
+            ConsoleWidgets.Readout("PARKING COAST".AsSpan(), "none".AsSpan());
             return;
         }
         ConsoleWidgets.Readout("PARKING COAST".AsSpan(), string.Format(Inv, "about {0}, {1:F1} orbits",
             FormatSpan(plan.CoastSec), plan.CoastSec / plan.ParkingPeriod).AsSpan());
         if (ImGui.IsItemHovered())
-            ConsoleWidgets.Tooltip(string.Format(Inv, "From orbit insertion, about {0:F0} min after ignition, to the injection burn.",
+            ConsoleWidgets.Tooltip(string.Format(Inv, "From orbit insertion, about {0:F0} min after ignition,\nto the injection burn.",
                 LunarLaunchPlanner.InsertionAfterIgnitionS / 60.0).AsSpan());
     }
 
     // --- Footer -------------------------------------------------------------
 
-    /// <summary>SEND TO ASCENT, and whether the ascent already has this plan. Why a send would be refused is said in the body, where there is room for it.</summary>
+    /// <summary>SEND TO ASCENT, and whether the ascent already has this plan. Why a send would be refused is said in the status under the plane, where there is room for it.</summary>
     private static void DrawFooter(Vehicle? vehicle, Celestial? moon, LunarLaunchPlan? plan)
     {
         bool ready = vehicle != null && moon != null && plan is { HasPlane: true, SiteReachesPlane: true }
@@ -435,7 +597,7 @@ internal static class MissionPlannerWindow
             if (ConsoleWidgets.PrimaryButton("SEND TO ASCENT".AsSpan()) && ready)
             {
                 var target = new AscentPlaneTarget(plan!.IncDeg, plan.LanDeg, ParkingLowKm, ParkingHighKm,
-                    $"{moon!.Id}, arrive {FormatUt(_arrivalTime)}");
+                    _control == PlaneControl.InPlane ? $"in {moon!.Id}'s orbit plane" : $"{moon!.Id}, arrive {FormatUt(_arrivalTime)}");
                 GuidanceWindow.TrySendPlaneTarget(vehicle!, target, out _);
             }
         }
@@ -451,13 +613,13 @@ internal static class MissionPlannerWindow
     {
         LunarLaunchPlan plan = LunarLaunchPlanner.Solve(vehicle, moon, now,
             new LunarLaunchInputs(_arrivalTime, _control, _incDeg, _lanDeg, _southbound, ParkingLowKm, ParkingHighKm));
-        // The angle not set follows the one that is.
+        // The angle not set follows the one that is. In-plane both are the moon's, so switching back starts from its plane.
         if (plan.HasPlane)
         {
-            if (_control == PlaneControl.Inclination)
-                _lanDeg = WrapDeg(plan.LanDeg);
-            else
+            if (_control != PlaneControl.Inclination)
                 _incDeg = plan.IncDeg;
+            if (_control != PlaneControl.Node)
+                _lanDeg = WrapDeg(plan.LanDeg);
         }
         return plan;
     }

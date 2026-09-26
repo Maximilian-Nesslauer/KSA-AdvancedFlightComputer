@@ -156,7 +156,7 @@ The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod l
 [![Watch the PoweredGuidance demo](docs/guidance/reference-material/images/twin_boosters.png)](https://youtu.be/hSUcV6tx3oY)
 
 Closed-loop guidance that flies the vehicle for you, originally the [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) mod by cairn5, see [Credits](#credits).
-Open the **AFC Guidance** menu in the top bar, switch **Enabled** on and open the panel with **Show panel**. EXECUTE, ABORT and RETARGET act on the selected tab.
+Open **AdvancedFC > AFC Guidance** in the top bar, switch **Enabled** on and open the panel with **Show panel**. EXECUTE, ABORT and RETARGET act on the selected tab.
 
 - **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
 - **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
@@ -171,12 +171,14 @@ The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [gu
 
 ### Mission Planner
 
-Plans a launch to meet a moon of the body you are on, for now a lunar launch from Earth. Open it from **AFC Guidance > Mission planner**.
+Plans a launch to meet a moon of the body you are on, for now a lunar launch from Earth. Open it from **AdvancedFC > Mission Planner**.
 
 - Pick when to arrive, starting from the soonest a transfer injected now can make it. The planner assumes an idealised Hohmann transfer from the parking orbit (200 x 200 km by default), injected at the point opposite where the Moon will be at arrival, so it aims at where the Moon will have moved to rather than where it is.
 - The parking orbit's plane has to contain the Moon at arrival, which leaves one of its two angles free. Set the inclination (the default, just above the launch site's latitude for the most easterly launch) and the LAN follows, or set the LAN and the inclination follows. Each inclination fits two planes, one meeting the Moon heading north and one heading south, and each shows its next launch window.
+- The Moon's declination, measured against Earth's equator in the non-rotating equatorial frame, swings between about 28.3 degrees north and south every orbit. Under the plane the planner shows where it is at arrival and now, when it next peaks each way, and a graph of the coming month against the launch site's latitude band. The plane has to be inclined at least as far as the Moon is at arrival, and **LEAST INCLINATION** shows whether that or the site's latitude sets the floor. Just above the site's latitude serves every arrival from LC-39A, which is outside the Moon's range, but from Kourou only the few days a month the Moon is near the equator.
+- **IN-PLANE** launches into the Moon's own orbit plane instead, so the injection burn is in-plane with the Moon's orbit and the transfer meets it along its path rather than across it. The plane holds still while the Moon swings through it, so this is possible from any site whose latitude is inside the peaks of the Moon's monthly swing, whenever you launch, and from no site outside them. **IN-PLANE CHECK** compares the two. **TILT TO MOON'S ORBIT** shows how far any other plane is from it.
 - **LAUNCH NOW** sets the plane through the launch site and the Moon at arrival, so the window is now.
-- Below that are the next time the site passes under the plane, the launch heading, the injection time and roughly how long the craft coasts in the parking orbit before injecting.
+- Anything that stops or qualifies the plan is said straight under the plane's rows. Below that are the next time the site passes under the plane, the launch heading, the injection time and roughly how long the craft coasts in the parking orbit before injecting.
 - **SEND TO ASCENT** makes the plane and the parking orbit the Ascent tab's target. EXECUTE there then arms for the same window, and warps to it with **Auto warp to window** on.
 
 ## Installation

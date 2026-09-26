@@ -6,7 +6,7 @@ How the guidance feature hangs on AFC at run time. The algorithms are described 
 
 `AdvancedFlightComputer/Mod.cs` is the only StarMap entry. Guidance is one feature of it and registers two patch blocks through `FeaturePatchSet`, each on its own Harmony id, so a failed block rolls back on its own and leaves the rest of AFC running.
 
-- The diagnostics block, `GuidanceFeature.ApplyDiagnosticPatches`, installs the managed assembly resolver for the three numerical assemblies and one postfix on `Program.DrawProgramMenusHook` that draws the AFC Guidance menu. The menu holds the Enabled switch and the Show panel switch. It is not drawn while the editor is open.
+- The diagnostics block, `GuidanceFeature.ApplyDiagnosticPatches`, installs the managed assembly resolver for the three numerical assemblies and one postfix on `Program.DrawProgramMenusHook` that draws the AdvancedFC menu. Its AFC Guidance submenu holds the Enabled switch and the Show panel switch, and its Mission Planner entry opens the mission planner. It is not drawn while the editor is open.
 - The driver block, `GuidanceFeature.ApplyDriverPatches`, installs the prefix on `Vehicle.PrepareWorker` that runs `GuidanceWindow.ApplyAutopilot` for every vehicle on the main thread before stock snapshots the flight computer for its worker, and the postfix on the private `FlightComputer.UpdateAttitudeTarget` that adds the rate feedforward on the vehicle worker. It also subscribes the release of every guided craft to `SaveLoadObserver.SaveLoaded`, because a load replaces every vehicle.
 The gimbal writer, `KsaGimbalControl.OnComputeControl`, is not a patch of its own. `VehicleCommandSink` owns the single `FlightComputer.ComputeControl` postfix and dispatches the guidance writer after the RCS writer, with the wake and off-rails bookkeeping applied from the receipt.
 
@@ -63,7 +63,7 @@ The whole game-facing part is one `partial class GuidanceWindow` in the `Advance
 
 ## Panel
 
-The AFC Guidance panel is a stock console window, so it moves, resizes and closes like the transfer planner, and it can leave the main game window. It starts hidden and is opened from the AFC Guidance menu. One row of EXECUTE, ABORT and RETARGET acts on the selected tab. The tabs are Ascent, Boostback, Deorbit and land, which flies the whole chain from orbit to touchdown, and Land from here, which starts only the terminal powered descent from the current state. RELEASE GUIDANCE sits in the footer and hands the craft back whatever the tab.
+The AFC Guidance panel is a stock console window, so it moves, resizes and closes like the transfer planner, and it can leave the main game window. It starts hidden and is opened from the AdvancedFC > AFC Guidance menu. One row of EXECUTE, ABORT and RETARGET acts on the selected tab. The tabs are Ascent, Boostback, Deorbit and land, which flies the whole chain from orbit to touchdown, and Land from here, which starts only the terminal powered descent from the current state. RELEASE GUIDANCE sits in the footer and hands the craft back whatever the tab.
 
 ## Dependencies
 
