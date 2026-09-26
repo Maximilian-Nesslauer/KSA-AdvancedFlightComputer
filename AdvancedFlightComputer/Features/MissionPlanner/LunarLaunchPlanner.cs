@@ -152,6 +152,59 @@ internal static class LunarLaunchPlanner
         return arrival;
     }
 
+    /// <summary>
+    /// The soonest arrival the plan can make from the ground: its plane's next launch window, the climb to orbit, one parking orbit to line up the injection, then the transfer.
+    /// <see cref="EarliestArrival"/> injects this instant, which no launch reaches.
+    /// The plane has to hold the moon at arrival, so it moves as the arrival does, and its window with it. This therefore steps forward from the earliest arrival by what the parking coast falls short, until it no longer does.
+    /// An arrival whose plane misses the moon or the site is stepped over an hour at a time.
+    /// NaN when nothing within two of the moon's orbits works, as for an inclination the site never passes under.
+    /// </summary>
+    public static double SoonestArrival(Vehicle vehicle, Celestial moon, double now, in LunarLaunchInputs inputs)
+    {
+        IParentBody home = moon.Orbit.Parent;
+        double sma = home.MeanRadius + 0.5 * (inputs.ParkingPeKm + inputs.ParkingApKm) * 1000.0;
+        double margin = 2.0 * Math.PI * Math.Sqrt(sma * sma * sma / home.Mu);
+        double arrival = EarliestArrival(moon, home.Mu, home.MeanRadius + inputs.ParkingPeKm * 1000.0, now);
+        double limit = arrival + 2.0 * moon.Orbit.Period;
+        double shortArrival = double.NaN;
+        for (int i = 0; i < 200 && arrival <= limit; i++)
+        {
+            double shortfall = Shortfall(vehicle, moon, now, inputs, arrival, margin);
+            if (double.IsNaN(shortfall))
+            {
+                arrival += 3600.0;
+                continue;
+            }
+            if (shortfall <= 0.0)
+            {
+                // The steps overshoot a little. Bisect back to where the coast first covers the margin, from the last arrival that fell short.
+                if (double.IsNaN(shortArrival))
+                    return arrival;
+                double good = arrival, bad = shortArrival;
+                for (int k = 0; k < 24 && good - bad > 1.0; k++)
+                {
+                    double mid = 0.5 * (good + bad);
+                    if (Shortfall(vehicle, moon, now, inputs, mid, margin) <= 0.0)
+                        good = mid;
+                    else
+                        bad = mid;
+                }
+                return good;
+            }
+            shortArrival = arrival;
+            // A little over, so the last steps do not creep up on the margin.
+            arrival += Math.Max(1.02 * shortfall, 30.0);
+        }
+        return double.NaN;
+    }
+
+    // What the parking coast lacks of the margin at this arrival, s: NaN when the plane misses the moon or the site, or there is no window.
+    private static double Shortfall(Vehicle vehicle, Celestial moon, double now, in LunarLaunchInputs inputs, double arrival, double margin)
+    {
+        LunarLaunchPlan plan = Solve(vehicle, moon, now, inputs with { ArrivalTime = arrival });
+        return plan.HasPlane && plan.SiteReachesPlane && double.IsFinite(plan.CoastSec) ? margin - plan.CoastSec : double.NaN;
+    }
+
     public static LunarLaunchPlan Solve(Vehicle vehicle, Celestial moon, double now, in LunarLaunchInputs inputs)
     {
         IParentBody home = moon.Orbit.Parent;

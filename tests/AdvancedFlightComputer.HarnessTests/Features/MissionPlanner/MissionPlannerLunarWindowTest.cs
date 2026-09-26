@@ -31,7 +31,7 @@ public sealed class MissionPlannerLunarWindowTest : AfcTest
     private const double LowSiteLatDeg = 10.0;
     private const double PadHeightM = 2000.0;
     private const double ParkingKm = 200.0;
-    private const double ArrivalAfterSoonestS = 2.0 * 86400.0;
+    private const double ArrivalAfterEarliestS = 2.0 * 86400.0;
 
     private static readonly string[] SpawnableVehicles = { "Rocket", "Gemini7", "Polaris" };
 
@@ -108,11 +108,11 @@ public sealed class MissionPlannerLunarWindowTest : AfcTest
         double mu = home.Mu;
         double parkingRadius = home.MeanRadius + ParkingKm * 1000.0;
 
-        double soonest = LunarLaunchPlanner.EarliestArrival(moon, mu, parkingRadius, now);
-        double transferThen = LunarTransferGeometry.HohmannTime(mu, parkingRadius, LunarLaunchPlanner.MoonAt(moon, soonest).Length());
-        t.CheckAbs("the soonest arrival is one Hohmann transfer from now, s", soonest - now, transferThen, 1.0);
+        double earliest = LunarLaunchPlanner.EarliestArrival(moon, mu, parkingRadius, now);
+        double transferThen = LunarTransferGeometry.HohmannTime(mu, parkingRadius, LunarLaunchPlanner.MoonAt(moon, earliest).Length());
+        t.CheckAbs("the earliest arrival is one Hohmann transfer from now, s", earliest - now, transferThen, 1.0);
 
-        double arrival = soonest + ArrivalAfterSoonestS;
+        double arrival = earliest + ArrivalAfterEarliestS;
         double3 moonAt = LunarLaunchPlanner.MoonAt(moon, arrival);
         double3 u = double3.Normalize(moonAt);
         double decDeg = Math.Asin(u.Z) * 180.0 / Math.PI;
@@ -164,6 +164,44 @@ public sealed class MissionPlannerLunarWindowTest : AfcTest
         CheckSendToAscent(t, home, vehicle, now, north);
         CheckDeclinationSwing(t, moon, vehicle, low, now, arrival, inputs);
         CheckInPlane(t, home, moon, vehicle, low, now, arrival, inputs);
+        CheckSoonest(t, home, moon, vehicle, low, now, earliest, inputs);
+    }
+
+    // SOONEST. The earliest arrival injects this instant, before any launch reaches orbit, which is the warning SOONEST used to raise.
+    // The soonest arrival the plane can make leaves a parking orbit between insertion and injection, and a minute sooner does not.
+    private static void CheckSoonest(TestContext t, IParentBody home, Celestial moon, Vehicle high, Vehicle low, double now,
+                                     double earliest, LunarLaunchInputs inputs)
+    {
+        double sma = home.MeanRadius + ParkingKm * 1000.0;
+        double parkingOrbit = 2.0 * Math.PI * Math.Sqrt(sma * sma * sma / home.Mu);
+        LunarLaunchPlan atEarliest = LunarLaunchPlanner.Solve(high, moon, now, inputs with { ArrivalTime = earliest });
+        t.Check("the earliest arrival's injection comes before any window reaches orbit",
+            atEarliest.HasPlane && atEarliest.CoastSec < 0.0, $"coast {atEarliest.CoastSec:F0} s");
+
+        foreach (bool southbound in new[] { false, true })
+        {
+            string name = southbound ? "southbound" : "northbound";
+            LunarLaunchInputs plane = inputs with { Southbound = southbound };
+            double soonest = LunarLaunchPlanner.SoonestArrival(high, moon, now, plane);
+            if (!t.Check($"the {name} plane has a soonest arrival", double.IsFinite(soonest)))
+                continue;
+            LunarLaunchPlan plan = LunarLaunchPlanner.Solve(high, moon, now, plane with { ArrivalTime = soonest });
+            t.Info($"{name}: soonest arrival {(soonest - now) / 86400.0:F3} d from now, window T-{plan.WaitSec:F0} s, coast {plan.CoastSec:F0} s.");
+            t.Check($"its coast covers a parking orbit, and only just", plan.HasPlane && plan.SiteReachesPlane
+                && plan.CoastSec >= parkingOrbit - 1e-6 && plan.CoastSec < parkingOrbit + 60.0,
+                $"coast {plan.CoastSec:F1} s, parking orbit {parkingOrbit:F1} s");
+            LunarLaunchPlan sooner = LunarLaunchPlanner.Solve(high, moon, now, plane with { ArrivalTime = soonest - 60.0 });
+            t.Check($"a minute sooner falls short", !(sooner.HasPlane && sooner.SiteReachesPlane && sooner.CoastSec >= parkingOrbit),
+                $"coast {sooner.CoastSec:F1} s");
+        }
+
+        LunarLaunchInputs inPlane = inputs with { Control = PlaneControl.InPlane };
+        double inPlaneSoonest = LunarLaunchPlanner.SoonestArrival(low, moon, now, inPlane);
+        LunarLaunchPlan fromLow = double.IsFinite(inPlaneSoonest)
+            ? LunarLaunchPlanner.Solve(low, moon, now, inPlane with { ArrivalTime = inPlaneSoonest }) : new LunarLaunchPlan();
+        t.Check("in-plane from inside the swing has a soonest arrival with a parking orbit's coast",
+            double.IsFinite(inPlaneSoonest) && fromLow.CoastSec >= parkingOrbit - 1e-6, $"coast {fromLow.CoastSec:F1} s");
+        t.Check("and from outside it none", double.IsNaN(LunarLaunchPlanner.SoonestArrival(high, moon, now, inPlane)));
     }
 
     // The moon's declination swings through its orbit, but its plane does not move: the swing peaks at the plane's inclination every

@@ -157,14 +157,20 @@ internal static class MissionPlannerWindow
         double earliest = LunarLaunchPlanner.EarliestArrival(moon, home.Mu,
             home.MeanRadius + ParkingLowKm * 1000.0, now);
         if (double.IsNaN(_arrivalTime))
+        {
+            // The inclination is seeded from the moon at the earliest arrival, then the arrival moves to the soonest the plane can make.
             _arrivalTime = earliest;
+            if (double.IsNaN(_incDeg))
+                _incDeg = DefaultInclination(vehicle, moon);
+            SeedSoonestArrival(vehicle, moon, now);
+        }
         if (double.IsNaN(_incDeg))
             _incDeg = DefaultInclination(vehicle, moon);
 
-        DrawArrivalSection(moon, now, earliest);
+        DrawArrivalSection(vehicle, moon, now, earliest);
 
         LunarLaunchPlan plan = Solve(vehicle, moon, now);
-        // The first plan of a seed takes whichever of the inclination's two planes has the sooner window. After that the choice is the player's.
+        // The first plan of a seed takes whichever of the inclination's two planes has the sooner window, when the seed could not pick by arrival. After that the choice is the player's.
         if (!_planeChosen && plan.HasPlane && _control == PlaneControl.Inclination)
         {
             _planeChosen = true;
@@ -204,13 +210,13 @@ internal static class MissionPlannerWindow
         if (blocked)
             ConsoleUi.DangerWrapped(plan.Problem);
         if (arrivalTooSoon)
-            ConsoleUi.DangerWrapped($"The arrival is sooner than a transfer from now can make, at {FormatUt(earliest)}. Move it later, or SOONEST.");
+            ConsoleUi.DangerWrapped($"The arrival is sooner than even a transfer injected now could make, at {FormatUt(earliest)}. Press SOONEST for the first arrival this plane reaches.");
         if (noTurn)
             ConsoleUi.MutedWrapped("The body does not turn, so the site never comes under a plane it is not in.");
         if (injectionPast)
-            ConsoleUi.DangerWrapped($"The injection would have been {FormatSpan(now - plan.InjectionTime)} ago. Arrive later.");
+            ConsoleUi.DangerWrapped($"The injection would have been {FormatSpan(now - plan.InjectionTime)} ago. Press SOONEST for the first arrival this plane reaches.");
         if (injectionEarly)
-            ConsoleUi.DangerWrapped($"The injection comes {FormatSpan(-plan.CoastSec)} before this window reaches orbit. Arrive later.");
+            ConsoleUi.DangerWrapped($"The injection comes {FormatSpan(-plan.CoastSec)} before this window reaches orbit. Press SOONEST for the first arrival this plane reaches.");
         if (plan.Retrograde)
             ConsoleUi.WarningWrapped($"Retrograde, a westward launch. The same plane flown eastward has its node at LAN {WrapDeg(plan.LanDeg + 180.0):F2}.");
         if (refusal.Length > 0)
@@ -256,24 +262,27 @@ internal static class MissionPlannerWindow
 
     // --- Arrival ------------------------------------------------------------
 
-    private static void DrawArrivalSection(Celestial moon, double now, double earliest)
+    private static void DrawArrivalSection(Vehicle vehicle, Celestial moon, double now, double earliest)
     {
         ConsoleWidgets.RegionHeader("ARRIVAL".AsSpan());
         ConsoleWidgets.Readout("ARRIVAL (UT)".AsSpan(), FormatUt(_arrivalTime).AsSpan());
-        ConsoleWidgets.Readout("ARRIVES IN".AsSpan(), FormatSpan(_arrivalTime - now).AsSpan());
 
-        // Coarse, over one of the moon's orbits, which is every position it can be met in. The buttons below fine-tune.
+        // Coarse, over one of the moon's orbits from the earliest arrival, which is every position it can be met in. The buttons below fine-tune.
+        // The left end injects this instant, which no launch reaches, and the arrival is kept absolute, so the slider slides left as the clock runs.
+        float fromNow = (float)(earliest - now);
         float span = (float)Math.Max(moon.Orbit.Period, Day);
-        float later = (float)Math.Clamp(_arrivalTime - earliest, 0.0, span);
-        ConsoleWidgets.BeginRow("AFTER SOONEST".AsSpan());
+        float arriveIn = (float)Math.Clamp(_arrivalTime - now, fromNow, fromNow + span);
+        ConsoleWidgets.BeginRow("ARRIVE IN".AsSpan());
         bool hovered = ConsoleWidgets.RowHovered;
-        if (ConsoleWidgets.SliderFloat("afcmp-later".AsSpan(), ref later, 0f, span, FormatSpan(later).AsSpan(), pending: false))
-            _arrivalTime = earliest + later;
+        if (ConsoleWidgets.SliderFloat("afcmp-arrive-in".AsSpan(), ref arriveIn, fromNow, fromNow + span,
+                FormatSpan(_arrivalTime - now).AsSpan(), pending: false))
+            _arrivalTime = now + arriveIn;
         ConsoleWidgets.EndRow();
         if (hovered)
-            ConsoleWidgets.Tooltip("How much later than a transfer injected now.".AsSpan());
+            ConsoleWidgets.Tooltip(("From now to arrival. The left end is a transfer injected this instant,\n"
+                + "which no launch reaches. SOONEST finds the first arrival the plane's\nlaunch windows do.").AsSpan());
 
-        DrawNudgeButtons(earliest);
+        DrawNudgeButtons(vehicle, moon, now, earliest);
     }
 
     private static readonly (string Label, double Seconds)[] Nudges =
@@ -281,7 +290,7 @@ internal static class MissionPlannerWindow
         ("-1D", -Day), ("-1H", -3600.0), ("-10M", -600.0), ("+10M", 600.0), ("+1H", 3600.0), ("+1D", Day),
     };
 
-    private static void DrawNudgeButtons(double earliest)
+    private static void DrawNudgeButtons(Vehicle vehicle, Celestial moon, double now, double earliest)
     {
         float spacing = ImGui.GetStyle().ItemSpacing.X;
         float height = ConsoleWidgets.ButtonHeight;
@@ -294,9 +303,39 @@ internal static class MissionPlannerWindow
             ImGui.SameLine();
         }
         if (ConsoleWidgets.Button("SOONEST".AsSpan(), "afcmp-soonest".AsSpan(), new float2(soonestWidth, height)))
-            _arrivalTime = earliest;
+        {
+            // With nothing reachable, the earliest arrival at least shows the status saying why.
+            double soonest = LunarLaunchPlanner.SoonestArrival(vehicle, moon, now, Inputs());
+            _arrivalTime = double.IsFinite(soonest) ? soonest : earliest;
+        }
         if (ImGui.IsItemHovered())
-            ConsoleWidgets.Tooltip("Arrive as soon as a transfer injected now can.".AsSpan());
+            ConsoleWidgets.Tooltip(("The first arrival this plane can make: its next launch window,\n"
+                + "about 10 min to orbit, one parking orbit to line up the injection,\nthen the transfer.").AsSpan());
+    }
+
+    /// <summary>
+    /// A new seed's arrival: the soonest the plane can make rather than the earliest arrival, which injects this instant.
+    /// Setting the inclination, it also picks whichever of the inclination's two planes gets there first.
+    /// Left at the earliest arrival when neither can, so the status says why.
+    /// </summary>
+    private static void SeedSoonestArrival(Vehicle vehicle, Celestial moon, double now)
+    {
+        LunarLaunchInputs inputs = Inputs();
+        if (_control != PlaneControl.Inclination)
+        {
+            double soonest = LunarLaunchPlanner.SoonestArrival(vehicle, moon, now, inputs);
+            if (double.IsFinite(soonest))
+                _arrivalTime = soonest;
+            return;
+        }
+
+        double north = LunarLaunchPlanner.SoonestArrival(vehicle, moon, now, inputs with { Southbound = false });
+        double south = LunarLaunchPlanner.SoonestArrival(vehicle, moon, now, inputs with { Southbound = true });
+        if (!double.IsFinite(north) && !double.IsFinite(south))
+            return;
+        _southbound = !double.IsFinite(north) || (double.IsFinite(south) && south < north);
+        _arrivalTime = _southbound ? south : north;
+        _planeChosen = true;
     }
 
     // --- Plane --------------------------------------------------------------
@@ -609,10 +648,12 @@ internal static class MissionPlannerWindow
 
     // --- Helpers ------------------------------------------------------------
 
+    private static LunarLaunchInputs Inputs()
+        => new(_arrivalTime, _control, _incDeg, _lanDeg, _southbound, ParkingLowKm, ParkingHighKm);
+
     private static LunarLaunchPlan Solve(Vehicle vehicle, Celestial moon, double now)
     {
-        LunarLaunchPlan plan = LunarLaunchPlanner.Solve(vehicle, moon, now,
-            new LunarLaunchInputs(_arrivalTime, _control, _incDeg, _lanDeg, _southbound, ParkingLowKm, ParkingHighKm));
+        LunarLaunchPlan plan = LunarLaunchPlanner.Solve(vehicle, moon, now, Inputs());
         // The angle not set follows the one that is. In-plane both are the moon's, so switching back starts from its plane.
         if (plan.HasPlane)
         {
