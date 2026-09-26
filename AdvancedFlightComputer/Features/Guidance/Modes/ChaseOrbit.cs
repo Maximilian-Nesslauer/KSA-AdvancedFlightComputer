@@ -7,7 +7,7 @@ using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// The launch-to-target geometry, extracted from the Ascent tab's draw so the gauge panel and the legacy tab compute it exactly once between them.
+// The launch-to-target geometry the Ascent tab draws.
 // Pure computation: no ImGui, no state writes.
 public static partial class GuidanceWindow
 {

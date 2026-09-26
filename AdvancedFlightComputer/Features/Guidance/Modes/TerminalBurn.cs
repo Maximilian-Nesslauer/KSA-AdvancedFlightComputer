@@ -27,7 +27,6 @@ public static partial class GuidanceWindow
         _s.GfoldThrottle = 0;
         _s.GfoldTrackInit = false;
         _s.TerminalBurnLastTime = now;
-        _s.TerminalIgnitionHeight = 0;
         _s.TerminalBurnSeconds = 0;
         _s.LandingStatus = "Horizontal braking complete. Coasting and turning upright for the landing burn.";
         GuidanceLog.Info(vehicle, _s.LandingStatus);
@@ -62,7 +61,6 @@ public static partial class GuidanceWindow
         TerminalBraking.Command command = TerminalBraking.Evaluate(height, velocityUp, gravity,
             minimum * tiltReserve, maximum * tiltReserve, step, minimumPulse,
             _s.LandingPhase == LandingPhase.TerminalBrake);
-        _s.TerminalIgnitionHeight = command.IgnitionHeight;
         _s.TerminalBurnSeconds = command.BurnSeconds;
         _s.GfoldAltM = height;
         _s.GfoldSpeedMs = velocity.Length();

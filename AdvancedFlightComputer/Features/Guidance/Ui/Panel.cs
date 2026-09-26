@@ -22,7 +22,7 @@ public static partial class GuidanceWindow
     private static float PanelHeightPx => 720f * ImGuiHelper.InterfaceScale;
 
     /// <summary>
-    /// Whether the panel is drawn. Off at start, so a game start shows no guidance window until the player opens it from the AFC Guidance menu. The window's close button and the legacy window's checkbox write it too. Hiding the panel does not stop guidance, that is the Enabled switch in the same menu.
+    /// Whether the panel is drawn. Off at start, so a game start shows no guidance window until the player opens it from the AFC Guidance menu. The window's close button writes it too. Hiding the panel does not stop guidance, that is the Enabled switch in the same menu.
     /// </summary>
     internal static bool PanelVisible;
 
@@ -36,7 +36,7 @@ public static partial class GuidanceWindow
         if (!PanelVisible)
             return;
 
-        // Seed the LAN from where the vessel is right now. The legacy tab does this on its own draw; without it here, a user who never opens that tab would launch toward LAN 0.
+        // Seed the LAN from where the vessel is right now, or a launch would go toward LAN 0.
         if (!_s.LanSeeded)
         {
             _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, orbit.Parent);
@@ -76,9 +76,6 @@ public static partial class GuidanceWindow
             {
                 if (ImGui.Button("RELEASE GUIDANCE"))
                 {
-                    // The gimbal override needs its own release because it lives outside the flight computer.
-                    _s.GimbalMode = 0;
-                    KsaGimbalControl.Disengage(vehicle);
                     ResetFlightComputer();
                 }
             }
@@ -111,6 +108,11 @@ public static partial class GuidanceWindow
             ImGui.TextColored(statusColor, phaseStatus);
         if (_s.Status.Length > 0)
             ImGui.TextColored(statusColor, _s.Status);
+        // A guidance solve that threw, and the single-thread invariant the ambient state rests on if it has ever been seen to break (see GuidanceWindow._s). The latter is not per-vehicle and not clearable: once it fires, every number on this panel is suspect.
+        if (_s.GuidanceError.Length > 0)
+            ImGui.TextColored(new float4(1f, 0.4f, 0.4f, 1f), "Error: " + _s.GuidanceError);
+        if (OwnerThreadViolation.Length > 0)
+            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f), "THREADING: " + OwnerThreadViolation);
         // The convex ascent's calculation, and a launch it could not plan, on every tab: EXECUTE may be waiting on it.
         DrawConvexLaunchBanner(vehicle, orbit, parent);
 

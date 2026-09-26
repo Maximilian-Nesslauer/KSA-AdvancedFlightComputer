@@ -26,7 +26,6 @@ public sealed class VehicleAutopilotState
     public double LastReplan;
     public bool DidSolve, SolveOk;      // did THIS cycle re-solve, and did it work
     public int RefusalRun;              // consecutive refused re-solves
-    public int Recoveries;
 
     // Cold solve state.
     public bool Converging;             // cold solve in progress, not yet flyable
@@ -34,14 +33,13 @@ public sealed class VehicleAutopilotState
 
     // Node ladder state.
     public int GateIndex = -1;          // -1 = above every gate
-    public int GateChanges;
     public int RungFloor = int.MaxValue;
     public double RungFloorSpeed;
     public int BackedOffTo = -1;
 
-    // Actuation values used by the readout and bias estimator.
+    // Actuation values used by the telemetry and bias estimator.
     public double LastThrottle;
-    public double DemandN, CapabilityN;
+    public double CapabilityN;
     public bool ThrustSaturated;
 
     /// <summary>6-DOF touchdown arming. The landing machine has its own - see
@@ -52,9 +50,6 @@ public sealed class VehicleAutopilotState
     public double[] PrevV;
     public double PrevT;
     public double3 Bias;
-
-    // Diagnostics for the diagonal-inertia approximation.
-    public double OffDiag, Asym;
 
     /// <summary>
     /// Vehicle mass at the previous step, for spotting a staging event. Zero until the
@@ -635,7 +630,6 @@ public sealed class VehicleAutopilotState
     public double LandingVerticalGateM = 500.0;
     internal GuidanceWindow.GfoldApproach GfoldApproach;
     internal double TerminalBurnLastTime;
-    internal double TerminalIgnitionHeight;
     internal double TerminalBurnSeconds;
     public double GfoldThrottle;
 
@@ -753,14 +747,6 @@ public sealed class VehicleAutopilotState
     public int TraceHead;                  // next write slot
     public double TraceLastTime = double.NegativeInfinity;
     public IParentBody TraceParent;
-
-    // Gimbal probe state.
-    public int GimbalMode;                 // 0 = off, 1 = direct, 2 = torque
-    public float GimbalY;
-    public float GimbalZ;
-    public float GimbalRoll;
-    public float GimbalPitch;
-    public float GimbalYaw;
 
     /// <summary>
     /// True when the sim thread may touch this vehicle's guidance: solve on it, rebuild

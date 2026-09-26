@@ -20,8 +20,6 @@ public static partial class GuidanceWindow
     ///  A UI mode rather than per-vehicle state, like _retargetArmed beside it: it lasts from pressing Set to the click that answers it, and there is one mouse.
     /// </summary>
     private static uint _retargetStageId;
-    private static bool _landingTabActive;   // set while the legacy window's Landing tab is the open tab
-    private static bool _ascentTabActive;    // set while the legacy window's Ascent tab is the open tab
 
     // Clickable retargeting: while armed, each frame we ray-cast the cursor onto the body, draw a live preview marker (projected back through the validated forward EclToScreen, so it should sit under the cursor), and commit the new site on a left-click. Right-click cancels.
     private static void HandleRetargetClick(IGameViewport vp, IParentBody parent)

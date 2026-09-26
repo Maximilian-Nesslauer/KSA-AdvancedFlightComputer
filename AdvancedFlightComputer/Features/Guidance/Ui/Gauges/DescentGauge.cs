@@ -8,7 +8,6 @@ using Brutal.Numerics;
 using KSA;
 
 // The Descent tab's content: everything that happens before the vehicle is anywhere near the ground - where it is going, when the deorbit burn is, and how the approach is shaped. The shell, tab bar and EXECUTE/ABORT live in Ui/Panel.cs.
-//  Shares VehicleAutopilotState with the legacy Landing tab's Deorbit sub-tab, so both drive the same flow; that sub-tab can be deleted once this has flown.
 public static partial class GuidanceWindow
 {
     /// <summary>
