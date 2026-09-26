@@ -115,10 +115,12 @@ foreach ($project in $projects.GetEnumerator()) {
 
 $targetFramework = "net10.0"
 $conicAssembly = Join-Path $RepositoryRoot "AdvancedFlightComputer/Features/Guidance/Conic/bin/$Configuration/$targetFramework/$RuntimeIdentifier/AdvancedFlightComputer.Guidance.Conic.dll"
+$gfoldConsoleDir = Join-Path $RepositoryRoot "tests/AdvancedFlightComputer.Guidance.Tests/Gfold/bin/$Configuration/$targetFramework/$RuntimeIdentifier"
 $scvxConsoleDir = Join-Path $RepositoryRoot "tests/AdvancedFlightComputer.Guidance.Tests/Scvx/bin/$Configuration/$targetFramework/$RuntimeIdentifier"
 
 foreach ($fileName in $nativeNames) {
     Copy-Item -LiteralPath (Join-Path $nativeDir $fileName) -Destination (Split-Path -Parent $conicAssembly) -Force
+    Copy-Item -LiteralPath (Join-Path $nativeDir $fileName) -Destination $gfoldConsoleDir -Force
     Copy-Item -LiteralPath (Join-Path $nativeDir $fileName) -Destination $scvxConsoleDir -Force
 }
 
@@ -138,6 +140,19 @@ $expectedScsChecks = 73
 $expectedScsExports = 6
 Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("clarabel", $conicAssembly,"--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedClarabelChecks, "--expect-exports", $expectedClarabelExports)) -FailureMessage "The Clarabel ABI check failed."
 Invoke-Checked -FilePath "dotnet" -ArgumentList ($nativeCheckBase + @("scs", $conicAssembly,"--rid", $RuntimeIdentifier, "--zig", $ZigExe, "--expect-checks", $expectedScsChecks, "--expect-exports", $expectedScsExports)) -FailureMessage "The SCS ABI check failed."
+
+$gfoldProject = Join-Path $RepositoryRoot $projects.GfoldConsole
+$gfoldBase = @(
+    "run", "--no-build",
+    "--project", $gfoldProject,
+    "--configuration", $Configuration,
+    "--runtime", $RuntimeIdentifier,
+    "--"
+)
+# Only the modes whose exit code asserts something. The default run writes its plans as CSVs to the working directory.
+foreach ($command in @(@("81", "120"), @("--clarabel-smoke"), @("--realtime"), @("--terminal-braking"))) {
+    Invoke-Checked -FilePath "dotnet" -ArgumentList ($gfoldBase + $command) -FailureMessage "The Gfold $($command -join ' ') check failed."
+}
 
 $scvxProject = Join-Path $RepositoryRoot $projects.ScvxConsole
 $scvxBase = @(
