@@ -400,21 +400,24 @@ internal static class MissionPlannerWindow
                     + "The first meets it heading north, the second heading south.").AsSpan());
         }
 
-        DrawDeclinationCycle(moon, plan, now);
-
         if (_control == PlaneControl.InPlane)
         {
-            // The check the mode makes, read off the cycle above: the plane reaches no further north or south than the moon's peak.
-            ConsoleWidgets.Readout("IN-PLANE CHECK".AsSpan(), string.Format(Inv, "site {0:F2} deg, {1} peaks {2:F2} deg",
-                Math.Abs(plan.SiteLatDeg), moon.Id, _peaks.NorthDeg).AsSpan());
+            // The moon's plane holds still, so this is the whole check: where the moon is in its monthly swing has no bearing on it.
+            double lat = Math.Abs(plan.SiteLatDeg), tilt = plan.MoonMaxDeclinationDeg;
+            string reach = lat > tilt ? "never" : lat > tilt - 0.01 ? "one window a day" : "two windows a day";
+            ConsoleWidgets.Readout("IN-PLANE CHECK".AsSpan(), string.Format(Inv, "site {0:F2}, plane {1:F2} deg: {2}",
+                lat, tilt, reach).AsSpan());
             if (ImGui.IsItemHovered())
-                ConsoleWidgets.Tooltip(($"{moon.Id}'s orbit plane reaches no further from the equator\n"
-                    + "than the peaks of its monthly swing in declination.\n"
-                    + "The site gets under that plane only if its latitude is inside them.").AsSpan());
+                ConsoleWidgets.Tooltip(($"{moon.Id}'s orbit plane is fixed, inclined {tilt:F2} deg to the equator,\n"
+                    + "and Earth turns the site under it. A site below that latitude\n"
+                    + "crosses it twice a sidereal day, heading north-east and then\n"
+                    + "south-east. A site above it never does.").AsSpan());
         }
         else
         {
-            // The floor the cycle puts under the inclination: the moon's declination at arrival, when that is further from the equator than the site.
+            DrawMoonDeclination(moon, plan, now);
+
+            // The floor the monthly swing puts under the inclination: the moon's declination at arrival, when that is further from the equator than the site.
             ConsoleWidgets.Readout("LEAST INCLINATION".AsSpan(), string.Format(Inv, "{0:F2} deg, {1}", plan.LeastInclinationDeg,
                 plan.LeastInclinationIsSite ? "the site's latitude" : $"{moon.Id} at arrival").AsSpan());
             if (ImGui.IsItemHovered())
@@ -464,15 +467,10 @@ internal static class MissionPlannerWindow
     private static string _peaksMoonId = "";
     private static long _peaksMinute = long.MinValue;
 
-    private const int CycleSamples = 160;
-
-    // The graph runs an orbit and a quarter from now, which takes in every arrival the slider offers.
-    private const double CycleSpanOrbits = 1.25;
-
     /// <summary>
-    /// The moon's declination through its monthly cycle, measured against Earth's equator in the non-rotating equatorial frame, so Earth's spin does not enter: where it is at arrival and now, when it next peaks, and a graph of it against the site's latitude.
+    /// The moon's declination on its monthly cycle, measured against Earth's equator in the non-rotating equatorial frame, so Earth's spin does not enter: where it is at arrival and now, and when it next peaks. For the planes through the moon at arrival, whose least inclination it sets.
     /// </summary>
-    private static void DrawDeclinationCycle(Celestial moon, LunarLaunchPlan plan, double now)
+    private static void DrawMoonDeclination(Celestial moon, LunarLaunchPlan plan, double now)
     {
         long minute = (long)Math.Floor(now / 60.0);
         if (minute != _peaksMinute || moon.Id != _peaksMoonId)
@@ -497,72 +495,6 @@ internal static class MissionPlannerWindow
                 + "Next northern peak in {4}, southern in {5}.",
                 moon.Id, period / Day, _peaks.NorthDeg, _peaks.SouthDeg,
                 FormatSpan(_peaks.NorthTime - now), FormatSpan(_peaks.SouthTime - now)).AsSpan());
-
-        double span = CycleSpanOrbits * period;
-        DrawCycleGraph(moon, plan, now, span);
-        ConsoleUi.MutedWrapped(string.Format(Inv, "Now to {0:F0} days on. Band: the site's latitude, +/-{1:F1} deg. Amber: the arrival.",
-            span / Day, Math.Abs(plan.SiteLatDeg)));
-    }
-
-    private static void DrawCycleGraph(Celestial moon, LunarLaunchPlan plan, double now, double span)
-    {
-        float scale = ConsoleStyle.EffectiveInterfaceScale;
-        float width = ConsoleStyle.ContentAvailWidth();
-        float2 size = new float2(width, MathF.Round(ConsoleStyle.FrameHeightPx * 2.8f));
-        float2 min = ImGui.GetCursorScreenPos();
-        float2 max = min + size;
-        ConsoleWidgets.InputWell(min, size);
-
-        float pad = MathF.Round(6f * scale);
-        float x0 = min.X + pad, x1 = max.X - pad, yTop = min.Y + pad, yBot = max.Y - pad;
-        double lat = Math.Abs(plan.SiteLatDeg);
-        double peak = Math.Max(Math.Abs(_peaks.NorthDeg), Math.Abs(_peaks.SouthDeg));
-        double reach = Math.Ceiling((Math.Max(peak, Math.Min(lat, 80.0)) + 3.0) / 5.0) * 5.0;
-        float X(double t) => x0 + (float)((t - now) / span) * (x1 - x0);
-        float Y(double dec) => 0.5f * (yTop + yBot) - (float)(dec / reach) * 0.5f * (yBot - yTop);
-
-        ImDrawListPtr draw = ImGui.GetWindowDrawList();
-        float hairline = ConsoleStyle.WindowBorderThicknessPx;
-        uint muted = ConsoleStyle.ApplyAlpha(ConsoleStyle.TextMutedU32);
-        // While the moon is inside this band, a plane just above the site's latitude reaches it. Outside it, the site is outside the moon's swing.
-        if (lat < reach)
-        {
-            draw.AddRectFilled(new float2(x0, Y(lat)), new float2(x1, Y(-lat)), ConsoleStyle.ApplyAlpha(ConsoleStyle.RowHoverWashU32));
-            draw.AddLine(new float2(x0, Y(lat)), new float2(x1, Y(lat)), muted, hairline);
-            draw.AddLine(new float2(x0, Y(-lat)), new float2(x1, Y(-lat)), muted, hairline);
-        }
-        draw.AddLine(new float2(x0, Y(0.0)), new float2(x1, Y(0.0)), ConsoleStyle.ApplyAlpha(ConsoleStyle.HairlineU32), hairline);
-
-        Span<float2> points = stackalloc float2[CycleSamples];
-        for (int i = 0; i < CycleSamples; i++)
-        {
-            double t = now + span * i / (CycleSamples - 1);
-            points[i] = new float2(X(t), Y(LunarLaunchPlanner.DeclinationAt(moon, t)));
-        }
-        draw.AddPolyline(points, ConsoleStyle.ApplyAlpha(ConsoleStyle.TextPrimaryU32), ImDrawFlags.None, 2f * hairline);
-
-        double arrival = Math.Clamp(_arrivalTime, now, now + span);
-        uint amber = ConsoleStyle.ApplyAlpha(ConsoleStyle.PendingU32);
-        float xa = X(arrival);
-        draw.AddLine(new float2(xa, yTop), new float2(xa, yBot), amber, hairline);
-        draw.AddCircleFilled(new float2(xa, Y(LunarLaunchPlanner.DeclinationAt(moon, arrival))), 3.5f * scale, amber);
-
-        ConsoleStyle.PushLabelFont();
-        float fontSize = ImGui.GetFontSize();
-        draw.AddText(new float2(x0 + 2f * scale, yTop), muted, string.Format(Inv, "+{0:F0}", reach));
-        draw.AddText(new float2(x0 + 2f * scale, yBot - fontSize), muted, string.Format(Inv, "-{0:F0}", reach));
-        ConsoleStyle.PopFont();
-
-        ImGui.Dummy(in size);
-
-        if (ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, max))
-        {
-            float mouseX = Math.Clamp(ImGui.GetMousePos().X, x0, x1);
-            double t = now + (mouseX - x0) / (x1 - x0) * span;
-            draw.AddLine(new float2(mouseX, yTop), new float2(mouseX, yBot), muted, hairline);
-            ConsoleWidgets.Tooltip(string.Format(Inv, "In {0}: {1} at {2:+0.00;-0.00} deg",
-                FormatSpan(t - now), moon.Id, LunarLaunchPlanner.DeclinationAt(moon, t)).AsSpan());
-        }
     }
 
     private static void SelectPlaneNearest(LunarLaunchPlan plan, double lanDeg)
