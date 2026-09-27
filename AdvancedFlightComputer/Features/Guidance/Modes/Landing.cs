@@ -29,6 +29,10 @@ public static partial class GuidanceWindow
     /// allowed to steer or throttle is not a descent.
     /// </summary>
     private static void StartGfoldNow(Vehicle vehicle)
+        => BeginGfoldDescent(vehicle, SimNow(), engineLit: false, "G-FOLD started from current state.");
+
+    // A lit engine keeps its throttle as the first G-FOLD command, so a handover from another mode does not blip the engine.
+    private static void BeginGfoldDescent(Vehicle vehicle, double now, bool engineLit, string status)
     {
         ResetLandingEngineWait();
         ClaimVehicle(GuidanceMode.Landing, vehicle);   // the descent takes the vehicle over
@@ -36,16 +40,18 @@ public static partial class GuidanceWindow
         _s.AutoStage = true;
         _s.LandingPhase = LandingPhase.GfoldDescent;
         ResetGfoldTrace();   // fresh flown path and a fresh axis latch
-        _s.GfoldHandoffTime = SimNow();
+        _s.GfoldHandoffTime = now;
         _s.GfoldLastSolveTime = double.NegativeInfinity;
         _s.GfoldPlan = null;
         _s.GfoldFailStreak = 0;
         _s.GfoldTrackInit = false;
-        _s.GfoldEngineOn = false;
+        _s.GfoldEngineOn = engineLit;
+        if (engineLit)
+            _s.GfoldThrottle = vehicle.GetManualThrottle();
         _s.GfoldRelightRequestTime = double.NaN;
         _s.GfoldHoverRefused = false;
         _s.HasCommand = false;
-        _s.LandingStatus = "G-FOLD started from current state.";
+        _s.LandingStatus = status;
     }
 
     // An abort in the air hands the craft back with the engine as it is, because a cut there drops the craft. The coast and the deorbit burn keep the cut, which stops the burn and costs a coasting craft nothing.
@@ -100,8 +106,8 @@ public static partial class GuidanceWindow
 
     private static void EnterBrakingPrep()
     {
-        if (Universe.IsAutoWarpActive)
-            Universe.AutoWarpStop(true);
+        if (Universe.IsAutoWarpActive || Universe.GetSimulationSpeed() > 1.0)
+            Universe.ResetSimulationSpeed();
         _s.Upfg.Reset();
         _s.LandingPhase = LandingPhase.Prep;
         _s.LandingStatus = "Converging the braking guidance.";
@@ -279,7 +285,7 @@ public static partial class GuidanceWindow
                     //
                     // Reached from the sim step rather than a button, so the release at the end of this same step sees the queued request and keeps the craft for it (see ApplyAutopilot).
                     // The claim releases the landing machine that got us here and finds no 6-DOF engaged, so it touches neither the engine nor the gimbals on the way through, and the engine holds the burn's command until the engage runs.
-                    Engage6Dof(vehicle);
+                    Engage6Dof(vehicle, fromBrakingBurn: true);
                     _s.LandingStatus = "Handoff to 6-DOF descent.";
                 }
                 else

@@ -40,7 +40,9 @@ public static partial class GuidanceWindow
         // Debug toggles stay OUT of the fold, as on the G-FOLD page: they are what you reach for while something is going wrong.
         ImGui.Checkbox("Show plan overlay", ref _show6DofOverlay);
         ImGui.SameLine();
-        ImGui.Checkbox("Log telemetry to file", ref _s.SixDofLogging);
+        bool logRequested = _s.SixDofLogging;
+        if (ImGui.Checkbox("Log telemetry to file", ref logRequested))
+            SetSixDofLogging(vehicle, logRequested);
         Draw6DofLogStatus();
 
         if (_s.Error.Length > 0)
@@ -96,7 +98,8 @@ public static partial class GuidanceWindow
             ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
                 $"another vehicle owns the log ({SixDofLog.RunName}) - this one is not being recorded");
         else if (_s.SixDofLogging)
-            ImGui.Text("logging will start when guidance engages");
+            ImGui.Text(_s.Active ? "no log is active - toggle logging to retry"
+                : "logging will start when guidance engages");
 
         if (SixDofLog.LastError.Length > 0)
             ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f), "log error: " + SixDofLog.LastError);

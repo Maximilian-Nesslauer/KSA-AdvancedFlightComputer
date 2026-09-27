@@ -66,7 +66,14 @@ internal static class SixDofLog
             Directory = Path.Combine(docs, "My Games", "Kitten Space Agency", "navbox-logs");
             System.IO.Directory.CreateDirectory(Directory);
 
-            RunName = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+            // A run switched off and on again within one second would reuse the name and append to the old files, so a clash gets a suffix.
+            string runTime = DateTime.Now.ToString("yyyyMMdd-HHmmss", CultureInfo.InvariantCulture);
+            RunName = runTime;
+            int suffix = 1;
+            while (File.Exists(Path.Combine(Directory, RunName + "-cycle.csv"))
+                || File.Exists(Path.Combine(Directory, RunName + "-plan.csv"))
+                || File.Exists(Path.Combine(Directory, RunName + "-events.log")))
+                RunName = runTime + "-" + suffix++;
             _cyclePath = Path.Combine(Directory, RunName + "-cycle.csv");
             _planPath = Path.Combine(Directory, RunName + "-plan.csv");
             _eventsPath = Path.Combine(Directory, RunName + "-events.log");
@@ -96,7 +103,7 @@ internal static class SixDofLog
                 "twr", "twrMin", "ambientPa", "altToGo", "descentRate", "stopDistM",
                 "glideViolM", "biasX", "biasY", "biasZ", "error"));
 
-            _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg");
+            _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma");
 
             _events.AppendLine($"# navbox 6-DOF run {RunName}");
             _events.AppendLine($"# vehicle: {vehicleName}   body: {bodyName}");
@@ -224,20 +231,21 @@ internal static class SixDofLog
     /// Snapshot the whole planned trajectory, rate-limited. THE point of this file:
     /// a cycle row can only say where the vehicle went, so on its own it can never distinguish "the plan is a loop and the vehicle followed it" from "the plan was straight and the vehicle diverged". Those have opposite causes.
     /// </summary>
-    internal static void PlanSnapshot(object owner, double t, int nodes,
-                                      ReadOnlySpan<double> planX, ReadOnlySpan<double> planU)
+    internal static void PlanSnapshot(object owner, double t, Ksa6DofPlan plan)
     {
-        if (!Writable(owner) || planX.Length < nodes * 14)
+        if (!Writable(owner) || plan == null || plan.X.Length < plan.Nodes * 14
+            || plan.U.Length < plan.Nodes * 4)
             return;
         if (t - _lastPlanSnapshot < PlanSnapshotInterval)
             return;
         try
         {
             _lastPlanSnapshot = t;
-            for (int k = 0; k < nodes; k++)
+            for (int k = 0; k < plan.Nodes; k++)
             {
                 int i = k * 14;
-                double qx = planX[i + 7], qy = planX[i + 8];
+                int u = k * 4;
+                double qx = plan.X[i + 7], qy = plan.X[i + 8];
                 double r22 = 1.0 - 2.0 * (qx * qx + qy * qy);
                 double tilt = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI;
 
@@ -245,10 +253,16 @@ internal static class SixDofLog
                 sb.Append(_cycleIndex).Append(',');
                 F(sb, t);
                 sb.Append(k).Append(',');
-                F(sb, planX[i + 0]); F(sb, planX[i + 1]); F(sb, planX[i + 2]);
-                F(sb, planX[i + 3]); F(sb, planX[i + 4]); F(sb, planX[i + 5]);
-                F(sb, planU.Length > k * 4 + 2 ? planU[k * 4 + 2] : 0.0);
-                F(sb, tilt, last: true);
+                F(sb, plan.X[i + 0]); F(sb, plan.X[i + 1]); F(sb, plan.X[i + 2]);
+                F(sb, plan.X[i + 3]); F(sb, plan.X[i + 4]); F(sb, plan.X[i + 5]);
+                F(sb, plan.U[u + 2]);
+                F(sb, tilt);
+                F(sb, plan.X[i + 6]); F(sb, plan.X[i + 7]);
+                F(sb, plan.X[i + 8]); F(sb, plan.X[i + 9]);
+                F(sb, plan.X[i + 10]); F(sb, plan.X[i + 11]); F(sb, plan.X[i + 12]);
+                F(sb, plan.X[i + 13]);
+                F(sb, plan.U[u + 0]); F(sb, plan.U[u + 1]); F(sb, plan.U[u + 3]);
+                F(sb, plan.SolveTime); F(sb, plan.Sigma, last: true);
                 sb.AppendLine();
             }
         }
@@ -289,9 +303,10 @@ internal static class SixDofLog
     }
 
     // Invariant culture throughout: a machine with a comma decimal separator would otherwise write "1,234" into a comma-separated file and silently shift every column right of it.
+    // Round-trip format, so a logged state can be fed back into the solver offline bit for bit.
     private static void F(StringBuilder sb, double v, bool last = false)
     {
-        sb.Append(double.IsFinite(v) ? v.ToString("G9", CultureInfo.InvariantCulture) : "");
+        sb.Append(double.IsFinite(v) ? v.ToString("R", CultureInfo.InvariantCulture) : "");
         if (!last) sb.Append(',');
     }
 

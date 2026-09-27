@@ -65,10 +65,6 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
-    /// Distance from the centre of mass to the main engine's thrust point, measured ALONG the thrust axis. This is the model's L_arm: it sets how much pitch/yaw torque a given gimbal deflection produces (tau = r_T x T_body).
-    ///  Taken from the highest-thrust gimbal, which is the main engine on any sane layout - the same one KsaFrameBridge derives the body axes from, so the two cannot disagree about which engine they mean.
-    /// </summary>
-    /// <summary>
     /// How far off vertical the vehicle is RIGHT NOW, in degrees, from the model quaternion - the same r22 the subproblem's tilt cone is written against, so the two cannot disagree about what "tilt" means.
     /// </summary>
     public static double EntryTiltDeg(double[] x0)
@@ -79,6 +75,10 @@ public static class Ksa6DofSetup
         return Math.Acos(r22) * 180.0 / Math.PI;
     }
 
+    /// <summary>
+    /// Distance from the centre of mass to the main engine's thrust point, measured ALONG the thrust axis. This is the model's L_arm: it sets how much pitch/yaw torque a given gimbal deflection produces (tau = r_T x T_body).
+    ///  Taken from the highest-thrust gimbal that KsaGimbalControl.CountsForPlanning accepts, the same one KsaFrameBridge derives the body axes from, so the two cannot disagree about which engine they mean. An unstaged upper engine sits on the far side of the centre of mass and would give a meaningless arm.
+    /// </summary>
     public static double EngineArm(Vehicle vehicle)
     {
         KsaFrameBridge.BodyAxes(vehicle, out _, out _, out double3 mz);
@@ -86,7 +86,7 @@ public static class Ksa6DofSetup
         float3 com = vehicle.CenterOfMassAsmbF;
 
         double best = 0.0, arm = 0.0;
-        foreach (GimbalController gc in vehicle.Parts.Modules.Get<GimbalController>())
+        foreach (GimbalController gc in KsaGimbalControl.PlanningGimbals(vehicle))
         {
             if (gc.Data.MaximumThrust <= best)
                 continue;
@@ -103,7 +103,7 @@ public static class Ksa6DofSetup
     /// </summary>
     public static double RollTorqueLimit(Vehicle vehicle)
     {
-        Span<GimbalController> gimbals = vehicle.Parts.Modules.Get<GimbalController>();
+        GimbalController[] gimbals = KsaGimbalControl.PlanningGimbals(vehicle);
         if (gimbals.Length == 0)
             return 0.0;
 
@@ -128,7 +128,7 @@ public static class Ksa6DofSetup
     /// </summary>
     public static double LateralTorqueLimit(Vehicle vehicle)
     {
-        Span<GimbalController> gimbals = vehicle.Parts.Modules.Get<GimbalController>();
+        GimbalController[] gimbals = KsaGimbalControl.PlanningGimbals(vehicle);
         if (gimbals.Length == 0)
             return 0.0;
 
@@ -166,7 +166,7 @@ public static class Ksa6DofSetup
     public static double GimbalLimitDeg(Vehicle vehicle)
     {
         double minRad = double.PositiveInfinity;
-        foreach (GimbalController gc in vehicle.Parts.Modules.Get<GimbalController>())
+        foreach (GimbalController gc in KsaGimbalControl.PlanningGimbals(vehicle))
         {
             Gimbal g = gc.Gimbal;
             double m = Math.Min(g.AxisY.MaxAngle, g.AxisZ.MaxAngle);

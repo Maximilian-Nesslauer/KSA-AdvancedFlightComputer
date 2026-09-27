@@ -78,6 +78,10 @@ public sealed class Scvx6DofConfig
     /// boundary is the dangerous case: any disturbance then puts the vehicle
     /// outside, and with no margin the next re-solve starts from a violated state.
     /// The slack below keeps that recoverable, but margin keeps it from happening.
+    ///
+    /// A vehicle that enters outside the cone gets an allowance that shrinks to
+    /// zero at the target, so the plan closes on the cone instead of asking the
+    /// first interval to jump inside it.
     /// </summary>
     public double GlideSlopeDeg { get; init; }
 

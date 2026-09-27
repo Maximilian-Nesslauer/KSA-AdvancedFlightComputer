@@ -17,6 +17,12 @@ const int RowLen = NX + NU + NX + NX * NX + NX * NU;
 
 bool verbose = args.Contains("--verbose");
 
+if (args.Contains("--cold-shift"))
+    return ColdReferenceShiftCheck.Run();
+
+if (args.Contains("--hermite"))
+    return PlanStateInterpolationCheck.Run();
+
 // --sub-scs: validate the cone-problem assembly by solving the same SCvx
 // subproblem CVXPY solved in python_ref/sub_ref.py and diffing the trajectory.
 if (args.Contains("--sub-scs"))
@@ -50,6 +56,8 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --spiral        reproduce a logged engage state offline
           --seed          cold-start seed: straight line vs 3-DOF G-FOLD
           --spread        spread the cold solve across frames while the vehicle falls
+          --cold-shift    preserve the cold reference dynamics when the craft moves
+          --hermite       sample plan position and velocity for warm re-solves
           --soft          soft terminal position: unreachable target still yields a plan
 
         MEASUREMENT - closed-loop MPC with injected dispersions

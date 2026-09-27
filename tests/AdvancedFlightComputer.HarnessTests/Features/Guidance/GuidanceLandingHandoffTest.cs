@@ -123,7 +123,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         t.Check("6-DOF: the engine keeps the burn's command",
             Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle,
             $"engine on {Inputs(craft).EngineOn}, throttle {Inputs(craft).EngineThrottle}");
-        t.Check("6-DOF: the attitude is given back for the allocator", !state.WasEngaged);
+        t.Check("6-DOF: the previous attitude stays held while no new plan exists",
+            state.WasEngaged && state.AttitudeOwnership.IsCurrent(craft.FlightComputer));
         t.Check("6-DOF: AutoStage stays armed through the handoff",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
@@ -133,8 +134,21 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.Active && state.ControlAcquired
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
         t.Check("6-DOF: the engine is still lit when the engage runs", Inputs(craft).EngineOn);
+        t.Check("6-DOF: a cold solve keeps the previous attitude until it can steer",
+            state.WasEngaged && state.AttitudeOwnership.IsCurrent(craft.FlightComputer));
         t.Check("6-DOF: AutoStage is still armed when the engage runs",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
+
+        // A cold solve that cannot publish soon enough returns to powered landing, while the prior engine command and the shared claim stay with this craft.
+        Method("HandSixDofToGfold").Invoke(null, new object[] { craft, Universe.GetElapsedSeconds(), 2000.0 });
+        t.Check("6-DOF: a cold start without a plan in time hands the craft to G-FOLD",
+            state.LandingPhase == GuidanceWindow.LandingPhase.GfoldDescent
+            && state.GfoldApproach == GuidanceWindow.GfoldApproach.BrakeAtGate
+            && !state.Active && !state.UseSixDofLanding
+            && state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
+        t.Check("6-DOF: fallback keeps the engine's previous command",
+            Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle
+            && state.GfoldThrottle == BurnThrottle && !state.LandingCutPending);
 
         VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);

@@ -11,9 +11,12 @@ public static partial class GuidanceWindow
     private const double LandingEngineWaitLimit = 10.0 * SequenceCooldown;
     private const double LandingLastSequenceGrace = 2.0 * SequenceCooldown;
 
+    private static bool HasPhysicalAtmosphere(IParentBody parent)
+        => parent?.GetAtmosphereReference()?.Physical != null;
+
     private static bool PrepareLandingEngines(Vehicle vehicle, IParentBody parent, double now, bool requireAirless)
     {
-        if (requireAirless && parent?.GetAtmosphereReference()?.Physical != null)
+        if (requireAirless && HasPhysicalAtmosphere(parent))
             return RefuseLandingEngines("G-FOLD is limited to airless bodies. Use terminal hover in atmosphere.");
         if (KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
             return RefuseLandingEngines("Landing control requires liquid engines with shutdown control.");

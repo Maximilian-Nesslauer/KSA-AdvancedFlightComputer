@@ -99,14 +99,14 @@ public static partial class GuidanceWindow
             ImGui.GetTextLineHeightWithSpacing());
         ImGui.Separator();
 
-        DrawLandingSiteSection(parent, orbit, bodyRadius, innerW);
+        DrawLandingSiteSection(vehicle, parent, orbit, bodyRadius, innerW);
         DrawApproachSection(innerW);
         DrawStockDeorbitActions();
     }
 
     // --- Landing site ------------------------------------------------------- The main levers: where to land, and whether the mod is allowed to fly it there.
-    private static void DrawLandingSiteSection(IParentBody parent, Orbit orbit,
-                                               double bodyRadius, float innerW)
+    private static void DrawLandingSiteSection(Vehicle vehicle, IParentBody parent, Orbit orbit,
+                                                double bodyRadius, float innerW)
     {
         if (!ImGuiHelper.BeginRegion("Landing site",
                 ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
@@ -125,6 +125,12 @@ public static partial class GuidanceWindow
         ImGui.NextColumn();
         DrawSolverRadios();
         ImGui.NextColumn();
+        if (_s.UseSixDofLanding)
+        {
+            bool logRequested = _s.SixDofLogging;
+            if (GaugeRowCheck("Log 6-DOF telemetry", "##d6doflog", ref logRequested))
+                SetSixDofLogging(vehicle, logRequested);
+        }
 
         double3 r = orbit.StateVectors.PositionCci;
         double3 siteDir = SiteDirCciAt(parent, 0);
