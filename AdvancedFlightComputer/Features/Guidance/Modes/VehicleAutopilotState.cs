@@ -730,8 +730,14 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofThreaded = true;
 
+    // Per engagement: the first cold solve's seed, raised to the braking burn's time to go on a handoff, and the last plan published and when, for the G-FOLD fallback clock.
+    public double SixDofEntrySigmaSeed = 20.0;
+    public double SixDofLastPlanTime = double.NaN;
+    public Ksa6DofPlan SixDofLastPublishedPlan;
+    public bool SixDofFromBrakingBurn;
+
     /// <summary>
-    /// This craft asks to be recorded when it engages. The log itself is a single
+    /// This craft asks to be recorded when it engages, or at once when switched on in flight. The log itself is a single
     /// global sink and grants the first claimant - see SixDofLog.Start, which refuses
     /// a second owner rather than interleaving two craft into one CSV.
     /// </summary>

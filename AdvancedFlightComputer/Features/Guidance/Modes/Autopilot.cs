@@ -1036,8 +1036,6 @@ public static partial class GuidanceWindow
             if (!TryTakeCraft(vehicle, acquire: false))
                 return;
 
-            // 6-DOF steers through the allocator, so the flight computer command it does not use is given back first. When the step ends the mode, the release runs in this same step, before the next frame can apply player input.
-            ReleaseAttitude(vehicle);
             LandingPhase landingBefore = _s.LandingPhase;
             bool boostbackBefore = BoostbackLive;
             bool ascentBefore = _s.Running;
@@ -1049,6 +1047,14 @@ public static partial class GuidanceWindow
                     && _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done)
                 || (BoostbackLive && !boostbackBefore)
                 || (_s.Running && !ascentBefore);
+            // The cold solve can run for several steps without a 6-DOF command, so the previous attitude stays held until a flyable plan takes over its steering.
+            if (!startedAnotherMode)
+            {
+                if (!_s.Active)
+                    ReleaseAttitude(vehicle);
+                else if (!_s.Converging && _s.Guidance?.Published != null)
+                    HoldManualAttitude(vehicle);
+            }
             if (!_s.Active && !_s.EngagePending && !startedAnotherMode)
             {
                 // Failed cleanup must retain ownership. This also releases a setup-only claim when HandBackVehicle has no resources to clear.
@@ -1145,7 +1151,8 @@ public static partial class GuidanceWindow
                 _s.Running || boostbackGuides ? _s.CommandRate : default);
             _s.WasEngaged = true;
         }
-        else if (_s.WasEngaged)
+        // A queued 6-DOF engage keeps the attitude of the mode that handed over, see the 6-DOF branch above.
+        else if (_s.WasEngaged && !_s.EngagePending)
         {
             ReleaseAttitude(vehicle);
             _s.WasEngaged = false;
@@ -1181,6 +1188,22 @@ public static partial class GuidanceWindow
         // Clear the commanded rotation rate before restoring attitude settings.
         KsaAttitudeRate.Clear(vehicle);
         _s.AttitudeOwnership.Release(vehicle.FlightComputer);
+        _s.WasEngaged = false;
+    }
+
+    // While 6-DOF steers through the gimbal override, the flight computer must not steer too. The override replaces every stock gimbal command, but ComputeRcsControl still fires RCS on each axis whose ActiveControlSystem is Rcs while AttitudeMode is Auto. Restoring the attitude from before guidance would bring back the Auto rate hold that the stock deorbit burn leaves, and at low throttle the live TVC authority can fall far enough below the RCS authority that the stock choice moves an axis to RCS, so that hold would fight the plan.
+    // The attitude stays guidance's own, so a player change still counts as a takeover, and ReleaseAttitude restores the original when 6-DOF ends. WasEngaged is cleared so that a G-FOLD fallback engages its attitude target fully.
+    private static void HoldManualAttitude(Vehicle vehicle)
+    {
+        if (!_s.ControlAcquired)
+            return;
+
+        FlightComputer fc = vehicle.FlightComputer;
+        if (fc.AttitudeMode != FlightComputerAttitudeMode.Manual)
+            KsaAttitudeRate.Clear(vehicle);
+        _s.AttitudeOwnership.BeginWrite(fc);
+        fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
+        _s.AttitudeOwnership.EndWrite(fc, writesRoll: false);
         _s.WasEngaged = false;
     }
 

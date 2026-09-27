@@ -185,15 +185,16 @@ public static partial class GuidanceWindow
         float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
 
         // EXECUTE lights green while that phase is actually doing something: guidance running, a launch armed and waiting for its window, or one waiting on its convex plan on ascent, any live landing phase on the deorbit tab. ABORT is red at all times, so it reads the same whether or not it currently has anything to stop.
+        bool sixDofRoute = _s.UseSixDofLanding && !LandingMachineLive;
         bool lit = _panelTab == GuidanceTab.Ascent
             ? (_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending)
             : _panelTab == GuidanceTab.Boostback ? BoostbackLive
             : _panelTab == GuidanceTab.Descent ? DescentLive
             : _landingSubTab == LandingSubTab.Hover
                 ? _s.LandingPhase == LandingPhase.TerminalHover
-                : _s.UseSixDofLanding
+                : sixDofRoute
                     ? (_s.Active || _s.EngagePending)
-                    : _s.LandingPhase == LandingPhase.GfoldDescent || TerminalBurnActive;
+                    : LandingMachineLive;
 
         bool terminalLanding = _panelTab == GuidanceTab.Landing
             && _landingSubTab == LandingSubTab.Powered && TerminalBurnActive;
@@ -210,7 +211,7 @@ public static partial class GuidanceWindow
                 ExecuteLanding(vehicle);
             else if (_landingSubTab == LandingSubTab.Hover)
                 StartTerminalHover(vehicle);
-            else if (_s.UseSixDofLanding)
+            else if (sixDofRoute)
                 Engage6Dof(vehicle);
             else
                 StartGfoldNow(vehicle);
@@ -224,7 +225,7 @@ public static partial class GuidanceWindow
             else if (_panelTab == GuidanceTab.Ascent)
                 AbortAscent();
             else if (_panelTab == GuidanceTab.Landing
-                     && _landingSubTab == LandingSubTab.Powered && _s.UseSixDofLanding)
+                     && _landingSubTab == LandingSubTab.Powered && sixDofRoute)
                 Disengage6Dof(vehicle);
             else
                 AbortLanding();
@@ -313,7 +314,7 @@ public static partial class GuidanceWindow
         DrawSolverRadios();
         ImGui.Separator();
 
-        if (_s.UseSixDofLanding)
+        if (_s.UseSixDofLanding && !LandingMachineLive)
             Draw6DofLandingContent(vehicle, innerW);
         else
             DrawGfoldLandingContent(innerW, ImGui.GetTextLineHeightWithSpacing());

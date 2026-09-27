@@ -154,8 +154,54 @@ public static class KsaGimbalControl
         st.AppliedCount = applied;
     }
 
+    /// <summary>
+    /// Whether an engine behind this gimbal is activated, the same test FlightComputer.IsGimbalEngineActive applies to its maximum TVC authority.
+    /// FlightComputer.VehicleConfig.Gimbals lists every gimbal on the craft, including those of upper stages that are not staged yet and can produce no torque.
+    /// </summary>
+    public static bool IsEngineActive(GimbalController gc)
+    {
+        foreach (RocketNozzle nozzle in gc.Data.Nozzles)
+            if (nozzle.Rocket?.Core.Controller is { IsActive: true })
+                return true;
+        return false;
+    }
+
+    /// <summary>
+    /// Whether any of these gimbals has an activated engine.
+    /// Planning counts the gimbals of activated engines, or every gimbal when none is activated, so that a check on the pad still has gimbals to measure; see <see cref="CountsForPlanning"/>.
+    /// </summary>
+    public static bool AnyEngineActive(ReadOnlySpan<GimbalController> gimbals)
+    {
+        foreach (GimbalController gc in gimbals)
+            if (IsEngineActive(gc))
+                return true;
+        return false;
+    }
+
+    public static bool CountsForPlanning(GimbalController gc, bool anyEngineActive)
+        => !anyEngineActive || IsEngineActive(gc);
+
+    /// <summary>The gimbals planning counts, as an array for the allocator's setup-time measurements.</summary>
+    public static GimbalController[] PlanningGimbals(Vehicle vehicle)
+    {
+        Span<GimbalController> all = vehicle.Parts.Modules.Get<GimbalController>();
+        bool anyActive = AnyEngineActive(all);
+        int count = 0;
+        foreach (GimbalController gc in all)
+            if (CountsForPlanning(gc, anyActive))
+                count++;
+
+        var result = new GimbalController[count];
+        int next = 0;
+        foreach (GimbalController gc in all)
+            if (CountsForPlanning(gc, anyActive))
+                result[next++] = gc;
+        return result;
+    }
+
     // Physical allocation: solve for the deflections delivering the commanded N*m.
-    //  Two passes over the gimbals because the solve needs every gimbal's thrust before it can produce any command. Thrust falls back to the nameplate maximum when the engine is unlit, so the allocation can be inspected on the pad - the resulting commands are then what WOULD be flown at full thrust.
+    //  Two passes over the gimbals because the solve needs every gimbal's thrust before it can produce any command.
+    //  An unlit gimbal enters the solve with zero thrust, as stock ComputeTvcControl skips it. With nameplate thrust in its columns the minimum-norm solve gives it a share of the demand by its moment arm, and on a two-stage craft the unstaged upper engines far from the centre of mass then take most of the pitch and yaw torque while the lit engines barely move. Only when no gimbal has thrust does the nameplate maximum stand in, so the allocation can still be inspected on the pad.
     private static void ApplyLsq(Slot st, Command cmd, FlightComputer.VehicleConfigInfo cfg,
                                  float3 com, ref FlightComputerOutput outputs,
                                  ref VehicleCommandSink.Receipt receipt)
@@ -174,15 +220,26 @@ public static class KsaGimbalControl
             st.Commands = new double[2 * n];
         }
 
+        bool anyLit = false;
         for (int i = 0; i < n; i++)
         {
             GimbalController gc = cfg.Gimbals[i];
             st.Gimbals[i] = gc;
 
-            ModuleStateful<GimbalController, GimbalControllerState, EmptyStruct, EmptyStruct>
-                .StateUpdater.ModuleAndNewStateRef slot = outputs.Gimbals.GetModuleAndNewState(gc);
-            double thrust = slot.Module != null ? slot.State.TotalThrust : 0.0;
-            st.Thrusts[i] = thrust > 0.0 ? thrust : gc.Data.MaximumThrust;
+            // Read the thrust from the state before this control step, as stock UpdateTvcParams does. Stock ComputeTvcControl has already written GimbalControllerState.Zero, with zero thrust, into the new state of every lit gimbal it gives a zero demand, which is every gimbal while the attitude mode is Manual and no rotation key is held.
+            double thrust = outputs.Gimbals.GetModuleAndReadOnlyState(gc).State.TotalThrust;
+            st.Thrusts[i] = thrust;
+            anyLit |= thrust > 0.0;
+        }
+
+        // The preview keeps to the gimbals PlanningGimbals chooses, so the first step after ignition, before any thrust is committed, does not hand the demand to an unstaged stage either.
+        if (!anyLit)
+        {
+            bool anyActive = AnyEngineActive(st.Gimbals.AsSpan(0, n));
+            for (int i = 0; i < n; i++)
+                st.Thrusts[i] = CountsForPlanning(st.Gimbals[i], anyActive)
+                    ? st.Gimbals[i].Data.MaximumThrust
+                    : 0.0;
         }
 
         st.LastAllocation = KsaTvcAllocator.Solve(

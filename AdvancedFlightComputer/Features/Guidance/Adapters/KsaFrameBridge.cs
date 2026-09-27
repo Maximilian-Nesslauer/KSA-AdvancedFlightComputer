@@ -54,11 +54,15 @@ public static class KsaFrameBridge
     /// </summary>
     public static void BodyAxes(Vehicle vehicle, out double3 mx, out double3 my, out double3 mz)
     {
-        // Model +Z is the thrust axis. Take it from the highest-thrust gimbal, which is the main engine on any sane layout; fall back to KSA's long axis (+X) if the vehicle has no gimballed engine to measure.
+        // Model +Z is the thrust axis. Take it from the highest-thrust gimbal among the activated engines, or among all gimbals when none is activated; fall back to KSA's long axis (+X) if the vehicle has no gimballed engine to measure.
         double3 thrust = new(1, 0, 0);
         double best = 0;
-        foreach (GimbalController gc in vehicle.Parts.Modules.Get<GimbalController>())
+        Span<GimbalController> gimbals = vehicle.Parts.Modules.Get<GimbalController>();
+        bool anyActive = KsaGimbalControl.AnyEngineActive(gimbals);
+        foreach (GimbalController gc in gimbals)
         {
+            if (!KsaGimbalControl.CountsForPlanning(gc, anyActive))
+                continue;
             if (gc.Data.MaximumThrust <= best)
                 continue;
             best = gc.Data.MaximumThrust;

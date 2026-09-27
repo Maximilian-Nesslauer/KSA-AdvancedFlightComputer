@@ -162,7 +162,7 @@ $scvxBase = @(
     "--runtime", $RuntimeIdentifier,
     "--"
 )
-foreach ($command in @("--fd", "--aero", "--impact", "--sub-scs", "--loop", "--ascent")) {
+foreach ($command in @("--fd", "--aero", "--impact", "--sub-scs", "--loop", "--ascent", "--cold-shift", "--hermite")) {
     Invoke-Checked -FilePath "dotnet" -ArgumentList ($scvxBase + $command) -FailureMessage "The Scvx $command check failed."
 }
 

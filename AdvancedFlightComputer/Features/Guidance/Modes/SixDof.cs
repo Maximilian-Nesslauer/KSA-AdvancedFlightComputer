@@ -448,8 +448,9 @@ public static partial class GuidanceWindow
         xf[2] = _s.SixDofTargetAltM;
         TerminalAttitude(x, xf);
 
+        double sigmaSeed = _s.Guidance.HasPlan ? _s.SixDofSigmaSeed : _s.SixDofEntrySigmaSeed;
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _s.SixDofTiltDeg,
-                                   _s.SixDofThrottleFloor, _s.SixDofSigmaSeed,
+                                   _s.SixDofThrottleFloor, sigmaSeed,
                                    _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                    _s.SixDofProximal,
                                    _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
@@ -478,10 +479,12 @@ public static partial class GuidanceWindow
     private static Ksa6DofGuidance ApplyRebuild(RebuildRequest req, Ksa6DofGuidance from,
                                                 double[] x, double now)
     {
-        var next = new Ksa6DofGuidance(req.Cfg, req.Dyn) { FixedTime = req.FixedTime };
-        next.Inputs = req.Inputs;
+        Ksa6DofGuidance next = NewGuidance(req);
         return next.SeedFrom(from, x, now) ? next : null;
     }
+
+    private static Ksa6DofGuidance NewGuidance(RebuildRequest req)
+        => new(req.Cfg, req.Dyn) { FixedTime = req.FixedTime, Inputs = req.Inputs };
 
     /// <summary>
     /// Rebuild the guidance at a different node count. Prepare on the game thread,
@@ -511,6 +514,19 @@ public static partial class GuidanceWindow
         return true;
     }
 
+    private static bool RebuildUnplannedColdAt(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                               double[] x, double now, int nodes)
+    {
+        RebuildRequest req = PrepareRebuild(vehicle, parent, siteCci, x, now, nodes);
+        if (req == null)
+            return false;
+
+        _s.Guidance = NewGuidance(req);
+        _s.LastReplan = now;
+        SixDofLog.Event(_s, now, $"COLD NODE STEP at alt {x[2]:F0} m: {nodes} nodes without a prior plan");
+        return true;
+    }
+
     /// <summary>
     /// What happens after a solve lands, whichever thread produced it. Shared on
     /// purpose: two copies of this would drift, and the A/B toggle is only worth
@@ -528,7 +544,7 @@ public static partial class GuidanceWindow
                 $"QUATERNION BRANCH FLIP at alt {x[2]:F0} m: re-expressed " +
                 $"{_s.Guidance.LastBranchFlips} of {_s.Guidance.Nodes - 1} plan nodes onto the " +
                 "vehicle's branch (q and -q are the same rotation; the defect is not)");
-        SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+        SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Published);
     }
 
     private static void OnSolveRefused(double now, string error)
@@ -536,9 +552,23 @@ public static partial class GuidanceWindow
         _s.Error = "re-solve failed: " + error;
         _s.SolveOk = false;
         _s.RefusalRun++;
-        // Every refusal, with its reason.
+        // Every refusal, with its reason and the last SCvx iteration, so a truncated subproblem can be told apart from a rejected step.
         // A refused re-solve silently leaves the vehicle on a stale open-loop plan, so a run of these in the event log is the signature to look for first.
-        SixDofLog.Event(_s, now, "RE-SOLVE REFUSED: " + error);
+        string attempt = _s.Guidance.LastIterations > 0
+            ? " " + DescribeLastIteration(_s.Worker?.LastSolveMs ?? _s.Guidance.LastSolveMs)
+            : "";
+        SixDofLog.Event(_s, now, "RE-SOLVE REFUSED: " + error + attempt);
+    }
+
+    // The last SCvx iteration of the current guidance, for the event log. A failed subproblem carries the native solver's reason, which tells a truncated solve from an infeasible one.
+    private static string DescribeLastIteration(double jobMs = double.NaN)
+    {
+        ScvxIteration last = _s.Guidance.LastIteration;
+        return $"[subproblem {last.Solved}, step {last.Accepted}, rho {last.Rho:G3}, " +
+               $"trust {last.TrustRegion:G3}, ADMM {last.SolverIterations}/" +
+               $"{_s.Guidance.SubproblemIterationCap}, iteration {last.ElapsedMs:F0} ms" +
+               (double.IsNaN(jobMs) ? "" : $", job {jobMs:F0} ms") +
+               (last.Solved ? "]" : $", {_s.Guidance.LastSubproblemFailure}]");
     }
 
     // A/B TOGGLE.
@@ -748,12 +778,45 @@ public static partial class GuidanceWindow
     /// The flag itself is still only a REQUEST. Engaging runs a cold solve, which
     /// belongs on the sim thread rather than in a draw; the claim is what can and must
     /// happen here, so that whatever was flying the vehicle stops on this frame rather
-    /// than getting one more step in before the cold solve lands.
+    /// than getting one more step in before the cold solve lands. Its attitude command
+    /// stays held until the first plan can steer, see ApplyAutopilot.
     /// </summary>
-    private static void Engage6Dof(Vehicle vehicle)
+    private static void Engage6Dof(Vehicle vehicle, bool fromBrakingBurn = false)
     {
+        double sigmaSeed = _s.SixDofSigmaSeed;
+        if (fromBrakingBurn && double.IsFinite(_s.Upfg.Tgo))
+            sigmaSeed = Math.Max(sigmaSeed, _s.Upfg.Tgo);
+        _s.SixDofEntrySigmaSeed = sigmaSeed;
         ClaimVehicle(GuidanceMode.SixDof, vehicle);
+        _s.SixDofFromBrakingBurn = fromBrakingBurn;
+        _s.SixDofLastPlanTime = double.NaN;
+        _s.SixDofLastPublishedPlan = null;
         _s.EngagePending = true;
+    }
+
+    // A 6-DOF solve that publishes no new plan for this long hands the craft to G-FOLD, which plans in milliseconds.
+    private const double SixDofColdFallbackSeconds = 6.0;
+    // Below this height a restart whose last plan has expired hands over at once instead of waiting for the full fallback time. A first solve always gets the full time, because a low direct engage is a deliberate choice.
+    private const double SixDofFallbackGateM = 500;
+
+    // The engine stays lit and the claim stays with guidance, so the craft is never released between the two modes. A handoff from the braking burn keeps the elevated G-FOLD gate, and a direct engage lands straight on the site.
+    // The solver choice stays 6-DOF for the next descent, and the panel shows and aborts the landing machine while it flies, see LandingMachineLive.
+    private static void HandSixDofToGfold(Vehicle vehicle, double now, double altitude)
+    {
+        string reason = altitude <= SixDofFallbackGateM
+            ? "6-DOF has no new plan near landing. G-FOLD takes over."
+            : $"6-DOF found no new plan in {SixDofColdFallbackSeconds:F0} s. G-FOLD takes over.";
+        double sinceLastPlan = now - _s.SixDofLastPlanTime;
+        SixDofLog.Event(_s, now, $"{reason} Altitude {altitude:F0} m, {sinceLastPlan:F1} s since the last plan, " +
+                                 $"{_s.Guidance?.Nodes ?? 0} nodes, {_s.Error}");
+        bool fromBrakingBurn = _s.SixDofFromBrakingBurn;
+        // 6-DOF only lights the engine once it has a plan, so a direct engage from a coast can reach this with the engine still off.
+        bool engineLit = ManualInputs(vehicle).EngineOn;
+        Disengage6Dof(vehicle, cutEngine: false);
+        BeginGfoldDescent(vehicle, now, engineLit, reason);
+        // After the claim, which resets the approach.
+        _s.GfoldApproach = fromBrakingBurn ? GfoldApproach.BrakeAtGate : GfoldApproach.Direct;
+        GuidanceLog.Info(vehicle, reason);
     }
 
     private static void Disengage6Dof(Vehicle vehicle, bool cutEngine = true)
@@ -762,6 +825,8 @@ public static partial class GuidanceWindow
         _s.Active = false;
         _s.EngagePending = false;
         _s.Converging = false;
+        _s.SixDofFromBrakingBurn = false;
+        _s.SixDofLastPublishedPlan = null;
 
         // CLEAR THE REFERENCE FIRST, then stop the worker.
         // If stopping ever throws, the mod must still end up disengaged: leaving a live _s.Worker behind means the next engage builds a second one and the first keeps solving into an orphan.
@@ -776,6 +841,50 @@ public static partial class GuidanceWindow
             _s.LandingCutPending = true;
         if (!cutEngine)
             _s.ReleaseWithoutEngineCut = true;
+    }
+
+    // The panel can enable telemetry after guidance engages.
+    // Start a run at that click and capture the current plan, so the next solve has a reference in the CSV.
+    private static void SetSixDofLogging(Vehicle vehicle, bool enabled)
+    {
+        _s.SixDofLogging = enabled;
+        if (!enabled)
+        {
+            if (ReferenceEquals(SixDofLog.Owner, _s))
+                ReportLogStop(SixDofLog.Stop(_s));
+            return;
+        }
+        if (!_s.Active || SixDofLog.Enabled)
+            return;
+        if (!SixDofLog.Start(_s, vehicle.ToString(), vehicle.Orbit.Parent.ToString()))
+            return;
+        double now = SimNow();
+        SixDofLog.Event(_s, now, "LOGGING ENABLED DURING FLIGHT");
+        Ksa6DofPlan plan = _s.Guidance?.Published;
+        if (plan != null)
+            SixDofLog.PlanSnapshot(_s, now, plan);
+    }
+
+    // Once a second, so a cold solve of a few seconds leaves a readable trail of where the craft was while no plan steered it.
+    private const double SixDofConvergenceLogIntervalS = 1.0;
+
+    private static void LogSixDofConvergence(Vehicle vehicle, double[] state, double now)
+    {
+        if ((!GuidanceLog.Enabled && !SixDofLog.Enabled)
+            || now - _s.LastGuidanceLogTime < SixDofConvergenceLogIntervalS)
+            return;
+        _s.LastGuidanceLogTime = now;
+        ref ManualControlInputs inputs = ref ManualInputs(vehicle);
+        double range = Math.Sqrt(state[0] * state[0] + state[1] * state[1]);
+        double horizontalSpeed = Math.Sqrt(state[3] * state[3] + state[4] * state[4]);
+        string line = $"6-DOF cold solve: altitude {state[2]:F1} m, site range {range:F1} m, "
+            + $"horizontal speed {horizontalSpeed:F1} m/s, sink {-state[5]:F1} m/s, "
+            + $"engine {inputs.EngineOn}, throttle {inputs.EngineThrottle:F3}, cold frames {_s.ColdFrames}, status {_s.Error}";
+        if (GuidanceIdle && _s.Guidance.LastIterations > 0)
+            line += " " + DescribeLastIteration();
+        if (GuidanceLog.Enabled)
+            GuidanceLog.Debug(vehicle, line);
+        SixDofLog.Event(_s, now, line);
     }
 
     // ---- Execute (runs from the PrepareWorker prefix, never the draw) ----
@@ -838,6 +947,43 @@ public static partial class GuidanceWindow
         }
     }
 
+    // A retry starts from the horizon the stalled solve had reached, and a descent that already has a plan never goes below the configured seed.
+    private static double RetrySigma(Ksa6DofGuidance stalled)
+    {
+        double sigma = stalled.WorkingSigma;
+        if (!double.IsFinite(sigma) || sigma <= 0.0)
+            sigma = stalled.HasPlan ? stalled.Sigma : _s.SixDofEntrySigmaSeed;
+        return stalled.HasPlan ? Math.Max(sigma, _s.SixDofSigmaSeed) : sigma;
+    }
+
+    // Starts the G-FOLD fallback clock again from this plan.
+    private static void NotePublishedPlan(Ksa6DofPlan plan, double now)
+    {
+        _s.SixDofLastPublishedPlan = plan;
+        _s.SixDofLastPlanTime = now;
+    }
+
+    /// <summary>
+    /// Keeps the actuators on the last published plan while a restart converges.
+    /// The gimbal override keeps its last torque until it gets a new one, so without this a restart flies a constant torque that spins the craft up for as long as the new solve takes. Once a plan has been published the flight computer attitude is held in Manual and nothing else steers, so the old plan is the best command there is until it expires. After that the torque is zeroed. Before any plan exists the attitude from the previous mode still steers and nothing is written here.
+    /// </summary>
+    private static void FlyLastPlanWhileConverging(Vehicle vehicle, IParentBody parent, double3 siteCci,
+                                                   double[] x, double now)
+    {
+        if (_s.SixDofLastPublishedPlan == null || _s.Guidance == null)
+            return;
+
+        Ksa6DofPlan plan = _s.Guidance.Published;
+        if (plan != null && now - plan.SolveTime < plan.Sigma
+            && _s.Guidance.Command(now, out double3 torqueModel, out double thrustN))
+        {
+            ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
+            return;
+        }
+
+        KsaGimbalControl.SetLsq(vehicle, default);
+    }
+
     private static void Step6DofCore(Vehicle vehicle)
     {
         // No vehicle-identity guard any more, and none needed: the state IS keyed on the vehicle, so a save load or a vessel switch simply arrives with different state rather than with the wrong state.
@@ -885,6 +1031,12 @@ public static partial class GuidanceWindow
             _s.EngagePending = false;
             if (!Engage6Dof(vehicle, parent, siteCci, x, now))
                 return;
+            double speed = Universe.GetSimulationSpeed();
+            if (Universe.IsAutoWarpActive || speed > 1.0)
+            {
+                Universe.ResetSimulationSpeed();
+                GuidanceLog.Info(vehicle, $"6-DOF set simulation speed from {speed:F1}x to 1x.");
+            }
             // A synchronous solve publishes its first gimbal and engine command further down in this same step, so the craft is acquired here and not on the next step's entry.
             AcquireControl(vehicle);
         }
@@ -913,6 +1065,26 @@ public static partial class GuidanceWindow
                 if (result.Ok) OnSolveSucceeded(now, x);
                 else OnSolveRefused(now, result.Error);
             }
+        }
+
+        // G-FOLD FALLBACK.
+        // The clock runs from the last plan 6-DOF published, across refused re-solves, restarts and node changes, so a run of failed attempts cannot keep resetting it. A restart after a long run of refusals therefore hands over at once, because the craft has flown that long without a new plan.
+        // A plan the worker published counts once its result is collected, because until then the cold solve is still running.
+        Ksa6DofPlan publishedPlan = _s.Guidance?.Published;
+        bool newPlan = publishedPlan != null
+            && !ReferenceEquals(publishedPlan, _s.SixDofLastPublishedPlan);
+        if (newPlan && (!_s.Converging || coldResult?.Ok == true))
+            NotePublishedPlan(publishedPlan, now);
+        bool waitingForPlan = _s.Converging && coldResult?.Ok != true && !newPlan;
+        bool lastPlanExpired = _s.SixDofLastPublishedPlan != null
+            && now - _s.SixDofLastPublishedPlan.SolveTime >= _s.SixDofLastPublishedPlan.Sigma;
+        if (waitingForPlan && !HasPhysicalAtmosphere(parent)
+            && KsaEnginePerf.SupportsThrottleControl(vehicle)
+            && (now - _s.SixDofLastPlanTime >= SixDofColdFallbackSeconds
+                || (x[2] <= SixDofFallbackGateM && lastPlanExpired)))
+        {
+            HandSixDofToGfold(vehicle, now, x[2]);
+            return;
         }
 
         // The UI changes the requested mode.
@@ -980,11 +1152,15 @@ public static partial class GuidanceWindow
         }
 
         // Advance a spread cold solve.
-        // Until it produces a flyable plan there is nothing to command, so this returns without touching the actuators - the vehicle carries on doing whatever it was doing.
+        // Before the first plan the attitude held from the previous mode steers. A restart after a plan keeps flying that plan until it expires, see FlyLastPlanWhileConverging, which runs on every exit that leaves the restart unfinished. A restart that converges falls through to the new plan's command below.
         if (_s.Converging)
         {
+            LogSixDofConvergence(vehicle, x, now);
             if (!GuidanceIdle)
+            {
+                FlyLastPlanWhileConverging(vehicle, parent, siteCci, x, now);
                 return;
+            }
 
             _s.ColdFrames++;
 
@@ -1002,6 +1178,7 @@ public static partial class GuidanceWindow
             else if (_s.Worker != null)
             {
                 _s.Worker.TryDispatchStepCold(_s.Guidance, x, now);
+                FlyLastPlanWhileConverging(vehicle, parent, siteCci, x, now);
                 return;
             }
             else
@@ -1018,7 +1195,7 @@ public static partial class GuidanceWindow
                     $"COLD SOLVE CONVERGED in {_s.Guidance.LastIterations} iterations spread over " +
                     $"{_s.ColdFrames} frames, defect {_s.Guidance.LastDefectM:F2} m, " +
                     $"sigma {_s.Guidance.Sigma:F1} s");
-                SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+                SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Published);
             }
             else if (_s.Guidance.NeedsMoreNodes && _s.Guidance.Nodes < MaxNodes)
             {
@@ -1035,10 +1212,21 @@ public static partial class GuidanceWindow
                 var xfMore = new double[14];
                 xfMore[2] = _s.SixDofTargetAltM;
                 TerminalAttitude(x, xfMore);
-                if (RebuildAt(vehicle, parent, siteCci, x, now, nodes))
+                double retrySigma = RetrySigma(_s.Guidance);
+                bool rebuilt = _s.Guidance.HasPlan
+                    ? RebuildAt(vehicle, parent, siteCci, x, now, nodes)
+                    : RebuildUnplannedColdAt(vehicle, parent, siteCci, x, now, nodes);
+                if (rebuilt)
                 {
+                    Ksa6DofPlan rebuiltPlan = _s.Guidance.Published;
+                    if (rebuiltPlan != null && !ReferenceEquals(rebuiltPlan, _s.SixDofLastPublishedPlan))
+                        NotePublishedPlan(rebuiltPlan, now);
                     _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-                    _s.Guidance.BeginCold(x, xfMore, Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed));
+                    // A rebuild that carried the plan across continues its horizon; one without a plan continues the stalled solve's.
+                    double sigma = rebuiltPlan != null
+                        ? Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed) : retrySigma;
+                    _s.Guidance.BeginCold(x, xfMore,
+                        Math.Clamp(sigma, _s.Guidance.SigmaMin, _s.Guidance.SigmaMax));
                     _s.ColdFrames = 0;
                 }
                 else
@@ -1059,10 +1247,7 @@ public static partial class GuidanceWindow
                         // Reaching here means the solve has stopped improving, a finer node count cannot be built, and the result will not pass even the loose cold gate.
                         // Returning without doing anything leaves _s.Converging set, so the next frame walks straight back into the same branch - and because "stalled" latches once ColdStallIterations is passed, it can never leave.
                         //
-                        // Flight 20260821-084639 is that loop: one solve iterated from 12 to 110 times over 10.5 seconds, logging "retrying at 50 nodes" a hundred times while the rebuild failed every time.
-                        // Step6Dof deliberately does not touch the actuators while converging, so the vehicle flew the LAST accepted plan the whole way - a hard deceleration from 725 m that it kept executing until it had arrested the descent and was climbing through 200 m at 45 degrees of tilt.
-                        //
-                        // A fresh BeginCold is not the same work again: it re-anchors at the state the vehicle is in NOW and starts the SCvx loop over, which is exactly what converged three times earlier in that same run.
+                        // A fresh BeginCold is not the same work again: it re-anchors at the state the vehicle is in NOW and starts the SCvx loop over.
                         // Cheap, because the iterations are spread over frames.
                         SixDofLog.Event(_s, now,
                             $"COLD SOLVE stuck after {_s.Guidance.LastIterations} iterations " +
@@ -1070,10 +1255,11 @@ public static partial class GuidanceWindow
                         _s.Guidance.ColdIterationIntervalS =
                             _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
                         _s.Guidance.BeginCold(x, xfMore,
-                            Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed));
+                            Math.Clamp(retrySigma, _s.Guidance.SigmaMin, _s.Guidance.SigmaMax));
                         _s.ColdFrames = 0;
                     }
                 }
+                FlyLastPlanWhileConverging(vehicle, parent, siteCci, x, now);
                 return;
             }
             else
@@ -1088,6 +1274,10 @@ public static partial class GuidanceWindow
                     SixDofLog.Event(_s, now, "COLD SOLVE gave up after 240 frames: " + coldError);
                     Disengage6Dof(vehicle);
                     _s.Error = error;
+                }
+                else
+                {
+                    FlyLastPlanWhileConverging(vehicle, parent, siteCci, x, now);
                 }
                 return;
             }
@@ -1198,6 +1388,15 @@ public static partial class GuidanceWindow
         if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN))
             return;
 
+        ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
+    }
+
+    /// <summary>
+    /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
+    /// </summary>
+    private static void ApplyPlanCommand(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x,
+                                         double now, double3 torqueModel, double thrustN)
+    {
         // CLOSE THE LOOP ON THRUST.
         // The optimiser asks for newtons; KSA's throttle is a fraction of what the engines can produce AT THIS INSTANT, so the demand is divided by the vehicle's live capability rather than by the plan's Tmax.
         //
@@ -1297,11 +1496,11 @@ public static partial class GuidanceWindow
         // Spread cold solves engage COARSE; everything else uses the configured count.
         // The ladder takes over from the first cycle, so this is a starting point rather than a choice about how the descent is flown.
         engageNodes = _s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed
-            ? ColdNodesFor(_s.SixDofSigmaSeed)
+            ? ColdNodesFor(_s.SixDofEntrySigmaSeed)
             : _s.SixDofNodes;
 
         return Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _s.SixDofTiltDeg,
-                                     _s.SixDofThrottleFloor, _s.SixDofSigmaSeed,
+                                      _s.SixDofThrottleFloor, _s.SixDofEntrySigmaSeed,
                                      _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                      _s.SixDofProximal,
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
@@ -1330,7 +1529,8 @@ public static partial class GuidanceWindow
         if (_s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed)
         {
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-            _s.Guidance.BeginCold(x, xf, _s.SixDofSigmaSeed);
+            _s.Guidance.BeginCold(x, xf, _s.SixDofEntrySigmaSeed);
+            _s.SixDofLastPlanTime = now;
             _s.Converging = true;
             _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
             _s.ColdFrames = 0;
@@ -1349,6 +1549,7 @@ public static partial class GuidanceWindow
             {
                 SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
                 SixDofLog.Event(_s, now, $"ENGAGED (spread cold solve)  nodes {engageNodes}  " +
+                                     $"sigma seed {_s.SixDofEntrySigmaSeed:F1} s  " +
                                      $"target alt {_s.SixDofTargetAltM:F0} m  cadence {_s.SixDofReplanSec:F2} s");
             }
             return true;
@@ -1369,8 +1570,8 @@ public static partial class GuidanceWindow
         if (!ok)
         {
             ok = _s.SixDofFixedTime
-                ? _s.Guidance.PlanSearch(x, xf, _s.SixDofSigmaSeed, now, Math.Clamp(_s.SixDofSigmaSamples, 1, 12))
-                : _s.Guidance.Plan(x, xf, _s.SixDofSigmaSeed, now);
+                ? _s.Guidance.PlanSearch(x, xf, _s.SixDofEntrySigmaSeed, now, Math.Clamp(_s.SixDofSigmaSamples, 1, 12))
+                : _s.Guidance.Plan(x, xf, _s.SixDofEntrySigmaSeed, now);
         }
         if (!ok)
         {
@@ -1407,7 +1608,7 @@ public static partial class GuidanceWindow
                 $"cold solve: {_s.Guidance.Status}, {_s.Guidance.LastIterations} iters, " +
                 $"defect {_s.Guidance.LastDefectM:F2} m, sigma {_s.Guidance.Sigma:F1} s, " +
                 $"Tmax {_s.Guidance.Tmax / 1e6:F2} MN");
-            SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Nodes, _s.Guidance.PlanState, _s.Guidance.PlanControl);
+            SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Published);
         }
         return true;
     }

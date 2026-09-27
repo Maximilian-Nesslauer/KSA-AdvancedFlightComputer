@@ -155,7 +155,7 @@ public sealed class Scvx6DofSubproblemScs
 
         AssembleObjective(x0[Dynamics6Dof.IM], xbar);
         AssembleEqualities(x0, xf, xbar, ubar, sigBar, A, B, f0);
-        AssembleCone(xf, xbar, ubar, sigBar, tr);
+        AssembleCone(x0, xf, xbar, ubar, sigBar, tr);
 
         if (!_frozen) { _A.Freeze(); _P.Freeze(); _frozen = true; }
         else { _A.EndRefill(); _P.EndRefill(); }
@@ -429,7 +429,7 @@ public sealed class Scvx6DofSubproblemScs
     // ------------------------------------------------------------------- cone
 
     // Same positive-orthant rows as the ECOS port's AssembleCone, minus the three epigraph cones (now handled by P instead), written starting at row offset _nEq since SCS stacks equalities and cone rows into one matrix.
-    private void AssembleCone(ReadOnlySpan<double> xf, double[] xbar, double[] ubar,
+    private void AssembleCone(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf, double[] xbar, double[] ubar,
                               double sigBar, double tr)
     {
         _row = _nEq;
@@ -519,19 +519,31 @@ public sealed class Scvx6DofSubproblemScs
         }
 
         // GLIDESLOPE, from node 1 onward, as a second-order cone:
-        //     ||r_xy[k] - target_xy||  <=  cot(angle) * (r_z[k] - target_z) + g_k
+        //     ||r_xy[k] - target_xy||  <=  cot(angle) * (r_z[k] - target_z) + entry_k + g_k
         //
         // SCS reads a SOC block as s = b - Ax with s[0] >= ||s[1:]||, so the three rows carry the cone's height and its two horizontal offsets.
         // Excluded at node 0 for the same reason as the climb rate, and slackened by g_k for a sharper one: alone, either constraint is survivable, but a vehicle that is both outside the cone and too low can only get back inside by CLIMBING - which the climb-rate row forbids.
         // Hard versions of the two together can trap the vehicle in a region with no feasible exit at all.
         // Soft versions cannot, and the L1 penalty keeps the slack at exactly zero whenever the corridor is actually reachable.
         double cot = _cfg.CotGlideSlope;
+        // ENTRY ALLOWANCE. A vehicle handed over outside the cone starts entry_0 metres outside it, measured from x0 on every solve.
+        // entry_k = entry_0 * ((1-s)^2 + s*(1-s)^4) with s the node's fraction of the horizon: the full violation at the entry, zero at the target, and a quartic term that only widens the early nodes, so the corridor closes on the target without asking the first interval to jump inside.
+        double entryX = x0[Dynamics6Dof.IR] - xf[Dynamics6Dof.IR];
+        double entryY = x0[Dynamics6Dof.IR + 1] - xf[Dynamics6Dof.IR + 1];
+        double entryHeight = x0[Dynamics6Dof.IR + 2] - xf[Dynamics6Dof.IR + 2];
+        double entryAllowance = Math.Max(0.0,
+            Math.Sqrt(entryX * entryX + entryY * entryY) - cot * entryHeight);
         for (int k = 0; k < _nGs; k++)
         {
             int node = k + 1;
             AddA(row, IX(node, Dynamics6Dof.IR + 2), -cot);
             AddA(row, IGs(k), -1.0);
-            _b[row++] = -cot * xf[Dynamics6Dof.IR + 2];
+            double progress = (double)node / (_n - 1);
+            double remaining = 1.0 - progress;
+            double remainingSquared = remaining * remaining;
+            double allowance = entryAllowance *
+                (remainingSquared + progress * remainingSquared * remainingSquared);
+            _b[row++] = -cot * xf[Dynamics6Dof.IR + 2] + allowance;
 
             AddA(row, IX(node, Dynamics6Dof.IR + 0), -1.0);
             _b[row++] = -xf[Dynamics6Dof.IR + 0];

@@ -46,12 +46,18 @@ public sealed class Ksa6DofGuidance
     public ScvxStatus Status { get; private set; } = ScvxStatus.Failed;
     public string Error { get; private set; } = "";
     public int LastIterations { get; private set; }
+    public ScvxIteration LastIteration => _solver.Trace.Count > 0 ? _solver.Trace[^1] : default;
+    public string LastSubproblemFailure => _solver.LastFailureReason;
+    public int SubproblemIterationCap => _solver.MaxSubproblemIterations;
     public int AcceptedSteps { get; private set; }
     public double LastSolveMs { get; private set; }
     public bool HasPlan => _planX.Length > 0;
 
     /// <summary>Plan duration (the solver's free final time), seconds.</summary>
     public double Sigma => _planSigma;
+
+    /// <summary>The burn time of the solve in progress, which is not published yet. Read it only while the worker is idle.</summary>
+    public double WorkingSigma => _solver.Sigma;
 
     /// <summary>Seconds since the solve that produced the current plan.</summary>
     public double PlanElapsed { get; private set; }
@@ -454,7 +460,7 @@ public sealed class Ksa6DofGuidance
     ///  THE TIMING. Node 0 is overwritten with the measured state, so it sits at old-plan time `elapsed`. Node 1 was old node 1+shift, sitting at old-plan time (1+shift)*dt_old. Interval 0 therefore spanned (1 + shift) * dt_old  -  elapsed of trajectory while its collocation constraint assumes it spans exactly one new dt. Because shift is ROUNDED those disagree by up to half a node, and at 80 m/s with dt around 0.4 s half a node is 16 m of vertical position that the seed asserts and the dynamics do not.
     ///  Flights the recorded run and -090504 are that arithmetic: mean gated ratio 0.02 and 0.35 while shift was zero, 6 to 34 the moment it reached one, the defect on rz at interval 0 in 51 of 53 refusals, and every refusal streak beginning on a shifted cycle with no prior refusal. Those cycles accepted no SCvx step, so the reported figure IS the seed: mean 19.6 m, worst 78.3 m.
     ///  THE TAIL. Clamping meant the last `shift` nodes were copies of the old final node - intervals joining a state to itself, which the collocation reads as a full dt of unexplained stillness.
-    ///  The current rule. Samples the old plan at the times the new grid actually wants, t_k = elapsed + k * sigmaNew / (n - 1) by linear interpolation between the bracketing old nodes. On the normal path sigmaNew is the remaining burn time, so t_0 = elapsed and t_(n-1) = the old plan's own terminal time: the horizon shrinks onto a FIXED endpoint, the terminal node stays the terminal node, and nothing is rounded or duplicated.
+    ///  The current rule. Samples the old plan at the times the new grid actually wants, t_k = elapsed + k * sigmaNew / (n - 1). Position and velocity come from one cubic segment, and the other channels are blended linearly. On the normal path sigmaNew is the remaining burn time, so t_0 = elapsed and t_(n-1) = the old plan's own terminal time: the horizon shrinks onto a FIXED endpoint, the terminal node stays the terminal node, and nothing is rounded or duplicated.
     ///  Interval 0 then spans exactly one new dt of the old plan, so its collocation is consistent by construction. What remains at interval 0 is the genuine drift between the measured state and where the plan said the vehicle would be - a real thing the solver should answer for, unlike the rounding.
     /// </summary>
     /// <param name="sigmaNew">
@@ -473,33 +479,7 @@ public sealed class Ksa6DofGuidance
 
         xs = new double[_n * NX];
         us = new double[_n * NU];
-        for (int k = 0; k < _n; k++)
-        {
-            // Clamped at the old plan's END. Only reachable when the new horizon runs past what the old plan covered - SigmaMin or MinimumBurnTime holding sigma up late in a descent, or a warm restart seeding a longer burn. The old plan has nothing to say beyond its terminal node and holding the target is the honest answer; on the normal path t_k lands exactly on _planSigma at k = n-1 and this never binds.
-            double t = Math.Clamp(elapsed + k * dtNew, 0.0, _planSigma);
-            double sNode = Math.Clamp(t / dtOld, 0.0, _n - 1);
-            int i0 = Math.Clamp((int)Math.Floor(sNode), 0, _n - 1);
-            int i1 = Math.Min(i0 + 1, _n - 1);
-            double a = sNode - i0;
-
-            for (int i = 0; i < NX; i++)
-                xs[k * NX + i] = _planX[i0 * NX + i] * (1.0 - a) + _planX[i1 * NX + i] * a;
-            for (int j = 0; j < NU; j++)
-                us[k * NU + j] = _planU[i0 * NU + j] * (1.0 - a) + _planU[i1 * NU + j] * a;
-
-            // THE DOUBLE COVER, between the two nodes being blended. q and -q are the same rotation, so a sign disagreement across the bracket interpolates through zero and comes back as a garbage attitude once normalised.
-            // Adjacent nodes of a solved plan are normally on one branch, but nothing enforces it and the failure would be silent.
-            double dot = 0.0;
-            for (int i = 0; i < 4; i++)
-                dot += _planX[i0 * NX + IQ + i] * _planX[i1 * NX + IQ + i];
-            if (dot < 0.0)
-                for (int i = 0; i < 4; i++)
-                    xs[k * NX + IQ + i] = _planX[i0 * NX + IQ + i] * (1.0 - a)
-                                        - _planX[i1 * NX + IQ + i] * a;
-
-            // Blending two unit quaternions gives a shorter one, and the solver's own norm constraint is linearised about the reference - a non-unit reference biases that row rather than merely being imprecise.
-            Normalize(xs.AsSpan(k * NX + IQ, 4));
-        }
+        ResamplePlan(_planX, _planU, _n, _planSigma, elapsed, _n, dtNew, xs, us);
 
         // Seed node 0 with the MEASURED state. It is what the equality will force anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle rather than at the old plan's prediction for now.
         Array.Copy(x0, 0, xs, 0, NX);
@@ -589,7 +569,7 @@ public sealed class Ksa6DofGuidance
         {
             double[] xs = (double[])_solver.ReferenceX.Clone();
             double[] us = (double[])_solver.ReferenceU.Clone();
-            Array.Copy(x0, 0, xs, 0, NX);
+            ColdReferenceShift.Apply(xs, _n, _solver.Sigma, x0);
             LastBranchFlips = AlignQuaternionBranch(xs, _n);
             _solver.Reseed(x0, xs, us, _solver.Sigma, trustRegion: _solver.TrustRegion);
         }
@@ -598,6 +578,7 @@ public sealed class Ksa6DofGuidance
         for (int i = 0; i < Math.Max(iterations, 1); i++)
             _solver.Iterate();
         double iterationMs = sw.Elapsed.TotalMilliseconds;
+        LearnAdmmCost(iterationMs);
 
         // Accept against the WARM gate first. Only fall back to the looser cold gate once the iteration count says it has stopped improving, so a genuinely hard case still engages instead of converging forever. Finish does no solving here - the 0 budget means it runs the gates over what Iterate just produced.
         // STALLED ABOVE THE WARM GATE MEANS TOO FEW NODES, NOT "GOOD ENOUGH".
@@ -668,22 +649,63 @@ public sealed class Ksa6DofGuidance
         if (plan == null) return double.PositiveInfinity;
         double dt = plan.Sigma / (plan.Nodes - 1);
         double t = Math.Max(0.0, simNow - plan.SolveTime);
-        double s = Math.Clamp(t / dt, 0.0, plan.Nodes - 1.001);
+        double s = Math.Clamp(t / dt, 0.0, plan.Nodes - 1.0);
         int k = (int)s;
         double f = s - k;
-        // NOT Lerp() - that one strides by NU because every other caller passes _planU. Using it on _planX reads element k*4+i, so from node 1 onward it returns velocity and quaternion components as if they were positions. That put ~6% of altitude of fictitious drift on a plan solved milliseconds ago, which tripped the 5%-of-altitude restart limit on literally every plan.
         int k1 = Math.Min(k + 1, plan.Nodes - 1);
+        Span<double> position = stackalloc double[3];
+        Span<double> velocity = stackalloc double[3];
+        PlanStateInterpolation.SamplePositionVelocity(plan.X, k, k1, f, dt, position, velocity);
         double d = 0.0;
         for (int i = 0; i < 3; i++)
         {
-            double px = plan.X[k * NX + i] * (1.0 - f) + plan.X[k1 * NX + i] * f;
-            d += (px - x0[i]) * (px - x0[i]);
+            double delta = position[i] - x0[i];
+            d += delta * delta;
         }
         PlanDriftM = Math.Sqrt(d);
         return PlanDriftM;
     }
 
     private double[] _xf = [];
+
+    /// <summary>
+    /// Samples a plan onto a new grid of <paramref name="nodes"/> nodes that starts <paramref name="elapsed"/> seconds into it, <paramref name="dtNew"/> seconds apart.
+    /// Position and velocity come from one cubic segment per interval, the other channels are blended linearly.
+    /// </summary>
+    private static void ResamplePlan(double[] planX, double[] planU, int planNodes, double planSigma,
+                                     double elapsed, int nodes, double dtNew, double[] xs, double[] us)
+    {
+        double dtOld = Math.Max(planSigma / (planNodes - 1), 1e-9);
+        for (int k = 0; k < nodes; k++)
+        {
+            // Clamped at the old plan's END. Only reachable when the new horizon runs past what the old plan covered - SigmaMin or MinimumBurnTime holding sigma up late in a descent, or a warm restart seeding a longer burn. The old plan has nothing to say beyond its terminal node and holding the target is the honest answer; on the normal path t_k lands exactly on the old plan's sigma at k = n-1 and this never binds.
+            double t = Math.Clamp(elapsed + k * dtNew, 0.0, planSigma);
+            double sNode = Math.Clamp(t / dtOld, 0.0, planNodes - 1);
+            int i0 = Math.Clamp((int)Math.Floor(sNode), 0, planNodes - 1);
+            int i1 = Math.Min(i0 + 1, planNodes - 1);
+            double a = sNode - i0;
+
+            PlanStateInterpolation.SamplePositionVelocity(planX, i0, i1, a, dtOld,
+                xs.AsSpan(k * NX, 3), xs.AsSpan(k * NX + Dynamics6Dof.IV, 3));
+            for (int i = IQ; i < NX; i++)
+                xs[k * NX + i] = planX[i0 * NX + i] * (1.0 - a) + planX[i1 * NX + i] * a;
+            for (int j = 0; j < NU; j++)
+                us[k * NU + j] = planU[i0 * NU + j] * (1.0 - a) + planU[i1 * NU + j] * a;
+
+            // THE DOUBLE COVER, between the two nodes being blended. q and -q are the same rotation, so a sign disagreement across the bracket interpolates through zero and comes back as a garbage attitude once normalised.
+            // Adjacent nodes of a solved plan are normally on one branch, but nothing enforces it and the failure would be silent.
+            double dot = 0.0;
+            for (int i = 0; i < 4; i++)
+                dot += planX[i0 * NX + IQ + i] * planX[i1 * NX + IQ + i];
+            if (dot < 0.0)
+                for (int i = 0; i < 4; i++)
+                    xs[k * NX + IQ + i] = planX[i0 * NX + IQ + i] * (1.0 - a)
+                                        - planX[i1 * NX + IQ + i] * a;
+
+            // Blending two unit quaternions gives a shorter one, and the solver's own norm constraint is linearised about the reference - a non-unit reference biases that row rather than merely being imprecise.
+            Normalize(xs.AsSpan(k * NX + IQ, 4));
+        }
+    }
 
     /// <summary>
     /// Seed this guidance from ANOTHER one's plan, resampled onto this node count.
@@ -707,33 +729,19 @@ public sealed class Ksa6DofGuidance
         if (prev == null || !prev.HasPlan)
             return false;
 
+        // The new plan starts where the vehicle is now on the old one and keeps its terminal time, so the transition is a resample of the remaining trajectory.
         var xs = new double[_n * NX];
         var us = new double[_n * NU];
-        int src = prev._n;
-
-        for (int k = 0; k < _n; k++)
-        {
-            // Same normalised time in both plans, so this is a pure resample of the trajectory rather than a reinterpretation of it.
-            double t = (double)k / (_n - 1) * (src - 1);
-            int i0 = Math.Clamp((int)Math.Floor(t), 0, src - 1);
-            int i1 = Math.Min(i0 + 1, src - 1);
-            double a = t - i0;
-
-            for (int i = 0; i < NX; i++)
-                xs[k * NX + i] = prev._planX[i0 * NX + i] * (1.0 - a) + prev._planX[i1 * NX + i] * a;
-            for (int j = 0; j < NU; j++)
-                us[k * NU + j] = prev._planU[i0 * NU + j] * (1.0 - a) + prev._planU[i1 * NU + j] * a;
-
-            // Componentwise interpolation does not preserve unit norm, and the dynamics assume it does.
-            Normalize(xs.AsSpan(k * NX + 6, 4));
-        }
+        double elapsed = Math.Max(0.0, simNow - prev._solveTime);
+        double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - elapsed);
+        ResamplePlan(prev._planX, prev._planU, prev._n, prev._planSigma, elapsed, _n,
+                     sigma / (_n - 1), xs, us);
 
         // Node 0 is the measured state exactly, for the same reason as in Plan: the equality and the trust region leave no slack there at all.
         Array.Copy(x0, 0, xs, 0, NX);
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         _xf = (double[])prev._xf.Clone();
-        double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - Math.Max(0.0, simNow - prev._solveTime));
         if (FixedTime) PinSigma(sigma);
         _solver.Initialize(x0, _xf, xs, us, sigma);
         return Finish(x0, simNow, maxIterations);
@@ -936,6 +944,20 @@ public sealed class Ksa6DofGuidance
         _solver.EscalatedSubproblemIterations = cap;   // equal, so no retry is issued
     }
 
+    // Refine the cost-per-iteration estimate from what a solve actually did.
+    // Exponential average so one outlier cannot swing the budget, but it still tracks a change in node count or vehicle within a few cycles.
+    private void LearnAdmmCost(double elapsedMs)
+    {
+        int admm = 0;
+        foreach (ScvxIteration it in _solver.Trace)
+            admm += it.SolverIterations;
+        if (admm > 50 && elapsedMs > 0.0)
+        {
+            double sample = elapsedMs / admm;
+            MsPerAdmmIteration = 0.8 * MsPerAdmmIteration + 0.2 * sample;
+        }
+    }
+
     private bool Finish(double[] x0, double simNow, int maxIterations, bool cold = false,
                         double budgetMs = 0.0)
     {
@@ -943,16 +965,9 @@ public sealed class Ksa6DofGuidance
         Status = _solver.Solve(maxIterations, budgetMs > 0.0 ? budgetMs : CycleBudgetMs);
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
 
-        // Refine the cost-per-iteration estimate from what this solve actually did.
-        // Exponential average so one outlier cannot swing the budget, but it still tracks a change in node count or vehicle within a few cycles.
-        int admm = 0;
-        foreach (ScvxIteration it in _solver.Trace)
-            admm += it.SolverIterations;
-        if (admm > 50 && LastSolveMs > 0.0)
-        {
-            double sample = LastSolveMs / admm;
-            MsPerAdmmIteration = 0.8 * MsPerAdmmIteration + 0.2 * sample;
-        }
+        // A zero-iteration Finish judges work done by StepCold and has no solve time to learn from.
+        if (maxIterations > 0)
+            LearnAdmmCost(LastSolveMs);
         LastIterations = _solver.IterationCount;
 
         AcceptedSteps = 0;
