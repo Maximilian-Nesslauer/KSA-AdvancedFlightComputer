@@ -796,16 +796,17 @@ public static partial class GuidanceWindow
 
     // A 6-DOF solve that publishes no new plan for this long hands the craft to G-FOLD, which plans in milliseconds.
     private const double SixDofColdFallbackSeconds = 6.0;
+    // A craft that cannot throttle below its weight and climbs this fast this close to the site has stopped short of the ground.
+    private const double SixDofClimbFallbackHeightM = 50;
+    private const double SixDofClimbFallbackMs = 1;
+
     // Below this height a restart whose last plan has expired hands over at once instead of waiting for the full fallback time. A first solve always gets the full time, because a low direct engage is a deliberate choice.
     private const double SixDofFallbackGateM = 500;
 
     // The engine stays lit and the claim stays with guidance, so the craft is never released between the two modes. A handoff from the braking burn keeps the elevated G-FOLD gate, and a direct engage lands straight on the site.
     // The solver choice stays 6-DOF for the next descent, and the panel shows and aborts the landing machine while it flies, see LandingMachineLive.
-    private static void HandSixDofToGfold(Vehicle vehicle, double now, double altitude)
+    private static void HandSixDofToGfold(Vehicle vehicle, double now, double altitude, string reason)
     {
-        string reason = altitude <= SixDofFallbackGateM
-            ? "6-DOF has no new plan near landing. G-FOLD takes over."
-            : $"6-DOF found no new plan in {SixDofColdFallbackSeconds:F0} s. G-FOLD takes over.";
         double sinceLastPlan = now - _s.SixDofLastPlanTime;
         SixDofLog.Event(_s, now, $"{reason} Altitude {altitude:F0} m, {sinceLastPlan:F1} s since the last plan, " +
                                  $"{_s.Guidance?.Nodes ?? 0} nodes, {_s.Error}");
@@ -1083,7 +1084,21 @@ public static partial class GuidanceWindow
             && (now - _s.SixDofLastPlanTime >= SixDofColdFallbackSeconds
                 || (x[2] <= SixDofFallbackGateM && lastPlanExpired)))
         {
-            HandSixDofToGfold(vehicle, now, x[2]);
+            HandSixDofToGfold(vehicle, now, x[2], x[2] <= SixDofFallbackGateM
+                ? "6-DOF has no new plan near landing. G-FOLD takes over."
+                : $"6-DOF found no new plan in {SixDofColdFallbackSeconds:F0} s. G-FOLD takes over.");
+            return;
+        }
+
+        // CLIMBING NEAR THE GROUND.
+        // The 6-DOF model keeps the engine lit at T >= Tmin, so a craft whose minimum thrust is above its weight climbs as soon as it stops short of the ground, and no plan can bring it back down with the engine lit. G-FOLD's landing burn cuts the engine and relights for the touchdown.
+        if (_s.SixDofLastPublishedPlan != null && x[2] <= SixDofClimbFallbackHeightM
+            && x[5] > SixDofClimbFallbackMs && !HasPhysicalAtmosphere(parent)
+            && KsaEnginePerf.SupportsThrottleControl(vehicle)
+            && TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1)
+        {
+            HandSixDofToGfold(vehicle, now, x[2],
+                "6-DOF is climbing near the ground and cannot throttle below the weight. G-FOLD takes over.");
             return;
         }
 

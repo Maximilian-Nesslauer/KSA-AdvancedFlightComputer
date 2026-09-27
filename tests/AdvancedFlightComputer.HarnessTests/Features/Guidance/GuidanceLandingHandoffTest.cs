@@ -140,7 +140,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
         // A cold solve that cannot publish soon enough returns to powered landing, while the prior engine command and the shared claim stay with this craft.
-        Method("HandSixDofToGfold").Invoke(null, new object[] { craft, Universe.GetElapsedSeconds(), 2000.0 });
+        Method("HandSixDofToGfold").Invoke(null, new object[] { craft, Universe.GetElapsedSeconds(), 2000.0, "fallback test" });
         t.Check("6-DOF: a cold start without a plan in time hands the craft to G-FOLD",
             state.LandingPhase == GuidanceWindow.LandingPhase.GfoldDescent
             && state.GfoldApproach == GuidanceWindow.GfoldApproach.BrakeAtGate
