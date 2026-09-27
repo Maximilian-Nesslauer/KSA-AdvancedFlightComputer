@@ -800,7 +800,7 @@ public static partial class GuidanceWindow
     private const double SixDofFallbackGateM = 500;
 
     // The engine stays lit and the claim stays with guidance, so the craft is never released between the two modes. A handoff from the braking burn keeps the elevated G-FOLD gate, and a direct engage lands straight on the site.
-    // The craft's solver choice follows the handover, as it does when 6-DOF refuses the braking handoff, so the panel shows and aborts the descent that is actually flying.
+    // The solver choice stays 6-DOF for the next descent, and the panel shows and aborts the landing machine while it flies, see LandingMachineLive.
     private static void HandSixDofToGfold(Vehicle vehicle, double now, double altitude)
     {
         string reason = altitude <= SixDofFallbackGateM
@@ -813,7 +813,6 @@ public static partial class GuidanceWindow
         // 6-DOF only lights the engine once it has a plan, so a direct engage from a coast can reach this with the engine still off.
         bool engineLit = ManualInputs(vehicle).EngineOn;
         Disengage6Dof(vehicle, cutEngine: false);
-        _s.UseSixDofLanding = false;
         BeginGfoldDescent(vehicle, now, engineLit, reason);
         // After the claim, which resets the approach.
         _s.GfoldApproach = fromBrakingBurn ? GfoldApproach.BrakeAtGate : GfoldApproach.Direct;

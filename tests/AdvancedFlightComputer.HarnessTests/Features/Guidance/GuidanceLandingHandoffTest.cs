@@ -144,7 +144,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         t.Check("6-DOF: a cold start without a plan in time hands the craft to G-FOLD",
             state.LandingPhase == GuidanceWindow.LandingPhase.GfoldDescent
             && state.GfoldApproach == GuidanceWindow.GfoldApproach.BrakeAtGate
-            && !state.Active && !state.UseSixDofLanding
+            && !state.Active && state.UseSixDofLanding
             && state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
         t.Check("6-DOF: fallback keeps the engine's previous command",
             Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle

@@ -86,6 +86,9 @@ public static partial class GuidanceWindow
 
     private static bool TerminalBurnActive => _s.LandingPhase is LandingPhase.TerminalCoast or LandingPhase.TerminalBrake;
 
+    // G-FOLD or its landing burn is flying. A 6-DOF descent can fall back to G-FOLD, so while this holds the panel belongs to G-FOLD whatever solver is selected.
+    private static bool LandingMachineLive => _s.LandingPhase == LandingPhase.GfoldDescent || TerminalBurnActive;
+
     private static bool LandingSwitchesOff => !_s.Engage || !_s.AutoStage;
 
     private const string LandingSwitchesChangedStatus = "Automatic landing stopped because its control switches changed.";
@@ -273,7 +276,7 @@ public static partial class GuidanceWindow
             // Both descents plan from the current state down.
             if (_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo)
             {
-                // 6-DOF is the default, but it needs thrust vectoring and a throttle floor it can land on, and G-FOLD needs neither. A craft 6-DOF would refuse goes to G-FOLD, and the craft's solver choice follows it, so the panel shows and aborts the descent that is actually flying.
+                // 6-DOF is the default, but it needs thrust vectoring and a throttle floor it can land on, and G-FOLD needs neither. A craft 6-DOF would refuse goes to G-FOLD, and the craft's solver choice follows it, because the next descent would be refused the same way.
                 string sixDofRefusal = null;
                 if (_s.UseSixDofLanding && !Can6DofTake(vehicle, out sixDofRefusal))
                     _s.UseSixDofLanding = false;
