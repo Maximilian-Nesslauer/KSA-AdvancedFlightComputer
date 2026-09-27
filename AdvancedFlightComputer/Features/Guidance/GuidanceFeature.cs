@@ -1,4 +1,3 @@
-using System.Reflection;
 using AdvancedFlightComputer.Core;
 using KSA;
 using Brutal.ImGuiApi;
@@ -7,8 +6,8 @@ using HarmonyLib;
 namespace AdvancedFlightComputer.Features.Guidance;
 
 /// <summary>
-/// The guidance feature's two patch blocks. The diagnostics block owns the menu and the managed
-/// resolver. The driver block owns the per-vehicle step and the worker hook, and its enable flag is
+/// The guidance feature's two patch blocks. The diagnostics block owns the menu.
+/// The driver block owns the per-vehicle step and the worker hook, and its enable flag is
 /// what the panel and the gimbal writer are gated on, so a driver that fails to load still leaves a
 /// menu that says so.
 /// </summary>
@@ -16,16 +15,8 @@ internal static class GuidanceFeature
 {
     internal const string UnavailableReason = "Guidance is unavailable because its game hooks did not load.";
 
-    private static bool _resolverRegistered;
-
     internal static void ApplyDiagnosticPatches(Harmony harmony)
     {
-        if (!_resolverRegistered)
-        {
-            AppDomain.CurrentDomain.AssemblyResolve += ResolveManagedLibrary;
-            _resolverRegistered = true;
-        }
-
         harmony.Patch(GameReflection.Program_DrawProgramMenusHook!,
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(DrawMenu)));
     }
@@ -160,27 +151,8 @@ internal static class GuidanceFeature
         }
     }
 
-    private static Assembly? ResolveManagedLibrary(object? sender, ResolveEventArgs args)
-    {
-        string? name = new AssemblyName(args.Name).Name;
-        if (name is not ("AdvancedFlightComputer.Guidance.Numerics"
-            or "AdvancedFlightComputer.Guidance.Gfold"
-            or "AdvancedFlightComputer.Guidance.Scvx"))
-            return null;
-
-        string? directory = Path.GetDirectoryName(typeof(GuidanceFeature).Assembly.Location);
-        if (string.IsNullOrEmpty(directory))
-            return null;
-
-        string path = Path.Combine(directory, name + ".dll");
-        return File.Exists(path) ? Assembly.LoadFrom(path) : null;
-    }
-
     internal static void Reset()
     {
         DisableDriver();
-        if (_resolverRegistered)
-            AppDomain.CurrentDomain.AssemblyResolve -= ResolveManagedLibrary;
-        _resolverRegistered = false;
     }
 }
