@@ -12,6 +12,5 @@ internal static class VehicleDisposePatch
         if (!MultiPassRegistry.Has(vehicleId)) return;
 
         MultiPassRegistry.Remove(vehicleId);
-        PassCompletionPatch.OnRegistryRemovedExternally(vehicleId);
     }
 }

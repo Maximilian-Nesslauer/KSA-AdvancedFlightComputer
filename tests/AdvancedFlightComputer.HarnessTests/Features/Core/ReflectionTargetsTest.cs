@@ -41,6 +41,10 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("FindClosestApproaches anchor", Patch_FindClosestApproaches.IsAnchorPresent);
         t.Check("GameSettings.OnDrawUi PopWidgetStyle anchor", ModSettingsPage.IsAnchorPresent);
         t.Check("ModLibrary.AllParts anchor", GameReflection.ModLibrary_AllParts != null);
+        // RcsWarpPatch binds by its attribute, so the overload it names is checked here.
+        t.Check("Universe.AutoWarpTo(UniverseTime, double, bool) anchor",
+            AccessTools.Method(typeof(Universe), nameof(Universe.AutoWarpTo),
+                [typeof(UniverseTime), typeof(double), typeof(bool)]) != null);
 
         // Stock initialises _transferType to its first entry, so a null key means the accessor did
         // not read through.

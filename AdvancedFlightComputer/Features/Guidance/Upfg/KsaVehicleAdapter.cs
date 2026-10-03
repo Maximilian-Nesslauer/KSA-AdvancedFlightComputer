@@ -92,7 +92,7 @@ public static class KsaVehicleAdapter
                     HashSet<Part> parts = PhaseParts(perf, j);
                     if (parts != null)
                         foreach (Part part in parts)
-                            stage.Throttleable &= !HasSolidCore(part);
+                            stage.Throttleable &= FollowsThrottleOnly(part);
                     result.Stages.Add(stage);
                     if (stageParts != null)
                         stageParts[stage] = parts != null ? new HashSet<Part>(parts) : new HashSet<Part>();
@@ -248,6 +248,19 @@ public static class KsaVehicleAdapter
             if (part.HasSubtreeSequencedModule(sequences[n].Number))
                 count++;
         return count;
+    }
+
+    // The same core rule KsaEnginePerf applies to a throttle command, so UPFG plans a stage throttleable only when guidance can throttle it.
+    private static bool FollowsThrottleOnly(Part part)
+    {
+        Span<EngineController> engines = part.Modules.Get<EngineController>();
+        for (int i = 0; i < engines.Length; i++)
+        {
+            RocketCore[] cores = engines[i].Cores;
+            if (cores != null && Array.Exists(cores, core => !KsaEnginePerf.FollowsThrottle(core)))
+                return false;
+        }
+        return true;
     }
 
     internal static bool HasSolidCore(Part part)

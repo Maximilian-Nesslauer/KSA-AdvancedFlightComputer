@@ -44,9 +44,6 @@ internal sealed class MultiPassExecution
     // Restore Auto only after FlightComputer.LoadBurn has reset the new pass to Manual.
     public bool ReengageAutoOnNextBurn { get; set; }
 
-    // Auto includes alignment before ignition. Observing it does not prove that thrust occurred.
-    public bool BurnAutoEngagedThisPass { get; set; }
-
     // The RCS executor stays in Manual, so the burn mode alone cannot show that a pass started.
     public bool PassArmed { get; set; }
 
@@ -61,7 +58,6 @@ internal sealed class MultiPassExecution
         CurrentBurnDvMagnitudeMs = burn.DeltaVVlf.Length();
         AwaitingMaterialization = true;
         AwaitingMaterializationTicks = 0;
-        BurnAutoEngagedThisPass = false;
         PassArmed = false;
         StallHintShown = false;
     }
@@ -73,7 +69,6 @@ internal sealed class MultiPassExecution
         CurrentBurnDvMagnitudeMs = null;
         AwaitingMaterialization = false;
         AwaitingMaterializationTicks = 0;
-        BurnAutoEngagedThisPass = false;
         PassArmed = false;
         StallHintShown = false;
     }

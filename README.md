@@ -7,7 +7,7 @@ Its powered guidance flies an ascent to orbit, a booster boostback and a pinpoin
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.9.22.5482.
+Validated against KSA build version 2026.10.7.5541.
 
 ## Features
 
@@ -74,6 +74,7 @@ Multi-pass works best with the built-in [automatic staging](#automatic-staging) 
 - Same-parent transfers (e.g., LEO to Luna) shift the final burn forward by a few parking periods to fit the K-schedule. The shift is shown in the plan window.
 - A change to the flyby side or altitude updates the selected departure even during thrust.
 - Very high-energy departures from small SOIs (e.g., low Mars orbit to Saturn) may auto-clamp to fewer passes because intermediate orbits would escape the SOI.
+- A pass that runs out of propellant waits in Manual so you can stage or refuel; if nothing aboard can thrust any more, the execution is cancelled with an alert.
 
 ### RCS Translation Burns
 
@@ -87,7 +88,7 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 - Burns themselves stay in the stock save format; removing the mod keeps every planned burn. The RCS arming metadata lives in `mods/AdvancedFlightComputer/rcs-exec.toml` next to the mod and survives save/load, including mid-burn.
 - The burn editor warns when a burn resolves to RCS but no thruster can translate (no propellant, none active) and when the estimated propellant exceeds what the thrusters can actually reach. Auto also shows an alert and refuses the burn before it creates execution state or changes the controls when the burn has no delta-V, no usable translation, or no axis that can serve its direction.
 - Estimates for a later planned burn use the current vehicle as an approximation and show **Estimate basis: Current vehicle** in the burn editor or **Current vehicle** in the gauge. Stock only loads the first executable burn as its active burn target, so these estimates do not forecast earlier burns or staging.
-- Completed RCS burns raise a public event (`RcsBurnCompletions.Completed`) other mods can consume; the built-in [automatic burn removal](#automatic-burn-removal) uses it to clean up finished RCS burns the same way it cleans up engine auto-burns.
+- An RCS burn ends like an engine auto-burn: time warp stops, the game shows its alert and the next burn loads.
 - The **allocator** is selectable per burn (default **Groups**). Groups fires signed-axis groups and uses attitude control to counter residual torque. **LP** solves a fuel-optimal jet-selection problem over individual thruster forces and torques (the Bergmann/Draper formulation). LP can require costly counter-thrust, so it is opt-in, and it falls back to Groups when the constraints are infeasible.
 
 ### Automatic Staging
@@ -103,11 +104,11 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
   </tr>
 </table>
 
-Activates the next sequence whenever the active engines run out of propellant, and drops burnt-out boosters while the rest of the stage keeps firing. Works during auto-burns (continues the burn instead of aborting) and manual burns. Formerly the separate AutoStage mod; remove that mod when you install this version, because two stagers on one burnout would activate two sequences. The settings written by AutoStage are imported on the first load.
+Activates the next sequence whenever the active engines run out of propellant, and drops burnt-out boosters while the rest of the stage keeps firing. Works during auto-burns (continues the burn instead of aborting) and manual burns. Do not install the standalone AutoStage mod next to AdvancedFlightComputer, because two stagers on one burnout would activate two sequences. The settings written by AutoStage are imported on the first load.
 
 - **AUTOSTAGE toggle button** on the EngineControl gauge panel, in the free slot under RCS. The switch belongs to the vehicle, so an armed craft keeps staging when you control another one. The same switch is available on the Mods settings page for installs without KittenExtensions.
 - **Control-module guard** - a sequence that would separate the last control module is never staged automatically; stage it by hand if that is what you want.
-- **Auto-burn continuation** - keeps the burn mode at Auto through staging so planned burns do not abort.
+- **Auto-burn continuation** - keeps the burn mode at Auto through staging, also when you stage by hand, so planned burns do not abort.
 - **Cascade staging** - stages again if the next stage is empty or only has decouplers.
 - **Spent stage drop** - sheds burnt-out boosters as soon as they quit, without waiting for the core stage to run dry.
 - **Configurable staging delays** - independent delays for decouplers and engines, simulating separation and engine spool-up time.
@@ -140,11 +141,8 @@ Per-vehicle sequence overrides are stored next to it in `autostage-vehicles\<veh
 
 ### Automatic Burn Removal
 
-In stock KSA, when an auto-burn completes the flight computer flips the burn mode to Manual but leaves the burn entry in the plan, so you have to click "Delete" before the next maneuver can take focus. This feature cleans up completed burns automatically. Formerly the separate AutoRemoveFinishedBurns mod; remove that mod when you install this version. Its saved switch is imported on the first load.
+KSA removes a finished auto-burn from the plan when another burn follows it, but keeps the last one. This feature removes that last finished burn, engine or RCS, on every vehicle. Manual burns and burns that stopped for lack of propellant stay in the plan. A switch saved by the old standalone AutoRemoveFinishedBurns mod is imported on the first load.
 
-- **Auto-burns** are removed as soon as the flight computer flips out of Auto mode on completion. Completion is confirmed through the same delta-V vector reversal the stock flight computer uses, so a burn that flamed out before reaching its target stays in the plan and can be resumed after staging.
-- **RCS burns** executed by this mod are removed on their completion event.
-- **Manual burns are never touched**, and only the vehicle you control is watched. A burn that finishes on a background vehicle stays in its plan.
 - **Switch** on the Mods settings page, on by default, persisted in `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\autoremove.toml`.
 
 ### Hyperbolic Targets
@@ -163,6 +161,7 @@ Open the **AFC Guidance** menu in the top bar, switch **Enabled** on and open th
 - **Deorbit and land** flies the whole chain from orbit: the deorbit burn, a fuel-optimal powered descent with G-FOLD or the 6-DOF solver, and a terminal hover to touchdown.
 - **Land from here** starts only the powered descent and the hover, from where the craft is now.
 
+Guidance plans stay within the g-limit and the structural load limit at which KSA holds the throttle back.
 Guidance takes a craft only when you press EXECUTE, and it lets go when you abort, take over the attitude or arm the stock Auto burn.
 An abort during the powered descent or the terminal hover leaves the engine as it is, so the craft does not drop, while every other abort cuts the engine.
 The hover refuses a craft whose thrust at minimum throttle exceeds its weight, because such a craft climbs whenever the engine runs, and a G-FOLD or 6-DOF descent that would hand over to it flies its own plan to touchdown instead.
@@ -202,8 +201,8 @@ The native guidance solvers are built from the vendored sources with Rust and Zi
 
 ## Mod compatibility
 
-- [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage), [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) and [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) are now part of this mod. Delete their folders under `mods`, because a disabled mod still applies its XML patches.
-- Known conflicts: none
+- [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage), [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) and [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) are part of this mod. Delete their folders under `mods`, because a disabled mod still applies its XML patches.
+- Known conflicts: the standalone AutoStage and AutoRemoveFinishedBurns mods.
 
 ## Credits
 

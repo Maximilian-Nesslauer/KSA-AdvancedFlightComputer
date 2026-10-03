@@ -1,5 +1,4 @@
 using System.Linq;
-using System.Reflection;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -63,7 +62,6 @@ public sealed class VehicleRenameTest : AfcTest
             {
                 MultiPassRegistry.Remove(id);
                 RcsExecRegistry.Remove(id);
-                PassCompletionPatch.OnRegistryRemovedExternally(id);
             }
             harmony.UnpatchAll(harmony.Id);
         }
@@ -82,7 +80,6 @@ public sealed class VehicleRenameTest : AfcTest
         string oldId = vehicle.Id;
         RcsExecution rcs = Arm(vehicle);
         MultiPassExecution pass = ArmPass(vehicle);
-        RecordBurnMode(oldId, FlightComputerBurnMode.Auto);
         VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.RcsTranslation, out _);
         if (!t.Check("the craft is armed and claimed under its first id",
                 RcsExecRegistry.TryGet(oldId, out _) && MultiPassRegistry.Has(oldId)
@@ -107,11 +104,6 @@ public sealed class VehicleRenameTest : AfcTest
             && ReferenceEquals(movedPass, pass) && !MultiPassRegistry.Has(oldId));
         t.Check("the pass sequence stores the new id, so a save writes it",
             pass.VehicleId == renamedId);
-
-        // Completion detection needs the previous mode under the new ID.
-        t.Check("the recorded burn mode follows the rename",
-            RecordedBurnMode(renamedId) == FlightComputerBurnMode.Auto
-            && RecordedBurnMode(oldId) == null);
     }
 
     // An idle claim is releasable only when its recorded ID matches the vehicle's ID.
@@ -173,16 +165,4 @@ public sealed class VehicleRenameTest : AfcTest
         MultiPassRegistry.Add(exec);
         return exec;
     }
-
-    // Seed history directly to avoid advancing the synthetic pass sequence.
-    private static void RecordBurnMode(string vehicleId, FlightComputerBurnMode mode)
-        => BurnModeHistory()[vehicleId] = mode;
-
-    private static FlightComputerBurnMode? RecordedBurnMode(string vehicleId)
-        => BurnModeHistory().TryGetValue(vehicleId, out FlightComputerBurnMode mode) ? mode : null;
-
-    private static Dictionary<string, FlightComputerBurnMode> BurnModeHistory()
-        => (Dictionary<string, FlightComputerBurnMode>)typeof(PassCompletionPatch)
-            .GetField("_lastBurnMode", BindingFlags.NonPublic | BindingFlags.Static)!
-            .GetValue(null)!;
 }

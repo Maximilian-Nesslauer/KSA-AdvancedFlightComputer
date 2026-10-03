@@ -6,25 +6,29 @@ using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// A real Burn goes in through the game's input queue, the real FlightComputer flips Auto to Manual
-// inside the vehicle solver, and the shared tick reacts to that transition. Only the completion
-// signal is fabricated: writing DeltaVAccumCci past DeltaVTargetCci reproduces the delta-V reversal
-// a finished burn measures, so the test is deterministic and independent of engine content.
+// A real Burn goes in through the game's input queue, the real FlightComputer raises
+// AutoBurnCompleted inside the vehicle solver, and stock FlightComputer.RaisePendingAlerts ends the
+// burn at the start of the next driver step. Only the completion signal is fabricated: writing
+// DeltaVAccumCci past DeltaVTargetCci reproduces the delta-V reversal a finished burn measures, so
+// the test is deterministic and independent of engine content.
 //
-// The burn sits far in the future on purpose: in Auto the flight computer waits for IgnitionTime
+// The burns sit far in the future on purpose: in Auto the flight computer waits for IgnitionTime
 // commanding a zero burn duration, so no engine fires, no propellant is spent, and Auto survives
 // from one step to the next.
 //
-// Scenarios, each from a fresh burn and a cleared previous-mode sample:
-//   completed:    Auto armed, completion injected, the burn is removed from the plan.
+// Scenarios, each from a fresh plan:
+//   completed:    Auto armed on the only burn, completion injected, stock keeps the burn and the
+//                 feature removes it.
+//   three-burns:  Auto armed on the first of three burns, completion injected, stock removes it and
+//                 loads the second, and the feature removes nothing more.
 //   engines-off:  Auto armed, every engine deactivated, stock keeps Auto for a burn still waiting
-//                 for ignition, so there is no transition and nothing is removed.
+//                 for ignition, so nothing ends and nothing is removed.
 //   disabled:     the switch is off, completion injected, the burn stays; switching back on does
 //                 not remove it retroactively.
 //   manual:       completion injected in Manual mode, the burn stays.
 //   zero-dv:      a zero-delta-V node inserted ahead of the armed burn drops the flight computer
-//                 out of Auto by itself, both burns stay.
-//   uncontrolled: completed on a vehicle that is not controlled, the burn stays.
+//                 out of Auto by itself, which is no completion, so both burns stay.
+//   uncontrolled: completed on a vehicle that is not controlled, the burn is removed.
 public sealed class AutoRemoveBurnTest : AfcTest
 {
     private const double StepDt = 1.0;
@@ -64,11 +68,12 @@ public sealed class AutoRemoveBurnTest : AfcTest
             driver.Step(StepDt, SettleSteps);
 
             ScenarioCompletedRemoves(t, vehicle, driver);
+            ScenarioThreeBurnsKeepsTheRest(t, vehicle, driver);
             ScenarioEnginesOffKeeps(t, vehicle, driver);
             ScenarioDisabledKeeps(t, vehicle, driver);
             ScenarioManualKeeps(t, vehicle, driver);
             ScenarioZeroDeltaVKeeps(t, vehicle, driver);
-            ScenarioUncontrolledKeeps(t, vehicle, driver);
+            ScenarioUncontrolledRemoves(t, vehicle, driver);
         }
         finally
         {
@@ -95,16 +100,45 @@ public sealed class AutoRemoveBurnTest : AfcTest
             && t.Check("completed: burn still in plan while in progress", fc.BurnPlan.HasActiveBurns))
         {
             InjectCompletion(fc);
-            driver.Step(StepDt);
+            StepThroughStockEnd(driver);
             t.Check("completed: burn removed from the plan", !fc.BurnPlan.HasActiveBurns);
             t.Check("completed: no burn target loaded", fc.Burn == null);
         }
         CleanupBurn(fc);
     }
 
-    // Stock only leaves Auto through the denied-ignition latch, which needs an ignition attempt,
-    // so a burn still counting down keeps Auto however long it sits without an engine. The
-    // held-Auto check pins stock; the burn-kept check is the feature verdict.
+    // FlightComputer.EndAutoBurn removes the finished first burn itself whenever another follows it,
+    // so a second removal by the feature would lose the burn stock just loaded.
+    private static void ScenarioThreeBurnsKeepsTheRest(TestContext t, Vehicle vehicle, SimDriver driver)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        if (BeginScenario(t, "three-burns", vehicle, driver))
+        {
+            QueueBurn(vehicle, driver, BurnLeadSeconds * 2.0, new double3(BurnDvMps, 0.0, 0.0));
+            QueueBurn(vehicle, driver, BurnLeadSeconds * 3.0, new double3(BurnDvMps, 0.0, 0.0));
+            Burn? second = BurnAt(fc, 1);
+            Burn? third = BurnAt(fc, 2);
+            if (t.Check("three-burns: three burns planned", fc.BurnPlan.BurnCount == 3 && second != null && third != null)
+                && Arm(t, "three-burns", vehicle, driver))
+            {
+                InjectCompletion(fc);
+                StepThroughStockEnd(driver);
+                t.Check("three-burns: only the finished burn left the plan",
+                    fc.BurnPlan.BurnCount == 2
+                    && ReferenceEquals(BurnAt(fc, 0), second) && ReferenceEquals(BurnAt(fc, 1), third),
+                    $"burns={fc.BurnPlan.BurnCount}");
+                t.Check("three-burns: the second burn is loaded in Manual",
+                    fc.Burn != null && fc.BurnMode == FlightComputerBurnMode.Manual
+                    && Math.Abs((fc.Burn.ImpulsiveInstant - second!.ImpulseTime).Seconds()) < 1e-6);
+            }
+        }
+        CleanupBurn(fc);
+    }
+
+    // Stock leaves Auto through the denied-ignition latch or the out-of-propellant stop, and both
+    // need the ignition time to have passed, so a burn still counting down keeps Auto however long
+    // it sits without an engine. The held-Auto check pins that stock behaviour, and the burn-kept
+    // check is the feature verdict.
     private static void ScenarioEnginesOffKeeps(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
@@ -132,10 +166,10 @@ public sealed class AutoRemoveBurnTest : AfcTest
         if (BeginScenario(t, "disabled", vehicle, driver) && Arm(t, "disabled", vehicle, driver))
         {
             InjectCompletion(fc);
-            driver.Step(StepDt);
+            StepThroughStockEnd(driver);
             t.Check("disabled: burn kept while the switch is off", fc.BurnPlan.HasActiveBurns);
 
-            // The transition is already consumed, so switching on later must not act on it.
+            // Stock has consumed the completion, so switching on later must not act on it.
             AutoRemoveConfig.Enabled = true;
             driver.Step(StepDt);
             t.Check("disabled: no retroactive removal after switching on", fc.BurnPlan.HasActiveBurns);
@@ -150,14 +184,15 @@ public sealed class AutoRemoveBurnTest : AfcTest
         if (BeginScenario(t, "manual", vehicle, driver))
         {
             InjectCompletion(fc);
-            driver.Step(StepDt);
+            StepThroughStockEnd(driver);
             t.Check("manual: manual burn kept despite the delta-V reversal", fc.BurnPlan.HasActiveBurns);
         }
         CleanupBurn(fc);
     }
 
     // A node with no delta-V reads as already reversed, and inserting one ahead of the running
-    // burn makes stock FlightComputer.AddBurn unload the loaded burn, which flips Auto to Manual.
+    // burn makes stock FlightComputer.AddBurn unload the loaded burn, which flips Auto to Manual
+    // without raising FlightComputer.AutoBurnCompleted.
     private static void ScenarioZeroDeltaVKeeps(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
@@ -170,24 +205,24 @@ public sealed class AutoRemoveBurnTest : AfcTest
         CleanupBurn(fc);
     }
 
-    private static void ScenarioUncontrolledKeeps(TestContext t, Vehicle vehicle, SimDriver driver)
+    // Stock ends the Auto burns of every vehicle, so the last one is removed on a vehicle that is not controlled too.
+    private static void ScenarioUncontrolledRemoves(TestContext t, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
         Program.ControlledVehicle = null;
         if (BeginScenario(t, "uncontrolled", vehicle, driver) && Arm(t, "uncontrolled", vehicle, driver))
         {
             InjectCompletion(fc);
-            driver.Step(StepDt);
-            t.Check("uncontrolled: burn kept on a vehicle that is not controlled", fc.BurnPlan.HasActiveBurns);
+            StepThroughStockEnd(driver);
+            t.Check("uncontrolled: burn removed on a vehicle that is not controlled", !fc.BurnPlan.HasActiveBurns);
         }
         Program.ControlledVehicle = vehicle;
         CleanupBurn(fc);
     }
 
-    // Previous-mode sample cleared and one fresh future burn in the plan, through the same input-event path the burn UI uses.
+    // One fresh future burn in the plan, through the same input-event path the burn UI uses.
     private static bool BeginScenario(TestContext t, string scenario, Vehicle vehicle, SimDriver driver)
     {
-        FinishedBurnRemover.Reset();
         FlightComputer fc = vehicle.FlightComputer;
         fc.BurnMode = FlightComputerBurnMode.Manual;
         QueueBurn(vehicle, driver, BurnLeadSeconds, new double3(BurnDvMps, 0.0, 0.0));
@@ -210,8 +245,11 @@ public sealed class AutoRemoveBurnTest : AfcTest
         driver.Step(StepDt);
     }
 
-    // Auto has to survive a full step, because the tick can only observe a transition out of a
-    // mode it saw recorded. Zeroing DeltaVAccumCci rules out the reversal.
+    private static Burn? BurnAt(FlightComputer fc, int index)
+        => fc.BurnPlan.TryGetBurn(index, out Burn? burn) ? burn : null;
+
+    // Auto has to survive a full step, so the completion is the only thing that ends it. Zeroing
+    // DeltaVAccumCci rules out the reversal.
     private static bool Arm(TestContext t, string scenario, Vehicle vehicle, SimDriver driver)
     {
         FlightComputer fc = vehicle.FlightComputer;
@@ -221,15 +259,23 @@ public sealed class AutoRemoveBurnTest : AfcTest
         return t.Check($"{scenario}: Auto mode held for a full step", fc.BurnMode == FlightComputerBurnMode.Auto);
     }
 
-    // Overshooting DeltaVTargetCci makes DeltaVToGoCci point backwards, the reversal FlightComputer.UpdateBurnTarget flips on.
+    // Overshooting DeltaVTargetCci makes DeltaVToGoCci point backwards, the reversal FlightComputer.UpdateBurnTarget completes on.
     private static void InjectCompletion(FlightComputer fc)
     {
         BurnTarget burn = fc.Burn!;
         burn.DeltaVAccumCci = burn.DeltaVTargetCci * 1.01f;
     }
 
+    // The worker raises the completion during the first step. FlightComputer.RaisePendingAlerts reads it at the start of
+    // the second, before that step's solvers run, which is where Program.PrepareFrame reads it after the solvers applied.
+    private static void StepThroughStockEnd(SimDriver driver) => driver.Step(StepDt, 2);
+
+    // A scenario that failed before stock read its flag leaves it set, and the step that queues the next scenario's burn
+    // would end that burn.
     private static void CleanupBurn(FlightComputer fc)
     {
+        fc.AutoBurnCompleted = false;
+        fc.AutoBurnStoppedOutOfPropellant = false;
         while (fc.BurnPlan.HasActiveBurns)
             fc.RemoveBurnAt(0);
     }

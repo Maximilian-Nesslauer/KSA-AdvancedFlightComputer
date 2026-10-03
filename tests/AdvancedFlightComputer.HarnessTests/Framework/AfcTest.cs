@@ -1,4 +1,6 @@
+using AdvancedFlightComputer.Features.Guidance;
 using HeadlessHarness.Harness;
+using KSA;
 
 namespace AdvancedFlightComputer.HarnessTests.Framework;
 
@@ -15,7 +17,17 @@ public abstract class AfcTest : IHarnessTest
     public int Run(HeadlessSession session)
     {
         TestContext t = new TestContext(Name, session);
-        Execute(t);
+        // The harness steps the simulation far faster than real time, so the guidance gates read the
+        // simulation time and advance as they do at 1x in game, not with how fast this machine runs.
+        GuidanceClock.Source = static () => (long)(Universe.GetElapsedSeconds() * 1000.0);
+        try
+        {
+            Execute(t);
+        }
+        finally
+        {
+            GuidanceClock.Reset();
+        }
         return t.Finish();
     }
 

@@ -6,11 +6,10 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
 
 /// <summary>
 /// Injects the per-burn RCS block (see <see cref="RcsBurnUi"/>) into the
-/// stock rendezvous burn infobox: a postfix on
-/// <see cref="Burn.DrawBurnEditorWindowContent"/>. As of 4980 the game only
-/// draws that infobox from TargetTrackWindow (the normal flight burn editor
-/// moved to the gauge canvas - see <see cref="RcsBurnCanvasUi"/>), so this
-/// surface now covers the rendezvous case only.
+/// stock rendezvous burn infobox with a postfix on
+/// <see cref="Burn.DrawBurnEditorWindowContent"/>. TargetTrackWindow is the
+/// only stock caller of that infobox, and the flight burn editor on the gauge
+/// canvas is covered by <see cref="RcsBurnCanvasUi"/>.
 /// </summary>
 [HarmonyPatch(typeof(Burn), nameof(Burn.DrawBurnEditorWindowContent),
     new Type[] { typeof(Vehicle), typeof(FlightComputer), typeof(bool), typeof(bool) })]

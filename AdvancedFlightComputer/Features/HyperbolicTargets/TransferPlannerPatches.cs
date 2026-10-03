@@ -9,9 +9,11 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 
 /// <summary>
 /// Adds unbound bodies that stock excludes from the transfer target list. A body still needs a
-/// positive, non-NaN sphere of influence. Stock tests <c>Eccentricity &lt; 1.0</c>, while the
+/// positive, non-NaN sphere of influence. Stock drops <c>Eccentricity &gt;= 1.0</c>, while the
 /// handling patches use <see cref="Orbit.IsBound"/> so they also cover the narrow parabolic band
-/// whose Period is NaN.
+/// whose Period is NaN. Only bodies orbiting the transfer's own frame are listed, see
+/// <see cref="HyperbolicTargets.TransferFrame"/>, so from a moon orbit a heliocentric comet stays
+/// out, because a plan around the planet could not reach it.
 /// </summary>
 [HarmonyPatch(typeof(TransferPlanner), nameof(TransferPlanner.PopulateWithPlanets),
     new Type[] { typeof(Span<TransferObject>), typeof(int), typeof(bool) },
@@ -25,33 +27,26 @@ internal static class Patch_PopulateWithPlanets
         try
         {
             if (StockPlanner.SourceVehicle is not Vehicle source) return;
-
-            StellarBody? star = HyperbolicTargets.GetParentStar(source);
-            if (star == null) return;
-
-            // Heliocentric source frames only, so the vehicle orbits the star or a planet that does.
-            // From a moon orbit stock lists sibling bodies, and a heliocentric comet there would produce a plan that means nothing.
-            IParentBody? sourceParent = source.Parent;
-            if (sourceParent != star && (sourceParent as Celestial)?.Parent != star)
-                return;
+            if (HyperbolicTargets.TransferFrame(source) is not IParentBody frame) return;
 
             ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
             for (int i = 0; i < all.Length; i++)
             {
-                if (all[i] is not Celestial celestial) continue;
-                if (celestial.Orbit == null || celestial.Orbit.Eccentricity < 1.0) continue;
-                if (celestial.Id == source.Id || celestial.Id == source.Parent?.Id) continue;
-                if (celestial.Parent != star) continue;
+                Astronomical body = all[i];
+                if (body is Vehicle || body is not IOrbiter orbiter) continue;
+                if (orbiter.Orbit == null || orbiter.Orbit.Eccentricity < 1.0) continue;
+                if (orbiter.Parent != frame) continue;
+                if (orbiter.Id == source.Id || orbiter.Id == source.Parent?.Id) continue;
 
-                if (celestial.SphereOfInfluence <= 0.0 || double.IsNaN(celestial.SphereOfInfluence))
+                if (orbiter.SphereOfInfluence <= 0.0 || double.IsNaN(orbiter.SphereOfInfluence))
                 {
-                    LogHelper.WarnOnce($"soi-missing-{celestial.Id}",
-                        $"[AFC] {celestial.Id} has no SOI, XML patch may be missing");
+                    LogHelper.WarnOnce($"soi-missing-{orbiter.Id}",
+                        $"[AFC] {orbiter.Id} has no SOI, XML patch may be missing");
                     continue;
                 }
 
                 if (count >= list.Length) break;
-                list[count++] = new TransferObject(celestial);
+                list[count++] = new TransferObject(body);
             }
         }
         catch (Exception ex)
@@ -67,7 +62,8 @@ internal static class Patch_PopulateWithPlanets
 /// radius, and Apoapsis is NaN on an unbound orbit. An unbound end uses its
 /// periapsis instead, which is finite and does not move with time, so the
 /// porkchop search gets a stable baseline. A bound end keeps the semi major axis
-/// stock would use.
+/// stock would use, and the gravitational parameter is the origin parent's, as in
+/// stock, because <see cref="Orbit.Mu"/> can carry a central-mass override.
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.HohmannFlight),
     new Type[] { typeof(Orbit), typeof(Orbit) })]
@@ -81,7 +77,8 @@ internal static class Patch_HohmannFlight
         double r1 = origin.IsBound() ? origin.SemiMajorAxis : origin.Periapsis;
         double r2 = destination.IsBound() ? destination.SemiMajorAxis : destination.Periapsis;
         double transferSma = (r1 + r2) * 0.5;
-        double tof = Math.PI * Math.Sqrt(transferSma * transferSma * transferSma / origin.Mu);
+        double mu = origin.Parent.Mu;
+        double tof = Math.PI * Math.Sqrt(transferSma * transferSma * transferSma / mu);
 
         // UniverseTime throws on NaN, and running the original instead would build one from the NaN apoapsis.
         // Zero is what every consumer of the estimate already tests for.
@@ -91,7 +88,7 @@ internal static class Patch_HohmannFlight
             LogHelper.WarnOnce(
                 $"hohmann-tof-degenerate-{origin.Parent?.Id ?? "?"}",
                 $"[AFC] HohmannFlight: degenerate geometry (r1={r1:E3}m r2={r2:E3}m " +
-                $"mu={origin.Mu:E3}); reporting no transfer estimate.");
+                $"mu={mu:E3}); reporting no transfer estimate.");
             __result = UniverseTime.Zero;
             return false;
         }
@@ -127,7 +124,7 @@ internal static class Patch_SetTransferInfo
         try
         {
             OrbitalTransfers.TransferInfo? info = StockPlanner.TransferInfo;
-            if (info?.Target?.Orbit == null || info.Target.Orbit.IsBound())
+            if (info?.Target is not IOrbiter target || target.Orbit == null || target.Orbit.IsBound())
                 return __exception;
             if (__exception != null && __exception is not ArgumentException)
                 return __exception;
@@ -140,7 +137,7 @@ internal static class Patch_SetTransferInfo
                 if (GameReflection.TransferPlanner_transferInfoRef is { } infoRef)
                     infoRef() = null;
                 LogHelper.WarnOnce(
-                    $"transfer-window-degenerate-{(info.Target as Astronomical)?.Id ?? "?"}",
+                    $"transfer-window-degenerate-{target.Id}",
                     "[AFC] SetTransferInfo: no Hohmann estimate for the unbound target; " +
                     "transfer cleared.");
                 return null;
@@ -148,11 +145,11 @@ internal static class Patch_SetTransferInfo
 
             info.MinTransferTimeOfFlight = new UniverseTime(hohmannSec * HyperbolicTargets.MinTofRatio);
             info.MaxTransferTimeOfFlight = new UniverseTime(hohmannSec * HyperbolicTargets.MaxTofRatio);
-            GameReflection.TransferPlanner_selectedMinTime!.SetValue(null, info.MinTransferTimeOfFlight);
-            GameReflection.TransferPlanner_selectedMaxTime!.SetValue(null, info.MaxTransferTimeOfFlight);
+            GameReflection.TransferPlanner_selectedMinTimeRef!() = info.MinTransferTimeOfFlight;
+            GameReflection.TransferPlanner_selectedMaxTimeRef!() = info.MaxTransferTimeOfFlight;
             SelectTimeUnit(hohmannSec);
 
-            MaybeAlertDepartureWindowPast(info, info.HohmannTimeOfFlight);
+            MaybeAlertDepartureWindowPast(target, info.HohmannTimeOfFlight);
             return null;
         }
         catch (Exception ex)
@@ -169,7 +166,7 @@ internal static class Patch_SetTransferInfo
     /// three integer digits.</summary>
     private static void SelectTimeUnit(double hohmannSec)
     {
-        if (GameReflection.TransferPlanner_timeUnits!.GetValue(null) is not List<TimeObject> units)
+        if (StockPlanner.TimeUnits is not { } units)
             return;
         foreach (TimeObject unit in units)
         {
@@ -178,7 +175,7 @@ internal static class Patch_SetTransferInfo
             int integerDigits = end < 0 ? text.Length : end;
             if (integerDigits <= 3)
             {
-                GameReflection.TransferPlanner_selectedTimeUnit!.SetValue(null, unit);
+                StockPlanner.SelectedTimeUnit = unit;
                 return;
             }
         }
@@ -189,13 +186,12 @@ internal static class Patch_SetTransferInfo
     /// why the porkchop window looks degenerate. <see cref="Patch_AlignmentTime"/>
     /// evaluates the same condition but also runs on the porkchop worker, and
     /// <c>TimedAlert.Create</c> mutates an unsynchronized list the draw thread walks.</summary>
-    private static void MaybeAlertDepartureWindowPast(
-        OrbitalTransfers.TransferInfo info, UniverseTime hohmannToF)
+    private static void MaybeAlertDepartureWindowPast(IOrbiter target, UniverseTime hohmannToF)
     {
-        UniverseTime ideal = info.Target.Orbit.TimeAtPeriapsis - hohmannToF;
+        UniverseTime ideal = target.Orbit.TimeAtPeriapsis - hohmannToF;
         if (!(ideal < Universe.GetElapsedTime())) return;
 
-        string targetId = (info.Target as Astronomical)?.Id ?? "?";
+        string targetId = target.Id;
         if (!_alertedTargets.Add(targetId)) return;
 
         // An unbound target has one periapsis passage, and TransferTask.Run sweeps from the current sim time whatever AlignmentTime returned, so this does not promise a later window.

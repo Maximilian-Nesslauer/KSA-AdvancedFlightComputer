@@ -340,13 +340,21 @@ internal sealed class AscentDynamics
     public void ThrustAt(ReadOnlySpan<double> x, ReadOnlySpan<double> u, int node,
                          out double liquidFull, out double delivered, out double solid)
     {
-        double rn = Math.Sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + REps2);
-        var pressure = _atm.Pressure(new Dual((rn - 1.0) * LU));
+        Dual pressure = PressureAt(x);
         int stage = _nodeStage[node];
         liquidFull = _stages[stage].MaxThrust(pressure).V;
         SolidPoint sp = _nodeSolid[node];
         solid = sp.MassFlowC > 0.0 ? sp.Thrust(pressure).V : 0.0;
         double um = Math.Sqrt(u[0] * u[0] + u[1] * u[1] + u[2] * u[2]);
         delivered = liquidFull * um + solid;
+    }
+
+    /// <summary>Canonical full-throttle thrust of a stage's liquid engines at a state's altitude.</summary>
+    public double LiquidThrustC(int stage, ReadOnlySpan<double> x) => _stages[stage].MaxThrust(PressureAt(x)).V / FU;
+
+    private Dual PressureAt(ReadOnlySpan<double> x)
+    {
+        double rn = Math.Sqrt(x[0] * x[0] + x[1] * x[1] + x[2] * x[2] + REps2);
+        return _atm.Pressure(new Dual((rn - 1.0) * LU));
     }
 }

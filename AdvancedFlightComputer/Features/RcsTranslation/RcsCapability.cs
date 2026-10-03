@@ -122,6 +122,27 @@ internal struct RcsCapabilitySnapshot
 
 internal static class RcsCapability
 {
+    /// <summary>True when at least one thruster is active and no active thruster reports propellant, the RCS counterpart of the check stock <c>FlightComputer.ComputeControl</c> makes on the active engines before it stops an Auto burn. A craft whose thrusters are all switched off is not out of propellant.</summary>
+    public static bool ActiveThrustersOutOfPropellant(Vehicle vehicle)
+    {
+        if (!ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var stateList))
+            return false;
+        bool anyActive = false;
+        var enumerator = new ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
+            .StateList.ModuleAndStateEnumerator(stateList);
+        while (enumerator.MoveNext())
+        {
+            var current = enumerator.Current;
+            if (!current.Module.IsActive)
+                continue;
+            if (current.State.IsPropellantAvailable)
+                return false;
+            anyActive = true;
+        }
+        return anyActive;
+    }
+
     /// <summary>Membership follows cached intended-action signs. Recompute force and mass flow together because ThrusterControllerGlobalState.IsCacheValid tolerates pressure and mass drift.</summary>
     public static RcsCapabilitySnapshot Probe(Vehicle vehicle)
     {

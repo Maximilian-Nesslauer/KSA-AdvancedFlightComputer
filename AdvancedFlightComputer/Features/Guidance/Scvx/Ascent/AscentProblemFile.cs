@@ -22,6 +22,8 @@ public static class AscentProblemFile
         public double? FixedBurnTime { get; set; }
         public bool LiquidCarriesOver { get; set; }
         public double? SeedThrottle { get; set; }
+        // Null for no limit, which is also how a file written before the limit existed reads back.
+        public double? AccelerationLimit { get; set; }
         // The solids, as AscentSolidBurn holds them: stage time, mass flow, and thrust row-major against the pressure grid.
         public double[]? SolidTime { get; set; }
         public double[]? SolidMassFlow { get; set; }
@@ -78,6 +80,7 @@ public static class AscentProblemFile
                 FixedBurnTime = s.IsPinned ? s.FixedBurnTime : null,
                 LiquidCarriesOver = s.LiquidCarriesOver,
                 SeedThrottle = s.SeedThrottle < 1.0 ? s.SeedThrottle : null,
+                AccelerationLimit = double.IsFinite(s.AccelerationLimit) ? s.AccelerationLimit : null,
                 SolidTime = s.Solid?.Time,
                 SolidMassFlow = s.Solid?.MassFlow,
                 SolidPressureGrid = s.Solid?.PressureGrid,
@@ -146,7 +149,8 @@ public static class AscentProblemFile
                                                                 && s.SolidPressureGrid is { } sg && s.SolidThrust is { } sf
                                                                 ? new AscentSolidBurn(st, sm, sg, sf) : null,
                                                             s.FixedBurnTime ?? double.NaN, s.LiquidCarriesOver,
-                                                            s.SeedThrottle ?? 1.0)).ToArray(),
+                                                            s.SeedThrottle ?? 1.0,
+                                                            s.AccelerationLimit ?? double.PositiveInfinity)).ToArray(),
             Atmosphere = air,
             GroundRadius = dto.GroundRadius,
             TargetRadius = dto.TargetRadius,

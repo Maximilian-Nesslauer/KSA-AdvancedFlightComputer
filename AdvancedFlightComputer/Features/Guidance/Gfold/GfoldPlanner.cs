@@ -180,6 +180,8 @@ public static class GfoldPlanner
         if (tf >= P.TfMax)
             throw new ArgumentException(
                 $"tf={tf:F1}s exceeds fuel-limited maximum {P.TfMax:F1}s");
+        if (!(P.AccelMax > 0))
+            throw new ArgumentException($"AccelMax={P.AccelMax} must be positive");
 
         bool p3 = fixedLanding == null;
         double dtPhys = tf / (N - 1);
@@ -290,9 +292,11 @@ public static class GfoldPlanner
         // --- cone constraints G x + s = h, s in R+^l x SOC(q...) --- Path inequalities (pointing/glideslope/velocity) run from node p0: when relaxing the initial state, skip node 0 so a fast/shallow handoff can't make every tf infeasible. Thrust magnitude (lossless ||u|| <= s) and the ground constraint stay on every node.
         int p0 = opt.RelaxInitialPath ? 1 : 0;
         int pathNodes = (N - 1) - p0;
+        bool accelLimited = double.IsFinite(P.AccelMax);
         int lp = pathNodes               // thrust pointing
                + 3 * Math.Max(N - 2, 0)  // thrust upper bound + z box, n = 1..N-2
-               + (N - 1);                // altitude >= 0
+               + (N - 1)                 // altitude >= 0
+               + (accelLimited ? N - 1 : 0); // thrust acceleration bound, n = 0..N-2
         int mIneq = lp
             + 3 * pathNodes // glideslope cones, Q3
             + 4 * pathNodes // velocity cones, Q4
@@ -341,6 +345,26 @@ public static class GfoldPlanner
         {
             G.Add(row, IX(n, 0), -1);
             h[row++] = 0;
+        }
+
+        // Thrust acceleration bound: s[n] <= aMax, which is ||Tc|| <= aMax * m in physical variables.
+        // It caps s from above, the same side as the thrust bound, so the thrust floor stays the only nonconvex constraint the relaxation lifts (Acikmese and Ploen 2007, Acikmese and Blackmore 2011).
+        // Where the floor is enforced, the bound is raised to R1 / z0Term, the floor acceleration at the lightest mass the node admits, so the floor cone stays feasible, because the thrust cannot go under R1 to hold a load limit either.
+        // A bound that follows the floor at the node's own mass would put s under a convex function of z, which is not convex. So where this relief applies, the plan can ride above the floor at its actual mass, up to R1 / z0Term.
+        // Node N-1 has s pinned to zero, so the trapezoid gives the last interval half the thrust of node N-2, and holding the final velocity there takes twice the gravity at node N-2.
+        // The bound at N-2 is raised to that, otherwise a bound under 2g makes every flight time infeasible.
+        if (accelLimited)
+        {
+            for (int n = 0; n < N - 1; n++)
+            {
+                double bound = P.AccelMax;
+                if (opt.EnforceLowerThrust && n > 0)
+                    bound = Math.Max(bound, P.R1 / (P.WetMass - alpha * r2Acc * n * dt));
+                if (n == N - 2)
+                    bound = Math.Max(bound, 2 * P.GravityMag);
+                G.Add(row, IS(n), 1);
+                h[row++] = bound / accScale;
+            }
         }
 
         var soc = new List<int>();

@@ -17,6 +17,7 @@ internal static class ManeuverTools
     internal const string KeyStockCircularizePeriapsis = "Circularize Periapsis";
 
     internal const string KeyStockHohmann = "Hohmann";
+    internal const string KeyStockInterstellar = "Interstellar";
 
     public static void InjectTransferTypes()
     {
@@ -25,10 +26,17 @@ internal static class ManeuverTools
         if (types.Exists(t => t.GetKey() == KeySetPeriapsis))
             return;
 
-        types.Add(new TransferType(KeySetPeriapsis, "Set Periapsis"));
-        types.Add(new TransferType(KeySetApoapsis, "Set Apoapsis"));
-        types.Add(new TransferType(KeyMatchInclination, "Match Inclination"));
-        types.Add(new TransferType(KeySetInclination, "Set Inclination"));
+        // The orbit tools follow stock's circularize entries, ahead of the interstellar planner, and go to the end if those entries are gone.
+        int insertAt = types.FindLastIndex(t => IsCircularizeType(t.GetKey())) + 1;
+        if (insertAt == 0)
+            insertAt = types.Count;
+        types.InsertRange(insertAt,
+        [
+            new TransferType(KeySetPeriapsis, "Set Periapsis"),
+            new TransferType(KeySetApoapsis, "Set Apoapsis"),
+            new TransferType(KeyMatchInclination, "Match Inclination"),
+            new TransferType(KeySetInclination, "Set Inclination"),
+        ]);
 
         if (DebugConfig.ManeuverTools)
             DefaultCategory.Log.Debug(
@@ -42,7 +50,7 @@ internal static class ManeuverTools
 
         // Select a stock type on unload because stock cannot draw the window for a removed AFC type.
         if (StockPlanner.TransferTypeKey is string key && IsOurType(key) && types.Count > 0)
-            StockPlanner.TransferType = types[0];
+            StockPlanner.SelectType(types[0]);
     }
 
     internal static bool IsOurType(string key)

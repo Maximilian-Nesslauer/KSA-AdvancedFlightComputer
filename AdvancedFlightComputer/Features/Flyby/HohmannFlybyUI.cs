@@ -381,6 +381,8 @@ internal static class HohmannFlybyUI
     /// <see cref="HohmannMultiPassUI"/> draws its own final pass.</summary>
     public static bool SuppressesStockTransferPreview()
     {
+        // The flyby and multi-pass state survive a plan type switch, so the type is checked first and stock's preview for any other type, such as an interstellar plan, is left alone.
+        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
         if (!FlybyRequested) return false;
         if (HohmannMultiPassUI.HasMultiPassPreview) return true;
         return ShouldRenderPreview(out _);

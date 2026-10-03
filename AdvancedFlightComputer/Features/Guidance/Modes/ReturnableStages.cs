@@ -169,7 +169,7 @@ public static partial class GuidanceWindow
         if (list.Count == 0)
             return;
 
-        long now = Environment.TickCount64;
+        long now = GuidanceClock.NowMs;
         if (now - _s.ReturnDvTick < ReturnDvIntervalMs)
             return;
         _s.ReturnDvTick = now;

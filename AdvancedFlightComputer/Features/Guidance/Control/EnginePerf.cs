@@ -9,6 +9,10 @@ using KSA;
 // FlightComputer.VehicleConfigInfo has no main-engine totals, so this adapter calculates them.
 internal static class KsaEnginePerf
 {
+    // FlightComputer.SolveGLoadThrottleCap holds thrust to this fraction of the structural load limit FlightComputer.MaxGLoad.
+    private const float StockGLoadMargin = 0.9f;
+    private const float StandardGravity = 9.80665f;
+
     // Configuration totals include inactive engines and do not depend on fuel supply.
     // Thrust is in N and mass flow is in kg/s.
     internal static (double thrust, double massFlow) Vacuum(Vehicle vehicle)
@@ -33,11 +37,32 @@ internal static class KsaEnginePerf
     }
 
     // Full-throttle capability includes active, supplied engines even when EngineOn is false.
+    // Like every throttle evaluation below except the configuration totals, it stops at StructuralThrottleCap, because stock never delivers more in Manual.
     internal static (double thrust, double massFlow) AtPressure(Vehicle vehicle, double ambientPressure)
         => ActivePerformance(vehicle, 1.0, ambientPressure);
 
     internal static double ActiveThrustCapability(Vehicle vehicle, double ambientPressure)
         => AtPressure(vehicle, ambientPressure).thrust;
+
+    // Full-throttle capability without StructuralThrottleCap, for a planner that receives StructuralAccelerationLimit as its own bound.
+    // The capped figure is a thrust at the present mass, and planning with it as a constant would let the planned acceleration grow as propellant burns.
+    internal static (double thrust, double massFlow) UncappedAtPressure(Vehicle vehicle, double ambientPressure)
+        => RawPerformance(vehicle, 1.0, ambientPressure);
+
+    // The thrust acceleration FlightComputer.SolveGLoadThrottleCap holds, m/s^2, computed in float as stock does.
+    // Before the worker has measured the vehicle, FlightComputer.MaxGLoad is still 0, so the limit comes from VehicleStructuralLimits.EffectiveMaxGLoad of the bounding sphere, the same source FlightComputer.ReadMeasurements uses.
+    // Positive infinity when there is no flight computer.
+    internal static double StructuralAccelerationLimit(Vehicle vehicle)
+    {
+        FlightComputer fc = vehicle?.FlightComputer;
+        if (fc == null)
+            return double.PositiveInfinity;
+        float maxGLoad = fc.MaxGLoad > 0f
+            ? fc.MaxGLoad
+            : (float)VehicleStructuralLimits.EffectiveMaxGLoad(vehicle.Props.ComputeBoundingSphereRadiusAsmb());
+        double limit = StockGLoadMargin * maxGLoad * StandardGravity;
+        return limit > 0.0 && double.IsFinite(limit) ? limit : double.PositiveInfinity;
+    }
 
     internal static double ThrustAtThrottle(Vehicle vehicle, double throttle, double ambientPressure)
         => ActivePerformance(vehicle, throttle, ambientPressure).thrust;
@@ -67,9 +92,47 @@ internal static class KsaEnginePerf
         return remaining;
     }
 
-    // liquidOnly leaves out every engine with a core that is not a Combustor: a solid motor ignores the throttle.
-    private static (double thrust, double massFlow) ActivePerformance(Vehicle vehicle, double throttle, double ambientPressure,
-                                                                      bool liquidOnly = false)
+    private static (double thrust, double massFlow) ActivePerformance(Vehicle vehicle, double throttle, double ambientPressure)
+        => RawPerformance(vehicle, Math.Min(throttle, StructuralThrottleCap(vehicle, ambientPressure)), ambientPressure);
+
+    // FlightComputer.ComputeControl caps a Manual engine throttle at FlightComputer.SolveGLoadThrottleCap, and guidance flies in Manual, so a command above this throttle is never delivered.
+    // Mirrors that solve from the MaxGLoad and mass FlightComputer.CopyFrom brings back to the main thread, with the linear estimate followed by two fixed-point refinements, clamped to the minimum throttle.
+    // Returns 1 when the flight computer has not measured the vehicle yet or the engines cannot reach the limit.
+    internal static double StructuralThrottleCap(Vehicle vehicle, double ambientPressure)
+    {
+        FlightComputer fc = vehicle?.FlightComputer;
+        if (fc == null)
+            return 1.0;
+        double limitN = StockGLoadMargin * fc.MaxGLoad * StandardGravity * fc.TotalMassPropsBody.Mass;
+        if (!(limitN > 0.0))
+            return 1.0;
+        // EngineController.VacuumData is the full-throttle thrust of every engine with no ambient pressure, which only lowers nozzle thrust.
+        // Engines whose vacuum total stays under the limit cannot reach it, so the usual case returns here without a performance evaluation.
+        if (!(VacuumThrust(vehicle) > limitN))
+            return 1.0;
+        double full = RawPerformance(vehicle, 1.0, ambientPressure).thrust;
+        if (!(full > limitN))
+            return 1.0;
+        double minimum = Math.Clamp(vehicle.GetMinThrottle(), 0.0, 1.0);
+        double cap = Math.Clamp(limitN / full, minimum, 1.0);
+        for (int i = 0; i < 2; i++)
+        {
+            double thrust = RawPerformance(vehicle, cap, ambientPressure).thrust;
+            if (!(thrust > 0.0))
+                break;
+            cap = Math.Clamp(cap * limitN / thrust, minimum, 1.0);
+        }
+        return cap;
+    }
+
+    // A combustion or thermal core sets its chamber pressure from the throttle, which is what RocketControllerData.ComputeFromCores models.
+    // A solid motor ignores the throttle, and an AntimatterRamCore delivers what its ram speed and jet power allow rather than what ComputeConditions reports, so neither can follow a guidance command.
+    internal static bool FollowsThrottle(RocketCore core) => core is Combustor or ThermalCore;
+
+    // Uncapped performance at a commanded throttle.
+    // liquidOnly leaves out every engine with a core that does not follow the throttle.
+    private static (double thrust, double massFlow) RawPerformance(Vehicle vehicle, double throttle, double ambientPressure,
+                                                                   bool liquidOnly = false)
     {
         if (vehicle?.Parts?.States == null || !double.IsFinite(throttle) || !double.IsFinite(ambientPressure)
             || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
@@ -88,7 +151,7 @@ internal static class KsaEnginePerf
                 || engine.Module.Cores == null || engine.Module.Cores.Length == 0)
                 continue;
             RocketCore[] cores = engine.Module.Cores;
-            if (liquidOnly && Array.Exists(cores, core => core is not Combustor))
+            if (liquidOnly && Array.Exists(cores, core => !FollowsThrottle(core)))
                 continue;
             bool allSupplied = true;
             foreach (RocketCore core in cores)
@@ -143,7 +206,7 @@ internal static class KsaEnginePerf
             }
             foreach (RocketCore core in engine.Module.Cores)
             {
-                if (core is not Combustor)
+                if (!FollowsThrottle(core))
                 {
                     // SolidMotor.UpdateState can keep a motor burning after its controller is disabled.
                     // IsNonzero also covers ignition and shutdown transitions.
@@ -184,7 +247,8 @@ internal static class KsaEnginePerf
         if (status != ThrustStatus.Available)
             return new(0.0, 0.0, status);
         return InvertThrust(demandN, vehicle.GetMinThrottle(),
-            throttle => ThrustAtThrottle(vehicle, throttle, ambientPressure));
+            throttle => RawPerformance(vehicle, throttle, ambientPressure).thrust,
+            StructuralThrottleCap(vehicle, ambientPressure));
     }
 
     // The throttle that gets a fraction of the liquid engines' full thrust out of them alone, for a plan whose throttle is theirs: solid motors burning alongside ignore it and add their own thrust on top. Everything the throttle reaches is liquid, so CommandForThrust's refusal while a solid burns does not apply.
@@ -192,11 +256,12 @@ internal static class KsaEnginePerf
     {
         if (!double.IsFinite(fraction))
             return new(0.0, 0.0, ThrustStatus.InvalidDemand);
-        double full = ActivePerformance(vehicle, 1.0, ambientPressure, liquidOnly: true).thrust;
+        double full = RawPerformance(vehicle, 1.0, ambientPressure, liquidOnly: true).thrust;
         if (!(full > 0.0))
             return new(0.0, 0.0, ThrustStatus.NoAuthority);
         return InvertThrust(fraction * full, vehicle.GetMinThrottle(),
-            throttle => ActivePerformance(vehicle, throttle, ambientPressure, liquidOnly: true).thrust);
+            throttle => RawPerformance(vehicle, throttle, ambientPressure, liquidOnly: true).thrust,
+            StructuralThrottleCap(vehicle, ambientPressure));
     }
 
     // Returns -1 when throttle control is unavailable.
@@ -209,16 +274,19 @@ internal static class KsaEnginePerf
     }
 
     // Needs a monotone thrust curve. Zero demand switches the engine off instead of commanding its minimum throttle.
-    internal static ThrustCommand InvertThrust(double demandN, double minimumThrottle, Func<double, double> thrustAtThrottle)
+    // maximumThrottle is the highest throttle that is delivered, so a demand above its thrust reports AboveMaximum.
+    internal static ThrustCommand InvertThrust(double demandN, double minimumThrottle, Func<double, double> thrustAtThrottle,
+                                               double maximumThrottle = 1.0)
     {
         if (!double.IsFinite(demandN))
             return new(0.0, 0.0, ThrustStatus.InvalidDemand);
         if (demandN <= 0.0)
             return new(0.0, 0.0, ThrustStatus.Off);
-        if (!double.IsFinite(minimumThrottle) || minimumThrottle < 0.0 || minimumThrottle > 1.0)
+        if (!double.IsFinite(minimumThrottle) || minimumThrottle < 0.0 || minimumThrottle > 1.0
+            || !double.IsFinite(maximumThrottle))
             return new(0.0, 0.0, ThrustStatus.NoAuthority);
 
-        double lo = Math.Max(minimumThrottle, float.Epsilon), hi = 1.0;
+        double lo = Math.Max(minimumThrottle, float.Epsilon), hi = Math.Clamp(maximumThrottle, lo, 1.0);
         double full = thrustAtThrottle(hi), minimum = thrustAtThrottle(lo);
         if (!double.IsFinite(full) || !double.IsFinite(minimum) || full <= 0.0 || minimum < 0.0 || minimum > full)
             return new(0.0, 0.0, ThrustStatus.NoAuthority);

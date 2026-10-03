@@ -74,6 +74,10 @@ public abstract class ConvexAscentFlightTest : AfcTest
 
     // A throttled plan is one that goes below this anywhere.
     private const double ThrottledBelow = 0.9;
+    // GuidanceWindow.ConvexThrottle commands full throttle for a planned fraction at or above this.
+    private const double FullThrottlePlan = 0.995;
+    // How far the lowest flown command may sit above the lowest planned fraction. The command is a throttle setting and the plan a thrust fraction, which the engine's throttle curve maps a little apart.
+    private const double ThrottleFollowTol = 0.03;
 
     private static readonly AccessTools.FieldRef<VehicleAutopilotState> AmbientState =
         AccessTools.StaticFieldRefAccess<VehicleAutopilotState>(
@@ -87,6 +91,25 @@ public abstract class ConvexAscentFlightTest : AfcTest
 
     private static readonly MethodInfo ConvexThrottle =
         AccessTools.Method(typeof(GuidanceWindow), "ConvexThrottle");
+
+    // The flown vessel, and the stack that disposed it, so a flight that stops because the vessel is gone names who removed it.
+    private static Vehicle? _flown;
+    private static string? _flownDisposedBy;
+
+    private static void RecordFlownDispose(Vehicle __instance)
+    {
+        if (ReferenceEquals(__instance, _flown) && _flownDisposedBy == null)
+            _flownDisposedBy = Environment.StackTrace;
+    }
+
+    private static void RecordFlownDestruction(Vehicle vehicle, VehicleDestructionEvent destructionEvent)
+    {
+        if (ReferenceEquals(vehicle, _flown))
+            _flownDestroyedFor = $"{destructionEvent.Cause}, peak {destructionEvent.PeakGLoad:F2} g, "
+                               + $"peak q {destructionEvent.PeakDynamicPressure:F0} Pa, structural limit {vehicle.FlightComputer.MaxGLoad:F2} g";
+    }
+
+    private static string? _flownDestroyedFor;
 
     protected override void Execute(TestContext t)
     {
@@ -147,7 +170,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 return;
             }
             t.Info($"'{saves[0]}' spawned {terrain + PadHeightM:F0} m above the mean radius at lat {SiteLatDeg:F1}, lon {SiteLonDeg:F1} "
-                 + $"(terrain {terrain:F0} m), {vehicle.TotalMass / 1000.0:F1} t");
+                 + $"(terrain {terrain:F0} m), {vehicle.TotalMass / 1000.0:F1} t, id '{vehicle.Id}', hash {vehicle.Hash.Code}");
 
             Program.ControlledVehicle = vehicle;
             PhysicsBubble._forceOffRails = true;
@@ -156,11 +179,19 @@ public abstract class ConvexAscentFlightTest : AfcTest
             StagingConfig.DropSpentStages = true;
             driver.Step(0.05, 6);
 
+            _flown = vehicle;
+            _flownDisposedBy = null;
+            _flownDestroyedFor = null;
+            harmony.Patch(AccessTools.Method(typeof(Vehicle), nameof(Vehicle.Dispose), new[] { typeof(bool) }),
+                prefix: new HarmonyMethod(typeof(ConvexAscentFlightTest), nameof(RecordFlownDispose)));
+            harmony.Patch(AccessTools.Method(typeof(Universe), nameof(Universe.DestroyVehicleFromEvent)),
+                prefix: new HarmonyMethod(typeof(ConvexAscentFlightTest), nameof(RecordFlownDestruction)));
             Fly(t, vehicle, home, driver, preexisting);
         }
         finally
         {
             harmony.UnpatchAll(harmony.Id);
+            _flown = null;
             GuidanceFeature.DisableDriver();
             SharedVehicleHooks.GuidanceEnabled = previousEnabled;
             GuidanceWindow.SetModActive(previousModActive);
@@ -183,7 +214,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
         state.ArgPeFixed = false;
         state.Engage = true;
         state.AutoStage = true;
-        // The g-limit throttles only UPFG's closed loop (the profile flies the plan's own throttle): a stage that ends at ten g against a quarter-second step would otherwise cut off tens of m/s off.
+        // The g-limit holds the plan's throttle and UPFG's closed loop alike: a stage that ends at ten g against a quarter-second step would otherwise cut off tens of m/s off.
         state.GLimitEnabled = true;
         state.GLimitG = GLimitG;
         state.ReserveArmed = false;
@@ -260,10 +291,13 @@ public abstract class ConvexAscentFlightTest : AfcTest
         double handoverAltKm = double.NaN, handoverTime = double.NaN, handoverSpeed = double.NaN;
         double worstDevKm = 0.0, worstDevSpeed = double.NaN;
         bool upfgConverged = false, blended = false;
-        double lowestCommand = 1.0, blendRate = 0.0;
+        double lowestCommand = 1.0, lowestPlanned = 1.0, blendRate = 0.0;
         double3 lastCommand = state.CommandDir;
         int lastStage = state.ConvexStage;
+        int lastActivations = StagingDetector.ActivationsOf(vehicle);
         double worstStagingAltKm = 0.0;
+        double3 lastSampleR = double3.Zero;
+        bool frozenReported = false;
         while (time < MaxFlightSeconds && state.Running)
         {
             // Fine steps through the terminal count: the cutoff lands on a step, and at four g a quarter second is 10 m/s, which is 35 km of apoapsis.
@@ -271,6 +305,15 @@ public abstract class ConvexAscentFlightTest : AfcTest
             driver.Step(dt);
             time += dt;
             // A spent stage falls back to the ground minutes later, and the game's ground-impact effect throws in the headless runtime. The flight under test does not need them, so they go as soon as they separate.
+            int activations = StagingDetector.ActivationsOf(vehicle);
+            if (activations != lastActivations)
+            {
+                t.Info($"AutoStage staged ({activations - lastActivations}) at t={time:F2} s, {vehicle.TotalMass / 1000.0:F2} t, "
+                     + $"phase {StagingDetector.StateOf(vehicle).State}, guidance {state.Phase}, "
+                     + $"active sequence {vehicle.Parts.SequenceList.ActiveSequence} of {vehicle.Parts.SequenceList.Sequences.Length}, "
+                     + $"{vehicle.Parts.Count} parts, delays {StagingConfig.EngineDelays.Count}/{StagingConfig.DecouplerDelays.Count}");
+                lastActivations = activations;
+            }
             DespawnJettisoned(t.System, preexisting, vehicle);
             double3 r = vehicle.Orbit.StateVectors.PositionCci;
             double3 v = vehicle.Orbit.StateVectors.VelocityCci;
@@ -308,6 +351,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             if (state.Phase == GuidanceWindow.AscentPhase.Profile)
             {
                 lowestCommand = Math.Min(lowestCommand, (float)ConvexThrottle.Invoke(null, new object[] { vehicle, home })!);
+                lowestPlanned = Math.Min(lowestPlanned, profile.Throttle(state.ConvexPlanTime));
                 double planKm = profile.AltitudeAt(state.ConvexPlanTime) / 1000.0;
                 if (Math.Abs(altKm - planKm) > Math.Abs(worstDevKm))
                 {
@@ -328,6 +372,23 @@ public abstract class ConvexAscentFlightTest : AfcTest
             if (time >= nextSample)
             {
                 nextSample += SampleIntervalS;
+                // A vessel that no longer moves between two samples is not simulated any more, which the asserts below only show as a missed cutoff.
+                if (!frozenReported && r == lastSampleR)
+                {
+                    frozenReported = true;
+                    bool inFrame = false;
+                    foreach (Vehicle framed in Program.VehiclesInFrame)
+                        inFrame |= ReferenceEquals(framed, vehicle);
+                    t.Info($"the vessel has not moved since the last sample at t={time:F1} s: phase {state.Phase}, "
+                         + $"autostage {StagingDetector.StateOf(vehicle).State}, burn mode {vehicle.FlightComputer.BurnMode}, "
+                         + $"situation {vehicle.Situation}, controlled {ReferenceEquals(Program.ControlledVehicle, vehicle)}, "
+                         + $"disposed {vehicle.IsDisposed}, in frame {inFrame}, mass {vehicle.TotalMass / 1000.0:F1} t");
+                    if (_flownDestroyedFor != null)
+                        t.Info($"the game destroyed the vessel: {_flownDestroyedFor}");
+                    if (_flownDisposedBy != null)
+                        t.Info($"the vessel was disposed by:{Environment.NewLine}{_flownDisposedBy}");
+                }
+                lastSampleR = r;
                 double3 up = double3.Normalize(r);
                 double pitch = 90.0 - Math.Acos(Math.Clamp(double3.Dot(up, double3.Normalize(state.CommandDir)), -1.0, 1.0)) * 180.0 / Math.PI;
                 profile.Attitude(state.ConvexPlanTime, out double planPitch, out _);
@@ -355,9 +416,12 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.Check("the hand-over blends onto UPFG's steering", blended);
         t.Check($"the command turns under {BlendRateLimitDegS:F1} deg/s through the blend", blendRate <= BlendRateLimitDegS,
             $"peak {blendRate:F2} deg/s in the {BlendWatchS:F0} s after the hand-over");
-        if (throttled)
-            t.Check($"the profile throttles the engines below {ThrottledBelow:P0}", lowestCommand < ThrottledBelow,
-                $"lowest command {lowestCommand:P0}");
+        if (throttled && lowestPlanned < FullThrottlePlan)
+            t.Check($"the profile throttles the engines as the plan does, within {ThrottleFollowTol:P0}",
+                lowestCommand < FullThrottlePlan && lowestCommand <= lowestPlanned + ThrottleFollowTol,
+                $"lowest command {lowestCommand:P1}, lowest planned {lowestPlanned:P1} before the hand-over");
+        else if (throttled)
+            t.Info($"the plan keeps full throttle until the hand-over (lowest planned {lowestPlanned:P1}), so the profile throttle is not checked");
         t.Check("UPFG converged", upfgConverged);
         if (!t.Check("the ascent cuts off and releases guidance",
                 !state.Running && state.Status.StartsWith("Ascent complete", StringComparison.Ordinal),

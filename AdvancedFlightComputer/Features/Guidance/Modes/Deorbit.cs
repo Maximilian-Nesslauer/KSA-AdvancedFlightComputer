@@ -86,7 +86,7 @@ public static partial class GuidanceWindow
         DeorbitEngine[] engines, double minimumPulse) =>
         new(orbit, SimNow(), vehicle.TotalMass, vehicle.BoundingSphereRadiusBody, CurrentDeorbitSettings(),
             model, engines, minimumPulse, DeorbitControlStep(vehicle), EffectiveGLimit,
-            StockPreparationTime(vehicle.FlightComputer));
+            StockPreparationTime(vehicle.FlightComputer), KsaEnginePerf.StructuralAccelerationLimit(vehicle) / StandardGravity);
 
     // Stores the request with the engine signature it was captured under, so a later staging or sequence edit invalidates it.
     private static bool TryCaptureDeorbitRequest(Vehicle vehicle, Orbit orbit, IParentBody parent)
@@ -205,7 +205,7 @@ public static partial class GuidanceWindow
     private static void RestartDeorbitPlanning(string status)
     {
         ClearDeorbitPlanState();
-        _s.DeorbitNextValidationTick = Environment.TickCount64 + DeorbitSettleMs;
+        _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitSettleMs;
         _s.LandingPhase = LandingPhase.DeorbitPlanning;
         _s.LandingStatus = status;
     }
@@ -216,8 +216,8 @@ public static partial class GuidanceWindow
         if (!DeorbitRequestCurrent(request, parent)) return true;
         // Direct braking rebuilds its model at ignition, so RCS use during its coast does not start a transfer search.
         if (_s.LandingPhase == LandingPhase.Coast
-            || (_s.LandingPhase != LandingPhase.DeorbitCoast && Environment.TickCount64 < _s.DeorbitNextValidationTick)) return false;
-        _s.DeorbitNextValidationTick = Environment.TickCount64 + DeorbitRevalidateMs;
+            || (_s.LandingPhase != LandingPhase.DeorbitCoast && GuidanceClock.NowMs < _s.DeorbitNextValidationTick)) return false;
+        _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors expected = request.Source.GetStateVectorsAt(new UniverseTime(SimNow()));
         return Math.Abs(vehicle.TotalMass - request.Mass) > Math.Max(1, request.Mass * 0.001)
             || !DeorbitPlanner.SameState(expected, orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci)
@@ -226,20 +226,20 @@ public static partial class GuidanceWindow
 
     private static bool StartDeorbitSearch(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
-        if (Environment.TickCount64 < _s.DeorbitNextValidationTick) return false;
+        if (GuidanceClock.NowMs < _s.DeorbitNextValidationTick) return false;
         string refusal = DeorbitSettingsRefusal();
         if (refusal.Length > 0) { RefuseDeorbit(refusal); return false; }
         if (!TryCaptureDeorbitRequest(vehicle, orbit, parent)) { RefuseDeorbit("No usable engine model on the vehicle."); return false; }
         DeorbitRequest request = _s.DeorbitRequest;
         _s.DeorbitPlanner = new DeorbitPlanner(request);
-        _s.DeorbitNextValidationTick = Environment.TickCount64 + DeorbitRevalidateMs;
+        _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors captured = request.Source.StateVectors;
         string thrust = request.Engines.Length == 0 ? "no usable engine"
             : $"minimum thrust {request.Engines[0].Thrust:F1} N, full thrust {request.Engines[^1].Thrust:F1} N";
         GuidanceLog.Info(vehicle, $"deorbit search: epoch {request.Epoch:F3} s, site {request.Settings.Latitude:F6} / {request.Settings.Longitude:F6} deg"
             + $", requested arrival {(request.Settings.ArrivalDescentDeg is double angle ? $"{angle:F2} deg down" : "automatic")}"
             + $", braking altitude {request.Settings.BrakingAltitude:F1} m, gate altitude {request.Settings.GateAltitude:F1} m, mass {request.Mass:F1} kg"
-            + $", step {request.ControlStep:F6} s, minimum pulse {request.MinimumPulse:F6} s, {thrust}, G limit {request.GLimit:F3}"
+            + $", step {request.ControlStep:F6} s, minimum pulse {request.MinimumPulse:F6} s, {thrust}, G limit {request.GLimit:F3}, structural limit {request.StructuralGLimit:F3} g"
             + $", position CCI ({captured.PositionCci.X:F4}, {captured.PositionCci.Y:F4}, {captured.PositionCci.Z:F4}) m"
             + $", velocity CCI ({captured.VelocityCci.X:F4}, {captured.VelocityCci.Y:F4}, {captured.VelocityCci.Z:F4}) m/s.");
         return true;
@@ -335,7 +335,7 @@ public static partial class GuidanceWindow
                         if (module.Sequence != sequence.Number || module is not EngineController engine) continue;
                         hasEngine = true;
                         foreach (RocketCore core in engine.Cores)
-                            if (core is not Combustor)
+                            if (!KsaEnginePerf.FollowsThrottle(core))
                                 return "The next landing engine cannot obey throttle and shutdown commands.";
                     }
                 if (hasEngine) break;

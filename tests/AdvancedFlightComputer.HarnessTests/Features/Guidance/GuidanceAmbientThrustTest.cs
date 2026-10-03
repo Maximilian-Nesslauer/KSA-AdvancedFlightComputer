@@ -57,7 +57,7 @@ public sealed class GuidanceAmbientThrustTest : AfcTest
             if (!Compare(t, vehicle, "at ignition"))
                 return;
 
-            // A manual burn has no g-load cap, so the core is held low. Lit solids ignore the throttle.
+            // A manual burn is capped only near the structural load limit, so the core is held low. Lit solids ignore the throttle.
             AutoStageFlightSupport.HoldPrograde(vehicle, 0.3f);
             for (double burnt = 0.0; burnt < BurnSeconds; burnt += BurnDt)
                 driver.Step(BurnDt);

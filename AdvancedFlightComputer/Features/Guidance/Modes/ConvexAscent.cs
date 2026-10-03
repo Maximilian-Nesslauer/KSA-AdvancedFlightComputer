@@ -263,12 +263,16 @@ public static partial class GuidanceWindow
         double floor = Math.Clamp(Math.Max(_s.ConvexThrottleMinPct / 100.0, vehicle.GetMinThrottle()), 0.01, FullThrottleFloor);
         double m0 = vehicle.TotalMass;
         double dragArea = aero.ReferenceArea;
+        // The acceleration limit of the stack on the pad goes to every stage that can hold it. The plan is solved once and flies its own throttle, so an upper stage on a smaller stack is flown under the pad limit even where stock would let it push harder (see EffectiveAccelLimitG).
+        double userGLimit = UserGLimitG;
+        double structuralGLimit = KsaEnginePerf.StructuralAccelerationLimit(vehicle) / StandardGravity;
+        double accelLimitG = Math.Min(userGLimit, structuralGLimit);
         KsaAscentStages.Gathered gathered = KsaAscentStages.Gather(vehicle, model, stageParts, grid);
         AscentPhasePlan.Result stagePlan;
         try
         {
             stagePlan = AscentPhasePlan.Build(gathered.Phases, gathered.Motors, grid, m0, dragArea, floor, FullThrottleFloor,
-                                              _s.ReserveArmed ? _s.ReserveKg : 0.0);
+                                              _s.ReserveArmed ? _s.ReserveKg : 0.0, accelLimitG * StandardGravity);
         }
         catch (ArgumentException e)
         {
@@ -396,6 +400,7 @@ public static partial class GuidanceWindow
             LanDeg = lanDeg,
             ThrottleMinPct = floor * 100.0,
             ThrottleMinRequestedPct = throttleRequestedPct,
+            GLimitG = userGLimit,
             SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
             CoreThrottledDown = stagePlan.CoreThrottledDown,
             StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", pinned to {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
@@ -428,7 +433,8 @@ public static partial class GuidanceWindow
         GuidanceLog.Info(vehicle, $"convex ascent requested (problem {dump}): {count} stage(s) available, trying {initial} first; "
             + (launchAt > now ? $"lift-off at the window, {launchAt - now:F0} s from now; " : "")
             + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg, "
-            + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), drag area {dragArea:F1} m^2, "
+            + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), "
+            + $"acceleration limit {accelLimitG:F2} g (g-limit {(double.IsFinite(userGLimit) ? userGLimit.ToString("F2") + " g" : "off")}, structure {structuralGLimit:F2} g) on {allStages.Count(st => double.IsFinite(st.AccelerationLimit))} stage(s), drag area {dragArea:F1} m^2, "
             + (atmosphere != null ? $"air {atmosphere}" : "no air") + ".");
         for (int i = 0; i < count; i++)
             GuidanceLog.Info(vehicle, $"convex ascent stage {i + 1}: {stagePlan.Describe[i]}"
@@ -485,7 +491,7 @@ public static partial class GuidanceWindow
             why = "the target orbit has changed since it was planned";
             return false;
         }
-        if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct))
+        if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct, UserGLimitG))
         {
             why = "the convex settings have changed since it was planned";
             return false;
@@ -587,6 +593,8 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The profile's throttle, as the engines take it. The plan's throttle is a fraction of the liquid engines' full thrust at the altitude flown, and thrust is not proportional to the throttle setting in air (see KsaEnginePerf.ThrustAtThrottle), so the demand is turned into a setting through the engines' own curve. Full throttle whenever the plan is within half a percent of it - which, at the script's 99 % floor, is all the time - and whenever the vehicle cannot throttle.
     ///
+    /// The fraction is of the UNCAPPED full thrust, because the plan holds the acceleration limit itself. Taking it of the thrust KsaEnginePerf.StructuralThrottleCap leaves would apply the structural limit a second time.
+    ///
     /// WHILE A SOLID BURNS the throttle is the liquid engines' alone: the plan adds the solids' thrust outside it (#73), and a core lit with its boosters may be planned well below full to outlast them (#32). The fraction is then of the liquids' full thrust, set through their curve alone.
     /// </summary>
     private static float ConvexThrottle(Vehicle vehicle, IParentBody parent)
@@ -599,7 +607,7 @@ public static partial class GuidanceWindow
             return 1f;
         double altitude = vehicle.Orbit.StateVectors.PositionCci.Length() - parent.MeanRadius;
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, altitude);
-        double full = KsaEnginePerf.ActiveThrustCapability(vehicle, pressure);
+        double full = KsaEnginePerf.UncappedAtPressure(vehicle, pressure).thrust;
         if (!(full > 0.0))
             return 1f;
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(vehicle, fraction * full, pressure);

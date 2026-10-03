@@ -578,9 +578,10 @@ internal static class HohmannMultiPassPlanner
             orbit.TimeAtPeriapsis);
     }
 
+    // TransferInfo.Target is null only for an interstellar plan, which never reaches the Hohmann planner, but the snapshot stays total.
     private readonly record struct ShiftGeometry(
-        Vehicle Vehicle, IOrbiter Source, IOrbiter Target,
-        OrbitSnapshot SourceOrbit, OrbitSnapshot TargetOrbit, OrbitSnapshot StartingOrbit,
+        Vehicle Vehicle, IOrbiter Source, IOrbiter? Target,
+        OrbitSnapshot SourceOrbit, OrbitSnapshot? TargetOrbit, OrbitSnapshot StartingOrbit,
         OrbitSnapshot VehicleOrbit, OrbitSnapshot? DepartureOrbit,
         UniverseTime PatchStart, UniverseTime PatchEnd)
     {
@@ -590,7 +591,8 @@ internal static class HohmannMultiPassPlanner
             PatchedConic? patch = info.Vehicle.FlightPlan.TryFindPatch(start);
             if (patch == null) info.Vehicle.FlightComputer.BurnPlan.FindPatchAt(start, out patch);
             return new ShiftGeometry(info.Vehicle, info.Source, info.Target,
-                OrbitSnapshot.Capture(info.Source.Orbit), OrbitSnapshot.Capture(info.Target.Orbit),
+                OrbitSnapshot.Capture(info.Source.Orbit),
+                info.Target == null ? null : OrbitSnapshot.Capture(info.Target.Orbit),
                 OrbitSnapshot.Capture(info.Starting), OrbitSnapshot.Capture(info.Vehicle.Orbit),
                 patch == null ? null : OrbitSnapshot.Capture(patch.Orbit),
                 patch?.StartTime ?? default, patch?.EndTime ?? default);

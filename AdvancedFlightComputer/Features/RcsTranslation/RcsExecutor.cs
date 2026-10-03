@@ -17,9 +17,6 @@ internal static partial class RcsExecutor
     private const double CapabilityRefreshSec = 1.0;
     private const double EstimateRefreshSec = 1.0;
 
-    // Burn identity tolerance in seconds, also used by the burn editor.
-    internal const double BurnIdentityToleranceSec = 0.5;
-
     private const float ProgressEpsilonMs = 0.001f;
 
     // Require a margin because the slew propellant estimate is approximate.
@@ -76,8 +73,9 @@ internal static partial class RcsExecutor
         FlightComputer fc = vehicle.FlightComputer;
         if (fc.Burn == null || !vehicle.IsControllable)
             return false;
+        // An interstellar burn runs for a fixed duration or down to a stop speed and has its brake planned again by stock, none of which the RCS executor models.
         Burn? first = fc.BurnPlan.FindFirstExecutableBurn();
-        if (first == null)
+        if (first == null || first.IsInterstellar)
             return false;
         RcsBurnOptions? options = null;
         if (RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? exec))
@@ -706,7 +704,7 @@ internal static partial class RcsExecutor
         // Cancel a deleted or reordered burn instead of firing at another target.
         if (burn == null || bt == null
             || !fc.BurnPlan.TryGetBurn(burn)
-            || Math.Abs((bt.ImpulsiveInstant - burn.Time).Seconds()) > BurnIdentityToleranceSec)
+            || !StockBurnIdentity.IsLoaded(bt, burn))
         {
             Cancel(vehicle, exec, "burn no longer loaded");
             return;
@@ -725,8 +723,16 @@ internal static partial class RcsExecutor
         bool ctrlFrameSettled = RefreshCapability(vehicle, exec, nowSec);
         if (!exec.Capability.HasAnyTranslation)
         {
+            if (RcsCapability.ActiveThrustersOutOfPropellant(vehicle))
+            {
+                // Stock FlightComputer.ComputeControl stops a dry Auto burn only from its ignition time on, so the player can refuel during the coast.
+                // Until then the burn waits without a new command and without the progress watchdog.
+                if (nowSec >= bt.IgnitionTime.Seconds())
+                    StopOutOfPropellant(vehicle, fc, exec);
+                return;
+            }
             Alert($"RCS burn stalled: no usable RCS translation left on '{vehicle.Id}' " +
-                  "(thrusters inactive, out of propellant, or no usable axis).");
+                  "(thrusters inactive or no usable axis).");
             Cancel(vehicle, exec, "no usable translation");
             return;
         }
@@ -906,11 +912,14 @@ internal static partial class RcsExecutor
         }
     }
 
-    private static void Complete(Vehicle vehicle, FlightComputer fc, RcsExecution exec, float residualMs)
+    // An RCS burn ends through the same flags the vehicle worker raises for a stock Auto burn, so stock FlightComputer.RaisePendingAlerts ends both kinds alike later in Program.PrepareFrame.
+    // It stops the time warp, removes the burn and loads the next one when another burn follows, and shows its alert, and SharedVehicleHooks then hands the outcome to MultiPass and AutoRemove.
+    // This driver runs after FlightComputer.CopyFrom has written the worker results back, and Vehicle.PrepareWorker copies this flight computer to the next worker step only after RaisePendingAlerts has cleared the flag, so no copy can drop it in between.
+    // The flag is set after the release, so a release that throws leaves the burn to the fault cleanup instead of ending it.
+    internal static void Complete(Vehicle vehicle, FlightComputer fc, RcsExecution exec, float residualMs)
     {
         double burnTime = exec.ActiveBurnTimeSec ?? 0.0;
         double burnDv = exec.ActiveBurnDvMs ?? 0.0;
-        Burn? completedBurn = exec.ActiveBurn;
         RcsFuelSummary fuel = ComputeFuelSummary(fc, exec);
 
         // Stock also leaves a completed burn in Manual.
@@ -919,16 +928,27 @@ internal static partial class RcsExecutor
         RcsBurnOptions? options = exec.FindOptions(burnTime, burnDv);
         if (options != null)
             exec.Options.Remove(options);
-        RcsCommandChannel.Clear(fc.BurnPlan);
         float accumMs = fc.Burn?.DeltaVAccumCci.Length() ?? 0f;
         DefaultCategory.Log.Info(
             $"[AFC] RCS burn complete: vehicle='{vehicle.Id}' " +
             $"accumulated={accumMs:F3}m/s of {burnDv:F2}m/s, residual={residualMs:F3}m/s");
         LogFuel(vehicle, in fuel);
+        fc.AutoBurnCompleted = true;
+    }
 
-        // Notify subscribers after teardown because they can remove the completed burn.
-        if (completedBurn != null)
-            RcsBurnCompletions.Raise(vehicle, completedBurn);
+    // Stock stops an Auto burn whose active engines all ran dry and keeps it planned when no burn follows it, so the player can refuel and engage it again. Its options stay for that.
+    internal static void StopOutOfPropellant(Vehicle vehicle, FlightComputer fc, RcsExecution exec)
+    {
+        RcsFuelSummary fuel = ComputeFuelSummary(fc, exec);
+
+        // Stock also leaves a stopped burn in Manual.
+        exec.ForcedBurnManual = false;
+        EndExecution(vehicle, exec);
+        DefaultCategory.Log.Info(
+            $"[AFC] RCS burn stopped, every active thruster is out of propellant: vehicle='{vehicle.Id}' " +
+            $"to go={fc.Burn?.DeltaVToGoCci.Length() ?? 0f:F3}m/s");
+        LogFuel(vehicle, in fuel);
+        fc.AutoBurnStoppedOutOfPropellant = true;
     }
 
     // FlightComputer.ComputeRcsTrackAxis coasts inside this corridor. A tighter gate can wait on drift.
@@ -1008,9 +1028,11 @@ internal static partial class RcsExecutor
         double angleDeg = 0.0;
         BurnTarget? bt = fc.Burn;
         // A cancellation can arrive after the loaded target has changed to another burn.
-        bool btMatches = bt != null && exec.ActiveBurnTimeSec.HasValue
-            && Math.Abs(bt.ImpulsiveInstant.Seconds() - exec.ActiveBurnTimeSec.Value)
-               <= BurnIdentityToleranceSec;
+        // Before the first tick after a load the burn reference is not resolved yet, and only the persisted time identifies it.
+        bool btMatches = exec.ActiveBurn != null
+            ? StockBurnIdentity.IsLoaded(bt, exec.ActiveBurn)
+            : bt != null && exec.ActiveBurnTimeSec.HasValue
+              && Math.Abs(bt.ImpulsiveInstant.Seconds() - exec.ActiveBurnTimeSec.Value) <= StockBurnIdentity.ToleranceSec;
         if (btMatches)
         {
             double3 accum = double3.Unpack(bt!.DeltaVAccumCci);

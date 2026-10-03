@@ -198,16 +198,12 @@ internal static partial class Patch_DrawPlanWindow
                 TransferPlanner.TransferTypes)
             && transferType.GetKey() != prev.GetKey())
         {
-            StockPlanner.TransferType = transferType;
-            StockPlanner.TransferCalculated = false;
+            StockPlanner.SelectType(transferType);
             ManeuverToolsWindow.OnTypeChanged();
             OnManeuverContextChanged();
 
             if (!ManeuverToolsFeature.IsHandledType(transferType.GetKey()))
-            {
-                GameReflection.TransferPlanner_SetTransferInfo!.Invoke(null, null);
                 return false;
-            }
         }
         return true;
     }

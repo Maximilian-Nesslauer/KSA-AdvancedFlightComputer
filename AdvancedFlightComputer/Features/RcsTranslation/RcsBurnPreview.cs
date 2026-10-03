@@ -12,7 +12,7 @@ internal static class RcsBurnPreview
         RcsExecution? exec, out RcsEstimates estimates, out bool currentVehicle)
     {
         currentVehicle = !ReferenceEquals(burn, fc.BurnPlan.FindFirstExecutableBurn())
-            || !RcsBurnUi.HasEstimatesFor(burn.Time.Seconds(), fc.Burn, exec);
+            || !RcsBurnUi.HasEstimatesFor(burn, fc.Burn, exec);
         if (!currentVehicle)
         {
             estimates = exec!.Estimates;

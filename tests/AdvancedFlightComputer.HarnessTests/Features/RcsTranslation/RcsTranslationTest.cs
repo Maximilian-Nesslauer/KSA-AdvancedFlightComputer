@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -38,11 +39,12 @@ public sealed class RcsTranslationTest : AfcTest
             RcsFlightSupport.RunOnSave(t, home, saveId, SpawnAltitudeM, "HarnessRcsTest",
                 (vehicle, driver) =>
                 {
-                    using var watcher = new RcsFlightSupport.CompletionWatcher();
+                    using var watcher = new RcsFlightSupport.CompletionWatcher(vehicle);
                     Fly(t, vehicle, driver, watcher);
                     FlyAlignScenario(t, vehicle, driver, watcher);
                     FlyDeferredAlignCheck(t, vehicle, driver);
                     FlyRcsToggleScenario(t, vehicle, driver, watcher);
+                    FlyStockEndScenario(t, vehicle, driver, watcher);
                     FlyZeroedTargetScenario(t, vehicle, driver, watcher);
                     FlyCancelRequestScenario(t, vehicle, driver, watcher);
                 });
@@ -138,22 +140,21 @@ public sealed class RcsTranslationTest : AfcTest
         {
             float accum = bt.DeltaVAccumCci.Length();
             float residual = bt.DeltaVToGoCci.Length();
-            // A cancel also deactivates the executor but never raises the completion event, so the event separates a genuine completion from any cancel path.
-            bool viaEvent = ReferenceEquals(watcher.LastBurn, burn);
-            if (!viaEvent
-                && RcsCancelLogPatch.LastReason == "no usable translation"
-                && RcsPropellant.AvailableKg(vehicle) < 0.02 * propellantAtStartKg)
+            // A cancel also deactivates the executor but raises no stock flag, so the completion flag separates a genuine completion from any cancel path.
+            bool viaFlag = watcher.CompletedOn(burn);
+            if (!viaFlag && watcher.StoppedOutOfPropellantOn(burn))
             {
-                // Dev propellant saves (Test Vehicle 1) can drain the whole RCS tank slewing 90 degrees. The executor's propellant stall cancel is the correct outcome there. The recorded cancel reason plus the empty tank prove it was that cancel. Any other cancel (watchdog, align timeout) still fails even when the tank happens to be empty.
+                // Dev propellant saves (Test Vehicle 1) can drain the whole RCS tank slewing 90 degrees. The stock out-of-propellant stop is the correct outcome there. Any cancel (watchdog, align timeout) still fails even when the tank happens to be empty.
                 t.Skip("align: RCS propellant exhausted mid-slew " +
-                       "(align is infeasible on this save); executor cancelled cleanly.");
+                       $"(align is infeasible on this save, {RcsPropellant.AvailableKg(vehicle):F1}kg of " +
+                       $"{propellantAtStartKg:F0}kg left); executor stopped cleanly.");
             }
             else
             {
-                bool deliveredOk = viaEvent && accum > (float)(BurnDvMs * 0.9) && residual <= 0.1f;
+                bool deliveredOk = viaFlag && accum > (float)(BurnDvMs * 0.9) && residual <= 0.1f;
                 t.Check("align burn", deliveredOk,
                     $"accum={accum:F3}m/s of {BurnDvMs:F2}m/s residual={residual:F4}m/s " +
-                    $"completedEvent={viaEvent}");
+                    $"completedFlag={viaFlag}");
 
                 // The committed pulses must stamp FlightComputer.LastThrustTime, the field Vehicle.ShouldForceMarkerLabels reads. Stock only stamps for its own engine command or translation pulses, which Fly() rules out by zeroing the manual inputs.
                 t.Check("align thrust stamp",
@@ -161,7 +162,7 @@ public sealed class RcsTranslationTest : AfcTest
                     $"LastThrustTime={fc.LastThrustTime.Seconds():F1}s " +
                     $"vs {lastThrustBeforeSec:F1}s before the burn");
 
-                if (viaEvent)
+                if (viaFlag)
                 {
                     // The 90 degree offset guarantees a real slew, so the telemetry's slew bucket must have caught propellant.
                     RcsFuelSummary fuel = RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? done)
@@ -364,14 +365,14 @@ public sealed class RcsTranslationTest : AfcTest
         }
         else
         {
-            // The completion event separates a genuine finish from any cancel path (a tumbling Hold burn without RCS would have stalled).
-            bool viaEvent = ReferenceEquals(watcher.LastBurn, burn);
+            // The completion flag separates a genuine finish from any cancel path (a tumbling Hold burn without RCS would have stalled).
+            bool viaFlag = watcher.CompletedOn(burn);
             bool restored = fc.RCSMode == FlightComputerRCSMode.Disabled;
             float accum = bt.DeltaVAccumCci.Length();
             float residual = bt.DeltaVToGoCci.Length();
-            bool deliveredOk = viaEvent && accum > (float)(BurnDvMs * 0.9) && residual <= 0.1f;
+            bool deliveredOk = viaFlag && accum > (float)(BurnDvMs * 0.9) && residual <= 0.1f;
             t.Check("rcs toggle A finish", deliveredOk && restored,
-                $"viaEvent={viaEvent} accum={accum:F3}m/s residual={residual:F4}m/s " +
+                $"viaFlag={viaFlag} accum={accum:F3}m/s residual={residual:F4}m/s " +
                 $"restoredToOff={restored}");
         }
         RcsFlightSupport.CleanupBurns(fc);
@@ -465,7 +466,79 @@ public sealed class RcsTranslationTest : AfcTest
         RcsFlightSupport.CleanupBurns(fc);
     }
 
-    // A zeroed target must cancel without a completion event or a MultiPass pass.
+    // Flies a Hold burn with another burn planned after it. The executor raises the completion flag in the
+    // ApplyVehicleSolvers postfix, and stock FlightComputer.RaisePendingAlerts at the start of the next step, before that
+    // step's solvers run, removes the flown burn once and loads the next one in Manual, which the driver then leaves alone.
+    private static void FlyStockEndScenario(
+        TestContext t, Vehicle vehicle, SimDriver driver, RcsFlightSupport.CompletionWatcher watcher)
+    {
+        const string label = "stock end";
+        FlightComputer fc = vehicle.FlightComputer;
+        RcsFlightSupport.CleanupBurns(fc);
+        vehicle.RefillConsumables();
+        fc.BurnMode = FlightComputerBurnMode.Manual;
+        fc.RCSMode = FlightComputerRCSMode.Enabled;
+        driver.Step(StepSec, 10);
+        watcher.Reset();
+
+        int bestAxis = RcsCapability.Probe(vehicle).BestAxis();
+        if (bestAxis < 0)
+        {
+            t.Skip($"{label}: no usable translation axis on this save.");
+            return;
+        }
+        RcsFlightSupport.BurnSetup? setup = BuildStrongAxisBurn(vehicle, driver, bestAxis);
+        RcsFlightSupport.BurnSetup? later = setup == null
+            ? null
+            : RcsFlightSupport.AddBurn(vehicle, driver, double3.UnitX, BurnDvMs, 600.0);
+        if (setup == null || later == null
+            || !ReferenceEquals(fc.BurnPlan.FindFirstExecutableBurn(), setup.Burn))
+        {
+            t.Fail(label, "could not plan the flown burn and a later one");
+            RcsFlightSupport.CleanupBurns(fc);
+            return;
+        }
+        Burn burn = setup.Burn;
+        BurnTarget bt = setup.BurnTarget;
+
+        if (RcsFlightSupport.ArmAndEngage(vehicle, burn, RcsExecutionMode.Rcs,
+                RcsAttitudeStrategy.Hold, RcsAllocator.Groups) == null)
+        {
+            t.Fail(label, "SetEnum(Auto) did not engage the executor");
+            RcsFlightSupport.CleanupBurns(fc);
+            return;
+        }
+
+        int steps = (int)((BurnLeadSec + 200.0) / StepSec);
+        RcsFlightSupport.RunResult result = RcsFlightSupport.RunUntilInactive(vehicle, driver, StepSec, steps);
+        if (!result.EnginesQuiet)
+            t.Fail($"{label} engines quiet", "a main engine received a throttle command");
+
+        // Only the stock end removes the flown burn. A cancel raises no flag and keeps it planned.
+        bool raised = result.Completed && watcher.CompletedOn(burn) && watcher.StockReadEnds == 0;
+        driver.Step(StepSec);
+        float accum = bt.DeltaVAccumCci.Length();
+        t.Check($"{label}: stock removes the flown burn once and loads the next in Manual",
+            raised && !fc.BurnPlan.TryGetBurn(burn)
+            && fc.BurnPlan.BurnCount == 1 && fc.BurnPlan.TryGetBurn(later.Burn)
+            && StockBurnIdentity.IsLoaded(fc.Burn, later.Burn)
+            && fc.BurnMode == FlightComputerBurnMode.Manual
+            && !watcher.AnyEnd && watcher.StockReadEnds == 1
+            && accum > (float)(BurnDvMs * 0.9),
+            $"completed={result.Completed} raised={raised} stockEnds={watcher.StockReadEnds} " +
+            $"burns={fc.BurnPlan.BurnCount} accum={accum:F3}m/s mode={fc.BurnMode}");
+
+        driver.Step(StepSec, 20);
+        bool idle = !RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? after) || !after.IsActive;
+        t.Check($"{label}: the next burn stays planned and is not engaged",
+            idle && fc.BurnPlan.BurnCount == 1 && fc.BurnPlan.TryGetBurn(later.Burn)
+            && fc.BurnMode == FlightComputerBurnMode.Manual
+            && !watcher.AnyEnd && watcher.StockReadEnds == 1,
+            $"idle={idle} burns={fc.BurnPlan.BurnCount} mode={fc.BurnMode} stockEnds={watcher.StockReadEnds}");
+        RcsFlightSupport.CleanupBurns(fc);
+    }
+
+    // A zeroed target must cancel without a stock completion flag or a MultiPass pass.
     private static void FlyZeroedTargetScenario(
         TestContext t, Vehicle vehicle, SimDriver driver, RcsFlightSupport.CompletionWatcher watcher)
     {
@@ -516,7 +589,7 @@ public sealed class RcsTranslationTest : AfcTest
 
         bool targetZeroed = bt.DeltaVTargetCci.IsExactlyZero();
         bool inactive = !RcsExecRegistry.TryGet(vehicle.Id, out RcsExecution? after) || !after.IsActive;
-        bool noCompletion = !ReferenceEquals(watcher.LastBurn, burn);
+        bool noCompletion = watcher.NoEndSinceReset;
         t.Check("zeroed target cancels",
             targetZeroed && inactive && noCompletion
             && RcsCancelLogPatch.LastReason == "burn target has no delta-V",
@@ -576,7 +649,7 @@ public sealed class RcsTranslationTest : AfcTest
             stillActiveAtRequest && inactiveAfterTick
             && RcsCancelLogPatch.LastReason == "user request"
             && fc.RCSMode == FlightComputerRCSMode.Disabled
-            && !ReferenceEquals(watcher.LastBurn, setup.Burn),
+            && watcher.NoEndSinceReset,
             $"activeAtRequest={stillActiveAtRequest} inactiveAfterTick={inactiveAfterTick} " +
             $"reason={RcsCancelLogPatch.LastReason ?? "none"} rcsMode={fc.RCSMode}");
 
@@ -609,7 +682,7 @@ public sealed class RcsTranslationTest : AfcTest
         Vehicle? previousControlled = Program.ControlledVehicle;
         try
         {
-            const double CallerMarginSec = 3.0;
+            const double CallerMarginSec = FlightComputer.IGNITION_TIME_AUTO_WARP_MARGIN;
             double controlLeadSec = RcsExecutor.AlignLeadSeconds(in exec.Estimates);
             double expected = Math.Max(CallerMarginSec,
                 (originalIgnition - (bt.ImpulsiveInstant - controlLeadSec)).Seconds());
@@ -622,14 +695,17 @@ public sealed class RcsTranslationTest : AfcTest
                 $"margin without controlled vehicle={RcsWarpObservationPatch.LastMargin:F3}s");
             Universe.AutoWarpStop(resetSimulationSpeed: true);
 
+            // The stock warp-to-burn action, which passes the ignition time, the stock margin and an uncapped warp.
             Program.ControlledVehicle = vehicle;
             RcsWarpObservationPatch.Reset();
-            Universe.AutoWarpTo(originalIgnition, CallerMarginSec);
+            fc.Handle(FlightComputerAction.WarpToNextBurn);
             t.Check("RCS warp margin",
                 RcsWarpObservationPatch.LastEndTime == originalIgnition
                 && Math.Abs(RcsWarpObservationPatch.LastMargin - expected) < 1e-6,
                 $"target={RcsWarpObservationPatch.LastEndTime?.Seconds():F3}s " +
                 $"margin={RcsWarpObservationPatch.LastMargin:F3}s expected={expected:F3}s");
+            t.Check("RCS warp keeps the stock uncapped warp", RcsWarpObservationPatch.LastUncapped == true,
+                $"isUncapped={RcsWarpObservationPatch.LastUncapped}");
             t.Check("RCS warp identity", Universe.AutoWarpTime == originalIgnition,
                 $"target={Universe.AutoWarpTime?.Seconds():F3}s ignition={originalIgnition.Seconds():F3}s");
 
@@ -781,9 +857,9 @@ public sealed class RcsTranslationTest : AfcTest
         double burned = m0 - vehicle.TotalMass;
         t.Check("propellant", burned > 0.0, $"{burned * 1000.0:F1}g consumed");
 
-        t.Check("completion event",
-            ReferenceEquals(watcher.LastVehicle, vehicle) && ReferenceEquals(watcher.LastBurn, burn),
-            "vehicle and burn delivered");
+        t.Check("completion flag",
+            watcher.CompletedOn(burn) && !fc.AutoBurnStoppedOutOfPropellant,
+            "AutoBurnCompleted raised for the loaded burn");
 
         // Manual inputs are zero, so the thrust timestamp can advance only when the executor commits translation pulses. Compare it with the previous timestamp rather than the changing ignition estimate.
         t.Check("thrust stamp",

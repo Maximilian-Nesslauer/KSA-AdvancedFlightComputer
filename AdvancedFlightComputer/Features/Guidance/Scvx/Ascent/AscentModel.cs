@@ -103,10 +103,12 @@ public sealed class AscentStage
     /// <param name="fixedBurnTime">This stage's duration, s, when something other than its liquid load ends it; NaN for a free burn time. Required with <paramref name="solid"/>.</param>
     /// <param name="liquidCarriesOver">The liquid engines keep burning the same load into the next stage.</param>
     /// <param name="seedThrottle">The liquid throttle the seed flies this stage at: below 1 for a core that has to outlast its boosters.</param>
+    /// <param name="accelerationLimit">The highest thrust acceleration the plan may give this stage, m/s^2, as its thrust over its mass. Positive infinity for none. Only a stage of liquid engines alone can hold one, because solids follow their grain, not the throttle.</param>
     public AscentStage(double thrust, double massFlow, double propellantMass, double jettisonMass,
                        double dragArea, double[]? pressureGrid = null, double[]? thrustAtPressure = null,
                        double throttleMin = double.NaN, AscentSolidBurn? solid = null,
-                       double fixedBurnTime = double.NaN, bool liquidCarriesOver = false, double seedThrottle = 1.0)
+                       double fixedBurnTime = double.NaN, bool liquidCarriesOver = false, double seedThrottle = 1.0,
+                       double accelerationLimit = double.PositiveInfinity)
     {
         bool liquid = thrust > 0.0 || massFlow > 0.0;
         if (liquid || solid == null)
@@ -134,6 +136,10 @@ public sealed class AscentStage
             throw new ArgumentOutOfRangeException(nameof(jettisonMass), jettisonMass, "Jettisoned mass must be finite and non-negative.");
         if (!(dragArea >= 0.0) || !double.IsFinite(dragArea))
             throw new ArgumentOutOfRangeException(nameof(dragArea), dragArea, "Drag area must be finite and non-negative.");
+        if (!(accelerationLimit > 0.0))
+            throw new ArgumentOutOfRangeException(nameof(accelerationLimit), accelerationLimit, "The acceleration limit must be positive.");
+        if (double.IsFinite(accelerationLimit) && (solid != null || !liquid))
+            throw new ArgumentException("Only a stage of liquid engines alone can hold an acceleration limit.", nameof(accelerationLimit));
 
         Thrust = thrust;
         MassFlow = massFlow;
@@ -147,6 +153,7 @@ public sealed class AscentStage
         FixedBurnTime = fixedBurnTime;
         LiquidCarriesOver = liquidCarriesOver;
         SeedThrottle = seedThrottle;
+        AccelerationLimit = accelerationLimit;
 
         if (liquid && pressureGrid != null && thrustAtPressure != null && pressureGrid.Length >= 2)
         {
@@ -184,13 +191,16 @@ public sealed class AscentStage
     /// <summary>The liquid throttle the seed flies this stage at.</summary>
     public double SeedThrottle { get; }
 
+    /// <summary>The highest thrust acceleration the plan may give this stage, m/s^2, or positive infinity.</summary>
+    public double AccelerationLimit { get; }
+
     public bool HasLiquid => MassFlow > 0.0;
     public bool IsPinned => !double.IsNaN(FixedBurnTime);
 
     /// <summary>A copy with another jettison mass, propellant and carry-over: what the planner does to the last stage of a truncated stack.</summary>
     public AscentStage With(double propellantMass, double jettisonMass, bool liquidCarriesOver)
         => new(Thrust, MassFlow, propellantMass, jettisonMass, DragArea, PressureGrid, ThrustAtPressure,
-               ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle);
+               ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle, AccelerationLimit);
 
     /// <summary>Exhaust velocity at the reference thrust, m/s, solids at their mean over the stage - for the dV readout only.</summary>
     public double ExhaustVelocity

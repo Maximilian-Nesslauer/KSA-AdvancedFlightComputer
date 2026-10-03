@@ -86,7 +86,6 @@ internal static class MultiPassController
                 $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
 
         MultiPassRegistry.Remove(source.Id);
-        PassCompletionPatch.OnRegistryRemovedExternally(source.Id);
     }
 
     private static IManeuverIntent? BuildIntent(Vehicle source, string typeKey)

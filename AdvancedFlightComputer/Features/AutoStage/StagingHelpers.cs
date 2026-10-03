@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Core;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.AutoStage;
@@ -29,7 +30,7 @@ internal static class StagingHelpers
         Span<EngineController> engines = vehicle.Parts.Modules.Get<EngineController>();
         for (int i = 0; i < engines.Length; i++)
         {
-            if (engines[i].IsActive && IsFueled(engines[i], moleStates, coreStates, out _, out _))
+            if (engines[i].IsActive && VehiclePropellant.IsFueled(engines[i], moleStates, coreStates, out _, out _))
                 return true;
         }
         return false;
@@ -57,7 +58,7 @@ internal static class StagingHelpers
                 continue;
             }
 
-            bool fueled = IsFueled(engine, moleStates, coreStates, out bool burning, out bool broken);
+            bool fueled = VehiclePropellant.IsFueled(engine, moleStates, coreStates, out bool burning, out bool broken);
             if (fueled)
                 survey.AnyFueled = true;
 
@@ -79,25 +80,42 @@ internal static class StagingHelpers
         return survey;
     }
 
-    private static bool IsFueled(EngineController engine,
-        ReadOnlySpan<MoleState> moleStates, ReadOnlySpan<RocketCoreState> coreStates,
-        out bool burning, out bool broken)
+    // Rocket.UpdateRockets sets EngineControllerState.WasActive on its first pass over a newly activated engine, and until then the committed IsPropellantAvailable is the false of an inactive engine.
+    // FlightComputer.ComputeControl runs before that pass in every worker frame, so while this holds, its next tick can still find every active engine dry.
+    public static bool HasUnreportedActiveEngine(Vehicle vehicle)
     {
-        bool fueled = false;
-        burning = false;
-        broken = false;
-        foreach (RocketCore core in engine.Cores)
+        if (!ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var engines))
+            return false;
+        foreach (var engine in engines.ModulesAndStates)
         {
-            // Mirrors Rocket.UpdateRockets: a core burns above zero throttle.
-            // A lit solid motor counts its remaining grain as propellant, while a quenched one falls back to the equilibrium-pressure check and reads as spent.
-            bool isBurning = coreStates[core.StatesIdx].Throttle > 0f;
-            burning |= isBurning;
-            fueled |= core.ComputePropellantAvailable(moleStates, isBurning);
-
-            // A motor whose stack did not resolve reports no propellant for the life of the vehicle.
-            broken |= core is SolidMotor { Stack.IsValid: false };
+            if (engine.Module.IsActive && !engine.State.WasActive)
+                return true;
         }
-        return fueled;
+        return false;
+    }
+
+    // The engines SequenceList.ActivateNextSequence is about to switch on, read before it marks the row activated.
+    // Stock picks the first unactivated row with parts and walks each part's modules in that row through Part.ActivateSubtreeInStage.
+    public static List<EngineController>? EnginesLitByNextRow(SequenceList sequenceList)
+    {
+        foreach (Sequence sequence in sequenceList.Sequences)
+        {
+            if (sequence.Activated || sequence.Parts.IsEmpty)
+                continue;
+            List<EngineController>? engines = null;
+            ReadOnlySpan<Part> parts = sequence.Parts;
+            for (int i = 0; i < parts.Length; i++)
+            {
+                foreach (ISequenced module in parts[i].InSequence(sequence.Number))
+                {
+                    if (module is EngineController { IsActive: false } engine)
+                        (engines ??= new List<EngineController>()).Add(engine);
+                }
+            }
+            return engines;
+        }
+        return null;
     }
 
     // Bumped on every sequence activation and cache reset, for every vehicle, so the per-vehicle answers below refresh.

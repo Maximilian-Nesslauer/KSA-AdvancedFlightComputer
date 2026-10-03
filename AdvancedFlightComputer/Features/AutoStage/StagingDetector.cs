@@ -11,10 +11,17 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 //   Monitoring -> the active engines lose propellant -> stage
 //   Monitoring -> the next row would shed only spent engines -> stage
 //   Monitoring -> a caller requested one row -> stage
+//   Monitoring -> the player stages during an Auto burn -> AwaitingActivation
 //   AwaitingIgnition -> both delays elapsed -> AwaitingPropagation
-//   AwaitingPropagation -> new engines fueled -> Monitoring, else cascade stage
+//   AwaitingActivation -> the input drain switched the player's row on -> AwaitingPropagation
+//   AwaitingPropagation -> new engines reported and fueled -> Monitoring, else cascade stage when armed
 //
-// AwaitingPropagation exists because a freshly activated engine reports propellant only a tick after activation, and BurnMode is held at Auto across that window so the worker cannot abort the burn.
+// AwaitingPropagation exists because a freshly activated engine reports propellant only after the first Rocket.UpdateRockets pass over it, and FlightComputer.ComputeControl runs before that pass in every worker frame.
+// Until then, and through the delays while the spent engines are still attached, every active engine looks dry, so FlightComputer.ComputeControl drops a running Auto burn to Manual and raises AutoBurnStoppedOutOfPropellant.
+// FlightComputer.RaisePendingAlerts would then end the burn later in the same frame, stop the warp, and remove the burn when another one follows.
+// A staging in flight therefore takes that stop back on every frame for the burn target it staged under, see KeepAutoBurn.
+// A player staging meets the same stop one frame later than AutoStage's own, because SequenceList.ActivateNextSequence runs inside InputEvents.ApplyInputEvents after that frame's activations were drained, so its activations land in the next frame's drain.
+// AwaitingActivation holds the burn until they have landed. It runs for every vehicle with a running Auto burn, armed or not, and only an armed vehicle stages further on its own.
 // Each vehicle runs its own machine, so an armed craft keeps staging when it is not the controlled one.
 internal static class StagingDetector
 {
@@ -24,6 +31,9 @@ internal static class StagingDetector
 
     // One frame for the worker to process the new engines, plus one margin.
     private const int PropagationFrames = 2;
+
+    // A player's activations land in the input drain of the next frame, so this only bounds one that never lands.
+    internal const int ActivationFrames = 3;
 
     // Level-triggered, so it needs a dwell. Sim time, because Evaluate also runs while paused.
     private const double SpentJettisonDwellSeconds = 0.25;
@@ -43,6 +53,8 @@ internal static class StagingDetector
             state.PropagationFrames = 0;
             state.ResetDwell();
             state.HeldForControl = false;
+            state.HeldBurn = null;
+            state.ActivationEngines = null;
             if (state.State != StagingState.Phase.AwaitingIgnition)
                 state.State = StagingState.Phase.Monitoring;
         }
@@ -127,7 +139,8 @@ internal static class StagingDetector
 
             bool sampled = state.Sampled;
             state.Sampled = false;
-            if (!sampled || !state.Active)
+            // An unarmed vehicle only finishes a staging in flight, which a player staging during an Auto burn can start.
+            if (state.Active ? !sampled : state.State == StagingState.Phase.Monitoring)
                 continue;
 
             EvaluateVehicle(vehicle, state, now);
@@ -165,14 +178,16 @@ internal static class StagingDetector
                 {
                     state.Requested = false;
                     state.SpentJettisonSince = double.NaN;
-                    ExecuteStaging(vehicle, state, fc, state.SampledBurnMode, "requested");
+                    ExecuteStaging(vehicle, state, fc, RunningAutoBurn(state, fc), "requested");
                 }
-                else if (state.SampledHadPropellant && !hasPropellant
+                // The stock stop counts as a burnout edge too, because the worker can see the engines dry before this frame's sample did.
+                else if (!hasPropellant
+                    && (state.SampledHadPropellant || fc.AutoBurnStoppedOutOfPropellant)
                     && !IsBurnComplete(fc)
                     && StagingHelpers.HasNextEngineSequence(vehicle))
                 {
                     state.SpentJettisonSince = double.NaN;
-                    ExecuteStaging(vehicle, state, fc, state.SampledBurnMode, "burnout");
+                    ExecuteStaging(vehicle, state, fc, RunningAutoBurn(state, fc), "burnout");
                 }
                 else if (StagingConfig.DropSpentStages)
                 {
@@ -186,27 +201,111 @@ internal static class StagingDetector
 
             case StagingState.Phase.AwaitingIgnition:
                 state.Requested = false;
-                MaintainBurnMode(state, fc);
+                KeepAutoBurn(vehicle, state, fc);
+                break;
+
+            case StagingState.Phase.AwaitingActivation:
+                state.Requested = false;
+                if (ActivationLanded(vehicle, state.ActivationEngines))
+                {
+                    state.ActivationEngines = null;
+                    BeginPropagation(state, now);
+                    EvaluatePropagation(vehicle, state, fc, hasPropellant, now);
+                }
+                else if (++state.ActivationFrames > ActivationFrames)
+                {
+                    // The drain did not apply the row, so there is nothing to wait for and a stop stands.
+                    state.ActivationEngines = null;
+                    state.HeldBurn = null;
+                    state.State = StagingState.Phase.Monitoring;
+                }
+                else
+                {
+                    KeepAutoBurn(vehicle, state, fc);
+                }
                 break;
 
             case StagingState.Phase.AwaitingPropagation:
-                state.Requested = false;
-                state.PropagationFrames++;
-                MaintainBurnMode(state, fc);
-
-                if (hasPropellant)
-                {
-                    state.State = StagingState.Phase.Monitoring;
-                }
-                else if (state.PropagationFrames >= PropagationFrames)
-                {
-                    if (!IsBurnComplete(fc) && StagingHelpers.HasNextEngineSequence(vehicle))
-                        ExecuteStaging(vehicle, state, fc, state.TriggeredMode, "cascade");
-                    else
-                        state.State = StagingState.Phase.Monitoring;
-                }
+                EvaluatePropagation(vehicle, state, fc, hasPropellant, now);
                 break;
         }
+    }
+
+    private static void BeginPropagation(StagingState state, double now)
+    {
+        state.State = StagingState.Phase.AwaitingPropagation;
+        state.PropagationFrames = 0;
+        state.PropagationCountedAt = now;
+    }
+
+    private static void EvaluatePropagation(Vehicle vehicle, StagingState state, FlightComputer fc, bool hasPropellant, double now)
+    {
+        state.Requested = false;
+        // A paused frame runs no worker step, so it neither counts towards the wait nor lets the new engines report.
+        if (now > state.PropagationCountedAt)
+        {
+            state.PropagationFrames++;
+            state.PropagationCountedAt = now;
+        }
+        bool waited = state.PropagationFrames >= PropagationFrames;
+
+        if (hasPropellant && (waited || !StagingHelpers.HasUnreportedActiveEngine(vehicle)))
+        {
+            // This frame's stop came from the engine that has only just been fed.
+            KeepAutoBurn(vehicle, state, fc);
+            state.HeldBurn = null;
+            state.State = StagingState.Phase.Monitoring;
+        }
+        else if (!hasPropellant && waited)
+        {
+            if (state.Active && !IsBurnComplete(fc) && StagingHelpers.HasNextEngineSequence(vehicle))
+            {
+                ExecuteStaging(vehicle, state, fc, state.HeldBurn, "cascade");
+            }
+            else
+            {
+                // Nothing left to stage, or the vehicle is not armed to stage it, so the stop stands and stock ends the burn.
+                state.HeldBurn = null;
+                state.State = StagingState.Phase.Monitoring;
+            }
+        }
+        else
+        {
+            KeepAutoBurn(vehicle, state, fc);
+        }
+    }
+
+    // Landed once every engine reads active or has left the vehicle with a decoupled part.
+    private static bool ActivationLanded(Vehicle vehicle, List<EngineController>? engines)
+    {
+        if (engines == null)
+            return true;
+        foreach (EngineController engine in engines)
+        {
+            if (!engine.IsActive && engine.Parent.FullPart.Tree == vehicle.Parts)
+                return false;
+        }
+        return true;
+    }
+
+    // SequenceList.ActivateNextSequence switched these engines on while an Auto burn ran. AutoStage's own staging does not call it, so this is the player's staging key.
+    // The activation only queues, so the burn is held from here on, through the frame the activation lands in and the frame the stale stop of the new engines arrives in.
+    internal static void OnPlayerStaged(Vehicle vehicle, List<EngineController> engines)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        if (vehicle.IsDisposed || fc.BurnMode != FlightComputerBurnMode.Auto || fc.Burn == null)
+            return;
+        StagingState state = StateOf(vehicle);
+        // A staging waiting out its delays already holds the burn on every frame, and its propagation follows.
+        if (state.State == StagingState.Phase.AwaitingIgnition)
+            return;
+        state.HeldBurn = fc.Burn;
+        state.ActivationEngines = engines;
+        state.ActivationFrames = 0;
+        state.State = StagingState.Phase.AwaitingActivation;
+        if (DebugConfig.AutoStage)
+            DefaultCategory.Log.Debug(
+                $"[AFC] AutoStage holds the Auto burn on '{vehicle.Id}' across a player staging that lights {engines.Count} engine(s).");
     }
 
     // Stages while the vehicle is still under thrust, when the next sequence would shed nothing but burnt-out engines.
@@ -261,7 +360,7 @@ internal static class StagingDetector
             }
         }
 
-        ExecuteStaging(vehicle, state, fc, state.SampledBurnMode, "spent drop");
+        ExecuteStaging(vehicle, state, fc, RunningAutoBurn(state, fc), "spent drop");
     }
 
     // Once per change, because silence makes "rode along" and "correctly refused" look alike.
@@ -320,10 +419,7 @@ internal static class StagingDetector
 
         state.Pending = null;
         if (state.State == StagingState.Phase.AwaitingIgnition)
-        {
-            state.State = StagingState.Phase.AwaitingPropagation;
-            state.PropagationFrames = 0;
-        }
+            BeginPropagation(state, Universe.GetElapsedSeconds());
     }
 
     // A held staging cannot be dropped: its already-activated row would stay unfired for good, and firing it early only shortens a delay that exists for looks.
@@ -336,8 +432,9 @@ internal static class StagingDetector
         TickPendingStaging(vehicle, state, double.PositiveInfinity);
     }
 
+    // heldBurn is the Auto burn target the staging keeps alive, null when no Auto burn was running.
     private static void ExecuteStaging(Vehicle vehicle, StagingState state, FlightComputer fc,
-        FlightComputerBurnMode originalBurnMode, string trigger)
+        BurnTarget? heldBurn, string trigger)
     {
         if (JettisonAnalysis.WouldSeparateLastControl(vehicle))
         {
@@ -349,6 +446,8 @@ internal static class StagingDetector
                     $"[AFC] AutoStage held on '{vehicle.Id}': the next sequence would separate the last control module. Stage it by hand if that is wanted.");
                 TimedAlert.Create("AutoStage held: the next sequence would separate the control module", Color.Yellow, 4.0);
             }
+            // The stop stands, so stock ends the burn it cannot continue.
+            state.HeldBurn = null;
             state.State = StagingState.Phase.Monitoring;
             return;
         }
@@ -359,21 +458,22 @@ internal static class StagingDetector
             string dvInfo = fc.Burn != null
                 ? $"dV remaining = {fc.Burn.DeltaVToGoCci.Length():F1} m/s"
                 : "no burn planned";
-            DefaultCategory.Log.Debug($"[AFC] AutoStage staging '{vehicle.Id}' on {trigger} ({originalBurnMode} mode): {dvInfo}");
+            string mode = heldBurn != null ? "Auto burn" : "no Auto burn";
+            DefaultCategory.Log.Debug($"[AFC] AutoStage staging '{vehicle.Id}' on {trigger} ({mode}): {dvInfo}");
         }
 
-        state.TriggeredMode = originalBurnMode;
+        state.HeldBurn = heldBurn;
         FlushPendingStaging(vehicle, state);
 
         PendingStaging? pending = StagingExecution.ActivateNextSequenceSplit(vehicle);
         state.Activations++;
 
-        if (originalBurnMode == FlightComputerBurnMode.Auto && fc.Burn != null)
-            fc.BurnMode = FlightComputerBurnMode.Auto;
+        KeepAutoBurn(vehicle, state, fc);
 
         if (pending != null)
         {
             state.Pending = pending;
+            state.ActivationEngines = null;
             state.State = StagingState.Phase.AwaitingIgnition;
 
             if (pending.DecouplersPending && pending.DecouplerDelay > 0.0)
@@ -387,29 +487,54 @@ internal static class StagingDetector
         }
         else
         {
-            state.State = StagingState.Phase.AwaitingPropagation;
-            state.PropagationFrames = 0;
+            state.ActivationEngines = null;
+            BeginPropagation(state, Universe.GetElapsedSeconds());
         }
     }
 
-    // FlightComputer.ComputeControl drops BurnMode to Manual after two denied ignitions, which is what a freshly staged engine looks like until its propellant state propagates.
-    private static void MaintainBurnMode(StagingState state, FlightComputer fc)
+    // The Auto burn target running when the trigger fired, or null.
+    // The mode is sampled before the worker results are applied, because a stop in this frame's results has already dropped it to Manual.
+    private static BurnTarget? RunningAutoBurn(StagingState state, FlightComputer fc)
+        => state.SampledBurnMode == FlightComputerBurnMode.Auto || fc.AutoBurnStoppedOutOfPropellant ? fc.Burn : null;
+
+    // FlightComputer.ComputeControl drops an Auto burn to Manual when every active engine reports no propellant, raising AutoBurnStoppedOutOfPropellant, and after two denied ignitions.
+    // Both are what a staging looks like until the new engines are fed, so while the held target is still the loaded one the stop is taken back before FlightComputer.RaisePendingAlerts reads it, and Auto is given back although the engines still read dry.
+    // The hold ends when stock completes the burn or loads another one, which leaves the burn to stock.
+    private static void KeepAutoBurn(Vehicle vehicle, StagingState state, FlightComputer fc)
     {
-        if (state.TriggeredMode == FlightComputerBurnMode.Auto
-            && fc.Burn != null
-            && !IsBurnComplete(fc)
-            && fc.BurnMode == FlightComputerBurnMode.Manual)
+        BurnTarget? held = state.HeldBurn;
+        if (held == null)
+            return;
+        if (!ReferenceEquals(fc.Burn, held) || IsBurnComplete(fc))
         {
-            fc.BurnMode = FlightComputerBurnMode.Auto;
+            state.HeldBurn = null;
+            return;
         }
+        bool takesBack = fc.BurnMode == FlightComputerBurnMode.Manual || fc.AutoBurnStoppedOutOfPropellant;
+        if (fc.BurnMode == FlightComputerBurnMode.Manual && !StockBurnMode.GiveBackAuto(vehicle, held, takesStopBack: true))
+        {
+            // A vehicle without control cannot fly the burn, so stock ends it.
+            state.HeldBurn = null;
+            return;
+        }
+        fc.AutoBurnStoppedOutOfPropellant = false;
+        // The stop came with a denied ignition. FlightComputer.ComputeControl drops an Auto burn to Manual without any flag when the next ignition is denied too,
+        // so the denial is cleared with the stop. A next dry tick then raises the stop again, and when the hold lets it stand, FlightComputer.RaisePendingAlerts ends the burn with its alert.
+        if (takesBack)
+            held.LastIgnitionDenied = false;
     }
 
-    // True once what is left to go no longer points along the target.
+    // True in the frame stock reports the burn complete, and after it for a burn that stock completes by the delta-V reversal, because what is left to go then no longer points along the target.
+    // A fixed-duration burn reads complete only in that frame, because FlightComputer.RaisePendingAlerts clears the flag and the reversal does not apply to it.
     // Burn outlives its BurnPlan entry and is saved, so a vehicle can load with a zero DeltaVTargetCci, which would pass the overshoot test forever and disable both triggers for the flight.
     private static bool IsBurnComplete(FlightComputer fc)
     {
         BurnTarget? burn = fc.Burn;
-        if (burn == null || burn.DeltaVTargetCci.IsNearlyZero())
+        if (burn == null)
+            return false;
+        if (fc.AutoBurnCompleted)
+            return true;
+        if (burn.DeltaVTargetCci.IsNearlyZero())
             return false;
         return float3.Dot(burn.DeltaVToGoCci, burn.DeltaVTargetCci) <= 0f;
     }

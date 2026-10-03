@@ -7,7 +7,8 @@ using KSA;
 namespace AdvancedFlightComputer.HarnessTests;
 
 // The harness does not load the mod, so each RCS flight test applies only the
-// patches that the executor needs. It removes them when the test ends.
+// patches that the executor needs. It removes them when the test ends, and also
+// when one of them fails to apply, so a broken patch cannot leak into later tests.
 internal static class RcsTestPatches
 {
     public static Scope Apply() => new();
@@ -20,15 +21,23 @@ internal static class RcsTestPatches
         internal Scope()
         {
             _rcsEnabledBefore = SharedVehicleHooks.RcsEnabled;
-            RcsExecRegistry.Init();
             _harmony = new Harmony("com.maxi.afc.harnesstests.rcs");
-            VehicleCommandSink.ApplyPatches(_harmony);
-            SharedVehicleHooks.ApplyPatches(_harmony);
-            _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
-            _harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
-            _harmony.CreateClassProcessor(typeof(RcsWarpObservationPatch)).Patch();
-            _harmony.CreateClassProcessor(typeof(RcsCancelLogPatch)).Patch();
-            SharedVehicleHooks.RcsEnabled = true;
+            try
+            {
+                RcsExecRegistry.Init();
+                VehicleCommandSink.ApplyPatches(_harmony);
+                SharedVehicleHooks.ApplyPatches(_harmony);
+                _harmony.CreateClassProcessor(typeof(RcsSetEnumPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsWarpPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsWarpObservationPatch)).Patch();
+                _harmony.CreateClassProcessor(typeof(RcsCancelLogPatch)).Patch();
+                SharedVehicleHooks.RcsEnabled = true;
+            }
+            catch
+            {
+                Dispose();
+                throw;
+            }
         }
 
         public void Dispose()
@@ -45,29 +54,32 @@ internal static class RcsTestPatches
 }
 
 [HarmonyPatch(typeof(Universe), nameof(Universe.AutoWarpTo),
-    new Type[] { typeof(UniverseTime), typeof(double) })]
+    new Type[] { typeof(UniverseTime), typeof(double), typeof(bool) })]
 internal static class RcsWarpObservationPatch
 {
     internal static UniverseTime? LastEndTime;
     internal static double LastMargin = double.NaN;
+    internal static bool? LastUncapped;
 
     internal static void Reset()
     {
         LastEndTime = null;
         LastMargin = double.NaN;
+        LastUncapped = null;
     }
 
-    static void Postfix(UniverseTime endTime, double simTimeMargin)
+    static void Postfix(UniverseTime endTime, double simTimeMargin, bool isUncapped)
     {
         LastEndTime = endTime;
         LastMargin = simTimeMargin;
+        LastUncapped = isUncapped;
     }
 }
 
 // Cancels log their reason to the game log, which headless runs never
 // write; mirror the reason into the harness log so a failed flight test
-// explains itself instead of just going inactive. The recorded reason also
-// gates the align scenario's propellant-exhaustion SKIP.
+// explains itself instead of just going inactive. The scenarios also assert
+// on the recorded reason.
 [HarmonyPatch(typeof(RcsExecutor), nameof(RcsExecutor.Cancel))]
 internal static class RcsCancelLogPatch
 {

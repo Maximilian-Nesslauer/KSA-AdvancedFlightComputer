@@ -19,13 +19,13 @@ namespace AdvancedFlightComputer.Features.Flyby;
 /// Two gravitational parameters are in play and must not be conflated. The
 /// Lambert solve is about the shared parent of the transfer, which is Earth for
 /// LEO to Luna and the Sun for LEO to Mars. The impact parameter and the
-/// periapsis speed use the target's own mu from <see cref="IParentBody.Mu"/>.
-/// Stock's course correction reads <c>target.Orbit.Mu</c>, which resolves to the
-/// parent's mu, and is deliberately not followed here.
+/// periapsis speed use the target's own mu from <see cref="IParentBody.Mu"/>,
+/// as stock's course correction in <c>CorrectionBurnTask</c> does.
 ///
 /// The B plane relation takes the relative speed at the SOI boundary so the
 /// achieved patched conic periapsis matches the game's own model. It reads
-/// v_p^2 = v_soi^2 - 2 mu / r_soi + 2 mu / r_p and b = r_p v_p / v_soi.
+/// v_p^2 = v_soi^2 - 2 mu / r_soi + 2 mu / r_p and b = r_p v_p / v_soi, which is
+/// stock's <see cref="OrbitalTransfers.ImpactParameterAtSoiEntry"/>.
 /// </summary>
 internal static partial class FlybyTargeting
 {
@@ -110,10 +110,9 @@ internal static partial class FlybyTargeting
     {
         if (!(vSoi > 0.0) || !(rpRadius > 0.0) || !(muTarget > 0.0) || !(soiRadius > 0.0))
             return double.NaN;
-        double vpSquared = vSoi * vSoi - 2.0 * muTarget / soiRadius + 2.0 * muTarget / rpRadius;
-        if (!(vpSquared > 0.0))
-            return double.NaN;
-        return rpRadius * Math.Sqrt(vpSquared) / vSoi;
+        // A periapsis the approach cannot reach leaves no positive speed there, which the stock relation returns as zero or NaN.
+        double b = OrbitalTransfers.ImpactParameterAtSoiEntry(muTarget, soiRadius, vSoi, rpRadius);
+        return b > 0.0 ? b : double.NaN;
     }
 
     /// <summary>Inverse of <see cref="ImpactParameterForPeriapsis"/>. From

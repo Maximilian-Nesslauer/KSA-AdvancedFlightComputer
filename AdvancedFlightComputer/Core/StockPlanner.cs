@@ -67,6 +67,44 @@ internal static class StockPlanner
 
     public static string? TransferTypeKey => TransferType?.GetKey();
 
+    /// <summary>
+    /// Switches the plan type with the same reset <see cref="TransferPlanner.DrawPlanWindow"/> applies when the player changes it in stock's own combo. That clears the calculated transfer, the destination and the selected porkchop entry, and selects the time unit stock starts the type with, which is years for an interstellar plan and minutes otherwise.
+    /// <c>TransferPlanner.SetTransferInfo</c> then rebuilds the transfer info for the new type, and for a stock type with a destination it picks the time unit from the Hohmann estimate.
+    /// The caller does not switch while a stock porkchop calculation runs, because only stock's own combo cancels that worker.
+    /// </summary>
+    public static void SelectType(KSA.TransferType type)
+    {
+        TransferType = type;
+        TransferCalculated = false;
+        Write(GameReflection.TransferPlanner_destinationBodyRef, new TransferObject(-1));
+        Write(GameReflection.TransferPlanner_selectedEntryRef, null);
+        SelectTimeUnit(type.GetKey() == Features.ManeuverTools.ManeuverTools.KeyStockInterstellar ? TimeUnit.Years : TimeUnit.Minutes);
+        GameReflection.TransferPlanner_SetTransferInfo?.Invoke(null, null);
+    }
+
+    private static void SelectTimeUnit(TimeUnit unit)
+    {
+        if (TimeUnits is not { } units)
+            return;
+        foreach (TimeObject candidate in units)
+        {
+            if (candidate.Unit == unit)
+            {
+                SelectedTimeUnit = candidate;
+                return;
+            }
+        }
+    }
+
+    /// <summary>The time units stock offers for the transfer window, or null when the field is gone.</summary>
+    public static List<TimeObject>? TimeUnits => Read(GameReflection.TransferPlanner_timeUnitsRef);
+
+    public static TimeObject SelectedTimeUnit
+    {
+        get => Read(GameReflection.TransferPlanner_selectedTimeUnitRef);
+        set => Write(GameReflection.TransferPlanner_selectedTimeUnitRef, value);
+    }
+
     public static TransferObject SourceBody
     {
         get => GameReflection.TransferPlanner_sourceBodyRef is { } accessor ? accessor() : new TransferObject(-1);
