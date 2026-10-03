@@ -1,13 +1,13 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.AutoRemove;
-using AdvancedFlightComputer.Features.RcsTranslation;
 using HarmonyLib;
 
 namespace AdvancedFlightComputer.HarnessTests;
 
-// The harness never runs Mod.OnFullyLoaded, so each burn-removal test applies the shared tick on
-// its own owner, wires the RCS subscription, and removes both when it ends. The config is set
-// directly rather than loaded, so the suite never touches the player's mod directory.
+// The harness never runs Mod.OnFullyLoaded, so each burn-removal test applies the shared hooks on
+// its own owner, among them the FlightComputer.RaisePendingAlerts postfix a finished engine or RCS
+// burn arrives through, and removes them when it ends. The config is set directly rather than
+// loaded, so the suite never touches the player's mod directory.
 internal static class AutoRemoveTestPatches
 {
     public static Scope Apply() => new();
@@ -22,7 +22,6 @@ internal static class AutoRemoveTestPatches
             try
             {
                 SharedVehicleHooks.ApplyPatches(_harmony);
-                RcsBurnCompletions.Completed += FinishedBurnRemover.OnRcsBurnCompleted;
                 SharedVehicleHooks.AutoRemoveEnabled = true;
                 AutoRemoveConfig.Enabled = true;
             }
@@ -36,8 +35,6 @@ internal static class AutoRemoveTestPatches
         public void Dispose()
         {
             SharedVehicleHooks.AutoRemoveEnabled = _enabledBefore;
-            RcsBurnCompletions.Completed -= FinishedBurnRemover.OnRcsBurnCompleted;
-            FinishedBurnRemover.Reset();
             AutoRemoveConfig.Reset();
             _harmony.UnpatchAll(_harmony.Id);
         }

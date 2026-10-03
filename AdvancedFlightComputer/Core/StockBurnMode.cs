@@ -20,15 +20,47 @@ internal static class StockBurnMode
     /// <summary>
     /// Gives an Auto back while the mode still reads Manual and <paramref name="heldTarget"/> is still the loaded burn target. Stock writes Manual itself when a burn is loaded, unloaded or completed, and Auto on a burn the player never armed would start the stock autopilot on it.
     /// A caller that cannot keep the target, because its hold outlives a save, passes the loaded one.
+    /// Stock writes Manual too when a started Auto burn finds every active engine dry, and raises <c>FlightComputer.AutoBurnStoppedOutOfPropellant</c>, after which <c>FlightComputer.RaisePendingAlerts</c> ends the burn and removes it when another burn follows. An Auto given back to such a burn would stop on the next worker step, so it is not given back: the burn stays planned in Manual and stock's own stop warning says why.
+    /// Only a caller that takes that stop back itself on every frame, as AutoStage does while new engines light, passes <paramref name="takesStopBack"/>.
     /// </summary>
-    internal static bool GiveBackAuto(Vehicle vehicle, BurnTarget? heldTarget)
+    internal static bool GiveBackAuto(Vehicle vehicle, BurnTarget? heldTarget, bool takesStopBack = false)
     {
         FlightComputer fc = vehicle.FlightComputer;
-        if (fc.BurnMode != FlightComputerBurnMode.Manual || !ReferenceEquals(fc.Burn, heldTarget)
+        if (fc.BurnMode != FlightComputerBurnMode.Manual || heldTarget == null || !ReferenceEquals(fc.Burn, heldTarget)
             || !vehicle.IsControllable)
             return false;
+        if (!takesStopBack && WouldStopAtOnce(vehicle, heldTarget))
+        {
+            TimedAlert.CreateWarning(ReferenceEquals(vehicle, Program.ControlledVehicle)
+                ? LStrings.AlertAutoBurnStopped.Format()
+                : LStrings.AlertAutoBurnStoppedVehicle.Format<string>(vehicle.Id));
+            return false;
+        }
         Write(vehicle, FlightComputerBurnMode.Auto);
         return true;
+    }
+
+    /// <summary>
+    /// The propellant stop of <c>FlightComputer.ComputeControl</c>, read on the committed engine states the next worker step starts from: the burn has started or reached its ignition time, at least one engine is active, and no active engine reports propellant.
+    /// </summary>
+    internal static bool WouldStopAtOnce(Vehicle vehicle, BurnTarget target)
+    {
+        if (!target.Throttle.HasValue && Universe.GetElapsedTime() < target.IgnitionTime)
+            return false;
+        if (vehicle.Parts?.States == null
+            || !ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var engines))
+            return false;
+        bool anyActive = false;
+        foreach (var engine in engines.ModulesAndStates)
+        {
+            if (!engine.Module.IsActive)
+                continue;
+            if (engine.State.IsPropellantAvailable)
+                return false;
+            anyActive = true;
+        }
+        return anyActive;
     }
 
     // Vehicle.SetEnum pairs the mode with the navball frame, BurnBody for Auto and the vehicle region's own frame otherwise.

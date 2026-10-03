@@ -1,4 +1,3 @@
-using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
@@ -41,11 +40,9 @@ internal static class SaveScopedState
         HohmannFlybyUI.Reset();
         Patch_DrawPlanWindow.Reset();
         ManeuverToolsWindow.Reset();
-        PassCompletionPatch.Reset();
         RcsExecutor.ResetUiCache();
         RcsCommandChannel.Reset();
         // Also disarms the AUTOSTAGE switch, so a loaded save does not stage until the player arms it again.
         StagingDetector.Reset();
-        FinishedBurnRemover.Reset();
     }
 }

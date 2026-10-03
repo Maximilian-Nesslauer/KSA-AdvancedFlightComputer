@@ -54,9 +54,14 @@ internal static class GameReflection
     public static readonly FieldInfo? TransferPlanner_transferInfo =
         AccessTools.Field(typeof(TransferPlanner), "_transferInfo");
 
-    [UsedBy(Feature.PlanWindow)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_selectedEntry =
         AccessTools.Field(typeof(TransferPlanner), "_selectedEntry");
+
+    // Cleared together with the selected entry when the plan type changes, as TransferPlanner.DrawPlanWindow does.
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
+    public static readonly FieldInfo? TransferPlanner_destinationBody =
+        AccessTools.Field(typeof(TransferPlanner), "_destinationBody");
 
     // The transfer-window time bounds HyperbolicTargets writes as inputs.
     [UsedBy(Feature.HyperbolicTargets)]
@@ -67,11 +72,11 @@ internal static class GameReflection
     public static readonly FieldInfo? TransferPlanner_selectedMaxTime =
         AccessTools.Field(typeof(TransferPlanner), "_selectedMaxTime");
 
-    [UsedBy(Feature.HyperbolicTargets)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_selectedTimeUnit =
         AccessTools.Field(typeof(TransferPlanner), "_selectedTimeUnit");
 
-    [UsedBy(Feature.HyperbolicTargets)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly FieldInfo? TransferPlanner_timeUnits =
         AccessTools.Field(typeof(TransferPlanner), "_timeUnits");
 
@@ -102,11 +107,11 @@ internal static class GameReflection
         AccessTools.Field(typeof(TransferPlanner), "_displaySelectedTransfer");
 
     // HyperbolicTargets binds its finalizer to the same method by name.
-    [UsedBy(Feature.HyperbolicTargets | Feature.PlanWindow)]
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly MethodInfo? TransferPlanner_SetTransferInfo =
         AccessTools.Method(typeof(TransferPlanner), "SetTransferInfo", Type.EmptyTypes);
 
-    // Typed accessors over the handles above for the plan-window state StockPlanner reads per frame, one delegate each and no boxing per read.
+    // Typed accessors over the handles above for the plan-window state StockPlanner and HyperbolicTargets read and write, one delegate each and no boxing per access.
     // An accessor is null when its handle is null or the field no longer holds the expected type, so the validation reports it like any other missing handle.
     [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<TransferObject>? TransferPlanner_sourceBodyRef =
@@ -116,9 +121,29 @@ internal static class GameReflection
     public static readonly AccessTools.FieldRef<OrbitalTransfers.TransferInfo?>? TransferPlanner_transferInfoRef =
         StaticFieldRef<OrbitalTransfers.TransferInfo?>(TransferPlanner_transferInfo);
 
-    [UsedBy(Feature.PlanWindow)]
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<OrbitalTransfers.PorkChopEntry?>? TransferPlanner_selectedEntryRef =
         StaticFieldRef<OrbitalTransfers.PorkChopEntry?>(TransferPlanner_selectedEntry);
+
+    [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
+    public static readonly AccessTools.FieldRef<TransferObject>? TransferPlanner_destinationBodyRef =
+        StaticFieldRef<TransferObject>(TransferPlanner_destinationBody);
+
+    [UsedBy(Feature.HyperbolicTargets)]
+    public static readonly AccessTools.FieldRef<UniverseTime>? TransferPlanner_selectedMinTimeRef =
+        StaticFieldRef<UniverseTime>(TransferPlanner_selectedMinTime);
+
+    [UsedBy(Feature.HyperbolicTargets)]
+    public static readonly AccessTools.FieldRef<UniverseTime>? TransferPlanner_selectedMaxTimeRef =
+        StaticFieldRef<UniverseTime>(TransferPlanner_selectedMaxTime);
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
+    public static readonly AccessTools.FieldRef<TimeObject>? TransferPlanner_selectedTimeUnitRef =
+        StaticFieldRef<TimeObject>(TransferPlanner_selectedTimeUnit);
+
+    [UsedBy(Feature.HyperbolicTargets | Feature.ManeuverTools | Feature.PlanWindow)]
+    public static readonly AccessTools.FieldRef<List<TimeObject>>? TransferPlanner_timeUnitsRef =
+        StaticFieldRef<List<TimeObject>>(TransferPlanner_timeUnits);
 
     [UsedBy(Feature.ManeuverTools | Feature.PlanWindow)]
     public static readonly AccessTools.FieldRef<TransferType>? TransferPlanner_transferTypeRef =
@@ -149,6 +174,7 @@ internal static class GameReflection
     #region Optional patch anchors
 
     // This guard prevents the stock search from using a second body with a NaN Period.
+    // The last parameter is the out searchedUntil, which reflection sees as a by-ref type.
     [UsedBy(Feature.SoftAnchor)]
     public static readonly MethodInfo? PatchedConic_FindClosestApproaches =
         AccessTools.Method(typeof(PatchedConic), "FindClosestApproaches", new[]
@@ -156,6 +182,7 @@ internal static class GameReflection
             typeof(Span<Encounter>),
             typeof(int).MakeByRefType(),
             typeof(IOrbiter),
+            typeof(UniverseTime).MakeByRefType(),
             typeof(UniverseTime).MakeByRefType(),
         });
 
@@ -174,12 +201,19 @@ internal static class GameReflection
 
     #region Save, tick and vehicle lifetime
 
-    // The per-frame tick MultiPass and RcsTranslation drive their state machines from.
+    // The per-frame tick MultiPass, RcsTranslation and AutoStage drive their state machines from.
     // It runs on the main thread after the solver results are applied to every vehicle and before InputEvents.ApplyInputEvents, so a driver reads fresh FlightComputer state and can still queue burn mutations for the same frame's drain.
+    // AutoStage takes back a worker's FlightComputer.AutoBurnStoppedOutOfPropellant here, before the input drain and before FlightComputer.RaisePendingAlerts acts on it later in Program.PrepareFrame. The RCS executor raises that flag and FlightComputer.AutoBurnCompleted here for its own burns, after AutoStage has run.
     // Neither per-vehicle half of the apply is a sound host, because Vehicle.UpdateFromTaskResultsUnsynchronized runs one worker per physics bubble and Vehicle.UpdateFromTaskResultsSynchronized is aggressively inlined, which a Harmony detour on the callee cannot survive.
-    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage | Feature.AutoRemove)]
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoStage)]
     public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
         AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers), Type.EmptyTypes);
+
+    // Stock ends an Auto burn here, and an RCS burn too, because the RCS executor raises the same flags. Program.PrepareFrame calls it for every vehicle after InputEvents.ApplyInputEvents, and FlightComputer.EndAutoBurn removes the finished or stopped burn there whenever another burn follows it.
+    // MultiPass and AutoRemove act on the outcome in a postfix, so they never remove a burn stock is about to remove as well.
+    [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoRemove)]
+    public static readonly MethodInfo? FlightComputer_RaisePendingAlerts =
+        AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.RaisePendingAlerts), new[] { typeof(Vehicle) });
 
     // UncompressedSave is the concrete path that calls Universe.DeserializeSave, and its Id is the save-game discriminator the registries scope their entries by.
     [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation)]

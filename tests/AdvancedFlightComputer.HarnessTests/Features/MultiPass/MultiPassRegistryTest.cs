@@ -51,7 +51,7 @@ public sealed class MultiPassRegistryTest : AfcTest
             ParkingPeriodSec = 5400.25,
         };
         MultiPassExecution apse = Make("save\\one", "ship \"A\"#1");
-        apse.BurnAutoEngagedThisPass = true;
+        apse.PassArmed = true;
         apse.AwaitingMaterialization = true;
         apse.ReengageAutoOnNextBurn = true;
         using var writer = new StringWriter(CultureInfo.GetCultureInfo("de-DE"));
@@ -69,7 +69,7 @@ public sealed class MultiPassRegistryTest : AfcTest
             t.Check("burn fingerprint is exact", back.CurrentBurnTimeSec == apse.CurrentBurnTimeSec
                 && back.CurrentBurnDvMagnitudeMs == apse.CurrentBurnDvMagnitudeMs);
             t.Check("transient control state resets", back.CurrentBurn == null
-                && !back.AwaitingMaterialization && !back.BurnAutoEngagedThisPass
+                && !back.AwaitingMaterialization && !back.PassArmed
                 && !back.ReengageAutoOnNextBurn);
             t.Check("apse intent survives", back.Intent is ApseIntent a
                 && a.IsSetApoapsis && a.ParentId == "Earth" && a.TargetRadiusMeters == 7200000.25);
