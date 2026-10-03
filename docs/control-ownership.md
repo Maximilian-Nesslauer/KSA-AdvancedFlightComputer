@@ -14,7 +14,14 @@ Guidance and the RCS executor take stock's burn mode through `StockBurnMode`.
 The writes mirror `Vehicle.SetEnum` without going through it, because AFC intercepts that path to start and cancel RCS burns.
 So the navball frame follows the mode, the vehicle region's frame for Manual and BurnBody for Auto, and a craft without a control module gets no Auto back, as stock refuses it.
 A give-back also needs the mode to still read Manual and the loaded burn target to be the one the caller names.
-Two other writers stay outside it. AutoStage writes Auto directly to keep it across a staging, because stock drops Auto after two denied ignitions and a freshly staged engine looks like that until its propellant state propagates. MultiPass re-engages Auto for its next pass through `Vehicle.SetEnum`, so that request reaches the RCS interception.
+Stock `FlightComputer.ComputeControl` drops a started Auto burn to Manual and sets `FlightComputer.AutoBurnStoppedOutOfPropellant` when no active engine reports propellant, and `FlightComputer.RaisePendingAlerts` then ends it. `StockBurnMode.GiveBackAuto` therefore leaves such a burn in Manual.
+AutoStage is the one exception: while its staging (or one by the player during an Auto burn) is in flight, it clears that flag and `BurnTarget.LastIgnitionDenied` in the `Universe.ApplyVehicleSolvers` postfix, before stock reads them, and a `Vehicle.PrepareWorker` prefix reports the new engines as fed for their first worker tick.
+MultiPass re-engages Auto for its next pass through `Vehicle.SetEnum`, so that request reaches the RCS interception.
+
+## Burn plan removal
+
+Stock `FlightComputer.EndAutoBurn` removes a finished or stopped Auto burn when another burn follows it. AFC acts only after that, in a postfix on `FlightComputer.RaisePendingAlerts`: MultiPass removes its own pass and AutoRemove the last finished burn, each only while it is still in the plan.
+An RCS burn takes the same path: the executor raises `FlightComputer.AutoBurnCompleted` or `AutoBurnStoppedOutOfPropellant` itself in the `Universe.ApplyVehicleSolvers` postfix, so stock ends it like an engine burn.
 
 ## Active RCS control
 
@@ -29,7 +36,8 @@ The output commands are rebuilt each step, while the executor's saved settings n
 | `BurnTarget.BurnDuration` and `IgnitionTime` | `RcsComputeControlPatch.Command` | Replace stock engine timing with RCS timing on the current target. These are not saved settings to restore. |
 | `FlightComputer.LastThrustTime` | `RcsComputeControlPatch.Command` | Record commanded RCS pulses. The timestamp is not restored. |
 | `FlightComputer.RCSMode` | `RcsExecutor.ForceRcsOn` and `RestoreRcsMode` | Enable RCS at acquisition when needed and restore Disabled if AFC changed it. A running burn that finds RCS switched off stands down, because the player owns the actuator. |
-| `FlightComputer.BurnMode` | `RcsExecutor.ForceBurnManual` and `RestoreBurnMode` through `StockBurnMode` | Set Manual at acquisition. Restore an earlier Auto only after cleanup succeeds and while the field still matches Manual. The give-back needs the burn target the hold saw, and after a load, which does not keep that target, the loaded one. Explicit stops and completion discard the saved Auto. This is not a periodic Manual write. |
+| `FlightComputer.BurnMode` | `RcsExecutor.ForceBurnManual` and `RestoreBurnMode` through `StockBurnMode` | Set Manual at acquisition. Restore an earlier Auto only after cleanup succeeds and while the field still matches Manual. The give-back needs the burn target the hold saw, and after a load, which does not keep that target, the loaded one. Explicit stops, completion and a propellant stop discard the saved Auto. This is not a periodic Manual write. |
+| `FlightComputer.AutoBurnCompleted` and `AutoBurnStoppedOutOfPropellant` | `RcsExecutor.Complete` and `StopOutOfPropellant` | Set after the release, like the stock worker does for an engine burn. Stock `FlightComputer.RaisePendingAlerts` clears them later in the same frame. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `AttitudeTarget` | `RcsExecutor.EnsureBurnControl` through `FlightComputer.RateHold` | Select Auto and null the rotation when the burn takes control from Manual. This is the first write to the mode, so the release records here what to hand back. |
 | `FlightComputer.AttitudeMode`, `AttitudeFrame`, `AttitudeTrackTarget` and `CustomAttitudeTarget` | `RcsExecutor.CommandAlignAttitude` | Select Auto and a burn-relative target for Align. Non-X axes use custom Euler angles. Later steps compare mode and tracker, plus frame and coordinates for None and Custom. |
 | `FlightComputer.AttitudeTrackTarget`, `AttitudeFrame`, `AttitudeTarget`, `AttitudeMode` and `CustomAttitudeTarget` | `RcsExecutor.EndExecution` through `FlightComputer.SetNullRot` and its own restore | Select None in BurnBody and zero the computed target, hand Manual back when acquisition replaced it, and clear the custom coordinates because tracking is None. The frame stays at BurnBody. |
