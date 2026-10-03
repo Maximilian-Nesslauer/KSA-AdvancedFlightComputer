@@ -154,5 +154,6 @@ internal static class GuidanceFeature
     internal static void Reset()
     {
         DisableDriver();
+        GuidanceClock.Reset();
     }
 }

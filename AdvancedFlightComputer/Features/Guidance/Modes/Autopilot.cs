@@ -449,7 +449,7 @@ public static partial class GuidanceWindow
         // No cross-vehicle invalidation any more. The snapshot lives on the vehicle it describes, so switching craft reads a different one rather than reading someone else's staging for an interval - which is what the old _stageModelVehicle field existed to prevent.
 
         // Wall-clock gated, not sim-time gated: under warp sim time elapses instantly and this would run every step.
-        long now = Environment.TickCount64;
+        long now = GuidanceClock.NowMs;
         if (!_s.StageModelDirty && now - _s.StageModelTick < StageModelIntervalMs)
             return;
         _s.StageModelTick = now;
@@ -987,7 +987,7 @@ public static partial class GuidanceWindow
         StepBoosterHandover(vehicle);
 
         // A readout fault costs readouts, never the flight. After one, the readouts wait a second before they try again, so a fault that repeats does not throw on every step.
-        if (Environment.TickCount64 >= _s.HousekeepingRetryTick)
+        if (GuidanceClock.NowMs >= _s.HousekeepingRetryTick)
         {
             try
             {
@@ -995,7 +995,7 @@ public static partial class GuidanceWindow
             }
             catch (Exception ex)
             {
-                _s.HousekeepingRetryTick = Environment.TickCount64 + HousekeepingRetryMs;
+                _s.HousekeepingRetryTick = GuidanceClock.NowMs + HousekeepingRetryMs;
                 LogHelper.WarnOnce($"guidance-readouts-{vehicle.Id}:{ex.GetType().Name}",
                     $"[AFC] Guidance readouts failed on '{vehicle.Id}': {ex}");
             }

@@ -205,7 +205,7 @@ public static partial class GuidanceWindow
     private static void RestartDeorbitPlanning(string status)
     {
         ClearDeorbitPlanState();
-        _s.DeorbitNextValidationTick = Environment.TickCount64 + DeorbitSettleMs;
+        _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitSettleMs;
         _s.LandingPhase = LandingPhase.DeorbitPlanning;
         _s.LandingStatus = status;
     }
@@ -216,8 +216,8 @@ public static partial class GuidanceWindow
         if (!DeorbitRequestCurrent(request, parent)) return true;
         // Direct braking rebuilds its model at ignition, so RCS use during its coast does not start a transfer search.
         if (_s.LandingPhase == LandingPhase.Coast
-            || (_s.LandingPhase != LandingPhase.DeorbitCoast && Environment.TickCount64 < _s.DeorbitNextValidationTick)) return false;
-        _s.DeorbitNextValidationTick = Environment.TickCount64 + DeorbitRevalidateMs;
+            || (_s.LandingPhase != LandingPhase.DeorbitCoast && GuidanceClock.NowMs < _s.DeorbitNextValidationTick)) return false;
+        _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors expected = request.Source.GetStateVectorsAt(new UniverseTime(SimNow()));
         return Math.Abs(vehicle.TotalMass - request.Mass) > Math.Max(1, request.Mass * 0.001)
             || !DeorbitPlanner.SameState(expected, orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci)
@@ -226,13 +226,13 @@ public static partial class GuidanceWindow
 
     private static bool StartDeorbitSearch(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
-        if (Environment.TickCount64 < _s.DeorbitNextValidationTick) return false;
+        if (GuidanceClock.NowMs < _s.DeorbitNextValidationTick) return false;
         string refusal = DeorbitSettingsRefusal();
         if (refusal.Length > 0) { RefuseDeorbit(refusal); return false; }
         if (!TryCaptureDeorbitRequest(vehicle, orbit, parent)) { RefuseDeorbit("No usable engine model on the vehicle."); return false; }
         DeorbitRequest request = _s.DeorbitRequest;
         _s.DeorbitPlanner = new DeorbitPlanner(request);
-        _s.DeorbitNextValidationTick = Environment.TickCount64 + DeorbitRevalidateMs;
+        _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors captured = request.Source.StateVectors;
         string thrust = request.Engines.Length == 0 ? "no usable engine"
             : $"minimum thrust {request.Engines[0].Thrust:F1} N, full thrust {request.Engines[^1].Thrust:F1} N";

@@ -248,7 +248,7 @@ public static partial class GuidanceWindow
         }
 
         // NOT ARMED: track the target's plane and the next window. Wall-clock gated like the stage model, and for the same two reasons - TryChaseOrbit searches the system for the target vehicle, which is not a per-sim-step cost, and under warp a sim-time gate would not throttle it at all.
-        long now = Environment.TickCount64;
+        long now = GuidanceClock.NowMs;
         if (now - _s.LaunchWindowTick < LaunchWindowIntervalMs)
             return;
         _s.LaunchWindowTick = now;
@@ -470,7 +470,7 @@ public static partial class GuidanceWindow
                 // Straight after the solve, from the same state and model: where a free insertion costs least. Searched only from a converged closed-loop solution, because the open-loop turn is not flying the steering the costs assume, and at most once per InsertionSearchIntervalMs of wall clock.
                 double goalBefore = _s.InsertionSearch.GoalNu;
                 double searchedBefore = _s.InsertionSearch.LastSearchTime;
-                long tick = Environment.TickCount64;
+                long tick = GuidanceClock.NowMs;
 #if DEBUG
                 using (new AdvancedFlightComputer.Core.PerfTracker.Scope("Guidance.InsertionSearch"))
 #endif
