@@ -23,8 +23,9 @@ public sealed class StagingDelayTest : AfcTest
     private const double MeasureDt = 0.5;
     private const double MaxStagingSeconds = 900.0;
     private const double MaxPhaseSeconds = 30.0;
-    // Part throttle, because a full-throttle stack that survives several stagings runs itself past
-    // VehicleStructuralLimits.EffectiveMaxGLoad and is destroyed mid-test.
+    // Part throttle, because the stock manual throttle cap cannot hold back lit solid motors, and a
+    // stack that survives several stagings could otherwise run past
+    // VehicleStructuralLimits.EffectiveMaxGLoad and be destroyed mid-test.
     private const float Throttle = 0.4f;
 
     public override string Name => "afc-autostage-delays";

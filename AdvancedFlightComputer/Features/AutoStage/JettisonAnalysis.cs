@@ -159,7 +159,7 @@ internal static class JettisonAnalysis
                 // AvailableConsumers is narrower than what a FurtherestToNearest flow rule drains, which is fine on stock parts, whose decoupler joints carry no BulkFluid capability.
                 foreach ((ResourceManager manager, int _) in tank.AvailableConsumers)
                 {
-                    if (manager.Consumer is not Combustor consumer)
+                    if (manager.Consumer is not PlumbedCore consumer)
                         continue;
                     if (jettison.Contains(consumer.Parent.FullPart))
                         continue;

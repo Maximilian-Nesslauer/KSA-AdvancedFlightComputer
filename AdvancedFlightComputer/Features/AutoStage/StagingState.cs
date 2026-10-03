@@ -3,10 +3,10 @@ using KSA;
 namespace AdvancedFlightComputer.Features.AutoStage;
 
 // Everything the detector knows about one vehicle.
-// Created on first contact through the gauge, the settings page, a guidance request or a dispose, and dropped when the vehicle is disposed.
+// Created on first contact through the gauge, the settings page, a guidance request, a player staging during an Auto burn or a dispose, and dropped when the vehicle is disposed.
 internal sealed class StagingState
 {
-    internal enum Phase { Monitoring, AwaitingIgnition, AwaitingPropagation }
+    internal enum Phase { Monitoring, AwaitingIgnition, AwaitingActivation, AwaitingPropagation }
 
     internal enum SpentDropBlocker
     {
@@ -29,12 +29,20 @@ internal sealed class StagingState
     public bool Requested;
 
     public Phase State = Phase.Monitoring;
+    // Frames on which sim time advanced since the new engines were switched on, and the sim time of the last evaluation that counted.
     public int PropagationFrames;
+    public double PropagationCountedAt = double.NaN;
+
+    // The engines a player staging switches on, until the input drain has applied the activation, and the frames spent waiting for it.
+    public List<EngineController>? ActivationEngines;
+    public int ActivationFrames;
     public double SpentJettisonSince = double.NaN;
     // Unreported rather than None, because None is the armed state and would suppress the first arm line.
     public SpentDropBlocker SpentJettisonBlockerReported = SpentDropBlocker.Unreported;
-    public FlightComputerBurnMode TriggeredMode;
     public PendingStaging? Pending;
+
+    // The Auto burn target a staging in flight keeps alive, or null once stock owns the burn again.
+    public BurnTarget? HeldBurn;
 
     // Rows this detector activated on the vehicle, so a caller can see its own request land.
     public int Activations;

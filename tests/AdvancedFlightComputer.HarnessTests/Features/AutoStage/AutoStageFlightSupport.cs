@@ -22,8 +22,9 @@ internal static class AutoStageFlightSupport
     }
 
     // Manual throttle with the flight computer holding prograde, so the burn only raises the orbit.
-    // The g-load throttle cap of an auto burn does not exist on a manual one, so a test that flies
-    // through several stagings has to throttle back or the game destroys the vehicle.
+    // FlightComputer.ComputeControl caps a manual throttle only near the structural load limit, and
+    // lit solid motors ignore the throttle, so a test that flies through several stagings throttles
+    // back to keep the stack well inside the limit.
     public static void HoldPrograde(Vehicle vehicle, float throttle = 1f)
     {
         vehicle.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
