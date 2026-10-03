@@ -38,8 +38,10 @@ public sealed class BurnMenuLauncherTest : AfcTest
         string[] keys = [ManeuverTools.KeySetApoapsis, ManeuverTools.KeySetPeriapsis,
             ManeuverTools.KeyMatchInclination, ManeuverTools.KeySetInclination];
         ManeuverTools.InjectTransferTypes();
+        CheckTypeOrder(t);
         foreach (string key in keys)
             CheckShortcut(t, key, source);
+        CheckInterstellarReset(t);
 
         TransferPlanner.TransferTypes.RemoveAll(type => type.GetKey() == ManeuverTools.KeySetApoapsis);
         StockPlanner.TransferType = new TransferType("S3-sentinel", "Sentinel");
@@ -53,6 +55,19 @@ public sealed class BurnMenuLauncherTest : AfcTest
             && StockPlanner.SourceBody.GetKey() == sourceBefore.GetKey());
 
         CheckWindowClose(t, source);
+    }
+
+    // The orbit tools sit right after stock's circularize entries and ahead of the interstellar planner.
+    private static void CheckTypeOrder(TestContext t)
+    {
+        List<string> keys = TransferPlanner.TransferTypes.ConvertAll(type => type.GetKey());
+        int circularize = keys.IndexOf(ManeuverTools.KeyStockCircularizePeriapsis);
+        int first = keys.IndexOf(ManeuverTools.KeySetPeriapsis);
+        int last = keys.IndexOf(ManeuverTools.KeySetInclination);
+        int interstellar = keys.IndexOf(ManeuverTools.KeyStockInterstellar);
+        t.Check("AFC plan types follow the stock circularize entries, ahead of Interstellar",
+            circularize >= 0 && first == circularize + 1 && last == first + 3 && (interstellar < 0 || interstellar > last),
+            string.Join(", ", keys));
     }
 
     private static void CheckShortcut(TestContext t, string key, Vehicle source)
@@ -71,7 +86,34 @@ public sealed class BurnMenuLauncherTest : AfcTest
         t.Check(key + " resets input defaults",
             !(bool)Field(typeof(ManeuverToolsWindow), "_defaultsInitialized").GetValue(null)!
             && !(bool)Field(typeof(ManeuverToolsWindow), "_nodeDefaultInitialized").GetValue(null)!);
+        t.Check(key + " applies the stock type reset",
+            DestinationKey() == "N/A" && Field(typeof(TransferPlanner), "_selectedEntry").GetValue(null) == null
+            && SelectedTimeUnit() == TimeUnit.Minutes,
+            $"destination {DestinationKey()}, time unit {SelectedTimeUnit()}");
     }
+
+    // TransferPlanner.DrawPlanWindow starts an interstellar plan in years and every other type in minutes.
+    private static void CheckInterstellarReset(TestContext t)
+    {
+        int index = TransferPlanner.TransferTypes.FindIndex(
+            type => type.GetKey() == ManeuverTools.KeyStockInterstellar);
+        if (index < 0)
+        {
+            t.Fail("interstellar type", "the stock plan types have no " + ManeuverTools.KeyStockInterstellar + " entry");
+            return;
+        }
+        StockPlanner.SelectType(TransferPlanner.TransferTypes[index]);
+        t.Check("an interstellar switch selects years and clears the destination",
+            SelectedTimeUnit() == TimeUnit.Years && DestinationKey() == "N/A"
+            && Field(typeof(TransferPlanner), "_selectedEntry").GetValue(null) == null,
+            $"destination {DestinationKey()}, time unit {SelectedTimeUnit()}");
+    }
+
+    private static string DestinationKey()
+        => ((TransferObject)Field(typeof(TransferPlanner), "_destinationBody").GetValue(null)!).GetKey();
+
+    private static TimeUnit SelectedTimeUnit()
+        => ((TimeObject)Field(typeof(TransferPlanner), "_selectedTimeUnit").GetValue(null)!).Unit;
 
     private static void CheckWindowClose(TestContext t, Vehicle source)
     {
@@ -105,7 +147,8 @@ public sealed class BurnMenuLauncherTest : AfcTest
 
         public SavedState()
         {
-            Save(typeof(TransferPlanner), "_showPlanWindow", "_sourceBody", "_transferType", "_transferCalculated");
+            Save(typeof(TransferPlanner), "_showPlanWindow", "_sourceBody", "_transferType", "_transferCalculated",
+                "_destinationBody", "_selectedEntry", "_selectedTimeUnit", "_transferInfo", "_selectedMinTime", "_selectedMaxTime");
             Save(typeof(ManeuverToolsWindow), "_defaultsInitialized", "_nodeDefaultInitialized", "_lastTargetParentId");
             Save(typeof(Patch_DrawPlanWindow), "_ourBurn", "_lastEntry", "_lastSource");
         }

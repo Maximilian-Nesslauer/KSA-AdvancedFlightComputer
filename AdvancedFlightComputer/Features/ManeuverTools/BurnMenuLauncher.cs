@@ -108,8 +108,7 @@ internal static class BurnMenuLauncher
         // TransferPlanner.ShowPlanWindow clears stock selection state only when set to false.
         TransferPlanner.ShowPlanWindow = true;
         StockPlanner.SourceBody = new TransferObject(vehicle);
-        StockPlanner.TransferType = type;
-        StockPlanner.TransferCalculated = false;
+        StockPlanner.SelectType(type);
 
         // Reset input defaults when a shortcut changes the source or type outside the dropdown.
         ManeuverToolsWindow.OnTypeChanged();

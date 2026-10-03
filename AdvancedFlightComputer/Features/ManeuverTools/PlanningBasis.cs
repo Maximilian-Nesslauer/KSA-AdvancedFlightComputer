@@ -20,7 +20,8 @@ internal readonly record struct PlanningBasis(
             return new PlanningBasis(source.Orbit, source.FlightPlan.TryFindPatch(now), now, false, null);
 
         // Patch zero describes the orbit after the burn, while later patches describe SOI transitions.
+        // It starts at the burn's impulse time, which for an interstellar burn lies half the burn after its start.
         PatchedConic patch = plan.Patches[0];
-        return new PlanningBasis(patch.Orbit, patch, finalBurn.Time, true, plan);
+        return new PlanningBasis(patch.Orbit, patch, finalBurn.ImpulseTime, true, plan);
     }
 }

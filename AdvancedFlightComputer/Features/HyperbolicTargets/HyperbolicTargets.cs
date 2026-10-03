@@ -1,4 +1,3 @@
-using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -39,17 +38,10 @@ internal static class HyperbolicTargets
                 "re-verify this feature before flying with HyperbolicBodies.xml enabled.");
     }
 
-    internal static StellarBody? GetParentStar(Vehicle source)
-    {
-        IParentBody? current = source.Parent;
-        while (current != null)
-        {
-            if (current is StellarBody star)
-                return star;
-            current = (current as Celestial)?.Parent;
-        }
-        LogHelper.WarnOnce($"no-parent-star-{source.Id}",
-            $"[AFC] No parent star found for vehicle {source.Id}; HyperbolicTargets disabled for this vehicle.");
-        return null;
-    }
+    /// <summary>The body a transfer from <paramref name="source"/> is solved around.
+    /// <c>TransferPlanner.SetTransferInfo</c> departs from the source's parent when
+    /// that parent orbits something, so the Lambert solve is about the parent's
+    /// parent, and otherwise from the vehicle itself about its own parent.</summary>
+    internal static IParentBody? TransferFrame(Vehicle source)
+        => (source.Parent as IOrbiter)?.Parent ?? source.Parent;
 }

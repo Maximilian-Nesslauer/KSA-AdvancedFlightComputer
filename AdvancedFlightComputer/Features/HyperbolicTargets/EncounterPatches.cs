@@ -135,12 +135,15 @@ internal static class Patch_TryFindIntercept
 /// second body's Period, which is NaN there, and it builds a UniverseTime from
 /// the window before its own finiteness check, which is where the NaN throws.
 /// The end of time branch sizes the window from the asymptotic speeds instead
-/// and never reads Period, so it runs as stock wrote it. The search is reached
-/// from every flight plan's encounter scan once a comet has an SOI, which
-/// HyperbolicBodies.xml gives it, and from the target node computation when a
-/// comet is the vehicle's target. Finding nothing is what the finiteness check
-/// would settle on, and the transfer's own closest approach comes from
-/// <see cref="Patch_TryFindIntercept"/>.
+/// and never reads Period, and the radius band branch needs a bound second body,
+/// so both run as stock wrote them. The search is reached from
+/// <c>PatchedConic.ScanForEncounters</c> on every flight plan once a comet has an
+/// SOI, which HyperbolicBodies.xml gives it, and from
+/// <c>PatchedConic.CalculateSetTargetData</c> when a comet is the vehicle's target.
+/// Finding nothing is what the finiteness check would settle on, and the skip
+/// reports the search as covering all time, the same answer stock gives for a
+/// window that is not finite, so the encounter scan does not repeat it. The
+/// transfer's own closest approach comes from <see cref="Patch_TryFindIntercept"/>.
 /// </summary>
 [HarmonyPatch]
 internal static class Patch_FindClosestApproaches
@@ -154,7 +157,8 @@ internal static class Patch_FindClosestApproaches
             "[AFC] PatchedConic.FindClosestApproaches not found; "
             + "patching this class requires an IsAnchorPresent check first.");
 
-    static bool Prefix(PatchedConic __instance, IOrbiter secondBody)
+    // searchedUntil is the original's out parameter, which a skipping prefix has to assign itself.
+    static bool Prefix(PatchedConic __instance, IOrbiter secondBody, ref UniverseTime searchedUntil)
     {
         try
         {
@@ -164,6 +168,7 @@ internal static class Patch_FindClosestApproaches
             if (target == null || target.IsBound()) return true;
             if (__instance.EndTime.IsEndOfTime()) return true;
             if (__instance.Orbit.Eccentricity < 1.0 && target.Eccentricity < 1.0) return true;
+            searchedUntil = UniverseTime.EndOfTime;
             return false;
         }
         catch (Exception ex)

@@ -78,7 +78,7 @@ internal static class OrbitManeuvers
         if (dvCci.LengthSquared() < 1e-12)
             return null;
 
-        double3 dvVlf = CciToVlf(dvCci, orbit, burnTime);
+        double3 dvVlf = OrbitalTransfers.CciToVlf(orbit, burnTime, dvCci);
         return new ManeuverResult(dvCci, dvVlf, burnTime);
     }
 
@@ -114,7 +114,7 @@ internal static class OrbitManeuvers
         double3 targetVel = sv.VelocityCci.Transform(planeChange);
         double3 dvCci = targetVel - sv.VelocityCci;
 
-        double3 dvVlf = CciToVlf(dvCci, vehicleOrbit, nodeTime);
+        double3 dvVlf = OrbitalTransfers.CciToVlf(vehicleOrbit, nodeTime, dvCci);
         return new ManeuverResult(dvCci, dvVlf, nodeTime);
     }
 
@@ -163,7 +163,7 @@ internal static class OrbitManeuvers
         double3 targetVel = sv.VelocityCci.Transform(planeChange);
         double3 dvCci = targetVel - sv.VelocityCci;
 
-        double3 dvVlf = CciToVlf(dvCci, orbit, nodeTime);
+        double3 dvVlf = OrbitalTransfers.CciToVlf(orbit, nodeTime, dvCci);
         return new ManeuverResult(dvCci, dvVlf, nodeTime);
     }
 
@@ -202,14 +202,8 @@ internal static class OrbitManeuvers
         double3 vDir = sv.VelocityCci.NormalizeOrZero();
         double3 dvCci = vDir * vNew - sv.VelocityCci;
 
-        double3 dvVlf = CciToVlf(dvCci, orbit, burnTime);
+        double3 dvVlf = OrbitalTransfers.CciToVlf(orbit, burnTime, dvCci);
         return new ManeuverResult(dvCci, dvVlf, burnTime);
-    }
-
-    private static double3 CciToVlf(double3 dvCci, Orbit orbit, UniverseTime time)
-    {
-        doubleQuat parentCci2Vlf = orbit.GetStateVectorsAt(time).GetVlf2ParentCci().OrIdentity().Inverse();
-        return dvCci.Transform(parentCci2Vlf);
     }
 
     #endregion

@@ -79,7 +79,7 @@ internal static partial class Patch_DrawPlanWindow
         flightPlan.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
         var info = new OrbitalTransfers.TransferInfo(source, source, source, usePorkChopData: false)
         {
-            Target = null!
+            Target = null
         };
         OrbitalTransfers.BuildFlightPlan(
             ref flightPlan, info, transferData.Start, transferData.TransferDvVlf,

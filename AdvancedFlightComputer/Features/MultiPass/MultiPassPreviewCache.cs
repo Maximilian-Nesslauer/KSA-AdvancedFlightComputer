@@ -147,13 +147,23 @@ internal static class MultiPassPreviewCache
 
     private static void AddCoreInputs(RocketCore core, ref HashCode hc)
     {
-        if (core is Combustor combustor)
+        if (core is PlumbedCore plumbed)
         {
-            hc.Add(combustor.Config.Lut);
-            hc.Add(combustor.Config.CombustionPressureMax);
-            hc.Add(combustor.Config.ThermalEfficiency);
-            AddReactants(combustor.DesiredMix, ref hc);
-            AddConsumptionOrder(combustor.ResourceManager, ref hc);
+            if (core is Combustor combustor)
+            {
+                hc.Add(combustor.Config.Lut);
+                hc.Add(combustor.Config.CombustionPressureMax);
+                hc.Add(combustor.Config.ThermalEfficiency);
+            }
+            else if (core is ThermalCore thermal)
+            {
+                hc.Add(thermal.Config.Lut);
+                hc.Add(thermal.Config.ChamberPressureMax);
+                hc.Add(thermal.Config.CoreTemperature);
+                hc.Add(thermal.Config.ThermalEfficiency);
+            }
+            AddReactants(plumbed.DesiredMix, ref hc);
+            AddConsumptionOrder(plumbed.ResourceManager, ref hc);
             return;
         }
 
