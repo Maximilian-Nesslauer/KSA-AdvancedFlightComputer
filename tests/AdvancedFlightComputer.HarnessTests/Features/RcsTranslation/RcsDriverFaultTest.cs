@@ -1,3 +1,5 @@
+using System.Runtime.CompilerServices;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -10,7 +12,9 @@ namespace AdvancedFlightComputer.HarnessTests;
 
 // The driver's exception path on a live vehicle. A faulted tick has to hand back the controls
 // the executor took, keep whatever it could not hand back visible and retryable, leave the burn
-// node alone, and never tell a completion subscriber that the burn finished.
+// node alone, and never raise the stock flag that tells FlightComputer.RaisePendingAlerts the
+// burn ended. The two ends that do raise it, a completion and a propellant stop, are checked
+// against the stock handler too.
 //
 // The faults are injected with Harmony because these paths cannot be made to fail from the
 // outside. Each fault is armed around one driver step and disarmed in a finally, so the live
@@ -42,10 +46,10 @@ public sealed class RcsDriverFaultTest : AfcTest
         // thruster layout, so one save carries the whole set.
         using RcsTestPatches.Scope patches = RcsTestPatches.Apply();
         using FaultScope faults = new();
-        using RcsFlightSupport.CompletionWatcher completions = new();
         RcsFlightSupport.RunOnSave(t, home, saves[0], 500_000.0, "HarnessRcsFault",
             (vehicle, driver) =>
             {
+                using RcsFlightSupport.CompletionWatcher completions = new(vehicle);
                 Vehicle? other = SpawnSecond(t, home, saves[0], driver);
                 PublishedFaultStopsAndPreservesOtherVehicle(t, vehicle, other, driver, completions);
                 AttitudeFailureRestoresRcsAndRetries(t, vehicle, driver, completions);
@@ -55,7 +59,10 @@ public sealed class RcsDriverFaultTest : AfcTest
                 FaultSurvivesSaveAndLoad(t, vehicle, driver, completions);
                 UnownedControlsStayUnchanged(t, vehicle, driver);
                 CompletionCleanupFailureDoesNotNotify(t, vehicle, driver, completions);
-                NormalCompletionNotifiesAfterTeardown(t, vehicle, driver);
+                NormalCompletionRaisesStockFlagAfterTeardown(t, vehicle, driver, completions);
+                PropellantStopEndsLikeAnEngineBurn(t, vehicle, driver, completions);
+                DryThrustersStopAtIgnition(t, vehicle, driver, completions);
+                InactiveThrustersCancelWithoutStockFlag(t, vehicle, driver, completions);
             });
     }
 
@@ -138,7 +145,7 @@ public sealed class RcsDriverFaultTest : AfcTest
             && ReferenceEquals(craft.Computer.BurnPlan.FirstBurn, craft.Burn)
             && craft.Burn.DeltaVVlf.Equals(craft.Dv));
         t.Check($"{label}: burn options survive the fault", craft.Exec.Options.Count == 1);
-        t.Check($"{label}: no completion subscriber ran", completions.LastBurn == null);
+        t.Check($"{label}: no stock burn end raised", !completions.AnyEnd);
     }
 
     private static void PublishedFaultStopsAndPreservesOtherVehicle(TestContext t, Vehicle vehicle,
@@ -318,33 +325,181 @@ public sealed class RcsDriverFaultTest : AfcTest
         CheckPlan(t, craft, completions, label);
     }
 
-    private static void NormalCompletionNotifiesAfterTeardown(TestContext t, Vehicle vehicle, SimDriver driver)
+    // The stock flag is raised only after the release, so FlightComputer.RaisePendingAlerts finds the
+    // controls handed back and the burn still loaded. With one burn planned stock keeps it, and the
+    // ended execution does not start again on the next driver step.
+    private static void NormalCompletionRaisesStockFlagAfterTeardown(TestContext t, Vehicle vehicle,
+        SimDriver driver, RcsFlightSupport.CompletionWatcher completions)
     {
         const string label = "successful completion";
-        if (Fresh(t, vehicle, driver, null, label) is not { } craft)
+        if (Fresh(t, vehicle, driver, completions, label) is not { } craft)
             return;
-        int notifications = 0;
-        bool observedClean = false;
-        void Observe(Vehicle notified, Burn burn)
-        {
-            notifications++;
-            observedClean = ReferenceEquals(notified, craft.Vehicle) && ReferenceEquals(burn, craft.Burn)
-                && !craft.Exec.IsActive && !craft.Exec.AlignCommanded && !craft.Exec.ForcedRcsOn
-                && !RcsCommandChannel.TryGet(craft.Computer.BurnPlan, out _)
-                && craft.Exec.Options.Count == 0;
-        }
-        RcsBurnCompletions.Completed += Observe;
         _completeInTick = true;
         try { RcsDriverPatch.TickVehicle(craft.Vehicle); }
+        finally { _completeInTick = false; }
+        t.Check($"{label}: the completion flag is raised after teardown",
+            completions.CompletedOn(craft.Burn) && !craft.Computer.AutoBurnStoppedOutOfPropellant
+            && !craft.Exec.IsActive && !craft.Exec.AlignCommanded && !craft.Exec.ForcedRcsOn
+            && !RcsCommandChannel.TryGet(craft.Computer.BurnPlan, out _)
+            && craft.Exec.Options.Count == 0);
+
+        craft.Computer.RaisePendingAlerts(craft.Vehicle);
+        t.Check($"{label}: stock clears the flag and keeps the only burn",
+            !completions.AnyEnd && craft.Computer.BurnPlan.BurnCount == 1
+            && ReferenceEquals(craft.Computer.BurnPlan.FirstBurn, craft.Burn)
+            && craft.Computer.BurnMode == FlightComputerBurnMode.Manual);
+        RcsDriverPatch.TickVehicle(craft.Vehicle);
+        t.Check($"{label}: the ended execution stays ended",
+            !craft.Exec.IsActive && !completions.AnyEnd
+            && craft.Computer.BurnMode == FlightComputerBurnMode.Manual);
+    }
+
+    // A propellant stop hands the controls back like a completion, keeps the burn options for a
+    // later restart, and raises the stock propellant flag. With another burn planned, stock removes
+    // the stopped burn and loads the next one in Manual, and the driver leaves that one alone.
+    private static void PropellantStopEndsLikeAnEngineBurn(TestContext t, Vehicle vehicle,
+        SimDriver driver, RcsFlightSupport.CompletionWatcher completions)
+    {
+        const string label = "propellant stop";
+        if (Fresh(t, vehicle, driver, completions, label) is not { } craft)
+            return;
+        RcsFlightSupport.BurnSetup? next = RcsFlightSupport.AddBurn(vehicle, driver, double3.UnitX, 1.0, 600.0);
+        if (!t.Check($"{label}: a second burn is planned after the running one",
+                next != null && craft.Computer.BurnPlan.BurnCount == 2
+                && ReferenceEquals(craft.Computer.BurnPlan.FindFirstExecutableBurn(), craft.Burn)))
+            return;
+
+        RcsExecutor.StopOutOfPropellant(craft.Vehicle, craft.Computer, craft.Exec);
+        t.Check($"{label}: the propellant flag is raised after teardown",
+            completions.StoppedOutOfPropellantOn(craft.Burn) && !craft.Computer.AutoBurnCompleted
+            && !craft.Exec.IsActive && !craft.Exec.AlignCommanded && !craft.Exec.ForcedRcsOn
+            && craft.Computer.RCSMode == FlightComputerRCSMode.Disabled
+            && !RcsCommandChannel.TryGet(craft.Computer.BurnPlan, out _)
+            && craft.Exec.Options.Count == 1);
+
+        craft.Computer.RaisePendingAlerts(craft.Vehicle);
+        t.Check($"{label}: stock removes the stopped burn once and loads the next in Manual",
+            !completions.AnyEnd && craft.Computer.BurnPlan.BurnCount == 1
+            && ReferenceEquals(craft.Computer.BurnPlan.FirstBurn, next!.Burn)
+            && StockBurnIdentity.IsLoaded(craft.Computer.Burn, next.Burn)
+            && craft.Computer.BurnMode == FlightComputerBurnMode.Manual);
+        RcsDriverPatch.TickVehicle(craft.Vehicle);
+        t.Check($"{label}: the driver does not engage the next burn",
+            !craft.Exec.IsActive && craft.Computer.BurnMode == FlightComputerBurnMode.Manual
+            && !RcsCommandChannel.TryGet(craft.Computer.BurnPlan, out _));
+    }
+
+    // The driver decides between the stock propellant stop and a cancel from the live thruster
+    // states. With every active thruster dry, the burn waits until its ignition time like a stock
+    // Auto burn and is then stopped through the stock flag with its options kept.
+    private static void DryThrustersStopAtIgnition(TestContext t, Vehicle vehicle,
+        SimDriver driver, RcsFlightSupport.CompletionWatcher completions)
+    {
+        const string label = "dry thrusters";
+        if (Fresh(t, vehicle, driver, completions, label) is not { } craft)
+            return;
+        BurnTarget? bt = craft.Computer.Burn;
+        double nowSec = Universe.GetElapsedTime().Seconds();
+        if (!t.Check($"{label}: the burn is loaded before its ignition time",
+                bt != null && nowSec < bt.IgnitionTime.Seconds()))
+            return;
+
+        bool[] supplied = SetThrusterPropellant(vehicle, null);
+        try
+        {
+            if (!t.Check($"{label}: the vehicle has active thrusters", supplied.Length > 0
+                    && RcsCapability.ActiveThrustersOutOfPropellant(vehicle)))
+                return;
+            craft.Exec.CapabilityProbedAtSec = double.NegativeInfinity;
+            RcsDriverPatch.TickVehicle(vehicle);
+            t.Check($"{label}: before ignition the burn waits",
+                craft.Exec.IsActive && !completions.AnyEnd && craft.Exec.Options.Count == 1);
+
+            bt!.IgnitionTime = Universe.GetElapsedTime();
+            RcsDriverPatch.TickVehicle(vehicle);
+            t.Check($"{label}: at ignition the stock propellant stop is raised",
+                !craft.Exec.IsActive && !craft.Exec.Faulted
+                && completions.StoppedOutOfPropellantOn(craft.Burn)
+                && !craft.Computer.AutoBurnCompleted
+                && craft.Computer.RCSMode == FlightComputerRCSMode.Disabled
+                && craft.Exec.Options.Count == 1);
+        }
         finally
         {
-            _completeInTick = false;
-            RcsBurnCompletions.Completed -= Observe;
+            SetThrusterPropellant(vehicle, supplied);
+            completions.Reset();
         }
-        t.Check($"{label}: notifies once, after teardown", notifications == 1 && observedClean);
-        t.Check($"{label}: the burn is still there for its subscriber",
-            craft.Computer.BurnPlan.BurnCount == 1
-            && ReferenceEquals(craft.Computer.BurnPlan.FirstBurn, craft.Burn));
+    }
+
+    // Thrusters that are switched off are not out of propellant. Stock raises no stop when no
+    // engine is active, so the driver cancels with its own alert and raises no stock flag.
+    private static void InactiveThrustersCancelWithoutStockFlag(TestContext t, Vehicle vehicle,
+        SimDriver driver, RcsFlightSupport.CompletionWatcher completions)
+    {
+        const string label = "inactive thrusters";
+        if (Fresh(t, vehicle, driver, completions, label) is not { } craft)
+            return;
+        List<ThrusterController> switchedOff = SetActiveThrusters(vehicle, false, null);
+        try
+        {
+            if (!t.Check($"{label}: the vehicle had active thrusters", switchedOff.Count > 0
+                    && !RcsCapability.ActiveThrustersOutOfPropellant(vehicle)))
+                return;
+            RcsCancelLogPatch.LastReason = null;
+            craft.Exec.CapabilityProbedAtSec = double.NegativeInfinity;
+            RcsDriverPatch.TickVehicle(vehicle);
+            t.Check($"{label}: the burn is cancelled without a stock flag",
+                !craft.Exec.IsActive && !craft.Exec.Faulted && !completions.AnyEnd
+                && RcsCancelLogPatch.LastReason == "no usable translation");
+        }
+        finally
+        {
+            SetActiveThrusters(vehicle, true, switchedOff);
+        }
+        CheckPlan(t, craft, completions, label);
+    }
+
+    // Writes IsPropellantAvailable on every active thruster, false when restore is null and the
+    // saved values otherwise, and returns the values it found, in enumeration order.
+    private static bool[] SetThrusterPropellant(Vehicle vehicle, bool[]? restore)
+    {
+        List<bool> found = new();
+        if (!ThrusterController.TryGetFrom(vehicle.Parts.States, out var stateList))
+            return [];
+        var enumerator = new ModuleStateful<ThrusterController, ThrusterControllerState, ThrusterControllerGlobalState, EmptyStruct>
+            .StateList.ModuleAndStateEnumerator(stateList);
+        while (enumerator.MoveNext())
+        {
+            var current = enumerator.Current;
+            if (!current.Module.IsActive)
+                continue;
+            ref ThrusterControllerState state = ref Unsafe.AsRef(in current.State);
+            found.Add(state.IsPropellantAvailable);
+            state.IsPropellantAvailable = restore != null && found.Count <= restore.Length
+                && restore[found.Count - 1];
+        }
+        return found.ToArray();
+    }
+
+    // Switches thrusters through the stock input path that the part window uses. Off acts on
+    // every active thruster and returns them, on acts only on the given list.
+    private static List<ThrusterController> SetActiveThrusters(Vehicle vehicle, bool active,
+        List<ThrusterController>? only)
+    {
+        List<ThrusterController> changed = new();
+        if (ThrusterController.TryGetFrom(vehicle.Parts.States, out var stateList))
+        {
+            List<ThrusterController> candidates = only ?? new List<ThrusterController>(stateList.Modules.ToArray());
+            foreach (ThrusterController thruster in candidates)
+            {
+                if (thruster.IsActive == active)
+                    continue;
+                thruster.SetIsActive(vehicle, active);
+                changed.Add(thruster);
+            }
+        }
+        InputEvents.ApplyInputEvents();
+        return changed;
     }
 
     // The four injection points. Each one only throws while its flag is armed, so the patches
@@ -384,8 +539,7 @@ public sealed class RcsDriverFaultTest : AfcTest
         if (!_completeInTick)
             return true;
         RcsExecRegistry.TryGet(__0.Id, out RcsExecution? exec);
-        AccessTools.Method(typeof(RcsExecutor), "Complete")
-            .Invoke(null, [__0, __0.FlightComputer, exec, 0f]);
+        RcsExecutor.Complete(__0, __0.FlightComputer, exec!, 0f);
         return false;
     }
 

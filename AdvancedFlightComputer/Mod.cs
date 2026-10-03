@@ -160,7 +160,6 @@ public sealed class Mod
     private static void PatchMultiPass(Harmony harmony)
     {
         MultiPassRegistry.Init();
-        RcsBurnCompletions.Completed += PassCompletionPatch.OnRcsBurnCompleted;
         MultiPassUI.Enabled = true;
 
         if (PlanWindowPatchPipeline.HasCalculatedControlsAnchor)
@@ -178,7 +177,6 @@ public sealed class Mod
     // Every flag here belongs to that block, so clearing them wholesale is safe.
     private static void DisableMultiPass()
     {
-        RcsBurnCompletions.Completed -= PassCompletionPatch.OnRcsBurnCompleted;
         MultiPassUI.Enabled = false;
         HohmannMultiPassUI.Enabled = false;
         HohmannFlybyUI.Enabled = false;
@@ -237,7 +235,6 @@ public sealed class Mod
         DisableMultiPass();
         BurnMenuLauncher.Enabled = false;
         RcsExecRegistry.Reset();
-        RcsBurnCompletions.Reset();
         MultiPassRegistry.Reset();
         AutoStageFeature.Disable();
         AutoStageFeature.RemoveGaugeEnum();

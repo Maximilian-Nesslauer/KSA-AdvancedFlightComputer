@@ -163,10 +163,9 @@ internal static class RcsBurnUi
             DrawWarning($"Propellant short: needs ~{neededKg:F0} kg, {availableKg:F0} kg available");
     }
 
-    internal static bool HasEstimatesFor(double timeSec, BurnTarget? loaded, RcsExecution? exec)
+    internal static bool HasEstimatesFor(Burn burn, BurnTarget? loaded, RcsExecution? exec)
         // FlightComputer loads only the first executable burn. A later editor must not show its estimates.
-        => exec != null && exec.Estimates.Valid && loaded != null
-            && Math.Abs(loaded.ImpulsiveInstant.Seconds() - timeSec) <= RcsExecutor.BurnIdentityToleranceSec;
+        => exec != null && exec.Estimates.Valid && StockBurnIdentity.IsLoaded(loaded, burn);
 
     internal static void CycleMode(RcsBurnOptions options)
         => options.Mode = options.Mode == RcsExecutionMode.Rcs ? RcsExecutionMode.Default : RcsExecutionMode.Rcs;

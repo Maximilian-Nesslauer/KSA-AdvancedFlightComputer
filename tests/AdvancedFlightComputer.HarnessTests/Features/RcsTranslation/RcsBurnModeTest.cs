@@ -1,4 +1,3 @@
-using System.Reflection;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -78,10 +77,14 @@ public sealed class RcsBurnModeTest : AfcTest
                 return;
 
             // Call completion directly to check mode restoration without flying the burn.
-            typeof(RcsExecutor).GetMethod("Complete", BindingFlags.NonPublic | BindingFlags.Static)!
-                .Invoke(null, [vehicle, fc, exec, 0f]);
+            RcsExecutor.Complete(vehicle, fc, exec, 0f);
             t.Check("a completed burn stays in Manual, the way stock leaves one",
                 fc.BurnMode == FlightComputerBurnMode.Manual && !exec.ForcedBurnManual);
+
+            // Stock then ends it as it ends an engine burn, which leaves Manual too.
+            fc.RaisePendingAlerts(vehicle);
+            t.Check("the stock end of the burn keeps Manual",
+                fc.BurnMode == FlightComputerBurnMode.Manual && !fc.AutoBurnCompleted);
         });
     }
 

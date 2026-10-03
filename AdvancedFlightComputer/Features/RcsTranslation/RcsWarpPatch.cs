@@ -1,10 +1,14 @@
+using AdvancedFlightComputer.Core;
 using HarmonyLib;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
+// Every stock warp to the next burn passes through this one overload. FlightComputer.Handle and FlightComputer.ToggleAction call it directly, and Universe.WarpToNext reaches it through InputEvents.AutoWarpData.
+// They aim at BurnTarget.IgnitionTime with FlightComputer.IGNITION_TIME_AUTO_WARP_MARGIN, which is too short for an RCS burn that has to align first. Warps to any other time are left alone.
+// Only the margin grows, so Universe.AutoWarpTime still reads the ignition time that Vehicle.IsSet compares against, and isUncapped passes through untouched.
 [HarmonyPatch(typeof(Universe), nameof(Universe.AutoWarpTo),
-    new Type[] { typeof(UniverseTime), typeof(double) })]
+    new Type[] { typeof(UniverseTime), typeof(double), typeof(bool) })]
 internal static class RcsWarpPatch
 {
     static void Prefix(UniverseTime endTime, ref double simTimeMargin)
@@ -23,8 +27,7 @@ internal static class RcsWarpPatch
             return false;
 
         Burn? burn = fc.BurnPlan.FindFirstExecutableBurn();
-        if (burn == null
-            || Math.Abs((bt.ImpulsiveInstant - burn.Time).Seconds()) > RcsExecutor.BurnIdentityToleranceSec
+        if (!StockBurnIdentity.IsLoaded(bt, burn)
             || !RcsExecutor.WouldExecuteRcs(vehicle, out RcsCapabilitySnapshot capability))
         {
             return false;

@@ -1,7 +1,9 @@
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
+using HarmonyLib;
 using HeadlessHarness.Harness;
 using KSA;
 
@@ -137,6 +139,8 @@ internal static class RcsFlightSupport
     // onActiveStep runs each tick the execution is still active, for
     // per-scenario sampling (firing nozzles, LP state, countdown mirror); its
     // int argument is the step index, so a scenario can throttle its tracing.
+    // The executor ends a burn in the ApplyVehicleSolvers postfix of the last step, so a stock flag it
+    // raised is still pending on return. The next step's FlightComputer.RaisePendingAlerts acts on it.
     internal static RunResult RunUntilInactive(
         Vehicle vehicle, SimDriver driver, double stepSec, int maxSteps,
         Action<int, RcsExecution>? onActiveStep = null)
@@ -198,31 +202,93 @@ internal static class RcsFlightSupport
             fc.RemoveBurnAt(0);
     }
 
-    // Subscribes to the public RCS completion event for the lifetime of the
-    // watcher, recording the last completion so a test can tell a genuine
-    // finish from any cancel path (a cancel never raises the event).
+    // Puts one vehicle into the state of an RCS burn that flies the given burn, with no control
+    // taken, so a test can end it through RcsExecutor.Complete or RcsExecutor.StopOutOfPropellant on
+    // any vehicle, also one without thrusters, and the release writes nothing to the flight computer.
+    internal static RcsExecution SeedFlyingExecution(Vehicle vehicle, Burn burn)
+    {
+        RcsExecution exec = RcsExecRegistry.GetOrCreate(vehicle.Id);
+        double timeSec = burn.Time.Seconds();
+        double dvMs = burn.DeltaVVlf.Length();
+        exec.ActiveBurn = burn;
+        exec.ActiveBurnTimeSec = timeSec;
+        exec.ActiveBurnDvMs = dvMs;
+        exec.ResolvedStrategy = RcsAttitudeStrategy.Hold;
+        exec.ResolvedAxis = -1;
+        exec.ControlTaken = true;
+        exec.ReconciledAfterLoad = true;
+        exec.GetOrCreateOptions(timeSec, dvMs).Mode = RcsExecutionMode.Rcs;
+        return exec;
+    }
+
+    // Reads how the executor ended a burn. It ends a burn through the stock flags
+    // FlightComputer.AutoBurnCompleted and AutoBurnStoppedOutOfPropellant, which stay pending until
+    // the next driver step, where FlightComputer.RaisePendingAlerts clears them and ends the burn.
+    // AnyEnd, CompletedOn and StoppedOutOfPropellantOn read the pending flags. A prefix on
+    // RaisePendingAlerts counts the ends stock read, so a check over several steps also sees an end
+    // that stock has already cleared. A cancel raises neither flag.
     internal sealed class CompletionWatcher : IDisposable
     {
-        private readonly Action<Vehicle, Burn> _handler;
-        public Vehicle? LastVehicle;
-        public Burn? LastBurn;
+        private static CompletionWatcher? _active;
+        private readonly Harmony _harmony = new("com.maxi.afc.harnesstests.rcs.completions");
+        private readonly Vehicle _vehicle;
 
-        public CompletionWatcher()
+        public CompletionWatcher(Vehicle vehicle)
         {
-            _handler = (v, b) =>
-            {
-                LastVehicle = v;
-                LastBurn = b;
-            };
-            RcsBurnCompletions.Completed += _handler;
+            _vehicle = vehicle;
+            Reset();
+            _harmony.Patch(
+                AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.RaisePendingAlerts),
+                    new[] { typeof(Vehicle) }),
+                prefix: new HarmonyMethod(typeof(CompletionWatcher), nameof(PendingAlertsPrefix)));
+            _active = this;
         }
 
+        // The ends that stock FlightComputer.RaisePendingAlerts read for this vehicle since Reset.
+        public int StockReadEnds { get; private set; }
+
+        public bool AnyEnd => _vehicle.FlightComputer.AutoBurnCompleted
+                              || _vehicle.FlightComputer.AutoBurnStoppedOutOfPropellant;
+
+        public bool NoEndSinceReset => !AnyEnd && StockReadEnds == 0;
+
+        public bool CompletedOn(Burn burn)
+            => _vehicle.FlightComputer.AutoBurnCompleted && IsLoadedFirst(burn);
+
+        public bool StoppedOutOfPropellantOn(Burn burn)
+            => _vehicle.FlightComputer.AutoBurnStoppedOutOfPropellant && IsLoadedFirst(burn);
+
+        // The burn FlightComputer.EndAutoBurn would end, which is the first executable one.
+        private bool IsLoadedFirst(Burn burn)
+        {
+            FlightComputer fc = _vehicle.FlightComputer;
+            return ReferenceEquals(fc.BurnPlan.FindFirstExecutableBurn(), burn)
+                   && StockBurnIdentity.IsLoaded(fc.Burn, burn);
+        }
+
+        // Also clears a pending flag, because a case that ends a burn without a step never lets stock
+        // read it, and the next case would start with that end still pending.
         public void Reset()
         {
-            LastVehicle = null;
-            LastBurn = null;
+            _vehicle.FlightComputer.AutoBurnCompleted = false;
+            _vehicle.FlightComputer.AutoBurnStoppedOutOfPropellant = false;
+            StockReadEnds = 0;
         }
 
-        public void Dispose() => RcsBurnCompletions.Completed -= _handler;
+        public void Dispose()
+        {
+            _harmony.UnpatchAll(_harmony.Id);
+            if (ReferenceEquals(_active, this))
+                _active = null;
+            Reset();
+        }
+
+        private static void PendingAlertsPrefix(FlightComputer __instance, Vehicle vehicle)
+        {
+            CompletionWatcher? watcher = _active;
+            if (watcher != null && ReferenceEquals(vehicle, watcher._vehicle)
+                && (__instance.AutoBurnCompleted || __instance.AutoBurnStoppedOutOfPropellant))
+                watcher.StockReadEnds++;
+        }
     }
 }

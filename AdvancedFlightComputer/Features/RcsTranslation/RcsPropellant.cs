@@ -17,11 +17,11 @@ internal static class RcsPropellant
                 continue;
             foreach (RocketCore core in thruster.Cores)
             {
-                // This estimate covers liquid reactants. Solid cores have no tank graph.
-                if (core is not Combustor combustor)
+                // This estimate covers tank-fed cores. Solid cores have no tank graph.
+                if (core is not PlumbedCore plumbed)
                     continue;
-                mix ??= combustor.DesiredMix;
-                CollectReachableTanks(combustor.ResourceManager, tanks);
+                mix ??= plumbed.DesiredMix;
+                CollectReachableTanks(plumbed.ResourceManager, tanks);
             }
         }
         if (mix == null || tanks.Count == 0)
