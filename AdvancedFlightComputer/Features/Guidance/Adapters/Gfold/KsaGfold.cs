@@ -52,18 +52,20 @@ internal static class KsaGfold
     }
 
     // Builds the G-FOLD parameter set from the live vehicle and site. Returns null if the vehicle has no usable engine (no thrust to plan with).
+    // accelLimitMs2 is the thrust acceleration limit the plan honours, positive infinity for none. The thrust bound is the uncapped full thrust, so the planned acceleration stays under the limit as the craft gets lighter.
     // refPosCci is the reference point the solve plans for - the vehicle CoM.
     // (The vehicle-height allowance is applied by the caller as an offset on the TARGET altitude, never by shifting this reference: an attitude-dependent reference point injects modelling error as the vehicle rotates.) arrivalAltM / arrivalRateMs implement "Option B": the target is a point arrivalAltM directly above the pad, reached descending vertically at arrivalRateMs with zero horizontal velocity - so G-FOLD nulls cross-range up high and the terminal vertical phase only has to kill the remaining sink.
     internal static GfoldParams BuildParams(
         Vehicle vehicle, IParentBody parent, Frame frame, double3 siteCci, double3 refPosCci,
         double glideSlopeDeg, double pointingDeg, double vMax,
-        double arrivalAltM, double arrivalRateMs, double throttleMin, double throttleMax, out string refusal)
+        double arrivalAltM, double arrivalRateMs, double throttleMin, double throttleMax, double accelLimitMs2,
+        out string refusal)
     {
         refusal = RefusalReason(vehicle, parent);
         if (refusal.Length > 0)
             return null;
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, refPosCci.Length() - parent.MeanRadius);
-        (double thrust, double massFlow) = KsaEnginePerf.AtPressure(vehicle, pressure);
+        (double thrust, double massFlow) = KsaEnginePerf.UncappedAtPressure(vehicle, pressure);
         double exhaustVel = massFlow > 0 ? thrust / massFlow : 0.0;
         if (thrust <= 0 || exhaustVel <= 0)
         {
@@ -91,6 +93,7 @@ internal static class KsaGfold
 
         // The plan must respect both the engine minimum and the selected thrust range.
         // The tracker can use the full available range to correct tracking errors.
+        // The acceleration limit keeps the same share of headroom as the thrust bound, because stock clips the tracker at the structural limit and a plan riding it would leave no authority to correct a shortfall.
         double minimumThrust = KsaEnginePerf.ThrustAtThrottle(vehicle, vehicle.GetMinThrottle(), pressure);
         double tMin = Math.Max(Math.Clamp(throttleMin, 0.01, 1.0), minimumThrust / thrust);
         double tMax = Math.Clamp(throttleMax, 0.01, 1.0);
@@ -109,6 +112,7 @@ internal static class KsaGfold
             ThrustMax = thrust,
             ThrottleMin = tMin,
             ThrottleMax = tMax,
+            AccelMax = accelLimitMs2 > 0.0 && double.IsFinite(accelLimitMs2) ? tMax * accelLimitMs2 : double.PositiveInfinity,
             VMax = vMaxEff,
             GlideSlopeDeg = glideSlopeDeg,
             PointingMaxDeg = Math.Clamp(pointingDeg, 1.0, 89.0),

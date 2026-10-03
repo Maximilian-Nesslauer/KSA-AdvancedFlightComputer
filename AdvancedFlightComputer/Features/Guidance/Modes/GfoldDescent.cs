@@ -183,7 +183,8 @@ public static partial class GuidanceWindow
 #endif
         GfoldParams p = KsaGfold.BuildParams(
             vehicle, parent, frame, siteCci, comPos, GfoldActiveGlideSlopeDeg, GfoldActivePointingDeg, _s.GfoldVMaxMs,
-            GfoldSolverTargetAltM, GfoldSolverArrivalRateMs, _s.GfoldThrottleMin, _s.GfoldThrottleMax, out string refusal);
+            GfoldSolverTargetAltM, GfoldSolverArrivalRateMs, _s.GfoldThrottleMin, _s.GfoldThrottleMax,
+            EffectiveAccelLimitG(vehicle) * StandardGravity, out string refusal);
         if (p == null)
         {
             _s.LandingStatus = refusal;
@@ -264,7 +265,8 @@ public static partial class GuidanceWindow
                 if (best == null)
                 {
                     FailGfold(vehicle, $"G-FOLD unreachable: alt {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, " +
-                              $"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, fuel {p.FuelMass:F0} kg");
+                              $"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, fuel {p.FuelMass:F0} kg"
+                              + (double.IsFinite(p.AccelMax) ? $", thrust acceleration limit {p.AccelMax / p.GravityMag:F1} local g" : ""));
                     return;
                 }
                 if (!FitsFuel(best.Trajectory, p))

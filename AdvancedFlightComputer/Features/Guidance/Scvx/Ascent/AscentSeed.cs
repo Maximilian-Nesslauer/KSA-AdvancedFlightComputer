@@ -6,7 +6,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///   1. Rise vertically at full thrust.
 ///   2. At an air-relative speed of PitchOverSpeed, rotate v_rel by the kick angle toward downrange, keeping its speed. The crossing is found by bisection inside the RK4 sub-step, so the seed does not depend on the mesh.
 ///   3. Follow v_rel from then on (a zero-alpha gravity turn), with the thrust PROJECTED INTO THE TARGET PLANE. Without the projection the thrust follows the out-of-plane part of v_rel that the body's rotation gives it, and the plane error feeds back until it is more than one trust region can absorb.
-///   4. Lower stages burn to depletion at full throttle; the last burns FinalBurnFraction of its load.
+///   4. Lower stages burn to depletion at full throttle, or at the throttle that holds a stage's acceleration limit; the last burns FinalBurnFraction of its load.
 ///
 /// The kick angle minimises the insertion ALTITUDE and PLANE miss plus the merit's own path violation - deliberately not the full insertion miss: speed and flight-path angle are the free burn times' job, and scoring them favours a seed that arrives at the right speed three hundred kilometres too high (see the script's seed_cost for the measurements).
 /// </summary>
@@ -19,12 +19,16 @@ internal static class AscentSeed
     public sealed record Result(bool Ok, double[] X, double[] U, double[] Sigma, double KickDeg,
                                 double Cost, int Evaluations, string Note, double LeastMaxQ);
 
-    /// <summary>Burn times at the seed's throttle, with the last stage at its seed fraction; a pinned one as it is pinned.</summary>
+    /// <summary>Burn times at the seed's throttle, with the last stage at its seed fraction; a pinned one as it is pinned. A stage under an acceleration limit throttles down as it gets lighter, which the seed burns at the mass it lights at (see AscentCase.SeedBurnTime).</summary>
     public static double[] SeedSigma(AscentCase c)
     {
         var sig = new double[c.S];
+        double m0 = c.X0[AscentDynamics.IM];
         for (int i = 0; i < c.S; i++)
-            sig[i] = double.IsFinite(c.SigFixed[i]) ? c.SigFixed[i] : c.PropC[i] / (c.Dyn.MassFlowC(i) * c.SeedThrottle[i]);
+        {
+            sig[i] = double.IsFinite(c.SigFixed[i]) ? c.SigFixed[i] : Math.Clamp(c.SeedBurnTime(i, m0), c.SigMin[i], c.SigMax[i]);
+            m0 -= c.PropC[i] + c.DryC[i];
+        }
         if (!double.IsFinite(c.SigFixed[c.S - 1]))
             sig[c.S - 1] *= c.Settings.FinalBurnFraction;
         return sig;
@@ -195,7 +199,8 @@ internal static class AscentSeed
             }
 
             Direction(c, xb.AsSpan(n * nx, nx), kicked, ub.AsSpan(n * nu, nu));
-            for (int j = 0; j < nu; j++) ub[n * nu + j] *= c.SeedThrottle[s];
+            double nodeThrottle = c.SeedThrottleAt(s, xb.AsSpan(n * nx, nx));
+            for (int j = 0; j < nu; j++) ub[n * nu + j] *= nodeThrottle;
             if (n == c.N - 1)
                 break;
 
@@ -230,7 +235,7 @@ internal static class AscentSeed
     {
         const int steps = 1000;
         int last = c.S - 1;
-        double full = c.PropC[last] / (c.Dyn.MassFlowC(last) * c.SeedThrottle[last]);
+        double full = c.SeedBurnTime(last, start[AscentDynamics.IM]);
         double target = 0.5 * c.VTarget * c.VTarget - 1.0 / c.RTarget;
         Span<double> x = stackalloc double[AscentCase.NX];
         start.CopyTo(x);
@@ -342,12 +347,12 @@ internal static class AscentSeed
             result[i] = x[i] + (h / 6.0) * (k1[i] + 2.0 * k2[i] + 2.0 * k3[i] + k4[i]);
     }
 
-    /// <summary>The seed's thrust law evaluated at the state it is stepped from, at the stage's seed throttle, with its solids read off their table at canonical stage time <paramref name="t"/>.</summary>
+    /// <summary>The seed's thrust law evaluated at the state it is stepped from, at the stage's seed throttle held under its acceleration limit, with its solids read off their table at canonical stage time <paramref name="t"/>.</summary>
     private static void Deriv(AscentCase c, ReadOnlySpan<double> x, int stage, double t, bool kicked, Span<double> dx)
     {
         Span<double> u = stackalloc double[3];
         Direction(c, x, kicked, u);
-        double throttle = c.SeedThrottle[stage];
+        double throttle = c.SeedThrottleAt(stage, x);
         for (int i = 0; i < 3; i++) u[i] *= throttle;
         c.Dyn.Eval(x, u, stage, c.Dyn.SolidBetween(stage, t * c.Dyn.TU), dx);
     }

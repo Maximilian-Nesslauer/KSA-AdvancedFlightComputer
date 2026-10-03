@@ -369,7 +369,7 @@ public static partial class GuidanceWindow
         _s.LastGuidanceLogTime = double.NegativeInfinity;
         GuidanceLog.Info(vehicle, $"ascent started to {_s.PeKm:F0} x {_s.ApKm:F0} km, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg"
             + $", arg. Pe {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") + " deg" : "free")}"
-            + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}"
+            + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}, structural limit {KsaEnginePerf.StructuralAccelerationLimit(vehicle) / StandardGravity:F1} g"
             + $", reserve {(_s.ReserveArmed ? _s.ReserveKg.ToString("F0") + " kg" : "off")}, "
             + (_s.FlyingPlan != null
                 ? $"convex profile to {_s.ConvexHandoverAltKm:F0} km, planned {_s.FlyingPlan.Solution.FinalMass / 1000.0:F2} t to orbit"
@@ -444,8 +444,9 @@ public static partial class GuidanceWindow
                 // The reserve BEFORE the g-limit split, so a stage that gets divided is divided at the masses it will actually fly through. Applied to this copy only - the cached model stays the vehicle as it is, which is what the stage table and the staging cue both need it to be.
                 if (_s.ReserveArmed)
                     ApplyAscentReserve(live, _s.ReserveKg);
-                if (_s.GLimitEnabled && _s.GLimitG > 0.1)
-                    ApplyGLimit(live, _s.GLimitG);
+                double gLimit = EffectiveAccelLimitG(vehicle);
+                if (double.IsFinite(gLimit))
+                    ApplyGLimit(live, gLimit);
                 _s.Status = "";
                 _s.UpfgVehicle = live;
                 // The first solve of a flight: the insertion search starts again from periapsis.

@@ -386,6 +386,8 @@ public sealed class AscentPlan
     public double ThrottleMinPct { get; init; }
     /// <summary>The floor as the panel asked for it, before the engines' own minimum and the 99 % cap.</summary>
     public double ThrottleMinRequestedPct { get; init; }
+    /// <summary>The player's g-limit the plan was solved to, g, positive infinity when it was off.</summary>
+    public double GLimitG { get; init; } = double.PositiveInfinity;
     public int SolidStages { get; init; }
     /// <summary>A core that would have run dry before its boosters is planned throttled down to outlast them (#32).</summary>
     public bool CoreThrottledDown { get; init; }
@@ -408,10 +410,11 @@ public sealed class AscentPlan
         => Math.Abs(peKm - PeKm) > 0.5 || Math.Abs(apKm - ApKm) > 0.5
         || Math.Abs(incDeg - IncDeg) > 0.05 || Math.Abs(Math.IEEERemainder(lanDeg - LanDeg, 360.0)) > 0.5;
 
-    /// <summary>True if the panel's limits are not the ones this plan was solved to.</summary>
-    public bool SettingsDiffer(double qMaxKpa, double qAlphaMax, double throttleMinPct)
+    /// <summary>True if the panel's limits are not the ones this plan was solved to. The structural limit is not compared, because it follows the parts, and a part change moves the mass the plan is checked against.</summary>
+    public bool SettingsDiffer(double qMaxKpa, double qAlphaMax, double throttleMinPct, double gLimitG)
         => Math.Abs(qMaxKpa - QMaxRequestedKpa) > 1e-6 || Math.Abs(qAlphaMax - QAlphaMax) > 1e-6
-        || Math.Abs(throttleMinPct - ThrottleMinRequestedPct) > 1e-6;
+        || Math.Abs(throttleMinPct - ThrottleMinRequestedPct) > 1e-6
+        || !(gLimitG == GLimitG || Math.Abs(gLimitG - GLimitG) <= 1e-6);
 }
 
 /// <summary>

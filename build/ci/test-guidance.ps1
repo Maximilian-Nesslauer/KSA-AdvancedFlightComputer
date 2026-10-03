@@ -150,7 +150,7 @@ $gfoldBase = @(
     "--"
 )
 # Only the modes whose exit code asserts something. The default run writes its plans as CSVs to the working directory.
-foreach ($command in @(@("81", "120"), @("--clarabel-smoke"), @("--realtime"), @("--terminal-braking"))) {
+foreach ($command in @(@("81", "120"), @("--clarabel-smoke"), @("--realtime"), @("--terminal-braking"), @("--accel-limit"))) {
     Invoke-Checked -FilePath "dotnet" -ArgumentList ($gfoldBase + $command) -FailureMessage "The Gfold $($command -join ' ') check failed."
 }
 
@@ -162,7 +162,7 @@ $scvxBase = @(
     "--runtime", $RuntimeIdentifier,
     "--"
 )
-foreach ($command in @("--fd", "--aero", "--impact", "--sub-scs", "--loop", "--ascent", "--cold-shift", "--hermite")) {
+foreach ($command in @("--fd", "--aero", "--impact", "--sub-scs", "--loop", "--ascent", "--ascent-glimit", "--cold-shift", "--hermite")) {
     Invoke-Checked -FilePath "dotnet" -ArgumentList ($scvxBase + $command) -FailureMessage "The Scvx $command check failed."
 }
 

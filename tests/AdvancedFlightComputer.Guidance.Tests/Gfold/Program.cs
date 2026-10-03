@@ -4,6 +4,9 @@ using AdvancedFlightComputer.Guidance.Gfold;
 if (args.Contains("--terminal-braking"))
     return TerminalBrakingTests.Run();
 
+if (args.Contains("--accel-limit"))
+    return AccelLimitTests.Run();
+
 // Replicates the reference Python P3_P4 flow on the Mars static test case:
 // Problem 3 (minimum landing error) finds the best reachable landing point,
 // Problem 4 (minimum fuel) re-solves pinned to that point.
@@ -549,6 +552,8 @@ static int CheckCsv(string path, double tf, GfoldParams p)
         W($"vmax n={k}", Math.Sqrt(v[k].Sum(x => x * x)) - p.VMax);
         W($"glide n={k}", Math.Sqrt(Math.Pow(r[k][1] - p.Rf[1], 2) + Math.Pow(r[k][2] - p.Rf[2], 2)) - cot * (r[k][0] - p.Rf[0]));
         W($"alt n={k}", -r[k][0]);
+        if (double.IsFinite(p.AccelMax))
+            W($"accelmax n={k}", sig[k] - p.AccelMax);
         if (k > 0 && k < n - 1)
         {
             double z0T = p.WetMass - alpha * p.R2 * k * dt;

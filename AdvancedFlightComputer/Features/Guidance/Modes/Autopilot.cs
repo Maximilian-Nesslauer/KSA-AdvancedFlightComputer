@@ -754,7 +754,20 @@ public static partial class GuidanceWindow
         s0.MassDry = Math.Min(s0.MassDry + reserveKg, floor);
     }
 
+    // The thrust acceleration limit every plan honours, in g, which is the lower of the player's g-limit when it is on and the structural limit stock holds the throttle to (KsaEnginePerf.StructuralAccelerationLimit).
+    // Positive infinity when neither applies.
+    // The structural limit is VehicleStructuralLimits.EffectiveMaxGLoad of the stack as it flies now, from the radius of its BoundingBoxAsmb, and every solve reads it again.
+    // Every stage of a plan takes it. A separation usually leaves a smaller stack with a higher limit, so a later stage is modelled throttled where stock will not throttle it, and the first solve after the staging corrects that.
+    // Vehicle.Split keeps the root side in the original vehicle, so its colliders stay in the same assembly frame and its box cannot grow. A flying stack that is split off and re-rooted can get a larger box in its new frame, which is not modelled.
+    internal static double EffectiveAccelLimitG(Vehicle vehicle) =>
+        Math.Min(UserGLimitG, KsaEnginePerf.StructuralAccelerationLimit(vehicle) / StandardGravity);
+
+    private static double UserGLimitG => _s.GLimitEnabled && _s.GLimitG > 0.1 ? _s.GLimitG : double.PositiveInfinity;
+
+    private const double StandardGravity = 9.80665;
+
     // The vehicle-wide acceleration limit is applied to the stage list on every step. A stage that crosses the limit mid-burn is divided at the mass where full thrust reaches the limit.
+    // Every stage takes the same limit, including one with a solid motor, because FlightComputer.SolveGLoadThrottleCap throttles the liquid engines beside it toward the structural limit too. A stage of solids alone that passes the limit passes it under stock as well, and no plan can change that.
     internal static void ApplyGLimit(UpfgVehicle vehicle, double gLim)
     {
         const double g0 = 9.80665;
@@ -1133,7 +1146,7 @@ public static partial class GuidanceWindow
                 else if (!_s.CutoffDone)
                 {
                     inputs.EngineOn = true;
-                    // Full throttle unless UPFG is holding the acceleration limit. Not while the convex profile flies: that flies the plan's own throttle, full at the script's floor, and a g-limit throttling it back would fly a different trajectory under the same attitudes.
+                    // Full throttle unless UPFG is holding the acceleration limit. While the convex profile flies, the throttle is the plan's own, which already holds the acceleration limit the plan was solved to.
                     inputs.EngineThrottle = _s.Phase == AscentPhase.Profile ? ConvexThrottle(vehicle, parent) : (float)_s.Upfg.Throttle;
                 }
             }

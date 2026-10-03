@@ -57,11 +57,14 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
             t.Check("AFC leaves stock Auto in control", craft.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
                 && ReferenceEquals(craft.FlightComputer.Burn, target) && !state.ControlAcquired && !state.HasCommand);
             double warpTime = (double)AccessTools.Method(typeof(GuidanceWindow), "StockDeorbitWarpTime")
-                .Invoke(null, new object[] { craft.FlightComputer, target })!;
+                .Invoke(null, new object[] { target })!;
+            // BurnTarget.AlignmentStartTime starts at EndOfTime until FlightComputer.UpdateBurnTarget sets it, and then the warp check below would pass on the lead term alone.
+            t.Check("stock has published the alignment start",
+                target.AlignmentStartTime != UniverseTime.EndOfTime && target.AlignmentStartTime <= target.IgnitionTime,
+                $"alignment {target.AlignmentStartTime.Seconds():F1} s, ignition {target.IgnitionTime.Seconds():F1} s");
             t.Check("stock-node warp stops before alignment preparation",
                 warpTime <= target.IgnitionTime.Seconds() - 30 - 10
-                && (!float.IsFinite(craft.FlightComputer.ConservativeFlipTime)
-                    || warpTime <= target.IgnitionTime.Seconds() - 2 * craft.FlightComputer.ConservativeFlipTime - 10));
+                && warpTime <= target.AlignmentStartTime.Seconds() - 10);
             state.DeorbitWarpRequested = true;
 
             craft.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;

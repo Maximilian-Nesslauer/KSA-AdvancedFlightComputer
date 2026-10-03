@@ -20,6 +20,10 @@ public sealed record GfoldParams
     public double GlideSlopeDeg { get; init; } = 30;  // min approach elevation
     public double PointingMaxDeg { get; init; } = 45; // max thrust tilt from up
 
+    // Upper bound on the thrust acceleration ||Tc||/m, m/s^2. A structure with a load limit holds thrust to a fixed acceleration, so the thrust it can take falls as propellant burns.
+    // Positive infinity leaves only the thrust bound.
+    public double AccelMax { get; init; } = double.PositiveInfinity;
+
     public double[] R0 { get; init; } = [2400, 2000, 0];
     public double[] V0 { get; init; } = [-40, 30, 0];
     public double[] Rf { get; init; } = [0, 0, 0];
@@ -31,6 +35,15 @@ public sealed record GfoldParams
     public double R2 => ThrottleMax * ThrustMax;
 
     // Bounds on the time of flight from the reference: below tf_min the vehicle cannot brake in time even at full thrust; above tf_max the minimum throttle burns all fuel before touchdown.
-    public double TfMin => DryMass * Math.Sqrt(V0.Sum(v => v * v)) / R2;
+    // An acceleration bound lowers the braking the dry vehicle can reach. GfoldPlanner keeps the thrust floor admissible above AccelMax, so R1 / DryMass is the most it lowers it to.
+    public double TfMin
+    {
+        get
+        {
+            double speed = Math.Sqrt(V0.Sum(v => v * v));
+            double accelMax = Math.Max(AccelMax, R1 / DryMass);
+            return R2 <= accelMax * DryMass ? DryMass * speed / R2 : speed / accelMax;
+        }
+    }
     public double TfMax => FuelMass / (Alpha * R1);
 }

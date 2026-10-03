@@ -40,7 +40,10 @@ internal sealed class DeorbitRequest
     internal readonly double VehicleRadius;
     internal readonly double MinimumPulse;
     internal readonly double ControlStep;
+    // The player's g-limit, 0 when it is off.
     internal readonly double GLimit;
+    // The structural limit of the stack at capture, in g. A staging or a part change invalidates the request through the engine signature, so it does not have to be compared again.
+    internal readonly double StructuralGLimit;
     // Stock Auto needs this long before ignition to turn the craft onto the node.
     internal readonly double StockPreparation;
     internal readonly DeorbitSettings Settings;
@@ -55,7 +58,7 @@ internal sealed class DeorbitRequest
 
     internal DeorbitRequest(Orbit source, double epoch, double mass, double vehicleRadius,
         DeorbitSettings settings, UpfgVehicle model, DeorbitEngine[] engines, double minimumPulse, double controlStep, double gLimit = 0,
-        double stockPreparation = DeorbitPlanner.PrepSeconds)
+        double stockPreparation = DeorbitPlanner.PrepSeconds, double structuralGLimit = double.PositiveInfinity)
     {
         Parent = source.Parent;
         StateVectors state = source.GetStateVectorsAt(new UniverseTime(epoch));
@@ -70,6 +73,7 @@ internal sealed class DeorbitRequest
         MinimumPulse = minimumPulse;
         ControlStep = controlStep;
         GLimit = gLimit;
+        StructuralGLimit = structuralGLimit > 0 ? structuralGLimit : double.PositiveInfinity;
         StockPreparation = double.IsFinite(stockPreparation) ? Math.Max(stockPreparation, DeorbitPlanner.PrepSeconds) : DeorbitPlanner.PrepSeconds;
         SiteCcf = GuidanceWindow.SiteDirCcf(settings.Latitude, settings.Longitude);
         SiteHeight = Terrain(SiteCcf);
@@ -96,7 +100,8 @@ internal sealed class DeorbitRequest
     {
         UpfgVehicle result = CopyModel(Model);
         if (result.Stages.Count > 0) result.Stages[0].MassTotal = mass;
-        if (GLimit > 0) GuidanceWindow.ApplyGLimit(result, GLimit);
+        double limit = Math.Min(GLimit > 0 ? GLimit : double.PositiveInfinity, StructuralGLimit);
+        if (double.IsFinite(limit)) GuidanceWindow.ApplyGLimit(result, limit);
         return result;
     }
 

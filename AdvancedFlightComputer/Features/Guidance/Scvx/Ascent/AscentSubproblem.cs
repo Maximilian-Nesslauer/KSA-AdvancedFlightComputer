@@ -6,13 +6,14 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 /// The convex subproblem solved at each SCvx iteration, assembled for Clarabel. Constraint for constraint the problem of launch3dof.py's loop, which is set out in "The Saturn V Ascent Problem" section 05:
 ///
 ///   minimise   (1 - m_N) + lambda sum ||u_k+1 - u_k||^2
-///              + rho_nu sum ||D^-1 nu_k||^2 + rho_s ||s||^2 + rho_q sum (s^q_k + s^qa_k)
+///              + rho_nu sum ||D^-1 nu_k||^2 + rho_s ||s||^2 + rho_q sum (s^q_k + s^qa_k + s^g_k)
 ///   s.t.       x_1 = x_0,  u_1 parallel to straight up                 lift-off
 ///              x_k+1 = x_k + dtau/2 (g_k + g_k+1) + nu_k               collocation
 ///              r, v continuous, m drops by the dry mass                staging links
 ///              lower stages burn their load, the last at most its load propellant
 ///              sigma_i = the solids' burn where one pins it               solids (#73)
 ///              ||u_k|| &lt;= 1,  u_bar_hat . u_k &gt;= throttle floor        throttle
+///              T_bar_k ||u_k|| &lt;= a (backoff m_k + m_bar_k s^g_k)       thrust acceleration, where a stage has a limit a
 ///              r_bar_hat . r_k &gt;= R_floor,  m_k &gt;= m_floor              ground, structure
 ///              tangent q &lt;= backoff + s^q,  cone q-alpha &lt;= backoff + s^qa   where q_bar &gt; QActive
 ///              -v_rel_bar_hat . u_k &lt;= s^pro                          thrust never against the airflow, there too
@@ -22,6 +23,8 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 /// with g_k = sigma_i f_k + sigma_bar_i (A_k dx_k + B_k du_k), the time-scaled dynamics linearised in all three of sigma, x and u.
 ///
 /// A "stage" in the propellant rows is really a run of stages that share one liquid load: a core lit with its boosters keeps burning after they burn out, and only the load's total is fixed, not how it splits across the burnout (AscentCase.Loads).
+///
+/// The acceleration limit is the one constraint launch3dof.py does not have. T ||u|| &lt;= a m is bilinear in the true model, because T depends on the altitude, so the liquid thrust is frozen at the reference T_bar, which leaves a cone in u, m and the slack. The slack term uses the reference mass so the cone stays linear in it, and the slack is priced as the other path slacks are, the exact-penalty treatment of a linearised path constraint in successive convexification (Mao, Szmuk and Acikmese 2016). The node's throttle floor is scaled to the reference's own ceiling under the limit, so the floor and the limit never exclude each other.
 ///
 /// Two departures, both conditioning rather than modelling. The lift-off thrust constraint is two rows (the two directions perpendicular to straight up) instead of the script's three rank-2 rows. And the whole problem is assembled fresh each iteration, as CVXPY rebuilt it: the set of nodes carrying a path limit changes with the reference, so the structure is not fixed.
 /// </summary>
@@ -33,7 +36,7 @@ internal sealed class AscentSubproblem
     private readonly AscentCase _c;
 
     // Variable layout.
-    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _nVar;
+    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _oSg, _nVar;
     private readonly int _nA;
     private readonly int[] _act;
 
@@ -50,7 +53,8 @@ internal sealed class AscentSubproblem
         _oSq = _oTerm + 5;
         _oSqa = _oSq + _nA;
         _oSpro = _oSqa + _nA;
-        _nVar = _oSpro + _nA;
+        _oSg = _oSpro + _nA;
+        _nVar = _oSg + c.LimitedNodes.Length;
     }
 
     public int VariableCount => _nVar;
@@ -63,6 +67,7 @@ internal sealed class AscentSubproblem
     private int ISq(int a) => _oSq + a;
     private int ISqa(int a) => _oSqa + a;
     private int ISpro(int a) => _oSpro + a;
+    private int ISg(int g) => _oSg + g;
 
     /// <summary>A growable block of rows: triplets and a right-hand side.</summary>
     private sealed class Rows
@@ -85,7 +90,7 @@ internal sealed class AscentSubproblem
     }
 
     public sealed record Solved(bool Ok, string Status, double[] X, double[] U, double[] Wv,
-                                double[] Sigma, double[] STerm, double[] Sq, double[] Sqa, double[] Spro,
+                                double[] Sigma, double[] STerm, double[] Sq, double[] Sqa, double[] Spro, double[] Sg,
                                 int SolverIterations, double SolveMs);
 
     public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double tr)
@@ -180,12 +185,25 @@ internal sealed class AscentSubproblem
             if (double.IsFinite(c.SigFixed[s]))
                 eq.Add(eq.NewRow(c.SigFixed[s]), ISig(s), 1.0);
 
+        // ---- the reference's liquid thrust and, under an acceleration limit, the throttle that limit leaves it.
+        int[] limited = c.LimitedNodes;
+        var limitThrust = new double[limited.Length];
+        var floorScale = new double[n];
+        Array.Fill(floorScale, 1.0);
+        for (int g = 0; g < limited.Length; g++)
+        {
+            int k = limited[g], s = c.NodeStage[k];
+            limitThrust[g] = c.Dyn.LiquidThrustC(s, xbar.AsSpan(k * NX, NX));
+            if (limitThrust[g] > 0.0)
+                floorScale[k] = Math.Clamp(c.AccC[s] * st.PathBackoff * xbar[k * NX + AscentDynamics.IM] / limitThrust[g], 0.0, 1.0);
+        }
+
         // ---- per-node: throttle floor (tangent halfspace), mass floor, ground (tangent halfspace).
         for (int k = 0; k < n; k++)
         {
             double ux = ubar[k * NU], uy = ubar[k * NU + 1], uz = ubar[k * NU + 2];
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
-            int row = ineq.NewRow(-c.ThrottleMin[c.NodeStage[k]]);
+            int row = ineq.NewRow(-c.ThrottleMin[c.NodeStage[k]] * floorScale[k]);
             if (un > 1e-12)
             {
                 ineq.Add(row, IU(k, 0), -ux / un);
@@ -255,11 +273,28 @@ internal sealed class AscentSubproblem
             ineq.Add(ineq.NewRow(0.0), ISqa(a), -1.0);
             ineq.Add(ineq.NewRow(0.0), ISpro(a), -1.0);
         }
+        for (int g = 0; g < limited.Length; g++)
+            ineq.Add(ineq.NewRow(0.0), ISg(g), -1.0);
 
         // ---- thrust ceiling ||u_k|| <= 1, a cone per node.
         for (int k = 0; k < n; k++)
         {
             soc.NewRow(1.0);
+            for (int j = 0; j < NU; j++)
+                soc.Add(soc.NewRow(0.0), IU(k, j), -1.0);
+            socDims.Add(4);
+        }
+
+        // ---- thrust acceleration T_bar ||u_k|| <= a (backoff m_k + m_bar_k s^g_k), a cone per limited node.
+        for (int g = 0; g < limited.Length; g++)
+        {
+            if (!(limitThrust[g] > 0.0))
+                continue;
+            int k = limited[g];
+            double a = c.AccC[c.NodeStage[k]], tl = limitThrust[g];
+            int top = soc.NewRow(0.0);
+            soc.Add(top, IX(k, AscentDynamics.IM), -a * st.PathBackoff / tl);
+            soc.Add(top, ISg(g), -a * xbar[k * NX + AscentDynamics.IM] / tl);
             for (int j = 0; j < NU; j++)
                 soc.Add(soc.NewRow(0.0), IU(k, j), -1.0);
             socDims.Add(4);
@@ -346,6 +381,8 @@ internal sealed class AscentSubproblem
             cvec[ISqa(a)] = st.RhoPath;
             cvec[ISpro(a)] = st.RhoPath;
         }
+        for (int g = 0; g < limited.Length; g++)
+            cvec[ISg(g)] = st.RhoPath;
 
         var p = new SparseCcs(_nVar, _nVar);
         double wdt = st.SmoothingWeight;
@@ -376,7 +413,7 @@ internal sealed class AscentSubproblem
         ineq.Rhs.CopyTo(h, 0);
         soc.Rhs.CopyTo(h, ineq.Count);
 
-        // The thrust cones were emitted after the q-alpha cones, so the dimension list is in row order already.
+        // The thrust cones were emitted after the q-alpha cones and the acceleration cones after them, so the dimension list is in row order already.
         var problem = new ConicProblem
         {
             C = cvec,
@@ -392,13 +429,13 @@ internal sealed class AscentSubproblem
         ConicResult res = ClarabelSolver.Solve(problem, out ClarabelSolver.ClarabelSolveInfo info,
             maxIterations: st.SubproblemMaxIterations, eps: st.SubproblemEps);
         if (!res.IsOptimal || res.X.Length != _nVar)
-            return new Solved(false, res.Status.ToString(), [], [], [], [], [], [], [], [], res.Iterations, info.TotalMs);
+            return new Solved(false, res.Status.ToString(), [], [], [], [], [], [], [], [], [], res.Iterations, info.TotalMs);
 
         double[] x = res.X;
         return new Solved(true, res.Status.ToString(),
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
-            res.Iterations, info.TotalMs);
+            x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs);
     }
 
     /// <summary>Two unit vectors perpendicular to d and to each other.</summary>

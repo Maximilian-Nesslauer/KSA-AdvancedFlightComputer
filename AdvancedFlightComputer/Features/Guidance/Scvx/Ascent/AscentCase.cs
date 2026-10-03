@@ -33,6 +33,10 @@ internal sealed class AscentCase
     /// <summary>Canonical burn time of a stage whose duration is pinned, NaN where it is free.</summary>
     public readonly double[] SigFixed;
     public readonly double[] ThrottleMin;
+    /// <summary>Each stage's thrust acceleration limit, canonical, positive infinity where it has none or where its full thrust cannot reach it.</summary>
+    public readonly double[] AccC;
+    /// <summary>The nodes of the stages with a finite <see cref="AccC"/>, in order.</summary>
+    public readonly int[] LimitedNodes;
     /// <summary>The liquid throttle the seed flies each stage at.</summary>
     public readonly double[] SeedThrottle;
     /// <summary>
@@ -126,6 +130,7 @@ internal sealed class AscentCase
         SigFixed = new double[S];
         ThrottleMin = new double[S];
         SeedThrottle = new double[S];
+        AccC = new double[S];
         for (int i = 0; i < S; i++)
         {
             AscentStage stg = p.Stages[i];
@@ -134,6 +139,7 @@ internal sealed class AscentCase
             double full = stg.FullBurnTime;
             ThrottleMin[i] = double.IsNaN(stg.ThrottleMin) ? st.ThrottleMin : stg.ThrottleMin;
             SeedThrottle[i] = Math.Max(stg.SeedThrottle, ThrottleMin[i]);
+            AccC[i] = stg.AccelerationLimit / Dyn.AU;
             SigFixed[i] = stg.IsPinned ? stg.FixedBurnTime / tu : double.NaN;
             if (stg.IsPinned)
             {
@@ -147,6 +153,28 @@ internal sealed class AscentCase
             }
         }
         SigScale = st.SigmaTrustSeconds / tu;
+
+        // A limit binds only on a stage whose highest liquid thrust over its lightest mass passes the backed-off limit, so every other stage drops it and adds nothing to the subproblem.
+        // A stage that keeps its limit throttles down as it gets lighter. Its box is widened to the burn at its throttle floor scaled to the limit, which is that burn at full throttle over the floor.
+        double mStart = X0[AscentDynamics.IM];
+        for (int i = 0; i < S; i++)
+        {
+            if (double.IsFinite(AccC[i]))
+            {
+                double peak = PeakLiquidThrustC(p.Stages[i]);
+                if (peak <= AccC[i] * st.PathBackoff * (mStart - PropC[i]))
+                    AccC[i] = double.PositiveInfinity;
+                else if (!p.Stages[i].IsPinned)
+                    SigMax[i] = Math.Max(SigMax[i], 1.1 * LimitedBurnTime(i, mStart, 1.0, peak) / ThrottleMin[i]);
+            }
+            mStart -= PropC[i] + DryC[i];
+        }
+
+        var limited = new List<int>();
+        for (int k = 0; k < N; k++)
+            if (double.IsFinite(AccC[NodeStage[k]]))
+                limited.Add(k);
+        LimitedNodes = limited.ToArray();
 
         var loads = new List<(int, int, double, bool)>();
         for (int first = 0; first < S;)
@@ -208,6 +236,51 @@ internal sealed class AscentCase
 
         QMax = p.QMax;
         QAlphaMax = p.QAlphaMax;
+    }
+
+    /// <summary>
+    /// The liquid throttle the seed flies a stage at from a state. That is its seed throttle, or less where the seed throttle would push past the stage's acceleration limit, held at the same back-off the subproblem holds the limit to.
+    /// </summary>
+    public double SeedThrottleAt(int stage, ReadOnlySpan<double> x)
+    {
+        double throttle = SeedThrottle[stage];
+        if (!double.IsFinite(AccC[stage]))
+            return throttle;
+        double full = Dyn.LiquidThrustC(stage, x);
+        return full > 0.0 ? Math.Min(throttle, AccC[stage] * Settings.PathBackoff * x[AscentDynamics.IM] / full) : throttle;
+    }
+
+    /// <summary>
+    /// The seed's burn time for a stage's whole load from mass <paramref name="m0"/>, canonical. At its seed throttle the load lasts PropC / (mdot theta). Under an acceleration limit a stage at the seed throttle reaches it at mass m* = theta T / a, and from there the throttle falls with the mass, so the mass decays exponentially with time constant T / (mdot a): t = (m0 - m*) / (mdot theta) + T / (mdot a) ln(m* / m1). T is the reference thrust, exact for a stage whose thrust does not depend on back pressure.
+    /// </summary>
+    public double SeedBurnTime(int stage, double m0) => LimitedBurnTime(stage, m0, SeedThrottle[stage], Dyn.ThrustRefC(stage));
+
+    // The same burn time at throttle theta with the canonical liquid thrust T.
+    private double LimitedBurnTime(int stage, double m0, double theta, double thrust)
+    {
+        double flow = Dyn.MassFlowC(stage);
+        double atFull = PropC[stage] / (flow * theta);
+        if (!double.IsFinite(AccC[stage]))
+            return atFull;
+        double a = AccC[stage] * Settings.PathBackoff;
+        double m1 = m0 - PropC[stage];
+        double mStar = theta * thrust / a;
+        if (!(m1 > 0.0) || mStar <= m1)
+            return atFull;
+        double tau = thrust / (flow * a);
+        return mStar >= m0
+            ? tau * Math.Log(m0 / m1)
+            : (m0 - mStar) / (flow * theta) + tau * Math.Log(mStar / m1);
+    }
+
+    // The liquid engines' highest full thrust, canonical: the reference thrust or the most the pressure table gives.
+    private double PeakLiquidThrustC(AscentStage stage)
+    {
+        double peak = stage.Thrust;
+        if (stage.ThrustAtPressure != null)
+            foreach (double t in stage.ThrustAtPressure)
+                peak = Math.Max(peak, t);
+        return peak / Dyn.FU;
     }
 
     /// <summary>Canonical air-relative velocity of a state.</summary>

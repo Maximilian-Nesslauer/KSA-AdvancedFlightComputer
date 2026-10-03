@@ -206,8 +206,9 @@ public static partial class GuidanceWindow
             UpfgVehicle live = BuildUpfgVehicle(vehicle);
             if (live != null)
             {
-                if (_s.GLimitEnabled && _s.GLimitG > 0.1)
-                    ApplyGLimit(live, _s.GLimitG);
+                double gLimit = EffectiveAccelLimitG(vehicle);
+                if (double.IsFinite(gLimit))
+                    ApplyGLimit(live, gLimit);
                 _s.UpfgVehicle = live;
 
                 double3 r = orbit.StateVectors.PositionCci;

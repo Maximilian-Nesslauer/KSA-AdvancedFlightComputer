@@ -17,19 +17,24 @@ public static partial class GuidanceWindow
         if (Universe.IsAutoWarpActive) ImGui.TextWrapped("Time warp is active.");
     }
 
-    // Stock Auto needs this long before ignition to turn the craft onto the burn.
+    // Stock Auto needs this long before ignition to turn the craft onto the burn, the lead FlightComputer.UpdateBurnTarget stores as BurnTarget.AlignmentStartTime.
+    // The planner request has no burn target yet, so it estimates the lead the same way.
     // FlightComputer.UpdateRcsParams derives the flip time from RCS torque alone and leaves it infinite without RCS, so like stock only a finite value counts.
     private static double StockPreparationTime(FlightComputer fc) => float.IsFinite(fc.ConservativeFlipTime)
         ? Math.Max(PrepLeadTime, 2 * fc.ConservativeFlipTime) : PrepLeadTime;
 
-    private static double StockDeorbitWarpTime(FlightComputer fc, BurnTarget target) =>
-        target.IgnitionTime.Seconds() - StockPreparationTime(fc) - WarpLeadTime;
+    // The earlier of the stock alignment start and AFC's own preparation lead.
+    private static double StockPreparationStart(BurnTarget target) =>
+        Math.Min(target.AlignmentStartTime.Seconds(), target.IgnitionTime.Seconds() - PrepLeadTime);
+
+    private static double StockDeorbitWarpTime(BurnTarget target) =>
+        StockPreparationStart(target) - WarpLeadTime;
 
     private static void StepStockDeorbitWarp(Vehicle vehicle)
     {
         if (!_s.DeorbitWarpRequested) return;
         _s.DeorbitWarpRequested = false;
-        double target = StockDeorbitWarpTime(vehicle.FlightComputer, _s.DeorbitTarget);
+        double target = StockDeorbitWarpTime(_s.DeorbitTarget);
         if (!ReferenceEquals(vehicle, Program.ControlledVehicle) || !double.IsFinite(target)
             || target <= SimNow() + 1)
         {
@@ -47,13 +52,14 @@ public static partial class GuidanceWindow
         && _s.DeorbitTarget.DeltaVTargetCci.LengthSquared() > 0
         && float3.Dot(_s.DeorbitTarget.DeltaVToGoCci, _s.DeorbitTarget.DeltaVTargetCci) <= 0;
 
+    // BurnTarget.UpdateFromBurn takes ImpulsiveInstant from Burn.ImpulseTime, so the node is recorded and checked by that time too.
     private static bool StockDeorbitTargetUnchanged => _s.DeorbitTarget != null
         && Math.Abs(_s.DeorbitTarget.ImpulsiveInstant.Seconds() - _s.DeorbitNodeTime) < 0.001
         && (double3.Unpack(_s.DeorbitTarget.DeltaVTargetCci) - _s.DeorbitNodeDeltaVCci).Length()
             < Math.Max(0.001, _s.DeorbitNodeDeltaVCci.Length() * 1e-5);
 
     private static bool StockDeorbitNodeUnchanged => _s.DeorbitNode != null
-        && Math.Abs(_s.DeorbitNode.Time.Seconds() - _s.DeorbitNodeTime) < 0.001
+        && Math.Abs(_s.DeorbitNode.ImpulseTime.Seconds() - _s.DeorbitNodeTime) < 0.001
         && (_s.DeorbitNode.DeltaVVlf - _s.DeorbitNodeDeltaV).Length() < 0.001;
 
     // This runs in the PrepareWorker prefix, after the input queue is drained and before vehicle workers start.
@@ -85,7 +91,9 @@ public static partial class GuidanceWindow
 
         FlightComputer fc = vehicle.FlightComputer;
         bool currentTarget = ReferenceEquals(fc.Burn, _s.DeorbitTarget);
-        if (!StockDeorbitTargetUnchanged || !StockDeorbitNodeUnchanged || (!currentTarget && fc.Burn != null))
+        // FlightComputer.EndAutoBurn removes a completed node that another burn follows and loads that burn, so another loaded target is a change only before completion.
+        bool handedOn = StockDeorbitComplete && !fc.BurnPlan.TryGetBurn(_s.DeorbitNode);
+        if (!StockDeorbitTargetUnchanged || !StockDeorbitNodeUnchanged || (!currentTarget && fc.Burn != null && !handedOn))
         {
             StopStockDeorbit(vehicle, "The deorbit node or loaded target changed. Landing stopped.", keepNode: true);
             return true;
@@ -119,9 +127,9 @@ public static partial class GuidanceWindow
         double3 dvVlf = plan.DeltaV.Transform(state.GetVlf2ParentCci().OrIdentity().Inverse());
         _s.DeorbitNodeDeltaV = dvVlf;
         _s.DeorbitNodeDeltaVCci = plan.DeltaV;
-        _s.DeorbitNodeTime = plan.DepartureTime;
         _s.DeorbitNode = Burn.Create(patch.Orbit.GetPointAt(new UniverseTime(plan.DepartureTime)),
             plan.DepartureTime, dvVlf, patch, vehicle);
+        _s.DeorbitNodeTime = _s.DeorbitNode.ImpulseTime.Seconds();
         _s.DeorbitNode.IsGizmoActive = false;
         fc.AddBurn(_s.DeorbitNode);
         _s.DeorbitTarget = fc.Burn;
@@ -153,14 +161,14 @@ public static partial class GuidanceWindow
 
         double duration = _s.DeorbitTarget.BurnDuration;
         double ignition = _s.DeorbitTarget.IgnitionTime.Seconds();
-        double preparation = StockPreparationTime(fc);
+        double preparationStart = StockPreparationStart(_s.DeorbitTarget);
         double latestFinish = plan.DepartureTime + duration / 2 + _s.DeorbitRequest.MinimumPulse;
         // FlightComputer.SolveBurnThrottle cannot select a throttle below its active engine minimum.
         // The stock estimate at that minimum bounds the ignition lead and burn finish before Auto is armed.
         bool minimumPreview = fc.ActiveEnginePerformanceMax.MinThrottle > 0
             && fc.PlannedBurnThrottle <= fc.ActiveEnginePerformanceMax.MinThrottle + 1e-6;
-        if (!minimumPreview || !(duration > 0) || !double.IsFinite(latestFinish + ignition + preparation)
-            || ignition < SimNow() + preparation || latestFinish >= plan.ArrivalTime - PrepLeadTime)
+        if (!minimumPreview || !(duration > 0) || !double.IsFinite(latestFinish + ignition + preparationStart)
+            || preparationStart < SimNow() || latestFinish >= plan.ArrivalTime - PrepLeadTime)
         { StopStockDeorbit(vehicle, "Stock has no bounded burn window with enough preparation time. The node remains Manual.", keepNode: true); return; }
 
         RestoreDeorbitPreviewThrottle(vehicle);
@@ -177,7 +185,7 @@ public static partial class GuidanceWindow
         FlightComputer fc = vehicle.FlightComputer;
         if (StockDeorbitComplete && fc.BurnMode == FlightComputerBurnMode.Manual)
         {
-            // Completion requires the stock residual reversal, including when FinishedBurnRemover has already removed the node.
+            // Completion requires the stock residual reversal, which the kept BurnTarget still shows after FlightComputer.EndAutoBurn or AutoRemove has removed the node.
             // An empty burn plan alone also occurs after a player deletion and cannot prove completion.
             GuidanceLog.Info(vehicle, $"stock deorbit complete: residual {_s.DeorbitLastResidual:F3} m/s, altitude {(orbit.StateVectors.PositionCci.Length() - parent.MeanRadius) / 1000:F3} km.");
             ReleaseStockDeorbit(vehicle, keepClaim: true);

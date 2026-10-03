@@ -119,6 +119,15 @@ public sealed class GuidanceThrustTest : AfcTest
         t.Check("a command against a solid core is refused",
             KsaEnginePerf.CommandForThrust(vehicle, 500, 0).Status == KsaEnginePerf.ThrustStatus.UnsupportedEngine);
 
+        // Combustor, ThermalCore and AntimatterRamCore all derive from PlumbedCore, but only the first two set their chamber from the throttle.
+        active.Cores = [Uninitialized<ThermalCore>()];
+        AddCore(active.Cores[0], 203, supplied: true);
+        t.Check("a thermal core supports throttle control", KsaEnginePerf.SupportsThrottleControl(vehicle));
+        active.Cores = [Uninitialized<AntimatterRamCore>()];
+        AddCore(active.Cores[0], 204, supplied: true);
+        t.Check("an antimatter ram core refuses throttle control",
+            KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.UnsupportedEngine);
+
         ProbeCore suppliedCore = Probe(0.4f);
         ProbeCore dryCore = Probe(0.2f);
         suppliedCore.LastThrottle = dryCore.LastThrottle = -1f;

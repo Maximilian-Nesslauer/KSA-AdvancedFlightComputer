@@ -86,7 +86,7 @@ public static partial class GuidanceWindow
         DeorbitEngine[] engines, double minimumPulse) =>
         new(orbit, SimNow(), vehicle.TotalMass, vehicle.BoundingSphereRadiusBody, CurrentDeorbitSettings(),
             model, engines, minimumPulse, DeorbitControlStep(vehicle), EffectiveGLimit,
-            StockPreparationTime(vehicle.FlightComputer));
+            StockPreparationTime(vehicle.FlightComputer), KsaEnginePerf.StructuralAccelerationLimit(vehicle) / StandardGravity);
 
     // Stores the request with the engine signature it was captured under, so a later staging or sequence edit invalidates it.
     private static bool TryCaptureDeorbitRequest(Vehicle vehicle, Orbit orbit, IParentBody parent)
@@ -239,7 +239,7 @@ public static partial class GuidanceWindow
         GuidanceLog.Info(vehicle, $"deorbit search: epoch {request.Epoch:F3} s, site {request.Settings.Latitude:F6} / {request.Settings.Longitude:F6} deg"
             + $", requested arrival {(request.Settings.ArrivalDescentDeg is double angle ? $"{angle:F2} deg down" : "automatic")}"
             + $", braking altitude {request.Settings.BrakingAltitude:F1} m, gate altitude {request.Settings.GateAltitude:F1} m, mass {request.Mass:F1} kg"
-            + $", step {request.ControlStep:F6} s, minimum pulse {request.MinimumPulse:F6} s, {thrust}, G limit {request.GLimit:F3}"
+            + $", step {request.ControlStep:F6} s, minimum pulse {request.MinimumPulse:F6} s, {thrust}, G limit {request.GLimit:F3}, structural limit {request.StructuralGLimit:F3} g"
             + $", position CCI ({captured.PositionCci.X:F4}, {captured.PositionCci.Y:F4}, {captured.PositionCci.Z:F4}) m"
             + $", velocity CCI ({captured.VelocityCci.X:F4}, {captured.VelocityCci.Y:F4}, {captured.VelocityCci.Z:F4}) m/s.");
         return true;
@@ -335,7 +335,7 @@ public static partial class GuidanceWindow
                         if (module.Sequence != sequence.Number || module is not EngineController engine) continue;
                         hasEngine = true;
                         foreach (RocketCore core in engine.Cores)
-                            if (core is not Combustor)
+                            if (!KsaEnginePerf.FollowsThrottle(core))
                                 return "The next landing engine cannot obey throttle and shutdown commands.";
                     }
                 if (hasEngine) break;

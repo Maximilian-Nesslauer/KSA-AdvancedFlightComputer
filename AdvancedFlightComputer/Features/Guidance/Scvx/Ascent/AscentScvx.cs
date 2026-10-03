@@ -146,7 +146,7 @@ public static class AscentScvx
             }
             catch (Exception e)
             {
-                sol = new AscentSubproblem.Solved(false, "exception: " + e.Message, [], [], [], [], [], [], [], [], 0, 0.0);
+                sol = new AscentSubproblem.Solved(false, "exception: " + e.Message, [], [], [], [], [], [], [], [], [], 0, 0.0);
             }
 
             if (!sol.Ok)
@@ -173,7 +173,7 @@ public static class AscentScvx
             double jLin = (1.0 - sol.X[(c.N - 1) * NX + 6]) + Smoothing(c, sol.U)
                 + st.RhoVirtualControl * SumSquaresScaled(sol.Wv, c.DScale)
                 + st.RhoTerminal * SumSquares(sol.STerm)
-                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum());
+                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum() + sol.Sg.Sum());
             Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma);
             double pred = refMerit.J - jLin;
             double actual = refMerit.J - cand.J;
@@ -296,6 +296,15 @@ public static class AscentScvx
             double vpro = q > st.QActive ? Math.Max(0.0, -AirAlong(c, x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU))) : 0.0;
             path += vqa + vq + vpro;
             pathWorst = Math.Max(pathWorst, Math.Max(Math.Max(vqa, vq), vpro));
+        }
+        // Thrust acceleration over the limit, where a stage has one (AscentSubproblem): the true thrust at the node's altitude.
+        foreach (int k in c.LimitedNodes)
+        {
+            c.Dyn.ThrustAt(x.AsSpan(k * NX, NX), u.AsSpan(k * NU, NU), k, out _, out double delivered, out _);
+            double mass = Math.Max(x[k * NX + AscentDynamics.IM], 1e-12);
+            double vg = Math.Max(0.0, delivered / c.Dyn.FU / (c.AccC[c.NodeStage[k]] * mass) - 1.0);
+            path += vg;
+            pathWorst = Math.Max(pathWorst, vg);
         }
 
         double j0 = (1.0 - x[(n - 1) * NX + 6]) + Smoothing(c, u)
