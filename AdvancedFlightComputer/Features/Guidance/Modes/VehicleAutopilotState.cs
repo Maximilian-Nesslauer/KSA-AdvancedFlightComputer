@@ -1056,7 +1056,7 @@ public sealed class VehicleAutopilotState
 
     // Boostback state machine.
     //
-    // Separation -> Rotation -> Boostback -> Glide, per vehicle like every other phase machine here. See Guidance/Boostback.cs for what each phase does.
+    // Separation -> Rotation -> Boostback -> EntryOrient, per vehicle like every other phase machine here. See Guidance/Boostback.cs for what each phase does.
 
     public GuidanceWindow.BoostbackPhase BoostbackPhase =
         GuidanceWindow.BoostbackPhase.Idle;
@@ -1132,7 +1132,7 @@ public sealed class VehicleAutopilotState
     // The PID asks for the impact to move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo; the impact Jacobian turns that into lift, and the measured lift curve turns the lift into an angle. The defaults are the ones flat-earth closed-loop runs through KSAero's aero settled on.
 
     /// <summary>Proportional gain, dimensionless: Kp * miss / tgo^2 is the lateral acceleration asked for. 3 is the textbook zero-effort-miss law; 5 holds up better when the attitude lags the command.</summary>
-    public double GlideKp = 5.0;
+    public double GlideKp = 15.0;
 
     /// <summary>Integral gain, 1/s. Off by default - over a long glide the integral of a shrinking miss becomes a stale bias.</summary>
     public double GlideKi = 0.0;
