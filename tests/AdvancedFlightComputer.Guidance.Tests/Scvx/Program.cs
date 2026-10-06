@@ -23,6 +23,12 @@ if (args.Contains("--cold-shift"))
 if (args.Contains("--hermite"))
     return PlanStateInterpolationCheck.Run();
 
+if (args.Contains("--3dof-model"))
+    return ThreeDofModelCheck.Run();
+
+if (args.Contains("--3dof-ksa"))
+    return ThreeDofKsaCheck.Run(verbose);
+
 if (args.Contains("--3dof"))
     return ThreeDofCheck.Run(verbose);
 
@@ -51,6 +57,8 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --ascent-glimit a thrust acceleration limit that binds, one that does not, and which stages take it
           --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new
           --3dof          the 3-DOF glide-and-burn loop against 3dof.py's result
+          --3dof-model    the KSA point-mass model: AD slopes, the rotating frame against CCI, lift and thrust
+          --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
                           solve an ascent problem the game dumped, with the full trace
 

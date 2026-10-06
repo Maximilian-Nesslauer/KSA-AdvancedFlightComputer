@@ -226,7 +226,8 @@ public sealed class Scvx3DofSolver
         double sigG = _sub.SigmaGlideOf(z), sigB = _sub.SigmaBurnOf(z);
 
         // Predicted reduction prices the defect by the virtual control, actual by the true nonlinear defect; both carry the same fuel, smoothing and slack terms or the ratio means nothing.
-        double jLin = Fuel(x) + Smoothing(u) + _sub.TerminalSlackCost(z) + _cfg.RhoVc * SumSquaresScaled(wv);
+        double jLin = Fuel(x) + Smoothing(u) + _sub.TerminalSlackCost(z) + _sub.PathSlackCost(z)
+                    + _cfg.RhoVc * SumSquaresScaled(wv);
         double jTrue = TrueCost(x, u, sigG, sigB, out double defectNorm, out int defectChannel, out int defectNode);
 
         double predicted = _jRef - jLin;
@@ -341,7 +342,7 @@ public sealed class Scvx3DofSolver
         }
 
         defectNorm = worst;
-        return Fuel(x) + Smoothing(u) + TerminalMissCost(x) + _cfg.RhoVc * sumSq;
+        return Fuel(x) + Smoothing(u) + TerminalMissCost(x) + PathViolationCost(x, u, sigG, sigB) + _cfg.RhoVc * sumSq;
     }
 
     /// <summary>
@@ -433,6 +434,51 @@ public sealed class Scvx3DofSolver
                 att += d * d;
             }
         return _cfg.WThrottleRate * th + _cfg.WAttitudeRate * att;
+    }
+
+    /// <summary>
+    /// The soft path constraints' penalty measured on the trajectory with the TRUE geometry - the actual angle of attack, the actual airflow direction - where the subproblem's slacks price the linearised one. Zero when the path constraints are hard. The angle-of-attack radius is the candidate's own, from its own speed and dynamic pressure.
+    /// </summary>
+    private double PathViolationCost(double[] x, double[] u, double sigG, double sigB)
+    {
+        if (!_cfg.SoftPath) return 0.0;
+        double cost = 0.0;
+        double sinMax = _cfg.SinAlphaMax;
+        for (int k = 0; k < _n; k++)
+        {
+            ReadOnlySpan<double> xk = x.AsSpan(k * NX, NX);
+            double vx = xk[PointMass3Dof.IV], vy = xk[PointMass3Dof.IV + 1], vz = xk[PointMass3Dof.IV + 2];
+            double bx = u[k * NU], by = u[k * NU + 1], bz = u[k * NU + 2];
+            double speed = Math.Sqrt(vx * vx + vy * vy + vz * vz);
+            if (speed > _cfg.AlphaSpeedThreshold)
+            {
+                double radius = sinMax;
+                if (_cfg.QAlphaMax > 0.0)
+                {
+                    double q = _model.DynamicPressure(xk);
+                    if (q > 0.0) radius = Math.Min(radius, _cfg.QAlphaMax / q);
+                }
+                double vm = Math.Sqrt(speed * speed + PointMass3Dof.VEps2);
+                double bv = (bx * vx + by * vy + bz * vz) / vm;
+                double px = bx - bv * vx / vm, py = by - bv * vy / vm, pz = bz - bv * vz / vm;
+                cost += Math.Max(0.0, Math.Sqrt(px * px + py * py + pz * pz) - radius);
+                if (_cfg.Retrograde)
+                    cost += Math.Max(0.0, (bx * vx + by * vy + bz * vz) / speed);
+            }
+            if (k > 0)
+                for (int i = 0; i < NX; i++)
+                {
+                    cost += Math.Max(0.0, (_cfg.StateMin[i] - xk[i]) / _xs[i]);
+                    cost += Math.Max(0.0, (xk[i] - _cfg.StateMax[i]) / _xs[i]);
+                }
+            if (k < _n - 1 && _cfg.AttitudeRateMax > 0.0)
+            {
+                double dt = k < _k ? sigG * _dtauG : sigB * _dtauB;
+                double dx = u[(k + 1) * NU] - bx, dy = u[(k + 1) * NU + 1] - by, dz = u[(k + 1) * NU + 2] - bz;
+                cost += Math.Max(0.0, Math.Sqrt(dx * dx + dy * dy + dz * dz) - _cfg.AttitudeRateMax * dt);
+            }
+        }
+        return _cfg.PathSlackWeight * cost;
     }
 
     /// <summary>The terminal-miss penalty measured on the trajectory, which is what the subproblem's slacks equal at its solution.</summary>

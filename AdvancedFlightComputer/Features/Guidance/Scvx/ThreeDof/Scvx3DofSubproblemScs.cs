@@ -45,6 +45,8 @@ public sealed class Linearisation3Dof
 ///   state bounds from node 1;  b_N-1 = b_f;  |b_k+1 - b_k| &lt;= rate sigma dtau;  a . b_0 &gt;= cos(theta)
 ///   trust box on x, u and both sigmas;  sigma bounds
 ///
+/// The path constraints - the cone, the retrograde row, the bounds and the rate cone - take an L1 slack each when the config makes them soft; see Scvx3DofConfig.PathSlackWeight.
+///
 /// with g_k = sigma f0_k + sigma_bar (A_k dx_k + B_k du_k) in each phase's own sigma and dtau. The glide's B has its throttle column zeroed: the engine is off there, so its throttle is not a control of the glide's dynamics.
 ///
 /// The structure is fixed at construction and refilled in place every iteration, as the 6-DOF subproblem is. Rows that apply only at some nodes - the angle-of-attack cone and the retrograde row below the speed threshold - are written as vacuous rows with explicit zeros rather than left out, so the sparsity pattern never changes.
@@ -60,6 +62,7 @@ public sealed class Scvx3DofSubproblemScs
     private readonly double[] _xs;
 
     private readonly int _oX, _oU, _oW, _iSigB, _iSigG, _oTm, _nTmPos, _nTmVel, _nTm, _nVars;
+    private readonly int _oSa, _oSr, _oSb, _oSw, _nSa, _nSr, _nSb, _nSw, _nSlack;
     private readonly int[] _minChannels, _maxChannels;
     private readonly bool _terminalAttitude, _rateLimit;
     private readonly int _nEq, _lDim, _nRows;
@@ -111,7 +114,18 @@ public sealed class Scvx3DofSubproblemScs
         _nTmPos = cfg.TerminalMissWeight > 0.0 ? 6 : 0;
         _nTmVel = cfg.TerminalSpeedWeight > 0.0 ? 6 : 0;
         _nTm = _nTmPos + _nTmVel;
-        _nVars = _oTm + _nTm;
+        // Path slacks, when soft: one per node for the angle-of-attack cone and the retrograde row, one per bounded channel per node from 1, one per interval for the rate cone.
+        bool soft = cfg.SoftPath;
+        _nSa = soft ? _n : 0;
+        _nSr = soft && cfg.Retrograde ? _n : 0;
+        _nSb = soft ? (_n - 1) * (_minChannels.Length + _maxChannels.Length) : 0;
+        _nSw = soft && _rateLimit ? _n - 1 : 0;
+        _nSlack = _nSa + _nSr + _nSb + _nSw;
+        _oSa = _oTm + _nTm;
+        _oSr = _oSa + _nSa;
+        _oSb = _oSr + _nSr;
+        _oSw = _oSb + _nSb;
+        _nVars = _oSw + _nSw;
 
         int sigmas = _k > 0 ? 2 : 1;
         _nEq = NX + 6 + (_terminalAttitude ? 3 : 0) + (_n - 1) * NX
@@ -122,7 +136,7 @@ public sealed class Scvx3DofSubproblemScs
               + 2 * _n * NX + 2 * _n * NU
               + 4 * sigmas
               + (cfg.AttitudeAnchor ? 1 : 0)
-              + _nTm;
+              + _nTm + _nSlack;
         int rateCones = _rateLimit ? _n - 1 : 0;
         _socDims = new int[_n + rateCones];
         Array.Fill(_socDims, 4);
@@ -145,7 +159,16 @@ public sealed class Scvx3DofSubproblemScs
         // Slacks take the scale of what they relax: a positive and a negative part per axis.
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[PointMass3Dof.IR + i / 2];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[PointMass3Dof.IV + i / 2];
+        int perNode = _minChannels.Length + _maxChannels.Length;
+        for (int i = 0; i < _nSb; i++)
+        {
+            int slot = i % perNode;
+            int channel = slot < _minChannels.Length ? _minChannels[slot] : _maxChannels[slot - _minChannels.Length];
+            _colScale[_oSb + i] = _xs[channel];
+        }
     }
+
+    private int BoundSlack(int node, int slot) => _oSb + (node - 1) * (_minChannels.Length + _maxChannels.Length) + slot;
 
     private void AddA(int row, int col, double value) => _A.Add(row, col, value * _colScale[col]);
     private void AddP(int row, int col, double value) => _P.Add(row, col, value * _colScale[row] * _colScale[col]);
@@ -274,6 +297,19 @@ public sealed class Scvx3DofSubproblemScs
         for (int i = 0; i < _nTmVel; i++)
             _c[_oTm + _nTmPos + i] +=
                 _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _xs[PointMass3Dof.IV + i / 2];
+
+        // Path slacks, each normalised to its own unit, so one weight prices them all.
+        for (int i = 0; i < _nSlack; i++)
+            _c[_oSa + i] += _cfg.PathSlackWeight;
+    }
+
+    /// <summary>The objective's path-slack penalty at a solution, so the merit can price the same terms.</summary>
+    public double PathSlackCost(double[] z)
+    {
+        double cost = 0;
+        for (int i = 0; i < _nSlack; i++)
+            cost += z[_oSa + i] / _colScale[_oSa + i];
+        return _cfg.PathSlackWeight * cost;
     }
 
     // -------------------------------------------------------------- equalities
@@ -406,20 +442,26 @@ public sealed class Scvx3DofSubproblemScs
                 AddA(row, IU(k, PointMass3Dof.IB + 0), vx * inv);
                 AddA(row, IU(k, PointMass3Dof.IB + 1), vy * inv);
                 AddA(row, IU(k, PointMass3Dof.IB + 2), vz * inv);
+                if (_nSr > 0) AddA(row, _oSr + k, -1.0);
                 _b[row++] = 0.0;
             }
 
         // State bounds from node 1.
         for (int k = 1; k < _n; k++)
         {
+            int slot = 0;
             foreach (int i in _minChannels)
             {
                 AddA(row, IX(k, i), -1.0);
+                if (_nSb > 0) AddA(row, BoundSlack(k, slot), -1.0);
+                slot++;
                 _b[row++] = -_cfg.StateMin[i];
             }
             foreach (int i in _maxChannels)
             {
                 AddA(row, IX(k, i), 1.0);
+                if (_nSb > 0) AddA(row, BoundSlack(k, slot), -1.0);
+                slot++;
                 _b[row++] = _cfg.StateMax[i];
             }
         }
@@ -462,6 +504,11 @@ public sealed class Scvx3DofSubproblemScs
             AddA(row, _oTm + i, -1.0);
             _b[row++] = 0.0;
         }
+        for (int i = 0; i < _nSlack; i++)
+        {
+            AddA(row, _oSa + i, -1.0);
+            _b[row++] = 0.0;
+        }
 
         // ANGLE OF ATTACK, as a second-order cone on the linearised projection:
         //     |p0 + dp/dv (v - v_bar) + dp/db (b - b_bar)| <= radius
@@ -469,6 +516,7 @@ public sealed class Scvx3DofSubproblemScs
         for (int k = 0; k < _n; k++)
         {
             bool active = alphaRadius[k] > 0.0;
+            if (_nSa > 0) AddA(row, _oSa + k, -1.0);
             _b[row++] = active ? alphaRadius[k] : 1.0;
             for (int i = 0; i < 3; i++)
             {
@@ -495,6 +543,7 @@ public sealed class Scvx3DofSubproblemScs
             {
                 bool glide = k < _k;
                 AddA(row, glide ? _iSigG : _iSigB, -_cfg.AttitudeRateMax * (glide ? _dtauG : _dtauB));
+                if (_nSw > 0) AddA(row, _oSw + k, -1.0);
                 _b[row++] = 0.0;
                 for (int j = 0; j < 3; j++)
                 {

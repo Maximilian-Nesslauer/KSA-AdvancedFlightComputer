@@ -73,6 +73,17 @@ public sealed class Scvx3DofConfig
     public double TerminalMissWeight { get; init; }
     public double TerminalSpeedWeight { get; init; }
 
+    /// <summary>
+    /// Penalty per unit of violation of the path constraints - the angle-of-attack cone, the retrograde row, the state bounds and the attitude-rate cone - or 0 to keep them hard, as 3dof.py does.
+    ///
+    /// SOFT FOR FLIGHT, for the reason the 6-DOF's glideslope is soft. SCvx keeps every step inside a trust region about the reference, so a hard constraint the reference breaks by more than one radius cannot be met by ANY step: the subproblem is infeasible, and shrinking the region only makes that worse. A cold seed is not built to satisfy every path limit, and in flight the measured state can arrive outside one. With an L1 slack the subproblem is always solvable and the slack is exactly zero whenever the constraint can be met - an exact penalty, above a finite weight, rather than a trade - so a feasible plan is the same plan, hard or soft.
+    ///
+    /// Each unit is the constraint's own: sin(alpha) for the cone, b . v_hat for the retrograde row, the channel's XScale for a bound, radians for the rate.
+    /// </summary>
+    public double PathSlackWeight { get; init; }
+
+    public bool SoftPath => PathSlackWeight > 0.0;
+
     public double RhoVc { get; init; } = 1e5;
     public double WThrottleRate { get; init; } = 0.05;
     public double WAttitudeRate { get; init; } = 0.10;
