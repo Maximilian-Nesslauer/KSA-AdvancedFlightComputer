@@ -46,7 +46,7 @@ public sealed class VacuumAscentAtmosphere : AscentAtmosphere
 ///
 /// DRAG DEPENDS ON THE ANGLE OF ATTACK. launch3dof.py's drag depends on Mach alone, and the port kept that, reading the table nose-first on the grounds that KSA's isotropic skin term dominates (see KsaAeroSweep). It doesn't dominate enough. KSA's drag is a six-face box plus the skin term, blended by |v_body|, so the flank faces add drag in proportion to |sin alpha| from the first degree: on 2stage_new about 4 % per degree. With the attitude free of charge, the planner flew 2 to 13 deg off the airflow from max q down, wherever q-alpha allowed it, and the vehicle met 40 to 60 % more drag than planned there, a shortfall of up to 5 m/s^2 that left it 8 km low and 370 m/s slow at staging. So the table is read at the flown angle: alpha from nose-first, which is pi minus the table's retrograde-first angle. The drag still acts straight against the relative wind, as in the game, which has no lift.
 ///
-/// The table is flat in Mach because KSA models no compressibility, so the transonic rise launch3dof.py has is absent here. The Mach axis is still read, so a table that grows one is picked up without any change.
+/// Under stock aero the table is flat in Mach, because KSA models no compressibility, so the transonic rise launch3dof.py has is absent. The Mach axis is still read, so a table measured off a drag model that has one, such as an aero mod's, is picked up without any change.
 /// </summary>
 public sealed class KsaAscentAtmosphere : AscentAtmosphere
 {

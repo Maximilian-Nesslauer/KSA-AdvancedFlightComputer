@@ -92,12 +92,27 @@ public static partial class GuidanceWindow
                         GaugeRowText("Flown open loop", $"{_s.BoostbackAccumDv,8:F1} m/s", dim);
                     break;
 
-                case BoostbackPhase.EntryOrient:
-                    // The whole point of the phase, so it is the number shown: how far the vehicle still is from engine-first into the relative wind.
+                case BoostbackPhase.Glide:
+                {
+                    // What the PID is driving to zero, what it is commanding, and whether the air lets it.
+                    GaugeRowText("Miss downrange", $"{_s.GlideMissDownM / 1000.0,8:F2} km  (+ long)");
+                    GaugeRowText("Miss crossrange", $"{_s.GlideMissCrossM / 1000.0,8:F2} km  (+ left)");
+                    bool limited = _s.GlideAoaDeg >= Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0) - 1e-6 && _s.GlideAoaDeg > 0.0;
+                    GaugeRowText("AoA command", $"{_s.GlideAoaDeg,8:F1} deg", limited ? warn : live);
+                    double trim = Math.Sqrt(_s.GlideTrimUpDeg * _s.GlideTrimUpDeg + _s.GlideTrimLeftDeg * _s.GlideTrimLeftDeg);
+                    GaugeRowText("AoA flown", $"{_s.GlideFlownAoaDeg,8:F1} deg   trim {trim:F1} deg", dim);
+                    GaugeRowText("Lateral accel", $"{_s.GlideAccelCmd,8:F2} m/s^2"
+                        + (double.IsFinite(_s.GlideTgo) ? $"   tgo {_s.GlideTgo:F0} s" : ""), dim);
+                    GaugeRowText("q", $"{_s.GlideQ / 1000.0,8:F1} kPa", dim);
+                    GaugeRowText("Lift", _s.GlideLiftSign > 0 ? "towards the engine tilt"
+                        : _s.GlideLiftSign < 0 ? "away from the engine tilt (blunt)"
+                        : "none to steer with", _s.GlideLiftSign != 0 ? dim : warn);
                     GaugeRowText("Vehicle error",
-                        $"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg");
-                    GaugeRowText("Holding", "surface retrograde (alpha 0)", dim);
+                        $"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg", dim);
+                    if (_s.GlideStatus.Length > 0)
+                        GaugeRowText("", _s.GlideStatus, warn);
                     break;
+                }
             }
         }
 
@@ -129,6 +144,12 @@ public static partial class GuidanceWindow
 
         // Flight-path-angle shaping. A FLOOR on how far the burn may point below the horizon, bought with the free direction - the velocity change that moves the impact point nowhere - so it costs dV but not accuracy. Any pitch below the geometric ceiling is reachable and is honoured whatever it costs; see ShapeFlightPathAngle. Lofting the burn is what buys flight time for a low-thrust vehicle. Very negative switches shaping off.
         GaugeRow("Min pitch (deg)", "##bbpitch", ref _s.BoostbackPitchDeg);
+
+        // The glide PID. Its output is a lateral acceleration, (Kp miss + Ki integral + Kd rate) / tgo^2, flown through the measured lift curve; see BoostbackGlide.cs. Live, so they can be tuned in flight.
+        GaugeRow("Glide Kp", "##glkp", ref _s.GlideKp);
+        GaugeRow("Glide Ki (1/s)", "##glki", ref _s.GlideKi);
+        GaugeRow("Glide Kd (s)", "##glkd", ref _s.GlideKd);
+        GaugeRow("Glide max AoA (deg)", "##glmax", ref _s.GlideMaxAoaDeg);
 
         if (_s.HasSteer)
         {
@@ -304,7 +325,6 @@ public static partial class GuidanceWindow
         {
             GaugeRowText("Grid", $"{a.MachCount} Mach x {a.AlphaCount} alpha");
             GaugeRowText("Ref area", $"{a.ReferenceArea,8:F2} m^2  (nose face)");
-            GaugeRowText("Skin area", $"{a.SkinArea,8:F1} m^2  (box surface)");
             GaugeRowText("Box (x,y,z)",
                 $"{a.BoxExtents.X,6:F1} {a.BoxExtents.Y,5:F1} {a.BoxExtents.Z,5:F1} m");
 
@@ -318,28 +338,35 @@ public static partial class GuidanceWindow
             float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
             float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
 
-            // Two different questions about attitude, and they have opposite answers for a slender booster - which is why both are here.
-            //  FORM FRACTION is local, at alpha = 0. KSA adds 0.1 * (box surface area) to CdA isotropically, and in the tail-first attitude that term swamps the form drag, so a few degrees of pointing error near the boostback attitude costs almost nothing. That is load-bearing for guidance.
-            bool formMatters = a.FormFraction > 0.15;
-            GaugeRowText("Form frac (a=0)", $"{a.FormFraction * 100.0,7:F1} %",
-                formMatters ? dim : warn);
-            if (!formMatters)
+            // Two different questions about attitude, and they can have opposite answers for a slender booster - which is why both are here.
+            //  POINTING SENSITIVITY is local: how much drag 5 degrees of pointing error near the boostback attitude costs. Small is load-bearing for guidance.
+            bool pointingMatters = a.PointingSensitivity > 0.15;
+            GaugeRowText("Cd(5)/Cd(0)", $"{(1.0 + a.PointingSensitivity),7:F2} x",
+                pointingMatters ? dim : warn);
+            if (!pointingMatters)
             {
                 ImGui.Text("");
                 ImGui.NextColumn();
-                ImGui.TextWrapped("Near alpha 0 the drag is mostly KSA's isotropic "
-                                + "skin term, so small pointing errors cost little.");
+                ImGui.TextWrapped("Near alpha 0 the drag barely changes with attitude, "
+                                + "so small pointing errors cost little.");
                 ImGui.NextColumn();
             }
 
-            // ATTITUDE SENSITIVITY is global. Broadside form drag is enormous whatever the fraction above says, because a slender stack's flank area dwarfs its nose area - so the alpha axis is carrying real information even when the vehicle is insensitive to attitude where it normally sits.
+            // ATTITUDE SENSITIVITY is global. Broadside drag is large whatever the number above says, because a slender stack's flank area dwarfs its nose area - so the alpha axis is carrying real information even when the vehicle is insensitive to attitude where it normally sits.
             GaugeRowText("Cd(90)/Cd(0)", $"{a.AttitudeSensitivity,7:F1} x", dim);
 
-            // Roll dependence the table cannot represent, because it has no roll input and stores the azimuthal mean. This does NOT go to zero for an axisymmetric vehicle: KSA's model is a box, so a square-section booster rolled 45 degrees still presents sqrt(2) the area it does at 0. About 25% is the floor for a slender stack; above ~35% the cross-section is genuinely not square on top of that.
-            GaugeRowText("Roll spread", $"{a.RollSpread * 100.0,7:F1} %  (~25% is inherent)",
+            // Roll dependence the table cannot represent, because it has no roll input and stores the azimuthal mean. Zero only for an axisymmetric drag model: stock's is a box, so a square-section booster rolled 45 degrees presents sqrt(2) the flank it does at 0, about 25% for a slender stack.
+            GaugeRowText("Roll spread", $"{a.RollSpread * 100.0,7:F1} %  (averaged out)",
                 a.RollSpread > 0.35 ? warn : dim);
 
-            GaugeRowText("Mach axis", "flat - KSA models no compressibility", warn);
+            GaugeRowText("Mach axis", a.MachSpread < 0.01
+                ? "flat - the active model has no compressibility"
+                : $"measured, Cd varies up to {a.MachSpread * 100.0:F0} %", dim);
+
+            // The table is drag only. A model with lift pushes the vehicle sideways by this much that the predictions do not include.
+            GaugeRowText("Lift", a.LiftToDragMax < 0.01
+                ? "none"
+                : $"L/D up to {a.LiftToDragMax:F2} - not in the table", a.LiftToDragMax < 0.01 ? dim : warn);
 
             if (_s.AeroError.Length > 0)
                 GaugeRowText("Last resample", _s.AeroError, new float4(1f, 0.4f, 0.4f, 1f));
@@ -374,7 +401,7 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // One Mach is enough while the axis is flat; sampling at 0.8 rather than 0 means a future non-flat table shows something representative here without this needing to change.
+        // One Mach, below the transonic rise, so the alpha profile shown is the subsonic one.
         const double AtMach = 0.8;
         const double Deg = Math.PI / 180.0;
 
