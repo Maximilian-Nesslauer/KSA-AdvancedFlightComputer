@@ -23,6 +23,9 @@ if (args.Contains("--cold-shift"))
 if (args.Contains("--hermite"))
     return PlanStateInterpolationCheck.Run();
 
+if (args.Contains("--3dof"))
+    return ThreeDofCheck.Run(verbose);
+
 // --sub-scs: validate the cone-problem assembly by solving the same SCvx
 // subproblem CVXPY solved in python_ref/sub_ref.py and diffing the trajectory.
 if (args.Contains("--sub-scs"))
@@ -47,6 +50,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --ascent-solids solid motors' thrust curves, pinned burns and a core throttled to outlast its boosters
           --ascent-glimit a thrust acceleration limit that binds, one that does not, and which stages take it
           --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new
+          --3dof          the 3-DOF glide-and-burn loop against 3dof.py's result
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
                           solve an ascent problem the game dumped, with the full trace
 
