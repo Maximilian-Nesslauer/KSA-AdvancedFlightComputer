@@ -28,6 +28,22 @@ public static class KsaAeroSweep
     private const double PointingAlphaDeg = 5.0;
 
     /// <summary>
+    /// Mach breakpoints past the default grid's last at 5, out to orbital entry.
+    ///  A booster coming back from a high apogee enters at Mach 7 or 8, and beyond the last breakpoint the fit extrapolates along its end slope. On a measured lift curve that slope pointed down, and by Mach 7.8 the extrapolated lift had changed sign - the glide read it as a body that lifts the other way and tilted the booster against its own correction for the whole of its upper entry. Coefficients level off at high Mach, so a handful of coarse breakpoints is all the hypersonic end needs.
+    /// </summary>
+    private static readonly double[] HypersonicMachBreakpoints = { 6.0, 7.0, 8.0, 10.0, 12.0, 15.0, 20.0, 25.0 };
+
+    private static double[] SweepMachBreakpoints()
+    {
+        double[] grid = AeroTable.DefaultMachBreakpoints;
+        var all = new System.Collections.Generic.List<double>(grid);
+        foreach (double m in HypersonicMachBreakpoints)
+            if (m > grid[^1])
+                all.Add(m);
+        return all.ToArray();
+    }
+
+    /// <summary>
     /// One sweep's worth of results: the fitted surrogate, the atmosphere it goes with, and everything needed to judge whether either is trustworthy.
     ///  Immutable by construction and built entirely from copies. Once this exists it shares nothing with the game, which is what makes it safe to hand to a solver on another thread - the same argument Ksa6DofInputs makes for bias and inertia.
     /// </summary>
@@ -155,7 +171,7 @@ public static class KsaAeroSweep
         if (!ForceProbe.TryCreate(vehicle, air.SeaLevelDensity, air.SeaLevelPressure, out ForceProbe probe, out error))
             return false;
 
-        double[] machGrid = AeroTable.DefaultMachBreakpoints;
+        double[] machGrid = SweepMachBreakpoints();
         double[] alphaDeg = AeroTable.DefaultAlphaBreakpointsDeg;
         int nm = machGrid.Length;
         int na = alphaDeg.Length;

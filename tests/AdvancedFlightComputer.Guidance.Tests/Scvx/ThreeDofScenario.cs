@@ -93,6 +93,9 @@ internal static class ThreeDofScenario
             AttitudeRateMax = 10.0 * Math.PI / 180,
             PathSlackWeight = 1e3,
             AttitudeAnchor = anchor,
+            // Soft terminal, the 6-DOF's weights: miss the pad before faking the dynamics, and miss the speed last of all.
+            TerminalMissWeight = 1e3,
+            TerminalSpeedWeight = 1e4,
             GlideSigmaMax = 200,
             BurnSigmaMin = 2,
             BurnSigmaMax = 60,

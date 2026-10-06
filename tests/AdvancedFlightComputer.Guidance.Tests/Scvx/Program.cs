@@ -26,6 +26,9 @@ if (args.Contains("--hermite"))
 if (args.Contains("--3dof-model"))
     return ThreeDofModelCheck.Run();
 
+if (args.Contains("--3dof-mpc"))
+    return ThreeDofMpcCheck.Run(verbose);
+
 if (args.Contains("--3dof-ksa"))
     return ThreeDofKsaCheck.Run(verbose);
 
@@ -59,6 +62,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --3dof          the 3-DOF glide-and-burn loop against 3dof.py's result
           --3dof-model    the KSA point-mass model: AD slopes, the rotating frame against CCI, lift and thrust
           --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
+          --3dof-mpc      the glide-and-burn guidance flown closed loop against dispersed drag, lift, thrust and attitude lag
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
                           solve an ascent problem the game dumped, with the full trace
 

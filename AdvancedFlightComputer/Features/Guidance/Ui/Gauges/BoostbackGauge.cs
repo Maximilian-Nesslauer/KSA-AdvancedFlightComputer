@@ -111,8 +111,15 @@ public static partial class GuidanceWindow
                         $"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg", dim);
                     if (_s.GlideStatus.Length > 0)
                         GaugeRowText("", _s.GlideStatus, warn);
+                    if (_s.ConvexStatus.Length > 0)
+                        GaugeRowText("3-DOF", _s.ConvexStatus, dim);
                     break;
                 }
+
+                case BoostbackPhase.LandingBurn:
+                    GaugeRowText("3-DOF", _s.ConvexStatus, live);
+                    GaugeRowText("Throttle", $"{_s.ConvexThrottle,8:P0}", dim);
+                    break;
             }
         }
 
@@ -150,6 +157,12 @@ public static partial class GuidanceWindow
         GaugeRow("Glide Ki (1/s)", "##glki", ref _s.GlideKi);
         GaugeRow("Glide Kd (s)", "##glkd", ref _s.GlideKd);
         GaugeRow("Glide max AoA (deg)", "##glmax", ref _s.GlideMaxAoaDeg);
+
+        // The 3-DOF glide and landing burn; see ConvexLanding.cs.
+        GaugeRowCheck("3-DOF landing", "##cvx", ref _s.ConvexLanding);
+        GaugeRow("3-DOF engage tgo (s)", "##cvxtgo", ref _s.ConvexEngageTgoS);
+        GaugeRowCheck("6-DOF below speed", "##cvx6", ref _s.ConvexSixDofHandover);
+        GaugeRow("6-DOF speed (m/s)", "##cvx6v", ref _s.ConvexSixDofSpeedMs);
 
         if (_s.HasSteer)
         {

@@ -98,10 +98,13 @@ public sealed class Scvx3DofConfig
     public double GlideSigmaMax { get; set; } = 40.0;
     public double BurnSigmaMin { get; set; } = 5.0;
     public double BurnSigmaMax { get; set; } = 50.0;
-    public double SigmaScale { get; init; } = 30.0;
-
-    /// <summary>State scales. 3dof.py's Xscale, whose mass entry is its m0.</summary>
-    public double[] XScale { get; init; } = [1000, 1000, 6000, 300, 300, 300, 28000];
+    /// <summary>
+    /// Duration and state scales: the units the solver works in, and so the units the trust region is measured in. 3dof.py's Xscale, whose mass entry is its m0, by default.
+    ///
+    /// SETTABLE, and read afresh on every assembly, so the guidance can size them to the problem that is left each cycle - the range to the pad, the speed - without rebuilding the solver: the column scaling is applied as the matrix is filled, so only the numbers change, never the pattern. A scale fixed at engage is a hundred times too coarse by the end of the burn: the trust region still allows a step the size of the whole entry, and the solver's tolerance, which is relative, is metres where the burn needs centimetres. See Ksa6DofSetup.TryBuild for the same lesson. Change them only between solves.
+    /// </summary>
+    public double SigmaScale { get; set; } = 30.0;
+    public double[] XScale { get; set; } = [1000, 1000, 6000, 300, 300, 300, 28000];
 
     public double SinAlphaMax => Math.Sin(AlphaMaxDeg * Math.PI / 180.0);
     public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0;

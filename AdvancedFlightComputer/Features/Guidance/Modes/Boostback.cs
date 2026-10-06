@@ -63,7 +63,8 @@ using AdvancedFlightComputer.Guidance.Numerics;
 public static partial class GuidanceWindow
 {
     // Public because VehicleAutopilotState holds a vehicle's phase - every craft runs this machine on its own, exactly like AscentPhase and LandingPhase.
-    public enum BoostbackPhase { Idle, Separation, Rotation, Boostback, Glide, Done }
+    // LandingBurn is the 3-DOF landing burn (ConvexLanding.cs), after the glide.
+    public enum BoostbackPhase { Idle, Separation, Rotation, Boostback, Glide, LandingBurn, Done }
 
     /// <summary>
     /// How often the BURN PLAN is re-solved, seconds of sim time.
@@ -261,6 +262,7 @@ public static partial class GuidanceWindow
         _s.BoostbackThrottle = 0.0;
         _s.BoostbackEngineOn = false;
         ResetGlide();
+        ResetConvex();
 
         // The attitude separation left us in, latched so the hold is a fixed inertial direction rather than a fresh reading of a vehicle that is drifting.
         // It is also what the rotation slews FROM, so the two phases join continuously.
@@ -282,6 +284,7 @@ public static partial class GuidanceWindow
         _s.BoostbackEngineOn = false;
         _s.LandingCutPending = true;   // the one-shot engine cut in ApplyAutopilot
         _s.HasCommand = false;
+        ShutDownConvex();
         _s.BoostbackStatus = "Aborted.";
     }
 
@@ -315,7 +318,7 @@ public static partial class GuidanceWindow
         EnsureBoostbackAero(vehicle, parent);
         UpdateImpactPrediction(vehicle, orbit, parent, force: false);
         // The impulsive correction only judges the burn - whether to light, whether to cut - so the glide does not pay for its Jacobian.
-        if (_s.BoostbackPhase != BoostbackPhase.Glide)
+        if (_s.BoostbackPhase is not (BoostbackPhase.Glide or BoostbackPhase.LandingBurn))
             UpdateSteering(vehicle, orbit, parent, BoostbackSteerIntervalMs);
 
         double3 r = orbit.StateVectors.PositionCci;
@@ -495,8 +498,18 @@ public static partial class GuidanceWindow
                 break;
 
             case BoostbackPhase.Glide:
-                want = GlideDirection(vehicle, orbit, parent, now, dt);
+            case BoostbackPhase.LandingBurn:
+            {
+                // The 3-DOF plan once it has one, the PID glide until then and whenever it falls back.
+                bool convex = StepConvexLanding(vehicle, orbit, parent, now, out double3 convexDir);
+                // A handover - terminal hover, 6-DOF - has claimed the craft on this step; it commands from here.
+                if (!BoostbackLive)
+                    return;
+                want = convex ? convexDir
+                     : _s.BoostbackPhase == BoostbackPhase.Glide ? GlideDirection(vehicle, orbit, parent, now, dt)
+                     : _s.CommandDir;
                 break;
+            }
 
             default:
                 want = _s.CommandDir;
@@ -765,6 +778,11 @@ public static partial class GuidanceWindow
                 _s.BoostbackEngineOn = true;
                 break;
 
+            case BoostbackPhase.LandingBurn:
+                _s.BoostbackThrottle = _s.ConvexThrottle;
+                _s.BoostbackEngineOn = true;
+                break;
+
             default:
                 _s.BoostbackThrottle = 0.0;
                 _s.BoostbackEngineOn = false;
@@ -920,7 +938,9 @@ public static partial class GuidanceWindow
         BoostbackPhase.Separation => "separation (settling)",
         BoostbackPhase.Rotation => "rotating to burn attitude",
         BoostbackPhase.Boostback => "boostback burn",
-        BoostbackPhase.Glide => "glide (AoA steering the impact point)",
+        BoostbackPhase.Glide => _s.ConvexGuidance?.Published != null
+            ? "glide (3-DOF plan)" : "glide (AoA steering the impact point)",
+        BoostbackPhase.LandingBurn => "landing burn (3-DOF)",
         BoostbackPhase.Done => "ended",
         _ => "?",
     };

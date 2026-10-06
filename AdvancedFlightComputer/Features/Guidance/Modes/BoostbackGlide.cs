@@ -64,6 +64,9 @@ public static partial class GuidanceWindow
     /// <summary>Sim seconds between glide lines in the game log.</summary>
     private const double GlideLogIntervalS = 2.0;
 
+    /// <summary>The trim only integrates while the flown tilt is within this of the asked one, degrees: a steady lag of a degree or two, not a manoeuvre still in progress.</summary>
+    private const double GlideTrimMaxErrorDeg = 5.0;
+
     private static void ResetGlide()
     {
         _s.GlideIntCcf = _s.GlideRateCcf = _s.GlidePrevMissCcf = double3.Zero;
@@ -142,11 +145,13 @@ public static partial class GuidanceWindow
         }
 
         // Anti-windup as in the PID: a trim that is already being clipped only ever unwinds.
+        // Only on a steady lag, never through a manoeuvre: during the turn from the burn attitude after cutoff the vehicle is tens of degrees off the command for seconds, and integrating that wound the trim to its limit in under a second and threw the attitude past retrograde when the turn ended.
         double errUp = _s.GlideTiltUpDeg - flownUp;
         double errLeft = _s.GlideTiltLeftDeg - flownLeft;
-        if (!sendLimited || errUp * _s.GlideTrimUpDeg < 0.0)
+        bool steady = Math.Sqrt(errUp * errUp + errLeft * errLeft) <= GlideTrimMaxErrorDeg;
+        if (steady && (!sendLimited || errUp * _s.GlideTrimUpDeg < 0.0))
             _s.GlideTrimUpDeg = Math.Clamp(_s.GlideTrimUpDeg + GlideTrackGain * errUp * dt, -maxAoa, maxAoa);
-        if (!sendLimited || errLeft * _s.GlideTrimLeftDeg < 0.0)
+        if (steady && (!sendLimited || errLeft * _s.GlideTrimLeftDeg < 0.0))
             _s.GlideTrimLeftDeg = Math.Clamp(_s.GlideTrimLeftDeg + GlideTrackGain * errLeft * dt, -maxAoa, maxAoa);
 
         // THE FLIGHT LOG, every GlideLogIntervalS of sim time: what was asked against what was flown, so a glide that misbehaves in the game can be read back afterwards. The two tilts are in the same lift-up / lift-left axes; a flown tilt that does not follow the command is the attitude loop, not the guidance.
@@ -155,6 +160,7 @@ public static partial class GuidanceWindow
             _s.GlideLogTime = now;
             KsaAeroSweep.Result logAero = _s.Aero;
             double logMach = logAero?.Atmosphere?.Mach(speed) ?? double.NaN;
+            double tableMach = logAero?.Table != null ? GlideTableMach(logAero, speed) : double.NaN;
             GuidanceLog.Info(vehicle, string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "glide: alt {0:F1} km, q {1:F2} kPa, M {2:F2}, tgo {3:F0} s, miss {4:F0} m long / {5:F0} m left; "
                 + "tilt up/left asked {6:F1}/{7:F1}, flown {8:F1}/{9:F1}, trim {10:F1}/{11:F1} deg; lift sign {12}, "
@@ -163,7 +169,7 @@ public static partial class GuidanceWindow
                 _s.GlideMissDownM, _s.GlideMissCrossM,
                 _s.GlideTiltUpDeg, _s.GlideTiltLeftDeg, flownUp, flownLeft, _s.GlideTrimUpDeg, _s.GlideTrimLeftDeg,
                 _s.GlideLiftSign,
-                logAero?.Table?.Cd(logMach, 0.0) ?? double.NaN, maxAoa, logAero?.LiftAt(logMach, maxAoa / RadToDeg) ?? double.NaN,
+                logAero?.Table?.Cd(tableMach, 0.0) ?? double.NaN, maxAoa, logAero?.LiftAt(tableMach, maxAoa / RadToDeg) ?? double.NaN,
                 _s.GlideStatus.Length > 0 ? _s.GlideStatus : "ok"));
         }
 
@@ -192,7 +198,7 @@ public static partial class GuidanceWindow
         }
         double maxAoa = Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0);
         double maxAoaRad = maxAoa * Math.PI / 180.0;
-        double mach = aero.Atmosphere?.Mach(speed) ?? 0.0;
+        double mach = GlideTableMach(aero, speed);
         double clMaxAoa = aero.LiftAt(mach, maxAoaRad);
         double cdMaxAoa = aero.Table.Cd(mach, maxAoaRad);
         _s.GlideLiftSign = cdMaxAoa > 0.0 && Math.Abs(clMaxAoa / cdMaxAoa) >= GlideMinLiftToDrag ? Math.Sign(clMaxAoa) : 0;
@@ -314,6 +320,15 @@ public static partial class GuidanceWindow
             prevCl = cl;
         }
         return maxAoaDeg;
+    }
+
+    /// <summary>
+    /// The Mach number to read the measured tables at: the flight's own, held inside the range that was measured. Past the last breakpoint the fit extrapolates along its end slope, which on a lift curve can run all the way through zero and flip the sign the glide steers by; coefficients level off at high Mach, so the last measured value is the honest stand-in.
+    /// </summary>
+    private static double GlideTableMach(KsaAeroSweep.Result aero, double speed)
+    {
+        double mach = aero.Atmosphere?.Mach(speed) ?? 0.0;
+        return Math.Clamp(mach, aero.Table.MachMin, aero.Table.MachMax);
     }
 
     /// <summary>The impact's movement for a velocity change: dG is row-major 3x3, [i*3+j] = d(ground_i)/d(v_j).</summary>

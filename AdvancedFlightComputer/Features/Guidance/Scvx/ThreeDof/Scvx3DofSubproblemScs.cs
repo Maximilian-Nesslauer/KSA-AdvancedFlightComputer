@@ -59,7 +59,7 @@ public sealed class Scvx3DofSubproblemScs
     private readonly Scvx3DofConfig _cfg;
     private readonly int _n, _k;
     private readonly double _dtauG, _dtauB;
-    private readonly double[] _xs;
+    private double[] _xs => _cfg.XScale;
 
     private readonly int _oX, _oU, _oW, _iSigB, _iSigG, _oTm, _nTmPos, _nTmVel, _nTm, _nVars;
     private readonly int _oSa, _oSr, _oSb, _oSw, _nSa, _nSr, _nSb, _nSw, _nSlack;
@@ -98,7 +98,6 @@ public sealed class Scvx3DofSubproblemScs
         _k = cfg.GlideIntervals;
         _dtauG = _k > 0 ? 1.0 / _k : 0.0;
         _dtauB = 1.0 / cfg.BurnIntervals;
-        _xs = cfg.XScale;
         _terminalAttitude = cfg.TerminalAttitude != null;
         _rateLimit = cfg.AttitudeRateMax > 0.0;
 
@@ -147,15 +146,22 @@ public sealed class Scvx3DofSubproblemScs
         _b = new double[_nRows];
         _c = new double[_nVars];
 
-        // Physical-unit column scaling, as the 6-DOF subproblem: x = diag(scale) x~. The attitude and the throttle are already order one.
         _colScale = new double[_nVars];
+        RefreshScales();
+    }
+
+    /// <summary>
+    /// Physical-unit column scaling, as the 6-DOF subproblem: x = diag(scale) x~. The attitude and the throttle are already order one. Re-read from the config on every assembly, so scales the guidance resizes between solves take effect on the next one.
+    /// </summary>
+    private void RefreshScales()
+    {
         Array.Fill(_colScale, 1.0);
         for (int k = 0; k < _n; k++)
             for (int i = 0; i < NX; i++) _colScale[IX(k, i)] = _xs[i];
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++) _colScale[IW(k, i)] = _xs[i];
-        _colScale[_iSigB] = cfg.SigmaScale;
-        if (_k > 0) _colScale[_iSigG] = cfg.SigmaScale;
+        _colScale[_iSigB] = _cfg.SigmaScale;
+        if (_k > 0) _colScale[_iSigG] = _cfg.SigmaScale;
         // Slacks take the scale of what they relax: a positive and a negative part per axis.
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[PointMass3Dof.IR + i / 2];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[PointMass3Dof.IV + i / 2];
@@ -186,6 +192,7 @@ public sealed class Scvx3DofSubproblemScs
                          ReadOnlySpan<double> anchor, double anchorCos)
     {
         if (_frozen) { _A.BeginRefill(); _P.BeginRefill(); }
+        RefreshScales();
         Array.Clear(_b);
         Array.Clear(_c);
 

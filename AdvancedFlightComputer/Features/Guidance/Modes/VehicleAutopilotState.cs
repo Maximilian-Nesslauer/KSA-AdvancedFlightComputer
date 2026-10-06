@@ -1173,6 +1173,37 @@ public sealed class VehicleAutopilotState
     /// <summary>Sim time of the last glide line written to the game log.</summary>
     public double GlideLogTime = double.NaN;
 
+    // ---- the 3-DOF glide and landing burn (see ConvexLanding.cs) ----
+
+    /// <summary>Hand the glide to the 3-DOF glide-and-burn guidance mid-glide, and let it fly the landing burn.</summary>
+    public bool ConvexLanding = true;
+
+    /// <summary>The glide's predicted time to impact, s, below which the 3-DOF cold solve starts. The PID glide flies until it has a plan.</summary>
+    public double ConvexEngageTgoS = 90.0;
+
+    /// <summary>Hand the landing burn to 6-DOF below this speed, for a more precise touchdown. Off by default.</summary>
+    public bool ConvexSixDofHandover;
+    public double ConvexSixDofSpeedMs = 50.0;
+
+    /// <summary>Where the 3-DOF burn ends: this high over the site, sinking this fast. Terminal hover takes the last metres.</summary>
+    public double ConvexAimHeightM = 20.0;
+    public double ConvexAimSinkMs = 2.0;
+
+    /// <summary>The live 3-DOF guidance, its solver thread, its model corrections and its nominal model, or null before engage.</summary>
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ConvexGuidance;
+    public Ksa3DofWorker ConvexWorker;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator ConvexEstimator;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.KsaPointMassModel ConvexNominal;
+
+    /// <summary>Sim time of the last re-solve dispatched, of the last cold-solve attempt, and of the velocity sample the acceleration is differenced from.</summary>
+    public double ConvexLastUpdate = double.NegativeInfinity, ConvexColdTime = double.NegativeInfinity;
+    public double ConvexAccelTime = double.NaN;
+    public double3 ConvexAccelVelocity;
+
+    /// <summary>Throttle the landing burn is commanding, and what the panel shows.</summary>
+    public double ConvexThrottle;
+    public string ConvexStatus = "";
+
     public string GlideStatus = "";
 
     // Weak keys keep this table from retaining vehicles after they are unloaded.

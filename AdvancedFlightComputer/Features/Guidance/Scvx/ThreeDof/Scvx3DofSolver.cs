@@ -33,12 +33,12 @@ public sealed class Scvx3DofSolver
     private const int NU = PointMass3Dof.NU;
 
     private readonly Scvx3DofConfig _cfg;
-    private readonly IPointMassModel _model;
+    private IPointMassModel _model;
     private readonly Scvx3DofSubproblemScs _sub;
     private readonly Linearisation3Dof _lin;
     private readonly int _n, _k;
     private readonly double _dtauG, _dtauB;
-    private readonly double[] _xs;
+    private double[] _xs => _cfg.XScale;
     private readonly double[] _alphaRadius;
 
     // Trust-region schedule: 3dof.py's constants, which are the 6-DOF's.
@@ -82,7 +82,10 @@ public sealed class Scvx3DofSolver
     public int Nodes => _n;
     public int GlideIntervals => _k;
     public Scvx3DofConfig Config => _cfg;
-    public IPointMassModel Model => _model;
+    /// <summary>
+    /// The model the next iteration linearises. Settable between cycles so the guidance can hand in corrected aerodynamics without rebuilding the solver; the merit baseline is recomputed on the next <see cref="Reseed"/> or <see cref="Initialize"/>, so change it only before one of those.
+    /// </summary>
+    public IPointMassModel Model { get => _model; set => _model = value ?? throw new ArgumentNullException(nameof(value)); }
     public string LastFailureReason { get; private set; } = "";
     public bool TimedOut { get; private set; }
 
@@ -94,7 +97,6 @@ public sealed class Scvx3DofSolver
         _k = cfg.GlideIntervals;
         _dtauG = _k > 0 ? 1.0 / _k : 0.0;
         _dtauB = 1.0 / cfg.BurnIntervals;
-        _xs = cfg.XScale;
         _sub = new Scvx3DofSubproblemScs(cfg);
         _lin = new Linearisation3Dof(_n);
         _alphaRadius = new double[_n];
