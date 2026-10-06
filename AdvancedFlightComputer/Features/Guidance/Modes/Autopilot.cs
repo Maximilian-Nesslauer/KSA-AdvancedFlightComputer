@@ -1089,7 +1089,7 @@ public static partial class GuidanceWindow
         //
         // The open-loop phases (vertical/kick/prograde) don't need a converged UPFG solution; once flying, keep commanding through transient re-convergence (e.g. right after staging) - dropping to Manual mid-ascent would be far more disruptive.
         bool landingGuides = LandingCommands(_s.LandingPhase);
-        // Every live boostback phase steers, including the settling burn (which holds a latched attitude) and the entry hold (which tracks surface retrograde indefinitely) - so unlike the landing machine there is no sub-phase here that wants the vehicle back.
+        // Every live boostback phase steers, including the settling burn (which holds a latched attitude) and the glide (which steers its angle of attack indefinitely) - so unlike the landing machine there is no sub-phase here that wants the vehicle back.
         bool boostbackGuides = BoostbackLive;
         bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides)
                           && _s.HasCommand;

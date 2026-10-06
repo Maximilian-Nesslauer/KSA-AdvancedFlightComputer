@@ -17,7 +17,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 // - The flight computer receives both the attitude and its rate through KsaAttitudeRate, so it tracks the slew instead of stationary targets.
 // - Boostback follows a BoostbackShooter arc at full throttle and resolves it every 2 s.
 // - At tgo <= 5 s it uses the 10 Hz impulsive correction, then freezes that command at tgo <= 2 s and cuts off on sensed dV.
-// - EntryOrient holds surface retrograde until an abort or another mode takes the vehicle.
+// - Glide flies engine-first into the wind and steers the angle of attack with a PID on the coast impact point (see BoostbackGlide.cs) until an abort or another mode takes the vehicle.
 //
 // TWO GUIDANCE LAWS RUN HERE, AND THEY DO DIFFERENT JOBS.
 //
@@ -36,8 +36,8 @@ using AdvancedFlightComputer.Guidance.Numerics;
 // Two seconds is the cadence because the plan answers a slow question ("what shape of burn is cheapest from here") whose answer barely moves in two seconds, which is also what makes the warm re-solve cheap enough to run at all.
 //
 // THE BURN ATTITUDE AND THE PREDICTION'S ASSUMPTION AGREE, which is load-bearing and not a coincidence worth leaving unstated.
-// DragCoastSystem holds alpha = 0 for the whole coast - engine into the wind - and both flown attitudes land there: the boostback dV is very nearly anti-parallel to the velocity, so thrusting along it points body +x aft, and the entry phase commands exactly that direction outright.
-// The only stretch of the flight where the vehicle is NOT near alpha 0 is the rotation, and nothing is being predicted through it.
+// DragCoastSystem holds alpha = 0 for the whole coast - engine into the wind - and the burn lands there: the boostback dV is very nearly anti-parallel to the velocity, so thrusting along it points body +x aft.
+// The glide leaves alpha 0 on purpose, and only as far as it takes to walk that alpha-0 impact point onto the site: what it steers on is where the vehicle lands if it straightens up now, so as the miss closes the command returns to alpha 0 and the prediction comes true.
 // If the burn ever became a large plane change, that assumption would stop holding and the prediction would need the flown alpha.
 //
 // AND THE END OF THE BURN IS RE-SOLVED FASTER, NOT DIFFERENTLY.
@@ -63,7 +63,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 public static partial class GuidanceWindow
 {
     // Public because VehicleAutopilotState holds a vehicle's phase - every craft runs this machine on its own, exactly like AscentPhase and LandingPhase.
-    public enum BoostbackPhase { Idle, Separation, Rotation, Boostback, EntryOrient, Done }
+    public enum BoostbackPhase { Idle, Separation, Rotation, Boostback, Glide, Done }
 
     /// <summary>
     /// How often the BURN PLAN is re-solved, seconds of sim time.
@@ -187,7 +187,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// Below this much correction there is nothing worth lighting an engine for, m/s.
     /// A booster whose ballistic impact is already on the site skips straight to the
-    /// entry attitude rather than burning a metre per second and calling it guidance.
+    /// glide rather than burning a metre per second and calling it guidance.
     /// </summary>
     private const double BoostbackMinDvMs = 5.0;
 
@@ -260,6 +260,7 @@ public static partial class GuidanceWindow
         _s.BoostbackPrevWantValid = false;
         _s.BoostbackThrottle = 0.0;
         _s.BoostbackEngineOn = false;
+        ResetGlide();
 
         // The attitude separation left us in, latched so the hold is a fixed inertial direction rather than a fresh reading of a vehicle that is drifting.
         // It is also what the rotation slews FROM, so the two phases join continuously.
@@ -313,7 +314,9 @@ public static partial class GuidanceWindow
 
         EnsureBoostbackAero(vehicle, parent);
         UpdateImpactPrediction(vehicle, orbit, parent, force: false);
-        UpdateSteering(vehicle, orbit, parent, BoostbackSteerIntervalMs);
+        // The impulsive correction only judges the burn - whether to light, whether to cut - so the glide does not pay for its Jacobian.
+        if (_s.BoostbackPhase != BoostbackPhase.Glide)
+            UpdateSteering(vehicle, orbit, parent, BoostbackSteerIntervalMs);
 
         double3 r = orbit.StateVectors.PositionCci;
         double altAsl = r.Length() - parent.MeanRadius;
@@ -399,10 +402,10 @@ public static partial class GuidanceWindow
                 if (missDv < BoostbackMinDvMs)
                 {
                     // Already on the site.
-                    // Nothing to burn, so go straight to the entry attitude rather than lighting an engine to prove a point.
+                    // Nothing to burn, so go straight to the glide rather than lighting an engine to prove a point.
                     // Judged on the TARGETING correction: shaping is optional, and a burn is not worth lighting for it alone.
                     _s.BoostbackStatus = $"Correction is only {missDv:F1} m/s - skipping the burn.";
-                    EnterBoostbackPhase(BoostbackPhase.EntryOrient, now);
+                    EnterBoostbackPhase(BoostbackPhase.Glide, now);
                     break;
                 }
                 _s.BoostbackStatus = "";
@@ -461,7 +464,7 @@ public static partial class GuidanceWindow
                     _s.BoostbackStatus = dry ? "Cutoff - propellant exhausted."
                         : overrun ? "Cutoff - burn exceeded its time limit; check the solution."
                         : $"Cutoff - miss {_s.SteerMissM / 1000.0:F1} km.";
-                    EnterBoostbackPhase(BoostbackPhase.EntryOrient, now);
+                    EnterBoostbackPhase(BoostbackPhase.Glide, now);
                 }
                 break;
             }
@@ -491,8 +494,8 @@ public static partial class GuidanceWindow
                 want = planDir.Length() > 0.5 ? planDir : _s.CommandDir;
                 break;
 
-            case BoostbackPhase.EntryOrient:
-                want = SurfaceRetrogradeCci(orbit, parent);
+            case BoostbackPhase.Glide:
+                want = GlideDirection(vehicle, orbit, parent, now, dt);
                 break;
 
             default:
@@ -787,6 +790,10 @@ public static partial class GuidanceWindow
             _s.BoostbackPlanTime = double.NegativeInfinity;
             _s.BoostbackPlanAttemptTime = double.NegativeInfinity;
         }
+
+        // The glide starts from alpha 0 with nothing integrated.
+        if (phase == BoostbackPhase.Glide)
+            ResetGlide();
     }
 
     // ------------------------------------------------------------------ helpers
@@ -913,7 +920,7 @@ public static partial class GuidanceWindow
         BoostbackPhase.Separation => "separation (settling)",
         BoostbackPhase.Rotation => "rotating to burn attitude",
         BoostbackPhase.Boostback => "boostback burn",
-        BoostbackPhase.EntryOrient => "entry attitude (surface retrograde)",
+        BoostbackPhase.Glide => "glide (AoA steering the impact point)",
         BoostbackPhase.Done => "ended",
         _ => "?",
     };

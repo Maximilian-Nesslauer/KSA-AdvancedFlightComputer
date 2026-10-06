@@ -222,7 +222,7 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        // Drag and air. The sweep is the game's own box model sampled onto a table, and the atmosphere it mirrors; an airless body comes back with no atmosphere, which is not a failure.
+        // Drag and air. The sweep is the game's own force function, whatever drag model is active, measured onto a table, and the atmosphere it mirrors; an airless body comes back with no atmosphere, which is not a failure.
         if (!KsaAeroSweep.TryBuild(vehicle, parent, SimNow(), out KsaAeroSweep.Result aero, out string aeroError))
         {
             error = "no drag model (" + aeroError + ")";

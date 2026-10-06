@@ -9,25 +9,23 @@ using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 
 /// <summary>
-/// Samples KSA's own aerodynamics onto a Cd(Mach, alpha) grid for the current vehicle, and pairs it with an atmosphere that mirrors the game's.
-///  THIS IS A MEASUREMENT, NOT A MODEL. Every Cd below comes out of the game's own BoundingBoxCdA.ComputeCdA, called on the live vehicle's own AerodynamicCdABody - so the surrogate cannot drift away from what the vehicle will actually fly through, and a KSA update that changes the aero changes these numbers with it. We re-derive nothing. The one thing added on top is the skin term, because it lives in PhysicsStates.ComputeDrag rather than in ComputeCdA and there is no way to ask the game for the two together.
-///  WHAT THE GAME ACTUALLY HAS, since it shapes everything here:
-///  F = (CdA(v_hat_body) + 0.1*S) * q,   q = 1/2 rho |v|^2,   applied at the CoM CdA is a six-face box model - sum over axes of |v_hat_i| * Cd_i * A_i - with Cd = 0.3 on the nose, 1.0 on the tail, 1.2 on each flank. It is a cosine blend across faces, not an aerodynamic angle-of-attack law, and it is the ONLY direction dependence there is.
-///  There is no Mach number, no compressibility, no lift, no pitching moment (drag acts through the centre of mass), no control surfaces and no wind.
-///  So the Mach axis of this sweep comes back FLAT, by construction, and the code below does not pretend otherwise - it samples one alpha profile and copies it across every Mach row. The axis is Current because the surrogate is parameterised on Mach for the solver's sake: the grid is already shaped for a transonic rise, so the day KSA grows one, only this file changes.
-///  THE SKIN TERM DOMINATES, and it is the single most surprising thing about KSA aerodynamics. S is the vehicle's bounding-box SURFACE area, and 0.1*S is added to CdA isotropically. For a 70 m x 3.7 m stack that is 105.8 m^2 against a nose-on form CdA of 3.2 - thirty-three times larger. KSA drag is therefore very nearly isotropic and proportional to bounding-box area, so slender-body intuition does not apply and the Cd values here are much larger than an aerodynamicist would expect. They are correct for this game.
+/// Measures the aerodynamic force the game applies to the current vehicle onto a Cd(Mach, alpha) grid, and pairs it with an atmosphere that mirrors the game's.
+///  THIS IS A MEASUREMENT, NOT A MODEL. Every Cd below is read off PhysicsStates.ComputeDerivatives - the force function the integrator itself calls every substep - run on a copy of the live vehicle's state with the airspeed set per sample. Whatever drag model is active is what gets measured: stock's box, or a mod that replaces it, with no knowledge here of which. A KSA update or an aero mod that changes the forces changes these numbers with it.
+///  The force along the airspeed goes into the drag table, because that is all the solvers model. The force across it is measured too: its size is reported in <see cref="Result.LiftToDragMax"/> so it is visible rather than silently dropped, and its signed component goes into <see cref="Result.Lift"/>, which the boostback glide steers with.
 /// </summary>
 public static class KsaAeroSweep
 {
-    /// <summary>
-    /// KSA's skin-drag coefficient: PhysicsStates.SkinDragCoefficient, multiplying the bounding-box surface area into an isotropic CdA increment.
-    /// </summary>
-    public const double SkinDragCoefficient = 0.1;
+    /// <summary>Roll azimuths averaged over per alpha. 15 degree steps, which land on both the 0 and 45 degree extremes of a box model, so the spread is exact and the mean within half a percent.</summary>
+    private const int RollSamples = 24;
 
-    /// <summary>Roll azimuths averaged over per alpha. 5 degree steps; the integrand
-    /// is |cos| + |sin| weighted, so this is far finer than it needs to be and costs
-    /// nothing at 72 evaluations per alpha.</summary>
-    private const int RollSamples = 72;
+    /// <summary>The Mach 0 row is a limit, not a speed anything can be measured at. It is sampled here instead.</summary>
+    private const double MinProbeMach = 0.05;
+
+    /// <summary>Airspeed of the baseline probe, m/s. Low enough that its drag is a part in 10^7 of the slowest real sample, and not zero, so the game still takes its atmospheric branch and the baseline carries the same buoyancy the samples do.</summary>
+    private const double BaselineSpeed = 0.01;
+
+    /// <summary>Alpha the pointing sensitivity is read at, degrees from tail-first.</summary>
+    private const double PointingAlphaDeg = 5.0;
 
     /// <summary>
     /// One sweep's worth of results: the fitted surrogate, the atmosphere it goes with, and everything needed to judge whether either is trustworthy.
@@ -38,6 +36,16 @@ public static class KsaAeroSweep
         /// <summary>The fitted Cd(Mach, alpha) surrogate.</summary>
         public AeroTable Table;
 
+        /// <summary>
+        /// The fitted lift coefficient C_L(Mach, alpha) - read it through <see cref="LiftAt"/>, since AeroTable names its lookup Cd. Same grid, reference area and retrograde-first alpha as <see cref="Table"/>.
+        ///  SIGNED BY WHERE THE ENGINE END POINTS: positive is lift towards the side the engine end is tilted off the airflow, negative away from it. A slender body leading with its engine lifts the positive way, from crossflow on its flanks; a blunt one leading with a heat shield lifts the negative way, from its tilted axial force; stock's box makes none.
+        /// </summary>
+        public AeroTable Lift;
+        public double[] LiftTable;
+
+        /// <summary>Signed C_L at a Mach number and retrograde-first alpha (radians). Zero when there is no lift table.</summary>
+        public double LiftAt(double mach, double alphaRad) => Lift?.Cd(mach, alphaRad) ?? 0.0;
+
         /// <summary>The game's atmosphere, mirrored. Null if the body has none.</summary>
         public ExponentialAtmosphere Atmosphere;
 
@@ -45,13 +53,8 @@ public static class KsaAeroSweep
         public double[] AlphaGridDeg;
         public double[] CdTable;
 
-        /// <summary>Frontal area the Cd values are referenced to, m^2. This is KSA's
-        /// own nose-face area, pi/4 * dy * dz - the same number the game uses for the
-        /// X faces of its box model, so the reference is the game's rather than ours.</summary>
+        /// <summary>Frontal area the Cd values are referenced to, m^2: pi/4 * dy * dz off the bounding box. Only a normalisation - the solvers multiply it back in - kept as the nose face so the numbers read like Cd on the cross-section.</summary>
         public double ReferenceArea;
-
-        /// <summary>Bounding-box surface area S, m^2 - the skin term's multiplier.</summary>
-        public double SkinArea;
 
         /// <summary>Bounding-box extents along the assembly axes (x = long axis), m.</summary>
         public double3 BoxExtents;
@@ -60,25 +63,28 @@ public static class KsaAeroSweep
         /// recorded so a stale sweep is recognisable.</summary>
         public double Mass;
 
-        /// <summary>Headline Cd values, referenced to <see cref="ReferenceArea"/>.</summary>
+        /// <summary>Headline Cd values at the lowest Mach row, referenced to <see cref="ReferenceArea"/>.</summary>
         public double CdTailFirst, CdBroadside, CdNoseFirst;
 
-        /// <summary>The pure form contribution AT ALPHA = 0, before the skin term, as
-        /// a fraction of the total there. Small means that in the boostback attitude the drag is essentially all of KSA's isotropic skin term, so a few degrees of pointing error costs almost nothing.
-        ///  It says nothing about the rest of the range: broadside form drag is enormous whatever this is, because the flank area of a slender stack dwarfs
-        /// its nose area. <see cref="AttitudeSensitivity"/> is the number for that.</summary>
-        public double FormFraction;
+        /// <summary>
+        /// How much Cd rises from tail-first to 5 degrees off it, as a fraction, at the lowest Mach row. Small means a few degrees of pointing error near the boostback attitude costs almost nothing, which is load-bearing for guidance.
+        /// </summary>
+        public double PointingSensitivity;
 
-        /// <summary>Cd(broadside) / Cd(tail-first): how much the drag actually varies
-        /// across the whole attitude range. Around 4 for a slender booster, so the surrogate's alpha axis is carrying real information even though the drag is
-        /// nearly attitude-independent close to alpha = 0.</summary>
+        /// <summary>Cd(broadside) / Cd(tail-first): how much the drag varies across the whole attitude range.</summary>
         public double AttitudeSensitivity;
 
         /// <summary>
-        /// How much Cd varies with ROLL at fixed alpha, as a fraction of the total, at its worst alpha. The table has no roll input, so it stores the azimuthal mean; this says how much that averaging threw away.
-        ///  IT DOES NOT GO TO ZERO FOR AN AXISYMMETRIC VEHICLE, which is the surprising part and worth knowing before reading the number. KSA's model is a BOX, not a body of revolution: the cross-flow term is |v_y|*A_y + |v_z|*A_z, so even with A_y == A_z a square-section booster rolled 45 degrees presents sqrt(2) times the area it presents at 0. For a slender stack that works out at roughly 25% and it is inherent, not a property of the airframe. Above about 35% the cross-section is genuinely not square as well.
+        /// How much Cd varies with ROLL at fixed alpha, as a fraction of its roll mean, at its worst alpha. The table has no roll input, so it stores the azimuthal mean; this says how much that averaging threw away.
+        ///  It goes to zero only if the active model is axisymmetric. Stock's is a box, so a square-section booster rolled 45 degrees presents sqrt(2) times the flank it presents at 0, which is roughly 25% for a slender stack.
         /// </summary>
         public double RollSpread;
+
+        /// <summary>The largest fractional change in Cd across the Mach axis at any one alpha. Zero means the active model has no compressibility.</summary>
+        public double MachSpread;
+
+        /// <summary>The largest lift-to-drag ratio anywhere on the grid. The table holds drag only, so this is how much force the solvers leave out.</summary>
+        public double LiftToDragMax;
 
         /// <summary>Largest relative disagreement between our mirrored density and
         /// KSA's own GetAtmosphericDensityAtAltitude, sampled across the atmosphere.
@@ -103,14 +109,13 @@ public static class KsaAeroSweep
     }
 
     /// <summary>
-    /// Sample the focused vehicle's aerodynamics and fit the surrogate.
+    /// Measure the focused vehicle's aerodynamics and fit the surrogate.
     ///  Main thread only: it reads Vehicle.Props, which the sim thread owns and rewrites. That is the same access the rest of the panel makes (TotalMass and friends), and it is why the result is a snapshot of plain arrays rather than anything that reaches back into the game.
     /// </summary>
     /// <returns>False with a reason in <paramref name="error"/> if the vehicle has no
-    /// usable geometry. A body with no atmosphere is NOT an error - the aero table is
-    /// still meaningful, and Atmosphere comes back null.</returns>
+    /// usable geometry, or the game's force function gives no drag. A body with no atmosphere is NOT an error - the probe flies through a nominal one, the table is still meaningful, and Atmosphere comes back null.</returns>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double simTime,
-                               out Result result, out string error)
+                                out Result result, out string error)
     {
         result = null;
         error = "";
@@ -121,18 +126,13 @@ public static class KsaAeroSweep
             return false;
         }
 
-        ref readonly VehicleProperties props = ref vehicle.Props;
-
-        // Extents along the ASSEMBLY axes. x is the long axis for any sane rocket - it is the one KSA gives the streamlined 0.3/1.0 pair and the elliptical cross-section, and the one the thrust axis lies along.
+        // Extents along the ASSEMBLY axes. x is the long axis for any sane rocket - the one the thrust axis lies along.
         //  Read through Vehicle's own accessor rather than off Props.BoundingBoxAsmb directly: that field is a BepuPhysics.Box, and touching it would drag a BepuPhysics reference into the mod for three floats. This is the same three floats, and it is what the staleness check reads too, so the two cannot disagree about which box the table was built from.
         float3 half = vehicle.BoundingBoxHalfExtentsAsmb;
         double dx = half.X * 2.0;
         double dy = half.Y * 2.0;
         double dz = half.Z * 2.0;
-
-        // Reference area: KSA's own nose face. Not a convention we picked - it is literally the A_x the game multiplies its 0.3 and 1.0 by.
         double refArea = Math.PI / 4.0 * dy * dz;
-        double skinArea = props.TotalSurfaceArea;
 
         if (!(refArea > 0.0) || !double.IsFinite(refArea))
         {
@@ -140,77 +140,129 @@ public static class KsaAeroSweep
             return false;
         }
 
-        double[] machGrid = AeroTable.DefaultMachBreakpoints;
-        double[] alphaDeg = AeroTable.DefaultAlphaBreakpointsDeg;
-        int na = alphaDeg.Length;
-
-        // --- the alpha profile, sampled once --------------------------------- One profile, not one per Mach row: the game has no Mach dependence, so sampling it na*nm times would be nm identical answers and a slower tab.
-        var cdAlpha = new double[na];
-        double rollSpread = 0.0;
-        double formAtZero = 0.0;
-
-        for (int j = 0; j < na; j++)
-        {
-            double alpha = alphaDeg[j] * Math.PI / 180.0;
-            double sa = Math.Sin(alpha), ca = Math.Cos(alpha);
-
-            // Average the form term over roll azimuth. KSA's two flank faces carry the same Cd but different areas, so at fixed alpha the answer still depends on which flank is into the wind; the surrogate has no roll input, so the mean is what it can represent. RollSpread records what that costs.
-            double sum = 0.0, lo = double.MaxValue, hi = double.MinValue;
-            for (int k = 0; k < RollSamples; k++)
-            {
-                double phi = 2.0 * Math.PI * k / RollSamples;
-
-                // RETROGRADE-FIRST: alpha = 0 means the wind comes at the TAIL, so the velocity in body axes points along -x. This is the sign that carries the whole convention - see AeroTable.AngleOfAttack.
-                var dir = new double3(-ca, sa * Math.Cos(phi), sa * Math.Sin(phi));
-
-                // The game's own function, on the game's own coefficients.
-                double cdA = props.AerodynamicCdABody.ComputeCdA(dir);
-                sum += cdA;
-                if (cdA < lo) lo = cdA;
-                if (cdA > hi) hi = cdA;
-            }
-
-            double formCdA = sum / RollSamples;
-            double totalCdA = formCdA + SkinDragCoefficient * skinArea;
-            cdAlpha[j] = totalCdA / refArea;
-
-            if (j == 0)
-                formAtZero = formCdA / totalCdA;
-
-            // Spread is judged against the TOTAL, since that is what the vehicle feels - a big spread in a term that is 3% of the force is not a big spread in the force.
-            if (totalCdA > 0.0)
-                rollSpread = Math.Max(rollSpread, (hi - lo) / totalCdA);
-        }
-
-        // --- broadcast across the (flat) Mach axis ----------------------------
-        var cdTable = new double[machGrid.Length * na];
-        for (int i = 0; i < machGrid.Length; i++)
-            Array.Copy(cdAlpha, 0, cdTable, i * na, na);
-
         var res = new Result
         {
-            MachGrid = machGrid,
-            AlphaGridDeg = alphaDeg,
-            CdTable = cdTable,
             ReferenceArea = refArea,
-            SkinArea = skinArea,
             BoxExtents = new double3(dx, dy, dz),
             SampledExtents = new double3(dx, dy, dz),
             Mass = vehicle.TotalMass,
             SampledAt = simTime,
-            FormFraction = formAtZero,
-            RollSpread = rollSpread,
-            CdTailFirst = cdAlpha[0],
-            CdNoseFirst = cdAlpha[na - 1],
-            CdBroadside = InterpolateAt(alphaDeg, cdAlpha, 90.0),
         };
-        res.AttitudeSensitivity = res.CdTailFirst > 0.0
-            ? res.CdBroadside / res.CdTailFirst
-            : 0.0;
+        BuildAtmosphere(parent, res);
+
+        // The air the probe flies through. Sea level of this body's own atmosphere, so a model whose Cd depends on Mach through sqrt(gamma p / rho) sees the same Mach the solvers compute - KSA's air is isothermal, so p / rho, and with it the speed of sound, is the same at every altitude.
+        ExponentialAtmosphere air = res.Atmosphere ?? ExponentialAtmosphere.Earth;
+        if (!ForceProbe.TryCreate(vehicle, air.SeaLevelDensity, air.SeaLevelPressure, out ForceProbe probe, out error))
+            return false;
+
+        double[] machGrid = AeroTable.DefaultMachBreakpoints;
+        double[] alphaDeg = AeroTable.DefaultAlphaBreakpointsDeg;
+        int nm = machGrid.Length;
+        int na = alphaDeg.Length;
+
+        // Every direction the grid uses, in body axes, with the force the game applies at a crawl in that direction. Subtracting it removes everything that does not depend on airspeed - buoyancy - and leaves the aerodynamics.
+        //  RETROGRADE-FIRST: alpha = 0 means the wind comes at the TAIL, so the velocity in body axes points along -x. This is the sign that carries the whole convention - see AeroTable.AngleOfAttack.
+        //  Beside each, the direction the ENGINE END (-x) is tilted off the airflow: -x less its component along u, which works out to -(sin a, cos a cos phi, cos a sin phi). Zero where it is undefined, at alpha 0 and 180, where there is no lift to sign anyway.
+        var dirs = new double3[na, RollSamples];
+        var tilts = new double3[na, RollSamples];
+        var baseline = new double3[na, RollSamples];
+        for (int j = 0; j < na; j++)
+        {
+            double alpha = alphaDeg[j] * Math.PI / 180.0;
+            double sa = Math.Sin(alpha), ca = Math.Cos(alpha);
+            for (int k = 0; k < RollSamples; k++)
+            {
+                double phi = 2.0 * Math.PI * k / RollSamples;
+                dirs[j, k] = new double3(-ca, sa * Math.Cos(phi), sa * Math.Sin(phi));
+                tilts[j, k] = sa > 1e-9
+                    ? new double3(-sa, -ca * Math.Cos(phi), -ca * Math.Sin(phi))
+                    : double3.Zero;
+                baseline[j, k] = probe.ForceBody(BaselineSpeed * dirs[j, k]);
+            }
+        }
+
+        var cdTable = new double[nm * na];
+        var clTable = new double[nm * na];
+        double rollSpread = 0.0, liftToDrag = 0.0;
+        for (int i = 0; i < nm; i++)
+        {
+            double speed = Math.Max(machGrid[i], MinProbeMach) * air.SpeedOfSound;
+            double qa = 0.5 * air.SeaLevelDensity * speed * speed * refArea;
+
+            for (int j = 0; j < na; j++)
+            {
+                double dragSum = 0.0, liftSum = 0.0, signedLiftSum = 0.0, lo = double.MaxValue, hi = double.MinValue;
+                for (int k = 0; k < RollSamples; k++)
+                {
+                    double3 u = dirs[j, k];
+                    double3 force = probe.ForceBody(speed * u) - baseline[j, k];
+                    double drag = -double3.Dot(force, u);
+                    double3 across = force + drag * u;
+                    dragSum += drag;
+                    liftSum += across.Length();
+                    signedLiftSum += double3.Dot(across, tilts[j, k]);
+                    lo = Math.Min(lo, drag);
+                    hi = Math.Max(hi, drag);
+                }
+
+                double cd = dragSum / RollSamples / qa;
+                double cl = signedLiftSum / RollSamples / qa;
+                if (!double.IsFinite(cd) || !double.IsFinite(cl))
+                {
+                    error = $"the game's force function gave a non-finite force at Mach {machGrid[i]:0.##}, alpha {alphaDeg[j]:0}";
+                    return false;
+                }
+                cdTable[i * na + j] = cd;
+                clTable[i * na + j] = cl;
+
+                if (dragSum > 0.0)
+                {
+                    liftToDrag = Math.Max(liftToDrag, liftSum / dragSum);
+                    if (i == 0)
+                        rollSpread = Math.Max(rollSpread, (hi - lo) / (dragSum / RollSamples));
+                }
+            }
+        }
+
+        // The one thing every drag model has: drag. A probe that measured none was not exercising the game's atmosphere branch, and a table of zeros would plan through vacuum without saying so.
+        double[] lowRow = new double[na];
+        Array.Copy(cdTable, 0, lowRow, 0, na);
+        if (!(lowRow[0] > 0.0) || !(lowRow[na - 1] > 0.0))
+        {
+            error = "the game applied no drag to the probe";
+            return false;
+        }
+
+        double machSpread = 0.0;
+        for (int j = 0; j < na; j++)
+        {
+            double mn = double.MaxValue, mx = double.MinValue;
+            for (int i = 0; i < nm; i++)
+            {
+                mn = Math.Min(mn, cdTable[i * na + j]);
+                mx = Math.Max(mx, cdTable[i * na + j]);
+            }
+            if (mn > 0.0)
+                machSpread = Math.Max(machSpread, (mx - mn) / mn);
+        }
+
+        res.MachGrid = machGrid;
+        res.AlphaGridDeg = alphaDeg;
+        res.CdTable = cdTable;
+        res.CdTailFirst = lowRow[0];
+        res.CdNoseFirst = lowRow[na - 1];
+        res.CdBroadside = InterpolateAt(alphaDeg, lowRow, 90.0);
+        res.AttitudeSensitivity = res.CdBroadside / res.CdTailFirst;
+        res.PointingSensitivity = InterpolateAt(alphaDeg, lowRow, PointingAlphaDeg) / res.CdTailFirst - 1.0;
+        res.RollSpread = rollSpread;
+        res.MachSpread = machSpread;
+        res.LiftToDragMax = liftToDrag;
+        res.LiftTable = clTable;
 
         try
         {
             res.Table = new AeroTable(machGrid, alphaDeg, cdTable);
+            res.Lift = new AeroTable(machGrid, alphaDeg, clTable);
         }
         catch (Exception ex)
         {
@@ -218,10 +270,71 @@ public static class KsaAeroSweep
             return false;
         }
 
-        BuildAtmosphere(parent, res);
-
         result = res;
         return true;
+    }
+
+    /// <summary>
+    /// A copy of one vehicle's physics state, with the air set per probe. The force read back is the game's own, from the same ComputeDerivatives the integrator calls, so any mod that patches the forces there is measured with them.
+    /// </summary>
+    private sealed class ForceProbe
+    {
+        private BubbleOrigin _origin;
+        private KinematicStates _kinematic;
+        private VehicleProperties _props;
+        private PhysicsEnvironment _environment;
+
+        /// <summary>The airspeed at zero physics velocity - the bubble's own motion against the turning air - in physics axes. Airspeed is this plus the physics velocity.</summary>
+        private double3 _frameAirPhys;
+
+        public static bool TryCreate(Vehicle vehicle, double density, double pressure, out ForceProbe probe, out string error)
+        {
+            probe = new ForceProbe
+            {
+                _origin = vehicle.BubbleOrigin,
+                _kinematic = vehicle.KinematicStates,
+                _props = vehicle.Props,
+                _environment = vehicle.PhysicsEnvironment,
+            };
+
+            // Air, no water, no spin: a probe in free air at this body's sea level. Anything this leaves set, like gravity, lands in AccelPhys or in the buoyancy the baseline removes.
+            probe._environment.InPhysicsRadius = true;
+            probe._environment.AtmosphericDensity = (float)density;
+            probe._environment.AtmosphericPressure = (float)pressure;
+            probe._environment.OceanVolume = 0.0;
+            probe._environment.OceanSurfaceArea = 0.0;
+            probe._kinematic.AngularVelocityPhys = double3.Zero;
+
+            // The game's own definition of airspeed, asked at zero physics velocity, gives the frame's share; every probe velocity is set relative to it.
+            probe._kinematic.VelocityPhys = double3.Zero;
+            float3 frameAir = PhysicsStates.ComputeAirVelocityBody(in probe._origin, in probe._kinematic, in probe._environment);
+            probe._frameAirPhys = double3.Unpack(in frameAir).Transform(probe._kinematic.Body2Phys);
+
+            // Check the airspeed lands where it was put, against the same game function. A frame this gets wrong would measure the drag of the wrong direction.
+            var check = new double3(-100.0, 30.0, 10.0);
+            probe._kinematic.VelocityPhys = check.Transform(probe._kinematic.Body2Phys) - probe._frameAirPhys;
+            float3 got = PhysicsStates.ComputeAirVelocityBody(in probe._origin, in probe._kinematic, in probe._environment);
+            double miss = (double3.Unpack(in got) - check).Length();
+            if (!(miss < 0.01))
+            {
+                error = $"could not set the probe's airspeed (missed by {miss:G3} m/s)";
+                return false;
+            }
+
+            error = "";
+            return true;
+        }
+
+        /// <summary>The body-axis force the game applies at this air velocity (body axes), buoyancy included.</summary>
+        public double3 ForceBody(double3 airVelocityBody)
+        {
+            _kinematic.VelocityPhys = airVelocityBody.Transform(_kinematic.Body2Phys) - _frameAirPhys;
+
+            // dt = 0 turns off the semi-implicit limiter stock applies to its drag, which is a property of the integrator rather than of the air. No thrusters, no chutes.
+            Disturbances d = PhysicsStates.ComputeDerivatives(in _origin, in _kinematic, in _props, in _environment,
+                0.0, 0.0, _origin.PositionBub, _origin.VelocityBub, default, default);
+            return d.ForceBody;
+        }
     }
 
     /// <summary>

@@ -1056,7 +1056,7 @@ public sealed class VehicleAutopilotState
 
     // Boostback state machine.
     //
-    // Separation -> Rotation -> Boostback -> EntryOrient, per vehicle like every other phase machine here. See Guidance/Boostback.cs for what each phase does.
+    // Separation -> Rotation -> Boostback -> Glide, per vehicle like every other phase machine here. See Guidance/Boostback.cs for what each phase does.
 
     public GuidanceWindow.BoostbackPhase BoostbackPhase =
         GuidanceWindow.BoostbackPhase.Idle;
@@ -1126,6 +1126,54 @@ public sealed class VehicleAutopilotState
     /// where writes to _manualControlInputs reach the sim.</summary>
     public double BoostbackThrottle;
     public bool BoostbackEngineOn;
+
+    // Boostback glide: a PID on the coast impact point, steering the angle of attack. See Guidance/BoostbackGlide.cs.
+    //
+    // The PID asks for the impact to move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo; the impact Jacobian turns that into lift, and the measured lift curve turns the lift into an angle. The defaults are the ones flat-earth closed-loop runs through KSAero's aero settled on.
+
+    /// <summary>Proportional gain, dimensionless: Kp * miss / tgo^2 is the lateral acceleration asked for. 3 is the textbook zero-effort-miss law; 5 holds up better when the attitude lags the command.</summary>
+    public double GlideKp = 5.0;
+
+    /// <summary>Integral gain, 1/s. Off by default - over a long glide the integral of a shrinking miss becomes a stale bias.</summary>
+    public double GlideKi = 0.0;
+
+    /// <summary>Derivative gain, s, on the low-passed rate the miss is changing at.</summary>
+    public double GlideKd = 0.0;
+
+    /// <summary>Largest angle of attack the glide commands, degrees off engine-first into the wind.</summary>
+    public double GlideMaxAoaDeg = 15.0;
+
+    /// <summary>Miss of the coast impact point from the site, m: along the ground track (positive long) and across it (positive left).</summary>
+    public double GlideMissDownM, GlideMissCrossM;
+
+    /// <summary>The miss as a vector on the ground at the site, body-fixed frame, m; its integral, m-s; and its low-passed rate, m/s.</summary>
+    public double3 GlidePrevMissCcf, GlideIntCcf, GlideRateCcf;
+    public bool GlidePrevValid;
+
+    /// <summary>The commanded tilt of the engine end off the airflow, degrees, as components along the lift-up and lift-left directions, and its size.</summary>
+    public double GlideTiltUpDeg, GlideTiltLeftDeg, GlideAoaDeg;
+
+    /// <summary>The attitude trim wound in on top of the commanded tilt so the vehicle flies it despite the attitude loop's lag, degrees, and the tilt actually being flown.</summary>
+    public double GlideTrimUpDeg, GlideTrimLeftDeg, GlideFlownAoaDeg;
+
+    /// <summary>Which way the active aero model lifts at the glide's AoA: +1 towards the engine tilt, -1 away from it, 0 not enough to steer with.</summary>
+    public int GlideLiftSign;
+
+    /// <summary>Dynamic pressure, Pa, the lateral acceleration asked for, m/s^2, and the time to impact it was sized on, s, at the last update.</summary>
+    public double GlideQ, GlideAccelCmd, GlideTgo = double.NaN;
+
+    /// <summary>The ground track in CCI, carried through a near-vertical fall from the last step that had one.</summary>
+    public double3 GlideHeadingCci;
+    public bool GlideHeadingValid;
+
+    /// <summary>Sim time of the last PID update, and the wall-clock tick that throttles it.</summary>
+    public double GlideLastUpdate = double.NaN;
+    public long GlideTick;
+
+    /// <summary>Sim time of the last glide line written to the game log.</summary>
+    public double GlideLogTime = double.NaN;
+
+    public string GlideStatus = "";
 
     // Weak keys keep this table from retaining vehicles after they are unloaded.
     private static readonly ConditionalWeakTable<Vehicle, VehicleAutopilotState> Table = new();
