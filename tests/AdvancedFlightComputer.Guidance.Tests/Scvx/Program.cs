@@ -17,6 +17,13 @@ const int RowLen = NX + NU + NX + NX * NX + NX * NU;
 
 bool verbose = args.Contains("--verbose");
 
+if (args.Contains("--standby"))
+{
+    StandbyTrackCheck.Verbose = verbose;
+    StandbyTrackCheck.Slow = args.Contains("--slow");
+    return StandbyTrackCheck.Run();
+}
+
 if (args.Contains("--cold-shift"))
     return ColdReferenceShiftCheck.Run();
 

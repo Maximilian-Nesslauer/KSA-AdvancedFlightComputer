@@ -448,7 +448,7 @@ public static partial class GuidanceWindow
         xf[2] = _s.SixDofTargetAltM;
         TerminalAttitude(x, xf);
 
-        double sigmaSeed = _s.Guidance.HasPlan ? _s.SixDofSigmaSeed : _s.SixDofEntrySigmaSeed;
+        double sigmaSeed = _s.Guidance.HasPlan ? SixDofSeedFloor : _s.SixDofEntrySigmaSeed;
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _s.SixDofTiltDeg,
                                    _s.SixDofThrottleFloor, sigmaSeed,
                                    _s.SixDofRateDampShare, _s.SixDofControlSmooth,
@@ -781,16 +781,25 @@ public static partial class GuidanceWindow
     /// than getting one more step in before the cold solve lands. Its attitude command
     /// stays held until the first plan can steer, see ApplyAutopilot.
     /// </summary>
-    private static void Engage6Dof(Vehicle vehicle, bool fromBrakingBurn = false)
+    /// <param name="sigmaSeed">The burn time to seed the cold solve with, when the caller knows it better than the configured seed does: the 3-DOF's time to go.</param>
+    private static void Engage6Dof(Vehicle vehicle, bool fromBrakingBurn = false, double sigmaSeed = double.NaN)
     {
-        double sigmaSeed = _s.SixDofSigmaSeed;
+        double seed = _s.SixDofSigmaSeed;
         if (fromBrakingBurn && double.IsFinite(_s.Upfg.Tgo))
-            sigmaSeed = Math.Max(sigmaSeed, _s.Upfg.Tgo);
-        _s.SixDofEntrySigmaSeed = sigmaSeed;
+            seed = Math.Max(seed, _s.Upfg.Tgo);
+        if (double.IsFinite(sigmaSeed) && sigmaSeed > 0.0)
+            seed = sigmaSeed;
+        // A standby already has its guidance, built on its own seed, and the plans it has published; the step promotes it rather than starting again (see SixDofStandby.cs).
+        bool standby = _s.SixDofStandby;
+        if (!standby)
+            _s.SixDofEntrySigmaSeed = seed;
         ClaimVehicle(GuidanceMode.SixDof, vehicle);
         _s.SixDofFromBrakingBurn = fromBrakingBurn;
-        _s.SixDofLastPlanTime = double.NaN;
-        _s.SixDofLastPublishedPlan = null;
+        if (!standby)
+        {
+            _s.SixDofLastPlanTime = double.NaN;
+            _s.SixDofLastPublishedPlan = null;
+        }
         _s.EngagePending = true;
     }
 
@@ -826,6 +835,7 @@ public static partial class GuidanceWindow
         _s.Active = false;
         _s.EngagePending = false;
         _s.Converging = false;
+        _s.SixDofStandby = false;
         _s.SixDofFromBrakingBurn = false;
         _s.SixDofLastPublishedPlan = null;
 
@@ -948,13 +958,13 @@ public static partial class GuidanceWindow
         }
     }
 
-    // A retry starts from the horizon the stalled solve had reached, and a descent that already has a plan never goes below the configured seed.
+    // A retry starts from the horizon the stalled solve had reached, and a descent that already has a plan never goes below the seed floor (see SixDofSeedFloor).
     private static double RetrySigma(Ksa6DofGuidance stalled)
     {
         double sigma = stalled.WorkingSigma;
         if (!double.IsFinite(sigma) || sigma <= 0.0)
             sigma = stalled.HasPlan ? stalled.Sigma : _s.SixDofEntrySigmaSeed;
-        return stalled.HasPlan ? Math.Max(sigma, _s.SixDofSigmaSeed) : sigma;
+        return stalled.HasPlan ? Math.Max(sigma, SixDofSeedFloor) : sigma;
     }
 
     // Starts the G-FOLD fallback clock again from this plan.
@@ -1030,7 +1040,10 @@ public static partial class GuidanceWindow
         if (_s.EngagePending)
         {
             _s.EngagePending = false;
-            if (!Engage6Dof(vehicle, parent, siteCci, x, now))
+            // A standby has been solving through the 3-DOF's burn, and takes over where it is.
+            if (_s.SixDofStandby && _s.Guidance != null)
+                PromoteSixDofStandby(vehicle, now, x);
+            else if (!Engage6Dof(vehicle, parent, siteCci, x, now))
                 return;
             double speed = Universe.GetSimulationSpeed();
             if (Universe.IsAutoWarpActive || speed > 1.0)
@@ -1144,7 +1157,7 @@ public static partial class GuidanceWindow
             TerminalAttitude(x, xfR);
             // No pacing when threaded: spacing iterations out exists to keep frames smooth, and off the sim thread there is no frame to protect - it would only make the vehicle fall further before it has a plan.
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
-            double sigmaR = Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed);
+            double sigmaR = Math.Max(_s.Guidance.Sigma, SixDofSeedFloor);
 
             // Refusals keep the plan; drift does not.
             // BeginWarmRestart declines if there is no plan to keep, in which case there is nothing to choose between them and the straight line is all that is left.
@@ -1239,7 +1252,7 @@ public static partial class GuidanceWindow
                     _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
                     // A rebuild that carried the plan across continues its horizon; one without a plan continues the stalled solve's.
                     double sigma = rebuiltPlan != null
-                        ? Math.Max(_s.Guidance.Sigma, _s.SixDofSigmaSeed) : retrySigma;
+                        ? Math.Max(_s.Guidance.Sigma, SixDofSeedFloor) : retrySigma;
                     _s.Guidance.BeginCold(x, xfMore,
                         Math.Clamp(sigma, _s.Guidance.SigmaMin, _s.Guidance.SigmaMax));
                     _s.ColdFrames = 0;
@@ -1488,9 +1501,11 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The solver configuration for this craft landing at the site from state <paramref name="x"/>: the target state, the node count to engage with, and the model. False, with the reason, if the craft cannot be planned for.
     /// </summary>
+    /// <param name="nodes">The node count to build with, overriding the engage choice; 0 for that choice.</param>
     private static bool TryConfigure6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci, double[] x,
                                          out double[] xf, out int engageNodes,
-                                         out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn, out string error)
+                                         out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn, out string error,
+                                         int nodes = 0)
     {
         // THE AUTO THROTTLE FLOOR IS RESOLVED HERE, where it is consumed, and nowhere else.
         // KSA knows the vehicle's real minimum throttle; the 0.40 default is the Python test case's value, and overstating it is what makes an otherwise fine vehicle read as "over-powered" and the cold solve come back infeasible.
@@ -1510,7 +1525,8 @@ public static partial class GuidanceWindow
 
         // Spread cold solves engage COARSE; everything else uses the configured count.
         // The ladder takes over from the first cycle, so this is a starting point rather than a choice about how the descent is flown.
-        engageNodes = _s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed
+        engageNodes = nodes > 0 ? nodes
+            : _s.SixDofSpreadCold && !_s.SixDofFixedTime && !_s.SixDofGfoldSeed
             ? ColdNodesFor(_s.SixDofEntrySigmaSeed)
             : _s.SixDofNodes;
 

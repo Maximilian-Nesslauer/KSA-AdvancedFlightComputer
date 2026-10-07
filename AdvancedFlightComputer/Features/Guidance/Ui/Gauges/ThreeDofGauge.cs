@@ -49,6 +49,8 @@ public static partial class GuidanceWindow
             // As of the solver's last idle moment: the guidance is the worker's while it solves, so the step caches this rather than the draw reading it.
             GaugeRowText("Last solve", _s.ThreeDofSolveText.Length > 0 ? _s.ThreeDofSolveText : "       -",
                 _s.ThreeDofRefusing ? warn : dim);
+            GaugeRowText("6-DOF standby", _s.ThreeDofPhase == ThreeDofPhase.Burn ? SixDofStandbyText(now) : "       -",
+                SixDofStandbyReady(now) ? good : dim);
             ImGuiHelper.EndRegion();
         }
 

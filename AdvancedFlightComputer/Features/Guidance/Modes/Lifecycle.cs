@@ -68,6 +68,7 @@ public static partial class GuidanceWindow
         }
         _s.Worker = null;
         _s.Guidance = null;
+        _s.SixDofStandby = false;
 
         // The ascent solve owns nothing of the game, so cancelling it is all the cleanup it needs.
         _s.AscentPlanJob?.Cancel();

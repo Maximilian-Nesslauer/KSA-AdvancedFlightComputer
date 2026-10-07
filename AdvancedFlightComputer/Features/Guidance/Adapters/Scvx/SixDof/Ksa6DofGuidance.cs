@@ -43,6 +43,12 @@ public sealed class Ksa6DofGuidance
     private double _planSigma;
     private double _solveTime;          // sim time at which node 0 was the vehicle
 
+    // Track's working trajectory: the solver's latest reference and when its node 0 was the vehicle, kept whether or not it passed the gate.
+    private double[] _workX = [];
+    private double[] _workU = [];
+    private double _workSigma;
+    private double _workTime = double.NegativeInfinity;
+
     public ScvxStatus Status { get; private set; } = ScvxStatus.Failed;
     public string Error { get; private set; } = "";
     public int LastIterations { get; private set; }
@@ -928,6 +934,50 @@ public sealed class Ksa6DofGuidance
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// A re-solve for a craft something else is flying - the 6-DOF standby under the 3-DOF's burn - that carries on from its OWN latest trajectory rather than from the published plan.
+    ///  Update assumes the vehicle is following the plan: it seeds from the published plan, starts in a tight trust region, and throws a refused attempt away, so the next one starts from the same plan again, older. On a craft flying another guidance's thrust profile the measured state leaves the plan a little further every cycle, so each attempt is refused, and every one starts further behind - in flight the standby published nothing for 1.8 s after converging, from 600 m to just before the hand-over.
+    ///  This keeps the solver's reference whether or not it passed the gate, and the next call shifts it forward to now and re-anchors it at the measured state, so the iterations add up and the solve keeps pace with the craft. Whatever passes the warm gate is published exactly as Update's would be. The trust region carries over between calls rather than resetting to the warm one, because this continues a solve rather than starting one.
+    /// </summary>
+    public bool Track(double[] x0, double simNow, int maxIterations = 2)
+    {
+        if (!HasPlan)
+            return false;
+        // Fixed time counts a committed burn down; this is free-time only, and the standby never runs fixed time.
+        if (FixedTime)
+            return Update(x0, simNow, maxIterations);
+
+        CommitInputs();
+        ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
+
+        // From whichever is newer: the working trajectory, or a plan published since by a cold solve.
+        bool fromWork = _workX.Length == _planX.Length && _workTime > _solveTime;
+        double[] baseX = fromWork ? _workX : _planX;
+        double[] baseU = fromWork ? _workU : _planU;
+        double baseSigma = fromWork ? _workSigma : _planSigma;
+        double elapsed = Math.Max(0.0, simNow - (fromWork ? _workTime : _solveTime));
+
+        // Resampled onto the shrinking horizon and re-anchored, as BuildShiftedSeed does for the published plan.
+        double sigma = Math.Max(_cfg.SigmaMin, baseSigma - elapsed);
+        var xs = new double[_n * NX];
+        var us = new double[_n * NU];
+        ResamplePlan(baseX, baseU, _n, baseSigma, elapsed, _n, sigma / (_n - 1), xs, us);
+        Array.Copy(x0, 0, xs, 0, NX);
+        LastBranchFlips = AlignQuaternionBranch(xs, _n);
+
+        FellBack = false;
+        double region = Math.Clamp(_solver.TrustRegion, WarmTrustRegion, _solver.TrustRegionMax);
+        LastTrustRegionStart = region;
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: region);
+        bool ok = Finish(x0, simNow, maxIterations, budgetMs: RecoveryCycleBudgetMs);
+
+        _workX = (double[])_solver.ReferenceX.Clone();
+        _workU = (double[])_solver.ReferenceU.Clone();
+        _workSigma = _solver.Sigma;
+        _workTime = simNow;
+        return ok;
     }
 
     /// <summary>

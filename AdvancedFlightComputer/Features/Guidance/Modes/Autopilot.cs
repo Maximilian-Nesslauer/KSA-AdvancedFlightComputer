@@ -892,6 +892,10 @@ public static partial class GuidanceWindow
         if (mode != GuidanceMode.Boostback)
             _s.BoostbackPhase = BoostbackPhase.Idle;
 
+        // The 6-DOF standby the 3-DOF's burn keeps is for 6-DOF only; anything else taking the craft ends it.
+        if (mode != GuidanceMode.SixDof)
+            StopSixDofStandby();
+
         // The 3-DOF hands over to terminal hover and to 6-DOF with the engine lit, so letting go of it cuts nothing; the incoming mode owns the engine from here.
         if (mode != GuidanceMode.ThreeDof && _s.ThreeDofPhase != ThreeDofPhase.Idle)
         {
@@ -1345,6 +1349,7 @@ public static partial class GuidanceWindow
         _s.Active = false;
         _s.EngagePending = false;
         _s.Converging = false;
+        _s.SixDofStandby = false;
         _s.HandoverPendingUntil = double.NegativeInfinity;
 
         string failure = "";

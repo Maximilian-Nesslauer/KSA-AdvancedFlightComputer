@@ -739,6 +739,19 @@ public sealed class VehicleAutopilotState
     public bool SixDofFromBrakingBurn;
 
     /// <summary>
+    /// 6-DOF is solving on standby through the 3-DOF's landing burn: Guidance, Worker and Converging are its, and nothing it plans is flown until the hand-over sets Active (see SixDofStandby.cs).
+    /// </summary>
+    public bool SixDofStandby;
+
+    /// <summary>Sim time the standby's current cold solve started, the earliest it may be set up again after a refusal, and the last refusal's reason.</summary>
+    public double SixDofStandbyStart, SixDofStandbyRetryAt = double.NegativeInfinity;
+    public string SixDofStandbyRefusal = "";
+
+    /// <summary>Standby re-solves refused since its last published plan, and when the standby last logged that it was not publishing.</summary>
+    public int SixDofStandbyRefusals;
+    public double SixDofStandbyLogTime = double.NegativeInfinity;
+
+    /// <summary>
     /// This craft asks to be recorded when it engages, or at once when switched on in flight. The log itself is a single
     /// global sink and grants the first claimant - see SixDofLog.Start, which refuses
     /// a second owner rather than interleaving two craft into one CSV.
@@ -1209,6 +1222,9 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Hand the landing burn to 6-DOF below this speed, for its rotational model of the final flare: the 3-DOF's horizon collapses in the last seconds and its re-solves start being refused there. On by default.</summary>
     public bool ThreeDofSixDofHandover = true;
+
+    /// <summary>Set once the burn is below the hand-over speed with 6-DOF not ready yet, so that is logged once.</summary>
+    public bool ThreeDofSixDofWaiting;
     public double ThreeDofSixDofSpeedMs = 100.0;
 
     /// <summary>Where the 3-DOF burn ends: this high over the site, sinking this fast. Terminal hover takes the last metres.</summary>

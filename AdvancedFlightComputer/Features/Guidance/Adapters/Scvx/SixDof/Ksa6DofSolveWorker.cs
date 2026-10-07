@@ -10,6 +10,7 @@ public enum Ksa6DofJob
     Update,
     StepCold,
     Rebuild,
+    Track,
 }
 
 public sealed record Ksa6DofSolveResult(
@@ -63,6 +64,10 @@ public sealed class Ksa6DofSolveWorker : IDisposable
 
     public bool TryDispatchStepCold(Ksa6DofGuidance guidance, double[] x0, double now)
         => Dispatch(Ksa6DofJob.StepCold, guidance, x0, now, 1, null);
+
+    /// <summary>A standby re-solve: see Ksa6DofGuidance.Track.</summary>
+    public bool TryDispatchTrack(Ksa6DofGuidance guidance, double[] x0, double now, int maxIterations)
+        => Dispatch(Ksa6DofJob.Track, guidance, x0, now, maxIterations, null);
 
     public bool TryDispatchRebuild(Func<Ksa6DofGuidance, double[], double, Ksa6DofGuidance> rebuild,
                                    Ksa6DofGuidance from, double[] x0, double now)
@@ -151,6 +156,10 @@ public sealed class Ksa6DofSolveWorker : IDisposable
                             break;
                         case Ksa6DofJob.StepCold:
                             ok = request.Guidance.StepCold(request.X0, request.Now);
+                            if (!ok) error = request.Guidance.Error;
+                            break;
+                        case Ksa6DofJob.Track:
+                            ok = request.Guidance.Track(request.X0, request.Now, request.MaxIterations);
                             if (!ok) error = request.Guidance.Error;
                             break;
                         case Ksa6DofJob.Rebuild:
