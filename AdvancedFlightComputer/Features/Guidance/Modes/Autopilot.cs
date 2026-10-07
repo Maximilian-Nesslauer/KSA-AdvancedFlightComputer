@@ -246,6 +246,9 @@ public static partial class GuidanceWindow
         internal double SiteLatDeg;
         internal double SiteLonDeg;
         internal double ExpiresAt;
+
+        // The stack the booster is being dropped from, which it must clear before it lights, see TryAdoptBooster.
+        internal Vehicle From;
     }
 
     private static readonly List<BoosterHandover> _handovers = new List<BoosterHandover>();
@@ -297,6 +300,7 @@ public static partial class GuidanceWindow
                 {
                     RootId = root.InstanceId,
                     ExpiresAt = now + HandoverWindowS,
+                    From = vehicle,
                 });
             }
         }
@@ -370,6 +374,16 @@ public static partial class GuidanceWindow
         _s.SiteLonDeg = mine.SiteLonDeg;
         GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
+        // ENGINE OFF ON THIS FRAME, and the settling burn held until the two are clear. A split vehicle inherits the stack's control inputs, so a booster dropped under the reserve comes away still burning - and from below the stage it let go of, that thrust drives it straight back into it, whose engine is usually held for a few seconds yet. KSA breaks the parts that hit: the first flights lost the booster's interstage, which took this vehicle and its boostback with it and left the rest of the booster as a new craft nothing was flying. The engage below can take seconds to stick, so the cut cannot wait for it. Written before any claim, but the inputs are the ascent's, inherited, not the player's.
+        ref ManualControlInputs inputs = ref ManualInputs(vehicle);
+        inputs.EngineOn = false;
+        if (mine.From is { IsDisposed: false } stage)
+        {
+            _s.BoostbackClearOf = stage;
+            _s.BoostbackClearFromM = SeparationDistance(vehicle, stage);
+            _s.BoostbackClearGapM = 0.0;
+        }
+
         // NOT engaged here, deliberately. This runs on the frame the split happened, which is the frame the part tree is least settled - and ExecuteBoostback needs an aero surrogate fitted to a bounding box that may not exist yet. It refuses rather than throwing, and refusing here would leave a booster that had been adopted and would never be flown, with the hand-over record already consumed. So the engage is retried from the sweep until it takes.
         _s.HandoverPendingUntil = now + HandoverWindowS;
         return true;
@@ -415,6 +429,10 @@ public static partial class GuidanceWindow
     }
 
     private const double HandoverRetryS = 0.5;
+
+    /// <summary>Centre-of-mass distance between two craft, m.</summary>
+    private static double SeparationDistance(Vehicle a, Vehicle b)
+        => (a.Orbit.StateVectors.PositionCci - b.Orbit.StateVectors.PositionCci).Length();
 
     // The part whose subtree separates when this decoupler fires: the tree-child side of its connection - the same rule Vehicle.Split applies.
     private static Part DetachedRoot(Decoupler decoupler)

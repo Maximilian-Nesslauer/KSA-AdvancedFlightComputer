@@ -1077,6 +1077,17 @@ public sealed class VehicleAutopilotState
     /// <summary>Settling burn at minimum throttle after separation, s.</summary>
     public double BoostbackSeparationS = 2.0;
 
+    /// <summary>How far a booster handed over at separation coasts engine-off away from the stage it left before the settling burn lights, m: the distance between the two must have opened this much since the split.</summary>
+    public double BoostbackClearanceM = 30.0;
+
+    /// <summary>
+    /// The stage a booster handed over at separation was dropped from, while the booster is still too close to light its engine; null otherwise. Set when the sweep adopts the booster, cleared once it is clear (see BoosterClear).
+    /// </summary>
+    public Vehicle BoostbackClearOf;
+
+    /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>
+    public double BoostbackClearFromM, BoostbackClearGapM;
+
     /// <summary>
     /// How fast the commanded attitude turns during the rotation and entry slews,
     /// deg/s. Unlike the ascent's MaxSlewDegS this is not a guard against a
@@ -1196,9 +1207,9 @@ public sealed class VehicleAutopilotState
     /// <summary>The glide's predicted time to impact, s, at which the 3-DOF takes it over. The PID glide flies on until the first plan.</summary>
     public double ThreeDofEngageTgoS = 90.0;
 
-    /// <summary>Hand the landing burn to 6-DOF below this speed, for a more precise touchdown. Off by default.</summary>
-    public bool ThreeDofSixDofHandover;
-    public double ThreeDofSixDofSpeedMs = 50.0;
+    /// <summary>Hand the landing burn to 6-DOF below this speed, for its rotational model of the final flare: the 3-DOF's horizon collapses in the last seconds and its re-solves start being refused there. On by default.</summary>
+    public bool ThreeDofSixDofHandover = true;
+    public double ThreeDofSixDofSpeedMs = 100.0;
 
     /// <summary>Where the 3-DOF burn ends: this high over the site, sinking this fast. Terminal hover takes the last metres.</summary>
     public double ThreeDofAimHeightM = 20.0;

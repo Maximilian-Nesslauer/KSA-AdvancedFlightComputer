@@ -118,6 +118,12 @@ public sealed class Guidance3Dof
         /// <summary>Smallest length scale, m, so the last metres of a burn are not divided by nearly nothing.</summary>
         public double MinLengthScale { get; init; } = 30.0;
 
+        /// <summary>
+        /// Bounds on the duration scale, s. It is set ONCE, at the cold solve, from the seed's burn time - not resized with the time left, see <see cref="Rescale"/>.
+        /// </summary>
+        public double MinSigmaScale { get; init; } = 5.0;
+        public double MaxSigmaScale { get; init; } = 30.0;
+
         /// <summary>Integration step for the ignition prediction, s.</summary>
         public double PredictionStep { get; init; } = 0.05;
     }
@@ -180,7 +186,11 @@ public sealed class Guidance3Dof
             return false;
         }
         if (_set.Scaling != ScalingMode.Fixed)
-            Rescale(_two.Config, x0, sg + sb);
+        {
+            Rescale(_two.Config, x0);
+            // The duration scale, once, for both solvers: the seed's burn time, as the 6-DOF sizes its own from the burn time at engage.
+            _two.Config.SigmaScale = _burn.Config.SigmaScale = Math.Clamp(sb, _set.MinSigmaScale, _set.MaxSigmaScale);
+        }
         _two.Initialize(x0, xf, xs, us, sg, sb);
         _two.MaxSubproblemIterations = _two.EscalatedSubproblemIterations = _set.ColdAdmmCap;
         _coldStart = now;
@@ -350,7 +360,7 @@ public sealed class Guidance3Dof
         var sw = System.Diagnostics.Stopwatch.StartNew();
         // Every solve, or only when this solver starts, which for the burn is the lock.
         if (_set.Scaling == ScalingMode.EverySolve || (_set.Scaling == ScalingMode.AtLock && !reseed))
-            Rescale(solver.Config, x0, sigG + sigB);
+            Rescale(solver.Config, x0);
         double tr = ConsecutiveRefusals > 0 ? solver.TrustRegionMax : _set.WarmTrustRegion;
         if (reseed)
         {
@@ -381,11 +391,13 @@ public sealed class Guidance3Dof
     }
 
     /// <summary>
-    /// Size the solver's units to the problem left, before every solve (see <see cref="ScalingMode"/>): a length scale per axis, a speed scale, the present mass and the time left.
+    /// Size the solver's units to the problem left, before every solve (see <see cref="ScalingMode"/>): a length scale per axis, a speed scale and the present mass.
+    ///
+    /// NOT THE DURATION SCALE. It also sizes the trust region on the two durations - each may move tr x SigmaScale per iteration - and sized from the time left it was 80-90 s through the glide: four seconds of ignition time per iteration, three iterations a cycle, on a cost that barely cares when the engine lights. Every re-solve published a different timeline, the ignition time wandered two seconds either way, and the glide attitude wandered with it. It is set once at the cold solve instead, from the burn time, as the 6-DOF's is: a fraction of a second per iteration, so the timeline moves only when the problem moves it.
     ///
     /// PER AXIS, NOT ISOTROPIC as the 6-DOF's. A glide is far taller than it is wide - 30 km of height against a few of range - and one length for all three axes sized by the height left the cross-range to resolve in 30 km units: offline, a 2 km cross-range cold solve that converges on per-axis scales stopped converging. The horizontal scale is the horizontal range to the aim point, floored at a tenth of the height, since the path can swing wider than the straight line; the vertical scale is the height.
     /// </summary>
-    private void Rescale(Scvx3DofConfig cfg, double[] x0, double sigTotal)
+    private void Rescale(Scvx3DofConfig cfg, double[] x0)
     {
         double dx = x0[0] - _xf[0], dy = x0[1] - _xf[1], dz = x0[2] - _xf[2];
         double height = Math.Max(Math.Abs(dz), _set.MinLengthScale);
@@ -394,7 +406,6 @@ public sealed class Guidance3Dof
         double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
         double velocity = Math.Max(Math.Max(speed, Math.Sqrt(height * g)), 1.0);
         cfg.XScale = [across, across, height, velocity, velocity, velocity, Math.Max(x0[PointMass3Dof.IM], 1.0)];
-        cfg.SigmaScale = Math.Max(sigTotal, 1.0);
     }
 
     private bool Gate(Scvx3DofSolver solver, out double gated)

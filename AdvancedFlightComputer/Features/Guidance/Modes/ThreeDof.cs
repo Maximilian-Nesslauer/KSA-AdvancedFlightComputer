@@ -21,7 +21,7 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 //
 // FALLBACKS. Before the burn: a cold solve that fails, or a run of refused re-solves, flies the PID glide again and starts a fresh cold solve. After ignition the glide cannot catch it, so a plan that runs out, or a long run of refusals, hands the burn to 6-DOF, which flies in air on its own model.
 //
-// HANDOVERS. At the aim point - ThreeDofAimHeightM over the site, sinking ThreeDofAimSinkMs - terminal hover lands it. Optionally, below ThreeDofSixDofSpeedMs, 6-DOF takes the burn instead, for its rotational model of the final flare.
+// HANDOVERS. At the aim point - ThreeDofAimHeightM over the site, sinking ThreeDofAimSinkMs - terminal hover lands it - unless, below ThreeDofSixDofSpeedMs (100 m/s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare.
 //
 // TODO (offline harness, --3dof-mpc): a vehicle with 30 % less lift than its table misses by 20-30 m, and combined dispersions leave 2.5 m/s of horizontal speed at the aim point. The 6-DOF handover is not pre-warmed: 6-DOF starts its cold solve when the speed threshold is crossed.
 public static partial class GuidanceWindow

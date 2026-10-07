@@ -55,6 +55,12 @@ public static partial class GuidanceWindow
             switch (_s.BoostbackPhase)
             {
                 case BoostbackPhase.Separation:
+                    if (_s.BoostbackClearOf != null)
+                    {
+                        GaugeRowText("Clearing", $"{_s.BoostbackClearGapM,8:F0} / {_s.BoostbackClearanceM:F0} m");
+                        GaugeRowText("Throttle", "       0 %  (coasting clear)");
+                        break;
+                    }
                     GaugeRowText("Settling", $"{inPhase,8:F1} / {_s.BoostbackSeparationS:F1} s");
                     GaugeRowText("Throttle", $"{_s.BoostbackThrottle * 100.0,8:F0} %  (vehicle floor)");
                     break;
@@ -142,6 +148,7 @@ public static partial class GuidanceWindow
             ImGui.NextColumn();
         }
 
+        GaugeRow("Clearance at separation (m)", "##bbclear", ref _s.BoostbackClearanceM);
         GaugeRow("Settling burn (s)", "##bbsep", ref _s.BoostbackSeparationS);
         GaugeRow("Slew rate (deg/s)", "##bbslew", ref _s.BoostbackSlewDegS);
 

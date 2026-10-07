@@ -12,7 +12,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //
 // These phases run in order and end on a condition where possible:
 //
-// - Separation uses the vehicle's lowest throttle for 2 s to settle propellant and move the booster clear while holding its attitude.
+// - Separation uses the vehicle's lowest throttle for 2 s to settle propellant while holding its attitude. A booster handed over at separation first coasts engine-off until it is BoostbackClearanceM clear of the stage it left: below that stage its thrust points straight at it (see TryAdoptBooster).
 // - Rotation slews the thrust axis to the boostback dV at a limited rate while gimbals turn the booster at minimum throttle.
 // - The flight computer receives both the attitude and its rate through KsaAttitudeRate, so it tracks the slew instead of stationary targets.
 // - Boostback follows a BoostbackShooter arc at full throttle and resolves it every 2 s.
@@ -262,6 +262,10 @@ public static partial class GuidanceWindow
         _s.BoostbackEngineOn = false;
         ResetGlide();
 
+        // Only a booster adopted at separation has a stage alongside to clear, see TryAdoptBooster. A manual engage, or one after the hand-over window, settles at once.
+        if (!(_s.HandoverPendingUntil > SimNow()))
+            _s.BoostbackClearOf = null;
+
         // The attitude separation left us in, latched so the hold is a fixed inertial direction rather than a fresh reading of a vehicle that is drifting.
         // It is also what the rotation slews FROM, so the two phases join continuously.
         _s.BoostbackHoldDir = ThrustAxisCci(vehicle);
@@ -282,6 +286,7 @@ public static partial class GuidanceWindow
         _s.BoostbackEngineOn = false;
         _s.LandingCutPending = true;   // the one-shot engine cut in ApplyAutopilot
         _s.HasCommand = false;
+        _s.BoostbackClearOf = null;
         _s.BoostbackStatus = "Aborted.";
     }
 
@@ -388,6 +393,13 @@ public static partial class GuidanceWindow
         switch (_s.BoostbackPhase)
         {
             case BoostbackPhase.Separation:
+                // Engine off until clear of the stage it left; the settling burn's clock starts from there.
+                if (_s.BoostbackClearOf != null)
+                {
+                    if (!BoosterClear(vehicle, now))
+                        break;
+                    _s.BoostbackPhaseStart = now;
+                }
                 if (now - _s.BoostbackPhaseStart >= Math.Max(_s.BoostbackSeparationS, 0.0))
                     EnterBoostbackPhase(BoostbackPhase.Rotation, now);
                 break;
@@ -752,6 +764,13 @@ public static partial class GuidanceWindow
         switch (_s.BoostbackPhase)
         {
             case BoostbackPhase.Separation:
+                // Still alongside the stage it left: coasting, see TryAdoptBooster.
+                if (_s.BoostbackClearOf != null)
+                {
+                    _s.BoostbackThrottle = 0.0;
+                    _s.BoostbackEngineOn = false;
+                    break;
+                }
                 _s.BoostbackThrottle = SettleThrottle(vehicle);
                 _s.BoostbackEngineOn = true;
                 break;
@@ -805,6 +824,30 @@ public static partial class GuidanceWindow
     }
 
     // ------------------------------------------------------------------ helpers
+
+    /// <summary>How long a booster coasts waiting to clear the stage it left before it settles anyway, s. Long enough for any upper stage that lights at all to be well away.</summary>
+    private const double BoostbackClearTimeoutS = 30.0;
+
+    /// <summary>
+    /// True once a booster handed over at separation is far enough from the stage it left to light its engine: the distance between the two has opened by BoostbackClearanceM since the split, the stage is gone, or the wait has run out. Clears <see cref="VehicleAutopilotState.BoostbackClearOf"/> when it says so.
+    /// The opening is measured rather than the gap itself because the two centres of mass start a half-length or so apart, which depends on the vehicles.
+    /// </summary>
+    private static bool BoosterClear(Vehicle vehicle, double now)
+    {
+        Vehicle stage = _s.BoostbackClearOf;
+        bool gone = stage == null || stage.IsDisposed;
+        _s.BoostbackClearGapM = gone ? double.NaN : SeparationDistance(vehicle, stage) - _s.BoostbackClearFromM;
+        double waited = now - _s.BoostbackPhaseStart;
+        bool timedOut = waited >= BoostbackClearTimeoutS;
+        if (!gone && !timedOut && _s.BoostbackClearGapM < _s.BoostbackClearanceM)
+            return false;
+
+        GuidanceLog.Debug(vehicle, gone
+            ? $"the stage it separated from is gone after {waited:F1} s, settling."
+            : $"{_s.BoostbackClearGapM:F0} m clear of '{stage.Id}' after {waited:F1} s{(timedOut ? " (waited the limit)" : "")}, settling.");
+        _s.BoostbackClearOf = null;
+        return true;
+    }
 
     /// <summary>Token throttle for a vehicle whose minimum is not usable. See
     /// <see cref="SettleThrottle"/>.</summary>
