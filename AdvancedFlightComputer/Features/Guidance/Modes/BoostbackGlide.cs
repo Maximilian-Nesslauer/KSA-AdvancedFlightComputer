@@ -10,8 +10,8 @@ using AdvancedFlightComputer.Guidance.Numerics;
 
 // The glide: from boostback cutoff to the ground, a PID on the coast impact point steers the angle of attack.
 //
-// WHAT IS STEERED ON. The prediction the overlay draws - where the vehicle lands if it coasts engine-first into the wind (alpha 0) from here, the 0% throttle impact point - and its miss from the site, a vector on the ground.
-// Flying a non-zero alpha moves the vehicle off the path that prediction assumes, which is the point: the lift walks the trajectory, the next prediction sees where it has walked to, and the loop closes on that. As the miss goes to zero the command goes back to alpha 0 and the prediction comes true.
+// WHAT IS STEERED ON. The prediction the overlay draws - where the vehicle lands if it glides from here engine-first at the planned angle of attack (GlideNominalAoaDeg, 7.5 degrees) with its lift up the trajectory - and its miss from the site, a vector on the ground. The boostback burn aims this same prediction at the site, so the glide's lift buys range the burn no longer has to; at a planned angle of 0 it is the engine-first ballistic coast.
+// The PID's lift is a correction ON TOP OF the planned glide's: flying other than the planned angle moves the vehicle off the path that prediction assumes, which is the point - the lift walks the trajectory, the next prediction sees where it has walked to, and the loop closes on that. As the miss goes to zero the command goes back to the planned angle and the prediction comes true.
 //
 // WHAT THE PID ASKS FOR IS A RATE: the impact should move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo, with tgo the prediction's own time to impact. Which lift does that is not assumed but MEASURED: one velocity Jacobian of the coast prediction says how far the impact moves per m/s of push along each lift axis, and a damped two-by-two least squares picks the lift that moves it at the asked-for rate. The Jacobian grows like the time to go, so the lift asked for is Kp miss / tgo^2 - the zero-effort-miss guidance law, Kp 3 its textbook gain - and one set of gains is right from cutoff to the ground.
 //  Assuming instead that lift up stretches the impact and lift left moves it left is right for a vehicle that is descending, and wrong for one still climbing after its boostback, where "up" off a steep climb points mostly backwards and pulls the impact in. That version pushed the impact a kilometre the wrong way for as long as the climb lasted, and then had to spend the glide's range winning it back.
@@ -40,6 +40,11 @@ public static partial class GuidanceWindow
     /// <summary>Least lift-to-drag at the maximum AoA that counts as lift worth steering with. Low on purpose: a little lift early is worth more than a lot of it late.</summary>
     private const double GlideMinLiftToDrag = 0.02;
 
+    /// <summary>
+    /// Least lift acceleration the maximum AoA must buy before the PID steers, m/s^2. Below it the air is too thin for an angle to move the impact, and the PID holds the planned glide instead: its correction is an acceleration that does not shrink with the air, while the planned glide's lift does, so in near-vacuum even a few hundred metres of miss swamped the plan and saturated the command at the AoA limit in the correction's direction - 12 degrees nose-down on the way into the atmosphere, for a miss the thick air would fix with a degree.
+    /// </summary>
+    private const double GlideMinAuthority = 0.05;
+
     /// <summary>Requests below this fraction of the maximum lift ramp the angle linearly from zero, keeping the command continuous through the dead band near alpha 0.</summary>
     private const double GlideLiftRamp = 0.02;
 
@@ -66,6 +71,22 @@ public static partial class GuidanceWindow
 
     /// <summary>The trim only integrates while the flown tilt is within this of the asked one, degrees: a steady lag of a degree or two, not a manoeuvre still in progress.</summary>
     private const double GlideTrimMaxErrorDeg = 5.0;
+
+    /// <summary>
+    /// The angle the boostback plans its glide at, radians - <see cref="VehicleAutopilotState.GlideNominalAoaDeg"/>, held inside the maximum - or 0 when this airframe's lift there is not worth steering with, the same test the PID uses, so a prediction never assumes a glide the PID will not fly.
+    /// </summary>
+    private static double GlideNominalAlpha(KsaAeroSweep.Result aero)
+    {
+        if (aero?.Table == null || aero.Lift == null)
+            return 0.0;
+        double deg = Math.Clamp(_s.GlideNominalAoaDeg, 0.0, Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0));
+        if (!(deg > 0.0))
+            return 0.0;
+        double rad = deg * Math.PI / 180.0;
+        // Judged at Mach 1, where a returning booster spends the thick air.
+        double cl = aero.LiftAt(1.0, rad), cd = aero.Table.Cd(1.0, rad);
+        return cd > 0.0 && Math.Abs(cl / cd) >= GlideMinLiftToDrag ? rad : 0.0;
+    }
 
     private static void ResetGlide()
     {
@@ -214,7 +235,7 @@ public static partial class GuidanceWindow
         _s.GlideQ = q;
         if (!(q > 0.0))
         {
-            HoldGlide("Above the atmosphere - holding alpha 0.");
+            HoldPlannedGlide(aero, "Above the atmosphere - holding the planned glide.");
             return;
         }
 
@@ -226,8 +247,9 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
-            Alpha = 0.0,
+            Alpha = GlideNominalAlpha(aero),
             Table = aero.Table,
+            LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
         var opt = ImpactOptions.Default(parent.MeanRadius);
@@ -270,8 +292,20 @@ public static partial class GuidanceWindow
         // THE PID, as the rate the impact should move at: (Kp miss + Ki integral + Kd rate) / tgo, back towards the site. With the Jacobian scaling like the time to go, the lift this asks for is the zero-effort-miss law's Kp miss / tgo^2.
         double tgo = Math.Max(nom.TimeOfFlight.V, GlideMinTgo);
         _s.GlideTgo = tgo;
+
+        // NOT IN AIR TOO THIN TO STEER IN. The miss and the time to go above are still wanted - the readout, and the 3-DOF's engage gate - but an angle up here buys nothing, so the vehicle holds the glide the boostback planned and enters the atmosphere in that attitude. The integral waits too.
+        if (q * aero.ReferenceArea * Math.Abs(clMaxAoa) / mass < GlideMinAuthority)
+        {
+            HoldPlannedGlide(aero, "Air too thin to steer - holding the planned glide.");
+            return;
+        }
+
         double3 pid = _s.GlideKp * miss + _s.GlideKi * _s.GlideIntCcf + _s.GlideKd * _s.GlideRateCcf;
         SolveGlideLift(perUp, perLeft, -pid / tgo, out double aUp, out double aLeft);
+        // ON TOP OF THE PLANNED GLIDE. The prediction assumes the nominal angle's lift, up the trajectory, so that is what flies at zero miss and the PID's lift is a correction to it; with no miss left the vehicle flies the glide the boostback planned for.
+        double nominal = sys.Alpha;
+        if (nominal > 0.0)
+            aUp += q * aero.ReferenceArea * Math.Abs(aero.LiftAt(mach, nominal)) / mass;
         double accel = Math.Sqrt(aUp * aUp + aLeft * aLeft);
         _s.GlideAccelCmd = accel;
 
@@ -361,6 +395,17 @@ public static partial class GuidanceWindow
         }
         aUp = (m22 * r1 - m12 * r2) / det;
         aLeft = (m11 * r2 - m12 * r1) / det;
+    }
+
+    /// <summary>Hold the planned glide's angle, lift up the trajectory, with no correction; alpha 0 if there is no planned angle.</summary>
+    private static void HoldPlannedGlide(KsaAeroSweep.Result aero, string why)
+    {
+        double nominalDeg = GlideNominalAlpha(aero) * 180.0 / Math.PI;
+        _s.GlideTiltUpDeg = _s.GlideLiftSign * nominalDeg;
+        _s.GlideTiltLeftDeg = 0.0;
+        _s.GlideAoaDeg = _s.GlideLiftSign != 0 ? nominalDeg : 0.0;
+        _s.GlideAccelCmd = 0.0;
+        _s.GlideStatus = why;
     }
 
     private static void HoldGlide(string why)

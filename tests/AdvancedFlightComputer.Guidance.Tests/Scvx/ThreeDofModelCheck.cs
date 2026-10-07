@@ -20,6 +20,7 @@ internal static class ThreeDofModelCheck
         ok &= CheckJacobians();
         ok &= CheckFrame();
         ok &= CheckForces();
+        ok &= CheckLiftingGlide();
         Console.WriteLine();
         Console.WriteLine(ok ? "PASS - the KSA point-mass model" : "FAIL");
         return ok ? 0 : 1;
@@ -157,6 +158,77 @@ internal static class ThreeDofModelCheck
         bool pass = ep < 0.01 && ev < 1e-3;
         Console.WriteLine($"  travelled {travelled / 1000:F1} km; site frame vs CCI: position {ep:E2} m, velocity {ev:E2} m/s  {(pass ? "ok" : "FAIL")}");
         Console.WriteLine($"  (without the Coriolis and centrifugal terms the same coast misses by {eRot:F0} m)");
+        return pass;
+    }
+
+    /// <summary>
+    /// The boostback's planned glide: DragCoastSystem held at 7.5 degrees with its lift up the trajectory, against the 3-DOF model flown at the same angle with its body axis placed so the lift points up. Two independent writings of the same lifting glide must land on each other, and the lift must stretch the range.
+    /// </summary>
+    private static bool CheckLiftingGlide()
+    {
+        Console.WriteLine();
+        Console.WriteLine("lifting glide: the predictor at 7.5 deg, lift up, against the 3-DOF model flown the same way, 60 s");
+        const double Alpha = 7.5 * Math.PI / 180;
+        KsaPointMassModel model = ThreeDofScenario.Model() with { AlphaRounding = 1e-9 };
+        ThreeDofScenario.Axes(out double[] ex, out double[] ey, out double[] ez);
+        double R = ThreeDofScenario.Radius, w = ThreeDofScenario.Omega, mass = ThreeDofScenario.WetMass;
+        double[] machGrid = AeroTable.DefaultMachBreakpoints, alphaGrid = AeroTable.DefaultAlphaBreakpointsDeg;
+        var clTable = new AeroTable(machGrid, alphaGrid, ThreeDofScenario.LiftTable(machGrid, alphaGrid));
+
+        double[] rl = [-15_000, 4_000, 38_000];
+        double[] vl = [650, -120, -700];
+        double[] origin = [ez[0] * R, ez[1] * R, ez[2] * R];
+        double[] omega = [0, 0, w];
+        double[] rc = Add(origin, Local(rl, ex, ey, ez));
+        double[] vc = Add(Local(vl, ex, ey, ez), ThreeDofScenario.Cross(omega, rc));
+
+        DragCoastSystem Coast(double alpha) => new()
+        {
+            Mu = ThreeDofScenario.Mu, OmegaZ = w, MeanRadius = R, AreaOverMass = ThreeDofScenario.Area / mass,
+            Alpha = alpha, Table = model.Drag, LiftTable = clTable, Atmosphere = model.Atmosphere,
+        };
+        DragCoastSystem lifting = Coast(Alpha), ballistic = Coast(0.0);
+
+        // The 3-DOF body axis for lift up: tail Alpha off the airflow, tilted so the engine end leans up - the side positive C_L lifts towards.
+        void Glide(double[] s, double[] d)
+        {
+            double sp = Math.Sqrt(s[3] * s[3] + s[4] * s[4] + s[5] * s[5]);
+            double[] h = [s[3] / sp, s[4] / sp, s[5] / sp];
+            double[] up = ThreeDofScenario.Normalise([s[0] - model.CentreX, s[1] - model.CentreY, s[2] - model.CentreZ]);
+            double uh = ThreeDofScenario.Dot(up, h);
+            double[] across = ThreeDofScenario.Normalise([up[0] - uh * h[0], up[1] - uh * h[1], up[2] - uh * h[2]]);
+            double[] b = [-Math.Cos(Alpha) * h[0] - Math.Sin(Alpha) * across[0],
+                          -Math.Cos(Alpha) * h[1] - Math.Sin(Alpha) * across[1],
+                          -Math.Cos(Alpha) * h[2] - Math.Sin(Alpha) * across[2]];
+            PointMass3Dof.Eval(model, s, [b[0], b[1], b[2], 0.0], d);
+        }
+
+        const double T = 60.0, dt = 0.02;
+        double[] xc = [rc[0], rc[1], rc[2], vc[0], vc[1], vc[2]];
+        double[] xb = (double[])xc.Clone();
+        double[] xl = [rl[0], rl[1], rl[2], vl[0], vl[1], vl[2], mass];
+        for (double t = 0; t < T - 1e-9; t += dt)
+        {
+            xc = Rk4(xc, dt, (s, d) => CoastDeriv(lifting, s, d));
+            xb = Rk4(xb, dt, (s, d) => CoastDeriv(ballistic, s, d));
+            xl = Rk4(xl, dt, Glide);
+        }
+
+        double ang = w * T;
+        double[] Rz(double[] a) => [Math.Cos(ang) * a[0] - Math.Sin(ang) * a[1], Math.Sin(ang) * a[0] + Math.Cos(ang) * a[1], a[2]];
+        double[] exT = Rz(ex), eyT = Rz(ey), ezT = Rz(ez), originT = Rz(origin);
+        double[] ToSite(double[] c)
+        {
+            double[] d = Sub([c[0], c[1], c[2]], originT);
+            return [ThreeDofScenario.Dot(d, exT), ThreeDofScenario.Dot(d, eyT), ThreeDofScenario.Dot(d, ezT)];
+        }
+        double[] pc = ToSite(xc), pb = ToSite(xb);
+        double err = Math.Sqrt(Sq(pc[0] - xl[0]) + Sq(pc[1] - xl[1]) + Sq(pc[2] - xl[2]));
+        double stretch = Math.Sqrt(Sq(pc[0] - pb[0]) + Sq(pc[1] - pb[1]) + Sq(pc[2] - pb[2]));
+        double climb = pc[2] - pb[2];
+        // The two read lift differently between grid points - a spline through C_L against one through C_L / sin(alpha) - so they agree to the table's interpolation, not to round-off.
+        bool pass = stretch > 100.0 && climb > 0.0 && err < 0.02 * stretch + 1.0;
+        Console.WriteLine($"  the lift moves the glide {stretch:F0} m ({climb:F0} m higher) against the ballistic coast; predictor vs 3-DOF {err:F1} m  {(pass ? "ok" : "FAIL")}");
         return pass;
     }
 

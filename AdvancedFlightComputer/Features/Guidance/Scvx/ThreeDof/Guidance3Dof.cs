@@ -259,6 +259,7 @@ public sealed class Guidance3Dof
         Resample3Dof.Resample(plan.X, plan.U, plan.Nodes, plan.GlideIntervals, plan.SigmaGlide, plan.SigmaBurn, elapsed,
                               cfg.Nodes, cfg.GlideIntervals, sigG, sigB, cfg.ThrottleFloor, xs, us);
         Array.Copy(x0, xs, NX);
+        OpenOn(us, attitude);
 
         _two.Model = Model;
         cfg.ThrottleCeiling = _set.GlideThrottleCeiling;
@@ -321,6 +322,7 @@ public sealed class Guidance3Dof
         Resample3Dof.Resample(plan.X, plan.U, plan.Nodes, plan.GlideIntervals, plan.SigmaGlide, plan.SigmaBurn, elapsed,
                               cfg.Nodes, 0, 0.0, sigB, cfg.ThrottleFloor, xs, us);
         Array.Copy(x0, xs, NX);
+        OpenOn(us, attitude);
 
         _burn.Model = Model;
         cfg.ThrottleCeiling = _set.BurnThrottleCeiling;
@@ -330,6 +332,16 @@ public sealed class Guidance3Dof
         bool reseed = _burnStarted;
         _burnStarted = true;
         return Solve(_burn, x0, xs, us, 0.0, sigB, now, now, Phase3Dof.Burn, _set.WarmIterations, reseed);
+    }
+
+    /// <summary>
+    /// Seed node 0's body axis with the anchor - the attitude last commanded - so the reference already satisfies the anchor and the plan opens where the command is. The resampled plan's own opening attitude is a cycle stale.
+    /// </summary>
+    private static void OpenOn(double[] us, double[] attitude)
+    {
+        double len = Math.Sqrt(attitude[0] * attitude[0] + attitude[1] * attitude[1] + attitude[2] * attitude[2]);
+        if (!(len > 0.5)) return;
+        for (int j = 0; j < 3; j++) us[PointMass3Dof.IB + j] = attitude[j] / len;
     }
 
     private bool Solve(Scvx3DofSolver solver, double[] x0, double[] xs, double[] us, double sigG, double sigB,

@@ -480,6 +480,8 @@ public sealed class Scvx3DofSolver
                 cost += Math.Max(0.0, Math.Sqrt(dx * dx + dy * dy + dz * dz) - _cfg.AttitudeRateMax * dt);
             }
         }
+        if (_cfg.AttitudeAnchor && _anchorCos > -1.0)
+            cost += Math.Max(0.0, _anchorCos - (_anchor[0] * u[0] + _anchor[1] * u[1] + _anchor[2] * u[2]));
         return _cfg.PathSlackWeight * cost;
     }
 

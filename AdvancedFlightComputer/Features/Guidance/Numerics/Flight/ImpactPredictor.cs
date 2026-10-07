@@ -65,7 +65,9 @@ public struct DragCoastSystem : IOdeSystem
     public double AreaOverMass;
 
     /// <summary>Angle of attack held through the coast, radians, retrograde-first.
-    /// Zero is engine-first. See the type summary.</summary>
+    /// Zero is engine-first. See the type summary. With a <see cref="LiftTable"/> a
+    /// non-zero angle also lifts, up the trajectory: the boostback plans its glide this
+    /// way, at a nominal angle that stretches the range so the burn can stop short.</summary>
     public double Alpha;
 
     /// <summary>Drag coefficient table. Null for a drag-free (Keplerian) coast.</summary>
@@ -121,7 +123,33 @@ public struct DragCoastSystem : IOdeSystem
         dx[3] -= k * ax;
         dx[4] -= k * ay;
         dx[5] -= k * az;
+
+        if (LiftTable == null || Alpha == 0.0)
+            return;
+
+        // LIFT AT THE HELD ANGLE, POINTED UP THE TRAJECTORY: perpendicular to the airflow, in the plane of the airflow and the local vertical - the direction that stretches the range. Its size is |C_L|, because the vehicle chooses which side to tilt its engine end so the lift points up, whichever way its airframe lifts. Mach is held inside the lift table's grid, where an extrapolated lift curve has been seen to change sign.
+        Dual liftMach = mach.V < LiftTable.MachMin ? new Dual(LiftTable.MachMin)
+                      : mach.V > LiftTable.MachMax ? new Dual(LiftTable.MachMax) : mach;
+        Dual cl = LiftTable.Cd(liftMach, new Dual(Alpha));
+        if (cl.V < 0.0)
+            cl = -cl;
+        Dual ux = rx / rlen, uy = ry / rlen, uz = rz / rlen;
+        Dual hx = ax / speed, hy = ay / speed, hz = az / speed;
+        Dual uv = ux * hx + uy * hy + uz * hz;
+        Dual px = ux - uv * hx, py = uy - uv * hy, pz = uz - uv * hz;
+        // The vertical's part across the airflow vanishes in a vertical fall, where no direction stretches the range; the floor fades the lift out there rather than dividing by nothing.
+        Dual pn = Dual.Sqrt(px * px + py * py + pz * pz + LiftDirectionFloor * LiftDirectionFloor);
+        Dual kl = 0.5 * rho * speed2 * cl * AreaOverMass / pn;
+        dx[3] += kl * px;
+        dx[4] += kl * py;
+        dx[5] += kl * pz;
     }
+
+    /// <summary>Lift coefficient table C_L(Mach, alpha), signed as KsaAeroSweep measures it. With a non-zero <see cref="Alpha"/> the coast carries |C_L| of lift up the trajectory - a lifting glide. Null, or Alpha 0, for the engine-first ballistic coast.</summary>
+    public AeroTable LiftTable;
+
+    /// <summary>Below this sine of the angle between the airflow and the vertical, the lift fades out: a vertical fall has no up-range direction to lift in.</summary>
+    private const double LiftDirectionFloor = 0.05;
 }
 
 /// <summary>How far and how finely to integrate.</summary>

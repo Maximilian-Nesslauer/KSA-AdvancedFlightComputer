@@ -122,9 +122,10 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
-            // Retrograde throughout: the coast assumption. See DragCoastSystem.
-            Alpha = 0.0,
+            // The planned glide: engine first, at the nominal angle, lifting up the trajectory. See GlideNominalAlpha.
+            Alpha = GlideNominalAlpha(aero),
             Table = aero.Table,
+            LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
 
@@ -224,8 +225,9 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
-            Alpha = 0.0,
+            Alpha = GlideNominalAlpha(aero),
             Table = aero.Table,
+            LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
 

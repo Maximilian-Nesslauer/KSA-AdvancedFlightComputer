@@ -185,13 +185,17 @@ public static partial class GuidanceWindow
         float3 amber = ColorRgbReference.GetIndexedRgb(IndexedColor.Yellow);
 
         // EXECUTE lights green while that phase is actually doing something: guidance running, a launch armed and waiting for its window, or one waiting on its convex plan on ascent, any live landing phase on the deorbit tab. ABORT is red at all times, so it reads the same whether or not it currently has anything to stop.
-        bool sixDofRoute = _s.UseSixDofLanding && !LandingMachineLive;
+        // The 3-DOF is the powered landing's when its page is selected, and continues the boostback's flight when it takes a glide over, so both tabs light for it and abort it.
+        bool threeDofRoute = _s.UseThreeDofLanding;
+        bool sixDofRoute = _s.UseSixDofLanding && !threeDofRoute && !LandingMachineLive;
         bool lit = _panelTab == GuidanceTab.Ascent
             ? (_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending)
-            : _panelTab == GuidanceTab.Boostback ? BoostbackLive
+            : _panelTab == GuidanceTab.Boostback ? BoostbackLive || ThreeDofLive
             : _panelTab == GuidanceTab.Descent ? DescentLive
             : _landingSubTab == LandingSubTab.Hover
                 ? _s.LandingPhase == LandingPhase.TerminalHover
+                : threeDofRoute
+                    ? ThreeDofLive || _s.ThreeDofEngagePending
                 : sixDofRoute
                     ? (_s.Active || _s.EngagePending)
                     : LandingMachineLive;
@@ -211,6 +215,11 @@ public static partial class GuidanceWindow
                 ExecuteLanding(vehicle);
             else if (_landingSubTab == LandingSubTab.Hover)
                 StartTerminalHover(vehicle);
+            else if (threeDofRoute)
+            {
+                _s.AutoStage = true;
+                _s.ThreeDofEngagePending = true;
+            }
             else if (sixDofRoute)
                 Engage6Dof(vehicle);
             else
@@ -220,7 +229,10 @@ public static partial class GuidanceWindow
         ImGui.SameLine();
         if (TintedButton("ABORT", size, red, true))
         {
-            if (_panelTab == GuidanceTab.Boostback)
+            if (ThreeDofLive && (_panelTab == GuidanceTab.Boostback
+                                 || (_panelTab == GuidanceTab.Landing && _landingSubTab == LandingSubTab.Powered && threeDofRoute)))
+                Disengage3Dof("Aborted.");
+            else if (_panelTab == GuidanceTab.Boostback)
                 AbortBoostback();
             else if (_panelTab == GuidanceTab.Ascent)
                 AbortAscent();
@@ -298,12 +310,19 @@ public static partial class GuidanceWindow
     {
         // The solver choice changes the braking gate. Keep it fixed while a committed deorbit is in flight.
         ImGui.BeginDisabled(DeorbitTargetLocked);
-        if (ImGui.RadioButton("G-FOLD", !_s.UseSixDofLanding))
-            _s.UseSixDofLanding = false;
+        if (ImGui.RadioButton("G-FOLD", !_s.UseSixDofLanding && !_s.UseThreeDofLanding))
+            _s.UseSixDofLanding = _s.UseThreeDofLanding = false;
         ImGui.SameLine();
-        if (ImGui.RadioButton("6-DOF", _s.UseSixDofLanding))
+        if (ImGui.RadioButton("6-DOF", _s.UseSixDofLanding && !_s.UseThreeDofLanding))
+        {
             _s.UseSixDofLanding = true;
+            _s.UseThreeDofLanding = false;
+        }
         ImGui.EndDisabled();
+        // Not locked with the others: the braking-burn handoff reads only the 6-DOF/G-FOLD choice, and the 3-DOF engages from a boostback glide or its own page.
+        ImGui.SameLine();
+        if (ImGui.RadioButton("3-DOF", _s.UseThreeDofLanding))
+            _s.UseThreeDofLanding = true;
     }
 
     private static void DrawPoweredLandingContent(Vehicle vehicle, float innerW)
@@ -314,7 +333,9 @@ public static partial class GuidanceWindow
         DrawSolverRadios();
         ImGui.Separator();
 
-        if (_s.UseSixDofLanding && !LandingMachineLive)
+        if (_s.UseThreeDofLanding || ThreeDofLive)
+            Draw3DofLandingContent(vehicle, innerW);
+        else if (_s.UseSixDofLanding && !LandingMachineLive)
             Draw6DofLandingContent(vehicle, innerW);
         else
             DrawGfoldLandingContent(innerW, ImGui.GetTextLineHeightWithSpacing());

@@ -564,6 +564,8 @@ public sealed class VehicleAutopilotState
     /// 6-DOF cannot plan for, and hands that craft to G-FOLD instead.
     /// </summary>
     public bool UseSixDofLanding = true;
+    /// <summary>The panel shows the 3-DOF page as this craft's powered landing. The braking-burn handoff still chooses between 6-DOF and G-FOLD; the 3-DOF engages from a boostback glide or from its own page.</summary>
+    public bool UseThreeDofLanding;
     public bool TermTabSelectPending;
 
     /// <summary>
@@ -1143,6 +1145,11 @@ public sealed class VehicleAutopilotState
     /// <summary>Largest angle of attack the glide commands, degrees off engine-first into the wind.</summary>
     public double GlideMaxAoaDeg = 15.0;
 
+    /// <summary>
+    /// The angle of attack the boostback plans the glide at, degrees: every impact prediction - the burn's shot, its cutoff correction, the overlay and the glide PID's own - assumes the vehicle glides at this angle with its lift pointed up the trajectory, which stretches the range so the burn can stop short and save propellant. The PID flies it as its nominal and trims about it. Half the maximum leaves the PID as much authority either side. 0 plans the engine-first ballistic coast.
+    /// </summary>
+    public double GlideNominalAoaDeg = 7.5;
+
     /// <summary>Miss of the coast impact point from the site, m: along the ground track (positive long) and across it (positive left).</summary>
     public double GlideMissDownM, GlideMissCrossM;
 
@@ -1173,36 +1180,58 @@ public sealed class VehicleAutopilotState
     /// <summary>Sim time of the last glide line written to the game log.</summary>
     public double GlideLogTime = double.NaN;
 
-    // ---- the 3-DOF glide and landing burn (see ConvexLanding.cs) ----
+    // ---- 3-DOF glide-and-burn landing (Modes/ThreeDof.cs; its panel page is Ui/Gauges/ThreeDofGauge.cs) ----
 
-    /// <summary>Hand the glide to the 3-DOF glide-and-burn guidance mid-glide, and let it fly the landing burn.</summary>
-    public bool ConvexLanding = true;
+    /// <summary>Where this craft's 3-DOF landing is: idle, gliding on the plan (or the PID glide while it has none), burning, or ended.</summary>
+    public GuidanceWindow.ThreeDofPhase ThreeDofPhase;
 
-    /// <summary>The glide's predicted time to impact, s, below which the 3-DOF cold solve starts. The PID glide flies until it has a plan.</summary>
-    public double ConvexEngageTgoS = 90.0;
+    /// <summary>The page's Engage, consumed by the next step (draw-time writes do not reach the sim), and the sim time of the last step.</summary>
+    public bool ThreeDofEngagePending;
+    public double ThreeDofLastStep;
+    public double ThreeDofLogTime = double.NaN;
+
+    /// <summary>Take a boostback glide over automatically once its predicted time to impact falls under <see cref="ThreeDofEngageTgoS"/>.</summary>
+    public bool ThreeDofFromGlide = true;
+
+    /// <summary>The glide's predicted time to impact, s, at which the 3-DOF takes it over. The PID glide flies on until the first plan.</summary>
+    public double ThreeDofEngageTgoS = 90.0;
 
     /// <summary>Hand the landing burn to 6-DOF below this speed, for a more precise touchdown. Off by default.</summary>
-    public bool ConvexSixDofHandover;
-    public double ConvexSixDofSpeedMs = 50.0;
+    public bool ThreeDofSixDofHandover;
+    public double ThreeDofSixDofSpeedMs = 50.0;
 
     /// <summary>Where the 3-DOF burn ends: this high over the site, sinking this fast. Terminal hover takes the last metres.</summary>
-    public double ConvexAimHeightM = 20.0;
-    public double ConvexAimSinkMs = 2.0;
+    public double ThreeDofAimHeightM = 20.0;
+    public double ThreeDofAimSinkMs = 2.0;
 
-    /// <summary>The live 3-DOF guidance, its solver thread, its model corrections and its nominal model, or null before engage.</summary>
-    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ConvexGuidance;
-    public Ksa3DofWorker ConvexWorker;
-    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator ConvexEstimator;
-    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.KsaPointMassModel ConvexNominal;
+    /// <summary>The live guidance, its solver thread, its model corrections and its nominal model, or null before the first solve.</summary>
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ThreeDofGuidance;
+    public Ksa3DofWorker ThreeDofWorker;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator ThreeDofEstimator;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.KsaPointMassModel ThreeDofNominal;
 
     /// <summary>Sim time of the last re-solve dispatched, of the last cold-solve attempt, and of the velocity sample the acceleration is differenced from.</summary>
-    public double ConvexLastUpdate = double.NegativeInfinity, ConvexColdTime = double.NegativeInfinity;
-    public double ConvexAccelTime = double.NaN;
-    public double3 ConvexAccelVelocity;
+    public double ThreeDofLastUpdate = double.NegativeInfinity, ThreeDofColdTime = double.NegativeInfinity;
+    public double ThreeDofAccelTime = double.NaN;
+    public double3 ThreeDofAccelVelocity;
 
-    /// <summary>Throttle the landing burn is commanding, and what the panel shows.</summary>
-    public double ConvexThrottle;
-    public string ConvexStatus = "";
+    /// <summary>
+    /// The command as last sent, site frame, which the guidance anchors each new plan's opening attitude on, and the plan being flown.
+    /// </summary>
+    public double3 ThreeDofCommandLocal;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Plan3Dof ThreeDofPlan;
+
+    /// <summary>Time constant of the low-pass the plan's attitude and throttle reach the vehicle through, s. G-FOLD's is 0.15 s; 0 switches it off.</summary>
+    public double ThreeDofSmoothTau = 0.2;
+
+    /// <summary>The engine command the burn writes, and what the panel shows.</summary>
+    public bool ThreeDofEngineOn;
+    public double ThreeDofThrottle;
+    public string ThreeDofStatus = "";
+
+    /// <summary>The last solve's figures for the page, cached by the step while the solver is idle.</summary>
+    public string ThreeDofSolveText = "";
+    public bool ThreeDofRefusing;
 
     public string GlideStatus = "";
 

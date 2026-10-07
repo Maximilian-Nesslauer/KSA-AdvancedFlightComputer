@@ -62,7 +62,7 @@ public sealed class Scvx3DofSubproblemScs
     private double[] _xs => _cfg.XScale;
 
     private readonly int _oX, _oU, _oW, _iSigB, _iSigG, _oTm, _nTmPos, _nTmVel, _nTm, _nVars;
-    private readonly int _oSa, _oSr, _oSb, _oSw, _nSa, _nSr, _nSb, _nSw, _nSlack;
+    private readonly int _oSa, _oSr, _oSb, _oSw, _oSn, _nSa, _nSr, _nSb, _nSw, _nSn, _nSlack;
     private readonly int[] _minChannels, _maxChannels;
     private readonly bool _terminalAttitude, _rateLimit;
     private readonly int _nEq, _lDim, _nRows;
@@ -119,12 +119,14 @@ public sealed class Scvx3DofSubproblemScs
         _nSr = soft && cfg.Retrograde ? _n : 0;
         _nSb = soft ? (_n - 1) * (_minChannels.Length + _maxChannels.Length) : 0;
         _nSw = soft && _rateLimit ? _n - 1 : 0;
-        _nSlack = _nSa + _nSr + _nSb + _nSw;
+        _nSn = soft && cfg.AttitudeAnchor ? 1 : 0;
+        _nSlack = _nSa + _nSr + _nSb + _nSw + _nSn;
         _oSa = _oTm + _nTm;
         _oSr = _oSa + _nSa;
         _oSb = _oSr + _nSr;
         _oSw = _oSb + _nSb;
-        _nVars = _oSw + _nSw;
+        _oSn = _oSw + _nSw;
+        _nVars = _oSn + _nSn;
 
         int sigmas = _k > 0 ? 2 : 1;
         _nEq = NX + 6 + (_terminalAttitude ? 3 : 0) + (_n - 1) * NX
@@ -503,6 +505,8 @@ public sealed class Scvx3DofSubproblemScs
             bool on = anchor.Length == 3 && (anchor[0] != 0.0 || anchor[1] != 0.0 || anchor[2] != 0.0);
             for (int j = 0; j < 3; j++)
                 AddA(row, IU(0, PointMass3Dof.IB + j), on ? -anchor[j] : 0.0);
+            // Soft with the other path limits: a reference that opens further from the anchor than one trust radius would otherwise leave no feasible step at all.
+            if (_nSn > 0) AddA(row, _oSn, -1.0);
             _b[row++] = on ? -anchorCos : 1.0;
         }
 

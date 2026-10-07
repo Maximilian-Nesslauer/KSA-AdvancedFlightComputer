@@ -92,10 +92,15 @@ internal static class ThreeDofMpcCheck
             LiftScale = c.Lift,
             VacuumThrust = nominal.VacuumThrust * c.Thrust,
         };
-        Scvx3DofConfig glide = ThreeDofScenario.Config();
+        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true);
         Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true);
         // No wall-clock deadlines offline: they make the iteration count, and so the flight, depend on the machine's speed. The iteration caps still bound every cycle.
-        var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings { CycleBudgetMs = 0, RecoveryBudgetMs = 0, Scaling = mode });
+        // Anchored on the last command, tight, as the game flies it.
+        var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings
+        {
+            CycleBudgetMs = 0, RecoveryBudgetMs = 0, Scaling = mode,
+            AnchorSeconds = 0.3, AnchorFloor = 1.0 * Math.PI / 180.0,
+        });
         var estimator = new AeroScaleEstimator();
 
         double[] x = (double[])(c.Start ?? X0).Clone();
@@ -136,7 +141,7 @@ internal static class ThreeDofMpcCheck
                 estimator.Update(nominal, x, att, throttle, measured, GuidanceStep);
                 guidance.Model = estimator.Apply(nominal);
                 Phase3Dof before = guidance.Phase;
-                bool ok = guidance.Update(x, att, t);
+                bool ok = guidance.Update(x, cmd, t);
                 solveMs.Add(guidance.LastSolveMs);
                 admm += guidance.LastAdmmIterations;
                 if (!ok) refused++;

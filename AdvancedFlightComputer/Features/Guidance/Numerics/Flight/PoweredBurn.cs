@@ -73,6 +73,10 @@ public struct PoweredBurnSystem : IOdeSystem
     public AeroTable Table;
     public ExponentialAtmosphere Atmosphere;
 
+    /// <summary>The glide after cutoff: the angle of attack it is planned at, radians, and the lift table that angle lifts through (see DragCoastSystem.LiftTable). Zero, or no table, for the engine-first ballistic coast.</summary>
+    public double GlideAlpha;
+    public AeroTable LiftTable;
+
     /// <summary>Steering: the direction at ignition. Dual because the shoot
     /// differentiates with respect to the angles that built it.</summary>
     public Dual Lx, Ly, Lz;
@@ -492,15 +496,16 @@ public static class BoostbackShooter
             }
         }
 
-        // --- the coast --- The vehicle flips to retrograde at cutoff, taken as instantaneous, so the coast is the alpha = 0 model the predictor already assumes.
+        // --- the coast --- The vehicle flips to retrograde at cutoff, taken as instantaneous, and glides at the planned angle of attack - lifting up the trajectory - so the burn only has to put the glide's impact on the site.
         var coastSys = new DragCoastSystem
         {
             Mu = sys.Mu,
             OmegaZ = sys.OmegaZ,
             MeanRadius = sys.MeanRadius,
             AreaOverMass = sys.ReferenceArea / end[6].V,
-            Alpha = 0.0,
+            Alpha = sys.GlideAlpha,
             Table = sys.Table,
+            LiftTable = sys.LiftTable,
             Atmosphere = sys.Atmosphere,
         };
 
