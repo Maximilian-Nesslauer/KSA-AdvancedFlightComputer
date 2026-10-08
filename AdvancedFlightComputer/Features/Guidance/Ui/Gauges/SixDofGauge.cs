@@ -158,6 +158,18 @@ public static partial class GuidanceWindow
 
         GaugeRowCheck("Estimate unmodelled accel", "##sdbias", ref _s.SixDofBiasEnabled);
 
+        // The thrust feedback that flies the plan between re-solves (Tracker6Dof), and the throttle the plan keeps in hand below it for that feedback - shared with the entry guidance page.
+        GaugeRowCheck("Track the plan's thrust between re-solves", "##sdtrack", ref _s.SixDofTrack);
+        using (new ImGuiDisabledScope(!_s.SixDofTrack))
+        {
+            GaugeRow("Track Kp (1/s2)", "##sdtrackkp", ref _s.SixDofTrackKp);
+            GaugeRow("Track Kd (1/s)", "##sdtrackkd", ref _s.SixDofTrackKd);
+        }
+        if (_s.SixDofTrack && _s.Guidance != null && _s.Guidance.HasPlan)
+            GaugeRowText("  off the plan", $"{_s.Guidance.TrackingError.PositionM:F1} m, {_s.Guidance.TrackingError.VelocityMs:F1} m/s, thrust {_s.Guidance.TrackingError.ThrustN / 1e3:+0;-0} kN");
+        GaugeRow("Plan min throttle above engine min", "##sdfloormargin", ref _s.LandingPlanFloorMargin);
+        _s.LandingPlanFloorMargin = Math.Clamp(_s.LandingPlanFloorMargin, 0.0, 0.5);
+
         GaugeRow("Re-solve every (s)", "##sdreplan", ref _s.SixDofReplanSec);
         GaugeRow("Rate damping (fuel share)", "##sdratedamp", ref _s.SixDofRateDampShare);
         GaugeRow("Control smoothing (W_DU)", "##sdsmooth", ref _s.SixDofControlSmooth);

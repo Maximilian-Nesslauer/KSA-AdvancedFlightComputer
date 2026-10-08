@@ -194,14 +194,14 @@ public sealed class Scvx3DofSubproblemScs
     /// <param name="alphaRadius">Per node: the bound on |p|, or 0 or less where the angle-of-attack cone and the retrograde row do not apply.</param>
     /// <param name="anchor">Direction node 0's body axis is held near, 3 long; ignored unless the config allocates the row. A zero vector disables it for this solve.</param>
     /// <param name="anchorCos">cos of the cone's half-angle about <paramref name="anchor"/>.</param>
-    /// <param name="vacuumThrust">The model's full-throttle vacuum thrust, N, for the acceleration limit; 0 or less leaves its rows vacuous.</param>
-    /// <param name="lossConstant">Per node: the model's back-pressure thrust loss linearised about the reference, loss(r) ~ lossConstant + lossGradient . r, N.</param>
-    /// <param name="lossGradient">Per node, 3 long: the loss's gradient in position, N/m.</param>
+    /// <param name="thrustSlope">Per node: the thrust law's slope in throttle at the reference, N, for the acceleration limit; null leaves its rows vacuous.</param>
+    /// <param name="lossConstant">Per node: the rest of the thrust law linearised about the reference, T ~ thrustSlope u - (lossConstant + lossGradient . r), N.</param>
+    /// <param name="lossGradient">Per node, 3 long: that loss's gradient in position, N/m.</param>
     public void Assemble(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf,
                          double[] xbar, double[] ubar, double sigGBar, double sigBBar, double tr,
                          Linearisation3Dof lin, double[] alphaRadius,
                          ReadOnlySpan<double> anchor, double anchorCos,
-                         double vacuumThrust, double[] lossConstant, double[] lossGradient)
+                         double[]? thrustSlope, double[] lossConstant, double[] lossGradient)
     {
         if (_frozen) { _A.BeginRefill(); _P.BeginRefill(); }
         RefreshScales();
@@ -213,7 +213,7 @@ public sealed class Scvx3DofSubproblemScs
         if (row != _nEq)
             throw new InvalidOperationException($"equality rows: emitted {row}, expected {_nEq}");
         row = AssembleCone(row, xbar, ubar, sigGBar, sigBBar, tr, lin, alphaRadius, anchor, anchorCos,
-                           vacuumThrust, lossConstant, lossGradient);
+                           thrustSlope, lossConstant, lossGradient);
         if (row != _nRows)
             throw new InvalidOperationException($"cone rows: emitted {row}, expected {_nRows}");
 
@@ -440,7 +440,7 @@ public sealed class Scvx3DofSubproblemScs
     private int AssembleCone(int row, double[] xbar, double[] ubar, double sigGBar, double sigBBar,
                              double tr, Linearisation3Dof lin, double[] alphaRadius,
                              ReadOnlySpan<double> anchor, double anchorCos,
-                             double vacuumThrust, double[] lossConstant, double[] lossGradient)
+                             double[]? thrustSlope, double[] lossConstant, double[] lossGradient)
     {
         // Throttle box over the burn: a scalar interval, convex because the attitude carries the direction (3dof.py README section 2b).
         for (int k = _k; k < _n; k++)
@@ -451,18 +451,19 @@ public sealed class Scvx3DofSubproblemScs
             _b[row++] = _cfg.ThrottleCeiling;
         }
 
-        // ACCELERATION LIMIT over the burn: throttle * F_vac - loss(r) <= AccelMax * m, in throttle units - throttle - (AccelMax / F_vac) m - (grad loss / F_vac) . r - s <= loss_0 / F_vac. Exact in the throttle and the mass, which are both variables; the back-pressure loss is linearised in position about the reference, as the dynamics are.
+        // ACCELERATION LIMIT over the burn: slope * throttle - loss(r) <= AccelMax * m, in throttle units - throttle - (AccelMax / slope) m - (grad loss / slope) . r - s <= loss_0 / slope. Exact in the mass; the thrust law is linearised in throttle and position about the reference, as the dynamics are, and under the constant-loss law the slope is F_vac and the throttle term exact too.
         // The position term is not a nicety. Read at the reference's altitude alone, the row ignored that a step up or down changes the loss, while the merit measures it at the step's own altitude: near the optimum, with the limit active, that first-order difference had every step rejected and the cold solve stalled (offline, --3dof-ksa case 4 with the anchor rows).
         // Vacuous without a thrust law to read.
-        bool limited = vacuumThrust > 0.0;
+        bool limited = thrustSlope != null;
         for (int k = _k; k < _k + _nAc; k++)
         {
+            double slope = limited ? thrustSlope![k] : 1.0;
             AddA(row, IU(k, PointMass3Dof.ITH), limited ? 1.0 : 0.0);
-            AddA(row, IX(k, PointMass3Dof.IM), limited ? -_cfg.AccelMax / vacuumThrust : 0.0);
+            AddA(row, IX(k, PointMass3Dof.IM), limited ? -_cfg.AccelMax / slope : 0.0);
             for (int i = 0; i < 3; i++)
-                AddA(row, IX(k, PointMass3Dof.IR + i), limited ? -lossGradient[k * 3 + i] / vacuumThrust : 0.0);
+                AddA(row, IX(k, PointMass3Dof.IR + i), limited ? -lossGradient[k * 3 + i] / slope : 0.0);
             if (_nSc > 0) AddA(row, _oSc + (k - _k), -1.0);
-            _b[row++] = limited ? lossConstant[k] / vacuumThrust : 1.0;
+            _b[row++] = limited ? lossConstant[k] / slope : 1.0;
         }
 
         // Retrograde: b_k . v_hat_bar_k <= 0, vacuous below the speed threshold.

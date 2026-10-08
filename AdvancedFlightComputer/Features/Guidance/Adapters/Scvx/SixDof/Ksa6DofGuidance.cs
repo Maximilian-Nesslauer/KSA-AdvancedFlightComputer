@@ -11,7 +11,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 /// <summary>
 /// 6-DOF powered descent as straight model-predictive control.
 ///  Every cycle: re-solve from the LIVE vehicle state, then apply the optimiser's own controls, interpolated along the fresh trajectory. That is the whole algorithm.
-/// There is no trajectory tracking, no PD, no attitude reference - MPC gets its feedback from re-solving at the measured state, which is the point of it.
+/// MPC gets its feedback from re-solving at the measured state, which is the point of it - but only from the re-solves that are accepted. Between them, and through a run of refused ones, the plan's thrust is corrected by Tracker6Dof when the caller passes one; its torques are flown as planned.
 ///  The optimiser's control IS the actuator command: u = (tdx, tdy, T, tau_roll) is a gimbal deflection, an axial thrust and a roll torque. Applying it means torque  = r_T x T_body = (LArm*tdy, -LArm*tdx, tau_roll) thrust  = T, in NEWTONS and nothing else. Converting that thrust into a KSA throttle needs the vehicle's LIVE capability and so belongs at the KSA boundary, not here - see Command. Attitude then evolves from the torque that deflection produces, exactly as the model's own dynamics say it will.
 ///  NODE 0 IS THE VEHICLE, and that has to be enforced rather than assumed. The subproblem pins it as an equality (`X[0][i] = x0[i]`), but the plan we read back is the SCvx REFERENCE trajectory, which only advances on an ACCEPTED step. Reseed sets that reference to the previous plan shifted forward - whose node 0 is the old plan's node `shift`, NOT the vehicle. So a cycle where the ratio test accepts nothing leaves a plan anchored an interval away from the vehicle, and the commands are read at the wrong point on it. AnchorOffsetM measures exactly that, and a plan is refused if it is not anchored.
 ///  NOT THREADED. A re-solve costs ~33 ms in the caller's frame.
@@ -488,7 +488,11 @@ public sealed class Ksa6DofGuidance
         ResamplePlan(_planX, _planU, _n, _planSigma, elapsed, _n, dtNew, xs, us);
 
         // Seed node 0 with the MEASURED state. It is what the equality will force anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle rather than at the old plan's prediction for now.
+        // Every later node's MASS moves with node 0's: the engine burns the same whatever the mass, so the shift keeps the seed's mass channel as consistent as the plan was. Moving node 0 alone put the whole difference - the tracker flies off the plan's thrust - into the first intervals' defect, and the re-solves were refused on mass (headless, 2026-10-08: 90-141 kg against 20).
+        double dm = x0[Dynamics6Dof.IM] - xs[Dynamics6Dof.IM];
         Array.Copy(x0, 0, xs, 0, NX);
+        for (int k = 1; k < _n; k++)
+            xs[k * NX + Dynamics6Dof.IM] += dm;
 
         // Put the resampled plan on the MEASUREMENT quaternion branch. Without this a sign flip in the measured attitude - a no-op physically - lands as ~1.5 of quaternion defect at interval 0 and gets the plan refused every cycle until the circuit breaker throws it away. See AlignQuaternionBranch.
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
@@ -1114,7 +1118,13 @@ public sealed class Ksa6DofGuidance
     /// The optimiser's control at this instant: body torque (N*m, MODEL body axes) and throttle in [0,1], interpolated along the current plan.
     ///  Read at (now - solveTime), so immediately after a solve this is node 0's control - the control the optimiser chose FOR THE VEHICLE'S ACTUAL STATE.
     /// </summary>
-    public bool Command(double simNow, out double3 torqueModel, out double thrustN)
+    /// <summary>What the tracker corrected on the last command - zero when the plan was flown open loop.</summary>
+    public Tracker6Dof.Error TrackingError { get; private set; }
+
+    /// <param name="x">The measured state, model frame, for the tracker; null flies the plan open loop.</param>
+    /// <param name="tracker">The feedback to fly the plan through, or null.</param>
+    public bool Command(double simNow, out double3 torqueModel, out double thrustN,
+                        double[] x = null, Tracker6Dof tracker = null)
     {
         torqueModel = default;
         thrustN = 0.0;
@@ -1150,6 +1160,18 @@ public sealed class Ksa6DofGuidance
         //  Measured on a real descent this is worth almost nothing - the deflections were 0.1 to 2.2 degrees, so cos is 0.999 - and it is NOT the explanation for the 10.3% thrust shortfall seen there. It is fixed because it is wrong, not because it is large.
         thrustN = Math.Sqrt(thrust * thrust + tdx * tdx + tdy * tdy);
         thrustN = Math.Max(thrustN, 0.0);
+        TrackingError = default;
+
+        // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's.
+        if (tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)
+        {
+            double axial = tracker.Correct(plan, k, f, x, thrust, out Tracker6Dof.Error error);
+            if (double.IsFinite(axial))
+            {
+                thrustN = Math.Sqrt(axial * axial + tdx * tdx + tdy * tdy);
+                TrackingError = error;
+            }
+        }
         return true;
     }
 

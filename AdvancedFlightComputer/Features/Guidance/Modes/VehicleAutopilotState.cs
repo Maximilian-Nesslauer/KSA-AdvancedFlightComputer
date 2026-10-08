@@ -640,6 +640,11 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double LandingAccelLimitG = 3.0;
 
+    /// <summary>
+    /// Throttle the landing plans keep in hand below them, as a fraction of full: the 3-DOF and the 6-DOF both plan from the engines' minimum throttle plus this, and their feedback (BurnTracker3Dof, Tracker6Dof) may use the rest, down to the real minimum. A min-fuel burn otherwise rides the minimum, and a craft that cannot throttle below its weight, slowed a little more than planned, has no thrust to take off and stops short above the pad (headless, 2026-10-08: 33 m up at a minimum TWR of 1.09). 0 plans on the minimum itself.
+    /// </summary>
+    public double LandingPlanFloorMargin = 0.05;
+
     public double GfoldHandoffTgo = 40.0;  // hand UPFG braking over this long before the gate
     public double LandingVerticalGateM = 500.0;
     internal GuidanceWindow.GfoldApproach GfoldApproach;
@@ -743,6 +748,12 @@ public sealed class VehicleAutopilotState
     public double SixDofColdIntervalS = 0.25;
     public bool SixDofBiasEnabled = true;
 
+    /// <summary>Correct the plan's thrust through Tracker6Dof's feedback between re-solves, and its position gain (1/s^2) and velocity gain (1/s). On by default; off flies the plan's thrust open loop between re-solves, as before. The torques are the plan's either way.</summary>
+    public bool SixDofTrack = true;
+    public double SixDofTrackKp = SixDofTrackDefaults.Kp;
+    public double SixDofTrackKd = SixDofTrackDefaults.Kd;
+    private static readonly Tracker6Dof SixDofTrackDefaults = new();
+
     /// <summary>
     /// Solve this craft's re-plan on a worker thread. Per vehicle because the worker
     /// is: toggling it off disposes THIS vehicle's worker, and as one global flag it
@@ -772,8 +783,9 @@ public sealed class VehicleAutopilotState
     /// This craft asks to be recorded when it engages, or at once when switched on in flight. The log itself is a single
     /// global sink and grants the first claimant - see SixDofLog.Start, which refuses
     /// a second owner rather than interleaving two craft into one CSV.
+    /// On by default: per vehicle, so a booster separated in flight never had the box ticked, and the landings that needed diagnosing on 2026-10-08 all flew without a record.
     /// </summary>
-    public bool SixDofLogging = false;
+    public bool SixDofLogging = true;
 
     // Flown track state.
     //
@@ -1240,12 +1252,14 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double ThreeDofEngageTgoS = 45.0;
 
-    /// <summary>Hand the landing burn to 6-DOF below this speed, for its rotational model of the final flare: the 3-DOF's horizon collapses in the last seconds and its re-solves start being refused there. On by default.</summary>
+    /// <summary>Hand the landing burn to 6-DOF for its last seconds, for its rotational model of the final flare: the 3-DOF's horizon collapses there and its re-solves start being refused. On by default.</summary>
     public bool ThreeDofSixDofHandover = true;
 
-    /// <summary>Set once the burn is below the hand-over speed with 6-DOF not ready yet, so that is logged once.</summary>
+    /// <summary>Set once the burn is inside the hand-over time with 6-DOF not ready yet, so that is logged once.</summary>
     public bool ThreeDofSixDofWaiting;
-    public double ThreeDofSixDofSpeedMs = 100.0;
+
+    /// <summary>Hand over with this much of the 3-DOF burn plan left, s. By time rather than speed: a light booster falls slower than any useful hand-over speed, and 6-DOF, with no coast and no drag model, cannot fly a long burn (see ThreeDof.cs).</summary>
+    public double ThreeDofSixDofTimeS = 5.0;
 
     /// <summary>The live guidance, its solver thread, its model corrections and its nominal model, or null before the first solve.</summary>
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ThreeDofGuidance;

@@ -14,7 +14,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 ///   vdot = g + R(q) T_body / m           T_body = [tdx, tdy, T]
 ///   qdot = 1/2 q (x) [0, w]              Hamilton, scalar-first
 ///   wdot = I^-1 ( tau - w x (I w) )      Euler's equation
-///   mdot = -alpha * T
+///   mdot = -(mdot_0 + alpha * T)
 ///
 /// Small-angle gimbal: the engine sits at r_T = [0,0,-L] below the CoM, so
 /// tau_gimbal = r_T x T_body = [L*tdy, -L*tdx, 0], linear in the controls.
@@ -54,6 +54,11 @@ public static class Dynamics6Dof
 
         /// <summary>Mass flow per newton of axial thrust.</summary>
         public double Alpha => 1.0 / (Isp * G0);
+
+        /// <summary>
+        /// Mass flow that does not buy thrust, kg/s: the engine's flow is linear in its throttle, but under back pressure its thrust is not, so the flow over the burn's thrust range is a line that does not pass through zero. 0 is the plain rocket equation, which is right in vacuum.
+        /// </summary>
+        public double MassFlowOffset = 0.0;
     }
 
     /// <summary>
@@ -113,8 +118,8 @@ public static class Dynamics6Dof
         xdot[IW + 1] = (tauy - gyroy) / p.Iyy;
         xdot[IW + 2] = (tauRoll - gyroz) / p.Izz;
 
-        // mdot = -alpha * T
-        xdot[IM] = -(p.Alpha * T);
+        // mdot = -(mdot_0 + alpha * T)
+        xdot[IM] = -(p.MassFlowOffset + p.Alpha * T);
     }
 
     /// <summary>

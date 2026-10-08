@@ -99,6 +99,17 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
+    /// The thrust the capability figures below are evaluated at: every planning gimbal at its Data.MaximumThrust. KSA computes that at a throttle of 2 and in vacuum (GimbalController.RecomputeStaticData), far beyond what the engines deliver, so a capability is only meaningful per newton of this - the gimbals deliver torque in proportion to the thrust actually through them.
+    /// </summary>
+    public static double PlanningThrust(Vehicle vehicle)
+    {
+        double total = 0.0;
+        foreach (GimbalController gc in KsaGimbalControl.PlanningGimbals(vehicle))
+            total += gc.Data.MaximumThrust;
+        return total;
+    }
+
+    /// <summary>
     /// Peak roll torque the vehicle can actually produce, in N*m - the model's TauRollMax. Comes from the allocator's honest capability figure (torque at the point some gimbal saturates), NOT from KSA's TvcTorqueAuthority, which sums absolute values and so assumes every gimbal serves roll maximally at once. Planning against an optimistic bound would produce a trajectory the vehicle cannot fly.
     /// </summary>
     public static double RollTorqueLimit(Vehicle vehicle)
@@ -209,7 +220,7 @@ public static class Ksa6DofSetup
                                 double glideSlopeDeg, double vzMaxMs,
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
-                                out string error, double accelMaxMs2 = 0.0)
+                                out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -233,9 +244,29 @@ public static class Ksa6DofSetup
         LastPressureThrustN = thrust;
 
         // THE FLOOR AS THE THRUST IT GIVES, not as a fraction of Tmax. The nozzle's back-pressure loss is the same newtons at any throttle, so the minimum throttle gives less than that fraction of full thrust. On the 2026-10-08 boosters, floor x Tmax took 13.3 % throttle to deliver against a real 10 % floor, putting the model's minimum thrust above the weight of a booster that could in fact hover - and its plans climbed off the pad. The model's floor is the real thrust at the minimum throttle over Tmax, both at the same pressure.
-        double floorThrust = KsaEnginePerf.ThrustAtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
-        if (floorThrust > 0.0 && floorThrust < thrust)
-            throttleFloor = floorThrust / thrust;
+        (double floorThrust, double floorFlow) = KsaEnginePerf.AtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
+        // THE PLAN'S FLOOR sits above the engines' by floorMargin, so the tracker has thrust to take off; the real floor stays what the flow is fitted through and what the over-powered check falls back to.
+        double planFloorThrust = floorMargin > 0.0
+            ? KsaEnginePerf.ThrustAtThrottle(vehicle, Math.Min(throttleFloor + floorMargin, 0.8), LastAmbientPressurePa)
+            : floorThrust;
+        double realFloorFraction = floorThrust > 0.0 && floorThrust < thrust ? floorThrust / thrust : throttleFloor;
+        if (planFloorThrust > 0.0 && planFloorThrust < thrust)
+            throttleFloor = planFloorThrust / thrust;
+        else
+            throttleFloor = realFloorFraction;
+
+        // MASS FLOW AS THE ENGINES BURN IT. The flow follows the throttle, but under back pressure the thrust does not, so the flow is not proportional to the thrust: one Isp read at full thrust had the 2026-10-08 booster burning 62 kg/s at its 10 % floor against a real 91.7, and every re-solve from the standby refused on the mass channel. The line through the game's two ends of the range - the floor and full thrust, at the same pressure - is exact at both and within 5 % between them on that booster.
+        double alpha = massFlow / thrust, flowOffset = 0.0;
+        if (floorThrust > 0.0 && floorFlow > 0.0 && thrust > 1.01 * floorThrust)
+        {
+            double slope = (massFlow - floorFlow) / (thrust - floorThrust);
+            double offset = floorFlow - slope * floorThrust;
+            if (slope > 0.0 && double.IsFinite(offset))
+            {
+                alpha = slope;
+                flowOffset = offset;
+            }
+        }
 
         // Tmax is the thrust of every engine the craft runs, because no engine is shut down for the landing. The throttle command is T / Tmax of the model, so a plan built against a smaller Tmax would command full throttle for part of the thrust and overshoot every plan.
         // An over-powered vehicle is a real situation, not something to model around. The feasibility panel reports it and names the throttle floor that would work.
@@ -247,7 +278,12 @@ public static class Ksa6DofSetup
             return false;
         }
 
+        // TORQUE AUTHORITY PER NEWTON. Both capabilities below are the allocator's at PlanningThrust, and the gimbals deliver torque in proportion to the thrust through them. Divided by full thrust at the target's pressure instead, the effective gimbal came out 1.3x too wide on the 2026-10-08 booster (3.17 deg against 2.40), and the roll bound was a fixed figure at that same vacuum thrust: the plan asked for torque the gimbals could not give at a third of full thrust, and the allocator saturated from the first step.
+        double planningThrust = PlanningThrust(vehicle);
         double tauRoll = RollTorqueLimit(vehicle);
+        // The roll capability at the model's Tmax; the rows scale it with the thrust (RollTorqueFollowsThrust).
+        if (planningThrust > 0.0)
+            tauRoll *= thrust / planningThrust;
         if (tauRoll <= 0.0)
         {
             error = "no roll authority from TVC (no off-axis gimbals)";
@@ -266,7 +302,7 @@ public static class Ksa6DofSetup
         double latCapability = LateralTorqueLimit(vehicle);
         if (latCapability > 0.0)
         {
-            double effectiveTan = latCapability / (arm * thrust);
+            double effectiveTan = latCapability / (arm * (planningThrust > 0.0 ? planningThrust : thrust));
             double effectiveDeg = Math.Atan(effectiveTan) * 180.0 / Math.PI;
             gimbalDeg = Math.Clamp(effectiveDeg, 0.1, gimbalDeg);
         }
@@ -283,6 +319,12 @@ public static class Ksa6DofSetup
             double gSite = parent.Mu / (siteCci.Length() * siteCci.Length());
             ThrottleMargin(thrust, throttleFloor, vehicle.TotalMass, gSite,
                            out double twrMin, out double needTiltDeg);
+            // A margin that leaves no plan is dropped rather than refusing the craft: planning on the real floor is what it did before.
+            if (needTiltDeg >= tiltMaxDeg && throttleFloor > realFloorFraction)
+            {
+                throttleFloor = realFloorFraction;
+                ThrottleMargin(thrust, throttleFloor, vehicle.TotalMass, gSite, out twrMin, out needTiltDeg);
+            }
             if (needTiltDeg >= tiltMaxDeg)
             {
                 double feasibleFloor = Math.Cos(tiltMaxDeg * Math.PI / 180.0) *
@@ -305,7 +347,8 @@ public static class Ksa6DofSetup
         {
             Gx = 0.0, Gy = 0.0, Gz = -g,
             G0 = G0,
-            Isp = thrust / massFlow / G0,
+            Isp = 1.0 / (alpha * G0),
+            MassFlowOffset = flowOffset,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,
         };
@@ -345,6 +388,7 @@ public static class Ksa6DofSetup
             ThrottleFloor = throttleFloor,
             GimbalMaxDeg = gimbalDeg,
             TauRollMax = tauRoll,
+            RollTorqueFollowsThrust = true,
             // WIDENED TO ADMIT THE CURRENT ATTITUDE. The tilt cone is applied at every node INCLUDING node 0, and node 0 is pinned by an equality to the measured state - so a cap below the vehicle's present tilt asks for a quaternion that is simultaneously exactly the measured one and inside a cone the measured one is outside. That is infeasible by construction, not merely expensive: measured offline from the the recorded run entry at 92.1 degrees with a 60-degree cap, NO node count solves at all - infinite defect at 15, 30 and 50 nodes, never reaching even the loose cold gate. Raise the cap above the entry attitude and the same problem solves at every one of them.
             //  This is the same failure the trust-region box had before it was moved off node 0, and the reason the glideslope and climb-rate constraints start at node 1. Widening rather than restructuring the rows, because the row layout is what the Python reference comparison checks.
             //  A GUARD, NOT A DIAGNOSIS. The flight this was measured against had already been flown with the cap raised to 120, so it was feasible throughout - the trouble there was node spacing, not this. What this prevents is the case where someone leaves the cap at a value that sounds cautious and the vehicle simply cannot be planned for, with nothing in the failure text to say why.

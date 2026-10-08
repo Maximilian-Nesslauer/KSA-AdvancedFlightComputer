@@ -40,7 +40,7 @@ public sealed class Scvx3DofSolver
     private readonly double _dtauG, _dtauB;
     private double[] _xs => _cfg.XScale;
     private readonly double[] _alphaRadius;
-    private readonly double[] _lossConstant, _lossGradient;
+    private readonly double[] _thrustSlope, _lossConstant, _lossGradient;
 
     // Trust-region schedule: 3dof.py's constants, which are the 6-DOF's.
     public double TrustRegion { get; private set; } = 0.1;
@@ -101,6 +101,7 @@ public sealed class Scvx3DofSolver
         _sub = new Scvx3DofSubproblemScs(cfg);
         _lin = new Linearisation3Dof(_n);
         _alphaRadius = new double[_n];
+        _thrustSlope = new double[_n];
         _lossConstant = new double[_n];
         _lossGradient = new double[_n * 3];
     }
@@ -210,7 +211,7 @@ public sealed class Scvx3DofSolver
         Linearise();
 
         _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigGBar, _sigBBar, TrustRegion, _lin, _alphaRadius,
-                      _anchor, _anchorCos, AccelLimitTerms(), _lossConstant, _lossGradient);
+                      _anchor, _anchorCos, AccelLimitTerms() ? _thrustSlope : null, _lossConstant, _lossGradient);
         ScsStatus st = _sub.Run(WarmStart && _sub.HasWarmStart, MaxSubproblemIterations, SubproblemEps, SubproblemEps);
         if (_sub.HitIterationLimit && EscalatedSubproblemIterations > MaxSubproblemIterations)
             st = _sub.Run(WarmStart && _sub.HasWarmStart, EscalatedSubproblemIterations, SubproblemEps, SubproblemEps);
@@ -313,27 +314,31 @@ public sealed class Scvx3DofSolver
     }
 
     /// <summary>
-    /// The acceleration limit's terms at the reference: the thrust law's full-throttle vacuum thrust, returned, and per node the back-pressure loss linearised in position, loss(r) ~ constant + gradient . r. Zero, leaving the rows vacuous, when there is no limit or no KSA thrust law to read.
+    /// The acceleration limit's terms at the reference, per node: the thrust law linearised in throttle and position, T ~ slope u - (constant + gradient . r). Under the constant-loss law the slope is the vacuum thrust and the rest is the back-pressure loss; under the game's table the slope is the curve's own at the reference throttle. False, leaving the rows vacuous, when there is no limit or no KSA thrust law to read.
     /// </summary>
-    private double AccelLimitTerms()
+    private bool AccelLimitTerms()
     {
-        if (!(_cfg.AccelMax > 0.0) || _model is not KsaPointMassModel ksa || !(ksa.VacuumThrust > 0.0))
-            return 0.0;
+        if (!(_cfg.AccelMax > 0.0) || _model is not KsaPointMassModel ksa || !ksa.HasThrust)
+            return false;
         for (int k = 0; k < _n; k++)
         {
             ReadOnlySpan<double> xk = _xbar.AsSpan(k * NX, NX);
             double altitude = ksa.Altitude(xk);
+            // About the reference throttle, held to the box the rows sit in: the glide nodes' zero is an unlit engine, which has no slope to linearise.
+            double u = Math.Clamp(_ubar[k * NU + PointMass3Dof.ITH], _cfg.ThrottleFloor, 1.0);
+            double thrust = ksa.ThrustLit(u, altitude, out double dThrottle, out double dAltitude);
+            _thrustSlope[k] = Math.Max(dThrottle, 1e-9 * ksa.VacuumThrust);
             // The altitude's gradient in position is the unit vector out from the body's centre.
             double cx = xk[0] - ksa.CentreX, cy = xk[1] - ksa.CentreY, cz = xk[2] - ksa.CentreZ;
             double len = Math.Sqrt(cx * cx + cy * cy + cz * cz);
-            double slope = len > 0.0 ? ksa.BackPressureLossSlope(altitude) / len : 0.0;
+            double slope = len > 0.0 ? -dAltitude / len : 0.0;
             _lossGradient[k * 3 + 0] = slope * cx;
             _lossGradient[k * 3 + 1] = slope * cy;
             _lossGradient[k * 3 + 2] = slope * cz;
-            _lossConstant[k] = ksa.BackPressureLoss(altitude)
+            _lossConstant[k] = _thrustSlope[k] * u - thrust
                 - (_lossGradient[k * 3] * xk[0] + _lossGradient[k * 3 + 1] * xk[1] + _lossGradient[k * 3 + 2] * xk[2]);
         }
-        return ksa.VacuumThrust;
+        return true;
     }
 
     // ------------------------------------------------------------ merit terms
@@ -509,13 +514,16 @@ public sealed class Scvx3DofSolver
         }
         if (_cfg.AttitudeAnchor && _anchorCos > -1.0)
             cost += Math.Max(0.0, _anchorCos - (_anchor[0] * u[0] + _anchor[1] * u[1] + _anchor[2] * u[2]));
-        // The acceleration limit, in the subproblem's throttle units: thrust over the limit, over the full-throttle vacuum thrust.
-        if (_cfg.AccelMax > 0.0 && _model is KsaPointMassModel ksa && ksa.VacuumThrust > 0.0)
+        // The acceleration limit, in the subproblem's throttle units: thrust over the limit, over the thrust law's slope in throttle there.
+        if (_cfg.AccelMax > 0.0 && _model is KsaPointMassModel ksa && ksa.HasThrust)
             for (int k = _k; k < _n; k++)
             {
                 ReadOnlySpan<double> xk = x.AsSpan(k * NX, NX);
-                double over = ksa.Thrust(u[k * NU + PointMass3Dof.ITH], ksa.Altitude(xk)) - _cfg.AccelMax * xk[PointMass3Dof.IM];
-                cost += Math.Max(0.0, over / ksa.VacuumThrust);
+                double altitude = ksa.Altitude(xk);
+                double throttle = u[k * NU + PointMass3Dof.ITH];
+                ksa.ThrustLit(Math.Clamp(throttle, _cfg.ThrottleFloor, 1.0), altitude, out double slope, out _);
+                double over = ksa.Thrust(throttle, altitude) - _cfg.AccelMax * xk[PointMass3Dof.IM];
+                cost += Math.Max(0.0, over / Math.Max(slope, 1e-9 * ksa.VacuumThrust));
             }
         return _cfg.PathSlackWeight * cost;
     }

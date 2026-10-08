@@ -447,10 +447,14 @@ public sealed class Scvx6DofSubproblemScs
             _b[row++] = -_cfg.Tmin;
             AddA(row, IU(k, Dynamics6Dof.IT), 1.0);
             _b[row++] = _cfg.Tmax;
+            // |tau_roll| <= TauRollMax, or <= (TauRollMax / Tmax) T when the roll comes from the gimbals; the thrust column is always present so the pattern does not depend on the mode.
+            double rollPerNewton = _cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? _cfg.TauRollMax / _cfg.Tmax : 0.0;
             AddA(row, IU(k, Dynamics6Dof.ITAU), 1.0);
-            _b[row++] = _cfg.TauRollMax;
+            AddA(row, IU(k, Dynamics6Dof.IT), -rollPerNewton);
+            _b[row++] = rollPerNewton > 0.0 ? 0.0 : _cfg.TauRollMax;
             AddA(row, IU(k, Dynamics6Dof.ITAU), -1.0);
-            _b[row++] = _cfg.TauRollMax;
+            AddA(row, IU(k, Dynamics6Dof.IT), -rollPerNewton);
+            _b[row++] = rollPerNewton > 0.0 ? 0.0 : _cfg.TauRollMax;
 
             AddA(row, IX(k, 2), -1.0);
             _b[row++] = -_cfg.GroundFloor;

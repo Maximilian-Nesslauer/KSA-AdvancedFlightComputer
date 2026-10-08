@@ -23,8 +23,10 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 //
 // FALLBACKS. Before the burn: a cold solve that fails, or a run of refused re-solves, flies the PID glide again and starts a fresh cold solve. After ignition the glide cannot catch it, so a plan that runs out, or a long run of refusals, hands the burn to 6-DOF, which flies in air on its own model.
 //
-// THE BURN ENDS AT ZERO/ZERO - the legs on the pad, at rest (the CoM VehicleHeightM above the site) - and the engine is cut at contact, unless, below ThreeDofSixDofSpeedMs (100 m/s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare. There is no hover hand-off: a craft that cannot throttle below its weight could not be handed one, and one that stops short is cut and dropped instead (see the burn's stop-short check).
-// 6-DOF is ON STANDBY from ignition (SixDofStandby.cs): its guidance cold-solves and then re-solves on its own thread from the measured state while this mode flies, so it takes the burn on a warm plan. Below the speed it takes over only once that plan is converged and fresh; until then this mode keeps the burn, to touchdown if need be. The fallbacks above hand over whatever state the standby is in, which at worst is a cold solve already under way, seeded with this burn's time to go.
+// THE BURN ENDS AT ZERO/ZERO - the legs on the pad, at rest (the CoM VehicleHeightM above the site) - and the engine is cut at contact, unless, in the burn's last ThreeDofSixDofTimeS (5 s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare.
+//
+// BY TIME, NOT SPEED. The hand-over was below 100 m/s, which a heavy booster reaches a few seconds from the pad but a light one, falling at a terminal speed of ~50 m/s, reaches at ignition: a 20 t booster lit 2.3 km up was handed a 40 s burn (headless, 2026-10-08). 6-DOF has no engine-off coast and no drag model - only a constant bias - so over a burn that long it rides its thrust floor, tilts 25-30 degrees to shed what it cannot throttle away, wanders hundreds of metres, and loses the plan as drag falls off. Its last seconds are what it is for, whatever the speed. There is no hover hand-off: a craft that cannot throttle below its weight could not be handed one, and one that stops short is cut and dropped instead (see the burn's stop-short check).
+// 6-DOF is ON STANDBY from ignition (SixDofStandby.cs): its guidance cold-solves and then re-solves on its own thread from the measured state while this mode flies, so it takes the burn on a warm plan. In the last seconds it takes over only once that plan is converged and fresh; until then this mode keeps the burn, to touchdown if need be. The fallbacks above hand over whatever state the standby is in, which at worst is a cold solve already under way, seeded with this burn's time to go.
 //
 // TODO (offline harness, --3dof-mpc, which flies the 3-DOF to touchdown with no 6-DOF hand-over): at zero/zero the nominal cases touch down at 0.4-0.7 m/s, but a 30 % lift deficit, an 8 % weak engine and a second's late ignition touch down at 3-4.5 m/s. In each, every burn re-solve from a few hundred metres down is refused on the mass channel (1-5x its tolerance), as it was against the old 20 m aim point, and the tracker flies a plan up to 8 s stale to the ground. In flight ThreeDofBurnRefusalLimit hands those burns to 6-DOF first.
 public static partial class GuidanceWindow
@@ -311,17 +313,18 @@ public static partial class GuidanceWindow
                 }
             }
             // Only to a standby with a warm plan: a 6-DOF that is still converging would leave the craft on the 3-DOF's last command until it is, which this mode can fly better.
-            if (_s.ThreeDofSixDofHandover && speed < _s.ThreeDofSixDofSpeedMs)
+            double burnLeft = plan.EndTime - now;
+            if (_s.ThreeDofSixDofHandover && burnLeft < _s.ThreeDofSixDofTimeS)
             {
                 if (SixDofStandbyReady(now))
                 {
-                    ThreeDofToSixDof(vehicle, $"Entry guidance hands the burn to touchdown guidance below {_s.ThreeDofSixDofSpeedMs:F0} m/s.");
+                    ThreeDofToSixDof(vehicle, $"Entry guidance hands the burn to touchdown guidance {burnLeft:F1} s from the pad, at {height:F0} m and {speed:F0} m/s.");
                     return false;
                 }
                 if (!_s.ThreeDofSixDofWaiting)
                 {
                     _s.ThreeDofSixDofWaiting = true;
-                    GuidanceLog.Info(vehicle, $"Entry guidance below {_s.ThreeDofSixDofSpeedMs:F0} m/s at {height:F0} m, touchdown guidance not ready ({SixDofStandbyText(now)}) - entry guidance keeps the burn until it is.");
+                    GuidanceLog.Info(vehicle, $"Entry guidance {burnLeft:F1} s from the pad at {height:F0} m, touchdown guidance not ready ({SixDofStandbyText(now)}) - entry guidance keeps the burn until it is.");
                 }
             }
         }
@@ -461,10 +464,11 @@ public static partial class GuidanceWindow
             BurnThrottleCeiling = Math.Clamp(_s.ThreeDofBurnCeiling, 0.1, 1.0),
         };
         // THE ACCELERATION LIMIT TIMES THE IGNITION AND NOTHING ELSE. The glide plan, which decides when to light, plans the burn to it, so a booster with thrust to spare lights early and brakes gently instead of at full thrust at the last moment. The burn re-solves, and 6-DOF after them, may use the engine's full thrust: limited there too, a burn that arrived squeezed found missing the site by tens of metres and stopping above the pad cheaper than braking harder (2026-10-08, 18:36: 32 m off, stopped 15 m up).
+        // Both plan from above the engines' minimum throttle, so the tracker has thrust to take off as well as to add; see LandingPlanFloorMargin.
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
-                                                    _s.VehicleHeightM, LandingAccelLimitMs2);
+                                                    _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
-                                                   _s.VehicleHeightM);
+                                                   _s.VehicleHeightM, floorMargin: _s.LandingPlanFloorMargin);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();

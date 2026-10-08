@@ -456,7 +456,8 @@ public static partial class GuidanceWindow
                                    _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
-                                   out Dynamics6Dof.Params dyn, out _))
+                                   out Dynamics6Dof.Params dyn, out _,
+                                   floorMargin: _s.LandingPlanFloorMargin))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -653,6 +654,8 @@ public static partial class GuidanceWindow
             AltToGo = altToGo, DescentRate = descent, StopDistM = stopDist,
             GlideViolM = glideViol,
             BiasX = _s.Guidance.AccelBias.X, BiasY = _s.Guidance.AccelBias.Y, BiasZ = _s.Guidance.AccelBias.Z,
+            TrackPosM = _s.Guidance.TrackingError.PositionM, TrackVelMs = _s.Guidance.TrackingError.VelocityMs,
+            TrackThrustN = _s.Guidance.TrackingError.ThrustN,
             Error = _s.Error,
         };
         SixDofLog.Cycle(_s, row);
@@ -967,7 +970,7 @@ public static partial class GuidanceWindow
 
         Ksa6DofPlan plan = _s.Guidance.Published;
         if (plan != null && now - plan.SolveTime < plan.Sigma
-            && _s.Guidance.Command(now, out double3 torqueModel, out double thrustN))
+            && _s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x, SixDofTracker()))
         {
             ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
             return;
@@ -1475,11 +1478,20 @@ public static partial class GuidanceWindow
             return;
         }
 
-        if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN))
+        if (!_s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x, SixDofTracker()))
             return;
 
         ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
     }
+
+    /// <summary>The feedback the plan's thrust is flown through between re-solves, from the panel's gains, or null to fly it open loop.</summary>
+    private static Tracker6Dof SixDofTracker() => _s.SixDofTrack
+        ? new Tracker6Dof
+        {
+            Kp = Math.Max(_s.SixDofTrackKp, 0.0),
+            Kd = Math.Max(_s.SixDofTrackKd, 0.0),
+        }
+        : null;
 
     /// <summary>
     /// Turns one plan command into the throttle and the gimbal torque, and logs the cycle.
@@ -1597,7 +1609,8 @@ public static partial class GuidanceWindow
                                      _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                      _s.SixDofProximal,
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
-                                     x, xf, out cfg, out dyn, out error);
+                                     x, xf, out cfg, out dyn, out error,
+                                     floorMargin: _s.LandingPlanFloorMargin);
     }
 
     private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,

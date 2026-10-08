@@ -8,7 +8,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 ///
 ///   rdot = v
 ///   vdot = g(r) - 2 w x v - w x (w x r_c) + (T b + D + L) / m
-///   mdot = -throttle * mdot_max
+///   mdot = -mdot(throttle)
 ///
 /// THE FRAME ROTATES WITH THE BODY. It is the landing-site frame KsaFrameBridge builds - origin at the site, +z radially up - which the guidance rebuilds every step from the site's current position, so it turns with the planet. In it the site never moves, which keeps the terminal condition fixed whatever the landing time, and the velocity is the airspeed, because KSA's atmosphere co-rotates. The price is the Coriolis and centrifugal terms, which flat-earth 3dof.py did not need: from tens of kilometres out the curvature drop and a Coriolis push of order 0.1 m/s^2 are not negligible. Gravity is central, from the body's centre r_c = r - c. This is DragCoastSystem's physics in different coordinates, so the plan and the impact prediction agree.
 ///
@@ -19,7 +19,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 ///
 /// THE CORNER AT alpha = 0. KSA's drag grows with |sin(alpha)|, which has a corner exactly where a booster flies, and a linearisation at the corner promises gains the true drag never pays. As the convex ascent does, the tables are read at an alpha whose |p| is rounded to |p|^2 / sqrt(|p|^2 + e^2): exact at zero, smooth, and about e^2 / 2|p| low elsewhere. Only the LOOKUP argument is rounded; the lift's direction comes from p itself.
 ///
-/// THRUST FOLLOWS THE NOZZLE. Throttle sets the chamber, not the thrust: T = throttle * F_vac - Pa(h) A_e, so the back-pressure loss is a near-constant deficit that is worst, relatively, at low throttle. Mass flow follows the throttle. 3dof.py's mdot proportional to T is wrong under back pressure.
+/// THRUST FOLLOWS THE NOZZLE. Throttle sets the chamber, not the thrust, and mass flow follows the throttle: 3dof.py's mdot proportional to T is wrong under back pressure. In flight both come from <see cref="Engine"/>, the game's own engines sampled over throttle and pressure, because the nozzle's loss to the air falls with the chamber pressure and no constant deficit fits. Without one - the offline checks - the law is T = throttle * F_vac - Pa(h) A_e and mdot = throttle * mdot_max, which is exact at full throttle and only there.
 ///
 /// Correction factors on drag and lift are set per solve by the guidance from what the vehicle is measured to experience - see <see cref="DragScale"/>.
 /// </summary>
@@ -71,6 +71,12 @@ public sealed record KsaPointMassModel : IPointMassModel
     /// <summary>Full-throttle mass flow, kg/s.</summary>
     public double MassFlow { get; init; }
 
+    /// <summary>The engines as the game runs them, thrust over throttle and pressure and flow over throttle; null for the constant-loss law above. See <see cref="EngineThrustTable"/>.</summary>
+    public EngineThrustTable? Engine { get; init; }
+
+    /// <summary>Multiplier on the thrust: what the vehicle is measured to deliver against the law (Guidance3Dof's estimator). The flow is the engines' own and is not scaled.</summary>
+    public double ThrustScale { get; init; } = 1.0;
+
     private const double VEps2 = PointMass3Dof.VEps2;
 
     public void F(ReadOnlySpan<Dual> x, ReadOnlySpan<Dual> u, Span<Dual> xdot)
@@ -106,7 +112,7 @@ public sealed record KsaPointMassModel : IPointMassModel
         if (throttle.V > EngineOnThrottle)
         {
             Dual pressure = Atmosphere != null ? Atmosphere.Pressure(altitude) : new Dual(0.0);
-            Dual thrust = throttle * VacuumThrust - pressure * ExitArea;
+            Dual thrust = ThrustScale * (Engine != null ? Engine.Thrust(throttle, pressure) : throttle * VacuumThrust - pressure * ExitArea);
             fx += thrust * bx;
             fy += thrust * by;
             fz += thrust * bz;
@@ -151,7 +157,9 @@ public sealed record KsaPointMassModel : IPointMassModel
         xdot[PointMass3Dof.IV + 0] = ax + fx / m;
         xdot[PointMass3Dof.IV + 1] = ay + fy / m;
         xdot[PointMass3Dof.IV + 2] = az + fz / m;
-        xdot[PointMass3Dof.IM] = -(throttle * MassFlow);
+        // Zero with the engine off either way: the glide holds the throttle at 0, and the table's extension below the minimum throttle is not an unlit engine.
+        xdot[PointMass3Dof.IM] = Engine == null ? -(throttle * MassFlow)
+            : throttle.V > EngineOnThrottle ? -Engine.MassFlow(throttle) : new Dual(0.0);
     }
 
     public double DynamicPressure(ReadOnlySpan<double> x)
@@ -169,20 +177,45 @@ public sealed record KsaPointMassModel : IPointMassModel
         return Math.Sqrt(cx * cx + cy * cy + cz * cz) - MeanRadius;
     }
 
-    /// <summary>Thrust at a throttle and altitude, N, by the model's own nozzle law; zero with the engine off.</summary>
+    /// <summary>Whether there is a lit engine to plan with.</summary>
+    public bool HasThrust => VacuumThrust > 0.0;
+
+    /// <summary>Thrust at a throttle and altitude, N, by the model's own law; zero with the engine off.</summary>
     public double Thrust(double throttle, double altitude)
-        => throttle > EngineOnThrottle ? throttle * VacuumThrust - BackPressureLoss(altitude) : 0.0;
+        => throttle > EngineOnThrottle ? ThrustLit(throttle, altitude, out _, out _) : 0.0;
+
+    /// <summary>Thrust of a lit engine with its slopes in throttle (N) and in altitude (N/m) - what the acceleration limit linearises.</summary>
+    public double ThrustLit(double throttle, double altitude, out double dThrottle, out double dAltitude)
+    {
+        Dual pressure = Atmosphere != null ? Atmosphere.Pressure(new Dual(altitude, 1.0)) : new Dual(0.0);
+        double thrust;
+        if (Engine != null)
+        {
+            thrust = Engine.Thrust(throttle, pressure.V, out double dU, out double dP);
+            dThrottle = dU;
+            dAltitude = dP * pressure.D;
+        }
+        else
+        {
+            thrust = throttle * VacuumThrust - pressure.V * ExitArea;
+            dThrottle = VacuumThrust;
+            dAltitude = -pressure.D * ExitArea;
+        }
+        dThrottle *= ThrustScale;
+        dAltitude *= ThrustScale;
+        return ThrustScale * thrust;
+    }
 
     /// <summary>The throttle that gives a thrust at an altitude by the same law, unclamped: <see cref="Thrust"/>'s inverse for a lit engine.</summary>
     public double ThrottleFor(double thrust, double altitude)
-        => VacuumThrust > 0.0 ? (thrust + BackPressureLoss(altitude)) / VacuumThrust : 0.0;
-
-    /// <summary>The lit nozzle's thrust deficit to ambient pressure, Pa * A_e, N.</summary>
-    public double BackPressureLoss(double altitude) => (Atmosphere?.Pressure(altitude) ?? 0.0) * ExitArea;
-
-    /// <summary>The back-pressure loss's slope with altitude, N/m: negative, since the air thins going up.</summary>
-    public double BackPressureLossSlope(double altitude)
-        => Atmosphere != null ? Atmosphere.Pressure(new Dual(altitude, 1.0)).D * ExitArea : 0.0;
+    {
+        if (!HasThrust || !(ThrustScale > 0.0))
+            return 0.0;
+        double pressure = Atmosphere?.Pressure(altitude) ?? 0.0;
+        return Engine != null
+            ? Engine.ThrottleFor(thrust / ThrustScale, pressure)
+            : (thrust / ThrustScale + pressure * ExitArea) / VacuumThrust;
+    }
 
     /// <summary>Throttle below which the engine counts as off.</summary>
     public const double EngineOnThrottle = 1e-6;

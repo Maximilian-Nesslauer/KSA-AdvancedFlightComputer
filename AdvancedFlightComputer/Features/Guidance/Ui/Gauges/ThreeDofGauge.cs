@@ -65,12 +65,15 @@ public static partial class GuidanceWindow
             GaugeRow("Command smoothing (s)", "##tdtau", ref _s.ThreeDofSmoothTau);
             GaugeRow("Plan max throttle, glide", "##tdceilg", ref _s.ThreeDofGlideCeiling);
             GaugeRow("Plan max throttle, burn", "##tdceilb", ref _s.ThreeDofBurnCeiling);
+            // Shared with the touchdown page: both plans keep this much throttle above the engines' minimum for their feedback.
+            GaugeRow("Plan min throttle above engine min", "##tdfloor", ref _s.LandingPlanFloorMargin);
+            _s.LandingPlanFloorMargin = Math.Clamp(_s.LandingPlanFloorMargin, 0.0, 0.5);
             GaugeRow("Burn track Kp (1/s2)", "##tdkp", ref _s.ThreeDofTrackKp);
             GaugeRow("Burn track Kd (1/s)", "##tdkd", ref _s.ThreeDofTrackKd);
             GaugeRow("Burn track max tilt (deg)", "##tdtilt", ref _s.ThreeDofTrackTiltDeg);
             GaugeRowCheck("Hand burn to touchdown", "##td6", ref _s.ThreeDofSixDofHandover);
             using (new ImGuiDisabledScope(!_s.ThreeDofSixDofHandover))
-                GaugeRow("Below speed (m/s)", "##td6v", ref _s.ThreeDofSixDofSpeedMs);
+                GaugeRow("With burn left (s)", "##td6t", ref _s.ThreeDofSixDofTimeS);
             ImGuiHelper.EndRegion();
         }
     }

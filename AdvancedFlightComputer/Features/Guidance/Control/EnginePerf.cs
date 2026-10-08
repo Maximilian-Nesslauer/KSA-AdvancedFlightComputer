@@ -49,6 +49,10 @@ internal static class KsaEnginePerf
     internal static (double thrust, double massFlow) UncappedAtPressure(Vehicle vehicle, double ambientPressure)
         => RawPerformance(vehicle, 1.0, ambientPressure);
 
+    // The same at any throttle, held to the vehicle's minimum below it, for a planner sampling the whole thrust curve.
+    internal static (double thrust, double massFlow) UncappedAtThrottle(Vehicle vehicle, double throttle, double ambientPressure)
+        => RawPerformance(vehicle, throttle, ambientPressure);
+
     // The thrust acceleration FlightComputer.SolveGLoadThrottleCap holds, m/s^2, computed in float as stock does.
     // Before the worker has measured the vehicle, FlightComputer.MaxGLoad is still 0, so the limit comes from VehicleStructuralLimits.EffectiveMaxGLoad of the bounding sphere, the same source FlightComputer.ReadMeasurements uses.
     // Positive infinity when there is no flight computer.

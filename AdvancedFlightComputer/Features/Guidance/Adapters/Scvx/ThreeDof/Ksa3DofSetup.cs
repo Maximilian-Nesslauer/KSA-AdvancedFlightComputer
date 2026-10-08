@@ -17,7 +17,7 @@ public static class Ksa3DofSetup
     public const double RateMax = 10.0 * Math.PI / 180.0;
 
     /// <summary>
-    /// The planner's model of this vehicle over this body, in the site frame: central gravity and the frame's rotation from the body, the aerodynamics from the boostback's sweep, and the lit engines' thrust law - vacuum thrust and the nozzle's back-pressure loss - measured from the game at vacuum and at sea level.
+    /// The planner's model of this vehicle over this body, in the site frame: central gravity and the frame's rotation from the body, the aerodynamics from the boostback's sweep, and the lit engines' thrust and flow sampled from the game over throttle and pressure (<see cref="EngineTable"/>).
     /// </summary>
     public static KsaPointMassModel BuildModel(Vehicle vehicle, IParentBody parent, KsaFrameBridge.SiteFrame frame,
                                                KsaAeroSweep.Result aero, out string error)
@@ -51,7 +51,43 @@ public static class Ksa3DofSetup
             VacuumThrust = vacuum,
             ExitArea = exitArea,
             MassFlow = flow,
+            Engine = p0 > 0.0 ? EngineTable(vehicle, p0) : null,
         };
+    }
+
+    // Throttle breakpoints as fractions of the way from the minimum to full: close together near the minimum, where the nozzle's loss bends most.
+    private static readonly double[] ThrottleSpacing = [0.0, 0.03, 0.07, 0.12, 0.18, 0.26, 0.35, 0.45, 0.56, 0.68, 0.84, 1.0];
+
+    // Pressure breakpoints as fractions of sea level, a little past it for a site below the datum.
+    private static readonly double[] PressureSpacing = [0.0, 0.05, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 1.0, 1.1];
+
+    /// <summary>
+    /// The lit engines as the game computes them, over throttle from the minimum to full and over pressure from vacuum to past sea level. Read once, here on the main thread, so the solves on the worker read nothing of the game's. See EngineThrustTable for why the constant-loss law is not enough. Null if the game returns nothing usable, which leaves the model on that law.
+    /// </summary>
+    public static EngineThrustTable EngineTable(Vehicle vehicle, double seaLevelPressure)
+    {
+        double floor = Math.Clamp(vehicle.GetMinThrottle(), 0.01, 0.95);
+        var throttles = new double[ThrottleSpacing.Length];
+        for (int j = 0; j < throttles.Length; j++)
+            throttles[j] = floor + (1.0 - floor) * ThrottleSpacing[j];
+        var pressures = new double[PressureSpacing.Length];
+        for (int i = 0; i < pressures.Length; i++)
+            pressures[i] = PressureSpacing[i] * seaLevelPressure;
+
+        var thrust = new double[pressures.Length * throttles.Length];
+        var flow = new double[throttles.Length];
+        for (int i = 0; i < pressures.Length; i++)
+            for (int j = 0; j < throttles.Length; j++)
+            {
+                (double t, double m) = KsaEnginePerf.UncappedAtThrottle(vehicle, throttles[j], pressures[i]);
+                if (!double.IsFinite(t) || !double.IsFinite(m) || !(m > 0.0))
+                    return null;
+                thrust[i * throttles.Length + j] = t;
+                // The flow is the chamber's, the same at every pressure; read at the first.
+                if (i == 0)
+                    flow[j] = m;
+            }
+        return new EngineThrustTable(pressures, throttles, thrust, flow);
     }
 
     /// <summary>
@@ -59,8 +95,9 @@ public static class Ksa3DofSetup
     /// </summary>
     /// <param name="comFloorM">The CoM's height over the site with the legs on the ground - the vehicle height - which is where the ground is for a plan that flies the CoM.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the burn may plan, m/s^2, or 0 for none; see Scvx3DofConfig.AccelMax.</param>
+    /// <param name="floorMargin">Throttle the plan keeps in hand above the engines' minimum, for the burn tracker; see VehicleAutopilotState.LandingPlanFloorMargin.</param>
     public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg,
-                                        double comFloorM = 0.0, double accelMaxMs2 = 0.0)
+                                        double comFloorM = 0.0, double accelMaxMs2 = 0.0, double floorMargin = 0.0)
     {
         var min = new double[PointMass3Dof.NX];
         var max = new double[PointMass3Dof.NX];
@@ -68,7 +105,8 @@ public static class Ksa3DofSetup
         Array.Fill(max, double.PositiveInfinity);
         min[PointMass3Dof.IR + 2] = Math.Max(comFloorM, 0.0);
         min[PointMass3Dof.IM] = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, 1.0);
-        double floor = Math.Clamp(vehicle.GetMinThrottle(), 0.01, 0.95);
+        double minimum = Math.Clamp(vehicle.GetMinThrottle(), 0.01, 0.95);
+        double floor = Math.Clamp(minimum + Math.Max(floorMargin, 0.0), minimum, Math.Max(minimum, 0.8));
         // Never under what the minimum throttle already gives at this mass: a limit below it could only ever be met through its slack.
         double minimumAccel = floor * KsaEnginePerf.UncappedAtPressure(vehicle, 0.0).thrust / Math.Max(vehicle.TotalMass, 1.0);
         return new Scvx3DofConfig

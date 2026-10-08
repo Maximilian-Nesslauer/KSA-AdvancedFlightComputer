@@ -101,7 +101,7 @@ internal static class SixDofLog
                 "thrustDemandN", "capabilityN", "throttle", "saturated",
                 "tauX", "tauY", "tauZ", "allocX", "allocY", "allocZ", "allocSat",
                 "twr", "twrMin", "ambientPa", "altToGo", "descentRate", "stopDistM",
-                "glideViolM", "biasX", "biasY", "biasZ", "error"));
+                "glideViolM", "biasX", "biasY", "biasZ", "trackPosM", "trackVelMs", "trackThrustN", "error"));
 
             _plan.AppendLine("cycle,t,node,x,y,z,vx,vy,vz,thrustN,tiltDeg,qw,qx,qy,qz,wx,wy,wz,mass,tdx,tdy,tauRoll,solveTime,sigma");
 
@@ -215,6 +215,7 @@ internal static class SixDofLog
             F(sb, r.AltToGo); F(sb, r.DescentRate); F(sb, r.StopDistM);
             F(sb, r.GlideViolM);
             F(sb, r.BiasX); F(sb, r.BiasY); F(sb, r.BiasZ);
+            F(sb, r.TrackPosM); F(sb, r.TrackVelMs); F(sb, r.TrackThrustN);
             sb.Append(Csv(r.Error));
             sb.AppendLine();
 
@@ -358,6 +359,7 @@ internal static class SixDofLog
         public double TauX, TauY, TauZ, AllocX, AllocY, AllocZ, AllocSat;
         public double Twr, TwrMin, AmbientPa, AltToGo, DescentRate, StopDistM, GlideViolM;
         public double BiasX, BiasY, BiasZ;
+        public double TrackPosM, TrackVelMs, TrackThrustN;
         public string Error;
     }
 }

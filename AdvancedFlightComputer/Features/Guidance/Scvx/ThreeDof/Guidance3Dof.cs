@@ -231,7 +231,9 @@ public sealed class Guidance3Dof
         LastSolveMs = sw.Elapsed.TotalMilliseconds;
         LastIterations = _two.IterationCount;
         LastStatus = st;
-        if (st == ScvxStatus.Converged && Gate(_two, out double gated))
+        // A STALLED cold solve may still hold a plan: every step rejected at the smallest trust region, the defect stuck just above SCvx's normalised convergence test, yet inside the physical gate the warm re-solves publish on. Headless on 2026-10-08 the 2stage_controlled booster's cold solves sat at a normalised defect of 0.0021 against 0.001 - about 0.3 m/s at node 0 - for all 150 iterations, from every altitude down to the ground, and the booster glided in unguided. Such a plan is published rather than thrown away; one outside the gate is not.
+        bool stalled = _two.TrustRegion <= _two.TrustRegionMin * 1.001 && Stalled(_two.Trace, ColdStallIterations);
+        if ((st == ScvxStatus.Converged || stalled) && Gate(_two, out double gated))
         {
             SetAdmmCaps(_set.WarmAdmmCap);
             Publish(_two, _coldStart, _coldStart, Phase3Dof.Glide, gated);
@@ -283,7 +285,7 @@ public sealed class Guidance3Dof
         var us = new double[cfg.Nodes * NU];
         Resample3Dof.Resample(plan.X, plan.U, plan.Nodes, plan.GlideIntervals, plan.SigmaGlide, plan.SigmaBurn, elapsed,
                               cfg.Nodes, cfg.GlideIntervals, sigG, sigB, cfg.ThrottleFloor, xs, us);
-        Array.Copy(x0, xs, NX);
+        AnchorSeed(x0, xs, cfg.Nodes);
         OpenOn(us, attitude);
 
         _two.Model = Model;
@@ -346,7 +348,7 @@ public sealed class Guidance3Dof
         var us = new double[cfg.Nodes * NU];
         Resample3Dof.Resample(plan.X, plan.U, plan.Nodes, plan.GlideIntervals, plan.SigmaGlide, plan.SigmaBurn, elapsed,
                               cfg.Nodes, 0, 0.0, sigB, cfg.ThrottleFloor, xs, us);
-        Array.Copy(x0, xs, NX);
+        AnchorSeed(x0, xs, cfg.Nodes);
         OpenOn(us, attitude);
 
         _burn.Model = Model;
@@ -357,6 +359,17 @@ public sealed class Guidance3Dof
         bool reseed = _burnStarted;
         _burnStarted = true;
         return Solve(_burn, x0, xs, us, 0.0, sigB, now, now, Phase3Dof.Burn, _set.WarmIterations, reseed);
+    }
+
+    /// <summary>
+    /// Anchor a resampled seed at the measured state: node 0 IS the vehicle, and every later node's mass moves with node 0's. The engine burns the same whatever the mass, so the shift keeps the seed's mass channel as consistent as the plan was; moving node 0 alone put the whole difference into the first interval's defect, and with the tracker flying off the plan's throttle that refused the re-solves on mass.
+    /// </summary>
+    private static void AnchorSeed(double[] x0, double[] xs, int nodes)
+    {
+        double dm = x0[PointMass3Dof.IM] - xs[PointMass3Dof.IM];
+        Array.Copy(x0, xs, NX);
+        for (int k = 1; k < nodes; k++)
+            xs[k * NX + PointMass3Dof.IM] += dm;
     }
 
     /// <summary>
@@ -423,6 +436,19 @@ public sealed class Guidance3Dof
         double speed = Math.Sqrt(x0[3] * x0[3] + x0[4] * x0[4] + x0[5] * x0[5]);
         double velocity = Math.Max(Math.Max(speed, Math.Sqrt(height * g)), 1.0);
         cfg.XScale = [across, across, height, velocity, velocity, velocity, Math.Max(x0[PointMass3Dof.IM], 1.0)];
+    }
+
+    /// <summary>Rejected steps in a row at the smallest trust region that count a cold solve as stalled.</summary>
+    private const int ColdStallIterations = 10;
+
+    private static bool Stalled(IReadOnlyList<Scvx3DofIteration> trace, int count)
+    {
+        if (trace.Count < count)
+            return false;
+        for (int i = trace.Count - count; i < trace.Count; i++)
+            if (trace[i].Accepted)
+                return false;
+        return true;
     }
 
     private bool Gate(Scvx3DofSolver solver, out double gated)
@@ -542,8 +568,7 @@ public sealed class AeroScaleEstimator
     {
         DragScale = DragScale,
         LiftScale = LiftScale,
-        VacuumThrust = nominal.VacuumThrust * ThrustScale,
-        ExitArea = nominal.ExitArea * ThrustScale,
+        ThrustScale = ThrustScale,
     };
 
     /// <param name="nominal">The model with every scale at 1.</param>

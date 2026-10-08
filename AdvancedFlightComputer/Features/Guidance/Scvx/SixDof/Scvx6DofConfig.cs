@@ -19,6 +19,11 @@ public sealed class Scvx6DofConfig
     public double ThrottleFloor { get; init; } = 0.40;          // Tmin = floor * Tmax
     public double GimbalMaxDeg { get; init; } = 10.0;
     public double TauRollMax { get; init; } = 1.0e5;
+
+    /// <summary>
+    /// Roll torque scales with the axial thrust, |tau_roll| &lt;= TauRollMax * T / Tmax, rather than TauRollMax at any thrust: the roll torque comes from gimbals, which turn thrust into torque, so at a third of full thrust there is a third of the roll authority. A fixed bound promised a landing booster several times the roll it had (2026-10-08), the plan rolled at rates the vehicle could not follow, and every re-solve from there was refused. Off for a vehicle with a roll actuator of its own.
+    /// </summary>
+    public bool RollTorqueFollowsThrust { get; init; }
     public double TiltMaxDeg { get; init; } = 30.0;
     public double GroundFloor { get; init; } = -1.0;            // X[n,2] >= this
 
