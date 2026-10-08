@@ -119,10 +119,14 @@ public sealed class Guidance3Dof
         public double MinLengthScale { get; init; } = 30.0;
 
         /// <summary>
-        /// Bounds on the duration scale, s. It is set ONCE, at the cold solve, from the seed's burn time - not resized with the time left, see <see cref="Rescale"/>.
+        /// Bounds on the warm re-solves' duration scale, s. It is set ONCE, when the cold plan publishes, from its burn time - not resized with the time left; the cold solve runs on its own, see <see cref="Rescale"/>.
         /// </summary>
         public double MinSigmaScale { get; init; } = 5.0;
         public double MaxSigmaScale { get; init; } = 30.0;
+
+        /// <summary>Bounds on the cold solve's duration scale, s: the seed's whole duration, glide and burn, held inside these (see <see cref="Rescale"/>).</summary>
+        public double MinColdSigmaScale { get; init; } = 30.0;
+        public double MaxColdSigmaScale { get; init; } = 60.0;
 
         /// <summary>Integration step for the ignition prediction, s.</summary>
         public double PredictionStep { get; init; } = 0.05;
@@ -188,8 +192,8 @@ public sealed class Guidance3Dof
         if (_set.Scaling != ScalingMode.Fixed)
         {
             Rescale(_two.Config, x0);
-            // The duration scale, once, for both solvers: the seed's burn time, as the 6-DOF sizes its own from the burn time at engage.
-            _two.Config.SigmaScale = _burn.Config.SigmaScale = Math.Clamp(sb, _set.MinSigmaScale, _set.MaxSigmaScale);
+            // The cold solve on the seed's whole duration; the warm re-solves get the burn time once it publishes (see Rescale).
+            _two.Config.SigmaScale = _burn.Config.SigmaScale = Math.Clamp(sg + sb, _set.MinColdSigmaScale, _set.MaxColdSigmaScale);
         }
         _two.Initialize(x0, xf, xs, us, sg, sb);
         _two.MaxSubproblemIterations = _two.EscalatedSubproblemIterations = _set.ColdAdmmCap;
@@ -223,6 +227,9 @@ public sealed class Guidance3Dof
         {
             SetAdmmCaps(_set.WarmAdmmCap);
             Publish(_two, _coldStart, _coldStart, Phase3Dof.Glide, gated);
+            // The warm re-solves' duration scale, once, for both solvers: the plan's burn time, as the 6-DOF sizes its own from the burn time at engage.
+            if (_set.Scaling != ScalingMode.Fixed)
+                _two.Config.SigmaScale = _burn.Config.SigmaScale = Math.Clamp(_two.SigmaBurn, _set.MinSigmaScale, _set.MaxSigmaScale);
             Phase = Phase3Dof.Glide;
             Error = "";
             return true;
@@ -393,7 +400,9 @@ public sealed class Guidance3Dof
     /// <summary>
     /// Size the solver's units to the problem left, before every solve (see <see cref="ScalingMode"/>): a length scale per axis, a speed scale and the present mass.
     ///
-    /// NOT THE DURATION SCALE. It also sizes the trust region on the two durations - each may move tr x SigmaScale per iteration - and sized from the time left it was 80-90 s through the glide: four seconds of ignition time per iteration, three iterations a cycle, on a cost that barely cares when the engine lights. Every re-solve published a different timeline, the ignition time wandered two seconds either way, and the glide attitude wandered with it. It is set once at the cold solve instead, from the burn time, as the 6-DOF's is: a fraction of a second per iteration, so the timeline moves only when the problem moves it.
+    /// NOT THE DURATION SCALE. It also sizes the trust region on the two durations - each may move tr x SigmaScale per iteration - so it is set twice, for two different jobs, and never resized with the time left:
+    ///  - THE COLD SOLVE runs on the seed's whole duration, glide and burn. It has the timeline to find, from a seed that can be tens of seconds out, and from a fast entry a burn-time scale left it unable to: offline (--3dof-far) and in flight, the cold solve from 29-69 km at 2500 m/s gave up at 150 iterations on a 13 s scale and converged in 9-17 on 60 s.
+    ///  - THE WARM RE-SOLVES run on the plan's burn time, set when the cold plan publishes, as the 6-DOF's is. Sized from the time left, 80-90 s through the glide, it let the ignition time move four seconds an iteration, three iterations a cycle, on a cost that barely cares when the engine lights: every re-solve published a different timeline, the ignition time wandered two seconds either way, and the glide attitude wandered with it. On the burn time it moves a fraction of a second, so the timeline moves only when the problem moves it.
     ///
     /// PER AXIS, NOT ISOTROPIC as the 6-DOF's. A glide is far taller than it is wide - 30 km of height against a few of range - and one length for all three axes sized by the height left the cross-range to resolve in 30 km units: offline, a 2 km cross-range cold solve that converges on per-axis scales stopped converging. The horizontal scale is the horizontal range to the aim point, floored at a tenth of the height, since the path can swing wider than the straight line; the vertical scale is the height.
     /// </summary>

@@ -33,6 +33,16 @@ if (args.Contains("--hermite"))
 if (args.Contains("--3dof-model"))
     return ThreeDofModelCheck.Run();
 
+if (args.Contains("--3dof-far"))
+{
+    ThreeDofFarCheck.Sweep = args.Contains("--sweep");
+    ThreeDofFarCheck.OldRule = args.Contains("--old-rule");
+    int nodesAt = Array.IndexOf(args, "--nodes"), glideAt = Array.IndexOf(args, "--glide");
+    if (nodesAt >= 0) ThreeDofFarCheck.Nodes = int.Parse(args[nodesAt + 1], CultureInfo.InvariantCulture);
+    if (glideAt >= 0) ThreeDofFarCheck.GlideIntervals = int.Parse(args[glideAt + 1], CultureInfo.InvariantCulture);
+    return ThreeDofFarCheck.Run();
+}
+
 if (args.Contains("--3dof-mpc"))
     return ThreeDofMpcCheck.Run(verbose);
 
