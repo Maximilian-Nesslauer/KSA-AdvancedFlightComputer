@@ -17,7 +17,7 @@ public static partial class GuidanceWindow
         var dim = new float4(0.7f, 0.7f, 0.7f, 1f);
 
         // A FIXED LAYOUT: every row is drawn every frame, with placeholders when it has nothing to say, and the numbers sit in their own fixed-width rows rather than in the status line. The panel sizes itself to its content, so a row that comes and goes - the solve row used to, every time the solver thread went busy - or a line whose length changes every frame shakes the whole window.
-        ImGui.Text("3-DOF");
+        ImGui.Text("Entry guidance");
         ImGui.SameLine();
         ImGui.TextColored(ThreeDofLive ? good : dim, ThreeDofPhaseName(_s.ThreeDofPhase));
         ImGui.TextColored(ThreeDofLive ? dim : warn, _s.ThreeDofStatus.Length > 0 ? _s.ThreeDofStatus : " ");
@@ -25,10 +25,10 @@ public static partial class GuidanceWindow
         if (ThreeDofLive)
         {
             // Draw-time writes are erased by the sim copy-back, so the abort only sets state the next step acts on; see Disengage3Dof.
-            if (ImGui.Button("Abort 3-DOF"))
+            if (ImGui.Button("Abort entry guidance"))
                 Disengage3Dof("Aborted.");
         }
-        else if (ImGui.Button("Engage 3-DOF"))
+        else if (ImGui.Button("Engage entry guidance"))
         {
             _s.AutoStage = true;
             _s.ThreeDofEngagePending = true;
@@ -49,7 +49,7 @@ public static partial class GuidanceWindow
             // As of the solver's last idle moment: the guidance is the worker's while it solves, so the step caches this rather than the draw reading it.
             GaugeRowText("Last solve", _s.ThreeDofSolveText.Length > 0 ? _s.ThreeDofSolveText : "       -",
                 _s.ThreeDofRefusing ? warn : dim);
-            GaugeRowText("6-DOF standby", _s.ThreeDofPhase == ThreeDofPhase.Burn ? SixDofStandbyText(now) : "       -",
+            GaugeRowText("Touchdown guidance standby", _s.ThreeDofPhase == ThreeDofPhase.Burn ? SixDofStandbyText(now) : "       -",
                 SixDofStandbyReady(now) ? good : dim);
             ImGuiHelper.EndRegion();
         }
@@ -59,10 +59,11 @@ public static partial class GuidanceWindow
             GaugeRowCheck("Take over boostback glides", "##tdglide", ref _s.ThreeDofFromGlide);
             using (new ImGuiDisabledScope(!_s.ThreeDofFromGlide))
                 GaugeRow("At time to impact (s)", "##tdtgo", ref _s.ThreeDofEngageTgoS);
-            GaugeRow("Aim height (m)", "##tdaimh", ref _s.ThreeDofAimHeightM);
+            GaugeRow("Aim height, legs (m)", "##tdaimh", ref _s.ThreeDofAimHeightM);
+            VehicleHeightRows("td");
             GaugeRow("Aim sink (m/s)", "##tdaimv", ref _s.ThreeDofAimSinkMs);
             GaugeRow("Command smoothing (s)", "##tdtau", ref _s.ThreeDofSmoothTau);
-            GaugeRowCheck("Hand burn to 6-DOF", "##td6", ref _s.ThreeDofSixDofHandover);
+            GaugeRowCheck("Hand burn to touchdown", "##td6", ref _s.ThreeDofSixDofHandover);
             using (new ImGuiDisabledScope(!_s.ThreeDofSixDofHandover))
                 GaugeRow("Below speed (m/s)", "##td6v", ref _s.ThreeDofSixDofSpeedMs);
             ImGuiHelper.EndRegion();

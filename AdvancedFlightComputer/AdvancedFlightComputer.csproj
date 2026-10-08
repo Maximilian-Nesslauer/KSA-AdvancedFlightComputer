@@ -47,6 +47,11 @@
       <HintPath>$(KsaDir)\BepuUtilities.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <!-- KsaVehicleHeight bounds each collider's own Bepu shape to find the touchdown point. -->
+    <Reference Include="BepuPhysics">
+      <HintPath>$(KsaDir)\BepuPhysics.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="Planet.Render.Core">
       <HintPath>$(KsaDir)\Planet.Render.Core.dll</HintPath>
       <Private>false</Private>

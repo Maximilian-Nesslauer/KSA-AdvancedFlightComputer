@@ -237,7 +237,7 @@ public static class Ksa6DofSetup
         double gimbalDeg = GimbalLimitDeg(vehicle);
         if (gimbalDeg <= 0.0)
         {
-            error = "no gimballed engine - 6-DOF needs thrust vectoring";
+            error = "no gimballed engine - touchdown guidance needs thrust vectoring";
             return false;
         }
 

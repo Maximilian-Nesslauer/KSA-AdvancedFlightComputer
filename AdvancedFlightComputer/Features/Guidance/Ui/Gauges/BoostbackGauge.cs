@@ -118,7 +118,7 @@ public static partial class GuidanceWindow
                     if (_s.GlideStatus.Length > 0)
                         GaugeRowText("", _s.GlideStatus, warn);
                     if (_s.ThreeDofFromGlide)
-                        GaugeRowText("3-DOF landing", double.IsFinite(_s.GlideTgo)
+                        GaugeRowText("Entry guidance", double.IsFinite(_s.GlideTgo)
                             ? $"takes over at {_s.ThreeDofEngageTgoS:F0} s to impact" : "waiting for an impact prediction", dim);
                     break;
                 }

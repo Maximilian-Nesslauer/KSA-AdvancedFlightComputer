@@ -625,8 +625,13 @@ public sealed class VehicleAutopilotState
     /// dimension, so emphatically per vehicle. Applied as an offset on the TARGET
     /// altitude (the CoM is planned to arrive this high above the pad), NOT by shifting
     /// the vehicle reference point.
+    /// Measured from the colliders, legs deployed, while VehicleHeightAuto is set (see
+    /// KsaVehicleHeight); the field is then a readout, and typing in it switches auto off.
     /// </summary>
     public double VehicleHeightM = 15.0;
+    public bool VehicleHeightAuto = true;
+    public string VehicleHeightStatus = "";
+    internal long VehicleHeightNextMs;
 
     public double GfoldHandoffTgo = 40.0;  // hand UPFG braking over this long before the gate
     public double LandingVerticalGateM = 500.0;
@@ -706,7 +711,9 @@ public sealed class VehicleAutopilotState
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;
+    // Target and hover handoff are heights of the LEGS above the pad, like G-FOLD's. The plan flies the CoM, so it aims VehicleHeightM higher - SixDofTargetComAltM.
     public double SixDofTargetAltM = 3.0;
+    public double SixDofTargetComAltM => SixDofTargetAltM + VehicleHeightM;
     public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
@@ -1217,8 +1224,11 @@ public sealed class VehicleAutopilotState
     /// <summary>Take a boostback glide over automatically once its predicted time to impact falls under <see cref="ThreeDofEngageTgoS"/>.</summary>
     public bool ThreeDofFromGlide = true;
 
-    /// <summary>The glide's predicted time to impact, s, at which the 3-DOF takes it over. The PID glide flies on until the first plan.</summary>
-    public double ThreeDofEngageTgoS = 90.0;
+    /// <summary>
+    /// The glide's predicted time to impact, s, at which the 3-DOF takes it over. The PID glide flies on until the first plan.
+    /// 45 s rather than the 90 it started at, which engaged 90-115 km up: the PID glide holds the entry well enough, and the cold solve from up there is the fragile one - offline (--3dof-far) it gives up from 4 of 15 starts at 69-107 km and from none below 50 km.
+    /// </summary>
+    public double ThreeDofEngageTgoS = 45.0;
 
     /// <summary>Hand the landing burn to 6-DOF below this speed, for its rotational model of the final flare: the 3-DOF's horizon collapses in the last seconds and its re-solves start being refused there. On by default.</summary>
     public bool ThreeDofSixDofHandover = true;

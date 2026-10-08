@@ -313,7 +313,7 @@ public static partial class GuidanceWindow
         if (ImGui.RadioButton("G-FOLD", !_s.UseSixDofLanding && !_s.UseThreeDofLanding))
             _s.UseSixDofLanding = _s.UseThreeDofLanding = false;
         ImGui.SameLine();
-        if (ImGui.RadioButton("6-DOF", _s.UseSixDofLanding && !_s.UseThreeDofLanding))
+        if (ImGui.RadioButton("Touchdown", _s.UseSixDofLanding && !_s.UseThreeDofLanding))
         {
             _s.UseSixDofLanding = true;
             _s.UseThreeDofLanding = false;
@@ -321,7 +321,7 @@ public static partial class GuidanceWindow
         ImGui.EndDisabled();
         // Not locked with the others: the braking-burn handoff reads only the 6-DOF/G-FOLD choice, and the 3-DOF engages from a boostback glide or its own page.
         ImGui.SameLine();
-        if (ImGui.RadioButton("3-DOF", _s.UseThreeDofLanding))
+        if (ImGui.RadioButton("Entry", _s.UseThreeDofLanding))
             _s.UseThreeDofLanding = true;
     }
 

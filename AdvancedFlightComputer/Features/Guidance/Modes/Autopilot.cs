@@ -928,7 +928,7 @@ public static partial class GuidanceWindow
         }
         if (_s.Active != _s.LoggedSixDofActive)
         {
-            GuidanceLog.Debug(vehicle, _s.Active ? "6-DOF guidance is active." : "6-DOF guidance ended.");
+            GuidanceLog.Debug(vehicle, _s.Active ? "Touchdown guidance is active." : "Touchdown guidance ended.");
             _s.LoggedSixDofActive = _s.Active;
         }
     }
@@ -1229,6 +1229,35 @@ public static partial class GuidanceWindow
 
         // Likewise the flown-trajectory trace: sampled off the simulation rather than the frame rate, and recorded whether or not guidance is running so the track is already there when the overlay is switched on - losing it the moment guidance engages would blank the overlay during exactly the descent worth watching.
         RecordTrace(vehicle, orbit);
+
+        RefreshVehicleHeight(vehicle);
+    }
+
+    private const long VehicleHeightRefreshMs = 500;
+
+    // Keep VehicleHeightM on the measured touchdown height while auto is on. It moves as the propellant drains (the CoM climbs) and changes at every staging, so it is re-read twice a second on the wall clock rather than captured once; the measurement is one bounds query per collider.
+    private static void RefreshVehicleHeight(Vehicle vehicle)
+    {
+        if (!_s.VehicleHeightAuto)
+        {
+            _s.VehicleHeightStatus = "manual";
+            return;
+        }
+        long now = GuidanceClock.NowMs;
+        if (now < _s.VehicleHeightNextMs)
+            return;
+        _s.VehicleHeightNextMs = now + VehicleHeightRefreshMs;
+
+        if (!KsaVehicleHeight.TryMeasure(vehicle, out KsaVehicleHeight.Result h))
+        {
+            // Keep the last good value: a guess of zero would plan the CoM into the ground.
+            _s.VehicleHeightStatus = $"no colliders to measure - holding {_s.VehicleHeightM:F2} m";
+            return;
+        }
+        _s.VehicleHeightM = h.DeployedM;
+        _s.VehicleHeightStatus = h.Stowed > 0
+            ? $"legs stowed ({h.Stowed} of {h.Deployables}) - measured deployed, {h.CurrentM:F2} m as they are"
+            : h.Deployables > 0 ? "measured, legs deployed" : "measured, no deployable legs";
     }
 
     // Release attitude without replacing the flight computer and losing the player's burn plan or settings.

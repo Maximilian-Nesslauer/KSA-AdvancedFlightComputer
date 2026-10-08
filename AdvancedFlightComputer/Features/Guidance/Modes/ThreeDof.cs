@@ -21,7 +21,7 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 //
 // FALLBACKS. Before the burn: a cold solve that fails, or a run of refused re-solves, flies the PID glide again and starts a fresh cold solve. After ignition the glide cannot catch it, so a plan that runs out, or a long run of refusals, hands the burn to 6-DOF, which flies in air on its own model.
 //
-// HANDOVERS. At the aim point - ThreeDofAimHeightM over the site, sinking ThreeDofAimSinkMs - terminal hover lands it - unless, below ThreeDofSixDofSpeedMs (100 m/s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare.
+// HANDOVERS. At the aim point - legs ThreeDofAimHeightM over the site (the CoM VehicleHeightM above that), sinking ThreeDofAimSinkMs - terminal hover lands it - unless, below ThreeDofSixDofSpeedMs (100 m/s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare.
 // 6-DOF is ON STANDBY from ignition (SixDofStandby.cs): its guidance cold-solves and then re-solves on its own thread from the measured state while this mode flies, so it takes the burn on a warm plan. Below the speed it takes over only once that plan is converged and fresh; until then this mode keeps the burn, to the aim point if need be. The fallbacks above hand over whatever state the standby is in, which at worst is a cold solve already under way, seeded with this burn's time to go.
 //
 // TODO (offline harness, --3dof-mpc): a vehicle with 30 % less lift than its table misses by 20-30 m, and combined dispersions leave 2.5 m/s of horizontal speed at the aim point.
@@ -60,8 +60,8 @@ public static partial class GuidanceWindow
         Reset3Dof();
         _s.ThreeDofPhase = ThreeDofPhase.Glide;
         _s.ThreeDofLastStep = now;
-        _s.ThreeDofStatus = "3-DOF engaged; PID glide while the cold solve runs.";
-        GuidanceLog.Info(vehicle, $"3-DOF landing engaged, {_s.GlideTgo:F0} s to impact.");
+        _s.ThreeDofStatus = "Entry guidance engaged; PID glide while the cold solve runs.";
+        GuidanceLog.Info(vehicle, $"Entry guidance engaged, {_s.GlideTgo:F0} s to impact.");
     }
 
     /// <summary>Stop the 3-DOF. In the air the engine is left as it is; a cut there drops the craft.</summary>
@@ -112,7 +112,7 @@ public static partial class GuidanceWindow
 
         if (HasTouchedDown(vehicle))
         {
-            GuidanceLog.Info(vehicle, "3-DOF: touchdown, engine cut.");
+            GuidanceLog.Info(vehicle, "Entry guidance: touchdown, engine cut.");
             StopSixDofStandby();
             Reset3Dof();
             _s.ThreeDofPhase = ThreeDofPhase.Done;
@@ -123,9 +123,9 @@ public static partial class GuidanceWindow
 
         if (_s.ThreeDofWorker?.LastError is { Length: > 0 } fault)
         {
-            GuidanceLog.Info(vehicle, "3-DOF solve faulted: " + fault);
+            GuidanceLog.Info(vehicle, "Entry guidance solve faulted: " + fault);
             _s.ThreeDofWorker.LastError = "";
-            Drop3Dof(vehicle, "3-DOF solve faulted - PID glide, retrying cold.", now);
+            Drop3Dof(vehicle, "Entry guidance solve faulted - PID glide, retrying cold.", now);
         }
 
         EnsureBoostbackAero(vehicle, parent);
@@ -192,7 +192,7 @@ public static partial class GuidanceWindow
         double off = Math.Acos(Math.Clamp(cmd.X * att[0] + cmd.Y * att[1] + cmd.Z * att[2], -1.0, 1.0)) * 180.0 / Math.PI;
         AeroScaleEstimator est = _s.ThreeDofEstimator;
         GuidanceLog.Info(vehicle, string.Format(System.Globalization.CultureInfo.InvariantCulture,
-            "3-DOF {0}: alt {1:F2} km, {2:F0} m/s, {3:F0} m from the site; {4}; flown {5:F1} deg off the command; "
+            "Entry guidance {0}: alt {1:F2} km, {2:F0} m/s, {3:F0} m from the site; {4}; flown {5:F1} deg off the command; "
             + "{6}; drag x{7:F2} lift x{8:F2} thrust x{9:F2}{10}",
             ThreeDofPhaseName(_s.ThreeDofPhase), x[2] / 1000.0, speed, Math.Sqrt(x[0] * x[0] + x[1] * x[1]),
             plan == null ? "no plan"
@@ -201,7 +201,7 @@ public static partial class GuidanceWindow
             off,
             g == null ? "no solver" : ThreeDofBusy ? "solving" : $"last solve {g.LastSolveMs:F0} ms, {g.ConsecutiveRefusals} refused",
             est?.DragScale ?? 1.0, est?.LiftScale ?? 1.0, est?.ThrustScale ?? 1.0,
-            _s.ThreeDofPhase == ThreeDofPhase.Burn ? "; 6-DOF standby " + SixDofStandbyText(now) : ""));
+            _s.ThreeDofPhase == ThreeDofPhase.Burn ? "; touchdown guidance standby " + SixDofStandbyText(now) : ""));
     }
 
     /// <summary>
@@ -240,17 +240,17 @@ public static partial class GuidanceWindow
             {
                 if (burning)
                 {
-                    ThreeDofToSixDof(vehicle, "3-DOF lost its plan in the burn - 6-DOF takes over.");
+                    ThreeDofToSixDof(vehicle, "Entry guidance lost its plan in the burn - touchdown guidance takes over.");
                     return false;
                 }
                 Drop3Dof(vehicle, g.Phase == Phase3Dof.Idle
-                    ? "3-DOF " + g.Error + " - PID glide, retrying cold."
-                    : $"3-DOF refused {g.ConsecutiveRefusals} re-solves - PID glide, retrying cold.", now);
+                    ? "Entry guidance " + g.Error + " - PID glide, retrying cold."
+                    : $"Entry guidance refused {g.ConsecutiveRefusals} re-solves - PID glide, retrying cold.", now);
                 return false;
             }
             if (burning && g.ConsecutiveRefusals >= ThreeDofBurnRefusalLimit)
             {
-                ThreeDofToSixDof(vehicle, $"3-DOF refused {g.ConsecutiveRefusals} re-solves in the burn - 6-DOF takes over.");
+                ThreeDofToSixDof(vehicle, $"Entry guidance refused {g.ConsecutiveRefusals} re-solves in the burn - touchdown guidance takes over.");
                 return false;
             }
             if (g.Phase != Phase3Dof.Converging && now - _s.ThreeDofLastUpdate >= ThreeDofUpdateS)
@@ -269,20 +269,20 @@ public static partial class GuidanceWindow
         Plan3Dof plan = g.Published;
         if (plan == null)
         {
-            _s.ThreeDofStatus = "PID glide while the 3-DOF cold solve runs.";
+            _s.ThreeDofStatus = "PID glide while the entry guidance cold solve runs.";
             return false;
         }
         if (!ReferenceEquals(plan, _s.ThreeDofPlan))
         {
             if (_s.ThreeDofPlan == null)
-                GuidanceLog.Info(vehicle, $"3-DOF first plan at {x[2] / 1000:F1} km: ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s.");
+                GuidanceLog.Info(vehicle, $"Entry guidance first plan at {x[2] / 1000:F1} km: ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s.");
             _s.ThreeDofPlan = plan;
         }
 
         // Past the end with the engine lit and nothing newer: the plan is no longer guidance.
         if (burning && now > plan.EndTime + 0.5)
         {
-            ThreeDofToSixDof(vehicle, "3-DOF plan ran out in the burn - 6-DOF takes over.");
+            ThreeDofToSixDof(vehicle, "Entry guidance plan ran out in the burn - touchdown guidance takes over.");
             return false;
         }
 
@@ -295,24 +295,24 @@ public static partial class GuidanceWindow
             {
                 if (SixDofStandbyReady(now))
                 {
-                    ThreeDofToSixDof(vehicle, $"3-DOF hands the burn to 6-DOF below {_s.ThreeDofSixDofSpeedMs:F0} m/s.");
+                    ThreeDofToSixDof(vehicle, $"Entry guidance hands the burn to touchdown guidance below {_s.ThreeDofSixDofSpeedMs:F0} m/s.");
                     return false;
                 }
                 if (!_s.ThreeDofSixDofWaiting)
                 {
                     _s.ThreeDofSixDofWaiting = true;
-                    GuidanceLog.Info(vehicle, $"3-DOF below {_s.ThreeDofSixDofSpeedMs:F0} m/s at {height:F0} m, 6-DOF not ready ({SixDofStandbyText(now)}) - the 3-DOF keeps the burn until it is.");
+                    GuidanceLog.Info(vehicle, $"Entry guidance below {_s.ThreeDofSixDofSpeedMs:F0} m/s at {height:F0} m, touchdown guidance not ready ({SixDofStandbyText(now)}) - entry guidance keeps the burn until it is.");
                 }
             }
-            if ((height <= _s.ThreeDofAimHeightM + 1.0 || now >= plan.EndTime - 0.2) && TerminalHoverAvailable(vehicle, out _))
+            if ((height <= _s.ThreeDofAimHeightM + _s.VehicleHeightM + 1.0 || now >= plan.EndTime - 0.2) && TerminalHoverAvailable(vehicle, out _))
             {
-                GuidanceLog.Info(vehicle, $"3-DOF burn reached the aim point at {height:F0} m, {speed:F1} m/s - terminal hover lands it.");
+                GuidanceLog.Info(vehicle, $"Entry guidance burn reached the aim point at {height:F0} m, {speed:F1} m/s - terminal hover lands it.");
                 // Hover's first command comes a step later, and this step's engine write reads its throttle, so the burn's carries over rather than cutting the engine for a step at 20 m.
                 double carried = _s.ThreeDofThrottle;
                 Reset3Dof();
                 _s.GfoldThrottle = carried;
                 StartTerminalHover(vehicle);
-                _s.LandingStatus = "3-DOF handoff to terminal hover.";
+                _s.LandingStatus = "Entry guidance handoff to terminal hover.";
                 return false;
             }
         }
@@ -338,7 +338,7 @@ public static partial class GuidanceWindow
 
         if (!burning && now >= plan.IgnitionTime)
         {
-            GuidanceLog.Info(vehicle, $"3-DOF ignition at {height:F0} m, {speed:F0} m/s.");
+            GuidanceLog.Info(vehicle, $"Entry guidance ignition at {height:F0} m, {speed:F0} m/s.");
             _s.ThreeDofPhase = ThreeDofPhase.Burn;
             burning = true;
         }
@@ -422,9 +422,9 @@ public static partial class GuidanceWindow
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();
-        double[] xf = [0, 0, _s.ThreeDofAimHeightM, 0, 0, -_s.ThreeDofAimSinkMs];
-        _s.ThreeDofStatus = "PID glide while the 3-DOF cold solve runs.";
-        GuidanceLog.Info(vehicle, $"3-DOF cold solve at {x[2] / 1000:F1} km.");
+        double[] xf = [0, 0, _s.ThreeDofAimHeightM + _s.VehicleHeightM, 0, 0, -_s.ThreeDofAimSinkMs];
+        _s.ThreeDofStatus = "PID glide while the entry guidance cold solve runs.";
+        GuidanceLog.Info(vehicle, $"Entry guidance cold solve at {x[2] / 1000:F1} km.");
         // Seed the glide the boostback planned: the nominal angle, lifting up the trajectory. Positive C_L lifts towards the engine end's tilt, so the engine end tilts up and the thrust axis down; the other way round for an airframe that lifts the other way.
         double nominal = GlideNominalAlpha(_s.Aero);
         var seed = new Seed3Dof.Options

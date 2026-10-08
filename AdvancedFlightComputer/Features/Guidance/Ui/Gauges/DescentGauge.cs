@@ -128,7 +128,7 @@ public static partial class GuidanceWindow
         if (_s.UseSixDofLanding)
         {
             bool logRequested = _s.SixDofLogging;
-            if (GaugeRowCheck("Log 6-DOF telemetry", "##d6doflog", ref logRequested))
+            if (GaugeRowCheck("Log touchdown guidance telemetry", "##d6doflog", ref logRequested))
                 SetSixDofLogging(vehicle, logRequested);
         }
 

@@ -445,7 +445,7 @@ public static partial class GuidanceWindow
                                                  double3 siteCci, double[] x, double now, int nodes)
     {
         var xf = new double[14];
-        xf[2] = _s.SixDofTargetAltM;
+        xf[2] = _s.SixDofTargetComAltM;
         TerminalAttitude(x, xf);
 
         double sigmaSeed = _s.Guidance.HasPlan ? SixDofSeedFloor : _s.SixDofEntrySigmaSeed;
@@ -594,7 +594,7 @@ public static partial class GuidanceWindow
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
         double weight = Math.Max(mass * g, 1.0);
-        double altToGo = x[2] - _s.SixDofTargetAltM;
+        double altToGo = x[2] - _s.SixDofTargetComAltM;
         double descent = -x[5];
         double netDecel = (capability / weight - 1.0) * g;
         double stopDist = descent > 0.0 && netDecel > 0.01
@@ -606,7 +606,7 @@ public static partial class GuidanceWindow
         if (_s.SixDofGlideSlopeDeg > 0.0)
         {
             double cot = 1.0 / Math.Tan(Math.Clamp(_s.SixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
-            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - cot * (x[2] - _s.SixDofTargetAltM);
+            glideViol = Math.Sqrt(x[0] * x[0] + x[1] * x[1]) - cot * (x[2] - _s.SixDofTargetComAltM);
         }
 
         double r22 = 1.0 - 2.0 * (x[7] * x[7] + x[8] * x[8]);
@@ -888,7 +888,7 @@ public static partial class GuidanceWindow
         ref ManualControlInputs inputs = ref ManualInputs(vehicle);
         double range = Math.Sqrt(state[0] * state[0] + state[1] * state[1]);
         double horizontalSpeed = Math.Sqrt(state[3] * state[3] + state[4] * state[4]);
-        string line = $"6-DOF cold solve: altitude {state[2]:F1} m, site range {range:F1} m, "
+        string line = $"Touchdown guidance cold solve: altitude {state[2]:F1} m, site range {range:F1} m, "
             + $"horizontal speed {horizontalSpeed:F1} m/s, sink {-state[5]:F1} m/s, "
             + $"engine {inputs.EngineOn}, throttle {inputs.EngineThrottle:F3}, cold frames {_s.ColdFrames}, status {_s.Error}";
         if (GuidanceIdle && _s.Guidance.LastIterations > 0)
@@ -915,7 +915,7 @@ public static partial class GuidanceWindow
             // The MESSAGE alone is not a diagnosis.
             // "Index was outside the bounds of the array" names neither the array nor the line, and this catch then disengages - so by the time anyone looks, the state that produced it is gone.
             // The full exception goes to a file that always exists, with enough surrounding state to tell which of the several paths through a step was running when it threw.
-            _s.Error = "6-DOF step failed: " + e.Message;
+            _s.Error = "Touchdown guidance step failed: " + e.Message;
             LogSixDofFault(vehicle, e);
             _s.EngagePending = false;
             Disengage6Dof(vehicle);
@@ -1014,9 +1014,9 @@ public static partial class GuidanceWindow
             {
                 SixDofLog.Event(_s, SimNow(),
                     $"STAGED: mass {_s.LastMass:F0} -> {m:F0} kg in one step - the plan was " +
-                    "built for a different vehicle. Terminating 6-DOF.");
+                    "built for a different vehicle. Terminating touchdown guidance.");
                 Disengage6Dof(vehicle, cutEngine: false);
-                _s.Error = "staged mid-flight - 6-DOF terminated. Re-engage to plan for " +
+                _s.Error = "staged mid-flight - touchdown guidance terminated. Re-engage to plan for " +
                            "the vehicle that is actually here.";
                 return;
             }
@@ -1049,7 +1049,7 @@ public static partial class GuidanceWindow
             if (Universe.IsAutoWarpActive || speed > 1.0)
             {
                 Universe.ResetSimulationSpeed();
-                GuidanceLog.Info(vehicle, $"6-DOF set simulation speed from {speed:F1}x to 1x.");
+                GuidanceLog.Info(vehicle, $"Touchdown guidance set simulation speed from {speed:F1}x to 1x.");
             }
             // A synchronous solve publishes its first gimbal and engine command further down in this same step, so the craft is acquired here and not on the next step's entry.
             AcquireControl(vehicle);
@@ -1098,8 +1098,8 @@ public static partial class GuidanceWindow
                 || (x[2] <= SixDofFallbackGateM && lastPlanExpired)))
         {
             HandSixDofToGfold(vehicle, now, x[2], x[2] <= SixDofFallbackGateM
-                ? "6-DOF has no new plan near landing. G-FOLD takes over."
-                : $"6-DOF found no new plan in {SixDofColdFallbackSeconds:F0} s. G-FOLD takes over.");
+                ? "Touchdown guidance has no new plan near landing. G-FOLD takes over."
+                : $"Touchdown guidance found no new plan in {SixDofColdFallbackSeconds:F0} s. G-FOLD takes over.");
             return;
         }
 
@@ -1111,7 +1111,7 @@ public static partial class GuidanceWindow
             && TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1)
         {
             HandSixDofToGfold(vehicle, now, x[2],
-                "6-DOF is climbing near the ground and cannot throttle below the weight. G-FOLD takes over.");
+                "Touchdown guidance is climbing near the ground and cannot throttle below the weight. G-FOLD takes over.");
             return;
         }
 
@@ -1153,7 +1153,7 @@ public static partial class GuidanceWindow
             (driftedOff || _s.RefusalRun >= RefusalsBeforeRestart))
         {
             var xfR = new double[14];
-            xfR[2] = _s.SixDofTargetAltM;
+            xfR[2] = _s.SixDofTargetComAltM;
             TerminalAttitude(x, xfR);
             // No pacing when threaded: spacing iterations out exists to keep frames smooth, and off the sim thread there is no frame to protect - it would only make the vehicle fall further before it has a plan.
             _s.Guidance.ColdIterationIntervalS = _s.SixDofThreaded ? 0.0 : _s.SixDofColdIntervalS;
@@ -1238,7 +1238,7 @@ public static partial class GuidanceWindow
                     $"after {_s.Guidance.LastIterations} iterations - retrying at {nodes} nodes");
 
                 var xfMore = new double[14];
-                xfMore[2] = _s.SixDofTargetAltM;
+                xfMore[2] = _s.SixDofTargetComAltM;
                 TerminalAttitude(x, xfMore);
                 double retrySigma = RetrySigma(_s.Guidance);
                 bool rebuilt = _s.Guidance.HasPlan
@@ -1329,7 +1329,7 @@ public static partial class GuidanceWindow
                                  $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
             ReportLogStop(SixDofLog.Stop(_s));
             Disengage6Dof(vehicle);
-            _s.Error = "touchdown - engine cut, 6-DOF guidance disengaged.";
+            _s.Error = "touchdown - engine cut, touchdown guidance disengaged.";
             return;
         }
 
@@ -1339,16 +1339,16 @@ public static partial class GuidanceWindow
         // The horizon has collapsed to almost nothing, so the plan is a handful of nodes over a second or two and the trust region is the binding constraint; meanwhile the terminal state is exactly what a hover controller is built for - near-zero velocity, upright, holding a point.
         // Optimising a descent is the wrong question by then.
         //
-        // Handing over ABOVE the target altitude on purpose: the 6-DOF plan aims at _s.SixDofTargetAltM and this fires on the way down to it.
+        // Handing over ABOVE the target altitude on purpose: the 6-DOF plan aims at _s.SixDofTargetComAltM and this fires on the way down to it.
         // A handover set below the target would simply never trigger, which the UI warns about.
         // The hover is asked before 6-DOF lets go, because a refused hover claims nothing and the craft would be released in the air; a refusal keeps the plan, which ends at the target, flying to the touchdown latch above, and asks once.
-        if (_s.SixDofHoverHandoff && !_s.SixDofHoverRefused && x[2] <= _s.SixDofHoverHandoffAltM)
+        if (_s.SixDofHoverHandoff && !_s.SixDofHoverRefused && x[2] <= _s.SixDofHoverHandoffAltM + _s.VehicleHeightM)
         {
             if (!TerminalHoverAvailable(vehicle, out _))
             {
                 _s.SixDofHoverRefused = true;
-                SixDofLog.Event(_s, now, $"HANDOFF refused at alt {x[2]:F1} m, 6-DOF flies to touchdown: {_s.LandingStatus}");
-                _s.Error = "Terminal hover refused, 6-DOF flies its plan to touchdown.";
+                SixDofLog.Event(_s, now, $"HANDOFF refused at alt {x[2]:F1} m, touchdown guidance flies to touchdown: {_s.LandingStatus}");
+                _s.Error = "Terminal hover refused, touchdown guidance flies its plan to touchdown.";
             }
             else
             {
@@ -1357,7 +1357,7 @@ public static partial class GuidanceWindow
                 ReportLogStop(SixDofLog.Stop(_s));
                 Disengage6Dof(vehicle, cutEngine: false);
                 StartTerminalHover(vehicle);
-                _s.LandingStatus = $"6-DOF handoff to terminal hover at {x[2]:F0} m.";
+                _s.LandingStatus = $"Touchdown guidance handoff to terminal hover at {x[2]:F0} m.";
                 _s.Error = _s.LandingStatus;
                 return;
             }
@@ -1520,7 +1520,7 @@ public static partial class GuidanceWindow
         // Mass is free, so the terminal state carries 13 of the 14 components.
         // Built BEFORE the config because the problem scaling is sized from the x0 -> xf extent.
         xf = new double[14];
-        xf[2] = _s.SixDofTargetAltM;
+        xf[2] = _s.SixDofTargetComAltM;
         TerminalAttitude(x, xf);
 
         // Spread cold solves engage COARSE; everything else uses the configured count.
@@ -1581,7 +1581,7 @@ public static partial class GuidanceWindow
                 SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
                 SixDofLog.Event(_s, now, $"ENGAGED (spread cold solve)  nodes {engageNodes}  " +
                                      $"sigma seed {_s.SixDofEntrySigmaSeed:F1} s  " +
-                                     $"target alt {_s.SixDofTargetAltM:F0} m  cadence {_s.SixDofReplanSec:F2} s");
+                                     $"target alt {_s.SixDofTargetComAltM:F0} m  cadence {_s.SixDofReplanSec:F2} s");
             }
             return true;
         }
@@ -1630,7 +1630,7 @@ public static partial class GuidanceWindow
             SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
             SixDofLog.Event(_s, now,
                 $"ENGAGED  nodes {engageNodes}  tilt {_s.SixDofTiltDeg:F0} deg  " +
-                $"floor {_s.SixDofThrottleFloor:F2}  target alt {_s.SixDofTargetAltM:F0} m  " +
+                $"floor {_s.SixDofThrottleFloor:F2}  target alt {_s.SixDofTargetComAltM:F0} m  " +
                 $"glideslope {_s.SixDofGlideSlopeDeg:F0} deg  " +
                 $"vzMax {(_s.SixDofVzEnabled ? _s.SixDofVzMaxMs.ToString("F1") : "off")}  " +
                 $"cadence {_s.SixDofReplanSec:F2} s  gates {(_s.SixDofNodeGates ? "on" : "off")}");
@@ -1658,7 +1658,7 @@ public static partial class GuidanceWindow
         // Must use the SAME pressure-corrected thrust the planner does.
         // This panel reading vacuum thrust while the plan used something else is precisely how the atmospheric shortfall stayed hidden: "max TWR" looked healthy because it was quoting a number the vehicle could only reach in space.
         double ambientPa = KsaEnginePerf.AmbientPressureAt(
-            parent, siteCci.Length() - parent.MeanRadius + _s.SixDofTargetAltM);
+            parent, siteCci.Length() - parent.MeanRadius + _s.SixDofTargetComAltM);
         (double thrust, _) = KsaEnginePerf.AtPressure(vehicle, ambientPa);
         if (thrust <= 0.0)
             return;
@@ -1696,7 +1696,7 @@ public static partial class GuidanceWindow
         //
         // A necessary condition, not a sufficient one: it assumes thrust straight up, so any tilt to kill downrange makes it worse.
         double[] xNow = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
-        double altToGo = xNow[2] - _s.SixDofTargetAltM;
+        double altToGo = xNow[2] - _s.SixDofTargetComAltM;
         double descent = -xNow[5];
         if (altToGo > 1.0 && descent > 1.0)
         {

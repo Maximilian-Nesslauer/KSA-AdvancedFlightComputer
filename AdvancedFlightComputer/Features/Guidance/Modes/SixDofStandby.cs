@@ -64,7 +64,7 @@ public static partial class GuidanceWindow
         // The standby runs the spread cold solve; the two options that replace it plan synchronously on engage instead.
         if (_s.SixDofFixedTime || _s.SixDofGfoldSeed)
         {
-            LogSixDofStandbyRefusal(vehicle, "6-DOF standby is off: it needs the spread cold solve, and fixed burn time or the G-FOLD seed is on.");
+            LogSixDofStandbyRefusal(vehicle, "Touchdown guidance standby is off: it needs the spread cold solve, and fixed burn time or the G-FOLD seed is on.");
             return false;
         }
 
@@ -72,7 +72,7 @@ public static partial class GuidanceWindow
         if (!TryConfigure6Dof(vehicle, parent, siteCci, x, out double[] xf, out int engageNodes,
                               out var cfg, out var dyn, out string error, nodes))
         {
-            LogSixDofStandbyRefusal(vehicle, "6-DOF standby cannot plan: " + error);
+            LogSixDofStandbyRefusal(vehicle, "Touchdown guidance standby cannot plan: " + error);
             return false;
         }
 
@@ -106,7 +106,7 @@ public static partial class GuidanceWindow
             SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
             SixDofLog.Event(_s, now, $"STANDBY at alt {x[2]:F0} m: cold solve on the worker, {what}");
         }
-        GuidanceLog.Info(vehicle, $"6-DOF standby at {x[2]:F0} m: cold solve on its own thread, {what}.");
+        GuidanceLog.Info(vehicle, $"Touchdown guidance standby at {x[2]:F0} m: cold solve on its own thread, {what}.");
         return true;
     }
 
@@ -147,7 +147,7 @@ public static partial class GuidanceWindow
         catch (Exception e)
         {
             LogSixDofFault(vehicle, e);
-            GuidanceLog.Info(vehicle, "6-DOF standby faulted, retrying: " + e.Message);
+            GuidanceLog.Info(vehicle, "Touchdown guidance standby faulted, retrying: " + e.Message);
             StopSixDofStandby();
             _s.SixDofStandbyRetryAt = now + SixDofStandbyRetryS;
         }
@@ -171,7 +171,7 @@ public static partial class GuidanceWindow
         {
             if (result.Faulted)
             {
-                GuidanceLog.Info(vehicle, "6-DOF standby solve faulted: " + result.Error + " - starting again.");
+                GuidanceLog.Info(vehicle, "Touchdown guidance standby solve faulted: " + result.Error + " - starting again.");
                 StartSixDofStandby(vehicle, parent, siteCci, x, now, sigmaSeed);
                 return;
             }
@@ -185,7 +185,7 @@ public static partial class GuidanceWindow
                     _s.LastReplan = now;
                     string what = $"{_s.Guidance.LastIterations} iterations in {now - _s.SixDofStandbyStart:F1} s, "
                                 + $"sigma {_s.Guidance.Sigma:F1} s, {_s.Guidance.Nodes} nodes, defect {_s.Guidance.LastDefectM:F2} m";
-                    GuidanceLog.Info(vehicle, $"6-DOF standby converged at {x[2]:F0} m: {what}.");
+                    GuidanceLog.Info(vehicle, $"Touchdown guidance standby converged at {x[2]:F0} m: {what}.");
                     SixDofLog.Event(_s, now, "STANDBY COLD SOLVE CONVERGED: " + what);
                     SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Published);
                 }
@@ -194,8 +194,8 @@ public static partial class GuidanceWindow
                     // The 3-DOF still has the craft, so starting again from here costs nothing but time.
                     int nodes = _s.Guidance.NeedsMoreNodes ? FinerNodeRung(_s.Guidance.Nodes) : 0;
                     GuidanceLog.Info(vehicle, (_s.Guidance.NeedsMoreNodes
-                            ? $"6-DOF standby cold solve stalled at {_s.Guidance.LastDefectM:F1} m with {_s.Guidance.Nodes} nodes"
-                            : $"6-DOF standby cold solve not converged in {_s.ColdFrames} iterations")
+                            ? $"Touchdown guidance standby cold solve stalled at {_s.Guidance.LastDefectM:F1} m with {_s.Guidance.Nodes} nodes"
+                            : $"Touchdown guidance standby cold solve not converged in {_s.ColdFrames} iterations")
                         + $" - starting again at {x[2]:F0} m" + (nodes > 0 ? $" with {nodes} nodes." : "."));
                     StartSixDofStandby(vehicle, parent, siteCci, x, now, sigmaSeed, nodes);
                     return;
@@ -239,14 +239,14 @@ public static partial class GuidanceWindow
         if (age > SixDofStandbyMaxPlanAgeS && now - _s.SixDofStandbyLogTime >= SixDofStandbyStaleLogS)
         {
             _s.SixDofStandbyLogTime = now;
-            GuidanceLog.Info(vehicle, $"6-DOF standby not publishing at {x[2]:F0} m: plan {age:F1} s old, {_s.SixDofStandbyRefusals} refused, "
+            GuidanceLog.Info(vehicle, $"Touchdown guidance standby not publishing at {x[2]:F0} m: plan {age:F1} s old, {_s.SixDofStandbyRefusals} refused, "
                 + $"last solve {_s.Worker.LastSolveMs:F0} ms at {_s.Guidance.Nodes} nodes; {_s.Error}");
         }
         double drift = _s.Guidance.MeasureDrift(x, now);
         double driftLimit = Math.Max(ColdRestartDriftM, 0.05 * Math.Max(x[2], 1.0));
         if (age > SixDofStandbyStaleRestartS || drift > driftLimit)
         {
-            GuidanceLog.Info(vehicle, $"6-DOF standby restarting at {x[2]:F0} m: "
+            GuidanceLog.Info(vehicle, $"Touchdown guidance standby restarting at {x[2]:F0} m: "
                 + (age > SixDofStandbyStaleRestartS
                     ? $"nothing published for {age:F1} s, {_s.SixDofStandbyRefusals} re-solves refused ({_s.Error})."
                     : $"{drift:F0} m off its plan."));
@@ -297,7 +297,7 @@ public static partial class GuidanceWindow
         string what = converging || plan == null
             ? $"its cold solve still running ({_s.Guidance.LastIterations} iterations so far)"
             : $"a warm plan {now - plan.SolveTime:F2} s old: {plan.Sigma:F1} s to the target, {_s.Guidance.Nodes} nodes";
-        GuidanceLog.Info(vehicle, $"6-DOF takes the burn from standby at {x[2]:F0} m with {what}.");
+        GuidanceLog.Info(vehicle, $"Touchdown guidance takes the burn from standby at {x[2]:F0} m with {what}.");
         SixDofLog.Event(_s, now, "ENGAGED FROM STANDBY: " + what);
     }
 

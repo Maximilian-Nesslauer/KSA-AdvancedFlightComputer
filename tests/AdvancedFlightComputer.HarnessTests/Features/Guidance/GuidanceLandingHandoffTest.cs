@@ -33,7 +33,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
 
     // What the stubbed check says when 6-DOF cannot take the craft.
-    private const string Refusal = "no gimballed engine - 6-DOF needs thrust vectoring";
+    private const string Refusal = "no gimballed engine - touchdown guidance needs thrust vectoring";
 
     private static Vehicle? _fixture;
     private static int _sixDofSteps;

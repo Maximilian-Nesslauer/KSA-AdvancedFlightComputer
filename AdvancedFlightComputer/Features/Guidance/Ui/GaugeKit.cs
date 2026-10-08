@@ -46,4 +46,16 @@ public static partial class GuidanceWindow
         ImGui.TextColored(colour, value);
         ImGui.NextColumn();
     }
+
+    // Vehicle height (CoM to legs), shared by every landing tab because they all land on the same number. While auto is on the value is the live measurement; typing over it is taken as wanting a manual figure, so it switches auto off rather than being overwritten half a second later.
+    private static void VehicleHeightRows(string idSuffix)
+    {
+        GaugeRowCheck("Measure vehicle height", "##vhauto" + idSuffix, ref _s.VehicleHeightAuto);
+        if (GaugeRow("Vehicle height (m)", "##vh" + idSuffix, ref _s.VehicleHeightM))
+            _s.VehicleHeightAuto = false;
+        if (_s.VehicleHeightStatus.StartsWith("legs stowed") || _s.VehicleHeightStatus.StartsWith("no colliders"))
+            GaugeRowText("", _s.VehicleHeightStatus, new float4(1f, 0.8f, 0.3f, 1f));
+        else if (_s.VehicleHeightStatus.Length > 0)
+            GaugeRowText("", _s.VehicleHeightStatus);
+    }
 }
