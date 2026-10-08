@@ -166,6 +166,13 @@ public sealed class Scvx6DofConfig
     public bool GlideSlopeEnabled => GlideSlopeDeg > 0.0;
     public bool VzLimitEnabled => VzMax >= 0.0;
 
+    /// <summary>
+    /// Largest THRUST acceleration the plan may use, m/s^2, or 0 for none: T &lt;= AccelMax * m at every node. Exact - both are variables and the row is linear in them - and soft like the glideslope, with an L1 slack at <see cref="AccelWeight"/>, so a craft that needs more to stop gets it rather than no plan. Keeps a high thrust-to-weight booster from planning its landing as a few seconds at full thrust, which is where lag costs the most.
+    /// </summary>
+    public double AccelMax { get; init; }
+    public double AccelWeight { get; init; } = 1e4;
+    public bool AccelLimitEnabled => AccelMax > 0.0;
+
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
 

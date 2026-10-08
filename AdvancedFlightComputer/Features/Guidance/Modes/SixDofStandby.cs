@@ -87,7 +87,6 @@ public static partial class GuidanceWindow
         _s.SixDofStandbyRefusals = 0;
         _s.Converging = true;
         _s.ColdFrames = 0;
-        _s.SixDofLastPlanTime = now;
         _s.SixDofLastPublishedPlan = null;
         _s.GateIndex = -1;
         _s.RefusalRun = 0;
@@ -290,7 +289,8 @@ public static partial class GuidanceWindow
         _s.Active = true;
         _s.RefusalRun = 0;
         _s.TouchdownArmed = false;
-        _s.SixDofHoverRefused = false;
+        _s.SixDofSeenDescending = _s.SixDofTookBurn;
+        _s.SixDofEngineCut = false;
         _s.SixDofFromBrakingBurn = false;
         _s.Error = converging ? "converging..." : "";
 

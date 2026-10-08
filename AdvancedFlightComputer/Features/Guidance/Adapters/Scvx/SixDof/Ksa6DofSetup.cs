@@ -200,6 +200,7 @@ public static class Ksa6DofSetup
     /// <param name="vzMaxMs">Largest allowed climb rate, m/s. Negative disables it.</param>
     /// <param name="x0">Initial model state - needed to SIZE THE PROBLEM, see XScale below.</param>
     /// <param name="xf">Terminal model state, same reason.</param>
+    /// <param name="accelMaxMs2">Largest thrust acceleration the plan may use, m/s^2, or 0 for none; see Scvx6DofConfig.AccelMax.</param>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed,
@@ -208,7 +209,7 @@ public static class Ksa6DofSetup
                                 double glideSlopeDeg, double vzMaxMs,
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
-                                out string error)
+                                out string error, double accelMaxMs2 = 0.0)
     {
         cfg = null!;
         dyn = null!;
@@ -345,6 +346,8 @@ public static class Ksa6DofSetup
             //  The margin is what makes it a starting point rather than a knife edge: a cap exactly at the current tilt leaves the first node with no slack at all.
             TiltMaxDeg = Math.Min(Math.Max(tiltMaxDeg, EntryTiltDeg(x0) + 5.0), 175.0),
             GroundFloor = -1.0,
+            // Never under what the minimum throttle already gives at this mass: a limit below it could only ever be met through its slack.
+            AccelMax = accelMaxMs2 > 0.0 ? Math.Max(accelMaxMs2, 1.05 * throttleFloor * thrust / vehicle.TotalMass) : 0.0,
 
             // Generous bounds. These only need to BRACKET the answer - sigma is a free variable and the solver picks it - but a bound that binds silently dictates the trajectory instead of the physics: sigma pinned at the max forces the vehicle to spend that long in the air, and if it cannot hover it loops to burn the time. Widening costs nothing, because conditioning comes from SigmaScale (the seed), not from the bounds.
             WW = wW,

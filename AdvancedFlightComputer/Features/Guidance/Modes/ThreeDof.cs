@@ -23,10 +23,10 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 //
 // FALLBACKS. Before the burn: a cold solve that fails, or a run of refused re-solves, flies the PID glide again and starts a fresh cold solve. After ignition the glide cannot catch it, so a plan that runs out, or a long run of refusals, hands the burn to 6-DOF, which flies in air on its own model.
 //
-// HANDOVERS. At the aim point - legs ThreeDofAimHeightM over the site (the CoM VehicleHeightM above that), sinking ThreeDofAimSinkMs - terminal hover lands it - unless, below ThreeDofSixDofSpeedMs (100 m/s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare.
-// 6-DOF is ON STANDBY from ignition (SixDofStandby.cs): its guidance cold-solves and then re-solves on its own thread from the measured state while this mode flies, so it takes the burn on a warm plan. Below the speed it takes over only once that plan is converged and fresh; until then this mode keeps the burn, to the aim point if need be. The fallbacks above hand over whatever state the standby is in, which at worst is a cold solve already under way, seeded with this burn's time to go.
+// THE BURN ENDS AT ZERO/ZERO - the legs on the pad, at rest (the CoM VehicleHeightM above the site) - and the engine is cut at contact, unless, below ThreeDofSixDofSpeedMs (100 m/s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare. There is no hover hand-off: a craft that cannot throttle below its weight could not be handed one, and one that stops short is cut and dropped instead (see the burn's stop-short check).
+// 6-DOF is ON STANDBY from ignition (SixDofStandby.cs): its guidance cold-solves and then re-solves on its own thread from the measured state while this mode flies, so it takes the burn on a warm plan. Below the speed it takes over only once that plan is converged and fresh; until then this mode keeps the burn, to touchdown if need be. The fallbacks above hand over whatever state the standby is in, which at worst is a cold solve already under way, seeded with this burn's time to go.
 //
-// TODO (offline harness, --3dof-mpc): combined dispersions (drag +20 %, lift -20 %, thrust -3 %, 0.8 s attitude lag) still leave 1.9-2.7 m/s of horizontal speed at the aim point, depending on the tracker's gains, against a 2 m/s pass mark. The tracker brought a 30 % lift deficit alone from a 29 m miss to under 1 m.
+// TODO (offline harness, --3dof-mpc, which flies the 3-DOF to touchdown with no 6-DOF hand-over): at zero/zero the nominal cases touch down at 0.4-0.7 m/s, but a 30 % lift deficit, an 8 % weak engine and a second's late ignition touch down at 3-4.5 m/s. In each, every burn re-solve from a few hundred metres down is refused on the mass channel (1-5x its tolerance), as it was against the old 20 m aim point, and the tracker flies a plan up to 8 s stale to the ground. In flight ThreeDofBurnRefusalLimit hands those burns to 6-DOF first.
 public static partial class GuidanceWindow
 {
     public enum ThreeDofPhase { Idle, Glide, Burn, Done }
@@ -202,7 +202,7 @@ public static partial class GuidanceWindow
                     ? $"burn {plan.EndTime - now:F1} s left, throttle {_s.ThreeDofThrottle:P0} (plan {_s.ThreeDofPlanThrottle:P0}), {TrackingErrorText(plan, x, now)}"
                 : $"ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s",
             off,
-            g == null ? "no solver" : ThreeDofBusy ? "solving" : $"last solve {g.LastSolveMs:F0} ms, {g.ConsecutiveRefusals} refused",
+            g == null ? "no solver" : ThreeDofBusy ? "solving" : $"last solve {g.LastSolveMs:F0} ms, {g.ConsecutiveRefusals} refused{RefusalReason(g)}",
             est?.DragScale ?? 1.0, est?.LiftScale ?? 1.0, est?.ThrustScale ?? 1.0,
             _s.ThreeDofPhase == ThreeDofPhase.Burn ? "; touchdown guidance standby " + SixDofStandbyText(now) : ""));
     }
@@ -248,12 +248,12 @@ public static partial class GuidanceWindow
                 }
                 Drop3Dof(vehicle, g.Phase == Phase3Dof.Idle
                     ? "Entry guidance " + g.Error + " - PID glide, retrying cold."
-                    : $"Entry guidance refused {g.ConsecutiveRefusals} re-solves - PID glide, retrying cold.", now);
+                    : $"Entry guidance refused {g.ConsecutiveRefusals} re-solves{RefusalReason(g)} - PID glide, retrying cold.", now);
                 return false;
             }
             if (burning && g.ConsecutiveRefusals >= ThreeDofBurnRefusalLimit)
             {
-                ThreeDofToSixDof(vehicle, $"Entry guidance refused {g.ConsecutiveRefusals} re-solves in the burn - touchdown guidance takes over.");
+                ThreeDofToSixDof(vehicle, $"Entry guidance refused {g.ConsecutiveRefusals} re-solves in the burn{RefusalReason(g)} - touchdown guidance takes over.");
                 return false;
             }
             if (g.Phase != Phase3Dof.Converging && now - _s.ThreeDofLastUpdate >= ThreeDofUpdateS)
@@ -293,6 +293,23 @@ public static partial class GuidanceWindow
         double speed = Math.Sqrt(x[3] * x[3] + x[4] * x[4] + x[5] * x[5]);
         if (burning)
         {
+            // STOPPED SHORT. The plan ends at zero/zero, but a craft whose minimum thrust is above its weight climbs from wherever it actually stops, and nothing with the engine lit brings it back: the engine is cut and it drops the rest of the way. 6-DOF is no better placed, since it keeps the engine lit too.
+            if (x[5] >= 0.0)
+            {
+                double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu);
+                if (minTwr > 1.0)
+                {
+                    string why = $"Entry guidance stopped short {height - _s.VehicleHeightM:F1} m above the pad, rising at {x[5]:F1} m/s, "
+                               + $"and cannot throttle below its weight ({minTwr:F2} at minimum) - engine cut, dropping to the pad.";
+                    GuidanceLog.Info(vehicle, why);
+                    StopSixDofStandby();
+                    Reset3Dof();
+                    _s.ThreeDofPhase = ThreeDofPhase.Done;
+                    _s.LandingCutPending = true;
+                    _s.ThreeDofStatus = why;
+                    return false;
+                }
+            }
             // Only to a standby with a warm plan: a 6-DOF that is still converging would leave the craft on the 3-DOF's last command until it is, which this mode can fly better.
             if (_s.ThreeDofSixDofHandover && speed < _s.ThreeDofSixDofSpeedMs)
             {
@@ -306,17 +323,6 @@ public static partial class GuidanceWindow
                     _s.ThreeDofSixDofWaiting = true;
                     GuidanceLog.Info(vehicle, $"Entry guidance below {_s.ThreeDofSixDofSpeedMs:F0} m/s at {height:F0} m, touchdown guidance not ready ({SixDofStandbyText(now)}) - entry guidance keeps the burn until it is.");
                 }
-            }
-            if ((height <= _s.ThreeDofAimHeightM + _s.VehicleHeightM + 1.0 || now >= plan.EndTime - 0.2) && TerminalHoverAvailable(vehicle, out _))
-            {
-                GuidanceLog.Info(vehicle, $"Entry guidance burn reached the aim point at {height:F0} m, {speed:F1} m/s - terminal hover lands it.");
-                // Hover's first command comes a step later, and this step's engine write reads its throttle, so the burn's carries over rather than cutting the engine for a step at 20 m.
-                double carried = _s.ThreeDofThrottle;
-                Reset3Dof();
-                _s.GfoldThrottle = carried;
-                StartTerminalHover(vehicle);
-                _s.LandingStatus = "Entry guidance handoff to terminal hover.";
-                return false;
             }
         }
 
@@ -394,6 +400,10 @@ public static partial class GuidanceWindow
         return $"{dr:F1} m and {dv:F1} m/s off the plan";
     }
 
+    /// <summary>Why the last re-solve was refused, as " (...)" for a log line, or nothing when none was. Read only while the worker is idle, as every other guidance result is.</summary>
+    private static string RefusalReason(Guidance3Dof g)
+        => g.ConsecutiveRefusals > 0 && g.Error.Length > 0 ? $" ({g.Error})" : "";
+
     /// <summary>A plan's body axis and throttle at a time.</summary>
     private static bool SamplePlan(Plan3Dof plan, double t, out double3 b, out double throttle)
     {
@@ -440,8 +450,6 @@ public static partial class GuidanceWindow
     private static void StartThreeDofCold(Vehicle vehicle, double[] x, double now)
     {
         _s.ThreeDofColdTime = now;
-        Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg);
-        Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg);
         // Anchored tight on the last command, so consecutive plans start where the command is; see the file summary.
         var settings = new Guidance3Dof.Settings
         {
@@ -449,10 +457,16 @@ public static partial class GuidanceWindow
             GlideThrottleCeiling = Math.Clamp(_s.ThreeDofGlideCeiling, 0.1, 1.0),
             BurnThrottleCeiling = Math.Clamp(_s.ThreeDofBurnCeiling, 0.1, 1.0),
         };
+        // The landing limit is the burn's; the glide plan times the ignition under it with headroom to spare (Settings.AccelHeadroom).
+        Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
+                                                    _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2));
+        Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
+                                                   _s.VehicleHeightM, LandingAccelLimitMs2);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();
-        double[] xf = [0, 0, _s.ThreeDofAimHeightM + _s.VehicleHeightM, 0, 0, -_s.ThreeDofAimSinkMs];
+        // Zero/zero: the legs on the pad, at rest. The plan flies the CoM, VehicleHeightM above the legs.
+        double[] xf = [0, 0, _s.VehicleHeightM, 0, 0, 0];
         _s.ThreeDofStatus = "PID glide while the entry guidance cold solve runs.";
         GuidanceLog.Info(vehicle, $"Entry guidance cold solve at {x[2] / 1000:F1} km.");
         // Seed the glide the boostback planned: the nominal angle, lifting up the trajectory. Positive C_L lifts towards the engine end's tilt, so the engine end tilts up and the thrust axis down; the other way round for an airframe that lifts the other way.
@@ -519,7 +533,7 @@ public static partial class GuidanceWindow
             : double.NaN;
         Reset3Dof();
         _s.ThreeDofStatus = why;
-        Engage6Dof(vehicle, sigmaSeed: seed);
+        Engage6Dof(vehicle, sigmaSeed: seed, tookBurn: true);
     }
 
     internal static string ThreeDofPhaseName(ThreeDofPhase p) => p switch

@@ -14,7 +14,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 public sealed record BurnTracker3Dof
 {
     /// <summary>
-    /// Position gain, 1/s^2, and velocity gain, 1/s: 0.5 rad/s at a damping ratio of 0.8. G-FOLD's 0.08 and 0.3 left a 30 % lift deficit 7 m off target at 2.5 m/s offline; these land it inside a metre, and every --3dof-mpc case passes. Swept offline from 0.08/0.3 to 0.3/1.2 (--track-kp, --track-kd): the velocity gain is what matters, and above about 1 the combined case's cross-range gets worse again.
+    /// Position gain, 1/s^2, and velocity gain, 1/s: 0.5 rad/s at a damping ratio of 0.8. G-FOLD's 0.08 and 0.3 left a 30 % lift deficit 7 m off target at 2.5 m/s offline; these land it inside a metre, and every --3dof-mpc case passed against the 20 m, 2 m/s aim point of the time. Swept offline from 0.08/0.3 to 0.3/1.2 (--track-kp, --track-kd): the velocity gain is what matters, and above about 1 the combined case's cross-range gets worse again.
     /// </summary>
     public double Kp { get; init; } = 0.25;
     public double Kd { get; init; } = 0.8;

@@ -7,6 +7,7 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 ///  1. COLD GLIDE AND BURN from a mid-glide state, seeded by Seed3Dof: converges, feasible against the true constraints, lands upright on the site at the terminal speed, and burns no more than the booster carries.
 ///  2. BURN ONLY (K = 0), from the plan's own ignition state with its burn as the seed - the problem the guidance swaps to once ignition is committed. Restricted to the same burn, it must agree with the glide-and-burn plan.
 ///  3. THE SAME GLIDE WITHOUT LIFT, to show what steering on lift is worth.
+///  4. A BINDING ACCELERATION LIMIT on a booster with twice the engines - about 6 at landing, as the game's are - to zero/zero: converges, holds the burn's thrust acceleration under 3 g, and burns longer than the same booster unlimited.
 /// </summary>
 internal static class ThreeDofKsaCheck
 {
@@ -44,12 +45,53 @@ internal static class ThreeDofKsaCheck
             : $"  without lift there is no plan on {X0[6] - ThreeDofScenario.DryMass:F0} kg of propellant; with lift it takes {propLift:F0} kg");
 
         Console.WriteLine();
+        Console.WriteLine("4. twice the engines to zero/zero, unlimited and then limited to 3 g");
+        ok &= AccelLimit(model, verbose);
+
+        Console.WriteLine();
         Console.WriteLine(ok ? "PASS - glide-and-burn and burn-only solves on the KSA model" : "FAIL");
         return ok ? 0 : 1;
     }
 
-    private static (bool, Scvx3DofSolver) SolveCold(KsaPointMassModel model, Scvx3DofConfig cfg, bool verbose)
+    private static bool AccelLimit(KsaPointMassModel scenario, bool verbose)
     {
+        KsaPointMassModel model = scenario with
+        {
+            VacuumThrust = 2 * scenario.VacuumThrust,
+            MassFlow = 2 * scenario.MassFlow,
+            ExitArea = 2 * scenario.ExitArea,
+        };
+        double[] zero = [0, 0, 0, 0, 0, 0];
+        const double limit = 3.0 * 9.80665;
+        // With the attitude anchor's rows, as the guidance builds its solvers: before the limit's back-pressure loss was linearised in position, this combination stalled near the optimum with every step rejected.
+        (bool free, Scvx3DofSolver unlimited) = SolveCold(model, ThreeDofScenario.Config(anchor: true), verbose, zero);
+        (bool limited, Scvx3DofSolver capped) = SolveCold(model, ThreeDofScenario.Config(anchor: true, accelMax: limit), verbose, zero);
+        if (!free || !limited)
+            return false;
+        double peakFree = PeakAccel(model, unlimited), peakCapped = PeakAccel(model, capped);
+        bool holds = peakCapped <= limit * 1.01;
+        bool longer = capped.SigmaBurn > unlimited.SigmaBurn;
+        Console.WriteLine($"  peak thrust acceleration {peakFree / 9.80665:F2} g over a {unlimited.SigmaBurn:F1} s burn unlimited, " +
+                          $"{peakCapped / 9.80665:F2} g over {capped.SigmaBurn:F1} s limited to 3 g  {(holds && longer ? "ok" : "FAIL")}");
+        return holds && longer;
+    }
+
+    /// <summary>The largest thrust acceleration over a plan's burn nodes, by the model's own law.</summary>
+    private static double PeakAccel(KsaPointMassModel model, Scvx3DofSolver solver)
+    {
+        Scvx3DofConfig cfg = solver.Config;
+        double peak = 0.0;
+        for (int k = cfg.GlideIntervals; k < cfg.Nodes; k++)
+        {
+            ReadOnlySpan<double> x = solver.ReferenceX.AsSpan(k * NX, NX);
+            peak = Math.Max(peak, model.Thrust(solver.ReferenceU[k * NU + PointMass3Dof.ITH], model.Altitude(x)) / x[PointMass3Dof.IM]);
+        }
+        return peak;
+    }
+
+    private static (bool, Scvx3DofSolver) SolveCold(KsaPointMassModel model, Scvx3DofConfig cfg, bool verbose, double[]? xf = null)
+    {
+        double[] Xf = xf ?? ThreeDofKsaCheck.Xf;
         if (!Seed3Dof.TryBuild(model, cfg, X0, Xf, new Seed3Dof.Options(), out double[] xs, out double[] us,
                                out double sg, out double sb))
         {

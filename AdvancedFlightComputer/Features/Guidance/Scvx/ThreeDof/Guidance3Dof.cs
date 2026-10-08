@@ -79,10 +79,18 @@ public sealed class Guidance3Dof
         /// Throttle the plan may use before ignition is committed, and after. Two margins, stacked:
         ///  - glide to burn: the headroom a committed ignition needs to absorb arriving late. Equal ceilings leave the burn-only re-solves nothing to plan a dispersion with, and offline (--3dof-mpc --glide-ceiling 0.9 --burn-ceiling 0.9) every case is refused through the burn;
         ///  - burn to full: what <see cref="BurnTracker3Dof"/> may use between re-solves. With the plan allowed full throttle a min-fuel burn rides it, and a burn lit a second late or an engine 8 % weak reaches the aim point at 17-37 m/s.
-        /// 0.88 and 0.95 pass every --3dof-mpc case, at about 2 % more propellant than 0.9 and 1.0. The glide ceiling is the sensitive one, both ways: at 0.9 a burn lit a second late still reaches the aim point at 36 m/s, and below 0.88 the cold solve gets fragile - at 0.85 --3dof-far gives up from 7 of its 15 starts, one of them 45 km up, against 4, all above 69 km, at 0.88 and 0.9; at 0.8 the --3dof-mpc 2 km cross-range cold solve fails too.
+        /// 0.88 and 0.95 passed every --3dof-mpc case against the 20 m, 2 m/s aim point the burn ended on then (--aim-height 20 --aim-sink 2), at about 2 % more propellant than 0.9 and 1.0. The glide ceiling is the sensitive one, both ways: at 0.9 a burn lit a second late still reaches the aim point at 36 m/s, and below 0.88 the cold solve gets fragile - at 0.85 --3dof-far gives up from 7 of its 15 starts, one of them 45 km up, against 4, all above 69 km, at 0.88 and 0.9; at 0.8 the --3dof-mpc 2 km cross-range cold solve fails too.
         /// </summary>
         public double GlideThrottleCeiling { get; init; } = 0.88;
         public double BurnThrottleCeiling { get; init; } = 0.95;
+
+        /// <summary>
+        /// The acceleration limit's headroom, the same idea as the ceilings': the glide plan, which times the ignition, is held to the landing limit over this, and the burn re-solves to the limit itself. Without it the burn plans to the very limit its ignition was timed on, and a dispersion leaves it nothing to stop with: offline, on a booster with the game's thrust to weight (--3dof-mpc --engine-scale 2), the plans traded the soft terminal speed for the limit instead and touched down at 4-10 m/s. A ratio of 1.3 landed those at 0.7-1.7 m/s, a second's late ignition included - measured with the ignition timed at 3 g and the burn allowed 3.9 g; this arrangement keeps the same ratio under the landing limit instead (ignition at 2.3 g, burn to 3 g), which has not been run offline. 1.15 was not enough. Read by the caller building the two configs; see GlideAccelMax.
+        /// </summary>
+        public double AccelHeadroom { get; init; } = 1.3;
+
+        /// <summary>The glide plan's acceleration limit for a landing limit of <paramref name="burnLimit"/>, m/s^2; 0 stays 0.</summary>
+        public double GlideAccelMax(double burnLimit) => burnLimit > 0.0 ? burnLimit / Math.Max(AccelHeadroom, 1.0) : 0.0;
 
         public int ColdIterations { get; init; } = 150;
 

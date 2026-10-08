@@ -180,6 +180,10 @@ public sealed record KsaPointMassModel : IPointMassModel
     /// <summary>The lit nozzle's thrust deficit to ambient pressure, Pa * A_e, N.</summary>
     public double BackPressureLoss(double altitude) => (Atmosphere?.Pressure(altitude) ?? 0.0) * ExitArea;
 
+    /// <summary>The back-pressure loss's slope with altitude, N/m: negative, since the air thins going up.</summary>
+    public double BackPressureLossSlope(double altitude)
+        => Atmosphere != null ? Atmosphere.Pressure(new Dual(altitude, 1.0)).D * ExitArea : 0.0;
+
     /// <summary>Throttle below which the engine counts as off.</summary>
     public const double EngineOnThrottle = 1e-6;
 

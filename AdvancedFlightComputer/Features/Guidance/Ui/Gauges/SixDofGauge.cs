@@ -24,17 +24,10 @@ public static partial class GuidanceWindow
         if (ImGuiHelper.BeginRegion("Descent", ImGuiTreeNodeFlags.DefaultOpen
                 | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
         {
-            // Both heights are of the legs above the pad; the plan flies the CoM, Vehicle height above them.
-            GaugeRow("Target height, legs (m)", "##sdtargetalt", ref _s.SixDofTargetAltM);
+            // The plan lands at zero/zero, legs on the pad at rest, so the one height it needs is the CoM's above the legs.
             VehicleHeightRows("sd");
-
-            // HANDOFF SITS WITH TARGET ALTITUDE, not in the parameter fold, because the two only mean anything relative to each other: the handoff must be ABOVE the target or it never fires, and the guidance then flies to the target and sits there. Separating them by a collapsed section made it possible to move one and forget the other, which reads in flight as the hover simply not happening.
-            GaugeRowCheck("Hand off to terminal hover", "##sdhover", ref _s.SixDofHoverHandoff);
-            using (new ImGuiDisabledScope(!_s.SixDofHoverHandoff))
-                GaugeRow("Handoff height, legs (m)", "##sdhoveralt", ref _s.SixDofHoverHandoffAltM);
-            if (_s.SixDofHoverHandoff && _s.SixDofHoverHandoffAltM <= _s.SixDofTargetAltM)
-                GaugeRowText("  warning", "at or below target altitude - will never fire",
-                    new float4(1f, 0.8f, 0.3f, 1f));
+            // Shared with the 3-DOF page: both solvers land on the same limit.
+            GaugeRow("Max burn accel (g, 0 off)", "##sdaccel", ref _s.LandingAccelLimitG);
 
             ImGuiHelper.EndRegion();
         }

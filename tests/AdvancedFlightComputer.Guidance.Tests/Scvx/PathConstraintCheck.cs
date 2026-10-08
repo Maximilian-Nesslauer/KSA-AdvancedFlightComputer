@@ -11,6 +11,8 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 /// constraint at all, because the overlay would draw a cone the solver was never
 /// really enforcing. So this checks the corridor is respected when it should be,
 /// AND that a vehicle starting outside it still gets a plan.
+///
+/// And the thrust acceleration limit: that it binds on a plan that would otherwise exceed it, and that the plan it gives still lands.
 /// </summary>
 internal static class PathConstraintCheck
 {
@@ -97,6 +99,22 @@ internal static class PathConstraintCheck
         Console.WriteLine($"  re-enters the cone     {(recovers ? "PASS" : "FAIL")}  " +
                           $"(last third {late2:F1} m outside)");
         ok &= solvable && recovers;
+
+        // ACCELERATION LIMIT, sized like the cone from the unconstrained plan's own peak, so it binds.
+        Console.WriteLine();
+        (double[] xFree, double[] uFree, double sigFree, _) = SolveFull(n, x0, xf, 0.0, -1.0, 0.0);
+        double peakFree = PeakAccel(xFree, uFree, n);
+        double limit = 0.75 * peakFree;
+        (double[] xLim, double[] uLim, double sigLim, ScvxStatus sLim) = SolveFull(n, x0, xf, 0.0, -1.0, limit);
+        double peakLim = PeakAccel(xLim, uLim, n);
+        double miss = Math.Sqrt(Enumerable.Range(0, 3).Sum(i => Math.Pow(xLim[(n - 1) * NX + i] - xf[i], 2)));
+        bool limBinds = Usable(sLim) && peakLim <= limit * 1.01;
+        bool limLands = Usable(sLim) && miss <= 1.0;
+        Console.WriteLine($"  unconstrained peak thrust acceleration {peakFree:F1} m/s^2 over {sigFree:F1} s -> limiting to {limit:F1}");
+        Console.WriteLine($"  acceleration binds     {(limBinds ? "PASS" : "FAIL")}  " +
+                          $"({sLim}, peak {peakLim:F2} m/s^2 against {limit:F2}, burn {sigLim:F1} s)");
+        Console.WriteLine($"  limited plan lands     {(limLands ? "PASS" : "FAIL")}  (terminal miss {miss:F2} m)");
+        ok &= limBinds && limLands;
 
         Console.WriteLine();
         Console.WriteLine(ok
@@ -189,8 +207,42 @@ internal static class PathConstraintCheck
         return (worst, late, worstClimb, status);
     }
 
+    /// <summary>The largest thrust acceleration, T / m, over a plan's nodes.</summary>
+    private static double PeakAccel(double[] x, double[] u, int n)
+    {
+        double peak = 0.0;
+        for (int k = 0; k < n; k++)
+            peak = Math.Max(peak, u[k * NU + Dynamics6Dof.IT] / x[k * NX + Dynamics6Dof.IM]);
+        return peak;
+    }
+
+    /// <summary>A solve with its controls and burn time, for the acceleration limit.</summary>
+    private static (double[] x, double[] u, double sigma, ScvxStatus status) SolveFull(
+        int n, double[] x0, double[] xf, double glideDeg, double vzMax, double accelMax)
+    {
+        var prev = Console.Out;
+        Console.SetOut(System.IO.TextWriter.Null);
+        try
+        {
+            Scvx6DofSolver solver = Build(n, x0, xf, glideDeg, vzMax, accelMax);
+            ScvxStatus status = solver.Solve(maxIterations: 150);
+            return (solver.ReferenceX, solver.ReferenceU, solver.Sigma, status);
+        }
+        finally { Console.SetOut(prev); }
+    }
+
     private static (double[] x, ScvxStatus status, int iters, string why) SolveInner(
         int n, double[] x0, double[] xf, double glideDeg, double vzMax)
+    {
+        Scvx6DofSolver solver = Build(n, x0, xf, glideDeg, vzMax, 0.0);
+        ScvxStatus status = solver.Solve(maxIterations: 150);
+        string why = status == ScvxStatus.Failed
+            ? $"   why: {solver.LastFailureReason}{Environment.NewLine}{solver.DiagnoseUnbounded().TrimEnd()}"
+            : "";
+        return (solver.ReferenceX, status, solver.IterationCount, why);
+    }
+
+    private static Scvx6DofSolver Build(int n, double[] x0, double[] xf, double glideDeg, double vzMax, double accelMax)
     {
         var cfg = new Scvx6DofConfig
         {
@@ -198,6 +250,7 @@ internal static class PathConstraintCheck
             GlideSlopeDeg = glideDeg,
             VzMax = vzMax,
             ProximalWeight = 0.05,
+            AccelMax = accelMax,
         };
 
         double m0 = x0[Dynamics6Dof.IM];
@@ -218,10 +271,6 @@ internal static class PathConstraintCheck
 
         var solver = new Scvx6DofSolver(cfg) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
         solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed: 12.0);
-        ScvxStatus status = solver.Solve(maxIterations: 150);
-        string why = status == ScvxStatus.Failed
-            ? $"   why: {solver.LastFailureReason}{Environment.NewLine}{solver.DiagnoseUnbounded().TrimEnd()}"
-            : "";
-        return (solver.ReferenceX, status, solver.IterationCount, why);
+        return solver;
     }
 }

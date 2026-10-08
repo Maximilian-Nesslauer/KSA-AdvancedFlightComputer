@@ -60,9 +60,8 @@ public static partial class GuidanceWindow
             GaugeRowCheck("Take over boostback glides", "##tdglide", ref _s.ThreeDofFromGlide);
             using (new ImGuiDisabledScope(!_s.ThreeDofFromGlide))
                 GaugeRow("At time to impact (s)", "##tdtgo", ref _s.ThreeDofEngageTgoS);
-            GaugeRow("Aim height, legs (m)", "##tdaimh", ref _s.ThreeDofAimHeightM);
             VehicleHeightRows("td");
-            GaugeRow("Aim sink (m/s)", "##tdaimv", ref _s.ThreeDofAimSinkMs);
+            GaugeRow("Max burn accel (g, 0 off)", "##tdaccel", ref _s.LandingAccelLimitG);
             GaugeRow("Command smoothing (s)", "##tdtau", ref _s.ThreeDofSmoothTau);
             GaugeRow("Plan max throttle, glide", "##tdceilg", ref _s.ThreeDofGlideCeiling);
             GaugeRow("Plan max throttle, burn", "##tdceilb", ref _s.ThreeDofBurnCeiling);

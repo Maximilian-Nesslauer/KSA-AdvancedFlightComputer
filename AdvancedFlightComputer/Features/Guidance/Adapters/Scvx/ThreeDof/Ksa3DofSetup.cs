@@ -57,19 +57,26 @@ public static class Ksa3DofSetup
     /// <summary>
     /// The glide-and-burn config (glideIntervals &gt; 0) or the burn-only one (0). Path limits soft and the terminal soft, the weights the offline closed loop was tuned with; ground and dry mass as state floors.
     /// </summary>
-    public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg)
+    /// <param name="comFloorM">The CoM's height over the site with the legs on the ground - the vehicle height - which is where the ground is for a plan that flies the CoM.</param>
+    /// <param name="accelMaxMs2">Largest thrust acceleration the burn may plan, m/s^2, or 0 for none; see Scvx3DofConfig.AccelMax.</param>
+    public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg,
+                                        double comFloorM = 0.0, double accelMaxMs2 = 0.0)
     {
         var min = new double[PointMass3Dof.NX];
         var max = new double[PointMass3Dof.NX];
         Array.Fill(min, double.NegativeInfinity);
         Array.Fill(max, double.PositiveInfinity);
-        min[PointMass3Dof.IR + 2] = 0.0;
+        min[PointMass3Dof.IR + 2] = Math.Max(comFloorM, 0.0);
         min[PointMass3Dof.IM] = Math.Max(vehicle.TotalMass - vehicle.PropellantMass, 1.0);
+        double floor = Math.Clamp(vehicle.GetMinThrottle(), 0.01, 0.95);
+        // Never under what the minimum throttle already gives at this mass: a limit below it could only ever be met through its slack.
+        double minimumAccel = floor * KsaEnginePerf.UncappedAtPressure(vehicle, 0.0).thrust / Math.Max(vehicle.TotalMass, 1.0);
         return new Scvx3DofConfig
         {
             Nodes = nodes,
             GlideIntervals = glideIntervals,
-            ThrottleFloor = Math.Clamp(vehicle.GetMinThrottle(), 0.01, 0.95),
+            ThrottleFloor = floor,
+            AccelMax = accelMaxMs2 > 0.0 ? Math.Max(accelMaxMs2, 1.05 * minimumAccel) : 0.0,
             AlphaMaxDeg = Math.Clamp(alphaMaxDeg, 1.0, 45.0),
             StateMin = min,
             StateMax = max,

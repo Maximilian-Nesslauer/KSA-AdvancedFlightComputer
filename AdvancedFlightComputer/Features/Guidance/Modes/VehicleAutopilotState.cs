@@ -610,9 +610,8 @@ public sealed class VehicleAutopilotState
     public double GfoldSearchRetryTime = double.NegativeInfinity;
     public double GfoldHoverHandoffAltM = 10.0;
 
-    // The hover refused this descent at the handoff height, so the plan flies on and the hover is not asked again. One flag per descent mode, reset where that mode starts.
+    // The hover refused this G-FOLD descent at the handoff height, so the plan flies on and the hover is not asked again. Reset where G-FOLD starts.
     public bool GfoldHoverRefused;
-    public bool SixDofHoverRefused;
 
     // The hover has compared the thrust at minimum throttle with the weight, at the engage or on the first step with a lit engine.
     public bool TermMinThrustChecked;
@@ -632,6 +631,11 @@ public sealed class VehicleAutopilotState
     public bool VehicleHeightAuto = true;
     public string VehicleHeightStatus = "";
     internal long VehicleHeightNextMs;
+
+    /// <summary>
+    /// Largest thrust acceleration a landing burn may PLAN, in g, or 0 for none - a constraint in both the 3-DOF and the 6-DOF solvers, read when they build their problem. A min-fuel burn otherwise lights as late as it can and brakes at full throttle: 5-6 g over two seconds on the 2026-10-08 boosters, where a tenth of a second of lag is metres per second. The 3-DOF's burn tracker may still go past it to correct.
+    /// </summary>
+    public double LandingAccelLimitG = 3.0;
 
     public double GfoldHandoffTgo = 40.0;  // hand UPFG braking over this long before the gate
     public double LandingVerticalGateM = 500.0;
@@ -711,14 +715,18 @@ public sealed class VehicleAutopilotState
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;
-    // Target and hover handoff are heights of the LEGS above the pad, like G-FOLD's. The plan flies the CoM, so it aims VehicleHeightM higher - SixDofTargetComAltM.
-    public double SixDofTargetAltM = 3.0;
-    public double SixDofTargetComAltM => SixDofTargetAltM + VehicleHeightM;
+    // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs.
+    public double SixDofTargetComAltM => VehicleHeightM;
     public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
-    public bool SixDofHoverHandoff = true;
-    public double SixDofHoverHandoffAltM = 3.5;
+
+    /// <summary>
+    /// Set once touchdown guidance has had the craft descending, so a craft that stops is known to have stopped SHORT, not to have been engaged while climbing.
+    /// And set when it has cut the engine for that: a craft that cannot throttle below its weight climbs from wherever it stops, so it drops the rest of the way with the engine off.
+    /// And whether it took a burn over from another mode - the 3-DOF or the braking burn - rather than being engaged directly: such a craft has no plan of its own until the first solve lands, and near the ground the burn's last command it is still flying is as stale as an expired plan.
+    /// </summary>
+    public bool SixDofSeenDescending, SixDofEngineCut, SixDofTookBurn;
     public double SixDofReplanSec = 0.1;
     public double SixDofRateDampShare = 0.002;
     public double SixDofControlSmooth = 0.05;
@@ -739,9 +747,8 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofThreaded = true;
 
-    // Per engagement: the first cold solve's seed, raised to the braking burn's time to go on a handoff, and the last plan published and when, for the G-FOLD fallback clock.
+    // Per engagement: the first cold solve's seed, raised to the braking burn's time to go on a handoff, and the last plan published, whose expiry is the craft losing its plan.
     public double SixDofEntrySigmaSeed = 20.0;
-    public double SixDofLastPlanTime = double.NaN;
     public Ksa6DofPlan SixDofLastPublishedPlan;
     public bool SixDofFromBrakingBurn;
 
@@ -1237,10 +1244,6 @@ public sealed class VehicleAutopilotState
     public bool ThreeDofSixDofWaiting;
     public double ThreeDofSixDofSpeedMs = 100.0;
 
-    /// <summary>Where the 3-DOF burn ends: this high over the site, sinking this fast. Terminal hover takes the last metres.</summary>
-    public double ThreeDofAimHeightM = 20.0;
-    public double ThreeDofAimSinkMs = 2.0;
-
     /// <summary>The live guidance, its solver thread, its model corrections and its nominal model, or null before the first solve.</summary>
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ThreeDofGuidance;
     public Ksa3DofWorker ThreeDofWorker;
@@ -1258,8 +1261,8 @@ public sealed class VehicleAutopilotState
     public double3 ThreeDofCommandLocal;
     public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Plan3Dof ThreeDofPlan;
 
-    /// <summary>Time constant of the low-pass the plan's attitude and throttle reach the vehicle through, s. G-FOLD's is 0.15 s; 0 switches it off.</summary>
-    public double ThreeDofSmoothTau = 0.2;
+    /// <summary>Time constant of the low-pass the plan's attitude and throttle reach the vehicle through, s; 0 switches it off. 0.05 s rather than the 0.2 s it started at: a landing burn of two seconds at 5-6 g turned 0.2 s of throttle lag into a 13 m/s climb off the pad (2026-10-08, 16:19).</summary>
+    public double ThreeDofSmoothTau = 0.05;
 
     /// <summary>
     /// Highest throttle the plan may use before ignition is committed, and after; the burn tracker may use the rest up to full. Read when a cold solve starts, so a change applies from the next engage. See Guidance3Dof.Settings.GlideThrottleCeiling.

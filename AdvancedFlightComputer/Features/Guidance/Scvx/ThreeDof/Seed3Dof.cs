@@ -157,7 +157,7 @@ public static class Seed3Dof
     private readonly record struct Burn(double StopHeight, double Time);
 
     /// <summary>
-    /// A retrograde burn at the search's thrust fraction from <paramref name="x"/>, until the sink is down to the terminal sink, the vehicle reaches the target height, the propellant runs out or the burn outlasts the longest allowed. Returns the height it stopped at.
+    /// A retrograde burn at the search's thrust fraction, under the acceleration limit, from <paramref name="x"/>, until the sink is down to the terminal sink, the vehicle reaches the target height, the propellant runs out or the burn outlasts the longest allowed. Returns the height it stopped at.
     /// </summary>
     private static Burn SimulateBurn(KsaPointMassModel model, Scvx3DofConfig cfg, double[] x, Options opt, double[] up,
                                      double targetHeight, double sinkF,
@@ -167,22 +167,31 @@ public static class Seed3Dof
         double dry = cfg.StateMin[PointMass3Dof.IM];
         double[] s = (double[])x.Clone();
         double t = 0.0;
-        record?.Add(((double[])s.Clone(), Retrograde(s, up), throttle));
+        record?.Add(((double[])s.Clone(), Retrograde(s, up), Capped(model, cfg, s, throttle)));
         while (t < cfg.BurnSigmaMax)
         {
             double sink = -Dot3(s, 3, up);
             double height = Dot3(s, 0, up);
             if (sink <= sinkF || height < targetHeight || (double.IsFinite(dry) && s[PointMass3Dof.IM] <= dry))
                 break;
-            s = Rk4(model, s, opt.Step, y => (Retrograde(y, up), throttle));
+            s = Rk4(model, s, opt.Step, y => (Retrograde(y, up), Capped(model, cfg, y, throttle)));
             t += opt.Step;
-            record?.Add(((double[])s.Clone(), Retrograde(s, up), throttle));
+            record?.Add(((double[])s.Clone(), Retrograde(s, up), Capped(model, cfg, s, throttle)));
         }
         double stopHeight = Dot3(s, 0, up);
         // Out of propellant or out of time while still falling: it did not stop, wherever it is.
         if (-Dot3(s, 3, up) > sinkF + 1.0)
             stopHeight = Math.Min(stopHeight, targetHeight - 1.0);
         return new Burn(stopHeight, t);
+    }
+
+    /// <summary>The search's throttle, held under the config's acceleration limit where it would pass it, so the ignition found is where a limited burn has to start rather than where the solver must drag it from.</summary>
+    private static double Capped(KsaPointMassModel model, Scvx3DofConfig cfg, double[] x, double throttle)
+    {
+        if (!(cfg.AccelMax > 0.0) || !(model.VacuumThrust > 0.0))
+            return throttle;
+        double limit = model.ThrottleFor(cfg.AccelMax * x[PointMass3Dof.IM], model.Altitude(x));
+        return Math.Clamp(Math.Min(throttle, limit), cfg.ThrottleFloor, cfg.ThrottleCeiling);
     }
 
     private static double[] Retrograde(double[] x, double[] up)

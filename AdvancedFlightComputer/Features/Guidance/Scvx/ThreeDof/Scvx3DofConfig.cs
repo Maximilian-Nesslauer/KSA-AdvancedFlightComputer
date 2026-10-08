@@ -28,6 +28,11 @@ public sealed class Scvx3DofConfig
     /// </summary>
     public double ThrottleCeiling { get; set; } = 1.0;
 
+    /// <summary>
+    /// Largest THRUST acceleration a burn node may plan, m/s^2, or 0 for none: thrust &lt;= AccelMax * mass, by the model's own nozzle law. A min-fuel burn on a high thrust-to-weight booster otherwise lights as late as it can and brakes at its throttle ceiling - 5-6 g over 2 s in flight - where a tenth of a second of lag is metres per second of error. A path constraint like the others, soft with them (<see cref="PathSlackWeight"/>), so a dispersion that needs more gets it rather than no plan. Needs a <see cref="KsaPointMassModel"/>, whose thrust law it reads; with any other model the rows are vacuous.
+    /// </summary>
+    public double AccelMax { get; init; }
+
     /// <summary>Angle-of-attack limit, degrees, at nodes faster than <see cref="AlphaSpeedThreshold"/>.</summary>
     public double AlphaMaxDeg { get; init; } = 10.0;
 

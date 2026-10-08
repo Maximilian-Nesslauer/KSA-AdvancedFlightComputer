@@ -3,9 +3,9 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 /// <summary>
 /// --3dof-mpc: the glide-and-burn guidance flown closed loop against a vehicle that is not the model.
 ///
-/// The truth is the same KSA point-mass physics with its drag, lift and thrust scaled off nominal, an attitude loop that lags its command and turns at a finite rate, and an engine that may light late; the guidance plans with the nominal model, corrected by the aero-scale estimator through the glide. The simulation steps at 50 Hz and the guidance re-solves at 10 Hz from the true state, through the free-ignition glide, the lock and the swap to the burn-only problem, and the burn, to the 20 m aim point where the terminal hover would take over. The burn is flown as the game flies it, through BurnTracker3Dof, at every step.
+/// The truth is the same KSA point-mass physics with its drag, lift and thrust scaled off nominal, an attitude loop that lags its command and turns at a finite rate, and an engine that may light late; the guidance plans with the nominal model, corrected by the aero-scale estimator through the glide. The simulation steps at 50 Hz and the guidance re-solves at 10 Hz from the true state, through the free-ignition glide, the lock and the swap to the burn-only problem, and the burn, to touchdown at zero/zero, cutting the engine where a craft that cannot hover stops short, as the game does. The burn is flown as the game flies it, through BurnTracker3Dof, at every step.
 ///
-/// Measured per case: miss and speeds at the aim point, propellant, how far the ignition time moved between the first plan and the lock, refused cycles, solve time, and how far the burn-only plan's opening state jumped from where the two-phase plan put it.
+/// Measured per case: miss and speeds at touchdown, the height of any stop-short cut, propellant, how far the ignition time moved between the first plan and the lock, refused cycles, solve time, and how far the burn-only plan's opening state jumped from where the two-phase plan put it.
 /// </summary>
 internal static class ThreeDofMpcCheck
 {
@@ -15,7 +15,8 @@ internal static class ThreeDofMpcCheck
     private const double ColdDelay = 1.0;     // the spread cold solve, flown on the PID glide meanwhile
 
     private static readonly double[] X0 = [-9000, 1500, 32000, 300, -30, -950, ThreeDofScenario.WetMass];
-    private static readonly double[] Xf = [0, 0, 20, 0, 0, -2];
+    // The end state: zero/zero, on the ground at rest (the scenario has no vehicle height, so z is the legs). --aim-height and --aim-sink end the burn above the ground instead, as the game did before (20 m, 2 m/s).
+    private static double[] Xf = [0, 0, 0, 0, 0, 0];
 
     /// <param name="IgnitionDelay">Seconds the engine lights after the guidance commands it, the guidance not told.</param>
     private sealed record Case(string Name, double Drag = 1.0, double Lift = 1.0, double Thrust = 1.0, double LagS = 0.3,
@@ -63,19 +64,23 @@ internal static class ThreeDofMpcCheck
             Kd = Num("--track-kd", tracking.Kd),
             MaxTiltRad = Num("--track-tilt", tracking.MaxTiltRad * 180.0 / Math.PI) * Math.PI / 180.0,
         };
+        // --accel-g: the burn's thrust acceleration limit, as the game's default of 3 g unless given; 0 for none. The glide plan gets it over Settings.AccelHeadroom, as in the game.
         var flight = new Flight(
             Arg("--track")?.ToLowerInvariant() == "off" ? null : tracking,
             Num("--glide-ceiling", defaults.GlideThrottleCeiling),
-            Num("--burn-ceiling", defaults.BurnThrottleCeiling));
+            Num("--burn-ceiling", defaults.BurnThrottleCeiling),
+            Num("--accel-g", 3.0) * 9.80665,
+            Num("--engine-scale", 1.0));
+        Xf = [0, 0, Num("--aim-height", 0.0), 0, 0, -Num("--aim-sink", 0.0)];
         Console.WriteLine($"burn tracking {(flight.Tracker is { } k ? $"Kp {k.Kp:F2} Kd {k.Kd:F2} tilt {k.MaxTiltRad * 180.0 / Math.PI:F0} deg" : "off")}, " +
-                          $"plan throttle ceiling {flight.GlideCeiling:F2} glide, {flight.BurnCeiling:F2} burn");
+                          $"plan throttle ceiling {flight.GlideCeiling:F2} glide, {flight.BurnCeiling:F2} burn, accel limit {(flight.AccelMax > 0.0 ? $"{flight.AccelMax / 9.80665:F1} g" : "off")}, engines x{flight.EngineScale:F1}, end state {Xf[2]:F0} m at {-Xf[5]:F1} m/s");
 
         bool all = true;
         var summary = new List<string>();
         foreach (ScalingMode mode in modes)
         {
             Console.WriteLine($"scaling: {mode}");
-            Console.WriteLine($"{"case",-18} {"miss m",7} {"vh m/s",7} {"vz m/s",7} {"prop kg",8} {"ign drift s",11} {"refused",7} {"admm/cyc",8} {"solve p50/max ms",17} {"swap jump m",11}  result");
+            Console.WriteLine($"{"case",-18} {"miss m",7} {"vh m/s",7} {"vz m/s",7} {"prop kg",8} {"ign drift s",11} {"refused",7} {"admm/cyc",8} {"solve p50/max ms",17} {"swap jump m",11} {"cut m",6} {"peak g",6} {"burn s",6}  result");
             var results = new List<Result>();
             foreach (Case c in cases)
                 if (only == null || c.Name.StartsWith(only, StringComparison.OrdinalIgnoreCase))
@@ -103,20 +108,27 @@ internal static class ThreeDofMpcCheck
 
     private sealed record Result(bool Pass, bool Flown, double Miss, double Vz, int Refused, double AdmmPerCycle, double P50, double Max);
 
-    /// <summary>How the burn is flown: the tracker, or the plan's own command when null, and the plan's throttle ceilings.</summary>
-    private sealed record Flight(BurnTracker3Dof? Tracker, double GlideCeiling, double BurnCeiling);
+    /// <summary>How the burn is flown: the tracker, or the plan's own command when null, the plan's throttle ceilings, and its thrust acceleration limit (m/s^2, 0 for none).</summary>
+    /// <param name="EngineScale">Multiplies the scenario's engines - thrust, mass flow and nozzle - for a booster with more thrust to weight, as the game's have (about 6 at landing against the scenario's 3).</param>
+    private sealed record Flight(BurnTracker3Dof? Tracker, double GlideCeiling, double BurnCeiling, double AccelMax, double EngineScale);
 
     private static Result Fly(Case c, ScalingMode mode, Flight flight, bool verbose)
     {
-        KsaPointMassModel nominal = ThreeDofScenario.Model();
+        KsaPointMassModel scenario = ThreeDofScenario.Model();
+        KsaPointMassModel nominal = scenario with
+        {
+            VacuumThrust = scenario.VacuumThrust * flight.EngineScale,
+            MassFlow = scenario.MassFlow * flight.EngineScale,
+            ExitArea = scenario.ExitArea * flight.EngineScale,
+        };
         KsaPointMassModel truth = nominal with
         {
             DragScale = c.Drag,
             LiftScale = c.Lift,
             VacuumThrust = nominal.VacuumThrust * c.Thrust,
         };
-        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true);
-        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true);
+        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax));
+        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax);
         // No wall-clock deadlines offline: they make the iteration count, and so the flight, depend on the machine's speed. The iteration caps still bound every cycle.
         // Anchored on the last command, tight, as the game flies it.
         var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings
@@ -153,12 +165,12 @@ internal static class ThreeDofMpcCheck
         double nextGuidance = t;
         double[] cmd = att;
         double throttle = 0.0;
-        bool engine = false, lit = false;
-        double commanded = double.NaN;
+        bool engine = false, lit = false, cut = false;
+        double commanded = double.NaN, cutHeight = double.NaN, peakAccel = 0.0;
         Plan3Dof? lastGlidePlan = guidance.Published;
         while (t < 400)
         {
-            if (t >= nextGuidance - 1e-9)
+            if (!cut && t >= nextGuidance - 1e-9)
             {
                 nextGuidance += GuidanceStep;
                 // What an accelerometer would read: the truth's aerodynamics and thrust, at the attitude flown and the throttle commanded. An engine lit late is reported as off until it lights, so a delayed ignition tests the burn's recovery rather than the thrust estimate.
@@ -207,11 +219,22 @@ internal static class ThreeDofMpcCheck
             }
             lit = engine && t >= commanded + c.IgnitionDelay;
 
+            // STOPPED SHORT, the game's rule: a craft that cannot throttle below its weight climbs from wherever it stops, so the engine is cut there and it drops the rest of the way. The scenario's floor makes this one such a craft.
+            if (lit && !cut && x[5] >= 0.0 && x[2] > Xf[2] && MinTwr(truth, x, burn.ThrottleFloor) > 1.0)
+            {
+                cut = true;
+                cutHeight = x[2] - Xf[2];
+            }
+            if (cut) lit = false;
+
+            if (lit)
+                peakAccel = Math.Max(peakAccel, truth.Thrust(throttle, truth.Altitude(x)) / x[PointMass3Dof.IM]);
+
             att = Turn(att, cmd, c.LagS, glide.AttitudeRateMax * 1.2);
             x = Step(truth, x, att, lit ? throttle : 0.0);
             t += SimStep;
 
-            if (x[2] <= Xf[2] || x[6] <= ThreeDofScenario.DryMass || (engine && t > plan.EndTime + 3.0))
+            if (x[2] <= Xf[2] || x[6] <= ThreeDofScenario.DryMass || (engine && !cut && t > plan.EndTime + 3.0))
                 break;
         }
 
@@ -226,9 +249,17 @@ internal static class ThreeDofMpcCheck
         bool landed = x[2] <= Xf[2] + 1.0;
         bool pass = landed && miss < 15.0 && vh < 2.0 && Math.Abs(vz - Xf[5]) < 2.0 && x[6] > ThreeDofScenario.DryMass;
         double admmPerCycle = solveMs.Count > 0 ? (double)admm / solveMs.Count : double.NaN;
-        Console.WriteLine($"{c.Name,-18} {miss,7:F1} {vh,7:F2} {vz,7:F2} {prop,8:F0} {drift,11:F2} {refused,7} {admmPerCycle,8:F0} {p50,8:F0}/{max,-8:F0} {swapJump,11:F1}  " +
+        Console.WriteLine($"{c.Name,-18} {miss,7:F1} {vh,7:F2} {vz,7:F2} {prop,8:F0} {drift,11:F2} {refused,7} {admmPerCycle,8:F0} {p50,8:F0}/{max,-8:F0} {swapJump,11:F1} {(cut ? cutHeight.ToString("F1") : "-"),6} {peakAccel / 9.80665,6:F2} {t - commanded,6:F1}  " +
                           $"{(pass ? "ok" : landed ? "OFF TARGET" : $"FAILED at {x[2]:F0} m: {guidance.Error}")}");
         return new Result(pass, true, miss, vz, refused, admmPerCycle, p50, max);
+    }
+
+    /// <summary>Thrust at the throttle floor over the weight, where the craft is.</summary>
+    private static double MinTwr(KsaPointMassModel model, double[] x, double floor)
+    {
+        double altitude = model.Altitude(x);
+        double g = model.Mu / Sq(model.MeanRadius + altitude);
+        return model.Thrust(floor, altitude) / (x[PointMass3Dof.IM] * g);
     }
 
     private static Result Report(Case c, string why)

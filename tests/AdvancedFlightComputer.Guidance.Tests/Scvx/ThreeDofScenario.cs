@@ -75,7 +75,9 @@ internal static class ThreeDofScenario
     }
 
     /// <summary>The flight config: the script's problem plus the blocks a landing needs.</summary>
-    public static Scvx3DofConfig Config(int nodes = 30, int glideIntervals = 12, double alphaMaxDeg = 15.0, bool anchor = false)
+    /// <param name="accelMax">Thrust acceleration limit, m/s^2, or 0 for none; see Scvx3DofConfig.AccelMax.</param>
+    public static Scvx3DofConfig Config(int nodes = 30, int glideIntervals = 12, double alphaMaxDeg = 15.0, bool anchor = false,
+                                        double accelMax = 0.0)
     {
         var min = Enumerable.Repeat(double.NegativeInfinity, 7).ToArray();
         var max = Enumerable.Repeat(double.PositiveInfinity, 7).ToArray();
@@ -86,6 +88,7 @@ internal static class ThreeDofScenario
             Nodes = nodes,
             GlideIntervals = glideIntervals,
             ThrottleFloor = ThrottleFloor,
+            AccelMax = accelMax,
             AlphaMaxDeg = alphaMaxDeg,
             StateMin = min,
             StateMax = max,

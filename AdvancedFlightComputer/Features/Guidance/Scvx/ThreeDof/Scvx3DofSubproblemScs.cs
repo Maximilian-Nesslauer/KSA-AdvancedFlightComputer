@@ -62,7 +62,8 @@ public sealed class Scvx3DofSubproblemScs
     private double[] _xs => _cfg.XScale;
 
     private readonly int _oX, _oU, _oW, _iSigB, _iSigG, _oTm, _nTmPos, _nTmVel, _nTm, _nVars;
-    private readonly int _oSa, _oSr, _oSb, _oSw, _oSn, _nSa, _nSr, _nSb, _nSw, _nSn, _nSlack;
+    private readonly int _oSa, _oSr, _oSb, _oSw, _oSn, _oSc, _nSa, _nSr, _nSb, _nSw, _nSn, _nSc, _nSlack;
+    private readonly int _nAc;
     private readonly int[] _minChannels, _maxChannels;
     private readonly bool _terminalAttitude, _rateLimit;
     private readonly int _nEq, _lDim, _nRows;
@@ -120,18 +121,23 @@ public sealed class Scvx3DofSubproblemScs
         _nSb = soft ? (_n - 1) * (_minChannels.Length + _maxChannels.Length) : 0;
         _nSw = soft && _rateLimit ? _n - 1 : 0;
         _nSn = soft && cfg.AttitudeAnchor ? 1 : 0;
-        _nSlack = _nSa + _nSr + _nSb + _nSw + _nSn;
+        // The acceleration limit: one row per burn node, and its slack when soft.
+        _nAc = cfg.AccelMax > 0.0 ? _n - _k : 0;
+        _nSc = soft ? _nAc : 0;
+        _nSlack = _nSa + _nSr + _nSb + _nSw + _nSn + _nSc;
         _oSa = _oTm + _nTm;
         _oSr = _oSa + _nSa;
         _oSb = _oSr + _nSr;
         _oSw = _oSb + _nSb;
         _oSn = _oSw + _nSw;
-        _nVars = _oSn + _nSn;
+        _oSc = _oSn + _nSn;
+        _nVars = _oSc + _nSc;
 
         int sigmas = _k > 0 ? 2 : 1;
         _nEq = NX + 6 + (_terminalAttitude ? 3 : 0) + (_n - 1) * NX
              + (_terminalAttitude ? _n - 1 : _n) + _k;
         _lDim = 2 * (_n - _k)
+              + _nAc
               + (cfg.Retrograde ? _n : 0)
               + (_n - 1) * (_minChannels.Length + _maxChannels.Length)
               + 2 * _n * NX + 2 * _n * NU
@@ -188,10 +194,14 @@ public sealed class Scvx3DofSubproblemScs
     /// <param name="alphaRadius">Per node: the bound on |p|, or 0 or less where the angle-of-attack cone and the retrograde row do not apply.</param>
     /// <param name="anchor">Direction node 0's body axis is held near, 3 long; ignored unless the config allocates the row. A zero vector disables it for this solve.</param>
     /// <param name="anchorCos">cos of the cone's half-angle about <paramref name="anchor"/>.</param>
+    /// <param name="vacuumThrust">The model's full-throttle vacuum thrust, N, for the acceleration limit; 0 or less leaves its rows vacuous.</param>
+    /// <param name="lossConstant">Per node: the model's back-pressure thrust loss linearised about the reference, loss(r) ~ lossConstant + lossGradient . r, N.</param>
+    /// <param name="lossGradient">Per node, 3 long: the loss's gradient in position, N/m.</param>
     public void Assemble(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf,
                          double[] xbar, double[] ubar, double sigGBar, double sigBBar, double tr,
                          Linearisation3Dof lin, double[] alphaRadius,
-                         ReadOnlySpan<double> anchor, double anchorCos)
+                         ReadOnlySpan<double> anchor, double anchorCos,
+                         double vacuumThrust, double[] lossConstant, double[] lossGradient)
     {
         if (_frozen) { _A.BeginRefill(); _P.BeginRefill(); }
         RefreshScales();
@@ -202,7 +212,8 @@ public sealed class Scvx3DofSubproblemScs
         int row = AssembleEqualities(x0, xf, xbar, ubar, sigGBar, sigBBar, lin);
         if (row != _nEq)
             throw new InvalidOperationException($"equality rows: emitted {row}, expected {_nEq}");
-        row = AssembleCone(row, xbar, ubar, sigGBar, sigBBar, tr, lin, alphaRadius, anchor, anchorCos);
+        row = AssembleCone(row, xbar, ubar, sigGBar, sigBBar, tr, lin, alphaRadius, anchor, anchorCos,
+                           vacuumThrust, lossConstant, lossGradient);
         if (row != _nRows)
             throw new InvalidOperationException($"cone rows: emitted {row}, expected {_nRows}");
 
@@ -428,7 +439,8 @@ public sealed class Scvx3DofSubproblemScs
 
     private int AssembleCone(int row, double[] xbar, double[] ubar, double sigGBar, double sigBBar,
                              double tr, Linearisation3Dof lin, double[] alphaRadius,
-                             ReadOnlySpan<double> anchor, double anchorCos)
+                             ReadOnlySpan<double> anchor, double anchorCos,
+                             double vacuumThrust, double[] lossConstant, double[] lossGradient)
     {
         // Throttle box over the burn: a scalar interval, convex because the attitude carries the direction (3dof.py README section 2b).
         for (int k = _k; k < _n; k++)
@@ -437,6 +449,20 @@ public sealed class Scvx3DofSubproblemScs
             _b[row++] = -_cfg.ThrottleFloor;
             AddA(row, IU(k, PointMass3Dof.ITH), 1.0);
             _b[row++] = _cfg.ThrottleCeiling;
+        }
+
+        // ACCELERATION LIMIT over the burn: throttle * F_vac - loss(r) <= AccelMax * m, in throttle units - throttle - (AccelMax / F_vac) m - (grad loss / F_vac) . r - s <= loss_0 / F_vac. Exact in the throttle and the mass, which are both variables; the back-pressure loss is linearised in position about the reference, as the dynamics are.
+        // The position term is not a nicety. Read at the reference's altitude alone, the row ignored that a step up or down changes the loss, while the merit measures it at the step's own altitude: near the optimum, with the limit active, that first-order difference had every step rejected and the cold solve stalled (offline, --3dof-ksa case 4 with the anchor rows).
+        // Vacuous without a thrust law to read.
+        bool limited = vacuumThrust > 0.0;
+        for (int k = _k; k < _k + _nAc; k++)
+        {
+            AddA(row, IU(k, PointMass3Dof.ITH), limited ? 1.0 : 0.0);
+            AddA(row, IX(k, PointMass3Dof.IM), limited ? -_cfg.AccelMax / vacuumThrust : 0.0);
+            for (int i = 0; i < 3; i++)
+                AddA(row, IX(k, PointMass3Dof.IR + i), limited ? -lossGradient[k * 3 + i] / vacuumThrust : 0.0);
+            if (_nSc > 0) AddA(row, _oSc + (k - _k), -1.0);
+            _b[row++] = limited ? lossConstant[k] / vacuumThrust : 1.0;
         }
 
         // Retrograde: b_k . v_hat_bar_k <= 0, vacuous below the speed threshold.
