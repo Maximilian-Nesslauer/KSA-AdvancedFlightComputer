@@ -19,12 +19,14 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 //  - the turn-rate feed-forward is the newest plan's own rate of turn, never a difference of successive commands, which would turn every re-solve's small step into a rate spike;
 //  - while ignition is locked, the burn plan's opening attitude lies a few seconds ahead, and the command turns towards it at the rate limit the ignition prediction assumed, rather than jumping to it: that jump was a 15-degree swing three seconds before ignition.
 //
+// THE BURN IS TRACKED, not just played back. The plan is re-solved from the measured state ten times a second, but between re-solves, and through a run of refused ones, it is open loop, and a min-fuel burn rides its throttle ceiling with nothing in hand. So the plan's throttle stops short of full - ThreeDofGlideCeiling before ignition is committed, ThreeDofBurnCeiling after - and BurnTracker3Dof flies it with PD feedback on its position and velocity: the correction along the axis as throttle, up to the engine's real maximum, and across it as a tilt of at most ThreeDofTrackTiltDeg, since the axis is also the attitude the aerodynamics were planned around.
+//
 // FALLBACKS. Before the burn: a cold solve that fails, or a run of refused re-solves, flies the PID glide again and starts a fresh cold solve. After ignition the glide cannot catch it, so a plan that runs out, or a long run of refusals, hands the burn to 6-DOF, which flies in air on its own model.
 //
 // HANDOVERS. At the aim point - legs ThreeDofAimHeightM over the site (the CoM VehicleHeightM above that), sinking ThreeDofAimSinkMs - terminal hover lands it - unless, below ThreeDofSixDofSpeedMs (100 m/s, on by default), 6-DOF has taken the burn first, for its rotational model of the final flare.
 // 6-DOF is ON STANDBY from ignition (SixDofStandby.cs): its guidance cold-solves and then re-solves on its own thread from the measured state while this mode flies, so it takes the burn on a warm plan. Below the speed it takes over only once that plan is converged and fresh; until then this mode keeps the burn, to the aim point if need be. The fallbacks above hand over whatever state the standby is in, which at worst is a cold solve already under way, seeded with this burn's time to go.
 //
-// TODO (offline harness, --3dof-mpc): a vehicle with 30 % less lift than its table misses by 20-30 m, and combined dispersions leave 2.5 m/s of horizontal speed at the aim point.
+// TODO (offline harness, --3dof-mpc): combined dispersions (drag +20 %, lift -20 %, thrust -3 %, 0.8 s attitude lag) still leave 1.9-2.7 m/s of horizontal speed at the aim point, depending on the tracker's gains, against a 2 m/s pass mark. The tracker brought a 30 % lift deficit alone from a 29 m miss to under 1 m.
 public static partial class GuidanceWindow
 {
     public enum ThreeDofPhase { Idle, Glide, Burn, Done }
@@ -91,7 +93,7 @@ public static partial class GuidanceWindow
         _s.ThreeDofSolveText = "";
         _s.ThreeDofRefusing = false;
         _s.ThreeDofEngineOn = false;
-        _s.ThreeDofThrottle = 0.0;
+        _s.ThreeDofThrottle = _s.ThreeDofPlanThrottle = 0.0;
         _s.ThreeDofSixDofWaiting = false;
     }
 
@@ -196,7 +198,8 @@ public static partial class GuidanceWindow
             + "{6}; drag x{7:F2} lift x{8:F2} thrust x{9:F2}{10}",
             ThreeDofPhaseName(_s.ThreeDofPhase), x[2] / 1000.0, speed, Math.Sqrt(x[0] * x[0] + x[1] * x[1]),
             plan == null ? "no plan"
-                : _s.ThreeDofPhase == ThreeDofPhase.Burn ? $"burn {plan.EndTime - now:F1} s left, throttle {_s.ThreeDofThrottle:P0}"
+                : _s.ThreeDofPhase == ThreeDofPhase.Burn
+                    ? $"burn {plan.EndTime - now:F1} s left, throttle {_s.ThreeDofThrottle:P0} (plan {_s.ThreeDofPlanThrottle:P0}), {TrackingErrorText(plan, x, now)}"
                 : $"ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s",
             off,
             g == null ? "no solver" : ThreeDofBusy ? "solving" : $"last solve {g.LastSolveMs:F0} ms, {g.ConsecutiveRefusals} refused",
@@ -345,13 +348,24 @@ public static partial class GuidanceWindow
 
         if (burning)
         {
-            // The plan asks for a throttle fraction of its own nozzle law; invert the game's real thrust curve for the newtons that law gives.
+            // The plan flown by the tracker: its thrust plus feedback on its state, the direction kept within a few degrees of its axis. See BurnTracker3Dof.
+            var tracker = new BurnTracker3Dof
+            {
+                Kp = _s.ThreeDofTrackKp,
+                Kd = _s.ThreeDofTrackKd,
+                MaxTiltRad = Math.Clamp(_s.ThreeDofTrackTiltDeg, 0.0, 30.0) * Math.PI / 180.0,
+            };
+            double thrust = tracker.Command(plan, now, x, out double[] axis);
+            wantLocal = new double3(axis[0], axis[1], axis[2]);
+            _s.ThreeDofPlanThrottle = throttle;
+
+            // The tracker's newtons by the game's real thrust curve. That curve is the one the nominal model was measured from, and the thrust scale is what the vehicle has been measured to deliver against it, so the curve is asked for the newtons over the scale: asked for the newtons themselves, it would take the deficit off a second time.
             KsaPointMassModel model = g.Model;
             double altitude = model.Altitude(x);
             double pa = KsaEnginePerf.AmbientPressureAt(parent, altitude);
-            double demand = model.Thrust(Math.Max(throttle, 0.0), altitude);
-            double inverted = KsaEnginePerf.ThrottleForThrust(vehicle, demand, pa);
-            double target = Math.Clamp(inverted >= 0.0 ? inverted : throttle, 0.0, 1.0);
+            double scale = _s.ThreeDofEstimator?.ThrustScale ?? 1.0;
+            double inverted = KsaEnginePerf.ThrottleForThrust(vehicle, thrust / scale, pa);
+            double target = Math.Clamp(inverted >= 0.0 ? inverted : model.ThrottleFor(thrust, altitude), 0.0, 1.0);
             // Low-passed as the attitude is, except on the step the engine lights, which opens on the plan's own throttle rather than ramping up from zero.
             _s.ThreeDofThrottle = _s.ThreeDofEngineOn
                 ? _s.ThreeDofThrottle + SmoothGain(dt) * (target - _s.ThreeDofThrottle)
@@ -360,13 +374,24 @@ public static partial class GuidanceWindow
         }
         else
         {
-            _s.ThreeDofThrottle = 0.0;
+            _s.ThreeDofThrottle = _s.ThreeDofPlanThrottle = 0.0;
             _s.ThreeDofEngineOn = false;
         }
 
         // Qualitative only; the figures are the page's own rows, so this line keeps its length frame to frame.
         _s.ThreeDofStatus = burning ? "Burning on the plan." : "Gliding on the plan.";
         return true;
+    }
+
+    /// <summary>How far the vehicle is off the plan's state now, for the log: what the burn tracker is correcting.</summary>
+    private static string TrackingErrorText(Plan3Dof plan, double[] x, double now)
+    {
+        Span<double> xs = stackalloc double[PointMass3Dof.NX];
+        Span<double> us = stackalloc double[PointMass3Dof.NU];
+        plan.Sample(now, xs, us);
+        double dr = new double3(xs[0] - x[0], xs[1] - x[1], xs[2] - x[2]).Length();
+        double dv = new double3(xs[3] - x[3], xs[4] - x[4], xs[5] - x[5]).Length();
+        return $"{dr:F1} m and {dv:F1} m/s off the plan";
     }
 
     /// <summary>A plan's body axis and throttle at a time.</summary>
@@ -418,7 +443,12 @@ public static partial class GuidanceWindow
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg);
         // Anchored tight on the last command, so consecutive plans start where the command is; see the file summary.
-        var settings = new Guidance3Dof.Settings { AnchorSeconds = 0.3, AnchorFloor = 1.0 * Math.PI / 180.0 };
+        var settings = new Guidance3Dof.Settings
+        {
+            AnchorSeconds = 0.3, AnchorFloor = 1.0 * Math.PI / 180.0,
+            GlideThrottleCeiling = Math.Clamp(_s.ThreeDofGlideCeiling, 0.1, 1.0),
+            BurnThrottleCeiling = Math.Clamp(_s.ThreeDofBurnCeiling, 0.1, 1.0),
+        };
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();

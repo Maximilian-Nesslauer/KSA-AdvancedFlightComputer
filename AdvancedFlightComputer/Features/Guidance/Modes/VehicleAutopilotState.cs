@@ -1261,9 +1261,23 @@ public sealed class VehicleAutopilotState
     /// <summary>Time constant of the low-pass the plan's attitude and throttle reach the vehicle through, s. G-FOLD's is 0.15 s; 0 switches it off.</summary>
     public double ThreeDofSmoothTau = 0.2;
 
-    /// <summary>The engine command the burn writes, and what the panel shows.</summary>
+    /// <summary>
+    /// Highest throttle the plan may use before ignition is committed, and after; the burn tracker may use the rest up to full. Read when a cold solve starts, so a change applies from the next engage. See Guidance3Dof.Settings.GlideThrottleCeiling.
+    /// </summary>
+    public double ThreeDofGlideCeiling = ThreeDofDefaults.GlideThrottleCeiling;
+    public double ThreeDofBurnCeiling = ThreeDofDefaults.BurnThrottleCeiling;
+
+    /// <summary>The burn tracker's position gain (1/s^2), velocity gain (1/s) and largest tilt off the plan's axis (deg). See BurnTracker3Dof.</summary>
+    public double ThreeDofTrackKp = ThreeDofTrackDefaults.Kp;
+    public double ThreeDofTrackKd = ThreeDofTrackDefaults.Kd;
+    public double ThreeDofTrackTiltDeg = ThreeDofTrackDefaults.MaxTiltRad * 180.0 / Math.PI;
+
+    private static readonly AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof.Settings ThreeDofDefaults = new();
+    private static readonly AdvancedFlightComputer.Guidance.Scvx.ThreeDof.BurnTracker3Dof ThreeDofTrackDefaults = new();
+
+    /// <summary>The engine command the burn writes, and what the panel shows, with the plan's own throttle beside it: the difference is the tracker's.</summary>
     public bool ThreeDofEngineOn;
-    public double ThreeDofThrottle;
+    public double ThreeDofThrottle, ThreeDofPlanThrottle;
     public string ThreeDofStatus = "";
 
     /// <summary>The last solve's figures for the page, cached by the step while the solver is idle.</summary>

@@ -173,6 +173,10 @@ public sealed record KsaPointMassModel : IPointMassModel
     public double Thrust(double throttle, double altitude)
         => throttle > EngineOnThrottle ? throttle * VacuumThrust - BackPressureLoss(altitude) : 0.0;
 
+    /// <summary>The throttle that gives a thrust at an altitude by the same law, unclamped: <see cref="Thrust"/>'s inverse for a lit engine.</summary>
+    public double ThrottleFor(double thrust, double altitude)
+        => VacuumThrust > 0.0 ? (thrust + BackPressureLoss(altitude)) / VacuumThrust : 0.0;
+
     /// <summary>The lit nozzle's thrust deficit to ambient pressure, Pa * A_e, N.</summary>
     public double BackPressureLoss(double altitude) => (Atmosphere?.Pressure(altitude) ?? 0.0) * ExitArea;
 

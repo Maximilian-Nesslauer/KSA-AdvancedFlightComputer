@@ -42,7 +42,8 @@ public static partial class GuidanceWindow
             GaugeRowText("Ignition in", gliding ? $"{plan.IgnitionTime - now,8:F1} s" : "       -");
             GaugeRowText("Burn", plan == null ? "       -"
                 : _s.ThreeDofPhase == ThreeDofPhase.Burn ? $"{plan.EndTime - now,8:F1} s left" : $"{plan.SigmaBurn,8:F1} s");
-            GaugeRowText("Throttle", _s.ThreeDofPhase == ThreeDofPhase.Burn ? $"{_s.ThreeDofThrottle,8:P0}" : "       -", dim);
+            GaugeRowText("Throttle", _s.ThreeDofPhase == ThreeDofPhase.Burn
+                ? $"{_s.ThreeDofThrottle,8:P0}  (plan {_s.ThreeDofPlanThrottle:P0})" : "       -", dim);
             var est = _s.ThreeDofEstimator;
             GaugeRowText("Model correction", est != null
                 ? $"drag x{est.DragScale:F2}  lift x{est.LiftScale:F2}  thrust x{est.ThrustScale:F2}" : "       -", dim);
@@ -63,6 +64,11 @@ public static partial class GuidanceWindow
             VehicleHeightRows("td");
             GaugeRow("Aim sink (m/s)", "##tdaimv", ref _s.ThreeDofAimSinkMs);
             GaugeRow("Command smoothing (s)", "##tdtau", ref _s.ThreeDofSmoothTau);
+            GaugeRow("Plan max throttle, glide", "##tdceilg", ref _s.ThreeDofGlideCeiling);
+            GaugeRow("Plan max throttle, burn", "##tdceilb", ref _s.ThreeDofBurnCeiling);
+            GaugeRow("Burn track Kp (1/s2)", "##tdkp", ref _s.ThreeDofTrackKp);
+            GaugeRow("Burn track Kd (1/s)", "##tdkd", ref _s.ThreeDofTrackKd);
+            GaugeRow("Burn track max tilt (deg)", "##tdtilt", ref _s.ThreeDofTrackTiltDeg);
             GaugeRowCheck("Hand burn to touchdown", "##td6", ref _s.ThreeDofSixDofHandover);
             using (new ImGuiDisabledScope(!_s.ThreeDofSixDofHandover))
                 GaugeRow("Below speed (m/s)", "##td6v", ref _s.ThreeDofSixDofSpeedMs);

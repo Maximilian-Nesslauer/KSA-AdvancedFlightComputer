@@ -3,7 +3,7 @@ using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 /// <summary>
 /// --3dof-mpc: the glide-and-burn guidance flown closed loop against a vehicle that is not the model.
 ///
-/// The truth is the same KSA point-mass physics with its drag, lift and thrust scaled off nominal and an attitude loop that lags its command and turns at a finite rate; the guidance plans with the nominal model, corrected by the aero-scale estimator through the glide. The simulation steps at 50 Hz and the guidance re-solves at 10 Hz from the true state, through the free-ignition glide, the lock and the swap to the burn-only problem, and the burn, to the 20 m aim point where the terminal hover would take over.
+/// The truth is the same KSA point-mass physics with its drag, lift and thrust scaled off nominal, an attitude loop that lags its command and turns at a finite rate, and an engine that may light late; the guidance plans with the nominal model, corrected by the aero-scale estimator through the glide. The simulation steps at 50 Hz and the guidance re-solves at 10 Hz from the true state, through the free-ignition glide, the lock and the swap to the burn-only problem, and the burn, to the 20 m aim point where the terminal hover would take over. The burn is flown as the game flies it, through BurnTracker3Dof, at every step.
 ///
 /// Measured per case: miss and speeds at the aim point, propellant, how far the ignition time moved between the first plan and the lock, refused cycles, solve time, and how far the burn-only plan's opening state jumped from where the two-phase plan put it.
 /// </summary>
@@ -17,8 +17,9 @@ internal static class ThreeDofMpcCheck
     private static readonly double[] X0 = [-9000, 1500, 32000, 300, -30, -950, ThreeDofScenario.WetMass];
     private static readonly double[] Xf = [0, 0, 20, 0, 0, -2];
 
+    /// <param name="IgnitionDelay">Seconds the engine lights after the guidance commands it, the guidance not told.</param>
     private sealed record Case(string Name, double Drag = 1.0, double Lift = 1.0, double Thrust = 1.0, double LagS = 0.3,
-                               double[]? Start = null);
+                               double[]? Start = null, double IgnitionDelay = 0.0);
 
     public static int Run(bool verbose)
     {
@@ -32,6 +33,8 @@ internal static class ThreeDofMpcCheck
             new("attitude lag 1 s", LagS: 1.0),
             new("combined", Drag: 1.2, Lift: 0.8, Thrust: 0.97, LagS: 0.8),
             new("2 km cross-range", Start: [-9000, 3500, 32000, 300, -30, -950, ThreeDofScenario.WetMass]),
+            new("late ignition 1 s", IgnitionDelay: 1.0),
+            new("thrust -8 %", Thrust: 0.92),
         ];
 
         string[] args = Environment.GetCommandLineArgs();
@@ -49,6 +52,23 @@ internal static class ThreeDofMpcCheck
             "all" => [ScalingMode.Fixed, ScalingMode.AtLock, ScalingMode.EverySolve],
             _ => [ScalingMode.EverySolve],
         };
+        // --track off flies the plan's own throttle and attitude in the burn, as the game did before the tracker; --glide-ceiling and --burn-ceiling override the guidance's plan throttle ceilings, and --track-kp, --track-kd, --track-tilt (deg) the tracker's.
+        double Num(string name, double fallback)
+            => double.TryParse(Arg(name), System.Globalization.CultureInfo.InvariantCulture, out double v) ? v : fallback;
+        var defaults = new Guidance3Dof.Settings();
+        var tracking = new BurnTracker3Dof();
+        tracking = tracking with
+        {
+            Kp = Num("--track-kp", tracking.Kp),
+            Kd = Num("--track-kd", tracking.Kd),
+            MaxTiltRad = Num("--track-tilt", tracking.MaxTiltRad * 180.0 / Math.PI) * Math.PI / 180.0,
+        };
+        var flight = new Flight(
+            Arg("--track")?.ToLowerInvariant() == "off" ? null : tracking,
+            Num("--glide-ceiling", defaults.GlideThrottleCeiling),
+            Num("--burn-ceiling", defaults.BurnThrottleCeiling));
+        Console.WriteLine($"burn tracking {(flight.Tracker is { } k ? $"Kp {k.Kp:F2} Kd {k.Kd:F2} tilt {k.MaxTiltRad * 180.0 / Math.PI:F0} deg" : "off")}, " +
+                          $"plan throttle ceiling {flight.GlideCeiling:F2} glide, {flight.BurnCeiling:F2} burn");
 
         bool all = true;
         var summary = new List<string>();
@@ -59,7 +79,7 @@ internal static class ThreeDofMpcCheck
             var results = new List<Result>();
             foreach (Case c in cases)
                 if (only == null || c.Name.StartsWith(only, StringComparison.OrdinalIgnoreCase))
-                    results.Add(Fly(c, mode, verbose));
+                    results.Add(Fly(c, mode, flight, verbose));
             bool modePass = results.All(r => r.Pass);
             all &= modePass;
             var flown = results.Where(r => r.Flown).ToList();
@@ -83,7 +103,10 @@ internal static class ThreeDofMpcCheck
 
     private sealed record Result(bool Pass, bool Flown, double Miss, double Vz, int Refused, double AdmmPerCycle, double P50, double Max);
 
-    private static Result Fly(Case c, ScalingMode mode, bool verbose)
+    /// <summary>How the burn is flown: the tracker, or the plan's own command when null, and the plan's throttle ceilings.</summary>
+    private sealed record Flight(BurnTracker3Dof? Tracker, double GlideCeiling, double BurnCeiling);
+
+    private static Result Fly(Case c, ScalingMode mode, Flight flight, bool verbose)
     {
         KsaPointMassModel nominal = ThreeDofScenario.Model();
         KsaPointMassModel truth = nominal with
@@ -100,6 +123,7 @@ internal static class ThreeDofMpcCheck
         {
             CycleBudgetMs = 0, RecoveryBudgetMs = 0, Scaling = mode,
             AnchorSeconds = 0.3, AnchorFloor = 1.0 * Math.PI / 180.0,
+            GlideThrottleCeiling = flight.GlideCeiling, BurnThrottleCeiling = flight.BurnCeiling,
         });
         var estimator = new AeroScaleEstimator();
 
@@ -129,16 +153,18 @@ internal static class ThreeDofMpcCheck
         double nextGuidance = t;
         double[] cmd = att;
         double throttle = 0.0;
-        bool engine = false;
+        bool engine = false, lit = false;
+        double commanded = double.NaN;
         Plan3Dof? lastGlidePlan = guidance.Published;
         while (t < 400)
         {
             if (t >= nextGuidance - 1e-9)
             {
                 nextGuidance += GuidanceStep;
-                // What an accelerometer would read: the truth's aerodynamics and thrust, at the attitude flown and the throttle commanded.
-                double[] measured = AeroScaleEstimator.NonGravitational(truth, x, att, throttle);
-                estimator.Update(nominal, x, att, throttle, measured, GuidanceStep);
+                // What an accelerometer would read: the truth's aerodynamics and thrust, at the attitude flown and the throttle commanded. An engine lit late is reported as off until it lights, so a delayed ignition tests the burn's recovery rather than the thrust estimate.
+                double flown = lit ? throttle : 0.0;
+                double[] measured = AeroScaleEstimator.NonGravitational(truth, x, att, flown);
+                estimator.Update(nominal, x, att, flown, measured, GuidanceStep);
                 guidance.Model = estimator.Apply(nominal);
                 Phase3Dof before = guidance.Phase;
                 bool ok = guidance.Update(x, cmd, t);
@@ -166,11 +192,23 @@ internal static class ThreeDofMpcCheck
             double[] xp = new double[NX], up = new double[4];
             plan.Sample(t, xp, up);
             engine = t >= plan.IgnitionTime;
-            cmd = [up[0], up[1], up[2]];
-            throttle = engine ? up[3] : 0.0;
+            if (engine && double.IsNaN(commanded)) commanded = t;
+            if (engine && flight.Tracker != null)
+            {
+                // The game's command: the tracker's thrust, as the throttle that gives it by the engine as now learned, inside what the engine can do.
+                KsaPointMassModel model = guidance.Model;
+                double thrust = flight.Tracker.Command(plan, t, x, out cmd);
+                throttle = Math.Clamp(model.ThrottleFor(thrust, model.Altitude(x)), burn.ThrottleFloor, 1.0);
+            }
+            else
+            {
+                cmd = [up[0], up[1], up[2]];
+                throttle = engine ? up[3] : 0.0;
+            }
+            lit = engine && t >= commanded + c.IgnitionDelay;
 
             att = Turn(att, cmd, c.LagS, glide.AttitudeRateMax * 1.2);
-            x = Step(truth, x, att, throttle);
+            x = Step(truth, x, att, lit ? throttle : 0.0);
             t += SimStep;
 
             if (x[2] <= Xf[2] || x[6] <= ThreeDofScenario.DryMass || (engine && t > plan.EndTime + 3.0))

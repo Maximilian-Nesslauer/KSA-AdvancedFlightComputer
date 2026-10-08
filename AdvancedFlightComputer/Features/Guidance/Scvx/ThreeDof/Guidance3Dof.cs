@@ -42,6 +42,9 @@ public sealed record Plan3Dof(
     public double IgnitionTime => StartTime + SigmaGlide;
     public double EndTime => StartTime + SigmaGlide + SigmaBurn;
 
+    /// <summary>The model the plan was solved with, whose thrust law gives its throttles their meaning. The guidance's own model moves on with every estimate, including through refused re-solves, so a plan read later needs this one, not that.</summary>
+    public KsaPointMassModel? Model { get; init; }
+
     /// <summary>State and control at sim time <paramref name="simTime"/>, clamped to the plan's span.</summary>
     public void Sample(double simTime, Span<double> x, Span<double> u)
         => Resample3Dof.Sample(X, U, Nodes, GlideIntervals, SigmaGlide, SigmaBurn, simTime - StartTime, x, u);
@@ -56,7 +59,7 @@ public sealed record Plan3Dof(
 ///
 /// LOCK. When the time to ignition falls to <see cref="Settings.LockSeconds"/>, the ignition time is COMMITTED and the glide phase is dropped - not at ignition, a few seconds before it, so the change of problem never coincides with lighting the engine. From then on the burn-only problem (the same subproblem class with no glide intervals) plans from the state PREDICTED at the committed ignition: the measured state carried through the remaining seconds of glide, every cycle, with the vehicle turning towards the burn's opening attitude. That is still closed loop - a dispersion before ignition shows up in the prediction and the burn plans for it - but the ignition time stops moving, which is the one decision not worth re-making against a model whose bias the solver cannot null: re-solving it into the last seconds would chase a target that moves every time it looks. Node 0's body axis is held within what the vehicle can turn to by ignition, a cone that closes onto the measured attitude as ignition arrives.
 ///
-/// BURN. At ignition the prediction horizon is zero, so node 0 is simply the measured state and the cone has closed: nothing switches. The burn is re-solved from the measured state each cycle with the full throttle released.
+/// BURN. At ignition the prediction horizon is zero, so node 0 is simply the measured state and the cone has closed: nothing switches. The burn is re-solved from the measured state each cycle with the burn's throttle ceiling released, which still stops short of full: the rest is the tracker's (<see cref="BurnTracker3Dof"/>), which flies the plan between re-solves.
 ///
 /// The swap is cheap because the burn-only problem is seeded with the burn the two-phase plan already holds; offline it takes four iterations. Until it has a plan of its own, the two-phase plan's burn, re-timed to the committed ignition, is published in its place, so there is never a moment without one.
 ///
@@ -72,9 +75,14 @@ public sealed class Guidance3Dof
         /// <summary>Time to ignition at which it is committed and the glide phase dropped, s.</summary>
         public double LockSeconds { get; init; } = 4.0;
 
-        /// <summary>Throttle the plan may use before ignition is committed, and after. The difference is the headroom a committed ignition needs to absorb arriving late.</summary>
-        public double GlideThrottleCeiling { get; init; } = 0.9;
-        public double BurnThrottleCeiling { get; init; } = 1.0;
+        /// <summary>
+        /// Throttle the plan may use before ignition is committed, and after. Two margins, stacked:
+        ///  - glide to burn: the headroom a committed ignition needs to absorb arriving late. Equal ceilings leave the burn-only re-solves nothing to plan a dispersion with, and offline (--3dof-mpc --glide-ceiling 0.9 --burn-ceiling 0.9) every case is refused through the burn;
+        ///  - burn to full: what <see cref="BurnTracker3Dof"/> may use between re-solves. With the plan allowed full throttle a min-fuel burn rides it, and a burn lit a second late or an engine 8 % weak reaches the aim point at 17-37 m/s.
+        /// 0.88 and 0.95 pass every --3dof-mpc case, at about 2 % more propellant than 0.9 and 1.0. The glide ceiling is the sensitive one, both ways: at 0.9 a burn lit a second late still reaches the aim point at 36 m/s, and below 0.88 the cold solve gets fragile - at 0.85 --3dof-far gives up from 7 of its 15 starts, one of them 45 km up, against 4, all above 69 km, at 0.88 and 0.9; at 0.8 the --3dof-mpc 2 km cross-range cold solve fails too.
+        /// </summary>
+        public double GlideThrottleCeiling { get; init; } = 0.88;
+        public double BurnThrottleCeiling { get; init; } = 0.95;
 
         public int ColdIterations { get; init; } = 150;
 
@@ -297,7 +305,7 @@ public sealed class Guidance3Dof
                               cfg.Nodes, 0, 0.0, plan.SigmaBurn, cfg.ThrottleFloor, xs, us);
         // The stand-in: the plan's own burn, starting at the committed ignition.
         _published = new Plan3Dof((double[])xs.Clone(), (double[])us.Clone(), cfg.Nodes, 0, 0.0, plan.SigmaBurn,
-                                  CommittedIgnition, now, Phase3Dof.Locked, plan.GatedDefect);
+                                  CommittedIgnition, now, Phase3Dof.Locked, plan.GatedDefect) { Model = plan.Model };
         Phase = Phase3Dof.Locked;
         _burnStarted = false;
         return UpdateLocked(_published, x0, attitude, now);
@@ -433,7 +441,7 @@ public sealed class Guidance3Dof
     {
         _published = new Plan3Dof((double[])solver.ReferenceX.Clone(), (double[])solver.ReferenceU.Clone(),
                                   solver.Nodes, solver.GlideIntervals, solver.SigmaGlide, solver.SigmaBurn,
-                                  startTime, now, phase, gated);
+                                  startTime, now, phase, gated) { Model = solver.Model as KsaPointMassModel };
     }
 
     private void SetAdmmCaps(int cap)
