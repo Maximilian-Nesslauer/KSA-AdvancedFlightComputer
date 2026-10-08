@@ -232,6 +232,11 @@ public static class Ksa6DofSetup
         LastVacuumThrustN = KsaEnginePerf.VacuumThrust(vehicle);
         LastPressureThrustN = thrust;
 
+        // THE FLOOR AS THE THRUST IT GIVES, not as a fraction of Tmax. The nozzle's back-pressure loss is the same newtons at any throttle, so the minimum throttle gives less than that fraction of full thrust. On the 2026-10-08 boosters, floor x Tmax took 13.3 % throttle to deliver against a real 10 % floor, putting the model's minimum thrust above the weight of a booster that could in fact hover - and its plans climbed off the pad. The model's floor is the real thrust at the minimum throttle over Tmax, both at the same pressure.
+        double floorThrust = KsaEnginePerf.ThrustAtThrottle(vehicle, throttleFloor, LastAmbientPressurePa);
+        if (floorThrust > 0.0 && floorThrust < thrust)
+            throttleFloor = floorThrust / thrust;
+
         // Tmax is the thrust of every engine the craft runs, because no engine is shut down for the landing. The throttle command is T / Tmax of the model, so a plan built against a smaller Tmax would command full throttle for part of the thrust and overshoot every plan.
         // An over-powered vehicle is a real situation, not something to model around. The feasibility panel reports it and names the throttle floor that would work.
 
@@ -357,7 +362,8 @@ public static class Ksa6DofSetup
             GlideSlopeDeg = glideSlopeDeg,
             VzMax = vzMaxMs,
             // Terminal position and speed are SOFT, heavily penalised. A hard terminal says "arrive exactly there, exactly at rest", and when that is not achievable the honest answer is a plan that misses rather than no plan at all - a descending booster cannot decline to land. The weights are high enough that both slacks sit at zero whenever the target is genuinely reachable, so this changes nothing on a normal descent.
-            TerminalMissWeight = 1.0e3,
+            //  POSITION ABOVE SPEED. Both are normalised by the problem's scales (here ~250 m and ~100 m/s at a hand-over), so the weights alone do not say what trades for what. With speed at 1e5 and the miss at 1e3, 1 m/s cost as much as ~270 m of miss, and a squeezed plan stopped at rest 20-30 m over the pad - where a booster that cannot throttle below its weight floats and then climbs (2026-10-08, 17:42 and 17:53). At 1e5 and 1e4, 1 m of miss costs about as much as 4 m/s: a squeezed plan arrives a little fast rather than high, as Falcon 9 lands at ~2 m/s rather than stopping short.
+            TerminalMissWeight = 1.0e5,
             TerminalSpeedWeight = 1.0e4,
             SigmaMin = sigma * 0.15,
             SigmaMax = sigma * 4.0,

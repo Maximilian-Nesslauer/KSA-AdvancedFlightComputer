@@ -456,7 +456,7 @@ public static partial class GuidanceWindow
                                    _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
-                                   out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2))
+                                   out Dynamics6Dof.Params dyn, out _))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1212,6 +1212,9 @@ public static partial class GuidanceWindow
             {
                 SixDofLog.Event(_s, now, $"TOUCHDOWN at alt {x[2]:F1} m, vz {x[5]:F2} m/s, " +
                                      $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
+                // In the game log too: without it a landing reads the same there as an abort.
+                GuidanceLog.Info(vehicle, $"Touchdown guidance: touchdown at {-x[5]:F1} m/s down and {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways, " +
+                                          $"{Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target - engine cut.");
                 ReportLogStop(SixDofLog.Stop(_s));
                 Disengage6Dof(vehicle);
                 _s.Error = "touchdown - engine cut, touchdown guidance disengaged.";
@@ -1594,11 +1597,8 @@ public static partial class GuidanceWindow
                                      _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                      _s.SixDofProximal,
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
-                                     x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2);
+                                     x, xf, out cfg, out dyn, out error);
     }
-
-    /// <summary>The landing burn's thrust acceleration limit, m/s^2, or 0 for none; shared by 3-DOF and 6-DOF.</summary>
-    private static double LandingAccelLimitMs2 => _s.LandingAccelLimitG > 0.0 ? _s.LandingAccelLimitG * StandardGravity : 0.0;
 
     private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                    double[] x, double now)
@@ -1728,7 +1728,9 @@ public static partial class GuidanceWindow
 
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
-        Ksa6DofSetup.ThrottleMargin(thrust, _s.SixDofThrottleFloor, mass, g,
+        // The floor as the thrust it really gives, as the plan now takes it (see Ksa6DofSetup.TryBuild).
+        double floorFraction = Math.Clamp(KsaEnginePerf.ThrustAtThrottle(vehicle, _s.SixDofThrottleFloor, ambientPa) / thrust, 0.0, 1.0);
+        Ksa6DofSetup.ThrottleMargin(thrust, floorFraction, mass, g,
                                     out double twrMin, out double needTilt);
 
         ImGui.SeparatorText("Feasibility");

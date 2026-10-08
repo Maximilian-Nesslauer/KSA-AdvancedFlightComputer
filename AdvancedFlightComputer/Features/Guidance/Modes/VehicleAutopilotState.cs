@@ -615,6 +615,9 @@ public sealed class VehicleAutopilotState
 
     // The hover has compared the thrust at minimum throttle with the weight, at the engage or on the first step with a lit engine.
     public bool TermMinThrustChecked;
+
+    // The hover has cut the engine for a craft rising on its minimum thrust: held off until contact. See StepTerminalHover.
+    public bool TermEngineCut;
     public double GfoldThrottleMin = 0.05;
     public double GfoldThrottleMax = 0.90;
     public double GfoldSlewReg = 0.05;
@@ -633,7 +636,7 @@ public sealed class VehicleAutopilotState
     internal long VehicleHeightNextMs;
 
     /// <summary>
-    /// Largest thrust acceleration a landing burn may PLAN, in g, or 0 for none - a constraint in both the 3-DOF and the 6-DOF solvers, read when they build their problem. A min-fuel burn otherwise lights as late as it can and brakes at full throttle: 5-6 g over two seconds on the 2026-10-08 boosters, where a tenth of a second of lag is metres per second. The 3-DOF's burn tracker may still go past it to correct.
+    /// The thrust acceleration the 3-DOF times its landing burn for, in g, or 0 for none: a constraint on the glide plan that decides when to light, read when its cold solve starts. A min-fuel burn otherwise lights as late as it can and brakes at full throttle - 5-6 g over two seconds on the 2026-10-08 boosters, where a tenth of a second of lag is metres per second. The burn itself, the 3-DOF's re-solves and 6-DOF's, may use the engine's full thrust to correct; see StartThreeDofCold.
     /// </summary>
     public double LandingAccelLimitG = 3.0;
 

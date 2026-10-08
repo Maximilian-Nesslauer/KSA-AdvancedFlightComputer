@@ -84,7 +84,8 @@ public static class Ksa3DofSetup
             AttitudeRateMax = RateMax,
             AttitudeAnchor = true,
             PathSlackWeight = 1e3,
-            TerminalMissWeight = 1e3,
+            // Position above speed, as the 6-DOF's (see Ksa6DofSetup.TryBuild): a squeezed burn should arrive a little fast rather than stop at rest above the pad, which a booster that cannot throttle below its weight cannot recover from.
+            TerminalMissWeight = 1e5,
             TerminalSpeedWeight = 1e4,
             GlideSigmaMax = 400,
             BurnSigmaMin = 1,

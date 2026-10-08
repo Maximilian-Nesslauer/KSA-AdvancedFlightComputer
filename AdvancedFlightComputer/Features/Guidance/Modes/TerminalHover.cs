@@ -15,6 +15,7 @@ public static partial class GuidanceWindow
 {
     // The descent profile, the PID gains, the integrator state and the player's velocity setpoints are all per vehicle (VehicleAutopilotState) - a hovering craft's integrators and nudged setpoints are the last thing that should follow the camera to another vehicle.
     private const double TermILimit = 3.0;           // integrator clamp, m/s2
+    private const double TermRisingMs = 0.3;         // a climb faster than this, on the minimum thrust, is the stop-short cut
 
     // Public because the per-vehicle state holds three of these.
     public struct Pid { public double I, PrevErr; }
@@ -52,6 +53,7 @@ public static partial class GuidanceWindow
         _s.TermPidUp = _s.TermPidE = _s.TermPidN = default;
         _s.TermInit = false;
         _s.TermMinThrustChecked = enginesLit;
+        _s.TermEngineCut = false;
         _s.TermSetE = _s.TermSetN = _s.TermSetUp = 0.0;
         _s.HasCommand = false;
         _s.GfoldThrustStatus = "";
@@ -118,6 +120,13 @@ public static partial class GuidanceWindow
             }
         }
 
+        // After a stop-short cut the engine stays off, upright, to the touchdown StepLanding watches for.
+        if (_s.TermEngineCut)
+        {
+            _s.GfoldThrottle = 0.0;
+            return;
+        }
+
         double3 r = orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(r);
         double3 vSrf = orbit.StateVectors.VelocityCci
@@ -166,6 +175,23 @@ public static partial class GuidanceWindow
         double pressure = KsaEnginePerf.AmbientPressureAt(parent, r.Length() - parent.MeanRadius);
         KsaEnginePerf.ThrustCommand command = KsaEnginePerf.CommandForThrust(
             vehicle, local.Length() * vehicle.TotalMass, pressure);
+
+        // STOPPED SHORT, the rule 6-DOF and the 3-DOF apply: rising while asking for less than the engine's minimum thrust means the craft cannot throttle below its weight - as a landing booster's minimum climbs past it with the last of the propellant - and every second lit takes it higher. The engine is cut and it drops the rest of the way.
+        if (vUp > TermRisingMs && command.Status == KsaEnginePerf.ThrustStatus.BelowMinimum)
+        {
+            double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
+            if (minTwr > 1.0)
+            {
+                _s.TermEngineCut = true;
+                _s.GfoldThrottle = 0.0;
+                _s.CommandDir = up;
+                _s.HasCommand = true;
+                _s.LandingStatus = $"Terminal hover rising at {vUp:F1} m/s {h:F1} m above the pad and cannot throttle below its weight "
+                                 + $"({minTwr:F2} at minimum) - engine cut, dropping to the pad.";
+                GuidanceLog.Info(vehicle, _s.LandingStatus);
+                return;
+            }
+        }
         _s.GfoldThrottle = command.Throttle;
         _s.GfoldThrustStatus = command.Message;
         double3 dirLocal = ClampToCone(local, _s.TermMaxTiltDeg);

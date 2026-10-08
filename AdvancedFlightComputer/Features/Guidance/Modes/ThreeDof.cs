@@ -404,6 +404,9 @@ public static partial class GuidanceWindow
     private static string RefusalReason(Guidance3Dof g)
         => g.ConsecutiveRefusals > 0 && g.Error.Length > 0 ? $" ({g.Error})" : "";
 
+    /// <summary>The thrust acceleration the landing burn is timed for, m/s^2, or 0 for none.</summary>
+    private static double LandingAccelLimitMs2 => _s.LandingAccelLimitG > 0.0 ? _s.LandingAccelLimitG * StandardGravity : 0.0;
+
     /// <summary>A plan's body axis and throttle at a time.</summary>
     private static bool SamplePlan(Plan3Dof plan, double t, out double3 b, out double throttle)
     {
@@ -457,11 +460,11 @@ public static partial class GuidanceWindow
             GlideThrottleCeiling = Math.Clamp(_s.ThreeDofGlideCeiling, 0.1, 1.0),
             BurnThrottleCeiling = Math.Clamp(_s.ThreeDofBurnCeiling, 0.1, 1.0),
         };
-        // The landing limit is the burn's; the glide plan times the ignition under it with headroom to spare (Settings.AccelHeadroom).
+        // THE ACCELERATION LIMIT TIMES THE IGNITION AND NOTHING ELSE. The glide plan, which decides when to light, plans the burn to it, so a booster with thrust to spare lights early and brakes gently instead of at full thrust at the last moment. The burn re-solves, and 6-DOF after them, may use the engine's full thrust: limited there too, a burn that arrived squeezed found missing the site by tens of metres and stopping above the pad cheaper than braking harder (2026-10-08, 18:36: 32 m off, stopped 15 m up).
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
-                                                    _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2));
+                                                    _s.VehicleHeightM, LandingAccelLimitMs2);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
-                                                   _s.VehicleHeightM, LandingAccelLimitMs2);
+                                                   _s.VehicleHeightM);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();
