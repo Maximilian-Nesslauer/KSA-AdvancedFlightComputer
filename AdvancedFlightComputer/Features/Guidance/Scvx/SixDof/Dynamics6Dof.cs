@@ -1,4 +1,5 @@
 using AdvancedFlightComputer.Guidance.Numerics;
+using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 
 namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
@@ -11,7 +12,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.SixDof;
 ///   control  u = [ tdx, tdy, T, tau_roll ]                        (4)
 ///
 ///   rdot = v
-///   vdot = g + R(q) T_body / m           T_body = [tdx, tdy, T]
+///   vdot = g + (R(q) T_body + F_aero) / m      T_body = [tdx, tdy, T]
 ///   qdot = 1/2 q (x) [0, w]              Hamilton, scalar-first
 ///   wdot = I^-1 ( tau - w x (I w) )      Euler's equation
 ///   mdot = -(mdot_0 + alpha * T)
@@ -56,6 +57,14 @@ public static class Dynamics6Dof
         public double Alpha => 1.0 / (Isp * G0);
 
         /// <summary>
+        /// The aerodynamics, or null for none: drag and lift on the body +Z axis from the 3-DOF model's KSAero-sampled tables (KsaPointMassModel.AeroForce), read at the model's height plus <see cref="AeroAltitudeOffset"/>. The velocity is the airspeed, the frame turning with the body as the atmosphere does. Aerodynamic moments are not modelled.
+        /// </summary>
+        public KsaPointMassModel? Aero;
+
+        /// <summary>Altitude of the model's origin - the site - above the body's mean radius, m.</summary>
+        public double AeroAltitudeOffset;
+
+        /// <summary>
         /// Mass flow that does not buy thrust, kg/s: the engine's flow is linear in its throttle, but under back pressure its thrust is not, so the flow over the burn's thrust range is a line that does not pass through zero. 0 is the plain rocket equation, which is right in vacuum.
         /// </summary>
         public double MassFlowOffset = 0.0;
@@ -96,7 +105,17 @@ public static class Dynamics6Dof
         Dual fy = r10 * tdx + r11 * tdy + r12 * T;
         Dual fz = r20 * tdx + r21 * tdy + r22 * T;
 
-        // vdot = g + R(q) T_body / m
+        // vdot = g + (R(q) T_body + F_aero) / m
+        // Drag and lift, on the thrust axis (the body +Z), at the model's height over the site.
+        if (p.Aero != null)
+        {
+            p.Aero.AeroForce(p.AeroAltitudeOffset + x[IR + 2], vx, vy, vz, r02, r12, r22,
+                             out Dual ax, out Dual ay, out Dual az);
+            fx += ax;
+            fy += ay;
+            fz += az;
+        }
+
         xdot[IV + 0] = p.Gx + fx / m;
         xdot[IV + 1] = p.Gy + fy / m;
         xdot[IV + 2] = p.Gz + fz / m;

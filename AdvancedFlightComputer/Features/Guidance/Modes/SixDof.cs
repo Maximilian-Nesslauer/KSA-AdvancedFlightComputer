@@ -449,6 +449,7 @@ public static partial class GuidanceWindow
         TerminalAttitude(x, xf);
 
         double sigmaSeed = _s.Guidance.HasPlan ? SixDofSeedFloor : _s.SixDofEntrySigmaSeed;
+        EnsureBoostbackAero(vehicle, parent);
         if (!Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, nodes, _s.SixDofTiltDeg,
                                    _s.SixDofThrottleFloor, sigmaSeed,
                                    _s.SixDofRateDampShare, _s.SixDofControlSmooth,
@@ -457,7 +458,7 @@ public static partial class GuidanceWindow
                                    x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _,
-                                   floorMargin: _s.LandingPlanFloorMargin))
+                                   floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -479,9 +480,16 @@ public static partial class GuidanceWindow
     /// </summary>
     private static Ksa6DofGuidance ApplyRebuild(RebuildRequest req, Ksa6DofGuidance from,
                                                 double[] x, double now)
+        => ApplyRebuild(req, from, x, now, out _);
+
+    /// <param name="why">Why the reseed was refused - the candidate's own error - or empty.</param>
+    private static Ksa6DofGuidance ApplyRebuild(RebuildRequest req, Ksa6DofGuidance from,
+                                                double[] x, double now, out string why)
     {
         Ksa6DofGuidance next = NewGuidance(req);
-        return next.SeedFrom(from, x, now) ? next : null;
+        bool ok = next.SeedFrom(from, x, now);
+        why = ok ? "" : next.Error;
+        return ok ? next : null;
     }
 
     private static Ksa6DofGuidance NewGuidance(RebuildRequest req)
@@ -499,11 +507,11 @@ public static partial class GuidanceWindow
             return false;
 
         double sigmaWas = _s.Guidance.Sigma;
-        Ksa6DofGuidance next = ApplyRebuild(req, _s.Guidance, x, now);
+        Ksa6DofGuidance next = ApplyRebuild(req, _s.Guidance, x, now, out string why);
         if (next == null)
         {
             SixDofLog.Event(_s, now, $"NODE STEP at alt {x[2]:F0} m FAILED to reseed at {nodes} " +
-                                 $"nodes - staying at {_s.Guidance.Nodes}");
+                                 $"nodes - staying at {_s.Guidance.Nodes}: {why}");
             return false;
         }
 
@@ -708,7 +716,7 @@ public static partial class GuidanceWindow
         _s.PrevV = [x[3], x[4], x[5]];
         _s.PrevT = now;
 
-        // Modelled acceleration: thrust along the body +Z axis, plus the gravity the config was built with (NOT the biased value, or the estimate feeds itself).
+        // Modelled acceleration: thrust along the body +Z axis, the model's own drag and lift, plus the gravity the config was built with (NOT the biased value, or the estimate feeds itself). With the aerodynamics in the model the bias is only what it misses, not the whole of the drag.
         double qw = x[6], qx = x[7], qy = x[8], qz = x[9];
         double zx = 2.0 * (qx * qz + qw * qy);
         double zy = 2.0 * (qy * qz - qw * qx);
@@ -716,9 +724,10 @@ public static partial class GuidanceWindow
         double m = Math.Max(x[13], 1.0);
         double3 g0 = _s.Guidance.BaseGravity;
 
-        double rx = ax - (thrustDelivered / m * zx + g0.X);
-        double ry = ay - (thrustDelivered / m * zy + g0.Y);
-        double rz = az - (thrustDelivered / m * zz + g0.Z);
+        double3 aero = _s.Guidance.ModelAeroAccel(x);
+        double rx = ax - (thrustDelivered / m * zx + g0.X + aero.X);
+        double ry = ay - (thrustDelivered / m * zy + g0.Y + aero.Y);
+        double rz = az - (thrustDelivered / m * zz + g0.Z + aero.Z);
 
         // ~2 s time constant at a 0.02 s step: slow enough to ignore per-frame noise, fast enough to follow drag falling away through the descent.
         double alpha = Math.Clamp(dt / 2.0, 0.0, 1.0);
@@ -1604,13 +1613,15 @@ public static partial class GuidanceWindow
             ? ColdNodesFor(_s.SixDofEntrySigmaSeed)
             : _s.SixDofNodes;
 
+        // The aerodynamics the 3-DOF flies with, sampled now if nothing has yet.
+        EnsureBoostbackAero(vehicle, parent);
         return Ksa6DofSetup.TryBuild(vehicle, parent, siteCci, engageNodes, _s.SixDofTiltDeg,
                                       _s.SixDofThrottleFloor, _s.SixDofEntrySigmaSeed,
                                      _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                      _s.SixDofProximal,
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                      x, xf, out cfg, out dyn, out error,
-                                     floorMargin: _s.LandingPlanFloorMargin);
+                                     floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero);
     }
 
     private static bool Engage6Dof(Vehicle vehicle, IParentBody parent, double3 siteCci,

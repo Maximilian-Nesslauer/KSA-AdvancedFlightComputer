@@ -118,38 +118,10 @@ public sealed record KsaPointMassModel : IPointMassModel
             fz += thrust * bz;
         }
 
-        if (Atmosphere != null && Drag != null)
-        {
-            Dual rho = Atmosphere.Density(altitude);
-            if (rho.V > 0.0)
-            {
-                Dual speed2 = vx * vx + vy * vy + vz * vz;
-                Dual speed = Dual.Sqrt(speed2 + VEps2);
-                Dual hx = vx / speed, hy = vy / speed, hz = vz / speed;
-                Dual qs = 0.5 * rho * speed2 * ReferenceArea;
-
-                // alpha from the tail: cos = -b . v_hat, sin = |p|, with |p| rounded for the lookup only.
-                Dual bv = bx * hx + by * hy + bz * hz;
-                Dual px = bx - bv * hx, py = by - bv * hy, pz = bz - bv * hz;
-                Dual pp = px * px + py * py + pz * pz;
-                Dual pRound = pp / Dual.Sqrt(pp + AlphaRounding * AlphaRounding);
-                Dual alpha = Dual.Atan2(pRound, -bv);
-                Dual mach = TableMach(Atmosphere.Mach(speed), Drag);
-
-                Dual drag = DragScale * qs * Drag.Cd(mach, alpha);
-                fx -= drag * hx;
-                fy -= drag * hy;
-                fz -= drag * hz;
-
-                if (LiftSlope != null)
-                {
-                    Dual lift = LiftScale * qs * LiftSlope.Cd(TableMach(Atmosphere.Mach(speed), LiftSlope), alpha);
-                    fx -= lift * px;
-                    fy -= lift * py;
-                    fz -= lift * pz;
-                }
-            }
-        }
+        AeroForce(altitude, vx, vy, vz, bx, by, bz, out Dual dx, out Dual dy, out Dual dz);
+        fx += dx;
+        fy += dy;
+        fz += dz;
 
         xdot[PointMass3Dof.IR + 0] = vx;
         xdot[PointMass3Dof.IR + 1] = vy;
@@ -160,6 +132,49 @@ public sealed record KsaPointMassModel : IPointMassModel
         // Zero with the engine off either way: the glide holds the throttle at 0, and the table's extension below the minimum throttle is not an unlit engine.
         xdot[PointMass3Dof.IM] = Engine == null ? -(throttle * MassFlow)
             : throttle.V > EngineOnThrottle ? -Engine.MassFlow(throttle) : new Dual(0.0);
+    }
+
+    /// <summary>
+    /// The aerodynamic force, N, on a body with axis b (unit, the thrust direction) moving at v through the air at an altitude above the mean radius: drag along -v_hat and lift along -p, from the tables. Zero with no air or no table.
+    /// The model's own dynamics use it, and so does the 6-DOF's (Dynamics6Dof.Params.Aero), so both planners fly the same aerodynamics: before, the 6-DOF had none, and a constant acceleration estimated at the hand-over's speed stood in for drag and lift that fall away as the booster slows.
+    /// </summary>
+    public void AeroForce(Dual altitude, Dual vx, Dual vy, Dual vz, Dual bx, Dual by, Dual bz,
+                          out Dual fx, out Dual fy, out Dual fz)
+    {
+        fx = default;
+        fy = default;
+        fz = default;
+        if (Atmosphere == null || Drag == null)
+            return;
+        Dual rho = Atmosphere.Density(altitude);
+        if (!(rho.V > 0.0))
+            return;
+
+        Dual speed2 = vx * vx + vy * vy + vz * vz;
+        Dual speed = Dual.Sqrt(speed2 + VEps2);
+        Dual hx = vx / speed, hy = vy / speed, hz = vz / speed;
+        Dual qs = 0.5 * rho * speed2 * ReferenceArea;
+
+        // alpha from the tail: cos = -b . v_hat, sin = |p|, with |p| rounded for the lookup only.
+        Dual bv = bx * hx + by * hy + bz * hz;
+        Dual px = bx - bv * hx, py = by - bv * hy, pz = bz - bv * hz;
+        Dual pp = px * px + py * py + pz * pz;
+        Dual pRound = pp / Dual.Sqrt(pp + AlphaRounding * AlphaRounding);
+        Dual alpha = Dual.Atan2(pRound, -bv);
+        Dual mach = TableMach(Atmosphere.Mach(speed), Drag);
+
+        Dual drag = DragScale * qs * Drag.Cd(mach, alpha);
+        fx -= drag * hx;
+        fy -= drag * hy;
+        fz -= drag * hz;
+
+        if (LiftSlope != null)
+        {
+            Dual lift = LiftScale * qs * LiftSlope.Cd(TableMach(Atmosphere.Mach(speed), LiftSlope), alpha);
+            fx -= lift * px;
+            fy -= lift * py;
+            fz -= lift * pz;
+        }
     }
 
     public double DynamicPressure(ReadOnlySpan<double> x)

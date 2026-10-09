@@ -157,6 +157,31 @@ public sealed class Ksa6DofGuidance
     ///  Measured on a real descent, the model was short by about 2.2 m/s^2 in the vertical - a fitted 10.3% thrust shortfall on top of gravity being 9.4% low (10.74 measured against 9.82 from Mu/r^2). That is roughly a fifth of the vehicle's net climb authority, applied continuously, which is more than enough to turn an approach into an overshoot and then an orbit.
     ///  Estimating the RESIDUAL rather than any individual term is deliberate: it needs no theory about which of gravity, thrust calibration or aerodynamics is responsible, and it picks up drag for free - including the way drag falls off as speed comes off, since the estimate simply follows it down.
     /// </summary>
+    /// <summary>
+    /// The model's aerodynamic acceleration at state x (model frame), m/s^2 - zero with no aero model. What the bias estimator takes off the measured acceleration before calling the rest unmodelled.
+    /// </summary>
+    public double3 ModelAeroAccel(double[] x)
+    {
+        if (_dyn.Aero == null || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
+            return default;
+        double qw = x[6], qx = x[7], qy = x[8], qz = x[9];
+        double n = Math.Sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+        if (!(n > 0.0))
+            return default;
+        qw /= n; qx /= n; qy /= n; qz /= n;
+        _dyn.Aero.AeroForce(_dyn.AeroAltitudeOffset + x[2], x[3], x[4], x[5],
+                            2.0 * (qx * qz + qw * qy), 2.0 * (qy * qz - qw * qx), 1.0 - 2.0 * (qx * qx + qy * qy),
+                            out var fx, out var fy, out var fz);
+        double m = x[Dynamics6Dof.IM];
+        return new double3(fx.V / m, fy.V / m, fz.V / m);
+    }
+
+    /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
+    public double LateralTorquePerNewton => _dyn.LArm * _cfg.TanGimbal;
+
+    /// <summary>Whether the model carries aerodynamics.</summary>
+    public bool HasAero => _dyn.Aero != null;
+
     /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
     public double3 AccelBias { get; private set; }
 
@@ -487,12 +512,9 @@ public sealed class Ksa6DofGuidance
         us = new double[_n * NU];
         ResamplePlan(_planX, _planU, _n, _planSigma, elapsed, _n, dtNew, xs, us);
 
-        // Seed node 0 with the MEASURED state. It is what the equality will force anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle rather than at the old plan's prediction for now.
-        // Every later node's MASS moves with node 0's: the engine burns the same whatever the mass, so the shift keeps the seed's mass channel as consistent as the plan was. Moving node 0 alone put the whole difference - the tracker flies off the plan's thrust - into the first intervals' defect, and the re-solves were refused on mass (headless, 2026-10-08: 90-141 kg against 20).
-        double dm = x0[Dynamics6Dof.IM] - xs[Dynamics6Dof.IM];
-        Array.Copy(x0, 0, xs, 0, NX);
-        for (int k = 1; k < _n; k++)
-            xs[k * NX + Dynamics6Dof.IM] += dm;
+        // Seed node 0 with the MEASURED state, and carry the rest of the reference with it: position by the offset plus the velocity offset times time, velocity and mass by their offsets - the same re-anchoring the spread cold solve does between its iterations (ColdReferenceShift). It is what the equality will force at node 0 anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle.
+        // REPLACING NODE 0 ALONE put the whole difference between the vehicle and its plan into the first interval's defect. No vehicle flies a plan exactly, and once it was a few m/s off, the first interval asked for a velocity jump far outside the trust region: every warm re-solve was refused, the next started from the same seed, and 6-DOF flew its first plan open loop to the ground (headless, 2026-10-08: 0 of 123 re-solves accepted, refused on vx 6-9 m/s at interval 0).
+        ColdReferenceShift.Apply(xs, _n, sigmaNew, x0);
 
         // Put the resampled plan on the MEASUREMENT quaternion branch. Without this a sign flip in the measured attitude - a no-op physically - lands as ~1.5 of quaternion defect at interval 0 and gets the plan refused every cycle until the circuit breaker throws it away. See AlignQuaternionBranch.
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
@@ -747,8 +769,8 @@ public sealed class Ksa6DofGuidance
         ResamplePlan(prev._planX, prev._planU, prev._n, prev._planSigma, elapsed, _n,
                      sigma / (_n - 1), xs, us);
 
-        // Node 0 is the measured state exactly, for the same reason as in Plan: the equality and the trust region leave no slack there at all.
-        Array.Copy(x0, 0, xs, 0, NX);
+        // Node 0 is the measured state exactly, for the same reason as in Plan: the equality and the trust region leave no slack there at all. The rest moves with it, as in BuildShiftedSeed, so the resampled plan is not refused for the jump from the vehicle to where the old plan thought it would be.
+        ColdReferenceShift.Apply(xs, _n, sigma, x0);
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         _xf = (double[])prev._xf.Clone();

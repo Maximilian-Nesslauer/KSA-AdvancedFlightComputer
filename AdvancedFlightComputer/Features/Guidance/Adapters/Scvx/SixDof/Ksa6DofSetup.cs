@@ -7,6 +7,7 @@ using BepuUtilities;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
+using AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
 
 /// <summary>
 /// Builds the 6-DOF solver's configuration from the LIVE vehicle and body, instead of the 6dof.py mirror values Scvx6DofConfig defaults to.
@@ -91,9 +92,10 @@ public static class Ksa6DofSetup
             if (gc.Data.MaximumThrust <= best)
                 continue;
             best = gc.Data.MaximumThrust;
-            float3 d = gc.Data.ThrustPosVehicleAsmb - com;
+            // To the gimbal's PIVOT, which a deflected nozzle swings about: the model's torque is LArm times the side force, and the side force acts on the pivot's arm, not the thrust point's (see KsaTvcAllocator.FillColumns).
+            double3 d = KsaTvcAllocator.GimbalPivot(gc) - new double3(com.X, com.Y, com.Z);
             // Negative because the engine sits at -Z in the model's body frame; the model wants the magnitude of that offset.
-            arm = Math.Abs(double3.Dot(new double3(d.X, d.Y, d.Z), mz));
+            arm = Math.Abs(double3.Dot(d, mz));
         }
         return arm;
     }
@@ -110,54 +112,50 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
-    /// Peak roll torque the vehicle can actually produce, in N*m - the model's TauRollMax. Comes from the allocator's honest capability figure (torque at the point some gimbal saturates), NOT from KSA's TvcTorqueAuthority, which sums absolute values and so assumes every gimbal serves roll maximally at once. Planning against an optimistic bound would produce a trajectory the vehicle cannot fly.
+    /// Peak roll torque the vehicle can actually produce, in N*m, at PlanningThrust - the model's TauRollMax before it is scaled to the plan's thrust. See TorqueAlong.
     /// </summary>
     public static double RollTorqueLimit(Vehicle vehicle)
     {
-        GimbalController[] gimbals = KsaGimbalControl.PlanningGimbals(vehicle);
-        if (gimbals.Length == 0)
-            return 0.0;
-
-        var thrusts = new double[gimbals.Length];
-        for (int i = 0; i < gimbals.Length; i++)
-            thrusts[i] = gimbals[i].Data.MaximumThrust;
-
-        // Vehicle's own CoM, not the FlightComputer's copy: the FC field is only refreshed by ReadMeasurements, so at engage time it can still be zero - which would silently measure the engine arm from the assembly origin instead of the centre of mass and hand the solver a wrong LArm.
-        float3 com = vehicle.CenterOfMassAsmbF;
-        var commands = new double[2 * gimbals.Length];
-        TvcAllocationResult a = KsaTvcAllocator.Solve(gimbals, thrusts, com, default, commands);
-
-        // MaxTorque is in KSA body axes; roll is about the model's +Z.
         KsaFrameBridge.BodyAxes(vehicle, out _, out _, out double3 mz);
-        return Math.Abs(a.MaxTorque.X * mz.X + a.MaxTorque.Y * mz.Y + a.MaxTorque.Z * mz.Z);
+        return TorqueAlong(vehicle, mz);
     }
 
     /// <summary>
-    /// Peak LATERAL (pitch/yaw) torque the vehicle can actually produce, N*m.
-    ///  This matters more than it looks. The model bounds lateral torque implicitly as LArm * Tmax * tan(gimbal) - a nominal geometry product that assumes ALL the thrust gimbals through the full angle on the full arm. A real vehicle rarely obliges: some engines do not gimbal at all, and the binding gimbal limit may belong to a small vernier. If that product overstates the truth, the solver plans a trajectory needing torque the allocator simply cannot deliver, the allocator saturates, and the vehicle does not fly its own plan - with nothing in the numbers to say why.
-    ///  Approximate: MaxTorque is a per-KSA-axis figure rather than a tensor, so each model lateral axis is scored by how much it projects onto each KSA axis. Erring toward the conservative (min of the two lateral axes) is the right direction - planning inside real capability.
+    /// Peak LATERAL (pitch/yaw) torque the vehicle can actually produce, N*m, at PlanningThrust: the smaller of the two model lateral axes. See TorqueAlong.
+    ///  This matters more than it looks. The model bounds lateral torque as LArm * T * tan(gimbal), and if that overstates the truth the solver plans a trajectory needing torque the allocator cannot deliver, the allocator saturates, and the vehicle does not fly its own plan - with nothing in the numbers to say why.
     /// </summary>
     public static double LateralTorqueLimit(Vehicle vehicle)
     {
+        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out _);
+        return Math.Min(TorqueAlong(vehicle, mx), TorqueAlong(vehicle, my));
+    }
+
+    /// <summary>
+    /// The torque the allocator actually delivers along one model axis (KSA body coordinates), N*m, with every planning gimbal at its MaximumThrust: it is asked for far more than it has, and what it hands back along that axis is the capability.
+    ///  THAT, AND NOT TvcAllocationResult.MaxTorque. MaxTorque is a per-KSA-axis figure that every gimbal could reach on its own, and it came out twice what the allocator delivers in any one direction: an over-asked allocator keeps the demand's direction and scales it down until the first gimbal saturates, so the deliverable torque is where that happens. Planned against MaxTorque, the 2026-10-08 booster's torques were scaled to about half by the allocator at every step and it never flew the attitude its plan turned on (measured live: 0.135 m of pitch torque per newton of thrust against MaxTorque's 0.268, 0.041 of roll against 0.088). The shared deflection is not the binding thing: 70 % of the pitch capability with 70 % of the roll fits.
+    /// </summary>
+    public static double TorqueAlong(Vehicle vehicle, double3 axis)
+    {
         GimbalController[] gimbals = KsaGimbalControl.PlanningGimbals(vehicle);
-        if (gimbals.Length == 0)
+        double length = axis.Length();
+        if (gimbals.Length == 0 || !(length > 0.0))
             return 0.0;
 
         var thrusts = new double[gimbals.Length];
+        double total = 0.0;
         for (int i = 0; i < gimbals.Length; i++)
+        {
             thrusts[i] = gimbals[i].Data.MaximumThrust;
+            total += thrusts[i];
+        }
 
+        // Vehicle's own CoM, not the FlightComputer's copy: the FC field is only refreshed by ReadMeasurements, so at engage time it can still be zero - which would silently measure the arm from the assembly origin instead of the centre of mass.
+        double3 unit = axis / length;
         var commands = new double[2 * gimbals.Length];
-        TvcAllocationResult a = KsaTvcAllocator.Solve(
-            gimbals, thrusts, vehicle.CenterOfMassAsmbF, default, commands);
-
-        KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out _);
-        double Along(double3 axis) =>
-            Math.Abs(axis.X) * Math.Abs(a.MaxTorque.X) +
-            Math.Abs(axis.Y) * Math.Abs(a.MaxTorque.Y) +
-            Math.Abs(axis.Z) * Math.Abs(a.MaxTorque.Z);
-
-        return Math.Min(Along(mx), Along(my));
+        // Far beyond anything the gimbals can give - thrust times a kilometre - so the result is the saturation point.
+        TvcAllocationResult a = KsaTvcAllocator.Solve(gimbals, thrusts, vehicle.CenterOfMassAsmbF,
+                                                      unit * (Math.Max(total, 1.0) * 1000.0), commands);
+        return Math.Max(double3.Dot(a.AchievedTorque, unit), 0.0);
     }
 
     /// <summary>
@@ -220,7 +218,8 @@ public static class Ksa6DofSetup
                                 double glideSlopeDeg, double vzMaxMs,
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
-                                out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0)
+                                out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
+                                KsaAeroSweep.Result aero = null)
     {
         cfg = null!;
         dyn = null!;
@@ -349,6 +348,19 @@ public static class Ksa6DofSetup
             G0 = G0,
             Isp = 1.0 / (alpha * G0),
             MassFlowOffset = flowOffset,
+            // THE AERODYNAMICS, from the same KSAero-sampled tables the 3-DOF flies (Ksa3DofSetup.BuildModel), read at the site's altitude plus the model's height. Without them the model had none, and the bias estimate stood in: a constant acceleration measured at the hand-over's ~90 m/s - several m/s^2 of drag and lift - that the plan leaned on to brake, and that fell away as the booster slowed (2026-10-08: it crossed the site still moving 13 m/s sideways).
+            Aero = aero?.Table != null
+                ? new KsaPointMassModel
+                {
+                    Atmosphere = aero.Atmosphere,
+                    Drag = aero.Table,
+                    LiftSlope = aero.LiftTable != null
+                        ? KsaPointMassModel.LiftSlopeTable(aero.MachGrid, aero.AlphaGridDeg, aero.LiftTable)
+                        : null,
+                    ReferenceArea = aero.ReferenceArea,
+                }
+                : null,
+            AeroAltitudeOffset = siteAltAsl,
             LArm = arm,
             Ixx = ixx, Iyy = iyy, Izz = izz,
         };
