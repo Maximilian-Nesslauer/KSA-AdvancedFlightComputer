@@ -45,7 +45,7 @@ public sealed class Linearisation3Dof
 ///   state bounds from node 1;  b_N-1 = b_f;  |b_k+1 - b_k| &lt;= rate sigma dtau;  a . b_0 &gt;= cos(theta)
 ///   trust box on x, u and both sigmas;  sigma bounds
 ///
-/// The path constraints - the cone, the retrograde row, the bounds and the rate cone - take an L1 slack each when the config makes them soft; see Scvx3DofConfig.PathSlackWeight.
+/// The path constraints - the cone, the retrograde row, the bounds, the rate cone and the turn-acceleration cone - take an L1 slack each when the config makes them soft; see Scvx3DofConfig.PathSlackWeight.
 ///
 /// with g_k = sigma f0_k + sigma_bar (A_k dx_k + B_k du_k) in each phase's own sigma and dtau. The glide's B has its throttle column zeroed: the engine is off there, so its throttle is not a control of the glide's dynamics.
 ///
@@ -62,12 +62,13 @@ public sealed class Scvx3DofSubproblemScs
     private double[] _xs => _cfg.XScale;
 
     private readonly int _oX, _oU, _oW, _iSigB, _iSigG, _oTm, _nTmPos, _nTmVel, _nTm, _nVars;
-    private readonly int _oSa, _oSr, _oSb, _oSw, _oSn, _oSc, _nSa, _nSr, _nSb, _nSw, _nSn, _nSc, _nSlack;
+    private readonly int _oSa, _oSr, _oSb, _oSw, _oSn, _oSc, _oSt, _nSa, _nSr, _nSb, _nSw, _nSn, _nSc, _nSt, _nSlack;
     private readonly int _nAc;
     private readonly int[] _minChannels, _maxChannels;
     private readonly bool _terminalAttitude, _rateLimit;
     private readonly int _nEq, _lDim, _nRows;
     private readonly int[] _socDims;
+    private readonly bool _accelLimit;
 
     private readonly CcsAssembler _A;
     private readonly CcsAssembler _P;
@@ -101,6 +102,7 @@ public sealed class Scvx3DofSubproblemScs
         _dtauB = 1.0 / cfg.BurnIntervals;
         _terminalAttitude = cfg.TerminalAttitude != null;
         _rateLimit = cfg.AttitudeRateMax > 0.0;
+        _accelLimit = cfg.AttitudeAccelMax > 0.0;
 
         _minChannels = Enumerable.Range(0, NX).Where(i => double.IsFinite(cfg.StateMin[i])).ToArray();
         _maxChannels = Enumerable.Range(0, NX).Where(i => double.IsFinite(cfg.StateMax[i])).ToArray();
@@ -124,14 +126,17 @@ public sealed class Scvx3DofSubproblemScs
         // The acceleration limit: one row per burn node, and its slack when soft.
         _nAc = cfg.AccelMax > 0.0 ? _n - _k : 0;
         _nSc = soft ? _nAc : 0;
-        _nSlack = _nSa + _nSr + _nSb + _nSw + _nSn + _nSc;
+        // The turn-acceleration cones: one per node, node 0's from the measured turn rate and the last's to a stop.
+        _nSt = soft && _accelLimit ? _n : 0;
+        _nSlack = _nSa + _nSr + _nSb + _nSw + _nSn + _nSc + _nSt;
         _oSa = _oTm + _nTm;
         _oSr = _oSa + _nSa;
         _oSb = _oSr + _nSr;
         _oSw = _oSb + _nSb;
         _oSn = _oSw + _nSw;
         _oSc = _oSn + _nSn;
-        _nVars = _oSc + _nSc;
+        _oSt = _oSc + _nSc;
+        _nVars = _oSt + _nSt;
 
         int sigmas = _k > 0 ? 2 : 1;
         _nEq = NX + 6 + (_terminalAttitude ? 3 : 0) + (_n - 1) * NX
@@ -145,7 +150,8 @@ public sealed class Scvx3DofSubproblemScs
               + (cfg.AttitudeAnchor ? 1 : 0)
               + _nTm + _nSlack;
         int rateCones = _rateLimit ? _n - 1 : 0;
-        _socDims = new int[_n + rateCones];
+        int accelCones = _accelLimit ? _n : 0;
+        _socDims = new int[_n + rateCones + accelCones];
         Array.Fill(_socDims, 4);
         _nRows = _nEq + _lDim + _socDims.Sum();
 
@@ -194,13 +200,14 @@ public sealed class Scvx3DofSubproblemScs
     /// <param name="alphaRadius">Per node: the bound on |p|, or 0 or less where the angle-of-attack cone and the retrograde row do not apply.</param>
     /// <param name="anchor">Direction node 0's body axis is held near, 3 long; ignored unless the config allocates the row. A zero vector disables it for this solve.</param>
     /// <param name="anchorCos">cos of the cone's half-angle about <paramref name="anchor"/>.</param>
+    /// <param name="anchorRate">The body axis's rate of change at node 0, 1/s, 3 long, that the turn-acceleration cone starts from; empty when it is not known, which leaves node 0's cone vacuous.</param>
     /// <param name="thrustSlope">Per node: the thrust law's slope in throttle at the reference, N, for the acceleration limit; null leaves its rows vacuous.</param>
     /// <param name="lossConstant">Per node: the rest of the thrust law linearised about the reference, T ~ thrustSlope u - (lossConstant + lossGradient . r), N.</param>
     /// <param name="lossGradient">Per node, 3 long: that loss's gradient in position, N/m.</param>
     public void Assemble(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf,
                          double[] xbar, double[] ubar, double sigGBar, double sigBBar, double tr,
                          Linearisation3Dof lin, double[] alphaRadius,
-                         ReadOnlySpan<double> anchor, double anchorCos,
+                         ReadOnlySpan<double> anchor, double anchorCos, ReadOnlySpan<double> anchorRate,
                          double[]? thrustSlope, double[] lossConstant, double[] lossGradient)
     {
         if (_frozen) { _A.BeginRefill(); _P.BeginRefill(); }
@@ -212,7 +219,7 @@ public sealed class Scvx3DofSubproblemScs
         int row = AssembleEqualities(x0, xf, xbar, ubar, sigGBar, sigBBar, lin);
         if (row != _nEq)
             throw new InvalidOperationException($"equality rows: emitted {row}, expected {_nEq}");
-        row = AssembleCone(row, xbar, ubar, sigGBar, sigBBar, tr, lin, alphaRadius, anchor, anchorCos,
+        row = AssembleCone(row, xbar, ubar, sigGBar, sigBBar, tr, lin, alphaRadius, anchor, anchorCos, anchorRate,
                            thrustSlope, lossConstant, lossGradient);
         if (row != _nRows)
             throw new InvalidOperationException($"cone rows: emitted {row}, expected {_nRows}");
@@ -439,7 +446,7 @@ public sealed class Scvx3DofSubproblemScs
 
     private int AssembleCone(int row, double[] xbar, double[] ubar, double sigGBar, double sigBBar,
                              double tr, Linearisation3Dof lin, double[] alphaRadius,
-                             ReadOnlySpan<double> anchor, double anchorCos,
+                             ReadOnlySpan<double> anchor, double anchorCos, ReadOnlySpan<double> anchorRate,
                              double[]? thrustSlope, double[] lossConstant, double[] lossGradient)
     {
         // Throttle box over the burn: a scalar interval, convex because the attitude carries the direction (3dof.py README section 2b).
@@ -590,6 +597,70 @@ public sealed class Scvx3DofSubproblemScs
                     _b[row++] = 0.0;
                 }
             }
+
+        // TURN ACCELERATION: the body axis's second difference within accel * dt^2 at every node. Node 0 continues the measured turn rate, as if the axis had been at b_0 - rate * dt one interval before it; the last node stops, as if it held still one interval after. Each head is accel * dtau^2 * (2 sigma_bar sigma - sigma_bar^2), the tangent of accel * (sigma dtau)^2 at the reference, which lies under it; the join between the glide and the burn, where the two intervals differ, is weighted by the reference's lengths. See Scvx3DofConfig.AttitudeAccelMax.
+        if (_accelLimit)
+        {
+            double accel = _cfg.AttitudeAccelMax;
+            bool rateKnown = anchorRate.Length == 3;
+            for (int k = 0; k < _n; k++)
+            {
+                bool join = _k > 0 && k == _k;
+                int interval = k == _n - 1 ? _n - 2 : k;   // node 0 and the interior take the interval after them, the last node the one before
+                bool glide = interval < _k;
+                int sigCol = glide ? _iSigG : _iSigB;
+                double dtau = glide ? _dtauG : _dtauB, sigBar = glide ? sigGBar : sigBBar;
+                bool on = k > 0 || rateKnown;
+
+                // Head.
+                if (join)
+                {
+                    double h1 = sigGBar * _dtauG, h2 = sigBBar * _dtauB;
+                    if (_nSt > 0) AddA(row, _oSt + k, -1.0);
+                    _b[row++] = accel * h1 * h2;
+                }
+                else
+                {
+                    AddA(row, sigCol, on ? -2.0 * accel * dtau * dtau * sigBar : 0.0);
+                    if (_nSt > 0) AddA(row, _oSt + k, -1.0);
+                    _b[row++] = on ? -accel * dtau * dtau * sigBar * sigBar : 1.0;
+                }
+
+                // Tail: the second difference.
+                for (int j = 0; j < 3; j++)
+                {
+                    int ib = PointMass3Dof.IB + j;
+                    if (k == 0)
+                    {
+                        double h0 = sigBar * dtau;
+                        AddA(row, IU(1, ib), on ? -1.0 : 0.0);
+                        AddA(row, IU(0, ib), on ? 1.0 : 0.0);
+                        _b[row++] = on ? -anchorRate[j] * h0 : 0.0;
+                    }
+                    else if (k == _n - 1)
+                    {
+                        AddA(row, IU(k - 1, ib), -1.0);
+                        AddA(row, IU(k, ib), 1.0);
+                        _b[row++] = 0.0;
+                    }
+                    else if (join)
+                    {
+                        double h1 = sigGBar * _dtauG, h2 = sigBBar * _dtauB, avg = 0.5 * (h1 + h2);
+                        AddA(row, IU(k + 1, ib), -h1 / avg);
+                        AddA(row, IU(k, ib), (h1 + h2) / avg);
+                        AddA(row, IU(k - 1, ib), -h2 / avg);
+                        _b[row++] = 0.0;
+                    }
+                    else
+                    {
+                        AddA(row, IU(k + 1, ib), -1.0);
+                        AddA(row, IU(k, ib), 2.0);
+                        AddA(row, IU(k - 1, ib), -1.0);
+                        _b[row++] = 0.0;
+                    }
+                }
+            }
+        }
 
         return row;
     }

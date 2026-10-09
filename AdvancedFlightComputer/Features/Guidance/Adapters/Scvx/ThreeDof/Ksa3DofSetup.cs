@@ -16,6 +16,20 @@ public static class Ksa3DofSetup
     /// <summary>Attitude rate the plans may ask of the vehicle, rad/s.</summary>
     public const double RateMax = 10.0 * Math.PI / 180.0;
 
+    /// <summary>Share of the vehicle's turn acceleration the plan may use, the rest left to the attitude loop that follows it - the same idea as the throttle ceilings.</summary>
+    public const double TurnAccelShare = 0.75;
+
+    /// <summary>
+    /// The turn acceleration the entry guidance plans to, rad/s^2: <see cref="TurnAccelShare"/> of what KSA's flight computer says the RCS gives about the weaker lateral control axis - the authority the vehicle has with its engines off, which is how it flies the glide, and a floor under the burn, where the gimbals add theirs. Not the gimbals': how the vehicle turns is not this solver's to model (see Scvx3DofConfig.AttitudeAccelMax). 0, no limit, when the flight computer reports none.
+    /// </summary>
+    public static double TurnAccelLimit(Vehicle vehicle)
+    {
+        FlightComputer fc = vehicle?.FlightComputer;
+        if (fc == null) return 0.0;
+        double rcs = Math.Min(fc.RcsTorqueAuthority.Y, fc.RcsTorqueAuthority.Z);
+        return rcs > 0.0 && double.IsFinite(rcs) ? TurnAccelShare * rcs : 0.0;
+    }
+
     /// <summary>
     /// The planner's model of this vehicle over this body, in the site frame: central gravity and the frame's rotation from the body, the aerodynamics from the boostback's sweep, and the lit engines' thrust and flow sampled from the game over throttle and pressure (<see cref="EngineTable"/>).
     /// </summary>
@@ -95,9 +109,11 @@ public static class Ksa3DofSetup
     /// </summary>
     /// <param name="comFloorM">The CoM's height over the site with the legs on the ground - the vehicle height - which is where the ground is for a plan that flies the CoM.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the burn may plan, m/s^2, or 0 for none; see Scvx3DofConfig.AccelMax.</param>
+    /// <param name="turnAccelRadS2">Largest turn acceleration the plan may use, rad/s^2, or 0 for none; see Scvx3DofConfig.AttitudeAccelMax and TurnAccelLimit.</param>
     /// <param name="floorMargin">Throttle the plan keeps in hand above the engines' minimum, for the burn tracker; see VehicleAutopilotState.LandingPlanFloorMargin.</param>
     public static Scvx3DofConfig Config(Vehicle vehicle, int nodes, int glideIntervals, double alphaMaxDeg,
-                                        double comFloorM = 0.0, double accelMaxMs2 = 0.0, double floorMargin = 0.0)
+                                        double comFloorM = 0.0, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
+                                        double turnAccelRadS2 = 0.0)
     {
         var min = new double[PointMass3Dof.NX];
         var max = new double[PointMass3Dof.NX];
@@ -120,6 +136,7 @@ public static class Ksa3DofSetup
             StateMax = max,
             TerminalAttitude = [0, 0, 1],
             AttitudeRateMax = RateMax,
+            AttitudeAccelMax = Math.Max(turnAccelRadS2, 0.0),
             AttitudeAnchor = true,
             PathSlackWeight = 1e3,
             // Position above speed, as the 6-DOF's (see Ksa6DofSetup.TryBuild): a squeezed burn should arrive a little fast rather than stop at rest above the pad, which a booster that cannot throttle below its weight cannot recover from.

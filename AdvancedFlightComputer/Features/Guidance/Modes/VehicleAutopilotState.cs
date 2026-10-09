@@ -1282,6 +1282,17 @@ public sealed class VehicleAutopilotState
     public double ThreeDofSmoothTau = 0.05;
 
     /// <summary>
+    /// Largest turn acceleration the entry guidance plans to, deg/s^2: 0 for the vehicle's own (Ksa3DofSetup.TurnAccelLimit, three quarters of its engine-off RCS authority), negative for no limit. Read when a cold solve starts. A plan held to a turn rate alone changes it instantly: on the 2026-10-09 booster it swung 24 deg at ignition and flicked upright in the last second, at several times the 3-4.6 deg/s^2 the booster has.
+    /// </summary>
+    public double ThreeDofTurnAccelDegS2 = 0.0;
+
+    /// <summary>The turn acceleration the running entry guidance plans to, deg/s^2, 0 for none: a readout.</summary>
+    public double ThreeDofTurnAccelInUse;
+
+    /// <summary>How fast the command is turning towards the burn's opening attitude between the lock and ignition, rad/s; 0 outside it.</summary>
+    internal double ThreeDofLockTurn;
+
+    /// <summary>
     /// Highest throttle the plan may use before ignition is committed, and after; the burn tracker may use the rest up to full. Read when a cold solve starts, so a change applies from the next engage. See Guidance3Dof.Settings.GlideThrottleCeiling.
     /// </summary>
     public double ThreeDofGlideCeiling = ThreeDofDefaults.GlideThrottleCeiling;

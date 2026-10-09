@@ -235,6 +235,9 @@ public static partial class GuidanceWindow
 
         // The command a new plan should open on: the one last sent, or the vehicle's own attitude before the first.
         double3 anchor = _s.ThreeDofCommandLocal.Length() > 0.5 ? _s.ThreeDofCommandLocal : new double3(att[0], att[1], att[2]);
+        // And the turn it is making, w x b, which the turn-acceleration limit could continue from. NOT PASSED for now: offline (--3dof-mpc --turn-accel 3), starting each plan from the command's turn rate had 38-100 re-solves a case refused against 4-34 without it, the command's rate carrying the burn tracker's corrections. The locked burn still starts from the turn its ignition prediction ends on.
+        double3 anchorTurn = _s.ThreeDofCommandLocal.Length() > 0.5 ? double3.Cross(frame.VecToLocal(_s.CommandRate), anchor) : default;
+        const bool turnKnown = false;
 
         if (!ThreeDofBusy)
         {
@@ -263,10 +266,11 @@ public static partial class GuidanceWindow
                 _s.ThreeDofLastUpdate = now;
                 KsaPointMassModel model = _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal);
                 double[] x0 = x, a0 = [anchor.X, anchor.Y, anchor.Z];
+                double[] r0 = turnKnown ? [anchorTurn.X, anchorTurn.Y, anchorTurn.Z] : null;
                 _s.ThreeDofWorker.TryRun(() =>
                 {
                     g.Model = model;
-                    g.Update(x0, a0, now);
+                    g.Update(x0, a0, now, r0);
                 });
             }
         }
@@ -334,15 +338,26 @@ public static partial class GuidanceWindow
             return false;
         if (plan.Phase == Phase3Dof.Locked && now < plan.IgnitionTime)
         {
-            // Ignition locked: the burn's opening attitude is ahead of us. Turn towards it at the rate limit the ignition prediction assumed, so the burn opens where the vehicle actually is.
+            // Ignition locked: the burn's opening attitude is ahead of us. Turn towards it as the ignition prediction assumed, so the burn opens where the vehicle actually is: speeding up and slowing down at the turn-acceleration limit, as fast as it can still stop on the opening attitude, capped at the rate limit (Guidance3Dof.PredictIgnition). Turned at the rate limit from a standing start, the 2026-10-09 booster was 14 deg off its command by ignition.
             double3 from = _s.ThreeDofCommandLocal.Length() > 0.5 ? _s.ThreeDofCommandLocal : anchor;
-            double3 next = SlewToward(from, b0, Ksa3DofSetup.RateMax * dt, out bool turning);
+            double accel = _s.ThreeDofTurnAccelInUse * Math.PI / 180.0;
+            double turnSpeed = Ksa3DofSetup.RateMax;
+            if (accel > 0.0)
+            {
+                double angle = Math.Acos(Math.Clamp(double3.Dot(from.NormalizeOrZero(), b0.NormalizeOrZero()), -1.0, 1.0));
+                double want = Math.Min(Ksa3DofSetup.RateMax, Math.Sqrt(2.0 * accel * angle));
+                double was = _s.ThreeDofLockTurn;
+                turnSpeed = was < want ? Math.Min(want, was + accel * dt) : Math.Max(want, was - accel * dt);
+            }
+            _s.ThreeDofLockTurn = turnSpeed;
+            double3 next = SlewToward(from, b0, turnSpeed * dt, out bool turning);
             wantLocal = next;
-            rateLocal = turning && dt > 1e-9 ? double3.Cross(from, next).NormalizeOrZero() * Ksa3DofSetup.RateMax : default;
+            rateLocal = turning && dt > 1e-9 ? double3.Cross(from, next).NormalizeOrZero() * turnSpeed : default;
             smooth = false;
         }
         else
         {
+            _s.ThreeDofLockTurn = 0.0;
             wantLocal = b0;
             rateLocal = double3.Cross(b0, b1) / ThreeDofRateProbeS;
             smooth = true;
@@ -465,10 +480,15 @@ public static partial class GuidanceWindow
         };
         // THE ACCELERATION LIMIT HOLDS THE WHOLE BURN, and the glide plan times the ignition under it with headroom to spare (Settings.AccelHeadroom). Timed to it but not held to it, as from 8d26ebd, the burn re-solves and 6-DOF after them were free to coast on minimum thrust and brake at the end: the 2026-10-09 7 t booster was handed over at 182 m and 88 m/s, a 3 g burn's height, fell on its floor to 27 m at 48 m/s and planned up to 13.7 g for the last second - a burn too short for any node count the solver could keep up with. The limit had been taken off after a burn stopped 15 m up and 32 m off with it binding (2026-10-08, 18:36), but that plan weighted terminal speed 100x above the miss, which alone makes stopping above the pad the cheap answer; the same commit put the miss above the speed. The limit is soft, so a burn that needs more to stop still gets it.
         // Both plan from above the engines' minimum throttle, so the tracker has thrust to take off as well as to add; see LandingPlanFloorMargin.
+        // Both turn no faster than the vehicle can change its turn rate; see ThreeDofTurnAccelDegS2.
+        double turn = _s.ThreeDofTurnAccelDegS2 > 0.0 ? _s.ThreeDofTurnAccelDegS2 * Math.PI / 180.0
+            : _s.ThreeDofTurnAccelDegS2 < 0.0 ? 0.0
+            : Ksa3DofSetup.TurnAccelLimit(vehicle);
+        _s.ThreeDofTurnAccelInUse = turn * 180.0 / Math.PI;
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
-                                                    _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin);
+                                                    _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin, turn);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
-                                                   _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin);
+                                                   _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin, turn);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();

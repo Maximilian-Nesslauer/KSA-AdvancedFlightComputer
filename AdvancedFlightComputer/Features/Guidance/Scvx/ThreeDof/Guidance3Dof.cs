@@ -198,6 +198,7 @@ public sealed class Guidance3Dof
         _two.Model = Model;
         _two.Config.ThrottleCeiling = _set.GlideThrottleCeiling;
         _two.SetAttitudeAnchor([0, 0, 0], Math.PI);
+        _two.SetAttitudeRateAnchor(default);
         _xf = (double[])xf.Clone();
         if (!Seed3Dof.TryBuild(Model, _two.Config, x0, xf, seed, out double[] xs, out double[] us,
                                out double sg, out double sb))
@@ -226,6 +227,9 @@ public sealed class Guidance3Dof
 
     private double _coldStart;
     private int _coldIterations;
+
+    /// <summary>The measured turn of the thrust axis this cycle, or null; see <see cref="Update"/>.</summary>
+    private double[]? _attitudeRate;
 
     /// <summary>
     /// Advance the cold solve by up to <paramref name="iterations"/> SCvx iterations. Publishes and moves to the glide on convergence; false while still converging, and once it has given up (see <see cref="Error"/>).
@@ -263,12 +267,13 @@ public sealed class Guidance3Dof
     // ------------------------------------------------------------------- warm
 
     /// <summary>
-    /// One receding-horizon cycle from the measured state. <paramref name="attitude"/> is the measured thrust axis in the model frame. Moves through the lock and into the burn as the committed times arrive; true if a new plan was published.
+    /// One receding-horizon cycle from the measured state. <paramref name="attitude"/> is the measured thrust axis in the model frame, and <paramref name="attitudeRate"/> its measured rate of change (w x b, 1/s), which the turn-acceleration limit starts the plan from; null for not known. Moves through the lock and into the burn as the committed times arrive; true if a new plan was published.
     /// </summary>
-    public bool Update(double[] x0, double[] attitude, double now)
+    public bool Update(double[] x0, double[] attitude, double now, double[]? attitudeRate = null)
     {
         Plan3Dof? plan = _published;
         if (plan == null) return false;
+        _attitudeRate = attitudeRate;
 
         return Phase switch
         {
@@ -299,6 +304,7 @@ public sealed class Guidance3Dof
         _two.Model = Model;
         cfg.ThrottleCeiling = _set.GlideThrottleCeiling;
         _two.SetAttitudeAnchor(attitude, AnchorCone(_set.AnchorSeconds));
+        _two.SetAttitudeRateAnchor(_attitudeRate);
         return Solve(_two, x0, xs, us, sigG, sigB, now, now, Phase3Dof.Glide, _set.WarmIterations, reseed: true);
     }
 
@@ -328,13 +334,14 @@ public sealed class Guidance3Dof
         var xs = (double[])plan.X.Clone();
         var us = (double[])plan.U.Clone();
         double[] opening = plan.U.AsSpan(0, 3).ToArray();
-        double[] predicted = PredictIgnition(x0, attitude, opening, toGo);
+        double[] predicted = PredictIgnition(x0, attitude, opening, toGo, _attitudeRate, out double[] rateAtIgnition);
         Array.Copy(predicted, xs, NX);
 
         _burn.Model = Model;
         cfg.ThrottleCeiling = _set.BurnThrottleCeiling;
-        // What the vehicle can turn to by ignition, closing onto the measured attitude as ignition arrives.
-        _burn.SetAttitudeAnchor(attitude, Math.Max(cfg.AttitudeRateMax * toGo, _set.AnchorFloor));
+        // What the vehicle can turn to by ignition, closing onto the measured attitude as ignition arrives; and the turn it is predicted to have there, which the burn continues.
+        _burn.SetAttitudeAnchor(attitude, Math.Max(ReachableAngle(cfg, toGo), _set.AnchorFloor));
+        _burn.SetAttitudeRateAnchor(cfg.AttitudeAccelMax > 0.0 ? rateAtIgnition : null);
         bool first = !_burnStarted;
         _burnStarted = true;
         return Solve(_burn, predicted, xs, us, 0.0, plan.SigmaBurn, CommittedIgnition, now, Phase3Dof.Locked,
@@ -364,6 +371,7 @@ public sealed class Guidance3Dof
         // A burn that runs short of its floor keeps that floor rather than asking the bounds for a burn shorter than they allow.
         cfg.BurnSigmaMin = Math.Min(cfg.BurnSigmaMin, _set.MinimumBurnTime);
         _burn.SetAttitudeAnchor(attitude, AnchorCone(_set.AnchorSeconds));
+        _burn.SetAttitudeRateAnchor(_attitudeRate);
         bool reseed = _burnStarted;
         _burnStarted = true;
         return Solve(_burn, x0, xs, us, 0.0, sigB, now, now, Phase3Dof.Burn, _set.WarmIterations, reseed);
@@ -496,14 +504,26 @@ public sealed class Guidance3Dof
     /// The state at ignition: the measured state carried engine-off through the seconds left, with the body axis turning from the measured attitude towards the burn's opening attitude at the rate limit - which is what the vehicle is commanded to do in that time.
     /// </summary>
     public double[] PredictIgnition(double[] x0, double[] attitude, double[] opening, double seconds)
+        => PredictIgnition(x0, attitude, opening, seconds, null, out _);
+
+    /// <summary>
+    /// The same, with the turn held to the turn-acceleration limit as well, from the measured turn <paramref name="rate0"/> (w x b, 1/s; null for at rest): the axis speeds up towards the opening attitude, and slows to arrive on it, no faster than the vehicle can. <paramref name="rateAtIgnition"/> is the axis's rate of change it is predicted to have at ignition.
+    /// </summary>
+    public double[] PredictIgnition(double[] x0, double[] attitude, double[] opening, double seconds,
+                                    double[]? rate0, out double[] rateAtIgnition)
     {
         double[] x = (double[])x0.Clone();
+        rateAtIgnition = rate0 != null && rate0.Length == 3 ? (double[])rate0.Clone() : new double[3];
         if (!(seconds > 0.0)) return x;
         double rate = _burn.Config.AttitudeRateMax > 0.0 ? _burn.Config.AttitudeRateMax : 10.0;
+        double accel = _burn.Config.AttitudeAccelMax;
         int steps = Math.Max(1, (int)Math.Ceiling(seconds / _set.PredictionStep));
         double h = seconds / steps;
         double[] b = Normalise(attitude);
         double[] target = Normalise(opening);
+        // The axis's speed towards the target, rad/s: the measured turn's component that way, to start.
+        double speed = accel > 0.0 && rate0 != null && rate0.Length == 3
+            ? Math.Clamp(Dot(rate0, TowardTarget(b, target)), 0.0, rate) : 0.0;
         Span<double> k1 = stackalloc double[NX], k2 = stackalloc double[NX], k3 = stackalloc double[NX], k4 = stackalloc double[NX];
         double[] tmp = new double[NX];
         for (int s = 0; s < steps; s++)
@@ -517,10 +537,44 @@ public sealed class Guidance3Dof
             for (int i = 0; i < NX; i++) tmp[i] = x[i] + h * k3[i];
             PointMass3Dof.Eval(Model, tmp, u, k4);
             for (int i = 0; i < NX; i++) x[i] += h / 6.0 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
-            b = Slew(b, target, rate * h);
+            if (accel > 0.0)
+            {
+                // As fast as it can stop from, capped at the rate limit, and no faster a change than the acceleration allows.
+                double angle = Math.Acos(Math.Clamp(Dot(b, target), -1.0, 1.0));
+                double want = Math.Min(rate, Math.Sqrt(2.0 * accel * angle));
+                speed = speed < want ? Math.Min(want, speed + accel * h) : Math.Max(want, speed - accel * h);
+                double[] toward = TowardTarget(b, target);
+                b = Slew(b, target, speed * h);
+                rateAtIgnition = [toward[0] * speed, toward[1] * speed, toward[2] * speed];
+            }
+            else
+                b = Slew(b, target, rate * h);
         }
         return x;
     }
+
+    /// <summary>
+    /// The largest angle the vehicle can turn through in <paramref name="seconds"/>, rad: from rest, speeding up at the turn-acceleration limit to the rate limit; the rate limit alone without one.
+    /// </summary>
+    private static double ReachableAngle(Scvx3DofConfig cfg, double seconds)
+    {
+        double rate = cfg.AttitudeRateMax > 0.0 ? cfg.AttitudeRateMax : 10.0 * Math.PI / 180.0;
+        double accel = cfg.AttitudeAccelMax;
+        if (!(accel > 0.0)) return rate * seconds;
+        double ramp = rate / accel;
+        return seconds <= ramp ? 0.5 * accel * seconds * seconds : 0.5 * accel * ramp * ramp + rate * (seconds - ramp);
+    }
+
+    /// <summary>The unit tangent at <paramref name="b"/> along the great circle to <paramref name="target"/>; zero when they coincide.</summary>
+    private static double[] TowardTarget(double[] b, double[] target)
+    {
+        double c = Dot(b, target);
+        double[] t = [target[0] - c * b[0], target[1] - c * b[1], target[2] - c * b[2]];
+        double len = Math.Sqrt(Dot(t, t));
+        return len > 1e-9 ? [t[0] / len, t[1] / len, t[2] / len] : new double[3];
+    }
+
+    private static double Dot(double[] a, double[] b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 
     /// <summary>Turn <paramref name="from"/> towards <paramref name="to"/> by at most <paramref name="maxAngle"/>.</summary>
     public static double[] Slew(double[] from, double[] to, double maxAngle)

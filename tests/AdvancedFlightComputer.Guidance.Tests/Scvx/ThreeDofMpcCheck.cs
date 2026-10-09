@@ -65,15 +65,21 @@ internal static class ThreeDofMpcCheck
             MaxTiltRad = Num("--track-tilt", tracking.MaxTiltRad * 180.0 / Math.PI) * Math.PI / 180.0,
         };
         // --accel-g: the burn's thrust acceleration limit, as the game's default of 3 g unless given; 0 for none. The glide plan gets it over Settings.AccelHeadroom, as in the game.
+        // --turn-accel: the plan's turn-acceleration limit, deg/s^2, 0 for none; --plant-accel the vehicle's, which the truth's attitude loop changes its turn rate no faster than, 0 for instantly as before.
         var flight = new Flight(
             Arg("--track")?.ToLowerInvariant() == "off" ? null : tracking,
             Num("--glide-ceiling", defaults.GlideThrottleCeiling),
             Num("--burn-ceiling", defaults.BurnThrottleCeiling),
             Num("--accel-g", 3.0) * 9.80665,
-            Num("--engine-scale", 1.0));
+            Num("--engine-scale", 1.0),
+            Num("--turn-accel", 0.0) * Math.PI / 180.0,
+            Num("--plant-accel", 0.0) * Math.PI / 180.0,
+            Num("--turn-accel-burn", Num("--turn-accel", 0.0)) * Math.PI / 180.0,
+            Arg("--turn-anchor")?.ToLowerInvariant() != "off");
         Xf = [0, 0, Num("--aim-height", 0.0), 0, 0, -Num("--aim-sink", 0.0)];
         Console.WriteLine($"burn tracking {(flight.Tracker is { } k ? $"Kp {k.Kp:F2} Kd {k.Kd:F2} tilt {k.MaxTiltRad * 180.0 / Math.PI:F0} deg" : "off")}, " +
-                          $"plan throttle ceiling {flight.GlideCeiling:F2} glide, {flight.BurnCeiling:F2} burn, accel limit {(flight.AccelMax > 0.0 ? $"{flight.AccelMax / 9.80665:F1} g" : "off")}, engines x{flight.EngineScale:F1}, end state {Xf[2]:F0} m at {-Xf[5]:F1} m/s");
+                          $"plan throttle ceiling {flight.GlideCeiling:F2} glide, {flight.BurnCeiling:F2} burn, accel limit {(flight.AccelMax > 0.0 ? $"{flight.AccelMax / 9.80665:F1} g" : "off")}, engines x{flight.EngineScale:F1}, end state {Xf[2]:F0} m at {-Xf[5]:F1} m/s, " +
+                          $"turn accel plan {(flight.TurnAccel > 0.0 ? $"{flight.TurnAccel * 180.0 / Math.PI:F1}" : "off")} vehicle {(flight.PlantAccel > 0.0 ? $"{flight.PlantAccel * 180.0 / Math.PI:F1} deg/s2" : "instant")}");
 
         bool all = true;
         var summary = new List<string>();
@@ -110,7 +116,12 @@ internal static class ThreeDofMpcCheck
 
     /// <summary>How the burn is flown: the tracker, or the plan's own command when null, the plan's throttle ceilings, and its thrust acceleration limit (m/s^2, 0 for none).</summary>
     /// <param name="EngineScale">Multiplies the scenario's engines - thrust, mass flow and nozzle - for a booster with more thrust to weight, as the game's have (about 6 at landing against the scenario's 3).</param>
-    private sealed record Flight(BurnTracker3Dof? Tracker, double GlideCeiling, double BurnCeiling, double AccelMax, double EngineScale);
+    /// <param name="TurnAccel">The plan's turn-acceleration limit, rad/s^2, 0 for none; see Scvx3DofConfig.AttitudeAccelMax.</param>
+    /// <param name="PlantAccel">The truth's: its attitude loop changes its turn rate no faster than this, rad/s^2, 0 for instantly.</param>
+    /// <param name="TurnAccelBurn">The burn-only plan's limit, --turn-accel-burn, the glide's unless given.</param>
+    /// <param name="TurnAnchor">Whether each plan starts from the command's turn rate (--turn-anchor off for not).</param>
+    private sealed record Flight(BurnTracker3Dof? Tracker, double GlideCeiling, double BurnCeiling, double AccelMax, double EngineScale,
+                                 double TurnAccel = 0.0, double PlantAccel = 0.0, double TurnAccelBurn = 0.0, bool TurnAnchor = true);
 
     private static Result Fly(Case c, ScalingMode mode, Flight flight, bool verbose)
     {
@@ -127,8 +138,8 @@ internal static class ThreeDofMpcCheck
             LiftScale = c.Lift,
             VacuumThrust = nominal.VacuumThrust * c.Thrust,
         };
-        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax));
-        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax);
+        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax), turnAccel: flight.TurnAccel);
+        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax, turnAccel: flight.TurnAccelBurn);
         // No wall-clock deadlines offline: they make the iteration count, and so the flight, depend on the machine's speed. The iteration caps still bound every cycle.
         // Anchored on the last command, tight, as the game flies it.
         var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings
@@ -163,7 +174,8 @@ internal static class ThreeDofMpcCheck
         int refused = 0;
         double lockIgnition = double.NaN, swapJump = double.NaN;
         double nextGuidance = t;
-        double[] cmd = att;
+        double[] cmd = att, cmdRate = new double[3], prevCmd = att;
+        double[] turn = new double[3];   // the truth's axis rate, for an attitude loop with a turn-acceleration limit
         double throttle = 0.0;
         bool engine = false, lit = false, cut = false;
         double commanded = double.NaN, cutHeight = double.NaN, peakAccel = 0.0;
@@ -179,7 +191,10 @@ internal static class ThreeDofMpcCheck
                 estimator.Update(nominal, x, att, flown, measured, GuidanceStep);
                 guidance.Model = estimator.Apply(nominal);
                 Phase3Dof before = guidance.Phase;
-                bool ok = guidance.Update(x, cmd, t);
+                // The command's own turn since the last cycle, which the plan continues from, as the game passes it.
+                for (int j = 0; j < 3; j++) cmdRate[j] = (cmd[j] - prevCmd[j]) / GuidanceStep;
+                prevCmd = (double[])cmd.Clone();
+                bool ok = guidance.Update(x, cmd, t, flight.TurnAnchor && (flight.TurnAccel > 0.0 || flight.TurnAccelBurn > 0.0) ? cmdRate : null);
                 solveMs.Add(guidance.LastSolveMs);
                 admm += guidance.LastAdmmIterations;
                 if (!ok) refused++;
@@ -230,7 +245,10 @@ internal static class ThreeDofMpcCheck
             if (lit)
                 peakAccel = Math.Max(peakAccel, truth.Thrust(throttle, truth.Altitude(x)) / x[PointMass3Dof.IM]);
 
-            att = Turn(att, cmd, c.LagS, glide.AttitudeRateMax * 1.2);
+            if (flight.PlantAccel > 0.0)
+                att = TurnLimited(att, cmd, c.LagS, glide.AttitudeRateMax * 1.2, flight.PlantAccel, turn);
+            else
+                att = Turn(att, cmd, c.LagS, glide.AttitudeRateMax * 1.2);
             x = Step(truth, x, att, lit ? throttle : 0.0);
             t += SimStep;
 
@@ -284,6 +302,30 @@ internal static class ThreeDofMpcCheck
         var o = new double[NX];
         for (int i = 0; i < NX; i++) o[i] = x[i] + h / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
         return o;
+    }
+
+    /// <summary>
+    /// An attitude loop that, as a real vehicle's, cannot change its turn rate instantly: it wants to close on the command as the lag would, no faster than the rate cap and no faster than it can stop from, and its axis rate <paramref name="turn"/> (carried between calls) moves towards that by at most <paramref name="accel"/> * dt a step.
+    /// </summary>
+    private static double[] TurnLimited(double[] att, double[] cmd, double lagS, double rate, double accel, double[] turn)
+    {
+        double cos = Math.Clamp(att[0] * cmd[0] + att[1] * cmd[1] + att[2] * cmd[2], -1, 1);
+        double angle = Math.Acos(cos);
+        double[] e = [cmd[0] - cos * att[0], cmd[1] - cos * att[1], cmd[2] - cos * att[2]];
+        double el = Math.Sqrt(e[0] * e[0] + e[1] * e[1] + e[2] * e[2]);
+        double speed = Math.Min(Math.Min(rate, Math.Sqrt(2.0 * accel * angle)), angle / Math.Max(lagS, 1e-3));
+        double[] want = el > 1e-12 ? [e[0] / el * speed, e[1] / el * speed, e[2] / el * speed] : new double[3];
+        double[] d = [want[0] - turn[0], want[1] - turn[1], want[2] - turn[2]];
+        double dl = Math.Sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]), max = accel * SimStep;
+        double k = dl > max ? max / dl : 1.0;
+        for (int j = 0; j < 3; j++) turn[j] += k * d[j];
+        double[] b = [att[0] + turn[0] * SimStep, att[1] + turn[1] * SimStep, att[2] + turn[2] * SimStep];
+        double bl = Math.Sqrt(b[0] * b[0] + b[1] * b[1] + b[2] * b[2]);
+        b = [b[0] / bl, b[1] / bl, b[2] / bl];
+        // Keep the rate in the new tangent plane.
+        double r = turn[0] * b[0] + turn[1] * b[1] + turn[2] * b[2];
+        for (int j = 0; j < 3; j++) turn[j] -= r * b[j];
+        return b;
     }
 
     /// <summary>An attitude loop: a first-order lag towards the command, capped at a turn rate.</summary>

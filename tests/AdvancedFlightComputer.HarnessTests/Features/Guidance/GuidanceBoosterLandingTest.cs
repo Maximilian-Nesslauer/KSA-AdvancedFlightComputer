@@ -137,6 +137,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
 
             VehicleAutopilotState state = VehicleAutopilotState.For(booster);
             state.SixDofLogging = true;
+            state.SixDofTrack = Env("AFC_LANDING_SIXDOF_TRACK", 1.0) > 0.0;
+            state.LandingPlanFloorMargin = Env("AFC_LANDING_FLOOR_MARGIN", state.LandingPlanFloorMargin);
             state.AutoStage = true;
             // AFC_LANDING_MODE=6dof engages touchdown guidance directly, as its EXECUTE does, for a start low enough to be a hand-over; anything else engages entry guidance.
             if (string.Equals(Environment.GetEnvironmentVariable("AFC_LANDING_MODE"), "6dof", StringComparison.OrdinalIgnoreCase))
@@ -156,7 +158,7 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 state.ThreeDofEngagePending = true;
             }
             state.LandingAccelLimitG = Env("AFC_LANDING_ACCEL_G", state.LandingAccelLimitG);
-            t.Info($"burn timed for {state.LandingAccelLimitG:F1} g, hand-over with {state.ThreeDofSixDofTimeS:F1} s of burn left");
+            t.Info($"burn limited to {state.LandingAccelLimitG:F1} g, hand-over with {state.ThreeDofSixDofTimeS:F1} s of burn left");
             // What the planners believe about the engines, against which the measured flow below is read.
             (double vacThrust, double vacFlow) = KsaEnginePerf.UncappedAtPressure(booster, 0.0);
             double seaThrust = KsaEnginePerf.UncappedAtPressure(booster, 101325.0).thrust;
@@ -168,6 +170,8 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             double planningThrust = Ksa6DofSetup.PlanningThrust(booster), lateral = Ksa6DofSetup.LateralTorqueLimit(booster), roll = Ksa6DofSetup.RollTorqueLimit(booster), arm = Ksa6DofSetup.EngineArm(booster);
             t.Info($"gimbals: capability at {planningThrust / 1e3:F0} kN planning thrust - lateral {lateral / 1e3:F0} kN m, roll {roll / 1e3:F0} kN m, arm {arm:F1} m; " +
                    $"effective gimbal {Math.Atan(lateral / (arm * planningThrust)) * 180 / Math.PI:F2} deg (was {Math.Atan(lateral / (arm * seaThrust)) * 180 / Math.PI:F2} deg against sea-level full thrust)");
+            Ksa6DofSetup.Inertia(booster, out double ixx, out double iyy, out double izz);
+            t.Info($"inertia as touchdown guidance models it: {ixx:E3} {iyy:E3} {izz:E3} kg m2, mass {booster.TotalMass:F0} kg");
             // The entry guidance's engine table against the game it was sampled from, between its breakpoints, and its inverse.
             EngineThrustTable? table = Ksa3DofSetup.EngineTable(booster, 101325.0);
             if (table == null)
@@ -221,7 +225,15 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
         bool engaged = false, airborne = false, touched = false;
         double touchSink = double.NaN, touchSideways = double.NaN, touchMiss = double.NaN, endAt = double.PositiveInfinity;
         string lastMode = "", runName = "";
+        double nextAeroProbe = 0.0, probeT = double.NaN;
+        bool couplingProbed = false;
+        double3 probeV = default;
         Guidance3Dof? lastEntry = null, dumpedEntry = null;
+        Plan3Dof? dumpedPlan = null;
+        double nextPlanDump = 0.0;
+        double nextTurnProbe = 0.0, nextTurnPrint = 0.0, turnT = double.NaN;
+        double maxGlideRate = 0.0, maxGlideAccel = 0.0, maxBurnRate = 0.0, maxBurnAccel = 0.0;
+        double3 turnW = default;
         int dumps = 0;
         double lastLegs = double.NaN, lastVz = double.NaN, lastVh = double.NaN, lastRange = double.NaN;
 
@@ -275,11 +287,103 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 : engaged ? "released" : "waiting";
             if (state.ThreeDofGuidance != null)
                 lastEntry = state.ThreeDofGuidance;
+            // The entry guidance's burn plan, node by node, about once a second from shortly before ignition to the hand-over.
+            if (threeDof && state.ThreeDofGuidance?.Published is Plan3Dof plan3 && !ReferenceEquals(plan3, dumpedPlan)
+                && plan3.SigmaGlide < 6.0 && sim >= nextPlanDump)
+            {
+                dumpedPlan = plan3;
+                nextPlanDump = sim + 1.0;
+                DumpBurnPlan(t, sim, plan3);
+            }
+            // HOW FAST THE BOOSTER TURNS while the entry guidance flies it: the error to its command, the lateral turn rate and acceleration it achieves, and what KSA's flight computer says it has - its rate limit, RCS and gimbal angular authority (rad/s^2 on the control axes, shown in deg/s^2).
+            if (threeDof && sim >= nextTurnProbe)
+            {
+                nextTurnProbe = sim + 0.1;
+                double[] xt = KsaFrameBridge.ToModelState(booster, KsaFrameBridge.BuildSiteFrame(siteCci));
+                double3 w = new(xt[10], xt[11], 0.0);
+                double qw = xt[6], qx = xt[7], qy = xt[8], qz = xt[9];
+                double3 b = new(2 * (qx * qz + qw * qy), 2 * (qy * qz - qw * qx), 1 - 2 * (qx * qx + qy * qy));
+                double3 cmd = state.ThreeDofCommandLocal;
+                double err = cmd.Length() > 0.5 ? Math.Acos(Math.Clamp(double3.Dot(b, double3.Normalize(cmd)), -1.0, 1.0)) * 180.0 / Math.PI : double.NaN;
+                double rate = w.Length() * 180.0 / Math.PI;
+                double accel = double.IsFinite(turnT) ? (w - turnW).Length() / (sim - turnT) * 180.0 / Math.PI : double.NaN;
+                (turnW, turnT) = (w, sim);
+                bool burning = state.ThreeDofPhase == GuidanceWindow.ThreeDofPhase.Burn;
+                if (double.IsFinite(accel))
+                {
+                    if (burning) { maxBurnRate = Math.Max(maxBurnRate, rate); maxBurnAccel = Math.Max(maxBurnAccel, accel); }
+                    else { maxGlideRate = Math.Max(maxGlideRate, rate); maxGlideAccel = Math.Max(maxGlideAccel, accel); }
+                }
+                if (sim >= nextTurnPrint)
+                {
+                    nextTurnPrint = sim + 0.5;
+                    FlightComputer fc = booster.FlightComputer;
+                    const double D = 180.0 / Math.PI;
+                    t.Info($"  turn t {sim,6:F2} {state.ThreeDofPhase,-5} z {xt[2],6:F0}  off command {err,5:F1} deg  rate {rate,5:F2} deg/s  accel {accel,6:F2} deg/s2  " +
+                           $"| KSA rate limit {fc.RateLimit * D:F1} deg/s, RCS {fc.RcsTorqueAuthority.Y * D:F2}/{fc.RcsTorqueAuthority.Z * D:F2}, gimbal {fc.TvcTorqueAuthority.Y * D:F2}/{fc.TvcTorqueAuthority.Z * D:F2} deg/s2, RCS mode {fc.RCSMode}, engine {(Inputs(booster).EngineOn ? "on" : "off")}");
+                }
+            }
             if (dumps < 2 && lastEntry != null && !ReferenceEquals(lastEntry, dumpedEntry) && state.ThreeDofStatus.Contains("gave up"))
             {
                 dumpedEntry = lastEntry;
                 dumps++;
                 DumpColdTrace(t, lastEntry);
+            }
+            // Touchdown guidance's aero model at the measured state and at its plan's state now, against what the booster feels: the measured acceleration less thrust along its axis and gravity.
+            if (state.Active && state.Guidance != null && state.Guidance.Published is Ksa6DofPlan plan6 && sim >= nextAeroProbe)
+            {
+                nextAeroProbe = sim + 0.25;
+                double[] xm = KsaFrameBridge.ToModelState(booster, KsaFrameBridge.BuildSiteFrame(siteCci));
+                double dtNode = plan6.Sigma / (plan6.Nodes - 1);
+                int kp = Math.Clamp((int)(state.Guidance.PlanElapsed / dtNode), 0, plan6.Nodes - 1);
+                double[] xp = plan6.X.AsSpan(kp * 14, 14).ToArray();
+                double3 am = state.Guidance.ModelAeroAccel(xm), ap = state.Guidance.ModelAeroAccel(xp);
+                double3 vm = new(xm[3], xm[4], xm[5]);
+                double3 meas = double.IsFinite(probeT) ? (vm - probeV) / (sim - probeT) : double3.Zero;
+                double qw = xm[6], qx = xm[7], qy = xm[8], qz = xm[9];
+                double3 bm = new(2 * (qx * qz + qw * qy), 2 * (qy * qz - qw * qx), 1 - 2 * (qx * qx + qy * qy));
+                // Off the engines' curve at this pressure, as the bias estimate reads it: throttle x full thrust overstates low throttle by tens of kN.
+                double thrustAcc = Inputs(booster).EngineOn && state.LastThrottle > 0.0
+                    ? KsaEnginePerf.ThrustAtThrottle(booster, state.LastThrottle,
+                          KsaEnginePerf.AmbientPressureAt(booster.Orbit.Parent, siteCci.Length() - booster.Orbit.Parent.MeanRadius + xm[2])) / booster.TotalMass
+                    : 0.0;
+                double3 feltAero = meas - bm * thrustAcc + new double3(0, 0, 9.81);
+                t.Info($"  aero probe z {xm[2]:F0} v ({xm[3]:F1},{xm[4]:F1},{xm[5]:F1}) axis ({bm.X:F3},{bm.Y:F3}) | model@meas ({am.X:F2},{am.Y:F2},{am.Z:F2}) " +
+                       $"| plan node {kp} z {xp[2]:F0} v ({xp[3]:F1},{xp[4]:F1},{xp[5]:F1}) model@plan ({ap.X:F2},{ap.Y:F2},{ap.Z:F2}) | felt ({feltAero.X:F2},{feltAero.Y:F2},{feltAero.Z:F2})");
+                // The gimbals' torque authority as the allocator sees it now, per newton of the thrust through them, against what the plan allows.
+                KsaGimbalControl.Slot slot = KsaGimbalControl.Diagnostics(booster);
+                if (slot != null)
+                {
+                    double through = 0.0;
+                    foreach (double th in slot.Thrusts) through += th;
+                    TvcAllocationResult la = slot.LastAllocation;
+                    // The allocator's own capability in the model's axes, alone and shared: does half the pitch with half the roll fit?
+                    if (!couplingProbed && through > 0.0 && slot.Gimbals.Length > 0)
+                    {
+                        couplingProbed = true;
+                        KsaFrameBridge.BodyAxes(booster, out double3 mx, out double3 my, out double3 mz);
+                        int ng = slot.Thrusts.Length;
+                        GimbalController[] gimbals = slot.Gimbals[..ng];
+                        double[] thrusts = slot.Thrusts[..ng];
+                        var cmds = new double[2 * ng];
+                        double Cap(double3 dir)
+                        {
+                            TvcAllocationResult r = KsaTvcAllocator.Solve(gimbals, thrusts, booster.CenterOfMassAsmbF, dir * 1e9, cmds);
+                            return double3.Dot(r.AchievedTorque, double3.Normalize(dir));
+                        }
+                        double capX = Cap(mx), capY = Cap(my), capZ = Cap(mz);
+                        TvcAllocationResult half = KsaTvcAllocator.Solve(gimbals, thrusts, booster.CenterOfMassAsmbF, mx * (0.5 * capX) + mz * (0.5 * capZ), cmds);
+                        TvcAllocationResult most = KsaTvcAllocator.Solve(gimbals, thrusts, booster.CenterOfMassAsmbF, mx * (0.7 * capX) + mz * (0.7 * capZ), cmds);
+                        TvcAllocationResult diag = KsaTvcAllocator.Solve(gimbals, thrusts, booster.CenterOfMassAsmbF, (mx + my) * (0.75 * capX), cmds);
+                        t.Info($"    coupling at {through / 1e3:F0} kN: model-axis capability x {capX / 1e3:F0} y {capY / 1e3:F0} roll {capZ / 1e3:F0} kN m " +
+                               $"({capX / through:F3}/{capY / through:F3}/{capZ / through:F3} m per N); half pitch + half roll sat {half.SaturationScale:F2}; " +
+                               $"0.7 + 0.7 sat {most.SaturationScale:F2}; pitch+yaw at 0.75 each (1.06 radial) sat {diag.SaturationScale:F2}");
+                    }
+                    t.Info($"    gimbals: {through / 1e3:F0} kN through {slot.Thrusts.Length} gimbal(s), max torque KSA ({la.MaxTorque.X / 1e3:F0},{la.MaxTorque.Y / 1e3:F0},{la.MaxTorque.Z / 1e3:F0}) kN m " +
+                           $"= {Math.Min(la.MaxTorque.Y, la.MaxTorque.Z) / Math.Max(through, 1.0):F3} m per N; plan allows {state.Guidance.LateralTorquePerNewton:F3} m per N; sat {la.SaturationScale:F2}");
+                }
+                probeV = vm;
+                probeT = sim;
             }
             ManualControlInputs inputs = Inputs(booster);
             while (GuidanceLines.TryDequeue(out string? line))
@@ -295,7 +399,7 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
                 double flow = double.IsFinite(sampleMass) ? (sampleMass - booster.TotalMass) / SampleS : 0.0;
                 sampleMass = booster.TotalMass;
                 t.Info($"  t {sim,6:F2}  legs {legs,8:F1} m  range {range,6:F1} m  vz {vz,7:F2}  vh {vh,6:F2} m/s  " +
-                       $"throttle {(inputs.EngineOn ? inputs.EngineThrottle : 0f),5:P0}  mass {booster.TotalMass,7:F0} ({flow,5:F1} kg/s)  {mode}" +
+                       $"throttle {(inputs.EngineOn ? inputs.EngineThrottle : 0f),5:P0}  mass {booster.TotalMass,7:F0} ({flow,5:F1} kg/s)  box {2 * booster.BoundingBoxHalfExtentsAsmb.X:F1}x{2 * booster.BoundingBoxHalfExtentsAsmb.Y:F1}x{2 * booster.BoundingBoxHalfExtentsAsmb.Z:F1}  {mode}" +
                        (threeDof ? $"  [{state.ThreeDofStatus}] [{state.ThreeDofSolveText}]" : ""));
             }
 
@@ -318,6 +422,7 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
         }
 
         t.Info($"flown {sim:F1} s of sim in {wall.Elapsed.TotalSeconds:F1} s");
+        t.Info($"entry guidance turning, peak achieved: glide {maxGlideRate:F2} deg/s and {maxGlideAccel:F2} deg/s2, burn {maxBurnRate:F2} deg/s and {maxBurnAccel:F2} deg/s2");
         if (runName.Length > 0)
             t.Info($"6-DOF log: {Path.Combine(SixDofLog.Directory, runName)}-cycle.csv / -plan.csv / -events.log");
         else
@@ -329,6 +434,42 @@ public sealed class GuidanceBoosterLandingTest : AfcTest
             t.Check("touchdown under 3 m/s down", touchSink < 3.0, $"{touchSink:F2} m/s");
             t.Check("touchdown under 1 m/s sideways", touchSideways < 1.0, $"{touchSideways:F2} m/s");
             t.Check("touchdown within 10 m of the site", touchMiss < 10.0, $"{touchMiss:F1} m");
+        }
+    }
+
+    // One entry-guidance plan's burn: per node the time from the plan's start, height, sideways and vertical speed, the thrust axis's tilt off vertical resolved along and across the sideways motion (positive along = leaning with it), the turn rate and turn acceleration to the next node, and the throttle.
+    private static void DumpBurnPlan(TestContext t, double sim, Plan3Dof p)
+    {
+        int nx = PointMass3Dof.NX, nu = PointMass3Dof.NU, g = p.GlideIntervals, n = p.Nodes;
+        double dtBurn = p.SigmaBurn / Math.Max(n - 1 - g, 1);
+        t.Info($"  t {sim,6:F2}  entry plan {p.Phase}: glide {p.SigmaGlide:F2} s, burn {p.SigmaBurn:F2} s over {n - 1 - g} intervals of {dtBurn:F3} s, defect {p.GatedDefect:G3}");
+        double prevRate = double.NaN;
+        double3 prevB = default;
+        for (int k = g; k < n; k++)
+        {
+            double tk = p.SigmaGlide + (k - g) * dtBurn;
+            double z = p.X[k * nx + PointMass3Dof.IR + 2];
+            double vx = p.X[k * nx + PointMass3Dof.IV], vy = p.X[k * nx + PointMass3Dof.IV + 1], vzk = p.X[k * nx + PointMass3Dof.IV + 2];
+            double3 b = new(p.U[k * nu + PointMass3Dof.IB], p.U[k * nu + PointMass3Dof.IB + 1], p.U[k * nu + PointMass3Dof.IB + 2]);
+            double bl = b.Length();
+            if (bl > 0.0) b /= bl;
+            double vh = Math.Sqrt(vx * vx + vy * vy);
+            double ux = vh > 0.05 ? vx / vh : 1.0, uy = vh > 0.05 ? vy / vh : 0.0;
+            double along = Math.Asin(Math.Clamp(b.X * ux + b.Y * uy, -1.0, 1.0)) * 180.0 / Math.PI;
+            double across = Math.Asin(Math.Clamp(-b.X * uy + b.Y * ux, -1.0, 1.0)) * 180.0 / Math.PI;
+            string rate = "", accel = "";
+            if (k > g)
+            {
+                double ang = Math.Acos(Math.Clamp(double3.Dot(prevB, b), -1.0, 1.0)) * 180.0 / Math.PI;
+                double r = ang / dtBurn;
+                rate = $"{r,6:F1}";
+                if (!double.IsNaN(prevRate))
+                    accel = $"{(r - prevRate) / dtBurn,7:F1}";
+                prevRate = r;
+            }
+            prevB = b;
+            t.Info($"    node {k,2} t {tk,5:F2}  z {z,6:F1}  vh {vh,5:F1} vz {vzk,6:F1}  tilt along {along,5:F1} across {across,5:F1} deg  " +
+                   $"rate {rate,6} deg/s accel {accel,7} deg/s2  throttle {p.U[k * nu + PointMass3Dof.ITH]:F3}");
         }
     }
 

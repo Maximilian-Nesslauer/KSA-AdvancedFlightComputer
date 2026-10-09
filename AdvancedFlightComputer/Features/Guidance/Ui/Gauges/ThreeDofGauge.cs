@@ -63,6 +63,8 @@ public static partial class GuidanceWindow
             VehicleHeightRows("td");
             GaugeRow("Max burn accel (g, 0 off)", "##tdaccel", ref _s.LandingAccelLimitG);
             GaugeRow("Command smoothing (s)", "##tdtau", ref _s.ThreeDofSmoothTau);
+            // 0 is the vehicle's own, read from its RCS when the cold solve starts; the value in use beside it.
+            GaugeRow($"Plan turn accel, deg/s2 (0 auto: {_s.ThreeDofTurnAccelInUse:F1})", "##tdturn", ref _s.ThreeDofTurnAccelDegS2);
             GaugeRow("Plan max throttle, glide", "##tdceilg", ref _s.ThreeDofGlideCeiling);
             GaugeRow("Plan max throttle, burn", "##tdceilb", ref _s.ThreeDofBurnCeiling);
             // Shared with the touchdown page: both plans keep this much throttle above the engines' minimum for their feedback.

@@ -70,6 +70,8 @@ public sealed class Scvx3DofSolver
     private double[] _x0 = [], _xf = [];
     private readonly double[] _anchor = new double[3];
     private double _anchorCos = -1.0;
+    private readonly double[] _anchorRate = new double[3];
+    private bool _anchorRateKnown;
 
     private readonly List<Scvx3DofIteration> _trace = [];
     public IReadOnlyList<Scvx3DofIteration> Trace => _trace;
@@ -172,6 +174,18 @@ public sealed class Scvx3DofSolver
     }
 
     /// <summary>
+    /// The body axis's rate of change at node 0, 1/s (for a body turning at w, w x b), that the turn-acceleration limit starts from - the measured turn, so a plan cannot open by stopping or reversing it instantly. Null or empty releases it. Only read with <see cref="Scvx3DofConfig.AttitudeAccelMax"/>.
+    /// </summary>
+    public void SetAttitudeRateAnchor(ReadOnlySpan<double> rate)
+    {
+        _anchorRateKnown = rate.Length == 3 && double.IsFinite(rate[0]) && double.IsFinite(rate[1]) && double.IsFinite(rate[2]);
+        if (_anchorRateKnown)
+            rate.CopyTo(_anchorRate);
+        else
+            Array.Clear(_anchorRate);
+    }
+
+    /// <summary>
     /// Iterate until convergence, the iteration budget, the deadline, or a collapsed trust region. At least one iteration always runs. See Scvx6DofSolver.Solve.
     /// </summary>
     public ScvxStatus Solve(int maxIterations, double deadlineMs = 0.0)
@@ -211,7 +225,8 @@ public sealed class Scvx3DofSolver
         Linearise();
 
         _sub.Assemble(_x0, _xf, _xbar, _ubar, _sigGBar, _sigBBar, TrustRegion, _lin, _alphaRadius,
-                      _anchor, _anchorCos, AccelLimitTerms() ? _thrustSlope : null, _lossConstant, _lossGradient);
+                      _anchor, _anchorCos, _anchorRateKnown ? _anchorRate : ReadOnlySpan<double>.Empty,
+                      AccelLimitTerms() ? _thrustSlope : null, _lossConstant, _lossGradient);
         ScsStatus st = _sub.Run(WarmStart && _sub.HasWarmStart, MaxSubproblemIterations, SubproblemEps, SubproblemEps);
         if (_sub.HitIterationLimit && EscalatedSubproblemIterations > MaxSubproblemIterations)
             st = _sub.Run(WarmStart && _sub.HasWarmStart, EscalatedSubproblemIterations, SubproblemEps, SubproblemEps);
@@ -514,6 +529,8 @@ public sealed class Scvx3DofSolver
         }
         if (_cfg.AttitudeAnchor && _anchorCos > -1.0)
             cost += Math.Max(0.0, _anchorCos - (_anchor[0] * u[0] + _anchor[1] * u[1] + _anchor[2] * u[2]));
+        if (_cfg.AttitudeAccelMax > 0.0)
+            cost += TurnAccelViolation(u, sigG, sigB);
         // The acceleration limit, in the subproblem's throttle units: thrust over the limit, over the thrust law's slope in throttle there.
         if (_cfg.AccelMax > 0.0 && _model is KsaPointMassModel ksa && ksa.HasThrust)
             for (int k = _k; k < _n; k++)
@@ -526,6 +543,43 @@ public sealed class Scvx3DofSolver
                 cost += Math.Max(0.0, over / Math.Max(slope, 1e-9 * ksa.VacuumThrust));
             }
         return _cfg.PathSlackWeight * cost;
+    }
+
+    /// <summary>
+    /// How far the plan's body axis turns faster than <see cref="Scvx3DofConfig.AttitudeAccelMax"/> allows, summed over nodes in the subproblem's units: the same cones, with the candidate's own interval lengths where the subproblem takes the reference's. Node 0 continues the rate anchor when there is one; the last node stops.
+    /// </summary>
+    private double TurnAccelViolation(double[] u, double sigG, double sigB)
+    {
+        double accel = _cfg.AttitudeAccelMax;
+        double hG = sigG * _dtauG, hB = sigB * _dtauB;
+        double cost = 0.0;
+        Span<double> d = stackalloc double[3];
+        for (int k = 0; k < _n; k++)
+        {
+            double limit;
+            if (k == 0)
+            {
+                if (!_anchorRateKnown) continue;
+                double h = _k > 0 ? hG : hB;
+                for (int j = 0; j < 3; j++) d[j] = u[NU + j] - u[j] - _anchorRate[j] * h;
+                limit = accel * h * h;
+            }
+            else if (k == _n - 1)
+            {
+                double h = _n - 2 < _k ? hG : hB;
+                for (int j = 0; j < 3; j++) d[j] = u[(k - 1) * NU + j] - u[k * NU + j];
+                limit = accel * h * h;
+            }
+            else
+            {
+                double h1 = k - 1 < _k ? hG : hB, h2 = k < _k ? hG : hB, avg = 0.5 * (h1 + h2);
+                for (int j = 0; j < 3; j++)
+                    d[j] = (h1 * (u[(k + 1) * NU + j] - u[k * NU + j]) - h2 * (u[k * NU + j] - u[(k - 1) * NU + j])) / avg;
+                limit = accel * h1 * h2;
+            }
+            cost += Math.Max(0.0, Math.Sqrt(d[0] * d[0] + d[1] * d[1] + d[2] * d[2]) - limit);
+        }
+        return cost;
     }
 
     /// <summary>The terminal-miss penalty measured on the trajectory, which is what the subproblem's slacks equal at its solution.</summary>
