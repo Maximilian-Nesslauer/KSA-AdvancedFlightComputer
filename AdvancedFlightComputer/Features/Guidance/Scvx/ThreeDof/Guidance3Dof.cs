@@ -84,6 +84,14 @@ public sealed class Guidance3Dof
         public double GlideThrottleCeiling { get; init; } = 0.88;
         public double BurnThrottleCeiling { get; init; } = 0.95;
 
+        /// <summary>
+        /// The acceleration limit's headroom, the same idea as the ceilings': the glide plan, which times the ignition, is held to the landing limit over this, and the burn re-solves and 6-DOF to the limit itself. Without it the burn plans to the very limit its ignition was timed on, and a dispersion leaves it nothing to stop with: offline, on a booster with the game's thrust to weight (--3dof-mpc --engine-scale 2), the plans traded the soft terminal speed for the limit instead and touched down at 4-10 m/s. A ratio of 1.3 landed those at 0.7-1.7 m/s, a second's late ignition included - measured with the ignition timed at 3 g and the burn allowed 3.9 g; this arrangement keeps the same ratio under the landing limit instead (ignition at 2.3 g, burn to 3 g), and on 2026-10-09 passed 8 of 10 --3dof-mpc cases at both engine scales, peaking at 2.8-3.2 g, against 5 and 2 of 10 with the ignition timed at 3 g and the burn unlimited (5.2-5.8 g at --engine-scale 2). 1.15 was not enough. Read by the caller building the two configs; see GlideAccelMax.
+        /// </summary>
+        public double AccelHeadroom { get; init; } = 1.3;
+
+        /// <summary>The glide plan's acceleration limit for a landing limit of <paramref name="burnLimit"/>, m/s^2; 0 stays 0.</summary>
+        public double GlideAccelMax(double burnLimit) => burnLimit > 0.0 ? burnLimit / Math.Max(AccelHeadroom, 1.0) : 0.0;
+
         public int ColdIterations { get; init; } = 150;
 
         /// <summary>

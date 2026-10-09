@@ -64,7 +64,7 @@ internal static class ThreeDofMpcCheck
             Kd = Num("--track-kd", tracking.Kd),
             MaxTiltRad = Num("--track-tilt", tracking.MaxTiltRad * 180.0 / Math.PI) * Math.PI / 180.0,
         };
-        // --accel-g: the thrust acceleration the glide plan times the burn for, as the game's default of 3 g unless given; 0 for none. The burn re-solves are not limited, as in the game.
+        // --accel-g: the burn's thrust acceleration limit, as the game's default of 3 g unless given; 0 for none. The glide plan gets it over Settings.AccelHeadroom, as in the game.
         var flight = new Flight(
             Arg("--track")?.ToLowerInvariant() == "off" ? null : tracking,
             Num("--glide-ceiling", defaults.GlideThrottleCeiling),
@@ -127,8 +127,8 @@ internal static class ThreeDofMpcCheck
             LiftScale = c.Lift,
             VacuumThrust = nominal.VacuumThrust * c.Thrust,
         };
-        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: flight.AccelMax);
-        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true);
+        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax));
+        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax);
         // No wall-clock deadlines offline: they make the iteration count, and so the flight, depend on the machine's speed. The iteration caps still bound every cycle.
         // Anchored on the last command, tight, as the game flies it.
         var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings

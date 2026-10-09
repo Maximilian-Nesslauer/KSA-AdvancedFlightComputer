@@ -26,6 +26,8 @@ public static partial class GuidanceWindow
         {
             // The plan lands at zero/zero, legs on the pad at rest, so the one height it needs is the CoM's above the legs.
             VehicleHeightRows("sd");
+            // Shared with the 3-DOF page: both solvers land on the same limit.
+            GaugeRow("Max burn accel (g, 0 off)", "##sdaccel", ref _s.LandingAccelLimitG);
 
             ImGuiHelper.EndRegion();
         }

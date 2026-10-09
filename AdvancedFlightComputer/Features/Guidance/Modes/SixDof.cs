@@ -457,7 +457,7 @@ public static partial class GuidanceWindow
                                    _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
                                    x, xf,
                                    out Scvx6DofConfig cfg,
-                                   out Dynamics6Dof.Params dyn, out _,
+                                   out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
                                    floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
@@ -1436,7 +1436,12 @@ public static partial class GuidanceWindow
         // NO HOVER HAND-OFF ON THE WAY DOWN. The plan ends at zero/zero - legs on the pad, at rest - so it lands the craft itself, and a craft that cannot hover could not be handed one anyway. The hover takes over only when the plan is lost near the ground and the craft can hold its weight; see NoPlanNearGround.
 
         // Estimate what the model is missing BEFORE re-solving, so the optimiser plans around it rather than rediscovering it every cycle.
-        UpdateAccelBias(x, now, _s.LastThrottle * _s.CapabilityN);
+        // The thrust the last throttle DELIVERS, off the engines' own curve - the one the command was inverted through - not throttle x full thrust. In an atmosphere that straight line overstates low-throttle thrust by a near-constant amount (see ApplyPlanCommand), and the estimate took the difference for a missing force: on the 2026-10-09 7 t booster, about 85 kN at a quarter throttle, a -3.7 m/s^2 "gravity" every plan then braked against, stopping the booster 5 m high and climbing.
+        double thrustDelivered = _s.LastThrottle > 0.0
+            ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle,
+                  KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]))
+            : 0.0;
+        UpdateAccelBias(x, now, thrustDelivered);
 
         // NODE SCHEDULE: drop node count at fixed altitude GATES.
         //
@@ -1620,7 +1625,7 @@ public static partial class GuidanceWindow
                                      _s.SixDofRateDampShare, _s.SixDofControlSmooth,
                                      _s.SixDofProximal,
                                      _s.SixDofGlideSlopeDeg, _s.SixDofVzEnabled ? _s.SixDofVzMaxMs : -1.0,
-                                     x, xf, out cfg, out dyn, out error,
+                                     x, xf, out cfg, out dyn, out error, LandingAccelLimitMs2,
                                      floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero);
     }
 

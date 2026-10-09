@@ -407,7 +407,7 @@ public static partial class GuidanceWindow
     private static string RefusalReason(Guidance3Dof g)
         => g.ConsecutiveRefusals > 0 && g.Error.Length > 0 ? $" ({g.Error})" : "";
 
-    /// <summary>The thrust acceleration the landing burn is timed for, m/s^2, or 0 for none.</summary>
+    /// <summary>The landing burn's thrust acceleration limit, m/s^2, or 0 for none; shared by 3-DOF and 6-DOF.</summary>
     private static double LandingAccelLimitMs2 => _s.LandingAccelLimitG > 0.0 ? _s.LandingAccelLimitG * StandardGravity : 0.0;
 
     /// <summary>A plan's body axis and throttle at a time.</summary>
@@ -463,12 +463,12 @@ public static partial class GuidanceWindow
             GlideThrottleCeiling = Math.Clamp(_s.ThreeDofGlideCeiling, 0.1, 1.0),
             BurnThrottleCeiling = Math.Clamp(_s.ThreeDofBurnCeiling, 0.1, 1.0),
         };
-        // THE ACCELERATION LIMIT TIMES THE IGNITION AND NOTHING ELSE. The glide plan, which decides when to light, plans the burn to it, so a booster with thrust to spare lights early and brakes gently instead of at full thrust at the last moment. The burn re-solves, and 6-DOF after them, may use the engine's full thrust: limited there too, a burn that arrived squeezed found missing the site by tens of metres and stopping above the pad cheaper than braking harder (2026-10-08, 18:36: 32 m off, stopped 15 m up).
+        // THE ACCELERATION LIMIT HOLDS THE WHOLE BURN, and the glide plan times the ignition under it with headroom to spare (Settings.AccelHeadroom). Timed to it but not held to it, as from 8d26ebd, the burn re-solves and 6-DOF after them were free to coast on minimum thrust and brake at the end: the 2026-10-09 7 t booster was handed over at 182 m and 88 m/s, a 3 g burn's height, fell on its floor to 27 m at 48 m/s and planned up to 13.7 g for the last second - a burn too short for any node count the solver could keep up with. The limit had been taken off after a burn stopped 15 m up and 32 m off with it binding (2026-10-08, 18:36), but that plan weighted terminal speed 100x above the miss, which alone makes stopping above the pad the cheap answer; the same commit put the miss above the speed. The limit is soft, so a burn that needs more to stop still gets it.
         // Both plan from above the engines' minimum throttle, so the tracker has thrust to take off as well as to add; see LandingPlanFloorMargin.
         Scvx3DofConfig glide = Ksa3DofSetup.Config(vehicle, nodes: 30, glideIntervals: 12, _s.GlideMaxAoaDeg,
-                                                    _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin);
+                                                    _s.VehicleHeightM, settings.GlideAccelMax(LandingAccelLimitMs2), _s.LandingPlanFloorMargin);
         Scvx3DofConfig burn = Ksa3DofSetup.Config(vehicle, nodes: 20, glideIntervals: 0, _s.GlideMaxAoaDeg,
-                                                   _s.VehicleHeightM, floorMargin: _s.LandingPlanFloorMargin);
+                                                   _s.VehicleHeightM, LandingAccelLimitMs2, _s.LandingPlanFloorMargin);
         var g = new Guidance3Dof(glide, burn, _s.ThreeDofEstimator.Apply(_s.ThreeDofNominal), settings);
         _s.ThreeDofGuidance = g;
         _s.ThreeDofWorker ??= new Ksa3DofWorker();

@@ -257,7 +257,8 @@ public static partial class GuidanceWindow
         double ambientPa = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
         _s.CapabilityN = KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa);
         _s.LastThrottle = _s.ThreeDofThrottle;
-        UpdateAccelBias(x, now, _s.LastThrottle * _s.CapabilityN);
+        // Off the engines' curve, as Step6DofCore reads it: throttle x full thrust overstates low throttle by tens of kN.
+        UpdateAccelBias(x, now, _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0);
 
         // The node ladder too, so the guidance handed over is already at the count 6-DOF would fly. Only off a fresh plan: a rebuild reseeds from the published plan, synchronously.
         if (_s.SixDofNodeGates && age <= SixDofStandbyMaxPlanAgeS)
