@@ -25,7 +25,7 @@ reads). Use an application key restricted to the refs bucket.
 Builds the zip without contacting B2.
 
 .EXAMPLE
-./build/publish-ksa-refs.ps1 -Version 2026.10.7.5541
+./build/publish-ksa-refs.ps1 -Version 2026.10.10.5554
 Makes sure that build is in the bucket, as the pre-push hook in build/hooks does. If a different
 build is installed, it can only check, and warns when the zip is missing.
 #>
