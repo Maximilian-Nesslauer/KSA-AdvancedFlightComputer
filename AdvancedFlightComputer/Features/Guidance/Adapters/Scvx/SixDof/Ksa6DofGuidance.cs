@@ -430,19 +430,60 @@ public sealed class Ksa6DofGuidance
     /// How far the virtual-control price has been tightened, 0 to PricingStages. ROUGH, THEN REFINED.
     ///  0 prices virtual control on XScale, loose: a solve from scratch - a cold start, a restart, a moved target - leans on it to get from a seed nothing like a trajectory to one, and priced tight it does not get there. Tight from the start, the moon_des hopper's cold solve from UPFG's braking burn (60 deg off vertical, 135 m/s across) ran 102 iterations without a plan and terminal hover hit at 13 m/s, 827 m off; staged, the same hand-over had a plan in 4 iterations and touched down at 0.16 m/s, 0.6 m off (headless, 2026-10-13).
     ///  Each accepted re-solve tightens it a stage, geometrically, to the config's price at PricingStages, where it stops a converged plan faking what its forces cannot do (Ksa6DofSetup.VirtualControlVelocityScaleMs). Repeated refusals loosen it a stage, so a plan that cannot be refined at the tight price is still flown at a looser one rather than lost.
+    ///  The stage is a CEILING: how tight the price may be. Time to go decides how tight it is - see PricingLooseAboveS.
     ///  Changed only between solves, never inside one: SetVirtualControlScale re-prices the reference with it.
     /// </summary>
     public int PricingStage { get; private set; }
 
     public const int PricingStages = 4;
 
+    /// <summary>
+    /// TIGHT ONLY NEAR THE END. Above this much time to go, s, virtual control is priced loose whatever the stage; below PricingTightBelowS the stage alone sets it; in between it ramps.
+    ///  A plan far from the pad is re-solved from the measured state many times before it is flown out, so a little phantom force in it is corrected long before it adds up. Near the end there is no horizon left to absorb it, and that is where it turned into arriving fast or sideways (the 2026-10-09 7 t booster). And the tight price is what made the warm re-solves expensive: at the moon_des hopper's 50 nodes, where the loose price is the 139 m/s of the hand-over and the tight one 5 m/s, 83-90% of re-solves ran out of ADMM iterations and took no step, against 31% before the tight price (2026-10-13).
+    /// </summary>
+    public double PricingLooseAboveS { get; set; } = 25.0;
+
+    /// <summary>Time to go, s, below which the stage alone sets the price. See PricingLooseAboveS.</summary>
+    public double PricingTightBelowS { get; set; } = 10.0;
+
+    /// <summary>The scale velocity's virtual control was last priced on, m/s - the price the last solve ran at. For the log.</summary>
+    public double PricingVelocityMs { get; private set; } = double.NaN;
+
+    // The horizon the price was last set for, s; NaN until a solve sets one, which leaves only the stage.
+    private double _pricingTimeToGo = double.NaN;
+    private double _pricingApplied = double.NaN;
+
     private void SetPricingStage(int stage)
     {
         PricingStage = Math.Clamp(stage, 0, PricingStages);
+        ApplyPricing();
+    }
+
+    /// <summary>Price the next solve for <paramref name="timeToGo"/> seconds of horizon. Called with the horizon each solve is about to run over.</summary>
+    private void PriceForHorizon(double timeToGo)
+    {
+        _pricingTimeToGo = timeToGo;
+        ApplyPricing();
+    }
+
+    private void ApplyPricing()
+    {
+        double near = 1.0;
+        if (_pricingTimeToGo > PricingTightBelowS)
+            near = _pricingTimeToGo >= PricingLooseAboveS || !(PricingLooseAboveS > PricingTightBelowS)
+                ? 0.0
+                : (PricingLooseAboveS - _pricingTimeToGo) / (PricingLooseAboveS - PricingTightBelowS);
+        double f = Math.Min((double)PricingStage / PricingStages, near);
         if (_vcTarget == null)
+        {
+            PricingVelocityMs = _cfg.XScale[Dynamics6Dof.IV];
             return;
+        }
+        // Unchanged since the last solve: nothing to re-price.
+        if (f == _pricingApplied)
+            return;
+        _pricingApplied = f;
         var scale = new double[NX];
-        double f = (double)PricingStage / PricingStages;
         for (int i = 0; i < NX; i++)
         {
             double tight = i < _vcTarget.Length ? _vcTarget[i] : 0.0;
@@ -450,6 +491,7 @@ public sealed class Ksa6DofGuidance
             // Geometric from XScale to the target; a target no tighter than XScale is simply the target.
             scale[i] = tight > 0.0 && loose > tight ? loose * Math.Pow(tight / loose, f) : tight;
         }
+        PricingVelocityMs = scale[Dynamics6Dof.IV] > 0.0 ? scale[Dynamics6Dof.IV] : _cfg.XScale[Dynamics6Dof.IV];
         _solver.SetVirtualControlScale(scale);
     }
 
@@ -461,6 +503,7 @@ public sealed class Ksa6DofGuidance
 
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
+        _pricingTimeToGo = sigmaSeed;
         SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         return Finish(x0, simNow, maxIterations, cold: true);
@@ -516,6 +559,7 @@ public sealed class Ksa6DofGuidance
 
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
+        _pricingTimeToGo = sigmaSeed;
         SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         return Finish(x0, simNow, maxIterations, cold: true);
@@ -583,6 +627,7 @@ public sealed class Ksa6DofGuidance
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
         // Rough first: a cold start or a restart is finding a plan, not refining one.
+        _pricingTimeToGo = sigmaSeed;
         SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, trustRegion: _solver.TrustRegionMax);
         Status = ScvxStatus.IterationLimit;
@@ -814,7 +859,8 @@ public sealed class Ksa6DofGuidance
 
         _xf = (double[])prev._xf.Clone();
         if (FixedTime) PinSigma(sigma);
-        // A rebuild continues a refinement: the price the previous guidance had reached, not a rough start.
+        // A rebuild continues a refinement: the stage the previous guidance had reached, not a rough start, at this horizon.
+        _pricingTimeToGo = sigma;
         SetPricingStage(prev.PricingStage);
         _solver.Initialize(x0, _xf, xs, us, sigma);
         return Finish(x0, simNow, maxIterations);
@@ -973,6 +1019,7 @@ public sealed class Ksa6DofGuidance
 
         FellBack = false;
         LastTrustRegionStart = WarmTrustRegion;
+        PriceForHorizon(sigma);
         _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion);
         if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
@@ -998,6 +1045,7 @@ public sealed class Ksa6DofGuidance
         FellBack = true;
         _consecutiveFailures++;
         LastTrustRegionStart = _solver.TrustRegionMax;
+        PriceForHorizon(sigma);
         _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax);
         if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
@@ -1042,6 +1090,7 @@ public sealed class Ksa6DofGuidance
         FellBack = false;
         double region = Math.Clamp(_solver.TrustRegion, WarmTrustRegion, _solver.TrustRegionMax);
         LastTrustRegionStart = region;
+        PriceForHorizon(sigma);
         _solver.Reseed(x0, xs, us, sigma, trustRegion: region);
         bool ok = Finish(x0, simNow, maxIterations, budgetMs: RecoveryCycleBudgetMs);
         SetPricingStage(ok ? PricingStage + 1 : PricingStage - 1);

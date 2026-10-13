@@ -664,6 +664,7 @@ public static partial class GuidanceWindow
             BiasX = _s.Guidance.AccelBias.X, BiasY = _s.Guidance.AccelBias.Y, BiasZ = _s.Guidance.AccelBias.Z,
             TrackPosM = _s.Guidance.TrackingError.PositionM, TrackVelMs = _s.Guidance.TrackingError.VelocityMs,
             TrackThrustN = _s.Guidance.TrackingError.ThrustN,
+            VcVelMs = _s.Guidance.PricingVelocityMs,
             Error = _s.Error,
         };
         SixDofLog.Cycle(_s, row);
