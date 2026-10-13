@@ -71,8 +71,9 @@ public sealed class Scvx6DofSolver
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    /// <summary>The scale the defect and the virtual control are PRICED on in the merit; the convergence test reads them on _xs. See Scvx6DofConfig.VirtualControlScale.</summary>
+    /// <summary>The scale the defect and the virtual control are PRICED on in the merit; the convergence test reads them on _xs. See Scvx6DofConfig.VirtualControlScale and SetVirtualControlScale.</summary>
     private readonly double[] _vcs;
+    private bool _initialised;
 
     // Trust-region schedule. Names match 6dof.py's constants.
     public double TrustRegion { get; private set; } = 0.1;
@@ -257,6 +258,18 @@ public sealed class Scvx6DofSolver
         _sub.ResetWarmStart();
 
         (_jRef, _) = TrueCost(_xbar, _ubar, _sigBar);
+        _initialised = true;
+    }
+
+    /// <summary>
+    /// Change the price on virtual control between iterations: the scale each channel's jump is measured on (Scvx6DofConfig.VirtualControlScale, null for XScale). The subproblem reads it at its next assembly, and the reference's merit is recomputed here under it, so the next ratio test compares like with like - a price changed under a reference whose cost was taken at the old one would read as a gain or a loss the step never made.
+    /// </summary>
+    public void SetVirtualControlScale(double[]? scale)
+    {
+        _cfg.VirtualControlScale = scale;
+        for (int i = 0; i < NX; i++) _vcs[i] = _cfg.VirtualControlScaleOf(i);
+        if (_initialised)
+            (_jRef, _) = TrueCost(_xbar, _ubar, _sigBar);
     }
 
     /// <summary>
@@ -281,6 +294,7 @@ public sealed class Scvx6DofSolver
         _trace.Clear();
         IterationCount = 0;
         (_jRef, _) = TrueCost(_xbar, _ubar, _sigBar);
+        _initialised = true;
     }
 
     /// <summary>

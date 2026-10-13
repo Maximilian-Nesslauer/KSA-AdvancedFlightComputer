@@ -413,9 +413,44 @@ public sealed class Ksa6DofGuidance
         _cfg = cfg;
         _dyn = dyn;
         _n = cfg.Nodes;
+        // The price the config asks for is where pricing ends up, not where it starts; see PricingStage.
+        _vcTarget = cfg.VirtualControlScale is { } target ? (double[])target.Clone() : null;
         _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
         _solver.MaxSubproblemIterations = ColdAdmmCap;
         _solver.EscalatedSubproblemIterations = EscalatedAdmmCap;
+        SetPricingStage(0);
+    }
+
+    // ----------------------------------------------------------- pricing
+
+    /// <summary>The virtual-control price the config asked for: the refined one, reached through PricingStages accepted re-solves. Null when it asked for none.</summary>
+    private readonly double[] _vcTarget;
+
+    /// <summary>
+    /// How far the virtual-control price has been tightened, 0 to PricingStages. ROUGH, THEN REFINED.
+    ///  0 prices virtual control on XScale, loose: a solve from scratch - a cold start, a restart, a moved target - leans on it to get from a seed nothing like a trajectory to one, and priced tight it does not get there. Tight from the start, the moon_des hopper's cold solve from UPFG's braking burn (60 deg off vertical, 135 m/s across) ran 102 iterations without a plan and terminal hover hit at 13 m/s, 827 m off; staged, the same hand-over had a plan in 4 iterations and touched down at 0.16 m/s, 0.6 m off (headless, 2026-10-13).
+    ///  Each accepted re-solve tightens it a stage, geometrically, to the config's price at PricingStages, where it stops a converged plan faking what its forces cannot do (Ksa6DofSetup.VirtualControlVelocityScaleMs). Repeated refusals loosen it a stage, so a plan that cannot be refined at the tight price is still flown at a looser one rather than lost.
+    ///  Changed only between solves, never inside one: SetVirtualControlScale re-prices the reference with it.
+    /// </summary>
+    public int PricingStage { get; private set; }
+
+    public const int PricingStages = 4;
+
+    private void SetPricingStage(int stage)
+    {
+        PricingStage = Math.Clamp(stage, 0, PricingStages);
+        if (_vcTarget == null)
+            return;
+        var scale = new double[NX];
+        double f = (double)PricingStage / PricingStages;
+        for (int i = 0; i < NX; i++)
+        {
+            double tight = i < _vcTarget.Length ? _vcTarget[i] : 0.0;
+            double loose = _cfg.XScale[i];
+            // Geometric from XScale to the target; a target no tighter than XScale is simply the target.
+            scale[i] = tight > 0.0 && loose > tight ? loose * Math.Pow(tight / loose, f) : tight;
+        }
+        _solver.SetVirtualControlScale(scale);
     }
 
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
@@ -426,6 +461,7 @@ public sealed class Ksa6DofGuidance
 
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
+        SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         return Finish(x0, simNow, maxIterations, cold: true);
     }
@@ -480,6 +516,7 @@ public sealed class Ksa6DofGuidance
 
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
+        SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         return Finish(x0, simNow, maxIterations, cold: true);
     }
@@ -545,6 +582,8 @@ public sealed class Ksa6DofGuidance
     {
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
+        // Rough first: a cold start or a restart is finding a plan, not refining one.
+        SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, trustRegion: _solver.TrustRegionMax);
         Status = ScvxStatus.IterationLimit;
         Error = "converging";
@@ -775,6 +814,8 @@ public sealed class Ksa6DofGuidance
 
         _xf = (double[])prev._xf.Clone();
         if (FixedTime) PinSigma(sigma);
+        // A rebuild continues a refinement: the price the previous guidance had reached, not a rough start.
+        SetPricingStage(prev.PricingStage);
         _solver.Initialize(x0, _xf, xs, us, sigma);
         return Finish(x0, simNow, maxIterations);
     }
@@ -936,8 +977,12 @@ public sealed class Ksa6DofGuidance
         if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
+            SetPricingStage(PricingStage + 1);
             return true;
         }
+        // A plan the tight price will not let through is looser-priced next cycle rather than lost.
+        if (_consecutiveFailures >= 1 && PricingStage > 0)
+            SetPricingStage(PricingStage - 1);
 
         // WIDE-TRUST-REGION RETRY, but NOT on every failure.
         //  It is the right response to a one-off divergence: the tight region above assumes the vehicle is near its previous plan, and once it is not, the problem is infeasible until the region opens up. But it costs a second reseed and three times the iterations, so doing it on every failure makes a REFUSAL more expensive than a SUCCESS - and once the loop starts failing repeatedly that is precisely backwards. the recorded run spent 250-500 ms per cycle this way while accepting 6 re-solves in 103.
@@ -957,6 +1002,7 @@ public sealed class Ksa6DofGuidance
         if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
             _consecutiveFailures = 0;
+            SetPricingStage(PricingStage + 1);
             return true;
         }
         return false;
@@ -998,6 +1044,7 @@ public sealed class Ksa6DofGuidance
         LastTrustRegionStart = region;
         _solver.Reseed(x0, xs, us, sigma, trustRegion: region);
         bool ok = Finish(x0, simNow, maxIterations, budgetMs: RecoveryCycleBudgetMs);
+        SetPricingStage(ok ? PricingStage + 1 : PricingStage - 1);
 
         _workX = (double[])_solver.ReferenceX.Clone();
         _workU = (double[])_solver.ReferenceU.Clone();
