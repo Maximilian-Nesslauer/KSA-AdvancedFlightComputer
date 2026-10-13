@@ -232,6 +232,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
         {
             fc.BurnMode = FlightComputerBurnMode.Manual;
             RcsExecution rcs = RcsFlightSupport.SeedFlyingExecution(vehicle, pass);
+            MarkLoadedBurnTimed(fc);
             RcsExecutor.Complete(vehicle, fc, rcs, 0f);
             if (!t.Check("an RCS pass raises the stock completion flag",
                     fc.AutoBurnCompleted && !fc.AutoBurnStoppedOutOfPropellant && !rcs.IsActive))
@@ -260,6 +261,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
             fc.BurnMode = FlightComputerBurnMode.Manual;
             fc.RemoveBurn(playerBurn);
             rcs = RcsFlightSupport.SeedFlyingExecution(vehicle, next!);
+            MarkLoadedBurnTimed(fc);
             RcsExecutor.Complete(vehicle, fc, rcs, 0f);
             _autoRemoveCalls = 0;
             _autoRemoveFoundBurn = false;
@@ -375,6 +377,13 @@ public sealed class SharedVehicleHooksTest : AfcTest
         {
             fc.BurnMode = FlightComputerBurnMode.Manual;
             fc.AutoBurnStoppedOutOfPropellant = true;
+            bool freshIgnored = StockBurnEnd.Capture(fc).Burn == null;
+            fc.AutoBurnStoppedOutOfPropellant = false;
+            if (!t.Check("an end flag on a target no control step has timed is not captured", freshIgnored))
+                return;
+
+            MarkLoadedBurnTimed(fc);
+            fc.AutoBurnStoppedOutOfPropellant = true;
             RaisePendingAlertsWithMultiPass(vehicle);
             if (!t.Check("a propellant stop keeps the pass index and drops the removed pass",
                     exec.PassIndex == 0 && exec.CurrentBurn == null && !exec.ReengageAutoOnNextBurn
@@ -433,6 +442,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
                 return;
 
             fc.BurnMode = FlightComputerBurnMode.Manual;
+            MarkLoadedBurnTimed(fc);
             fc.AutoBurnStoppedOutOfPropellant = true;
             RaisePendingAlertsWithMultiPass(vehicle);
             t.Check("dry stop: the execution ends instead of planning the pass again",
@@ -446,6 +456,7 @@ public sealed class SharedVehicleHooksTest : AfcTest
             exec.StallHintShown = false;
             MultiPassRegistry.Add(exec);
             fc.BurnMode = FlightComputerBurnMode.Manual;
+            MarkLoadedBurnTimed(fc);
             fc.AutoBurnStoppedOutOfPropellant = true;
             RaisePendingAlertsWithMultiPass(vehicle);
             t.Check("dry stop: a pass stock kept waits in Manual with the execution",
@@ -470,6 +481,13 @@ public sealed class SharedVehicleHooksTest : AfcTest
         Burn burn = Burn.Create(OrbitPointCce.Zero, (now + leadSeconds).Seconds(), new double3(0.5, 0.0, 0.0), patch, vehicle);
         vehicle.FlightComputer.AddBurn(burn);
         return burn;
+    }
+
+    // A hand-raised end flag needs a target that a control step has timed, because StockBurnEnd.Capture ignores the fresh target FlightComputer.LoadBurn creates.
+    private static void MarkLoadedBurnTimed(FlightComputer fc)
+    {
+        if (fc.Burn != null)
+            fc.Burn.IgnitionTime = Universe.GetElapsedTime();
     }
 
     // Arms Auto on the loaded burn, then overshoots its target so the worker raises AutoBurnCompleted.

@@ -73,9 +73,12 @@ internal static partial class RcsExecutor
         float mass = vehicle.FlightComputer.TotalMassPropsBody.Mass;
         est.Valid = true;
 
+        // The capability groups are in the thruster cache frame of their probe, so project into that frame.
+        doubleQuat ctrl2Cci = RcsCtrlFrame.Ctrl2Cci(vehicle, cap.Ctrl2Body);
+
         // The weakest required axis limits net force. Each group contributes its duty scaled mass flow.
         double3 uCtrl = double3.Unpack(togo)
-            .Transform(vehicle.GetCtrl2Cci().Inverse()).NormalizeOrZero();
+            .Transform(ctrl2Cci.Inverse()).NormalizeOrZero();
         est.HoldFeasible = TryHoldPerformance(in cap, uCtrl, out double holdForce, out double holdMassFlow);
         if (est.HoldFeasible && holdForce > 0.0)
         {
@@ -98,7 +101,7 @@ internal static partial class RcsExecutor
                     in cap, double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best)));
 
             double3 axisCci = double3.Unpack(RcsCapabilitySnapshot.AxisDirection(best))
-                .Transform(vehicle.GetCtrl2Cci());
+                .Transform(ctrl2Cci);
             double3 uCci = double3.Unpack(togo).NormalizeOrZero();
             double theta = MathEx.SafeAcos(double3.Dot(axisCci, uCci));
             if (theta > AlignMinThetaRad)

@@ -20,7 +20,7 @@ internal static class StockBurnMode
     /// <summary>
     /// Gives an Auto back while the mode still reads Manual and <paramref name="heldTarget"/> is still the loaded burn target. Stock writes Manual itself when a burn is loaded, unloaded or completed, and Auto on a burn the player never armed would start the stock autopilot on it.
     /// A caller that cannot keep the target, because its hold outlives a save, passes the loaded one.
-    /// Stock writes Manual too when a started Auto burn finds every active engine dry, and raises <c>FlightComputer.AutoBurnStoppedOutOfPropellant</c>, after which <c>FlightComputer.RaisePendingAlerts</c> ends the burn and removes it when another burn follows. An Auto given back to such a burn would stop on the next worker step, so it is not given back: the burn stays planned in Manual and stock's own stop warning says why.
+    /// Stock writes Manual too when a started Auto burn finds every active engine dry, and raises <c>FlightComputer.AutoBurnStoppedOutOfPropellant</c>, after which <c>FlightComputer.RaisePendingAlerts</c> stops the warp and warns. It keeps the burn loaded when a later stage exists, and otherwise ends the burn and removes it when another burn follows. An Auto given back to such a burn would stop on the next worker step, so it is not given back: the burn stays planned in Manual and a warning says why.
     /// Only a caller that takes that stop back itself on every frame, as AutoStage does while new engines light, passes <paramref name="takesStopBack"/>.
     /// </summary>
     internal static bool GiveBackAuto(Vehicle vehicle, BurnTarget? heldTarget, bool takesStopBack = false)
@@ -41,10 +41,13 @@ internal static class StockBurnMode
     }
 
     /// <summary>
-    /// The propellant stop of <c>FlightComputer.ComputeControl</c>, read on the committed engine states the next worker step starts from: the burn has started or reached its ignition time, at least one engine is active, and no active engine reports propellant.
+    /// The propellant stop of <c>FlightComputer.ComputeControl</c>, read on the committed engine states the next worker step starts from: the flight computer has run a control step before, the burn has started or reached its ignition time, at least one engine is active, and no active engine reports propellant.
+    /// Stock skips the stop in the first control step after the flight computer is created or loaded by <c>FlightComputer.DeserializeSave</c>, which is the step where <c>FlightComputer.LastControlTime</c> still has no value.
     /// </summary>
     internal static bool WouldStopAtOnce(Vehicle vehicle, BurnTarget target)
     {
+        if (!vehicle.FlightComputer.LastControlTime.HasValue)
+            return false;
         if (!target.Throttle.HasValue && Universe.GetElapsedTime() < target.IgnitionTime)
             return false;
         if (vehicle.Parts?.States == null

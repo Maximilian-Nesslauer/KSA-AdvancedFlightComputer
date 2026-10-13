@@ -190,17 +190,15 @@ internal static class HohmannMultiPassUI
         }
     }
 
-    // Stock draws the queued pass. It draws the final pass only while the selected transfer overlay is available.
+    // Stock draws the queued pass, so only the remaining passes are drawn here.
     public static void RenderOrbits(IViewport viewport, Vehicle source)
     {
         if (!HasMultiPassPreview) return;
         if (source.Id != _cachedKey.SourceId) return;
 
         bool skipFirst = MultiPassRegistry.Has(source.Id);
-        bool stockOwnsFinal = StockSelectedTransferOverlayActive();
         MultiPassRenderer.RenderPassOrbits(
-            viewport, source, _cachedPreview.Passes,
-            skipFirst, skipLast: stockOwnsFinal);
+            viewport, source, _cachedPreview.Passes, skipFirst);
     }
 
     // Keep the original pass numbers when the preview contains only the remaining passes.
@@ -216,20 +214,14 @@ internal static class HohmannMultiPassUI
             firstPassDisplayNumber = exec.PassIndex + 1;
             skipFirst = true;
         }
-        bool stockOwnsFinal = StockSelectedTransferOverlayActive();
         MultiPassMarkers.Draw(viewport, source,
-            _cachedPreview.Passes, firstPassDisplayNumber,
-            skipFirst, skipLast: stockOwnsFinal);
+            _cachedPreview.Passes, firstPassDisplayNumber, skipFirst);
     }
 
-    // The flyby overlay hides the stock path aimed at the center, so MultiPass must draw the final pass.
-    private static bool StockSelectedTransferOverlayActive()
-    {
-        if (HohmannFlybyUI.FlybyRequested) return false;
-        return StockPlanner.ShowPlanWindow
-               && StockPlanner.DisplaySelectedTransfer
-               && StockPlanner.TransferCalculated;
-    }
+    // True while RenderOrbits and RenderMarkers draw the passes for the planner's source vehicle. Stock's selected transfer is one burn of the whole transfer delta v, which multi-pass does not fly, so it must stay hidden then.
+    public static bool IsDrawingPassOverlay()
+        => ShouldRenderOverlay(out Vehicle? source)
+           && source != null && source.Id == _cachedKey.SourceId;
 
     // Active execution survives invalidation of the stock preview. An uncommitted preview must be discarded.
     public static bool ShouldRenderOverlay(out Vehicle? source)

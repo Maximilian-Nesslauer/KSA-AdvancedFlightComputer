@@ -18,7 +18,7 @@ namespace AdvancedFlightComputer;
 [StarMapMod]
 public sealed class Mod
 {
-    private const string TestedGameVersion = "v2026.10.10.5554";
+    private const string TestedGameVersion = "v2026.10.13.5602";
 
     private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
     private static bool _maneuverTypesInjected;
@@ -146,8 +146,8 @@ public sealed class Mod
             : markers ? "DrawSelectedTransfer"
             : "DrawSelectedTransfer and DrawSelectedTransferUi";
         DefaultCategory.Log.Warning(
-            $"[AFC] Flyby stock-preview suppression disabled - {missing} anchor not found. "
-            + "Stock keeps drawing its own preview next to the flyby trajectory.");
+            $"[AFC] Stock transfer-preview suppression disabled - {missing} anchor not found. "
+            + "Stock keeps drawing its own preview next to the flyby or multi-pass trajectory.");
     }
 
     // With the DrawPlanWindow prefix possibly missing, the injected types would sit in stock's dropdown with no window body.

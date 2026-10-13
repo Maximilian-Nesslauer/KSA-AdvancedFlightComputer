@@ -209,7 +209,7 @@ internal static class GameReflection
     public static readonly MethodInfo? Universe_ApplyVehicleSolvers =
         AccessTools.Method(typeof(Universe), nameof(Universe.ApplyVehicleSolvers), Type.EmptyTypes);
 
-    // Stock ends an Auto burn here, and an RCS burn too, because the RCS executor raises the same flags. Program.PrepareFrame calls it for every vehicle after InputEvents.ApplyInputEvents, and FlightComputer.EndAutoBurn removes the finished or stopped burn there whenever another burn follows it.
+    // Stock acts on the end of an Auto burn here, and of an RCS burn too, because the RCS executor raises the same flags. Program.PrepareFrame calls it for every vehicle after InputEvents.ApplyInputEvents, and FlightComputer.EndAutoBurn removes the finished or stopped burn there whenever another burn follows it. A propellant stop with a later stage keeps the burn loaded, stops the warp and warns instead.
     // MultiPass and AutoRemove act on the outcome in a postfix, so they never remove a burn stock is about to remove as well.
     [UsedBy(Feature.Core | Feature.MultiPass | Feature.RcsTranslation | Feature.AutoRemove)]
     public static readonly MethodInfo? FlightComputer_RaisePendingAlerts =

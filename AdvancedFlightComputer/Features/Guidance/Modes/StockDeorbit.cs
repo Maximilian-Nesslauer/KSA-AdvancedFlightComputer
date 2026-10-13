@@ -174,6 +174,9 @@ public static partial class GuidanceWindow
         RestoreDeorbitPreviewThrottle(vehicle);
         if (!StockBurnMode.GiveBackAuto(vehicle, _s.DeorbitTarget))
         { StopStockDeorbit(vehicle, "Stock could not arm the deorbit node. The node remains Manual.", keepNode: true); return; }
+        // In Manual, BurnPlan.CalculateNewFlightPlansFromFlightComputerOnly predicts the ignition of a node without a planned throttle at full throttle, while the duration checked above is for the preview throttle.
+        // FlightComputer.BurnUpdated runs BurnTarget.UpdateFromBurn on the same loaded target, which clears PlannedIgnition, and marks the flight plans out of date, so stock predicts the ignition again at the Auto throttle.
+        fc.BurnUpdated(_s.DeorbitNode);
         _s.DeorbitAutoArmed = true;
         _s.LandingPhase = LandingPhase.DeorbitBurn;
         _s.LandingStatus = "Stock Auto will align and execute the deorbit node.";

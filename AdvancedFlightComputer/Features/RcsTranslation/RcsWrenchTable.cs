@@ -15,10 +15,10 @@ internal sealed class RcsWrenchTable
     public int UsableCount;
     public floatQuat Ctrl2Body = floatQuat.Identity;
 
-    /// <summary>Compare module references because the flight-computer configuration swaps with its worker copy and staging can replace a list without changing its count.</summary>
-    public bool Matches(List<ThrusterController> thrusters, in RcsCtrlFrame ctrl)
+    /// <summary>Compare module references because the flight-computer configuration swaps with its worker copy and staging can replace a list without changing its count. A rebuild of the thruster cache in another frame also invalidates the table.</summary>
+    public bool Matches(Vehicle vehicle, List<ThrusterController> thrusters)
     {
-        if (Count != thrusters.Count || Ctrl2Body != ctrl.Ctrl2Body)
+        if (Count != thrusters.Count || !RcsCtrlFrame.MatchesCache(vehicle, Ctrl2Body))
             return false;
         for (int i = 0; i < Count; i++)
         {

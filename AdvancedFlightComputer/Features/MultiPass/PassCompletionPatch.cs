@@ -10,14 +10,14 @@ using KSA;
 namespace AdvancedFlightComputer.Features.MultiPass;
 
 // The multi-pass state machine, ticked on the main thread before input events are drained.
-// Stock ends every pass. FlightComputer.RaisePendingAlerts acts on the completion or propellant stop that the vehicle worker raised for an engine pass or the RCS executor raised for an RCS pass, and FlightComputer.EndAutoBurn removes the pass when another burn follows it. SharedVehicleHooks hands that outcome to OnStockBurnEnded.
+// Stock acts on the end of every pass. FlightComputer.RaisePendingAlerts acts on the completion or propellant stop that the vehicle worker raised for an engine pass or the RCS executor raised for an RCS pass. FlightComputer.EndAutoBurn removes the pass when another burn follows it. A propellant stop with a later stage does not reach FlightComputer.EndAutoBurn, so stock keeps that pass loaded. SharedVehicleHooks hands that outcome to OnStockBurnEnded.
 internal static class PassCompletionPatch
 {
     private const int MaxAwaitingMaterializationTicks = 4;
     private const int MaxConsecutiveScheduleFailures = 5;
 
     // Runs after FlightComputer.RaisePendingAlerts with the workers joined, so the plan can be changed directly.
-    // keptByStock says whether FlightComputer.EndAutoBurn left the burn in the plan, which it does only for the last planned burn.
+    // keptByStock says whether the burn is still the first executable burn of the plan. FlightComputer.EndAutoBurn leaves only the last planned burn there, and a stage-ran-dry stop keeps the burn whatever follows it.
     internal static void OnStockBurnEnded(Vehicle vehicle, Burn burn, bool completed, bool keptByStock)
     {
         if (!MultiPassRegistry.TryGet(vehicle.Id, out MultiPassExecution? exec)
@@ -241,7 +241,7 @@ internal static class PassCompletionPatch
     }
 
     // Stock has already warned about the stop.
-    // A pass stock kept waits in Manual for the player, who can refuel and engage it again. A pass stock removed is planned again from the current orbit on the next tick, also in Manual, so the player can stage and arm it.
+    // A pass stock kept waits in Manual for the player, who can stage or refuel and engage it again. A pass stock removed is planned again from the current orbit on the next tick, also in Manual, so the player can stage and arm it.
     // With no propellant left anywhere a pass planned again could never fly, so the execution ends instead of planning it.
     // An unstaged engine counts, because staging it lets the pass fly, and so do the RCS thrusters when the RCS executor can fly a pass.
     private static void StopPass(Vehicle vehicle, MultiPassExecution exec, bool keptByStock)

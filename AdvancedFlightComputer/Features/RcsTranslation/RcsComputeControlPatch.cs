@@ -25,9 +25,12 @@ internal static class RcsComputeControlPatch
         if (bt == null)
             return;
 
+        // Use the frame of the thruster cache, not fc.Ctrl2Asmb. IntendedForce and the published groups are in the cache frame, and Rocket.UpdateThrusterCache moves the cache to fc.Ctrl2Asmb only later in this step.
         float3 togo = bt.DeltaVToGoCci;
+        floatQuat cachedCtrl2Body = outputs.Thrusters.GlobalState.CachedCtrl2Body;
         float3 impulse = float3.Pack(
-            double3.Unpack(togo).Transform(doubleQuat.Concatenate(nav.Ctrl2Body, nav.Body2Cci).Inverse()))
+            double3.Unpack(togo).Transform(
+                doubleQuat.Concatenate(doubleQuat.Unpack(in cachedCtrl2Body), nav.Body2Cci).Inverse()))
             * fc.TotalMassPropsBody.Mass;
 
         // Stock UpdateBurnTarget writes engine timing every tick. Replace it with remaining RCS duration. Stale LP geometry uses the group model.

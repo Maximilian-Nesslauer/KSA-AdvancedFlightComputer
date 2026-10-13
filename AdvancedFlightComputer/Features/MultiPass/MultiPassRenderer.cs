@@ -6,19 +6,16 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 // Earlier passes are dimmer so the final trajectory remains distinct.
 internal static class MultiPassRenderer
 {
-    // Hidden passes retain their positions in the brightness sequence.
+    // A skipped first pass is the queued burn, which stock draws itself.
     public static void RenderPassOrbits(
         IViewport viewport, Vehicle source, PassPreview[] passes,
-        bool skipFirst = false, bool skipLast = false)
+        bool skipFirst = false)
     {
         int start = skipFirst ? 1 : 0;
-        int end = passes.Length - (skipLast ? 1 : 0);
-        if (end - start <= 0) return;
-
-        // Include the hidden final pass in the ramp so the preceding pass does not jump to full brightness.
         int rampCount = passes.Length - start;
+        if (rampCount <= 0) return;
 
-        for (int i = start; i < end; i++)
+        for (int i = start; i < passes.Length; i++)
         {
             FlightPlan fp = passes[i].FlightPlan;
             if (fp.Patches.Count == 0)
@@ -27,10 +24,10 @@ internal static class MultiPassRenderer
             ApplyPassColor(fp, i - start, rampCount);
             EnsurePatchPointsCached(fp);
 
-            // Use the selected stock orbit style. Restrict danger ground tracks to the final pass, which stock draws when it is hidden here.
+            // Use the selected stock orbit style. Restrict danger ground tracks to the final pass.
             fp.AddLineInstances(viewport, source, isActive: true,
                 drawVehiclePosition: false,
-                TrueAnomaly.NaN, TrueAnomaly.NaN,
+                nextBurnTime: null,
                 drawDangerGroundTrack: i == passes.Length - 1,
                 isPostBurnOrbit: true);
         }
