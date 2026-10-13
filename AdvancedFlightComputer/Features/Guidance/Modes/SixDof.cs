@@ -822,6 +822,7 @@ public static partial class GuidanceWindow
         _s.Active = false;
         _s.EngagePending = false;
         _s.Converging = false;
+        _s.SixDofRestartOpenLoop = false;
         _s.SixDofStandby = false;
         _s.SixDofFromBrakingBurn = false;
         _s.SixDofLastPublishedPlan = null;
@@ -977,9 +978,11 @@ public static partial class GuidanceWindow
             return;
         }
 
+        // Untracked after a cold restart: the plan has been abandoned, so its position error is not one to correct (SixDofRestartOpenLoop).
         Ksa6DofPlan plan = _s.Guidance.Published;
         if (plan != null && now - plan.SolveTime < plan.Sigma
-            && _s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x, SixDofTracker()))
+            && _s.Guidance.Command(now, out double3 torqueModel, out double thrustN, x,
+                                   _s.SixDofRestartOpenLoop ? null : SixDofTracker()))
         {
             ApplyPlanCommand(vehicle, parent, siteCci, x, now, torqueModel, thrustN);
             return;
@@ -1291,10 +1294,12 @@ public static partial class GuidanceWindow
                               $"{driftLimit:F0} m") +
                 $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.LastDefectM:F0} m" +
                 (keptPlan ? " - reseeding from the existing plan"
-                          : " - reseeding from a straight line"));
+                          : " - reseeding from a straight line, flying the last plan untracked meanwhile"));
             _s.Converging = true;
             _s.ColdFrames = 0;
             _s.RefusalRun = 0;
+            // The plan a cold restart abandons is flown open loop until the new one lands; see SixDofRestartOpenLoop.
+            _s.SixDofRestartOpenLoop = !keptPlan;
             _s.Error = "re-converging...";
         }
 
@@ -1337,6 +1342,7 @@ public static partial class GuidanceWindow
             if (coldDone)
             {
                 _s.Converging = false;
+                _s.SixDofRestartOpenLoop = false;
                 _s.Error = "";
                 SixDofLog.Event(_s, now,
                     $"COLD SOLVE CONVERGED in {_s.Guidance.LastIterations} iterations spread over " +
@@ -1385,6 +1391,7 @@ public static partial class GuidanceWindow
                     if (_s.Guidance.AcceptCold(x, now))
                     {
                         _s.Converging = false;
+                        _s.SixDofRestartOpenLoop = false;
                         _s.Error = "";
                     }
                     else

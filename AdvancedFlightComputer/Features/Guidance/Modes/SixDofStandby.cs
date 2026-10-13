@@ -292,6 +292,7 @@ public static partial class GuidanceWindow
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
         _s.SixDofEngineCut = false;
+        _s.SixDofRestartOpenLoop = false;
         _s.SixDofFromBrakingBurn = false;
         _s.Error = converging ? "converging..." : "";
 
