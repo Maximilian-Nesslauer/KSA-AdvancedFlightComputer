@@ -175,7 +175,13 @@ public sealed class Scvx6DofConfig
     /// Largest THRUST acceleration the plan may use, m/s^2, or 0 for none: T &lt;= AccelMax * m at every node. Exact - both are variables and the row is linear in them - and soft like the glideslope, with an L1 slack at <see cref="AccelWeight"/>, so a craft that needs more to stop gets it rather than no plan. Keeps a high thrust-to-weight booster from planning its landing as a few seconds at full thrust, which is where lag costs the most.
     /// </summary>
     public double AccelMax { get; init; }
-    public double AccelWeight { get; init; } = 1e4;
+
+    /// <summary>
+    /// The acceleration slack's price per newton over the limit, normalised by Tmax, per node. LOW ENOUGH THAT BRAKING HARDER BEATS ARRIVING FAST: a m/s bought over the limit costs about (AccelWeight / 1e4) x (velocity scale / full-thrust acceleration) / node spacing times a m/s of touchdown speed, and at 1e4 that was 2.2 on the 2026-10-09 booster (95 m/s, 3.8 MN on 31 t, 0.35 s nodes) - in game it coasted, held 3.00 g to the end and hit the pad at 10.9 m/s.
+    ///  300 keeps that ratio under about 0.3 from 50 nodes down to 5 on the 7-30 t boosters, and flew well in game on 2026-10-09. The ratio grows with finer nodes and lighter thrust; a much different vehicle could need it lower.
+    ///  NOT VERIFIED TO BIND EVERYWHERE: offline, --path's acceleration case no longer holds the limit at 300 (peak 24.1 m/s^2 against 12.3, IterationLimit) where 1e4 held it exactly - a flat weight's meaning depends on the scales, which differ there.
+    /// </summary>
+    public double AccelWeight { get; init; } = 300;
     public bool AccelLimitEnabled => AccelMax > 0.0;
 
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
