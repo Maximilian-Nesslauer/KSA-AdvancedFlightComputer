@@ -615,6 +615,7 @@ public sealed class Ksa6DofGuidance
         CommitInputs();
         BuildShiftedSeed(x0, simNow, sigmaSeed, out double[] xSeed, out double[] uSeed, out _);
         BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        _spreadFromPlan = true;
         return true;
     }
 
@@ -636,6 +637,7 @@ public sealed class Ksa6DofGuidance
         LastTrustRegionStart = _solver.TrustRegionMax;
         _lastColdIterationS = 0.0;
         _coldIterations = 0;
+        _coldRefusedRun = 0;
         NeedsMoreNodes = false;
         _solver.SubproblemEps = ColdSubproblemEps;
     }
@@ -651,6 +653,7 @@ public sealed class Ksa6DofGuidance
 
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        _spreadFromPlan = false;
     }
 
     /// <summary>
@@ -712,7 +715,51 @@ public sealed class Ksa6DofGuidance
         // Back to flight accuracy for everything after this. The looser tolerance is only defensible while the answer is a seed for the next solve rather than a trajectory the vehicle is about to fly.
         if (ok)
             _solver.SubproblemEps = Scvx6DofSolver.RealTimeEps;
+
+        // STUCK: a run of refused iterations - what the log shows as a defect of infinity, there being no accepted step to measure. Each refusal halves the trust region and the re-anchoring above carries it into the next iteration, so the run pins it at its floor, and the re-anchoring moves the reference's position but not its time: the vehicle flies on while nodes 1..n stay where the solve began, and the gap at interval 0 grows faster than a floor-sized step can close it. The 2026-10-13 moon_des retarget's third restart sat there from 338 m - 6x, then 12x the attitude tolerance at interval 0 - until its plan ran out 7 m over the pad.
+        //  So it starts again: from the vehicle's state now, the trust region wide open, the price loose, and a seed made now - the plan resampled to this moment for a solve that started from the plan, a new straight line for one that did not.
+        bool refused = _solver.Trace.Count == 0 || !_solver.Trace[^1].Accepted;
+        _coldRefusedRun = refused ? _coldRefusedRun + 1 : 0;
+        if (!ok && _coldRefusedRun >= StuckRefusals)
+            RestartStuckSpreadSolve(x0, simNow);
         return ok;
+    }
+
+    /// <summary>Refused iterations in a row after which a spread solve is stuck and starts again; see StepCold. Six halvings bring the trust region from its widest to within a factor two of its floor.</summary>
+    public int StuckRefusals { get; set; } = 6;
+
+    /// <summary>Times a stuck spread solve has started again on this guidance. For the log.</summary>
+    public int StuckRestarts { get; private set; }
+
+    // Refused iterations in a row in the spread solve, whether it was seeded from the plan, and the note its last stuck restart left for the log.
+    private int _coldRefusedRun;
+    private bool _spreadFromPlan;
+    private string _stuckNote;
+
+    /// <summary>The note the last stuck restart left, once, then null. Read only while no solve is running.</summary>
+    public string TakeStuckRestartNote()
+    {
+        string note = _stuckNote;
+        _stuckNote = null;
+        return note;
+    }
+
+    private void RestartStuckSpreadSolve(double[] x0, double simNow)
+    {
+        int refused = _coldRefusedRun;
+        double trust = _solver.TrustRegion;
+        double sigma = Math.Clamp(_solver.Sigma, _cfg.SigmaMin, _cfg.SigmaMax);
+        bool fromPlan = _spreadFromPlan && HasPlan;
+        double[] xs, us;
+        if (fromPlan)
+            BuildShiftedSeed(x0, simNow, sigma, out xs, out us, out _);
+        else
+            BuildColdSeed(x0, _xf, out xs, out us);
+        BeginSpreadSolve(x0, _xf, xs, us, sigma);
+        _spreadFromPlan = fromPlan;
+        StuckRestarts++;
+        _stuckNote = $"COLD SOLVE STUCK: {refused} iterations refused in a row, trust region {trust:G2} - starting it again from the vehicle's state with the trust region wide open, " +
+                     (fromPlan ? "re-seeded from the plan as of now" : "from a new straight line");
     }
 
     /// <summary>

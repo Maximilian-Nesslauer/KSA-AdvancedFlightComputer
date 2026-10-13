@@ -1340,6 +1340,11 @@ public static partial class GuidanceWindow
                 coldError = _s.Guidance.Error;
             }
 
+            // A stuck spread solve starts itself again (Ksa6DofGuidance.StepCold); say so.
+            string stuck = _s.Guidance.TakeStuckRestartNote();
+            if (stuck != null)
+                SixDofLog.Event(_s, now, $"{stuck}, at alt {x[2]:F0} m");
+
             if (coldDone)
             {
                 _s.Converging = false;
