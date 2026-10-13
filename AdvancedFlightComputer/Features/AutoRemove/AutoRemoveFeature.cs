@@ -46,7 +46,8 @@ internal static class AutoRemoveFeature
         }
 
         ImGui.TextWrapped(
-            "The game removes a finished or stopped auto-burn by itself when another burn follows it. When on, " +
+            "The game removes a finished or stopped auto-burn by itself when another burn follows it, but keeps " +
+            "a burn that stopped because a stage ran dry and a later stage can continue it. When on, " +
             "the last finished burn is removed as well, for engine and RCS burns alike. Manual burns, and a " +
             "last burn that stopped without propellant, stay in the plan.");
     }

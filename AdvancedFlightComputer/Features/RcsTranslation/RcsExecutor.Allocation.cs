@@ -106,7 +106,7 @@ internal static partial class RcsExecutor
         RcsCtrlFrame ctrl = RcsCtrlFrame.For(vehicle);
         exec.Wrench ??= new RcsWrenchTable();
         if (nowSec - exec.WrenchBuiltAtSec > CapabilityRefreshSec
-            || !exec.Wrench.Matches(thrusters, in ctrl))
+            || !exec.Wrench.Matches(vehicle, thrusters))
         {
             exec.Wrench.Build(vehicle, fc, in ctrl);
             exec.WrenchBuiltAtSec = nowSec;

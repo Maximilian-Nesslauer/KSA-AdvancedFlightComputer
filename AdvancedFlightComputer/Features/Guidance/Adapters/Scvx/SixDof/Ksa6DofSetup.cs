@@ -91,7 +91,9 @@ public static class Ksa6DofSetup
             if (gc.Data.MaximumThrust <= best)
                 continue;
             best = gc.Data.MaximumThrust;
-            float3 d = gc.Data.ThrustPosVehicleAsmb - com;
+            // Rest thrust point, at zero deflection, the same arm KsaTvcAllocator uses.
+            TvcAllocation.ComputeThrustAsmb(gc, float2.Zero, out float3 thrustPos, out _);
+            float3 d = thrustPos - com;
             // Negative because the engine sits at -Z in the model's body frame; the model wants the magnitude of that offset.
             arm = Math.Abs(double3.Dot(new double3(d.X, d.Y, d.Z), mz));
         }
@@ -99,7 +101,7 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
-    /// Peak roll torque the vehicle can actually produce, in N*m - the model's TauRollMax. Comes from the allocator's honest capability figure (torque at the point some gimbal saturates), NOT from KSA's TvcTorqueAuthority, which sums absolute values and so assumes every gimbal serves roll maximally at once. Planning against an optimistic bound would produce a trajectory the vehicle cannot fly.
+    /// Peak roll torque the vehicle can actually produce, in N*m - the model's TauRollMax. Comes from the allocator's honest capability figure (torque at the point some gimbal saturates), NOT from KSA's TvcTorqueAuthority. That figure is an angular acceleration about the flight computer's control axes, which FlightComputer.UpdateTvcParams takes from TvcAllocation.ComputeTorqueRange for the gimbals of FlightComputer.VehicleConfig.Gimbals, scaled to the current thrust. It is zero while the engines are off, and planning needs the torque in N*m of the same allocation that flies the plan. A bound above what that allocation delivers would produce a trajectory the vehicle cannot fly.
     /// </summary>
     public static double RollTorqueLimit(Vehicle vehicle)
     {

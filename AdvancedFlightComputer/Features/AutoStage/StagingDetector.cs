@@ -18,7 +18,7 @@ namespace AdvancedFlightComputer.Features.AutoStage;
 //
 // AwaitingPropagation exists because a freshly activated engine reports propellant only after the first Rocket.UpdateRockets pass over it, and FlightComputer.ComputeControl runs before that pass in every worker frame.
 // Until then, and through the delays while the spent engines are still attached, every active engine looks dry, so FlightComputer.ComputeControl drops a running Auto burn to Manual and raises AutoBurnStoppedOutOfPropellant.
-// FlightComputer.RaisePendingAlerts would then end the burn later in the same frame, stop the warp, and remove the burn when another one follows.
+// FlightComputer.RaisePendingAlerts would then act on the stop later in the same frame. It stops the warp and either keeps the burn loaded with a stage-ran-dry warning, when a later stage exists, or ends the burn and removes it when another one follows.
 // A staging in flight therefore takes that stop back on every frame for the burn target it staged under, see KeepAutoBurn.
 // A player staging meets the same stop one frame later than AutoStage's own, because SequenceList.ActivateNextSequence runs inside InputEvents.ApplyInputEvents after that frame's activations were drained, so its activations land in the next frame's drain.
 // AwaitingActivation holds the burn until they have landed. It runs for every vehicle with a running Auto burn, armed or not, and only an armed vehicle stages further on its own.
@@ -264,7 +264,7 @@ internal static class StagingDetector
             }
             else
             {
-                // Nothing left to stage, or the vehicle is not armed to stage it, so the stop stands and stock ends the burn.
+                // Nothing left to stage, or the vehicle is not armed to stage it, so the stop stands and stock handles it.
                 state.HeldBurn = null;
                 state.State = StagingState.Phase.Monitoring;
             }
@@ -446,7 +446,7 @@ internal static class StagingDetector
                     $"[AFC] AutoStage held on '{vehicle.Id}': the next sequence would separate the last control module. Stage it by hand if that is wanted.");
                 TimedAlert.Create("AutoStage held: the next sequence would separate the control module", Color.Yellow, 4.0);
             }
-            // The stop stands, so stock ends the burn it cannot continue.
+            // The stop stands, so stock handles the burn it cannot continue.
             state.HeldBurn = null;
             state.State = StagingState.Phase.Monitoring;
             return;
@@ -513,13 +513,15 @@ internal static class StagingDetector
         bool takesBack = fc.BurnMode == FlightComputerBurnMode.Manual || fc.AutoBurnStoppedOutOfPropellant;
         if (fc.BurnMode == FlightComputerBurnMode.Manual && !StockBurnMode.GiveBackAuto(vehicle, held, takesStopBack: true))
         {
-            // A vehicle without control cannot fly the burn, so stock ends it.
+            // A vehicle without control cannot fly the burn, so the burn is left to stock.
             state.HeldBurn = null;
             return;
         }
         fc.AutoBurnStoppedOutOfPropellant = false;
+        // The stage-ran-dry flag goes with the stop, because a stale true would make a later stop of another burn keep that burn loaded.
+        fc.AutoBurnStageRanDry = false;
         // The stop came with a denied ignition. FlightComputer.ComputeControl drops an Auto burn to Manual without any flag when the next ignition is denied too,
-        // so the denial is cleared with the stop. A next dry tick then raises the stop again, and when the hold lets it stand, FlightComputer.RaisePendingAlerts ends the burn with its alert.
+        // so the denial is cleared with the stop. A next dry tick then raises the stop again, and when the hold lets it stand, FlightComputer.RaisePendingAlerts acts on it with its own alert.
         if (takesBack)
             held.LastIgnitionDenied = false;
     }

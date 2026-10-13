@@ -19,9 +19,23 @@ internal readonly record struct PlanningBasis(
         if (plan.Patches.Count == 0)
             return new PlanningBasis(source.Orbit, source.FlightPlan.TryFindPatch(now), now, false, null);
 
-        // Patch zero describes the orbit after the burn, while later patches describe SOI transitions.
-        // It starts at the burn's impulse time, which for an interstellar burn lies half the burn after its start.
+        // The last finite burn piece carries the conic after cutoff, and later patches describe SOI transitions.
+        // A plan without a finite burn piece starts with the orbit after an impulse at the burn's impulse time.
         PatchedConic patch = plan.Patches[0];
-        return new PlanningBasis(patch.Orbit, patch, finalBurn.ImpulseTime, true, plan);
+        for (int i = plan.Patches.Count - 1; i >= 0; i--)
+        {
+            if (plan.Patches[i].BurnTrajectory.HasValue)
+            {
+                patch = plan.Patches[i];
+                break;
+            }
+        }
+
+        // A finite burn piece starts at ignition, and its conic is valid only from the cutoff, so a chained maneuver may not start before the cutoff.
+        UniverseTime earliest = finalBurn.ImpulseTime;
+        UniverseTime conicStart = patch.ConicStartTime;
+        if (conicStart > earliest)
+            earliest = conicStart;
+        return new PlanningBasis(patch.Orbit, patch, earliest, true, plan);
     }
 }

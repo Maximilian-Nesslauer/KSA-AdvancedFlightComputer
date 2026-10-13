@@ -15,7 +15,8 @@ namespace AdvancedFlightComputer.Features.PlanWindow;
 /// closest approach markers come from <c>DrawSelectedTransferUi</c> during the
 /// plan window's ImGui pass. Suppressing only the lines would leave the
 /// retargeted trajectory decorated with the markers of the plan aimed at the
-/// center, which describe the impact the flyby replaced.
+/// center, which describe the impact the flyby replaced. The same applies to the
+/// multi pass overlay, which marks every pass itself.
 /// </summary>
 [HarmonyPatch]
 internal static class Patch_TransferPlanner_DrawSelectedTransferUi_Flyby

@@ -54,7 +54,7 @@ internal static class SharedVehicleHooks
         }
     }
 
-    // The end of a burn, after FlightComputer.RaisePendingAlerts has acted on it. The worker raises the flags for an engine Auto burn and the RCS executor raises them for an RCS burn, so both arrive here.
+    // The end of a burn, after FlightComputer.RaisePendingAlerts has acted on it, which removes the burn only while another burn follows and the stop is not a stage-ran-dry stop. The worker raises the flags for an engine Auto burn and the RCS executor raises them for an RCS burn, so both arrive here.
     // MultiPass first, so a finished pass is advanced before AutoRemove looks at the plan.
     internal static void OnStockBurnEnded(Vehicle vehicle, in StockBurnEnd ended)
     {
@@ -120,6 +120,7 @@ internal static class SharedVehicleHooks
     }
 
     // FlightComputer.RaisePendingAlerts clears the completion and propellant-stop flags and runs FlightComputer.EndAutoBurn, which removes the first executable burn only while more than one burn is planned.
+    // A propellant stop with a later stage (FlightComputer.AutoBurnStageRanDry) returns before FlightComputer.EndAutoBurn, so stock keeps that burn loaded, stops the warp and warns.
     // The prefix records which burn the flags refer to before they are cleared, and the postfix sees whether stock kept that burn.
     [HarmonyPatch(typeof(FlightComputer), nameof(FlightComputer.RaisePendingAlerts), new[] { typeof(Vehicle) })]
     private static class PendingAlertsPatch
@@ -176,11 +177,18 @@ internal readonly struct StockBurnEnd(Burn? burn, bool completed)
 
     // The worker raises a flag only in Auto and drops the mode to Manual with it, and the RCS executor holds Manual while it flies, so one frame raises at most one of them.
     // The loaded target has to belong to the first executable burn, which is the one FlightComputer.EndAutoBurn removes.
+    // It also has to have been flown, because FlightComputer.RemoveBurn loads the next burn's fresh target in the frame it removes a finished burn, and a flag raised for the removed burn must not be assigned to the burn that follows it.
+    // A fresh target from BurnTarget.CreateFromBurn has no start time, no accumulated delta-V and its ignition time at the end of time. FlightComputer.UpdateBurnTarget times the loaded target in every control step and the RCS executor writes its own ignition time, so a target that raised a flag has at least one of them.
+    // The ignition time is the one that tells a stop at ignition before any thrust, which leaves the other two empty.
     public static StockBurnEnd Capture(FlightComputer fc)
     {
         if (!fc.AutoBurnCompleted && !fc.AutoBurnStoppedOutOfPropellant)
             return default;
+        BurnTarget? loaded = fc.Burn;
+        if (loaded == null
+            || (!loaded.StartedAt.HasValue && loaded.DeltaVAccumCci == Brutal.Numerics.float3.Zero && loaded.IgnitionTime.IsEndOfTime()))
+            return default;
         Burn? burn = fc.BurnPlan.FindFirstExecutableBurn();
-        return StockBurnIdentity.IsLoaded(fc.Burn, burn) ? new StockBurnEnd(burn, fc.AutoBurnCompleted) : default;
+        return StockBurnIdentity.IsLoaded(loaded, burn) ? new StockBurnEnd(burn, fc.AutoBurnCompleted) : default;
     }
 }

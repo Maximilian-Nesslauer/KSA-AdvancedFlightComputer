@@ -142,7 +142,7 @@ public static class KsaGimbalControl
             if (slot.Module == null)
                 continue;
 
-            // Deliberately NOT gated on TotalThrust > 0, unlike the game's own ComputeTvcControl. An unlit engine still swings its nozzle visually, which is what makes this testable on the pad before committing to a burn.
+            // Deliberately NOT gated on thrust, unlike the game's own ComputeTvcControl, which gives a zero command to an unlit gimbal while another gimbal is lit. An unlit engine still swings its nozzle visually, which is what makes this testable on the pad before committing to a burn. FlightComputer.VehicleConfig.Gimbals holds only the gimbals whose engine is activated, so that check needs the engine staged.
             slot.State.CommandY = cmd.CommandY;
             slot.State.CommandZ = cmd.CommandZ;
             applied++;
@@ -155,31 +155,19 @@ public static class KsaGimbalControl
     }
 
     /// <summary>
-    /// Whether an engine behind this gimbal is activated, the same test FlightComputer.IsGimbalEngineActive applies to its maximum TVC authority.
-    /// FlightComputer.VehicleConfig.Gimbals lists every gimbal on the craft, including those of upper stages that are not staged yet and can produce no torque.
-    /// </summary>
-    public static bool IsEngineActive(GimbalController gc)
-    {
-        foreach (RocketNozzle nozzle in gc.Data.Nozzles)
-            if (nozzle.Rocket?.Core.Controller is { IsActive: true })
-                return true;
-        return false;
-    }
-
-    /// <summary>
-    /// Whether any of these gimbals has an activated engine.
+    /// Whether any of these gimbals has an activated engine, by GimbalController.HasActiveEngine. That is the test FlightComputer.ReadUpdatedVehicleConfiguration uses to fill FlightComputer.VehicleConfig.Gimbals, while Vehicle.Parts.Modules also holds the gimbals of upper stages that are not staged yet and can produce no torque.
     /// Planning counts the gimbals of activated engines, or every gimbal when none is activated, so that a check on the pad still has gimbals to measure; see <see cref="CountsForPlanning"/>.
     /// </summary>
     public static bool AnyEngineActive(ReadOnlySpan<GimbalController> gimbals)
     {
         foreach (GimbalController gc in gimbals)
-            if (IsEngineActive(gc))
+            if (gc.HasActiveEngine())
                 return true;
         return false;
     }
 
     public static bool CountsForPlanning(GimbalController gc, bool anyEngineActive)
-        => !anyEngineActive || IsEngineActive(gc);
+        => !anyEngineActive || gc.HasActiveEngine();
 
     /// <summary>The gimbals planning counts, as an array for the allocator's setup-time measurements.</summary>
     public static GimbalController[] PlanningGimbals(Vehicle vehicle)
@@ -201,7 +189,8 @@ public static class KsaGimbalControl
 
     // Physical allocation: solve for the deflections delivering the commanded N*m.
     //  Two passes over the gimbals because the solve needs every gimbal's thrust before it can produce any command.
-    //  An unlit gimbal enters the solve with zero thrust, as stock ComputeTvcControl skips it. With nameplate thrust in its columns the minimum-norm solve gives it a share of the demand by its moment arm, and on a two-stage craft the unstaged upper engines far from the centre of mass then take most of the pitch and yaw torque while the lit engines barely move. Only when no gimbal has thrust does the nameplate maximum stand in, so the allocation can still be inspected on the pad.
+    //  FlightComputer.VehicleConfig.Gimbals holds only the gimbals whose engine is activated, so a stage that is not staged yet never enters the solve.
+    //  An unlit gimbal enters the solve with zero thrust while another gimbal is lit, as in stock FlightComputer.UpdateTvcThrusts, and stock ComputeTvcControl gives it a zero command. With nameplate thrust in its columns the minimum-norm solve would give it a share of the demand by its moment arm, and that share would produce no torque. Only when no gimbal has thrust does the nameplate maximum stand in, so the allocation can still be inspected on the pad.
     private static void ApplyLsq(Slot st, Command cmd, FlightComputer.VehicleConfigInfo cfg,
                                  float3 com, ref FlightComputerOutput outputs,
                                  ref VehicleCommandSink.Receipt receipt)
@@ -226,13 +215,13 @@ public static class KsaGimbalControl
             GimbalController gc = cfg.Gimbals[i];
             st.Gimbals[i] = gc;
 
-            // Read the thrust from the state before this control step, as stock UpdateTvcParams does. Stock ComputeTvcControl has already written GimbalControllerState.Zero, with zero thrust, into the new state of every lit gimbal it gives a zero demand, which is every gimbal while the attitude mode is Manual and no rotation key is held.
+            // Read the thrust from the state before this control step, as stock FlightComputer.UpdateTvcThrusts does.
             double thrust = outputs.Gimbals.GetModuleAndReadOnlyState(gc).State.TotalThrust;
             st.Thrusts[i] = thrust;
             anyLit |= thrust > 0.0;
         }
 
-        // The preview keeps to the gimbals PlanningGimbals chooses, so the first step after ignition, before any thrust is committed, does not hand the demand to an unstaged stage either.
+        // The preview keeps to the gimbals PlanningGimbals chooses. FlightComputer.VehicleConfig.Gimbals holds the gimbals with an activated engine as of the last flight computer reset, so this filter only acts on an engine deactivated after that reset. Such a gimbal gets no share here while another engine in the list is still activated.
         if (!anyLit)
         {
             bool anyActive = AnyEngineActive(st.Gimbals.AsSpan(0, n));
