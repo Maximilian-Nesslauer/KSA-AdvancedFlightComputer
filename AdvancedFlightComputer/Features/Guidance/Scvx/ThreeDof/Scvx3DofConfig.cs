@@ -97,6 +97,18 @@ public sealed class Scvx3DofConfig
     public bool SoftPath => PathSlackWeight > 0.0;
 
     public double RhoVc { get; init; } = 1e5;
+
+    /// <summary>
+    /// The scale each state channel's virtual control is priced on, NX long, or null for <see cref="XScale"/>: the dynamics penalty is RhoVc * sum (w / scale)^2, in the subproblem and in the merit alike. An entry of 0 or less keeps that channel on XScale.
+    ///  DECOUPLED FROM XScale, which also sets the column scaling and the trust region, so a channel's price can be chosen for what a jump in it means without touching either - the ascent's DScale (launch3dof.py's Dscale). The convergence test still reads the defect on XScale.
+    ///  Why it matters: priced on XScale, a velocity jump is measured against the speed at engage, and the quadratic makes a small jump repeated on every interval nearly free - cheaper, below some size per interval, than the L1 terminal slack it can stand in for. On the 2026-10-09 7 t booster a plan carried 0.18 m/s of phantom braking on every interval, about 9 m/s over the burn, at a twentieth of the price of arriving that much faster.
+    /// </summary>
+    public double[]? VirtualControlScale { get; init; }
+
+    /// <summary>The scale channel <paramref name="i"/>'s virtual control is priced on: <see cref="VirtualControlScale"/> where it sets one, <see cref="XScale"/> otherwise.</summary>
+    public double VirtualControlScaleOf(int i)
+        => VirtualControlScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : XScale[i];
+
     public double WThrottleRate { get; init; } = 0.05;
     public double WAttitudeRate { get; init; } = 0.10;
 

@@ -379,8 +379,9 @@ public sealed class Scvx3DofSolver
             for (int i = 0; i < NX; i++)
             {
                 double d = x[(k + 1) * NX + i] - x[k * NX + i] - half * (fk[i] + fk1[i]);
+                double priced = d / _cfg.VirtualControlScaleOf(i);
+                sumSq += priced * priced;
                 double scaled = d / _xs[i];
-                sumSq += scaled * scaled;
                 if (Math.Abs(scaled) > worst)
                 {
                     worst = Math.Abs(scaled);
@@ -601,7 +602,7 @@ public sealed class Scvx3DofSolver
         double s = 0;
         for (int i = 0; i < wv.Length; i++)
         {
-            double d = wv[i] / _xs[i % NX];
+            double d = wv[i] / _cfg.VirtualControlScaleOf(i % NX);
             s += d * d;
         }
         return s;

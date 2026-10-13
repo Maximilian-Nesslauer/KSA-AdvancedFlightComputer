@@ -20,6 +20,13 @@ public static class Ksa6DofSetup
     ///  These are diagnostics, not inputs - nothing reads them back. They exist because the vacuum-thrust bug was invisible: the solver plans a perfectly feasible trajectory for a vehicle with 25% more thrust than it has, and the only symptom is that the vehicle slowly loses the altitude fight. Showing the ratio makes the assumption checkable at a glance instead.
     /// </summary>
     public static double LastAmbientPressurePa { get; private set; }
+
+    /// <summary>
+    /// The scale 6-DOF prices a velocity jump on, m/s, in place of the speed at engage (Scvx6DofConfig.VirtualControlScale). The 3-DOF keeps XScale; see Ksa3DofSetup.Config.
+    ///  Below this size per interval, faking braking with virtual control is cheaper than arriving that much faster: RhoVc (v/D)^2 against the terminal speed's TerminalSpeedWeight v / XScale, so up to TerminalSpeedWeight D^2 / (RhoVc XScale) per interval. Priced on a ~95 m/s engage speed that was about 9 m/s per interval, and on the 2026-10-09 7 t booster a plan braked 0.18 m/s an interval on nothing; at 5 m/s it is about 0.03.
+    ///  Not tighter, because at convergence the virtual control is the defect, collocation error included: on the same booster the trapezoid's own error at 0.6 s spacing is a few tenths of a m/s an interval, and a scale near the flight gate's 0.5 m/s would price that hundreds of times above the fuel term and have the optimiser shape trajectories around the mesh.
+    /// </summary>
+    public const double VirtualControlVelocityScaleMs = 5.0;
     public static double LastVacuumThrustN { get; private set; }
     public static double LastPressureThrustN { get; private set; }
 
@@ -409,6 +416,15 @@ public static class Ksa6DofSetup
             GroundFloor = -1.0,
             // Never under what the minimum throttle already gives at this mass: a limit below it could only ever be met through its slack.
             AccelMax = accelMaxMs2 > 0.0 ? Math.Max(accelMaxMs2, 1.05 * throttleFloor * thrust / vehicle.TotalMass) : 0.0,
+            // Velocity's virtual control priced on its own scale, the rest on XScale; see VirtualControlVelocityScaleMs.
+            VirtualControlScale =
+            [
+                0, 0, 0,
+                VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs, VirtualControlVelocityScaleMs,
+                0, 0, 0, 0,
+                0, 0, 0,
+                0,
+            ],
 
             // Generous bounds. These only need to BRACKET the answer - sigma is a free variable and the solver picks it - but a bound that binds silently dictates the trajectory instead of the physics: sigma pinned at the max forces the vehicle to spend that long in the air, and if it cannot hover it loops to burn the time. Widening costs nothing, because conditioning comes from SigmaScale (the seed), not from the bounds.
             WW = wW,

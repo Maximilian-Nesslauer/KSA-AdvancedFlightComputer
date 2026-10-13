@@ -75,7 +75,8 @@ internal static class ThreeDofMpcCheck
             Num("--turn-accel", 0.0) * Math.PI / 180.0,
             Num("--plant-accel", 0.0) * Math.PI / 180.0,
             Num("--turn-accel-burn", Num("--turn-accel", 0.0)) * Math.PI / 180.0,
-            Arg("--turn-anchor")?.ToLowerInvariant() != "off");
+            Arg("--turn-anchor")?.ToLowerInvariant() != "off",
+            Num("--vc-velocity", 0.0));
         Xf = [0, 0, Num("--aim-height", 0.0), 0, 0, -Num("--aim-sink", 0.0)];
         Console.WriteLine($"burn tracking {(flight.Tracker is { } k ? $"Kp {k.Kp:F2} Kd {k.Kd:F2} tilt {k.MaxTiltRad * 180.0 / Math.PI:F0} deg" : "off")}, " +
                           $"plan throttle ceiling {flight.GlideCeiling:F2} glide, {flight.BurnCeiling:F2} burn, accel limit {(flight.AccelMax > 0.0 ? $"{flight.AccelMax / 9.80665:F1} g" : "off")}, engines x{flight.EngineScale:F1}, end state {Xf[2]:F0} m at {-Xf[5]:F1} m/s, " +
@@ -120,8 +121,10 @@ internal static class ThreeDofMpcCheck
     /// <param name="PlantAccel">The truth's: its attitude loop changes its turn rate no faster than this, rad/s^2, 0 for instantly.</param>
     /// <param name="TurnAccelBurn">The burn-only plan's limit, --turn-accel-burn, the glide's unless given.</param>
     /// <param name="TurnAnchor">Whether each plan starts from the command's turn rate (--turn-anchor off for not).</param>
+    /// <param name="VcVelocity">The scale velocity's virtual control is priced on, m/s (--vc-velocity), 0 for XScale as the scenario always has; see Scvx3DofConfig.VirtualControlScale.</param>
     private sealed record Flight(BurnTracker3Dof? Tracker, double GlideCeiling, double BurnCeiling, double AccelMax, double EngineScale,
-                                 double TurnAccel = 0.0, double PlantAccel = 0.0, double TurnAccelBurn = 0.0, bool TurnAnchor = true);
+                                 double TurnAccel = 0.0, double PlantAccel = 0.0, double TurnAccelBurn = 0.0, bool TurnAnchor = true,
+                                 double VcVelocity = 0.0);
 
     private static Result Fly(Case c, ScalingMode mode, Flight flight, bool verbose)
     {
@@ -138,8 +141,8 @@ internal static class ThreeDofMpcCheck
             LiftScale = c.Lift,
             VacuumThrust = nominal.VacuumThrust * c.Thrust,
         };
-        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax), turnAccel: flight.TurnAccel);
-        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax, turnAccel: flight.TurnAccelBurn);
+        Scvx3DofConfig glide = ThreeDofScenario.Config(anchor: true, accelMax: new Guidance3Dof.Settings().GlideAccelMax(flight.AccelMax), turnAccel: flight.TurnAccel, vcVelocity: flight.VcVelocity);
+        Scvx3DofConfig burn = ThreeDofScenario.Config(nodes: 20, glideIntervals: 0, anchor: true, accelMax: flight.AccelMax, turnAccel: flight.TurnAccelBurn, vcVelocity: flight.VcVelocity);
         // No wall-clock deadlines offline: they make the iteration count, and so the flight, depend on the machine's speed. The iteration caps still bound every cycle.
         // Anchored on the last command, tight, as the game flies it.
         var guidance = new Guidance3Dof(glide, burn, nominal, new Guidance3Dof.Settings

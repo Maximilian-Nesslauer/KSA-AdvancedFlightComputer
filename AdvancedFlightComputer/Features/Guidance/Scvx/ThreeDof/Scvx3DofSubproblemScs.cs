@@ -311,10 +311,12 @@ public sealed class Scvx3DofSubproblemScs
                     _c[col] += -2.0 * w * xbar[k * NX + i] * _colScale[col];
                 }
 
+        // Priced on XScale unless the config prices a channel on its own; see Scvx3DofConfig.VirtualControlScale.
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++)
             {
-                double w = _cfg.RhoVc / (_xs[i] * _xs[i]);
+                double vs = _cfg.VirtualControlScaleOf(i);
+                double w = _cfg.RhoVc / (vs * vs);
                 AddP(IW(k, i), IW(k, i), 2.0 * w);
             }
 
