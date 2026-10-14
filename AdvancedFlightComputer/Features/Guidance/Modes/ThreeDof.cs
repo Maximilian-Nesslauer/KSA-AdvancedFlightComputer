@@ -111,11 +111,7 @@ public static partial class GuidanceWindow
     private static void Step3Dof(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         double now = SimNow();
-        if (_s.ThreeDofEngagePending)
-        {
-            _s.ThreeDofEngagePending = false;
-            Engage3Dof(vehicle, now);
-        }
+        // A pending engage is taken in ApplyAutopilot, ahead of the control claim.
         if (!ThreeDofLive)
             return;
 

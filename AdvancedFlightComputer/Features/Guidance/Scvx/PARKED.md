@@ -8,6 +8,7 @@ Status as of `feature/3dof_aero` at c58e171 (2026-10-14).
 
 - **`--path` "acceleration binds".** With `Scvx6DofConfig.AccelWeight` at 300, the acceleration limit does not bind on the check's case: peak 24.1 m/s² against a 12.3 m/s² limit, unconverged. 300 was chosen so touchdown guidance brakes past the limit rather than arriving at 10 m/s (288dd62); 1e3 is an untested middle.
 - **`--3dof-mpc` "lift −30 %" and "combined".** Both land off target. They predate the 2026-10-13 work.
+- **The acceleration slack is not in the merit.** `Scvx6DofSubproblemScs` prices `AccelWeight` x slack in the convex objective, but `Scvx6DofSolver.Iterate`'s predicted merit and `TrueCost` leave it out. So the ratio test cannot credit a step for reducing the acceleration-limit violation, and may refuse one that trades fuel for it. This may be why "acceleration binds" stays unconverged. Adding it changes which steps are accepted on every landing, so it wants a flight test (PR #104 review).
 
 ## Model and estimation
 

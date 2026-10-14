@@ -40,12 +40,18 @@ public sealed record Tracker6Dof
         if (!(massPlan > 0.0) || !(massNow > 0.0))
             return thrust;
 
+        // Position and velocity on the plan's cubic segment, as MeasureDrift and the warm seed sample it: linear blending puts a braking plan's midpoint off its own arc (10 m at 20 m/s^2 over a 2 s interval), which the gains then fly as error.
+        Span<double> planR = stackalloc double[3];
+        Span<double> planV = stackalloc double[3];
+        double dt = plan.Nodes > 1 ? plan.Sigma / (plan.Nodes - 1) : 0.0;
+        PlanStateInterpolation.SamplePositionVelocity(plan.X, k, k1, f, dt, planR, planV);
+
         double[] fb = new double[3];
         double posErr2 = 0.0, velErr2 = 0.0;
         for (int i = 0; i < 3; i++)
         {
-            double dr = L(Dynamics6Dof.IR + i) - x[Dynamics6Dof.IR + i];
-            double dv = L(Dynamics6Dof.IV + i) - x[Dynamics6Dof.IV + i];
+            double dr = planR[i] - x[Dynamics6Dof.IR + i];
+            double dv = planV[i] - x[Dynamics6Dof.IV + i];
             posErr2 += dr * dr;
             velErr2 += dv * dv;
             fb[i] = Kp * dr + Kd * dv;

@@ -256,12 +256,10 @@ public static partial class GuidanceWindow
         double clMaxAoa = aero.LiftAt(mach, maxAoaRad);
         double cdMaxAoa = aero.Table.Cd(mach, maxAoaRad);
         _s.GlideLiftSign = cdMaxAoa > 0.0 && Math.Abs(clMaxAoa / cdMaxAoa) >= GlideMinLiftToDrag ? Math.Sign(clMaxAoa) : 0;
-        if (_s.GlideLiftSign == 0 || !(maxAoa > 0.0))
-        {
+        // No lift to steer with still needs the impact prediction below: its time to go is entry guidance's engage gate, and returning here left it NaN, so a booster on stock aero never got its landing burn. The hold comes after the prediction.
+        bool noLift = _s.GlideLiftSign == 0 || !(maxAoa > 0.0);
+        if (noLift)
             _s.GlideIntCcf = double3.Zero;
-            HoldGlide("The active aero model makes no lift to steer with - holding alpha 0.");
-            return;
-        }
 
         // STEER IN ANY AIR AT ALL. A dispersion is cheapest to fix early, while there is the most time for a small push to grow into a large shift; up high the lift asked for simply exceeds what the thin air gives, so the command sits at the AoA limit and does what it can. Only above the atmosphere, where no angle buys anything, is there nothing to do.
         double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed;
@@ -325,6 +323,12 @@ public static partial class GuidanceWindow
         // THE PID, as the rate the impact should move at: (Kp miss + Ki integral + Kd rate) / tgo, back towards the site. With the Jacobian scaling like the time to go, the lift this asks for is the zero-effort-miss law's Kp miss / tgo^2.
         double tgo = Math.Max(nom.TimeOfFlight.V, GlideMinTgo);
         _s.GlideTgo = tgo;
+
+        if (noLift)
+        {
+            HoldGlide("The active aero model makes no lift to steer with - holding alpha 0.");
+            return;
+        }
 
         // NOT IN AIR TOO THIN TO STEER IN. The miss and the time to go above are still wanted - the readout, and the 3-DOF's engage gate - but an angle up here buys nothing, so the vehicle holds the glide the boostback planned and enters the atmosphere in that attitude. The integral waits too.
         if (q * aero.ReferenceArea * Math.Abs(clMaxAoa) / mass < GlideMinAuthority)

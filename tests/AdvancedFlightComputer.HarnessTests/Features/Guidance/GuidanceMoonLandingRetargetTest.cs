@@ -138,11 +138,11 @@ public sealed class GuidanceMoonLandingRetargetTest : AfcTest
             }
             sim += StepS;
             // Real time once touchdown guidance flies: its solves run against the wall clock.
-            if (state.Active && pace != 1.0)
-            {
-                (pace, simBase, wallBase) = (1.0, sim, wall.Elapsed.TotalSeconds);
+            // Engagement noted on its own, so a run paced at 1x from the start still records it.
+            if (state.Active && double.IsNaN(engagedAt))
                 engagedAt = sim;
-            }
+            if (state.Active && pace != 1.0)
+                (pace, simBase, wallBase) = (1.0, sim, wall.Elapsed.TotalSeconds);
             double ahead = (sim - simBase) / pace - (wall.Elapsed.TotalSeconds - wallBase);
             if (ahead > 0.002)
                 Thread.Sleep(TimeSpan.FromSeconds(ahead));
