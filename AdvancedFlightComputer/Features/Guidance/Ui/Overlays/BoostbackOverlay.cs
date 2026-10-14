@@ -26,8 +26,8 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //                       whatever genuine motion happens between recomputes arrives all at once. Blended below.
 public static partial class GuidanceWindow
 {
-    // On by default.
-    private static bool _showImpactOverlay = true;
+    // Off by default; the Boostback page turns it on.
+    private static bool _showImpactOverlay = false;
 
     /// <summary>How often the prediction is recomputed, ms. A prediction is about a
     /// millisecond, so this cannot be per-frame; at 60 ms the marker's own motion
