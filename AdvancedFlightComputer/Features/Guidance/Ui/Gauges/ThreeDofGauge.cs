@@ -29,6 +29,14 @@ public static partial class GuidanceWindow
         ImGui.Dummy(new float2(innerW, ImGui.GetTextLineHeight()));
 
         // A FIXED LAYOUT: every row is drawn every frame, with placeholders when it has nothing to say, and the numbers sit in their own fixed-width rows rather than in the status line. The panel sizes itself to its content, so a row that comes and goes - the solve row used to, every time the solver thread went busy - or a line whose length changes every frame shakes the whole window.
+        string noLift = AeroLiftWarning();
+        if (noLift.Length > 0)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new float4(1f, 0.5f, 0.3f, 1f));
+            ImGui.TextWrapped(noLift);
+            ImGui.PopStyleColor();
+        }
+
         ImGui.Text("Entry guidance");
         ImGui.SameLine();
         ImGui.TextColored(ThreeDofLive ? good : dim, ThreeDofPhaseName(_s.ThreeDofPhase));

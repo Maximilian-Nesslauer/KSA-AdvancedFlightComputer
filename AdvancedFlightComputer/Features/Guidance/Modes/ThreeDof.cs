@@ -68,6 +68,12 @@ public static partial class GuidanceWindow
         ResetGfoldTrace();
         _s.ThreeDofStatus = "Entry guidance engaged; PID glide while the cold solve runs.";
         GuidanceLog.Info(vehicle, $"Entry guidance engaged, {_s.GlideTgo:F0} s to impact.");
+        string noLift = AeroLiftWarning();
+        if (noLift.Length > 0)
+        {
+            GuidanceLog.Info(vehicle, "Entry guidance: " + noLift);
+            _s.ThreeDofStatus = "Engaged without lift - ballistic fall, the burn lands it.";
+        }
     }
 
     /// <summary>Stop the 3-DOF. In the air the engine is left as it is; a cut there drops the craft.</summary>

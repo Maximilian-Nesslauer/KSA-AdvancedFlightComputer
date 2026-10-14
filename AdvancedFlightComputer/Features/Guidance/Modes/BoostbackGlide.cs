@@ -40,6 +40,39 @@ public static partial class GuidanceWindow
     /// <summary>Least lift-to-drag at the maximum AoA that counts as lift worth steering with. Low on purpose: a little lift early is worth more than a lot of it late.</summary>
     private const double GlideMinLiftToDrag = 0.02;
 
+    // Whether the KSAero mod is loaded, rechecked every few seconds until it is: mods load in an order this cannot rely on.
+    private static bool _ksaeroLoaded;
+    private static double _ksaeroCheckedAt = double.NegativeInfinity;
+
+    private static bool KsaeroLoaded
+    {
+        get
+        {
+            double wall = Environment.TickCount64 / 1000.0;
+            if (!_ksaeroLoaded && wall - _ksaeroCheckedAt > 5.0)
+            {
+                _ksaeroCheckedAt = wall;
+                foreach (System.Reflection.Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+                    if (a.GetName().Name == "KSAero") { _ksaeroLoaded = true; break; }
+            }
+            return _ksaeroLoaded;
+        }
+    }
+
+    /// <summary>
+    /// Why the air cannot steer this craft, or "" when it can. Boostback steering and entry guidance's glide both steer with LIFT; KSA's stock aero is a box that makes none, so without KSAero - or on an airframe whose measured lift is too small to steer with (the sweep's L/D below what the glide steers on) - neither can move the impact point. They still fly: the glide holds alpha 0, falling ballistic, and entry guidance plans the fall and the landing burn on drag alone. Only the steering is lost.
+    /// </summary>
+    internal static string AeroLiftWarning()
+    {
+        const string lost = "boostback steering and entry guidance's glide steering will not work. The glide holds retrograde and entry guidance plans a ballistic fall and burn on drag alone, so the burn must absorb any miss.";
+        if (!KsaeroLoaded)
+            return "KSAero is not loaded - stock aero makes no lift, so " + lost;
+        KsaAeroSweep.Result aero = _s.Aero;
+        if (aero?.Table != null && aero.Atmosphere != null && aero.LiftToDragMax < GlideMinLiftToDrag)
+            return $"This airframe makes no usable lift (L/D up to {aero.LiftToDragMax:F3}), so " + lost;
+        return "";
+    }
+
     /// <summary>
     /// Least lift acceleration the maximum AoA must buy before the PID steers, m/s^2. Below it the air is too thin for an angle to move the impact, and the PID holds the planned glide instead: its correction is an acceleration that does not shrink with the air, while the planned glide's lift does, so in near-vacuum even a few hundred metres of miss swamped the plan and saturated the command at the AoA limit in the correction's direction - 12 degrees nose-down on the way into the atmosphere, for a miss the thick air would fix with a degree.
     /// </summary>

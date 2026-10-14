@@ -26,6 +26,14 @@ public static partial class GuidanceWindow
         //  "When the tab is selected" is exactly here: this method only runs while the tab is open, so an unopened tab costs nothing and an open one re-fits only when staging has actually invalidated the table. The guidance step calls the same helper, so a boostback flown with the panel shut uses the same table.
         EnsureBoostbackAero(vehicle, parent);
 
+        string noLift = AeroLiftWarning();
+        if (noLift.Length > 0)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new float4(1f, 0.5f, 0.3f, 1f));
+            ImGui.TextWrapped(noLift);
+            ImGui.PopStyleColor();
+        }
+
         DrawBoostbackGuidanceSection(vehicle, innerW);
         DrawBoostbackImpactSection(vehicle, orbit, parent, innerW);
         DrawBoostbackSurrogateSection(vehicle, parent, innerW);
