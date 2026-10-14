@@ -4,9 +4,9 @@
     "net10.0": {
       "Lib.Harmony": {
         "type": "Direct",
-        "requested": "[2.4.2, )",
-        "resolved": "2.4.2",
-        "contentHash": "D2X9ojVjqbqdqWVK3VQETrEb56yVoXxtEp6tP5UvW0PP+bA4uJiswqOxF8GhH02ECwyevUa9vwhwdLzyXfksbw=="
+        "requested": "[2.4.3, )",
+        "resolved": "2.4.3",
+        "contentHash": "dxBbWOlFdzJNGIlkf3Q5/QdTZFzt2uPYCAfGA12D5HW6uBX+tiT0rVUW0upYI6Nlj2rfkHcO6jyoiNcoEpxCTw=="
       },
       "StarMap.API": {
         "type": "Direct",
