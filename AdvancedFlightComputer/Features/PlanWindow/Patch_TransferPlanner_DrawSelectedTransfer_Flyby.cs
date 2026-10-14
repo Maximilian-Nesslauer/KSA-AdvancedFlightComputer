@@ -9,11 +9,13 @@ namespace AdvancedFlightComputer.Features.PlanWindow;
 
 /// <summary>
 /// Skips stock's 3D preview of the selected transfer while a single burn flyby is
-/// armed. Stock draws the porkchop entry aimed at the center, which for an armed
-/// flyby is the impact trajectory the retarget exists to replace, so leaving it on
-/// paints a second trajectory the Create button will never fly.
-/// <see cref="HohmannFlybyUI.RenderPreview"/> draws the retargeted one instead,
-/// from the postfix on the same <see cref="TransferPlanner.OnPreRender"/> pass.
+/// armed or the multi pass overlay is shown. Stock draws the porkchop entry aimed at
+/// the center, which for an armed flyby is the impact trajectory the retarget exists
+/// to replace, and for multi pass is one burn of the whole transfer delta v. Leaving
+/// it on paints a second trajectory the Create button will never fly.
+/// <see cref="HohmannFlybyUI.RenderPreview"/> or the multi pass overlay draws the
+/// trajectory that will be flown instead, from the postfix on the same
+/// <see cref="TransferPlanner.OnPreRender"/> pass.
 ///
 /// This covers the orbit lines only. Stock's markers hang off the same
 /// <c>_displaySelectedTransfer</c> toggle and are suppressed alongside by

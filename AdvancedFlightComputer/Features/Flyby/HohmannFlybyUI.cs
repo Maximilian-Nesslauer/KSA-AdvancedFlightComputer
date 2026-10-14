@@ -374,15 +374,17 @@ internal static class HohmannFlybyUI
         return source != null && ReferenceEquals(source, _displayedDeparture?.Key.Source);
     }
 
-    /// <summary>True when stock's preview aimed at the center should be skipped
-    /// because the trajectory Create will fly is drawn elsewhere. With a flyby armed
-    /// that also covers multi pass, because the flyby is baked into its plan input,
-    /// so stock's entry is the impact the retarget replaced there too, and
-    /// <see cref="HohmannMultiPassUI"/> draws its own final pass.</summary>
+    /// <summary>True when stock's preview of the selected transfer should be skipped
+    /// because the trajectory Create will fly is drawn elsewhere. Stock's entry is one
+    /// burn of the whole transfer delta v, so it is skipped while the multi pass
+    /// overlay draws every pass. With a flyby armed it is also skipped for a multi pass
+    /// plan whose overlay is not shown, because the flyby is baked into its plan input,
+    /// so stock's entry is the impact the retarget replaced.</summary>
     public static bool SuppressesStockTransferPreview()
     {
         // The flyby and multi-pass state survive a plan type switch, so the type is checked first and stock's preview for any other type, such as an interstellar plan, is left alone.
         if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
+        if (HohmannMultiPassUI.IsDrawingPassOverlay()) return true;
         if (!FlybyRequested) return false;
         if (HohmannMultiPassUI.HasMultiPassPreview) return true;
         return ShouldRenderPreview(out _);
@@ -406,7 +408,7 @@ internal static class HohmannFlybyUI
         }
 
         fp.AddLineInstances(viewport, source, isActive: true,
-            drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN,
+            drawVehiclePosition: false, nextBurnTime: null,
             isPostBurnOrbit: true);
     }
 

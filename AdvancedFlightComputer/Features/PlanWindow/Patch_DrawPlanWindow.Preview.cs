@@ -129,7 +129,7 @@ internal static partial class Patch_DrawPlanWindow
         }
 
         flightPlan.AddLineInstances(inViewport, _lastSource, isActive: true,
-            drawVehiclePosition: false, TrueAnomaly.NaN, TrueAnomaly.NaN,
+            drawVehiclePosition: false, nextBurnTime: null,
             isPostBurnOrbit: true);
     }
 }

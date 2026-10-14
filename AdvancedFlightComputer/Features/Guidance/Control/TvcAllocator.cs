@@ -8,12 +8,9 @@ using KSA;
 
 /// <summary>
 /// Physical thrust-vector control allocation: given a desired body torque in N*m, solve for the per-gimbal deflections that produce it.
-///  WHY NOT USE KSA'S OWN ALLOCATION. The game's ComputeTvcControl offers the SAME normalized demand vector to every gimbal and lets each independently pick a direction from its own moment arm. That is a heuristic, not an inverse:
-///   - the demand is DIMENSIONLESS. Its magnitude scales deflection directly and is then clamped to [-1,1], so there is nowhere to put a torque in N*m.
-///   - nothing solves "produce exactly tau". The realized torque is the sum over gimbals and is generally NOT parallel to the demand, so commanding pure roll leaks pitch and yaw.
-///   - every gimbal gets the same deflection magnitude regardless of its thrust, so a 6 MN main and a small vernier contribute wildly unequally.
-/// For SCvx that matters: the model's dynamics are J*wdot = tau with tau a control we choose and trust. Commanding through a heuristic makes the realized torque a nonlinear function of the demand, and the planned attitude stops matching the flown one - which is the main thing 6-DOF buys over the 3-DOF plan.
-///  WHAT THIS DOES INSTEAD. Build the true allocation matrix B (3 x 2N) mapping per-gimbal commands to body torque, then solve the regularized minimum-norm problem u = B^T (B B^T + lambda I)^-1 tau B B^T is only 3x3, so this is a closed-form inverse, not an iterative solve - cheap enough to run every flight-computer step. Minimum-norm is the right objective here: it spreads effort across gimbals in proportion to their effectiveness, which is what makes the verniers take roll and the main engine take pitch/yaw with no per-vehicle configuration.
+///  WHY A SEPARATE ALLOCATION. The game's ComputeTvcControl turns a NORMALIZED per-axis demand into a torque with the ranges from TvcAllocation.ComputeTorqueRange and solves for it with the iterative TvcAllocation.Solve. The 6-DOF plan commands a torque in N*m through the gimbal override, and its setup also needs the linear model behind the solve: the per-axis capability that bounds the planned torque, and the lateral force that comes with it.
+/// For SCvx that matters: the model's dynamics are J*wdot = tau with tau a control we choose and trust. The allocation must deliver the planned torque and report what it actually delivers, or the planned attitude stops matching the flown one - which is the main thing 6-DOF buys over the 3-DOF plan.
+///  WHAT THIS DOES. Build the linear allocation matrix B (3 x 2N) mapping per-gimbal commands to body torque, then solve the regularized minimum-norm problem u = B^T (B B^T + lambda I)^-1 tau B B^T is only 3x3, so this is a closed-form inverse, not an iterative solve - cheap enough to run every flight-computer step. Minimum-norm is the right objective here: it spreads effort across gimbals in proportion to their effectiveness, which is what makes the verniers take roll and the main engine take pitch/yaw with no per-vehicle configuration.
 /// </summary>
 public static class KsaTvcAllocator
 {
@@ -29,50 +26,41 @@ public static class KsaTvcAllocator
 
     /// <summary>
     /// Thrust direction in the VEHICLE assembly frame for a given normalized command.
-    ///  Mirrors RocketNozzle.UpdateState exactly. The game rotates assembly-frame vectors by (Gimbal2Asmb * state * Gimbal2Asmb^-1), which is just "apply the state rotation in the gimbal's own frame" - so we take the rest direction into gimbal frame via Data.VehicleAsmb2Gimbal, rotate, and come back.
+    ///  Mirrors TvcAllocation.ComputeThrustAsmb, in double. The rest direction is stored in the gimbal's own frame as Data.InitialDirGimbal, so we apply the deflection rotation Gimbal.ComputeGimbal2Asmb there and then rotate into the vehicle assembly frame with Data.Gimbal2VehicleAsmb.
     /// </summary>
     public static double3 ThrustDirection(GimbalController gc, double commandY, double commandZ)
     {
         Gimbal g = gc.Gimbal;
-        doubleQuat vehicleToGimbal = doubleQuat.Unpack(in gc.Data.VehicleAsmb2Gimbal);
+        doubleQuat gimbalToVehicle = doubleQuat.Unpack(in gc.Data.Gimbal2VehicleAsmb);
 
-        float3 restF = gc.Data.ThrustDirVehicleAsmb;
-        double3 restInGimbal = new double3(restF.X, restF.Y, restF.Z).Transform(vehicleToGimbal);
+        float3 restF = gc.Data.InitialDirGimbal;
+        var restInGimbal = new double3(restF.X, restF.Y, restF.Z);
 
         double angleY = Math.Clamp(commandY, -1.0, 1.0) * g.AxisY.MaxAngle;
         double angleZ = Math.Clamp(commandZ, -1.0, 1.0) * g.AxisZ.MaxAngle;
-        doubleQuat deflect = doubleQuat.Concatenate(
-            doubleQuat.CreateFromAxisAngle(double3.UnitY, angleY),
-            doubleQuat.CreateFromAxisAngle(double3.UnitZ, angleZ));
+        doubleQuat deflect = Gimbal.ComputeGimbal2Asmb(angleY, angleZ);
 
-        return restInGimbal.Transform(deflect).Transform(doubleQuat.Inverse(vehicleToGimbal));
+        return restInGimbal.Transform(deflect).Transform(gimbalToVehicle);
     }
 
     /// <summary>
-    /// Where the thrust acts, VEHICLE assembly frame, for a given normalized command: the rest thrust position swung about the gimbal's pivot by the same rotation as the direction. Mirrors RocketNozzle.UpdateState, which rotates the nozzle's location about Gimbal.PositionAsmb.
+    /// Where the thrust acts, VEHICLE assembly frame, for a given normalized command: the gimbal's pivot plus its thrust offset, both swung by the deflection. Mirrors TvcAllocation.ComputeThrustAsmb, in double - Data.ThrustOffsetGimbal rotated by Gimbal.ComputeGimbal2Asmb in the gimbal's frame, then into the vehicle assembly frame with Data.Gimbal2VehicleAsmb.
     /// </summary>
     public static double3 ThrustLocation(GimbalController gc, double commandY, double commandZ)
     {
         Gimbal g = gc.Gimbal;
-        double3 pivot = GimbalPivot(gc);
-        float3 restF = gc.Data.ThrustPosVehicleAsmb;
-        double3 offset = new double3(restF.X, restF.Y, restF.Z) - pivot;
-
-        doubleQuat vehicleToGimbal = doubleQuat.Unpack(in gc.Data.VehicleAsmb2Gimbal);
+        doubleQuat gimbalToVehicle = doubleQuat.Unpack(in gc.Data.Gimbal2VehicleAsmb);
+        float3 offF = gc.Data.ThrustOffsetGimbal;
         double angleY = Math.Clamp(commandY, -1.0, 1.0) * g.AxisY.MaxAngle;
         double angleZ = Math.Clamp(commandZ, -1.0, 1.0) * g.AxisZ.MaxAngle;
-        doubleQuat deflect = doubleQuat.Concatenate(
-            doubleQuat.CreateFromAxisAngle(double3.UnitY, angleY),
-            doubleQuat.CreateFromAxisAngle(double3.UnitZ, angleZ));
-        return pivot + offset.Transform(vehicleToGimbal).Transform(deflect).Transform(doubleQuat.Inverse(vehicleToGimbal));
+        doubleQuat deflect = Gimbal.ComputeGimbal2Asmb(angleY, angleZ);
+        return GimbalPivot(gc) + new double3(offF.X, offF.Y, offF.Z).Transform(deflect).Transform(gimbalToVehicle);
     }
 
-    /// <summary>The gimbal's pivot, VEHICLE assembly frame.</summary>
+    /// <summary>The gimbal's pivot, VEHICLE assembly frame (Data.PivotPosVehicleAsmb).</summary>
     public static double3 GimbalPivot(GimbalController gc)
     {
-        Gimbal g = gc.Gimbal;
-        float4x4 matrix = float4x4.Pack(g.Parent.MatrixAsmb2VehicleAsmb);
-        float3 pivot = float3.Pack(in g.PositionAsmb).Transform(matrix);
+        float3 pivot = gc.Data.PivotPosVehicleAsmb;
         return new double3(pivot.X, pivot.Y, pivot.Z);
     }
 
@@ -211,7 +199,7 @@ public static class KsaTvcAllocator
         result.AchievedForce = force;
 
         // Per-axis capability, for scaling a UI slider or clamping a guidance demand: the torque produced by driving the min-norm solution for that axis to saturation.
-        // Unlike KSA's TvcTorqueAuthority (a sum of absolute values, so an optimistic bound that assumes every gimbal serves that axis maximally), this is achievable by construction.
+        // This is achievable by construction. It is a torque in N*m about a KSA body axis, while KSA's TvcTorqueAuthority is an angular acceleration about a control axis, which FlightComputer.UpdateTvcParams takes from the smaller of the two TvcAllocation.ComputeTorqueRange directions, scaled to the current thrust and divided by the control-axis inertia.
         result.MaxTorque = new double3(
             AxisCapability(bTorque, cols, inv, 0),
             AxisCapability(bTorque, cols, inv, 1),
@@ -268,7 +256,7 @@ public struct TvcAllocationResult
     /// <summary>Lateral force that comes with it, N. Gimballing for torque always tilts the thrust vector.</summary>
     public double3 AchievedForce;
 
-    /// <summary>Per-axis achievable torque at saturation, N*m. Honest, unlike KSA's TvcTorqueAuthority.</summary>
+    /// <summary>Per-axis achievable torque at saturation, N*m.</summary>
     public double3 MaxTorque;
 
     /// <summary>1 when unsaturated; below 1 the demand was scaled down to fit, preserving direction.</summary>

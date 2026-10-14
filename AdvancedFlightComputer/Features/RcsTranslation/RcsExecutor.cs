@@ -576,9 +576,10 @@ internal static partial class RcsExecutor
         return true;
     }
 
-    // Convert CCI delta V to control frame impulse in N s.
+    // Convert CCI delta V to impulse in N s in the thruster cache frame, the frame of the capability groups and the wrench table.
     private static float3 ImpulseCtrlFromTogo(Vehicle vehicle, FlightComputer fc, BurnTarget bt)
-        => float3.Pack(double3.Unpack(bt.DeltaVToGoCci).Transform(vehicle.GetCtrl2Cci().Inverse()))
+        => float3.Pack(double3.Unpack(bt.DeltaVToGoCci).Transform(
+               RcsCtrlFrame.Ctrl2Cci(vehicle, RcsCtrlFrame.For(vehicle).Ctrl2Body).Inverse()))
            * fc.TotalMassPropsBody.Mass;
 
     private static doubleQuat ShortestArc(double3 from, double3 to)
@@ -642,7 +643,7 @@ internal static partial class RcsExecutor
             return;
 
         // Reuse a recent snapshot because the probe solves each thruster nozzle.
-        if (hasExec && IsCapabilityFresh(RcsCtrlFrame.For(vehicle).Ctrl2Body, exec!, nowSec))
+        if (hasExec && IsCapabilityFresh(vehicle, exec!, nowSec))
         {
             if (exec!.Capability.HasAnyTranslation)
                 RefreshArmedEstimates(vehicle, fc, exec, nowSec);
@@ -808,20 +809,19 @@ internal static partial class RcsExecutor
 
     private static bool RefreshCapability(Vehicle vehicle, RcsExecution exec, double nowSec)
     {
-        floatQuat liveCtrl2Body = RcsCtrlFrame.For(vehicle).Ctrl2Body;
-        if (!IsCapabilityFresh(liveCtrl2Body, exec, nowSec))
+        if (!IsCapabilityFresh(vehicle, exec, nowSec))
         {
             exec.Capability = RcsCapability.Probe(vehicle);
             exec.CapabilityProbedAtSec = nowSec;
         }
 
         // Rocket.UpdateThrusterCache can lag the live control frame. Do not compare completion floors until they agree.
-        return liveCtrl2Body == exec.Capability.Ctrl2Body;
+        return RcsCtrlFrame.IsSettled(vehicle, exec.Capability.Ctrl2Body);
     }
 
-    // A control point change invalidates all groups immediately, even inside the refresh interval.
-    private static bool IsCapabilityFresh(floatQuat liveCtrl2Body, RcsExecution exec, double nowSec)
-        => liveCtrl2Body == exec.Capability.Ctrl2Body
+    // A control point or control frame change invalidates all groups immediately, even inside the refresh interval.
+    private static bool IsCapabilityFresh(Vehicle vehicle, RcsExecution exec, double nowSec)
+        => RcsCtrlFrame.IsSettled(vehicle, exec.Capability.Ctrl2Body)
            && nowSec - exec.CapabilityProbedAtSec <= CapabilityRefreshSec;
 
     private static bool CheckProgress(
@@ -948,6 +948,8 @@ internal static partial class RcsExecutor
             $"[AFC] RCS burn stopped, every active thruster is out of propellant: vehicle='{vehicle.Id}' " +
             $"to go={fc.Burn?.DeltaVToGoCci.Length() ?? 0f:F3}m/s");
         LogFuel(vehicle, in fuel);
+        // A stale flag from an earlier staged engine burn makes stock FlightComputer.RaisePendingAlerts keep the burn as a dry stage. An RCS burn has no stage to hand over to.
+        fc.AutoBurnStageRanDry = false;
         fc.AutoBurnStoppedOutOfPropellant = true;
     }
 

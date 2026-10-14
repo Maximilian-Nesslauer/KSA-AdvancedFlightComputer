@@ -66,7 +66,8 @@ public static class KsaFrameBridge
             if (gc.Data.MaximumThrust <= best)
                 continue;
             best = gc.Data.MaximumThrust;
-            float3 d = gc.Data.ThrustDirVehicleAsmb;
+            // Rest direction, at zero deflection, in vehicle assembly axes.
+            TvcAllocation.ComputeThrustAsmb(gc, float2.Zero, out _, out float3 d);
             thrust = new double3(d.X, d.Y, d.Z);
         }
 
