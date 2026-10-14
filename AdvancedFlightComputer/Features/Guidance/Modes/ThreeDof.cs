@@ -64,6 +64,8 @@ public static partial class GuidanceWindow
         Reset3Dof();
         _s.ThreeDofPhase = ThreeDofPhase.Glide;
         _s.ThreeDofLastStep = now;
+        // A fresh flown path for the entry page's plot, which touchdown guidance's plot carries on after the hand-over.
+        ResetGfoldTrace();
         _s.ThreeDofStatus = "Entry guidance engaged; PID glide while the cold solve runs.";
         GuidanceLog.Info(vehicle, $"Entry guidance engaged, {_s.GlideTgo:F0} s to impact.");
     }
@@ -138,6 +140,7 @@ public static partial class GuidanceWindow
         KsaFrameBridge.SiteFrame frame = KsaFrameBridge.BuildSiteFrame(siteCci);
         double[] x14 = KsaFrameBridge.ToModelState(vehicle, frame);
         double[] x = [x14[0], x14[1], x14[2], x14[3], x14[4], x14[5], vehicle.TotalMass];
+        RecordGfoldTrace(Math.Sqrt(x14[0] * x14[0] + x14[1] * x14[1]), x14[2]);
         double3 attLocal = frame.VecToLocal(ThrustAxisCci(vehicle)).NormalizeOrZero();
         double[] att = [attLocal.X, attLocal.Y, attLocal.Z];
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;

@@ -16,6 +16,18 @@ public static partial class GuidanceWindow
         var warn = new float4(1f, 0.8f, 0.3f, 1f);
         var dim = new float4(0.7f, 0.7f, 0.7f, 1f);
 
+        // The side view: the plan, glide then burn, against the flown path, with the ignition marked until it happens.
+        float plotH = ImGui.GetTextLineHeightWithSpacing() * 6.5f;
+        Draw3DofPlot(ImGui.GetWindowDrawList(), ImGui.GetCursorScreenPos(), new float2(innerW, plotH));
+        ImGui.Dummy(new float2(innerW, plotH));
+        ImDrawListPtr legendDl = ImGui.GetWindowDrawList();
+        float2 legend = ImGui.GetCursorScreenPos();
+        legendDl.AddText(legend, GfoldPlanCol, "glide");
+        legendDl.AddText(legend + new float2(44f, 0f), GfoldThrustCol, "burn");
+        legendDl.AddText(legend + new float2(84f, 0f), GfoldFlownCol, "flown");
+        legendDl.AddText(legend + new float2(132f, 0f), ThreeDofIgnitionCol, "x ignition");
+        ImGui.Dummy(new float2(innerW, ImGui.GetTextLineHeight()));
+
         // A FIXED LAYOUT: every row is drawn every frame, with placeholders when it has nothing to say, and the numbers sit in their own fixed-width rows rather than in the status line. The panel sizes itself to its content, so a row that comes and goes - the solve row used to, every time the solver thread went busy - or a line whose length changes every frame shakes the whole window.
         ImGui.Text("Entry guidance");
         ImGui.SameLine();
@@ -50,8 +62,6 @@ public static partial class GuidanceWindow
             // As of the solver's last idle moment: the guidance is the worker's while it solves, so the step caches this rather than the draw reading it.
             GaugeRowText("Last solve", _s.ThreeDofSolveText.Length > 0 ? _s.ThreeDofSolveText : "       -",
                 _s.ThreeDofRefusing ? warn : dim);
-            GaugeRowText("Touchdown guidance standby", _s.ThreeDofPhase == ThreeDofPhase.Burn ? SixDofStandbyText(now) : "       -",
-                SixDofStandbyReady(now) ? good : dim);
             ImGuiHelper.EndRegion();
         }
 
@@ -78,5 +88,83 @@ public static partial class GuidanceWindow
                 GaugeRow("With burn left (s)", "##td6t", ref _s.ThreeDofSixDofTimeS);
             ImGuiHelper.EndRegion();
         }
+    }
+
+    private static readonly ImColor8 ThreeDofIgnitionCol = new ImColor8(255, 70, 70);
+
+    /// <summary>
+    /// Entry guidance's side view, range to the site against height: the plan's glide and burn, the flown path, and a red cross at the planned ignition while the craft is still gliding. Axes fit the plan and the craft, rounded up to a step so they do not crawl as the plan is re-solved.
+    /// </summary>
+    private static void Draw3DofPlot(ImDrawListPtr dl, float2 min, float2 size)
+    {
+        dl.AddRect(min, min + size, SchemSpent, 3f);
+        var plan = _s.ThreeDofPlan;
+        const int nx = 7;
+        if (plan == null || plan.Nodes < 2 || plan.X.Length < plan.Nodes * nx)
+        {
+            dl.AddText(min + new float2(6f, 4f), SchemDim, ThreeDofLive ? "no entry plan yet" : "entry guidance idle");
+            return;
+        }
+
+        double maxR = 1.0, maxA = 1.0;
+        for (int k = 0; k < plan.Nodes; k++)
+        {
+            maxR = Math.Max(maxR, Math.Sqrt(plan.X[k * nx] * plan.X[k * nx] + plan.X[k * nx + 1] * plan.X[k * nx + 1]));
+            maxA = Math.Max(maxA, plan.X[k * nx + 2]);
+        }
+        if (TryLastTraceSample(out float2 craft))
+        {
+            maxR = Math.Max(maxR, craft.X);
+            maxA = Math.Max(maxA, craft.Y);
+        }
+        double axR = NiceCeiling(maxR * 1.1), axA = NiceCeiling(maxA * 1.1);
+
+        float padL = 8f, padR = 10f, padT = 18f, padB = 12f;
+        float2 plotMin = min + new float2(padL, padT);
+        float2 plotSize = new float2(size.X - padL - padR, size.Y - padT - padB);
+        if (plotSize.X < 24f || plotSize.Y < 16f)
+            return;
+        float2 plotMax = plotMin + plotSize;
+        float2 ToPlot(double rangeM, double altM) => new float2(
+            plotMax.X - plotSize.X * (float)(rangeM / axR),
+            plotMax.Y - plotSize.Y * (float)(altM / axA));
+        float2 Node(int k) => ToPlot(Math.Sqrt(plan.X[k * nx] * plan.X[k * nx] + plan.X[k * nx + 1] * plan.X[k * nx + 1]),
+                                     plan.X[k * nx + 2]);
+
+        float groundY = ToPlot(0.0, 0.0).Y;
+        dl.AddLine(new float2(plotMin.X, groundY), new float2(plotMax.X, groundY), SchemSpent, 1.5f);
+        dl.AddCircleFilled(ToPlot(0.0, 0.0), 3f, SchemInk);
+
+        // Glide intervals first, then the burn; the node between them is the ignition.
+        int ignition = Math.Clamp(plan.GlideIntervals, 0, plan.Nodes - 1);
+        for (int k = 0; k < plan.Nodes - 1; k++)
+            ClipLine(dl, Node(k), Node(k + 1), plotMin, plotMax, k < ignition ? GfoldPlanCol : GfoldThrustCol, 2f);
+        DrawGfoldFlownPath(dl, ToPlot, plotMin, plotMax);
+
+        double now = SimNow();
+        if (_s.ThreeDofPhase == ThreeDofPhase.Glide && plan.IgnitionTime > now)
+        {
+            float2 x = Node(ignition);
+            float r = 5f;
+            dl.AddLine(x + new float2(-r, -r), x + new float2(r, r), ThreeDofIgnitionCol, 2.5f);
+            dl.AddLine(x + new float2(-r, r), x + new float2(r, -r), ThreeDofIgnitionCol, 2.5f);
+        }
+
+        string head = _s.ThreeDofPhase == ThreeDofPhase.Glide && plan.IgnitionTime > now
+            ? $"ignition in {plan.IgnitionTime - now:F0} s"
+            : _s.ThreeDofPhase == ThreeDofPhase.Burn ? $"burning, {Math.Max(plan.EndTime - now, 0.0):F0} s left" : "";
+        dl.AddText(min + new float2(6f, 4f), SchemDim, head);
+        string axes = $"{axR / 1000.0:F1} x {axA / 1000.0:F1} km";
+        dl.AddText(new float2(min.X + size.X - 6f - ImGui.CalcTextSize(axes).X, min.Y + 4f), SchemDim, axes);
+    }
+
+    /// <summary>The next 1, 2 or 5 times a power of ten at or above <paramref name="v"/>.</summary>
+    private static double NiceCeiling(double v)
+    {
+        double p = Math.Pow(10.0, Math.Floor(Math.Log10(Math.Max(v, 1e-9))));
+        foreach (double m in new[] { 1.0, 2.0, 5.0, 10.0 })
+            if (m * p >= v)
+                return m * p;
+        return 10.0 * p;
     }
 }

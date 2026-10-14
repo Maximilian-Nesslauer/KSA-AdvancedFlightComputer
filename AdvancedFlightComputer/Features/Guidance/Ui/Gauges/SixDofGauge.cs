@@ -54,6 +54,14 @@ public static partial class GuidanceWindow
     {
         if (!_s.Active)
         {
+            // Solving on standby under entry guidance's burn, ready to take it over.
+            if (_s.SixDofStandby)
+            {
+                double now = SimNow();
+                ImGui.TextColored(SixDofStandbyReady(now) ? new float4(0.4f, 1f, 0.5f, 1f) : new float4(0.7f, 0.7f, 0.7f, 1f),
+                    "Standby under entry guidance: " + SixDofStandbyText(now));
+                return;
+            }
             ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f),
                 _s.EngagePending ? "Engaging..." : "Idle - EXECUTE engages touchdown guidance.");
             // The cold solve is ~1.7 s of sim thread unless it is threaded or spread, which is worth knowing BEFORE committing rather than after the hitch.

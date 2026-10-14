@@ -122,6 +122,9 @@ public static partial class GuidanceWindow
         // The guidance handed over to a powered descent: follow it, at both levels of the tab bar, and make the solver shown agree with the one that actually started. Read here and consumed after the bar, so both levels see it.
         bool followGfold = _s.GfoldTabSelectPending;
 
+        // FOLLOW THE MODE THAT IS FLYING: when it changes - boostback, entry guidance, touchdown guidance, G-FOLD, hover - its tab and page come up, so a hand-over is seen without hunting for it.
+        FollowLiveMode(out bool followBoostback, out bool followLand, out LandingSubTab followSub);
+
         if (ImGui.BeginTabBar("##panel_tabs"))
         {
             // Width is taken INSIDE each tab: the tab bar insets its content, and a region sized to the panel's inner width would overhang it.
@@ -134,7 +137,8 @@ public static partial class GuidanceWindow
             }
 
             // Next to Ascent because that is the order they are flown in: a booster separates, turns round, and boosts back. Its content is the aero workbench for now, see Ui/Gauges/BoostbackGauge.cs.
-            if (ImGui.BeginTabItem("Boostback"))
+            if (ImGui.BeginTabItem("Boostback", followBoostback
+                    ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
             {
                 _panelTab = GuidanceTab.Boostback;
                 DrawBoostbackTabContent(vehicle, orbit, parent,
@@ -152,12 +156,14 @@ public static partial class GuidanceWindow
             }
 
             // Only the terminal part, started from wherever the craft is now, for a craft that is already falling.
-            if (ImGui.BeginTabItem("Land from here", followGfold || _s.TermTabSelectPending
+            if (ImGui.BeginTabItem("Land from here", followGfold || _s.TermTabSelectPending || followLand
                     ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
             {
                 _panelTab = GuidanceTab.Landing;
                 DrawLandingTabContent(vehicle, orbit, parent, bodyRadius,
-                    ImGui.GetContentRegionAvail().X, followGfold);
+                    ImGui.GetContentRegionAvail().X,
+                    followGfold || (followLand && followSub == LandingSubTab.Powered),
+                    followLand && followSub == LandingSubTab.Hover);
                 ImGui.EndTabItem();
             }
 
@@ -276,7 +282,7 @@ public static partial class GuidanceWindow
     /// The land-from-here tab. Two sub-tabs: the powered descent to the pad, and the hover the last few metres are flown on.
     /// </summary>
     private static void DrawLandingTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
-                                             double bodyRadius, float innerW, bool selectPowered)
+                                             double bodyRadius, float innerW, bool selectPowered, bool selectHover)
     {
         if (!ImGui.BeginTabBar("##landing_tabs"))
             return;
@@ -290,7 +296,7 @@ public static partial class GuidanceWindow
         }
 
         // The hover controller sets its own focus flag when it takes over, the same way the powered descent does.
-        bool followHover = _s.TermTabSelectPending;
+        bool followHover = _s.TermTabSelectPending || selectHover;
         if (ImGui.BeginTabItem("Hover", followHover
                 ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
         {
@@ -308,21 +314,71 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void DrawSolverRadios()
     {
-        // The solver choice changes the braking gate. Keep it fixed while a committed deorbit is in flight.
+        // In the order a landing flies them: entry guidance, then touchdown guidance. G-FOLD last, as the deprecated one.
+        // Entry is not locked with the others: the braking-burn handoff reads only the touchdown/G-FOLD choice, and entry guidance engages from a boostback glide or its own page.
+        if (ImGui.RadioButton("Entry", _s.UseThreeDofLanding))
+            _s.UseThreeDofLanding = true;
+        // The touchdown/G-FOLD choice changes the braking gate. Keep it fixed while a committed deorbit is in flight.
         ImGui.BeginDisabled(DeorbitTargetLocked);
-        if (ImGui.RadioButton("G-FOLD", !_s.UseSixDofLanding && !_s.UseThreeDofLanding))
-            _s.UseSixDofLanding = _s.UseThreeDofLanding = false;
         ImGui.SameLine();
         if (ImGui.RadioButton("Touchdown", _s.UseSixDofLanding && !_s.UseThreeDofLanding))
         {
             _s.UseSixDofLanding = true;
             _s.UseThreeDofLanding = false;
         }
-        ImGui.EndDisabled();
-        // Not locked with the others: the braking-burn handoff reads only the 6-DOF/G-FOLD choice, and the 3-DOF engages from a boostback glide or its own page.
         ImGui.SameLine();
-        if (ImGui.RadioButton("Entry", _s.UseThreeDofLanding))
-            _s.UseThreeDofLanding = true;
+        if (ImGui.RadioButton("G-FOLD (deprecated)", !_s.UseSixDofLanding && !_s.UseThreeDofLanding))
+            _s.UseSixDofLanding = _s.UseThreeDofLanding = false;
+        ImGui.EndDisabled();
+    }
+
+    // The mode that was flying when the panel last drew, so a change can bring its page up once and then leave the player free to look elsewhere.
+    private enum LiveMode { None, Boostback, Entry, Touchdown, Gfold, Hover }
+    private static LiveMode _lastLiveMode;
+
+    private static LiveMode CurrentLiveMode() =>
+        _s.Active ? LiveMode.Touchdown                                   // touchdown guidance engaged, not its standby
+        : ThreeDofLive ? LiveMode.Entry
+        : _s.LandingPhase == LandingPhase.TerminalHover ? LiveMode.Hover
+        : LandingMachineLive ? LiveMode.Gfold
+        : BoostbackLive ? LiveMode.Boostback
+        : LiveMode.None;
+
+    /// <summary>
+    /// On a change of the mode flying the craft, which tab and landing page to bring up, and the solver choice set to match, so the page shown, EXECUTE and ABORT all act on the mode that is actually flying - entry guidance handing to touchdown guidance used to leave the entry page up, and ABORT aimed at it.
+    /// </summary>
+    private static void FollowLiveMode(out bool boostback, out bool land, out LandingSubTab sub)
+    {
+        boostback = land = false;
+        sub = LandingSubTab.Powered;
+        LiveMode live = CurrentLiveMode();
+        if (live != _lastLiveMode)
+        {
+            switch (live)
+            {
+                case LiveMode.Boostback:
+                    boostback = true;
+                    break;
+                case LiveMode.Entry:
+                    land = true;
+                    _s.UseThreeDofLanding = true;
+                    break;
+                case LiveMode.Touchdown:
+                    land = true;
+                    _s.UseThreeDofLanding = false;
+                    _s.UseSixDofLanding = true;
+                    break;
+                case LiveMode.Gfold:
+                    land = true;
+                    _s.UseThreeDofLanding = _s.UseSixDofLanding = false;
+                    break;
+                case LiveMode.Hover:
+                    land = true;
+                    sub = LandingSubTab.Hover;
+                    break;
+            }
+        }
+        _lastLiveMode = live;
     }
 
     private static void DrawPoweredLandingContent(Vehicle vehicle, float innerW)
@@ -333,9 +389,10 @@ public static partial class GuidanceWindow
         DrawSolverRadios();
         ImGui.Separator();
 
-        if (_s.UseThreeDofLanding || ThreeDofLive)
+        // One mode per page, picked by the choice alone; a mode taking over moves the choice (FollowLiveMode), so the page shown is the one flying.
+        if (_s.UseThreeDofLanding)
             Draw3DofLandingContent(vehicle, innerW);
-        else if (_s.UseSixDofLanding && !LandingMachineLive)
+        else if (_s.UseSixDofLanding)
             Draw6DofLandingContent(vehicle, innerW);
         else
             DrawGfoldLandingContent(innerW, ImGui.GetTextLineHeightWithSpacing());
