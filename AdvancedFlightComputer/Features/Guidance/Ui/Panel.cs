@@ -314,7 +314,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void DrawSolverRadios()
     {
-        // In the order a landing flies them: entry guidance, then touchdown guidance. G-FOLD last, as the deprecated one.
+        // In the order a landing flies them: entry guidance, then touchdown guidance. G-FOLD last, set apart.
         // Entry is not locked with the others: the braking-burn handoff reads only the touchdown/G-FOLD choice, and entry guidance engages from a boostback glide or its own page.
         if (ImGui.RadioButton("Entry", _s.UseThreeDofLanding))
             _s.UseThreeDofLanding = true;
@@ -326,8 +326,11 @@ public static partial class GuidanceWindow
             _s.UseSixDofLanding = true;
             _s.UseThreeDofLanding = false;
         }
-        ImGui.SameLine();
-        if (ImGui.RadioButton("G-FOLD (deprecated)", !_s.UseSixDofLanding && !_s.UseThreeDofLanding))
+        // Set apart from the two above by a gap and a divider: G-FOLD is the older solver, not the next step of the chain.
+        ImGui.SameLine(0f, ImGui.GetStyle().ItemSpacing.X * 3f);
+        ImGui.TextDisabled("|");
+        ImGui.SameLine(0f, ImGui.GetStyle().ItemSpacing.X * 3f);
+        if (ImGui.RadioButton("G-FOLD", !_s.UseSixDofLanding && !_s.UseThreeDofLanding))
             _s.UseSixDofLanding = _s.UseThreeDofLanding = false;
         ImGui.EndDisabled();
     }
