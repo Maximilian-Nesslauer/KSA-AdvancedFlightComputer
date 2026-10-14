@@ -204,4 +204,5 @@ public sealed class Ksa6DofGuidance
     public string Error = "";
     public bool Update(double[] x, double now, int iterations) => Solve(x, now, iterations);
     public bool StepCold(double[] x, double now) => Solve(x, now, 1);
+    public bool Track(double[] x, double now, int iterations) => Solve(x, now, iterations);
 }
