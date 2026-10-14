@@ -517,7 +517,7 @@ public static partial class GuidanceWindow
 
         SixDofLog.Event(_s, now, $"NODE STEP at alt {x[2]:F0} m: {_s.Guidance.Nodes} -> {nodes} nodes " +
                              $"(sigma {sigmaWas:F1} s -> dt {sigmaWas / Math.Max(nodes - 1, 1):F2} s, " +
-                             $"defect {next.LastDefectM:F2} m)");
+                             $"defect {next.DefectText})");
         _s.Guidance = next;
         _s.LastReplan = now;
         return true;
@@ -631,7 +631,7 @@ public static partial class GuidanceWindow
             Solved = _s.DidSolve && _s.SolveOk,
             Status = _s.DidSolve ? _s.Guidance.Status.ToString() : "(no solve this cycle)",
             ScvxIters = _s.Guidance.LastIterations, Accepted = _s.Guidance.AcceptedSteps,
-            SolveMs = _s.Guidance.LastSolveMs, Admm = 0,
+            SolveMs = _s.Guidance.LastSolveMs, Admm = _s.Guidance.LastAdmmIterations,
             DefectM = _s.Guidance.LastDefectM, DefectLimitM = _s.Guidance.MaxDefectM,
             DefectChan = _s.Guidance.LastDefectChannelName, DefectGroup = _s.Guidance.LastDefectGroup,
             DefectRaw = _s.Guidance.LastDefectRaw, DefectNode = _s.Guidance.LastDefectNode,
@@ -1293,7 +1293,7 @@ public static partial class GuidanceWindow
                 (driftedOff ? $"drifted {drift:F0} m from the plan (limit {driftLimit:F0} m)"
                             : $"{_s.RefusalRun} refused re-solves, drift {drift:F0} m of " +
                               $"{driftLimit:F0} m") +
-                $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.LastDefectM:F0} m" +
+                $" - plan {_s.Guidance.PlanElapsed:F1} s stale, defect {_s.Guidance.DefectText}" +
                 (keptPlan ? " - reseeding from the existing plan"
                           : " - reseeding from a straight line, flying the last plan untracked meanwhile"));
             _s.Converging = true;
@@ -1352,7 +1352,7 @@ public static partial class GuidanceWindow
                 _s.Error = "";
                 SixDofLog.Event(_s, now,
                     $"COLD SOLVE CONVERGED in {_s.Guidance.LastIterations} iterations spread over " +
-                    $"{_s.ColdFrames} frames, defect {_s.Guidance.LastDefectM:F2} m, " +
+                    $"{_s.ColdFrames} frames, defect {_s.Guidance.DefectText}, " +
                     $"sigma {_s.Guidance.Sigma:F1} s");
                 SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Published);
             }
@@ -1365,7 +1365,7 @@ public static partial class GuidanceWindow
                 int nodes = Math.Clamp(NodeRungs[finer], MinNodes, MaxNodes);
 
                 SixDofLog.Event(_s, now,
-                    $"COLD SOLVE stalled at {_s.Guidance.LastDefectM:F1} m with {_s.Guidance.Nodes} nodes " +
+                    $"COLD SOLVE stalled at {_s.Guidance.DefectText} with {_s.Guidance.Nodes} nodes " +
                     $"after {_s.Guidance.LastIterations} iterations - retrying at {nodes} nodes");
 
                 var xfMore = new double[14];
@@ -1425,7 +1425,7 @@ public static partial class GuidanceWindow
             else
             {
                 _s.Error = $"converging... {_s.Guidance.LastIterations} iterations, " +
-                               $"defect {_s.Guidance.LastDefectM:F1} m" +
+                               $"defect {_s.Guidance.DefectText}" +
                                (string.IsNullOrEmpty(coldError) ? "" : ": " + coldError);
                 // Give up rather than fall forever if it is not going to converge.
                 if (_s.ColdFrames > 240)
@@ -1742,7 +1742,7 @@ public static partial class GuidanceWindow
             SixDofLog.Event(_s, now,
                 (seedNote.Length > 0 ? seedNote + "  |  " : "") +
                 $"cold solve: {_s.Guidance.Status}, {_s.Guidance.LastIterations} iters, " +
-                $"defect {_s.Guidance.LastDefectM:F2} m, sigma {_s.Guidance.Sigma:F1} s, " +
+                $"defect {_s.Guidance.DefectText}, sigma {_s.Guidance.Sigma:F1} s, " +
                 $"Tmax {_s.Guidance.Tmax / 1e6:F2} MN");
             SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Published);
         }

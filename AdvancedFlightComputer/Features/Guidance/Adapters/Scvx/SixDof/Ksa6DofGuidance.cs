@@ -376,6 +376,25 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public int LastDefectChannel { get; private set; } = -1;
 
+    /// <summary>
+    /// The worst defect for a log line or readout, on its own channel in its own units ("qy 0.0261 (quat)"), or "no step accepted". LastDefectM is that channel's scaled defect times the RANGE, so an attitude or velocity defect read as metres - 211 "m" after a restart was an attitude error.
+    /// </summary>
+    public string DefectText
+    {
+        get
+        {
+            int ch = LastDefectChannel;
+            if (!double.IsFinite(LastDefect) || ch < 0 || ch >= NX)
+                return "no step accepted";
+            double raw = LastDefect * _cfg.XScale[ch];
+            string units = Scvx6DofSolver.ChannelGroup(ch) switch
+            {
+                "position" => "m", "velocity" => "m/s", "attitude" => "(quat)", "rate" => "rad/s", "mass" => "kg", _ => "",
+            };
+            return $"{Scvx6DofSolver.ChannelName(ch)} {raw:G3} {units}".TrimEnd();
+        }
+    }
+
     /// <summary>Interval (between node k and k+1) carrying the worst defect, or -1.</summary>
     public int LastDefectNode { get; private set; } = -1;
 
@@ -1165,11 +1184,15 @@ public sealed class Ksa6DofGuidance
 
     // Refine the cost-per-iteration estimate from what a solve actually did.
     // Exponential average so one outlier cannot swing the budget, but it still tracks a change in node count or vehicle within a few cycles.
+    /// <summary>ADMM iterations the last solve spent, over all its SCvx iterations. For the log.</summary>
+    public int LastAdmmIterations { get; private set; }
+
     private void LearnAdmmCost(double elapsedMs)
     {
         int admm = 0;
         foreach (ScvxIteration it in _solver.Trace)
             admm += it.SolverIterations;
+        LastAdmmIterations = admm;
         if (admm > 50 && elapsedMs > 0.0)
         {
             double sample = elapsedMs / admm;
