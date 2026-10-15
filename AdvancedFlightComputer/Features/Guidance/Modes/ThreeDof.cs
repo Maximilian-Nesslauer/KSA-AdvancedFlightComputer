@@ -143,7 +143,7 @@ public static partial class GuidanceWindow
         double[] x14 = KsaFrameBridge.ToModelState(vehicle, frame);
         double[] x = [x14[0], x14[1], x14[2], x14[3], x14[4], x14[5], vehicle.TotalMass];
         RecordGfoldTrace(Math.Sqrt(x14[0] * x14[0] + x14[1] * x14[1]), x14[2]);
-        double3 attLocal = frame.VecToLocal(ThrustAxisCci(vehicle)).NormalizeOrZero();
+        double3 attLocal = frame.VecToLocal(KsaFrameBridge.ThrustAxisCci(vehicle)).NormalizeOrZero();
         double[] att = [attLocal.X, attLocal.Y, attLocal.Z];
         bool burning = _s.ThreeDofPhase == ThreeDofPhase.Burn;
 

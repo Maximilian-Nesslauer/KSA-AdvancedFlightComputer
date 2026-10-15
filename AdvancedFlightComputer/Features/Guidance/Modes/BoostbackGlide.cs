@@ -24,7 +24,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //
 // The two lift axes are perpendicular to the airflow, one in the vertical plane and one across it, built from the ground track - carried through a near-vertical fall from the last heading that had one, so the basis never degenerates. Any basis would do; the Jacobian decides what each one is worth.
 //
-// AND THE VEHICLE FLIES WHAT IS ASKED. The airflow turns as the trajectory bends, and an attitude loop lagging a turning target flies a steady degree or two of angle of attack nobody commanded - lift that carried the impact past the site before the guidance noticed. A trim integrates the commanded tilt against the tilt actually flown, measured off the thrust axis every step; see GlideTrackGain.
+// AND THE VEHICLE FLIES WHAT IS ASKED. The airflow turns as the trajectory bends, and an attitude loop lagging a turning target flies a steady degree or two of angle of attack nobody commanded - lift that carried the impact past the site before the guidance noticed. A trim integrates the commanded tilt against the tilt actually flown, measured off the body nose axis every step; see GlideTrackGain.
 //
 // THE INTEGRAL DEFAULTS OFF. A glide is minutes long and the miss starts kilometres out, so the integral of an ordinary, shrinking miss grows into a large stale bias that then drives the vehicle past the site. Kd bought nothing either - the overshoot it was meant to damp turned out to be the attitude lag, which the trim removes. Both are left on the panel to tune against the real thing.
 //
@@ -178,9 +178,10 @@ public static partial class GuidanceWindow
             UpdateGlidePid(vehicle, orbit, parent, heading, up, left, speed, now);
         }
 
-        // THE ATTITUDE TRIM, every step: the tilt actually flown, measured off the thrust axis, against the tilt asked for, and the difference wound into the command. See GlideTrackGain.
+        // THE ATTITUDE TRIM, every step: the tilt actually flown, measured off the body nose axis, against the tilt asked for, and the difference wound into the command. See GlideTrackGain.
+        // The body axis and not the thrust axis, because the angle of attack is an aerodynamic quantity and the surrogate is sampled in body axes. If an engine burns, the flight computer points the trimmed thrust axis instead, and this trim winds the trim angle out of the body tilt.
         const double RadToDeg = 180.0 / Math.PI;
-        double3 engine = -ThrustAxisCci(vehicle);
+        double3 engine = -KsaFrameBridge.BodyNoseCci(vehicle);
         double3 flownAcross = engine - double3.Dot(engine, vHat) * vHat;
         double flownUp = double3.Dot(flownAcross, up) * RadToDeg;
         double flownLeft = double3.Dot(flownAcross, left) * RadToDeg;

@@ -126,7 +126,7 @@ public static partial class GuidanceWindow
         RecordGfoldTrace(horizontalDistance, gfLocal.X);
         double3 localVelocity = frame.VecToLocal(vSrf);
         double horizontalSpeed = HorizontalLength(localVelocity);
-        double tilt = AngleBetween(ThrustAxisCci(vehicle), frame.Ex) * 180 / Math.PI;
+        double tilt = AngleBetween(KsaFrameBridge.ThrustAxisCci(vehicle), frame.Ex) * 180 / Math.PI;
         if (TryStartTerminalBurn(vehicle, _s.GfoldAltM, horizontalSpeed, horizontalDistance, now))
         {
             StepTerminalBurn(vehicle, orbit, parent, now);
@@ -364,7 +364,7 @@ public static partial class GuidanceWindow
         {
             if (double.IsNaN(_s.GfoldRelightRequestTime))
                 _s.GfoldRelightRequestTime = now;
-            double alignErrorDeg = AngleBetween(ThrustAxisCci(vehicle), _s.CommandDir) * 180.0 / Math.PI;
+            double alignErrorDeg = AngleBetween(KsaFrameBridge.ThrustAxisCci(vehicle), _s.CommandDir) * 180.0 / Math.PI;
             if (alignErrorDeg <= GfoldIgnitionAlignDeg || now - _s.GfoldRelightRequestTime >= GfoldIgnitionAlignLimitS)
                 _s.GfoldEngineOn = true;
         }

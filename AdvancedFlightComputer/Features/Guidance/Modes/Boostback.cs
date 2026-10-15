@@ -268,7 +268,7 @@ public static partial class GuidanceWindow
 
         // The attitude separation left us in, latched so the hold is a fixed inertial direction rather than a fresh reading of a vehicle that is drifting.
         // It is also what the rotation slews FROM, so the two phases join continuously.
-        _s.BoostbackHoldDir = ThrustAxisCci(vehicle);
+        _s.BoostbackHoldDir = KsaFrameBridge.ThrustAxisCci(vehicle);
         _s.CommandDir = _s.BoostbackHoldDir;
         _s.CommandRate = default;
         _s.HasCommand = _s.CommandDir.Length() > 0.5;
@@ -945,10 +945,6 @@ public static partial class GuidanceWindow
                      - double3.Cross(parent.GetAngularVelocityCci(), r);
         return -vAir.NormalizeOrZero();
     }
-
-    /// <summary>The vehicle's thrust axis in CCI - KSA's body +x.</summary>
-    private static double3 ThrustAxisCci(Vehicle vehicle)
-        => new double3(1, 0, 0).Transform(KsaFrameBridge.BodyToCci(vehicle));
 
     /// <summary>
     /// Make sure this vehicle has an aero surrogate, resampling only when its bounding

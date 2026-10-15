@@ -78,7 +78,7 @@ public static partial class GuidanceWindow
         _s.CommandDir = (vertical * up + lateralCommand).Normalized();
         _s.HasCommand = true;
 
-        double3 thrustAxis = ThrustAxisCci(vehicle);
+        double3 thrustAxis = KsaFrameBridge.ThrustAxisCci(vehicle);
         double actualUp = double3.Dot(thrustAxis, up);
         double alignment = AngleBetween(thrustAxis, _s.CommandDir) * 180 / Math.PI;
         bool ignite = command.EngineOn && actualUp >= tiltReserve && alignment <= TerminalBurnTiltDeg;
