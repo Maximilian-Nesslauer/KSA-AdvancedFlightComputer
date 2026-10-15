@@ -92,6 +92,23 @@ public static class KsaFrameBridge
     public static doubleQuat BodyToCci(Vehicle vehicle) =>
         doubleQuat.Concatenate(vehicle.Body2Cce, vehicle.Orbit.Parent.GetCce2Cci());
 
+    /// <summary>KSA's body +X (the nose) in CCI, the axis that the aerodynamic tables use.</summary>
+    public static double3 BodyNoseCci(Vehicle vehicle) => double3.UnitX.Transform(BodyToCci(vehicle));
+
+    /// <summary>
+    /// The thrust axis in CCI. This is also the axis that the flight computer points at its attitude target, so a command of "body +X along the steering vector" closes the measured alignment to zero.
+    ///  While FlightComputer.ActiveControlFrame is TNM, the axis is X of FlightComputer.Tnm2Asmb, the trimmed net thrust direction that FlightComputer.UpdateTnmFrame solves so that the thrust goes through the centre of mass. FlightComputer.GetDesiredControlFrame selects TNM when an engine produces thrust, and also when a stock Auto burn or a delta-v track is set on a vehicle with an active gimballed engine. In the Helm frame the axis is body +X. The flight computer then points the helm X axis (Vehicle.Helm2Body), which is body +X unless the vehicle is controlled from a part that is turned relative to the body.
+    ///  Both fields come from the main-thread flight computer, which FlightComputer.CopyFrom updates from the worker copy after each step, so they are one step old. Tvcs.ThrustCurrent is not copied back, so it cannot tell here whether an engine burns.
+    /// </summary>
+    public static double3 ThrustAxisCci(Vehicle vehicle)
+    {
+        doubleQuat body2Cci = BodyToCci(vehicle);
+        FlightComputer fc = vehicle.FlightComputer;
+        // The asmb frame is the body frame, see Vehicle.GetAsmb2Cci.
+        doubleQuat axis2Cci = fc.ActiveControlFrame.IsTnm() ? doubleQuat.Concatenate(fc.Tnm2Asmb, body2Cci) : body2Cci;
+        return double3.UnitX.Transform(axis2Cci);
+    }
+
     /// <summary>
     /// Full model state: [r(3) v(3) q(4) w(3) m(1)] = 14, matching Dynamics6Dof's layout. Velocity is SURFACE-relative (the body's rotation removed), because the model's flat-ground frame is not inertial in KSA's sense.
     /// </summary>

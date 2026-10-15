@@ -68,6 +68,7 @@ The geometry cases check the plan against stock orbit propagation and terrain cl
 - `afc-guidance-deorbit-refusal`, `afc-guidance-deorbit-plan`, `afc-guidance-high-deorbit-plan`, `afc-guidance-arrival-angle-plan`, and `afc-guidance-flight-log-deorbit-plan` cover direct and Lambert search in both transfer directions.
 - `afc-guidance-stock-deorbit` flies a stock Auto node; `afc-guidance-deorbit-lifecycle` covers its claim, warp, sequence edits, cancellation, completion and cleanup.
 - `afc-guidance-vertical-approach` and `afc-guidance-terminal-burn` cover the elevated G-FOLD gate and final burn decisions.
+- `afc-guidance-thrust-axis` checks that the landing and boostback guidance read the thrust axis from the flight computer TNM frame while it is active and from body +X in the Helm frame, and that a burning engine sets the TNM frame on the main-thread flight computer.
 
 The landing abort, handoff, staging and player takeover cases also cover the new phases.
 The game-free G-FOLD executable accepts `--terminal-braking` for vertical control checks; it does not validate a full landing flight.

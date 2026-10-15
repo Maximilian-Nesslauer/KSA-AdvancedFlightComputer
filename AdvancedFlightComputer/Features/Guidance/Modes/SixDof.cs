@@ -1013,7 +1013,7 @@ public static partial class GuidanceWindow
 
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(position);
-        double vertical = Math.Max(double3.Dot(ThrustAxisCci(vehicle), up), 0.5);
+        double vertical = Math.Max(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), 0.5);
         double legs = Math.Max(x[2] - _s.VehicleHeightM, 0.1);
         double sink = Math.Max(-x[5], 0.0);
         double gravity = parent.Mu / position.LengthSquared();
