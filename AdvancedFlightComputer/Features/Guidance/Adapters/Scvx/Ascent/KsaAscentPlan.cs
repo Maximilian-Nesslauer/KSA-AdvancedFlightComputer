@@ -425,6 +425,8 @@ public sealed class AscentPlan
 /// EVERY RETRY SAYS SO. An attempt that did not converge is followed by one with looser constraints - that max-q, or one more stage to burn - and <see cref="Retry"/> says which and why while it runs, so the panel never shows a second solve as if it were the first.
 ///
 /// HOW MANY STAGES THE PLAN BURNS is decided here, by trying. The script's formulation burns every stage but the last to depletion, which is right for a vehicle whose last stage is the one that reaches orbit and wrong for one that reaches orbit early: a stage that has to burn its whole load when orbit needed half of it can only waste the rest, and the plan it produces lofts and weaves to do so. So the first attempt plans only as many stages as the ideal dV says orbit needs, anything above them riding along as payload; a plan that cannot reach orbit adds the next stage, and one whose last stage is pinned at its shortest allowed burn drops it.
+///
+/// A STAGE THE PLAN MUST NOT THROTTLE is found from the converged plan, because which stages those are depends on where the plan flies them. The caller names them, and the same stages are solved once more held at full thrust. A held solve that does not converge leaves the first plan in place.
 /// </summary>
 public sealed class AscentPlanJob : IDisposable
 {
@@ -433,7 +435,8 @@ public sealed class AscentPlanJob : IDisposable
     /// <summary>A relaxed max-q sits this far above the least peak q the vehicle's steepest seed reached.</summary>
     public const double QRelaxFactor = 1.15;
 
-    private readonly Func<int, double, AscentProblem> _build;
+    private readonly Func<int, double, bool[], AscentProblem> _build;
+    private readonly Func<AscentProblem, AscentSolution, bool[]> _toHold;
     private readonly int _available, _initial;
     private readonly double _qMax;
     private readonly Func<AscentSolution, int, double, string[], double, AscentPlan> _publish;
@@ -444,15 +447,18 @@ public sealed class AscentPlanJob : IDisposable
     private bool _done;
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
 
-    /// <param name="build">The problem for a number of stages and a max-q, Pa. Must touch nothing of the game.</param>
+    /// <param name="build">The problem for a number of stages, a max-q, Pa, and the stages held at full thrust (null for none). Must touch nothing of the game.</param>
     /// <param name="available">Stages the vehicle has.</param>
     /// <param name="initial">Stages to try first.</param>
     /// <param name="qMax">The max-q asked for, Pa.</param>
     /// <param name="publish">Wraps the chosen solution, its stage count, the max-q it was planned to, the attempt notes and the wall time in a plan; run on the worker, so it too must touch nothing of the game.</param>
-    public AscentPlanJob(Func<int, double, AscentProblem> build, int available, int initial, double qMax,
-                         Func<AscentSolution, int, double, string[], double, AscentPlan> publish)
+    /// <param name="toHold">From a converged problem and its solution, the stages to solve again held at full thrust, or null for none. Run on the worker.</param>
+    public AscentPlanJob(Func<int, double, bool[], AscentProblem> build, int available, int initial, double qMax,
+                         Func<AscentSolution, int, double, string[], double, AscentPlan> publish,
+                         Func<AscentProblem, AscentSolution, bool[]> toHold = null)
     {
         _build = build;
+        _toHold = toHold;
         _qMax = qMax;
         _available = available;
         _initial = Math.Clamp(initial, 1, available);
@@ -498,6 +504,7 @@ public sealed class AscentPlanJob : IDisposable
         try
         {
             AscentSolution best = null;
+            AscentProblem bestProblem = null;
             int bestK = 0;
             double bestQ = _qMax, qMax = _qMax;
             bool relaxed = false;
@@ -507,11 +514,8 @@ public sealed class AscentPlanJob : IDisposable
             {
                 int stages = k;
                 string what = $"{stages} stage{(stages == 1 ? "" : "s")}{(relaxed ? $", {qMax / 1000.0:F0} kPa" : "")}";
-                AscentProblem problem = _build(stages, qMax);
-                AscentSolution sol = AscentScvx.Solve(problem,
-                    it => SetProgress($"{what}: iteration {it.Index + 1}, {it.Status}, miss {it.TerminalViolation:E1}, dV {it.DeltaV:F0} m/s"),
-                    phase => SetProgress($"{what}: {phase}"),
-                    _cts.Token);
+                AscentProblem problem = _build(stages, qMax, null);
+                AscentSolution sol = SolveOne(problem, what);
                 lock (_gate)
                     _notes.Add($"{stages} of {_available} stages at {qMax / 1000.0:F0} kPa: {sol.Message}"
                             + (sol.Nodes > 0 ? $", {sol.FinalMass / 1000.0:F2} t to orbit" : ""));
@@ -521,6 +525,7 @@ public sealed class AscentPlanJob : IDisposable
                 if (sol.Converged)
                 {
                     best = sol;
+                    bestProblem = problem;
                     bestK = stages;
                     bestQ = qMax;
                     // The last stage pinned at its shortest allowed burn: the stages below it already reach orbit, and forcing it to burn at all distorts the plan.
@@ -572,6 +577,24 @@ public sealed class AscentPlanJob : IDisposable
                 break;
             }
 
+            if (best != null && best.Converged && _toHold != null && !_cts.IsCancellationRequested)
+            {
+                bool[] hold = _toHold(bestProblem, best);
+                if (hold != null && Array.IndexOf(hold, true) >= 0)
+                {
+                    string which = string.Join(", ", Enumerable.Range(0, hold.Length).Where(i => hold[i]).Select(i => (i + 1).ToString()));
+                    lock (_gate)
+                        _retry = $"Converged, but it throttles stage {which}, which is flown at full thrust after the hand-over: planning it held at full thrust.";
+                    AscentSolution held = SolveOne(_build(bestK, bestQ, hold), $"stage {which} held at full thrust");
+                    lock (_gate)
+                        _notes.Add($"{bestK} of {_available} stages at {bestQ / 1000.0:F0} kPa, stage {which} held at full thrust: {held.Message}"
+                                + (held.Nodes > 0 ? $", {held.FinalMass / 1000.0:F2} t to orbit" : "")
+                                + (held.Converged ? "" : "; the throttled plan is kept"));
+                    if (held.Converged)
+                        best = held;
+                }
+            }
+
             if (best != null && !_cts.IsCancellationRequested)
                 plan = _publish(best, bestK, bestQ, Notes, ElapsedSeconds);
         }
@@ -589,6 +612,12 @@ public sealed class AscentPlanJob : IDisposable
             }
         }
     }
+
+    private AscentSolution SolveOne(AscentProblem problem, string what)
+        => AscentScvx.Solve(problem,
+            it => SetProgress($"{what}: iteration {it.Index + 1}, {it.Status}, miss {it.TerminalViolation:E1}, dV {it.DeltaV:F0} m/s"),
+            phase => SetProgress($"{what}: {phase}"),
+            _cts.Token);
 
     private static double TerminalMiss(AscentSolution s)
         => s.TerminalResidual.Length == 0 ? double.PositiveInfinity

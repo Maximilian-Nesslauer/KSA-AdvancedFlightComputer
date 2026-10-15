@@ -341,9 +341,13 @@ public static partial class GuidanceWindow
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
-        AscentProblem Build(int stages, double qLimit)
+        AscentProblem Build(int stages, double qLimit, bool[] held)
         {
             AscentStage[] list = AscentPhasePlan.Truncate(allStages, stages);
+            if (held != null)
+                for (int i = 0; i < list.Length && i < held.Length; i++)
+                    if (held[i])
+                        list[i] = list[i].WithThrottleMin(FullThrottleFloor);
             return new AscentProblem
             {
                 Mu = mu,
@@ -409,7 +413,7 @@ public static partial class GuidanceWindow
             QMaxRequestedKpa = qMaxKpa,
             QAlphaMax = qAlphaMax,
             InsertionAltKm = insAltKm,
-            FinalMassFloor = Build(stages, qUsed).FinalMassFloor,
+            FinalMassFloor = Build(stages, qUsed, null).FinalMassFloor,
             StagesPlanned = stages,
             StagesAvailable = count,
             Notes = notes,
@@ -423,7 +427,7 @@ public static partial class GuidanceWindow
             string dir = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "afc-convex-ascent");
             System.IO.Directory.CreateDirectory(dir);
             dump = System.IO.Path.Combine(dir, $"{string.Concat(vehicleId.Split(System.IO.Path.GetInvalidFileNameChars()))}.json");
-            System.IO.File.WriteAllText(dump, AscentProblemFile.ToJson(Build(count, qMax)));
+            System.IO.File.WriteAllText(dump, AscentProblemFile.ToJson(Build(count, qMax, null)));
         }
         catch (Exception e)
         {
@@ -446,10 +450,54 @@ public static partial class GuidanceWindow
         foreach (string note in stagePlan.Notes)
             GuidanceLog.Info(vehicle, "convex ascent: " + note + ".");
 
-        job = new AscentPlanJob(Build, count, initial, qMax, Publish);
+        double handoverRadius = bodyRadius + _s.ConvexHandoverAltKm * 1000.0;
+        job = new AscentPlanJob(Build, count, initial, qMax, Publish,
+                                (problem, sol) => StagesUpfgFliesThrottled(problem, sol, handoverRadius));
         error = "";
         return true;
     }
+
+    /// <summary>A planned throttle under this fraction of what the stage can give, full thrust or the acceleration limit, is one UPFG does not fly.</summary>
+    private const double UpfgThrottleSlack = 0.9;
+
+    /// <summary>
+    /// The stages of a converged plan that light at or above the hand-over radius and that the plan throttles below what UPFG gives them, or null for none. Runs on the worker, on plain data.
+    ///
+    /// WHY THEY ARE HELD. Every stage that lights above the hand-over altitude burns wholly under UPFG, which flies full thrust and holds only the acceleration limit. Left free, the plan can throttle such a stage far down, a low-thrust arc on which a lofted climb coasts up to the insertion radius while the engines add the horizontal speed slowly. That arc is the plan's own optimum, but UPFG cannot fly it. From the lofted state it is handed, UPFG burns at full thrust, so it reaches orbital speed long before the plan would and has to pitch up and then far down to stop the climb at the insertion radius. Its steering is then tens of degrees off the plan at the hand-over, and the burn costs hundreds of m/s more than planned. Held at full thrust, the plan shapes its climb for the burn that will be flown.
+    ///
+    /// A stage that lights below the hand-over altitude keeps its throttle, because the plan flies it through the air. Only liquid stages that are free to throttle are candidates: solids follow their grain, and a pinned stage is already held.
+    /// </summary>
+    private static bool[] StagesUpfgFliesThrottled(AscentProblem problem, AscentSolution sol, double handoverRadius)
+    {
+        bool[] held = null;
+        for (int i = 0; i < problem.Stages.Length; i++)
+        {
+            AscentStage st = problem.Stages[i];
+            double floor = double.IsNaN(st.ThrottleMin) ? problem.Settings.ThrottleMin : st.ThrottleMin;
+            if (st.Solid != null || !st.HasLiquid || st.IsPinned || floor >= FullThrottleFloor)
+                continue;
+            int first = Array.IndexOf(sol.NodeStage, i);
+            if (first < 0 || NodeRadius(sol, first) < handoverRadius)
+                continue;
+            for (int k = first; k < sol.Nodes && sol.NodeStage[k] == i; k++)
+            {
+                double u = new double3(sol.Throttle[k * 3], sol.Throttle[k * 3 + 1], sol.Throttle[k * 3 + 2]).Length();
+                double full = k < sol.FullThrust.Length ? sol.FullThrust[k] : 0.0;
+                double most = double.IsFinite(st.AccelerationLimit) && full > 0.0
+                    ? Math.Min(1.0, st.AccelerationLimit * sol.Mass[k] / full)
+                    : 1.0;
+                if (u < UpfgThrottleSlack * most)
+                {
+                    (held ??= new bool[problem.Stages.Length])[i] = true;
+                    break;
+                }
+            }
+        }
+        return held;
+    }
+
+    private static double NodeRadius(AscentSolution sol, int k)
+        => new double3(sol.Position[k * 3], sol.Position[k * 3 + 1], sol.Position[k * 3 + 2]).Length();
 
     // --- flying the plan ------------------------------------------------------
 

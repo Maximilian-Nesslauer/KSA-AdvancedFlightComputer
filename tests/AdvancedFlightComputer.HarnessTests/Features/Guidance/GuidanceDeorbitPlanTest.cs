@@ -104,20 +104,53 @@ public sealed class GuidanceDeorbitRefusalTest : AfcTest
 
     private static void CheckLowApproach(TestContext t, DeorbitRequest request)
     {
-        double periapsisTime = request.Epoch + 120;
-        Orbit low = OrbitFixtures.EllipticalAt(request.Parent, 11000, 215000, new UniverseTime(periapsisTime));
-        double3 site = low.GetStateVectorsAt(new UniverseTime(periapsisTime + 40)).PositionCci.Normalized()
-            .Transform(request.Parent.GetCci2Ccf(new UniverseTime(periapsisTime)));
-        double3 lla = request.Parent.GetLlaFromCcf(site * request.Parent.MeanRadius);
-        var settings = request.Settings with { Latitude = lla.X, Longitude = lla.Y };
-        var approach = new DeorbitRequest(low, request.Epoch, request.Mass, request.VehicleRadius,
-            settings, request.Model, request.Engines, request.MinimumPulse, request.ControlStep);
-        using var planner = new DeorbitPlanner(approach);
-        var elapsed = Stopwatch.StartNew();
-        while (!planner.Complete && elapsed.Elapsed.TotalSeconds < 30) planner.Step(3);
+        using (DeorbitPlanner level = PlanLowApproach(request, request.Settings.BrakingAltitude, out _, out _))
+            t.Check("a periapsis at the braking altitude is refused as too steep for this stack",
+                level.Complete && level.Direct is { Refusal.Length: > 0 } && level.DirectRefusal.Contains("not a shallow approach"),
+                level.DirectRefusal);
+        using DeorbitPlanner planner = PlanLowApproach(request, LowApproachPeriapsisM, out DeorbitRequest approach, out double crossing);
+        DirectBrakingPlan? direct = planner.Direct;
+        t.Info(direct == null
+            ? "low approach: no direct braking point"
+            : $"low approach: direct ignition {direct.IgnitionTime - crossing:F1} s after the braking altitude crossing at {(direct.Position.Length() - approach.Parent.MeanRadius) / 1000.0:F2} km altitude "
+              + $"(site {approach.SiteHeight / 1000.0:F2} km), speed {direct.Velocity.Length():F1} m/s, downrange {direct.Downrange / 1000.0:F2} km");
         t.Check("the full low-periapsis plan keeps direct braking after its terrain check",
             planner.Complete && planner.Direct is { Refusal.Length: 0 } && planner.Plan == null,
             $"{planner.Status} Direct: {planner.DirectRefusal}");
+    }
+
+    // The saved stack brakes at more than 20 lunar g, so its braking burn is too short to fall the braking altitude under gravity alone.
+    // From a periapsis at the braking altitude its braking solve must steer far below the horizon, which the planner refuses by design.
+    // The accepted approach therefore descends through the braking altitude at about 7 deg, as a flown deorbit arc does, with its periapsis below the surface.
+    private const double LowApproachPeriapsisM = -200000;
+    // About the braking distance with the downrange factor, so ignition falls near the braking altitude crossing.
+    private const double LowApproachSiteLeadSeconds = 25;
+
+    private static DeorbitPlanner PlanLowApproach(DeorbitRequest request, double periapsisAltitude, out DeorbitRequest approach, out double crossing)
+    {
+        IParentBody parent = request.Parent;
+        double brakingRadius = parent.MeanRadius + request.Settings.BrakingAltitude;
+        // The orbit is built with its periapsis at the epoch first, to find how long before the periapsis it descends through the braking altitude.
+        Orbit probe = OrbitFixtures.EllipticalAt(parent, periapsisAltitude, 215000, new UniverseTime(request.Epoch));
+        double above = request.Epoch - probe.Period / 2, below = request.Epoch;
+        for (int i = 0; i < 60; i++)
+        {
+            double mid = (above + below) / 2;
+            if (probe.GetStateVectorsAt(new UniverseTime(mid)).PositionCci.Length() > brakingRadius) above = mid; else below = mid;
+        }
+        crossing = request.Epoch + 120;
+        Orbit low = OrbitFixtures.EllipticalAt(parent, periapsisAltitude, 215000, new UniverseTime(crossing + request.Epoch - below));
+        double siteTime = crossing + LowApproachSiteLeadSeconds;
+        double3 site = low.GetStateVectorsAt(new UniverseTime(siteTime)).PositionCci.Normalized()
+            .Transform(parent.GetCci2Ccf(new UniverseTime(siteTime)));
+        double3 lla = parent.GetLlaFromCcf(site * parent.MeanRadius);
+        var settings = request.Settings with { Latitude = lla.X, Longitude = lla.Y };
+        approach = new DeorbitRequest(low, request.Epoch, request.Mass, request.VehicleRadius,
+            settings, request.Model, request.Engines, request.MinimumPulse, request.ControlStep);
+        var planner = new DeorbitPlanner(approach);
+        var elapsed = Stopwatch.StartNew();
+        while (!planner.Complete && elapsed.Elapsed.TotalSeconds < 30) planner.Step(3);
+        return planner;
     }
 
     private static void CheckRuntimeRefusal(TestContext t, DeorbitFixture fixture)
