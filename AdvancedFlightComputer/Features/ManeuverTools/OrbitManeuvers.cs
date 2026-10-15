@@ -1,4 +1,5 @@
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
 
@@ -185,6 +186,17 @@ internal static class OrbitManeuvers
         UniverseTime? dnTime = orbit.TimeOfTrueAnomaly(dnTa, now);
 
         return (anTa, dnTa, anTime, dnTime);
+    }
+
+    // The results above are impulsive. This gives the burn that reaches the same goal when the engines fly it at full throttle, with the delta v in the VLF frame at the returned burn time.
+    public static ManeuverResult RefineForFiniteBurn(
+        Orbit orbit, in ManeuverResult maneuver, ReadOnlySpan<FiniteBurnPhase> phases, in FiniteBurnGoal goal,
+        UniverseTime? notBefore = null)
+    {
+        var (burnTime, dvVlf) = FiniteBurns.Refine(orbit, maneuver.BurnTime, maneuver.DvVlf, phases, goal, notBefore);
+        if (burnTime == maneuver.BurnTime && dvVlf == maneuver.DvVlf)
+            return maneuver;
+        return new ManeuverResult(FiniteBurns.VlfToCci(orbit, burnTime, dvVlf), dvVlf, burnTime);
     }
 
     #region Helpers

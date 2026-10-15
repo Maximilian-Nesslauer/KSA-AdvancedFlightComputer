@@ -40,11 +40,12 @@ internal static class HohmannMultiPassUI
         bool FlybyOn,
         long FlybyRpBucket,
         FlybySide FlybySide,
-        FlybyTargeting.DepartureKey? FlybyDeparture = null)
+        FlybyTargeting.DepartureKey? FlybyDeparture = null,
+        int PhaseSignature = 0)
     {
         // Thrust changes mass and can shift the final time through the parking period. Ignore those fields while thrust is active, but retain changes to the transfer, flyby request, and pass index.
         public PreviewKey WithoutDrift() =>
-            this with { TFinalBucketSec = 0, MassBucket = 0,
+            this with { TFinalBucketSec = 0, MassBucket = 0, PhaseSignature = 0,
                 FlybyDeparture = FlybyDeparture?.WithoutParkingDrift() };
     }
 
@@ -450,7 +451,8 @@ internal static class HohmannMultiPassUI
             DFinalVlf: intent.DFinalVlf,
             IsCrossParent: intent.IsCrossParent,
             VInfMs: intent.VInfMs,
-            ApoTargetRadiusMeters: intent.ApoTargetRadiusMeters);
+            ApoTargetRadiusMeters: intent.ApoTargetRadiusMeters,
+            Transit: intent.TransitSec is double transitSec ? new UniverseTime(transitSec) : null);
 
         var key = BuildKey(source, input,
             passCount: exec.PassCountTotal,
@@ -852,7 +854,8 @@ internal static class HohmannMultiPassUI
             DFinalVlf: entry.TransferData.TransferDvVlf,
             IsCrossParent: isCrossParent,
             VInfMs: vInfMs,
-            ApoTargetRadiusMeters: apoTargetRadiusM);
+            ApoTargetRadiusMeters: apoTargetRadiusM,
+            Transit: entry.TransferData.Transit);
     }
 
 
@@ -891,6 +894,7 @@ internal static class HohmannMultiPassUI
             VInfMs = input.VInfMs,
             ApoTargetRadiusMeters = input.ApoTargetRadiusMeters,
             ParkingPeriodSec = parkingPeriod,
+            TransitSec = input.Transit?.Seconds(),
         };
     }
 
@@ -929,7 +933,8 @@ internal static class HohmannMultiPassUI
             FlybyOn: flybyOn,
             FlybyRpBucket: flybyRpBucket,
             FlybySide: flybySide,
-            FlybyDeparture: departureKey);
+            FlybyDeparture: departureKey,
+            PhaseSignature: FiniteBurns.PhaseSignature(source));
     }
 
     // Preview and commit must use the same shifted transit.
@@ -969,6 +974,7 @@ internal static class HohmannMultiPassUI
                 TFinal = f.BurnTime,
                 DFinalVlf = f.DvVlf,
                 VInfMs = f.PlannerVInfMs,
+                Transit = FlybyTransit(f, center),
             };
         }
 
@@ -979,8 +985,15 @@ internal static class HohmannMultiPassUI
             TFinal = f.BurnTime,
             DFinalVlf = f.DvVlf,
             ApoTargetRadiusMeters = f.PlannerApoTargetMeters,
+            Transit = FlybyTransit(f, center),
         };
     }
+
+    private static UniverseTime? FlybyTransit(
+        FlybyTargeting.FlybyResult flyby, HohmannMultiPassPlanner.HohmannPlanInput center)
+        => flyby.Arrival is UniverseTime arrival && arrival > flyby.BurnTime
+            ? arrival - flyby.BurnTime
+            : center.Transit;
 
     private static void DrawFlybyMultipassNoteIfApplicable()
     {

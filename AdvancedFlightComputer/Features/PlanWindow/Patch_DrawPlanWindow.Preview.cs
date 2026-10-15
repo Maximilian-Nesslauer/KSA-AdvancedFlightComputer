@@ -1,4 +1,5 @@
 using System;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
@@ -73,6 +74,15 @@ internal static partial class Patch_DrawPlanWindow
             var (chainedPlan, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
                 source, basis.Patch, maneuver.BurnTime, maneuver.DvVlf);
             return new OrbitalTransfers.PorkChopEntry(transferData, chainedPlan);
+        }
+
+        // With engine thrust the preview shows the burn arc and markers that stock draws once the burn exists.
+        PatchedConic? prePatch = source.FlightPlan.TryFindPatch(maneuver.BurnTime);
+        if (prePatch != null && FiniteBurns.HasThrust(FiniteBurns.FullThrottlePhases(source)))
+        {
+            var (finitePlan, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
+                source, prePatch, maneuver.BurnTime, maneuver.DvVlf);
+            return new OrbitalTransfers.PorkChopEntry(transferData, finitePlan);
         }
 
         FlightPlan flightPlan = FlightPlan.CreateUninitialized(source.Hash);

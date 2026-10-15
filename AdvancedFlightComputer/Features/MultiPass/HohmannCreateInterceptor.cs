@@ -156,14 +156,16 @@ internal static class HohmannCreateInterceptor
         }
 
         OrbitPointCce pointCce = patch.Orbit.GetPointAt(flyby.BurnTime);
+        double3 dvVlf = HohmannFlybyUI.RefineDeparture(vehicle, patch, flyby);
         Burn burn = Burn.Create(
-            pointCce, flyby.BurnTime.Seconds(), flyby.DvVlf, patch, vehicle);
+            pointCce, flyby.BurnTime.Seconds(), dvVlf, patch, vehicle);
         burn.IsGizmoActive = false;
 
         if (DebugConfig.Flyby)
             DefaultCategory.Log.Debug(
                 $"[AFC] HohmannCreateInterceptor: single flyby burn for vehicle={vehicle.Id} " +
-                $"t={flyby.BurnTime.Seconds():F0}s dv={flyby.DvVlf.Length():F1}m/s " +
+                $"t={flyby.BurnTime.Seconds():F0}s dv={dvVlf.Length():F1}m/s " +
+                $"(impulsive {flyby.DvVlf.Length():F1}m/s) " +
                 $"rp={flyby.TargetPeRadiusMeters:F0}m b={flyby.ImpactParameterMeters:F0}m.");
         return burn;
     }

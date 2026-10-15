@@ -1,5 +1,6 @@
 using System.IO;
 using Brutal.Numerics;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
@@ -547,21 +548,97 @@ public sealed class SequenceBurnStateTest : AfcTest
             Splitter.Allocate(100.0, 100, SplitMode.EqualDv, SequenceBurnState.Empty).Length == Splitter.MaxPasses);
     }
 
+    // The schedule checks assume impulsive burns, so the flight computer thrust is cleared for them, and the finite burn checks then set a staged burn.
     private static void CheckHohmannSchedule(TestContext t, Vehicle vehicle)
     {
+        FlightComputer fc = vehicle.FlightComputer;
+        ActiveEnginePerformance savedPerformance = fc.ActiveEnginePerformanceMax;
+        FiniteBurnPhase[] savedStaged = fc.StagedBurn.ToArray();
+        try
+        {
+            fc.ActiveEnginePerformanceMax = ActiveEnginePerformance.Zero;
+            fc.SetStagedBurn(ReadOnlySpan<FiniteBurnPhase>.Empty);
+            CheckHohmannImpulsiveSchedule(t, vehicle);
+            CheckHohmannFiniteBurns(t, vehicle);
+        }
+        finally
+        {
+            fc.SetStagedBurn(savedStaged);
+            fc.ActiveEnginePerformanceMax = savedPerformance;
+        }
+    }
+
+    private static HohmannMultiPassPlanner.HohmannPlanInput BuildHohmannInput(
+        Vehicle vehicle, UniverseTime now, out double rp, out double apo, out double rotation)
+    {
         Orbit parking = vehicle.Orbit;
-        UniverseTime now = Universe.GetElapsedTime();
-        double rp = parking.Periapsis;
-        double apo = rp * 8.0;
+        rp = parking.Periapsis;
+        apo = rp * 8.0;
         Orbit target = OrbitFixtures.EllipticalAt(parking.Parent,
             rp - parking.Parent.MeanRadius, apo - parking.Parent.MeanRadius, now);
         double targetSpeed = target.GetOrbitalSpeed(rp);
         double parkingSpeed = parking.GetOrbitalSpeed(rp);
-        const double rotation = 0.01;
-        var input = new HohmannMultiPassPlanner.HohmannPlanInput(
+        rotation = 0.01;
+        return new HohmannMultiPassPlanner.HohmannPlanInput(
             vehicle, now + 30.0 * parking.Period,
             new double3(targetSpeed * Math.Cos(rotation) - parkingSpeed,
                 targetSpeed * Math.Sin(rotation), 0.0), false, 0.0, apo);
+    }
+
+    // A staged burn makes the planners fly every pass as a finite burn. The prior passes keep the period of their impulsive result, and the final pass still ends on a bound orbit near the target apoapsis.
+    private static void CheckHohmannFiniteBurns(TestContext t, Vehicle vehicle)
+    {
+        const double thrustN = 120_000.0;
+        const double startMassKg = 40_000.0;
+        const double ispSec = 330.0;
+        const double standardGravity = 9.80665;
+        const int count = 2;
+
+        Orbit parking = vehicle.Orbit;
+        UniverseTime now = Universe.GetElapsedTime();
+        var input = BuildHohmannInput(vehicle, now, out _, out double apo, out _);
+
+        PassPreviewResult impulsive = HohmannMultiPassPlanner.Plan(vehicle, input, count, 0,
+            parking.Period, SequenceBurnState.Empty, now, SplitMode.EqualDv);
+        vehicle.FlightComputer.SetStagedBurn(new FiniteBurnPhase[]
+        {
+            new(thrustN, thrustN / (standardGravity * ispSec), startMassKg, double.PositiveInfinity),
+        });
+        PassPreviewResult finite = HohmannMultiPassPlanner.Plan(vehicle, input, count, 0,
+            parking.Period, SequenceBurnState.Empty, now, SplitMode.EqualDv);
+
+        bool planned = !impulsive.Failed && !finite.Failed
+            && impulsive.Passes.Length == count && finite.Passes.Length == count;
+        t.Check("Hohmann finite burn passes planned", planned,
+            finite.FailureReason ?? impulsive.FailureReason ?? "");
+        if (!planned) return;
+
+        bool allFinite = true;
+        foreach (PassPreview pass in finite.Passes)
+            allFinite &= FiniteBurns.LastBurnPiece(pass.FlightPlan) != null;
+        t.Check("Hohmann finite burn passes fly as finite burns", allFinite);
+        t.Check("Hohmann finite burn refines the first pass",
+            (finite.Passes[0].DvVlf - impulsive.Passes[0].DvVlf).Length() > 0.01,
+            $"finite {finite.Passes[0].DvVlf.Length():F2}m/s, impulsive {impulsive.Passes[0].DvVlf.Length():F2}m/s");
+        if (!allFinite) return;
+
+        Orbit post = FiniteBurns.LastBurnPiece(finite.Passes[0].FlightPlan)!.Orbit;
+        double coast = (finite.Passes[1].BurnTime - finite.Passes[0].BurnTime).Seconds();
+        t.Check("Hohmann finite burn prior pass returns after one orbit",
+            Approx.Mixed(coast, post.Period, 0.05, 1e-6),
+            $"coast {coast:F3}s, period {post.Period:F3}s");
+
+        Orbit final = FiniteBurns.LastBurnPiece(finite.Passes[^1].FlightPlan)!.Orbit;
+        t.Check("Hohmann finite burn final pass ends near the target apoapsis",
+            final.IsBound() && Approx.Rel(final.Apoapsis, apo, 0.2),
+            $"apoapsis {final.Apoapsis:F0}m, target {apo:F0}m");
+    }
+
+    private static void CheckHohmannImpulsiveSchedule(TestContext t, Vehicle vehicle)
+    {
+        Orbit parking = vehicle.Orbit;
+        UniverseTime now = Universe.GetElapsedTime();
+        var input = BuildHohmannInput(vehicle, now, out double rp, out double apo, out double rotation);
 
         // Check the departure schedule against the orbits propagated by the game.
         for (int count = 2; count <= 4; count++)

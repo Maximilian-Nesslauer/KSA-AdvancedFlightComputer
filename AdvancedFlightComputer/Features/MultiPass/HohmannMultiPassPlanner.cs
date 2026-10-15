@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using AdvancedFlightComputer.Core;
 using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
@@ -21,7 +22,9 @@ internal static class HohmannMultiPassPlanner
         double3 DFinalVlf,
         bool IsCrossParent,
         double VInfMs,
-        double ApoTargetRadiusMeters);
+        double ApoTargetRadiusMeters,
+        // The transfer time of the final burn. It sets the arrival goal of the finite burn refinement when the transfer stays inside the parking SOI.
+        UniverseTime? Transit = null);
     // Keep parkingPeriodSec fixed when recalculating because the period after a burn is no longer the parking period.
     public static PassPreviewResult Plan(
         Vehicle source,
@@ -293,7 +296,8 @@ internal static class HohmannMultiPassPlanner
 
         for (int k = 0; k < remainingCount; k++)
         {
-            double3 dvVlf = dvVlfSeq[k];
+            double3 dvVlf = RefineForFiniteBurn(source, input, prePatch.Orbit, times[k],
+                dvVlfSeq[k], isFinal: k == remainingCount - 1);
 
             var (fp, burnPatch) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
                 source, prePatch, times[k], dvVlf, input.Target);
@@ -402,6 +406,7 @@ internal static class HohmannMultiPassPlanner
             TFinal = bestTd.Start,
             DFinalVlf = bestTd.TransferDvVlf,
             ApoTargetRadiusMeters = apoTargetRadiusM,
+            Transit = bestTd.Transit,
         };
 
         if (MultiPassDebug.Enabled)
@@ -864,6 +869,8 @@ internal static class HohmannMultiPassPlanner
                 (burnTime - input.TFinal).Seconds(),
                 vpLive, vTargetXy, theta, dvX, dvY, dvZ, dvFinalMag));
 
+        // The final pass is committed alone from the orbit the earlier passes raised, so this refines it from that orbit and not from the parking orbit.
+        dvVlf = RefineForFiniteBurn(source, input, o, burnTime, dvVlf, isFinal: true);
         var (fp, _) = MultiPassForwardChainPlanner.BuildPassFlightPlan(
             source, prePatch, burnTime, dvVlf, input.Target);
         var single = new PassPreview(
@@ -874,6 +881,19 @@ internal static class HohmannMultiPassPlanner
         string? finalAdvisory = CheckFinalPassAdvisory(fp, source, input.Target);
         return new PassPreviewResult(new[] { single }, Failed: false,
             FailureReason: null, Advisory: finalAdvisory);
+    }
+
+    // A prior burn only raises the orbit, so it holds the period of its impulsive result, which the schedule relies on.
+    // The final burn aims as the stock transfer planner does, at the exit velocity or at the arrival position of the impulsive transfer.
+    private static double3 RefineForFiniteBurn(
+        Vehicle source, HohmannPlanInput input, Orbit preOrbit, UniverseTime burnTime,
+        double3 dvVlf, bool isFinal)
+    {
+        FiniteBurnGoal goal = isFinal
+            ? FiniteBurnGoal.Transfer(input.Transit is UniverseTime transit ? burnTime + transit : null)
+            : FiniteBurnGoal.Period;
+        return FiniteBurns.Refine(preOrbit, burnTime, dvVlf,
+            FiniteBurns.FullThrottlePhases(source), goal).DvVlf;
     }
 
     private static PassPreviewResult Fail(string reason, PassPlanFailure kind) =>

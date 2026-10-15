@@ -26,6 +26,8 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
     public required double ApoTargetRadiusMeters { get; init; }
     // The original parking period anchors phasing even after prior burns change the live period.
     public required double ParkingPeriodSec { get; init; }
+    // The transfer time after the final burn, for the arrival goal of its finite burn refinement. Null keeps the goal on the impulsive transfer conic.
+    public double? TransitSec { get; init; }
 
     public string Kind => HohmannTransferKind;
     public string TypeKey => ManeuverTools.ManeuverTools.KeyStockHohmann;
@@ -85,7 +87,8 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
             DFinalVlf: DFinalVlf,
             IsCrossParent: IsCrossParent,
             VInfMs: VInfMs,
-            ApoTargetRadiusMeters: ApoTargetRadiusMeters);
+            ApoTargetRadiusMeters: ApoTargetRadiusMeters,
+            Transit: TransitSec is double transitSec ? new UniverseTime(transitSec) : null);
         var result = HohmannMultiPassPlanner.Plan(
             vehicle, input, passCountTotal, passIndex,
             ParkingPeriodSec, state, now, mode);
@@ -134,6 +137,8 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         w.WriteLine(string.Format(Inv, "v_inf_ms = {0:R}", VInfMs));
         w.WriteLine(string.Format(Inv, "apo_target_radius_m = {0:R}", ApoTargetRadiusMeters));
         w.WriteLine(string.Format(Inv, "parking_period_sec = {0:R}", ParkingPeriodSec));
+        if (TransitSec is double transitSec)
+            w.WriteLine(string.Format(Inv, "transit_sec = {0:R}", transitSec));
     }
 
     public static HohmannTransferIntent? FromToml(IReadOnlyDictionary<string, string> kv)
@@ -152,6 +157,10 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         if (!TryParseDouble(kv, "parking_period_sec", out double parkingPeriod)
             || !(parkingPeriod > 0.0))
             return null;
+        // Saves written without the key load with no arrival goal.
+        double? transitSec = TryParseDouble(kv, "transit_sec", out double transit) && transit > 0.0
+            ? transit
+            : null;
         return new HohmannTransferIntent
         {
             TargetId = tid,
@@ -162,6 +171,7 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
             VInfMs = vInf,
             ApoTargetRadiusMeters = apoTarget,
             ParkingPeriodSec = parkingPeriod,
+            TransitSec = transitSec,
         };
     }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -39,7 +40,7 @@ internal static class PlaneChangeBurnPlanner
                 return BuildStep(orbit, nodeTime, rotAxis, relInc, dvCap,
                     f => OrbitManeuvers.ComputeMatchInclination(
                         orbit, targetOrbit, useDescendingNode, earliestTime, f),
-                    "Match");
+                    "Match", targetOrbit);
             }, execution);
     }
 
@@ -84,7 +85,7 @@ internal static class PlaneChangeBurnPlanner
                 return BuildStep(orbit, nodeTime, rotAxis, fullAngle, dvCap,
                     f => OrbitManeuvers.ComputeSetInclination(
                         orbit, clampedTargetInc, useDescendingNode, earliestTime, reference, f),
-                    "Set");
+                    "Set", fullPlaneTarget: null);
             }, execution);
     }
 
@@ -92,7 +93,7 @@ internal static class PlaneChangeBurnPlanner
         Orbit orbit, UniverseTime nodeTime, double3 rotAxis, double fullAngle,
         double dvCapMs,
         Func<double, OrbitManeuvers.ManeuverResult?> computeWithFraction,
-        string logLabel)
+        string logLabel, Orbit? fullPlaneTarget)
     {
         StateVectors sv = orbit.GetStateVectorsAt(nodeTime);
         double3 vPerpVec = sv.VelocityCci - double3.Dot(sv.VelocityCci, rotAxis) * rotAxis;
@@ -129,6 +130,8 @@ internal static class PlaneChangeBurnPlanner
         }
 
         if (m == null) return null;
-        return new PassStep(m.Value.BurnTime, m.Value.DvVlf);
+        // A partial pass aims at the plane of its own impulsive result, and only a pass that completes the change aims at the target plane, as stock Match Target Plane does.
+        Orbit? planeTarget = fraction >= 1.0 ? fullPlaneTarget : null;
+        return new PassStep(m.Value.BurnTime, m.Value.DvVlf, FiniteBurnGoal.Plane(planeTarget));
     }
 }

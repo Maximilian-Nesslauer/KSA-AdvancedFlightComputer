@@ -56,7 +56,8 @@ internal static partial class FlybyTargeting
     /// parking frame that a split into several passes locks. A departure to
     /// another parent carries the ejection excess and a NaN apoapsis. A departure
     /// within the same parent carries the apoapsis after the burn and a NaN
-    /// excess.</summary>
+    /// excess. <see cref="Arrival"/> is the closest approach time of the solved
+    /// transfer, which the finite burn refinement uses as its arrival goal.</summary>
     public readonly record struct FlybyResult(
         double3 DvVlf,
         double3 DvCci,
@@ -66,7 +67,8 @@ internal static partial class FlybyTargeting
         double TargetPeRadiusMeters,
         bool IsCrossParent,
         double PlannerVInfMs,
-        double PlannerApoTargetMeters);
+        double PlannerApoTargetMeters,
+        UniverseTime? Arrival = null);
 
     #region Reference radius resolution
 
@@ -379,7 +381,7 @@ internal static partial class FlybyTargeting
 
         return new FlybyResult(dvVlf, dvCci, start,
             s.ImpactParameter, s.VInf, rpRadius, IsCrossParent: false,
-            PlannerVInfMs: double.NaN, PlannerApoTargetMeters: apoTarget);
+            PlannerVInfMs: double.NaN, PlannerApoTargetMeters: apoTarget, Arrival: s.CaTime);
     }
 
     private static FlybyResult? BuildCrossParentDeparture(
@@ -413,7 +415,7 @@ internal static partial class FlybyTargeting
         double plannerVInf = s.DepartureDeltaCci.Length();
         return new FlybyResult(dvVlf, dvCci, burnTime,
             s.ImpactParameter, s.VInf, rpRadius, IsCrossParent: true,
-            PlannerVInfMs: plannerVInf, PlannerApoTargetMeters: double.NaN);
+            PlannerVInfMs: plannerVInf, PlannerApoTargetMeters: double.NaN, Arrival: s.CaTime);
     }
 
     #endregion
