@@ -19,10 +19,28 @@ public sealed class Scvx6DofConfig
     public double ThrottleFloor { get; init; } = 0.40;          // Tmin = floor * Tmax
     public double GimbalMaxDeg { get; init; } = 10.0;
     public double TauRollMax { get; init; } = 1.0e5;
+
+    /// <summary>
+    /// Roll torque scales with the axial thrust, |tau_roll| &lt;= TauRollMax * T / Tmax, rather than TauRollMax at any thrust: the roll torque comes from gimbals, which turn thrust into torque, so at a third of full thrust there is a third of the roll authority. A fixed bound promised a landing booster several times the roll it had (2026-10-08), the plan rolled at rates the vehicle could not follow, and every re-solve from there was refused. Off for a vehicle with a roll actuator of its own.
+    /// </summary>
+    public bool RollTorqueFollowsThrust { get; init; }
     public double TiltMaxDeg { get; init; } = 30.0;
     public double GroundFloor { get; init; } = -1.0;            // X[n,2] >= this
 
     public double RhoVc { get; init; } = 1e5;                   // virtual-control penalty
+
+    /// <summary>
+    /// The scale each state channel's virtual control is priced on, NX long, or null for <see cref="XScale"/>: the dynamics penalty is RhoVc * sum (w / scale)^2, in the subproblem and in the merit alike. An entry of 0 or less keeps that channel on XScale.
+    ///  DECOUPLED FROM XScale, which also sets the column scaling and the trust region, so a channel's price can be chosen for what a jump in it means without touching either - the ascent's DScale (launch3dof.py's Dscale). The convergence test still reads the defect on XScale.
+    ///  Why it matters: priced on XScale, a velocity jump is measured against the speed at engage, and the quadratic makes a small jump repeated on every interval nearly free - cheaper, below some size per interval, than the L1 terminal slack it can stand in for. On the 2026-10-09 7 t booster a plan carried 0.18 m/s of phantom braking on every interval, about 9 m/s over the burn, at a twentieth of the price of arriving that much faster.
+    /// </summary>
+    ///  SETTABLE, through Scvx6DofSolver.SetVirtualControlScale and nowhere else: the guidance stages it, loose while a plan is being found and tight once one is being refined (Ksa6DofGuidance's pricing stage).
+    public double[]? VirtualControlScale { get; set; }
+
+    /// <summary>The scale channel <paramref name="i"/>'s virtual control is priced on: <see cref="VirtualControlScale"/> where it sets one, <see cref="XScale"/> otherwise.</summary>
+    public double VirtualControlScaleOf(int i)
+        => VirtualControlScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : XScale[i];
+
     public double WDu { get; init; } = 0.2;                     // control-rate smoothing
     public double WW { get; init; } = 1.0;                      // angular-rate damping
     /// <summary>
@@ -165,6 +183,19 @@ public sealed class Scvx6DofConfig
 
     public bool GlideSlopeEnabled => GlideSlopeDeg > 0.0;
     public bool VzLimitEnabled => VzMax >= 0.0;
+
+    /// <summary>
+    /// Largest THRUST acceleration the plan may use, m/s^2, or 0 for none: T &lt;= AccelMax * m at every node. Exact - both are variables and the row is linear in them - and soft like the glideslope, with an L1 slack at <see cref="AccelWeight"/>, so a craft that needs more to stop gets it rather than no plan. Keeps a high thrust-to-weight booster from planning its landing as a few seconds at full thrust, which is where lag costs the most.
+    /// </summary>
+    public double AccelMax { get; init; }
+
+    /// <summary>
+    /// The acceleration slack's price per newton over the limit, normalised by Tmax, per node. LOW ENOUGH THAT BRAKING HARDER BEATS ARRIVING FAST: a m/s bought over the limit costs about (AccelWeight / 1e4) x (velocity scale / full-thrust acceleration) / node spacing times a m/s of touchdown speed, and at 1e4 that was 2.2 on the 2026-10-09 booster (95 m/s, 3.8 MN on 31 t, 0.35 s nodes) - in game it coasted, held 3.00 g to the end and hit the pad at 10.9 m/s.
+    ///  300 keeps that ratio under about 0.3 from 50 nodes down to 5 on the 7-30 t boosters, and flew well in game on 2026-10-09. The ratio grows with finer nodes and lighter thrust; a much different vehicle could need it lower.
+    ///  NOT VERIFIED TO BIND EVERYWHERE: offline, --path's acceleration case no longer holds the limit at 300 (peak 24.1 m/s^2 against 12.3, IterationLimit) where 1e4 held it exactly - a flat weight's meaning depends on the scales, which differ there.
+    /// </summary>
+    public double AccelWeight { get; init; } = 300;
+    public bool AccelLimitEnabled => AccelMax > 0.0;
 
     /// <summary>cot of the glideslope half-angle: the cone's horizontal run per unit of height.</summary>
     public double CotGlideSlope => 1.0 / Math.Tan(Math.Clamp(GlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);

@@ -26,8 +26,8 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //                       whatever genuine motion happens between recomputes arrives all at once. Blended below.
 public static partial class GuidanceWindow
 {
-    // On by default.
-    private static bool _showImpactOverlay = true;
+    // Off by default; the Boostback page turns it on.
+    private static bool _showImpactOverlay = false;
 
     /// <summary>How often the prediction is recomputed, ms. A prediction is about a
     /// millisecond, so this cannot be per-frame; at 60 ms the marker's own motion
@@ -122,9 +122,10 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
-            // Retrograde throughout: the coast assumption. See DragCoastSystem.
-            Alpha = 0.0,
+            // The planned glide: engine first, at the nominal angle, lifting up the trajectory. See GlideNominalAlpha.
+            Alpha = GlideNominalAlpha(aero),
             Table = aero.Table,
+            LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
 
@@ -224,8 +225,9 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
-            Alpha = 0.0,
+            Alpha = GlideNominalAlpha(aero),
             Table = aero.Table,
+            LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
 

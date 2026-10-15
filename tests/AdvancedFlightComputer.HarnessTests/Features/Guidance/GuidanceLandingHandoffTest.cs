@@ -33,7 +33,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         AccessTools.FieldRefAccess<Vehicle, ManualControlInputs>("_manualControlInputs");
 
     // What the stubbed check says when 6-DOF cannot take the craft.
-    private const string Refusal = "no gimballed engine - 6-DOF needs thrust vectoring";
+    private const string Refusal = "no gimballed engine - touchdown guidance needs thrust vectoring";
 
     private static Vehicle? _fixture;
     private static int _sixDofSteps;
@@ -138,17 +138,6 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.WasEngaged && state.AttitudeOwnership.IsCurrent(craft.FlightComputer));
         t.Check("6-DOF: AutoStage is still armed when the engage runs",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
-
-        // A cold solve that cannot publish soon enough returns to powered landing, while the prior engine command and the shared claim stay with this craft.
-        Method("HandSixDofToGfold").Invoke(null, new object[] { craft, Universe.GetElapsedSeconds(), 2000.0, "fallback test" });
-        t.Check("6-DOF: a cold start without a plan in time hands the craft to G-FOLD",
-            state.LandingPhase == GuidanceWindow.LandingPhase.GfoldDescent
-            && state.GfoldApproach == GuidanceWindow.GfoldApproach.BrakeAtGate
-            && !state.Active && state.UseSixDofLanding
-            && state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
-        t.Check("6-DOF: fallback keeps the engine's previous command",
-            Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle
-            && state.GfoldThrottle == BurnThrottle && !state.LandingCutPending);
 
         VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);

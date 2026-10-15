@@ -17,11 +17,40 @@ const int RowLen = NX + NU + NX + NX * NX + NX * NU;
 
 bool verbose = args.Contains("--verbose");
 
+if (args.Contains("--standby"))
+{
+    StandbyTrackCheck.Verbose = verbose;
+    StandbyTrackCheck.Slow = args.Contains("--slow");
+    return StandbyTrackCheck.Run();
+}
+
 if (args.Contains("--cold-shift"))
     return ColdReferenceShiftCheck.Run();
 
 if (args.Contains("--hermite"))
     return PlanStateInterpolationCheck.Run();
+
+if (args.Contains("--3dof-model"))
+    return ThreeDofModelCheck.Run();
+
+if (args.Contains("--3dof-far"))
+{
+    ThreeDofFarCheck.Sweep = args.Contains("--sweep");
+    ThreeDofFarCheck.OldRule = args.Contains("--old-rule");
+    int nodesAt = Array.IndexOf(args, "--nodes"), glideAt = Array.IndexOf(args, "--glide");
+    if (nodesAt >= 0) ThreeDofFarCheck.Nodes = int.Parse(args[nodesAt + 1], CultureInfo.InvariantCulture);
+    if (glideAt >= 0) ThreeDofFarCheck.GlideIntervals = int.Parse(args[glideAt + 1], CultureInfo.InvariantCulture);
+    return ThreeDofFarCheck.Run();
+}
+
+if (args.Contains("--3dof-mpc"))
+    return ThreeDofMpcCheck.Run(verbose);
+
+if (args.Contains("--3dof-ksa"))
+    return ThreeDofKsaCheck.Run(verbose);
+
+if (args.Contains("--3dof"))
+    return ThreeDofCheck.Run(verbose);
 
 // --sub-scs: validate the cone-problem assembly by solving the same SCvx
 // subproblem CVXPY solved in python_ref/sub_ref.py and diffing the trajectory.
@@ -47,6 +76,10 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --ascent-solids solid motors' thrust curves, pinned burns and a core throttled to outlast its boosters
           --ascent-glimit a thrust acceleration limit that binds, one that does not, and which stages take it
           --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new
+          --3dof          the 3-DOF glide-and-burn loop against 3dof.py's result
+          --3dof-model    the KSA point-mass model: AD slopes, the rotating frame against CCI, lift and thrust
+          --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
+          --3dof-mpc      the glide-and-burn guidance flown closed loop against dispersed drag, lift, thrust and attitude lag
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
                           solve an ascent problem the game dumped, with the full trace
 

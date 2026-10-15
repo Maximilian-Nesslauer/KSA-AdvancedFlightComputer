@@ -26,6 +26,14 @@ public static partial class GuidanceWindow
         //  "When the tab is selected" is exactly here: this method only runs while the tab is open, so an unopened tab costs nothing and an open one re-fits only when staging has actually invalidated the table. The guidance step calls the same helper, so a boostback flown with the panel shut uses the same table.
         EnsureBoostbackAero(vehicle, parent);
 
+        string noLift = AeroLiftWarning();
+        if (noLift.Length > 0)
+        {
+            ImGui.PushStyleColor(ImGuiCol.Text, new float4(1f, 0.5f, 0.3f, 1f));
+            ImGui.TextWrapped(noLift);
+            ImGui.PopStyleColor();
+        }
+
         DrawBoostbackGuidanceSection(vehicle, innerW);
         DrawBoostbackImpactSection(vehicle, orbit, parent, innerW);
         DrawBoostbackSurrogateSection(vehicle, parent, innerW);
@@ -55,6 +63,12 @@ public static partial class GuidanceWindow
             switch (_s.BoostbackPhase)
             {
                 case BoostbackPhase.Separation:
+                    if (_s.BoostbackClearOf != null)
+                    {
+                        GaugeRowText("Clearing", $"{_s.BoostbackClearGapM,8:F0} / {_s.BoostbackClearanceM:F0} m");
+                        GaugeRowText("Throttle", "       0 %  (coasting clear)");
+                        break;
+                    }
                     GaugeRowText("Settling", $"{inPhase,8:F1} / {_s.BoostbackSeparationS:F1} s");
                     GaugeRowText("Throttle", $"{_s.BoostbackThrottle * 100.0,8:F0} %  (vehicle floor)");
                     break;
@@ -111,6 +125,9 @@ public static partial class GuidanceWindow
                         $"{vehicle.FlightComputer.ErrorAngles.Length() * 180.0 / Math.PI,8:F1} deg", dim);
                     if (_s.GlideStatus.Length > 0)
                         GaugeRowText("", _s.GlideStatus, warn);
+                    if (_s.ThreeDofFromGlide)
+                        GaugeRowText("Entry guidance", double.IsFinite(_s.GlideTgo)
+                            ? $"takes over at {_s.ThreeDofEngageTgoS:F0} s to impact" : "waiting for an impact prediction", dim);
                     break;
                 }
             }
@@ -139,6 +156,7 @@ public static partial class GuidanceWindow
             ImGui.NextColumn();
         }
 
+        GaugeRow("Clearance at separation (m)", "##bbclear", ref _s.BoostbackClearanceM);
         GaugeRow("Settling burn (s)", "##bbsep", ref _s.BoostbackSeparationS);
         GaugeRow("Slew rate (deg/s)", "##bbslew", ref _s.BoostbackSlewDegS);
 
@@ -150,6 +168,7 @@ public static partial class GuidanceWindow
         GaugeRow("Glide Ki (1/s)", "##glki", ref _s.GlideKi);
         GaugeRow("Glide Kd (s)", "##glkd", ref _s.GlideKd);
         GaugeRow("Glide max AoA (deg)", "##glmax", ref _s.GlideMaxAoaDeg);
+        GaugeRow("Glide planned AoA (deg)", "##glnom", ref _s.GlideNominalAoaDeg);
 
         if (_s.HasSteer)
         {

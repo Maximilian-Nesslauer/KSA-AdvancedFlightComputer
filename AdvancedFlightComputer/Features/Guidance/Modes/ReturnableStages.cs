@@ -194,8 +194,9 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
-            Alpha = 0.0,
+            Alpha = GlideNominalAlpha(aero),
             Table = aero.Table,
+            LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
 

@@ -58,7 +58,7 @@ public static partial class GuidanceWindow
         if (_s.SixDofGlideSlopeDeg > 0.0)
         {
             var coneCol = new ImColor8(90, 140, 190);
-            double apexZ = _s.SixDofTargetAltM;
+            double apexZ = _s.SixDofTargetComAltM;
             double topZ = Math.Max(px[0 * 14 + 2], apexZ + 1.0);   // up to the plan's start
             double cot = 1.0 / Math.Tan(Math.Clamp(_s.SixDofGlideSlopeDeg, 1e-3, 89.999) * Math.PI / 180.0);
             double3 apex = f.PosToCci(new double3(0, 0, apexZ));
@@ -125,7 +125,7 @@ public static partial class GuidanceWindow
                 dl.AddCircleFilled(s, 2.0f, nodeCol);
 
         // --- target and pad ---
-        double3 targetCci = f.PosToCci(new double3(0, 0, _s.SixDofTargetAltM));
+        double3 targetCci = f.PosToCci(new double3(0, 0, _s.SixDofTargetComAltM));
         if (TryProjectCci(targetCci, out float2 tgt))
             dl.AddCircleFilled(tgt, 5.0f, tgtCol);
         OvLine(dl, siteCci, targetCci, padCol, 1.0f);

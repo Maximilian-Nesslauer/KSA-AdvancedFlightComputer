@@ -246,6 +246,9 @@ public static partial class GuidanceWindow
         internal double SiteLatDeg;
         internal double SiteLonDeg;
         internal double ExpiresAt;
+
+        // The stack the booster is being dropped from, which it must clear before it lights, see TryAdoptBooster.
+        internal Vehicle From;
     }
 
     private static readonly List<BoosterHandover> _handovers = new List<BoosterHandover>();
@@ -297,6 +300,7 @@ public static partial class GuidanceWindow
                 {
                     RootId = root.InstanceId,
                     ExpiresAt = now + HandoverWindowS,
+                    From = vehicle,
                 });
             }
         }
@@ -370,6 +374,16 @@ public static partial class GuidanceWindow
         _s.SiteLonDeg = mine.SiteLonDeg;
         GuidanceLog.Info(vehicle, $"adopted as a separated booster, boostback engages within {HandoverWindowS:F0} s.");
 
+        // ENGINE OFF ON THIS FRAME, and the settling burn held until the two are clear. A split vehicle inherits the stack's control inputs, so a booster dropped under the reserve comes away still burning - and from below the stage it let go of, that thrust drives it straight back into it, whose engine is usually held for a few seconds yet. KSA breaks the parts that hit: the first flights lost the booster's interstage, which took this vehicle and its boostback with it and left the rest of the booster as a new craft nothing was flying. The engage below can take seconds to stick, so the cut cannot wait for it. Written before any claim, but the inputs are the ascent's, inherited, not the player's.
+        ref ManualControlInputs inputs = ref ManualInputs(vehicle);
+        inputs.EngineOn = false;
+        if (mine.From is { IsDisposed: false } stage)
+        {
+            _s.BoostbackClearOf = stage;
+            _s.BoostbackClearFromM = SeparationDistance(vehicle, stage);
+            _s.BoostbackClearGapM = 0.0;
+        }
+
         // NOT engaged here, deliberately. This runs on the frame the split happened, which is the frame the part tree is least settled - and ExecuteBoostback needs an aero surrogate fitted to a bounding box that may not exist yet. It refuses rather than throwing, and refusing here would leave a booster that had been adopted and would never be flown, with the hand-over record already consumed. So the engage is retried from the sweep until it takes.
         _s.HandoverPendingUntil = now + HandoverWindowS;
         return true;
@@ -415,6 +429,10 @@ public static partial class GuidanceWindow
     }
 
     private const double HandoverRetryS = 0.5;
+
+    /// <summary>Centre-of-mass distance between two craft, m.</summary>
+    private static double SeparationDistance(Vehicle a, Vehicle b)
+        => (a.Orbit.StateVectors.PositionCci - b.Orbit.StateVectors.PositionCci).Length();
 
     // The part whose subtree separates when this decoupler fires: the tree-child side of its connection - the same rule Vehicle.Split applies.
     private static Part DetachedRoot(Decoupler decoupler)
@@ -812,7 +830,7 @@ public static partial class GuidanceWindow
     /// separate tabs but one machine (<see cref="LandingPhase"/>), and 6-DOF is a
     /// sub-tab of Landing but a wholly separate mode.
     /// </summary>
-    private enum GuidanceMode { Ascent, Landing, Boostback, SixDof }
+    private enum GuidanceMode { Ascent, Landing, Boostback, SixDof, ThreeDof }
 
     /// <summary>
     /// TAKE THE VEHICLE FOR ONE MODE, releasing every other.
@@ -874,6 +892,17 @@ public static partial class GuidanceWindow
         if (mode != GuidanceMode.Boostback)
             _s.BoostbackPhase = BoostbackPhase.Idle;
 
+        // The 6-DOF standby the 3-DOF's burn keeps is for 6-DOF only; anything else taking the craft ends it.
+        if (mode != GuidanceMode.SixDof)
+            StopSixDofStandby();
+
+        // The 3-DOF hands over to terminal hover and to 6-DOF with the engine lit, so letting go of it cuts nothing; the incoming mode owns the engine from here.
+        if (mode != GuidanceMode.ThreeDof && _s.ThreeDofPhase != ThreeDofPhase.Idle)
+        {
+            Reset3Dof();
+            _s.ThreeDofPhase = ThreeDofPhase.Idle;
+        }
+
         // The engine cut is deliberate and is NOT redundant with the incoming mode's own engine handling. A mode can claim the vehicle in a phase that commands nothing yet - LandingPhase.Coast is the case, coasting to a burn point - and in that phase nothing in ApplyAutopilot writes EngineOn at all. Without the cut, a 6-DOF descent handing over to a deorbit coast would leave the engine lit and throttled the whole way round.
         if (mode != GuidanceMode.SixDof && (_s.Active || _s.EngagePending))
             Disengage6Dof(vehicle);
@@ -899,7 +928,7 @@ public static partial class GuidanceWindow
         }
         if (_s.Active != _s.LoggedSixDofActive)
         {
-            GuidanceLog.Debug(vehicle, _s.Active ? "6-DOF guidance is active." : "6-DOF guidance ended.");
+            GuidanceLog.Debug(vehicle, _s.Active ? "Touchdown guidance is active." : "Touchdown guidance ended.");
             _s.LoggedSixDofActive = _s.Active;
         }
     }
@@ -950,8 +979,8 @@ public static partial class GuidanceWindow
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire EXECUTE. A booster adopted at separation also counts as flying until boostback engages.
         bool handingOver = _s.HandoverPendingUntil > SimNow();
-        bool flying = sixDof || _s.Running || landingActive || BoostbackLive || _s.WasEngaged
-                   || _s.LandingCutPending || _s.LaunchArmed || handingOver;
+        bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending
+                   || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver;
 
         // Check ownership per actuator before mode steps can overwrite a changed command. The attitude is compared by value. The engine belongs to whoever arms stock Auto, because Vehicle.PrepareWorker then clears EngineOn on every step after this prefix and stock's own burn logic never writes Auto by itself. Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
         bool attitudeTaken = _s.ControlAcquired
@@ -959,7 +988,7 @@ public static partial class GuidanceWindow
         bool engineTaken = _s.ControlAcquired
             && vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto;
         if (_s.ControlAcquired && ((!sixDof && !_s.Engage)
-            || (!sixDof && !_s.Running && !landingActive && !BoostbackLive && !_s.LaunchArmed)
+            || (!sixDof && !_s.Running && !landingActive && !BoostbackLive && !ThreeDofLive && !_s.LaunchArmed)
             || attitudeTaken || engineTaken))
         {
             // Release after a takeover without changing the engine command. A takeover moves one actuator and nothing else, so an engine cut guidance already decided on still happens, whether it sits in the queued one-shot cut or in a release that shuts down by itself. The reason outlives a failed cleanup, so the retry can say it.
@@ -1033,9 +1062,16 @@ public static partial class GuidanceWindow
         if (StepStockDeorbit(vehicle, orbit, parent)) return;
         StepLandingCoast();
 
+        // An entry guidance request engages HERE, ahead of the claim below, so its first step is claimed like any other mode's - consumed in Step3Dof it wrote engine and attitude before the claim, and while touchdown guidance flew, the exclusive branch returned before it was consumed at all. Engage3Dof's ClaimVehicle disengages touchdown guidance.
+        if (_s.ThreeDofEngagePending)
+        {
+            _s.ThreeDofEngagePending = false;
+            Engage3Dof(vehicle, SimNow());
+        }
+
         sixDof = _s.Active || _s.EngagePending;
         // Active, not EngagePending: a setup that Engage6Dof rejects never writes control, and must not leave the craft owned. A coast owns nothing either, see StepLandingCoast.
-        if (_s.Active || (_s.Engage && (_s.Running || LandingCommands(_s.LandingPhase) || BoostbackLive)))
+        if (_s.Active || (_s.Engage && (_s.Running || LandingCommands(_s.LandingPhase) || BoostbackLive || ThreeDofLive)))
         {
             // A refused claim must not reach command writes or restore the holder's attitude fields.
             if (!TryTakeCraft(vehicle, acquire: true))
@@ -1084,6 +1120,7 @@ public static partial class GuidanceWindow
         StepLanding(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
         StepAscent(vehicle, orbit, parent, parent.Mu, parent.MeanRadius);
         StepBoostback(vehicle, orbit, parent);
+        Step3Dof(vehicle, orbit, parent);
 
         // Read straight off _s, not off the values the bail above was computed from: the flows just ran, and a touchdown, an abort or a handoff can have changed the phase on this very step.
         //
@@ -1091,7 +1128,9 @@ public static partial class GuidanceWindow
         bool landingGuides = LandingCommands(_s.LandingPhase);
         // Every live boostback phase steers, including the settling burn (which holds a latched attitude) and the glide (which steers its angle of attack indefinitely) - so unlike the landing machine there is no sub-phase here that wants the vehicle back.
         bool boostbackGuides = BoostbackLive;
-        bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides)
+        // The 3-DOF steers through the flight computer as the boostback does, from its PID glide to the end of its burn.
+        bool threeDofGuides = ThreeDofLive;
+        bool shouldCommand = _s.Engage && (_s.Running || landingGuides || boostbackGuides || threeDofGuides)
                           && _s.HasCommand;
 
         // Auto engine control: master switch on at full throttle while flying, off for good once the terminal countdown expires. Written here - the prefix runs just before PrepareWorker snapshots _manualControlInputs - so it reaches the sim exactly like the player's ignite/shutdown key. One-shot engine cut when the landing flow ends (cutoff, abort, failure) - after this the player's inputs are untouched, so the final descent below the gate can be flown manually.
@@ -1128,6 +1167,13 @@ public static partial class GuidanceWindow
                     inputs.EngineOn = false; // Prep (pre-ignition)
                 }
             }
+            else if (threeDofGuides)
+            {
+                // Off through the glide, the plan's throttle through the burn. Not paired with AutoSequence, for the boostback's reason: an engine-off glide reads to the auto-stager as a cue to fire the next sequence.
+                ref ManualControlInputs inputs = ref ManualInputs(vehicle);
+                inputs.EngineOn = _s.ThreeDofEngineOn;
+                inputs.EngineThrottle = (float)_s.ThreeDofThrottle;
+            }
             else if (boostbackGuides)
             {
                 // The phase decides; the step recorded it. Deliberately NOT paired with AutoSequence: the machine cuts the engine at boostback cutoff and coasts to entry from there, and the auto-stager reads "no thrust" as a cue to fire the next sequence - so it would work its way down a returning booster's staging list one activation per second, and the sequences left on a first stage are the ones that separate it.
@@ -1161,7 +1207,7 @@ public static partial class GuidanceWindow
 
             // Publish the attitude and its turning rate together so they describe the same instant.
             KsaAttitudeRate.Set(vehicle,
-                _s.Running || boostbackGuides ? _s.CommandRate : default);
+                _s.Running || boostbackGuides || threeDofGuides ? _s.CommandRate : default);
             _s.WasEngaged = true;
         }
         // A queued 6-DOF engage keeps the attitude of the mode that handed over, see the 6-DOF branch above.
@@ -1174,7 +1220,7 @@ public static partial class GuidanceWindow
         // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input. A coast that EXECUTE queued while another mode still owned the craft stays through that release, and claims again at Prep.
         // A 6-DOF engage queued on this step is a handover, not an end: the deorbit burn queues one at its handoff, and the next step's 6-DOF dispatch runs it. Releasing here would drop the request and cut the engine the burn left lit, so the craft falls with nothing flying it.
         bool stillNeedsCraft = _s.Active || _s.EngagePending
-            || (_s.Engage && (_s.Running || landingGuides || boostbackGuides));
+            || (_s.Engage && (_s.Running || landingGuides || boostbackGuides || threeDofGuides));
         if (_s.ControlAcquired && !_s.LaunchArmed && !stillNeedsCraft)
             ReleaseVehicle(vehicle, keepWaitingCoast: true);
     }
@@ -1190,6 +1236,35 @@ public static partial class GuidanceWindow
 
         // Likewise the flown-trajectory trace: sampled off the simulation rather than the frame rate, and recorded whether or not guidance is running so the track is already there when the overlay is switched on - losing it the moment guidance engages would blank the overlay during exactly the descent worth watching.
         RecordTrace(vehicle, orbit);
+
+        RefreshVehicleHeight(vehicle);
+    }
+
+    private const long VehicleHeightRefreshMs = 500;
+
+    // Keep VehicleHeightM on the measured touchdown height while auto is on. It moves as the propellant drains (the CoM climbs) and changes at every staging, so it is re-read twice a second on the wall clock rather than captured once; the measurement is one bounds query per collider.
+    private static void RefreshVehicleHeight(Vehicle vehicle)
+    {
+        if (!_s.VehicleHeightAuto)
+        {
+            _s.VehicleHeightStatus = "manual";
+            return;
+        }
+        long now = GuidanceClock.NowMs;
+        if (now < _s.VehicleHeightNextMs)
+            return;
+        _s.VehicleHeightNextMs = now + VehicleHeightRefreshMs;
+
+        if (!KsaVehicleHeight.TryMeasure(vehicle, out KsaVehicleHeight.Result h))
+        {
+            // Keep the last good value: a guess of zero would plan the CoM into the ground.
+            _s.VehicleHeightStatus = $"no colliders to measure - holding {_s.VehicleHeightM:F2} m";
+            return;
+        }
+        _s.VehicleHeightM = h.DeployedM;
+        _s.VehicleHeightStatus = h.Stowed > 0
+            ? $"legs stowed ({h.Stowed} of {h.Deployables}) - measured deployed, {h.CurrentM:F2} m as they are"
+            : h.Deployables > 0 ? "measured, legs deployed" : "measured, no deployable legs";
     }
 
     // Release attitude without replacing the flight computer and losing the player's burn plan or settings.
@@ -1282,7 +1357,8 @@ public static partial class GuidanceWindow
             && !_s.HasCommand && _s.Guidance == null
             && _s.HandoverPendingUntil == double.NegativeInfinity
             && !ReferenceEquals(SixDofLog.Owner, _s)
-            && _s.LandingPhase == LandingPhase.Idle && _s.BoostbackPhase == BoostbackPhase.Idle)
+            && _s.LandingPhase == LandingPhase.Idle && _s.BoostbackPhase == BoostbackPhase.Idle
+            && _s.ThreeDofPhase == ThreeDofPhase.Idle)
         {
             // Nothing to release, so the next stop starts from the default again.
             _s.ReleaseWithoutEngineCut = false;
@@ -1299,11 +1375,17 @@ public static partial class GuidanceWindow
             ClearDeorbitPlanState();
         }
         _s.BoostbackPhase = BoostbackPhase.Idle;
+        if (_s.ThreeDofPhase != ThreeDofPhase.Idle)
+        {
+            Reset3Dof();
+            _s.ThreeDofPhase = ThreeDofPhase.Idle;
+        }
         _s.LaunchArmed = false;
         _s.HasCommand = false;
         _s.Active = false;
         _s.EngagePending = false;
         _s.Converging = false;
+        _s.SixDofStandby = false;
         _s.HandoverPendingUntil = double.NegativeInfinity;
 
         string failure = "";

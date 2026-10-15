@@ -451,7 +451,7 @@ public static partial class GuidanceWindow
                 | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
         {
             GaugeRow("Hover handoff alt (m)", "##gfhand", ref _s.GfoldHoverHandoffAltM);
-            GaugeRow("Vehicle height (m)", "##gfvh", ref _s.VehicleHeightM);
+            VehicleHeightRows("gf");
             ImGuiHelper.EndRegion();
         }
 

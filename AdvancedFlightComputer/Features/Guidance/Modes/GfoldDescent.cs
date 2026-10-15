@@ -478,7 +478,8 @@ public static partial class GuidanceWindow
         ImGui.InputDouble("Solve time limit (s, 0=none)", ref _s.GfoldSolveTimeLimitS);
 
         ImGui.InputDouble("Hover handoff alt (m)", ref _s.GfoldHoverHandoffAltM);
-        ImGui.InputDouble("Vehicle height (m)", ref _s.VehicleHeightM);
+        if (ImGui.InputDouble("Vehicle height (m)", ref _s.VehicleHeightM))
+            _s.VehicleHeightAuto = false;
         ImGui.InputDouble("Track gain Kp", ref _s.GfoldKp);
         ImGui.InputDouble("Track gain Kd", ref _s.GfoldKd);
         ImGui.InputDouble("Command smoothing (s)", ref _s.GfoldSmoothTau);

@@ -11,7 +11,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 /// <summary>
 /// 6-DOF powered descent as straight model-predictive control.
 ///  Every cycle: re-solve from the LIVE vehicle state, then apply the optimiser's own controls, interpolated along the fresh trajectory. That is the whole algorithm.
-/// There is no trajectory tracking, no PD, no attitude reference - MPC gets its feedback from re-solving at the measured state, which is the point of it.
+/// MPC gets its feedback from re-solving at the measured state, which is the point of it - but only from the re-solves that are accepted. Between them, and through a run of refused ones, the plan's thrust is corrected by Tracker6Dof when the caller passes one; its torques are flown as planned.
 ///  The optimiser's control IS the actuator command: u = (tdx, tdy, T, tau_roll) is a gimbal deflection, an axial thrust and a roll torque. Applying it means torque  = r_T x T_body = (LArm*tdy, -LArm*tdx, tau_roll) thrust  = T, in NEWTONS and nothing else. Converting that thrust into a KSA throttle needs the vehicle's LIVE capability and so belongs at the KSA boundary, not here - see Command. Attitude then evolves from the torque that deflection produces, exactly as the model's own dynamics say it will.
 ///  NODE 0 IS THE VEHICLE, and that has to be enforced rather than assumed. The subproblem pins it as an equality (`X[0][i] = x0[i]`), but the plan we read back is the SCvx REFERENCE trajectory, which only advances on an ACCEPTED step. Reseed sets that reference to the previous plan shifted forward - whose node 0 is the old plan's node `shift`, NOT the vehicle. So a cycle where the ratio test accepts nothing leaves a plan anchored an interval away from the vehicle, and the commands are read at the wrong point on it. AnchorOffsetM measures exactly that, and a plan is refused if it is not anchored.
 ///  NOT THREADED. A re-solve costs ~33 ms in the caller's frame.
@@ -42,6 +42,12 @@ public sealed class Ksa6DofGuidance
     private double[] _planU = [];
     private double _planSigma;
     private double _solveTime;          // sim time at which node 0 was the vehicle
+
+    // Track's working trajectory: the solver's latest reference and when its node 0 was the vehicle, kept whether or not it passed the gate.
+    private double[] _workX = [];
+    private double[] _workU = [];
+    private double _workSigma;
+    private double _workTime = double.NegativeInfinity;
 
     public ScvxStatus Status { get; private set; } = ScvxStatus.Failed;
     public string Error { get; private set; } = "";
@@ -151,6 +157,31 @@ public sealed class Ksa6DofGuidance
     ///  Measured on a real descent, the model was short by about 2.2 m/s^2 in the vertical - a fitted 10.3% thrust shortfall on top of gravity being 9.4% low (10.74 measured against 9.82 from Mu/r^2). That is roughly a fifth of the vehicle's net climb authority, applied continuously, which is more than enough to turn an approach into an overshoot and then an orbit.
     ///  Estimating the RESIDUAL rather than any individual term is deliberate: it needs no theory about which of gravity, thrust calibration or aerodynamics is responsible, and it picks up drag for free - including the way drag falls off as speed comes off, since the estimate simply follows it down.
     /// </summary>
+    /// <summary>
+    /// The model's aerodynamic acceleration at state x (model frame), m/s^2 - zero with no aero model. What the bias estimator takes off the measured acceleration before calling the rest unmodelled.
+    /// </summary>
+    public double3 ModelAeroAccel(double[] x)
+    {
+        if (_dyn.Aero == null || x == null || x.Length < NX || !(x[Dynamics6Dof.IM] > 0.0))
+            return default;
+        double qw = x[6], qx = x[7], qy = x[8], qz = x[9];
+        double n = Math.Sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+        if (!(n > 0.0))
+            return default;
+        qw /= n; qx /= n; qy /= n; qz /= n;
+        _dyn.Aero.AeroForce(_dyn.AeroAltitudeOffset + x[2], x[3], x[4], x[5],
+                            2.0 * (qx * qz + qw * qy), 2.0 * (qy * qz - qw * qx), 1.0 - 2.0 * (qx * qx + qy * qy),
+                            out var fx, out var fy, out var fz);
+        double m = x[Dynamics6Dof.IM];
+        return new double3(fx.V / m, fy.V / m, fz.V / m);
+    }
+
+    /// <summary>Lateral (pitch/yaw) torque the model allows per newton of axial thrust, N m/N: the gimbal arm times the cone's tangent.</summary>
+    public double LateralTorquePerNewton => _dyn.LArm * _cfg.TanGimbal;
+
+    /// <summary>Whether the model carries aerodynamics.</summary>
+    public bool HasAero => _dyn.Aero != null;
+
     /// <summary>The bias actually IN the model, i.e. as of the last CommitInputs.</summary>
     public double3 AccelBias { get; private set; }
 
@@ -345,6 +376,25 @@ public sealed class Ksa6DofGuidance
     /// </summary>
     public int LastDefectChannel { get; private set; } = -1;
 
+    /// <summary>
+    /// The worst defect for a log line or readout, on its own channel in its own units ("qy 0.0261 (quat)"), or "no step accepted". LastDefectM is that channel's scaled defect times the RANGE, so an attitude or velocity defect read as metres - 211 "m" after a restart was an attitude error.
+    /// </summary>
+    public string DefectText
+    {
+        get
+        {
+            int ch = LastDefectChannel;
+            if (!double.IsFinite(LastDefect) || ch < 0 || ch >= NX)
+                return "no step accepted";
+            double raw = LastDefect * _cfg.XScale[ch];
+            string units = Scvx6DofSolver.ChannelGroup(ch) switch
+            {
+                "position" => "m", "velocity" => "m/s", "attitude" => "(quat)", "rate" => "rad/s", "mass" => "kg", _ => "",
+            };
+            return $"{Scvx6DofSolver.ChannelName(ch)} {raw:G3} {units}".TrimEnd();
+        }
+    }
+
     /// <summary>Interval (between node k and k+1) carrying the worst defect, or -1.</summary>
     public int LastDefectNode { get; private set; } = -1;
 
@@ -382,9 +432,86 @@ public sealed class Ksa6DofGuidance
         _cfg = cfg;
         _dyn = dyn;
         _n = cfg.Nodes;
+        // The price the config asks for is where pricing ends up, not where it starts; see PricingStage.
+        _vcTarget = cfg.VirtualControlScale is { } target ? (double[])target.Clone() : null;
         _solver = new Scvx6DofSolver(cfg, dyn) { SubproblemEps = Scvx6DofSolver.RealTimeEps };
         _solver.MaxSubproblemIterations = ColdAdmmCap;
         _solver.EscalatedSubproblemIterations = EscalatedAdmmCap;
+        SetPricingStage(0);
+    }
+
+    // ----------------------------------------------------------- pricing
+
+    /// <summary>The virtual-control price the config asked for: the refined one, reached through PricingStages accepted re-solves. Null when it asked for none.</summary>
+    private readonly double[] _vcTarget;
+
+    /// <summary>
+    /// How far the virtual-control price has been tightened, 0 to PricingStages. ROUGH, THEN REFINED.
+    ///  0 prices virtual control on XScale, loose: a solve from scratch - a cold start, a restart, a moved target - leans on it to get from a seed nothing like a trajectory to one, and priced tight it does not get there. Tight from the start, the moon_des hopper's cold solve from UPFG's braking burn (60 deg off vertical, 135 m/s across) ran 102 iterations without a plan and terminal hover hit at 13 m/s, 827 m off; staged, the same hand-over had a plan in 4 iterations and touched down at 0.16 m/s, 0.6 m off (headless, 2026-10-13).
+    ///  Each accepted re-solve tightens it a stage, geometrically, to the config's price at PricingStages, where it stops a converged plan faking what its forces cannot do (Ksa6DofSetup.VirtualControlVelocityScaleMs). Repeated refusals loosen it a stage, so a plan that cannot be refined at the tight price is still flown at a looser one rather than lost.
+    ///  The stage is a CEILING: how tight the price may be. Time to go decides how tight it is - see PricingLooseAboveS.
+    ///  Changed only between solves, never inside one: SetVirtualControlScale re-prices the reference with it.
+    /// </summary>
+    public int PricingStage { get; private set; }
+
+    public const int PricingStages = 4;
+
+    /// <summary>
+    /// TIGHT ONLY NEAR THE END. Above this much time to go, s, virtual control is priced loose whatever the stage; below PricingTightBelowS the stage alone sets it; in between it ramps.
+    ///  A plan far from the pad is re-solved from the measured state many times before it is flown out, so a little phantom force in it is corrected long before it adds up. Near the end there is no horizon left to absorb it, and that is where it turned into arriving fast or sideways (the 2026-10-09 7 t booster). And the tight price is what made the warm re-solves expensive: at the moon_des hopper's 50 nodes, where the loose price is the 139 m/s of the hand-over and the tight one 5 m/s, 83-90% of re-solves ran out of ADMM iterations and took no step, against 31% before the tight price (2026-10-13).
+    /// </summary>
+    public double PricingLooseAboveS { get; set; } = 25.0;
+
+    /// <summary>Time to go, s, below which the stage alone sets the price. See PricingLooseAboveS.</summary>
+    public double PricingTightBelowS { get; set; } = 10.0;
+
+    /// <summary>The scale velocity's virtual control was last priced on, m/s - the price the last solve ran at. For the log.</summary>
+    public double PricingVelocityMs { get; private set; } = double.NaN;
+
+    // The horizon the price was last set for, s; NaN until a solve sets one, which leaves only the stage.
+    private double _pricingTimeToGo = double.NaN;
+    private double _pricingApplied = double.NaN;
+
+    private void SetPricingStage(int stage)
+    {
+        PricingStage = Math.Clamp(stage, 0, PricingStages);
+        ApplyPricing();
+    }
+
+    /// <summary>Price the next solve for <paramref name="timeToGo"/> seconds of horizon. Called with the horizon each solve is about to run over.</summary>
+    private void PriceForHorizon(double timeToGo)
+    {
+        _pricingTimeToGo = timeToGo;
+        ApplyPricing();
+    }
+
+    private void ApplyPricing()
+    {
+        double near = 1.0;
+        if (_pricingTimeToGo > PricingTightBelowS)
+            near = _pricingTimeToGo >= PricingLooseAboveS || !(PricingLooseAboveS > PricingTightBelowS)
+                ? 0.0
+                : (PricingLooseAboveS - _pricingTimeToGo) / (PricingLooseAboveS - PricingTightBelowS);
+        double f = Math.Min((double)PricingStage / PricingStages, near);
+        if (_vcTarget == null)
+        {
+            PricingVelocityMs = _cfg.XScale[Dynamics6Dof.IV];
+            return;
+        }
+        // Unchanged since the last solve: nothing to re-price.
+        if (f == _pricingApplied)
+            return;
+        _pricingApplied = f;
+        var scale = new double[NX];
+        for (int i = 0; i < NX; i++)
+        {
+            double tight = i < _vcTarget.Length ? _vcTarget[i] : 0.0;
+            double loose = _cfg.XScale[i];
+            // Geometric from XScale to the target; a target no tighter than XScale is simply the target.
+            scale[i] = tight > 0.0 && loose > tight ? loose * Math.Pow(tight / loose, f) : tight;
+        }
+        PricingVelocityMs = scale[Dynamics6Dof.IV] > 0.0 ? scale[Dynamics6Dof.IV] : _cfg.XScale[Dynamics6Dof.IV];
+        _solver.SetVirtualControlScale(scale);
     }
 
     /// <summary>Cold solve from a straight-line seed. ~1.7 s, so do it during a coast.</summary>
@@ -395,6 +522,8 @@ public sealed class Ksa6DofGuidance
 
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
+        _pricingTimeToGo = sigmaSeed;
+        SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         return Finish(x0, simNow, maxIterations, cold: true);
     }
@@ -449,6 +578,8 @@ public sealed class Ksa6DofGuidance
 
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
+        _pricingTimeToGo = sigmaSeed;
+        SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed);
         return Finish(x0, simNow, maxIterations, cold: true);
     }
@@ -481,8 +612,9 @@ public sealed class Ksa6DofGuidance
         us = new double[_n * NU];
         ResamplePlan(_planX, _planU, _n, _planSigma, elapsed, _n, dtNew, xs, us);
 
-        // Seed node 0 with the MEASURED state. It is what the equality will force anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle rather than at the old plan's prediction for now.
-        Array.Copy(x0, 0, xs, 0, NX);
+        // Seed node 0 with the MEASURED state, and carry the rest of the reference with it: position by the offset plus the velocity offset times time, velocity and mass by their offsets - the same re-anchoring the spread cold solve does between its iterations (ColdReferenceShift). It is what the equality will force at node 0 anyway, and starting the reference there means even a cycle that accepts no step still hands back a plan anchored at the vehicle.
+        // REPLACING NODE 0 ALONE put the whole difference between the vehicle and its plan into the first interval's defect. No vehicle flies a plan exactly, and once it was a few m/s off, the first interval asked for a velocity jump far outside the trust region: every warm re-solve was refused, the next started from the same seed, and 6-DOF flew its first plan open loop to the ground (headless, 2026-10-08: 0 of 123 re-solves accepted, refused on vx 6-9 m/s at interval 0).
+        ColdReferenceShift.Apply(xs, _n, sigmaNew, x0);
 
         // Put the resampled plan on the MEASUREMENT quaternion branch. Without this a sign flip in the measured attitude - a no-op physically - lands as ~1.5 of quaternion defect at interval 0 and gets the plan refused every cycle until the circuit breaker throws it away. See AlignQuaternionBranch.
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
@@ -502,6 +634,7 @@ public sealed class Ksa6DofGuidance
         CommitInputs();
         BuildShiftedSeed(x0, simNow, sigmaSeed, out double[] xSeed, out double[] uSeed, out _);
         BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        _spreadFromPlan = true;
         return true;
     }
 
@@ -513,6 +646,9 @@ public sealed class Ksa6DofGuidance
     {
         _xf = (double[])xf.Clone();
         if (FixedTime) PinSigma(sigmaSeed);
+        // Rough first: a cold start or a restart is finding a plan, not refining one.
+        _pricingTimeToGo = sigmaSeed;
+        SetPricingStage(0);
         _solver.Initialize(x0, xf, xSeed, uSeed, sigmaSeed, trustRegion: _solver.TrustRegionMax);
         Status = ScvxStatus.IterationLimit;
         Error = "converging";
@@ -520,6 +656,7 @@ public sealed class Ksa6DofGuidance
         LastTrustRegionStart = _solver.TrustRegionMax;
         _lastColdIterationS = 0.0;
         _coldIterations = 0;
+        _coldRefusedRun = 0;
         NeedsMoreNodes = false;
         _solver.SubproblemEps = ColdSubproblemEps;
     }
@@ -535,6 +672,7 @@ public sealed class Ksa6DofGuidance
 
         BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
         BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
+        _spreadFromPlan = false;
     }
 
     /// <summary>
@@ -596,7 +734,51 @@ public sealed class Ksa6DofGuidance
         // Back to flight accuracy for everything after this. The looser tolerance is only defensible while the answer is a seed for the next solve rather than a trajectory the vehicle is about to fly.
         if (ok)
             _solver.SubproblemEps = Scvx6DofSolver.RealTimeEps;
+
+        // STUCK: a run of refused iterations - what the log shows as a defect of infinity, there being no accepted step to measure. Each refusal halves the trust region and the re-anchoring above carries it into the next iteration, so the run pins it at its floor, and the re-anchoring moves the reference's position but not its time: the vehicle flies on while nodes 1..n stay where the solve began, and the gap at interval 0 grows faster than a floor-sized step can close it. The 2026-10-13 moon_des retarget's third restart sat there from 338 m - 6x, then 12x the attitude tolerance at interval 0 - until its plan ran out 7 m over the pad.
+        //  So it starts again: from the vehicle's state now, the trust region wide open, the price loose, and a seed made now - the plan resampled to this moment for a solve that started from the plan, a new straight line for one that did not.
+        bool refused = _solver.Trace.Count == 0 || !_solver.Trace[^1].Accepted;
+        _coldRefusedRun = refused ? _coldRefusedRun + 1 : 0;
+        if (!ok && _coldRefusedRun >= StuckRefusals)
+            RestartStuckSpreadSolve(x0, simNow);
         return ok;
+    }
+
+    /// <summary>Refused iterations in a row after which a spread solve is stuck and starts again; see StepCold. Six halvings bring the trust region from its widest to within a factor two of its floor.</summary>
+    public int StuckRefusals { get; set; } = 6;
+
+    /// <summary>Times a stuck spread solve has started again on this guidance. For the log.</summary>
+    public int StuckRestarts { get; private set; }
+
+    // Refused iterations in a row in the spread solve, whether it was seeded from the plan, and the note its last stuck restart left for the log.
+    private int _coldRefusedRun;
+    private bool _spreadFromPlan;
+    private string _stuckNote;
+
+    /// <summary>The note the last stuck restart left, once, then null. Read only while no solve is running.</summary>
+    public string TakeStuckRestartNote()
+    {
+        string note = _stuckNote;
+        _stuckNote = null;
+        return note;
+    }
+
+    private void RestartStuckSpreadSolve(double[] x0, double simNow)
+    {
+        int refused = _coldRefusedRun;
+        double trust = _solver.TrustRegion;
+        double sigma = Math.Clamp(_solver.Sigma, _cfg.SigmaMin, _cfg.SigmaMax);
+        bool fromPlan = _spreadFromPlan && HasPlan;
+        double[] xs, us;
+        if (fromPlan)
+            BuildShiftedSeed(x0, simNow, sigma, out xs, out us, out _);
+        else
+            BuildColdSeed(x0, _xf, out xs, out us);
+        BeginSpreadSolve(x0, _xf, xs, us, sigma);
+        _spreadFromPlan = fromPlan;
+        StuckRestarts++;
+        _stuckNote = $"COLD SOLVE STUCK: {refused} iterations refused in a row, trust region {trust:G2} - starting it again from the vehicle's state with the trust region wide open, " +
+                     (fromPlan ? "re-seeded from the plan as of now" : "from a new straight line");
     }
 
     /// <summary>
@@ -737,12 +919,15 @@ public sealed class Ksa6DofGuidance
         ResamplePlan(prev._planX, prev._planU, prev._n, prev._planSigma, elapsed, _n,
                      sigma / (_n - 1), xs, us);
 
-        // Node 0 is the measured state exactly, for the same reason as in Plan: the equality and the trust region leave no slack there at all.
-        Array.Copy(x0, 0, xs, 0, NX);
+        // Node 0 is the measured state exactly, for the same reason as in Plan: the equality and the trust region leave no slack there at all. The rest moves with it, as in BuildShiftedSeed, so the resampled plan is not refused for the jump from the vehicle to where the old plan thought it would be.
+        ColdReferenceShift.Apply(xs, _n, sigma, x0);
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         _xf = (double[])prev._xf.Clone();
         if (FixedTime) PinSigma(sigma);
+        // A rebuild continues a refinement: the stage the previous guidance had reached, not a rough start, at this horizon.
+        _pricingTimeToGo = sigma;
+        SetPricingStage(prev.PricingStage);
         _solver.Initialize(x0, _xf, xs, us, sigma);
         return Finish(x0, simNow, maxIterations);
     }
@@ -900,12 +1085,17 @@ public sealed class Ksa6DofGuidance
 
         FellBack = false;
         LastTrustRegionStart = WarmTrustRegion;
+        PriceForHorizon(sigma);
         _solver.Reseed(x0, xs, us, sigma, trustRegion: WarmTrustRegion);
         if (Finish(x0, simNow, maxIterations, budgetMs: budget))
         {
             _consecutiveFailures = 0;
+            SetPricingStage(PricingStage + 1);
             return true;
         }
+        // A plan the tight price will not let through is looser-priced next cycle rather than lost.
+        if (_consecutiveFailures >= 1 && PricingStage > 0)
+            SetPricingStage(PricingStage - 1);
 
         // WIDE-TRUST-REGION RETRY, but NOT on every failure.
         //  It is the right response to a one-off divergence: the tight region above assumes the vehicle is near its previous plan, and once it is not, the problem is infeasible until the region opens up. But it costs a second reseed and three times the iterations, so doing it on every failure makes a REFUSAL more expensive than a SUCCESS - and once the loop starts failing repeatedly that is precisely backwards. the recorded run spent 250-500 ms per cycle this way while accepting 6 re-solves in 103.
@@ -921,13 +1111,61 @@ public sealed class Ksa6DofGuidance
         FellBack = true;
         _consecutiveFailures++;
         LastTrustRegionStart = _solver.TrustRegionMax;
+        PriceForHorizon(sigma);
         _solver.Reseed(x0, xs, us, sigma, trustRegion: _solver.TrustRegionMax);
         if (Finish(x0, simNow, maxIterations * 3, budgetMs: RecoveryCycleBudgetMs))
         {
             _consecutiveFailures = 0;
+            SetPricingStage(PricingStage + 1);
             return true;
         }
         return false;
+    }
+
+    /// <summary>
+    /// A re-solve for a craft something else is flying - the 6-DOF standby under the 3-DOF's burn - that carries on from its OWN latest trajectory rather than from the published plan.
+    ///  Update assumes the vehicle is following the plan: it seeds from the published plan, starts in a tight trust region, and throws a refused attempt away, so the next one starts from the same plan again, older. On a craft flying another guidance's thrust profile the measured state leaves the plan a little further every cycle, so each attempt is refused, and every one starts further behind - in flight the standby published nothing for 1.8 s after converging, from 600 m to just before the hand-over.
+    ///  This keeps the solver's reference whether or not it passed the gate, and the next call shifts it forward to now and re-anchors it at the measured state, so the iterations add up and the solve keeps pace with the craft. Whatever passes the warm gate is published exactly as Update's would be. The trust region carries over between calls rather than resetting to the warm one, because this continues a solve rather than starting one.
+    /// </summary>
+    public bool Track(double[] x0, double simNow, int maxIterations = 2)
+    {
+        if (!HasPlan)
+            return false;
+        // Fixed time counts a committed burn down; this is free-time only, and the standby never runs fixed time.
+        if (FixedTime)
+            return Update(x0, simNow, maxIterations);
+
+        CommitInputs();
+        ApplyTimeBudget(SubproblemBudgetMs, EscalatedBudgetMs);
+
+        // From whichever is newer: the working trajectory, or a plan published since by a cold solve.
+        bool fromWork = _workX.Length == _planX.Length && _workTime > _solveTime;
+        double[] baseX = fromWork ? _workX : _planX;
+        double[] baseU = fromWork ? _workU : _planU;
+        double baseSigma = fromWork ? _workSigma : _planSigma;
+        double elapsed = Math.Max(0.0, simNow - (fromWork ? _workTime : _solveTime));
+
+        // Resampled onto the shrinking horizon and re-anchored, as BuildShiftedSeed does for the published plan.
+        double sigma = Math.Max(_cfg.SigmaMin, baseSigma - elapsed);
+        var xs = new double[_n * NX];
+        var us = new double[_n * NU];
+        ResamplePlan(baseX, baseU, _n, baseSigma, elapsed, _n, sigma / (_n - 1), xs, us);
+        Array.Copy(x0, 0, xs, 0, NX);
+        LastBranchFlips = AlignQuaternionBranch(xs, _n);
+
+        FellBack = false;
+        double region = Math.Clamp(_solver.TrustRegion, WarmTrustRegion, _solver.TrustRegionMax);
+        LastTrustRegionStart = region;
+        PriceForHorizon(sigma);
+        _solver.Reseed(x0, xs, us, sigma, trustRegion: region);
+        bool ok = Finish(x0, simNow, maxIterations, budgetMs: RecoveryCycleBudgetMs);
+        SetPricingStage(ok ? PricingStage + 1 : PricingStage - 1);
+
+        _workX = (double[])_solver.ReferenceX.Clone();
+        _workU = (double[])_solver.ReferenceU.Clone();
+        _workSigma = _solver.Sigma;
+        _workTime = simNow;
+        return ok;
     }
 
     /// <summary>
@@ -946,11 +1184,15 @@ public sealed class Ksa6DofGuidance
 
     // Refine the cost-per-iteration estimate from what a solve actually did.
     // Exponential average so one outlier cannot swing the budget, but it still tracks a change in node count or vehicle within a few cycles.
+    /// <summary>ADMM iterations the last solve spent, over all its SCvx iterations. For the log.</summary>
+    public int LastAdmmIterations { get; private set; }
+
     private void LearnAdmmCost(double elapsedMs)
     {
         int admm = 0;
         foreach (ScvxIteration it in _solver.Trace)
             admm += it.SolverIterations;
+        LastAdmmIterations = admm;
         if (admm > 50 && elapsedMs > 0.0)
         {
             double sample = elapsedMs / admm;
@@ -1064,7 +1306,13 @@ public sealed class Ksa6DofGuidance
     /// The optimiser's control at this instant: body torque (N*m, MODEL body axes) and throttle in [0,1], interpolated along the current plan.
     ///  Read at (now - solveTime), so immediately after a solve this is node 0's control - the control the optimiser chose FOR THE VEHICLE'S ACTUAL STATE.
     /// </summary>
-    public bool Command(double simNow, out double3 torqueModel, out double thrustN)
+    /// <summary>What the tracker corrected on the last command - zero when the plan was flown open loop.</summary>
+    public Tracker6Dof.Error TrackingError { get; private set; }
+
+    /// <param name="x">The measured state, model frame, for the tracker; null flies the plan open loop.</param>
+    /// <param name="tracker">The feedback to fly the plan through, or null.</param>
+    public bool Command(double simNow, out double3 torqueModel, out double thrustN,
+                        double[] x = null, Tracker6Dof tracker = null)
     {
         torqueModel = default;
         thrustN = 0.0;
@@ -1100,6 +1348,18 @@ public sealed class Ksa6DofGuidance
         //  Measured on a real descent this is worth almost nothing - the deflections were 0.1 to 2.2 degrees, so cos is 0.999 - and it is NOT the explanation for the 10.3% thrust shortfall seen there. It is fixed because it is wrong, not because it is large.
         thrustN = Math.Sqrt(thrust * thrust + tdx * tdx + tdy * tdy);
         thrustN = Math.Max(thrustN, 0.0);
+        TrackingError = default;
+
+        // THE TRACKER, when there is one: the axial thrust corrected for where the vehicle is against the plan. The torques, and the lateral thrust they come from, are the plan's.
+        if (tracker != null && x != null && x.Length >= NX && plan.X.Length >= plan.Nodes * NX)
+        {
+            double axial = tracker.Correct(plan, k, f, x, thrust, out Tracker6Dof.Error error);
+            if (double.IsFinite(axial))
+            {
+                thrustN = Math.Sqrt(axial * axial + tdx * tdx + tdy * tdy);
+                TrackingError = error;
+            }
+        }
         return true;
     }
 

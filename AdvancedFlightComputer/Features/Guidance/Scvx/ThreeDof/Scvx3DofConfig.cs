@@ -1,0 +1,142 @@
+namespace AdvancedFlightComputer.Guidance.Scvx.ThreeDof;
+
+/// <summary>
+/// Problem shape, limits and SCvx weights for the glide-and-burn subproblem.
+///
+/// Defaults mirror 3dof.py so the C# result can be diffed against the script. Everything the script does not have defaults to OFF, so the default config assembles exactly the script's problem; the guidance switches those on for flight.
+/// </summary>
+public sealed class Scvx3DofConfig
+{
+    private const int NX = PointMass3Dof.NX;
+
+    public int Nodes { get; init; } = 30;
+
+    /// <summary>
+    /// Intervals in the glide phase, at the front of the grid. The glide is intervals 0..K-1 (nodes 0..K) with the engine off, the burn intervals K..N-2 (nodes K..N-1); node K is the ignition instant and belongs to both.
+    ///
+    /// ZERO MEANS NO GLIDE: the same class then assembles the burn-only problem the guidance switches to once ignition is committed, with no glide duration variable at all.
+    /// </summary>
+    public int GlideIntervals { get; init; } = 12;
+
+    public bool HasGlide => GlideIntervals > 0;
+    public int BurnIntervals => Nodes - 1 - GlideIntervals;
+
+    public double ThrottleFloor { get; init; } = 0.40;
+
+    /// <summary>
+    /// Highest throttle the PLAN may use. Settable, so the guidance can hold back headroom before ignition and release it after without rebuilding the solver: a min-fuel landing burn rides full throttle, and a committed ignition time with no headroom left cannot absorb arriving a little late.
+    /// </summary>
+    public double ThrottleCeiling { get; set; } = 1.0;
+
+    /// <summary>
+    /// Largest THRUST acceleration a burn node may plan, m/s^2, or 0 for none: thrust &lt;= AccelMax * mass, by the model's own nozzle law. A min-fuel burn on a high thrust-to-weight booster otherwise lights as late as it can and brakes at its throttle ceiling - 5-6 g over 2 s in flight - where a tenth of a second of lag is metres per second of error. A path constraint like the others, soft with them (<see cref="PathSlackWeight"/>), so a dispersion that needs more gets it rather than no plan. Needs a <see cref="KsaPointMassModel"/>, whose thrust law it reads; with any other model the rows are vacuous.
+    /// </summary>
+    public double AccelMax { get; init; }
+
+    /// <summary>Angle-of-attack limit, degrees, at nodes faster than <see cref="AlphaSpeedThreshold"/>.</summary>
+    public double AlphaMaxDeg { get; init; } = 10.0;
+
+    /// <summary>Below this speed the airflow direction means nothing, so neither the angle-of-attack limit nor the retrograde row applies. 3dof.py's V_THRESH.</summary>
+    public double AlphaSpeedThreshold { get; init; } = 5.0;
+
+    /// <summary>
+    /// q-alpha limit, Pa per radian of sin(alpha), or 0 for none. Where set, the node's angle-of-attack radius is min(sin(AlphaMax), QAlphaMax / q_bar): a large angle at the bottom of a burn, where the air is slow, loads nothing, while the same angle at ignition can. Off by default, as in the script.
+    /// </summary>
+    public double QAlphaMax { get; init; }
+
+    /// <summary>Keep the body axis against the airflow, b . v_hat &lt;= 0: the booster flies engine first.</summary>
+    public bool Retrograde { get; init; } = true;
+
+    /// <summary>
+    /// Per-channel bounds on the state from node 1 onward; infinite entries are off. Node 0 is pinned to the measured state by an equality, so a bound it already breaks would make the problem infeasible rather than expensive - the reason the 6-DOF's path constraints start at node 1 too.
+    ///
+    /// The ground floor is a minimum on r_z and the dry mass a minimum on m. 3dof.py's "do not overshoot the pad" pair is v_x &lt;= 2 and r_x &gt;= -10.
+    /// </summary>
+    public double[] StateMin { get; init; } = Filled(double.NegativeInfinity);
+    public double[] StateMax { get; init; } = Filled(double.PositiveInfinity);
+
+    /// <summary>
+    /// Body axis at the final node, a unit vector, or null for free. Upright for a landing: the vehicle arrives standing on its engine.
+    /// </summary>
+    public double[]? TerminalAttitude { get; init; }
+
+    /// <summary>
+    /// Attitude rate limit, rad/s, or 0 for none: |b_k+1 - b_k| &lt;= rate * (interval duration). The plan's attitude is flown by the flight computer, which turns at a finite rate; a point-mass model otherwise assumes it turns instantly.
+    ///
+    /// The duration is sigma * dtau, and sigma is a VARIABLE, so the bound is an exact second-order cone with sigma in its head - no linearisation.
+    /// </summary>
+    public double AttitudeRateMax { get; init; }
+
+    /// <summary>
+    /// Turn ACCELERATION limit, rad/s^2, or 0 for none: how fast the body axis's turn rate may change, |b_k+1 - 2 b_k + b_k-1| &lt;= accel * dt^2 at every node, from the measured turn rate at node 0 (see <see cref="Scvx3DofSolver.SetAttitudeRateAnchor"/>) to a stop at the last. A rate limit alone lets the plan change its turn rate instantly, which no vehicle can: planned at 10 deg/s and nothing else, the 2026-10-09 booster's burns swung 24 deg at ignition and flicked upright in the last second at 10-25 deg/s^2, against the 3-4.6 its RCS gives with the engines off, and it was 12 deg off its command by ignition.
+    ///  How the vehicle turns is not modelled - gimbals, RCS, fins are all one number - which is the point: this solver flies the part of the descent where aerodynamics matter, and the gimbals' thrust-dependent authority belongs to the 6-DOF after it.
+    ///  sigma is a variable and dt^2 = (sigma dtau)^2 is not affine in it; the cone takes its tangent at the reference, which lies under it, so a step is held to a slightly tighter limit than the true one and the row is exact at convergence.
+    /// </summary>
+    public double AttitudeAccelMax { get; init; }
+
+    /// <summary>
+    /// Allocate the row that holds node 0's body axis within a cone about a given direction, set per solve through <see cref="Scvx3DofSolver.SetAttitudeAnchor"/>. Node 0's attitude is a control, not a measured state, so without this a plan may open with an instant rotation.
+    /// </summary>
+    public bool AttitudeAnchor { get; init; }
+
+    /// <summary>
+    /// Penalty per metre on missing the terminal position, and per m/s on the terminal velocity, or 0 to keep each hard. L1, so exact: above a finite weight the slack is zero whenever the target is reachable, and it only opens when the alternative is no plan at all. See Scvx6DofConfig.TerminalMissWeight.
+    /// </summary>
+    public double TerminalMissWeight { get; init; }
+    public double TerminalSpeedWeight { get; init; }
+
+    /// <summary>
+    /// Penalty per unit of violation of the path constraints - the angle-of-attack cone, the retrograde row, the state bounds and the attitude-rate cone - or 0 to keep them hard, as 3dof.py does.
+    ///
+    /// SOFT FOR FLIGHT, for the reason the 6-DOF's glideslope is soft. SCvx keeps every step inside a trust region about the reference, so a hard constraint the reference breaks by more than one radius cannot be met by ANY step: the subproblem is infeasible, and shrinking the region only makes that worse. A cold seed is not built to satisfy every path limit, and in flight the measured state can arrive outside one. With an L1 slack the subproblem is always solvable and the slack is exactly zero whenever the constraint can be met - an exact penalty, above a finite weight, rather than a trade - so a feasible plan is the same plan, hard or soft.
+    ///
+    /// Each unit is the constraint's own: sin(alpha) for the cone, b . v_hat for the retrograde row, the channel's XScale for a bound, radians for the rate.
+    /// </summary>
+    public double PathSlackWeight { get; init; }
+
+    public bool SoftPath => PathSlackWeight > 0.0;
+
+    public double RhoVc { get; init; } = 1e5;
+
+    /// <summary>
+    /// The scale each state channel's virtual control is priced on, NX long, or null for <see cref="XScale"/>: the dynamics penalty is RhoVc * sum (w / scale)^2, in the subproblem and in the merit alike. An entry of 0 or less keeps that channel on XScale.
+    ///  DECOUPLED FROM XScale, which also sets the column scaling and the trust region, so a channel's price can be chosen for what a jump in it means without touching either - the ascent's DScale (launch3dof.py's Dscale). The convergence test still reads the defect on XScale.
+    ///  Why it matters: priced on XScale, a velocity jump is measured against the speed at engage, and the quadratic makes a small jump repeated on every interval nearly free - cheaper, below some size per interval, than the L1 terminal slack it can stand in for. On the 2026-10-09 7 t booster a plan carried 0.18 m/s of phantom braking on every interval, about 9 m/s over the burn, at a twentieth of the price of arriving that much faster.
+    /// </summary>
+    public double[]? VirtualControlScale { get; init; }
+
+    /// <summary>The scale channel <paramref name="i"/>'s virtual control is priced on: <see cref="VirtualControlScale"/> where it sets one, <see cref="XScale"/> otherwise.</summary>
+    public double VirtualControlScaleOf(int i)
+        => VirtualControlScale is { } s && i < s.Length && s[i] > 0.0 ? s[i] : XScale[i];
+
+    public double WThrottleRate { get; init; } = 0.05;
+    public double WAttitudeRate { get; init; } = 0.10;
+
+    /// <summary>Proximal weight on (X - Xbar)/Xscale, for conditioning without biasing sigma. See Scvx6DofConfig.ProximalWeight. Off by default, as in the script.</summary>
+    public double ProximalWeight { get; init; }
+
+    /// <summary>
+    /// Phase-duration bounds, seconds. SETTABLE, so the guidance can pin a duration per cycle (min == max) without rebuilding the solver: that is how the glide's duration is committed once ignition is close, and how the burn's is counted down after it.
+    /// </summary>
+    public double GlideSigmaMin { get; set; } = 0.0;
+    public double GlideSigmaMax { get; set; } = 40.0;
+    public double BurnSigmaMin { get; set; } = 5.0;
+    public double BurnSigmaMax { get; set; } = 50.0;
+    /// <summary>
+    /// Duration and state scales: the units the solver works in, and so the units the trust region is measured in. 3dof.py's Xscale, whose mass entry is its m0, by default.
+    ///
+    /// SETTABLE, and read afresh on every assembly, so the guidance can size them to the problem that is left each cycle - the range to the pad, the speed - without rebuilding the solver: the column scaling is applied as the matrix is filled, so only the numbers change, never the pattern. A scale fixed at engage is a hundred times too coarse by the end of the burn: the trust region still allows a step the size of the whole entry, and the solver's tolerance, which is relative, is metres where the burn needs centimetres. See Ksa6DofSetup.TryBuild for the same lesson. Change them only between solves.
+    /// </summary>
+    public double SigmaScale { get; set; } = 30.0;
+    public double[] XScale { get; set; } = [1000, 1000, 6000, 300, 300, 300, 28000];
+
+    public double SinAlphaMax => Math.Sin(AlphaMaxDeg * Math.PI / 180.0);
+    public bool SoftTerminal => TerminalMissWeight > 0.0 || TerminalSpeedWeight > 0.0;
+
+    private static double[] Filled(double v)
+    {
+        var a = new double[NX];
+        Array.Fill(a, v);
+        return a;
+    }
+}

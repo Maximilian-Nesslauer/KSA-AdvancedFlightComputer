@@ -44,15 +44,34 @@ public static class KsaTvcAllocator
     }
 
     /// <summary>
+    /// Where the thrust acts, VEHICLE assembly frame, for a given normalized command: the gimbal's pivot plus its thrust offset, both swung by the deflection. Mirrors TvcAllocation.ComputeThrustAsmb, in double - Data.ThrustOffsetGimbal rotated by Gimbal.ComputeGimbal2Asmb in the gimbal's frame, then into the vehicle assembly frame with Data.Gimbal2VehicleAsmb.
+    /// </summary>
+    public static double3 ThrustLocation(GimbalController gc, double commandY, double commandZ)
+    {
+        Gimbal g = gc.Gimbal;
+        doubleQuat gimbalToVehicle = doubleQuat.Unpack(in gc.Data.Gimbal2VehicleAsmb);
+        float3 offF = gc.Data.ThrustOffsetGimbal;
+        double angleY = Math.Clamp(commandY, -1.0, 1.0) * g.AxisY.MaxAngle;
+        double angleZ = Math.Clamp(commandZ, -1.0, 1.0) * g.AxisZ.MaxAngle;
+        doubleQuat deflect = Gimbal.ComputeGimbal2Asmb(angleY, angleZ);
+        return GimbalPivot(gc) + new double3(offF.X, offF.Y, offF.Z).Transform(deflect).Transform(gimbalToVehicle);
+    }
+
+    /// <summary>The gimbal's pivot, VEHICLE assembly frame (Data.PivotPosVehicleAsmb).</summary>
+    public static double3 GimbalPivot(GimbalController gc)
+    {
+        float3 pivot = gc.Data.PivotPosVehicleAsmb;
+        return new double3(pivot.X, pivot.Y, pivot.Z);
+    }
+
+    /// <summary>
     /// Fill the torque and force Jacobians for one gimbal: columns 2i and 2i+1 of B (N*m per unit command) and Bf (N per unit command).
-    ///  The moment arm is taken at the REST thrust point, from TvcAllocation.ComputeThrustAsmb at zero deflection. The columns do not model the translation of the thrust point as the nozzle swings about the gimbal pivot, so they use the rest arm for every deflection.
+    ///  THE TORQUE IS DIFFERENTIATED WHOLE, the thrust's point swinging about the pivot with its direction, because that is what the plant does (RocketNozzle.UpdateState). The swing is not second order: the point moves by the nozzle's length times the deflection while the FULL thrust acts on it, which is the same order as the side force, and the two together act on the arm to the PIVOT, not to the thrust point - the nozzle's length cancels. Taken at the rest thrust point the arm was the nozzle's length too long, and on the 2026-10-08 booster every torque came out 1.37x what the engines delivered: measured from the flight, the booster turned as if its inertia were 1.46e6 kg m^2 against the 1.07e6 KSA integrates it with.
     /// </summary>
     private static void FillColumns(GimbalController gc, float3 comAsmb, double thrust,
                                     double[] bTorque, double[] bForce, int gimbalIndex)
     {
-        TvcAllocation.ComputeThrustAsmb(gc, float2.Zero, out float3 restPosAsmb, out _);
-        float3 armF = restPosAsmb - comAsmb;
-        var arm = new double3(armF.X, armF.Y, armF.Z);
+        var com = new double3(comAsmb.X, comAsmb.Y, comAsmb.Z);
 
         for (int axis = 0; axis < 2; axis++)
         {
@@ -61,9 +80,11 @@ public static class KsaTvcAllocator
 
             double3 plus = ThrustDirection(gc, cy, cz);
             double3 minus = ThrustDirection(gc, -cy, -cz);
+            double3 torquePlus = double3.Cross(ThrustLocation(gc, cy, cz) - com, plus * thrust);
+            double3 torqueMinus = double3.Cross(ThrustLocation(gc, -cy, -cz) - com, minus * thrust);
 
             double3 dForce = (plus - minus) * (thrust / (2.0 * DiffStep));
-            double3 dTorque = double3.Cross(arm, dForce);
+            double3 dTorque = (torquePlus - torqueMinus) * (1.0 / (2.0 * DiffStep));
 
             int col = 2 * gimbalIndex + axis;
             bTorque[3 * col + 0] = dTorque.X;

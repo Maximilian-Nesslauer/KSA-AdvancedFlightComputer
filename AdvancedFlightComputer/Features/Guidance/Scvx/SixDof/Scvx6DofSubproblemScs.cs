@@ -38,8 +38,8 @@ public sealed class Scvx6DofSubproblemScs
     private readonly double _dtau;
     private readonly double[] _xs, _us;
 
-    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _nVars;
-    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel;
+    private readonly int _oX, _oU, _oW, _iSig, _oGs, _oVz, _oTm, _oAc, _nVars;
+    private readonly int _nGs, _nVz, _nTm, _nTmPos, _nTmVel, _nAc;
     private readonly int _nEq, _lDim, _nCone;   // _nCone = total rows = nEq + lDim + sum(soc)
     private readonly int[] _socDims;
 
@@ -96,13 +96,16 @@ public sealed class Scvx6DofSubproblemScs
         _nTmPos = cfg.TerminalMissWeight > 0.0 ? 6 : 0;
         _nTmVel = cfg.TerminalSpeedWeight > 0.0 ? 6 : 0;
         _nTm = _nTmPos + _nTmVel;
-        _nVars = _oTm + _nTm;
+        // The acceleration limit's slacks, one per node and LAST, so every earlier block keeps its offset.
+        _nAc = cfg.AccelLimitEnabled ? _n : 0;
+        _oAc = _oTm + _nTm;
+        _nVars = _oAc + _nAc;
 
         _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2);
         // FIVE orthant rows per node, not six.
         // The sixth was the LINEARISED tilt constraint; it is now an exact second-order cone in the block below, so the row is gone rather than merely changed.
         // See AssembleCone's tilt block. + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows + _nTm non-negativity rows for the terminal-miss slacks
-        _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm;
+        _lDim = _n * 5 + 2 * _n * NX + 2 * _n * NU + 4 + _nVz + _nGs + _nVz + _nTm + 2 * _nAc;
         _socDims = new int[_n + _nGs + _n];
         for (int k = 0; k < _n; k++) _socDims[k] = 3;             // gimbal cone per node
         for (int k = 0; k < _nGs; k++) _socDims[_n + k] = 3;      // glideslope cone per node
@@ -130,6 +133,7 @@ public sealed class Scvx6DofSubproblemScs
         for (int k = 0; k < _nVz; k++) _colScale[IVz(k)] = _xs[Dynamics6Dof.IV];
         for (int i = 0; i < _nTmPos; i++) _colScale[_oTm + i] = _xs[Dynamics6Dof.IR];
         for (int i = 0; i < _nTmVel; i++) _colScale[_oTm + _nTmPos + i] = _xs[Dynamics6Dof.IV];
+        for (int k = 0; k < _nAc; k++) _colScale[_oAc + k] = _us[Dynamics6Dof.IT];
     }
 
     private void AddA(int row, int col, double value) => _A.Add(row, col, value * _colScale[col]);
@@ -316,11 +320,12 @@ public sealed class Scvx6DofSubproblemScs
                     _c[col] += -2.0 * w * xbar[k * NX + i] * _colScale[col];
                 }
 
-        // RhoVc * sum_k ||Wv[k]/Xscale||^2 - pure diagonal
+        // RhoVc * sum_k ||Wv[k]/VirtualControlScale||^2 - pure diagonal. The scale is XScale unless the config prices a channel on its own; see Scvx6DofConfig.VirtualControlScale.
         for (int k = 0; k < _n - 1; k++)
             for (int i = 0; i < NX; i++)
             {
-                double w = _cfg.RhoVc / (_xs[i] * _xs[i]);
+                double vs = _cfg.VirtualControlScaleOf(i);
+                double w = _cfg.RhoVc / (vs * vs);
                 AddP(IW(k, i), IW(k, i), 2.0 * w);
             }
 
@@ -339,6 +344,8 @@ public sealed class Scvx6DofSubproblemScs
         for (int i = 0; i < _nTmVel; i++)
             _c[_oTm + _nTmPos + i] +=
                 _cfg.TerminalSpeedWeight * _colScale[_oTm + _nTmPos + i] / _xs[Dynamics6Dof.IV];
+        for (int k = 0; k < _nAc; k++)
+            _c[_oAc + k] += _cfg.AccelWeight * _colScale[_oAc + k] / _us[Dynamics6Dof.IT];
     }
 
     // -------------------------------------------------------------- equalities
@@ -441,10 +448,14 @@ public sealed class Scvx6DofSubproblemScs
             _b[row++] = -_cfg.Tmin;
             AddA(row, IU(k, Dynamics6Dof.IT), 1.0);
             _b[row++] = _cfg.Tmax;
+            // |tau_roll| <= TauRollMax, or <= (TauRollMax / Tmax) T when the roll comes from the gimbals; the thrust column is always present so the pattern does not depend on the mode.
+            double rollPerNewton = _cfg.RollTorqueFollowsThrust && _cfg.Tmax > 0.0 ? _cfg.TauRollMax / _cfg.Tmax : 0.0;
             AddA(row, IU(k, Dynamics6Dof.ITAU), 1.0);
-            _b[row++] = _cfg.TauRollMax;
+            AddA(row, IU(k, Dynamics6Dof.IT), -rollPerNewton);
+            _b[row++] = rollPerNewton > 0.0 ? 0.0 : _cfg.TauRollMax;
             AddA(row, IU(k, Dynamics6Dof.ITAU), -1.0);
-            _b[row++] = _cfg.TauRollMax;
+            AddA(row, IU(k, Dynamics6Dof.IT), -rollPerNewton);
+            _b[row++] = rollPerNewton > 0.0 ? 0.0 : _cfg.TauRollMax;
 
             AddA(row, IX(k, 2), -1.0);
             _b[row++] = -_cfg.GroundFloor;
@@ -495,6 +506,17 @@ public sealed class Scvx6DofSubproblemScs
         for (int i = 0; i < _nTm; i++)
         {
             AddA(row, _oTm + i, -1.0);
+            _b[row++] = 0.0;
+        }
+
+        // ACCELERATION LIMIT at every node: T_k - AccelMax m_k - s_k <= 0, s_k >= 0. Node 0 included - its thrust is free even though its mass is pinned, and the slack keeps it feasible whatever the mass.
+        for (int k = 0; k < _nAc; k++)
+        {
+            AddA(row, IU(k, Dynamics6Dof.IT), 1.0);
+            AddA(row, IX(k, Dynamics6Dof.IM), -_cfg.AccelMax);
+            AddA(row, _oAc + k, -1.0);
+            _b[row++] = 0.0;
+            AddA(row, _oAc + k, -1.0);
             _b[row++] = 0.0;
         }
 

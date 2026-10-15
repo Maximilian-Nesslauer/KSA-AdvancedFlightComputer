@@ -564,6 +564,8 @@ public sealed class VehicleAutopilotState
     /// 6-DOF cannot plan for, and hands that craft to G-FOLD instead.
     /// </summary>
     public bool UseSixDofLanding = true;
+    /// <summary>The panel shows the 3-DOF page as this craft's powered landing. The braking-burn handoff still chooses between 6-DOF and G-FOLD; the 3-DOF engages from a boostback glide or from its own page.</summary>
+    public bool UseThreeDofLanding;
     public bool TermTabSelectPending;
 
     /// <summary>
@@ -608,12 +610,14 @@ public sealed class VehicleAutopilotState
     public double GfoldSearchRetryTime = double.NegativeInfinity;
     public double GfoldHoverHandoffAltM = 10.0;
 
-    // The hover refused this descent at the handoff height, so the plan flies on and the hover is not asked again. One flag per descent mode, reset where that mode starts.
+    // The hover refused this G-FOLD descent at the handoff height, so the plan flies on and the hover is not asked again. Reset where G-FOLD starts.
     public bool GfoldHoverRefused;
-    public bool SixDofHoverRefused;
 
     // The hover has compared the thrust at minimum throttle with the weight, at the engage or on the first step with a lit engine.
     public bool TermMinThrustChecked;
+
+    // The hover has cut the engine for a craft rising on its minimum thrust: held off until contact. See StepTerminalHover.
+    public bool TermEngineCut;
     public double GfoldThrottleMin = 0.05;
     public double GfoldThrottleMax = 0.90;
     public double GfoldSlewReg = 0.05;
@@ -623,8 +627,23 @@ public sealed class VehicleAutopilotState
     /// dimension, so emphatically per vehicle. Applied as an offset on the TARGET
     /// altitude (the CoM is planned to arrive this high above the pad), NOT by shifting
     /// the vehicle reference point.
+    /// Measured from the colliders, legs deployed, while VehicleHeightAuto is set (see
+    /// KsaVehicleHeight); the field is then a readout, and typing in it switches auto off.
     /// </summary>
     public double VehicleHeightM = 15.0;
+    public bool VehicleHeightAuto = true;
+    public string VehicleHeightStatus = "";
+    internal long VehicleHeightNextMs;
+
+    /// <summary>
+    /// Largest thrust acceleration a landing burn may PLAN, in g, or 0 for none - a soft constraint in both the 3-DOF and the 6-DOF solvers, read when they build their problem; the glide plan times the ignition under it with headroom (Guidance3Dof.Settings.AccelHeadroom). A min-fuel burn otherwise lights as late as it can, or coasts on minimum thrust once lit, and brakes at full throttle at the end: 5-6 g over two seconds on the 2026-10-08 boosters, up to 13.7 g in the last second on the 2026-10-09 7 t one, where a tenth of a second of lag is metres per second and no node count the solver keeps up with resolves the burn. The trackers may still go past it to correct; see StartThreeDofCold.
+    /// </summary>
+    public double LandingAccelLimitG = 3.0;
+
+    /// <summary>
+    /// Throttle the landing plans keep in hand below them, as a fraction of full: the 3-DOF and the 6-DOF both plan from the engines' minimum throttle plus this, and their feedback (BurnTracker3Dof, Tracker6Dof) may use the rest, down to the real minimum. A min-fuel burn otherwise rides the minimum, and a craft that cannot throttle below its weight, slowed a little more than planned, has no thrust to take off and stops short above the pad (headless, 2026-10-08: 33 m up at a minimum TWR of 1.09). 0 plans on the minimum itself.
+    /// </summary>
+    public double LandingPlanFloorMargin = 0.05;
 
     public double GfoldHandoffTgo = 40.0;  // hand UPFG braking over this long before the gate
     public double LandingVerticalGateM = 500.0;
@@ -704,12 +723,23 @@ public sealed class VehicleAutopilotState
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;
-    public double SixDofTargetAltM = 3.0;
+    // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs.
+    public double SixDofTargetComAltM => VehicleHeightM;
     public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
-    public bool SixDofHoverHandoff = true;
-    public double SixDofHoverHandoffAltM = 3.5;
+
+    /// <summary>
+    /// Set once touchdown guidance has had the craft descending, so a craft that stops is known to have stopped SHORT, not to have been engaged while climbing.
+    /// And set when it has cut the engine for that: a craft that cannot throttle below its weight climbs from wherever it stops, so it drops the rest of the way with the engine off.
+    /// And whether it took a burn over from another mode - the 3-DOF or the braking burn - rather than being engaged directly: such a craft has no plan of its own until the first solve lands, and near the ground the burn's last command it is still flying is as stale as an expired plan.
+    /// </summary>
+    public bool SixDofSeenDescending, SixDofEngineCut, SixDofTookBurn;
+
+    /// <summary>
+    /// Set while a COLD restart converges: the last plan is flown open loop, without the tracker, until the new plan lands. A cold restart means the plan was abandoned - the vehicle drifted off it, or the target moved, which moves the frame so the plan reads as hundreds of metres off - and tracking an abandoned plan pushes the vehicle around for an error that is not one (throttle 0.01 then 1.0 after a 250 m move, 2026-10-13 08:40). A warm restart keeps the plan it is refining, and keeps tracking it.
+    /// </summary>
+    public bool SixDofRestartOpenLoop;
     public double SixDofReplanSec = 0.1;
     public double SixDofRateDampShare = 0.002;
     public double SixDofControlSmooth = 0.05;
@@ -723,6 +753,12 @@ public sealed class VehicleAutopilotState
     public double SixDofColdIntervalS = 0.25;
     public bool SixDofBiasEnabled = true;
 
+    /// <summary>Correct the plan's thrust through Tracker6Dof's feedback between re-solves, and its position gain (1/s^2) and velocity gain (1/s). On by default; off flies the plan's thrust open loop between re-solves, as before. The torques are the plan's either way.</summary>
+    public bool SixDofTrack = true;
+    public double SixDofTrackKp = SixDofTrackDefaults.Kp;
+    public double SixDofTrackKd = SixDofTrackDefaults.Kd;
+    private static readonly Tracker6Dof SixDofTrackDefaults = new();
+
     /// <summary>
     /// Solve this craft's re-plan on a worker thread. Per vehicle because the worker
     /// is: toggling it off disposes THIS vehicle's worker, and as one global flag it
@@ -730,18 +766,31 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofThreaded = true;
 
-    // Per engagement: the first cold solve's seed, raised to the braking burn's time to go on a handoff, and the last plan published and when, for the G-FOLD fallback clock.
+    // Per engagement: the first cold solve's seed, raised to the braking burn's time to go on a handoff, and the last plan published, whose expiry is the craft losing its plan.
     public double SixDofEntrySigmaSeed = 20.0;
-    public double SixDofLastPlanTime = double.NaN;
     public Ksa6DofPlan SixDofLastPublishedPlan;
     public bool SixDofFromBrakingBurn;
+
+    /// <summary>
+    /// 6-DOF is solving on standby through the 3-DOF's landing burn: Guidance, Worker and Converging are its, and nothing it plans is flown until the hand-over sets Active (see SixDofStandby.cs).
+    /// </summary>
+    public bool SixDofStandby;
+
+    /// <summary>Sim time the standby's current cold solve started, the earliest it may be set up again after a refusal, and the last refusal's reason.</summary>
+    public double SixDofStandbyStart, SixDofStandbyRetryAt = double.NegativeInfinity;
+    public string SixDofStandbyRefusal = "";
+
+    /// <summary>Standby re-solves refused since its last published plan, and when the standby last logged that it was not publishing.</summary>
+    public int SixDofStandbyRefusals;
+    public double SixDofStandbyLogTime = double.NegativeInfinity;
 
     /// <summary>
     /// This craft asks to be recorded when it engages, or at once when switched on in flight. The log itself is a single
     /// global sink and grants the first claimant - see SixDofLog.Start, which refuses
     /// a second owner rather than interleaving two craft into one CSV.
+    /// On by default: per vehicle, so a booster separated in flight never had the box ticked, and the landings that needed diagnosing on 2026-10-08 all flew without a record.
     /// </summary>
-    public bool SixDofLogging = false;
+    public bool SixDofLogging = true;
 
     // Flown track state.
     //
@@ -1056,7 +1105,7 @@ public sealed class VehicleAutopilotState
 
     // Boostback state machine.
     //
-    // Separation -> Rotation -> Boostback -> Glide, per vehicle like every other phase machine here. See Guidance/Boostback.cs for what each phase does.
+    // Separation -> Rotation -> Boostback -> EntryOrient, per vehicle like every other phase machine here. See Guidance/Boostback.cs for what each phase does.
 
     public GuidanceWindow.BoostbackPhase BoostbackPhase =
         GuidanceWindow.BoostbackPhase.Idle;
@@ -1074,6 +1123,17 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Settling burn at minimum throttle after separation, s.</summary>
     public double BoostbackSeparationS = 2.0;
+
+    /// <summary>How far a booster handed over at separation coasts engine-off away from the stage it left before the settling burn lights, m: the distance between the two must have opened this much since the split.</summary>
+    public double BoostbackClearanceM = 30.0;
+
+    /// <summary>
+    /// The stage a booster handed over at separation was dropped from, while the booster is still too close to light its engine; null otherwise. Set when the sweep adopts the booster, cleared once it is clear (see BoosterClear).
+    /// </summary>
+    public Vehicle BoostbackClearOf;
+
+    /// <summary>Distance to BoostbackClearOf at the split, m, and how far it has opened since, the gauge's readout.</summary>
+    public double BoostbackClearFromM, BoostbackClearGapM;
 
     /// <summary>
     /// How fast the commanded attitude turns during the rotation and entry slews,
@@ -1132,7 +1192,7 @@ public sealed class VehicleAutopilotState
     // The PID asks for the impact to move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo; the impact Jacobian turns that into lift, and the measured lift curve turns the lift into an angle. The defaults are the ones flat-earth closed-loop runs through KSAero's aero settled on.
 
     /// <summary>Proportional gain, dimensionless: Kp * miss / tgo^2 is the lateral acceleration asked for. 3 is the textbook zero-effort-miss law; 5 holds up better when the attitude lags the command.</summary>
-    public double GlideKp = 5.0;
+    public double GlideKp = 15.0;
 
     /// <summary>Integral gain, 1/s. Off by default - over a long glide the integral of a shrinking miss becomes a stale bias.</summary>
     public double GlideKi = 0.0;
@@ -1142,6 +1202,11 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Largest angle of attack the glide commands, degrees off engine-first into the wind.</summary>
     public double GlideMaxAoaDeg = 15.0;
+
+    /// <summary>
+    /// The angle of attack the boostback plans the glide at, degrees: every impact prediction - the burn's shot, its cutoff correction, the overlay and the glide PID's own - assumes the vehicle glides at this angle with its lift pointed up the trajectory, which stretches the range so the burn can stop short and save propellant. The PID flies it as its nominal and trims about it. Half the maximum leaves the PID as much authority either side. 0 plans the engine-first ballistic coast.
+    /// </summary>
+    public double GlideNominalAoaDeg = 7.5;
 
     /// <summary>Miss of the coast impact point from the site, m: along the ground track (positive long) and across it (positive left).</summary>
     public double GlideMissDownM, GlideMissCrossM;
@@ -1172,6 +1237,88 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Sim time of the last glide line written to the game log.</summary>
     public double GlideLogTime = double.NaN;
+
+    // ---- 3-DOF glide-and-burn landing (Modes/ThreeDof.cs; its panel page is Ui/Gauges/ThreeDofGauge.cs) ----
+
+    /// <summary>Where this craft's 3-DOF landing is: idle, gliding on the plan (or the PID glide while it has none), burning, or ended.</summary>
+    public GuidanceWindow.ThreeDofPhase ThreeDofPhase;
+
+    /// <summary>The page's Engage, consumed by the next step (draw-time writes do not reach the sim), and the sim time of the last step.</summary>
+    public bool ThreeDofEngagePending;
+    public double ThreeDofLastStep;
+    public double ThreeDofLogTime = double.NaN;
+
+    /// <summary>Take a boostback glide over automatically once its predicted time to impact falls under <see cref="ThreeDofEngageTgoS"/>.</summary>
+    public bool ThreeDofFromGlide = true;
+
+    /// <summary>
+    /// The glide's predicted time to impact, s, at which the 3-DOF takes it over. The PID glide flies on until the first plan.
+    /// 45 s rather than the 90 it started at, which engaged 90-115 km up: the PID glide holds the entry well enough, and the cold solve from up there is the fragile one - offline (--3dof-far) it gives up from 4 of 15 starts at 69-107 km and from none below 50 km.
+    /// </summary>
+    public double ThreeDofEngageTgoS = 45.0;
+
+    /// <summary>Hand the landing burn to 6-DOF for its last seconds, for its rotational model of the final flare: the 3-DOF's horizon collapses there and its re-solves start being refused. On by default.</summary>
+    public bool ThreeDofSixDofHandover = true;
+
+    /// <summary>Set once the burn is inside the hand-over time with 6-DOF not ready yet, so that is logged once.</summary>
+    public bool ThreeDofSixDofWaiting;
+
+    /// <summary>Hand over with this much of the 3-DOF burn plan left, s. By time rather than speed: a light booster falls slower than any useful hand-over speed, and 6-DOF, with no coast and no drag model, cannot fly a long burn (see ThreeDof.cs).</summary>
+    public double ThreeDofSixDofTimeS = 5.0;
+
+    /// <summary>The live guidance, its solver thread, its model corrections and its nominal model, or null before the first solve.</summary>
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof ThreeDofGuidance;
+    public Ksa3DofWorker ThreeDofWorker;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.AeroScaleEstimator ThreeDofEstimator;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.KsaPointMassModel ThreeDofNominal;
+
+    /// <summary>Sim time of the last re-solve dispatched, of the last cold-solve attempt, and of the velocity sample the acceleration is differenced from.</summary>
+    public double ThreeDofLastUpdate = double.NegativeInfinity, ThreeDofColdTime = double.NegativeInfinity;
+    public double ThreeDofAccelTime = double.NaN;
+    public double3 ThreeDofAccelVelocity;
+
+    /// <summary>
+    /// The command as last sent, site frame, which the guidance anchors each new plan's opening attitude on, and the plan being flown.
+    /// </summary>
+    public double3 ThreeDofCommandLocal;
+    public AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Plan3Dof ThreeDofPlan;
+
+    /// <summary>Time constant of the low-pass the plan's attitude and throttle reach the vehicle through, s; 0 switches it off. 0.05 s rather than the 0.2 s it started at: a landing burn of two seconds at 5-6 g turned 0.2 s of throttle lag into a 13 m/s climb off the pad (2026-10-08, 16:19).</summary>
+    public double ThreeDofSmoothTau = 0.05;
+
+    /// <summary>
+    /// Largest turn acceleration the entry guidance plans to, deg/s^2: 0 for the vehicle's own (Ksa3DofSetup.TurnAccelLimit, three quarters of its engine-off RCS authority), negative for no limit. Read when a cold solve starts. A plan held to a turn rate alone changes it instantly: on the 2026-10-09 booster it swung 24 deg at ignition and flicked upright in the last second, at several times the 3-4.6 deg/s^2 the booster has.
+    /// </summary>
+    public double ThreeDofTurnAccelDegS2 = 0.0;
+
+    /// <summary>The turn acceleration the running entry guidance plans to, deg/s^2, 0 for none: a readout.</summary>
+    public double ThreeDofTurnAccelInUse;
+
+    /// <summary>How fast the command is turning towards the burn's opening attitude between the lock and ignition, rad/s; 0 outside it.</summary>
+    internal double ThreeDofLockTurn;
+
+    /// <summary>
+    /// Highest throttle the plan may use before ignition is committed, and after; the burn tracker may use the rest up to full. Read when a cold solve starts, so a change applies from the next engage. See Guidance3Dof.Settings.GlideThrottleCeiling.
+    /// </summary>
+    public double ThreeDofGlideCeiling = ThreeDofDefaults.GlideThrottleCeiling;
+    public double ThreeDofBurnCeiling = ThreeDofDefaults.BurnThrottleCeiling;
+
+    /// <summary>The burn tracker's position gain (1/s^2), velocity gain (1/s) and largest tilt off the plan's axis (deg). See BurnTracker3Dof.</summary>
+    public double ThreeDofTrackKp = ThreeDofTrackDefaults.Kp;
+    public double ThreeDofTrackKd = ThreeDofTrackDefaults.Kd;
+    public double ThreeDofTrackTiltDeg = ThreeDofTrackDefaults.MaxTiltRad * 180.0 / Math.PI;
+
+    private static readonly AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof.Settings ThreeDofDefaults = new();
+    private static readonly AdvancedFlightComputer.Guidance.Scvx.ThreeDof.BurnTracker3Dof ThreeDofTrackDefaults = new();
+
+    /// <summary>The engine command the burn writes, and what the panel shows, with the plan's own throttle beside it: the difference is the tracker's.</summary>
+    public bool ThreeDofEngineOn;
+    public double ThreeDofThrottle, ThreeDofPlanThrottle;
+    public string ThreeDofStatus = "";
+
+    /// <summary>The last solve's figures for the page, cached by the step while the solver is idle.</summary>
+    public string ThreeDofSolveText = "";
+    public bool ThreeDofRefusing;
 
     public string GlideStatus = "";
 

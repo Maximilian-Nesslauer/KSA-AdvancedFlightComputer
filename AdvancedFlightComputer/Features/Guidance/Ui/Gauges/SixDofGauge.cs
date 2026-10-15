@@ -24,15 +24,10 @@ public static partial class GuidanceWindow
         if (ImGuiHelper.BeginRegion("Descent", ImGuiTreeNodeFlags.DefaultOpen
                 | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
         {
-            GaugeRow("Target altitude (m)", "##sdtargetalt", ref _s.SixDofTargetAltM);
-
-            // HANDOFF SITS WITH TARGET ALTITUDE, not in the parameter fold, because the two only mean anything relative to each other: the handoff must be ABOVE the target or it never fires, and the guidance then flies to the target and sits there. Separating them by a collapsed section made it possible to move one and forget the other, which reads in flight as the hover simply not happening.
-            GaugeRowCheck("Hand off to terminal hover", "##sdhover", ref _s.SixDofHoverHandoff);
-            using (new ImGuiDisabledScope(!_s.SixDofHoverHandoff))
-                GaugeRow("Handoff altitude (m)", "##sdhoveralt", ref _s.SixDofHoverHandoffAltM);
-            if (_s.SixDofHoverHandoff && _s.SixDofHoverHandoffAltM <= _s.SixDofTargetAltM)
-                GaugeRowText("  warning", "at or below target altitude - will never fire",
-                    new float4(1f, 0.8f, 0.3f, 1f));
+            // The plan lands at zero/zero, legs on the pad at rest, so the one height it needs is the CoM's above the legs.
+            VehicleHeightRows("sd");
+            // Shared with the 3-DOF page: both solvers land on the same limit.
+            GaugeRow("Max burn accel (g, 0 off)", "##sdaccel", ref _s.LandingAccelLimitG);
 
             ImGuiHelper.EndRegion();
         }
@@ -48,7 +43,7 @@ public static partial class GuidanceWindow
         if (_s.Error.Length > 0)
             ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f), _s.Error);
 
-        if (ImGuiHelper.BeginRegion("6-DOF parameters", ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        if (ImGuiHelper.BeginRegion("Touchdown guidance parameters", ImGuiTreeNodeFlags.SpanAllColumns, innerW))
         {
             Draw6DofParameters();
             ImGuiHelper.EndRegion();
@@ -59,8 +54,16 @@ public static partial class GuidanceWindow
     {
         if (!_s.Active)
         {
+            // Solving on standby under entry guidance's burn, ready to take it over.
+            if (_s.SixDofStandby)
+            {
+                double now = SimNow();
+                ImGui.TextColored(SixDofStandbyReady(now) ? new float4(0.4f, 1f, 0.5f, 1f) : new float4(0.7f, 0.7f, 0.7f, 1f),
+                    "Standby under entry guidance: " + SixDofStandbyText(now));
+                return;
+            }
             ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f),
-                _s.EngagePending ? "Engaging..." : "Idle - EXECUTE engages 6-DOF guidance.");
+                _s.EngagePending ? "Engaging..." : "Idle - EXECUTE engages touchdown guidance.");
             // The cold solve is ~1.7 s of sim thread unless it is threaded or spread, which is worth knowing BEFORE committing rather than after the hitch.
             if (!_s.SixDofThreaded && !_s.SixDofSpreadCold)
                 ImGui.TextWrapped("Cold solve blocks the sim thread for ~1.7 s - engage during a coast, "
@@ -164,6 +167,18 @@ public static partial class GuidanceWindow
         _s.SixDofColdIntervalS = Math.Clamp(_s.SixDofColdIntervalS, 0.0, 1.0);
 
         GaugeRowCheck("Estimate unmodelled accel", "##sdbias", ref _s.SixDofBiasEnabled);
+
+        // The thrust feedback that flies the plan between re-solves (Tracker6Dof), and the throttle the plan keeps in hand below it for that feedback - shared with the entry guidance page.
+        GaugeRowCheck("Track the plan's thrust between re-solves", "##sdtrack", ref _s.SixDofTrack);
+        using (new ImGuiDisabledScope(!_s.SixDofTrack))
+        {
+            GaugeRow("Track Kp (1/s2)", "##sdtrackkp", ref _s.SixDofTrackKp);
+            GaugeRow("Track Kd (1/s)", "##sdtrackkd", ref _s.SixDofTrackKd);
+        }
+        if (_s.SixDofTrack && _s.Guidance != null && _s.Guidance.HasPlan)
+            GaugeRowText("  off the plan", $"{_s.Guidance.TrackingError.PositionM:F1} m, {_s.Guidance.TrackingError.VelocityMs:F1} m/s, thrust {_s.Guidance.TrackingError.ThrustN / 1e3:+0;-0} kN");
+        GaugeRow("Plan min throttle above engine min", "##sdfloormargin", ref _s.LandingPlanFloorMargin);
+        _s.LandingPlanFloorMargin = Math.Clamp(_s.LandingPlanFloorMargin, 0.0, 0.5);
 
         GaugeRow("Re-solve every (s)", "##sdreplan", ref _s.SixDofReplanSec);
         GaugeRow("Rate damping (fuel share)", "##sdratedamp", ref _s.SixDofRateDampShare);

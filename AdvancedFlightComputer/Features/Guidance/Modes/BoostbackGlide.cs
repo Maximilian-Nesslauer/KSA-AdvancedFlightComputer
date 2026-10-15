@@ -10,8 +10,8 @@ using AdvancedFlightComputer.Guidance.Numerics;
 
 // The glide: from boostback cutoff to the ground, a PID on the coast impact point steers the angle of attack.
 //
-// WHAT IS STEERED ON. The prediction the overlay draws - where the vehicle lands if it coasts engine-first into the wind (alpha 0) from here, the 0% throttle impact point - and its miss from the site, a vector on the ground.
-// Flying a non-zero alpha moves the vehicle off the path that prediction assumes, which is the point: the lift walks the trajectory, the next prediction sees where it has walked to, and the loop closes on that. As the miss goes to zero the command goes back to alpha 0 and the prediction comes true.
+// WHAT IS STEERED ON. The prediction the overlay draws - where the vehicle lands if it glides from here engine-first at the planned angle of attack (GlideNominalAoaDeg, 7.5 degrees) with its lift up the trajectory - and its miss from the site, a vector on the ground. The boostback burn aims this same prediction at the site, so the glide's lift buys range the burn no longer has to; at a planned angle of 0 it is the engine-first ballistic coast.
+// The PID's lift is a correction ON TOP OF the planned glide's: flying other than the planned angle moves the vehicle off the path that prediction assumes, which is the point - the lift walks the trajectory, the next prediction sees where it has walked to, and the loop closes on that. As the miss goes to zero the command goes back to the planned angle and the prediction comes true.
 //
 // WHAT THE PID ASKS FOR IS A RATE: the impact should move back towards the site at (Kp miss + Ki integral + Kd rate) / tgo, with tgo the prediction's own time to impact. Which lift does that is not assumed but MEASURED: one velocity Jacobian of the coast prediction says how far the impact moves per m/s of push along each lift axis, and a damped two-by-two least squares picks the lift that moves it at the asked-for rate. The Jacobian grows like the time to go, so the lift asked for is Kp miss / tgo^2 - the zero-effort-miss guidance law, Kp 3 its textbook gain - and one set of gains is right from cutoff to the ground.
 //  Assuming instead that lift up stretches the impact and lift left moves it left is right for a vehicle that is descending, and wrong for one still climbing after its boostback, where "up" off a steep climb points mostly backwards and pulls the impact in. That version pushed the impact a kilometre the wrong way for as long as the climb lasted, and then had to spend the glide's range winning it back.
@@ -40,6 +40,44 @@ public static partial class GuidanceWindow
     /// <summary>Least lift-to-drag at the maximum AoA that counts as lift worth steering with. Low on purpose: a little lift early is worth more than a lot of it late.</summary>
     private const double GlideMinLiftToDrag = 0.02;
 
+    // Whether the KSAero mod is loaded, rechecked every few seconds until it is: mods load in an order this cannot rely on.
+    private static bool _ksaeroLoaded;
+    private static double _ksaeroCheckedAt = double.NegativeInfinity;
+
+    private static bool KsaeroLoaded
+    {
+        get
+        {
+            double wall = Environment.TickCount64 / 1000.0;
+            if (!_ksaeroLoaded && wall - _ksaeroCheckedAt > 5.0)
+            {
+                _ksaeroCheckedAt = wall;
+                foreach (System.Reflection.Assembly a in AppDomain.CurrentDomain.GetAssemblies())
+                    if (a.GetName().Name == "KSAero") { _ksaeroLoaded = true; break; }
+            }
+            return _ksaeroLoaded;
+        }
+    }
+
+    /// <summary>
+    /// Why the air cannot steer this craft, or "" when it can. Boostback steering and entry guidance's glide both steer with LIFT; KSA's stock aero is a box that makes none, so without KSAero - or on an airframe whose measured lift is too small to steer with (the sweep's L/D below what the glide steers on) - neither can move the impact point. They still fly: the glide holds alpha 0, falling ballistic, and entry guidance plans the fall and the landing burn on drag alone. Only the steering is lost.
+    /// </summary>
+    internal static string AeroLiftWarning()
+    {
+        const string lost = "boostback steering and entry guidance's glide steering will not work. The glide holds retrograde and entry guidance plans a ballistic fall and burn on drag alone, so the burn must absorb any miss.";
+        if (!KsaeroLoaded)
+            return "KSAero is not loaded - stock aero makes no lift, so " + lost;
+        KsaAeroSweep.Result aero = _s.Aero;
+        if (aero?.Table != null && aero.Atmosphere != null && aero.LiftToDragMax < GlideMinLiftToDrag)
+            return $"This airframe makes no usable lift (L/D up to {aero.LiftToDragMax:F3}), so " + lost;
+        return "";
+    }
+
+    /// <summary>
+    /// Least lift acceleration the maximum AoA must buy before the PID steers, m/s^2. Below it the air is too thin for an angle to move the impact, and the PID holds the planned glide instead: its correction is an acceleration that does not shrink with the air, while the planned glide's lift does, so in near-vacuum even a few hundred metres of miss swamped the plan and saturated the command at the AoA limit in the correction's direction - 12 degrees nose-down on the way into the atmosphere, for a miss the thick air would fix with a degree.
+    /// </summary>
+    private const double GlideMinAuthority = 0.05;
+
     /// <summary>Requests below this fraction of the maximum lift ramp the angle linearly from zero, keeping the command continuous through the dead band near alpha 0.</summary>
     private const double GlideLiftRamp = 0.02;
 
@@ -63,6 +101,25 @@ public static partial class GuidanceWindow
 
     /// <summary>Sim seconds between glide lines in the game log.</summary>
     private const double GlideLogIntervalS = 2.0;
+
+    /// <summary>The trim only integrates while the flown tilt is within this of the asked one, degrees: a steady lag of a degree or two, not a manoeuvre still in progress.</summary>
+    private const double GlideTrimMaxErrorDeg = 5.0;
+
+    /// <summary>
+    /// The angle the boostback plans its glide at, radians - <see cref="VehicleAutopilotState.GlideNominalAoaDeg"/>, held inside the maximum - or 0 when this airframe's lift there is not worth steering with, the same test the PID uses, so a prediction never assumes a glide the PID will not fly.
+    /// </summary>
+    private static double GlideNominalAlpha(KsaAeroSweep.Result aero)
+    {
+        if (aero?.Table == null || aero.Lift == null)
+            return 0.0;
+        double deg = Math.Clamp(_s.GlideNominalAoaDeg, 0.0, Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0));
+        if (!(deg > 0.0))
+            return 0.0;
+        double rad = deg * Math.PI / 180.0;
+        // Judged at Mach 1, where a returning booster spends the thick air.
+        double cl = aero.LiftAt(1.0, rad), cd = aero.Table.Cd(1.0, rad);
+        return cd > 0.0 && Math.Abs(cl / cd) >= GlideMinLiftToDrag ? rad : 0.0;
+    }
 
     private static void ResetGlide()
     {
@@ -142,11 +199,13 @@ public static partial class GuidanceWindow
         }
 
         // Anti-windup as in the PID: a trim that is already being clipped only ever unwinds.
+        // Only on a steady lag, never through a manoeuvre: during the turn from the burn attitude after cutoff the vehicle is tens of degrees off the command for seconds, and integrating that wound the trim to its limit in under a second and threw the attitude past retrograde when the turn ended.
         double errUp = _s.GlideTiltUpDeg - flownUp;
         double errLeft = _s.GlideTiltLeftDeg - flownLeft;
-        if (!sendLimited || errUp * _s.GlideTrimUpDeg < 0.0)
+        bool steady = Math.Sqrt(errUp * errUp + errLeft * errLeft) <= GlideTrimMaxErrorDeg;
+        if (steady && (!sendLimited || errUp * _s.GlideTrimUpDeg < 0.0))
             _s.GlideTrimUpDeg = Math.Clamp(_s.GlideTrimUpDeg + GlideTrackGain * errUp * dt, -maxAoa, maxAoa);
-        if (!sendLimited || errLeft * _s.GlideTrimLeftDeg < 0.0)
+        if (steady && (!sendLimited || errLeft * _s.GlideTrimLeftDeg < 0.0))
             _s.GlideTrimLeftDeg = Math.Clamp(_s.GlideTrimLeftDeg + GlideTrackGain * errLeft * dt, -maxAoa, maxAoa);
 
         // THE FLIGHT LOG, every GlideLogIntervalS of sim time: what was asked against what was flown, so a glide that misbehaves in the game can be read back afterwards. The two tilts are in the same lift-up / lift-left axes; a flown tilt that does not follow the command is the attitude loop, not the guidance.
@@ -155,6 +214,7 @@ public static partial class GuidanceWindow
             _s.GlideLogTime = now;
             KsaAeroSweep.Result logAero = _s.Aero;
             double logMach = logAero?.Atmosphere?.Mach(speed) ?? double.NaN;
+            double tableMach = logAero?.Table != null ? GlideTableMach(logAero, speed) : double.NaN;
             GuidanceLog.Info(vehicle, string.Format(System.Globalization.CultureInfo.InvariantCulture,
                 "glide: alt {0:F1} km, q {1:F2} kPa, M {2:F2}, tgo {3:F0} s, miss {4:F0} m long / {5:F0} m left; "
                 + "tilt up/left asked {6:F1}/{7:F1}, flown {8:F1}/{9:F1}, trim {10:F1}/{11:F1} deg; lift sign {12}, "
@@ -163,7 +223,7 @@ public static partial class GuidanceWindow
                 _s.GlideMissDownM, _s.GlideMissCrossM,
                 _s.GlideTiltUpDeg, _s.GlideTiltLeftDeg, flownUp, flownLeft, _s.GlideTrimUpDeg, _s.GlideTrimLeftDeg,
                 _s.GlideLiftSign,
-                logAero?.Table?.Cd(logMach, 0.0) ?? double.NaN, maxAoa, logAero?.LiftAt(logMach, maxAoa / RadToDeg) ?? double.NaN,
+                logAero?.Table?.Cd(tableMach, 0.0) ?? double.NaN, maxAoa, logAero?.LiftAt(tableMach, maxAoa / RadToDeg) ?? double.NaN,
                 _s.GlideStatus.Length > 0 ? _s.GlideStatus : "ok"));
         }
 
@@ -192,23 +252,21 @@ public static partial class GuidanceWindow
         }
         double maxAoa = Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0);
         double maxAoaRad = maxAoa * Math.PI / 180.0;
-        double mach = aero.Atmosphere?.Mach(speed) ?? 0.0;
+        double mach = GlideTableMach(aero, speed);
         double clMaxAoa = aero.LiftAt(mach, maxAoaRad);
         double cdMaxAoa = aero.Table.Cd(mach, maxAoaRad);
         _s.GlideLiftSign = cdMaxAoa > 0.0 && Math.Abs(clMaxAoa / cdMaxAoa) >= GlideMinLiftToDrag ? Math.Sign(clMaxAoa) : 0;
-        if (_s.GlideLiftSign == 0 || !(maxAoa > 0.0))
-        {
+        // No lift to steer with still needs the impact prediction below: its time to go is entry guidance's engage gate, and returning here left it NaN, so a booster on stock aero never got its landing burn. The hold comes after the prediction.
+        bool noLift = _s.GlideLiftSign == 0 || !(maxAoa > 0.0);
+        if (noLift)
             _s.GlideIntCcf = double3.Zero;
-            HoldGlide("The active aero model makes no lift to steer with - holding alpha 0.");
-            return;
-        }
 
         // STEER IN ANY AIR AT ALL. A dispersion is cheapest to fix early, while there is the most time for a small push to grow into a large shift; up high the lift asked for simply exceeds what the thin air gives, so the command sits at the AoA limit and does what it can. Only above the atmosphere, where no angle buys anything, is there nothing to do.
         double q = 0.5 * vehicle.PhysicsEnvironment.AtmosphericDensity * speed * speed;
         _s.GlideQ = q;
         if (!(q > 0.0))
         {
-            HoldGlide("Above the atmosphere - holding alpha 0.");
+            HoldPlannedGlide(aero, "Above the atmosphere - holding the planned glide.");
             return;
         }
 
@@ -220,8 +278,9 @@ public static partial class GuidanceWindow
             OmegaZ = parent.GetAngularVelocity(),
             MeanRadius = parent.MeanRadius,
             AreaOverMass = aero.ReferenceArea / mass,
-            Alpha = 0.0,
+            Alpha = GlideNominalAlpha(aero),
             Table = aero.Table,
+            LiftTable = aero.Lift,
             Atmosphere = aero.Atmosphere,
         };
         var opt = ImpactOptions.Default(parent.MeanRadius);
@@ -264,8 +323,26 @@ public static partial class GuidanceWindow
         // THE PID, as the rate the impact should move at: (Kp miss + Ki integral + Kd rate) / tgo, back towards the site. With the Jacobian scaling like the time to go, the lift this asks for is the zero-effort-miss law's Kp miss / tgo^2.
         double tgo = Math.Max(nom.TimeOfFlight.V, GlideMinTgo);
         _s.GlideTgo = tgo;
+
+        if (noLift)
+        {
+            HoldGlide("The active aero model makes no lift to steer with - holding alpha 0.");
+            return;
+        }
+
+        // NOT IN AIR TOO THIN TO STEER IN. The miss and the time to go above are still wanted - the readout, and the 3-DOF's engage gate - but an angle up here buys nothing, so the vehicle holds the glide the boostback planned and enters the atmosphere in that attitude. The integral waits too.
+        if (q * aero.ReferenceArea * Math.Abs(clMaxAoa) / mass < GlideMinAuthority)
+        {
+            HoldPlannedGlide(aero, "Air too thin to steer - holding the planned glide.");
+            return;
+        }
+
         double3 pid = _s.GlideKp * miss + _s.GlideKi * _s.GlideIntCcf + _s.GlideKd * _s.GlideRateCcf;
         SolveGlideLift(perUp, perLeft, -pid / tgo, out double aUp, out double aLeft);
+        // ON TOP OF THE PLANNED GLIDE. The prediction assumes the nominal angle's lift, up the trajectory, so that is what flies at zero miss and the PID's lift is a correction to it; with no miss left the vehicle flies the glide the boostback planned for.
+        double nominal = sys.Alpha;
+        if (nominal > 0.0)
+            aUp += q * aero.ReferenceArea * Math.Abs(aero.LiftAt(mach, nominal)) / mass;
         double accel = Math.Sqrt(aUp * aUp + aLeft * aLeft);
         _s.GlideAccelCmd = accel;
 
@@ -316,6 +393,15 @@ public static partial class GuidanceWindow
         return maxAoaDeg;
     }
 
+    /// <summary>
+    /// The Mach number to read the measured tables at: the flight's own, held inside the range that was measured. Past the last breakpoint the fit extrapolates along its end slope, which on a lift curve can run all the way through zero and flip the sign the glide steers by; coefficients level off at high Mach, so the last measured value is the honest stand-in.
+    /// </summary>
+    private static double GlideTableMach(KsaAeroSweep.Result aero, double speed)
+    {
+        double mach = aero.Atmosphere?.Mach(speed) ?? 0.0;
+        return Math.Clamp(mach, aero.Table.MachMin, aero.Table.MachMax);
+    }
+
     /// <summary>The impact's movement for a velocity change: dG is row-major 3x3, [i*3+j] = d(ground_i)/d(v_j).</summary>
     private static double3 ApplyJacobian(ReadOnlySpan<double> dG, double3 dv)
         => new double3(dG[0] * dv.X + dG[1] * dv.Y + dG[2] * dv.Z,
@@ -346,6 +432,17 @@ public static partial class GuidanceWindow
         }
         aUp = (m22 * r1 - m12 * r2) / det;
         aLeft = (m11 * r2 - m12 * r1) / det;
+    }
+
+    /// <summary>Hold the planned glide's angle, lift up the trajectory, with no correction; alpha 0 if there is no planned angle.</summary>
+    private static void HoldPlannedGlide(KsaAeroSweep.Result aero, string why)
+    {
+        double nominalDeg = GlideNominalAlpha(aero) * 180.0 / Math.PI;
+        _s.GlideTiltUpDeg = _s.GlideLiftSign * nominalDeg;
+        _s.GlideTiltLeftDeg = 0.0;
+        _s.GlideAoaDeg = _s.GlideLiftSign != 0 ? nominalDeg : 0.0;
+        _s.GlideAccelCmd = 0.0;
+        _s.GlideStatus = why;
     }
 
     private static void HoldGlide(string why)
