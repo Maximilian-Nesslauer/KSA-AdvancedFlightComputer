@@ -44,6 +44,11 @@ public abstract class ConvexAscentFlightTest : AfcTest
     /// <summary>How far each staging may land off the plan's altitude, km, or NaN for no check.</summary>
     protected virtual double StagingAltitudeTolKm => double.NaN;
 
+    /// <summary>Log every UPFG solve from UpfgSolveLogLeadS before the hand-over to the end of the blend watch: its stage model, steering and the command.</summary>
+    protected virtual bool LogsUpfgSolvesAroundHandover => false;
+
+    private const double UpfgSolveLogLeadS = 10.0;
+
     private static readonly string[] DefaultSaves = { "Test Vehicle 1", "Test Vehicle 2" };
 
     private const double SiteLatDeg = 28.5;
@@ -69,6 +74,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
     private const double InclinationTolDeg = 0.25;
 
     // How fast the command may turn through the hand-over blend, deg/s. The slew limit it replaces is 5 deg/s, which is what a snap onto UPFG's steering reads as; blended, a ten-degree difference turns at a peak of 1 deg/s on top of UPFG's own rate.
+    // A step at which UPFG's own steering turns faster than the limit is not counted: the command would turn as fast with no blend at all. The solve after a separation works on a new stage list and on the coast the staging took, and its steering can step by a degree within one guidance cycle; the slew limit holds that, and it is UPFG's rate, not the blend's.
     private const double BlendRateLimitDegS = 2.5;
     private const double BlendWatchS = 20.0;
 
@@ -291,13 +297,21 @@ public abstract class ConvexAscentFlightTest : AfcTest
         double handoverAltKm = double.NaN, handoverTime = double.NaN, handoverSpeed = double.NaN;
         double worstDevKm = 0.0, worstDevSpeed = double.NaN;
         bool upfgConverged = false, blended = false;
-        double lowestCommand = 1.0, lowestPlanned = 1.0, blendRate = 0.0;
+        double lowestCommand = 1.0, lowestPlanned = 1.0, blendRate = 0.0, blendRateTime = double.NaN;
+        double terminalTime = double.NaN, skippedUpfgRate = 0.0;
+        int skippedUpfgSteps = 0;
+        double3 lastSteer = default;
         double3 lastCommand = state.CommandDir;
         int lastStage = state.ConvexStage;
         int lastActivations = StagingDetector.ActivationsOf(vehicle);
         double worstStagingAltKm = 0.0;
         double3 lastSampleR = double3.Zero;
-        bool frozenReported = false;
+        bool frozenReported = false, cutoffLogged = false;
+        double3 lastR = vehicle.Orbit.StateVectors.PositionCci, lastV = vehicle.Orbit.StateVectors.VelocityCci;
+        double nextThrustLog = 0.0;
+        // The solves before the hand-over are only known to be before it once it happens, so they wait here and are logged then.
+        var solvesBeforeHandover = new Queue<(double Time, string Line)>();
+        double lastSolveTime = state.LastSolveTime;
         while (time < MaxFlightSeconds && state.Running)
         {
             // Fine steps through the terminal count: the cutoff lands on a step, and at four g a quarter second is 10 m/s, which is 35 km of apoapsis.
@@ -322,13 +336,68 @@ public abstract class ConvexAscentFlightTest : AfcTest
             upfgConverged |= state.Upfg.Converged;
 
             // How fast the command turns through the hand-over blend.
-            if (double.IsFinite(handoverTime) && time - handoverTime <= BlendWatchS
+            // UPFG's steering law where the command reads it this step (see Ascent.UpdatePhase), and how far it turned since the last one.
+            double3 steerNow = state.Upfg.SteeringAt(Math.Clamp(Universe.GetElapsedSeconds() - state.LastSolveTime, 0.0, 1.0), out _);
+            double steerRate = lastSteer.Length() > 0.5 && steerNow.Length() > 0.5 ? AngleDeg(lastSteer, steerNow) / dt : 0.0;
+            lastSteer = steerNow;
+            if (double.IsFinite(handoverTime) && time - handoverTime <= BlendWatchS && steerRate > BlendRateLimitDegS)
+            {
+                skippedUpfgSteps++;
+                skippedUpfgRate = Math.Max(skippedUpfgRate, steerRate);
+            }
+            else if (double.IsFinite(handoverTime) && time - handoverTime <= BlendWatchS
                 && lastCommand.Length() > 0.5 && state.CommandDir.Length() > 0.5)
             {
                 double turn = Math.Acos(Math.Clamp(double3.Dot(double3.Normalize(lastCommand), double3.Normalize(state.CommandDir)), -1.0, 1.0));
-                blendRate = Math.Max(blendRate, turn * 180.0 / Math.PI / dt);
+                double rate = turn * 180.0 / Math.PI / dt;
+                if (rate > blendRate)
+                {
+                    blendRate = rate;
+                    blendRateTime = time;
+                }
+                // Each fast step of the blend, split into pitch and heading, so a peak can be told apart from the blend's own turn.
+                if (LogsUpfgSolvesAroundHandover && rate > 1.5)
+                {
+                    double3 upNow = double3.Normalize(r);
+                    t.Info($"blend step t={time:F2}s {rate:F2} deg/s: pitch {PitchDeg(upNow, lastCommand):F2} -> {PitchDeg(upNow, state.CommandDir):F2}, "
+                         + $"heading {HeadingDeg(upNow, lastCommand):F2} -> {HeadingDeg(upNow, state.CommandDir):F2}, steer pitch {PitchDeg(upNow, state.Upfg.Steering):F2}, "
+                         + $"plan stage {state.ConvexStage + 1} t {state.ConvexPlanTime:F2} s, mass {vehicle.TotalMass / 1000.0:F2} t, status '{state.Status}'");
+                }
             }
             lastCommand = state.CommandDir;
+
+            // The thrust the vehicle actually delivers over the last 20 s of the burn, from its change of velocity less point-mass gravity, against the command: an attitude or thrust-axis error the terminal phase cannot steer out shows here.
+            if (LogsUpfgSolvesAroundHandover && state.Running && !state.CutoffDone && time >= nextThrustLog
+                && (state.Phase == GuidanceWindow.AscentPhase.Terminal || (state.Phase == GuidanceWindow.AscentPhase.ClosedLoop && state.Upfg.Tgo < 20.0)))
+            {
+                nextThrustLog = time + 1.0;
+                double3 mid = 0.5 * (r + lastR);
+                double3 accel = (v - lastV) * (1.0 / dt) + mid * (home.Mu / Math.Pow(mid.Length(), 3));
+                double3 upMid = double3.Normalize(mid);
+                t.Info($"thrust t={time:F2}s {state.Phase}: delivered pitch {PitchDeg(upMid, accel):F2} heading {HeadingDeg(upMid, accel):F2} at {accel.Length() / 9.80665:F2} g, "
+                     + $"command pitch {PitchDeg(upMid, state.CommandDir):F2} heading {HeadingDeg(upMid, state.CommandDir):F2}, "
+                     + $"steer pitch {PitchDeg(upMid, state.Upfg.Steering):F2}, off command {AngleDeg(accel, state.CommandDir):F2} deg, tgo {state.Upfg.Tgo:F2} s");
+            }
+            lastR = r;
+            lastV = v;
+
+            // The cutoff: when the terminal phase latched the steering law and what the burn left, against the circular speed at the radius reached.
+            if (LogsUpfgSolvesAroundHandover && state.Phase == GuidanceWindow.AscentPhase.Terminal && double.IsNaN(terminalTime))
+            {
+                terminalTime = time;
+                t.Info($"terminal at t={time:F2} s: tgo {state.Upfg.Tgo:F2} s, "
+                     + $"pitch at the latch {PitchDeg(double3.Normalize(r), state.FrozenDir):F2}, alt {altKm:F2} km, mass {vehicle.TotalMass / 1000.0:F2} t");
+            }
+            if (LogsUpfgSolvesAroundHandover && double.IsFinite(terminalTime) && (state.CutoffDone || !state.Running) && !cutoffLogged)
+            {
+                cutoffLogged = true;
+                double3 upNow = double3.Normalize(r);
+                double radial = double3.Dot(v, upNow);
+                double horizontal = (v - radial * upNow).Length();
+                double circular = Math.Sqrt(home.Mu / r.Length());
+                t.Info($"cut off by t={time:F2} s: alt {altKm:F3} km, radial {radial:F2} m/s, horizontal {horizontal:F2} m/s against circular {circular:F2} m/s, "
+                     + $"thrust accel {KsaEnginePerf.ActiveThrustCapability(vehicle, 0.0) / vehicle.TotalMass / 9.80665:F2} g at full, mass {vehicle.TotalMass / 1000.0:F2} t");
+            }
 
             // Each staging against the plan's own: where the profile moved on to the next planned stage, against where the plan has it.
             if (state.Phase == GuidanceWindow.AscentPhase.Profile && state.ConvexStage != lastStage)
@@ -365,8 +434,35 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 handoverTime = time;
                 handoverSpeed = air;
                 blended = double.IsFinite(state.ConvexBlendStart);
+                foreach ((double _, string line) in solvesBeforeHandover)
+                    t.Info(line);
+                solvesBeforeHandover.Clear();
                 t.Info($"hand-over to {state.Phase} at t={time:F1} s, {altKm:F1} km, air speed {air:F0} m/s, plan time {state.ConvexPlanTime:F1} s "
                      + $"(plan there {profile.AltitudeAt(state.ConvexPlanTime) / 1000.0:F1} km, {profile.SpeedAt(state.ConvexPlanTime):F0} m/s)");
+            }
+
+            // UPFG's own view of the vehicle at each solve through the hand-over: the stage model it plans on (thrust and burn time per stage), the steering it gives and the command flown, against the live thrust.
+            if (LogsUpfgSolvesAroundHandover && state.LastSolveTime != lastSolveTime)
+            {
+                lastSolveTime = state.LastSolveTime;
+                bool afterHandover = double.IsFinite(handoverTime);
+                if (!afterHandover || time - handoverTime <= BlendWatchS)
+                {
+                    double3 up = double3.Normalize(r);
+                    profile.Attitude(state.ConvexPlanTime, out double planPitchRad, out _);
+                    double liveThrustKn = KsaEnginePerf.ActiveThrustCapability(vehicle, KsaEnginePerf.AmbientPressureAt(home, altKm * 1000.0)) / 1000.0;
+                    string line = $"UPFG solve t={time:F2}s {state.Phase} tgo {state.Upfg.Tgo:F1} s vgo {state.Upfg.VgoMag:F0} m/s converged {state.Upfg.Converged}  "
+                                + $"steer pitch {PitchDeg(up, state.Upfg.Steering):F1} cmd pitch {PitchDeg(up, state.CommandDir):F1} plan pitch {planPitchRad * 180.0 / Math.PI:F1}  "
+                                + $"alt {altKm:F1} km mass {vehicle.TotalMass / 1000.0:F2} t live thrust {liveThrustKn:F0} kN  model {GuidanceLog.DescribeStages(state.UpfgVehicle)}";
+                    if (afterHandover)
+                        t.Info(line);
+                    else
+                    {
+                        solvesBeforeHandover.Enqueue((time, line));
+                        while (time - solvesBeforeHandover.Peek().Time > UpfgSolveLogLeadS)
+                            solvesBeforeHandover.Dequeue();
+                    }
+                }
             }
 
             if (time >= nextSample)
@@ -415,7 +511,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.Info($"worst altitude deviation {worstDevKm:F2} km at {worstDevSpeed:F0} m/s air speed; worst at a staging {worstStagingAltKm:F2} km");
         t.Check("the hand-over blends onto UPFG's steering", blended);
         t.Check($"the command turns under {BlendRateLimitDegS:F1} deg/s through the blend", blendRate <= BlendRateLimitDegS,
-            $"peak {blendRate:F2} deg/s in the {BlendWatchS:F0} s after the hand-over");
+            $"peak {blendRate:F2} deg/s at t={blendRateTime:F2} s in the {BlendWatchS:F0} s after the hand-over"
+            + (skippedUpfgSteps > 0 ? $", not counting {skippedUpfgSteps} step(s) where UPFG's own steering turned at up to {skippedUpfgRate:F2} deg/s" : ""));
         if (throttled && lowestPlanned < FullThrottlePlan)
             t.Check($"the profile throttles the engines as the plan does, within {ThrottleFollowTol:P0}",
                 lowestCommand < FullThrottlePlan && lowestCommand <= lowestPlanned + ThrottleFollowTol,
@@ -437,6 +534,28 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.CheckAbs("flown apoapsis altitude, km", (flown.Apoapsis - radius) / 1000.0, TargetAltKm, ApoapsisTolKm);
         t.CheckAbs("flown inclination, deg", flown.Inclination * 180.0 / Math.PI, TargetIncDeg, InclinationTolDeg);
     }
+
+    // Degrees between two directions, NaN for a zero one.
+    private static double AngleDeg(double3 a, double3 b)
+        => a.Length() < 1e-9 || b.Length() < 1e-9 ? double.NaN
+         : Math.Acos(Math.Clamp(double3.Dot(double3.Normalize(a), double3.Normalize(b)), -1.0, 1.0)) * 180.0 / Math.PI;
+
+    // Degrees from north toward east of the horizontal part, NaN for a vertical or zero direction.
+    private static double HeadingDeg(double3 up, double3 dir)
+    {
+        double3 h = dir - double3.Dot(dir, up) * up;
+        double3 east = double3.Cross(new double3(0, 0, 1), up);
+        if (h.Length() < 1e-9 || east.Length() < 1e-9)
+            return double.NaN;
+        east = double3.Normalize(east);
+        double3 north = double3.Cross(up, east);
+        return Math.Atan2(double3.Dot(h, east), double3.Dot(h, north)) * 180.0 / Math.PI;
+    }
+
+    // Degrees above the local horizontal, NaN for a zero direction.
+    private static double PitchDeg(double3 up, double3 dir)
+        => dir.Length() < 1e-9 ? double.NaN
+         : 90.0 - Math.Acos(Math.Clamp(double3.Dot(up, double3.Normalize(dir)), -1.0, 1.0)) * 180.0 / Math.PI;
 
     // The plan's full-throttle thrust at a plan time, liquids and solids, from the node nearest in time.
     private static double PlanThrustAt(AscentSolution sol, ConvexAscentProfile profile, double planTime)
@@ -484,4 +603,7 @@ public sealed class GuidanceConvexAscentSolidsTest : ConvexAscentFlightTest
     // Through a solid stage's tail-off the speed-indexed profile falls further behind the boosters' clock-driven thrust (#81), so the climb check waits on that. What the solid model itself decides is where the boosters separate: on 2stage they burn out 1.3 s after the plan's burnout, with the plan's mass to 0.2 t, 3.5 km below the plan's altitude.
     protected override bool ChecksClimbTracking => false;
     protected override double StagingAltitudeTolKm => 5.0;
+
+    // The hand-over falls inside the solid stage, so the log shows whether UPFG's stage model of the boosters matches their real burn.
+    protected override bool LogsUpfgSolvesAroundHandover => true;
 }

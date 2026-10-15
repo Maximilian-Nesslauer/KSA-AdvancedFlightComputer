@@ -15,8 +15,11 @@ namespace AdvancedFlightComputer.HarnessTests;
 // What EXECUTE does on the Ascent tab now that the convex profile is the ascent and the deg/s gravity turn only its
 // backup. Nothing is flown: each case commits, checks what was committed to, and aborts.
 //
-// Without a plan, EXECUTE calculates one and launches on it once it converges - asked for the script's 35 kPa, which a KSA stack cannot hold at full throttle, so the first attempt does not converge and the panel is told the retry is looser. With a plan that fits, it launches at
-// once. A plan solved to other limits does not fit, so EXECUTE calculates again, and ABORT cancels that launch. A plan
+// Without a plan, EXECUTE calculates one and launches on it once it converges. The test asks for a max q of 1 kPa. At
+// full throttle the steepest gravity turn of Test Vehicle 1 climbs through about 24 kPa, so the job relaxes the limit
+// once it sees the first attempt fail, and the panel is told the retry is looser. The limit must be far below that,
+// because the solve itself is not held to a gravity turn: at a high angle of attack it holds 10 kPa and converges.
+// With a plan that fits, it launches at once. A plan solved to other limits does not fit, so EXECUTE calculates again, and ABORT cancels that launch. A plan
 // that cannot be calculated launches nothing: the panel says why, and its backup button flies the vertical rise and
 // gravity turn.
 //
@@ -33,6 +36,10 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
     private const double TargetAltKm = 200.0;
     private const double TargetIncDeg = 35.0;
     private const double PlanTimeoutS = 180.0;
+
+    // So far below the least max q of a full-throttle climb at the 99 % throttle floor that the first solve cannot
+    // converge. Near 5 kPa it can still come within metres of the target, which makes the result a matter of chance.
+    private const double QMaxOutOfReachKpa = 1.0;
 
     private static readonly AccessTools.FieldRef<VehicleAutopilotState> AmbientState =
         AccessTools.StaticFieldRefAccess<VehicleAutopilotState>(
@@ -130,7 +137,7 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
         state.TargetId = "";
         state.FlyConvexAscent = true;
         state.ConvexThrottleMinPct = 99.0;
-        state.ConvexQMaxKpa = 35.0;
+        state.ConvexQMaxKpa = QMaxOutOfReachKpa;
         state.AscentPlan = null;
         AmbientState() = state;
         object[] args = { vehicle, vehicle.Orbit, home };
@@ -159,6 +166,12 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
             job.Cancel();
             return;
         }
+        // The retry text stays on the job, so a solve that finished between two polls still shows it.
+        if (retry.Length == 0)
+            retry = job.Retry;
+        // The notes give each attempt's result, the seed's least max q and the relaxed limit.
+        foreach (string note in job.Notes)
+            t.Info("attempt: " + note);
         driver.Step(0.02);
         if (!t.Check("the plan converged", state.AscentPlan?.Usable == true, $"status '{state.AscentPlanStatus}', failure '{state.ConvexLaunchFailure}'"))
             return;

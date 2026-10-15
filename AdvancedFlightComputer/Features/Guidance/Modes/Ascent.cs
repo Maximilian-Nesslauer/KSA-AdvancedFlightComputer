@@ -13,7 +13,7 @@ using AdvancedFlightComputer.Features.Guidance.Upfg;
 // Vertical flight continues straight up from the pad until the turn-start altitude.
 // The turn phase pitches down from vertical at a fixed rate in deg/s toward the launch azimuth until the commanded pitch meets UPFG's command or reaches the failsafe altitude.
 // The closed-loop phase flies the converged UPFG steering.
-// At tgo <= 10 s, the terminal phase freezes the commanded attitude and counts down to cutoff.
+// At tgo <= 10 s, the terminal phase latches UPFG's steering law, flies it to the end of the burn and counts down to cutoff.
 // UPFG keeps iterating for the readouts.
 public static partial class GuidanceWindow
 {
@@ -361,6 +361,7 @@ public static partial class GuidanceWindow
         _s.LastStepTime = SimNow();
         _s.RollLatched = false;    // re-measure the vehicle's roll at this engagement
         _s.CutoffDone = false;
+        _s.TerminalLaw = null;
         _s.ReserveStaged = false;   // a fresh ascent gets its reserve staging back
         _s.StagingActive = false;
         _s.LastSequenceTime = double.NegativeInfinity;
@@ -424,7 +425,7 @@ public static partial class GuidanceWindow
         double stepDt = Math.Clamp(now - _s.LastStepTime, 0.0, GuidanceCycle);
         _s.LastStepTime = now;
 
-        // The ATTITUDE is frozen in the terminal phase, not the solver. Re-running UPFG over a near-zero remaining arc makes its steering chase itself, which is why the command holds _s.FrozenDir below - but the solve itself keeps running, so tgo, vgo and the stage model stay live in the readouts instead of freezing on whatever they happened to be ten seconds before cutoff.
+        // The STEERING LAW is latched in the terminal phase, not the solver. Re-running UPFG over a near-zero remaining arc makes its steering chase itself, which is why the command flies _s.TerminalLaw below - but the solve itself keeps running, so tgo, vgo and the stage model stay live in the readouts instead of freezing on whatever they happened to be ten seconds before cutoff.
         //
         // ONE SOLVE PER GUIDANCE CYCLE, not one per sim step - see GuidanceCycle. The phase machine and the commanded attitude below still run every step; only the solve is paced.
         if (now - _s.LastSolveTime >= GuidanceCycle)
@@ -565,10 +566,12 @@ public static partial class GuidanceWindow
                 {
                     _s.Phase = AscentPhase.Terminal;
                     _s.FrozenDir = steerNow;
+                    _s.TerminalLaw = _s.Upfg.Clone();
+                    _s.TerminalLawTime = _s.LastSolveTime;
                     _s.ConvexBlendStart = double.NaN;   // a blend still running ends with the burn
                     // tgo is measured from the SOLVE, not from now - the solution can be most of a guidance cycle old by the time this trips, and counting that cycle twice is a whole second of extra burn.
                     _s.CutoffTime = _s.LastSolveTime + _s.Upfg.Tgo;
-                    GuidanceLog.Debug(vehicle, $"terminal phase, attitude frozen at pitch {upfgPitch:F1} deg, cutoff in {_s.CutoffTime - SimNow():F1} s.");
+                    GuidanceLog.Debug(vehicle, $"terminal phase, steering law latched at pitch {upfgPitch:F1} deg, cutoff in {_s.CutoffTime - SimNow():F1} s.");
                 }
                 break;
         }
@@ -608,7 +611,19 @@ public static partial class GuidanceWindow
                 break;
 
             case AscentPhase.Terminal:
-                want = _s.FrozenDir;             // frozen: no angle change, no rate
+                // The law of the last solve before the terminal phase, flown to the cutoff. That solve's tgo and its cutoff time assume the thrust turns along this law over the whole remaining arc. A direction held fixed instead leaves out the turn the law still had to make, which at a steep insertion pitch leaves tens of m/s of velocity error across the thrust at cutoff. Past the cutoff the law holds its last direction.
+                if (_s.TerminalLaw != null)
+                {
+                    double lawEnd = Math.Max(_s.CutoffTime - _s.TerminalLawTime, 0.0);
+                    double lawTau = Math.Clamp(SimNow() - _s.TerminalLawTime, 0.0, lawEnd);
+                    want = _s.TerminalLaw.SteeringAt(lawTau, out wantRate);
+                    if (lawTau >= lawEnd)
+                        wantRate = default;
+                }
+                else
+                {
+                    want = _s.FrozenDir;
+                }
                 break;
 
             default:
@@ -708,7 +723,7 @@ public static partial class GuidanceWindow
         AscentPhase.Vertical => "vertical rise",
         AscentPhase.Turn => "gravity turn (open loop)",
         AscentPhase.ClosedLoop => "UPFG closed loop",
-        AscentPhase.Terminal => "terminal (frozen)",
+        AscentPhase.Terminal => "terminal (latched law)",
         AscentPhase.Profile => "convex profile (open loop)",
         _ => "?",
     };

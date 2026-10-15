@@ -69,7 +69,7 @@ public static partial class GuidanceWindow
             case AscentPhase.Profile: return "CONVEX PROFILE";
             case AscentPhase.ClosedLoop: return double.IsFinite(_s.ConvexBlendStart) ? "UPFG (BLENDING)" : "UPFG";
             case AscentPhase.Terminal:
-                return AscentCutoffIn() > 0.0 ? "TERMINAL FREEZE" : "CUTOFF";
+                return AscentCutoffIn() > 0.0 ? "TERMINAL" : "CUTOFF";
             default: return _s.Phase.ToString();
         }
     }
@@ -82,7 +82,7 @@ public static partial class GuidanceWindow
             : terminal ? (AscentCutoffIn() > 0.0 ? SchemBurn : SchemAlert)
             : (_s.Phase == AscentPhase.ClosedLoop && !_s.Upfg.Converged ? SchemBurn : SchemVgo);
 
-        // In the freeze the countdown is the latched one, so it keeps ticking down cleanly while UPFG's own tgo wanders over the near-zero remaining arc.
+        // In the terminal phase the countdown is the latched one, so it keeps ticking down cleanly while UPFG's own tgo wanders over the near-zero remaining arc.
         // Before that it is the solver's, aged by however long ago the solve was: the guidance cycle is a second long and a tgo that only moves when a solve lands reads as a stuck number rather than a countdown.
         double tgoSec = terminal
             ? Math.Max(0.0, AscentCutoffIn())

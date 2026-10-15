@@ -202,6 +202,11 @@ public sealed class AscentStage
         => new(Thrust, MassFlow, propellantMass, jettisonMass, DragArea, PressureGrid, ThrustAtPressure,
                ThrottleMin, Solid, FixedBurnTime, liquidCarriesOver, SeedThrottle, AccelerationLimit);
 
+    /// <summary>A copy with another throttle floor, a fraction of full thrust. The acceleration limit still scales it down where full thrust would pass the limit.</summary>
+    public AscentStage WithThrottleMin(double throttleMin)
+        => new(Thrust, MassFlow, PropellantMass, JettisonMass, DragArea, PressureGrid, ThrustAtPressure,
+               throttleMin, Solid, FixedBurnTime, LiquidCarriesOver, SeedThrottle, AccelerationLimit);
+
     /// <summary>Exhaust velocity at the reference thrust, m/s, solids at their mean over the stage - for the dV readout only.</summary>
     public double ExhaustVelocity
     {

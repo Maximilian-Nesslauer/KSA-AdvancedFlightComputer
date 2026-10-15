@@ -134,7 +134,8 @@ internal static class AscentCheck
                 + $"defect_n={it.DefectNorm:E2}  pviol={it.PathViolation:E1}  term={it.TerminalViolation:E1}  "
                 + $"dv={it.DeltaV:F0}  J={it.Cost:E5}  clarabel={it.SolverIterations} {it.SolveMs:F0} ms"),
             phase => Console.WriteLine("-- " + phase));
-        Console.WriteLine($"{sol.Message}: kick {sol.KickDeg:F3} deg, seed {sol.SeedSeconds:F1} s, total {sol.SolveSeconds:F1} s");
+        Console.WriteLine($"{sol.Message}: kick {sol.KickDeg:F3} deg, seed {sol.SeedSeconds:F1} s, total {sol.SolveSeconds:F1} s, "
+            + $"seeds' least max q {sol.SeedLeastMaxQ / 1000.0:F1} kPa");
         if (sol.Nodes > 0)
             Console.WriteLine($"to orbit {sol.FinalMass / 1000.0:F2} t, burns {string.Join(" / ", sol.BurnTime.Select(b => b.ToString("F1")))} s, "
                 + $"max q {sol.DynamicPressure.Max() / 1000.0:F1} kPa, max q-alpha {sol.QAlpha.Max():F0}, miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s");

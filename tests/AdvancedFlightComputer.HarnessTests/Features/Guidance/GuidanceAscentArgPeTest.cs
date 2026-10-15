@@ -35,12 +35,15 @@ namespace AdvancedFlightComputer.HarnessTests;
 // this UPFG diverges whatever the target, which would say nothing about the argument of periapsis. For the same
 // reason the insertion stays well inside the band a burn from orbit can be flown in at all: in closed-loop
 // simulation of this flight a free insertion pinned 18 deg past the natural cutoff already diverged, so asking
-// the fixed target for that would test UPFG's reach rather than the argument of periapsis.
+// the fixed target for that would test UPFG's reach rather than the argument of periapsis. The long burn needs
+// every stage held at the g-limit, so a vehicle with solid motors is not flown, because they burn at several g and cannot
+// be cut off.
 public sealed class GuidanceAscentArgPeTest : AfcTest
 {
     public override string Name => "afc-guidance-ascent-argpe";
 
-    private static readonly string[] DefaultSaves = { "Test Vehicle 2", "Test Vehicle 1" };
+    // The all-liquid save first, because the flight needs every stage held at the g-limit (see Fly).
+    private static readonly string[] DefaultSaves = { "Test Vehicle 1", "Test Vehicle 2" };
 
     private const int GeometrySamples = 16;
     private const double GeometryRelTol = 1e-7;
@@ -153,7 +156,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
             VehicleAutopilotState state = VehicleAutopilotState.For(vehicle);
             AmbientState() = state;
             CheckChaseOrbit(t, home, vehicle, state, saves[0]);
-            Fly(t, vehicle, state, home, driver);
+            Fly(t, vehicle, state, home, driver, saves[0]);
         }
         finally
         {
@@ -465,7 +468,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         }
     }
 
-    private static void Fly(TestContext t, Vehicle vehicle, VehicleAutopilotState state, IParentBody home, SimDriver driver)
+    private static void Fly(TestContext t, Vehicle vehicle, VehicleAutopilotState state, IParentBody home, SimDriver driver, string save)
     {
         // The spawn orbit's own plane, from its state vectors, so the burn reshapes the orbit and turns its periapsis without a plane change.
         double3 r0 = vehicle.Orbit.StateVectors.PositionCci;
@@ -525,6 +528,16 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
 
         CheckInsertionSearch(t, preview, free, r, v, vehicle.TotalMass, home.Mu, model);
 
+        // A solid motor follows its grain, not the throttle, so the g-limit cannot hold its stage. UPFG then plans a 2 g burn
+        // that the vehicle flies at several g, and a booster that cannot be cut off can deliver more delta-v than the insertion
+        // needs. Such a flight shows nothing about the argument of periapsis.
+        UpfgStage? solid = state.StageModel?.Stages.Find(s => !s.Throttleable);
+        if (solid != null)
+        {
+            t.Skip($"'{save}' has a stage the g-limit cannot hold ({solid.Thrust / 1000.0:F0} kN, {solid.MassTotal / 1000.0:F1} -> {solid.MassDry / 1000.0:F1} t), so the flight is not flown.");
+            return;
+        }
+
         double argPeDeg = WrapDeg(freeCutoffDeg - InsertionAnomalyDeg);
         state.ArgPeFixed = true;
         state.ArgPeDeg = argPeDeg;
@@ -538,22 +551,36 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         double time = 0.0, nextSample = 0.0;
         bool converged = false;
         UpfgTarget.Insertion lastAim = default;
-        bool held = false;
+        bool held = false, wasHeld = false;
+        double heldAimRadius = double.NaN;
         while (time < MaxFlightSeconds && state.Running)
         {
             driver.Step(StepDt);
             time += StepDt;
             converged |= state.Upfg.Converged;
-            held |= state.Upfg.AimHeld;
+            bool heldNow = state.Upfg.AimHeld;
+            held |= heldNow;
             if (state.Upfg.Aim.Valid)
                 lastAim = state.Upfg.Aim;
+            double3 rNow = vehicle.Orbit.StateVectors.PositionCci;
+            double radiusNowKm = rNow.Length() / 1000.0;
+            double verticalMs = double3.Dot(rNow, vehicle.Orbit.StateVectors.VelocityCci) / rNow.Length();
+            // The vehicle radius, the held radius and the vertical speed at the moment the hold starts or ends show whether the vehicle could still reach the held insertion.
+            if (heldNow != wasHeld)
+                t.Info($"t={time,6:F1}s aim hold {(heldNow ? "starts" : "ends")}: radius {radiusNowKm:F1} km, "
+                     + $"held aim radius {(heldNow ? lastAim.Radius : heldAimRadius) / 1000.0:F1} km, vertical speed {verticalMs:F0} m/s, "
+                     + $"tgo {state.Upfg.Tgo:F1} s, vgo {state.Upfg.VgoMag:F0} m/s");
+            wasHeld = heldNow;
+            if (heldNow)
+                heldAimRadius = lastAim.Radius;
             if (time >= nextSample)
             {
                 nextSample += SampleIntervalS;
-                double altNowKm = (vehicle.Orbit.StateVectors.PositionCci.Length() - home.MeanRadius) / 1000.0;
+                double altNowKm = radiusNowKm - home.MeanRadius / 1000.0;
                 t.Info($"t={time,6:F1}s phase={state.Phase} tgo={state.Upfg.Tgo,6:F1}s vgo={state.Upfg.VgoMag,6:F0}m/s converged={state.Upfg.Converged} "
-                     + $"aim={Deg(lastAim.TrueAnomaly),6:F2}deg{(state.Upfg.AimHeld ? " held" : "")} from Pe at {(lastAim.Radius - home.MeanRadius) / 1000.0,7:F1}km FPA={Deg(lastAim.Fpa),5:F2}deg "
-                     + $"alt={altNowKm,7:F1}km mass={vehicle.TotalMass / 1000.0,6:F1}t status='{state.Status}'");
+                     + $"aim={Deg(lastAim.TrueAnomaly),6:F2}deg{(heldNow ? " held" : "")} from Pe at {(lastAim.Radius - home.MeanRadius) / 1000.0,7:F1}km FPA={Deg(lastAim.Fpa),5:F2}deg "
+                     + $"alt={altNowKm,7:F1}km radius={radiusNowKm,8:F1}km aimRadius={lastAim.Radius / 1000.0,8:F1}km vs={verticalMs,6:F0}m/s "
+                     + $"mass={vehicle.TotalMass / 1000.0,6:F1}t status='{state.Status}'");
             }
         }
 

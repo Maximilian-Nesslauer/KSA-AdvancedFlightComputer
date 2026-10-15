@@ -336,6 +336,9 @@ public sealed class VehicleAutopilotState
     public GuidanceWindow.AscentPhase Phase = GuidanceWindow.AscentPhase.Vertical;
     public double TurnStartTime;
     public double3 FrozenDir;
+    /// <summary>A copy of the UPFG solution the terminal phase flies its steering law from, and the sim time of that solve. Null before the terminal phase.</summary>
+    public UpfgGuidance TerminalLaw;
+    public double TerminalLawTime;
     public double CutoffTime;
     public bool LanSeeded;
 
