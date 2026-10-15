@@ -68,7 +68,7 @@ public static class KsaTvcAllocator
     /// Fill the torque and force Jacobians for one gimbal: columns 2i and 2i+1 of B (N*m per unit command) and Bf (N per unit command).
     ///  THE TORQUE IS DIFFERENTIATED WHOLE, the thrust's point swinging about the pivot with its direction, because that is what the plant does (RocketNozzle.UpdateState). The swing is not second order: the point moves by the nozzle's length times the deflection while the FULL thrust acts on it, which is the same order as the side force, and the two together act on the arm to the PIVOT, not to the thrust point - the nozzle's length cancels. Taken at the rest thrust point the arm was the nozzle's length too long, and on the 2026-10-08 booster every torque came out 1.37x what the engines delivered: measured from the flight, the booster turned as if its inertia were 1.46e6 kg m^2 against the 1.07e6 KSA integrates it with.
     /// </summary>
-    private static void FillColumns(GimbalController gc, float3 comAsmb, double thrust,
+    internal static void FillColumns(GimbalController gc, float3 comAsmb, double thrust,
                                     double[] bTorque, double[] bForce, int gimbalIndex)
     {
         var com = new double3(comAsmb.X, comAsmb.Y, comAsmb.Z);
