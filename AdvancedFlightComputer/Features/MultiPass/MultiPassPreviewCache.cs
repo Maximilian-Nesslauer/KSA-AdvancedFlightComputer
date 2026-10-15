@@ -1,4 +1,5 @@
 using System;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.RcsTranslation;
 using KSA;
@@ -268,7 +269,8 @@ internal static class MultiPassPreviewCache
         long TargetIncMilliRad,
         OrbitManeuvers.InclinationReference Reference,
         string TargetId,
-        int SequenceSignature)
+        int SequenceSignature,
+        int PhaseSignature)
     {
         public static PreviewKey From(
             Vehicle source, string typeKey, int passCount,
@@ -287,12 +289,13 @@ internal static class MultiPassPreviewCache
                 (long)(ManeuverToolsWindow.TargetInclinationRad * 1000.0),
                 ManeuverToolsWindow.InclinationRef,
                 target?.Id ?? string.Empty,
-                ComputeSequenceSignature(state));
+                ComputeSequenceSignature(state),
+                FiniteBurns.PhaseSignature(source));
         }
 
         // Exclude orbit, mass, delta v, and sequence performance changes when comparing intent during thrust.
         public PreviewKey WithoutDrift() =>
-            this with { DvBucket = 0, SmaBucket = 0, MassBucket = 0, SequenceSignature = 0 };
+            this with { DvBucket = 0, SmaBucket = 0, MassBucket = 0, SequenceSignature = 0, PhaseSignature = 0 };
     }
 
     private static int ComputeSequenceSignature(SequenceBurnState state)

@@ -36,6 +36,14 @@ internal static partial class Patch_DrawPlanWindow
     private static bool _showFlightPlanPreview;
     private static bool _showOrbitPreview;
 
+    private static OrbitManeuvers.ManeuverResult? _refined;
+    private static Orbit? _refinedOrbit;
+    private static OrbitManeuvers.ManeuverResult _refinedImpulsive;
+    private static FiniteBurnGoal _refinedGoal;
+    // FlightComputer.SetStagedBurn keeps at most 16 phases.
+    private static readonly FiniteBurnPhase[] _refinedPhases = new FiniteBurnPhase[16];
+    private static int _refinedPhaseCount;
+
     static bool Prefix(IGameViewport inViewport)
     {
         if (StockPlanner.TransferType is not TransferType transferType)
@@ -155,19 +163,21 @@ internal static partial class Patch_DrawPlanWindow
 
         ManeuverToolsWindow.DrawInline(typeKey, source, basis);
 
-        var result = ComputeManeuver(typeKey, source, basis);
-        if (result == null)
+        var impulsive = ComputeManeuver(typeKey, source, basis);
+        if (impulsive == null)
         {
             _lastEntry = null;
             return default;
         }
 
-        _lastEntry = BuildTransferEntry(source, result.Value, basis);
+        // The single burn is created, previewed and reported as the engines fly it. The multi-pass planners split the impulsive maneuver and refine each pass themselves.
+        OrbitManeuvers.ManeuverResult maneuver = RefineForFiniteBurn(typeKey, source, basis, impulsive.Value);
+        _lastEntry = BuildTransferEntry(source, maneuver, basis);
 
         ImGui.Separator();
-        DrawManeuverInfo(result.Value);
+        DrawManeuverInfo(maneuver);
 
-        MultiPassUI.Draw(source, result.Value, typeKey);
+        MultiPassUI.Draw(source, impulsive.Value, typeKey);
 
         CommitState state = ResolveCommitState(source, typeKey);
         if (state == CommitState.MultiPassRunning)
@@ -186,7 +196,7 @@ internal static partial class Patch_DrawPlanWindow
                 ref _showFlightPlanPreview);
         }
 
-        return new Commit(state, source, result.Value, typeKey, basis);
+        return new Commit(state, source, maneuver, typeKey, basis);
     }
 
     #region Dropdowns
@@ -315,6 +325,50 @@ internal static partial class Patch_DrawPlanWindow
         return null;
     }
 
+    // Stock refines Circularize with FiniteBurnRefiner.RefineToCircular and Match Target Plane with FiniteBurnRefiner.RefineToPlane. A plane goal can move the burn time. Set Periapsis and Set Apoapsis hold the apsis they set.
+    internal static FiniteBurnGoal FiniteBurnGoalFor(string key)
+    {
+        if (key == ManeuverToolsFeature.KeyStockCircularizeApoapsis
+            || key == ManeuverToolsFeature.KeyStockCircularizePeriapsis)
+            return FiniteBurnGoal.Circular;
+        if (key == ManeuverToolsFeature.KeyMatchInclination)
+            return FiniteBurnGoal.Plane(ManeuverToolsWindow.GetSelectedTargetOrbit());
+        if (key == ManeuverToolsFeature.KeySetInclination)
+            return FiniteBurnGoal.Plane(null);
+        return FiniteBurnGoal.Apsis;
+    }
+
+    // The window redraws every frame, so the last refinement is reused until its inputs change, as TransferPlanner.SelectedPlan does for the transfer burn.
+    private static OrbitManeuvers.ManeuverResult RefineForFiniteBurn(
+        string key, Vehicle source, PlanningBasis basis, in OrbitManeuvers.ManeuverResult impulsive)
+    {
+        ReadOnlySpan<FiniteBurnPhase> phases = FiniteBurns.FullThrottlePhases(source);
+        FiniteBurnGoal goal = FiniteBurnGoalFor(key);
+        if (_refined is OrbitManeuvers.ManeuverResult cached
+            && ReferenceEquals(_refinedOrbit, basis.Orbit)
+            && _refinedImpulsive == impulsive
+            && _refinedGoal == goal
+            && phases.SequenceEqual(_refinedPhases.AsSpan(0, _refinedPhaseCount)))
+            return cached;
+
+        OrbitManeuvers.ManeuverResult refined =
+            OrbitManeuvers.RefineForFiniteBurn(basis.Orbit, impulsive, phases, goal, basis.Earliest);
+        _refinedOrbit = basis.Orbit;
+        _refinedImpulsive = impulsive;
+        _refinedGoal = goal;
+        _refinedPhaseCount = Math.Min(phases.Length, _refinedPhases.Length);
+        phases.Slice(0, _refinedPhaseCount).CopyTo(_refinedPhases);
+        _refined = refined;
+        return refined;
+    }
+
+    private static void ClearRefinement()
+    {
+        _refined = null;
+        _refinedOrbit = null;
+        _refinedGoal = default;
+    }
+
     // Burn.Equals compares time and delta V, so plan membership alone does not prove that the burn belongs to the selected vehicle.
     private static void CleanupStaleBurn(Vehicle source)
     {
@@ -340,6 +394,7 @@ internal static partial class Patch_DrawPlanWindow
         _ourBurn = null;
         _lastEntry = null;
         _lastSource = null;
+        ClearRefinement();
     }
 
     private static void HandleWindowClose()

@@ -7,7 +7,9 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-internal readonly record struct PassStep(UniverseTime BurnTime, double3 DvVlf);
+// BurnTime and DvVlf describe the impulsive burn. The planner refines it for the finite burn toward Goal before it builds the pass.
+internal readonly record struct PassStep(
+    UniverseTime BurnTime, double3 DvVlf, FiniteBurnGoal Goal = default);
 
 // The factory receives the orbit before the burn and returns null when the goal is unreachable.
 internal delegate PassStep? PassStepFactory(
@@ -64,18 +66,21 @@ internal static class MultiPassForwardChainPlanner
                 prePatch = lastBurnPatch;
             }
 
-            var (fp, burnPatch) = BuildPassFlightPlan(
-                source, prePatch!, step.Value.BurnTime, step.Value.DvVlf);
+            // Execution commits the first pass of a chain planned from the live orbit, so each committed pass is refined at commit time from the orbit it starts on.
+            var (burnTime, dvVlf) = FiniteBurns.Refine(prePatch!.Orbit, step.Value.BurnTime,
+                step.Value.DvVlf, FiniteBurns.FullThrottlePhases(source), step.Value.Goal, earliestTime);
+            var (fp, burnPatch) = BuildPassFlightPlan(source, prePatch, burnTime, dvVlf);
             results.Add(new PassPreview(
-                BurnTime: step.Value.BurnTime,
-                DvVlf: step.Value.DvVlf,
+                BurnTime: burnTime,
+                DvVlf: dvVlf,
                 EstimatedBurnTimeSec: allocations[i].EstimatedBurnTimeSec,
                 FlightPlan: fp));
             if (MultiPassDebug.Enabled)
                 logPasses ??= execution || LogHelper.ThrottleAllows(
                     "forward-chain-passes", PassDiagnosticMinIntervalSec);
             if (logPasses == true)
-                LogPass(source, currentOrbit, burnPatch.Orbit, step.Value, i, now, execution);
+                LogPass(source, currentOrbit, burnPatch.Orbit,
+                    step.Value with { BurnTime = burnTime, DvVlf = dvVlf }, i, now, execution);
             if (!burnPatch.Orbit.IsBound())
                 return new PassPreviewResult(results.ToArray(), Failed: true,
                     $"pass {i} produced an unbound orbit");
@@ -84,7 +89,10 @@ internal static class MultiPassForwardChainPlanner
                 break;
 
             currentOrbit = burnPatch.Orbit;
-            earliestTime = step.Value.BurnTime + NextOccurrenceEpsilonSec;
+            // The orbit after a finite burn is valid only from cutoff.
+            earliestTime = burnTime + NextOccurrenceEpsilonSec;
+            if (burnPatch.ConicStartTime > earliestTime)
+                earliestTime = burnPatch.ConicStartTime;
             lastFp = fp;
             lastBurnPatch = burnPatch;
         }
@@ -127,20 +135,28 @@ internal static class MultiPassForwardChainPlanner
             execution ? "execution" : "preview", chainTime.Seconds()));
     }
 
-    // The returned burn patch is the next pass's starting orbit.
+    // The returned burn patch is the next pass's starting orbit. With engine thrust it is the last finite burn piece, whose orbit is the conic after cutoff.
     internal static (FlightPlan fp, PatchedConic burnPatch) BuildPassFlightPlan(
         Vehicle source, PatchedConic prePatch, UniverseTime burnTime, double3 dvVlf,
         IOrbiter? encounterFilter = null)
     {
-        UniverseTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(burnTime);
         FlightPlan fp = FlightPlan.CreateUninitialized(source.Hash);
         // Use the same terrain clearance as plans installed on the vehicle.
         fp.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
-        PatchedConic burnPatch = fp.CalculateBurnPatch(prePatch, timeSincePe, dvVlf, burnTime);
-        fp.Patches.Add(burnPatch);
+        PatchedConic? burnPatch = FiniteBurns.TryAddFiniteBurn(
+            fp, prePatch, burnTime, dvVlf, FiniteBurns.FullThrottlePhases(source), out bool impacted);
+        if (burnPatch == null)
+        {
+            UniverseTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(burnTime);
+            burnPatch = fp.CalculateBurnPatch(prePatch, timeSincePe, dvVlf, burnTime);
+            fp.Patches.Add(burnPatch);
+            impacted = false;
+        }
         // Detached plans have no worker to finish the incremental terrain search.
-        fp.ComputeCompleteTrajectory(out _, FlightPlanPatchLimit, FlightPlanPolynomialOrder,
-            encounterFilter, resolveImpactsCompletely: true);
+        // The patch limit counts every patch, so a burn split into several pieces keeps the same number of coast patches after it.
+        if (!impacted)
+            fp.ComputeCompleteTrajectory(out _, fp.Patches.Count - 1 + FlightPlanPatchLimit,
+                FlightPlanPolynomialOrder, encounterFilter, resolveImpactsCompletely: true);
         // Markers use closest approaches from every pass, including intermediate passes.
         if (source.Target != null)
             fp.CalculateTargetNodes(source.Target);

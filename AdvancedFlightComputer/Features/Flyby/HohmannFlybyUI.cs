@@ -49,6 +49,7 @@ internal static class HohmannFlybyUI
     private static UniverseTime _previewPatchStart;
     private static UniverseTime _previewPatchEnd;
     private static double _previewClearance;
+    private static int _previewPhaseSignature;
     private static double _displayTargetRadius;
     private static string? _lastSourceId;
 
@@ -248,6 +249,7 @@ internal static class HohmannFlybyUI
             ? source.FlightPlan.TryFindPatch(result.BurnTime) : null;
         if (ReferenceEquals(solution, _displayedDeparture) && !_displayingMultiPass
             && _previewClearance == source.BoundingSphereRadiusBody
+            && _previewPhaseSignature == FiniteBurns.PhaseSignature(source)
             && _displayTargetRadius == target.MeanRadius && _minFlybyRadius == floor
             && (patch != null) == _previewHadCoveringPatch
             && (patch == null || (patch.StartTime == _previewPatchStart && patch.EndTime == _previewPatchEnd))) return;
@@ -257,6 +259,7 @@ internal static class HohmannFlybyUI
         _previewPatchStart = patch?.StartTime ?? default;
         _previewPatchEnd = patch?.EndTime ?? default;
         _previewClearance = source.BoundingSphereRadiusBody;
+        _previewPhaseSignature = FiniteBurns.PhaseSignature(source);
         _displayTargetRadius = target.MeanRadius;
         _minFlybyRadius = floor;
         _prediction = BuildPreview(source, info.Target, target, solution.Outcome.Result, out _previewPlan);
@@ -316,7 +319,7 @@ internal static class HohmannFlybyUI
             "{0:F1} m/s ({1:+0.0;-0.0} vs impact)", _cachedFlybyDv, _cachedFlybyDv - stockDv);
     }
 
-    // FlightPlan.CalculateBurnPatch and ComputeCompleteTrajectory provide the same propagation used by stock previews.
+    // FlightPlan.TryAddFiniteBurn and ComputeCompleteTrajectory provide the same propagation used by stock previews. Without engine thrust the burn stays impulsive through FlightPlan.CalculateBurnPatch.
     internal static FlybyPrediction BuildPreview(
         Vehicle source, IOrbiter targetOrbiter, IParentBody target,
         FlybyTargeting.FlybyResult? result, out FlightPlan? preview)
@@ -331,12 +334,24 @@ internal static class HohmannFlybyUI
 
         try
         {
-            UniverseTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(departure.BurnTime);
             FlightPlan plan = FlightPlan.CreateUninitialized(source.Hash);
             plan.ImpactClearanceMargin = source.BoundingSphereRadiusBody;
-            plan.Patches.Add(plan.CalculateBurnPatch(
-                prePatch, timeSincePe, departure.DvVlf, departure.BurnTime));
-            plan.ComputeCompleteTrajectory(out bool errors, 8, 8, targetOrbiter, resolveImpactsCompletely: true);
+            double3 dvVlf = RefineDeparture(source, prePatch, departure);
+            bool errors = false;
+            if (FiniteBurns.TryAddFiniteBurn(plan, prePatch, departure.BurnTime, dvVlf,
+                    FiniteBurns.FullThrottlePhases(source), out bool impacted) == null)
+            {
+                UniverseTime timeSincePe = prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(departure.BurnTime);
+                plan.Patches.Add(plan.CalculateBurnPatch(
+                    prePatch, timeSincePe, dvVlf, departure.BurnTime));
+                plan.ComputeCompleteTrajectory(out errors, 8, 8, targetOrbiter, resolveImpactsCompletely: true);
+            }
+            else if (!impacted)
+            {
+                // The patch limit counts every patch, so a burn split into several pieces keeps the same number of coast patches after it.
+                plan.ComputeCompleteTrajectory(out errors, plan.Patches.Count + 7, 8, targetOrbiter,
+                    resolveImpactsCompletely: true);
+            }
             if (errors) return new(FlybyPredictionStatus.PropagationFailed);
             preview = plan;
             return FlybyPrediction.FromPlan(plan, target);
@@ -348,6 +363,14 @@ internal static class HohmannFlybyUI
             return new(FlybyPredictionStatus.PropagationFailed);
         }
     }
+
+    /// <summary>The flyby departure corrected for the finite burn, as stock refines
+    /// its own transfer burn with FiniteBurnRefiner.RefineTransfer. The preview and
+    /// the burn that Create queues both use it, so they show the same trajectory.</summary>
+    internal static double3 RefineDeparture(
+        Vehicle source, PatchedConic prePatch, FlybyTargeting.FlybyResult departure)
+        => FiniteBurns.Refine(prePatch.Orbit, departure.BurnTime, departure.DvVlf,
+            FiniteBurns.FullThrottlePhases(source), FiniteBurnGoal.Transfer(departure.Arrival)).DvVlf;
 
     /// <summary>True when the single burn flyby overlay should draw, which needs a
     /// flyby armed with a propagated plan, stock's plan window showing a Hohmann

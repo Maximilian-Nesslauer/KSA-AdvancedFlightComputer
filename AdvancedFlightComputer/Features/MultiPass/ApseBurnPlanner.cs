@@ -1,3 +1,4 @@
+using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
 
@@ -31,7 +32,8 @@ internal static class ApseBurnPlanner
             {
                 if (orbit.TimeOfTrueAnomaly(burnTa, earliestTime) is not UniverseTime burnTime)
                     return null;
-                return new PassStep(burnTime, dvDir * dvCap);
+                // Each pass holds the apsis its impulsive burn sets, and a pass that ends circular aims at a circular orbit.
+                return new PassStep(burnTime, dvDir * dvCap, FiniteBurnGoal.Apsis);
             }, execution);
     }
 }
