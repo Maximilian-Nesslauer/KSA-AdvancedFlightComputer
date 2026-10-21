@@ -19,12 +19,12 @@
       <HintPath>$(KsaDir)\KSA.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Brutal.Core.Numerics">
-      <HintPath>$(KsaDir)\Brutal.Core.Numerics.dll</HintPath>
+    <Reference Include="Brutal.Numerics">
+      <HintPath>$(KsaDir)\Brutal.Numerics.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Brutal.Core.Logging">
-      <HintPath>$(KsaDir)\Brutal.Core.Logging.dll</HintPath>
+    <Reference Include="Brutal.Logging">
+      <HintPath>$(KsaDir)\Brutal.Logging.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="CommunityToolkit.HighPerformance">
@@ -35,8 +35,8 @@
       <HintPath>$(KsaDir)\Brutal.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Brutal.Core.Strings">
-      <HintPath>$(KsaDir)\Brutal.Core.Strings.dll</HintPath>
+    <Reference Include="Brutal.Strings">
+      <HintPath>$(KsaDir)\Brutal.Strings.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Brutal.Localization">

@@ -35,8 +35,8 @@
       <HintPath>../../../../refs/game/KSA.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Brutal.Core.Numerics">
-      <HintPath>../../../../refs/game/Brutal.Core.Numerics.dll</HintPath>
+    <Reference Include="Brutal.Numerics">
+      <HintPath>../../../../refs/game/Brutal.Numerics.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <!-- Overload resolution on KSA's frame-transform extensions pulls in BepuUtilities types. -->
