@@ -106,7 +106,7 @@ Execute a planned burn with RCS thrusters only, no main engine. Useful for small
 
 Activates the next sequence whenever the active engines run out of propellant, and drops burnt-out boosters while the rest of the stage keeps firing. Works during auto-burns (continues the burn instead of aborting) and manual burns. Do not install the standalone AutoStage mod next to AdvancedFlightComputer, because two stagers on one burnout would activate two sequences. The settings written by AutoStage are imported on the first load.
 
-- **AUTOSTAGE toggle button** on the EngineControl gauge panel, in the free slot under RCS. The switch belongs to the vehicle, so an armed craft keeps staging when you control another one. The same switch is available on the Mods settings page for installs without KittenExtensions.
+- **AUTOSTAGE toggle button** on the EngineControl gauge panel, in the free slot under RCS. The switch belongs to the vehicle, so an armed craft keeps staging when you control another one. The same switch is available on the Mods settings page for installs without KittenExtensions Continued.
 - **Control-module guard** - a sequence that would separate the last control module is never staged automatically; stage it by hand if that is what you want.
 - **Auto-burn continuation** - keeps the burn mode at Auto through staging, also when you stage by hand, so planned burns do not abort.
 - **Cascade staging** - stages again if the next stage is empty or only has decouplers.
@@ -170,7 +170,7 @@ The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [gu
 
 ## Installation
 
-1. Install [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions](https://github.com/tsholmes/KittenExtensions) (the latter is only required for hyperbolic targets and the AUTOSTAGE gauge button).
+1. Install [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions Continued](https://github.com/AMPW-german/KittenExtensions) (the latter is only required for hyperbolic targets and the AUTOSTAGE gauge button).
 2. Download the latest release from the [Releases](https://github.com/Maximilian-Nesslauer/KSA-AdvancedFlightComputer/releases) tab.
 3. Extract into `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\`.
 4. The game auto-discovers new mods and prompts you to enable them. Alternatively, add to `Documents\My Games\Kitten Space Agency\manifest.toml`:
@@ -186,7 +186,7 @@ enabled = true
 | Package | Purpose | Tested version |
 | --- | --- | --- |
 | [StarMap](https://github.com/StarMapLoader/StarMap) | Mod loader, required at runtime (see [Installation](#installation)) | 0.4.6 |
-| [KittenExtensions](https://github.com/tsholmes/KittenExtensions) | Optional, required at runtime for the hyperbolic-targets and AUTOSTAGE button XML patches | v0.4.0 |
+| [KittenExtensions Continued](https://github.com/AMPW-german/KittenExtensions) | Optional, required at runtime for the hyperbolic-targets and AUTOSTAGE button XML patches. The original KittenExtensions does not load on KSA 2026.10.19.5638 and later, so remove it first | v0.5.3 |
 
 ## Build dependencies
 
