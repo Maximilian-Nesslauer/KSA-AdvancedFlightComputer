@@ -8,7 +8,7 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 /// Lets the Transfer Planner target bodies on unbound orbits, which are the
 /// interstellar comets. The Lambert solver handles any geometry, but the code
 /// around it assumes a finite Period, a positive semi major axis and a usable
-/// SOI. HyperbolicBodies.xml supplies mass and SOI through KittenExtensions.
+/// SOI. HyperbolicBodies.xml supplies mass and SOI through KittenExtensions Continued.
 /// The patches here cover the rest, namely the target listing, the time of
 /// flight estimate, the departure alignment, the encounter detection, and the
 /// stock closest approach search, which throws on an unbound body.

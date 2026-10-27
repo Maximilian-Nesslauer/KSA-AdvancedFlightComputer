@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The optional dependency is now **KittenExtensions Continued** 0.5.3 or later instead of the original KittenExtensions, which does not load on KSA 2026.10.19.5638 and later. It applies the hyperbolic-targets and AUTOSTAGE button patches. Remove the original KittenExtensions before you install it.
+
 - UPFG, G-FOLD and the convex ascent plan within the lower of the g-limit and the structural load limit at which KSA holds the throttle back. Stages with solid motors or without throttle are planned at full thrust.
 
 - Added **argument of periapsis** to the ascent target. Tick **Fix arg. of Pe** and the ascent holds the whole ellipse in place, inserting wherever along it the burn ends instead of always at periapsis. While it flies, an **Insertion** row shows how far round from periapsis that is, and turns amber once that starts to cost real dV, or when the insertion is before periapsis, which a burn that starts from orbit may not converge on. For its last 45 seconds the burn holds the insertion it is aiming at rather than following the cutoff, so it cannot chase itself round the ellipse. A burn from orbit can only reach an argument of periapsis that puts the insertion a little past where it would naturally end, up to about 20 degrees; further round it runs out of propellant just as a free insertion placed there would. Left unticked, the argument of periapsis falls wherever the burn ends, as before.
