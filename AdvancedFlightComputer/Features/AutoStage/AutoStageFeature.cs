@@ -72,6 +72,8 @@ internal static class AutoStageFeature
         harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.TogglePatch)).Patch();
         harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.IsSetPatch)).Patch();
         harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.IsDisabledPatch)).Patch();
+        harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.ButtonIsDisabledPatch)).Patch();
+        harmony.CreateClassProcessor(typeof(AutoStageGaugePatches.ButtonPackDataPatch)).Patch();
         harmony.CreateClassProcessor(typeof(SequenceListPatches.ActivateNextSequencePatch)).Patch();
         harmony.CreateClassProcessor(typeof(SequenceListPatches.ResetCachesPatch)).Patch();
         harmony.CreateClassProcessor(typeof(NewEngineSeedPatch)).Patch();

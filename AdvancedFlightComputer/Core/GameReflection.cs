@@ -300,10 +300,15 @@ internal static class GameReflection
 
     #region RcsTranslation
 
-    // The gauge button keeps its bound enum private, and the RCS gauge patches need it to recognize the BurnMode button instance.
-    [UsedBy(Feature.RcsTranslation)]
+    // The gauge button keeps its bound enum private, and the RCS and AutoStage gauge patches need it to recognize their button instances.
+    [UsedBy(Feature.RcsTranslation | Feature.AutoStage)]
     public static readonly FieldInfo? GaugeButtonFlightComputer_enumValue =
         AccessTools.Field(typeof(GaugeButtonFlightComputer), "_enumValue");
+
+    // Read for every flight computer button in every frame, so it is a delegate instead of FieldInfo.GetValue.
+    [UsedBy(Feature.AutoStage)]
+    public static readonly AccessTools.FieldRef<GaugeButtonFlightComputer, Enum>? GaugeButtonFlightComputer_enumValueRef =
+        InstanceFieldRef<GaugeButtonFlightComputer, Enum>(GaugeButtonFlightComputer_enumValue);
 
     // Private tooltip hook for the Auto button, replaced with the RCS explanation when a burn resolves to RCS execution.
     [UsedBy(Feature.RcsTranslation)]
