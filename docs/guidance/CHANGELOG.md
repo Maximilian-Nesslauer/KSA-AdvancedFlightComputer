@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The **AFC Guidance** menu no longer disappears when another mod, such as ModMenu, patches the menu bar. With ModMenu it is under **Mods > AFC Guidance**.
+
 - The optional dependency is now **KittenExtensions Continued** 0.5.3 or later instead of the original KittenExtensions, which does not load on KSA 2026.10.19.5638 and later. It applies the hyperbolic-targets and AUTOSTAGE button patches. Remove the original KittenExtensions before you install it.
 
 - UPFG, G-FOLD and the convex ascent plan within the lower of the g-limit and the structural load limit at which KSA holds the throttle back. Stages with solid motors or without throttle are planned at full thrust.

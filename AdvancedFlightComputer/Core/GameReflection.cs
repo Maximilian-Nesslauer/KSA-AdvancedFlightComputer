@@ -197,6 +197,12 @@ internal static class GameReflection
         AccessTools.Method(typeof(TransferPlanner), "DrawSelectedTransferUi",
             new[] { typeof(IGameViewport) });
 
+    // Re-patched after the hook, see GuidanceFeature.KeepMenuHookCall.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? Program_DrawMenuBar =
+        AccessTools.Method(typeof(Program), nameof(Program.DrawMenuBar),
+            new[] { typeof(IGameViewport), typeof(int) });
+
     #endregion
 
     #region Save, tick and vehicle lifetime

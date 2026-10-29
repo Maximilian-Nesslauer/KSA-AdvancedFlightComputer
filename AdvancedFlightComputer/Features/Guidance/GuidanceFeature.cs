@@ -1,6 +1,7 @@
 using AdvancedFlightComputer.Core;
 using KSA;
 using Brutal.ImGuiApi;
+using Brutal.Logging;
 using HarmonyLib;
 
 namespace AdvancedFlightComputer.Features.Guidance;
@@ -19,7 +20,35 @@ internal static class GuidanceFeature
     {
         harmony.Patch(GameReflection.Program_DrawProgramMenusHook!,
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(DrawMenu)));
+        KeepMenuHookCall(harmony);
+        ModMenuBridge.DrawItems = DrawMenuItems;
     }
+
+    // A DrawMenuBar patch made before the hook patch can have the empty hook inlined. Patching it again rebuilds it with the call.
+    private static void KeepMenuHookCall(Harmony harmony)
+    {
+        var menuBar = GameReflection.Program_DrawMenuBar;
+        if (menuBar == null)
+        {
+            DefaultCategory.Log.Warning("[AFC] Program.DrawMenuBar was not found, so a mod that patches the menu bar can hide the AFC Guidance menu.");
+            return;
+        }
+
+        try
+        {
+            string[] others = Harmony.GetPatchInfo(menuBar)?.Owners.Where(owner => owner != harmony.Id).ToArray() ?? [];
+            harmony.Patch(menuBar, transpiler: new HarmonyMethod(typeof(GuidanceFeature), nameof(KeepMenuBar)));
+            if (others.Length > 0)
+                DefaultCategory.Log.Info($"[AFC] Program.DrawMenuBar is also patched by {string.Join(", ", others)}. It was compiled again so that the menu bar keeps its call to the menu hook.");
+        }
+        catch (Exception ex)
+        {
+            // Not rethrown, because a feature failure would also remove the guidance driver.
+            DefaultCategory.Log.Warning($"[AFC] Could not compile Program.DrawMenuBar again, so a mod that patches the menu bar can hide the AFC Guidance menu: {ex}");
+        }
+    }
+
+    private static IEnumerable<CodeInstruction> KeepMenuBar(IEnumerable<CodeInstruction> instructions) => instructions;
 
     internal static void ApplyDriverPatches(Harmony harmony)
     {
@@ -111,33 +140,19 @@ internal static class GuidanceFeature
         }
     }
 
-    // The menu carries the driver's only off switch, so a fault here is logged once per kind and the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally. The menu is flight UI, so the editor's menu bar does not get it.
+    // Top-bar host. Silent in the editor and while ModMenu hosts the menu.
     private static void DrawMenu()
     {
         try
         {
-            if (Program.IsEditorOpen || !ImGui.BeginMenu("AFC Guidance"u8))
+            if (Program.IsEditorOpen)
+                return;
+            ModMenuBridge.NoteTopBarHook();
+            if (ModMenuBridge.Active || !ImGui.BeginMenu(ModMenuBridge.MenuName))
                 return;
             try
             {
-                if (SharedVehicleHooks.GuidanceEnabled)
-                {
-                    bool active = GuidanceWindow.ModActive;
-                    if (ImGui.MenuItem("Enabled", "", ref active, true))
-                        GuidanceWindow.SetModActive(active);
-
-                    // The panel is the only place a mode is started from, and it starts hidden, so this is how the player reaches it.
-                    bool visible = GuidanceWindow.PanelVisible;
-                    if (ImGui.MenuItem("Show panel", "", ref visible, active))
-                        GuidanceWindow.PanelVisible = visible;
-                }
-                else
-                    ImGui.Text(UnavailableReason);
-
-                // Keep release errors visible while the guidance panel is hidden.
-                string failure = GuidanceWindow.ReleaseFailure(Program.ControlledVehicle);
-                if (failure.Length > 0)
-                    ImGui.Text(failure);
+                DrawMenuItems();
             }
             finally
             {
@@ -151,8 +166,39 @@ internal static class GuidanceFeature
         }
     }
 
+    // Drawn by both hosts. It holds the driver's only off switch.
+    private static void DrawMenuItems()
+    {
+        // ModMenu also draws in the editor.
+        if (Program.IsEditorOpen)
+        {
+            ImGui.TextDisabled("Guidance is available in flight."u8);
+            return;
+        }
+
+        if (SharedVehicleHooks.GuidanceEnabled)
+        {
+            bool active = GuidanceWindow.ModActive;
+            if (ImGui.MenuItem("Enabled", "", ref active, true))
+                GuidanceWindow.SetModActive(active);
+
+            // The panel is the only place a mode is started from, and it starts hidden, so this is how the player reaches it.
+            bool visible = GuidanceWindow.PanelVisible;
+            if (ImGui.MenuItem("Show panel", "", ref visible, active))
+                GuidanceWindow.PanelVisible = visible;
+        }
+        else
+            ImGui.Text(UnavailableReason);
+
+        // Keep release errors visible while the guidance panel is hidden.
+        string failure = GuidanceWindow.ReleaseFailure(Program.ControlledVehicle);
+        if (failure.Length > 0)
+            ImGui.Text(failure);
+    }
+
     internal static void Reset()
     {
+        ModMenuBridge.Reset();
         DisableDriver();
         GuidanceClock.Reset();
     }
