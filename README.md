@@ -154,7 +154,7 @@ The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod l
 [![Watch the PoweredGuidance demo](docs/guidance/reference-material/images/twin_boosters.png)](https://youtu.be/hSUcV6tx3oY)
 
 Closed-loop guidance that flies the vehicle for you, originally the [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) mod by cairn5, see [Credits](#credits).
-Open the **AFC Guidance** menu in the top bar, switch **Enabled** on and open the panel with **Show panel**. EXECUTE, ABORT and RETARGET act on the selected tab.
+Open the **AFC Guidance** menu in the top bar (with [ModMenu](https://github.com/MrJeranimo/ModMenu): **Mods > AFC Guidance**), check that **Enabled** is on and open the panel with **Show panel**. EXECUTE, ABORT and RETARGET act on the selected tab.
 
 - **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
 - **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
@@ -172,7 +172,7 @@ The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [gu
 
 1. Install [StarMap](https://github.com/StarMapLoader/StarMap) and [KittenExtensions Continued](https://github.com/AMPW-german/KittenExtensions) (the latter is only required for hyperbolic targets and the AUTOSTAGE gauge button).
 2. Download the latest release from the [Releases](https://github.com/Maximilian-Nesslauer/KSA-AdvancedFlightComputer/releases) tab.
-3. Extract into `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\`.
+3. Extract the zip into `Documents\My Games\Kitten Space Agency\mods\`. It already contains the `AdvancedFlightComputer` folder.
 4. The game auto-discovers new mods and prompts you to enable them. Alternatively, add to `Documents\My Games\Kitten Space Agency\manifest.toml`:
 
 ```toml
@@ -202,6 +202,7 @@ The native guidance solvers are built from the vendored sources with Rust and Zi
 ## Mod compatibility
 
 - [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage), [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) and [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) are part of this mod. Delete their folders under `mods`, because a disabled mod still applies its XML patches.
+- [ModMenu](https://github.com/MrJeranimo/ModMenu) 0.2.3 or later is optional. With it, the AFC Guidance menu is under **Mods**.
 - Known conflicts: the standalone AutoStage and AutoRemoveFinishedBurns mods.
 
 ## Credits
