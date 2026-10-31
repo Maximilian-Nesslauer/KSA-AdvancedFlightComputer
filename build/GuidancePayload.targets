@@ -14,6 +14,10 @@
     <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/clarabel_c.dll" TargetPath="clarabel_c.dll" />
     <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/scs.dll" TargetPath="scs.dll" />
   </ItemGroup>
+  <ItemGroup Condition="$(GuidanceNativeRids.Contains('osx-arm64'))">
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)osx-arm64/libclarabel_c.dylib" TargetPath="libclarabel_c.dylib" />
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)osx-arm64/libscs.dylib" TargetPath="libscs.dylib" />
+  </ItemGroup>
   <ItemGroup Condition="$(GuidanceNativeRids.Contains('linux-x64'))">
     <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libclarabel_c.so" TargetPath="libclarabel_c.so" />
     <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libscs.so" TargetPath="libscs.so" />

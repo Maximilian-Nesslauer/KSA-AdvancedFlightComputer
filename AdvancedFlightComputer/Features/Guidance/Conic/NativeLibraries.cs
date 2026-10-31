@@ -23,8 +23,14 @@ internal static class NativeLibraries
         {
             string? fileName = name switch
             {
-                "clarabel_c" => OperatingSystem.IsWindows() ? "clarabel_c.dll" : "libclarabel_c.so",
-                "scs" => OperatingSystem.IsWindows() ? "scs.dll" : "libscs.so",
+                "clarabel_c" =>
+                    OperatingSystem.IsWindows() ? "clarabel_c.dll" :
+                    OperatingSystem.IsMacOS() ? "libclarabel_c.dylib" :
+                    "libclarabel_c.so",
+                "scs" =>
+                    OperatingSystem.IsWindows() ? "scs.dll" :
+                    OperatingSystem.IsMacOS() ? "libscs.dylib" :
+                    "libscs.so",
                 _ => null,
             };
             if (fileName == null)

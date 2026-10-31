@@ -10,8 +10,8 @@ param(
     [string]$ZigExe = "zig",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
-    [ValidateSet("win-x64", "linux-x64")]
-    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } else { "linux-x64" }),
+    [ValidateSet("win-x64", "linux-x64", "osx-arm64")]
+    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }),
     [string]$OutDir
 )
 
@@ -23,6 +23,7 @@ $scs = Join-Path $root "../third_party/scs"
 $runtimes = @{
     "win-x64"   = @{ Target = "x86_64-windows-gnu"; Library = "scs.dll";   Pic = @() }
     "linux-x64" = @{ Target = "x86_64-linux-gnu";   Library = "libscs.so"; Pic = @("-fPIC") }
+    "osx-arm64" = @{ Target = "aarch64-macos";      Library = "libscs.dylib"; Pic = @("-fPIC") }
 }
 $target = $runtimes[$Rid].Target
 $library = $runtimes[$Rid].Library

@@ -5,8 +5,8 @@
 [CmdletBinding()]
 param(
     [string]$CargoExe = "cargo",
-    [ValidateSet("win-x64", "linux-x64")]
-    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } else { "linux-x64" }),
+    [ValidateSet("win-x64", "linux-x64", "osx-arm64")]
+    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }),
     [string]$OutDir
 )
 
@@ -16,6 +16,7 @@ $ErrorActionPreference = "Stop"
 $runtimes = @{
     "win-x64"   = @{ Triple = "x86_64-pc-windows-msvc";   Library = "clarabel_c.dll" }
     "linux-x64" = @{ Triple = "x86_64-unknown-linux-gnu"; Library = "libclarabel_c.so" }
+    "osx-arm64" = @{ Triple = "aarch64-apple-darwin";     Library = "libclarabel_c.dylib" }
 }
 $triple = $runtimes[$Rid].Triple
 $library = $runtimes[$Rid].Library
