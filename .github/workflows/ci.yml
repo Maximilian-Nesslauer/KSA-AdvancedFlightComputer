@@ -24,6 +24,8 @@ jobs:
             runtime: win-x64
           - os: ubuntu-latest
             runtime: linux-x64
+          - os: macos-latest
+            runtime: osx-arm64
     env:
       DOTNET_CLI_TELEMETRY_OPTOUT: "1"
       DOTNET_NOLOGO: "1"
@@ -98,6 +100,12 @@ jobs:
           name: guidance-native-linux-x64
           path: build/native/linux-x64
 
+      - name: Download macOS native libraries
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: guidance-native-osx-arm64
+          path: build/native/osx-arm64
+
       # The reference assemblies stay in the runner's temp folder: they must never be uploaded
       # as an artifact or cached, since both can be read from a public repository.
       - name: Fetch KSA reference assemblies
@@ -121,7 +129,7 @@ jobs:
           --configuration Release
           --no-restore
           -p:DeployToMods=false
-          -p:GuidanceNativeRids=win-x64%3Blinux-x64
+          -p:GuidanceNativeRids=win-x64%3Blinux-x64%3Bosx-arm64
           "-p:KsaDir=${{ runner.temp }}/ksa-refs"
 
       - name: Upload mod package
