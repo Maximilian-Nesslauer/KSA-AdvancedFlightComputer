@@ -36,8 +36,30 @@ internal static class NativeLibraries
             if (fileName == null)
                 return IntPtr.Zero;
             string dir = Path.GetDirectoryName(asm.Location) ?? ".";
-            string candidate = Path.Combine(dir, fileName);
-            return NativeLibrary.TryLoad(candidate, out IntPtr handle) ? handle : IntPtr.Zero;
+            return LoadOnce(Path.Combine(dir, fileName), fileName);
         });
+    }
+
+    private static readonly Dictionary<string, string> LoadFailures = [];
+
+    /// <summary>
+    /// The solvers retry on failure, but a load that failed will not work later in the session, and an attempt can hold the game. So a library is tried until it fails once, and later calls get the same error.
+    /// </summary>
+    private static IntPtr LoadOnce(string path, string fileName)
+    {
+        lock (LoadFailures)
+        {
+            if (LoadFailures.TryGetValue(fileName, out string? failure))
+                throw new DllNotFoundException(failure);
+            try
+            {
+                return NativeLibrary.Load(path);
+            }
+            catch (Exception e) when (e is DllNotFoundException or BadImageFormatException)
+            {
+                LoadFailures[fileName] = e.Message;
+                throw new DllNotFoundException(e.Message, e);
+            }
+        }
     }
 }
