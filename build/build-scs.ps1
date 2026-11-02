@@ -1,4 +1,4 @@
-# Builds SCS from third_party/scs with Zig for Windows or Linux.
+# Builds SCS from third_party/scs with Zig for Windows, Linux or macOS.
 # Leave DLONG and SFLOAT undefined to keep 32-bit integers and 64-bit floats in the C ABI.
 # Defining either macro as 0 still changes the types because SCS tests whether it is defined.
 # CTRLC=0 leaves signal handling to the host process, and NDEBUG disables debug output.

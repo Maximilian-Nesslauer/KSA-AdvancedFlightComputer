@@ -89,7 +89,7 @@ foreach ($fileName in $nativeNames) {
     }
 }
 
-# Restore both runtimes to match the lock files, then build for one.
+# Restore every runtime to match the lock files, then build for one.
 # Passing --runtime to restore narrows that set and causes NU1004 in locked mode.
 $restoreArguments = @(
     "-p:Configuration=$Configuration",

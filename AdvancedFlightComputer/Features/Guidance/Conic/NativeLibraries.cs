@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Guidance.Conic;
 ///
 /// Resolving from next to this assembly rather than the process working directory lets the same assembly work in the console runner, a test host, and the game.
 ///
-/// KSA ships for Windows and Linux, so one mod folder can hold both builds of the same library. Their file names differ, and the running platform loads only its own.
+/// One mod folder can hold every platform's build of the same library. Their file names differ, and the running platform loads only its own.
 /// </summary>
 internal static class NativeLibraries
 {
