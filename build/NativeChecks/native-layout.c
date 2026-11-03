@@ -7,7 +7,7 @@
 #include "DefaultSolution.h"
 #include "SupportedConeT.h"
 
-_Static_assert(sizeof(void *) == 8, "An x64 target is required");
+_Static_assert(sizeof(void *) == 8, "A 64-bit target is required");
 _Static_assert(sizeof(scs_int) == 4, "DLONG must be undefined");
 _Static_assert(sizeof(scs_float) == 8, "SFLOAT must be undefined");
 _Static_assert(sizeof(bool) == 1, "The Clarabel ABI requires one-byte bool");

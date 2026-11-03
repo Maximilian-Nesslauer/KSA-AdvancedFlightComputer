@@ -5,20 +5,23 @@
 [CmdletBinding()]
 param(
     [string]$CargoExe = "cargo",
-    [ValidateSet("win-x64", "linux-x64")]
-    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } else { "linux-x64" }),
+    [ValidateSet("win-x64", "linux-x64", "osx-arm64")]
+    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }),
     [string]$OutDir
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+# The macOS install name is fixed, because the linker would otherwise record the build path.
 $runtimes = @{
-    "win-x64"   = @{ Triple = "x86_64-pc-windows-msvc";   Library = "clarabel_c.dll" }
-    "linux-x64" = @{ Triple = "x86_64-unknown-linux-gnu"; Library = "libclarabel_c.so" }
+    "win-x64"   = @{ Triple = "x86_64-pc-windows-msvc";   Library = "clarabel_c.dll"; CargoArgs = @() }
+    "linux-x64" = @{ Triple = "x86_64-unknown-linux-gnu"; Library = "libclarabel_c.so"; CargoArgs = @() }
+    "osx-arm64" = @{ Triple = "aarch64-apple-darwin";     Library = "libclarabel_c.dylib"; CargoArgs = @("--config", "target.aarch64-apple-darwin.rustflags=['-Clink-arg=-Wl,-install_name,@rpath/libclarabel_c.dylib']") }
 }
 $triple = $runtimes[$Rid].Triple
 $library = $runtimes[$Rid].Library
+$cargoArgs = $runtimes[$Rid].CargoArgs
 if (-not $OutDir) { $OutDir = Join-Path $PSScriptRoot "native/$Rid" }
 
 $crate = Join-Path $PSScriptRoot "../third_party/clarabel/rust_wrapper"
@@ -33,7 +36,7 @@ if (-not (Get-Command $CargoExe -ErrorAction SilentlyContinue)) {
 Write-Host "building $library (release, $triple) with $CargoExe ..."
 Push-Location $crate
 try {
-    & $CargoExe build --locked --release --target $triple
+    & $CargoExe build --locked --release --target $triple @cargoArgs
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
 }
 finally {

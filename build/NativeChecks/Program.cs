@@ -8,7 +8,7 @@ using System.Runtime.Loader;
 // Run on the target platform because layouts can differ between platforms.
 
 const string usage = "Usage: NativeChecks <clarabel|scs> <assembly-path> "
-    + "[--rid <win-x64|linux-x64>] [--zig <path>] [--scs-include <dir>] [--clarabel-include <dir>] "
+    + "[--rid <win-x64|linux-x64|osx-arm64>] [--zig <path>] [--scs-include <dir>] [--clarabel-include <dir>] "
     + "[--expect-checks <count>] [--expect-exports <count>]";
 
 if (args.Length < 2 || args[0] is not ("scs" or "clarabel"))
@@ -152,12 +152,13 @@ catch (Exception error)
     return 1;
 }
 
-static string HostRid() => OperatingSystem.IsWindows() ? "win-x64" : "linux-x64";
+static string HostRid() => OperatingSystem.IsWindows() ? "win-x64" : OperatingSystem.IsMacOS() ? "osx-arm64" : "linux-x64";
 
 static (string ZigTarget, string Clarabel, string Scs) Runtime(string rid) => rid switch
 {
     "win-x64" => ("x86_64-windows-gnu", "clarabel_c.dll", "scs.dll"),
     "linux-x64" => ("x86_64-linux-gnu", "libclarabel_c.so", "libscs.so"),
+    "osx-arm64" => ("aarch64-macos", "libclarabel_c.dylib", "libscs.dylib"),
     _ => throw new ArgumentException($"Unknown runtime identifier {rid}"),
 };
 

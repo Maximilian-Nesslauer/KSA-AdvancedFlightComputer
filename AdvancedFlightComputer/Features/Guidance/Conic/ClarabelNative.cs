@@ -27,7 +27,7 @@ namespace AdvancedFlightComputer.Guidance.Conic;
 ///     bool in ClarabelDefaultSettings is read from the wrong offset.
 ///
 /// Three entry points return a struct BY VALUE (settings default, solution, info). On
-/// x64 that uses the hidden-return-pointer convention, which .NET's marshaller handles
+/// x64 and arm64 that uses a hidden return pointer, which .NET's marshaller handles
 /// for blittable structs - but it is another reason the layouts have to be exactly
 /// right. <see cref="DumpLayouts"/> prints what .NET actually computed, so a mismatch
 /// can be checked against the header rather than argued about.
@@ -66,7 +66,7 @@ internal static partial class ClarabelNative
     /// followed by an anonymous union.
     ///
     /// The union's largest member is the generalised-power case - a pointer plus two
-    /// uintptr_t, 24 bytes - so the whole struct is 32 bytes on x64 (4-byte tag, 4
+    /// uintptr_t, 24 bytes - so the whole struct is 32 bytes on 64-bit targets (4-byte tag, 4
     /// bytes of padding to reach 8-byte alignment, then 24). Only the first member is
     /// ever used here: zero, nonnegative and second-order cones each carry a single
     /// dimension. The two trailing fields exist ONLY to reserve the union's full width;
@@ -209,7 +209,8 @@ internal static partial class ClarabelNative
     /// a struct with the right field ORDER can still have wrong OFFSETS, and this is
     /// the difference between checking that and arguing about it.
     ///
-    /// VERIFIED on x64 against the C headers by hand: CscMatrix 40, SupportedCone 32,
+    /// VERIFIED on x64 against the C headers by hand, and NativeChecks compares the layouts
+    /// with the headers on each runtime: CscMatrix 40, SupportedCone 32,
     /// Solution 104, Settings 280. The load-bearing offsets, all confirmed:
     ///
     ///   SupportedCone.Dim            8    tag is 4 bytes + 4 padding, not 8

@@ -5,8 +5,8 @@ param(
     [Parameter(Mandatory = $true)]
     [string]$InstallRoot,
 
-    [ValidateSet("win-x64", "linux-x64")]
-    [string]$RuntimeIdentifier = $(if ($IsWindows) { "win-x64" } else { "linux-x64" }),
+    [ValidateSet("win-x64", "linux-x64", "osx-arm64")]
+    [string]$RuntimeIdentifier = $(if ($IsWindows) { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }),
 
     [string]$RustVersion = "1.90.0",
     [string]$ZigVersion = "0.14.1"
@@ -22,7 +22,7 @@ if ($ZigVersion -ne "0.14.1") {
     throw "ZigVersion must be 0.14.1 because this script contains the official hashes for that release."
 }
 
-$hostRid = if ($IsWindows) { "win-x64" } else { "linux-x64" }
+$hostRid = if ($IsWindows) { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }
 if ($RuntimeIdentifier -ne $hostRid) {
     throw "RuntimeIdentifier is $RuntimeIdentifier, but this host is $hostRid. Install tools on the runner that will execute the native checks."
 }
@@ -42,6 +42,14 @@ $platforms = @{
         RustupSha256 = "20a06e644b0d9bd2fbdbfd52d42540bdde820ea7df86e92e533c073da0cdd43c"
         ZigArchive = "zig-x86_64-linux-0.14.1.tar.xz"
         ZigSha256 = "24aeeec8af16c381934a6cd7d95c807a8cb2cf7df9fa40d359aa884195c4716c"
+        ZigExecutable = "zig"
+    }
+    "osx-arm64" = @{
+        RustTarget = "aarch64-apple-darwin"
+        RustupFile = "rustup-init"
+        RustupSha256 = "20ef5516c31b1ac2290084199ba77dbbcaa1406c45c1d978ca68558ef5964ef5"
+        ZigArchive = "zig-aarch64-macos-0.14.1.tar.xz"
+        ZigSha256 = "39f3dc5e79c22088ce878edc821dedb4ca5a1cd9f5ef915e9b3cc3053e8faefa"
         ZigExecutable = "zig"
     }
 }

@@ -6,16 +6,19 @@
     <GuidanceNativeDir>$(MSBuildThisFileDirectory)native/</GuidanceNativeDir>
 
     <GuidanceHostRid Condition="'$(GuidanceHostRid)' == '' and '$(OS)' == 'Windows_NT'">win-x64</GuidanceHostRid>
+    <GuidanceHostRid Condition="'$(GuidanceHostRid)' == '' and $([MSBuild]::IsOSPlatform('OSX'))">osx-arm64</GuidanceHostRid>
     <GuidanceHostRid Condition="'$(GuidanceHostRid)' == ''">linux-x64</GuidanceHostRid>
 
     <!-- Which runtimes the payload carries. A local build ships the host runtime
          only, so a missing cross build cannot fail an ordinary deployment. A
-         release build passes both, for example -p:GuidanceNativeRids=win-x64;linux-x64 -->
+         release build passes them all, for example -p:GuidanceNativeRids=win-x64;linux-x64;osx-arm64 -->
     <GuidanceNativeRids Condition="'$(GuidanceNativeRids)' == ''">$(GuidanceHostRid)</GuidanceNativeRids>
 
     <GuidanceHostClarabel Condition="'$(GuidanceHostRid)' == 'win-x64'">clarabel_c.dll</GuidanceHostClarabel>
+    <GuidanceHostClarabel Condition="'$(GuidanceHostRid)' == 'osx-arm64'">libclarabel_c.dylib</GuidanceHostClarabel>
     <GuidanceHostClarabel Condition="'$(GuidanceHostClarabel)' == ''">libclarabel_c.so</GuidanceHostClarabel>
     <GuidanceHostScs Condition="'$(GuidanceHostRid)' == 'win-x64'">scs.dll</GuidanceHostScs>
+    <GuidanceHostScs Condition="'$(GuidanceHostRid)' == 'osx-arm64'">libscs.dylib</GuidanceHostScs>
     <GuidanceHostScs Condition="'$(GuidanceHostScs)' == ''">libscs.so</GuidanceHostScs>
   </PropertyGroup>
 </Project>

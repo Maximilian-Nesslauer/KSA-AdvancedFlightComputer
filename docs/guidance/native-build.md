@@ -7,9 +7,10 @@ Clarabel serves the G-FOLD planner, and SCS serves the six degree of freedom sol
 | --- | --- | --- |
 | `win-x64` | `build/native/win-x64/clarabel_c.dll` | `build/native/win-x64/scs.dll` |
 | `linux-x64` | `build/native/linux-x64/libclarabel_c.so` | `build/native/linux-x64/libscs.so` |
+| `osx-arm64` | `build/native/osx-arm64/libclarabel_c.dylib` | `build/native/osx-arm64/libscs.dylib` |
 
 `build/GuidanceNative.props` defines the output layout.
-A mod package can carry both runtimes, with each platform loading its own libraries.
+A mod package can carry every runtime, with each platform loading its own libraries.
 
 ## Build and test locally
 
@@ -22,9 +23,10 @@ $nativeTools = ./build/ci/install-native-tools.ps1 -InstallRoot $toolsRoot -Runt
 ./build/ci/test-guidance.ps1 -RepositoryRoot $PWD -RuntimeIdentifier win-x64 -CargoExe $nativeTools.CargoExe -ZigExe $nativeTools.ZigExe
 ```
 
-On Linux, use `linux-x64` in both commands.
+On Linux, use `linux-x64` in both commands, and on an Apple silicon Mac, `osx-arm64`.
 Windows also needs the Visual Studio C++ build tools and Windows SDK for Rust's MSVC target.
 Linux needs a GNU linker.
+macOS needs the Xcode Command Line Tools.
 
 The check builds both native libraries and eight game-free managed projects, then checks native layouts and exports against the C# bindings in the Conic assembly.
 It runs each Scvx check (`--fd`, `--aero`, `--impact`, `--sub-scs`, `--loop`, `--ascent`, `--ascent-glimit`, `--cold-shift`, `--hermite`), the Gfold checks (the default `81 120` run, `--clarabel-smoke`, `--realtime`, `--terminal-braking`, `--accel-limit`) and `Worker.Tests`, stopping on failure.
@@ -45,11 +47,11 @@ ABI checks must run on the target platform.
 ## Public CI
 
 `.github/workflows/ci.yml` runs on pull requests, pushes to `main`, and manual dispatch.
-Its Windows and Linux native jobs run the same checks and upload exactly two native libraries per runtime.
+Its Windows, Linux and macOS native jobs run the same checks and upload exactly two native libraries per runtime.
 Missing, empty, or extra artifact files fail the job.
 The native jobs use read-only repository access and need no game files or private tokens.
 
-The `mod` job then builds and packages the whole mod in Release, with the native libraries from both runtimes.
+The `mod` job then builds and packages the whole mod in Release, with the native libraries from every runtime.
 It compiles against KSA reference assemblies, which keep the game's API and strip every method body.
 They live in a private Backblaze B2 bucket, not in this repository.
 `build/ci/fetch-ksa-refs.ps1` downloads the zip for `TestedGameVersion` in `Mod.cs`, using the `KSAREFS_ID` and `KSAREFS_KEY` secrets.
@@ -74,7 +76,7 @@ Actions are pinned to commits.
 `NuGet.config` selects nuget.org without inherited feeds.
 
 CI uses locked Cargo and NuGet restores to reject unexpected dependency changes.
-Each `packages.lock.json` covers both runtimes declared in `Directory.Build.props`.
+Each `packages.lock.json` covers every runtime declared in `Directory.Build.props`.
 Restore must run without `--runtime`, then build with `--no-restore --runtime <rid>`.
 Passing `--runtime` to restore narrows the runtime set and causes NU1004 in locked mode.
 After an intended package change, run a plain restore and review the updated lock file with the change.
@@ -90,7 +92,17 @@ Review binding changes before updating these values in `test-guidance.ps1`.
 ## Packaging
 
 A local Release build packages the host runtime and checks the ZIP against its payload list.
-To package both runtimes, build both native library pairs first, then pass both runtime identifiers to the mod build.
+To package every runtime, build each native library pair first, then pass the runtime identifiers to the mod build.
+Do not pass `--runtime` to that build: it marks the assemblies for one architecture, and .NET on another refuses to load them.
 Use `DeployToMods=false` and `GenerateLaunchProfile=false` for a compile-only check.
 
+## Building on macOS
+
+Set `USERPROFILE`, which sets where the mod deploys, and `KsaDir`, which locates the game.
+
+```sh
+USERPROFILE="$HOME" dotnet build AdvancedFlightComputer/AdvancedFlightComputer.csproj -c Release -p:GenerateLaunchProfile=false -p:KsaDir="$HOME/Applications/Kitten Space Agency.app/Contents/Resources"
+```
+
+If Gatekeeper blocks a downloaded library, choose Allow Anyway under Privacy & Security, then restart the game.
 

@@ -144,6 +144,11 @@ public static class AscentScvx
             {
                 sol = sub.Solve(lin, xbar, ubar, sigBar, tr);
             }
+            // A missing solver is not a numerical failure, so a smaller box cannot help. The job reports it.
+            catch (DllNotFoundException)
+            {
+                throw;
+            }
             catch (Exception e)
             {
                 sol = new AscentSubproblem.Solved(false, "exception: " + e.Message, [], [], [], [], [], [], [], [], [], 0, 0.0);

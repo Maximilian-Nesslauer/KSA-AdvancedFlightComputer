@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Guidance.Conic;
 ///
 /// Resolving from next to this assembly rather than the process working directory lets the same assembly work in the console runner, a test host, and the game.
 ///
-/// KSA ships for Windows and Linux, so one mod folder can hold both builds of the same library. Their file names differ, and the running platform loads only its own.
+/// One mod folder can hold every platform's build of the same library. Their file names differ, and the running platform loads only its own.
 /// </summary>
 internal static class NativeLibraries
 {
@@ -23,15 +23,43 @@ internal static class NativeLibraries
         {
             string? fileName = name switch
             {
-                "clarabel_c" => OperatingSystem.IsWindows() ? "clarabel_c.dll" : "libclarabel_c.so",
-                "scs" => OperatingSystem.IsWindows() ? "scs.dll" : "libscs.so",
+                "clarabel_c" =>
+                    OperatingSystem.IsWindows() ? "clarabel_c.dll" :
+                    OperatingSystem.IsMacOS() ? "libclarabel_c.dylib" :
+                    "libclarabel_c.so",
+                "scs" =>
+                    OperatingSystem.IsWindows() ? "scs.dll" :
+                    OperatingSystem.IsMacOS() ? "libscs.dylib" :
+                    "libscs.so",
                 _ => null,
             };
             if (fileName == null)
                 return IntPtr.Zero;
             string dir = Path.GetDirectoryName(asm.Location) ?? ".";
-            string candidate = Path.Combine(dir, fileName);
-            return NativeLibrary.TryLoad(candidate, out IntPtr handle) ? handle : IntPtr.Zero;
+            return LoadOnce(Path.Combine(dir, fileName), fileName);
         });
+    }
+
+    private static readonly Dictionary<string, string> LoadFailures = [];
+
+    /// <summary>
+    /// The solvers retry on failure, but a load that failed will not work later in the session, and an attempt can hold the game. So a library is tried until it fails once, and later calls get the same error.
+    /// </summary>
+    private static IntPtr LoadOnce(string path, string fileName)
+    {
+        lock (LoadFailures)
+        {
+            if (LoadFailures.TryGetValue(fileName, out string? failure))
+                throw new DllNotFoundException(failure);
+            try
+            {
+                return NativeLibrary.Load(path);
+            }
+            catch (Exception e) when (e is DllNotFoundException or BadImageFormatException)
+            {
+                LoadFailures[fileName] = e.Message;
+                throw new DllNotFoundException(e.Message, e);
+            }
+        }
     }
 }

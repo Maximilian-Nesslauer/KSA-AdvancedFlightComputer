@@ -6,7 +6,7 @@ param(
     [string]$RepositoryRoot,
 
     [Parameter(Mandatory = $true)]
-    [ValidateSet("win-x64", "linux-x64")]
+    [ValidateSet("win-x64", "linux-x64", "osx-arm64")]
     [string]$RuntimeIdentifier,
 
     [ValidateSet("Debug", "Release")]
@@ -27,7 +27,7 @@ if (-not $ArtifactsRoot) {
 }
 $ArtifactsRoot = [IO.Path]::GetFullPath($ArtifactsRoot)
 
-$hostRid = if ($IsWindows) { "win-x64" } else { "linux-x64" }
+$hostRid = if ($IsWindows) { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }
 if ($RuntimeIdentifier -ne $hostRid) {
     throw "RuntimeIdentifier is $RuntimeIdentifier, but this host is $hostRid. Native ABI checks must run on the target platform."
 }
@@ -64,6 +64,9 @@ function Invoke-Checked {
 $nativeNames = if ($RuntimeIdentifier -eq "win-x64") {
     @("clarabel_c.dll", "scs.dll")
 }
+elseif ($RuntimeIdentifier -eq "osx-arm64") {
+    @("libclarabel_c.dylib", "libscs.dylib")
+}
 else {
     @("libclarabel_c.so", "libscs.so")
 }
@@ -86,7 +89,7 @@ foreach ($fileName in $nativeNames) {
     }
 }
 
-# Restore both runtimes to match the lock files, then build for one.
+# Restore every runtime to match the lock files, then build for one.
 # Passing --runtime to restore narrows that set and causes NU1004 in locked mode.
 $restoreArguments = @(
     "-p:Configuration=$Configuration",

@@ -1,4 +1,4 @@
-# Builds SCS from third_party/scs with Zig for Windows or Linux.
+# Builds SCS from third_party/scs with Zig for Windows, Linux or macOS.
 # Leave DLONG and SFLOAT undefined to keep 32-bit integers and 64-bit floats in the C ABI.
 # Defining either macro as 0 still changes the types because SCS tests whether it is defined.
 # CTRLC=0 leaves signal handling to the host process, and NDEBUG disables debug output.
@@ -10,8 +10,8 @@ param(
     [string]$ZigExe = "zig",
     [ValidateSet("Debug", "Release")]
     [string]$Configuration = "Release",
-    [ValidateSet("win-x64", "linux-x64")]
-    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } else { "linux-x64" }),
+    [ValidateSet("win-x64", "linux-x64", "osx-arm64")]
+    [string]$Rid = $(if ($env:OS -eq "Windows_NT") { "win-x64" } elseif ($IsMacOS) { "osx-arm64" } else { "linux-x64" }),
     [string]$OutDir
 )
 
@@ -20,13 +20,16 @@ $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $scs = Join-Path $root "../third_party/scs"
 
+# The macOS install name is fixed, because the linker would otherwise record the build path.
 $runtimes = @{
-    "win-x64"   = @{ Target = "x86_64-windows-gnu"; Library = "scs.dll";   Pic = @() }
-    "linux-x64" = @{ Target = "x86_64-linux-gnu";   Library = "libscs.so"; Pic = @("-fPIC") }
+    "win-x64"   = @{ Target = "x86_64-windows-gnu"; Library = "scs.dll";   Pic = @(); Link = @() }
+    "linux-x64" = @{ Target = "x86_64-linux-gnu";   Library = "libscs.so"; Pic = @("-fPIC"); Link = @() }
+    "osx-arm64" = @{ Target = "aarch64-macos";      Library = "libscs.dylib"; Pic = @("-fPIC"); Link = @("-Wl,-install_name,@rpath/libscs.dylib") }
 }
 $target = $runtimes[$Rid].Target
 $library = $runtimes[$Rid].Library
 $pic = $runtimes[$Rid].Pic
+$link = $runtimes[$Rid].Link
 $out = if ($OutDir) { $OutDir } else { Join-Path $root "native/$Rid" }
 
 if (-not (Get-Command $ZigExe -ErrorAction SilentlyContinue)) {
@@ -78,7 +81,7 @@ try {
     $zigArgs = @("cc", "-target", $target, "-shared") + $pic +
         $opt.Split(" ") +
         @("-DCTRLC=0", "-DNDEBUG") +
-        $includes + $sources + @($shimObj, $aaObj) +
+        $includes + $sources + @($shimObj, $aaObj) + $link +
         @("-o", (Join-Path $out $library))
     & $ZigExe @zigArgs
     if ($LASTEXITCODE -ne 0) { throw "zig cc failed with exit code $LASTEXITCODE" }

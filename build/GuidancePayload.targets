@@ -8,8 +8,8 @@
     <ModPayloadFile Include="$(OutputPath)AdvancedFlightComputer.Guidance.Scvx.dll" TargetPath="AdvancedFlightComputer.Guidance.Scvx.dll" />
   </ItemGroup>
 
-  <!-- Windows and Linux use different library names, so one mod folder can contain
-       both runtimes and each platform can load its own files. -->
+  <!-- Each platform uses different library names, so one mod folder can contain
+       every runtime and each platform can load its own files. -->
   <ItemGroup Condition="$(GuidanceNativeRids.Contains('win-x64'))">
     <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/clarabel_c.dll" TargetPath="clarabel_c.dll" />
     <GuidanceNativeFile Include="$(GuidanceNativeDir)win-x64/scs.dll" TargetPath="scs.dll" />
@@ -17,6 +17,10 @@
   <ItemGroup Condition="$(GuidanceNativeRids.Contains('linux-x64'))">
     <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libclarabel_c.so" TargetPath="libclarabel_c.so" />
     <GuidanceNativeFile Include="$(GuidanceNativeDir)linux-x64/libscs.so" TargetPath="libscs.so" />
+  </ItemGroup>
+  <ItemGroup Condition="$(GuidanceNativeRids.Contains('osx-arm64'))">
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)osx-arm64/libclarabel_c.dylib" TargetPath="libclarabel_c.dylib" />
+    <GuidanceNativeFile Include="$(GuidanceNativeDir)osx-arm64/libscs.dylib" TargetPath="libscs.dylib" />
   </ItemGroup>
 
   <ItemGroup>
