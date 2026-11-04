@@ -36,7 +36,8 @@ internal static class AscentCheck
         }
     }
 
-    internal static AscentProblem SaturnV()
+    /// <summary>launch3dof.py's Saturn V. <paramref name="offPlaneDeg"/> tilts the target plane away from the pad by that angle about the plane's line through it, which the script's own case (inclination = latitude, the pad at the plane's northernmost point) has at zero.</summary>
+    internal static AscentProblem SaturnV(double offPlaneDeg = 0.0)
     {
         double[] isp = [290.0, 421.0, 421.0];
         double[] tmax = [3.45e7, 5.00e6, 1.00e6];
@@ -70,10 +71,17 @@ internal static class AscentCheck
             TargetRadius = rt,
             TargetSpeed = Math.Sqrt(Mu / rt),
             TargetRadialRate = 0.0,
-            PlaneNormal = [Math.Sin(inc) * Math.Sin(lan), -Math.Sin(inc) * Math.Cos(lan), Math.Cos(inc)],
+            PlaneNormal = OffPlane([Math.Sin(inc) * Math.Sin(lan), -Math.Sin(inc) * Math.Cos(lan), Math.Cos(inc)], site, offPlaneDeg),
             QMax = 35000.0,
             QAlphaMax = 3500.0,
         };
+    }
+
+    /// <summary>The plane normal n turned toward the pad's radial by the angle, so the pad sits that far off the plane: n stays a unit vector because the radial is perpendicular to it.</summary>
+    private static double[] OffPlane(double[] n, double[] site, double deg)
+    {
+        double a = deg * Math.PI / 180.0, c = Math.Cos(a), s = Math.Sin(a);
+        return [c * n[0] + s * site[0], c * n[1] + s * site[1], c * n[2] + s * site[2]];
     }
 
     /// <summary>Solve a problem the game wrote out (see AscentProblemFile), optionally with fewer stages, printing the whole trace.</summary>
@@ -217,6 +225,28 @@ internal static class AscentCheck
                   $"{s.TerminalResidual[3]:F1} m, {s.TerminalResidual[4]:F3} m/s");
             Check("dynamically feasible", s.MaxDefectPosition < 35.0 && s.MaxDefectVelocity < 0.8,
                   $"{s.MaxDefectPosition:F2} m, {s.MaxDefectVelocity:F4} m/s");
+        }
+
+        // OFF THE PLANE (#90). The seed's thrust is projected into the target plane, so off it the seed's lift-off thrust leans away from the straight-up one the problem pins. The first subproblem must still be solvable, the plan must still reach the plane, and leaving the plane must cost propellant. Before the fix every case from 7 deg on failed its first subproblem and every retry after it; now 5 and 10 deg converge, and 20 deg, past what the S-IVB can turn, has only to get past the first subproblem.
+        Console.WriteLine();
+        Console.WriteLine("the pad off the target plane (#90)");
+        foreach (double off in new[] { 5.0, 10.0, 20.0 })
+        {
+            AscentSolution s = AscentScvx.Solve(SaturnV(off));
+            bool firstSolved = s.Trace.Count > 0 && s.Trace[0].Solved;
+            Console.WriteLine($"  {off:F0} deg: {s.Message}, {s.Iterations} iterations"
+                            + (s.Nodes > 0 ? $", to orbit {s.FinalMass / 1000.0:F2} t, n.r {s.TerminalResidual[3]:F1} m" : ""));
+            Check($"{off:F0} deg off: the first subproblem solves", firstSolved, s.Trace.Count > 0 ? s.Trace[0].Status : "no iterations");
+            Check($"{off:F0} deg off: no subproblem fails", s.Trace.All(t => t.Solved),
+                  $"{s.Trace.Count(t => !t.Solved)} of {s.Trace.Count} failed");
+            if (off <= 10.0)
+            {
+                Check($"{off:F0} deg off: converged", s.Converged, s.Message);
+                Check($"{off:F0} deg off: in the plane", s.Nodes > 0 && Math.Abs(s.TerminalResidual[3]) < 150.0 && Math.Abs(s.TerminalResidual[4]) < 0.2,
+                      s.Nodes > 0 ? $"{s.TerminalResidual[3]:F1} m, {s.TerminalResidual[4]:F3} m/s" : "");
+                Check($"{off:F0} deg off: costs propellant", s.Nodes > 0 && s.FinalMass < 148.5e3 - 1.0e3,
+                      s.Nodes > 0 ? $"{s.FinalMass / 1000.0:F2} t against 148.5 in the plane" : "");
+            }
         }
 
         Console.WriteLine();
