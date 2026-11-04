@@ -139,7 +139,7 @@ internal static class AscentSeed
             return new Flight(false, 0.0, 0.0);
 
         Span<double> res = stackalloc double[5];
-        c.TerminalResidual(x, res);
+        c.TerminalResidual(x, c.PlaneTurn0, res);
         double miss = res[0] * res[0] + res[3] * res[3] + res[4] * res[4];
 
         int o = (c.N - 1) * AscentCase.NX;

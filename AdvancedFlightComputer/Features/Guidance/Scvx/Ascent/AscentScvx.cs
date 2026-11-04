@@ -86,6 +86,41 @@ public sealed class AscentSolution
     /// </summary>
     public bool Usable => Converged || StallUsable;
     public bool StallUsable { get; init; }
+
+    /// <summary>How far the plan turned the target plane about the spin axis, radians, east positive (AscentProblem.PlaneTurnMin): a launch delay of -PlaneTurn / Omega for a plane fixed in space, or a LAN change for one that is not. The insertion residuals are taken in the turned plane.</summary>
+    public double PlaneTurn { get; init; }
+
+    /// <summary>
+    /// The same plan turned about the spin axis (z) by <paramref name="angle"/>, radians, east positive: positions, velocities and thrust directions; everything else is unchanged, since nothing else depends on where round the axis the plan is. A plan solved from a pad and flown <c>t</c> later, from where the spin has carried the pad, is this turned by Omega t.
+    /// </summary>
+    public AscentSolution RotatedAboutSpin(double angle)
+    {
+        if (angle == 0.0 || Nodes == 0)
+            return this;
+        double c = Math.Cos(angle), s = Math.Sin(angle);
+        double[] Turn(double[] v)
+        {
+            var o = (double[])v.Clone();
+            for (int k = 0; k + 2 < o.Length; k += 3)
+            {
+                double x = v[k], y = v[k + 1];
+                o[k] = c * x - s * y;
+                o[k + 1] = s * x + c * y;
+            }
+            return o;
+        }
+        return new AscentSolution
+        {
+            Status = Status, Message = Message, Nodes = Nodes, NodeStage = NodeStage, Time = Time,
+            Position = Turn(Position), Velocity = Turn(Velocity), Mass = Mass, Throttle = Turn(Throttle),
+            Thrust = Thrust, FullThrust = FullThrust, SolidThrust = SolidThrust, DynamicPressure = DynamicPressure,
+            QAlpha = QAlpha, AngleOfAttackDeg = AngleOfAttackDeg, BurnTime = BurnTime, StageDeltaV = StageDeltaV,
+            TerminalResidual = TerminalResidual, MaxDefectPosition = MaxDefectPosition, MaxDefectVelocity = MaxDefectVelocity,
+            MaxDefectMass = MaxDefectMass, KickDeg = KickDeg, SeedNote = SeedNote, SeedLeastMaxQ = SeedLeastMaxQ,
+            Iterations = Iterations, Accepted = Accepted, SolveSeconds = SolveSeconds, SeedSeconds = SeedSeconds, Trace = Trace,
+            GatesMet = GatesMet, RemainingGainKg = RemainingGainKg, StallUsable = StallUsable, PlaneTurn = PlaneTurn + angle,
+        };
+    }
     public double FinalMass => Mass[Nodes - 1];
     public double TotalDeltaV => StageDeltaV.Sum();
 }
@@ -122,7 +157,8 @@ public static class AscentScvx
             return Failed(problem, "cancelled", AscentStatus.Cancelled);
 
         double[] xbar = seed.X, ubar = seed.U, sigBar = (double[])seed.Sigma.Clone();
-        Merit refMerit = TrueCost(c, xbar, ubar, sigBar);
+        double phiBar = c.PlaneTurn0;
+        Merit refMerit = TrueCost(c, xbar, ubar, sigBar, phiBar);
         onPhase?.Invoke($"seed: kick {seed.KickDeg:F3} deg after {seed.Evaluations} flights{(seed.Note.Length > 0 ? " (" + seed.Note + ")" : "")}, "
                       + $"merit {refMerit.J:E3}, defect {refMerit.DefectNorm:E2}, path {refMerit.PathViolation:E2}, insertion {refMerit.TerminalViolation:E2}");
         var lin = new Linearization(c.N);
@@ -154,7 +190,7 @@ public static class AscentScvx
             AscentSubproblem.Solved sol;
             try
             {
-                sol = sub.Solve(lin, xbar, ubar, sigBar, tr);
+                sol = sub.Solve(lin, xbar, ubar, sigBar, phiBar, tr);
             }
             // A missing solver is not a numerical failure, so a smaller box cannot help. The job reports it.
             catch (DllNotFoundException)
@@ -190,8 +226,9 @@ public static class AscentScvx
             double jLin = (1.0 - sol.X[(c.N - 1) * NX + 6]) + Smoothing(c, sol.U)
                 + st.RhoVirtualControl * SumSquaresScaled(sol.Wv, c.DScale)
                 + st.RhoTerminal * SumSquares(sol.STerm)
-                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum() + sol.Sg.Sum());
-            Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma);
+                + st.RhoPath * (sol.Sq.Sum() + sol.Sqa.Sum() + sol.Spro.Sum() + sol.Sg.Sum())
+                + TurnCost(st, sol.Phi);
+            Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma, sol.Phi);
             double pred = refMerit.J - jLin;
             double actual = refMerit.J - cand.J;
             lastPred = pred;
@@ -200,7 +237,8 @@ public static class AscentScvx
             double dU = MaxScaledDiff(sol.U, ubar, [1.0, 1.0, 1.0]);
             double dS = 0.0;
             for (int s = 0; s < c.S; s++) dS = Math.Max(dS, Math.Abs(sol.Sigma[s] - sigBar[s]) / c.SigScale);
-            double used = Math.Max(dX, Math.Max(dU, dS));
+            double dP = Math.Abs(sol.Phi - phiBar) / st.PlaneTurnTrust;
+            double used = Math.Max(Math.Max(dX, dP), Math.Max(dU, dS));
 
             double rho;
             bool accept, shrink, grow;
@@ -225,6 +263,7 @@ public static class AscentScvx
                 xbar = sol.X;
                 ubar = sol.U;
                 sigBar = sol.Sigma;
+                phiBar = sol.Phi;
                 refMerit = cand;
                 accepted++;
             }
@@ -260,7 +299,7 @@ public static class AscentScvx
             message = $"no convergence in {st.MaxIterations} iterations";
 
         bool gates = GatesMet(st, refMerit);
-        return Build(c, xbar, ubar, sigBar, status, message, seed, it, accepted,
+        return Build(c, xbar, ubar, sigBar, phiBar, status, message, seed, it, accepted,
             total.Elapsed.TotalSeconds, seedSeconds, trace, gates,
             status == AscentStatus.Stalled && StallAcceptable(st, refMerit, lastPred),
             lastPred * c.Dyn.MU);
@@ -286,7 +325,10 @@ public static class AscentScvx
     /// <summary>
     /// J = fuel + smoothing + virtual-control penalty + insertion penalty + path penalty, with the TRUE nonlinear dynamics and constraints, each term of the same form and weight as its linearised counterpart in the subproblem.
     /// </summary>
-    private static Merit TrueCost(AscentCase c, double[] x, double[] u, double[] sig)
+    /// <summary>The plane turn's tie-break price, as the subproblem's objective has it (AscentSettings.PlaneTurnPrice).</summary>
+    private static double TurnCost(AscentSettings st, double phi) => st.PlaneTurnPrice * Math.Abs(phi);
+
+    private static Merit TrueCost(AscentCase c, double[] x, double[] u, double[] sig, double phi)
     {
         AscentSettings st = c.Settings;
         int n = c.N;
@@ -309,7 +351,7 @@ public static class AscentScvx
         }
 
         Span<double> res = stackalloc double[5];
-        c.TerminalResidual(x, res);
+        c.TerminalResidual(x, phi, res);
         double term = 0.0, termWorst = 0.0;
         for (int j = 0; j < 5; j++)
         {
@@ -340,7 +382,7 @@ public static class AscentScvx
         }
 
         double j0 = (1.0 - x[(n - 1) * NX + 6]) + Smoothing(c, u)
-            + st.RhoVirtualControl * defect + st.RhoTerminal * term + st.RhoPath * path;
+            + st.RhoVirtualControl * defect + st.RhoTerminal * term + st.RhoPath * path + TurnCost(st, phi);
         return new Merit(j0, worst, pathWorst, termWorst);
     }
 
@@ -412,7 +454,7 @@ public static class AscentScvx
 
     // --------------------------------------------------------------- results
 
-    private static AscentSolution Build(AscentCase c, double[] x, double[] u, double[] sig,
+    private static AscentSolution Build(AscentCase c, double[] x, double[] u, double[] sig, double phi,
                                         AscentStatus status, string message, AscentSeed.Result seed,
                                         int iterations, int accepted, double seconds, double seedSeconds,
                                         List<AscentIteration> trace, bool gatesMet, bool stallUsable, double remainingGainKg)
@@ -467,7 +509,7 @@ public static class AscentScvx
         }
 
         var res = new double[5];
-        c.TerminalResidual(x, res);
+        c.TerminalResidual(x, phi, res);
         res[0] *= d.LU;
         res[1] *= d.VU;
         res[2] *= d.LU * d.VU;
@@ -514,6 +556,7 @@ public static class AscentScvx
             SolveSeconds = seconds,
             SeedSeconds = seedSeconds,
             Trace = trace,
+            PlaneTurn = phi,
             GatesMet = gatesMet,
             StallUsable = stallUsable,
             RemainingGainKg = remainingGainKg,

@@ -36,8 +36,8 @@ internal static class AscentCheck
         }
     }
 
-    /// <summary>launch3dof.py's Saturn V. <paramref name="offPlaneDeg"/> tilts the target plane away from the pad by that angle about the plane's line through it, which the script's own case (inclination = latitude, the pad at the plane's northernmost point) has at zero.</summary>
-    internal static AscentProblem SaturnV(double offPlaneDeg = 0.0)
+    /// <summary>launch3dof.py's Saturn V. <paramref name="offPlaneDeg"/> tilts the target plane away from the pad by that angle about the plane's line through it, which the script's own case (inclination = latitude, the pad at the plane's northernmost point) has at zero. <paramref name="incDeg"/> changes the inclination, with the LAN of the plane whose ascending pass is over the pad; at the script's 28.5 deg that is its own 270 deg.</summary>
+    internal static AscentProblem SaturnV(double offPlaneDeg = 0.0, double incDeg = 28.5)
     {
         double[] isp = [290.0, 421.0, 421.0];
         double[] tmax = [3.45e7, 5.00e6, 1.00e6];
@@ -55,7 +55,10 @@ internal static class AscentCheck
         // v0 = omega x r0 + 10 m/s straight up.
         double[] v0 = [-OmegaE * r0[1] + 10.0 * site[0], OmegaE * r0[0] + 10.0 * site[1], 10.0 * site[2]];
 
-        double inc = 28.5 * Math.PI / 180.0, lan = 270.0 * Math.PI / 180.0;
+        // The ascending node is asin(tan lat / tan inc) of right ascension behind the pad, which is at right ascension zero.
+        double inc = incDeg * Math.PI / 180.0;
+        double lan = incDeg == 28.5 ? 270.0 * Math.PI / 180.0
+            : -Math.Asin(Math.Clamp(Math.Tan(lat) / Math.Tan(inc), -1.0, 1.0));
         double rt = Re + 200e3;
         return new AscentProblem
         {
@@ -106,6 +109,7 @@ internal static class AscentCheck
                 Stages = stages, Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius,
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
+                PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
             };
         }
 
@@ -122,7 +126,12 @@ internal static class AscentCheck
                 Stages = p.Stages, Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius,
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = qMax, QAlphaMax = qaMax,
+                PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
             };
+        // --turn S: free the launch time within S seconds either way, as a plane turn of Omega S (AscentProblem.PlaneTurnMin).
+        double turnS = Arg("--turn", double.NaN);
+        if (double.IsFinite(turnS))
+            p = p.WithPlaneTurn(-Math.Abs(p.Omega) * turnS, Math.Abs(p.Omega) * turnS);
         p.Settings.ThrottleMin = Arg("--floor", p.Settings.ThrottleMin);
         // --set Name=value (repeatable): any numeric or boolean AscentSettings field, to try a tuning against a dumped problem.
         for (int i = 0; i + 1 < args.Length; i++)
@@ -161,6 +170,8 @@ internal static class AscentCheck
         if (sol.Nodes > 0)
             Console.WriteLine($"to orbit {sol.FinalMass / 1000.0:F2} t, burns {string.Join(" / ", sol.BurnTime.Select(b => b.ToString("F1")))} s, "
                 + $"max q {sol.DynamicPressure.Max() / 1000.0:F1} kPa, max q-alpha {sol.QAlpha.Max():F0}, miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s");
+        if (p.PlaneTurnMin != p.PlaneTurnMax)
+            Console.WriteLine($"plane turned {sol.PlaneTurn * 180.0 / Math.PI:F3} deg: a lift-off {(p.Omega != 0.0 ? -sol.PlaneTurn / p.Omega : double.NaN):F1} s later, or that much more LAN");
         Console.WriteLine($"{(sol.Usable ? "usable" : "not usable")}: {sol.Status}, gates {(sol.GatesMet ? "met" : "not met")}, last predicted gain {sol.RemainingGainKg:F2} kg");
         return sol.Usable ? 0 : 1;
     }
@@ -249,8 +260,73 @@ internal static class AscentCheck
             }
         }
 
+        // A FREE LAUNCH TIME. The Saturn V into 51.6 deg, whose window was ten minutes ago: lifting off now is late, the pad has turned east of the plane. Not the script's 28.5 deg: there the pad is at the plane's northernmost point, where ten minutes of spin hardly moves it off the plane, and every launch time puts the same 148.5 t into orbit. Free to lift off up to twenty minutes either way, the plan must find the launch time a sweep of fixed launch times finds best, and put that much more into orbit than lifting off now. A launch delay t is the plane turned by -Omega t (AscentProblem.PlaneTurnMin), so the sweep turns the plane and the free solve reports its turn as a delay.
+        Console.WriteLine();
+        Console.WriteLine("a free launch time, the window ten minutes ago");
+        {
+            const double lateS = 600.0, freeS = 1200.0;
+            // The pad passed under the plane lateS ago, so the problem now is the unturned one lifting off lateS later: the plane turned by -Omega lateS.
+            AscentProblem Late() => SpinTurned(SaturnV(0.0, 51.6), -OmegaE * lateS);
+            AscentSolution now = AscentScvx.Solve(Late());
+            double bestDelay = double.NaN, bestMass = 0.0;
+            foreach (double delay in new[] { -1400.0, -1300.0, -1200.0, -1100.0, -1000.0, -900.0, -800.0, -700.0, -600.0 })
+            {
+                AscentSolution d = AscentScvx.Solve(SpinTurned(Late(), -OmegaE * delay));
+                Console.WriteLine($"  fixed, lifting off {delay:+0;-0} s from now: {d.Message}, {(d.Nodes > 0 ? d.FinalMass / 1000.0 : double.NaN):F2} t");
+                if (d.Converged && d.FinalMass > bestMass)
+                {
+                    bestMass = d.FinalMass;
+                    bestDelay = delay;
+                }
+            }
+            AscentSolution free = AscentScvx.Solve(Late().WithPlaneTurn(-OmegaE * freeS, OmegaE * freeS));
+            double freeDelay = -free.PlaneTurn / OmegaE;
+            Console.WriteLine($"  now: {now.Message}, {(now.Nodes > 0 ? now.FinalMass / 1000.0 : double.NaN):F2} t; "
+                            + $"free: {free.Message}, {(free.Nodes > 0 ? free.FinalMass / 1000.0 : double.NaN):F2} t, lifting off {freeDelay:+0;-0} s from now; "
+                            + $"the sweep's best {bestMass / 1000.0:F2} t at {bestDelay:+0;-0} s");
+            Check("free launch time: converged", free.Converged, free.Message);
+            Check("free launch time: as much as the sweep's best", free.Nodes > 0 && free.FinalMass > bestMass - 0.3e3,
+                  $"{free.FinalMass / 1000.0:F2} t against {bestMass / 1000.0:F2} t");
+            Check("free launch time: near the sweep's best time", Math.Abs(freeDelay - bestDelay) < 150.0,
+                  $"{freeDelay:+0;-0} s against {bestDelay:+0;-0} s");
+            Check("free launch time: beats lifting off now", now.Nodes > 0 && free.FinalMass > now.FinalMass + 1.0e3,
+                  $"{free.FinalMass / 1000.0:F2} t against {now.FinalMass / 1000.0:F2} t");
+            Check("free launch time: in the turned plane", Math.Abs(free.TerminalResidual[3]) < 150.0 && Math.Abs(free.TerminalResidual[4]) < 0.2,
+                  $"{free.TerminalResidual[3]:F1} m, {free.TerminalResidual[4]:F3} m/s");
+            Check("free launch time: within its bounds", Math.Abs(freeDelay) <= freeS + 1e-6, $"{freeDelay:F1} s");
+
+            // Turned back by the spin over the delay, the plan is the same flight from where the pad will be: in the problem's own plane, and with the turn used up.
+            AscentSolution flown = free.RotatedAboutSpin(OmegaE * freeDelay);
+            double[] n0 = Late().PlaneNormal;
+            int f = (flown.Nodes - 1) * 3;
+            double nr = n0[0] * flown.Position[f] + n0[1] * flown.Position[f + 1] + n0[2] * flown.Position[f + 2];
+            Check("free launch time: turned by the spin, in the plane itself", Math.Abs(nr) < 150.0 && Math.Abs(flown.PlaneTurn) < 1e-12,
+                  $"{nr:F1} m, turn {flown.PlaneTurn:E1} rad");
+
+            // Pinned, the variable must change nothing: the script's own run, iteration for iteration.
+            AscentSolution pinned = AscentScvx.Solve(SaturnV().WithPlaneTurn(0.0, 0.0));
+            AscentSolution plain = AscentScvx.Solve(SaturnV());
+            Check("pinned turn: the same run", pinned.Iterations == plain.Iterations && Math.Abs(pinned.FinalMass - plain.FinalMass) < 1e-6,
+                  $"{pinned.Iterations} against {plain.Iterations} iterations, {pinned.FinalMass - plain.FinalMass:E1} kg");
+        }
+
         Console.WriteLine();
         Console.WriteLine(fails == 0 ? "ALL PASS" : $"{fails} FAILED");
         return fails == 0 ? 0 : 1;
+    }
+
+    /// <summary>The problem with its target plane turned about the spin axis by <paramref name="angle"/>, radians: lifting off -angle / Omega later.</summary>
+    private static AscentProblem SpinTurned(AscentProblem p, double angle)
+    {
+        double c = Math.Cos(angle), s = Math.Sin(angle);
+        double[] n = p.PlaneNormal;
+        return new AscentProblem
+        {
+            Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0, Stages = p.Stages,
+            Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
+            TargetRadialRate = p.TargetRadialRate, PlaneNormal = [c * n[0] - s * n[1], s * n[0] + c * n[1], n[2]],
+            QMax = p.QMax, QAlphaMax = p.QAlphaMax, PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
+            LiftoffDirection = p.LiftoffDirection, Settings = p.Settings,
+        };
     }
 }

@@ -467,6 +467,11 @@ public sealed class VehicleAutopilotState
     /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. A stage burning a solid motor is held at 99 % whatever this says.</summary>
     public double ConvexThrottleMinPct = 90.0;
 
+    /// <summary>
+    /// Let the convex plan choose its own launch timing. With a target it chooses when, within ConvexTimingFreedomS of the launch window: the window's fixed lead (LanLeadSeconds) is only where it starts. Without one it chooses the LAN, starting from the plane over the pad, and the panel's LAN is set to it.
+    /// </summary>
+    public bool ConvexOptimiseTiming = true;
+
     public bool ShowConvexPlan = true;
 
     /// <summary>The plan this flight is flying, latched at EXECUTE so a recalculation cannot swap it mid-climb; and when the climb began, which fixes where the drawn plan sits.</summary>

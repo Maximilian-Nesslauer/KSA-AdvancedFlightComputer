@@ -53,6 +53,8 @@ public static class AscentProblemFile
         public double[] PlaneNormal { get; set; } = [];
         public double QMax { get; set; }
         public double QAlphaMax { get; set; }
+        public double? PlaneTurnMin { get; set; }
+        public double? PlaneTurnMax { get; set; }
     }
 
     private static readonly double[] MachSamples = AeroTable.DefaultMachBreakpoints;
@@ -93,6 +95,8 @@ public static class AscentProblemFile
             PlaneNormal = p.PlaneNormal,
             QMax = p.QMax,
             QAlphaMax = p.QAlphaMax,
+            PlaneTurnMin = p.PlaneTurnMin != 0.0 ? p.PlaneTurnMin : null,
+            PlaneTurnMax = p.PlaneTurnMax != 0.0 ? p.PlaneTurnMax : null,
         };
         if (p.Atmosphere is KsaAscentAtmosphere ksa)
         {
@@ -159,6 +163,8 @@ public static class AscentProblemFile
             PlaneNormal = dto.PlaneNormal,
             QMax = dto.QMax,
             QAlphaMax = dto.QAlphaMax,
+            PlaneTurnMin = dto.PlaneTurnMin ?? 0.0,
+            PlaneTurnMax = dto.PlaneTurnMax ?? 0.0,
         };
     }
 }

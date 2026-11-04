@@ -306,6 +306,14 @@ public sealed class AscentSettings
     /// </summary>
     public double StallAcceptGain = 1e-3;
 
+    /// <summary>The plane turn's trust box, radians per unit of trust region (see <see cref="AscentProblem.PlaneTurnMin"/>): at the largest region, 0.3, about 0.9 deg, or 3.4 minutes of Earth's spin, a step.</summary>
+    public double PlaneTurnTrust = 0.05;
+
+    /// <summary>
+    /// The price of turning the plane at all, as lift-off mass per radian of turn. A tie-break, so a plan whose propellant does not care keeps the plane, and the launch, where it was asked for rather than wandering inside the bounds; LINEAR, so it holds a flat case exactly at no turn while moving a real optimum only where the propellant it saves per radian falls below the price. A QUADRATIC price could not do both: one strong enough to hold GS-2 (whose last stage only burns its shortest allowed burn, so its mass to orbit is the same at every launch time, and which wandered 377 to 450 s late at weaker prices) held the Saturn V into 51.6 deg 160 s short of its best launch time, 50 kg down. At 1e-3 GS-2 stays exactly on its window, 2stage_controlled and NewRocket_1 leave 118 and 114 s early for the 40 and 80 kg the sweep finds there, and the Saturn V lands within 60 s of its sweep's best; 1e-4 and 3e-4 let GS-2 wander again.
+    /// </summary>
+    public double PlaneTurnPrice = 1e-3;
+
     // Seed: a flown gravity turn with a searched kick angle.
     public double PitchOverSpeed = 130.0;       // m/s, air-relative
     public double FinalBurnFraction = 0.8;
@@ -386,6 +394,23 @@ public sealed class AscentProblem
     public double QAlphaMax { get; init; } = 3500.0;
 
     /// <summary>
+    /// How far the solver may turn the target plane about the body's spin axis (z), radians, east positive; both zero hold it where <see cref="PlaneNormal"/> puts it. The plan reports the turn it chose in <see cref="AscentSolution.PlaneTurn"/>.
+    ///
+    /// ONE VARIABLE, TWO MEANINGS. The body and its air are symmetric about the spin axis and turn with it, so a lift-off delayed by t is the same problem as lifting off now into the plane turned by -Omega t: only the insertion's two plane rows read the turn. For a plane fixed in space (a target's) the turn is a launch delay, -turn / Omega. For a plane that is only an inclination, it is a change of LAN, flown now.
+    /// </summary>
+    public double PlaneTurnMin { get; init; }
+    public double PlaneTurnMax { get; init; }
+
+    /// <summary>This problem with the plane free to turn between <paramref name="min"/> and <paramref name="max"/>, radians; the settings object is shared.</summary>
+    public AscentProblem WithPlaneTurn(double min, double max) => new()
+    {
+        Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
+        Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
+        TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
+        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings,
+    };
+
+    /// <summary>
     /// Straight up at lift-off: the first thrust is pinned parallel to this. Null takes the lift-off air-relative velocity, as the script does.
     /// </summary>
     public double[]? LiftoffDirection { get; init; }
@@ -431,6 +456,8 @@ public sealed class AscentProblem
             return "the target orbit is not above the surface";
         if (!(QMax > 0.0) || !(QAlphaMax > 0.0))
             return "the structural limits must be positive";
+        if (!double.IsFinite(PlaneTurnMin) || !double.IsFinite(PlaneTurnMax) || PlaneTurnMin > PlaneTurnMax)
+            return "the plane-turn bounds are not valid";
         return "";
     }
 }
