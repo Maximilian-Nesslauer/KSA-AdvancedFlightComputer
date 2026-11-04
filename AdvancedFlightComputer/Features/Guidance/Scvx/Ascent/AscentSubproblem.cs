@@ -199,9 +199,15 @@ internal sealed class AscentSubproblem
         }
 
         // ---- per-node: throttle floor (tangent halfspace), mass floor, ground (tangent halfspace).
+        // The lift-off rows pin u_1 straight up, so its floor and its trust box are taken about straight up too (LiftoffReference), not about the reference's own direction: see there.
+        double[] u0Ref = LiftoffReference(c, ubar);
         for (int k = 0; k < n; k++)
         {
             double ux = ubar[k * NU], uy = ubar[k * NU + 1], uz = ubar[k * NU + 2];
+            if (k == 0)
+            {
+                ux = u0Ref[0]; uy = u0Ref[1]; uz = u0Ref[2];
+            }
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
             int row = ineq.NewRow(-c.ThrottleMin[c.NodeStage[k]] * floorScale[k]);
             if (un > 1e-12)
@@ -356,7 +362,7 @@ internal sealed class AscentSubproblem
             }
             for (int j = 0; j < NU; j++)
             {
-                double ub = ubar[k * NU + j];
+                double ub = k == 0 ? u0Ref[j] : ubar[k * NU + j];
                 ineq.Add(ineq.NewRow(ub + tr), IU(k, j), 1.0);
                 ineq.Add(ineq.NewRow(-ub + tr), IU(k, j), -1.0);
             }
@@ -436,6 +442,17 @@ internal sealed class AscentSubproblem
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
             x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs);
+    }
+
+    /// <summary>
+    /// The lift-off thrust the floor and the trust box are taken about: the reference's throttle, turned straight up.
+    ///
+    /// THE LIFT-OFF ROWS PIN u_1 STRAIGHT UP, SO NOTHING ELSE MAY ASK FOR A u_1 THAT IS NOT. The seed's thrust is projected into the target plane (AscentSeed.Direction, as launch3dof.py's _tdir), so off the plane its u_1 leans away from straight up by the pad's angle to the plane. Taken about that leaning u_1, the box |u_1 - u_bar_1| &lt;= tr and the floor u_bar_hat . u_1 &gt;= floor both rule out every straight-up u_1 once the lean is more than a few degrees: about 6 deg for the box at the first iteration's tr of 0.1, and acos(floor) for the floor. The first subproblem was infeasible, and so was every retry, since each one only shrank the box (#90). Turned straight up at its own throttle, the reference is itself a u_1 the problem allows. From the second iteration on u_bar_1 is straight up already, so this changes nothing there, nor for a pad in the plane.
+    /// </summary>
+    private static double[] LiftoffReference(AscentCase c, double[] ubar)
+    {
+        double mag = Math.Sqrt(ubar[0] * ubar[0] + ubar[1] * ubar[1] + ubar[2] * ubar[2]);
+        return [mag * c.LiftoffDir[0], mag * c.LiftoffDir[1], mag * c.LiftoffDir[2]];
     }
 
     /// <summary>Two unit vectors perpendicular to d and to each other.</summary>
