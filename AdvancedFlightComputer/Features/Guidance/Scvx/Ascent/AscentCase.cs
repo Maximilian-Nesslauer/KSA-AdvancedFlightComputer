@@ -24,7 +24,12 @@ internal sealed class AscentCase
     // Canonical constants.
     public readonly double[] X0 = new double[NX];
     public readonly double[] LiftoffDir = new double[3];
+    /// <summary>The target plane's normal at <see cref="PlaneTurn0"/>, the turn the solve starts from: what the seed flies into and kicks along.</summary>
     public readonly double[] Nhat = new double[3];
+    /// <summary>The problem's own plane normal, unturned. <see cref="PlaneNormal"/> turns it.</summary>
+    public readonly double[] N0 = new double[3];
+    /// <summary>The plane turn the solve starts from: none, or the nearest the bounds allow. See AscentProblem.PlaneTurnMin.</summary>
+    public readonly double PlaneTurn0, PlaneTurnMin, PlaneTurnMax;
     public readonly double[] E2 = new double[3];     // in-plane downrange at lift-off
     public readonly double RTarget, VTarget, RvTarget;
     public readonly double RFloor, MFloor;
@@ -100,7 +105,11 @@ internal sealed class AscentCase
         X0[6] = 1.0;
 
         double nn = Norm3(p.PlaneNormal);
-        for (int i = 0; i < 3; i++) Nhat[i] = p.PlaneNormal[i] / nn;
+        for (int i = 0; i < 3; i++) N0[i] = p.PlaneNormal[i] / nn;
+        PlaneTurnMin = p.PlaneTurnMin;
+        PlaneTurnMax = p.PlaneTurnMax;
+        PlaneTurn0 = Math.Clamp(0.0, PlaneTurnMin, PlaneTurnMax);
+        PlaneNormal(PlaneTurn0).CopyTo(Nhat, 0);
 
         // Straight up: the script pins the first thrust along the lift-off AIR-RELATIVE velocity, not v0 itself, which on the pad is almost all co-rotation.
         double[] up = p.LiftoffDirection ?? AirVelocity(X0);
@@ -290,17 +299,25 @@ internal sealed class AscentCase
         return [x[3] + w * x[1], x[4] - w * x[0], x[5]];
     }
 
-    /// <summary>The five TRUE insertion residuals, canonical: |r| - R, |v| - V, r.v - (r.v)*, n.r, n.v.</summary>
-    public void TerminalResidual(double[] x, Span<double> res)
+    /// <summary>The target plane's normal turned about the spin axis (z) by <paramref name="turn"/>, radians, east positive.</summary>
+    public double[] PlaneNormal(double turn)
     {
+        double c = Math.Cos(turn), s = Math.Sin(turn);
+        return [c * N0[0] - s * N0[1], s * N0[0] + c * N0[1], N0[2]];
+    }
+
+    /// <summary>The five TRUE insertion residuals, canonical: |r| - R, |v| - V, r.v - (r.v)*, n.r, n.v, with the plane turned by <paramref name="turn"/>.</summary>
+    public void TerminalResidual(double[] x, double turn, Span<double> res)
+    {
+        double[] nh = PlaneNormal(turn);
         int o = (N - 1) * NX;
         double rx = x[o], ry = x[o + 1], rz = x[o + 2];
         double vx = x[o + 3], vy = x[o + 4], vz = x[o + 5];
         res[0] = Math.Sqrt(rx * rx + ry * ry + rz * rz) - RTarget;
         res[1] = Math.Sqrt(vx * vx + vy * vy + vz * vz) - VTarget;
         res[2] = rx * vx + ry * vy + rz * vz - RvTarget;
-        res[3] = Nhat[0] * rx + Nhat[1] * ry + Nhat[2] * rz;
-        res[4] = Nhat[0] * vx + Nhat[1] * vy + Nhat[2] * vz;
+        res[3] = nh[0] * rx + nh[1] * ry + nh[2] * rz;
+        res[4] = nh[0] * vx + nh[1] * vy + nh[2] * vz;
     }
 
     public static double Norm3(ReadOnlySpan<double> v) => Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);

@@ -75,6 +75,8 @@ public static partial class GuidanceWindow
             GaugeRow("Max q-alpha (Pa rad)", "##cvxqa", ref _s.ConvexQAlphaMax);
             // The script's 99 % keeps the plan at full throttle. Lower lets it throttle the liquid stages - through max-q, typically - and the profile then flies that throttle too; solid stages stay at full thrust whatever this says.
             GaugeRow("Min throttle (%)", "##cvxthrottle", ref _s.ConvexThrottleMinPct);
+            // With a target: when to lift off, near the window. Without: the LAN, from the plane over the pad. See VehicleAutopilotState.ConvexOptimiseTiming.
+            GaugeRowCheck(_s.TargetId.Length > 0 ? "Choose launch time" : "Choose LAN", "##cvxtiming", ref _s.ConvexOptimiseTiming);
         }
         GaugeRow("UPFG from (km)", "##cvxhandover", ref _s.ConvexHandoverAltKm);
         GaugeRowCheck("Show plan", "##cvxshow", ref _s.ShowConvexPlan);
@@ -113,7 +115,7 @@ public static partial class GuidanceWindow
         using (new ImGuiDisabledScope(_s.Running))
         {
             if (ImGui.Button("CALCULATE ASCENT##cvx"))
-                RequestAscentPlan(ExecuteLaunchInstant() > SimNow() ? ExecuteLaunchInstant() : double.NaN);
+                RequestAscentPlan(WindowInstant() > SimNow() ? WindowInstant() : double.NaN);
         }
         if (_s.AscentPlan != null)
         {
@@ -145,6 +147,10 @@ public static partial class GuidanceWindow
 
         GaugeRowText("Solve", $"{sol.Message}, {sol.Iterations} iterations ({sol.Accepted} accepted), {plan.WallSeconds:F1} s",
             sol.Usable ? CvxDim : CvxWarn);
+        if (plan.LaunchDelayS != 0.0)
+            GaugeRowText("Launch time", $"{Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window");
+        else if (plan.LanChosen)
+            GaugeRowText("LAN", $"{plan.LanDeg:F2} deg, chosen for the pad");
         GaugeRowText("Stages planned", plan.StagesPlanned == plan.StagesAvailable
             ? $"{plan.StagesPlanned}"
             : $"{plan.StagesPlanned} of {plan.StagesAvailable} (the rest ride as payload)");

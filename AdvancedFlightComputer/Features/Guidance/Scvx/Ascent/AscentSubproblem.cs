@@ -17,8 +17,10 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///              r_bar_hat . r_k &gt;= R_floor,  m_k &gt;= m_floor              ground, structure
 ///              tangent q &lt;= backoff + s^q,  cone q-alpha &lt;= backoff + s^qa   where q_bar &gt; QActive
 ///              -v_rel_bar_hat . u_k &lt;= s^pro                          thrust never against the airflow, there too
-///              linearised insertion = s,  linearised prograde &gt;= 0     orbit
-///              trust box on x, u, sigma;  sigma_min &lt;= sigma &lt;= sigma_max
+///              linearised insertion = s,  linearised prograde &gt;= 0     orbit, the plane turned by phi
+///              trust box on x, u, sigma, phi;  sigma_min &lt;= sigma &lt;= sigma_max,  phi_min &lt;= phi &lt;= phi_max
+///
+/// plus PlaneTurnPrice |phi| in the objective, through a bound t &gt;= |phi|. phi turns the target plane about the spin axis, which is how a free launch time or a free LAN enters (AscentProblem.PlaneTurnMin). Pinned - both bounds equal - neither phi nor t is a variable and none of their rows is emitted, so the problem is exactly the script's: even unused, they move the interior-point path enough to change a sensitive solve.
 ///
 /// with g_k = sigma_i f_k + sigma_bar_i (A_k dx_k + B_k du_k), the time-scaled dynamics linearised in all three of sigma, x and u.
 ///
@@ -36,7 +38,9 @@ internal sealed class AscentSubproblem
     private readonly AscentCase _c;
 
     // Variable layout.
-    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _oSg, _nVar;
+    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _oSg, _oPhi, _oPhiAbs, _nVar;
+    /// <summary>The plane turn is a variable: its bounds are not equal.</summary>
+    private readonly bool _turnFree;
     private readonly int _nA;
     private readonly int[] _act;
 
@@ -54,7 +58,10 @@ internal sealed class AscentSubproblem
         _oSqa = _oSq + _nA;
         _oSpro = _oSqa + _nA;
         _oSg = _oSpro + _nA;
-        _nVar = _oSg + c.LimitedNodes.Length;
+        _oPhi = _oSg + c.LimitedNodes.Length;
+        _oPhiAbs = _oPhi + 1;
+        _turnFree = c.PlaneTurnMin < c.PlaneTurnMax;
+        _nVar = _turnFree ? _oPhiAbs + 1 : _oPhi;
     }
 
     public int VariableCount => _nVar;
@@ -68,6 +75,8 @@ internal sealed class AscentSubproblem
     private int ISqa(int a) => _oSqa + a;
     private int ISpro(int a) => _oSpro + a;
     private int ISg(int g) => _oSg + g;
+    private int IPhi => _oPhi;
+    private int IPhiAbs => _oPhiAbs;
 
     /// <summary>A growable block of rows: triplets and a right-hand side.</summary>
     private sealed class Rows
@@ -91,9 +100,9 @@ internal sealed class AscentSubproblem
 
     public sealed record Solved(bool Ok, string Status, double[] X, double[] U, double[] Wv,
                                 double[] Sigma, double[] STerm, double[] Sq, double[] Sqa, double[] Spro, double[] Sg,
-                                int SolverIterations, double SolveMs);
+                                int SolverIterations, double SolveMs, double Phi = 0.0);
 
-    public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double tr)
+    public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double phiBar, double tr)
     {
         AscentCase c = _c;
         AscentSettings st = c.Settings;
@@ -329,12 +338,20 @@ internal sealed class AscentSubproblem
             eq.Add(row, IX(f, 3), rbx); eq.Add(row, IX(f, 4), rby); eq.Add(row, IX(f, 5), rbz);
             eq.Add(row, ITerm(2), -1.0);
 
-            double[] nh = c.Nhat;
-            row = eq.NewRow(0.0);
+            // n(phi).r_f and n(phi).v_f, linearised in phi too: n(phi) ~ n_bar + (z x n_bar)(phi - phi_bar), and the cross term (z x n_bar).(r_f - r_bar)(phi - phi_bar) is second order.
+            if (!_turnFree)
+                phiBar = c.PlaneTurn0;
+            double[] nh = c.PlaneNormal(phiBar);
+            double[] dn = [-nh[1], nh[0], 0.0];
+            double dnr = dn[0] * rbx + dn[1] * rby + dn[2] * rbz;
+            double dnv = dn[0] * vbx + dn[1] * vby + dn[2] * vbz;
+            row = eq.NewRow(_turnFree ? dnr * phiBar : 0.0);
             for (int i = 0; i < 3; i++) eq.Add(row, IX(f, i), nh[i]);
+            if (_turnFree) eq.Add(row, IPhi, dnr);
             eq.Add(row, ITerm(3), -1.0);
-            row = eq.NewRow(0.0);
+            row = eq.NewRow(_turnFree ? dnv * phiBar : 0.0);
             for (int i = 0; i < 3; i++) eq.Add(row, IX(f, 3 + i), nh[i]);
+            if (_turnFree) eq.Add(row, IPhi, dnv);
             eq.Add(row, ITerm(4), -1.0);
 
             // (rb x vb).n + (vb x n).(rf - rb) + (n x rb).(vf - vb) >= 0
@@ -377,6 +394,21 @@ internal sealed class AscentSubproblem
             ineq.Add(ineq.NewRow(-c.SigMin[s]), ISig(s), -1.0);
             ineq.Add(ineq.NewRow(c.SigMax[s]), ISig(s), 1.0);
         }
+        if (_turnFree)
+        {
+            double w = tr * st.PlaneTurnTrust;
+            ineq.Add(ineq.NewRow(phiBar + w), IPhi, 1.0);
+            ineq.Add(ineq.NewRow(-phiBar + w), IPhi, -1.0);
+            ineq.Add(ineq.NewRow(c.PlaneTurnMax), IPhi, 1.0);
+            ineq.Add(ineq.NewRow(-c.PlaneTurnMin), IPhi, -1.0);
+            // t >= |phi|, which the objective prices.
+            int up = ineq.NewRow(0.0);
+            ineq.Add(up, IPhi, 1.0);
+            ineq.Add(up, IPhiAbs, -1.0);
+            int dn = ineq.NewRow(0.0);
+            ineq.Add(dn, IPhi, -1.0);
+            ineq.Add(dn, IPhiAbs, -1.0);
+        }
 
         // ---- objective.
         var cvec = new double[_nVar];
@@ -389,6 +421,8 @@ internal sealed class AscentSubproblem
         }
         for (int g = 0; g < limited.Length; g++)
             cvec[ISg(g)] = st.RhoPath;
+        if (_turnFree)
+            cvec[IPhiAbs] = st.PlaneTurnPrice;
 
         var p = new SparseCcs(_nVar, _nVar);
         double wdt = st.SmoothingWeight;
@@ -441,7 +475,7 @@ internal sealed class AscentSubproblem
         return new Solved(true, res.Status.ToString(),
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
-            x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs);
+            x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs, _turnFree ? x[_oPhi] : c.PlaneTurn0);
     }
 
     /// <summary>

@@ -40,6 +40,14 @@ public static partial class GuidanceWindow
     /// <summary>A plan flown this far from the lift-off instant it was solved for starts from a pad the body has turned under the target plane, s. A minute is a quarter of a degree of spin, which UPFG steers out after the hand-over; a calculation at 1x takes seconds.</summary>
     private const double PlanLaunchToleranceS = 60.0;
 
+    /// <summary>
+    /// How far either side of the launch window a plan with a free launch time may move its lift-off, s (VehicleAutopilotState.ConvexOptimiseTiming); for a free LAN, the same angle of the body's spin. Ten minutes brackets every best launch time measured so far: two to seven minutes ahead of the pad passing under the plane, against LanLeadSeconds' fixed three.
+    /// </summary>
+    private const double ConvexTimingFreedomS = 600.0;
+
+    /// <summary>The earliest a free launch time may lift off, s from when the plan is posed: time to solve it and arm before it arrives.</summary>
+    private const double ConvexTimingEarliestS = 60.0;
+
     // --- request and collection, from the sim step ---------------------------
 
     /// <summary>Picks up a Calculate request and collects a finished solve. Runs from the vehicle's sim step for the focused craft; a fault costs the plan, never the step.</summary>
@@ -70,6 +78,12 @@ public static partial class GuidanceWindow
             {
                 _s.AscentPlan = plan;
                 AscentSolution sol = plan.Solution;
+                // A chosen LAN is the target now: the panel shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
+                if (plan.Usable && plan.LanChosen)
+                    _s.LanDeg = plan.LanDeg;
+                string timing = !plan.Usable ? ""
+                    : plan.LaunchDelayS != 0.0 ? $" Lifts off {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window."
+                    : plan.LanChosen ? $" LAN {plan.LanDeg:F2} deg." : "";
                 // The commonest reason there is no plan: a stack with the thrust to spare cannot climb through the thick air under the q limit at full throttle, and the problem - which keeps the throttle within 1 % of full, as the script does - has no feasible trajectory. The seed search measured how low it can get.
                 string hint = !plan.Usable && sol.Nodes > 0 && double.IsFinite(sol.SeedLeastMaxQ)
                               && sol.SeedLeastMaxQ > 0.98 * plan.QMaxKpa * 1000.0
@@ -79,7 +93,7 @@ public static partial class GuidanceWindow
                     ? $" The first solve did not converge: max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was retried with looser constraints, max q {plan.QMaxKpa:F0} kPa."
                     : "";
                 _s.AscentPlanStatus = plan.Usable
-                    ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{relaxed}"
+                    ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{relaxed}"
                     : $"No converged plan: {sol.Message}.{relaxed}{hint}";
                 // More than one attempt's line means the job retried looser - a relaxed max q or another stage - and that did not converge either.
                 bool retried = plan.QRelaxed || plan.Notes.Count > 1;
@@ -92,6 +106,7 @@ public static partial class GuidanceWindow
                           + $"max q {Max(sol.DynamicPressure) / 1000.0:F1} kPa, max q-alpha {Max(sol.QAlpha):F0} Pa rad, "
                           + $"insertion miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s; "
                         : "")
+                    + (timing.Length > 0 ? timing.Trim() + " " : "")
                     + string.Join("; ", plan.Notes) + ".");
             }
             else
@@ -127,9 +142,22 @@ public static partial class GuidanceWindow
 
     // --- EXECUTE: calculate, then launch -----------------------------------------
 
-    /// <summary>The lift-off EXECUTE would commit to: the launch window's instant when there is a target to wait for, now otherwise.</summary>
-    private static double ExecuteLaunchInstant()
+    /// <summary>The launch window's instant when there is a target to wait for, now otherwise: the lift-off a plan is posed for.</summary>
+    private static double WindowInstant()
         => _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime) ? Math.Max(_s.LaunchTargetTime, SimNow()) : SimNow();
+
+    /// <summary>
+    /// The lift-off EXECUTE would commit to: the window, moved by the launch time the convex plan chose for it, if it has one for this window (AscentPlan.LaunchDelayS). The window itself stays as it is tracked, so the backup gravity turn, and a plan for another window, keep it.
+    /// </summary>
+    private static double ExecuteLaunchInstant()
+    {
+        double window = WindowInstant();
+        AscentPlan p = _s.AscentPlan;
+        if (_s.FlyConvexAscent && !_s.BackupAscent && p != null && p.Usable && p.LaunchDelayS != 0.0
+            && Math.Abs(p.WindowAt - window) <= PlanLaunchToleranceS)
+            return Math.Max(window + p.LaunchDelayS, SimNow());
+        return window;
+    }
 
     /// <summary>Ask the sim step for a plan whose lift-off is at <paramref name="launchAt"/>, sim time, or now for NaN. A solve already running is left to finish: its plan is judged when it lands.</summary>
     private static void RequestAscentPlan(double launchAt)
@@ -151,7 +179,7 @@ public static partial class GuidanceWindow
         _s.ConvexLaunchAtWindow = atWindow;
         _s.ConvexLaunchRetried = false;
         _s.ConvexLaunchFailure = "";
-        RequestAscentPlan(atWindow ? ExecuteLaunchInstant() : double.NaN);
+        RequestAscentPlan(atWindow ? WindowInstant() : double.NaN);
         GuidanceLog.Info(vehicle, $"EXECUTE: calculating the convex ascent before {(atWindow ? "arming for the launch window" : "launching")} ({why}).");
     }
 
@@ -173,7 +201,7 @@ public static partial class GuidanceWindow
             {
                 _s.ConvexLaunchRetried = true;
                 _s.ConvexLaunchPending = true;
-                RequestAscentPlan(_s.ConvexLaunchAtWindow ? launchAt : double.NaN);
+                RequestAscentPlan(_s.ConvexLaunchAtWindow ? WindowInstant() : double.NaN);
                 GuidanceLog.Info(vehicle, $"EXECUTE: the convex plan came back but does not fit the launch ({why}), calculating it again.");
                 return;
             }
@@ -335,6 +363,35 @@ public static partial class GuidanceWindow
             v = new double3(c * v.X - sn * v.Y, sn * v.X + c * v.Y, v.Z);
         }
 
+        // THE LAUNCH TIMING THE PLAN MAY CHOOSE (ConvexOptimiseTiming), as a turn of the target plane about the spin axis (AscentProblem.PlaneTurnMin): a lift-off t later is the plane turned by -omega t.
+        //  - Waiting for a target's window: when, within ConvexTimingFreedomS of the window, and not before the plan can be armed. The plane is the target's.
+        //  - No target: the LAN, within the same angle of spin, starting from the plane over the pad. The plane is only an inclination, so nothing waits.
+        //  - Launching now to a target: nothing; its plane is fixed and the lift-off is now.
+        bool freeTime = false, freeLan = false;
+        double turnMin = 0.0, turnMax = 0.0, lanDeg = _s.LanDeg;
+        if (_s.ConvexOptimiseTiming && omega > 0.0)
+        {
+            if (_s.TargetId.Length > 0 && launchAt > now)
+            {
+                double earliest = Math.Max(-ConvexTimingFreedomS, now + ConvexTimingEarliestS - launchAt);
+                double latest = ConvexTimingFreedomS;
+                if (earliest < latest)
+                {
+                    freeTime = true;
+                    turnMin = -omega * latest;
+                    turnMax = -omega * earliest;
+                }
+            }
+            else if (_s.TargetId.Length == 0)
+            {
+                freeLan = true;
+                lanDeg = LanOverhead(r, _s.IncDeg, parent);
+                normal = UpfgTarget.OrbitNormal(UpfgTarget.DegToRad(_s.IncDeg), UpfgTarget.DegToRad(lanDeg));
+                turnMin = -omega * ConvexTimingFreedomS;
+                turnMax = omega * ConvexTimingFreedomS;
+            }
+        }
+
         double groundRadius = Math.Min(bodyRadius, r.Length() - 1.0);
         double qMax = ConvexQMaxKpaUsed() * 1000.0;
         double qAlphaMax = ConvexQAlphaMaxUsed();
@@ -365,6 +422,8 @@ public static partial class GuidanceWindow
                 PlaneNormal = n0,
                 QMax = qLimit,
                 QAlphaMax = qAlphaMax,
+                PlaneTurnMin = turnMin,
+                PlaneTurnMax = turnMax,
             };
         }
 
@@ -381,12 +440,20 @@ public static partial class GuidanceWindow
         string bodyName = parent.Id;
         double solvedAt = launchAt;
         double3 startCcf = rNow.Transform(parent.GetCci2Ccf());
-        double peKm = _s.PeKm, apKm = _s.ApKm, incDeg = _s.IncDeg, lanDeg = _s.LanDeg;
+        double peKm = _s.PeKm, apKm = _s.ApKm, incDeg = _s.IncDeg;
+        bool optimiseTiming = _s.ConvexOptimiseTiming;
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
 
-        AscentPlan Publish(AscentSolution sol, int stages, double qUsed, string[] notes, double wall) => new()
+        AscentPlan Publish(AscentSolution solved, int stages, double qUsed, string[] notes, double wall)
         {
+            // A chosen launch time lifts off delay later, from where the spin has carried the pad: the same plan turned by omega delay, which is -PlaneTurn, and so back in the target's own plane. A chosen LAN flies now, in the plane turned by PlaneTurn.
+            double delay = freeTime && solved.Nodes > 0 ? -solved.PlaneTurn / omega : 0.0;
+            AscentSolution sol = freeTime ? solved.RotatedAboutSpin(-solved.PlaneTurn) : solved;
+            double lanPlanned = freeLan && solved.Nodes > 0 ? lanDeg + UpfgTarget.RadToDeg(solved.PlaneTurn) : lanDeg;
+            lanPlanned = (lanPlanned % 360.0 + 360.0) % 360.0;
+            return new AscentPlan
+            {
             Solution = sol,
             Profile = sol.Nodes > 0 ? ConvexAscentProfile.FromSolution(sol, omega, bodyRadius) : null,
             Series = AscentPlanSeries.Build(sol, omega, bodyRadius, qUsed, qAlphaMax),
@@ -395,13 +462,17 @@ public static partial class GuidanceWindow
             Body = parent,
             Omega = omega,
             BodyRadius = bodyRadius,
-            SolvedAt = solvedAt,
+            SolvedAt = solvedAt + delay,
+            WindowAt = solvedAt,
+            LaunchDelayS = delay,
+            LanChosen = freeLan,
+            OptimisedTiming = optimiseTiming,
             Mass0 = m0,
             StartCcf = startCcf,
             PeKm = peKm,
             ApKm = apKm,
             IncDeg = incDeg,
-            LanDeg = lanDeg,
+            LanDeg = lanPlanned,
             ThrottleMinPct = floor * 100.0,
             ThrottleMinRequestedPct = throttleRequestedPct,
             GLimitG = userGLimit,
@@ -418,7 +489,8 @@ public static partial class GuidanceWindow
             StagesAvailable = count,
             Notes = notes,
             WallSeconds = wall,
-        };
+            };
+        }
 
         // The whole problem, every stage, as JSON beside the temp files: the test console's --ascent-replay solves it again offline, which is how a plan that fails in the game gets diagnosed.
         string dump = "";
@@ -436,7 +508,9 @@ public static partial class GuidanceWindow
 
         GuidanceLog.Info(vehicle, $"convex ascent requested (problem {dump}): {count} stage(s) available, trying {initial} first; "
             + (launchAt > now ? $"lift-off at the window, {launchAt - now:F0} s from now; " : "")
-            + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg, "
+            + (freeTime ? $"launch time free from {-turnMax / omega:+0;-0} to {-turnMin / omega:+0;-0} s of the window; " : "")
+            + (freeLan ? $"LAN free {UpfgTarget.RadToDeg(turnMin):+0.00;-0.00} to {UpfgTarget.RadToDeg(turnMax):+0.00;-0.00} deg of the plane over the pad; " : "")
+            + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {lanDeg:F2} deg, "
             + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), "
             + $"acceleration limit {accelLimitG:F2} g (g-limit {(double.IsFinite(userGLimit) ? userGLimit.ToString("F2") + " g" : "off")}, structure {structuralGLimit:F2} g) on {allStages.Count(st => double.IsFinite(st.AccelerationLimit))} stage(s), drag area {dragArea:F1} m^2, "
             + (atmosphere != null ? $"air {atmosphere}" : "no air") + ".");
@@ -539,7 +613,8 @@ public static partial class GuidanceWindow
             why = "the target orbit has changed since it was planned";
             return false;
         }
-        if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct, UserGLimitG))
+        if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct, UserGLimitG)
+            || p.OptimisedTiming != _s.ConvexOptimiseTiming)
         {
             why = "the convex settings have changed since it was planned";
             return false;
