@@ -38,7 +38,9 @@ internal sealed class AscentSubproblem
     private readonly AscentCase _c;
 
     // Variable layout.
-    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _oSg, _oPhi, _oPhiAbs, _nVar;
+    private readonly int _oU, _oW, _oSig, _oTerm, _oSq, _oSqa, _oSpro, _oSg, _oPhi, _oPhiAbs, _oDR, _oSRec, _nVar;
+    /// <summary>A booster is brought home (AscentCase.RecStage): its reserve change and the recovery slack are variables.</summary>
+    private readonly bool _recovery;
     /// <summary>The plane turn is a variable: its bounds are not equal.</summary>
     private readonly bool _turnFree;
     private readonly int _nA;
@@ -61,7 +63,10 @@ internal sealed class AscentSubproblem
         _oPhi = _oSg + c.LimitedNodes.Length;
         _oPhiAbs = _oPhi + 1;
         _turnFree = c.PlaneTurnMin < c.PlaneTurnMax;
-        _nVar = _turnFree ? _oPhiAbs + 1 : _oPhi;
+        _oDR = _turnFree ? _oPhiAbs + 1 : _oPhi;
+        _recovery = c.RecStage >= 0;
+        _oSRec = _oDR + 1;
+        _nVar = _recovery ? _oSRec + 1 : _oDR;
     }
 
     public int VariableCount => _nVar;
@@ -77,6 +82,8 @@ internal sealed class AscentSubproblem
     private int ISg(int g) => _oSg + g;
     private int IPhi => _oPhi;
     private int IPhiAbs => _oPhiAbs;
+    private int IDR => _oDR;
+    private int ISRec => _oSRec;
 
     /// <summary>A growable block of rows: triplets and a right-hand side.</summary>
     private sealed class Rows
@@ -100,9 +107,12 @@ internal sealed class AscentSubproblem
 
     public sealed record Solved(bool Ok, string Status, double[] X, double[] U, double[] Wv,
                                 double[] Sigma, double[] STerm, double[] Sq, double[] Sqa, double[] Spro, double[] Sg,
-                                int SolverIterations, double SolveMs, double Phi = 0.0);
+                                int SolverIterations, double SolveMs, double Phi = 0.0, double DR = 0.0, double SRec = 0.0);
 
-    public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double phiBar, double tr)
+    /// <param name="drBar">The reference's reserve change, canonical (AscentCase.R0C), when a booster is brought home.</param>
+    /// <param name="need">The booster's need at the reference's separation, which the recovery row linearises; not Ok leaves the row out for this iteration, holding the reserve where it is.</param>
+    public Solved Solve(Linearization lin, double[] xbar, double[] ubar, double[] sigBar, double phiBar, double tr,
+                        double drBar = 0.0, BoostbackOracle.Need need = default)
     {
         AscentCase c = _c;
         AscentSettings st = c.Settings;
@@ -170,6 +180,9 @@ internal sealed class AscentSubproblem
                 for (int r = 0; r < NX; r++)
                 {
                     int row = eq.NewRow(r == AscentDynamics.IM ? -c.DryC[s] : 0.0);
+                    // The booster leaves with its reserve: the drop at its separation is its dry mass and the reserve, which moves with dR.
+                    if (r == AscentDynamics.IM && _recovery && s == c.RecStage)
+                        eq.Add(row, IDR, 1.0);
                     eq.Add(row, IX(k + 1, r), 1.0);
                     eq.Add(row, IX(k, r), -1.0);
                 }
@@ -187,6 +200,9 @@ internal sealed class AscentSubproblem
                 rows.Add(row, IX(c.Ends[s], 6), sign);
                 rows.Add(row, IX(c.Starts[s], 6), -sign);
             }
+            // The booster's load burns its propellant less what it keeps back: dR more kept is dR less burned.
+            if (_recovery && last == c.RecStage)
+                rows.Add(row, IDR, -sign);
         }
 
         // ---- a pinned burn time: a solid's burn, or a liquid held at full thrust, sets it.
@@ -410,6 +426,42 @@ internal sealed class AscentSubproblem
             ineq.Add(dn, IPhiAbs, -1.0);
         }
 
+        // ---- the booster's reserve: its change from the stage list's, boxed and bounded; and what the booster needs from where it separates, linearised in the separation state and time:
+        //   R0 + dR + s >= need_bar + g_r.(r - r_bar) + g_v.(v - v_bar) + g_t (t - t_bar),  t = sum of the burns to separation.
+        if (_recovery)
+        {
+            double w = tr * st.RecoveryTrust;
+            ineq.Add(ineq.NewRow(drBar + w), IDR, 1.0);
+            ineq.Add(ineq.NewRow(-drBar + w), IDR, -1.0);
+            ineq.Add(ineq.NewRow(c.RMaxC), IDR, 1.0);
+            ineq.Add(ineq.NewRow(-c.RMinC), IDR, -1.0);
+            ineq.Add(ineq.NewRow(0.0), ISRec, -1.0);
+            if (need.Ok)
+            {
+                AscentDynamics d = c.Dyn;
+                int ks = c.Ends[c.RecStage];
+                double needC = need.RequiredKg / d.MU;
+                double rhs = c.R0C - needC;
+                int row = ineq.NewRow(0.0);
+                for (int i = 0; i < 3; i++)
+                {
+                    double gr = need.GradPosition[i] * d.LU / d.MU, gv = need.GradVelocity[i] * d.VU / d.MU;
+                    ineq.Add(row, IX(ks, i), gr);
+                    ineq.Add(row, IX(ks, 3 + i), gv);
+                    rhs += gr * xbar[ks * NX + i] + gv * xbar[ks * NX + 3 + i];
+                }
+                double gt = need.GradTime * d.TU / d.MU;
+                for (int s = 0; s <= c.RecStage; s++)
+                {
+                    ineq.Add(row, ISig(s), gt);
+                    rhs += gt * sigBar[s];
+                }
+                ineq.Add(row, IDR, -1.0);
+                ineq.Add(row, ISRec, -1.0);
+                ineq.Rhs[row] = rhs;
+            }
+        }
+
         // ---- objective.
         var cvec = new double[_nVar];
         cvec[IX(n - 1, 6)] = -1.0;
@@ -423,6 +475,8 @@ internal sealed class AscentSubproblem
             cvec[ISg(g)] = st.RhoPath;
         if (_turnFree)
             cvec[IPhiAbs] = st.PlaneTurnPrice;
+        if (_recovery)
+            cvec[ISRec] = st.RhoRecovery;
 
         var p = new SparseCcs(_nVar, _nVar);
         double wdt = st.SmoothingWeight;
@@ -475,7 +529,8 @@ internal sealed class AscentSubproblem
         return new Solved(true, res.Status.ToString(),
             x[..(n * NX)], x[_oU..(_oU + n * NU)], x[_oW..(_oW + c.Coll.Length * NX)],
             x[_oSig..(_oSig + c.S)], x[_oTerm..(_oTerm + 5)], x[_oSq..(_oSq + _nA)], x[_oSqa..(_oSqa + _nA)], x[_oSpro..(_oSpro + _nA)],
-            x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs, _turnFree ? x[_oPhi] : c.PlaneTurn0);
+            x[_oSg..(_oSg + limited.Length)], res.Iterations, info.TotalMs, _turnFree ? x[_oPhi] : c.PlaneTurn0,
+            _recovery ? x[_oDR] : 0.0, _recovery ? x[_oSRec] : 0.0);
     }
 
     /// <summary>

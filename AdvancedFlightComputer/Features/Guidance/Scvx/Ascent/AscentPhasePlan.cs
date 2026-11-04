@@ -74,6 +74,11 @@ public static class AscentPhasePlan
         public required List<string> Notes { get; init; }
         /// <summary>A core was planned throttled down to outlast its boosters.</summary>
         public bool CoreThrottledDown { get; init; }
+        /// <summary>The stage whose burn-out drops the booster with its reserve - the end of the first liquid load - or -1 where no reserve can be kept (a first stage of solids alone, or pinned). A booster brought home is this stage (AscentRecovery.Stage).</summary>
+        public int ReserveStage { get; init; } = -1;
+        /// <summary>The reserve kept in it, kg, and its jettison before the reserve was added: the booster's dry mass.</summary>
+        public double ReserveKeptKg { get; init; }
+        public double BoosterDryKg { get; init; }
     }
 
     /// <param name="phases">The drain model's phases, in order; the first starts at <paramref name="m0"/>.</param>
@@ -201,7 +206,9 @@ public static class AscentPhasePlan
             }
         }
 
-        ApplyReserve(stages, reserveKg, notes);
+        int reserveStage = ReserveStage(stages);
+        double boosterDry = reserveStage >= 0 ? stages[reserveStage].JettisonMass : 0.0;
+        double kept = ApplyReserve(stages, reserveKg, notes);
 
         var startMass = new double[stages.Count];
         double mass = m0;
@@ -217,7 +224,24 @@ public static class AscentPhasePlan
             Describe = describe.ToArray(),
             Notes = notes,
             CoreThrottledDown = throttledDown,
+            ReserveStage = reserveStage,
+            ReserveKeptKg = kept,
+            BoosterDryKg = boosterDry,
         };
+    }
+
+    /// <summary>The stage that ends the first liquid load, if a reserve can be kept in it; -1 otherwise. ApplyReserve's own test.</summary>
+    private static int ReserveStage(List<AscentStage> stages)
+    {
+        if (stages.Count < 2)
+            return -1;
+        int end = 0;
+        while (end < stages.Count - 1 && stages[end].LiquidCarriesOver) end++;
+        if (end >= stages.Count - 1)
+            return -1;
+        AscentStage s = stages[end];
+        double solid = s.Solid?.Propellant(0.0, s.FixedBurnTime) ?? 0.0;
+        return s.HasLiquid && !s.IsPinned && s.Solid == null && s.PropellantMass - solid > 0.0 ? end : -1;
     }
 
     /// <summary>
@@ -320,10 +344,10 @@ public static class AscentPhasePlan
     /// <summary>
     /// Keeps the booster reserve out of the first liquid load: the stage that ends it burns that much less and drops it instead. Nothing to keep back from solids.
     /// </summary>
-    private static void ApplyReserve(List<AscentStage> stages, double reserveKg, List<string> notes)
+    private static double ApplyReserve(List<AscentStage> stages, double reserveKg, List<string> notes)
     {
         if (!(reserveKg > 0.0) || stages.Count == 0)
-            return;
+            return 0.0;
         int end = 0;
         while (end < stages.Count - 1 && stages[end].LiquidCarriesOver) end++;
         AscentStage s = stages[end];
@@ -332,11 +356,12 @@ public static class AscentPhasePlan
         if (!s.HasLiquid || s.IsPinned || !(liquid > 0.0))
         {
             notes.Add("the booster reserve is not applied: the first stage has no liquid load that its own burn-out ends");
-            return;
+            return 0.0;
         }
         // The same guard UPFG keeps: never past 98 % of the load.
         double kept = Math.Min(reserveKg, 0.98 * liquid);
         stages[end] = s.With(s.PropellantMass - kept, s.JettisonMass + kept, s.LiquidCarriesOver);
+        return kept;
     }
 
     private static string Describe(AscentPhase ph, AscentSolidBurn table, double sigma, double grain, double liquid, string? core)

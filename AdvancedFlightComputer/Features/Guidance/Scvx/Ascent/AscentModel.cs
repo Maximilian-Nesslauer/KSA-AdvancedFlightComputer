@@ -314,6 +314,22 @@ public sealed class AscentSettings
     /// </summary>
     public double PlaneTurnPrice = 1e-3;
 
+    /// <summary>
+    /// The booster reserve's trust box, as lift-off mass per unit of trust region (AscentProblem.Recovery).
+    ///
+    /// NOT TIGHT. The reserve enters the subproblem only through linear rows - the stage's burn and the drop at separation - so it needs no box of its own beyond keeping a step near where the booster's need was linearised. At 0.02 a trust region shrunk by an unrelated rejection to 0.002 let it move 6.5 kg a step on a 164 t stack, and the solve stopped when its gain per step fell below PredictedTolerance, keeping 16 t for a booster that needed 4 t. At 0.2 the same problem converges in 43 iterations with the reserve at the need.
+    /// </summary>
+    public double RecoveryTrust = 0.2;
+
+    /// <summary>Solve a booster's free reserve from the plan with the reserve held as set, rather than from a seed (AscentScvx.Solve).</summary>
+    public bool RecoveryWarmStart = true;
+
+    /// <summary>Price of the recovery row's slack, per unit of lift-off mass the booster is short. Far above the propellant's own price of one, so a plan never buys mass to orbit by leaving the booster short.</summary>
+    public double RhoRecovery = 1e3;
+
+    /// <summary>The recovery gate: the booster may be short by at most this fraction of the lift-off mass. 1e-4 is 16 kg on a 160 t stack.</summary>
+    public double RecoveryTolerance = 1e-4;
+
     // Seed: a flown gravity turn with a searched kick angle.
     public double PitchOverSpeed = 130.0;       // m/s, air-relative
     public double FinalBurnFraction = 0.8;
@@ -401,13 +417,44 @@ public sealed class AscentProblem
     public double PlaneTurnMin { get; init; }
     public double PlaneTurnMax { get; init; }
 
+    /// <summary>A booster the plan brings home, whose reserve the solve then chooses (AscentRecovery); null keeps the stage list's reserve fixed.</summary>
+    public AscentRecovery? Recovery { get; init; }
+
+    /// <summary>This problem with <paramref name="recovery"/> as its booster, or none; the settings object is shared.</summary>
+    public AscentProblem WithRecovery(AscentRecovery? recovery) => new()
+    {
+        Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
+        Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
+        TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
+        PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+        Recovery = recovery,
+    };
+
+    /// <summary>This problem with its booster's reserve starting at <paramref name="reserveKg"/> instead (AscentProblem.Recovery): that much less burned in its stage and that much more dropped with it.</summary>
+    public AscentProblem WithInitialReserve(double reserveKg)
+    {
+        AscentRecovery rec = Recovery ?? throw new InvalidOperationException("no booster to keep a reserve in");
+        var stages = (AscentStage[])Stages.Clone();
+        AscentStage b = stages[rec.Stage];
+        double d = reserveKg - rec.InitialReserveKg;
+        stages[rec.Stage] = b.With(b.PropellantMass - d, b.JettisonMass + d, b.LiquidCarriesOver);
+        return new AscentProblem
+        {
+            Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = stages,
+            Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
+            TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
+            PlaneTurnMin = PlaneTurnMin, PlaneTurnMax = PlaneTurnMax, LiftoffDirection = LiftoffDirection, Settings = Settings,
+            Recovery = rec.WithInitialReserve(reserveKg),
+        };
+    }
+
     /// <summary>This problem with the plane free to turn between <paramref name="min"/> and <paramref name="max"/>, radians; the settings object is shared.</summary>
     public AscentProblem WithPlaneTurn(double min, double max) => new()
     {
         Mu = Mu, BodyRadius = BodyRadius, Omega = Omega, R0 = R0, V0 = V0, M0 = M0, Stages = Stages,
         Atmosphere = Atmosphere, GroundRadius = GroundRadius, TargetRadius = TargetRadius, TargetSpeed = TargetSpeed,
         TargetRadialRate = TargetRadialRate, PlaneNormal = PlaneNormal, QMax = QMax, QAlphaMax = QAlphaMax,
-        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings,
+        PlaneTurnMin = min, PlaneTurnMax = max, LiftoffDirection = LiftoffDirection, Settings = Settings, Recovery = Recovery,
     };
 
     /// <summary>
@@ -458,6 +505,8 @@ public sealed class AscentProblem
             return "the structural limits must be positive";
         if (!double.IsFinite(PlaneTurnMin) || !double.IsFinite(PlaneTurnMax) || PlaneTurnMin > PlaneTurnMax)
             return "the plane-turn bounds are not valid";
+        if (Recovery != null && Recovery.Validate(this) is { Length: > 0 } recovery)
+            return recovery;
         return "";
     }
 }

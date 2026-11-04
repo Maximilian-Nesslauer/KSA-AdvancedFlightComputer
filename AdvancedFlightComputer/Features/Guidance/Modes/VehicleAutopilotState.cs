@@ -472,6 +472,11 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool ConvexOptimiseTiming = true;
 
+    /// <summary>
+    /// Let the convex plan size the booster reserve (#84): with a reserve set, and a booster that can fly home, the plan keeps whatever the booster needs from where the plan separates it - its boostback to the site and a landing burn of LandingFactor times its terminal velocity - and chooses the separation knowing that. The reserve on the panel is then only where the solve starts.
+    /// </summary>
+    public bool ConvexPlanRecovery = true;
+
     public bool ShowConvexPlan = true;
 
     /// <summary>The plan this flight is flying, latched at EXECUTE so a recalculation cannot swap it mid-climb; and when the climb began, which fixes where the drawn plan sits.</summary>

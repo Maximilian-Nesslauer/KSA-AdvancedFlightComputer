@@ -81,6 +81,9 @@ public static partial class GuidanceWindow
                 // A chosen LAN is the target now: the panel shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
                 if (plan.Usable && plan.LanChosen)
                     _s.LanDeg = plan.LanDeg;
+                string booster = plan.Usable && double.IsFinite(sol.RecoveryReserveKg)
+                    ? $" Booster keeps {sol.RecoveryReserveKg / 1000.0:F2} t for a {sol.BoostbackDv:F0} m/s boostback and a {sol.LandingDv:F0} m/s landing."
+                    : "";
                 string timing = !plan.Usable ? ""
                     : plan.LaunchDelayS != 0.0 ? $" Lifts off {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window."
                     : plan.LanChosen ? $" LAN {plan.LanDeg:F2} deg." : "";
@@ -93,7 +96,7 @@ public static partial class GuidanceWindow
                     ? $" The first solve did not converge: max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was retried with looser constraints, max q {plan.QMaxKpa:F0} kPa."
                     : "";
                 _s.AscentPlanStatus = plan.Usable
-                    ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{relaxed}"
+                    ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}"
                     : $"No converged plan: {sol.Message}.{relaxed}{hint}";
                 // More than one attempt's line means the job retried looser - a relaxed max q or another stage - and that did not converge either.
                 bool retried = plan.QRelaxed || plan.Notes.Count > 1;
@@ -107,6 +110,7 @@ public static partial class GuidanceWindow
                           + $"insertion miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s; "
                         : "")
                     + (timing.Length > 0 ? timing.Trim() + " " : "")
+                    + (booster.Length > 0 ? booster.Trim() + " " : "")
                     + string.Join("; ", plan.Notes) + ".");
             }
             else
@@ -398,6 +402,43 @@ public static partial class GuidanceWindow
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
+        // THE BOOSTER THE PLAN BRINGS HOME (ConvexPlanRecovery): with the reserve armed - the next separation drops every burning engine - and a booster that can fly itself (a command pod on the side that leaves), the plan sizes the reserve instead of taking it as set. Its site is the one set for that stage, or the pad; at lift-off, like the pad, it has turned with the body to the launch.
+        AscentRecovery recovery = null;
+        string recoveryNote = "";
+        if (_s.ConvexPlanRecovery && _s.ReserveArmed && stagePlan.ReserveStage >= 0)
+        {
+            ReturnableStage booster = _s.ReturnableStages.Find(st => st.IsNext);
+            if (booster == null)
+                recoveryNote = "booster reserve fixed: the booster has no command pod to fly home with";
+            else if (aero.Table == null || aero.Atmosphere == null)
+                recoveryNote = "booster reserve fixed: no air to fly it home through";
+            else
+            {
+                double latDeg = booster.HasTarget ? booster.TargetLatDeg : _s.SiteLatDeg;
+                double lonDeg = booster.HasTarget ? booster.TargetLonDeg : _s.SiteLonDeg;
+                double3 site = (SiteDirCcfAt(latDeg, lonDeg) * bodyRadius).Transform(parent.GetCcf2Cci());
+                double turn = omega * (launchAt - now);
+                double cs = Math.Cos(turn), sn = Math.Sin(turn);
+                site = new double3(cs * site.X - sn * site.Y, sn * site.X + cs * site.Y, site.Z);
+                AscentStage b = allStages[stagePlan.ReserveStage];
+                recovery = new AscentRecovery
+                {
+                    Stage = stagePlan.ReserveStage,
+                    InitialReserveKg = stagePlan.ReserveKeptKg,
+                    BoosterDryKg = stagePlan.BoosterDryKg,
+                    ExhaustVelocity = b.Thrust / b.MassFlow,
+                    SiteCci = [site.X, site.Y, site.Z],
+                    ReferenceArea = aero.ReferenceArea,
+                    Drag = aero.Table,
+                    Lift = aero.Lift,
+                    Alpha = GlideNominalAlpha(aero),
+                    Air = aero.Atmosphere,
+                };
+                recoveryNote = $"booster reserve sized by the plan: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) home to lat {latDeg:F3} lon {lonDeg:F3}{(booster.HasTarget ? "" : " (the pad)")}, "
+                             + $"from {stagePlan.ReserveKeptKg / 1000.0:F2} t";
+            }
+        }
+
         AscentProblem Build(int stages, double qLimit, bool[] held)
         {
             AscentStage[] list = AscentPhasePlan.Truncate(allStages, stages);
@@ -424,6 +465,8 @@ public static partial class GuidanceWindow
                 QAlphaMax = qAlphaMax,
                 PlaneTurnMin = turnMin,
                 PlaneTurnMax = turnMax,
+                // Only while the booster is a lower stage: a stack planned on fewer stages carries it to the end.
+                Recovery = recovery != null && recovery.Stage < stages - 1 ? recovery : null,
             };
         }
 
@@ -441,7 +484,7 @@ public static partial class GuidanceWindow
         double solvedAt = launchAt;
         double3 startCcf = rNow.Transform(parent.GetCci2Ccf());
         double peKm = _s.PeKm, apKm = _s.ApKm, incDeg = _s.IncDeg;
-        bool optimiseTiming = _s.ConvexOptimiseTiming;
+        bool optimiseTiming = _s.ConvexOptimiseTiming, recoveryRequested = _s.ConvexPlanRecovery;
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
 
@@ -467,6 +510,7 @@ public static partial class GuidanceWindow
             LaunchDelayS = delay,
             LanChosen = freeLan,
             OptimisedTiming = optimiseTiming,
+            RecoveryRequested = recoveryRequested,
             Mass0 = m0,
             StartCcf = startCcf,
             PeKm = peKm,
@@ -510,6 +554,7 @@ public static partial class GuidanceWindow
             + (launchAt > now ? $"lift-off at the window, {launchAt - now:F0} s from now; " : "")
             + (freeTime ? $"launch time free from {-turnMax / omega:+0;-0} to {-turnMin / omega:+0;-0} s of the window; " : "")
             + (freeLan ? $"LAN free {UpfgTarget.RadToDeg(turnMin):+0.00;-0.00} to {UpfgTarget.RadToDeg(turnMax):+0.00;-0.00} deg of the plane over the pad; " : "")
+            + (recoveryNote.Length > 0 ? recoveryNote + "; " : "")
             + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {lanDeg:F2} deg, "
             + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), "
             + $"acceleration limit {accelLimitG:F2} g (g-limit {(double.IsFinite(userGLimit) ? userGLimit.ToString("F2") + " g" : "off")}, structure {structuralGLimit:F2} g) on {allStages.Count(st => double.IsFinite(st.AccelerationLimit))} stage(s), drag area {dragArea:F1} m^2, "
@@ -614,7 +659,7 @@ public static partial class GuidanceWindow
             return false;
         }
         if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct, UserGLimitG)
-            || p.OptimisedTiming != _s.ConvexOptimiseTiming)
+            || p.OptimisedTiming != _s.ConvexOptimiseTiming || p.RecoveryRequested != _s.ConvexPlanRecovery)
         {
             why = "the convex settings have changed since it was planned";
             return false;

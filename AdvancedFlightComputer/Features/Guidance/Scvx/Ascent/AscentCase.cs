@@ -48,6 +48,12 @@ internal sealed class AscentCase
     /// The propellant constraints, one per run of stages that share a liquid load: the first and last stage of the run, the canonical propellant the run burns, and whether that is exact or a ceiling. A run is exact when a free burn time ends it - its liquid load runs dry - and it is not the last; a ceiling when it is the last, or when a pinned burn ends it and its liquid can come in under the load. A run with no liquid at all needs no row: its solids' drop is fixed by the dynamics.
     /// </summary>
     public readonly (int First, int Last, double PropC, bool Exact)[] Loads;
+
+    /// <summary>The stage whose burn-out separates a booster the plan brings home (AscentProblem.Recovery), -1 for none; and its need, as the oracle prices it.</summary>
+    public readonly int RecStage = -1;
+    public readonly BoostbackOracle? Oracle;
+    /// <summary>The reserve the stage list already holds back, canonical; the solve's variable is the change from it, between <see cref="RMinC"/> and <see cref="RMaxC"/>: none at all, to the same 98 % of the stage's liquid load UPFG's reserve stops at.</summary>
+    public readonly double R0C, RMinC, RMaxC;
     /// <summary>Each node's solids, at its fixed second of its stage.</summary>
     public readonly SolidPoint[] NodeSolid;
     public readonly double SigScale;
@@ -203,6 +209,15 @@ internal sealed class AscentCase
         }
         Loads = loads.ToArray();
 
+        if (p.Recovery is AscentRecovery rec)
+        {
+            RecStage = rec.Stage;
+            Oracle = new BoostbackOracle(p, rec);
+            R0C = rec.InitialReserveKg / mu;
+            RMinC = -R0C;
+            RMaxC = Math.Max(0.0, 0.98 * (PropC[RecStage] + R0C) - R0C);
+        }
+
         NodeSolid = new SolidPoint[N];
         for (int i = 0; i < S; i++)
         {
@@ -318,6 +333,20 @@ internal sealed class AscentCase
         res[2] = rx * vx + ry * vy + rz * vz - RvTarget;
         res[3] = nh[0] * rx + nh[1] * ry + nh[2] * rz;
         res[4] = nh[0] * vx + nh[1] * vy + nh[2] * vz;
+    }
+
+    /// <summary>The booster's separation, SI, from a trajectory: position and velocity at its stage's last node, and the time since lift-off, the burns up to it.</summary>
+    public void Separation(double[] x, double[] sig, double[] r, double[] v, out double t)
+    {
+        int o = Ends[RecStage] * NX;
+        for (int i = 0; i < 3; i++)
+        {
+            r[i] = x[o + i] * Dyn.LU;
+            v[i] = x[o + 3 + i] * Dyn.VU;
+        }
+        t = 0.0;
+        for (int s = 0; s <= RecStage; s++)
+            t += sig[s] * Dyn.TU;
     }
 
     public static double Norm3(ReadOnlySpan<double> v) => Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);

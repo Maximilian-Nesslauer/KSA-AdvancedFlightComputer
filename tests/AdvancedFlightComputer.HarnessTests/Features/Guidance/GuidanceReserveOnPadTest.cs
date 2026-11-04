@@ -2,6 +2,7 @@ using System.Text.Json;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -72,6 +73,9 @@ public sealed class GuidanceReserveOnPadTest : AfcTest
             GuidanceFeature.ApplyDriverPatches(harmony);
             SharedVehicleHooks.GuidanceEnabled = true;
             GuidanceWindow.SetModActive(true);
+            // The bodies turn, and a step first: until the orbit solvers have run once the body's rotation is not the universe clock's, and the booster's site, read through it, would be an hour of spin from the pad.
+            driver.StepOrbits = true;
+            driver.Step(0.02, 2);
 
             // The pad, as the convex ascent test makes it: over the site, a few hundred metres up, turning with the ground.
             double lat = SiteLatDeg * Math.PI / 180.0, lon = SiteLonDeg * Math.PI / 180.0;
@@ -107,6 +111,10 @@ public sealed class GuidanceReserveOnPadTest : AfcTest
             state.TargetId = "";
             state.FlyConvexAscent = true;
             state.AscentReserveDvMs = ReserveDvMs;
+            // The booster comes home to the pad it lifts off from.
+            state.SiteLatDeg = SiteLatDeg;
+            state.SiteLonDeg = SiteLonDeg;
+            state.ConvexPlanRecovery = true;
             AmbientState() = state;
 
             bool unlit = true;
@@ -130,7 +138,7 @@ public sealed class GuidanceReserveOnPadTest : AfcTest
                 File.Delete(dump);
             state.AscentPlanRequested = true;
             driver.Step(0.02);
-            state.AscentPlanJob?.Cancel();
+            AscentPlanJob? job = state.AscentPlanJob;
             if (!t.Check("Calculate wrote the problem", File.Exists(dump), $"status '{state.AscentPlanStatus}'"))
                 return;
             using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(dump));
@@ -138,6 +146,39 @@ public sealed class GuidanceReserveOnPadTest : AfcTest
             t.Info($"first stage: {load:F0} kg of propellant, {planned:F0} kg planned, reserve {state.ReserveKg:F0} kg");
             t.Check("the plan keeps the reserve out of the first stage", state.ReserveKg > 0.0 && Math.Abs(load - state.ReserveKg - planned) < 0.02 * load,
                 $"{planned:F0} kg planned against {load - state.ReserveKg:F0} kg");
+
+            // THE PLAN SIZES IT (#84): the problem carries the booster, and the plan's reserve is what it needs from where the plan separates it - which the armed reserve then takes.
+            bool hasRecovery = doc.RootElement.TryGetProperty("Recovery", out JsonElement rec) && rec.ValueKind == JsonValueKind.Object;
+            if (!t.Check("the problem brings the booster home", hasRecovery))
+            {
+                job?.Cancel();
+                return;
+            }
+            double dry = rec.GetProperty("BoosterDryKg").GetDouble();
+            t.Check("at the booster's dry mass", Math.Abs(dry - state.ReserveBoosterDryKg) < 0.02 * state.ReserveBoosterDryKg,
+                $"{dry:F0} kg against {state.ReserveBoosterDryKg:F0} kg");
+            var clock = System.Diagnostics.Stopwatch.StartNew();
+            while (job != null && !job.IsDone && clock.Elapsed.TotalSeconds < 240.0)
+                Thread.Sleep(50);
+            if (!t.Check("the solve finishes", job?.IsDone == true, job?.Progress ?? "no job"))
+            {
+                job?.Cancel();
+                return;
+            }
+            driver.Step(0.02);
+            AscentPlan? plan = state.AscentPlan;
+            if (!t.Check("the plan is usable", plan?.Usable == true, $"status '{state.AscentPlanStatus}'"))
+                return;
+            AscentSolution sol = plan!.Solution;
+            t.Info($"plan: {sol.Message}, {sol.FinalMass / 1000.0:F2} t to orbit; booster keeps {sol.RecoveryReserveKg:F0} kg against a need of {sol.RecoveryRequiredKg:F0} kg "
+                 + $"({sol.BoostbackDv:F0} m/s boostback, {sol.LandingDv:F0} m/s landing), separates at T+{sol.SeparationTime:F0} s");
+            t.Check("the booster's need is met", double.IsFinite(sol.RecoveryReserveKg) && sol.RecoveryReserveKg >= sol.RecoveryRequiredKg - 50.0,
+                $"{sol.RecoveryReserveKg:F0} kg against {sol.RecoveryRequiredKg:F0} kg");
+            // The refresh is gated to 4 Hz on the wall clock; the plan landing does not mark it, so mark it here, as a staging would.
+            state.StageModelDirty = true;
+            RefreshStageModel.Invoke(null, new object[] { vehicle });
+            t.Check("the armed reserve is the plan's", state.ReserveArmed && Math.Abs(state.ReserveKg - sol.RecoveryReserveKg) < 1.0,
+                $"{state.ReserveKg:F0} kg against {sol.RecoveryReserveKg:F0} kg");
         }
         finally
         {

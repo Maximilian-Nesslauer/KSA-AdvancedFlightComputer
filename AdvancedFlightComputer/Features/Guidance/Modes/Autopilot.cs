@@ -711,6 +711,15 @@ public static partial class GuidanceWindow
         return anyLit;
     }
 
+    /// <summary>The reserve a usable convex plan for this vehicle sized for its booster, kg (AscentSolution.RecoveryReserveKg); NaN when there is none, or the gravity turn flies instead.</summary>
+    private static double PlannedBoosterReserveKg(Vehicle vehicle)
+    {
+        AscentPlan p = _s.AscentPlan;
+        if (!_s.FlyConvexAscent || _s.BackupAscent || p == null || !p.Usable || p.VehicleId != vehicle.Id)
+            return double.NaN;
+        return p.Solution.RecoveryReserveKg;
+    }
+
     /// <summary>
     /// Size the reserve and decide whether it is armed. Runs with the stage model, on
     /// its 4 Hz tick, because both inputs - the model and the part tree - only change
@@ -747,6 +756,11 @@ public static partial class GuidanceWindow
             _s.ReserveNote = why;
             return;
         }
+
+        // The convex plan sized it, for the booster it brings home (ConvexPlanRecovery): stage it there, so the booster leaves where the plan separates it. The panel's figure is then only where the next plan starts.
+        double planned = PlannedBoosterReserveKg(vehicle);
+        if (double.IsFinite(planned))
+            kg = planned;
 
         _s.ReserveKg = kg;
         _s.ReserveBoosterDryKg = boosterDry;

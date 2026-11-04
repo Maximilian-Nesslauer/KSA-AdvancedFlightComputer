@@ -77,6 +77,8 @@ public static partial class GuidanceWindow
             GaugeRow("Min throttle (%)", "##cvxthrottle", ref _s.ConvexThrottleMinPct);
             // With a target: when to lift off, near the window. Without: the LAN, from the plane over the pad. See VehicleAutopilotState.ConvexOptimiseTiming.
             GaugeRowCheck(_s.TargetId.Length > 0 ? "Choose launch time" : "Choose LAN", "##cvxtiming", ref _s.ConvexOptimiseTiming);
+            // With a booster reserve set: the plan sizes it for the booster's boostback and landing (VehicleAutopilotState.ConvexPlanRecovery).
+            GaugeRowCheck("Size booster reserve", "##cvxrecovery", ref _s.ConvexPlanRecovery);
         }
         GaugeRow("UPFG from (km)", "##cvxhandover", ref _s.ConvexHandoverAltKm);
         GaugeRowCheck("Show plan", "##cvxshow", ref _s.ShowConvexPlan);
@@ -147,6 +149,9 @@ public static partial class GuidanceWindow
 
         GaugeRowText("Solve", $"{sol.Message}, {sol.Iterations} iterations ({sol.Accepted} accepted), {plan.WallSeconds:F1} s",
             sol.Usable ? CvxDim : CvxWarn);
+        if (double.IsFinite(sol.RecoveryReserveKg))
+            GaugeRowText("Booster", $"keeps {sol.RecoveryReserveKg / 1000.0:F2} t: {sol.BoostbackDv:F0} m/s boostback + {sol.LandingDv:F0} m/s landing, separates at T+{sol.SeparationTime:F0} s",
+                sol.RecoveryReserveKg >= sol.RecoveryRequiredKg - 50.0 ? CvxDim : CvxWarn);
         if (plan.LaunchDelayS != 0.0)
             GaugeRowText("Launch time", $"{Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window");
         else if (plan.LanChosen)

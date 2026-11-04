@@ -110,6 +110,7 @@ internal static class AscentCheck
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
+                Recovery = p.Recovery is { } rc && rc.Stage < stages.Length - 1 ? rc : null,
             };
         }
 
@@ -127,6 +128,7 @@ internal static class AscentCheck
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = qMax, QAlphaMax = qaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
+                Recovery = p.Recovery,
             };
         // --turn S: free the launch time within S seconds either way, as a plane turn of Omega S (AscentProblem.PlaneTurnMin).
         double turnS = Arg("--turn", double.NaN);
@@ -170,6 +172,8 @@ internal static class AscentCheck
         if (sol.Nodes > 0)
             Console.WriteLine($"to orbit {sol.FinalMass / 1000.0:F2} t, burns {string.Join(" / ", sol.BurnTime.Select(b => b.ToString("F1")))} s, "
                 + $"max q {sol.DynamicPressure.Max() / 1000.0:F1} kPa, max q-alpha {sol.QAlpha.Max():F0}, miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s");
+        if (double.IsFinite(sol.RecoveryReserveKg))
+            Console.WriteLine($"booster keeps {sol.RecoveryReserveKg:F0} kg against a need of {sol.RecoveryRequiredKg:F0} kg: {sol.BoostbackDv:F0} m/s boostback, {sol.LandingDv:F0} m/s landing, separates at {sol.SeparationTime:F1} s");
         if (p.PlaneTurnMin != p.PlaneTurnMax)
             Console.WriteLine($"plane turned {sol.PlaneTurn * 180.0 / Math.PI:F3} deg: a lift-off {(p.Omega != 0.0 ? -sol.PlaneTurn / p.Omega : double.NaN):F1} s later, or that much more LAN");
         Console.WriteLine($"{(sol.Usable ? "usable" : "not usable")}: {sol.Status}, gates {(sol.GatesMet ? "met" : "not met")}, last predicted gain {sol.RemainingGainKg:F2} kg");
