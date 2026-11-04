@@ -74,7 +74,18 @@ public sealed class AscentSolution
     public required double SeedSeconds { get; init; }
     public required IReadOnlyList<AscentIteration> Trace { get; init; }
 
+    /// <summary>The returned reference passes every feasibility gate: dynamics defect, path limits and insertion.</summary>
+    public bool GatesMet { get; init; }
+    /// <summary>The gain the model still predicted at the last iteration, as kilograms of lift-off mass (the merit's fuel term is the final mass over the lift-off mass). NaN when no subproblem solved.</summary>
+    public double RemainingGainKg { get; init; } = double.NaN;
+
     public bool Converged => Status == AscentStatus.Converged;
+
+    /// <summary>
+    /// Fit to fly: converged, or stalled at the smallest trust region on a reference that passes every feasibility gate with less than <see cref="AscentSettings.StallAcceptGain"/> still predicted. Such a stall is a plan the solver cannot prove optimal, not one it cannot fly; see <see cref="AscentSettings.StallAcceptGain"/>.
+    /// </summary>
+    public bool Usable => Converged || StallUsable;
+    public bool StallUsable { get; init; }
     public double FinalMass => Mass[Nodes - 1];
     public double TotalDeltaV => StageDeltaV.Sum();
 }
@@ -118,6 +129,7 @@ public static class AscentScvx
         var trace = new List<AscentIteration>();
         double tr = st.TrustInitial;
         int stall = 0, accepted = 0;
+        double lastPred = double.NaN;
         AscentStatus status = AscentStatus.IterationLimit;
         string message = "";
 
@@ -168,7 +180,7 @@ public static class AscentScvx
                 if (stall >= st.StallMax)
                 {
                     status = AscentStatus.Stalled;
-                    message = "the solver keeps failing at the smallest trust region";
+                    message = "the solver keeps failing at the smallest trust region" + StallNote(c, refMerit, lastPred);
                     break;
                 }
                 continue;
@@ -182,6 +194,7 @@ public static class AscentScvx
             Merit cand = TrueCost(c, sol.X, sol.U, sol.Sigma);
             double pred = refMerit.J - jLin;
             double actual = refMerit.J - cand.J;
+            lastPred = pred;
 
             double dX = MaxScaledDiff(sol.X, xbar, c.XScale);
             double dU = MaxScaledDiff(sol.U, ubar, [1.0, 1.0, 1.0]);
@@ -228,9 +241,7 @@ public static class AscentScvx
             it++;
 
             // The feasibility gates are those of the current REFERENCE, the last accepted iterate.
-            bool feasible = refMerit.DefectNorm < st.DefectTolerance
-                         && refMerit.PathViolation < st.PathTolerance
-                         && refMerit.TerminalViolation < st.TerminalTolerance;
+            bool feasible = GatesMet(st, refMerit);
             if (pred < st.PredictedTolerance && feasible)
             {
                 status = AscentStatus.Converged;
@@ -241,16 +252,32 @@ public static class AscentScvx
             {
                 status = AscentStatus.Stalled;
                 message = $"stalled: {st.StallMax} rejections in a row at the smallest trust region, feasibility gates "
-                        + (feasible ? "met" : "not met");
+                        + (feasible ? "met" : "not met") + StallNote(c, refMerit, lastPred);
                 break;
             }
         }
         if (status == AscentStatus.IterationLimit)
             message = $"no convergence in {st.MaxIterations} iterations";
 
+        bool gates = GatesMet(st, refMerit);
         return Build(c, xbar, ubar, sigBar, status, message, seed, it, accepted,
-            total.Elapsed.TotalSeconds, seedSeconds, trace);
+            total.Elapsed.TotalSeconds, seedSeconds, trace, gates,
+            status == AscentStatus.Stalled && StallAcceptable(st, refMerit, lastPred),
+            lastPred * c.Dyn.MU);
     }
+
+    private static bool GatesMet(AscentSettings st, Merit m)
+        => m.DefectNorm < st.DefectTolerance && m.PathViolation < st.PathTolerance && m.TerminalViolation < st.TerminalTolerance;
+
+    /// <summary>A stall that is flown anyway: its reference passes every gate, and the model's last promise is small. See <see cref="AscentSettings.StallAcceptGain"/>.</summary>
+    private static bool StallAcceptable(AscentSettings st, Merit m, double lastPred)
+        => GatesMet(st, m) && double.IsFinite(lastPred) && lastPred < st.StallAcceptGain;
+
+    /// <summary>What a stall's message adds when the plan is flown anyway: how far the model still thought it could go.</summary>
+    private static string StallNote(AscentCase c, Merit m, double lastPred)
+        => StallAcceptable(c.Settings, m, lastPred)
+            ? $", so the plan is usable: the last step still promised {Math.Max(lastPred, 0.0) * c.Dyn.MU:F1} kg"
+            : "";
 
     // ------------------------------------------------------------------ merit
 
@@ -388,7 +415,7 @@ public static class AscentScvx
     private static AscentSolution Build(AscentCase c, double[] x, double[] u, double[] sig,
                                         AscentStatus status, string message, AscentSeed.Result seed,
                                         int iterations, int accepted, double seconds, double seedSeconds,
-                                        List<AscentIteration> trace)
+                                        List<AscentIteration> trace, bool gatesMet, bool stallUsable, double remainingGainKg)
     {
         int n = c.N;
         AscentDynamics d = c.Dyn;
@@ -487,6 +514,9 @@ public static class AscentScvx
             SolveSeconds = seconds,
             SeedSeconds = seedSeconds,
             Trace = trace,
+            GatesMet = gatesMet,
+            StallUsable = stallUsable,
+            RemainingGainKg = remainingGainKg,
         };
     }
 

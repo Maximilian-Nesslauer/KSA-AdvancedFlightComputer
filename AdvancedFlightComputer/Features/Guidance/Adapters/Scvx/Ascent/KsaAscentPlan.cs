@@ -403,7 +403,7 @@ public sealed class AscentPlan
     public IReadOnlyList<string> Notes { get; init; }
     public double WallSeconds { get; init; }
 
-    public bool Usable => Solution != null && Solution.Converged && Profile != null;
+    public bool Usable => Solution != null && Solution.Usable && Profile != null;
 
     /// <summary>True if the target orbit on the panel is not the one this plan was solved for.</summary>
     public bool TargetDiffers(double peKm, double apKm, double incDeg, double lanDeg)
@@ -522,7 +522,7 @@ public sealed class AscentPlanJob : IDisposable
                 if (sol.Status == AscentStatus.Cancelled)
                     break;
 
-                if (sol.Converged)
+                if (sol.Usable)
                 {
                     best = sol;
                     bestProblem = problem;
@@ -557,14 +557,14 @@ public sealed class AscentPlanJob : IDisposable
                 }
 
                 // Not converged. Keep the closest miss for the readout, but a plan that DID converge always wins.
-                if (best == null || (!best.Converged && sol.Nodes > 0
+                if (best == null || (!best.Usable && sol.Nodes > 0
                                      && (best.Nodes == 0 || TerminalMiss(sol) < TerminalMiss(best))))
                 {
                     best = sol;
                     bestK = stages;
                     bestQ = qMax;
                 }
-                if (best.Converged)
+                if (best.Usable)
                     break;
                 // Short of orbit, or no flyable seed: plan one more stage while there is one.
                 if (stages < _available)
@@ -577,7 +577,7 @@ public sealed class AscentPlanJob : IDisposable
                 break;
             }
 
-            if (best != null && best.Converged && _toHold != null && !_cts.IsCancellationRequested)
+            if (best != null && best.Usable && _toHold != null && !_cts.IsCancellationRequested)
             {
                 bool[] hold = _toHold(bestProblem, best);
                 if (hold != null && Array.IndexOf(hold, true) >= 0)
@@ -589,8 +589,8 @@ public sealed class AscentPlanJob : IDisposable
                     lock (_gate)
                         _notes.Add($"{bestK} of {_available} stages at {bestQ / 1000.0:F0} kPa, stage {which} held at full thrust: {held.Message}"
                                 + (held.Nodes > 0 ? $", {held.FinalMass / 1000.0:F2} t to orbit" : "")
-                                + (held.Converged ? "" : "; the throttled plan is kept"));
-                    if (held.Converged)
+                                + (held.Usable ? "" : "; the throttled plan is kept"));
+                    if (held.Usable)
                         best = held;
                 }
             }

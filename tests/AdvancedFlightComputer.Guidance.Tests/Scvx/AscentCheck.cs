@@ -116,7 +116,21 @@ internal static class AscentCheck
                 PlaneNormal = p.PlaneNormal, QMax = qMax, QAlphaMax = qaMax,
             };
         p.Settings.ThrottleMin = Arg("--floor", p.Settings.ThrottleMin);
-        double r0 = Math.Sqrt(p.R0.Sum(x => x * x));
+        // --set Name=value (repeatable): any numeric or boolean AscentSettings field, to try a tuning against a dumped problem.
+        for (int i = 0; i + 1 < args.Length; i++)
+        {
+            if (args[i] != "--set") continue;
+            string[] kv = args[i + 1].Split('=', 2);
+            System.Reflection.FieldInfo? fi = kv.Length == 2 ? typeof(AscentSettings).GetField(kv[0]) : null;
+            if (fi == null)
+            {
+                Console.WriteLine($"--set: no AscentSettings field '{args[i + 1]}'");
+                return 2;
+            }
+            fi.SetValue(p.Settings, Convert.ChangeType(kv[1], fi.FieldType, System.Globalization.CultureInfo.InvariantCulture));
+            Console.WriteLine($"setting {fi.Name} = {fi.GetValue(p.Settings)}");
+        }
+        double r0 =Math.Sqrt(p.R0.Sum(x => x * x));
         Console.WriteLine($"body R {p.BodyRadius / 1000.0:F1} km, mu {p.Mu:E4}, omega {p.Omega:E4}; lift-off {(r0 - p.BodyRadius):F0} m up, {p.M0 / 1000.0:F2} t");
         Console.WriteLine($"target {(p.TargetRadius - p.BodyRadius) / 1000.0:F1} km at {p.TargetSpeed:F1} m/s, r.v {p.TargetRadialRate:E3}; q {p.QMax / 1000.0:F1} kPa, q-alpha {p.QAlphaMax:F0}; floor {p.FinalMassFloor / 1000.0:F2} t");
         for (int i = 0; i < p.Stages.Length; i++)
@@ -139,7 +153,8 @@ internal static class AscentCheck
         if (sol.Nodes > 0)
             Console.WriteLine($"to orbit {sol.FinalMass / 1000.0:F2} t, burns {string.Join(" / ", sol.BurnTime.Select(b => b.ToString("F1")))} s, "
                 + $"max q {sol.DynamicPressure.Max() / 1000.0:F1} kPa, max q-alpha {sol.QAlpha.Max():F0}, miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s");
-        return sol.Converged ? 0 : 1;
+        Console.WriteLine($"{(sol.Usable ? "usable" : "not usable")}: {sol.Status}, gates {(sol.GatesMet ? "met" : "not met")}, last predicted gain {sol.RemainingGainKg:F2} kg");
+        return sol.Usable ? 0 : 1;
     }
 
     internal static int Run(bool verbose)

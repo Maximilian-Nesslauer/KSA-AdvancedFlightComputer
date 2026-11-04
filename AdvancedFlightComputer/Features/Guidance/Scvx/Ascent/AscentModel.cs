@@ -299,6 +299,13 @@ public sealed class AscentSettings
     public double Grow = 1.5;
     public int StallMax = 6;
 
+    /// <summary>
+    /// The most predicted gain, as a fraction of the lift-off mass, a stall may leave and still be flown (<see cref="AscentSolution.Usable"/>). Its reference must also pass every feasibility gate.
+    ///
+    /// A STALL WITH THE GATES MET IS A PLAN THAT CANNOT BE PROVEN OPTIMAL, NOT ONE THAT CANNOT BE FLOWN. At the smallest trust region the box cannot shrink, so each rejection repeats the same subproblem and the same step. The model's last promise can then sit above PredictedTolerance only because the curvature its linearisation leaves out is larger than the gain. #120's interstellar mk1 (a 461 km/s exhaust, 24 g limit) stalled at 6e-5, about 2 kg, on the plan that a TrustMin of 1e-4 or 2e-4, or a PredictedTolerance of 1e-4, each converge to exactly. 1e-3 (35 kg on that vehicle) allows such a stall and refuses one stopped far from the optimum. The 3-DOF entry guidance publishes a stalled cold solve inside its physical gate for the same reason.
+    /// </summary>
+    public double StallAcceptGain = 1e-3;
+
     // Seed: a flown gravity turn with a searched kick angle.
     public double PitchOverSpeed = 130.0;       // m/s, air-relative
     public double FinalBurnFraction = 0.8;
