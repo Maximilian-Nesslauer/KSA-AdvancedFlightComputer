@@ -131,10 +131,13 @@ public static partial class GuidanceWindow
             case ChaseStatus.Ok:
                 GaugeRowText("Target orbit",
                     $"{plan.TargetPeKm:F1} x {plan.TargetApKm:F1} km, inc {plan.IncDeg:F2} deg");
-                // To IGNITION, which leads the plane crossing by LanLeadSeconds.
-                GaugeRowText("Launch window",
-                    $"T-{plan.WaitSec:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")}, "
-                    + $"{LanLeadSeconds:F0} s lead)");
+                // To IGNITION, which leads the plane crossing by LanLeadSeconds - or, once the convex plan has chosen its own launch time for this window, to that.
+                double planned = ExecuteLaunchInstant() - WindowInstant();
+                GaugeRowText("Launch window", planned != 0.0
+                    ? $"T-{plan.WaitSec + planned:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")}, "
+                      + $"the plan's own time, {Math.Abs(planned):F0} s {(planned > 0.0 ? "after" : "before")} the {LanLeadSeconds:F0} s lead)"
+                    : $"T-{plan.WaitSec:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")}, "
+                      + $"{LanLeadSeconds:F0} s lead)");
                 break;
         }
 

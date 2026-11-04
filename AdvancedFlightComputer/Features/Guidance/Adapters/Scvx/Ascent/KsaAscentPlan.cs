@@ -364,8 +364,16 @@ public sealed class AscentPlan
     public object Body { get; init; }
     public double Omega { get; init; }
     public double BodyRadius { get; init; }
-    /// <summary>Sim time of the state the plan starts from - what the drawn plan is rotated forward from. The lift-off it was solved for: when it was requested, or the launch window's instant when EXECUTE armed for one.</summary>
+    /// <summary>Sim time of the state the plan starts from - what the drawn plan is rotated forward from. The lift-off it flies: when it was requested, or the launch window's instant when EXECUTE armed for one, plus <see cref="LaunchDelayS"/>.</summary>
     public double SolvedAt { get; init; }
+    /// <summary>The lift-off the problem was posed for: the launch window's instant, or the moment it was requested. A plan with a free launch time lifts off <see cref="LaunchDelayS"/> after it.</summary>
+    public double WindowAt { get; init; }
+    /// <summary>How long after <see cref="WindowAt"/> the plan lifts off, s, negative for before: the launch time it chose (VehicleAutopilotState.ConvexOptimiseTiming). Zero for a plan whose launch time was not free.</summary>
+    public double LaunchDelayS { get; init; }
+    /// <summary>The plan chose its LAN (no target, ConvexOptimiseTiming): <see cref="LanDeg"/> is that LAN, and the panel's is set to it.</summary>
+    public bool LanChosen { get; init; }
+    /// <summary>ConvexOptimiseTiming when it was planned, so a change to it asks for a new plan.</summary>
+    public bool OptimisedTiming { get; init; }
     public double Mass0 { get; init; }
     /// <summary>The lift-off position in the body-fixed frame, to tell whether the vehicle has moved since.</summary>
     public double3 StartCcf { get; init; }

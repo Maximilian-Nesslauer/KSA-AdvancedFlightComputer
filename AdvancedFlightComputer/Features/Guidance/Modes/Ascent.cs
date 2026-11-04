@@ -219,7 +219,9 @@ public static partial class GuidanceWindow
         if (_s.LaunchArmed && !double.IsNaN(_s.LaunchTargetTime))
         {
             // Ask to warp to just before the window (the warp itself needs the user's confirmation - see DrawWarpPrompt), then press EXECUTE for them. The engage/auto toggles are respected as configured, not forced.
-            double waitSec = _s.LaunchTargetTime - SimNow();
+            // The window, or the lift-off the convex plan chose near it (ExecuteLaunchInstant): LaunchTargetTime itself stays the window.
+            double fireAt = ExecuteLaunchInstant();
+            double waitSec = fireAt - SimNow();
 
             // <= rather than a window: with an absolute target this goes NEGATIVE on overshoot, so a single large warp step past the window still fires.
             if (waitSec <= 1.0)
@@ -242,7 +244,7 @@ public static partial class GuidanceWindow
             }
             else if (_s.AutoLaunch && waitSec > WarpLeadTime + 5.0 && !Universe.IsAutoWarpActive)
             {
-                RequestWarp(_s.LaunchTargetTime - WarpLeadTime, LaunchWindowWarpLabel);
+                RequestWarp(fireAt - WarpLeadTime, LaunchWindowWarpLabel);
             }
             return;
         }
