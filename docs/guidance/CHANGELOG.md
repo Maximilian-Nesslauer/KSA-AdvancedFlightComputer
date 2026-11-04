@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The convex ascent now plans the **booster reserve**. On the pad the next staging row is usually the ignition, so the reserve only armed once the engines were lit, after EXECUTE had already planned the whole first stage. The reserve then staged the booster early, and the vehicle flew below its plan all the way to the UPFG hand-over, where it pitched up sharply. The reserve now arms on the pad, so the plan burns the first stage that much shorter and drops the booster when the plan expects it.
+
 - The convex ascent no longer refuses to launch when its solve stalls on a plan that already passes every feasibility check: the dynamics, the max-q, max q-alpha and acceleration limits, and the insertion. Such a stall leaves the plan short only of proving it optimal, and it is now flown, provided the solver still expected less than 0.1 % of the lift-off mass in savings. The status says how many kilograms that was. A very high-thrust single-stage vehicle hit this after its max q was relaxed: the plan it refused was the optimum to within about 2 kg (#120).
 
 - The **AFC Guidance** menu no longer disappears when another mod, such as ModMenu, patches the menu bar. With ModMenu it is under **Mods > AFC Guidance**.
