@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The convex ascent no longer refuses to launch when its solve stalls on a plan that already passes every feasibility check: the dynamics, the max-q, max q-alpha and acceleration limits, and the insertion. Such a stall leaves the plan short only of proving it optimal, and it is now flown, provided the solver still expected less than 0.1 % of the lift-off mass in savings. The status says how many kilograms that was. A very high-thrust single-stage vehicle hit this after its max q was relaxed: the plan it refused was the optimum to within about 2 kg (#120).
+
 - The **AFC Guidance** menu no longer disappears when another mod, such as ModMenu, patches the menu bar. With ModMenu it is under **Mods > AFC Guidance**.
 
 - The optional dependency is now **KittenExtensions Continued** 0.5.3 or later instead of the original KittenExtensions, which does not load on KSA 2026.10.19.5638 and later. It applies the hyperbolic-targets and AUTOSTAGE button patches. Remove the original KittenExtensions before you install it.

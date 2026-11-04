@@ -136,7 +136,7 @@ public static partial class GuidanceWindow
         for (int k = 0; k < n; k++)
             _planPoints[k] = RotZ(new double3(sol.Position[k * 3], sol.Position[k * 3 + 1], sol.Position[k * 3 + 2]), turn);
 
-        var col = sol.Converged ? new ImColor8(255, 170, 40) : new ImColor8(255, 90, 70);
+        var col = sol.Usable ? new ImColor8(255, 170, 40) : new ImColor8(255, 90, 70);
         DrawCciPolyline(dl, _planPoints.AsSpan(0, n), col, 2.0f);
 
         foreach (int k in plan.Series.StagingNodes)

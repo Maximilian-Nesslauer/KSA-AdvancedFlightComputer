@@ -144,7 +144,7 @@ public static partial class GuidanceWindow
             return;
 
         GaugeRowText("Solve", $"{sol.Message}, {sol.Iterations} iterations ({sol.Accepted} accepted), {plan.WallSeconds:F1} s",
-            sol.Converged ? CvxDim : CvxWarn);
+            sol.Usable ? CvxDim : CvxWarn);
         GaugeRowText("Stages planned", plan.StagesPlanned == plan.StagesAvailable
             ? $"{plan.StagesPlanned}"
             : $"{plan.StagesPlanned} of {plan.StagesAvailable} (the rest ride as payload)");
