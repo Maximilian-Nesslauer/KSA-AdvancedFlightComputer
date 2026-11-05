@@ -303,8 +303,9 @@ public static partial class GuidanceWindow
         AscentPhasePlan.Result stagePlan;
         try
         {
+            // No reserve going in: a booster with a target has its reserve sized below, from nothing, and there is no other kind (RefreshReserve).
             stagePlan = AscentPhasePlan.Build(gathered.Phases, gathered.Motors, grid, m0, dragArea, floor, FullThrottleFloor,
-                                              _s.ReserveArmed ? _s.ReserveKg : 0.0, accelLimitG * StandardGravity);
+                                              0.0, accelLimitG * StandardGravity);
         }
         catch (ArgumentException e)
         {
@@ -402,20 +403,23 @@ public static partial class GuidanceWindow
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
-        // THE BOOSTER THE PLAN BRINGS HOME (ConvexPlanRecovery): with the reserve armed - the next separation drops every burning engine - and a booster that can fly itself (a command pod on the side that leaves), the plan sizes the reserve instead of taking it as set. Its site is the one set for that stage, or the pad; at lift-off, like the pad, it has turned with the body to the launch.
+        // THE BOOSTER THE PLAN BRINGS HOME: the next stage to separate has a landing target, and the reserve is armed - that separation drops every burning engine. The plan sizes its reserve from nothing, for the boostback to that target and the landing. The site has turned with the body to the launch, like the pad.
         AscentRecovery recovery = null;
         string recoveryNote = "";
-        if (_s.ConvexPlanRecovery && _s.ReserveArmed && stagePlan.ReserveStage >= 0)
+        ReturnableStage booster = BoostbackTarget();
+        string recoverySite = RecoverySiteKey(booster);
+        if (booster != null && !_s.ReserveArmed)
+            recoveryNote = $"no booster reserve: {(_s.ReserveNote.Length > 0 ? _s.ReserveNote : "not armed")}";
+        else if (booster != null && stagePlan.ReserveStage < 0)
+            recoveryNote = "no booster reserve: the stage that separates has no liquid load of its own to keep one in";
+        else if (booster != null)
         {
-            ReturnableStage booster = _s.ReturnableStages.Find(st => st.IsNext);
-            if (booster == null)
-                recoveryNote = "booster reserve fixed: the booster has no command pod to fly home with";
-            else if (aero.Table == null || aero.Atmosphere == null)
-                recoveryNote = "booster reserve fixed: no air to fly it home through";
+            if (aero.Table == null || aero.Atmosphere == null)
+                recoveryNote = "no booster reserve: no air to fly it home through";
             else
             {
-                double latDeg = booster.HasTarget ? booster.TargetLatDeg : _s.SiteLatDeg;
-                double lonDeg = booster.HasTarget ? booster.TargetLonDeg : _s.SiteLonDeg;
+                double latDeg = booster.TargetLatDeg;
+                double lonDeg = booster.TargetLonDeg;
                 double3 site = (SiteDirCcfAt(latDeg, lonDeg) * bodyRadius).Transform(parent.GetCcf2Cci());
                 double turn = omega * (launchAt - now);
                 double cs = Math.Cos(turn), sn = Math.Sin(turn);
@@ -434,8 +438,7 @@ public static partial class GuidanceWindow
                     Alpha = GlideNominalAlpha(aero),
                     Air = aero.Atmosphere,
                 };
-                recoveryNote = $"booster reserve sized by the plan: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) home to lat {latDeg:F3} lon {lonDeg:F3}{(booster.HasTarget ? "" : " (the pad)")}, "
-                             + $"from {stagePlan.ReserveKeptKg / 1000.0:F2} t";
+                recoveryNote = $"booster reserve sized by the plan: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) home to lat {latDeg:F3} lon {lonDeg:F3}";
             }
         }
 
@@ -484,7 +487,7 @@ public static partial class GuidanceWindow
         double solvedAt = launchAt;
         double3 startCcf = rNow.Transform(parent.GetCci2Ccf());
         double peKm = _s.PeKm, apKm = _s.ApKm, incDeg = _s.IncDeg;
-        bool optimiseTiming = _s.ConvexOptimiseTiming, recoveryRequested = _s.ConvexPlanRecovery;
+        bool optimiseTiming = _s.ConvexOptimiseTiming;
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
 
@@ -510,7 +513,7 @@ public static partial class GuidanceWindow
             LaunchDelayS = delay,
             LanChosen = freeLan,
             OptimisedTiming = optimiseTiming,
-            RecoveryRequested = recoveryRequested,
+            RecoverySite = recoverySite,
             Mass0 = m0,
             StartCcf = startCcf,
             PeKm = peKm,
@@ -659,9 +662,14 @@ public static partial class GuidanceWindow
             return false;
         }
         if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct, UserGLimitG)
-            || p.OptimisedTiming != _s.ConvexOptimiseTiming || p.RecoveryRequested != _s.ConvexPlanRecovery)
+            || p.OptimisedTiming != _s.ConvexOptimiseTiming)
         {
             why = "the convex settings have changed since it was planned";
+            return false;
+        }
+        if (p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
+        {
+            why = "the booster's landing target has changed since it was planned";
             return false;
         }
         double late = launchAt - p.SolvedAt;

@@ -77,8 +77,6 @@ public static partial class GuidanceWindow
             GaugeRow("Min throttle (%)", "##cvxthrottle", ref _s.ConvexThrottleMinPct);
             // With a target: when to lift off, near the window. Without: the LAN, from the plane over the pad. See VehicleAutopilotState.ConvexOptimiseTiming.
             GaugeRowCheck(_s.TargetId.Length > 0 ? "Choose launch time" : "Choose LAN", "##cvxtiming", ref _s.ConvexOptimiseTiming);
-            // With a booster reserve set: the plan sizes it for the booster's boostback and landing (VehicleAutopilotState.ConvexPlanRecovery).
-            GaugeRowCheck("Size booster reserve", "##cvxrecovery", ref _s.ConvexPlanRecovery);
         }
         GaugeRow("UPFG from (km)", "##cvxhandover", ref _s.ConvexHandoverAltKm);
         GaugeRowCheck("Show plan", "##cvxshow", ref _s.ShowConvexPlan);

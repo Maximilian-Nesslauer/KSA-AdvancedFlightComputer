@@ -500,9 +500,9 @@ public static partial class GuidanceWindow
                 }
             }
 
-            // The reserve rides the same tick: both of its inputs - the stage model and the part tree the separation walk reads - only change when staging does, and StageModelDirty is already set exactly then. So does the returnable stage list, which reads the same part tree for the same reason.
-            RefreshReserve(vehicle);
+            // The returnable stage list and the reserve ride the same tick: their inputs - the stage model and the part tree the separation walks read - only change when staging does, and StageModelDirty is already set exactly then. The list goes first, because the reserve arms on its booster's target.
             RefreshReturnableStages(vehicle);
+            RefreshReserve(vehicle);
             _s.StageModelFailures = 0;
         }
         catch (Exception ex)
@@ -562,56 +562,18 @@ public static partial class GuidanceWindow
     // TWO LEVERS, AND BOTH ARE NEEDED. UPFG never commands staging - it plans around stage boundaries, but the event itself is fired by the tanks running dry (see AutoSequence). So the reserve raises the stage's MassDry, which is what makes UPFG believe the stage is shorter and hand the difference to the upper stage; and it adds a staging CUE, which is what actually cuts the burn. Doing only the first makes UPFG plan a shorter stage and then burn straight through the reserve anyway.
 
     /// <summary>
-    /// The propellant a dV reserve costs, kg, and the booster dry mass it is measured
-    /// against. Zero when there is no separation to reserve for.
+    /// The booster's dry mass, kg: what the first real jettison in the stage model drops. Zero when there is no separation to keep a reserve for.
     ///
-    /// THE ARITHMETIC IS THE POINT. For a reserve dv left in a booster of dry mass
-    /// m_dry, the rocket equation gives ve*ln((m_dry + m_p)/m_dry) = dv, so
-    ///
-    ///     m_p = m_dry * (exp(dv/ve) - 1)
-    ///
-    /// and the UPPER STAGE IS NOT IN IT. That is not an approximation, it is the whole
-    /// reason the knob is a dV: the propellant only ever has to lift the booster, so
-    /// sizing it against the mass at staging - booster plus upper stage, the number
-    /// that is actually to hand - over-reserves by the ratio of the two. On a 20 t
-    /// booster under a 40 t upper stage, a 500 m/s reserve is 3.6 t; measured against
-    /// the 60 t stack it is 10.9 t, which is 7.3 t the ascent gave up for nothing and
-    /// 1303 m/s where 500 was asked for.
-    ///
-    /// m_dry is read straight off the stage model: the mass that goes overboard at the
-    /// first real jettison is the booster, and Coalesce has already used exactly that
-    /// discontinuity to decide the boundary is a boundary (KsaVehicleAdapter).
-    ///
-    /// ve is the stage's VACUUM exhaust velocity, with the ambient correction divided back out.
-    /// Staging happens high enough that the boostback burn is very nearly a vacuum burn,
-    /// so this is close - but it is optimistic, not conservative, and a reserve flown
-    /// low would deliver less dV than the knob says.
+    /// Read straight off the stage model: the mass that goes overboard at the first real jettison is the booster, and Coalesce has already used exactly that discontinuity to decide the boundary is a boundary (KsaVehicleAdapter).
     /// </summary>
-    private static double ReservePropellantKg(UpfgVehicle model, double dvMs,
-                                              out double boosterDryKg)
+    private static double BoosterDryKg(UpfgVehicle model)
     {
-        boosterDryKg = 0.0;
-        if (model == null || dvMs <= 0.0 || model.Stages.Count < 2)
+        if (model == null || model.Stages.Count < 2)
             return 0.0;
-
         UpfgStage first = model.Stages[0], next = model.Stages[1];
-
         // A real jettison, not a g-limit split or an engine cutting out: those leave the mass continuous and are not a booster going anywhere.
         double dropped = first.MassDry - next.MassTotal;
-        if (dropped <= 1e-4 * Math.Max(first.MassTotal, 1.0))
-            return 0.0;
-
-        double ratio = model.BurningStageThrustRatio;
-        double ve = first.Isp * 9.80665 / (ratio > 0.0 ? ratio : 1.0);
-        if (!(ve > 0.0))
-            return 0.0;
-
-        boosterDryKg = dropped;
-
-        // DELIBERATELY UNCAPPED. Capping it against the propellant still in the stage looks prudent and is in fact self-defeating: MassTotal is re-seeded from the live tanks every refresh, so "what is left" shrinks as the ascent burns, and a reserve capped at a fraction of it shrinks with it - which makes the staging test (propellant left <= reserve) one the burn can never reach. The cue has to compare a shrinking quantity against a FIXED one, so this is the fixed one.
-        //
-        // A reserve larger than the stage can give is a question the vehicle answers by staging as soon as guidance is flying, and the readout says so before it does.
-        return dropped * (Math.Exp(dvMs / ve) - 1.0);
+        return dropped > 1e-4 * Math.Max(first.MassTotal, 1.0) ? dropped : 0.0;
     }
 
     // Scratch for the separation walk, filled and consumed inside one call, never read across calls.
@@ -711,19 +673,32 @@ public static partial class GuidanceWindow
         return anyLit;
     }
 
-    /// <summary>The reserve a usable convex plan for this vehicle sized for its booster, kg (AscentSolution.RecoveryReserveKg); NaN when there is none, or the gravity turn flies instead.</summary>
+    /// <summary>The next stage to separate when it can fly home and has a landing target set (Set target on the Returnable stages list), else null. Setting one is what asks for a booster reserve.</summary>
+    internal static ReturnableStage BoostbackTarget()
+        => _s.ReturnableStages.Find(st => st.IsNext && st.HasTarget);
+
+    /// <summary>The booster and site a plan was asked to bring home to, as the plan records it (AscentPlan.RecoverySite): a target moved or cleared since makes that plan's reserve stale.</summary>
+    internal static string RecoverySiteKey(ReturnableStage booster)
+        => booster == null ? "" : $"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}";
+
+    /// <summary>The reserve a usable convex plan for this vehicle sized for its booster, for the target that booster has now, kg (AscentSolution.RecoveryReserveKg); NaN when there is none, or the gravity turn flies instead.</summary>
     private static double PlannedBoosterReserveKg(Vehicle vehicle)
     {
         AscentPlan p = _s.AscentPlan;
         if (!_s.FlyConvexAscent || _s.BackupAscent || p == null || !p.Usable || p.VehicleId != vehicle.Id)
             return double.NaN;
+        // Once flying, the target cannot move the plan - the climb is committed - but before then a plan for another site is not this booster's.
+        if (!_s.Running && p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
+            return double.NaN;
         return p.Solution.RecoveryReserveKg;
     }
 
     /// <summary>
-    /// Size the reserve and decide whether it is armed. Runs with the stage model, on
-    /// its 4 Hz tick, because both inputs - the model and the part tree - only change
+    /// Decide whether the booster reserve is armed, and how much it keeps. Runs with the stage model, on
+    /// its 4 Hz tick, because its inputs - the model and the part tree - only change
     /// when staging does, and StageModelDirty already marks that.
+    ///
+    /// NOTHING TO SET. The reserve arms when the booster that separates next has a landing target, and keeps whatever the convex plan sized for it - from nothing, for the boostback to that target and the landing (#84). Armed with no usable plan it keeps nothing, so the booster burns out as before: only the plan knows what bringing it home costs.
     /// </summary>
     private static void RefreshReserve(Vehicle vehicle)
     {
@@ -731,7 +706,7 @@ public static partial class GuidanceWindow
         _s.ReserveBoosterDryKg = 0.0;
         _s.ReserveArmed = false;
 
-        if (!(_s.AscentReserveDvMs > 0.0))
+        if (BoostbackTarget() == null)
         {
             _s.ReserveNote = "";
             return;
@@ -744,11 +719,10 @@ public static partial class GuidanceWindow
             return;
         }
 
-        double kg = ReservePropellantKg(_s.StageModel, _s.AscentReserveDvMs,
-                                        out double boosterDry);
-        if (!(kg > 0.0))
+        double boosterDry = BoosterDryKg(_s.StageModel);
+        if (!(boosterDry > 0.0))
         {
-            _s.ReserveNote = "no separation in the stage model to reserve for";
+            _s.ReserveNote = "no separation in the stage model to keep a reserve for";
             return;
         }
         if (!NextSeparationDropsAllEngines(vehicle, out string why))
@@ -757,21 +731,14 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // The convex plan sized it, for the booster it brings home (ConvexPlanRecovery): stage it there, so the booster leaves where the plan separates it. The panel's figure is then only where the next plan starts.
+        // The convex plan sized it for the booster it brings home: stage it there, so the booster leaves where the plan separates it.
         double planned = PlannedBoosterReserveKg(vehicle);
-        if (double.IsFinite(planned))
-            kg = planned;
+        double kg = double.IsFinite(planned) ? planned : 0.0;
 
         _s.ReserveKg = kg;
         _s.ReserveBoosterDryKg = boosterDry;
         _s.ReserveArmed = true;
-
-        // Not a refusal - the vehicle will stage the moment it is flying, which is the right answer to "leave more behind than this stage holds" - but it is not what anyone means to ask for, so it is said out loud rather than discovered.
-        double left = Math.Max(_s.StageModel.Stages[0].MassTotal
-                             - _s.StageModel.Stages[0].MassDry, 0.0);
-        _s.ReserveNote = kg >= left
-            ? $"reserve is more than the {left / 1000.0:F1} t left in this stage"
-            : "";
+        _s.ReserveNote = double.IsFinite(planned) ? "" : "sized when the convex plan is calculated";
     }
 
     /// <summary>

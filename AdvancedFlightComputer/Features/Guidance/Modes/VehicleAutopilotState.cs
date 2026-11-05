@@ -200,21 +200,9 @@ public sealed class VehicleAutopilotState
 
     // Ascent propellant reserve for a returning booster.
 
-    /// <summary>
-    /// dV to leave in the first stage for its own return, m/s. Zero switches it off.
-    ///
-    /// MEASURED AGAINST THE BOOSTER, NOT THE STACK, which is the whole point of
-    /// expressing it as dV rather than as kilograms. The propellant a given dV costs is
-    /// m_boosterDry * (exp(dv/ve) - 1) - the upper stage cancels out of the rocket
-    /// equation entirely - and sizing it against the stack instead over-reserves by the
-    /// ratio of the two masses. On a 20 t booster under a 40 t upper stage that is
-    /// three times too much propellant and 2.6 times the dV asked for. See
-    /// GuidanceWindow.ReservePropellantKg.
-    /// </summary>
-    public double AscentReserveDvMs;
+    // There is no reserve to set. A booster with a landing target (Set target on the Returnable stages list) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
 
-    /// <summary>What that dV costs at the current staging geometry, kg. Recomputed with
-    /// the stage model; zero when the reserve is not armed.</summary>
+    /// <summary>The propellant the booster keeps for its return, kg: what the convex plan sized for it. Zero while armed with no usable plan yet, and when the reserve is not armed.</summary>
     public double ReserveKg;
 
     /// <summary>The booster's own dry mass, kg - the mass the next separation drops.
@@ -471,11 +459,6 @@ public sealed class VehicleAutopilotState
     /// Let the convex plan choose its own launch timing. With a target it chooses when, within ConvexTimingFreedomS of the launch window: the window's fixed lead (LanLeadSeconds) is only where it starts. Without one it chooses the LAN, starting from the plane over the pad, and the panel's LAN is set to it.
     /// </summary>
     public bool ConvexOptimiseTiming = true;
-
-    /// <summary>
-    /// Let the convex plan size the booster reserve (#84): with a reserve set, and a booster that can fly home, the plan keeps whatever the booster needs from where the plan separates it - its boostback to the site and a landing burn of LandingFactor times its terminal velocity - and chooses the separation knowing that. The reserve on the panel is then only where the solve starts.
-    /// </summary>
-    public bool ConvexPlanRecovery = true;
 
     public bool ShowConvexPlan = true;
 

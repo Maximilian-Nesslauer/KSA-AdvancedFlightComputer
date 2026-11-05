@@ -30,9 +30,10 @@ public static partial class GuidanceWindow
         ImGui.Separator();
 
         DrawTargetOrbitSection(vehicle, orbit, parent, bodyRadius, innerW);
+        // Where the boosters come home to, beside where the vehicle is going: a target set here is what asks the convex plan for a booster reserve.
+        DrawReturnableStagesSection(innerW);
         DrawConvexAscentSection(vehicle, orbit, parent, innerW);
         DrawAscentSettingsSection(innerW);
-        DrawReturnableStagesSection(innerW);
         DrawExpertSettingsSection(innerW);
     }
 
@@ -244,44 +245,7 @@ public static partial class GuidanceWindow
         using (new ImGuiDisabledScope(!_s.ForceRoll))
             GaugeRow("Roll angle (deg)", "##rollangle", ref _s.ForceRollDeg);
 
-        DrawBoosterReserve();
-
         ImGuiHelper.EndRegion();
-    }
-
-    // --- Booster reserve ----------------------------------------------------
-
-    /// <summary>
-    /// Stage the first stage EARLY, leaving it the dV it needs to fly itself home, and hand it to boostback with the landing site. Zero switches it off.
-    ///  A dV RATHER THAN A MASS, and the readout shows both numbers for the same reason:
-    /// what a reserve costs depends on what it has to lift, and that is the booster alone - m_dry * (exp(dv/ve) - 1), with the upper stage cancelling out of the rocket equation entirely. So a reserve that looks wrong is nearly always a booster dry mass that looks wrong, and the booster mass is the one worth checking against the vehicle in the editor.
-    /// </summary>
-    private static void DrawBoosterReserve()
-    {
-        GaugeRow("Booster reserve dV", "##reservedv", ref _s.AscentReserveDvMs);
-        if (_s.AscentReserveDvMs < 0.0)
-            _s.AscentReserveDvMs = 0.0;
-        if (!(_s.AscentReserveDvMs > 0.0))
-            return;
-
-        float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
-        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
-
-        if (!_s.ReserveArmed)
-        {
-            // Idle is the normal state for most of a flight - a strap-on stack does not arm until the solids are gone - so it says WHY rather than just going quiet. See GuidanceWindow.NextSeparationDropsAllEngines.
-            GaugeRowText("Reserve", _s.ReserveNote.Length > 0 ? _s.ReserveNote
-                                                              : "waiting for a stage model", warn);
-            return;
-        }
-
-        GaugeRowText("Reserve",
-            $"{_s.ReserveKg / 1000.0,8:F2} t   ({_s.ReserveBoosterDryKg / 1000.0:F1} t booster)",
-            _s.ReserveStaged ? dim : new float4(0.4f, 1f, 0.4f, 1f));
-        if (_s.ReserveNote.Length > 0)
-            GaugeRowText("", _s.ReserveNote, warn);
-        if (_s.ReserveStaged)
-            GaugeRowText("", "staged - booster handed to boostback", dim);
     }
 
     // --- Returnable stages --------------------------------------------------
@@ -289,7 +253,8 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The stages that could fly themselves home, each with its own landing site and what coming back would cost it from where the vehicle is right now.
     ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is.
-    ///  THE COST IS LIVE THROUGH THE CLIMB, which is the point of it. It is the impulse that would put the ballistic impact on the site if the stage separated NOW, so it starts enormous, falls as the trajectory bends over, and is the number that says when staging is affordable. Read it against Booster reserve dV above: that is what the reserve has to buy.
+    ///  THE COST IS LIVE THROUGH THE CLIMB, which is the point of it. It is the impulse that would put the ballistic impact on the site if the stage separated NOW, so it starts enormous, falls as the trajectory bends over, and is the number that says when staging is affordable.
+    ///  A TARGET ON THE NEXT STAGE ASKS FOR ITS RESERVE: the convex plan sizes what that booster keeps for the boostback and landing, shown on its Booster row. There is nothing to set.
     /// </summary>
     private static void DrawReturnableStagesSection(float innerW)
     {
@@ -338,6 +303,9 @@ public static partial class GuidanceWindow
             }
 
             GaugeRowText("", $"lat {stage.TargetLatDeg,8:F3}, lon {stage.TargetLonDeg:F3}", dim);
+            // Only when something stops the reserve: a strap-on stack, say, does not arm it until the strap-ons are gone (NextSeparationDropsAllEngines).
+            if (stage.IsNext && !_s.ReserveArmed && !_s.ReserveStaged && _s.ReserveNote.Length > 0)
+                GaugeRowText("", $"no reserve: {_s.ReserveNote}", warn);
 
             if (double.IsNaN(stage.RequiredDvMs))
             {
@@ -351,11 +319,6 @@ public static partial class GuidanceWindow
             if (!double.IsNaN(stage.MissM))
                 GaugeRowText("", $"{stage.MissM / 1000.0,8:F0} km back to the site", dim);
 
-            // The one thing the reserve knob needs to hear, said where it is being read.
-            if (stage.IsNext && _s.AscentReserveDvMs > 0.0
-                && stage.RequiredDvMs > _s.AscentReserveDvMs)
-                GaugeRowText("", $"reserve is {_s.AscentReserveDvMs:F0} m/s - short by "
-                               + $"{stage.RequiredDvMs - _s.AscentReserveDvMs:F0}", warn);
         }
 
         ImGui.Text("");
