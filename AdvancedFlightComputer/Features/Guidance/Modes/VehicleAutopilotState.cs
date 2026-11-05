@@ -200,7 +200,7 @@ public sealed class VehicleAutopilotState
 
     // Ascent propellant reserve for a returning booster.
 
-    // There is no reserve to set. A booster with a landing target (Set target on the Returnable stages list) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
+    // There is no reserve to set. A booster with a landing target (Set target on its row under Target orbit) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
 
     /// <summary>The propellant the booster keeps for its return, kg: what the convex plan sized for it. Zero while armed with no usable plan yet, and when the reserve is not armed.</summary>
     public double ReserveKg;

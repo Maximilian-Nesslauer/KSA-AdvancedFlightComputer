@@ -673,7 +673,7 @@ public static partial class GuidanceWindow
         return anyLit;
     }
 
-    /// <summary>The next stage to separate when it can fly home and has a landing target set (Set target on the Returnable stages list), else null. Setting one is what asks for a booster reserve.</summary>
+    /// <summary>The next stage to separate when it can fly home and has a landing target set (Set target on its row under Target orbit), else null. Setting one is what asks for a booster reserve.</summary>
     internal static ReturnableStage BoostbackTarget()
         => _s.ReturnableStages.Find(st => st.IsNext && st.HasTarget);
 

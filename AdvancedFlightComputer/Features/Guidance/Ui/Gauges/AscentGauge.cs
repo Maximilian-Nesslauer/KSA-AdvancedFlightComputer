@@ -30,8 +30,6 @@ public static partial class GuidanceWindow
         ImGui.Separator();
 
         DrawTargetOrbitSection(vehicle, orbit, parent, bodyRadius, innerW);
-        // Where the boosters come home to, beside where the vehicle is going: a target set here is what asks the convex plan for a booster reserve.
-        DrawReturnableStagesSection(innerW);
         DrawConvexAscentSection(vehicle, orbit, parent, innerW);
         DrawAscentSettingsSection(innerW);
         DrawExpertSettingsSection(innerW);
@@ -68,13 +66,7 @@ public static partial class GuidanceWindow
         ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
         bool driven = status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable;
         if (driven)
-        {
             ApplyChaseOrbit(in plan);
-            GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
-            // Greyed for a near-circular target, which has no argument of periapsis to copy.
-            using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))
-                GaugeRowCheck("Copy target arg. Pe", "##matchargpe", ref _s.MatchTargetArgPe);
-        }
 
         using (new ImGuiDisabledScope(driven))
         {
@@ -88,6 +80,21 @@ public static partial class GuidanceWindow
             // A new inclination makes the old LAN meaningless - the plane it named no longer passes overhead - so re-seed it from where the vehicle is.
             if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
+        }
+
+        // Where the boosters come home to, right under where the vehicle is going: a target set here is what asks the convex plan for a booster reserve. A stop-gap placement until the panel overhaul.
+        DrawReturnableStageRows();
+
+        if (driven)
+        {
+            GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
+            // Greyed for a near-circular target, which has no argument of periapsis to copy.
+            using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))
+                GaugeRowCheck("Copy target arg. Pe", "##matchargpe", ref _s.MatchTargetArgPe);
+        }
+
+        using (new ImGuiDisabledScope(driven))
+        {
             GaugeRow("LAN (deg)", "##lan", ref _s.LanDeg);
             // Free inserts wherever the burn ends - at periapsis, or where Optimise insertion finds it cheaper. Fixed holds periapsis where it is put and moves the insertion along the ellipse instead, which costs more the further from periapsis it lands - the Insertion row says where that is once guidance runs.
             GaugeRowCheck("Fix arg. of Pe", "##argpefixed", ref _s.ArgPeFixed);
@@ -248,34 +255,26 @@ public static partial class GuidanceWindow
         ImGuiHelper.EndRegion();
     }
 
-    // --- Returnable stages --------------------------------------------------
-
     /// <summary>
-    /// The stages that could fly themselves home, each with its own landing site and what coming back would cost it from where the vehicle is right now.
+    /// The stages that could fly themselves home, one compact row each inside Target orbit: the stage, its Set target button, and the site once set.
     ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is.
-    ///  THE COST IS LIVE THROUGH THE CLIMB, which is the point of it. It is the impulse that would put the ballistic impact on the site if the stage separated NOW, so it starts enormous, falls as the trajectory bends over, and is the number that says when staging is affordable.
     ///  A TARGET ON THE NEXT STAGE ASKS FOR ITS RESERVE: the convex plan sizes what that booster keeps for the boostback and landing, shown on its Booster row. There is nothing to set.
+    ///  The live return cost (ReturnableStage.RequiredDvMs) is still solved, but not shown: the plan's Booster row is the number that matters now.
     /// </summary>
-    private static void DrawReturnableStagesSection(float innerW)
+    private static void DrawReturnableStageRows()
     {
         var list = _s.ReturnableStages;
         if (list.Count == 0)
             return;      // nothing separating carries a pod - most upper stages
 
-        if (!ImGuiHelper.BeginRegion("Returnable stages",
-                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
-            return;
-
         float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
         float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
-        float4 live = new float4(0.5f, 0.9f, 1f, 1f);
 
         for (int i = 0; i < list.Count; i++)
         {
             GuidanceWindow.ReturnableStage stage = list[i];
 
-            // The name row carries the Set button, because the button is about the stage rather than about any one of its numbers.
-            ImGui.Text(stage.Name + (stage.IsNext ? "  (next)" : ""));
+            ImGui.Text(stage.Name + (stage.IsNext ? " (next)" : ""));
             ImGui.NextColumn();
             bool arming = _retargetStageId == stage.RootId;
             if (ImGui.Button(arming ? $"click a spot##set{stage.RootId}"
@@ -293,41 +292,15 @@ public static partial class GuidanceWindow
                     _s.StageTargets.Remove(stage.RootId);
                     _s.StageModelDirty = true;
                 }
+                ImGui.SameLine();
+                ImGui.TextColored(dim, $"{stage.TargetLatDeg:F3}, {stage.TargetLonDeg:F3}");
             }
             ImGui.NextColumn();
 
-            if (!stage.HasTarget)
-            {
-                GaugeRowText("", "no target set", dim);
-                continue;
-            }
-
-            GaugeRowText("", $"lat {stage.TargetLatDeg,8:F3}, lon {stage.TargetLonDeg:F3}", dim);
             // Only when something stops the reserve: a strap-on stack, say, does not arm it until the strap-ons are gone (NextSeparationDropsAllEngines).
-            if (stage.IsNext && !_s.ReserveArmed && !_s.ReserveStaged && _s.ReserveNote.Length > 0)
+            if (stage.HasTarget && stage.IsNext && !_s.ReserveArmed && !_s.ReserveStaged && _s.ReserveNote.Length > 0)
                 GaugeRowText("", $"no reserve: {_s.ReserveNote}", warn);
-
-            if (double.IsNaN(stage.RequiredDvMs))
-            {
-                // Normal for most of a climb: a vehicle still going up has no ballistic impact to drag anywhere, so there is no cost to quote yet.
-                GaugeRowText("Return dV", _s.ReturnDvNote.Length > 0 ? _s.ReturnDvNote
-                                                                     : "not solved yet", dim);
-                continue;
-            }
-
-            GaugeRowText("Return dV", $"{stage.RequiredDvMs,8:F0} m/s", stage.IsNext ? live : dim);
-            if (!double.IsNaN(stage.MissM))
-                GaugeRowText("", $"{stage.MissM / 1000.0,8:F0} km back to the site", dim);
-
         }
-
-        ImGui.Text("");
-        ImGui.NextColumn();
-        ImGui.TextWrapped("Cost of an impulse from HERE, on the stack's own drag. "
-                        + "A real burn is dearer - the shooter plans that one.");
-        ImGui.NextColumn();
-
-        ImGuiHelper.EndRegion();
     }
 
     // --- Expert settings ---------------------------------------------------- Collapsed by default - dropping DefaultOpen is the whole mechanism.
