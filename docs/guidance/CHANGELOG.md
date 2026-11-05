@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The convex ascent's defaults are now a **max q of 195 kPa**, just under the 200 kPa KSA holds a vehicle to, instead of 140, and a **min throttle of 80 %** instead of 90.
+
 - Only stages that separate during the climb are listed under **Returnable stages**. A stage with a command pod that separates once nothing is left to fire, such as an upper stage leaving its payload, is going orbital speed and cannot fly back, so it can no longer be given a landing target.
 
 - Fixed a boostback with no burn plan ("the plan did not converge") when the burn is long and near the propellant aboard. The planner gave up if no burn solved at its first guess of pitch, 10 degrees, even where one at 30 degrees lands with propellant to spare; it now looks either side of the guess first. A plan that cannot be found now says why, such as not enough propellant.

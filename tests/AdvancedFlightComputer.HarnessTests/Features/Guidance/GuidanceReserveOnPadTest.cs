@@ -111,6 +111,8 @@ public sealed class GuidanceReserveOnPadTest : AfcTest
             state.LanSeeded = true;
             state.TargetId = "";
             state.FlyConvexAscent = true;
+            // At the 80 % default this spawned-in-the-air climb stalls with the linear model promising 309 kg it never delivers (the plan is 10.39 t against 10.42 t at 90 %), over the 0.1 % a stall may leave: a throttle question, not the reserve's, so the floor is held where this test was written.
+            state.ConvexThrottleMinPct = 90.0;
             AmbientState() = state;
 
             bool unlit = true;

@@ -445,15 +445,15 @@ public sealed class VehicleAutopilotState
     /// <summary>The player chose the backup gravity turn (deg/s) for this launch, so no convex plan is flown even if one fits. Cleared by the next EXECUTE or by ABORT.</summary>
     public bool BackupAscent;
 
-    /// <summary>Max-q 140 kPa, four times the script's Saturn V 35 kPa: a KSA stack lifting off at three to five g cannot hold 35 at full throttle, and the planner then has to retry looser anyway. Q-alpha is the script's 3500 Pa rad.</summary>
-    public double ConvexQMaxKpa = 140.0;
+    /// <summary>Max-q 195 kPa, just under the 200 kPa KSA itself holds a vehicle to, so the plan uses all the dynamic pressure the game allows and keeps a margin from its limit. A KSA stack lifting off at three to five g cannot hold the script's Saturn V 35 kPa at full throttle, and at 140 the planner often had to retry looser anyway. Q-alpha is the script's 3500 Pa rad.</summary>
+    public double ConvexQMaxKpa = 195.0;
     public double ConvexQAlphaMax = 3500.0;
 
     /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
     public double ConvexHandoverAltKm = 80.0;
 
-    /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. A stage burning a solid motor is held at 99 % whatever this says.</summary>
-    public double ConvexThrottleMinPct = 90.0;
+    /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. 80 % by default. A stage burning a solid motor is held at 99 % whatever this says, and no stage goes below its engines' own minimum.</summary>
+    public double ConvexThrottleMinPct = 80.0;
 
     /// <summary>
     /// Let the convex plan choose its own launch timing. With a target it chooses when, within ConvexTimingFreedomS of the launch window: the window's fixed lead (LanLeadSeconds) is only where it starts. Without one it chooses the LAN, starting from the plane over the pad, and the panel's LAN is set to it.
