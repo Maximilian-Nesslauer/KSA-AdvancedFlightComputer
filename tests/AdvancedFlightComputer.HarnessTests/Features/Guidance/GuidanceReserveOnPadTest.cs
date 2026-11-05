@@ -122,8 +122,10 @@ public sealed class GuidanceReserveOnPadTest : AfcTest
             RefreshStageModel.Invoke(null, new object[] { vehicle });
             t.Info($"stage model: {GuidanceLog.DescribeStages(state.StageModel)}");
             t.Check("with no booster target the reserve is off", !state.ReserveArmed && state.ReserveKg == 0.0, $"note '{state.ReserveNote}'");
+            // The service module leaves its upper stage in orbit: a command pod, but going orbital speed, so not listed.
+            t.Check("only the booster can be targeted, not the stage that separates in orbit", state.ReturnableStages.Count == 1, $"{state.ReturnableStages.Count} listed");
             GuidanceWindow.ReturnableStage? booster = state.ReturnableStages.Find(st => st.IsNext);
-            if (!t.Check("the booster is the next returnable stage", booster != null, $"{state.ReturnableStages.Count} listed"))
+            if (!t.Check("the booster is the next returnable stage", booster != null))
                 return;
 
             // The booster comes home to the pad it lifts off from: Set target on its row.

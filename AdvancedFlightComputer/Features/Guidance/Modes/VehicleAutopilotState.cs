@@ -1117,8 +1117,8 @@ public sealed class VehicleAutopilotState
 
     // Per-vehicle tuning for the booster's airframe and mission.
 
-    /// <summary>Settling burn at minimum throttle after separation, s.</summary>
-    public double BoostbackSeparationS = 2.0;
+    /// <summary>Settling burn at minimum throttle after separation, s. Short: every second of it is a second further from the site, which at staging speed is kilometres (BoostbackOracle.BurnDelayS).</summary>
+    public double BoostbackSeparationS = 0.2;
 
     /// <summary>How far a booster handed over at separation coasts engine-off away from the stage it left before the settling burn lights, m: the distance between the two must have opened this much since the split.</summary>
     public double BoostbackClearanceM = 30.0;

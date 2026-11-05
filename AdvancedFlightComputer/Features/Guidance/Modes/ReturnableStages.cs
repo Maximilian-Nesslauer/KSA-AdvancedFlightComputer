@@ -93,6 +93,8 @@ public static partial class GuidanceWindow
         if (controls.Length == 0)
             return;      // nothing aboard is controllable, so nothing separating is
 
+        Span<EngineController> engines = tree.Modules.Get<EngineController>();
+        _returnDropsSoFar.Clear();
         bool first = true;
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
         for (int i = 0; i < sequences.Length; i++)
@@ -117,6 +119,7 @@ public static partial class GuidanceWindow
             }
             if (detached == null || _returnDrops.Count == 0)
                 continue;   // an ignition-only sequence: it separates nothing
+            _returnDropsSoFar.UnionWith(_returnDrops);
 
             // THE TEST.
             // A command pod on the side that leaves is what makes the thing that leaves a vehicle rather than debris.
@@ -129,6 +132,10 @@ public static partial class GuidanceWindow
                 first = false;
                 continue;
             }
+
+            // NOT ONE THAT REACHES ORBIT. A stage that separates once the climb is over - an upper stage leaving its payload, a capsule - is already going orbital speed, and no boostback brings that home, command pod or not. The climb is over when nothing left aboard lights at this sequence or later: the booster's own separation lights the stage above it, and a strap-on's leaves the core and the upper stage still to fire. Hot staging, an upper stage lit a sequence before the booster leaves, would read as orbital here.
+            if (!LightsLater(engines, i))
+                continue;
 
             uint rootId = detached.InstanceId;
             if (!cache.TryGetValue(rootId, out ReturnableStage stage))
@@ -154,6 +161,17 @@ public static partial class GuidanceWindow
     // Scratch for the subtree walk.
     // Same contract as _stagingDropped: filled and consumed inside one call, never read across calls.
     private static readonly HashSet<Part> _returnDrops = new HashSet<Part>();
+    // Everything the separations so far in the walk drop, this one included.
+    private static readonly HashSet<Part> _returnDropsSoFar = new HashSet<Part>();
+
+    /// <summary>True when an engine still aboard after the separations so far (<see cref="_returnDropsSoFar"/>) is lit by sequence <paramref name="sequence"/> or a later one: the climb goes on after that separation.</summary>
+    private static bool LightsLater(Span<EngineController> engines, int sequence)
+    {
+        for (int e = 0; e < engines.Length; e++)
+            if (engines[e].Sequence >= sequence && !_returnDropsSoFar.Contains(engines[e].Parent.FullPart))
+                return true;
+        return false;
+    }
 
     /// <summary>
     /// Re-solve what it would cost each listed stage to come home from here.

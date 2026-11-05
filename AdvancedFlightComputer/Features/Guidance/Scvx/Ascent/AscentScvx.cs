@@ -168,7 +168,7 @@ public static class AscentScvx
             if (held.Nodes > 0 && held.GatesMet)
                 warm = held;
             // A held plan short of its own booster's need is a climb that cannot bring it home, and freeing the reserve from there bends the climb to make up for it: from none on the 2stage_new stack that reached 7.81 t to orbit, where a fixed 7.02 t reserve that comes home reaches 8.02 t. So it is held once more, at that plan's own need, and freed from the climb that carries it.
-            if (warm != null)
+            if (warm != null && st.RecoveryHoldAtNeed)
             {
                 int ks = c.Ends[c.RecStage];
                 BoostbackOracle.Need need = c.Oracle!.Evaluate(warm.Position.AsSpan(ks * 3, 3), warm.Velocity.AsSpan(ks * 3, 3), warm.Time[ks], null, gradient: false);

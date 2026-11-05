@@ -35,12 +35,19 @@ public sealed class AscentRecovery
     /// <summary>The landing burn, as a multiple of the booster's terminal velocity.</summary>
     public double LandingFactor { get; init; } = 1.3;
     /// <summary>The boostback, as a multiple of its impulse: a real burn is finite, flipped into and flown through gravity and drag, where the impulse is none of these.</summary>
-    public double BoostbackMargin { get; init; } = 1.1;
+    /// <summary>
+    /// What a real boostback burn costs over the impulse, as a factor on its dv. Not small, and longer the burn the more it is: from boosters_controlled's planned separation (3.3 km/s at 241 km) the booster's own planner needed 5080 m/s for a 4383 m/s impulse, 16 % more, which at 1.15 left 0.2 t of the 0.32 t the landing needs (2026-11-05).
+    /// </summary>
+    public double BoostbackMargin { get; init; } = 1.25;
+    /// <summary>
+    /// How long the booster coasts from separation before its boostback burn, s: clearing the stage it left (30 m, about 5 s), the settling burn (0.2 s) and the flip (5 to 8 s). The impulse is priced from where that coast leaves it, not from the separation itself - at staging speed every second of it is kilometres further from the site.
+    /// </summary>
+    public double BurnDelayS { get; init; } = 15.0;
 
     /// <summary>The same booster, its reserve starting at <paramref name="initialReserveKg"/>.</summary>
     public AscentRecovery WithInitialReserve(double initialReserveKg) => new()
     {
-        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, ExhaustVelocity = ExhaustVelocity,
+        Stage = Stage, InitialReserveKg = initialReserveKg, BoosterDryKg = BoosterDryKg, ExhaustVelocity = ExhaustVelocity, BurnDelayS = BurnDelayS,
         SiteCci = SiteCci, ReferenceArea = ReferenceArea, Drag = Drag, Lift = Lift, Alpha = Alpha, Air = Air,
         LandingFactor = LandingFactor, BoostbackMargin = BoostbackMargin,
     };
@@ -137,10 +144,28 @@ public sealed class BoostbackOracle
     public bool Boostback(ReadOnlySpan<double> r, ReadOnlySpan<double> v, double tSep, double[] dv, out double dvMag, out double missM)
     {
         dvMag = double.NaN;
-        double a = _omega * tSep, c = Math.Cos(a), s = Math.Sin(a);
+        double[] rr = r.ToArray(), vv = v.ToArray();
+        // The coast to the burn (BurnDelayS): engine off, on the same drag the coast after it flies. The burn is then at tSep + delay, and the site has turned that much further.
+        double delay = Math.Max(_r.BurnDelayS, 0.0);
+        if (delay > 0.0)
+        {
+            Span<Dual> s0 = stackalloc Dual[ImpactPredictor.N];
+            Span<Dual> s1 = stackalloc Dual[ImpactPredictor.N];
+            for (int i = 0; i < 3; i++)
+            {
+                s0[i] = rr[i];
+                s0[3 + i] = vv[i];
+            }
+            Rk4.Integrate(in _sys, 0.0, s0, delay, 1.0, s1, _scratch.AsSpan(0, Rk4.IntegrateScratch(ImpactPredictor.N)));
+            for (int i = 0; i < 3; i++)
+            {
+                rr[i] = s1[i].V;
+                vv[i] = s1[3 + i].V;
+            }
+        }
+        double a = _omega * (tSep + delay), c = Math.Cos(a), s = Math.Sin(a);
         double[] site0 = _r.SiteCci;
         double sx = c * site0[0] - s * site0[1], sy = s * site0[0] + c * site0[1], sz = site0[2];
-        double[] rr = r.ToArray(), vv = v.ToArray();
         var dG = new double[9];
         var miss = new double[3];
         var nrm = new double[3];

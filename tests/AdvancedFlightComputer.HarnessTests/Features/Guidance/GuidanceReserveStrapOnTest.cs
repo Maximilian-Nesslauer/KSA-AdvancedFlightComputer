@@ -111,6 +111,8 @@ public sealed class GuidanceReserveStrapOnTest : AfcTest
             t.Info($"stage model: {GuidanceLog.DescribeStages(state.StageModel)}");
             foreach (GuidanceWindow.ReturnableStage st in state.ReturnableStages)
                 t.Info($"returnable: '{st.Name}', sequence {st.SequenceIndex}{(st.IsNext ? ", next" : "")}");
+            // The service module leaves its upper stage in orbit: a command pod, but going orbital speed, so not listed.
+            t.Check("only the booster can be targeted, not the stage that separates in orbit", state.ReturnableStages.Count == 1, $"{state.ReturnableStages.Count} listed");
             GuidanceWindow.ReturnableStage? core = state.ReturnableStages.Count > 0 ? state.ReturnableStages[0] : null;
             if (!t.Check("the core can fly home", core != null, $"{state.ReturnableStages.Count} listed"))
                 return;

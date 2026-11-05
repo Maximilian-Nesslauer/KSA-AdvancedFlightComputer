@@ -321,8 +321,15 @@ public sealed class AscentSettings
     /// </summary>
     public double RecoveryTrust = 0.2;
 
-    /// <summary>Solve a booster's free reserve from the plan with the reserve held as set, rather than from a seed (AscentScvx.Solve).</summary>
-    public bool RecoveryWarmStart = true;
+    /// <summary>
+    /// Solve a booster's free reserve from the plan with the reserve held as set, rather than from a seed (AscentScvx.Solve).
+    ///
+    /// OFF: ONE SOLVE, straight from the seed. The warm start's two held solves found a better local optimum, but not by much for their cost, measured in Release on the dumped problems of 2026-11-05: boosters_controlled 27.18 t to orbit in 18 s against 25.85 t in 7 s from the seed, 2stage_controlled 10.51 t in 25 s against 10.42 t in 4 s. Skipping only the second hold was the worst of both, 24.62 t in 15 s.
+    /// </summary>
+    public bool RecoveryWarmStart = false;
+
+    /// <summary>With RecoveryWarmStart, when the plan held at the reserve as set falls short of its own booster's need, hold it once more at that need before freeing it (AscentScvx.Solve).</summary>
+    public bool RecoveryHoldAtNeed = true;
 
     /// <summary>Price of the recovery row's slack, per unit of lift-off mass the booster is short. Far above the propellant's own price of one, so a plan never buys mass to orbit by leaving the booster short.</summary>
     public double RhoRecovery = 1e3;
