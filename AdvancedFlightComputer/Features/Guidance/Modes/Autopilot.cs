@@ -616,6 +616,8 @@ public static partial class GuidanceWindow
 
     // Scratch for the separation walk, filled and consumed inside one call, never read across calls.
     private static readonly HashSet<Part> _separationDrops = new HashSet<Part>();
+    // Likewise: the engines the ignition-only sequences ahead of the separation will light.
+    private static readonly HashSet<EngineController> _pendingIgnition = new HashSet<EngineController>();
 
     /// <summary>
     /// True when the next separation drops every engine currently producing thrust.
@@ -627,6 +629,15 @@ public static partial class GuidanceWindow
     /// away. Requiring the separation to take ALL the live engines with it says the
     /// thing that leaves is the thing doing the flying, which is what a boostback needs
     /// to be true. Once the strap-ons are gone it becomes true on its own.
+    ///
+    /// ON THE PAD THE NEXT SEQUENCE IS USUALLY THE IGNITION, which separates nothing.
+    /// Stopping there left the reserve unarmed until the engines were lit, and the
+    /// convex ascent, planned on the pad before EXECUTE launches, planned the whole first
+    /// stage: the reserve then armed in the climb and staged the booster early, and UPFG
+    /// took over from a vehicle well off the plan (2stage_controlled, 2026-11-04: 30 deg
+    /// planned pitch at the hand-over against UPFG's 51). So sequences that separate
+    /// nothing are passed over to the first that does, and the engines they will light
+    /// count as burning, as they will be when that separation comes.
     /// </summary>
     private static bool NextSeparationDropsAllEngines(Vehicle vehicle, out string why)
     {
@@ -639,38 +650,40 @@ public static partial class GuidanceWindow
             return false;
         }
 
-        Sequence next = null;
+        _separationDrops.Clear();
+        _pendingIgnition.Clear();
+        bool anySequence = false;
         ReadOnlySpan<Sequence> sequences = sequenceList.Sequences;
-        for (int i = 0; i < sequences.Length; i++)
+        for (int s = 0; s < sequences.Length && _separationDrops.Count == 0; s++)
         {
-            if (!sequences[i].Activated && !sequences[i].Parts.IsEmpty)
+            if (sequences[s].Activated || sequences[s].Parts.IsEmpty)
+                continue;
+            anySequence = true;
+            ReadOnlySpan<Part> parts = sequences[s].Parts;
+            for (int i = 0; i < parts.Length; i++)
             {
-                next = sequences[i];
-                break;
+                Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
+                for (int j = 0; j < decouplers.Length; j++)
+                {
+                    Part root = DetachedRoot(decouplers[j]);
+                    if (root != null)
+                        CollectSubtree(root, _separationDrops);
+                }
             }
+            // An ignition-only sequence: what it lights is burning by the time a later one separates. The separating sequence's own engines are not, since they light as it fires.
+            if (_separationDrops.Count == 0)
+                for (int i = 0; i < parts.Length; i++)
+                    foreach (EngineController e in parts[i].SubtreeModules.Get<EngineController>())
+                        _pendingIgnition.Add(e);
         }
-        if (next == null)
+        if (!anySequence)
         {
             why = "no staging sequence left to fire";
             return false;
         }
-
-        _separationDrops.Clear();
-        ReadOnlySpan<Part> parts = next.Parts;
-        for (int i = 0; i < parts.Length; i++)
-        {
-            Span<Decoupler> decouplers = parts[i].SubtreeModules.Get<Decoupler>();
-            for (int j = 0; j < decouplers.Length; j++)
-            {
-                Part root = DetachedRoot(decouplers[j]);
-                if (root != null)
-                    CollectSubtree(root, _separationDrops);
-            }
-        }
         if (_separationDrops.Count == 0)
         {
-            // An ignition-only sequence, say. Not a fault - the reserve simply has nothing to stage into yet, and this becomes true further down the list.
-            why = "the next sequence separates nothing";
+            why = "no sequence left separates anything";
             return false;
         }
 
@@ -684,7 +697,7 @@ public static partial class GuidanceWindow
         bool anyLit = false;
         foreach (var engine in engineStates.ModulesAndStates)
         {
-            if (!engine.Module.IsActive || !engine.State.IsPropellantAvailable)
+            if ((!engine.Module.IsActive || !engine.State.IsPropellantAvailable) && !_pendingIgnition.Contains(engine.Module))
                 continue;
             anyLit = true;
             if (!_separationDrops.Contains(engine.Module.Parent.FullPart))
