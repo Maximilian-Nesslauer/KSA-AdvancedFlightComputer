@@ -57,9 +57,8 @@ public static partial class GuidanceWindow
     private static void DrawTargetOrbitSection(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                                double bodyRadius, float innerW)
     {
-        if (!ImGuiHelper.BeginRegion("Target orbit",
-                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
-            return;
+        // THE ORBIT ITSELF, as plain rows with no header to fold them away: the target, periapsis, apoapsis and inclination are what every launch is set up with. Below them the boosters' sites, then how to reach the orbit (Orbit settings). A stop-gap layout until the panel overhaul.
+        ImGuiHelper.BeginRegion("##targetorbit", border: false, innerW);
 
         DrawTargetPicker(vehicle);
 
@@ -82,9 +81,27 @@ public static partial class GuidanceWindow
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
         }
 
-        // Where the boosters come home to, right under where the vehicle is going: a target set here is what asks the convex plan for a booster reserve. A stop-gap placement until the panel overhaul.
-        DrawReturnableStageRows();
+        ImGuiHelper.EndRegion();
 
+        // Where the boosters come home to, right under where the vehicle is going: a target set here is what asks the convex plan for a booster reserve.
+        DrawReturnableStagesSection(innerW);
+
+        if (ImGuiHelper.BeginRegion("Orbit settings",
+                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        {
+            DrawOrbitSettingsRows(orbit, parent, bodyRadius, status, in plan, driven);
+            ImGuiHelper.EndRegion();
+        }
+
+        // Outside the region: it emits plain full-width status text, not column rows.
+        if (status == ChaseStatus.Ok)
+            DrawAutoLaunchArming();
+    }
+
+    // --- Orbit settings ----------------------------------------------------- Everything about the target orbit past its four numbers: the plane's LAN, the argument of periapsis, the insertion, the chase offset, what EXECUTE does, and the launch window.
+    private static void DrawOrbitSettingsRows(Orbit orbit, IParentBody parent, double bodyRadius,
+                                              ChaseStatus status, in ChasePlan plan, bool driven)
+    {
         if (driven)
         {
             GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
@@ -150,12 +167,6 @@ public static partial class GuidanceWindow
         }
 
         DrawInsertionRows(bodyRadius);
-
-        ImGuiHelper.EndRegion();
-
-        // Outside the region: it emits plain full-width status text, not column rows.
-        if (status == ChaseStatus.Ok)
-            DrawAutoLaunchArming();
     }
 
     // Where the Insertion row turns amber. Not limits - nothing is refused, and what an insertion costs depends on the vehicle - but where the cost has stopped being small: far round the ellipse from periapsis, or climbing steeply onto it.
@@ -256,16 +267,21 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The stages that could fly themselves home, one compact row each inside Target orbit: the stage, its Set target button, and the site once set.
+    /// The stages that could fly themselves home, a section of their own that does not fold away, one compact row each: the stage, its Set target button, and the site once set.
     ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is.
     ///  A TARGET ON THE NEXT STAGE ASKS FOR ITS RESERVE: the convex plan sizes what that booster keeps for the boostback and landing, shown on its Booster row. There is nothing to set.
     ///  The live return cost (ReturnableStage.RequiredDvMs) is still solved, but not shown: the plan's Booster row is the number that matters now.
     /// </summary>
-    private static void DrawReturnableStageRows()
+    private static void DrawReturnableStagesSection(float innerW)
     {
         var list = _s.ReturnableStages;
         if (list.Count == 0)
             return;      // nothing separating carries a pod - most upper stages
+
+        // Leaf: a header with no arrow, always open.
+        if (!ImGuiHelper.BeginRegion("Returnable stages",
+                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns | ImGuiTreeNodeFlags.Leaf, innerW))
+            return;
 
         float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
         float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
@@ -301,6 +317,8 @@ public static partial class GuidanceWindow
             if (stage.HasTarget && stage.IsNext && !_s.ReserveArmed && !_s.ReserveStaged && _s.ReserveNote.Length > 0)
                 GaugeRowText("", $"no reserve: {_s.ReserveNote}", warn);
         }
+
+        ImGuiHelper.EndRegion();
     }
 
     // --- Expert settings ---------------------------------------------------- Collapsed by default - dropping DefaultOpen is the whole mechanism.
