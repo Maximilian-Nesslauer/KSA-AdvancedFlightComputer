@@ -673,9 +673,13 @@ public static partial class GuidanceWindow
         return anyLit;
     }
 
-    /// <summary>The next stage to separate when it can fly home and has a landing target set (Set target on its row in Returnable stages), else null. Setting one is what asks for a booster reserve.</summary>
+    /// <summary>
+    /// The first stage, in staging order, that can fly home and has a landing target set (Set target on its row in Returnable stages), else null. Setting one is what asks for a booster reserve.
+    ///
+    /// NOT ONLY THE NEXT ONE. A core under strap-on boosters with no command pod is not the next thing to separate on the pad - the strap-ons are - but it is the booster coming home, and the plan has to size its reserve before lift-off. It arms once the strap-ons are gone and it is next (RefreshReserve).
+    /// </summary>
     internal static ReturnableStage BoostbackTarget()
-        => _s.ReturnableStages.Find(st => st.IsNext && st.HasTarget);
+        => _s.ReturnableStages.Find(st => st.HasTarget);
 
     /// <summary>The booster and site a plan was asked to bring home to, as the plan records it (AscentPlan.RecoverySite): a target moved or cleared since makes that plan's reserve stale.</summary>
     internal static string RecoverySiteKey(ReturnableStage booster)
@@ -706,7 +710,8 @@ public static partial class GuidanceWindow
         _s.ReserveBoosterDryKg = 0.0;
         _s.ReserveArmed = false;
 
-        if (BoostbackTarget() == null)
+        ReturnableStage booster = BoostbackTarget();
+        if (booster == null)
         {
             _s.ReserveNote = "";
             return;
@@ -716,6 +721,13 @@ public static partial class GuidanceWindow
         if (_s.ReserveStaged)
         {
             _s.ReserveNote = "already staged";
+            return;
+        }
+
+        // Something else separates first - strap-ons round a core - so the next staging is not this booster's. Not a refusal: it arms when they are gone.
+        if (!booster.IsNext)
+        {
+            _s.ReserveNote = "arms when the stages below it have separated";
             return;
         }
 

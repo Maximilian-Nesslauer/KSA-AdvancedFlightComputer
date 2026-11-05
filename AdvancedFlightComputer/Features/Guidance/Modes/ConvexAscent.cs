@@ -77,6 +77,8 @@ public static partial class GuidanceWindow
             if (plan != null)
             {
                 _s.AscentPlan = plan;
+                // The booster reserve is the plan's: re-read it now rather than at the next 4 Hz tick, so a launch straight from EXECUTE stages on it from the start.
+                _s.StageModelDirty = true;
                 AscentSolution sol = plan.Solution;
                 // A chosen LAN is the target now: the panel shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
                 if (plan.Usable && plan.LanChosen)
@@ -403,14 +405,12 @@ public static partial class GuidanceWindow
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
-        // THE BOOSTER THE PLAN BRINGS HOME: the next stage to separate has a landing target, and the reserve is armed - that separation drops every burning engine. The plan sizes its reserve from nothing, for the boostback to that target and the landing. The site has turned with the body to the launch, like the pad.
+        // THE BOOSTER THE PLAN BRINGS HOME: a stage that can fly home has a landing target (BoostbackTarget). The plan sizes its reserve from nothing, for the boostback to that target and the landing, in the first stage that drops its liquid load whole (AscentPhasePlan.ReserveStage) - a core under strap-ons included, which is why the reserve need not be armed yet: it arms when that booster is next to separate. The site has turned with the body to the launch, like the pad.
         AscentRecovery recovery = null;
         string recoveryNote = "";
         ReturnableStage booster = BoostbackTarget();
         string recoverySite = RecoverySiteKey(booster);
-        if (booster != null && !_s.ReserveArmed)
-            recoveryNote = $"no booster reserve: {(_s.ReserveNote.Length > 0 ? _s.ReserveNote : "not armed")}";
-        else if (booster != null && stagePlan.ReserveStage < 0)
+        if (booster != null && stagePlan.ReserveStage < 0)
             recoveryNote = "no booster reserve: the stage that separates has no liquid load of its own to keep one in";
         else if (booster != null)
         {
