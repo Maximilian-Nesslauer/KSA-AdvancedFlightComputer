@@ -161,9 +161,9 @@ public static partial class GuidanceWindow
 
         int qi = ArgMax(sol.DynamicPressure), qai = ArgMax(sol.QAlpha);
         GaugeRowText(D, "MAX Q", FormattableString.Invariant($"{sol.DynamicPressure[qi] / 1000.0:F1} kPa AT T+{sol.Time[qi]:F0} s (LIMIT {plan.QMaxKpa:F1} kPa)"),
-            LimitInk(sol.DynamicPressure[qi], plan.QMaxKpa * 1000.0));
+            plan.OverQCeiling ? CvxWarn : LimitInk(sol.DynamicPressure[qi], plan.QMaxKpa * 1000.0));
         if (plan.QRelaxed)
-            GaugeRowText(D, "", FormattableString.Invariant($"NO SOLUTION AT {plan.QMaxRequestedKpa:F0} kPa (OUT OF REACH AT FULL THROTTLE). RETRIED LOOSER."), CvxWarn);
+            GaugeRowText(D, "", FormattableString.Invariant($"NO SOLUTION AT {plan.QMaxRequestedKpa:F0} kPa (OUT OF REACH). RETRIED LOOSER."), CvxWarn);
         GaugeRowText(D, "MAX Q-ALPHA", FormattableString.Invariant($"{sol.QAlpha[qai]:F0} Pa rad AT T+{sol.Time[qai]:F0} s (LIMIT {plan.QAlphaMax:F0} Pa rad)"),
             LimitInk(sol.QAlpha[qai], plan.QAlphaMax));
         GaugeRowText(D, "PLAN INSERTION", FormattableString.Invariant($"{plan.InsertionAltKm:F0} km, MISS {Fmt.Fixed(sol.TerminalResidual[0], 0)} m, {Fmt.Fixed(sol.TerminalResidual[1], 2)} m/s, PLANE {Fmt.Fixed(sol.TerminalResidual[3], 0)} m"));
