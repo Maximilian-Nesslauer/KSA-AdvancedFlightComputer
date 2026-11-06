@@ -18,12 +18,20 @@ public static partial class GuidanceWindow
 
     private static double EffectiveGLimit => _s.GLimitEnabled ? _s.GLimitG : 0;
 
-    private static double LandingBrakeGateAltitude => Math.Max(_s.AimAltKm * 1000,
-        _s.UseSixDofLanding ? 0 : _s.LandingVerticalGateM + _s.VehicleHeightM);
+    private static double LandingBrakeGateAltitude => BrakeGateAltitude(_s.VehicleHeightM);
 
-    private static DeorbitSettings CurrentDeorbitSettings() => new(_s.SiteLatDeg, _s.SiteLonDeg,
-        _s.BrakingAltitudeKm * 1000, LandingBrakeGateAltitude, _s.GateUprangeKm * 1000,
+    private static double BrakeGateAltitude(double vehicleHeightM) => Math.Max(_s.AimAltKm * 1000,
+        _s.UseSixDofLanding ? 0 : _s.LandingVerticalGateM + vehicleHeightM);
+
+    private static DeorbitSettings CurrentDeorbitSettings() => CurrentDeorbitSettings(_s.VehicleHeightM);
+
+    private static DeorbitSettings CurrentDeorbitSettings(double vehicleHeightM) => new(_s.SiteLatDeg, _s.SiteLonDeg,
+        _s.BrakingAltitudeKm * 1000, BrakeGateAltitude(vehicleHeightM), _s.GateUprangeKm * 1000,
         _s.DescentRate, _s.DownrangeFactor, _s.DeorbitArrivalAngleEnabled ? _s.DeorbitArrivalDescentDeg : null);
+
+    // A measured vehicle height is written again twice a second while propellant moves the centre of mass (RefreshVehicleHeight), so the comparison uses the measured height from the capture of the request, and only a typed height can make the request old.
+    private static DeorbitSettings ComparedDeorbitSettings() =>
+        CurrentDeorbitSettings(_s.VehicleHeightAuto ? _s.DeorbitRequestHeightM : _s.VehicleHeightM);
 
     private static bool DeorbitTargetLocked => (_s.DeorbitPlan != null || _s.DirectBrakingPlan != null)
         && (IsStockDeorbitPhase(_s.LandingPhase) || _s.LandingPhase is LandingPhase.TransferPlanning
@@ -31,7 +39,7 @@ public static partial class GuidanceWindow
 
     private static bool DeorbitRequestCurrent(DeorbitRequest request, IParentBody parent) =>
         request != null && ReferenceEquals(parent, request.Parent)
-        && request.Settings == CurrentDeorbitSettings() && request.GLimit == EffectiveGLimit;
+        && request.Settings == ComparedDeorbitSettings() && request.GLimit == EffectiveGLimit;
 
     private static string DeorbitSettingsRefusal()
     {
@@ -106,6 +114,7 @@ public static partial class GuidanceWindow
                     engines.Add(new(throttle, thrust, flow));
             }
         }
+        _s.DeorbitRequestHeightM = _s.VehicleHeightM;
         _s.DeorbitRequest = NewDeorbitRequest(vehicle, orbit, model, engines.ToArray(), minimumPulse);
         _s.DeorbitEngineSignature = DeorbitEngineSignature(vehicle);
         return true;

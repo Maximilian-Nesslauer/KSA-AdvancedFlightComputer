@@ -32,6 +32,7 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
         try
         {
             CheckAngleSnapshot(t, state, ambient);
+            CheckMeasuredHeightDrift(t, fixture, state, ambient);
             CheckSequenceTopology(t, fixture, state, ambient);
             CheckPriorModeRelease(t, fixture, state, ambient);
             CheckControlSwitches(t, fixture, state);
@@ -174,6 +175,52 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
         t.Check("a waiting direct coast can still replan its angle", !(bool)targetLocked.GetValue(null)!);
         state.DirectBrakingPlan = null;
         state.LandingPhase = GuidanceWindow.LandingPhase.Idle;
+    }
+
+    // With G-FOLD the gate altitude includes the vehicle height, which RefreshVehicleHeight measures again twice a second while auto is on.
+    private static void CheckMeasuredHeightDrift(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state,
+        System.Reflection.FieldInfo ambient)
+    {
+        ambient.SetValue(null, state);
+        Vehicle craft = fixture.Vehicle;
+        IParentBody parent = fixture.Request.Parent;
+        bool sixDof = state.UseSixDofLanding;
+        bool auto = state.VehicleHeightAuto;
+        double height = state.VehicleHeightM;
+        double gate = state.LandingVerticalGateM;
+        double aim = state.AimAltKm;
+        var stageModel = state.StageModel;
+        try
+        {
+            state.UseSixDofLanding = false;
+            state.LandingVerticalGateM = 500;
+            state.AimAltKm = 0.1;
+            state.VehicleHeightAuto = true;
+            state.VehicleHeightM = 15;
+            state.StageModel = fixture.Request.Model;
+            bool captured = (bool)AccessTools.Method(typeof(GuidanceWindow), "TryCaptureDeorbitRequest")
+                .Invoke(null, new object[] { craft, craft.Orbit, parent })!;
+            if (!t.Check("the height fixture captures a deorbit request", captured && state.DeorbitRequest != null)) return;
+            var current = AccessTools.Method(typeof(GuidanceWindow), "DeorbitRequestCurrent");
+            bool Current() => (bool)current.Invoke(null, new object[] { state.DeorbitRequest!, parent })!;
+            t.CheckAbs("the request gate includes the vehicle height", state.DeorbitRequest!.Settings.GateAltitude, 515, 0.001);
+            state.VehicleHeightM = 15.8;
+            t.Check("a measured height drift keeps the request current", Current());
+            state.VehicleHeightAuto = false;
+            t.Check("a typed height change makes the request old", !Current());
+            state.VehicleHeightM = 15;
+            t.Check("the typed height of the capture keeps the request current", Current());
+        }
+        finally
+        {
+            state.DeorbitRequest = null;
+            state.UseSixDofLanding = sixDof;
+            state.VehicleHeightAuto = auto;
+            state.VehicleHeightM = height;
+            state.LandingVerticalGateM = gate;
+            state.AimAltKm = aim;
+            state.StageModel = stageModel;
+        }
     }
 
     private static void CheckPriorModeRelease(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state,

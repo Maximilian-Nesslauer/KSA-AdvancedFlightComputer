@@ -490,6 +490,7 @@ public sealed class VehicleAutopilotState
     internal DeorbitPlan DeorbitPlan;
     internal DirectBrakingPlan DirectBrakingPlan;
     internal int DeorbitEngineSignature;
+    internal double DeorbitRequestHeightM;
     internal double DeorbitLastResidual = double.PositiveInfinity;
     internal long DeorbitNextValidationTick;
     internal Burn DeorbitNode;
