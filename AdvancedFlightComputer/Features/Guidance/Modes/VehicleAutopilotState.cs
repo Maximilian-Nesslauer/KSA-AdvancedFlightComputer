@@ -200,21 +200,9 @@ public sealed class VehicleAutopilotState
 
     // Ascent propellant reserve for a returning booster.
 
-    /// <summary>
-    /// dV to leave in the first stage for its own return, m/s. Zero switches it off.
-    ///
-    /// MEASURED AGAINST THE BOOSTER, NOT THE STACK, which is the whole point of
-    /// expressing it as dV rather than as kilograms. The propellant a given dV costs is
-    /// m_boosterDry * (exp(dv/ve) - 1) - the upper stage cancels out of the rocket
-    /// equation entirely - and sizing it against the stack instead over-reserves by the
-    /// ratio of the two masses. On a 20 t booster under a 40 t upper stage that is
-    /// three times too much propellant and 2.6 times the dV asked for. See
-    /// GuidanceWindow.ReservePropellantKg.
-    /// </summary>
-    public double AscentReserveDvMs;
+    // There is no reserve to set. A booster with a landing target (Set target on its row in Returnable stages) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
 
-    /// <summary>What that dV costs at the current staging geometry, kg. Recomputed with
-    /// the stage model; zero when the reserve is not armed.</summary>
+    /// <summary>The propellant the booster keeps for its return, kg: what the convex plan sized for it. Zero while armed with no usable plan yet, and when the reserve is not armed.</summary>
     public double ReserveKg;
 
     /// <summary>The booster's own dry mass, kg - the mass the next separation drops.
@@ -457,15 +445,15 @@ public sealed class VehicleAutopilotState
     /// <summary>The player chose the backup gravity turn (deg/s) for this launch, so no convex plan is flown even if one fits. Cleared by the next EXECUTE or by ABORT.</summary>
     public bool BackupAscent;
 
-    /// <summary>Max-q 140 kPa, four times the script's Saturn V 35 kPa: a KSA stack lifting off at three to five g cannot hold 35 at full throttle, and the planner then has to retry looser anyway. Q-alpha is the script's 3500 Pa rad.</summary>
-    public double ConvexQMaxKpa = 140.0;
+    /// <summary>Max-q 195 kPa, just under the 200 kPa KSA itself holds a vehicle to, so the plan uses all the dynamic pressure the game allows and keeps a margin from its limit. A KSA stack lifting off at three to five g cannot hold the script's Saturn V 35 kPa at full throttle, and at 140 the planner often had to retry looser anyway. Q-alpha is the script's 3500 Pa rad.</summary>
+    public double ConvexQMaxKpa = 195.0;
     public double ConvexQAlphaMax = 3500.0;
 
     /// <summary>Above this altitude the open-loop profile hands over to UPFG.</summary>
     public double ConvexHandoverAltKm = 80.0;
 
-    /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. A stage burning a solid motor is held at 99 % whatever this says.</summary>
-    public double ConvexThrottleMinPct = 90.0;
+    /// <summary>The plan's throttle floor, percent of full thrust. The script's 99 % keeps the plan at full throttle; lower lets it throttle a liquid stage, through max-q say. 80 % by default. A stage burning a solid motor is held at 99 % whatever this says, and no stage goes below its engines' own minimum.</summary>
+    public double ConvexThrottleMinPct = 80.0;
 
     /// <summary>
     /// Let the convex plan choose its own launch timing. With a target it chooses when, within ConvexTimingFreedomS of the launch window: the window's fixed lead (LanLeadSeconds) is only where it starts. Without one it chooses the LAN, starting from the plane over the pad, and the panel's LAN is set to it.
@@ -1129,8 +1117,8 @@ public sealed class VehicleAutopilotState
 
     // Per-vehicle tuning for the booster's airframe and mission.
 
-    /// <summary>Settling burn at minimum throttle after separation, s.</summary>
-    public double BoostbackSeparationS = 2.0;
+    /// <summary>Settling burn at minimum throttle after separation, s. Short: every second of it is a second further from the site, which at staging speed is kilometres (BoostbackOracle.BurnDelayS).</summary>
+    public double BoostbackSeparationS = 0.2;
 
     /// <summary>How far a booster handed over at separation coasts engine-off away from the stage it left before the settling burn lights, m: the distance between the two must have opened this much since the split.</summary>
     public double BoostbackClearanceM = 30.0;

@@ -110,6 +110,7 @@ internal static class AscentCheck
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
+                Recovery = p.Recovery is { } rc && rc.Stage < stages.Length - 1 ? rc : null,
             };
         }
 
@@ -127,12 +128,27 @@ internal static class AscentCheck
                 TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed, TargetRadialRate = p.TargetRadialRate,
                 PlaneNormal = p.PlaneNormal, QMax = qMax, QAlphaMax = qaMax,
                 PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax,
+                Recovery = p.Recovery,
             };
         // --turn S: free the launch time within S seconds either way, as a plane turn of Omega S (AscentProblem.PlaneTurnMin).
         double turnS = Arg("--turn", double.NaN);
         if (double.IsFinite(turnS))
             p = p.WithPlaneTurn(-Math.Abs(p.Omega) * turnS, Math.Abs(p.Omega) * turnS);
         p.Settings.ThrottleMin = Arg("--floor", p.Settings.ThrottleMin);
+        // A stage's own floor wins over the vehicle-wide one, and the game writes one per stage, so --floor sets those too.
+        if (args.Contains("--floor"))
+        {
+            double fl = p.Settings.ThrottleMin;
+            AscentStage[] st = p.Stages.Select(x => double.IsNaN(x.ThrottleMin) || x.ThrottleMin < 0.99 ? x.WithThrottleMin(fl) : x).ToArray();   // a stage held at full thrust (solids, 0.99) stays held
+            p = new AscentProblem
+            {
+                Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0, Stages = st,
+                Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
+                TargetRadialRate = p.TargetRadialRate, PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
+                PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax, LiftoffDirection = p.LiftoffDirection, Settings = p.Settings,
+                Recovery = p.Recovery,
+            };
+        }
         // --set Name=value (repeatable): any numeric or boolean AscentSettings field, to try a tuning against a dumped problem.
         for (int i = 0; i + 1 < args.Length; i++)
         {
@@ -170,9 +186,19 @@ internal static class AscentCheck
         if (sol.Nodes > 0)
             Console.WriteLine($"to orbit {sol.FinalMass / 1000.0:F2} t, burns {string.Join(" / ", sol.BurnTime.Select(b => b.ToString("F1")))} s, "
                 + $"max q {sol.DynamicPressure.Max() / 1000.0:F1} kPa, max q-alpha {sol.QAlpha.Max():F0}, miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s");
+        if (double.IsFinite(sol.RecoveryReserveKg))
+            Console.WriteLine($"booster keeps {sol.RecoveryReserveKg:F0} kg against a need of {sol.RecoveryRequiredKg:F0} kg: {sol.BoostbackDv:F0} m/s boostback, {sol.LandingDv:F0} m/s landing, separates at {sol.SeparationTime:F1} s");
         if (p.PlaneTurnMin != p.PlaneTurnMax)
             Console.WriteLine($"plane turned {sol.PlaneTurn * 180.0 / Math.PI:F3} deg: a lift-off {(p.Omega != 0.0 ? -sol.PlaneTurn / p.Omega : double.NaN):F1} s later, or that much more LAN");
         Console.WriteLine($"{(sol.Usable ? "usable" : "not usable")}: {sol.Status}, gates {(sol.GatesMet ? "met" : "not met")}, last predicted gain {sol.RemainingGainKg:F2} kg");
+        // --throttle: the plan's throttle node by node, where it is below full - what UPFG would have to inherit after the hand-over.
+        if (args.Contains("--throttle"))
+            for (int n = 0; n < sol.Nodes; n++)
+            {
+                double u = Math.Sqrt(sol.Throttle[3 * n] * sol.Throttle[3 * n] + sol.Throttle[3 * n + 1] * sol.Throttle[3 * n + 1] + sol.Throttle[3 * n + 2] * sol.Throttle[3 * n + 2]);
+                double rr = Math.Sqrt(sol.Position[3 * n] * sol.Position[3 * n] + sol.Position[3 * n + 1] * sol.Position[3 * n + 1] + sol.Position[3 * n + 2] * sol.Position[3 * n + 2]);
+                Console.WriteLine($"  node {n,3} stage {sol.NodeStage[n] + 1} T+{sol.Time[n],6:F1} s {(rr - p.BodyRadius) / 1000.0,6:F1} km throttle {u * 100.0,5:F1} % accel {u * p.Stages[sol.NodeStage[n]].Thrust / sol.Mass[n] / 9.80665,5:F2} g");
+            }
         return sol.Usable ? 0 : 1;
     }
 

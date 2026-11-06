@@ -202,6 +202,9 @@ public static partial class GuidanceWindow
     /// </summary>
     private const double BoostbackRateTau = 0.5;
 
+    /// <summary>How near the burn direction the booster itself must point, degrees, before the flip stops being slewed and is commanded straight to it. Well short of a half turn, so the shortest way round is unambiguously the way it is already turning.</summary>
+    private const double BoostbackFlipFreeDeg = 135.0;
+
     /// <summary>
     /// Burn-duration backstop as a multiple of the burn time predicted at ignition.
     ///
@@ -535,6 +538,10 @@ public static partial class GuidanceWindow
         // The command SLEWS toward the target rather than jumping to it, and the slew is the manoeuvre in the rotation and entry phases rather than a guard on one: BoostbackSlewDegS is the rate the booster actually turns at.
         // When the slew binds, the published rate is the SLEW's, not the target's - a feedforward the command is not following would have the FC drive toward one rate while the target it can see moved at another.
         double maxRad = _s.BoostbackSlewDegS * Math.PI / 180.0 * dt;
+        // THE FLIP, ONCE IT IS GOING THE RIGHT WAY, AS FAST AS THE BOOSTER CAN TURN. The slew sets the direction of a turn that can start near a half turn away, where the shortest way round is no answer at all; once the booster itself is within BoostbackFlipFreeDeg of the burn direction, the shortest way is the way it is already turning, and the command goes straight there. The flight computer then turns it at whatever the gimbals give it, rather than at BoostbackSlewDegS. Every second of the flip is kilometres further from the site.
+        if (_s.BoostbackPhase == BoostbackPhase.Rotation
+            && AngleBetween(KsaFrameBridge.ThrustAxisCci(vehicle), want) <= BoostbackFlipFreeDeg * Math.PI / 180.0)
+            maxRad = double.PositiveInfinity;
         double3 slewed = SlewToward(_s.CommandDir, want, maxRad, out bool clamped);
         if (clamped && dt > 1e-9)
         {

@@ -76,10 +76,12 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --ascent-solids solid motors' thrust curves, pinned burns and a core throttled to outlast its boosters
           --ascent-glimit a thrust acceleration limit that binds, one that does not, and which stages take it
           --ascent-aoa    drag that grows with the angle of attack, as KSA's does, on 2stage_new
+          --ascent-recovery the booster reserve chosen by the solve, held to what the booster needs to come home
           --3dof          the 3-DOF glide-and-burn loop against 3dof.py's result
           --3dof-model    the KSA point-mass model: AD slopes, the rotating frame against CCI, lift and thrust
           --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
           --3dof-mpc      the glide-and-burn guidance flown closed loop against dispersed drag, lift, thrust and attitude lag
+          --boostback-replay <file> [--delay s] [--min-pitch deg]  the booster's own burn planner from where the plan separates it
           --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
                           solve an ascent problem the game dumped, with the full trace
 
@@ -173,10 +175,21 @@ if (args.Contains("--impact"))
     return ImpactCheck.Run();
 }
 
+if (args.Contains("--boostback-replay"))
+{
+    int at = Array.IndexOf(args, "--boostback-replay");
+    return BoostbackFromPlanCheck.Run(at + 1 < args.Length ? args[at + 1] : "", args);
+}
+
 if (args.Contains("--ascent-replay"))
 {
     int at = Array.IndexOf(args, "--ascent-replay");
     return AscentCheck.Replay(at + 1 < args.Length ? args[at + 1] : "", args);
+}
+
+if (args.Contains("--ascent-recovery"))
+{
+    return AscentRecoveryCheck.Run(verbose);
 }
 
 if (args.Contains("--ascent-aoa"))

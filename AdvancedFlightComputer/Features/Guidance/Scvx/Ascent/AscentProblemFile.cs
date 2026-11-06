@@ -55,6 +55,22 @@ public static class AscentProblemFile
         public double QAlphaMax { get; set; }
         public double? PlaneTurnMin { get; set; }
         public double? PlaneTurnMax { get; set; }
+        public RecoveryDto? Recovery { get; set; }
+    }
+
+    /// <summary>AscentRecovery. Its drag is the problem's own table and its air the problem's; only the lift is its own, sampled on the same grid.</summary>
+    private sealed class RecoveryDto
+    {
+        public int Stage { get; set; }
+        public double InitialReserveKg { get; set; }
+        public double BoosterDryKg { get; set; }
+        public double ExhaustVelocity { get; set; }
+        public double[] SiteCci { get; set; } = [];
+        public double ReferenceArea { get; set; }
+        public double Alpha { get; set; }
+        public double LandingFactor { get; set; }
+        public double BoostbackMargin { get; set; }
+        public double[]? LiftTable { get; set; }
     }
 
     private static readonly double[] MachSamples = AeroTable.DefaultMachBreakpoints;
@@ -110,6 +126,22 @@ public static class AscentProblemFile
                 dto.CdTable = MachSamples.SelectMany(m => dto.CdAlphaDeg.Select(a => table.Cd(m, a * Math.PI / 180.0))).ToArray();
             }
         }
+        if (p.Recovery is AscentRecovery rec)
+            dto.Recovery = new RecoveryDto
+            {
+                Stage = rec.Stage,
+                InitialReserveKg = rec.InitialReserveKg,
+                BoosterDryKg = rec.BoosterDryKg,
+                ExhaustVelocity = rec.ExhaustVelocity,
+                SiteCci = rec.SiteCci,
+                ReferenceArea = rec.ReferenceArea,
+                Alpha = rec.Alpha,
+                LandingFactor = rec.LandingFactor,
+                BoostbackMargin = rec.BoostbackMargin,
+                LiftTable = rec.Lift is { } lift
+                    ? MachSamples.SelectMany(m => AeroTable.DefaultAlphaBreakpointsDeg.Select(a => lift.Cd(m, a * Math.PI / 180.0))).ToArray()
+                    : null,
+            };
         return JsonSerializer.Serialize(dto, new JsonSerializerOptions { WriteIndented = true });
     }
 
@@ -138,6 +170,24 @@ public static class AscentProblemFile
             }
             air = new KsaAscentAtmosphere(atm, table);
         }
+        AscentRecovery? recovery = null;
+        if (dto.Recovery is RecoveryDto r && air is KsaAscentAtmosphere ka && ka.Table is { } drag)
+            recovery = new AscentRecovery
+            {
+                Stage = r.Stage,
+                InitialReserveKg = r.InitialReserveKg,
+                BoosterDryKg = r.BoosterDryKg,
+                ExhaustVelocity = r.ExhaustVelocity,
+                SiteCci = r.SiteCci,
+                ReferenceArea = r.ReferenceArea,
+                Drag = drag,
+                Lift = r.LiftTable is { } lt && lt.Length == MachSamples.Length * AeroTable.DefaultAlphaBreakpointsDeg.Length
+                    ? new AeroTable(MachSamples, AeroTable.DefaultAlphaBreakpointsDeg, lt) : null,
+                Alpha = r.Alpha,
+                Air = ka.Atmosphere,
+                LandingFactor = r.LandingFactor,
+                BoostbackMargin = r.BoostbackMargin,
+            };
         return new AscentProblem
         {
             Mu = dto.Mu,
@@ -165,6 +215,7 @@ public static class AscentProblemFile
             QAlphaMax = dto.QAlphaMax,
             PlaneTurnMin = dto.PlaneTurnMin ?? 0.0,
             PlaneTurnMax = dto.PlaneTurnMax ?? 0.0,
+            Recovery = recovery,
         };
     }
 }

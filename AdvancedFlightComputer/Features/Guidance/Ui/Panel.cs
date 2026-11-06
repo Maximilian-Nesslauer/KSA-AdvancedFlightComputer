@@ -211,8 +211,12 @@ public static partial class GuidanceWindow
         if (TintedButton(terminalLanding ? "LANDING ACTIVE" : "EXECUTE", size, green, lit)
             && !terminalLanding)
         {
+            // A boostback already flying is not started again: that put it back to settling, and a booster coming home at 3 km/s lost 10 s to two presses (2026-11-05). ABORT stops it.
             if (_panelTab == GuidanceTab.Boostback)
-                ExecuteBoostback(vehicle, orbit, parent);
+            {
+                if (!BoostbackLive)
+                    ExecuteBoostback(vehicle, orbit, parent);
+            }
             else if (_panelTab == GuidanceTab.Ascent && _s.AscentMethod == AscentMethod.GravityTurn)
                 ExecuteGravityTurn(vehicle, orbit, parent);
             else if (_panelTab == GuidanceTab.Ascent)

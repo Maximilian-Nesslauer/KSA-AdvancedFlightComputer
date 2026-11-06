@@ -712,6 +712,11 @@ public static class BoostbackShooter
         public ShotResult Shot;
     }
 
+    /// <summary>The scan for a starting pitch that solves, when the guess does not (Solve): this far apart, this many each side, no steeper than this.</summary>
+    private const double PitchScanDeg = 10.0;
+    private const int PitchScanSteps = 6;
+    private const double PitchScanMaxDeg = 80.0;
+
     /// <summary>
     /// OUTER LOOP: choose the pitch and turn rates that need the SHORTEST burn.
     ///
@@ -756,8 +761,32 @@ public static class BoostbackShooter
         double best = Evaluate(in template, in frame, x0, mass0, pitch, pRate, yRate,
                                target, in coastOpt, scratch, maxDuration,
                                ref yawSeed, ref durSeed, ref shots, out InnerResult bestInner);
+        // THE STARTING PITCH MAY BE ONE NO BURN SOLVES AT, where another is fine. A long boostback near the propellant limit is the case: from 3.3 km/s at 241 km the cold guess of 10 deg needs more than the tanks hold, and 30 deg lands it with 0.2 t to spare (2026-11-05). Giving up there left the booster with no plan at all, so scan out from the guess, either side, for a pitch that does solve, and search from that.
+        for (int k = 1; !bestInner.Converged && k <= PitchScanSteps; k++)
+        {
+            for (int side = 0; side < 2 && !bestInner.Converged; side++)
+            {
+                double trial = pitch + (side == 0 ? 1.0 : -1.0) * k * PitchScanDeg;
+                if (trial < minPitchDeg || trial > PitchScanMaxDeg)
+                    continue;
+                double y = guess.YawDeg, d = guess.Duration;
+                double v = Evaluate(in template, in frame, x0, mass0, trial, pRate, yRate,
+                                    target, in coastOpt, scratch, maxDuration,
+                                    ref y, ref d, ref shots, out InnerResult inner);
+                if (inner.Converged)
+                {
+                    best = v; pitch = trial; bestInner = inner; yawSeed = y; durSeed = d;
+                }
+            }
+        }
         if (!bestInner.Converged)
+        {
+            // Why, said: out of propellant, into the ground, or no burn reaching the site, from the starting pitch's shot.
+            res.Shot = bestInner.Shot;
+            res.MissM = bestInner.MissM;
+            res.Shots = shots;
             return res;
+        }
 
         // The pattern search's first step should match how far the answer is expected to have moved.
         // Cold, that is the whole plausible range; warm - re-solving a couple of seconds later from the last plan - it is a degree or two, and starting at 8 degrees there wastes most of the search overshooting.

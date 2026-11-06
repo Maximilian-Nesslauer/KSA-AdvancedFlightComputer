@@ -4,6 +4,8 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>AdvancedFlightComputer.Guidance.Scvx</RootNamespace>
+    <!-- Optimised in Debug too: the convex ascent and the impact predictions run here, and unoptimised they took a booster plan 40 s in game against 16 s. The mod's own Debug logging is unaffected. -->
+    <Optimize>true</Optimize>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="../Numerics/AdvancedFlightComputer.Guidance.Numerics.csproj" />

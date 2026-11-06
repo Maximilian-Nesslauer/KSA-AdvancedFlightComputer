@@ -147,6 +147,9 @@ public static partial class GuidanceWindow
 
         GaugeRowText("Solve", $"{sol.Message}, {sol.Iterations} iterations ({sol.Accepted} accepted), {plan.WallSeconds:F1} s",
             sol.Usable ? CvxDim : CvxWarn);
+        if (double.IsFinite(sol.RecoveryReserveKg))
+            GaugeRowText("Booster", $"keeps {sol.RecoveryReserveKg / 1000.0:F2} t: {sol.BoostbackDv:F0} m/s boostback + {sol.LandingDv:F0} m/s landing, separates at T+{sol.SeparationTime:F0} s",
+                sol.RecoveryReserveKg >= sol.RecoveryRequiredKg - 50.0 ? CvxDim : CvxWarn);
         if (plan.LaunchDelayS != 0.0)
             GaugeRowText("Launch time", $"{Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window");
         else if (plan.LanChosen)

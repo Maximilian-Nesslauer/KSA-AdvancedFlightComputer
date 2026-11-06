@@ -373,7 +373,7 @@ public static partial class GuidanceWindow
         GuidanceLog.Info(vehicle, $"ascent started to {_s.PeKm:F0} x {_s.ApKm:F0} km, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg"
             + $", arg. Pe {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") + " deg" : "free")}"
             + $" (engage {_s.Engage}, auto engines and staging {_s.AutoStage}, g-limit {(_s.GLimitEnabled ? _s.GLimitG.ToString("F1") + " g" : "off")}, structural limit {KsaEnginePerf.StructuralAccelerationLimit(vehicle) / StandardGravity:F1} g"
-            + $", reserve {(_s.ReserveArmed ? _s.ReserveKg.ToString("F0") + " kg" : "off")}, "
+            + $", booster reserve {(BoostbackTarget() == null ? "off (no booster target set)" : _s.ReserveArmed ? (_s.ReserveKg > 0.0 ? $"{_s.ReserveKg:F0} kg, sized by the plan" : $"none ({_s.ReserveNote})") : $"off ({(_s.ReserveNote.Length > 0 ? _s.ReserveNote : "no stage model yet")})")}, "
             + (_s.FlyingPlan != null
                 ? $"convex profile to {_s.ConvexHandoverAltKm:F0} km, planned {_s.FlyingPlan.Solution.FinalMass / 1000.0:F2} t to orbit"
                 : $"turn from {_s.TurnStartAltKm:F1} km at {_s.TurnRateDegS:F2} deg/s"

@@ -374,6 +374,8 @@ public sealed class AscentPlan
     public bool LanChosen { get; init; }
     /// <summary>ConvexOptimiseTiming when it was planned, so a change to it asks for a new plan.</summary>
     public bool OptimisedTiming { get; init; }
+    /// <summary>The booster and landing target it sized the reserve for, GuidanceWindow.RecoverySiteKey; empty with no target. A target set, moved or cleared since asks for a new plan.</summary>
+    public string RecoverySite { get; init; } = "";
     public double Mass0 { get; init; }
     /// <summary>The lift-off position in the body-fixed frame, to tell whether the vehicle has moved since.</summary>
     public double3 StartCcf { get; init; }

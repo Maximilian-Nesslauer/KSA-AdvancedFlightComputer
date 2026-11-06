@@ -11,7 +11,7 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 /// </summary>
 internal static class AscentAoaCheck
 {
-    private const double DragArea = 38.12363600646471;
+    internal const double DragArea = 38.12363600646471;
     // The box law, as m^2 of CdA: nose face 0.3 Ax, tail face 1.0 Ax, the flanks 1.2 A_flank (roll-averaged) times |sin alpha|, and the skin term.
     private const double NoseFace = 0.3 * 9.6, TailFace = 1.0 * 9.6, Flanks = 217.6, Skin = 94.9 - NoseFace;
 
@@ -28,7 +28,7 @@ internal static class AscentAoaCheck
     }
 
     /// <summary>The box law's Cd against the table's retrograde-first angle, referenced to the stage drag area, flat in Mach as KSA's is.</summary>
-    private static AeroTable Table(bool attitude)
+    internal static AeroTable Table(bool attitude)
     {
         double[] mach = AeroTable.DefaultMachBreakpoints;
         double[] alpha = AeroTable.DefaultAlphaBreakpointsDeg;
@@ -46,7 +46,7 @@ internal static class AscentAoaCheck
         return new AeroTable(mach, alpha, cd);
     }
 
-    private static AscentProblem Problem(AeroTable table)
+    internal static AscentProblem Problem(AeroTable table)
     {
         AscentStage[] stages =
         [

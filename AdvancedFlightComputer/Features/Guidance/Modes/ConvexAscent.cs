@@ -77,10 +77,15 @@ public static partial class GuidanceWindow
             if (plan != null)
             {
                 _s.AscentPlan = plan;
+                // The booster reserve is the plan's: re-read it now rather than at the next 4 Hz tick, so a launch straight from EXECUTE stages on it from the start.
+                _s.StageModelDirty = true;
                 AscentSolution sol = plan.Solution;
                 // A chosen LAN is the target now: the panel shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
                 if (plan.Usable && plan.LanChosen)
                     _s.LanDeg = plan.LanDeg;
+                string booster = plan.Usable && double.IsFinite(sol.RecoveryReserveKg)
+                    ? $" Booster keeps {sol.RecoveryReserveKg / 1000.0:F2} t for a {sol.BoostbackDv:F0} m/s boostback and a {sol.LandingDv:F0} m/s landing."
+                    : "";
                 string timing = !plan.Usable ? ""
                     : plan.LaunchDelayS != 0.0 ? $" Lifts off {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window."
                     : plan.LanChosen ? $" LAN {plan.LanDeg:F2} deg." : "";
@@ -93,7 +98,7 @@ public static partial class GuidanceWindow
                     ? $" The first solve did not converge: max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was retried with looser constraints, max q {plan.QMaxKpa:F0} kPa."
                     : "";
                 _s.AscentPlanStatus = plan.Usable
-                    ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{relaxed}"
+                    ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}"
                     : $"No converged plan: {sol.Message}.{relaxed}{hint}";
                 // More than one attempt's line means the job retried looser - a relaxed max q or another stage - and that did not converge either.
                 bool retried = plan.QRelaxed || plan.Notes.Count > 1;
@@ -107,6 +112,7 @@ public static partial class GuidanceWindow
                           + $"insertion miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s; "
                         : "")
                     + (timing.Length > 0 ? timing.Trim() + " " : "")
+                    + (booster.Length > 0 ? booster.Trim() + " " : "")
                     + string.Join("; ", plan.Notes) + ".");
             }
             else
@@ -299,8 +305,9 @@ public static partial class GuidanceWindow
         AscentPhasePlan.Result stagePlan;
         try
         {
+            // No reserve going in: a booster with a target has its reserve sized below, from nothing, and there is no other kind (RefreshReserve).
             stagePlan = AscentPhasePlan.Build(gathered.Phases, gathered.Motors, grid, m0, dragArea, floor, FullThrottleFloor,
-                                              _s.ReserveArmed ? _s.ReserveKg : 0.0, accelLimitG * StandardGravity);
+                                              0.0, accelLimitG * StandardGravity);
         }
         catch (ArgumentException e)
         {
@@ -398,6 +405,43 @@ public static partial class GuidanceWindow
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
 
+        // THE BOOSTER THE PLAN BRINGS HOME: a stage that can fly home has a landing target (BoostbackTarget). The plan sizes its reserve from nothing, for the boostback to that target and the landing, in the first stage that drops its liquid load whole (AscentPhasePlan.ReserveStage) - a core under strap-ons included, which is why the reserve need not be armed yet: it arms when that booster is next to separate. The site has turned with the body to the launch, like the pad.
+        AscentRecovery recovery = null;
+        string recoveryNote = "";
+        ReturnableStage booster = BoostbackTarget();
+        string recoverySite = RecoverySiteKey(booster);
+        if (booster != null && stagePlan.ReserveStage < 0)
+            recoveryNote = "no booster reserve: the stage that separates has no liquid load of its own to keep one in";
+        else if (booster != null)
+        {
+            if (aero.Table == null || aero.Atmosphere == null)
+                recoveryNote = "no booster reserve: no air to fly it home through";
+            else
+            {
+                double latDeg = booster.TargetLatDeg;
+                double lonDeg = booster.TargetLonDeg;
+                double3 site = (SiteDirCcfAt(latDeg, lonDeg) * bodyRadius).Transform(parent.GetCcf2Cci());
+                double turn = omega * (launchAt - now);
+                double cs = Math.Cos(turn), sn = Math.Sin(turn);
+                site = new double3(cs * site.X - sn * site.Y, sn * site.X + cs * site.Y, site.Z);
+                AscentStage b = allStages[stagePlan.ReserveStage];
+                recovery = new AscentRecovery
+                {
+                    Stage = stagePlan.ReserveStage,
+                    InitialReserveKg = stagePlan.ReserveKeptKg,
+                    BoosterDryKg = stagePlan.BoosterDryKg,
+                    ExhaustVelocity = b.Thrust / b.MassFlow,
+                    SiteCci = [site.X, site.Y, site.Z],
+                    ReferenceArea = aero.ReferenceArea,
+                    Drag = aero.Table,
+                    Lift = aero.Lift,
+                    Alpha = GlideNominalAlpha(aero),
+                    Air = aero.Atmosphere,
+                };
+                recoveryNote = $"booster reserve sized by the plan: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) home to lat {latDeg:F3} lon {lonDeg:F3}";
+            }
+        }
+
         AscentProblem Build(int stages, double qLimit, bool[] held)
         {
             AscentStage[] list = AscentPhasePlan.Truncate(allStages, stages);
@@ -424,6 +468,8 @@ public static partial class GuidanceWindow
                 QAlphaMax = qAlphaMax,
                 PlaneTurnMin = turnMin,
                 PlaneTurnMax = turnMax,
+                // Only while the booster is a lower stage: a stack planned on fewer stages carries it to the end.
+                Recovery = recovery != null && recovery.Stage < stages - 1 ? recovery : null,
             };
         }
 
@@ -467,6 +513,7 @@ public static partial class GuidanceWindow
             LaunchDelayS = delay,
             LanChosen = freeLan,
             OptimisedTiming = optimiseTiming,
+            RecoverySite = recoverySite,
             Mass0 = m0,
             StartCcf = startCcf,
             PeKm = peKm,
@@ -510,6 +557,7 @@ public static partial class GuidanceWindow
             + (launchAt > now ? $"lift-off at the window, {launchAt - now:F0} s from now; " : "")
             + (freeTime ? $"launch time free from {-turnMax / omega:+0;-0} to {-turnMin / omega:+0;-0} s of the window; " : "")
             + (freeLan ? $"LAN free {UpfgTarget.RadToDeg(turnMin):+0.00;-0.00} to {UpfgTarget.RadToDeg(turnMax):+0.00;-0.00} deg of the plane over the pad; " : "")
+            + (recoveryNote.Length > 0 ? recoveryNote + "; " : "")
             + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {lanDeg:F2} deg, "
             + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), "
             + $"acceleration limit {accelLimitG:F2} g (g-limit {(double.IsFinite(userGLimit) ? userGLimit.ToString("F2") + " g" : "off")}, structure {structuralGLimit:F2} g) on {allStages.Count(st => double.IsFinite(st.AccelerationLimit))} stage(s), drag area {dragArea:F1} m^2, "
@@ -617,6 +665,11 @@ public static partial class GuidanceWindow
             || p.OptimisedTiming != _s.ConvexOptimiseTiming)
         {
             why = "the convex settings have changed since it was planned";
+            return false;
+        }
+        if (p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
+        {
+            why = "the booster's landing target has changed since it was planned";
             return false;
         }
         double late = launchAt - p.SolvedAt;
