@@ -619,6 +619,7 @@ internal static partial class AfcConsole
         {
             ConsolePage.Launch => LaunchPage.Draw(ctx),
             ConsolePage.Land => LandPage.Draw(ctx),
+            ConsolePage.Tune => TunePage.Draw(ctx),
             _ => CommitSpec.None,
         };
     }

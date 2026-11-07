@@ -286,6 +286,7 @@ internal static partial class AfcConsole
         TuneSet = TuneSet.Ascent;
         TuneLanding = TuneLanding.Approach;
         TuneDiagnostics = TuneDiagnostics.Ascent;
+        Pages.TunePage.Reset();
         GuidanceWindow.ResetConsoleState();
         AfcAlerts.History = null;
     }
@@ -469,7 +470,7 @@ internal static partial class AfcConsole
             && Page is ConsolePage.Launch or ConsolePage.Land or ConsolePage.Tune or ConsolePage.Staging or ConsolePage.Orbit or ConsolePage.Transfer or ConsolePage.Rcs;
         GuidanceWindow.PageShownProbe = Frame.Subject != null ? PageProbe : null;
         OrbitToolsPanel.PreviewVisible = shown && Page == ConsolePage.Orbit && OrbitToolsPanel.Enabled;
-        OrbitToolsPanel.PlanKept = false;
+        OrbitToolsPanel.PlanKept = shown && Page == ConsolePage.Tune && OrbitToolsPanel.Enabled && Pages.TunePage.FlightPlanShown(Frame);
         OrbitToolsPanel.Tick();
         TransferSession.PageVisible = shown && Page == ConsolePage.Transfer;
         _pagesShown = shown;

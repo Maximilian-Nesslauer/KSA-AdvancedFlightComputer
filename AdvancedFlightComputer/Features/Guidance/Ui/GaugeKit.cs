@@ -297,6 +297,8 @@ public static partial class GuidanceWindow
             float h = ConsoleStyle.FrameHeightPx;
             ImGui.SetCursorScreenPos(new float2(right - buttonW, control.Y + (h - ConsoleWidgets.ButtonHeight) * 0.5f));
             bool hit = ConsoleWidgets.Button(PageText.ResetVerb.AsSpan(), ("AfcRowReset" + key).AsSpan(), default);
+            if (!ConsoleUi.LastItemDisabled)
+                TuneRowResets++;
             ConsoleUi.PushSmall();
             float textW = ImGui.CalcTextSize(_text).X;
             ImGui.GetWindowDrawList().AddText(new float2(right - buttonW - gap - textW, control.Y + (h - ImGui.GetFontSize()) * 0.5f), ConsoleStyle.ApplyAlpha(ConsoleStyle.TextMutedU32), _text);
