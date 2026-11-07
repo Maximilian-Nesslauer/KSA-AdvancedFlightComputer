@@ -184,7 +184,7 @@ Use the **LAUNCH** and **LAND** pages of the [AFC console](#afc-console). The fo
 
 - **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
 - **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
-- **Land from orbit** flies the whole chain from orbit: the deorbit burn, a fuel-optimal powered descent with G-FOLD or touchdown guidance (the 6-DOF solver), and a terminal hover to touchdown.
+- **Land from orbit** flies the whole chain from orbit: the deorbit burn, a powered descent with touchdown guidance (the 6-DOF solver) or G-FOLD (a point-mass solver and the fallback), and a terminal hover to touchdown.
 - **Land from here** starts the landing from where the craft is now, with entry guidance, touchdown guidance or G-FOLD, as the **MODE** column of the solver table picks.
 - **Entry guidance** (the 3-DOF solver) flies the glide through the atmosphere with the engine off, lights the engine at the planned ignition and flies the landing burn. With **ENTRY ON GLIDE** on, it takes a boostback glide over by itself, and with **TOUCHDOWN FOR BURN END** on, touchdown guidance takes the last seconds of the burn.
 

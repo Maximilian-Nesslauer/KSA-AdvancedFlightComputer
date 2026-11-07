@@ -41,7 +41,7 @@ internal static class LandSolvers
     {
         LandSolver.Entry => "GLIDE + BURN (ENTRY)",
         LandSolver.Touchdown => "POWERED (TOUCHDOWN)",
-        _ => "MIN FUEL (G-FOLD)",
+        _ => "POINT MASS (G-FOLD)",
     };
 
     public static string Suits(LandSolver solver) => solver switch
@@ -129,7 +129,7 @@ internal static class LandSolvers
     {
         LandSolver.Entry => "Flies the glide with the engine off and lights it at the planned ignition.",
         LandSolver.Touchdown => "Plans and flies a powered descent to the ground.",
-        _ => "Minimum-fuel powered descent.",
+        _ => "Point-mass powered descent, no rotation of the craft. Fallback when TOUCHDOWN cannot plan.",
     };
 
     public static string Card(LandSolver solver, double hoverHandoffM, bool handToTouchdown, double touchdownLastS, bool hoverFlies = true, bool hasAir = true, bool hoverKnown = true)
