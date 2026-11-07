@@ -112,7 +112,7 @@ public static partial class GuidanceWindow
                     : hasPlan && _s.SixDofTrack ? PlanWords.Tracking(g.TrackingError.PositionM)
                     : PlanWords.Of(hasPlan, NoPlanHolds(_s));
                 return new ModeReadout(a, "TOUCHDOWN", "", phase,
-                    Tone(_s.Active && !_s.Converging), planned ? planLeft : ImpactSeconds(vehicle, guidanceBound: false), planned ? PageText.LandsIn : "TO IMPACT",
+                    Tone(_s.Active && !_s.Converging), planned ? planLeft : ImpactSeconds(vehicle, guidanceBound: false), planned ? PageText.LandsIn : "IMPACT T-",
                     LandingNumbers(vehicle, site: true), PageText.HoverNumbersCard, Word: word, HeightShown: true, ImpactShown: true);
             }
             case StopTarget.Landing:
@@ -149,7 +149,7 @@ public static partial class GuidanceWindow
                     {
                         double entryIn = _s.ThreeDofFromGlide && double.IsFinite(_s.GlideTgo) ? _s.GlideTgo - _s.ThreeDofEngageTgoS : double.NaN;
                         double glideMissKm = Math.Sqrt(_s.GlideMissDownM * _s.GlideMissDownM + _s.GlideMissCrossM * _s.GlideMissCrossM) / 1000.0;
-                        return new ModeReadout(a, "BOOSTBACK", "", phase, Tone(true), _s.GlideTgo, "TO IMPACT",
+                        return new ModeReadout(a, "BOOSTBACK", "", phase, Tone(true), _s.GlideTgo, "IMPACT T-",
                             PageText.GlideNumbers(_s.GlideMissDownM, _s.GlideMissCrossM, entryIn), PageText.GlideNumbersCard, PhaseList: chain,
                             Word: PlanWords.Miss(glideMissKm), ImpactShown: true);
                     }
@@ -163,11 +163,11 @@ public static partial class GuidanceWindow
                         HeadValue[] attitude = double.IsFinite(errorDeg) ? [new HeadValue("TURN " + Fmt.Deg(errorDeg), 1)] : [];
                         PlanWord word = !_s.BoostbackHasPlan ? PlanWords.Of(false, NoPlanHolds(_s))
                             : errorDeg <= BoostbackAlignDeg ? PlanWords.OnPlan : PlanWords.Turning;
-                        return new ModeReadout(a, "BOOSTBACK", "", phase, Tone(true), _s.HasImpact ? _s.Impact.TimeOfFlight.V : double.NaN, "TO IMPACT",
+                        return new ModeReadout(a, "BOOSTBACK", "", phase, Tone(true), _s.HasImpact ? _s.Impact.TimeOfFlight.V : double.NaN, "IMPACT T-",
                             MissAnd(missText, missTone, attitude), PhaseList: chain, Word: word, ImpactShown: true);
                     }
                     default:
-                        return new ModeReadout(a, "BOOSTBACK", "", phase, Tone(true), _s.HasImpact ? _s.Impact.TimeOfFlight.V : double.NaN, "TO IMPACT",
+                        return new ModeReadout(a, "BOOSTBACK", "", phase, Tone(true), _s.HasImpact ? _s.Impact.TimeOfFlight.V : double.NaN, "IMPACT T-",
                             MissAnd(missText, missTone), PhaseList: chain, ImpactShown: true);
                 }
             }
@@ -190,7 +190,7 @@ public static partial class GuidanceWindow
                 bool planFlies = flying ? _s.FlyingPlan != null : _s.FlyConvexAscent && !BackupLaunchChosen;
                 PlanWord word = flying ? AscentWord() : a.ControlAcquired ? default : PlanWords.Yours(_s.LaunchArmed ? "WINDOW" : "LIFTOFF");
                 return new ModeReadout(a, "ASCENT", method, phase,
-                    Tone(flying), tgo, flying ? "CUTOFF" : "TO WINDOW", flying ? AscentNumbers(vehicle) : Array.Empty<HeadValue>(), card, NumbersHoldOrbit: flying,
+                    Tone(flying), tgo, flying ? "CUTOFF T-" : "WINDOW T-", flying ? AscentNumbers(vehicle) : Array.Empty<HeadValue>(), card, NumbersHoldOrbit: flying,
                     PhaseList: ascent.Id == AscentMethod.CatsUpfg ? GuidanceModes.AscentPhasesFor(planFlies) : null, Word: word);
             }
             case StopTarget.Registered when a.RegisteredModeLive is GuidanceModeId id && HooksOf(id) is GuidanceModeHooks hooks:
@@ -358,7 +358,7 @@ public static partial class GuidanceWindow
             case LandingPhase.GfoldDescent:
                 return (tgo, PageText.LandsIn);
             case LandingPhase.TerminalCoast:
-                return (ImpactSeconds(vehicle, guidanceBound: false), "TO IMPACT");
+                return (ImpactSeconds(vehicle, guidanceBound: false), "IMPACT T-");
             default:
                 return (double.NaN, "");
         }

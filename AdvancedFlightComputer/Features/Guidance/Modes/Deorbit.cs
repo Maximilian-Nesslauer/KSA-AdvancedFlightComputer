@@ -64,7 +64,7 @@ public static partial class GuidanceWindow
             changed.Add(Ui.Logic.GuidanceSettingSpecs.BrakingAltitudeKm.Label);
         // The gate altitude comes from AIM ALTITUDE, or with G-FOLD from VERTICAL APPROACH plus COM ABOVE LEGS (LandingBrakeGateAltitude), so all of them are named with the two values.
         if (was.GateAltitude != now.GateAltitude)
-            changed.Add(FormattableString.Invariant($"BRAKING GATE ALTITUDE ({was.GateAltitude:F3} m, NOW {was.GateAltitude:F3} m; FROM SOLVER, AIM ALTITUDE, VERTICAL APPROACH OR COM ABOVE LEGS)"));
+            changed.Add(FormattableString.Invariant($"BRAKING GATE ALTITUDE ({was.GateAltitude:F3} m, NOW {now.GateAltitude:F3} m; FROM SOLVER, AIM ALTITUDE, VERTICAL APPROACH OR COM ABOVE LEGS)"));
         if (was.GateUprange != now.GateUprange)
             changed.Add(Ui.Logic.GuidanceSettingSpecs.GateUprangeKm.Label);
         if (was.SinkRate != now.SinkRate)
@@ -285,7 +285,7 @@ public static partial class GuidanceWindow
         _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors captured = request.Source.StateVectors;
         string thrust = request.Engines.Length == 0 ? "NO USABLE ENGINE"
-            : $"MIN THRUST {request.Engines[0].Thrust:F1} N, FULL THRUST {request.Engines[0].Thrust:F1} N";
+            : $"MIN THRUST {request.Engines[0].Thrust:F1} N, FULL THRUST {request.Engines[^1].Thrust:F1} N";
         GuidanceLog.Info(vehicle, $"deorbit search: epoch {request.Epoch:F3} s, site {request.Settings.Latitude:F6} / {request.Settings.Longitude:F6} deg"
             + $", requested arrival {(request.Settings.ArrivalDescentDeg is double angle ? $"{angle:F2} deg down" : "automatic")}"
             + $", braking altitude {request.Settings.BrakingAltitude:F1} m, gate altitude {request.Settings.GateAltitude:F1} m, mass {request.Mass:F1} kg"

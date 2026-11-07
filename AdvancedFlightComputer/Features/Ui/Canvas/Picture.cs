@@ -368,7 +368,7 @@ internal static class Picture
         float bottom = origin.Y + h;
         if (views.Length > 1)
         {
-            int picked = FolderTabs(views, view, idPrefix + "VIEW", origin.X, bottom, avail - right - gap, viewCards);
+            int picked = FolderTabs(views, view, idPrefix + "View", origin.X, bottom, avail - right - gap, viewCards);
             if (picked >= 0)
                 view = picked;
         }

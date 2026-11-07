@@ -163,7 +163,7 @@ internal static class Program
         Check("with no sentence the mark has the row", !FormRules.MarkOwnRow(0f, 200f, 584f, 10f, true));
         Check("no mark has no row", !FormRules.MarkOwnRow(400f, 0f, 584f, 10f, true));
 
-        Check("a real burn never reads as nothing", PageText.BurnAnswer(16.8, "in 1h 37m", 9607.0) == "16.8 m/s in 1h 37m, UNDER 1 % of ~9607 m/s");
+        Check("a real burn never reads as nothing", PageText.BurnAnswer(16.8, "IN 1h 37m", 9607.0) == "16.8 m/s IN 1h 37m, UNDER 1 % OF ~9607 m/s");
         Check("the fuel sentence holds one row", PageText.FuelShort(9757.0, 1949.0).Length * 10.9f <= 584f);
         Check("a node names its cost and its time", PageText.NodeChoice(false, 9969.6, 4500.0).StartsWith("ASC ", StringComparison.Ordinal) && PageText.NodeChoice(true, 9757.0, 1500.0).StartsWith("DESC 9757 m/s, ", StringComparison.Ordinal));
         Check("a node out of reach has no numbers", PageText.NodeChoice(true, double.NaN, double.NaN) == "DESC NONE");
@@ -325,7 +325,7 @@ internal static class Program
         Check("a path that curves leaves the verb lit on LAND NOW, as on DEORBIT", curve.Lit);
 
         VerbFit noStage = SituationVerbs.For(GuidanceModeId.Boostback, new CommitGates(false, false, "", "", false, Where: CraftSituation.Ground, NoStageHome: true));
-        Check("the footer reads the fact of the BOOSTERS fold", noStage.Reason == "No stage can fly home." && noStage.NextPage == null && noStage.Calm);
+        Check("the footer reads the fact of the BOOSTERS fold", noStage.Reason == "NO STAGE CAN FLY HOME." && noStage.NextPage == null && noStage.Calm);
         Check("with such a stage it starts after separation", SituationVerbs.For(GuidanceModeId.Boostback, new CommitGates(false, false, "", "", false, Where: CraftSituation.Ground)).Reason == SituationVerbs.AfterSeparation);
 
         foreach (VerbFit normal in new[]
@@ -337,8 +337,8 @@ internal static class Program
                      SituationVerbs.For(GuidanceModeId.DeorbitLand, new CommitGates(false, false, "", "", false, Where: CraftSituation.Ground)),
                  })
             Check("a normal state is calm: " + normal.Reason, !normal.Fits && normal.Calm);
-        Check("the words of the ground", SituationVerbs.OnGround == "Launch first." && SituationVerbs.ForManeuver(CraftSituation.Ground).Reason == SituationVerbs.OnGround);
-        Check("the words of an orbit", SituationVerbs.InOrbitShape == "Next: shape the orbit.");
+        Check("the words of the ground", SituationVerbs.OnGround == "LAUNCH FIRST." && SituationVerbs.ForManeuver(CraftSituation.Ground).Reason == SituationVerbs.OnGround);
+        Check("the words of an orbit", SituationVerbs.InOrbitShape == "NEXT: SHAPE ORBIT.");
 
         Check("a take-over says what ends and what flies", PageText.TakeOverOutcome(GuidanceModeId.GfoldHere, "TOUCHDOWN") == "Replaces TOUCHDOWN with G-FOLD.");
         Check("also from a landing", PageText.TakeOverOutcome(GuidanceModeId.SixDofHere, "LANDING") == "Replaces LANDING with TOUCHDOWN.");
@@ -374,7 +374,7 @@ internal static class Program
                      SituationVerbs.GuidanceFlies, SituationVerbs.DeorbitFlies(GuidanceModeId.GfoldHere), SituationVerbs.AscentFliesLand, SituationVerbs.EntryNeedsAir, SituationVerbs.GfoldNeedsNoAir, SituationVerbs.GfoldEndsDeorbit,
                      PageText.PassesFar, PageText.PressPlansNext, PageText.GfoldNoHoverOutcome, PageText.CorrectionOutcome, PageText.TriesAgain,
                      PageText.NoGimbalFact, PageText.OverPoweredFact(0.45), PageText.PlanOld, PageText.BurnAfterImpact, PageText.HoverNoEngine,
-                     PageText.FuelShort(9757.0, 1978.0), PageText.FuelShort(9757.0, 1978.0, chained: true), PageText.BurnAnswer(9757.5, "in 12h 44m", 11978.0),
+                     PageText.FuelShort(9757.0, 1978.0), PageText.FuelShort(9757.0, 1978.0, chained: true), PageText.BurnAnswer(9757.5, "IN 12h 44m", 11978.0),
                      PageText.TakeOverOutcome(GuidanceModeId.SixDofHere, "TOUCHDOWN"), PageText.TakeOverOutcome(GuidanceModeId.AscentUpfg, "BOOSTBACK"),
                      PageText.PassesOutcome(12), PageText.LandingStopped(true, true), PageText.SiteFar,
                  })
@@ -1192,7 +1192,7 @@ internal static class Program
         Check("the row of passes says what a split saves beside its field", PageText.PassesRowDetail(1) == "SPLIT SAVES UNDER 1 m/s" && PageText.PassesRowDetail(3).Length == 0);
         Check("a saving that nothing calculated is not said", PageText.PassesRowDetail(1, savingKnown: false).Length == 0 && !PageText.PassesRowTip(false).Contains("saves") && PageText.PassesRowTip(true).Contains("saves"));
         Check("the saving knows when it is unknown", double.IsNaN(FormRules.PassesSaving(915.0, 400.0, double.NaN)) && double.IsNaN(FormRules.PassesSaving(915.0, 0.0, 5500.0)) && double.IsFinite(FormRules.PassesSaving(915.0, 24.0, 5500.0)));
-        Check("the search range in the time form", PageText.SearchLabel(864.0, 2592.0) == "SEARCH: TOF 14m 24s to 43m 12s");
+        Check("the search range in the time form", PageText.SearchLabel(864.0, 2592.0) == "SEARCH: TOF 14m 24s TO 43m 12s");
         Check("G-FOLD names where the hover starts", PageText.HoverHandOverLabel(10.0, true) == "HANDOVER: HOVER FROM 10 m");
         Check("a flown orbit against its goal", PageText.FlownAgainstGoal(200.0, 421.0, 200.0, 420.0) == "FLOWN 200 x 421 km, GOAL 200 x 420 km");
         Check("a coast has no orbit yet", PageText.FlownAgainstGoal(-812.0, 192.0, 200.0, 420.0) == "FLOWN TO AP 192 km, GOAL 200 x 420 km");
@@ -1238,13 +1238,13 @@ internal static class Program
         static FoldPart Off(string name) => new(name, false);
         const string How = PageText.HowItFlies;
 
-        Check("a fold lists the parts that show", FoldRules.Label(How, [On(FoldNames.Plane), On(FoldNames.Insertion), On(FoldNames.Turn)]) == "GNC: Plane, insertion, turn");
-        Check("a part with no rows stays out of the label", FoldRules.Label(How, [On(FoldNames.Turn), Off(FoldNames.InMap)]) == "GNC: Turn"
-            && FoldRules.Label(How, [Off(FoldNames.InMap), On(FoldNames.Turn)]) == "GNC: Turn");
-        Check("the label follows the state", FoldRules.Label(How, [On(FoldNames.Turn), On(FoldNames.InMap)]) == "GNC: Turn, show in map");
+        Check("a fold lists the parts that show", FoldRules.Label(How, [On(FoldNames.Plane), On(FoldNames.Insertion), On(FoldNames.Turn)]) == "GNC: PLANE, INSERTION, TURN");
+        Check("a part with no rows stays out of the label", FoldRules.Label(How, [On(FoldNames.Turn), Off(FoldNames.InMap)]) == "GNC: TURN"
+            && FoldRules.Label(How, [Off(FoldNames.InMap), On(FoldNames.Turn)]) == "GNC: TURN");
+        Check("the label follows the state", FoldRules.Label(How, [On(FoldNames.Turn), On(FoldNames.InMap)]) == "GNC: TURN, SHOW IN MAP");
         Check("a switch of the picture has the name of its row in the fold", FoldNames.InMap == PageText.ShowInMap && FoldNames.InWorld == PageText.ShowInWorld);
-        Check("the label counts the changed values", FoldRules.Label(How, [On(FoldNames.Turn)], 2) == "GNC: Turn (2 CHANGED)");
-        Check("the reset stays out of the label", FoldRules.Label(How, [new("", true), On(FoldNames.Turn)], 1) == "GNC: Turn (1 CHANGED)");
+        Check("the label counts the changed values", FoldRules.Label(How, [On(FoldNames.Turn)], 2) == "GNC: TURN (2 CHANGED)");
+        Check("the reset stays out of the label", FoldRules.Label(How, [new("", true), On(FoldNames.Turn)], 1) == "GNC: TURN (1 CHANGED)");
         Check("a fold with no part is its name", FoldRules.Label(How, [Off(FoldNames.Turn)]) == How);
 
         Check("no part with rows, no fold", !FoldRules.HasRows([Off(FoldNames.Turn), Off(FoldNames.InMap)]) && !FoldRules.HasRows([]));
@@ -1882,8 +1882,9 @@ internal static class Program
         Check("a far pass reads far", SketchMath.PassToneOf(1003.5, 10.0, 400.0) == PassTone.Far);
         Check("the strip says track and no miss", PageText.PassesTitle.Contains("TRACK FROM SITE") && PageText.NextPassTitle.Contains("TRACK FROM SITE") && !PageText.NextPassTitle.Contains("MISS"));
         Check("the band of the strip has its name", PageText.PassWithin(10.0) == "WITHIN 10 km");
-        Check("the distance of a pass has a clock time", PageText.PassTrack(97.74, 38678.0) == "97.7 km in 10h 44m");
-        Check("the closest pass has its row", PageText.PassClosest(97.74, 38678.0) == "CLOSEST 97.7 km in 10h 44m");
+        Check("the distance of a pass has a clock time", PageText.PassTrack(97.74, 38678.0) == "97.7 km IN 10h 44m");
+        Check("the closest pass has its row", PageText.PassClosest(97.74, 38678.0) == "CLOSEST 97.7 km IN 10h 44m");
+        Check("a time to go in the T- form has no space", PageText.Tgo("IMPACT T-", "3m 00s") == "IMPACT T-3m 00s" && PageText.Tgo(PageText.LandsIn, "42s") == "LANDS T-42s" && PageText.Tgo("BURN IN", "2h 07m") == "BURN IN 2h 07m");
         Check("the next pass has its mark", PageText.PassNext(false) == "NEXT PASS");
         Check("next and closest share one row", PageText.PassNext(true) == "NEXT PASS IS CLOSEST");
         Check("the pass of a deorbit that flies is an estimate with its time first", PageText.PassFlies(112.6, 7585.0) == "PASS IN 2h 06m, NOW 112.6 km OFF");
@@ -2366,7 +2367,7 @@ internal static class Program
 
         var airless = new DescentFacts(true, 1e6, 1e6, 2.5e5, 1.62, 0.0, 0.1, 0.1, 0.4, 0.4, 0.0, 15.0, 0.0, 0.0);
         var noAirHere = new LandNowFacts(LandWay.FromHere, LandSolver.Touchdown, false, false, false, airless);
-        Check("no air stands on the row of entry and it stops that row", LandSolvers.NoteOf(LandSolver.Entry, in noAirHere) == new RowNote("NO AIR", true));
+        Check("no air stands on the row of entry and it stops that row", LandSolvers.NoteOf(LandSolver.Entry, in noAirHere) == new RowNote("NEEDS AIR", true));
         Check("the fact of entry stands on no other row", LandSolvers.NoteOf(LandSolver.Touchdown, in noAirHere).Text.Length == 0 && LandSolvers.NoteOf(LandSolver.Gfold, in noAirHere).Text.Length == 0);
         var airOfEarth = new LandNowFacts(LandWay.FromHere, LandSolver.Gfold, true, false, false, Body: "Earth");
         Check("air stands on the row of G-FOLD with the name of the body", LandSolvers.NoteOf(LandSolver.Gfold, in airOfEarth) == new RowNote("Earth HAS AIR", true));
@@ -2397,8 +2398,8 @@ internal static class Program
         Check("an obstacle on another row takes the dim warning colour", Marks(LandSolver.Gfold, 2, false, new RowNote("Earth HAS AIR", true), true) is [{ Row: 2, Column: 1, Ink: TableInk.WarnDim }]);
         Check("a path that curves has a soft mark on every row, lighter on the band", Marks(LandSolver.Touchdown, 1, true, new RowNote("TWR >1 AT FLOOR"), false) is [{ Column: 1, Ink: TableInk.WarnOnBand }]
             && Marks(LandSolver.Touchdown, 1, false, new RowNote("TWR >1 AT FLOOR"), false) is [{ Column: 1, Ink: TableInk.WarnDim }]);
-        Check("a crash on the chosen row takes the danger colour of the band on its word, and its cause the warning colour", Marks(LandSolver.Entry, 0, true, new RowNote("NO AIR", true), false) is [{ Row: 0, Column: 2, Ink: TableInk.DangerOnBand }, { Row: 0, Column: 1, Ink: TableInk.Warn }]);
-        Check("a crash on another row stays a crash in a dim colour", Marks(LandSolver.Entry, 0, false, new RowNote("NO AIR", true), false) is [{ Column: 2, Ink: TableInk.DangerDim }, { Column: 1, Ink: TableInk.WarnDim }]);
+        Check("a crash on the chosen row takes the danger colour of the band on its word, and its cause the warning colour", Marks(LandSolver.Entry, 0, true, new RowNote("NEEDS AIR", true), false) is [{ Row: 0, Column: 2, Ink: TableInk.DangerOnBand }, { Row: 0, Column: 1, Ink: TableInk.Warn }]);
+        Check("a crash on another row stays a crash in a dim colour", Marks(LandSolver.Entry, 0, false, new RowNote("NEEDS AIR", true), false) is [{ Column: 2, Ink: TableInk.DangerDim }, { Column: 1, Ink: TableInk.WarnDim }]);
         Check("a row with no obstacle takes no colour, so a table claims no success", Marks(LandSolver.Touchdown, 1, true, RowNote.None, true).Count == 0 && Marks(LandSolver.Gfold, 2, false, RowNote.None, false).Count == 0);
         Check("a held row takes no warning", Marks(LandSolver.Touchdown, 1, false, new RowNote(LandSolvers.HeldNote), false).Count == 0);
         Check("the chain of a way that cannot fly is dim", LandSolvers.ChainCannotFly(LandWay.FromHere, LandSolver.Gfold, true, CraftSituation.Orbit, false)
@@ -2841,7 +2842,7 @@ internal static class Program
         Check("the window row names the node and the lead", PageText.WindowCountdown(725.0, true, 180.0) == "T-12m 05s, DESC NODE, 180 s LEAD");
         Check("the window row counts to the lift-off the plan chose", PageText.WindowCountdown(725.0, false, 180.0, 95.0) == "T-13m 40s, ASC NODE, PLAN TIME, 95 s AFTER 180 s LEAD"
             && PageText.WindowCountdown(725.0, false, 180.0, -125.0) == "T-10m 00s, ASC NODE, PLAN TIME, 125 s BEFORE 180 s LEAD");
-        Check("the timing switch names what it chooses", PageText.OptimiseTimingLabel(true) == "LAUNCH TIME" && PageText.OptimiseTimingLabel(false) == "LAN");
+        Check("the timing switch names what it chooses", PageText.OptimiseTimingLabel(true) == "SOLVE LIFTOFF" && PageText.OptimiseTimingLabel(false) == "SOLVE LAN");
         Check("the timing switch is an expert switch of the launch, on by default", GuidanceSettingSpecs.ConvexOptimiseTiming.Tier == UiTier.Expert
             && GuidanceSettingSpecs.ConvexOptimiseTiming.Default
             && Array.IndexOf(GuidanceSettingSpecs.LaunchExpertBools, GuidanceSettingSpecs.ConvexOptimiseTiming) >= 0
@@ -2872,7 +2873,7 @@ internal static class Program
             && GuidanceSettingSpecs.ConvexThrottleMinPct.Default == 80.0 && GuidanceSettingSpecs.BoostbackSeparationS.Default == 0.2);
         Check("the progress has one colon less", PageText.PlanProgress("4 stages: searching for a seed", 3.2) == "4 stages, searching for a seed (3 s)");
 
-        Check("one burn is one line, and the answer row holds what is on board", PageText.BurnFuelLine("Seq 1", 2930.0, 0.0) == "PAID BY Seq 1, ~2.9 t.");
+        Check("one burn is one line, and the answer row holds what is on board", PageText.BurnFuelLine("Seq 1", 2930.0, 0.0) == "PAID BY Seq 1, ~2.9 t");
         Check("a burn with no payer has no line, because the answer row holds what is on board", PageText.BurnFuelLine("", 0.0, 0.0).Length == 0);
         Check("a burn after a burn counts what that burn leaves", PageText.FuelShort(1100.0, 1062.0, chained: true) == "NEEDS 1100 m/s, LAST BURN LEAVES ~1062");
         Check("a burn over budget has no line, because the footer says it", PageText.BurnFuelLine("Seq 1", 2930.0, 2229.5).Length == 0);
@@ -2880,9 +2881,9 @@ internal static class Program
         Check("a press of a deorbit says what it flies and how to get the closest", PageText.PressPlansNext == "Flies the next pass.");
         Check("the pass a deorbit flies is the pass nearest its arrival", SketchMath.NearestTime(new[] { 100.0, 7000.0, 13000.0 }, 6800.0) == 1 && SketchMath.NearestTime(new[] { 100.0 }, double.NaN) == -1 && SketchMath.NearestTime(ReadOnlySpan<double>.Empty, 5.0) == -1);
         Check("the pass that flies has its number", PageText.PassFlies(112.6, 7585.0) == "PASS IN 2h 06m, NOW 112.6 km OFF");
-        Check("the answer row of a burn", PageText.BurnAnswer(916.1, "in 1h 28m", 1978.0) == "916.1 m/s in 1h 28m, 46 % of ~1978 m/s");
-        Check("with no estimate the share goes", PageText.BurnAnswer(916.1, "in 1h 28m", double.NaN) == "916.1 m/s in 1h 28m");
-        Check("a chain says the share of what is left", PageText.BurnAnswer(916.1, "in 1h 28m", 1062.0, chained: true) == "916.1 m/s in 1h 28m, 86 % of ~1062 m/s left");
+        Check("the answer row of a burn", PageText.BurnAnswer(916.1, "IN 1h 28m", 1978.0) == "916.1 m/s IN 1h 28m, 46 % OF ~1978 m/s");
+        Check("with no estimate the share goes", PageText.BurnAnswer(916.1, "IN 1h 28m", double.NaN) == "916.1 m/s IN 1h 28m");
+        Check("a chain says the share of what is left", PageText.BurnAnswer(916.1, "IN 1h 28m", 1062.0, chained: true) == "916.1 m/s IN 1h 28m, 86 % OF ~1062 m/s LEFT");
     }
 
     private static void ManeuverSeeds()
@@ -3008,8 +3009,8 @@ internal static class Program
         Check("the longest band takes at most two lines", band.Length <= 176, band.Length.ToString());
         string common = FailureBand.Text(new BandFacts("G-FOLD gave up", EngineNow.Off, FlownBy.You, 31.0));
         Check("a common band takes one line", common == "G-FOLD gave up. ENGINE OFF. MANUAL. IMPACT T-31 s" && common.Length <= 88, common);
-        Check("the created burn says what was made", PageText.BurnCreated(915.47, "1h 28m") == "BURN CREATED: 915.5 m/s in 1h 28m.");
-        Check("the created transfer says what was made", PageText.TransferCreated(915.47, "1h 28m") == "TRANSFER CREATED: 915.5 m/s in 1h 28m.");
+        Check("the created burn says what was made", PageText.BurnCreated(915.47, "1h 28m") == "BURN CREATED: 915.5 m/s IN 1h 28m.");
+        Check("the created transfer says what was made", PageText.TransferCreated(915.47, "1h 28m") == "TRANSFER CREATED: 915.5 m/s IN 1h 28m.");
         Check("a target at the apsis names the apsis", PageText.AtTargetApse(true).Contains("PE") && PageText.AtTargetApse(false).Contains("AP"));
     }
 
@@ -3342,7 +3343,7 @@ internal static class Program
         {
             System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("de-DE");
             Check("the decimal point does not follow the culture", Fmt.Dv(1.5) == "1.5 m/s" && Fmt.Percent(0.5) == "50 %" && Fmt.TimeFine(1.5) == "1.5 s");
-            Check("a sentence of a page does not follow the culture", PageText.BurnAnswer(1.5, "in 1m", 100.5) == "1.5 m/s in 1m, 1 % of ~100 m/s"
+            Check("a sentence of a page does not follow the culture", PageText.BurnAnswer(1.5, "IN 1m", 100.5) == "1.5 m/s IN 1m, 1 % OF ~100 m/s"
                 && PageText.HoverSetpoint(1.5, 0.0, 0.0).StartsWith("E 1.5"));
         }
         finally

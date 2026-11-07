@@ -75,7 +75,7 @@ internal static class ConsoleHead
 
     private static string TgoText(in ModeReadout mode)
         => double.IsFinite(mode.TgoSeconds) && mode.TgoLabel.Length > 0
-            ? mode.TgoLabel + " " + FormatHelper.FormatDuration(Math.Max(0.0, mode.TgoSeconds))
+            ? PageText.Tgo(mode.TgoLabel, FormatHelper.FormatDuration(Math.Max(0.0, mode.TgoSeconds)))
             : "";
 
     // A burn that stock AUTO flies says its step beside its name too, and a hover has no step to name.

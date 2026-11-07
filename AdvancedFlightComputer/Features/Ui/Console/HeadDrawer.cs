@@ -93,7 +93,7 @@ internal static class HeadDrawer
         _seen.Add(vehicle.Id);
         string detail = mode.Phase != mode.ModeName ? mode.Phase : "";
         if (double.IsFinite(mode.TgoSeconds) && mode.TgoLabel.Length > 0)
-            detail += (detail.Length > 0 ? "   " : "") + mode.TgoLabel + " " + FormatHelper.FormatDuration(Math.Max(0.0, mode.TgoSeconds));
+            detail += (detail.Length > 0 ? "   " : "") + PageText.Tgo(mode.TgoLabel, FormatHelper.FormatDuration(Math.Max(0.0, mode.TgoSeconds)));
         _others.Add(new CraftRow(vehicle, vehicle.Id, mode.ModeName, detail, mode.Activity));
     }
 

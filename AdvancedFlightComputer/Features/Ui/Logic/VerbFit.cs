@@ -13,22 +13,22 @@ internal readonly record struct VerbFit(string Reason, ConsolePage? NextPage = n
 
 internal static class SituationVerbs
 {
-    public const string OnGround = "Launch first.";
-    public const string InOrbitShape = "Next: shape the orbit.";
+    public const string OnGround = "LAUNCH FIRST.";
+    public const string InOrbitShape = "NEXT: SHAPE ORBIT.";
     public const string CoastingShape = InOrbitShape;
     public const string EscapingShape = InOrbitShape;
-    public const string FallingLand = "Next: land.";
-    public const string AfterSeparation = "Starts after separation.";
-    public const string NoStageHome = "No stage can fly home.";
-    public const string NoImpact = "No impact predicted.";
-    public const string NeedsOrbit = "Needs an orbit.";
-    public const string BelowBrakingStart = "Too low for a deorbit.";
+    public const string FallingLand = "NEXT: LAND.";
+    public const string AfterSeparation = "STARTS AFTER SEPARATION.";
+    public const string NoStageHome = "NO STAGE CAN FLY HOME.";
+    public const string NoImpact = "NO IMPACT PREDICTED.";
+    public const string NeedsOrbit = "NEEDS ORBIT.";
+    public const string BelowBrakingStart = "TOO LOW FOR DEORBIT.";
     public const string DeorbitFirst = "DEORBIT FIRST.";
-    public const string BoostbackNoAir = "No air. Ends in an impact.";
-    public const string AscentFlies = "Ascent active. Plan after cutoff.";
-    public const string GuidanceFlies = "AFC active. Plan after it ends.";
-    public const string AscentFliesLand = "Ascent active. Plan the landing after cutoff.";
-    public const string AscentFliesEnds = "Ascent active. G-FOLD cannot start.";
+    public const string BoostbackNoAir = "NO AIR. ENDS IN IMPACT.";
+    public const string AscentFlies = "ASCENT ACTIVE. PLAN AFTER CUTOFF.";
+    public const string GuidanceFlies = "AFC ACTIVE. PLAN AFTER IT ENDS.";
+    public const string AscentFliesLand = "ASCENT ACTIVE. LAND AFTER CUTOFF.";
+    public const string AscentFliesEnds = "ASCENT ACTIVE. G-FOLD CANNOT START.";
     public const string BackToFlight = "BACK TO FLIGHT >";
 
     public static readonly VerbFit AscentFliesLandFit = new(AscentFliesLand, ConsolePage.Launch, Plain: true, NextLabel: BackToFlight, NextQuiet: true);

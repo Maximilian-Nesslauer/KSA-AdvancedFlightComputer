@@ -1096,7 +1096,7 @@ public static partial class GuidanceWindow
         KsaGimbalControl.SetLsq(vehicle, default);
         if (!vehicle.Situation.HasAnyContact())
             return;
-        string what = FormattableString.Invariant($"TOUCHDOWN AFTER STOP-SHORT CUT, {-x[5]:F1} m/s, {-x[5]:F1} m FROM TARGET");
+        string what = FormattableString.Invariant($"TOUCHDOWN AFTER STOP-SHORT CUT, {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
         SixDofLog.Event(_s, now, what);
         GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
         ReportLogStop(SixDofLog.Stop(_s));

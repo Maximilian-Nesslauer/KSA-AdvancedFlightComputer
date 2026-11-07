@@ -63,7 +63,7 @@ internal static class FoldRules
         string contents = Contents(parts);
         string count = changed > 0 ? changed.ToString(Fmt.Inv) + " CHANGED" : "";
         string detail = contents.Length > 0 && count.Length > 0 ? contents + " (" + count + ")" : contents + count;
-        return detail.Length > 0 ? name + ": " + Fmt.Sentence(detail) : name;
+        return detail.Length > 0 ? name + ": " + detail.ToUpperInvariant() : name;
     }
 
     public static string FitSummary(string detail, float room, Func<string, float> width)

@@ -534,7 +534,7 @@ public static partial class GuidanceWindow
         ConsoleUi.Readout("PLAN".AsSpan(), FormattableString.Invariant($"{n} POINTS, DT {plan.Dt:F2} s, TF {plan.TimeOfFlight:F1} s").AsSpan());
         if (_s.GfoldThrustStatus.Length > 0)
             ConsoleUi.Readout("THRUST".AsSpan(), Fmt.Sentence(_s.GfoldThrustStatus).AsSpan());
-        ConsoleUi.Readout("LAST SOLVE".AsSpan(), FormattableString.Invariant($"{_s.GfoldSolveMs:F1} ms, {_s.GfoldSolveMs:F1} FRAMES AT 60 Hz").AsSpan());
+        ConsoleUi.Readout("LAST SOLVE".AsSpan(), FormattableString.Invariant($"{_s.GfoldSolveMs:F1} ms, {_s.GfoldSolveMs / 16.7:F1} FRAMES AT 60 Hz").AsSpan());
         ConsoleUi.Readout("FUEL USED".AsSpan(), FormattableString.Invariant($"{plan.FuelUsed:F0} kg").AsSpan());
         ConsoleUi.Readout("LANDING ERROR".AsSpan(), FormattableString.Invariant($"{plan.LandingErrorNorm:F1} m").AsSpan());
         ConsoleUi.Readout("PLAN TIME".AsSpan(), FormattableString.Invariant($"t+{elapsed:F1} s").AsSpan());

@@ -308,7 +308,7 @@ internal static class PageText
     public static string PassesRowTip(bool savingKnown)
         => savingKnown ? "Number of burns. A split into more passes saves little on a short burn." : "Number of burns.";
 
-    public static string SearchLabel(double minS, double maxS) => "SEARCH: TOF " + Fmt.Time(minS) + " to " + Fmt.Time(maxS);
+    public static string SearchLabel(double minS, double maxS) => "SEARCH: TOF " + Fmt.Time(minS) + " TO " + Fmt.Time(maxS);
 
     public const string SearchTip = "Sets the quantity SOLVE searches and whether the destination also becomes the stock target.";
 
@@ -334,7 +334,7 @@ internal static class PageText
 
     public const string AutoStageOffUntilLaunch = "A launch arms AutoStage at lift-off.";
 
-    public const string SequenceCaption = "Delta-v of each box, m/s";
+    public const string SequenceCaption = "DV PER SEQUENCE (m/s)";
 
     public const string ResetFold = "RESET";
 
@@ -614,7 +614,7 @@ internal static class PageText
 
     public const string NextPassTitle = "NEXT PASS, TRACK FROM SITE";
 
-    public static string PassTrack(double km, double inSeconds) => Fmt.KmFine(km) + " in " + Fmt.Time(inSeconds);
+    public static string PassTrack(double km, double inSeconds) => Fmt.KmFine(km) + " IN " + Fmt.Time(inSeconds);
 
     public static string PassNext(bool alsoClosest) => alsoClosest ? "NEXT PASS IS CLOSEST" : "NEXT PASS";
 
@@ -786,7 +786,7 @@ internal static class PageText
             return what;
         double percent = dvMs / budgetMs * 100.0;
         string share = dvMs > 0.0 && percent < 1.0 ? "UNDER 1 %" : string.Create(Inv, $"{percent:F0} %");
-        return string.Create(Inv, $"{what}, {share} of ~{budgetMs:F0} m/s{(chained ? " left" : "")}");
+        return string.Create(Inv, $"{what}, {share} OF ~{budgetMs:F0} m/s{(chained ? " LEFT" : "")}");
     }
 
     public static string PassesOutcome(int passes)
@@ -945,7 +945,7 @@ internal static class PageText
     }
 
     /// <summary>The name of the switch that lets the calculated climb choose its timing: with a target it chooses the launch time, with none the LAN.</summary>
-    public static string OptimiseTimingLabel(bool hasTarget) => hasTarget ? "LAUNCH TIME" : "LAN";
+    public static string OptimiseTimingLabel(bool hasTarget) => hasTarget ? "SOLVE LIFTOFF" : "SOLVE LAN";
 
     /// <summary>The DIAG line of a booster reserve the plan sized: what the booster keeps, for what, and when it separates.</summary>
     public static string PlanBooster(double reserveKg, double boostbackDvMs, double landingDvMs, double separationS)
@@ -979,7 +979,7 @@ internal static class PageText
     private static bool IsPlanStatusTransient(string stored) => stored is "STARTING..." or "SOLVING...";
 
     public static string BurnFuelLine(string payer, double propellantKg, double shortMs)
-        => shortMs <= 0.5 && payer.Length > 0 ? "PAID BY " + payer + ", ~" + Fmt.Mass(propellantKg) + "." : "";
+        => shortMs <= 0.5 && payer.Length > 0 ? "PAID BY " + payer + ", ~" + Fmt.Mass(propellantKg) : "";
 
     public static string PassesPaidBy(string payer) => payer.Length > 0 ? "PAID BY " + payer : "";
 
@@ -1070,6 +1070,9 @@ internal static class PageText
     public static string ImpactOff(double km) => "IMPACT " + Fmt.KmFine(km) + " OFF";
 
     public const string LandsIn = "LANDS T-";
+
+    /// <summary>The time to go of a mode beside its word. A word that ends in T- (IMPACT T-) takes the time with no space, as in IMPACT T-42 s.</summary>
+    public static string Tgo(string label, string time) => label.EndsWith('-') ? label + time : label + " " + time;
 
     /// <summary>The name of a burn that stock AUTO flies in the head, with the step it stands on.</summary>
     public static string StockBurnName(bool burning) => burning ? "BURN ACTIVE" : "BURN ARMED";
@@ -1224,9 +1227,9 @@ internal static class PageText
 
     public static string Landed(string body) => body.Length > 0 ? "LANDED, " + body : "LANDED";
 
-    public static string BurnCreated(double dvMs, string inTime) => "BURN CREATED: " + Fmt.Dv(dvMs) + " in " + inTime + ".";
+    public static string BurnCreated(double dvMs, string inTime) => "BURN CREATED: " + Fmt.Dv(dvMs) + " IN " + inTime + ".";
 
-    public static string TransferCreated(double dvMs, string inTime) => "TRANSFER CREATED: " + Fmt.Dv(dvMs) + " in " + inTime + ".";
+    public static string TransferCreated(double dvMs, string inTime) => "TRANSFER CREATED: " + Fmt.Dv(dvMs) + " IN " + inTime + ".";
 
     public const string CreatedNext = "FLY OR PLAN NEXT BURN";
 

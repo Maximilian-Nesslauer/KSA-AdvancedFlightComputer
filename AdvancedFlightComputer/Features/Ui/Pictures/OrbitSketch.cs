@@ -384,7 +384,7 @@ internal static class OrbitSketch
     private static void ApsisTexts(Orbit orbit, double radius, out string ap, out string pe)
     {
         pe = orbit.Periapsis < radius ? PageText.SketchPeBelowGround : "PE " + Fmt.Km((orbit.Periapsis - radius) / 1000.0);
-        ap = orbit.Eccentricity < 1.0 && double.IsFinite(orbit.Apoapsis) ? "AP" + Fmt.Km((orbit.Apoapsis - radius) / 1000.0) : PageText.Escapes;
+        ap = orbit.Eccentricity < 1.0 && double.IsFinite(orbit.Apoapsis) ? "AP " + Fmt.Km((orbit.Apoapsis - radius) / 1000.0) : PageText.Escapes;
     }
 
     private static void ApsisDots(in PictureFrame f, Orbit orbit, in SketchFrame frame, ImColor8 color, Labels labels)

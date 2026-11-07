@@ -217,7 +217,7 @@ public static partial class GuidanceWindow
         string cross = ShowProvenance && ksaDv > 1.0 && !sameStack
             ? string.Format(PicInv, "   (KSA {0:F0} m/s)", ksaDv) : "";
         // While both read the same stack the line prints the stock figure, so LAUNCH, STAGING and the stock panel show one number for one craft.
-        return "ON BOARD   " + Fmt.DvWhole(sameStack ? ksaDv : totalDv) + "   " + Fmt.Time(total) + " burn" + cross;
+        return "ON BOARD   " + Fmt.DvWhole(sameStack ? ksaDv : totalDv) + "   " + Fmt.Time(total) + " BURN" + cross;
     }
 
     // The seq/eng provenance, the G flag and the KSA cross-check of the staging bar are diagnostics, shown only with SHOW STAGING DIAGNOSTICS on.

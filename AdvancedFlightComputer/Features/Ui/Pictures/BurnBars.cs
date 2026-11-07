@@ -126,7 +126,7 @@ internal static class BurnBars
                     dl.AddRectFilled(new float2(x0, barY), new float2(x0 + len, barY + barH), Palette.Plan.A(bar.Lit ? 0.95f : 0.7f), 1f * scale);
             }
             string value = double.IsFinite(bar.InS) && bar.InS > 0.0
-                ? Fmt.Dv(dvs[i]) + "  in " + FormatHelper.FormatDuration(bar.InS)
+                ? Fmt.Dv(dvs[i]) + "  IN " + FormatHelper.FormatDuration(bar.InS)
                 : Fmt.Dv(dvs[i]);
             dl.AddText(new float2(x0, min.Y + textY), Palette.Text.Solid, value);
             float valueW = ImGui.CalcTextSize(value).X;

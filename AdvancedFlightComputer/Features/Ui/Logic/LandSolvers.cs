@@ -81,7 +81,7 @@ internal static class LandSolvers
         switch (solver)
         {
             case LandSolver.Entry when !f.HasAir:
-                return new RowNote("NO AIR", Stops: true);
+                return new RowNote("NEEDS AIR", Stops: true);
             case LandSolver.Gfold when f.HasAir:
                 return new RowNote(f.Body.Length > 0 ? f.Body + " HAS AIR" : "HAS AIR", Stops: true);
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.NoGimbal:

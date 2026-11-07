@@ -59,7 +59,7 @@ internal static class GuidanceSettingSpecs
         "Searches for the insertion before apoapsis, not after periapsis.");
     public static readonly BoolSpec FlyConvexAscent = new("FlyConvexAscent", "SOLVED CLIMB", P, true,
         "Flies the solved climb. Off flies the vertical rise and the gravity turn.");
-    public static readonly BoolSpec ConvexOptimiseTiming = new("ConvexOptimiseTiming", "LAUNCH TIME", E, true,
+    public static readonly BoolSpec ConvexOptimiseTiming = new("ConvexOptimiseTiming", "SOLVE LIFTOFF", E, true,
         "Sets the liftoff time (with a target, up to 10 minutes from the launch window) or the LAN (no target) for the most mass to orbit. LAUNCH arms for that time and LAN is set to it. Off launches at the window, or now, into the LAN on the page.");
     public static readonly BoolSpec ShowConvexPlan = new("ShowConvexPlan", "PLAN ON MAP", E, true,
         "Draws the solved plan in the map view with SHOW IN MAP on. The FLIGHT PROFILE picture always shows it.");

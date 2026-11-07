@@ -119,7 +119,7 @@ public static partial class GuidanceWindow
             return new ModeLiveReadout(plan.IgnitionTime - now, "TO IGNITION", numbers, false, word, HeightShown: true);
         bool waiting = s.ThreeDofPhase != ThreeDofPhase.Glide || plan == null;
         bool glideTgo = s.ThreeDofPhase == ThreeDofPhase.Glide && plan == null && double.IsFinite(s.GlideTgo);
-        return new ModeLiveReadout(glideTgo ? s.GlideTgo : double.NaN, "TO IMPACT", numbers, waiting, word, HeightShown: true, ImpactShown: glideTgo);
+        return new ModeLiveReadout(glideTgo ? s.GlideTgo : double.NaN, "IMPACT T-", numbers, waiting, word, HeightShown: true, ImpactShown: glideTgo);
     }
 
     // Entry guidance stays without a plan past the wait of the head (LastingProblem), or it never gets one on this body.

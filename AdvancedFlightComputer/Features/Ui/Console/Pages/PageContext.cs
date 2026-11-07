@@ -37,7 +37,7 @@ internal static class PageKit
         => ConsoleUi.PartsFold(PageText.HowItFlies, FoldId(id), parts, changed, openByDefault, PageText.HowItFliesTip, saying);
 
     public static void Numbers(string id, ReadOnlySpan<FoldPart> parts, bool openByDefault)
-        => ConsoleUi.PartsFold(PageText.Numbers, "PARAMETERS" + id, parts, 0, openByDefault, PageText.NumbersTip);
+        => ConsoleUi.PartsFold(PageText.Numbers, "Numbers" + id, parts, 0, openByDefault, PageText.NumbersTip);
 
     public static string FoldId(string id) => "How" + id;
 

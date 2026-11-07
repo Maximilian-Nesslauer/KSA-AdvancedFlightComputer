@@ -775,7 +775,7 @@ internal static class TransferPage
             return "";
         string when = passes > 1
             ? string.Create(Inv, $"IN {passes} PASSES")
-            : "in " + FormatHelper.FormatDuration(Math.Max(0.0, (t.Start - Universe.GetElapsedTime()).Seconds()));
+            : "IN " + FormatHelper.FormatDuration(Math.Max(0.0, (t.Start - Universe.GetElapsedTime()).Seconds()));
         return PageText.BurnAnswer(passes > 1 && double.IsFinite(BurnBars.LastTotalMs) ? BurnBars.LastTotalMs : t.TransferDvVlf.Length(), when, BurnBars.LastOnBoardMs);
     }
 

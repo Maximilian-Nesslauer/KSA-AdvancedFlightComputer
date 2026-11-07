@@ -101,8 +101,8 @@ internal static partial class OrbitToolsPanel
     private static string Answer(int passes, in OrbitManeuvers.ManeuverResult maneuver, double budgetMs, bool chained)
     {
         string when = passes > 1
-            ? string.Create(Fmt.Inv, $"in {passes} passes")
-            : "in " + FormatHelper.FormatDuration(Math.Max(0.0, (maneuver.BurnTime - Universe.GetElapsedTime()).Seconds()));
+            ? string.Create(Fmt.Inv, $"IN {passes} PASSES")
+            : "IN " + FormatHelper.FormatDuration(Math.Max(0.0, (maneuver.BurnTime - Universe.GetElapsedTime()).Seconds()));
         return PageText.BurnAnswer(maneuver.DvCci.Length(), when, budgetMs, chained);
     }
 
