@@ -48,6 +48,14 @@ public static partial class GuidanceWindow
     /// <summary>The earliest a free launch time may lift off, s from when the plan is posed: time to solve it and arm before it arrives.</summary>
     private const double ConvexTimingEarliestS = 60.0;
 
+    /// <summary>The game destroys a vehicle at this dynamic pressure, Pa (PhysicsBubble.DetectStructuralFailure). It is compiled into the mod.</summary>
+    private const double BreakupQ = VehicleStructuralLimits.MaxDynamicPressure;
+
+    /// <summary>No flown plan or relaxed retry may reach this share of <see cref="BreakupQ"/>, because plan q is sampled at nodes and the flight does not follow the plan exactly.</summary>
+    private const double BreakupQMargin = 0.98;
+
+    private static double QPlanHighest => AscentMaxQ.Highest(BreakupQMargin * BreakupQ);
+
     // --- request and collection, from the sim step ---------------------------
 
     /// <summary>Picks up a Calculate request and collects a finished solve. Runs from the vehicle's sim step for the focused craft; a fault costs the plan, never the step.</summary>
@@ -90,22 +98,25 @@ public static partial class GuidanceWindow
                     : plan.LaunchDelayS != 0.0 ? FormattableString.Invariant($" LIFTOFF {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "AFTER" : "BEFORE")} WINDOW.")
                     : plan.LanChosen ? FormattableString.Invariant($" LAN {plan.LanDeg:F2} deg.") : "";
                 // The commonest reason there is no plan: a stack with the thrust to spare cannot climb through the thick air under the q limit at full throttle, and the problem - which keeps the throttle within 1 % of full, as the script does - has no feasible trajectory. The seed search measured how low it can get.
-                string hint = !plan.Usable && sol.Nodes > 0 && double.IsFinite(sol.SeedLeastMaxQ)
-                              && sol.SeedLeastMaxQ > 0.98 * plan.QMaxKpa * 1000.0
-                    ? FormattableString.Invariant($" STEEPEST CLIMB AT FULL THROTTLE REACHES {sol.SeedLeastMaxQ / 1000.0:F0} kPa. RAISE MAX Q ABOVE.")
-                    : "";
+                string hint = plan.Usable ? "" : ConvexQHint(plan);
                 string relaxed = plan.QRelaxed
-                    ? FormattableString.Invariant($" FIRST SOLVE DID NOT CONVERGE: MAX Q {plan.QMaxRequestedKpa:F0} kPa OUT OF REACH AT FULL THROTTLE. RETRIED WITH LOOSER LIMITS, MAX Q {plan.QMaxKpa:F0} kPa.")
+                    ? FormattableString.Invariant($" FIRST SOLVE DID NOT CONVERGE: MAX Q {plan.QMaxRequestedKpa:F0} kPa OUT OF REACH. RETRIED WITH LOOSER LIMITS, MAX Q {plan.QMaxKpa:F0} kPa.")
+                    : "";
+                string refused = sol.Usable && plan.OverQCeiling
+                    ? FormattableString.Invariant($"PEAK Q {plan.PeakQKpa:F1} kPa, LIMIT {plan.QCeilingKpa:F0} kPa (BREAKUP {BreakupQ / 1000.0:F0} kPa). LOWER MAX Q.")
                     : "";
                 _s.AscentPlanStatus = plan.Usable
                     ? FormattableString.Invariant($"PLAN READY: {sol.FinalMass / 1000.0:F2} t TO ORBIT, {plan.StagesPlanned} OF {plan.StagesAvailable} STAGES, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}")
+                    : refused.Length > 0 ? "PLAN NOT FLOWN: " + refused
                     : $"NO SOLUTION: {sol.Message}.{relaxed}{hint}";
-                // More than one attempt's line means the job retried looser - a relaxed max q or another stage - and that did not converge either.
-                bool retried = plan.QRelaxed || plan.Notes.Count > 1;
+                // More than one solve means a looser retry also failed. Notes are not counted, because one can say that no retry was possible.
+                bool retried = job.Attempts > 1;
                 failure = plan.Usable ? ""
+                    : refused.Length > 0 ? "PLAN NOT FLOWN: " + refused
                     : $"NO SOLUTION{(retried ? ", even after retrying with looser constraints" : "")}: {sol.Message}.{relaxed}{hint}";
                 GuidanceLog.Info(vehicle, plan.Usable
                     ? FormattableString.Invariant($"convex ascent planned: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.")
+                    : refused.Length > 0 ? FormattableString.Invariant($"convex ascent refused: peak q {plan.PeakQKpa:F1} kPa.")
                     : $"convex ascent did not converge: {GuidanceLog.Cut(sol.Message, 37)}.");
                 if (GuidanceLog.Enabled)
                 {
@@ -272,6 +283,21 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
+    /// Why a plan that is not fit to fly could not hold its max q, when every seed climbed through it; empty otherwise. When the vehicle needs more than the highest max q AFC plans to, the text names the break-up limit and warns about the backup gravity turn, which also climbs at full thrust or at the acceleration limit (Autopilot flies UPFG's throttle, which holds only the acceleration limit).
+    /// </summary>
+    private static string ConvexQHint(AscentPlan plan)
+    {
+        AscentSolution sol = plan.Solution;
+        if (sol.Nodes == 0 || !AscentMaxQ.OutOfReach(sol, plan.QMaxKpa * 1000.0))
+            return "";
+        double seedKpa = sol.SeedLeastMaxQ / 1000.0;
+        double highestKpa = AscentMaxQ.Highest(plan.QCeilingKpa * 1000.0) / 1000.0;
+        if (seedKpa < highestKpa && plan.QMaxKpa < highestKpa - 1e-6)
+            return FormattableString.Invariant($" STEEPEST CLIMB REACHES {seedKpa:F0} kPa. TRY MAX Q {seedKpa:F0} TO {highestKpa:F0} kPa.");
+        return FormattableString.Invariant($" STEEPEST CLIMB REACHES {seedKpa:F0} kPa. NO PLAN ABOVE {highestKpa:F0} kPa (BREAKUP {BreakupQ / 1000.0:F0} kPa). GRAVITY TURN HOLDS NO MAX Q: SET A G-LIMIT.");
+    }
+
+    /// <summary>
     /// Build the problem from the live vehicle and start the solve. Everything the worker reads is copied here: the stage list, the drag table (immutable), the atmosphere (immutable), the lift-off state and the target.
     /// </summary>
     private static bool TryStartAscentPlan(Vehicle vehicle, Orbit orbit, IParentBody parent,
@@ -430,6 +456,7 @@ public static partial class GuidanceWindow
 
         double groundRadius = Math.Min(bodyRadius, r.Length() - 1.0);
         double qMax = ConvexQMaxKpaUsed() * 1000.0;
+        double qCeiling = BreakupQMargin * BreakupQ;
         double qAlphaMax = ConvexQAlphaMaxUsed();
         double throttleRequestedPct = _s.ConvexThrottleMinPct;
         double[] r0 = [r.X, r.Y, r.Z], v0 = [v.X, v.Y, v.Z], n0 = [normal.X, normal.Y, normal.Z];
@@ -552,6 +579,7 @@ public static partial class GuidanceWindow
             ThrottleMinPct = floor * 100.0,
             ThrottleMinRequestedPct = throttleRequestedPct,
             GLimitG = userGLimit,
+            QCeilingKpa = qCeiling / 1000.0,
             SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
             CoreThrottledDown = stagePlan.CoreThrottledDown,
             StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", PINNED TO {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
@@ -627,7 +655,7 @@ public static partial class GuidanceWindow
 
         double handoverRadius = bodyRadius + _s.ConvexHandoverAltKm * 1000.0;
         job = new AscentPlanJob(Build, count, initial, qMax, Publish,
-                                (problem, sol) => StagesUpfgFliesThrottled(problem, sol, handoverRadius));
+                                (problem, sol) => StagesUpfgFliesThrottled(problem, sol, handoverRadius), qCeiling);
         error = "";
         return true;
     }
@@ -690,7 +718,9 @@ public static partial class GuidanceWindow
         }
         if (!p.Usable)
         {
-            why = "NO SOLUTION";
+            why = p.Solution?.Usable == true && p.OverQCeiling
+                ? FormattableString.Invariant($"PEAK Q {p.PeakQKpa:F0} kPa, LIMIT {p.QCeilingKpa:F0} kPa (BREAKUP {BreakupQ / 1000.0:F0} kPa)")
+                : "NO SOLUTION";
             return false;
         }
         if (p.VehicleId != vehicle.Id || !ReferenceEquals(p.Body, parent))
@@ -737,8 +767,8 @@ public static partial class GuidanceWindow
         return true;
     }
 
-    /// <summary>The max-q and q-alpha of the LAUNCH page as a plan is solved to them, floored away from zero.</summary>
-    private static double ConvexQMaxKpaUsed() => Math.Max(_s.ConvexQMaxKpa, 0.1);
+    /// <summary>The max-q of the LAUNCH page as a plan is solved to it, floored away from zero and held at <see cref="QPlanHighest"/> at most, because a plan that needs more is not flown.</summary>
+    private static double ConvexQMaxKpaUsed() => Math.Clamp(_s.ConvexQMaxKpa, 0.1, QPlanHighest / 1000.0);
     private static double ConvexQAlphaMaxUsed() => Math.Max(_s.ConvexQAlphaMax, 1.0);
 
     /// <summary>Air-relative speed: what the profile is indexed by.</summary>

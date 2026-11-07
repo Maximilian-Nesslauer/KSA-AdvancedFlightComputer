@@ -398,6 +398,11 @@ public sealed class AscentPlan
     public double ThrottleMinRequestedPct { get; init; }
     /// <summary>The player's g-limit the plan was solved to, g, positive infinity when it was off.</summary>
     public double GLimitG { get; init; } = double.PositiveInfinity;
+
+    /// <summary>A plan whose dynamic pressure reaches this is not flown, kPa. Positive infinity for none.</summary>
+    public double QCeilingKpa { get; init; } = double.PositiveInfinity;
+    public double PeakQKpa => Solution is { Nodes: > 0 } s ? s.DynamicPressure.Max() / 1000.0 : 0.0;
+    public bool OverQCeiling => PeakQKpa >= QCeilingKpa;
     public int SolidStages { get; init; }
     /// <summary>A core that would have run dry before its boosters is planned throttled down to outlast them (#32).</summary>
     public bool CoreThrottledDown { get; init; }
@@ -413,7 +418,8 @@ public sealed class AscentPlan
     public IReadOnlyList<string> Notes { get; init; }
     public double WallSeconds { get; init; }
 
-    public bool Usable => Solution != null && Solution.Usable && Profile != null;
+    /// <summary>Fit to fly (<see cref="AscentSolution.Usable"/>) and under the dynamic-pressure ceiling.</summary>
+    public bool Usable => Solution != null && Solution.Usable && Profile != null && !OverQCeiling;
 
     /// <summary>True if the target orbit on the LAUNCH page is not the one this plan was solved for.</summary>
     public bool TargetDiffers(double peKm, double apKm, double incDeg, double lanDeg)
@@ -432,6 +438,8 @@ public sealed class AscentPlan
 ///
 /// A MAX-Q THE VEHICLE CANNOT HOLD is relaxed here, once. The problem keeps the throttle within 1 % of full, as the script's does, and a KSA stack lifting off at three or five g climbs through the thick air well above the script's 35 kPa however steeply it goes - which is why the default MAX Q is four times that - and one that cannot hold the limit it is given: the problem then has no feasible trajectory, and SCvx can only hide the violation in its virtual control and stall. The seed search measures the least peak q the steepest climb reaches, so when every seed exceeded the limit the same stages are planned again to QRelaxFactor of that. A vehicle that can hold the limit is planned to it exactly.
 ///
+/// NO RETRY ABOVE THE CEILING. A relaxed retry is planned at <see cref="AscentMaxQ.Highest"/> of the ceiling at most, and a solve already at or above that is not retried.
+///
 /// EVERY RETRY SAYS SO. An attempt that did not converge is followed by one with looser constraints - that max-q, or one more stage to burn - and <see cref="Retry"/> says which and why while it runs, so the console never shows a second solve as if it were the first.
 ///
 /// HOW MANY STAGES THE PLAN BURNS is decided here, by trying. The script's formulation burns every stage but the last to depletion, which is right for a vehicle whose last stage is the one that reaches orbit and wrong for one that reaches orbit early: a stage that has to burn its whole load when orbit needed half of it can only waste the rest, and the plan it produces lofts and weaves to do so. So the first attempt plans only as many stages as the ideal dV says orbit needs, anything above them riding along as payload; a plan that cannot reach orbit adds the next stage, and one whose last stage is pinned at its shortest allowed burn drops it.
@@ -442,13 +450,11 @@ public sealed class AscentPlanJob : IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
     private readonly Thread _thread;
-    /// <summary>A relaxed max-q sits this far above the least peak q the vehicle's steepest seed reached.</summary>
-    public const double QRelaxFactor = 1.15;
 
     private readonly Func<int, double, bool[], AscentProblem> _build;
     private readonly Func<AscentProblem, AscentSolution, bool[]> _toHold;
     private readonly int _available, _initial;
-    private readonly double _qMax;
+    private readonly double _qMax, _qCeiling;
     private readonly Func<AscentSolution, int, double, string[], double, AscentPlan> _publish;
     private readonly object _gate = new();
     private string _progress = "starting";
@@ -463,13 +469,16 @@ public sealed class AscentPlanJob : IDisposable
     /// <param name="qMax">The max-q asked for, Pa.</param>
     /// <param name="publish">Wraps the chosen solution, its stage count, the max-q it was planned to, the attempt notes and the wall time in a plan; run on the worker, so it too must touch nothing of the game.</param>
     /// <param name="toHold">From a converged problem and its solution, the stages to solve again held at full thrust, or null for none. Run on the worker.</param>
+    /// <param name="qCeiling">The ceiling on a retry's max-q, Pa. Positive infinity for none.</param>
     public AscentPlanJob(Func<int, double, bool[], AscentProblem> build, int available, int initial, double qMax,
                          Func<AscentSolution, int, double, string[], double, AscentPlan> publish,
-                         Func<AscentProblem, AscentSolution, bool[]> toHold = null)
+                         Func<AscentProblem, AscentSolution, bool[]> toHold = null,
+                         double qCeiling = double.PositiveInfinity)
     {
         _build = build;
         _toHold = toHold;
         _qMax = qMax;
+        _qCeiling = qCeiling;
         _available = available;
         _initial = Math.Clamp(initial, 1, available);
         _publish = publish;
@@ -483,9 +492,13 @@ public sealed class AscentPlanJob : IDisposable
     }
 
     private readonly List<string> _notes = [];
+    private int _attempts;
 
-    /// <summary>One line per attempt so far.</summary>
+    /// <summary>One line per attempt so far, and a line for each retry that was or could not be made.</summary>
     public string[] Notes { get { lock (_gate) return _notes.ToArray(); } }
+
+    /// <summary>The solves of the search so far, not counting the final solve with stages held at full thrust.</summary>
+    public int Attempts { get { lock (_gate) return _attempts; } }
 
     public double ElapsedSeconds => _clock.Elapsed.TotalSeconds;
 
@@ -527,8 +540,11 @@ public sealed class AscentPlanJob : IDisposable
                 AscentProblem problem = _build(stages, qMax, null);
                 AscentSolution sol = SolveOne(problem, what);
                 lock (_gate)
+                {
+                    _attempts++;
                     _notes.Add($"{stages} of {_available} stages at {qMax / 1000.0:F0} kPa: {sol.Message}"
                             + (sol.Nodes > 0 ? $", {sol.FinalMass / 1000.0:F2} t to orbit" : ""));
+                }
                 if (sol.Status == AscentStatus.Cancelled)
                     break;
 
@@ -549,21 +565,30 @@ public sealed class AscentPlanJob : IDisposable
                     break;
                 }
 
-                // Every seed climbed through more than the limit: re-plan the same stages, once, to a limit the vehicle can hold.
-                if (!relaxed && double.IsFinite(sol.SeedLeastMaxQ) && sol.SeedLeastMaxQ > 0.98 * qMax)
+                // Every seed climbed through more than the limit: re-plan the same stages, once, to a limit the vehicle can hold, but never above the ceiling.
+                if (!relaxed && AscentMaxQ.OutOfReach(sol, qMax))
                 {
-                    double held = Math.Ceiling(QRelaxFactor * sol.SeedLeastMaxQ / 5000.0) * 5000.0;
-                    lock (_gate)
-                    {
-                        _notes.Add($"did not converge at max q {qMax / 1000.0:F0} kPa, which is out of reach at full throttle - the steepest climb reaches "
-                                 + $"{sol.SeedLeastMaxQ / 1000.0:F0} kPa - so retrying with looser constraints, max q {held / 1000.0:F0} kPa");
-                        _retry = $"Did not converge: max q {qMax / 1000.0:F0} kPa is out of this vehicle's reach at full throttle (its steepest climb reaches "
-                               + $"{sol.SeedLeastMaxQ / 1000.0:F0} kPa). Retrying with looser constraints: max q {held / 1000.0:F0} kPa.";
-                    }
-                    qMax = held;
+                    double held = AscentMaxQ.Relaxed(sol.SeedLeastMaxQ, _qCeiling);
                     relaxed = true;
-                    tried.Remove(stages);
-                    continue;
+                    string reach = $"the steepest climb, at full thrust or at the acceleration limit, reaches {sol.SeedLeastMaxQ / 1000.0:F0} kPa";
+                    if (held > qMax)
+                    {
+                        string capped = held < AscentMaxQ.Relaxed(sol.SeedLeastMaxQ, double.PositiveInfinity)
+                            ? ", the highest a retry may use" : "";
+                        lock (_gate)
+                        {
+                            _notes.Add($"did not converge at max q {qMax / 1000.0:F0} kPa, which is out of reach ({reach}), "
+                                     + $"so retrying with looser constraints, max q {held / 1000.0:F0} kPa{capped}");
+                            _retry = $"Did not converge: max q {qMax / 1000.0:F0} kPa is out of this vehicle's reach ({reach}). "
+                                   + $"Retrying with looser constraints: max q {held / 1000.0:F0} kPa{capped}.";
+                        }
+                        qMax = held;
+                        tried.Remove(stages);
+                        continue;
+                    }
+                    lock (_gate)
+                        _notes.Add($"did not converge at max q {qMax / 1000.0:F0} kPa, which is out of reach ({reach}), "
+                                 + $"and no retry may use more than {AscentMaxQ.Highest(_qCeiling) / 1000.0:F0} kPa");
                 }
 
                 // Not converged. Keep the closest miss for the readout, but a plan that DID converge always wins.
