@@ -16,7 +16,7 @@ Fixtures/            what a test asserts against
 Features/<Feature>/  one folder per mod folder under test, plus that feature's own helpers
 ```
 
-`Features/` follows where the code under test lives, not the feature that motivated the test: `StockPinGuardTest` covers `Core/StockPlanner`, so it sits in `Features/Core/`.
+`Features/` follows where the code under test lives, not the feature that motivated the test: `SaveScopedStateTest` covers `Core/SaveScopedState`, so it sits in `Features/Core/`.
 
 ## Adding a test
 
@@ -78,8 +78,8 @@ The game-free G-FOLD executable accepts `--terminal-braking` for vertical contro
 - `afc-set-periapsis` and `afc-set-apoapsis` assert that a computed apse burn reaches the requested altitude and leaves the opposite apse unchanged, and that impossible requests yield no maneuver.
 - `afc-circularize` asserts circularization at both apses and the "nothing to do" contract for circular and unbound orbits.
 - `afc-set-inclination` and `afc-match-inclination` assert node burns against the ecliptic and equatorial references, partial-fraction burns, and the coplanar and hyperbolic edge cases.
-- `afc-burn-menu-launcher` checks the orbit-menu shortcuts (tool, source, input defaults, stock type reset), that AFC's plan types sit before the stock interstellar type, and closed-window cleanup.
-- `afc-maneuver-transpilers` checks the shortcut and create-button injections against the current game IL and verifies exception boundaries with Harmony-patched test methods.
+- `afc-burn-menu-launcher` checks that every orbit-menu shortcut opens the AFC console on ORBIT with its tool and craft and resets the tool inputs, and that the ORBIT plan state is dropped once the page is off screen.
+- `afc-maneuver-transpilers` checks the shortcut injections into the orbit right-click menu against the current game IL and verifies exception boundaries with Harmony-patched test methods.
 - `afc-target-identity` asserts that a Match Inclination target selection keeps naming the same body while vehicles are spawned and despawned around it, because the game's lookup swap-removes on deregister and a held index would drift.
 
 ### Flyby targeting
@@ -96,7 +96,6 @@ The game-free G-FOLD executable accepts `--terminal-braking` for vertical contro
 
 - `afc-sequence-burnstate` asserts the per-sequence burn-state adapter against the game's own `SequencePerformanceList` on real vehicles, including a disabled tank and a non-default engine flow rule. It checks burnable fuel, mass flow, exhaust velocity, and start mass.
 - `afc-multipass-registry` checks TOML persistence, maneuver intent round-trips, save-scope changes, and unique temporary-file cleanup.
-- `afc-multipass-fallback` checks the Hohmann fallback transpiler against the current game IL and verifies branch labels and exception boundaries with synthetic test methods.
 
 ### RCS translation
 
@@ -142,13 +141,20 @@ The staging tests apply the feature's patches on a test-scoped Harmony owner thr
 - `afc-autoremove-burns` completes real auto-burns: the last planned burn is removed once stock kept it (also on an uncontrolled vehicle), stock alone removes the first of three, and engines-off, switched-off, manual and zero-delta-V cases keep the burn.
 - `afc-autoremove-rcs` ends RCS burns through the executor and the stock path, with the same removal cases as `afc-autoremove-burns` plus the propellant-stop and cancel cases.
 
+### AFC console
+
+- `afc-console-open` checks that an orbit-menu entry opens the console on ORBIT with its tool and craft, that a running multi-pass refuses the entry, and that the stock planner lists only its own plan types.
+- `afc-planner-route` checks the planner key routing on the public `TransferPlanner.ShowPlanWindow` setter: a routed open leaves the stock window closed and raises a console toggle, the STOCK PLANNER link opens the stock window, a close passes, the frame check catches a window opened past the setter, and with routing off the setter is stock. It also checks that the only AFC patches on planner members are the setter prefix and the unbound-target data patches.
+- `afc-console-pages` opens every page through the shared entry without a draw and checks that it is saved to ui.toml and read back, that the cue targets reach their sub-pages, that an unknown cue changes nothing, that the console opens nothing while it is off, and that the stock planner lists only its own plan types.
+- `afc-transfer-session` runs the AFC porkchop for a craft in a low orbit to a moon of the home body without the stock planner: the workers on the thread pool, the collect in the session tick, the best entry and its selection, the binned dV raster, the end of the intercept refinement, a cancelled calculation that reports nothing, and CancelAll. It also checks that the calculation flag of the stock planner stays as it was.
+- `afc-ui-setting-defaults` checks that every guidance setting spec of the console names a real field of `VehicleAutopilotState` and that its default is the initializer of that field. It also checks that a fresh craft counts no changed tuning value, and that a measured vehicle height counts as a change only when MEASURE VEHICLE HEIGHT is off.
+
 ### Core
 
-- `afc-save-scoped-reset` asserts that the save-scoped reset list runs cold, populated, and twice in a row without throwing, and clears the plan-window inputs that it covers.
+- `afc-save-scoped-reset` asserts that the save-scoped reset list runs cold, populated, and twice in a row without throwing, and clears the ORBIT tool inputs that it covers.
 - `afc-refused-load` drives the save-load patch directly. A load that did not replace the save's universe data, as when the editor refuses it or the universe file cannot be read, keeps the save scope, the registry, and the save-scoped state and raises no `SaveLoaded`. A completed load moves all of them.
 - `afc-failed-write` drives the save-write patch directly. A write that `UncompressedSave.Write` reports as failed keeps the save scope and the registry on the previous save, raises no `SaveWritten`, and persists no registry file. A completed write moves the scope and persists the registry.
-- `afc-stock-pin-guard` asserts the guard that decides whether stock's selected-transfer block can index the porkchop array, against fresh, in-flight, populated, zero-sized, and out-of-range `TransferInfo` states.
-- `afc-reflection-targets` asserts that every reflection key, transpiler anchor, and typed plan-window accessor resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature. It also checks the AUTOSTAGE gauge enum injection and that stock still activates a sequence row through `Part.ActivateSubtreeInStage`, which the staging execution clones.
+- `afc-reflection-targets` asserts that every reflection key, transpiler anchor, typed planner accessor and the planner setter the key routing patches resolves against the running game build, so a game-side rename fails in the harness instead of silently disabling a feature. It also checks the AUTOSTAGE gauge enum injection and that stock still activates a sequence row through `Part.ActivateSubtreeInStage`, which the staging execution clones.
 - `afc-modmenu-contract` replays the ModMenu lookup of the AFC entry and checks the flag latch and the reserved method names.
 - `afc-feature-patch-rollback` checks that a failed feature block removes only its partial patches, keeps other owners intact, and does not prevent a later block or unload.
 - `afc-shared-vehicle-hooks` checks the shared tick order, the MultiPass-then-AutoRemove order at a stock burn end, feature gates, patch bindings, and cleanup when a vehicle is disposed. It also flies multi-pass passes (engine and RCS) through the stock burn end with a player burn after them, a propellant stop (re-planned, or cancelled when nothing can thrust), and the stall hint.

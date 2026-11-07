@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
@@ -27,13 +28,24 @@ internal static class MultiPassUI
 
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
-    private static readonly string[] SplitModeLabels = { "EQUAL TIME", "EQUAL DV" };
+    private static readonly string[] SplitModeLabels = { "EQUAL TIME", "EQUAL DELTA-V" };
 
     private static int _passCount = 1;
     private static SplitMode _splitMode = SplitMode.EqualBurnTime;
 
     private static string? _lastTypeKey;
     private static string? _lastSourceId;
+
+    private static MultiPassExecution? _shortExec;
+    private static double _shortMs;
+
+    public static void NoteRunningShort(MultiPassExecution exec, double shortMs)
+    {
+        _shortExec = exec;
+        _shortMs = shortMs;
+    }
+
+    public static double RunningShortMs(MultiPassExecution exec) => ReferenceEquals(_shortExec, exec) ? _shortMs : 0.0;
 
     public static int PassCount => _passCount;
     public static SplitMode CurrentSplitMode => _splitMode;
@@ -46,8 +58,8 @@ internal static class MultiPassUI
         || typeKey == KeySetPeriapsis
         || typeKey == KeyMatchInclination
         || typeKey == KeySetInclination
-        || typeKey == KeyStockCircularizeApoapsis
-        || typeKey == KeyStockCircularizePeriapsis;
+        || typeKey == KeyCircularizeApoapsis
+        || typeKey == KeyCircularizePeriapsis;
 
     public static bool IsArmed(string typeKey) =>
         Enabled
@@ -61,8 +73,17 @@ internal static class MultiPassUI
         && IsMultiPassSupportedType(typeKey)
         && !MultiPassPreviewCache.HasPreview;
 
+    /// <summary>Footer sentence while the passes of this tool cannot deliver the goal, or empty. The burn bars cannot show this, because a preview caps each pass at the fuel it has.</summary>
+    public static string FuelShortFact(string typeKey, double totalDv)
+    {
+        if (!IsArmed(typeKey) || totalDv <= 0.0)
+            return "";
+        double sum = MultiPassPreviewCache.CachedAllocationsSum;
+        return !double.IsNaN(sum) && sum < totalDv * 0.995 ? PageText.FuelShort(totalDv, sum) : "";
+    }
+
     public static void Draw(
-        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey)
+        Vehicle source, OrbitManeuvers.ManeuverResult maneuver, string typeKey, bool countRow = true)
     {
         if (!Enabled || source == null || !IsMultiPassSupportedType(typeKey))
             return;
@@ -76,15 +97,7 @@ internal static class MultiPassUI
             return;
         }
 
-        // Reset when the transfer type or source changes so another maneuver cannot reuse this preview.
-        if (_lastTypeKey != typeKey || _lastSourceId != source.Id)
-        {
-            _lastTypeKey = typeKey;
-            _lastSourceId = source.Id;
-            _passCount = 1;
-            _splitMode = SplitMode.EqualBurnTime;
-            MultiPassPreviewCache.ClearPreview();
-        }
+        ResetOnNewTool(source, typeKey);
 
         SequenceBurnState state = MultiPassPreviewCache.GetSequenceState(source);
 
@@ -98,26 +111,68 @@ internal static class MultiPassUI
         double totalDv = maneuver.DvCci.Length();
         double totalBurnTime = EstimateBurnTime(totalDv, state);
 
-        ImGui.Spacing();
-        DrawPassCountSelector();
+        double period = source.Orbit?.Period ?? 0.0;
+        bool matters = FormRules.PassesCanMatter(totalDv, totalBurnTime, period);
+        bool savingKnown = double.IsFinite(FormRules.PassesSaving(totalDv, totalBurnTime, period));
+        ConsoleUi.NoteShape("AfcMpPassesRow", countRow ? 1 : 0);
+        if (countRow && PassCountRow("##AfcMpPasses", ref _passCount, matters ? "" : PageText.PassesRowDetail(_passCount, savingKnown), matters ? "" : PageText.PassesRowTip(savingKnown)))
+            MultiPassPreviewCache.Invalidate();
 
-        if (_passCount > 1)
-            DrawSplitModeSelector();
-
-        DrawAdvisoryIfApplicable(source.Orbit, totalDv, totalBurnTime);
+        DrawAdvisoryIfApplicable(source.Orbit!, totalDv, totalBurnTime);
 
         if (_passCount > 1)
         {
             MultiPassPreviewCache.UpdatePreviewIfStale(
                 source, maneuver, typeKey, _passCount, _splitMode, state, totalDv);
             DrawPreviewFailureIfApplicable();
-            DrawInsufficientFuelIfApplicable(totalDv, state);
-            DrawPassList(firstPassDisplayNumber: 1);
             DrawSavingsLine(totalDv, totalBurnTime, source.Orbit?.Period ?? 0.0,
                 MultiPassPreviewCache.PreviewPasses);
         }
         else
             MultiPassPreviewCache.ClearPreview();
+    }
+
+    public static void DrawRunning(Vehicle source, string typeKey)
+    {
+        if (!Enabled || !MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
+            return;
+        if (exec.Intent.TypeKey != typeKey)
+        {
+            DrawBlockedByOtherExecution(exec);
+            return;
+        }
+        ResetOnNewTool(source, typeKey);
+        DrawActive(source, typeKey, MultiPassPreviewCache.GetSequenceState(source), exec);
+    }
+
+    public static PassPreview[] RunningPasses(Vehicle source, MultiPassExecution exec)
+    {
+        int remaining = exec.PassCountTotal - exec.PassIndex;
+        if (!Enabled || remaining <= 0)
+            return Array.Empty<PassPreview>();
+        string typeKey = exec.Intent.TypeKey;
+        if (!IsMultiPassSupportedType(typeKey))
+        {
+            PassPreview[] planned = HohmannMultiPassUI.PreviewPassesFrom(source, exec.PassIndex);
+            return planned.Length == remaining ? planned : Array.Empty<PassPreview>();
+        }
+        OrbitManeuvers.ManeuverResult? locked = exec.Intent.ComputeManeuver(source);
+        if (locked == null)
+            return Array.Empty<PassPreview>();
+        MultiPassPreviewCache.UpdatePreviewIfStale(source, locked.Value, typeKey, remaining, exec.Mode,
+            MultiPassPreviewCache.GetSequenceState(source), locked.Value.DvCci.Length());
+        return MultiPassPreviewCache.PreviewPasses.Length == remaining ? MultiPassPreviewCache.PreviewPasses : Array.Empty<PassPreview>();
+    }
+
+    private static void ResetOnNewTool(Vehicle source, string typeKey)
+    {
+        if (_lastTypeKey == typeKey && _lastSourceId == source.Id)
+            return;
+        _lastTypeKey = typeKey;
+        _lastSourceId = source.Id;
+        _passCount = 1;
+        _splitMode = SplitMode.EqualBurnTime;
+        MultiPassPreviewCache.ClearPreview();
     }
 
     private static void DrawActive(
@@ -127,6 +182,8 @@ internal static class MultiPassUI
         int remaining = exec.PassCountTotal - exec.PassIndex;
         if (remaining <= 0) return;
 
+        _passCount = exec.PassCountTotal;
+
         // Use the locked intent rather than an editable target while execution is active.
         OrbitManeuvers.ManeuverResult? lockedManeuver = exec.Intent.ComputeManeuver(source);
         if (lockedManeuver == null) return;
@@ -135,32 +192,36 @@ internal static class MultiPassUI
         MultiPassPreviewCache.UpdatePreviewIfStale(
             source, lockedManeuver.Value, typeKey, remaining, exec.Mode, state, totalDv);
         DrawPreviewFailureIfApplicable();
-        DrawInsufficientFuelIfApplicable(totalDv, state);
-        DrawPassList(firstPassDisplayNumber: exec.PassIndex + 1);
+        double sum = MultiPassPreviewCache.CachedAllocationsSum;
+        NoteRunningShort(exec, state.HasUsableEngines && totalDv > 0.0 && !double.IsNaN(sum) && sum < totalDv * 0.995 ? totalDv - sum : 0.0);
         DrawSavingsLine(totalDv, EstimateBurnTime(totalDv, state),
             source.Orbit?.Period ?? 0.0, MultiPassPreviewCache.PreviewPasses);
     }
 
-    // Use the display name from TransferTypes. The caller draws execution status and cancellation controls separately.
+    // The caller draws execution status and cancellation controls separately.
     private static void DrawBlockedByOtherExecution(MultiPassExecution exec)
     {
-        string typeKey = exec.Intent.TypeKey;
-        string label = typeKey;
-        foreach (TransferType t in TransferPlanner.TransferTypes)
-        {
-            if (t.GetKey() == typeKey)
-            {
-                label = t.GetName();
-                break;
-            }
-        }
-
         ImGui.Spacing();
-        ConsoleUi.WarningWrapped(string.Format(Inv,
-            "Vehicle is running a \"{0}\" multi-pass. " +
-            "Switch the Plan Type back to \"{0}\" to view its passes.",
-            label));
+        // A Hohmann multi-pass is not an ORBIT tool, so its passes are on TRANSFER.
+        if (OrbitToolCatalog.IsTool(exec.Intent.TypeKey))
+            ConsoleUi.WarningWrapped(string.Format(Inv,
+                "This craft runs passes of \"{0}\". Pick \"{0}\" again to view them.",
+                OrbitToolCatalog.DisplayName(exec.Intent.TypeKey)));
+        else
+            ConsoleUi.WarningWrapped("This craft runs the passes of a transfer. TRANSFER shows them.");
     }
+
+    public static string SplitSummary => _splitMode == SplitMode.EqualDv ? "Equal delta-v" : "Equal burn time";
+
+    public static void DrawSplitRow(Vehicle source, string typeKey)
+    {
+        if (SplitRowShown(source, typeKey))
+            DrawSplitModeSelector();
+    }
+
+    public static bool SplitRowShown(Vehicle source, string typeKey)
+        => Enabled && source != null && _passCount > 1 && IsMultiPassSupportedType(typeKey)
+           && _lastTypeKey == typeKey && _lastSourceId == source.Id && !MultiPassRegistry.Has(source.Id);
 
     public static void Render(IViewport viewport, Vehicle source)
     {
@@ -205,51 +266,42 @@ internal static class MultiPassUI
         _splitMode = SplitMode.EqualBurnTime;
         _lastTypeKey = null;
         _lastSourceId = null;
+        _shortExec = null;
+        _shortMs = 0.0;
     }
 
     #region UI components
 
-    private static void DrawPassCountSelector()
+    /// <summary>The PASSES row of the orbit tools and of the transfer page. Returns whether the count changed.</summary>
+    internal static bool PassCountRow(string id, ref int count, string detail, string tip)
     {
-        ConsoleWidgets.BeginRow("PASSES".AsSpan());
-        int passes = _passCount;
-        if (ConsoleWidgets.SliderInt("AfcMpPasses".AsSpan(), ref passes, MinPasses,
-                Splitter.MaxPasses, passes.ToString(Inv).AsSpan(), pending: false))
-        {
-            _passCount = passes;
-            MultiPassPreviewCache.Invalidate();
-        }
-        ConsoleWidgets.EndRow();
-    }
-
-    private static void DrawPassList(int firstPassDisplayNumber)
-    {
-        if (!MultiPassPreviewCache.HasPreview) return;
-
-        PassPreview[] passes = MultiPassPreviewCache.PreviewPasses;
-        if (passes.Length == 0) return;
-
-        for (int i = 0; i < passes.Length; i++)
-        {
-            double dv = passes[i].DvVlf.Length();
-            double t = passes[i].EstimatedBurnTimeSec;
-            string value = t > 0.5
-                ? string.Format(Inv, "{0:F0} m/s, {1:F0}s", dv, t)
-                : string.Format(Inv, "{0:F0} m/s", dv);
-            ConsoleWidgets.Readout(
-                string.Format(Inv, "PASS {0}", firstPassDisplayNumber + i).AsSpan(), value.AsSpan());
-        }
+        ConsoleUi.BeginRow("PASSES".AsSpan());
+        bool detailUnder = detail.Length > 0 && !ConsoleUi.RowDetail(detail, ConsoleWidgets.RowControlWidth);
+        if (tip.Length > 0 && ConsoleWidgets.RowHovered)
+            ConsoleUi.Tooltip(tip.AsSpan());
+        int passes = count;
+        ImGui.SetNextItemWidth(ConsoleWidgets.RowControlWidth);
+        bool edited = ImGui.InputInt(id, ref passes);
+        ConsoleUi.EndRow();
+        ConsoleUi.NoteShape("AfcPassesDetailUnder", detailUnder ? 1 : 0);
+        if (detailUnder)
+            ConsoleUi.Muted(detail.AsSpan());
+        passes = Math.Clamp(passes, MinPasses, Splitter.MaxPasses);
+        if (!edited || passes == count)
+            return false;
+        count = passes;
+        return true;
     }
 
     private static void DrawSplitModeSelector()
     {
-        ConsoleWidgets.BeginRow("SPLIT".AsSpan());
-        int picked = ConsoleWidgets.Segmented("AfcMpSplit".AsSpan(), SplitModeLabels,
+        ConsoleUi.BeginRow(FoldNames.Split.AsSpan());
+        int picked = ConsoleUi.Segmented("AfcMpSplit", SplitModeLabels,
             _splitMode == SplitMode.EqualDv ? 1 : 0);
         if (ConsoleWidgets.RowHovered)
-            ConsoleWidgets.Tooltip(
+            ConsoleUi.Tooltip(
                 "Equal burn time fires the engines for the same duration each pass, equalizing finite-burn arc length (Oberth-optimal default). Equal delta-v delivers the same magnitude each pass.".AsSpan());
-        ConsoleWidgets.EndRow();
+        ConsoleUi.EndRow();
 
         SplitMode pickedMode = picked == 1 ? SplitMode.EqualDv : SplitMode.EqualBurnTime;
         if (picked >= 0 && pickedMode != _splitMode)
@@ -266,28 +318,9 @@ internal static class MultiPassUI
         ImGui.Spacing();
         string reason = MultiPassPreviewCache.LastPreviewFailureReason ?? "unknown reason";
         ConsoleUi.WarningWrapped(string.Format(Inv,
-            "Multi-pass preview incomplete: {0}. " +
-            "Try fewer passes or a different split mode.",
+            "Pass preview incomplete: {0}. " +
+            "Try fewer passes or the other choice of EACH PASS HAS.",
             reason));
-    }
-
-    // Cache the allocated delta v total so fuel checks do not run the splitter each frame.
-    private static void DrawInsufficientFuelIfApplicable(
-        double totalDv, SequenceBurnState state)
-    {
-        if (totalDv <= 0.0 || !state.HasUsableEngines) return;
-
-        double sum = MultiPassPreviewCache.CachedAllocationsSum;
-        if (double.IsNaN(sum)) return;
-
-        // Allow a 0.5 percent tolerance for floating point differences in the staged Tsiolkovsky calculation.
-        if (sum >= totalDv * 0.995) return;
-
-        ImGui.Spacing();
-        ConsoleUi.WarningWrapped(string.Format(Inv,
-            "Vehicle can only deliver ~{0:F0} m/s of the {1:F0} m/s required. " +
-            "Multi-pass will run out of fuel before the goal is reached.",
-            sum, totalDv));
     }
 
     private static void DrawAdvisoryIfApplicable(
@@ -307,10 +340,10 @@ internal static class MultiPassUI
         double estimatedSavings = singlePassLoss - splitLoss;
 
         ImGui.Spacing();
-        ConsoleUi.WarningWrapped(string.Format(Inv,
+        ConsoleUi.AdviceWrapped(ConsoleUi.EscapeFormat(string.Format(Inv,
             "Burn duration ({0:F0}s) is {1:F0}% of orbital period. " +
             "Splitting across {2} passes saves ~{3:F0} m/s.",
-            totalBurnTime, burnRatio * 100.0, suggestedN, estimatedSavings));
+            totalBurnTime, burnRatio * 100.0, suggestedN, estimatedSavings)));
     }
 
     // Choose the smallest pass count that meets the loss threshold and saves less than 0.1 percent with another pass. The maximum count can still leave the loss above the threshold.
@@ -351,14 +384,14 @@ internal static class MultiPassUI
         double savings = singleLoss - splitLoss;
         if (savings < 1.0) return;
 
-        ConsoleWidgets.Readout("SAVINGS VS SINGLE BURN".AsSpan(),
+        ConsoleUi.Readout("SAVINGS VS SINGLE BURN".AsSpan(),
             string.Format(Inv, "~{0:F0} m/s", savings).AsSpan());
     }
 
     #endregion
 
     // Use the staged Tsiolkovsky calculation for total burn time. Missing propulsion data produces zero.
-    private static double EstimateBurnTime(double totalDv, SequenceBurnState state)
+    internal static double EstimateBurnTime(double totalDv, SequenceBurnState state)
     {
         if (totalDv <= 0.0 || !state.HasUsableEngines) return 0.0;
         var alloc = Splitter.Allocate(totalDv, 1, SplitMode.EqualDv, state);

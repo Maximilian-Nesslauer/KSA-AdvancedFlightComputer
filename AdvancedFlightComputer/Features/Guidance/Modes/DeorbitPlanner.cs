@@ -162,7 +162,7 @@ internal sealed class DeorbitPlanner : IDisposable
     internal DeorbitPlan? Plan { get; private set; }
     internal DirectBrakingPlan? Direct { get; private set; }
     internal bool Complete { get; private set; }
-    internal string Status { get; private set; } = "Planning the approach.";
+    internal string Status { get; private set; } = "PLANNING APPROACH";
     internal string DirectRefusal { get; private set; } = "";
     internal int Evaluations { get; private set; }
     internal double WorkMilliseconds { get; private set; }
@@ -187,8 +187,8 @@ internal sealed class DeorbitPlanner : IDisposable
             {
                 if (WorkMilliseconds + Stopwatch.GetElapsedTime(start).TotalMilliseconds >= WorkLimitMilliseconds)
                 {
-                    Status = Plan != null ? "Stock deorbit node ready. Using the checked plan."
-                        : "The planning work limit ended before a safe approach was found. Change the site or braking altitude.";
+                    Status = Plan != null ? "STOCK DEORBIT BURN READY. CHECKED PLAN IN USE."
+                        : "NO SAFE APPROACH WITHIN WORK LIMIT. CHANGE SITE OR BRAKING ALTITUDE.";
                     // An accepted direct approach that was still being checked becomes a refusal. An earlier refusal keeps its reason.
                     if (Direct is { Refusal.Length: 0 }) Direct = Direct with { Refusal = Status };
                     Complete = true;
@@ -201,7 +201,7 @@ internal sealed class DeorbitPlanner : IDisposable
         // A failed iterator cannot continue, so the refusal names the failure instead of the last progress status.
         catch (Exception error)
         {
-            Status = "Deorbit planning failed: " + error.Message;
+            Status = "DEORBIT PLANNING FAILED: " + error.Message;
             if (Direct is { Refusal.Length: 0 }) Direct = Direct with { Refusal = Status };
             Plan = null;
             Complete = true;
@@ -219,24 +219,24 @@ internal sealed class DeorbitPlanner : IDisposable
             || !(request.Source.Period > 0) || !double.IsFinite(request.Source.Period)
             || request.Source.Eccentricity >= 1 || !(request.Mass > 0) || request.Model.Stages.Count == 0)
         {
-            Status = "The approach needs a finite bound orbit, terrain, and an engine model.";
+            Status = "APPROACH NEEDS: BOUND ORBIT, TERRAIN, ENGINE MODEL.";
             yield break;
         }
         foreach (bool step in DirectSteps()) yield return step;
         if (Direct is { Refusal.Length: 0 })
         {
-            Status = "Direct braking approach ready.";
+            Status = "DIRECT BRAKING APPROACH READY";
             yield break;
         }
         yield return true;
         if (_brakingOnly)
         {
-            Status = "The actual orbit has no safe braking approach. " + DirectRefusal;
+            Status = "NO SAFE BRAKING APPROACH ON ACTUAL ORBIT. " + DirectRefusal;
             yield break;
         }
         if (request.Engines.Length == 0)
         {
-            Status = DirectRefusal + " A deorbit burn needs active, supplied liquid engines.";
+            Status = DirectRefusal + " DEORBIT BURN NEEDS ACTIVE, SUPPLIED LIQUID ENGINES.";
             yield break;
         }
         foreach (bool step in TransferSteps()) yield return step;
@@ -248,13 +248,13 @@ internal sealed class DeorbitPlanner : IDisposable
         var found = new Result<DirectBrakingPlan?>();
         foreach (bool step in FindDirectSteps(_request, found, _arrivalHint)) yield return step;
         Direct = found.Value;
-        DirectRefusal = Direct?.Refusal ?? $"No approaching braking point was found within {ApproachOrbits} orbits.";
+        DirectRefusal = Direct?.Refusal ?? $"NO BRAKING POINT WITHIN {ApproachOrbits} ORBITS.";
         if (Direct is not { Refusal.Length: 0 }) yield break;
         // After the node, the measured orbit decides braking. Execution error must not demand another node.
         if (!_brakingOnly && _request.Settings.ArrivalDescentDeg.HasValue
             && !MatchesArrivalAngle(_request.Settings, Direct.Position, Direct.Velocity))
         {
-            RefuseDirect("The current orbit misses the selected arrival angle. A deorbit transfer is required.");
+            RefuseDirect("ORBIT MISSES ARRIVAL ANGLE. DEORBIT TRANSFER REQUIRED.");
             yield break;
         }
         var arc = new DeorbitArcCheck(_request, _request.Source, _request.Epoch, Direct.IgnitionTime);
@@ -278,7 +278,7 @@ internal sealed class DeorbitPlanner : IDisposable
         _longestFlight = 0.9 * period;
         if (_lastDeparture <= _firstDeparture || _longestFlight <= _shortestFlight)
         {
-            Status = "The next orbit has no transfer window with enough preparation time.";
+            Status = "NO TRANSFER WINDOW WITH ENOUGH PREPARATION TIME IN NEXT ORBIT.";
             yield break;
         }
         _departureStep = (_lastDeparture - _firstDeparture) / DepartureSamples;
@@ -293,7 +293,7 @@ internal sealed class DeorbitPlanner : IDisposable
         _seedDistance = seed.Value;
         if (!(_seedDistance > 0))
         {
-            Status = "The braking prediction did not converge at the selected altitude.";
+            Status = "BRAKING PREDICTION: NO SOLUTION AT SELECTED ALTITUDE.";
             yield break;
         }
 
@@ -309,12 +309,12 @@ internal sealed class DeorbitPlanner : IDisposable
             if (checkedPlan.Value is not DeorbitPlan plan) continue;
             Plan = plan;
             foreach (bool step in RefineSteps(plan)) yield return step;
-            Status = "Stock deorbit node ready.";
+            Status = "STOCK DEORBIT BURN READY";
             yield break;
         }
         Status = candidates.Count > CandidateLimit
-            ? $"The {CandidateLimit}-candidate limit ended before a safe approach was found. Change the site or braking altitude."
-            : "Deorbit refused. No safe transfer was found in the next orbit. Change the site, braking altitude or arrival angle.";
+            ? $"NO SAFE APPROACH IN {CandidateLimit} CANDIDATES. CHANGE SITE OR BRAKING ALTITUDE."
+            : "REFUSED: NO SAFE TRANSFER IN NEXT ORBIT. CHANGE SITE, BRAKING ALTITUDE OR ARRIVAL ANGLE.";
     }
 
     // A narrow selected angle band can fall between coarse flight times, so every interval that brackets it is fitted as well.
@@ -344,7 +344,7 @@ internal sealed class DeorbitPlanner : IDisposable
                     }
                 }
                 previous = candidate;
-                Status = $"Searching deorbit transfers ({i * FlightSamples + j}/{total}).";
+                Status = $"SEARCHING DEORBIT TRANSFERS ({i * FlightSamples + j}/{total})";
                 yield return true;
             }
         }
@@ -382,13 +382,13 @@ internal sealed class DeorbitPlanner : IDisposable
         var fitted = new Result<DeorbitPlan?>();
         foreach (bool step in FitBrakingPointSteps(departure, flight, fitted)) yield return step;
         if (fitted.Value is not DeorbitPlan candidate) yield break;
-        Status = $"Checking departure clearance ({CandidatesChecked}/{CandidateLimit}).";
+        Status = $"CHECKING DEPARTURE CLEARANCE ({CandidatesChecked}/{CandidateLimit})";
         var sourceArc = new DeorbitArcCheck(_request, _request.Source, _request.Epoch, candidate.DepartureTime);
         while (sourceArc.Advance()) yield return true;
         if (sourceArc.Refusal.Length > 0) yield break;
         Orbit transfer = Orbit.CreateFromStateCci(_request.Parent, new UniverseTime(candidate.DepartureTime),
             candidate.DeparturePosition, candidate.DepartureVelocity, _request.Source.OrbitLineColor);
-        Status = $"Checking transfer clearance ({CandidatesChecked}/{CandidateLimit}).";
+        Status = $"CHECKING TRANSFER CLEARANCE ({CandidatesChecked}/{CandidateLimit})";
         var transferArc = new DeorbitArcCheck(_request, transfer, candidate.DepartureTime, candidate.ArrivalTime);
         while (transferArc.Advance()) yield return true;
         if (transferArc.Refusal.Length == 0 && FitsStockBurn(candidate)) result.Value = candidate;
@@ -405,7 +405,7 @@ internal sealed class DeorbitPlanner : IDisposable
             DeorbitPlan? transfer = Transfer(departure, flight, distance, checkAngle: true);
             if (transfer == null) yield break;
             yield return true;
-            Status = $"Fitting the braking point ({CandidatesChecked}/{CandidateLimit}, correction {iteration}/{BrakingFitIterations}).";
+            Status = $"FITTING BRAKING POINT ({CandidatesChecked}/{CandidateLimit}, CORRECTION {iteration}/{BrakingFitIterations})";
             var prediction = new Result<double>();
             foreach (bool step in PredictBrakingDistanceSteps(r, transfer.ArrivalPosition, transfer.ArrivalVelocity,
                 transfer.CutoffMass, prediction)) yield return step;
@@ -416,7 +416,7 @@ internal sealed class DeorbitPlanner : IDisposable
                 distance = 0.5 * (distance + predicted);
                 continue;
             }
-            Status = $"Checking the braking burn ({CandidatesChecked}/{CandidateLimit}).";
+            Status = $"CHECKING BRAKING BURN ({CandidatesChecked}/{CandidateLimit})";
             var brake = new Result<string>();
             foreach (bool step in CanBrakeSteps(r, transfer.ArrivalPosition, transfer.ArrivalVelocity,
                 transfer.ArrivalTime, transfer.CutoffMass, brake)) yield return step;
@@ -437,12 +437,12 @@ internal sealed class DeorbitPlanner : IDisposable
     {
         double flight = plan.ArrivalTime - plan.DepartureTime;
         var departure = new Result<double>();
-        Status = "A safe node is ready. Refining its departure time.";
+        Status = "SAFE BURN READY. REFINING DEPARTURE TIME.";
         foreach (bool step in MinimizeSteps(t => TransferCost(t, flight),
             Math.Max(_firstDeparture, plan.DepartureTime - _departureStep),
             Math.Min(_lastDeparture, plan.DepartureTime + _departureStep), departure)) yield return step;
         var refinedFlight = new Result<double>();
-        Status = "A safe node is ready. Refining its flight time.";
+        Status = "SAFE BURN READY. REFINING FLIGHT TIME.";
         foreach (bool step in MinimizeSteps(t => TransferCost(departure.Value, t),
             Math.Max(_shortestFlight, flight - _flightStep), Math.Min(_longestFlight, flight + _flightStep),
             refinedFlight)) yield return step;
@@ -648,7 +648,7 @@ internal sealed class DeorbitPlanner : IDisposable
     private static IEnumerable<bool> CanBrakeSteps(DeorbitRequest request, double3 position, double3 velocity,
         double time, double mass, Result<string> result)
     {
-        result.Value = "The braking state is not finite.";
+        result.Value = "BRAKING STATE NOT FINITE";
         if (!Finite(position) || !Finite(velocity) || !double.IsFinite(time) || !(mass > 0)) yield break;
         double3 normal = double3.Normalize(double3.Cross(position, velocity));
         double3 gate = request.GateAt(time, normal);
@@ -656,14 +656,14 @@ internal sealed class DeorbitPlanner : IDisposable
         double height = position.Length() - request.GateRadius;
         if (!(distance > 0) || height > distance * Math.Tan(DirectApproachSlopeDeg * Math.PI / 180))
         {
-            result.Value = $"Direct braking refused at {(position.Length() - request.Parent.MeanRadius) / 1000:F1} km altitude and {distance / 1000:F1} km uprange. Lower the approach first.";
+            result.Value = FormattableString.Invariant($"REFUSED: DIRECT BRAKING AT {(position.Length() - request.Parent.MeanRadius) / 1000:F1} km ALTITUDE, {distance / 1000:F1} km UPRANGE. LOWER APPROACH FIRST.");
             yield break;
         }
         var solver = new UpfgGuidance();
         var target = new UpfgTarget { Radius = request.GateRadius, Velocity = 0,
             DescentRate = request.Settings.SinkRate, Normal = normal, Rdes = gate };
         UpfgVehicle model = request.ModelAt(mass);
-        string failure = "does not converge";
+        string failure = "DOES NOT CONVERGE";
         for (int i = 0; i < PredictionIterations; i++)
         {
             solver.Step(position, velocity, mass, request.Parent.Mu, target, model, 3);
@@ -673,7 +673,7 @@ internal sealed class DeorbitPlanner : IDisposable
             if (!double.IsFinite(pitch) || pitch < LowestBrakingPitchDeg * Math.PI / 180 || !(solver.Tgo > 0)
                 || !double.IsFinite(solver.Tgo) || !double.IsFinite(solver.VgoMag))
             {
-                failure = $"converges at a pitch of {pitch * 180 / Math.PI:F0} deg and {solver.Tgo:F0} s to go, which is not a shallow approach";
+                failure = $"CONVERGES AT PITCH {pitch * 180 / Math.PI:F0} deg, {solver.Tgo:F0} s TO GO: NOT A SHALLOW APPROACH";
                 break;
             }
             double capacity = 0;
@@ -682,11 +682,11 @@ internal sealed class DeorbitPlanner : IDisposable
                 if (!(stage.MassTotal > stage.MassDry) || !(stage.MassDry > 0) || !(stage.Isp > 0)) continue;
                 capacity += stage.Isp * 9.80665 * Math.Log(stage.MassTotal / stage.MassDry);
             }
-            if (solver.VgoMag > capacity) { result.Value = "The braking burn exceeds the remaining propellant."; yield break; }
+            if (solver.VgoMag > capacity) { result.Value = "BRAKING BURN EXCEEDS PROPELLANT"; yield break; }
             result.Value = "";
             yield break;
         }
-        result.Value = $"The braking solve {failure}. Lower the orbit or change the braking altitude.";
+        result.Value = $"BRAKING SOLVE {failure}. LOWER ORBIT OR CHANGE BRAKING ALTITUDE.";
     }
 
     // Without a selected angle, the automatic range applies.
@@ -769,7 +769,7 @@ internal sealed class DeorbitArcCheck
     internal bool Advance()
     {
         if (_last || Refusal.Length > 0) return false;
-        if (++_samples > SampleLimit) { Refusal = "The terrain check exceeded its sample budget."; return false; }
+        if (++_samples > SampleLimit) { Refusal = "TERRAIN CHECK EXCEEDED SAMPLE BUDGET"; return false; }
         if (_refineIndex > 0)
         {
             Check(_refineStart + _refineStep * _refineIndex);
@@ -784,7 +784,7 @@ internal sealed class DeorbitArcCheck
             if (!entry.HasValue || entry.Value.Item1.Seconds() > _end) { _last = true; return false; }
             double entryTime = entry.Value.Item1.Seconds();
             if (!double.IsFinite(entryTime) || entryTime <= _time)
-            { Refusal = "The terrain band entry could not be resolved."; return false; }
+            { Refusal = "TERRAIN BAND ENTRY NOT RESOLVED"; return false; }
             _time = entryTime;
             _beforeTime = _previousTime = double.NaN;
             return true;
@@ -817,9 +817,9 @@ internal sealed class DeorbitArcCheck
         StateVectors state = _orbit.GetStateVectorsAt(new UniverseTime(time));
         double clearance = _request.Clearance(state.PositionCci, time);
         if (!(clearance >= DeorbitPlanner.ClearanceMargin))
-            Refusal = "The flown arc does not clear terrain by the planning margin.";
+            Refusal = "ARC DOES NOT CLEAR TERRAIN BY PLANNING MARGIN";
         else if (state.PositionCci.Length() < _request.Parent.GetAtmosphereRadius())
-            Refusal = "The coast enters the atmosphere before braking.";
+            Refusal = "COAST ENTERS ATMOSPHERE BEFORE BRAKING";
         return clearance;
     }
 }

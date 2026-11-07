@@ -29,7 +29,8 @@ public static partial class GuidanceWindow
         if (ImGui.IsMouseClicked(ImGuiMouseButton.Right))
         {
             _retargetArmed = false;
-            _s.LandingStatus = "Retarget cancelled.";
+            _retargetStageId = 0;
+            _s.LandingStatus = "PICK CANCELED";
             return;
         }
         Camera cam = Program.GetMainCamera();
@@ -120,17 +121,17 @@ public static partial class GuidanceWindow
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##retarget_preview");
         using WindowEnd end = default;
         float2 m = ImGui.GetMousePos();
-        var col = new ImColor8(255, 90, 220);
+        var col = Ui.Canvas.Palette.Target.Solid;
         if (hit)
         {
             float2 s = cam.EclToScreen(hitEcl, false);
             dl.AddCircleFilled(s, 6f, col);
-            dl.AddText(s + new float2(10f, 6f), col, $"retarget  lat {latDeg:F2}  lon {lonDeg:F2}");
-            dl.AddText(m + new float2(12f, -16f), new ImColor8(150, 150, 150), "cursor");
+            dl.AddText(s + new float2(10f, 6f), col, FormattableString.Invariant($"RETARGET  LAT {latDeg:F3}  LON {lonDeg:F3}"));
+            dl.AddText(m + new float2(12f, -16f), new ImColor8(150, 150, 150), "CURSOR");
         }
         else
         {
-            dl.AddText(m + new float2(12f, 6f), new ImColor8(200, 200, 200), "aim at the surface to retarget");
+            dl.AddText(m + new float2(12f, 6f), new ImColor8(200, 200, 200), "AIM AT SURFACE TO RETARGET");
         }
     }
 
@@ -144,7 +145,7 @@ public static partial class GuidanceWindow
         if (_retargetStageId != 0)
         {
             _s.StageTargets[_retargetStageId] = new double2(latDeg, lonDeg);
-            _s.LandingStatus = $"Stage target set to lat {latDeg:F3}, lon {lonDeg:F3}.";
+            _s.LandingStatus = FormattableString.Invariant($"STAGE TARGET SET: LAT {latDeg:F3}, LON {lonDeg:F3}");
             _retargetStageId = 0;
             _s.StageModelDirty = true;   // so the list picks the new target up at once
             return;
@@ -152,13 +153,13 @@ public static partial class GuidanceWindow
 
         if (DeorbitTargetLocked)
         {
-            _s.LandingStatus = "Abort and plan again to change the transfer target.";
+            _s.WarnLanding("TRANSFER TARGET LOCKED. STOP TO EDIT.");
             return;
         }
 
         _s.SiteLatDeg = latDeg;
         _s.SiteLonDeg = lonDeg;
-        _s.LandingStatus = $"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.";
+        _s.LandingStatus = FormattableString.Invariant($"RETARGETED: LAT {latDeg:F3}, LON {lonDeg:F3}");
 
         if (_s.LandingPhase == LandingPhase.GfoldDescent)
         {
@@ -195,14 +196,14 @@ public static partial class GuidanceWindow
         int n = plan.Nodes;
         double now = SimNow();
 
-        var trajCol = new ImColor8(70, 220, 100);
-        var nodeCol = new ImColor8(150, 255, 170);
-        var coneCol = new ImColor8(235, 150, 40);
-        var tgtCol = new ImColor8(255, 90, 220);
+        var trajCol = Ui.Canvas.Palette.Plan.Solid;
+        var nodeCol = Ui.Canvas.Palette.Plan.Solid;
+        var coneCol = Ui.Canvas.Palette.Dim.Solid;
+        var tgtCol = Ui.Canvas.Palette.Target.Solid;
         var padCol = new ImColor8(235, 235, 235);
-        var thrCol = new ImColor8(255, 215, 60);
-        var liveCol = new ImColor8(80, 220, 255);
-        var velCol = new ImColor8(150, 240, 255);
+        var thrCol = Ui.Canvas.Palette.Text.Solid;
+        var liveCol = Ui.Canvas.Palette.Flown.Solid;
+        var velCol = Ui.Canvas.Palette.Flown.Solid;
         var devCol = new ImColor8(255, 80, 80);
         var hudCol = new ImColor8(205, 215, 225);
 
@@ -257,7 +258,7 @@ public static partial class GuidanceWindow
             if (TryProjectCci(PlanCci(f, Node(plan.Position, i)), out float2 p))
             {
                 dl.AddCircleFilled(p, 3f, nodeCol);
-                dl.AddText(p + new float2(5f, -6f), nodeCol, $"{plan.Position[i][0]:F0}m");
+                dl.AddText(p + new float2(5f, -6f), nodeCol, FormattableString.Invariant($"{plan.Position[i][0]:F0}m"));
             }
 
         // --- Target + pad markers ---
@@ -296,15 +297,15 @@ public static partial class GuidanceWindow
         string[] hud =
         {
             $"G-FOLD   {_s.GfoldStatus}",
-            $"phase    {_s.LandingPhase}",
-            $"tgo     {tgo,6:F1} s   tf {plan.TimeOfFlight,5:F1} s",
-            $"alt     {_s.GfoldAltM,7:F0} m",
-            $"speed   {_s.GfoldSpeedMs,6:F1} / {_s.GfoldVMaxMs,5:F0} m/s",
-            $"throttle{_s.GfoldThrottle * 100,5:F0} %",
-            $"fuel    {vehicle.PropellantMass,7:F0} kg",
-            $"deviation{devM,6:F1} m",
-            $"land err{plan.LandingErrorNorm,6:F1} m",
-            $"nodes {plan.Nodes}  iters {plan.Iterations}",
+            $"PHASE    {_s.LandingPhase}",
+            FormattableString.Invariant($"TGO     {tgo,6:F1} s   TF {plan.TimeOfFlight,5:F1} s"),
+            FormattableString.Invariant($"ALT     {_s.GfoldAltM,7:F0} m"),
+            FormattableString.Invariant($"SPEED   {_s.GfoldSpeedMs,6:F1} / {_s.GfoldVMaxMs,5:F0} m/s"),
+            FormattableString.Invariant($"THROTTLE{_s.GfoldThrottle * 100,5:F0} %"),
+            FormattableString.Invariant($"FUEL    {vehicle.PropellantMass,7:F0} kg"),
+            FormattableString.Invariant($"DEVIATION{devM,6:F1} m"),
+            FormattableString.Invariant($"LAND ERR{plan.LandingErrorNorm,6:F1} m"),
+            $"NODES {plan.Nodes}  ITERS {plan.Iterations}",
         };
         float hx = vp.Width - 300f, hy = 70f, lh = 16f;
         dl.AddRectFilled(new float2(hx - 8f, hy - 6f),
@@ -313,7 +314,7 @@ public static partial class GuidanceWindow
             dl.AddText(new float2(hx, hy + i * lh), hudCol, hud[i]);
     }
 
-    // The landing-site marker, drawn in the world whenever the Landing tab is open (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
+    // The landing-site marker, drawn in the world whenever a landing or a boostback is watched or flown (independent of G-FOLD), so the target is visible for deorbit/UPFG planning too.
     private static void DrawLandingSiteMarker(IGameViewport vp, IParentBody parent)
     {
         if (!SetupProjection(parent))
@@ -324,14 +325,14 @@ public static partial class GuidanceWindow
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##landing_site");
         using WindowEnd end = default;
-        var col = new ImColor8(120, 230, 255);
+        var col = Ui.Canvas.Palette.Target.Solid;
         const float g = 5f, r = 13f;            // crosshair gap and reach
         ScreenLine(dl, s + new float2(g, 0f), s + new float2(r, 0f), col, 1.6f);
         ScreenLine(dl, s - new float2(r, 0f), s - new float2(g, 0f), col, 1.6f);
         ScreenLine(dl, s + new float2(0f, g), s + new float2(0f, r), col, 1.6f);
         ScreenLine(dl, s - new float2(0f, r), s - new float2(0f, g), col, 1.6f);
         dl.AddCircleFilled(s, 2.5f, col);
-        dl.AddText(s + new float2(r + 4f, -6f), col, $"SITE  {_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}");
+        dl.AddText(s + new float2(r + 4f, -6f), col, FormattableString.Invariant($"SITE  {_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}"));
     }
 
     // A point in the plan's site-local frame (x = up) back to a CCI position.

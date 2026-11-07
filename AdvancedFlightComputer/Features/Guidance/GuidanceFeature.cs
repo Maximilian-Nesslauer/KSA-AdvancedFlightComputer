@@ -1,16 +1,15 @@
 using AdvancedFlightComputer.Core;
 using KSA;
-using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
 
 namespace AdvancedFlightComputer.Features.Guidance;
 
 /// <summary>
-/// The guidance feature's two patch blocks. The diagnostics block owns the menu.
-/// The driver block owns the per-vehicle step and the worker hook, and its enable flag is
-/// what the panel and the gimbal writer are gated on, so a driver that fails to load still leaves a
-/// menu that says so.
+/// The guidance feature's two patch blocks. The diagnostics block owns the hook the AFC menu draws
+/// from. The driver block owns the per-vehicle step and the worker hook, and its enable flag is what
+/// the guidance pages of the console and the gimbal writer are gated on, so a driver that fails to
+/// load still leaves a menu that says so.
 /// </summary>
 internal static class GuidanceFeature
 {
@@ -19,9 +18,9 @@ internal static class GuidanceFeature
     internal static void ApplyDiagnosticPatches(Harmony harmony)
     {
         harmony.Patch(GameReflection.Program_DrawProgramMenusHook!,
-            postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(DrawMenu)));
+            postfix: new HarmonyMethod(typeof(AfcMenu), nameof(AfcMenu.Draw)));
         KeepMenuHookCall(harmony);
-        ModMenuBridge.DrawItems = DrawMenuItems;
+        ModMenuBridge.DrawItems = AfcMenu.DrawItems;
     }
 
     // A DrawMenuBar patch made before the hook patch can have the empty hook inlined. Patching it again rebuilds it with the call.
@@ -30,7 +29,7 @@ internal static class GuidanceFeature
         var menuBar = GameReflection.Program_DrawMenuBar;
         if (menuBar == null)
         {
-            DefaultCategory.Log.Warning("[AFC] Program.DrawMenuBar was not found, so a mod that patches the menu bar can hide the AFC Guidance menu.");
+            DefaultCategory.Log.Warning("[AFC] Program.DrawMenuBar was not found, so a mod that patches the menu bar can hide the AFC menu.");
             return;
         }
 
@@ -44,7 +43,7 @@ internal static class GuidanceFeature
         catch (Exception ex)
         {
             // Not rethrown, because a feature failure would also remove the guidance driver.
-            DefaultCategory.Log.Warning($"[AFC] Could not compile Program.DrawMenuBar again, so a mod that patches the menu bar can hide the AFC Guidance menu: {ex}");
+            DefaultCategory.Log.Warning($"[AFC] Could not compile Program.DrawMenuBar again, so a mod that patches the menu bar can hide the AFC menu: {ex}");
         }
     }
 
@@ -70,23 +69,6 @@ internal static class GuidanceFeature
         GuidanceWindow.ReleaseAllVehicles();
     }
 
-    internal static void DrawGui()
-    {
-        // Guidance flies a craft, so its panel and overlays are flight UI and stay out of the editor. Guidance itself keeps running; only the drawing is skipped.
-        if (!SharedVehicleHooks.GuidanceEnabled || Program.IsEditorOpen)
-            return;
-
-        try
-        {
-            GuidanceWindow.Draw(Program.MainViewport);
-        }
-        catch (Exception ex)
-        {
-            LogHelper.WarnOnce($"guidance-draw:{ex.GetType().Name}",
-                $"[AFC] Guidance panel draw failed for '{Program.ControlledVehicle?.Id}': {ex}");
-        }
-    }
-
     // Runs on the main thread inside Universe.PrepareVehicleWorkers for every vehicle. See the handle in GameReflection for why this is the site.
     private static void OnPrepareWorker(Vehicle __instance) => StepVehicle(__instance);
 
@@ -98,6 +80,8 @@ internal static class GuidanceFeature
 
         try
         {
+            // A stop the console asked for on a craft that is not on screen is applied here, before the modes step.
+            GuidanceWindow.DrainRequests(vehicle);
             GuidanceWindow.ApplyAutopilot(vehicle);
             GuidanceWindow.StepSucceeded(vehicle);
         }
@@ -140,66 +124,11 @@ internal static class GuidanceFeature
         }
     }
 
-    // Top-bar host. Silent in the editor and while ModMenu hosts the menu.
-    private static void DrawMenu()
-    {
-        try
-        {
-            if (Program.IsEditorOpen)
-                return;
-            ModMenuBridge.NoteTopBarHook();
-            if (ModMenuBridge.Active || !ImGui.BeginMenu(ModMenuBridge.MenuName))
-                return;
-            try
-            {
-                DrawMenuItems();
-            }
-            finally
-            {
-                ImGui.EndMenu();
-            }
-        }
-        catch (Exception ex)
-        {
-            LogHelper.WarnOnce($"guidance-menu:{ex.GetType().Name}",
-                $"[AFC] Guidance menu failed: {ex}");
-        }
-    }
-
-    // Drawn by both hosts. It holds the driver's only off switch.
-    private static void DrawMenuItems()
-    {
-        // ModMenu also draws in the editor.
-        if (Program.IsEditorOpen)
-        {
-            ImGui.TextDisabled("Guidance is available in flight."u8);
-            return;
-        }
-
-        if (SharedVehicleHooks.GuidanceEnabled)
-        {
-            bool active = GuidanceWindow.ModActive;
-            if (ImGui.MenuItem("Enabled", "", ref active, true))
-                GuidanceWindow.SetModActive(active);
-
-            // The panel is the only place a mode is started from, and it starts hidden, so this is how the player reaches it.
-            bool visible = GuidanceWindow.PanelVisible;
-            if (ImGui.MenuItem("Show panel", "", ref visible, active))
-                GuidanceWindow.PanelVisible = visible;
-        }
-        else
-            ImGui.Text(UnavailableReason);
-
-        // Keep release errors visible while the guidance panel is hidden.
-        string failure = GuidanceWindow.ReleaseFailure(Program.ControlledVehicle);
-        if (failure.Length > 0)
-            ImGui.Text(failure);
-    }
-
     internal static void Reset()
     {
         ModMenuBridge.Reset();
         DisableDriver();
         GuidanceClock.Reset();
+        ViewDemand.Reset();
     }
 }

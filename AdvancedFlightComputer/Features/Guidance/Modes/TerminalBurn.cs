@@ -28,7 +28,7 @@ public static partial class GuidanceWindow
         _s.GfoldTrackInit = false;
         _s.TerminalBurnLastTime = now;
         _s.TerminalBurnSeconds = 0;
-        _s.LandingStatus = "Horizontal braking complete. Coasting and turning upright for the landing burn.";
+        _s.LandingStatus = "HORIZONTAL BRAKING COMPLETE. COAST, TURN UPRIGHT FOR LANDING BURN.";
         GuidanceLog.Info(vehicle, _s.LandingStatus);
     }
 
@@ -54,7 +54,7 @@ public static partial class GuidanceWindow
         double tiltReserve = Math.Cos(TerminalBurnTiltDeg * Math.PI / 180);
         if (!(maximum * tiltReserve > gravity))
         {
-            RefuseLandingEngines("The landing engine cannot stop the descent with the required tilt reserve.");
+            RefuseLandingEngines(vehicle, "LANDING ENGINE CANNOT STOP DESCENT", "LANDING ENGINE CANNOT STOP DESCENT WITH REQUIRED TILT RESERVE");
             return;
         }
         double minimumPulse = KsaEnginePerf.MinimumPulse(vehicle);
@@ -98,8 +98,8 @@ public static partial class GuidanceWindow
         if (_s.LandingPhase != next)
             GuidanceLog.Info(vehicle, $"terminal {next}: height {height:F2} m, sink {-velocityUp:F2} m/s, horizontal {lateral.Length():F2} m/s, ignition height {command.IgnitionHeight:F2} m.");
         _s.LandingPhase = next;
-        _s.LandingStatus = ignite ? "Final landing burn. Braking to touchdown."
-            : "Engine off. Falling to the landing burn.";
+        _s.LandingStatus = ignite ? "FINAL LANDING BURN. BRAKING TO TOUCHDOWN."
+            : "ENGINE OFF. FALL TO LANDING BURN.";
         if (GuidanceLog.Enabled && now - _s.LastGuidanceLogTime >= 1)
         {
             _s.LastGuidanceLogTime = now;

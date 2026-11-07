@@ -3,6 +3,8 @@ using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
+using AdvancedFlightComputer.Features.Transfer;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -10,13 +12,11 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.MultiPass;
 
-// Hohmann keeps separate UI state because stock owns this window. Quick tools use MultiPassUI.
+// The passes and the flyby of a transfer on the TRANSFER page, planned from the selection of the AFC transfer session. Quick tools use MultiPassUI.
 internal static class HohmannMultiPassUI
 {
-    private const int MinPasses = 1;
-
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    private static readonly string[] SplitModeLabels = { "EQUAL TIME", "EQUAL DV" };
+    private static readonly string[] SplitModeLabels = { "EQUAL TIME", "EQUAL DELTA-V" };
 
     public static bool Enabled { get; set; }
 
@@ -67,17 +67,9 @@ internal static class HohmannMultiPassUI
     private static bool _flybyRetargetFailed;
     private static FlybyTargeting.DepartureSolution? _plannedFlybyDeparture;
 
-    private static int _lastFrameDrawn = -1;
-
-    // Both window injection sites share one ImGui frame claim to prevent duplicate controls.
-    public static void DrawInline()
+    public static void DrawInputs()
     {
-        if (!Enabled) return;
-        int frame = ImGui.GetFrameCount();
-        if (frame == _lastFrameDrawn) return;
-        _lastFrameDrawn = frame;
-
-        if (TryDrawActiveFastPath()) return;
+        if (!Enabled || RunsOnSession()) return;
 
         if (!ShouldDraw(out Vehicle? source, out OrbitalTransfers.PorkChopEntry? entry,
                        out OrbitalTransfers.TransferInfo? info))
@@ -96,39 +88,74 @@ internal static class HohmannMultiPassUI
 
         try
         {
-            ImGui.Separator();
-            DrawBody(source, entry!, info!);
-            ImGui.Separator();
+            DrawBodyInputs(source, entry!, info!);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce("hohmann-inputs:" + ex.GetType().Name,
+                $"[AFC] HohmannMultiPassUI.DrawInputs: source={source.Id} target={targetId} passes={_passCount} mode={_splitMode}: {ex}");
+        }
+    }
+
+    public static void DrawResults()
+    {
+        if (!Enabled) return;
+
+        if (TryDrawActiveFastPath()) return;
+
+        if (!ShouldDraw(out Vehicle? source, out OrbitalTransfers.PorkChopEntry? entry,
+                       out OrbitalTransfers.TransferInfo? info))
+            return;
+
+        try
+        {
+            DrawBodyResults(source!, entry!, info!);
         }
         catch (Exception ex)
         {
             LogHelper.WarnOnce("hohmann-inline:" + ex.GetType().Name,
-                $"[AFC] HohmannMultiPassUI.DrawInline: source={source.Id} target={targetId} passes={_passCount} mode={_splitMode}: {ex}");
+                $"[AFC] HohmannMultiPassUI.DrawResults: source={source!.Id} passes={_passCount} mode={_splitMode}: {ex}");
         }
     }
 
-    // Keep active execution status available after closing the window clears the selected transfer.
+    private static bool RunsOnSession()
+        => TransferSession.Source is Vehicle source
+           && MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec)
+           && exec.Intent is HohmannTransferIntent;
+
+    // A running transfer multi-pass shows its passes whatever the selection is, because a new calculation clears the selection.
     private static bool TryDrawActiveFastPath()
     {
-        if (!StockPlanner.ShowPlanWindow) return false;
-        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
-            return false;
-
-        if (StockPlanner.SourceVehicle is not Vehicle source) return false;
+        if (TransferSession.Source is not Vehicle source) return false;
         if (!MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
             return false;
         if (exec.Intent is not HohmannTransferIntent) return false;
 
-        ImGui.Separator();
         try { DrawActive(source, exec); }
         catch (Exception ex)
         {
             LogHelper.WarnOnce("hohmann-inline-active:" + ex.GetType().Name,
-                $"[AFC] HohmannMultiPassUI.DrawInline: source={source.Id} pass={exec.PassIndex + 1}/{exec.PassCountTotal} kind={exec.Intent.Kind}: {ex}");
+                $"[AFC] HohmannMultiPassUI.DrawSection: source={source.Id} pass={exec.PassIndex + 1}/{exec.PassCountTotal} kind={exec.Intent.Kind}: {ex}");
         }
-        ImGui.Separator();
         return true;
     }
+
+    public static string SplitSummary => _splitMode == SplitMode.EqualDv ? "Equal delta-v" : "Equal burn time";
+
+    public static bool SplitRowShown => Enabled && _passCount > 1 && ShouldDraw(out Vehicle? source, out _, out _) && !MultiPassRegistry.Has(source!.Id);
+
+    public static void DrawSplitRow() => DrawSplitModeSelector();
+
+    public static int ChangedInFold => !Enabled || _passCount <= 1 || _splitMode == SplitMode.EqualBurnTime ? 0 : 1;
+
+    /// <summary>The pass count the TRANSFER footer reads for its verb.</summary>
+    public static int PassCount => _passCount;
+
+    /// <summary>The passes of the preview for the burn bars, empty without a multi-pass preview.</summary>
+    public static PassPreview[] PreviewPasses => _hasCachedPreview && !_cachedPreview.Failed ? _cachedPreview.Passes : Array.Empty<PassPreview>();
+
+    public static PassPreview[] PreviewPassesFrom(Vehicle source, int startPassIndex)
+        => _cachedKey.SourceId == source.Id && _cachedKey.StartPassIndex == startPassIndex ? PreviewPasses : Array.Empty<PassPreview>();
 
     public static void Reset()
     {
@@ -137,7 +164,6 @@ internal static class HohmannMultiPassUI
         InvalidatePreview();
         _lastSourceId = null;
         _lastTargetId = null;
-        _lastFrameDrawn = -1;
         HohmannMultiPassPlanner.ResetShiftCache();
     }
 
@@ -154,12 +180,6 @@ internal static class HohmannMultiPassUI
         _lastShiftKShift = 0;
         _flybyRetargetFailed = false;
         _plannedFlybyDeparture = null;
-    }
-
-    internal static void ClearFlybyPreview()
-    {
-        if (_cachedKey.FlybyDeparture != null || _plannedFlybyDeparture != null)
-            InvalidatePreview();
     }
 
     // Clear the preview before registry removal can leave an overlay on the orbit after the burn.
@@ -219,29 +239,34 @@ internal static class HohmannMultiPassUI
             _cachedPreview.Passes, firstPassDisplayNumber, skipFirst);
     }
 
-    // True while RenderOrbits and RenderMarkers draw the passes for the planner's source vehicle. Stock's selected transfer is one burn of the whole transfer delta v, which multi-pass does not fly, so it must stay hidden then.
+    // True while RenderOrbits and RenderMarkers draw the passes for the TRANSFER session's source vehicle. The selected transfer is one burn of the whole transfer delta v, which multi-pass does not fly, so the TRANSFER page hides it then.
     public static bool IsDrawingPassOverlay()
         => ShouldRenderOverlay(out Vehicle? source)
            && source != null && source.Id == _cachedKey.SourceId;
 
-    // Active execution survives invalidation of the stock preview. An uncommitted preview must be discarded.
+    /// <summary>
+    /// Whether the session's craft flies the final pass of a transfer multi-pass. Stock then draws that
+    /// pass as the queued node of the flight plan, so the selected transfer is not drawn on top of it.
+    /// </summary>
+    internal static bool FinalPassQueued
+        => TransferSession.Source is Vehicle source
+           && MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec)
+           && exec.Intent is HohmannTransferIntent
+           && exec.PassIndex >= exec.PassCountTotal - 1;
+
+    // Active execution survives a new calculation. An uncommitted preview draws only while TRANSFER is on screen with a result.
     public static bool ShouldRenderOverlay(out Vehicle? source)
     {
         source = null;
         if (!HasMultiPassPreview) return false;
+        if (!TransferSession.ShowMap) return false;
 
-        if (!StockPlanner.ShowPlanWindow) return false;
-        if (!StockPlanner.DisplaySelectedTransfer) return false;
-        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
-            return false;
-
-        source = StockPlanner.SourceVehicle;
+        source = TransferSession.Source;
         if (source == null) return false;
 
-        if (!MultiPassRegistry.Has(source.Id) && !StockPlanner.TransferCalculated)
-            return false;
-
-        return true;
+        if (MultiPassRegistry.Has(source.Id))
+            return true;
+        return TransferSession.Calculated && TransferSession.PageVisible;
     }
 
     private static bool ShouldDraw(
@@ -255,21 +280,16 @@ internal static class HohmannMultiPassUI
 
         try
         {
-            if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
-                return false;
+            // The session clears the selection on a source or destination change, so a calculated result always matches its transfer information.
+            if (!TransferSession.Calculated) return false;
 
-            if (!StockPlanner.ShowPlanWindow) return false;
-
-            // The selected entry can survive a source or target change. Require TransferCalculated to avoid combining that entry with different transfer information.
-            if (!StockPlanner.TransferCalculated) return false;
-
-            entry = StockPlanner.SelectedEntry;
+            entry = TransferSession.SelectedEntry;
             if (entry == null) return false;
 
-            info = StockPlanner.TransferInfo;
+            info = TransferSession.Info;
             if (info == null || info.Target == null) return false;
 
-            source = StockPlanner.SourceVehicle;
+            source = TransferSession.Source;
             return source != null && source.Orbit?.Parent != null;
         }
         catch
@@ -278,74 +298,57 @@ internal static class HohmannMultiPassUI
         }
     }
 
-    private static void DrawBody(
+    private static void DrawBodyInputs(
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
         OrbitalTransfers.TransferInfo info)
     {
-        // An active intent owns its pending burn. Show its status or block the controls before another intent can replace it.
-        if (MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
-        {
-            if (exec.Intent is HohmannTransferIntent)
-                DrawActive(source, exec);
-            else
-                DrawBlockedByOtherExecution(exec);
+        // An active intent owns its pending burn, so another intent gets no controls that could replace it.
+        if (MultiPassRegistry.Has(source.Id))
             return;
-        }
-
-        ConsoleWidgets.RegionHeader("MULTI-PASS DEPARTURE".AsSpan());
-        ConsoleWidgets.Readout("DESTINATION".AsSpan(),
-            ((info.Target as Astronomical)?.Id ?? "?").AsSpan());
-        ConsoleWidgets.Readout("LAMBERT DV".AsSpan(),
-            string.Format(Inv, "{0:F1} m/s", entry.TransferData.TransferDvVlf.Length()).AsSpan());
 
         // Apply flyby targeting before splitting the departure so all passes use the requested aim.
         HohmannFlybyUI.DrawControls(source, info);
 
-        ImGui.Spacing();
+        double dv = entry.TransferData.TransferDvVlf.Length();
+        double burnTime = MultiPassUI.EstimateBurnTime(dv, MultiPassPreviewCache.GetSequenceState(source));
+        double period = source.Orbit?.Period ?? 0.0;
+        bool matters = Ui.Logic.FormRules.PassesCanMatter(dv, burnTime, period);
+        bool savingKnown = double.IsFinite(Ui.Logic.FormRules.PassesSaving(dv, burnTime, period));
+        if (MultiPassUI.PassCountRow("##AfcHmpPasses", ref _passCount, matters ? "" : Ui.Logic.PageText.PassesRowDetail(_passCount, savingKnown), matters ? "" : Ui.Logic.PageText.PassesRowTip(savingKnown)))
+            InvalidatePreview();
 
-        DrawPassCountSelector();
+        if (_passCount > 1)
+            UpdatePreviewIfStale(source, entry, info);
+        ShowFlybyDeparture(source, entry, info);
+    }
+
+    private static void DrawBodyResults(
+        Vehicle source, OrbitalTransfers.PorkChopEntry entry,
+        OrbitalTransfers.TransferInfo info)
+    {
+        if (MultiPassRegistry.TryGet(source.Id, out MultiPassExecution? exec))
+        {
+            DrawBlockedByOtherExecution(exec);
+            return;
+        }
 
         if (_passCount > 1)
         {
-            DrawSplitModeSelector();
-            UpdatePreviewIfStale(source, entry, info);
-            ShowFlybyDeparture(source, entry, info);
-            DrawSpanInfo(source);
             DrawPreviewFailureIfApplicable();
-            DrawInsufficientFuelIfApplicable();
             DrawAdvisoryIfApplicable();
             DrawFlybyMultipassNoteIfApplicable();
-            DrawPassList();
-            if (_hasCachedPreview && !_cachedPreview.Failed)
-                DrawTotalsAndSavings(source, _cachedPreview.Passes,
-                    entry.TransferData.TransferDvVlf.Length(),
-                    source.Orbit?.Period ?? 0.0);
         }
-        else
+        HohmannFlybyUI.DrawSelectedResult(entry);
+        if (_passCount > 1 && _hasCachedPreview && !_cachedPreview.Failed)
         {
-            ShowFlybyDeparture(source, entry, info);
+            DrawSpanInfo(source);
+            DrawTotalsAndSavings(source, _cachedPreview.Passes,
+                entry.TransferData.TransferDvVlf.Length(),
+                source.Orbit?.Period ?? 0.0);
         }
 
         // Keep the clamp message visible even when only one pass remains. Clear it when the user changes the pass count or split mode.
         DrawAutoClampIfApplicable();
-
-        bool flyby = HohmannFlybyUI.FlybyRequested;
-        if (_passCount <= 1 && _autoClampedFromN <= _passCount)
-        {
-            ImGui.Spacing();
-            ConsoleUi.MutedWrapped(flyby
-                ? "N = 1: the Create button does a single flyby burn."
-                : "N = 1: the Create button does a single Hohmann burn.");
-        }
-        else if (_passCount > 1)
-        {
-            ImGui.Spacing();
-            ConsoleUi.MutedWrapped(string.Format(Inv,
-                flyby
-                    ? "Click Create to start the {0}-pass flyby execution."
-                    : "Click Create to start the {0}-pass execution.",
-                _passCount));
-        }
     }
 
     private static void ShowFlybyDeparture(
@@ -359,7 +362,6 @@ internal static class HohmannMultiPassUI
             FlightPlan? finalPlan = !_cachedPreview.Failed && passes.Length > 0 ? passes[^1].FlightPlan : null;
             HohmannFlybyUI.ShowMultiPassDeparture(_plannedFlybyDeparture, finalPlan, target, entry);
         }
-        HohmannFlybyUI.DrawSelectedResult(entry);
     }
 
     private static void DrawSpanInfo(Vehicle source)
@@ -374,27 +376,27 @@ internal static class HohmannMultiPassUI
                          - passes[0].BurnTime.Seconds();
         if (!(spanSec > 0.0)) return;
 
-        ConsoleWidgets.Readout("SPAN".AsSpan(), string.Format(Inv, "{0:F0} parking periods (~{1})",
+        ConsoleUi.Readout("SPAN".AsSpan(), string.Format(Inv, "{0:F0} parking periods (~{1})",
             spanSec / tPark, FormatHelper.FormatDuration(spanSec)).AsSpan());
         if (_lastShiftKShift > 0)
         {
             double shiftSec = _lastShiftKShift * tPark;
             ConsoleUi.MutedWrapped(string.Format(Inv,
-                "Final burn pushed {0} parking period(s) (~{1}) later so the " +
-                "multi-pass schedule fits; transfer re-planned at the later time.",
+                "Final burn moved {0} parking orbits (~{1}) later so the " +
+                "passes fit. The transfer is planned again for that time.",
                 _lastShiftKShift, FormatHelper.FormatDuration(shiftSec)));
         }
     }
 
     private static void DrawSplitModeSelector()
     {
-        ConsoleWidgets.BeginRow("SPLIT".AsSpan());
-        int picked = ConsoleWidgets.Segmented("AfcHmpSplit".AsSpan(), SplitModeLabels,
+        ConsoleUi.BeginRow(FoldNames.Split.AsSpan());
+        int picked = ConsoleUi.Segmented("AfcHmpSplit", SplitModeLabels,
             _splitMode == SplitMode.EqualDv ? 1 : 0);
         if (ConsoleWidgets.RowHovered)
-            ConsoleWidgets.Tooltip(
+            ConsoleUi.Tooltip(
                 "Equal burn time fires the engines for the same duration each pass, equalizing finite-burn arc length (the literature-standard default for finite-burn loss). Equal delta-v delivers the same magnitude each pass: simpler to reason about, slightly less efficient for finite burns.".AsSpan());
-        ConsoleWidgets.EndRow();
+        ConsoleUi.EndRow();
 
         SplitMode mode = picked == 1 ? SplitMode.EqualDv : SplitMode.EqualBurnTime;
         if (picked < 0 || mode == _splitMode) return;
@@ -406,35 +408,17 @@ internal static class HohmannMultiPassUI
 
     private static void DrawActive(Vehicle source, MultiPassExecution exec)
     {
-        ConsoleWidgets.Readout("MULTI-PASS ACTIVE".AsSpan(),
-            string.Format(Inv, "PASS {0} OF {1}", exec.PassIndex + 1, exec.PassCountTotal).AsSpan());
+        ConsoleUi.Readout("PASSES RUN".AsSpan(),
+            string.Format(Inv, "Pass {0} of {1}", exec.PassIndex + 1, exec.PassCountTotal).AsSpan());
 
         // Rebuild the active preview from the locked intent and current orbit. The pass index invalidates the cache after each completed pass.
         if (exec.Intent is HohmannTransferIntent intent)
             UpdatePreviewForActiveExec(source, exec, intent);
 
-        // The first preview entry is the queued pass. Keep its displayed number relative to the full execution.
-        DrawPassList(firstPassDisplayNumber: exec.PassIndex + 1);
-
         // Show planning failures during execution so the user can understand why the overlay disappeared.
         DrawPreviewFailureIfApplicable();
         DrawAdvisoryIfApplicable();
 
-        // Stock hides its preview checkbox after the window is closed. This control lets the user restore the overlay without another calculation.
-        if (!StockPlanner.TransferCalculated)
-            DrawInlinePreviewToggle();
-
-        ImGui.Spacing();
-        if (ConsoleWidgets.DangerButton("CANCEL REMAINING PASSES".AsSpan()))
-            CancelExecution(source, exec);
-    }
-
-    private static void DrawInlinePreviewToggle()
-    {
-        bool preview = StockPlanner.DisplaySelectedTransfer;
-        if (ConsoleUi.CheckboxRow("PREVIEW SELECTED TRANSFER".AsSpan(),
-                "AfcHmpPreview".AsSpan(), ref preview))
-            StockPlanner.DisplaySelectedTransfer = preview;
     }
 
     private static void UpdatePreviewForActiveExec(
@@ -476,48 +460,14 @@ internal static class HohmannMultiPassUI
     private static void DrawBlockedByOtherExecution(MultiPassExecution exec)
     {
         ConsoleUi.WarningWrapped(string.Format(Inv,
-            "Vehicle is already running a {0} multi-pass ({1} of {2}). " +
-            "Cancel it from its own plan window before starting a Hohmann.",
+            "This craft runs {0} passes (pass {1} of {2}). " +
+            "STOP PASSES in the AFC head ends it before a transfer can start.",
             exec.Intent.Kind, exec.PassIndex + 1, exec.PassCountTotal));
-    }
-
-    private static void CancelExecution(Vehicle source, MultiPassExecution exec)
-    {
-        Burn? pending = exec.TryResolveCurrentBurn(source.FlightComputer.BurnPlan);
-        if (pending != null)
-        {
-            InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
-            {
-                Burn = pending,
-                FlightComputer = source.FlightComputer,
-                DeleteBurn = true,
-            });
-        }
-        if (MultiPassDebug.Enabled)
-            DefaultCategory.Log.Debug(
-                $"[AFC] HohmannMultiPass: vehicle={source.Id} user cancelled at pass " +
-                $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
-        MultiPassRegistry.Remove(source.Id);
-        OnExecutionEnded(source.Id);
     }
 
     #endregion
 
     #region Pass count / split mode / preview
-
-    private static void DrawPassCountSelector()
-    {
-        ConsoleWidgets.BeginRow("PASSES".AsSpan());
-        int passes = _passCount;
-        bool changed = ConsoleWidgets.SliderInt("AfcHmpPasses".AsSpan(), ref passes,
-            MinPasses, Splitter.MaxPasses, passes.ToString(Inv).AsSpan(), pending: false);
-        ConsoleWidgets.EndRow();
-        if (!changed)
-            return;
-
-        _passCount = passes;
-        InvalidatePreview();
-    }
 
     private static void UpdatePreviewIfStale(
         Vehicle source, OrbitalTransfers.PorkChopEntry entry,
@@ -629,7 +579,7 @@ internal static class HohmannMultiPassUI
         if (!_hasCachedPreview || !_cachedPreview.Failed) return;
         ImGui.Spacing();
         ConsoleUi.WarningWrapped(string.Format(Inv,
-            "Multi-pass preview incomplete: {0}.",
+            "Pass preview incomplete: {0}.",
             _cachedPreview.FailureReason ?? "unknown reason"));
     }
 
@@ -638,21 +588,7 @@ internal static class HohmannMultiPassUI
         if (!_hasCachedPreview || _cachedPreview.Failed) return;
         if (_cachedPreview.Advisory == null) return;
         ImGui.Spacing();
-        ConsoleUi.WarningWrapped(_cachedPreview.Advisory);
-    }
-
-    private static void DrawInsufficientFuelIfApplicable()
-    {
-        if (_hasCachedPreview && _cachedPreview.Failed) return;
-        if (double.IsNaN(_cachedFuelSum) || double.IsNaN(_cachedFuelTotalDv)) return;
-        if (!(_cachedFuelTotalDv > 0.0)) return;
-        if (_cachedFuelSum >= _cachedFuelTotalDv * 0.995) return;
-
-        ImGui.Spacing();
-        ConsoleUi.WarningWrapped(string.Format(Inv,
-            "Vehicle can only deliver ~{0:F0} m/s of the {1:F0} m/s required. " +
-            "Multi-pass will run out of fuel before the departure is reached.",
-            _cachedFuelSum, _cachedFuelTotalDv));
+        ConsoleUi.WarningWrapped(ConsoleUi.EscapeFormat(_cachedPreview.Advisory));
     }
 
     private static void DrawAutoClampIfApplicable()
@@ -682,10 +618,9 @@ internal static class HohmannMultiPassUI
                 + "Reduce passes, or try "
                 + $"{otherModeLabel}.",
             PassPlanFailure.NonMonotonicK =>
-                "Integer-sum rounding artifact at this N; reduce passes by one "
-                + "(N-1 typically works).",
+                "The passes do not divide evenly at this count. One pass fewer usually works.",
             PassPlanFailure.KFloor =>
-                "Per-pass dV too small to be meaningful at this N; reduce passes.",
+                "Each pass would be too small at this count; reduce passes.",
             PassPlanFailure.FuelShort =>
                 "Vehicle has insufficient fuel for this transfer (reducing "
                 + "passes will not help). Add fuel or pick a lower-energy departure.",
@@ -694,31 +629,11 @@ internal static class HohmannMultiPassUI
         };
 
         ConsoleUi.WarningWrapped(string.Format(Inv,
-            "{0} pass(es) requested, only {1} feasible at this departure entry. {2}",
+            "{0} passes asked for, only {1} can fly from this departure. {2}",
             _autoClampedFromN, _passCount, advice));
         if (MultiPassDebug.Enabled && _autoClampReason != null)
             ConsoleUi.MutedWrapped(string.Format(Inv,
                 "Debug: kind={0}, reason: {1}", _autoClampKind, _autoClampReason));
-    }
-
-    private static void DrawPassList(int firstPassDisplayNumber = 1)
-    {
-        if (!_hasCachedPreview) return;
-        PassPreview[] passes = _cachedPreview.Passes;
-        if (passes.Length == 0) return;
-
-        for (int i = 0; i < passes.Length; i++)
-        {
-            double dv = passes[i].DvVlf.Length();
-            double t = passes[i].EstimatedBurnTimeSec;
-            string label = i == passes.Length - 1
-                ? string.Format(Inv, "PASS {0} (FINAL)", firstPassDisplayNumber + i)
-                : string.Format(Inv, "PASS {0}", firstPassDisplayNumber + i);
-            string value = t > 0.5
-                ? string.Format(Inv, "{0:F0} m/s, {1:F0}s", dv, t)
-                : string.Format(Inv, "{0:F0} m/s", dv);
-            ConsoleWidgets.Readout(label.AsSpan(), value.AsSpan());
-        }
     }
 
     private static void DrawTotalsAndSavings(
@@ -726,17 +641,11 @@ internal static class HohmannMultiPassUI
     {
         if (passes.Length == 0 || !(lambertDv > 0.0)) return;
 
-        double sumDv = 0.0;
-        for (int i = 0; i < passes.Length; i++)
-            sumDv += passes[i].DvVlf.Length();
-
-        ConsoleWidgets.Rule();
-        ConsoleWidgets.Readout("TOTAL".AsSpan(),
-            string.Format(Inv, "{0:F0} m/s", sumDv).AsSpan());
-        ConsoleWidgets.Readout("LAMBERT".AsSpan(),
+        ConsoleUi.Readout("SINGLE BURN".AsSpan(),
             string.Format(Inv, "{0:F0} m/s", lambertDv).AsSpan());
         string? savingsLine = TryFormatRobbinsSavings(source, passes, lambertDv, tPark);
-        if (savingsLine != null) ConsoleUi.MutedWrapped(savingsLine);
+        if (savingsLine != null)
+            ConsoleUi.Readout("SAVINGS VS SINGLE BURN".AsSpan(), savingsLine.AsSpan());
     }
 
     // A shifted transfer or a plan with insufficient fuel cannot be compared with the selected single burn. Using the parking period for every pass slightly overestimates savings.
@@ -775,8 +684,7 @@ internal static class HohmannMultiPassUI
         double savings = singleLoss - splitLoss;
         if (savings < 1.0) return null;
 
-        return string.Format(Inv,
-            "Robbins savings estimate vs single burn: ~{0:F0} m/s", savings);
+        return string.Format(Inv, "~{0:F0} m/s", savings);
     }
 
     #endregion
@@ -785,6 +693,15 @@ internal static class HohmannMultiPassUI
 
     public static bool WantedMultiPassButPreviewFailed() =>
         Enabled && _passCount > 1 && _hasCachedPreview && _cachedPreview.Failed;
+
+    public static string FuelShortFact()
+    {
+        if (!Enabled || _passCount <= 1 || (_hasCachedPreview && _cachedPreview.Failed))
+            return "";
+        if (double.IsNaN(_cachedFuelSum) || double.IsNaN(_cachedFuelTotalDv) || !(_cachedFuelTotalDv > 0.0))
+            return "";
+        return _cachedFuelSum < _cachedFuelTotalDv * 0.995 ? Ui.Logic.PageText.FuelShort(_cachedFuelTotalDv, _cachedFuelSum) : "";
+    }
 
     public static bool WantsMultiPass => Enabled && _passCount > 1;
 

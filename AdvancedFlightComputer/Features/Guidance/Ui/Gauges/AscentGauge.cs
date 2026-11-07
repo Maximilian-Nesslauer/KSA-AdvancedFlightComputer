@@ -3,173 +3,194 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.Ascent;
+using AdvancedFlightComputer.Features.Ui.Canvas;
+using AdvancedFlightComputer.Features.Ui.Logic;
+using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
-// The Ascent tab's content. The gauge shell, the tab bar and the EXECUTE/ABORT buttons live in Ui/Panel.cs; everything here draws inside the body child that panel opens, so it is plain ImGui under ImGaugeDressing's styling.
-//  The two sections that shape a launch - the target orbit above all - are open, and everything else is folded away behind "Expert settings", collapsed until asked for.
 public static partial class GuidanceWindow
 {
-    private static void DrawAscentTabContent(Vehicle vehicle, Orbit orbit, IParentBody parent,
-                                             double bodyRadius, float innerW)
+    private static bool AscentPlanBusy => _s.AscentPlanJob != null || _s.AscentPlanRequested;
+
+    private const string FromPositionVerb = "FROM POSITION";
+
+    private const float OrbitFieldLeast = 56f;
+
+    // A row of the page. Picking a target turns the three orbit inputs into OUTPUTS of that pick, continuously recomputed and greyed out, because a chase orbit that disagreed with the target it was chasing was never anything but a mistake. Returns the width of its fields, so the row under it can line up.
+    private static float DrawOrbitRow(Orbit orbit, IParentBody parent, bool driven)
     {
-        // Which ascent, above everything else, because it decides what the rest of the page is.
-        DrawAscentMethodRadios();
-        ImGui.Separator();
-        if (_s.AscentMethod == AscentMethod.GravityTurn)
+        float avail = ConsoleStyle.ContentAvailWidth();
+        float cells = avail - ConsoleUi.LabelColumnWidth;
+        float fieldW = CellFieldWidth(cells, out float rowWidth, ("PE", Specs.PeKm.Unit), ("AP", Specs.ApKm.Unit), ("INC", Specs.IncDeg.Unit));
+        // In a narrow pane the fields need the room of the label, because PE, AP and INC name the row by themselves.
+        bool label = fieldW >= OrbitFieldLeast * ImGuiHelper.InterfaceScale;
+        if (!label)
         {
-            DrawGravityTurnTabContent(innerW);
-            return;
+            cells = avail;
+            fieldW = CellFieldWidth(cells, out rowWidth, ("PE", Specs.PeKm.Unit), ("AP", Specs.ApKm.Unit), ("INC", Specs.IncDeg.Unit));
         }
+        // The name takes the violet of the band of the goal orbit in the picture, because these values set that band. With no room for the name PE and AP take it, and with no band no name has it.
+        uint? bandInk = LaunchOrbitBandDraws ? Palette.Target.U32 : null;
+        uint? cellInk = label ? null : bandInk;
+        ConsoleUi.BeginRow(label ? "ORBIT" : "", cells, bandInk);
+        float2 control = ImGui.GetCursorScreenPos();
+        float x = control.X + ConsoleWidgets.RowControlWidth - rowWidth;
 
-        // Status first: what the guidance is doing now, before anything you set.
-        DrawAscentStatus(ImGui.GetCursorScreenPos(), ImGui.GetContentRegionAvail().X,
-            ImGui.GetTextLineHeightWithSpacing());
-        ImGui.Separator();
-
-        DrawTargetOrbitSection(vehicle, orbit, parent, bodyRadius, innerW);
-        DrawConvexAscentSection(vehicle, orbit, parent, innerW);
-        DrawAscentSettingsSection(innerW);
-        DrawExpertSettingsSection(innerW);
-    }
-
-    /// <summary>
-    /// The CAT-S / UPFG ascent or the gravity-turn one. Locked while an ascent is flying, armed for its window or waiting on its convex plan, so the page and EXECUTE cannot switch away from the one that is committed.
-    /// </summary>
-    private static void DrawAscentMethodRadios()
-    {
-        ImGui.Text("Method");
-        ImGui.SameLine();
-        using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending))
-        {
-            // Suffixed IDs: the Gravity turn page's section header carries the same label.
-            if (ImGui.RadioButton("CAT-S / UPFG##ascentmethod", _s.AscentMethod == AscentMethod.CatsUpfg))
-                _s.AscentMethod = AscentMethod.CatsUpfg;
-            ImGui.SameLine();
-            if (ImGui.RadioButton("Gravity turn##ascentmethod", _s.AscentMethod == AscentMethod.GravityTurn))
-                _s.AscentMethod = AscentMethod.GravityTurn;
-        }
-    }
-
-    // --- Target orbit ------------------------------------------------------- The main levers. Picking a target turns the four orbit inputs into OUTPUTS of that pick - continuously recomputed and greyed out - because a chase orbit that disagreed with the target it was chasing was never anything but a mistake.
-    private static void DrawTargetOrbitSection(Vehicle vehicle, Orbit orbit, IParentBody parent,
-                                               double bodyRadius, float innerW)
-    {
-        // THE ORBIT ITSELF, as plain rows with no header to fold them away: the target, periapsis, apoapsis and inclination are what every launch is set up with. Below them the boosters' sites, then how to reach the orbit (Orbit settings). A stop-gap layout until the panel overhaul.
-        ImGuiHelper.BeginRegion("##targetorbit", border: false, innerW);
-
-        DrawTargetPicker(vehicle);
-
-        ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
-        bool driven = status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable;
-        if (driven)
-            ApplyChaseOrbit(in plan);
-
-        using (new ImGuiDisabledScope(driven))
+        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
         {
             // Periapsis is always the lower: a pair entered the other way round swaps once the field is left (see OrderApsides).
-            GaugeRow("Periapsis (km)", "##pe", ref _s.PeKm);
-            if (ImGui.IsItemDeactivatedAfterEdit())
+            GaugeCell(Specs.PeKm, "PE", ref x, control.Y, fieldW, ref _s.PeKm, nameInk: cellInk);
+            if (RowEditEnded(Specs.PeKm))
                 OrderApsides();
-            GaugeRow("Apoapsis (km)", "##ap", ref _s.ApKm);
-            if (ImGui.IsItemDeactivatedAfterEdit())
+            GaugeCell(Specs.ApKm, "AP", ref x, control.Y, fieldW, ref _s.ApKm, nameInk: cellInk);
+            if (RowEditEnded(Specs.ApKm))
                 OrderApsides();
-            // A new inclination makes the old LAN meaningless - the plane it named no longer passes overhead - so re-seed it from where the vehicle is.
-            if (GaugeRow("Inclination (deg)", "##inc", ref _s.IncDeg))
+            // A new inclination makes the old LAN meaningless, because the plane it named no longer passes overhead, so re-seed it from where the vehicle is.
+            if (GaugeCell(Specs.IncDeg, "INC", ref x, control.Y, fieldW, ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
         }
-
-        ImGuiHelper.EndRegion();
-
-        // Where the boosters come home to, right under where the vehicle is going: a target set here is what asks the convex plan for a booster reserve.
-        DrawReturnableStagesSection(innerW);
-
-        if (ImGuiHelper.BeginRegion("Orbit settings",
-                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
-        {
-            DrawOrbitSettingsRows(orbit, parent, bodyRadius, status, in plan, driven);
-            ImGuiHelper.EndRegion();
-        }
-
-        // Outside the region: it emits plain full-width status text, not column rows.
-        if (status == ChaseStatus.Ok)
-            DrawAutoLaunchArming();
+        ConsoleUi.EndRow();
+        return fieldW;
     }
 
-    // --- Orbit settings ----------------------------------------------------- Everything about the target orbit past its four numbers: the plane's LAN, the argument of periapsis, the insertion, the chase offset, what EXECUTE does, and the launch window.
-    private static void DrawOrbitSettingsRows(Orbit orbit, IParentBody parent, double bodyRadius,
-                                              ChaseStatus status, in ChasePlan plan, bool driven)
+    private static void DrawPlaneRow(Orbit orbit, IParentBody parent, bool driven, float fieldW)
     {
-        if (driven)
-        {
-            GaugeRow("SMA offset (km)", "##chaseoffset", ref _s.ChaseOffsetKm);
-            // Greyed for a near-circular target, which has no argument of periapsis to copy.
-            using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))
-                GaugeRowCheck("Copy target arg. Pe", "##matchargpe", ref _s.MatchTargetArgPe);
-        }
-
-        using (new ImGuiDisabledScope(driven))
-        {
-            GaugeRow("LAN (deg)", "##lan", ref _s.LanDeg);
-            // Free inserts wherever the burn ends - at periapsis, or where Optimise insertion finds it cheaper. Fixed holds periapsis where it is put and moves the insertion along the ellipse instead, which costs more the further from periapsis it lands - the Insertion row says where that is once guidance runs.
-            GaugeRowCheck("Fix arg. of Pe", "##argpefixed", ref _s.ArgPeFixed);
-            using (new ImGuiDisabledScope(!_s.ArgPeFixed))
-                GaugeRow("Arg. of Pe (deg)", "##argpe", ref _s.ArgPeDeg);
-        }
-
-        // Outside the target's greying, since it is how to fly rather than where to go. Greyed instead while the argument of periapsis is fixed: that decides the insertion point by itself.
-        using (new ImGuiDisabledScope(_s.ArgPeFixed))
-        {
-            GaugeRowCheck("Optimise insertion", "##optinsertion", ref _s.OptimiseInsertion);
-            // Where the insertion is looked for: past periapsis, or short of apoapsis for a vehicle whose burn is better ended high - still climbing, so it coasts up to apoapsis to circularise.
-            GaugeRowCheck("Insert before Ap", "##insertap", ref _s.InsertBeforeApoapsis);
-        }
-
+        BeginKitRow("PLANE", controlWidth: ConsoleStyle.ContentAvailWidth() - ConsoleUi.LabelColumnWidth);
+        float2 control = ImGui.GetCursorScreenPos();
+        float x = control.X + ConsoleWidgets.RowControlWidth - CellsWithoutFields([("LAN", Specs.LanDeg.Unit)]) - fieldW;
         if (!driven)
         {
-            ImGui.Text("");
-            ImGui.NextColumn();
-            if (ImGui.Button("LAN from position"))
+            float buttonW = ConsoleWidgets.ButtonWidth(FromPositionVerb.AsSpan());
+            ImGui.SetCursorScreenPos(new float2(x - CellGap - buttonW, control.Y));
+            bool fromPosition;
+            using (new ImGuiDisabledScope(AscentPlanBusy))
+                fromPosition = ConsoleWidgets.Button(FromPositionVerb.AsSpan(), "AfcLanFromPosition".AsSpan(), new float2(buttonW, ConsoleStyle.FrameHeightPx));
+            if (fromPosition && !AscentPlanBusy)
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
-            ImGui.NextColumn();
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ConsoleUi.Tooltip(PageText.LanFromPositionTip.AsSpan());
         }
+        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
+            GaugeCell(Specs.LanDeg, "LAN", ref x, control.Y, fieldW, ref _s.LanDeg);
+        ConsoleUi.EndRow();
+    }
 
-        // Directly below the orbit parameters: these two decide what EXECUTE actually does, so they belong with the launch, not buried in Expert.
-        using (new ImGuiDisabledScope(!driven))
-            GaugeRowCheck("Auto warp to window", "##autolaunch", ref _s.AutoLaunch);
-        GaugeRowCheck("Auto engines/staging", "##autostage", ref _s.AutoStage);
-
+    private static void DrawTargetFacts(ChaseStatus status, in ChasePlan plan)
+    {
         switch (status)
         {
             case ChaseStatus.NotFound:
-                GaugeRowText("Target", "not found", new float4(1f, 0.4f, 0.4f, 1f));
+                GaugeRowText("TARGET", "NOT FOUND", ConsoleStyle.Danger);
                 break;
             case ChaseStatus.DifferentBody:
-                GaugeRowText("Target", "orbits another body", new float4(1f, 0.4f, 0.4f, 1f));
-                break;
-            case ChaseStatus.PlaneUnreachable:
-                GaugeRowText("Launch window", "inclination below site latitude",
-                    new float4(1f, 0.6f, 0.3f, 1f));
+                GaugeRowText("TARGET", "OTHER BODY", ConsoleStyle.Danger);
                 break;
             case ChaseStatus.Ok:
-                GaugeRowText("Target orbit",
-                    $"{plan.TargetPeKm:F1} x {plan.TargetApKm:F1} km, inc {plan.IncDeg:F2} deg");
-                // To IGNITION, which leads the plane crossing by LanLeadSeconds - or, once the convex plan has chosen its own launch time for this window, to that.
-                double planned = ExecuteLaunchInstant() - WindowInstant();
-                GaugeRowText("Launch window", planned != 0.0
-                    ? $"T-{plan.WaitSec + planned:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")}, "
-                      + $"the plan's own time, {Math.Abs(planned):F0} s {(planned > 0.0 ? "after" : "before")} the {LanLeadSeconds:F0} s lead)"
-                    : $"T-{plan.WaitSec:F0} s ({(LaunchNodeDescending(in plan) ? "descending" : "ascending")}, "
-                      + $"{LanLeadSeconds:F0} s lead)");
+                GaugeRowText("TARGET ORBIT", PageText.TargetOrbit(plan.TargetPeKm, plan.TargetApKm, plan.IncDeg));
                 break;
         }
-
-        DrawInsertionRows(bodyRadius);
     }
 
-    // Where the Insertion row turns amber. Not limits - nothing is refused, and what an insertion costs depends on the vehicle - but where the cost has stopped being small: far round the ellipse from periapsis, or climbing steeply onto it.
+    private static void DrawLaunchWindowRows(ChaseStatus status, in ChasePlan plan, bool nodeChoiceExists)
+    {
+        LaunchWindowRow row = FormRules.WindowRow(_s.TargetId.Length > 0, status == ChaseStatus.Ok && double.IsFinite(plan.WaitSec),
+            status == ChaseStatus.PlaneUnreachable, nodeChoiceExists && (!_s.FlyConvexAscent || BackupLaunchChosen));
+        ConsoleUi.NoteShape("AfcLaunchWindow", (int)row);
+        switch (row)
+        {
+            case LaunchWindowRow.NodeChoice:
+                int picked = ConsoleUi.ChoiceRow("WINDOW", "AfcLaunchNode", PageText.NodeLabels, _s.LaunchDescending ? 1 : 0, default, PageText.NodeCards, "",
+                    Specs.LaunchDescending.Help);
+                if (picked >= 0)
+                    _s.LaunchDescending = picked == 1;
+                break;
+            case LaunchWindowRow.Countdown:
+                // To IGNITION, which leads the plane crossing by LanLeadSeconds, or, once the calculated climb chose its own launch time for this window, to that.
+                GaugeRowText("WINDOW", PageText.WindowCountdown(plan.WaitSec, LaunchNodeDescending(in plan), LanLeadSeconds, ExecuteLaunchInstant() - WindowInstant()));
+                GaugeRowCheck(Specs.AutoLaunch, ref _s.AutoLaunch);
+                DrawAutoLaunchArming();
+                break;
+            case LaunchWindowRow.NoCrossing:
+                GaugeRowText("WINDOW", PageText.NoCrossing, ConsoleStyle.Danger);
+                break;
+        }
+    }
+
+    // The LIMITS fold of the page: the limits of the climb that the plan and the flight read. MAX Q shows with either climb, because SOLVE solves a plan with GRAVITY TURN too. The limit is part of the problem, so it is frozen while the problem is being solved.
+    private static void DrawLimitsFold(IParentBody parent, bool openByDefault)
+    {
+        bool air = HasPhysicalAtmosphere(parent);
+        if (!ConsoleUi.Fold(PageText.LimitsLabel(air, _s.ConvexQMaxKpa, _s.GLimitEnabled, _s.GLimitG), LimitsFoldId, openByDefault, PageText.LimitsTip(air)))
+            return;
+        ImGui.PushID(LimitsFoldId);
+        try
+        {
+            using (ConsoleUi.Dim(_s.Running))
+            using (new ImGuiDisabledScope(AscentPlanBusy))
+            {
+                if (air)
+                    GaugeRow(Specs.ConvexQMaxKpa, ref _s.ConvexQMaxKpa);
+                else
+                    GaugeRowText(Specs.ConvexQMaxKpa.Tier, Specs.ConvexQMaxKpa.Label, PageText.NoAirRow, ConsoleStyle.TextMuted);
+            }
+            GaugeRowCheck(Specs.GLimitEnabled, ref _s.GLimitEnabled);
+            // Greyed rather than hidden, because the limit is still worth reading when it is off.
+            using (new ImGuiDisabledScope(!_s.GLimitEnabled))
+                GaugeRow(Specs.GLimitG, ref _s.GLimitG);
+        }
+        finally
+        {
+            ImGui.PopID();
+        }
+    }
+
+    // How the orbit plane is held, in the GNC fold. The LAN stands on the page, because it changes which orbit the craft goes to.
+    private static void DrawOrbitPlaneSection(Vehicle vehicle, Orbit orbit, IParentBody parent, double bodyRadius)
+    {
+        if (!GuidanceRegion.Begin(FoldNames.Plane, GuidanceRegion.Expert))
+            return;
+
+        // Read only, because the rows grey out on it. The launch window step writes the chase result into the state (StepLaunchWindow), so the draw never does.
+        ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
+        bool driven = status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable;
+        if (driven)
+        {
+            GaugeRow(Specs.ChaseOffsetKm, ref _s.ChaseOffsetKm);
+            using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))
+                GaugeRowCheck(Specs.MatchTargetArgPe, ref _s.MatchTargetArgPe);
+        }
+
+        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
+        {
+            GaugeRowCheck(Specs.ArgPeFixed, ref _s.ArgPeFixed);
+            using (new ImGuiDisabledScope(!_s.ArgPeFixed))
+                GaugeRow(Specs.ArgPeDeg, ref _s.ArgPeDeg);
+        }
+
+        GuidanceRegion.End();
+    }
+
+    private static void DrawInsertionSection()
+    {
+        if (!GuidanceRegion.Begin(FoldNames.Insertion, GuidanceRegion.Expert))
+            return;
+
+        // Outside the target's greying, since it is how to fly rather than where to go. Greyed instead while the argument of periapsis is fixed, which decides the insertion point by itself.
+        using (new ImGuiDisabledScope(_s.ArgPeFixed))
+        {
+            GaugeRowCheck(Specs.OptimiseInsertion, ref _s.OptimiseInsertion);
+            GaugeRowCheck(Specs.InsertBeforeApoapsis, ref _s.InsertBeforeApoapsis);
+        }
+
+        GuidanceRegion.End();
+    }
+
+    // Where the insertion row turns amber. Not limits, because nothing is refused and what an insertion costs depends on the vehicle, but where the cost has stopped being small: far round the ellipse from periapsis, or climbing steeply onto it.
     private const double InsertionWarnAnomalyDeg = 45.0;
     private const double InsertionWarnFpaDeg = 5.0;
 
@@ -177,7 +198,7 @@ public static partial class GuidanceWindow
     private const double InsertionDescendingFpaDeg = -0.5;
 
     /// <summary>
-    /// Where the running ascent is aiming to insert on the target ellipse, whenever that is anywhere but periapsis: how far round from periapsis, at what altitude, and at what flight-path angle - the numbers a fixed argument of periapsis spends dV on, and the insertion search saves dV with. Drawn only while there is a solution to read them from.
+    /// Where the running ascent is aiming to insert on the target ellipse, whenever that is anywhere but periapsis: how far round from periapsis, at what altitude, and at what flight-path angle. These are the numbers a fixed argument of periapsis spends dV on, and the insertion search saves dV with. Drawn only while there is a solution to read them from.
     /// </summary>
     private static void DrawInsertionRows(double bodyRadius)
     {
@@ -192,31 +213,35 @@ public static partial class GuidanceWindow
         // Only a fixed argument of periapsis can put the insertion somewhere dear: the search moves it only to save dV, and the floor only to keep the cutoff out of the air.
         bool far = _s.ArgPeFixed && (Math.Abs(nuDeg) > InsertionWarnAnomalyDeg || Math.Abs(fpaDeg) > InsertionWarnFpaDeg);
         bool descending = _s.ArgPeFixed && fpaDeg < InsertionDescendingFpaDeg;
-        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
-        float4 fine = new float4(0.5f, 0.9f, 1f, 1f);
+        float4 warn = ConsoleUi.WarnInk;
+        float4 fine = ConsoleStyle.TextPrimary;
+        const UiTier D = UiTier.Diagnostics;
 
-        GaugeRowText("Insertion",
-            $"{nuDeg:+0.0;-0.0} deg from Pe, {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {fpaDeg:+0.0;-0.0}",
+        GaugeRowText(D, "INSERTION",
+            FormattableString.Invariant($"{nuDeg:+0.0;-0.0} deg from PE, ALT {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {fpaDeg:+0.0;-0.0}"),
             far || descending || aim.FloorLimited ? warn : fine);
         if (aim.FloorLimited)
-            GaugeRowText("", "Pe inside the atmosphere - inserting at its top", warn);
+            GaugeRowText(D, "", "PE IN ATMOSPHERE. INSERTION AT ATMOSPHERE TOP.", warn);
         if (far)
-            GaugeRowText("", "far round from Pe - costs dV", warn);
+            GaugeRowText(D, "", "FAR PAST PE. COSTS DV.", warn);
         else if (descending)
-            GaugeRowText("", "before Pe - a burn from orbit may not converge", warn);
+            GaugeRowText(D, "", "BEFORE PE. BURN FROM ORBIT MAY NOT CONVERGE.", warn);
         if (searched && double.IsFinite(_s.InsertionSearch.SavingMs))
-            GaugeRowText("", $"placed for dV, {Math.Max(_s.InsertionSearch.SavingS, 0.0):F1} s of burn ({Math.Max(_s.InsertionSearch.SavingMs, 0.0):F0} m/s) under inserting {(_s.InsertionSearch.AtApoapsis ? $"{UpfgInsertionSearch.ApoapsisLeadDeg:F0} deg before Ap" : "at Pe")}", fine);
+            GaugeRowText(D, "", FormattableString.Invariant($"PLACED FOR DV: SAVES {Math.Max(_s.InsertionSearch.SavingS, 0.0):F1} s ({Math.Max(_s.InsertionSearch.SavingMs, 0.0):F0} m/s) VS INSERTING {(_s.InsertionSearch.AtApoapsis ? FormattableString.Invariant($"{UpfgInsertionSearch.ApoapsisLeadDeg:F0} deg BEFORE AP") : "AT PE")}"), fine);
     }
 
     private static void DrawTargetPicker(Vehicle vehicle)
     {
-        ImGui.Text("Target");
-        ImGui.NextColumn();
-        ImGui.PushItemWidth(-1f);
-        if (ImGui.BeginCombo("##ascenttarget", _s.TargetId.Length > 0 ? _s.TargetId : "(none)"))
+        BeginKitRow("TARGET");
+        bool rowHovered = ConsoleWidgets.RowHovered;
+        ConsoleUi.RowChip("TARGET", Owner.Stock, "STOCK");
+        bool open = ConsoleUi.BeginCombo("AfcAscentTarget".AsSpan(), _s.TargetId.Length > 0 ? _s.TargetId : "None");
+        if (!open && rowHovered)
+            ConsoleUi.Card("TARGET", "Craft whose orbit LAUNCH targets. LAUNCH waits for its window. " + PageText.CraftTargetChipTip);
+        if (open)
         {
-            // Dropping the target frees the argument of periapsis again: the target's was only ever copied for the chase.
-            if (ImGui.Selectable("(none)", _s.TargetId.Length == 0) && _s.TargetId.Length > 0)
+            // Dropping the target frees the argument of periapsis again, because the target's was only ever copied for the chase.
+            if (ImGui.Selectable("None", _s.TargetId.Length == 0) && _s.TargetId.Length > 0)
             {
                 _s.TargetId = "";
                 _s.ArgPeFixed = false;
@@ -237,64 +262,77 @@ public static partial class GuidanceWindow
                     }
                 }
             }
-            ImGui.EndCombo();
+            ConsoleWidgets.EndComboControl();
         }
-        ImGui.PopItemWidth();
-        ImGui.NextColumn();
+        ConsoleUi.EndRow();
     }
 
-    // --- Ascent settings ---------------------------------------------------- How the vehicle flies the ascent, as opposed to where it is going.
+    // How the vehicle flies the ascent, as opposed to where it is going.
     private static void DrawAscentSettingsSection(float innerW)
     {
-        if (!ImGuiHelper.BeginRegion("Ascent settings",
-                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        if (!GuidanceRegion.Begin(FoldNames.Turn, GuidanceRegion.Expert))
             return;
 
-        GaugeRowCheck("G-limit", "##glimit", ref _s.GLimitEnabled);
-        // Greyed rather than hidden: the limit is still worth reading when it is off.
-        using (new ImGuiDisabledScope(!_s.GLimitEnabled))
-            GaugeRow("Max accel (g)", "##glimitg", ref _s.GLimitG);
+        GaugeRow(Specs.TurnStartAltKm, ref _s.TurnStartAltKm);
+        GaugeRow(Specs.TurnRateDegS, ref _s.TurnRateDegS);
 
-        GaugeRow("Turn start alt (km)", "##turnalt", ref _s.TurnStartAltKm);
-        GaugeRow("Turn rate (deg/s)", "##turnrate", ref _s.TurnRateDegS);
-
-        // Roll is FREE by default - the ascent holds whatever the vehicle lifted off with and commands a thrust direction only. Ticking this commands a roll as well, and switches the flight computer out of decoupled roll so it tracks it (see VehicleAutopilotState.ForceRoll).
-        GaugeRowCheck("Force roll", "##forceroll", ref _s.ForceRoll);
+        // FORCE ROLL is on by default: the ascent commands a roll as well as a thrust direction and switches the flight computer out of decoupled roll so it tracks it (see VehicleAutopilotState.ForceRoll). Off, the ascent holds whatever roll the vehicle lifted off with.
+        GaugeRowCheck(Specs.ForceRoll, ref _s.ForceRoll);
         using (new ImGuiDisabledScope(!_s.ForceRoll))
-            GaugeRow("Roll angle (deg)", "##rollangle", ref _s.ForceRollDeg);
+            GaugeRow(Specs.ForceRollDeg, ref _s.ForceRollDeg);
 
-        ImGuiHelper.EndRegion();
+        GuidanceRegion.End();
+    }
+
+    /// <summary>The booster reserve the calculated climb sized for the booster with a stage site, kg; NaN with no usable plan for that site.</summary>
+    private static double PlannedReserveBoostbackDv(out double landingDvMs)
+    {
+        landingDvMs = double.NaN;
+        AscentPlan p = _s.AscentPlan;
+        AscentSolution sol = p?.Solution;
+        if (p == null || !p.Usable || !double.IsFinite(sol.RecoveryReserveKg) || p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
+            return double.NaN;
+        landingDvMs = sol.LandingDv;
+        return sol.BoostbackDv;
     }
 
     /// <summary>
-    /// The stages that could fly themselves home, a section of their own that does not fold away, one compact row each: the stage, its Set target button, and the site once set.
-    ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is.
-    ///  A TARGET ON THE NEXT STAGE ASKS FOR ITS RESERVE: the convex plan sizes what that booster keeps for the boostback and landing, shown on its Booster row. There is nothing to set.
-    ///  The live return cost (ReturnableStage.RequiredDvMs) is still solved, but not shown: the plan's Booster row is the number that matters now.
+    /// What the booster with a stage site keeps for its way home. There is nothing to set: the stage site arms the reserve, and the calculated climb sizes it for the boostback to that site and the landing burn (RefreshReserve). Idle is normal for part of a flight, because a strap-on stack does not arm until the strap-ons are gone, so the row says why (NextSeparationDropsAllEngines).
     /// </summary>
-    private static void DrawReturnableStagesSection(float innerW)
+    private static void DrawBoosterReserve()
+    {
+        double boostbackDv = PlannedReserveBoostbackDv(out double landingDv);
+        string text = PageText.BoosterReserve(BoostbackTarget() != null, _s.ReserveArmed, _s.ReserveStaged, _s.ReserveKg, boostbackDv, landingDv, _s.ReserveNote, out bool warn);
+        if (text.Length == 0)
+            return;
+        GaugeRowText(UiTier.Player, "RESERVE", text, warn ? ConsoleUi.WarnInk : _s.ReserveStaged ? ConsoleStyle.TextMuted : ConsoleStyle.TextPrimary);
+    }
+
+    /// <summary>
+    /// The stages that can fly themselves home, one row each with its SITE.
+    ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is, and a stage that separates once the climb is over is going orbital speed and is not listed.
+    ///  A SITE ON A STAGE ASKS FOR ITS RESERVE: the calculated climb sizes what that booster keeps for the boostback and the landing, which the RESERVE row shows.
+    /// </summary>
+    private static void DrawReturnableStageRows()
     {
         var list = _s.ReturnableStages;
         if (list.Count == 0)
-            return;      // nothing separating carries a pod - most upper stages
-
-        // Leaf: a header with no arrow, always open.
-        if (!ImGuiHelper.BeginRegion("Returnable stages",
-                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns | ImGuiTreeNodeFlags.Leaf, innerW))
             return;
 
-        float4 dim = new float4(0.7f, 0.7f, 0.7f, 1f);
-        float4 warn = new float4(1f, 0.8f, 0.3f, 1f);
+        float4 dim = ConsoleStyle.TextMuted;
 
         for (int i = 0; i < list.Count; i++)
         {
             GuidanceWindow.ReturnableStage stage = list[i];
 
-            ImGui.Text(stage.Name + (stage.IsNext ? " (next)" : ""));
-            ImGui.NextColumn();
+            // The name row carries the set button, because the button is about the stage rather than about any one of its numbers.
             bool arming = _retargetStageId == stage.RootId;
-            if (ImGui.Button(arming ? $"click a spot##set{stage.RootId}"
-                                    : $"Set target##set{stage.RootId}"))
+            string pick = arming ? "CLICK SITE" : "PICK SITE";
+            float clearW = stage.HasTarget ? ConsoleWidgets.ButtonWidth("X".AsSpan()) + ImGui.GetStyle().ItemSpacing.X : 0f;
+            float buttonsW = ConsoleWidgets.ButtonWidth(pick.AsSpan()) + clearW;
+            BeginKitRow(stage.Name.ToUpperInvariant() + (stage.IsNext ? "  NEXT" : ""), controlWidth: buttonsW);
+            ConsoleUi.RowRight(buttonsW);
+            if (ConsoleWidgets.Button(pick.AsSpan(), $"AfcStageSet{stage.RootId}".AsSpan(), default))
             {
                 // Arms the world click for THIS stage. Same click handler the landing retarget uses; the binding is what sends the answer somewhere else.
                 _retargetStageId = arming ? 0u : stage.RootId;
@@ -303,42 +341,37 @@ public static partial class GuidanceWindow
             if (stage.HasTarget)
             {
                 ImGui.SameLine();
-                if (ImGui.Button($"x##clr{stage.RootId}"))
+                if (ConsoleWidgets.Button("X".AsSpan(), $"AfcStageClear{stage.RootId}".AsSpan(), default))
                 {
                     _s.StageTargets.Remove(stage.RootId);
                     _s.StageModelDirty = true;
                 }
-                ImGui.SameLine();
-                ImGui.TextColored(dim, $"{stage.TargetLatDeg:F3}, {stage.TargetLonDeg:F3}");
             }
-            ImGui.NextColumn();
+            ConsoleUi.EndRow();
 
-            // Only when something stops the reserve: a strap-on stack, say, does not arm it until the strap-ons are gone (NextSeparationDropsAllEngines).
-            if (stage.HasTarget && stage.IsNext && !_s.ReserveArmed && !_s.ReserveStaged && _s.ReserveNote.Length > 0)
-                GaugeRowText("", $"no reserve: {_s.ReserveNote}", warn);
+            GaugeRowText(stage.HasTarget ? "SITE" : "", stage.HasTarget ? Fmt.Sentence(Fmt.LatLon(stage.TargetLatDeg, stage.TargetLonDeg)) : "NO SITE", dim);
         }
-
-        ImGuiHelper.EndRegion();
     }
 
-    // --- Expert settings ---------------------------------------------------- Collapsed by default - dropping DefaultOpen is the whole mechanism.
-    private static void DrawExpertSettingsSection(float innerW)
+    private static void DrawAscentOptionsSection(double bodyRadius)
     {
-        if (!ImGuiHelper.BeginRegion("Expert settings", ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        if (!GuidanceRegion.Begin("LIVE##ascent", GuidanceRegion.Diagnostics))
             return;
 
-        GaugeRowCheck("Engage autopilot", "##engage", ref _s.Engage);
-        // With a target the node is the next crossing, chosen for you; the box only decides for an ascent without one.
-        using (new ImGuiDisabledScope(_s.TargetId.Length > 0))
-            GaugeRowCheck("Descending node (SE)", "##descending", ref _s.LaunchDescending);
-        GaugeRowCheck("Show orbit & track", "##overlay", ref _showAscentOverlay);
+        if (_s.Running && _s.Upfg.Tgo > 0.0)
+        {
+            GaugeRowText(UiTier.Diagnostics, "SPEED TO GAIN", Fmt.DvWhole(_s.Upfg.VgoMag));
+            GaugeRowText(UiTier.Diagnostics, "DISTANCE TO GO", Fmt.Km(_s.Upfg.Rgo.Length() / 1000.0));
+        }
+        DrawInsertionRows(bodyRadius);
 
-        ImGui.Text("");
-        ImGui.NextColumn();
-        if (ImGui.Button("Clear track"))
-            ResetTrace();
-        ImGui.NextColumn();
+        if (_s.TraceCount > 0)
+        {
+            ConsoleUi.SectionRow();
+            if (ConsoleUi.ButtonRight("CLEAR TRACK", "AfcClearTrack"))
+                ResetTrace();
+        }
 
-        ImGuiHelper.EndRegion();
+        GuidanceRegion.End();
     }
 }

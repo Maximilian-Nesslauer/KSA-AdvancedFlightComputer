@@ -276,7 +276,7 @@ internal static class MultiPassPreviewCache
             Vehicle source, string typeKey, int passCount,
             SplitMode mode, double totalDv, SequenceBurnState state)
         {
-            IOrbiter? target = ManeuverToolsWindow.GetSelectedTargetOrbiter();
+            IOrbiter? target = OrbitToolForm.GetSelectedTargetOrbiter();
             return new(
                 typeKey,
                 source.Id,
@@ -285,9 +285,9 @@ internal static class MultiPassPreviewCache
                 (long)totalDv,
                 (long)(source.Orbit.SemiMajorAxis / SmaQuantumM),
                 (long)(source.TotalMass / MassQuantumKg),
-                ManeuverToolsWindow.UseDescendingNode,
-                (long)(ManeuverToolsWindow.TargetInclinationRad * 1000.0),
-                ManeuverToolsWindow.InclinationRef,
+                OrbitToolForm.UseDescendingNode,
+                (long)(OrbitToolForm.TargetInclinationRad * 1000.0),
+                OrbitToolForm.InclinationRef,
                 target?.Id ?? string.Empty,
                 ComputeSequenceSignature(state),
                 FiniteBurns.PhaseSignature(source));
@@ -372,24 +372,24 @@ internal static class MultiPassPreviewCache
             return ApseBurnPlanner.Plan(source, maneuver.DvVlf, new TrueAnomaly(Math.PI), allocations, now);
         if (typeKey == KeyMatchInclination)
         {
-            Orbit? target = ManeuverToolsWindow.GetSelectedTargetOrbit();
+            Orbit? target = OrbitToolForm.GetSelectedTargetOrbit();
             if (target == null)
                 return new PassPreviewResult(System.Array.Empty<PassPreview>(), Failed: true,
                     "no target selected");
             return PlaneChangeBurnPlanner.PlanForMatch(
-                source, target, ManeuverToolsWindow.UseDescendingNode, allocations, now);
+                source, target, OrbitToolForm.UseDescendingNode, allocations, now);
         }
         if (typeKey == KeySetInclination)
         {
             return PlaneChangeBurnPlanner.PlanForSet(
-                source, ManeuverToolsWindow.TargetInclinationRad,
-                ManeuverToolsWindow.InclinationRef,
-                ManeuverToolsWindow.UseDescendingNode, allocations, now);
+                source, OrbitToolForm.TargetInclinationRad,
+                OrbitToolForm.InclinationRef,
+                OrbitToolForm.UseDescendingNode, allocations, now);
         }
         // Circularization is a tangential burn that preserves the chosen apsis and moves the opposite apsis toward it.
-        if (typeKey == KeyStockCircularizeApoapsis)
+        if (typeKey == KeyCircularizeApoapsis)
             return ApseBurnPlanner.Plan(source, maneuver.DvVlf, new TrueAnomaly(Math.PI), allocations, now);
-        if (typeKey == KeyStockCircularizePeriapsis)
+        if (typeKey == KeyCircularizePeriapsis)
             return ApseBurnPlanner.Plan(source, maneuver.DvVlf, TrueAnomaly.Zero, allocations, now);
         return new PassPreviewResult(System.Array.Empty<PassPreview>(), Failed: true,
             $"no planner for typeKey '{typeKey}'");

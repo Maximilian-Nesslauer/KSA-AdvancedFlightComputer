@@ -7,8 +7,9 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Features.Ui.Logic;
 
-// The Ascent tab and its guidance: reads the controlled vehicle's live inertial (CCI) state, runs the standalone UPFG guidance toward a target orbit, and (optionally) commands the flight computer through a full ascent profile:
+// The CAT-S / UPFG ascent and its guidance: reads the controlled vehicle's live inertial (CCI) state, runs the standalone UPFG guidance toward a target orbit, and (optionally) commands the flight computer through a full ascent profile:
 //
 // Vertical flight continues straight up from the pad until the turn-start altitude.
 // The turn phase pitches down from vertical at a fixed rate in deg/s toward the launch azimuth until the commanded pitch meets UPFG's command or reaches the failsafe altitude.
@@ -17,7 +18,7 @@ using AdvancedFlightComputer.Features.Guidance.Upfg;
 // UPFG keeps iterating for the readouts.
 public static partial class GuidanceWindow
 {
-    // The target orbit, launch-to-target pick, and gravity-turn shaping are stored in VehicleAutopilotState for the vehicle they describe. LAN is seeded from the vessel's position when its panel first draws and can be re-seeded with the adjacent button.
+    // The target orbit, launch-to-target pick, and gravity-turn shaping are stored in VehicleAutopilotState for the vehicle they describe. LAN is seeded from the vessel's position when the LAUNCH page first draws and can be re-seeded with LAN FROM POSITION.
     private const double TerminalTgo = 10.0;
     // Hand over to UPFG no later than this altitude, even if the pitch profiles never crossed - the failsafe against an open-loop runaway vehicle.
     private const double FailsafeAltKm = 50.0;
@@ -81,24 +82,21 @@ public static partial class GuidanceWindow
     // Profile is the convex ascent's open-loop programme (see Modes/ConvexAscent.cs), flown in place of Vertical and Turn when there is a plan.
     public enum AscentPhase { Vertical, Turn, ClosedLoop, Terminal, Profile }
 
-    // Reset at the top of every Draw; see DrawAutoLaunchArming.
-    private static bool _autoLaunchStepped;
-
     /// <summary>
     /// The single commit point. A TARGET is what decides whether this launches or
     /// arms: with one, there is a launch window to hit and firing now would miss the
-    /// plane, so EXECUTE arms and guidance starts when the window arrives. Without a
+    /// plane, so the commit arms and guidance starts when the window arrives. Without a
     /// target - or with a target whose plane the site cannot reach, so there is no
-    /// window at all - EXECUTE means EXECUTE.
+    /// window at all - the commit launches now.
     ///
     /// The auto-warp setting is deliberately NOT part of this decision. It only says
     /// whether the mod offers to warp to the window for you or you warp there
     /// yourself; either way the launch waits for the window.
     ///
-    /// THE CONVEX PROFILE IS THE ASCENT. Without a plan that fits this launch, EXECUTE
+    /// THE SOLVED CLIMB IS THE ASCENT. Without a plan that fits this launch, the commit
     /// calculates one - for the window's lift-off when it arms - and launches or arms
     /// once it converges (see RequestConvexLaunch). The vertical rise and deg/s gravity
-    /// turn fly only with the convex profile switched off, or as the backup the panel
+    /// turn fly only with the convex profile switched off, or as the backup the console
     /// offers when the plan does not converge.
     /// </summary>
     private static void ExecuteAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
@@ -161,15 +159,15 @@ public static partial class GuidanceWindow
     private static bool LaunchNodeDescending(in ChasePlan plan)
         => _s.LaunchArmed || _s.Running ? _s.LaunchDescending : plan.Descending;
 
-    /// <summary>Stop everything, including a pending armed launch. A panel action, so the craft is the focused one.</summary>
-    private static void AbortAscent() => ReleaseAscent("", Program.ControlledVehicle);
+    /// <summary>Stop everything on <paramref name="vehicle"/>, including a pending armed launch. The ambient state must be that craft's.</summary>
+    private static void AbortAscent(Vehicle vehicle) => ReleaseAscent("", vehicle);
 
     /// <summary>
-    /// Hand the vehicle back and return the panel to a clean slate: guidance off, no
+    /// Hand the vehicle back and return the LAUNCH page to a clean slate: guidance off, no
     /// pending launch, and the solver reset so nothing downstream reads a stale
     /// solution as if it were live.
     /// </summary>
-    private static void ReleaseAscent(string status, Vehicle vehicle)
+    private static void ReleaseAscent(string status, Vehicle vehicle, bool warn = false)
     {
         if (_s.Running || _s.LaunchArmed)
             GuidanceLog.Info(vehicle, $"ascent {(status.Length > 0 ? "ended: " + status : "stopped by the player")}"
@@ -192,19 +190,19 @@ public static partial class GuidanceWindow
         _s.CommandDir = default;
         _s.RollLatched = false;
         _s.Upfg.Reset();
-        _s.RgoPeak = 0.0;
-        _s.VgoPeak = 0.0;
         _s.FlyingPlan = null;
         _s.FlyingPlanLaunchTime = double.NaN;
         _s.ConvexBlendStart = double.NaN;
         _s.Status = status;
+        if (warn)
+            _s.WarnStatus(status);
     }
 
     /// <summary>
     /// THE ARMED LAUNCH, STEPPED. Tracks the launch window, keeps the chase orbit
-    /// pointed at the target, and fires EXECUTE when the window arrives.
+    /// pointed at the target, and fires the commit when the window arrives.
     ///
-    /// This runs from the simulation step for the vehicle it controls, so launch-window tracking and the armed launch do not depend on the visible panel.
+    /// This runs from the simulation step for the vehicle it controls, so launch-window tracking and the armed launch do not depend on the visible console.
     ///
     /// Runs from the sim step for the vehicle it belongs to, so the only thing the
     /// draw decides now is whether the status TEXT is visible.
@@ -218,7 +216,7 @@ public static partial class GuidanceWindow
         // ARMED: the launch instant is already latched and absolute, so this needs no geometry at all - and MUST not re-derive it. Checked every step, ahead of everything else here, because a single warp step can cross the window whole.
         if (_s.LaunchArmed && !double.IsNaN(_s.LaunchTargetTime))
         {
-            // Ask to warp to just before the window (the warp itself needs the user's confirmation - see DrawWarpPrompt), then press EXECUTE for them. The engage/auto toggles are respected as configured, not forced.
+            // Ask to warp to just before the window (the warp itself needs the user's confirmation - see DrawWarpPrompt), then make the commit for them. The engage/auto toggles are respected as configured, not forced.
             // The window, or the lift-off the convex plan chose near it (ExecuteLaunchInstant): LaunchTargetTime itself stays the window.
             double fireAt = ExecuteLaunchInstant();
             double waitSec = fireAt - SimNow();
@@ -228,15 +226,16 @@ public static partial class GuidanceWindow
             {
                 if (Universe.IsAutoWarpActive)
                     Universe.AutoWarpStop(true);
-                // The plan was solved for this lift-off when EXECUTE armed. One that no longer fits - the vehicle changed while it waited, or a warp step carried it well past the window - is not quietly swapped for the backup gravity turn: that is the player's call, so the launch holds and the panel offers it.
+                // The plan was solved for this lift-off when the commit armed. One that no longer fits - the vehicle changed while it waited, or a warp step carried it well past the window - is not quietly swapped for the backup gravity turn: that is the player's call, so the launch holds and the console offers it.
                 if (_s.FlyConvexAscent && !_s.BackupAscent
                     && !ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out string why))
                 {
-                    ReleaseAscent($"launch held at the window: the convex plan no longer fits ({why}).", vehicle);
-                    // The panel's failure line says it, with the choice it leaves; the status line would only repeat it. The backup it offers goes now: the window is here.
+                    ReleaseAscent($"LAUNCH HELD AT WINDOW: SOLVED PLAN NO LONGER FITS ({why}).", vehicle);
+                    // The console's failure line says it, with the choice it leaves; the status line would only repeat it. The backup it offers goes now: the window is here.
                     _s.Status = "";
                     _s.ConvexLaunchAtWindow = false;
-                    _s.ConvexLaunchFailure = $"Launch held at the window: the convex plan no longer fits ({why}).";
+                    _s.ConvexLaunchFailure = $"LAUNCH HELD AT WINDOW: SOLVED PLAN NO LONGER FITS ({why}).";
+                    _s.ConvexBackupChosen = false;
                     return;
                 }
                 StartGuidance(vehicle, orbit, parent);
@@ -257,8 +256,10 @@ public static partial class GuidanceWindow
 
         ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
 
-        // The chase orbit is an OUTPUT of the target pick, recomputed continuously - it has to keep tracking while the fold that displays it is shut, or the launch would fly to whatever plane was last on screen.
-        if (status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable)
+        // The chase orbit is an OUTPUT of the target pick, recomputed continuously here and nowhere in the draw, so the launch flies the same plane whether or not the LAUNCH page is on screen. ChaseDriven tells the page which rows the target sets.
+        bool driven = status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable;
+        _s.ChaseDriven = driven;
+        if (driven)
             ApplyChaseOrbit(in plan);
 
         if (status == ChaseStatus.Ok)
@@ -269,11 +270,13 @@ public static partial class GuidanceWindow
     private static void StepAscent(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                    double mu, double bodyRadius)
     {
-        // Ascent guidance does not run forever: shortly after terminal cutoff it releases. Leaving it engaged kept CommandAttitude running on every sim step (thousands/s under warp) and held the flight computer in active attitude tracking - the lag that appeared with warp and lingered after. Released once the engines are actually out, or on the timeout if auto staging was never going to cut them. Releasing has to CLEAR the solver as well as the flag: leaving UPFG's recursive state loaded meant the panel went on showing the finished ascent's tgo and vgo, which is what made an abort look mandatory to get back to a clean slate.
+        // Ascent guidance does not run forever: shortly after terminal cutoff it releases. Leaving it engaged kept CommandAttitude running on every sim step (thousands/s under warp) and held the flight computer in active attitude tracking - the lag that appeared with warp and lingered after. Released once the engines are actually out, or on the timeout if auto staging was never going to cut them. Releasing has to CLEAR the solver as well as the flag: leaving UPFG's recursive state loaded meant the console went on showing the finished ascent's tgo and vgo, which is what made an abort look mandatory to get back to a clean slate.
         if (_s.Running && _s.Phase == AscentPhase.Terminal
             && (SimNow() > _s.CutoffTime + (_s.CutoffDone ? 2.0 : 15.0)))
         {
-            ReleaseAscent("Ascent complete - guidance released.", vehicle);
+            ReleaseAscent("ASCENT COMPLETE. MANUAL.", vehicle);
+            if (_s.CutoffDone)
+                _s.DiagStatus(_s.Status);
         }
 
         if (!_s.Running)
@@ -295,13 +298,13 @@ public static partial class GuidanceWindow
             if (_s.FailStreak > MaxFailStreak)
             {
                 _s.Running = false;
-                _s.Status = "Guidance failed repeatedly: " + e.Message;
+                _s.FailStatus("ASCENT STOPPED: REPEATED FAULTS", "GUIDANCE FAULT (REPEATED): " + e.Message);
                 GuidanceLog.Info(vehicle, $"ascent stopped after {_s.FailStreak} failed steps: {e}");
             }
         }
     }
 
-    // The EXECUTE button's action - also fired automatically at the launch window.
+    // The commit of the LAUNCH page - also fired automatically at the launch window.
     /// <summary>
     /// Periapsis is the lower apsis: a pair entered the other way round is swapped rather than flown as given. Called when either field is left after an edit - swapping on every keystroke would swap a value half typed - and again at launch, for a pair that reached the state any other way.
     /// </summary>
@@ -319,15 +322,15 @@ public static partial class GuidanceWindow
         double atmosphere = parent?.GetAtmosphereRadius() ?? 0.0;
         if (atmosphere > 0.0 && Math.Max(_s.PeKm, _s.ApKm) * 1000.0 + parent.MeanRadius <= atmosphere)
         {
-            string refusal = $"Target apoapsis is inside the atmosphere (top at {(atmosphere - parent.MeanRadius) / 1000.0:F0} km) - not launching.";
+            string refusal = $"REFUSED: TARGET AP INSIDE ATMOSPHERE (TOP AT {(atmosphere - parent.MeanRadius) / 1000.0:F0} km).";
             if (_s.LaunchArmed)
             {
-                ReleaseAscent(refusal, vehicle);
+                ReleaseAscent(refusal, vehicle, warn: true);
             }
             else
             {
                 GuidanceLog.Info(vehicle, $"ascent refused: {refusal}");
-                _s.Status = refusal;
+                _s.WarnStatus(refusal);
             }
             return;
         }
@@ -367,8 +370,6 @@ public static partial class GuidanceWindow
         _s.ReserveStaged = false;   // a fresh ascent gets its reserve staging back
         _s.StagingActive = false;
         _s.LastSequenceTime = double.NegativeInfinity;
-        _s.RgoPeak = 0.0;
-        _s.VgoPeak = 0.0;
         _s.LastGuidanceLogTime = double.NegativeInfinity;
         GuidanceLog.Info(vehicle, $"ascent started to {_s.PeKm:F0} x {_s.ApKm:F0} km, inc {_s.IncDeg:F2} deg, LAN {_s.LanDeg:F2} deg"
             + $", arg. Pe {(_s.ArgPeFixed ? _s.ArgPeDeg.ToString("F2") + " deg" : "free")}"
@@ -383,36 +384,28 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The armed auto-launch's STATUS TEXT. Guarded to run at most once per frame
-    /// because both the tab and the gauge panel reach it and it would otherwise
-    /// print twice with both open.
+    /// The armed auto-launch's STATUS TEXT. The caller draws it only in the primary tier pass, so it prints once per frame.
     ///
     /// StepLaunchWindow performs the launch action when the window arrives.
     /// </summary>
     private static void DrawAutoLaunchArming()
     {
-        if (_autoLaunchStepped)
-            return;
-        _autoLaunchStepped = true;
-
         // TEXT ONLY. The launch itself is fired by StepLaunchWindow, from the sim step - see there for why it cannot live in a draw.
         double waitSec = _s.LaunchTargetTime - SimNow();
         if (_s.LaunchArmed && !_s.Running && !double.IsNaN(waitSec))
         {
             if (!_s.Engage || !_s.AutoStage)
-                ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                    "Note: engage/auto toggles are off - auto-launch will only start guidance.");
+                AdvancedFlightComputer.Core.ConsoleUi.WarningWrapped(
+                    "AFC MAY STEER OR AFC MAY USE ENGINES OFF. LAUNCH STARTS GUIDANCE ONLY.");
 
-            ImGui.TextColored(new float4(0.5f, 0.9f, 1f, 1f), Universe.IsAutoWarpActive
-                ? "Auto-warping to the launch window..."
-                : (_s.AutoLaunch
-                    ? "Armed - will EXECUTE at the window."
-                    : "Armed - warp to the window yourself; it will EXECUTE there."));
+            // The launch goes at ExecuteLaunchInstant, which is the window or the lift-off the calculated climb chose near it.
+            AdvancedFlightComputer.Core.ConsoleUi.Sentence(PageText.ArmedLaunch(Universe.IsAutoWarpActive, _s.AutoLaunch,
+                ExecuteLaunchInstant() - WindowInstant()).AsSpan(), in ConsoleStyle.TextPrimary);
         }
         else if (_s.LaunchArmed && _s.Running)
         {
-            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                "Guidance already running - auto-launch is waiting (Stop / reset to clear).");
+            AdvancedFlightComputer.Core.ConsoleUi.WarningWrapped(
+                "GUIDANCE ACTIVE. LAUNCH WAITS. STOP TO CLEAR.");
         }
     }
 
@@ -423,7 +416,7 @@ public static partial class GuidanceWindow
         double3 v = orbit.StateVectors.VelocityCci;
         double now = SimNow();
 
-        // Sim-time step for the command shaping below. Sim time, not wall clock, so a warp step is treated as the long interval it is; clamped because the first step after EXECUTE (and any warp jump) would otherwise hand it an interval that makes the slew limit meaningless in one direction or the other.
+        // Sim-time step for the command shaping below. Sim time, not wall clock, so a warp step is treated as the long interval it is; clamped because the first step after the commit (and any warp jump) would otherwise hand it an interval that makes the slew limit meaningless in one direction or the other.
         double stepDt = Math.Clamp(now - _s.LastStepTime, 0.0, GuidanceCycle);
         _s.LastStepTime = now;
 
@@ -511,7 +504,7 @@ public static partial class GuidanceWindow
         UpdatePhase(vehicle, r, v, parent, bodyRadius, stepDt);
     }
 
-    private const string NoThrustStatus = "No thrust - holding last solution (staging/coast).";
+    private const string NoThrustStatus = "NO THRUST: HOLDING LAST SOLUTION (STAGING/COAST).";
     private const double GuidanceLogIntervalS = 5.0;
 
     // Ascent phase state machine. Transitions cascade naturally over successive frames, so initializing mid-flight fast-forwards to the right phase. stepDt is the sim time since the previous step, for the command slew limit.
@@ -722,11 +715,11 @@ public static partial class GuidanceWindow
 
     private static string PhaseName(AscentPhase p) => p switch
     {
-        AscentPhase.Vertical => "vertical rise",
-        AscentPhase.Turn => "gravity turn (open loop)",
-        AscentPhase.ClosedLoop => "UPFG closed loop",
-        AscentPhase.Terminal => "terminal (latched law)",
-        AscentPhase.Profile => "convex profile (open loop)",
+        AscentPhase.Vertical => "VERTICAL RISE",
+        AscentPhase.Turn => "GRAVITY TURN (OPEN LOOP)",
+        AscentPhase.ClosedLoop => "UPFG (CLOSED LOOP)",
+        AscentPhase.Terminal => "TERMINAL (LATCHED LAW)",
+        AscentPhase.Profile => "SOLVED PROFILE (OPEN LOOP)",
         _ => "?",
     };
 

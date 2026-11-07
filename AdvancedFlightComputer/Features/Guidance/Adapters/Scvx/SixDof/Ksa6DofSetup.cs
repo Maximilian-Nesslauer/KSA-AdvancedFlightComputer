@@ -275,7 +275,7 @@ public static class Ksa6DofSetup
         }
 
         // Tmax is the thrust of every engine the craft runs, because no engine is shut down for the landing. The throttle command is T / Tmax of the model, so a plan built against a smaller Tmax would command full throttle for part of the thrust and overshoot every plan.
-        // An over-powered vehicle is a real situation, not something to model around. The feasibility panel reports it and names the throttle floor that would work.
+        // An over-powered vehicle is a real situation, not something to model around. The feasibility readout reports it and names the throttle floor that would work.
 
         double gimbalDeg = GimbalLimitDeg(vehicle);
         if (gimbalDeg <= 0.0)
@@ -396,7 +396,7 @@ public static class Ksa6DofSetup
         // Fix: size W_W so the rate penalty is a SMALL FRACTION of fuel at the rate this manoeuvre actually needs - roughly the tilt range swept over half the burn.
         // Scvx6DofConfig's defaults stay at the Python values so the reference validation and the constants drift guard remain valid; only flight overrides them. rateDampShare is the fraction of a typical (~0.1) fuel term the rate penalty should cost at the manoeuvre's characteristic rate.
         // Turned right down after flight testing: these terms only need to discourage chatter and spin, and anything large enough to show up against fuel is steering the trajectory instead.
-        // There IS a floor - at zero the control can go bang-bang between nodes and the attitude can oscillate - so the objective panel and the plan overlay are the check when reducing further.
+        // There IS a floor - at zero the control can go bang-bang between nodes and the attitude can oscillate - so the objective readout and the plan overlay are the check when reducing further.
         double omegaScale = Math.Max(tiltMaxDeg * Math.PI / 180.0 / Math.Max(sigma * 0.5, 1.0), 1e-3);
         double wW = Math.Max(rateDampShare, 0.0) / (nodes * 3.0 * omegaScale * omegaScale);
 

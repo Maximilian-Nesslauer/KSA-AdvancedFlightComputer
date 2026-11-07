@@ -97,7 +97,7 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
         t.Check("the throttle setting is left alone", Inputs(vehicle).EngineThrottle == 0.63f);
         t.Check("the target the player selected survives",
             computer.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.Prograde);
-        t.Check("the reason is visible", state.Status.Contains("attitude"));
+        t.Check("the reason is visible", state.Status.Contains("ATTITUDE"));
         t.Check("the finished release restores the default stop", !state.ReleaseWithoutEngineCut);
     }
 
@@ -123,7 +123,7 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
             GuidanceWindow.ApplyAutopilot(vehicle);
             t.Check("the retry finishes", !state.ControlAcquired && !state.FcResetPending);
             t.Check("the retry does not cut the engine either", Inputs(vehicle).EngineOn);
-            t.Check("the retry still says why guidance stopped", state.Status.Contains("attitude"));
+            t.Check("the retry still says why guidance stopped", state.Status.Contains("ATTITUDE"));
         }
         finally
         {
@@ -243,22 +243,21 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
         }
     }
 
-    // The production abort paths, called the way the panel calls them, so the test proves that
+    // The production abort paths, called the way the console calls them, so the test proves that
     // they record the shutdown intent and not only that the release honours a flag.
     private static void AnAbortKeepsItsShutdownThroughATakeover(TestContext t, Vehicle vehicle)
     {
-        AbortPathKeepsItsShutdown(t, vehicle, "ascent abort", "AbortAscent", withVehicle: false);
-        AbortPathKeepsItsShutdown(t, vehicle, "landing abort", "AbortLanding", withVehicle: false);
-        AbortPathKeepsItsShutdown(t, vehicle, "boostback abort", "AbortBoostback", withVehicle: false);
-        AbortPathKeepsItsShutdown(t, vehicle, "6-DOF disengage", "Disengage6Dof", withVehicle: true);
+        AbortPathKeepsItsShutdown(t, vehicle, "ascent abort", "AbortAscent", new object[] { vehicle });
+        AbortPathKeepsItsShutdown(t, vehicle, "landing abort", "AbortLanding", Array.Empty<object>());
+        AbortPathKeepsItsShutdown(t, vehicle, "boostback abort", "AbortBoostback", Array.Empty<object>());
+        AbortPathKeepsItsShutdown(t, vehicle, "6-DOF disengage", "Disengage6Dof", new object[] { vehicle, true });
     }
 
     private static void AbortPathKeepsItsShutdown(
-        TestContext t, Vehicle vehicle, string label, string method, bool withVehicle)
+        TestContext t, Vehicle vehicle, string label, string method, object[] arguments)
     {
         VehicleAutopilotState state = Engaged(vehicle);
         Ambient() = state;
-        object[] arguments = withVehicle ? new object[] { vehicle, true } : Array.Empty<object>();
         AccessTools.Method(typeof(GuidanceWindow), method)?.Invoke(null, arguments);
         if (!t.Check($"{label} records its shutdown",
                 state.LandingCutPending || state.ShutdownRequested))
@@ -271,7 +270,7 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
         GuidanceWindow.ApplyAutopilot(vehicle);
         t.Check($"{label} still shuts the engine down through a takeover", !Inputs(vehicle).EngineOn);
         t.Check($"{label} leaves no cut pending", !state.LandingCutPending);
-        t.Check($"{label} still reports the takeover", state.Status.Contains("attitude"));
+        t.Check($"{label} still reports the takeover", state.Status.Contains("ATTITUDE"));
         VehicleAutopilotState.Remove(vehicle);
     }
 

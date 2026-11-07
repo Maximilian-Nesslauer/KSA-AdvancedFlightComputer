@@ -444,7 +444,7 @@ internal static class StagingDetector
                 state.HeldForControl = true;
                 DefaultCategory.Log.Warning(
                     $"[AFC] AutoStage held on '{vehicle.Id}': the next sequence would separate the last control module. Stage it by hand if that is wanted.");
-                TimedAlert.Create("AutoStage held: the next sequence would separate the control module", Color.Yellow, 4.0);
+                AfcAlerts.Info("AutoStage held: the next sequence would separate the control module", Color.Yellow, 4.0, vehicle);
             }
             // The stop stands, so stock handles the burn it cannot continue.
             state.HeldBurn = null;
@@ -477,9 +477,9 @@ internal static class StagingDetector
             state.State = StagingState.Phase.AwaitingIgnition;
 
             if (pending.DecouplersPending && pending.DecouplerDelay > 0.0)
-                TimedAlert.Create($"Decouple in {pending.DecouplerDelay:F1}s", Color.Yellow, pending.DecouplerDelay);
+                TimedAlert.Create("Decouple in " + Features.Ui.Logic.Fmt.TimeFine(pending.DecouplerDelay), Color.Yellow, pending.DecouplerDelay);
             if (pending.EnginesPending && pending.EngineDelay > 0.0)
-                TimedAlert.Create($"Ignition in {pending.EngineDelay:F1}s", Color.Yellow, pending.EngineDelay);
+                TimedAlert.Create("Ignition in " + Features.Ui.Logic.Fmt.TimeFine(pending.EngineDelay), Color.Yellow, pending.EngineDelay);
 
             DefaultCategory.Log.Info(
                 $"[AFC] AutoStage staging delay on '{vehicle.Id}': decouplers={pending.DecouplerDelay:F1}s ({pending.DecouplerModules?.Count ?? 0}), " +

@@ -7,7 +7,7 @@ using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
 
-// The launch-to-target geometry the Ascent tab draws.
+// The launch-to-target geometry the LAUNCH page draws.
 // Pure computation: no ImGui, no state writes.
 public static partial class GuidanceWindow
 {
@@ -118,7 +118,7 @@ public static partial class GuidanceWindow
 
             // ...
             // AND THE WRAP IS NOT ALLOWED TO COST A WHOLE REVOLUTION.
-            // Inside the lead window - the ideal ignition is behind us but the plane crossing itself is still ahead - the wrap reports the NEXT revolution's launch, so pressing EXECUTE armed a countdown of most of a day and looked like a dead button.
+            // Inside the lead window - the ideal ignition is behind us but the plane crossing itself is still ahead - the wrap reports the NEXT revolution's launch, so the commit armed a countdown of most of a day and looked like a dead button.
             // Going now is at most LanLeadSeconds late, which only means the crossing lands earlier in the ascent than the lead intends; waiting a revolution for that is absurd.
             if (wait > period - LanLeadSeconds)
                 wait = 0.0;
@@ -137,9 +137,10 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// Drives the target-orbit inputs from the chase plan. The gauge panel calls this
-    /// every frame while a target is selected - which is why those inputs are greyed
-    /// out there: they are outputs of the target pick, not independent settings.
+    /// Drives the target-orbit inputs from the chase plan. The launch window step calls
+    /// this while a target is selected and no launch is armed, and the launch commit once
+    /// more as it is clicked. That is why the LAUNCH page greys those inputs: they are
+    /// outputs of the target pick, not independent settings.
     ///
     /// The argument of periapsis follows the target's only while MatchTargetArgPe is
     /// set, so clearing that leaves the chase orbit to insert at its own periapsis. A

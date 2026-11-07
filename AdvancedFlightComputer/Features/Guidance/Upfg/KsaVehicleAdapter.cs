@@ -84,7 +84,7 @@ public static class KsaVehicleAdapter
                         MassTotal = mass,
                         MassDry = burnout,
                         GLim = 1e9,
-                        Seq = i,
+                        Seq = sequences[i].Number,
                         Engines = phase.ActiveEngineCount,
                     };
                     if (pressureGrid != null)

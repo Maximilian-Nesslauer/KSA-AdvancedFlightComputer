@@ -3,6 +3,7 @@ using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.Features.Ui.Console;
 using HarmonyLib;
 using KSA;
 
@@ -83,6 +84,8 @@ internal static class SharedVehicleHooks
                     $"[AFC] AutoRemove threw on the end of a stock burn for '{vehicle.Id}': {ex}");
             }
         }
+        if (ended.Completed)
+            ConsoleHead.OnBurnCompleted(vehicle, ended.Burn);
     }
 
     internal static void OnDisposed(Vehicle vehicle)

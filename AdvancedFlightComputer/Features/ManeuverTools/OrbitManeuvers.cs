@@ -11,7 +11,7 @@ internal static class OrbitManeuvers
 
     public enum InclinationReference { Ecliptic, Equatorial }
 
-    // CCI +Z is the ecliptic normal. The equatorial normal is CCE +Z transformed to CCI.
+    // CCI +Z is the body spin axis and CCE +Z the ecliptic normal, so the enum names are swapped: Ecliptic reads the equator. The names stay because saved passes keep them.
     public static double3 GetReferenceNormalCci(Orbit orbit, InclinationReference reference)
     {
         if (reference == InclinationReference.Ecliptic)

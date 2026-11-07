@@ -3,186 +3,201 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Features.Ui.Logic;
+using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
-// The Powered landing tab's 6-DOF content. Same shape as the G-FOLD page: what the guidance is doing, the one knob that gets set per flight, the debug toggles, and every solver parameter folded away.
-//  The one visible knob is TARGET ALTITUDE, because it is the only one that describes the flight rather than the optimiser: it is where the plan levels off, and it is set per landing. The rest tune how the problem is solved and are left alone once they work.
 public static partial class GuidanceWindow
 {
     private static void Draw6DofLandingContent(Vehicle vehicle, float innerW)
     {
-        // Same descent plot the G-FOLD and hover pages carry, drawing this solver's plan against the flown path.
-        float plotH = ImGui.GetTextLineHeightWithSpacing() * 6.5f;
-        DrawGfoldPlot(ImGui.GetWindowDrawList(), ImGui.GetCursorScreenPos(),
-            new float2(innerW, plotH));
-        ImGui.Dummy(new float2(innerW, plotH));
-
-        Draw6DofStatusLine(vehicle);
-
-        if (ImGuiHelper.BeginRegion("Descent", ImGuiTreeNodeFlags.DefaultOpen
-                | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        // The descent plot is the LAND picture above this form, so the form starts with the status.
+        if (TierScope.IsPrimaryPass)
         {
-            // The plan lands at zero/zero, legs on the pad at rest, so the one height it needs is the CoM's above the legs.
-            VehicleHeightRows("sd");
-            // Shared with the 3-DOF page: both solvers land on the same limit.
-            GaugeRow("Max burn accel (g, 0 off)", "##sdaccel", ref _s.LandingAccelLimitG);
+            Draw6DofStatusLine();
 
-            ImGuiHelper.EndRegion();
+            if (!_s.Active && !_s.EngagePending && _s.Error.Length > 0 && _s.ErrorSeverity >= Severity.Warning)
+            {
+                bool failed = _s.ErrorSeverity == Severity.Error;
+                float4 ink = failed ? ConsoleStyle.Danger : ConsoleUi.WarnInk;
+                ConsoleUi.Sentence((failed && _s.FailureWhat.Length > 0 ? _s.FailureWhat + "." : Fmt.Sentence(_s.Error)).AsSpan(), in ink);
+            }
         }
 
-        // Debug toggles stay OUT of the fold, as on the G-FOLD page: they are what you reach for while something is going wrong.
-        ImGui.Checkbox("Show plan overlay", ref _show6DofOverlay);
-        ImGui.SameLine();
-        bool logRequested = _s.SixDofLogging;
-        if (ImGui.Checkbox("Log telemetry to file", ref logRequested))
-            SetSixDofLogging(vehicle, logRequested);
-        Draw6DofLogStatus();
-
-        if (_s.Error.Length > 0)
-            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f), _s.Error);
-
-        if (ImGuiHelper.BeginRegion("Touchdown guidance parameters", ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        if (GuidanceRegion.Begin("TOUCHDOWN GUIDANCE PARAMETERS", GuidanceRegion.Tuning))
         {
             Draw6DofParameters();
-            ImGuiHelper.EndRegion();
+            GuidanceRegion.End();
+        }
+
+        if (GuidanceRegion.Begin("##sixdofdiag", GuidanceRegion.Diagnostics))
+        {
+            Draw6DofDiagnostics();
+            GuidanceRegion.End();
         }
     }
 
-    private static void Draw6DofStatusLine(Vehicle vehicle)
+    private static void Draw6DofStatusLine()
     {
         if (!_s.Active)
         {
-            // Solving on standby under entry guidance's burn, ready to take it over.
+            // Solving on standby under the landing burn of entry guidance, ready to take it over.
             if (_s.SixDofStandby)
             {
                 double now = SimNow();
-                ImGui.TextColored(SixDofStandbyReady(now) ? new float4(0.4f, 1f, 0.5f, 1f) : new float4(0.7f, 0.7f, 0.7f, 1f),
-                    "Standby under entry guidance: " + SixDofStandbyText(now));
+                ConsoleUi.Sentence(("STANDBY (ENTRY): " + SixDofStandbyText(now)).AsSpan(),
+                    SixDofStandbyReady(now) ? ConsoleStyle.TextPrimary : ConsoleStyle.TextMuted);
                 return;
             }
-            ImGui.TextColored(new float4(0.7f, 0.7f, 0.7f, 1f),
-                _s.EngagePending ? "Engaging..." : "Idle - EXECUTE engages touchdown guidance.");
-            // The cold solve is ~1.7 s of sim thread unless it is threaded or spread, which is worth knowing BEFORE committing rather than after the hitch.
-            if (!_s.SixDofThreaded && !_s.SixDofSpreadCold)
-                ImGui.TextWrapped("Cold solve blocks the sim thread for ~1.7 s - engage during a coast, "
-                    + "or turn on threading or cold-solve spreading in the parameters.");
-
-            // Whether a plan can exist AT ALL, before committing rather than after a failed solve. This is the readout that explains a refusal to engage.
-            Draw6DofFeasibility(vehicle);
+            if (_s.EngagePending)
+                ConsoleUi.Muted("STARTING".AsSpan());
             return;
         }
 
         Ksa6DofGuidance g = _s.Guidance;
         if (g == null || !g.HasPlan)
         {
-            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                _s.Converging ? "Cold solve in progress..." : "Engaged - no plan yet.");
-            return;
+            ConsoleUi.Sentence((_s.Converging ? "SOLVING FIRST PLAN" : "STARTED, NO PLAN").AsSpan(), in ConsoleStyle.TextPrimary);
         }
+    }
 
-        ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
-            $"Engaged - burn {g.Sigma,5:F1} s over {g.Nodes} nodes, throttle {_s.LastThrottle * 100,3:F0} %");
+    // The live figures of the guidance: the standby under entry guidance, and how far the craft is off the plan between re-solves.
+    private static void Draw6DofDiagnostics()
+    {
+        const UiTier D = UiTier.Diagnostics;
+        double now = SimNow();
+        GaugeRowText(D, "STATE", _s.Active ? (_s.Converging ? "FIRST PLAN" : "ACTIVE")
+            : _s.SixDofStandby ? "STANDBY (ENTRY)" : _s.EngagePending ? "STARTING" : "IDLE");
+        GaugeRowText(D, "SOLVER", _s.Error.Length > 0 ? Fmt.Sentence(_s.Error) : "-", ConsoleStyle.TextMuted);
+        ConsoleUi.NoteShape("AfcDiagStandby", _s.SixDofStandby ? 1 : 0);
+        if (_s.SixDofStandby)
+            GaugeRowText(D, "STANDBY", SixDofStandbyText(now), SixDofStandbyReady(now) ? ConsoleStyle.TextPrimary : ConsoleStyle.TextMuted);
+        if (_s.SixDofStandbyRefusal.Length > 0)
+            GaugeRowText(D, "STANDBY REFUSED", _s.SixDofStandbyRefusal, ConsoleUi.WarnInk);
+        Ksa6DofGuidance g = _s.Guidance;
+        if (g != null && g.HasPlan)
+            GaugeRowText(D, "BURN TIME", Fmt.TimeFine(g.Sigma));
+        if (_s.SixDofTrack && g != null && g.HasPlan)
+            GaugeRowText(D, "OFF PLAN",
+                FormattableString.Invariant($"{g.TrackingError.PositionM:F1} m, {g.TrackingError.VelocityMs:F1} m/s, THRUST {g.TrackingError.ThrustN / 1e3:+0;-0} kN"));
+        else
+            GaugeRowText(D, "OFF PLAN", _s.SixDofTrack ? "-" : "THRUST TRACKING OFF", ConsoleStyle.TextMuted);
+    }
+
+    internal static void Draw6DofLogDiag(Vehicle vehicle, float innerW)
+    {
+        using (TierScope.Push(UiTier.Tuning))
+        {
+            bool logRequested = _s.SixDofLogging;
+            if (GaugeRowCheck(UiTier.Tuning, FoldNames.TelemetryLog, "##sdlog", ref logRequested))
+                SetSixDofLogging(vehicle, logRequested);
+            Draw6DofLogStatus();
+        }
     }
 
     private static void Draw6DofLogStatus()
     {
+        const UiTier T = UiTier.Tuning;
         // One global sink with one owner, so say plainly whether it is recording THIS craft: "logging" on a vehicle whose rows are going nowhere is worse than silence.
         if (SixDofLog.Enabled && ReferenceEquals(SixDofLog.Owner, _s))
         {
-            ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
-                $"logging {SixDofLog.RunName} - {SixDofLog.RowsWritten} rows");
-            ImGui.SameLine();
-            if (ImGui.Button("Flush"))
+            GaugeRowText(T, "", $"Writes {SixDofLog.RunName}, {SixDofLog.RowsWritten} rows.", ConsoleStyle.TextPrimary);
+            if (ConsoleUi.ButtonRight("FLUSH", "AfcSixDofFlush"))
                 SixDofLog.Flush();
         }
         else if (SixDofLog.Enabled)
-            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                $"another vehicle owns the log ({SixDofLog.RunName}) - this one is not being recorded");
+            GaugeRowText(T, "", $"Another craft owns the log ({SixDofLog.RunName}), so this craft is not recorded.", ConsoleUi.WarnInk);
         else if (_s.SixDofLogging)
-            ImGui.Text(_s.Active ? "no log is active - toggle logging to retry"
-                : "logging will start when guidance engages");
+            GaugeRowText(T, "", _s.Active ? "No log is open. Switch it off and on to try again."
+                : "Starts when touchdown guidance starts.", ConsoleStyle.TextMuted);
 
         if (SixDofLog.LastError.Length > 0)
-            ImGui.TextColored(new float4(1f, 0.5f, 0.3f, 1f), "log error: " + SixDofLog.LastError);
+            GaugeRowText(T, "LOG ERROR", SixDofLog.LastError, ConsoleStyle.Danger);
     }
 
+    // The touchdown set in three groups, so a player finds a limit or a gain without reading the solver rows. Each group head counts its changed values, because a closed group hides its marks.
     private static void Draw6DofParameters()
     {
-        ImGui.Text("Nodes");
-        ImGui.NextColumn();
-        ImGui.PushItemWidth(-1f);
-        ImGui.InputInt("##sdnodes", ref _s.SixDofNodes);
-        ImGui.PopItemWidth();
-        ImGui.NextColumn();
-        _s.SixDofNodes = Math.Clamp(_s.SixDofNodes, MinNodes, MaxNodes);
+        DrawTuningGroup("LIMITS", "SixDofLimits", true, Specs.TuningSixDofLimits, Specs.TuningSixDofLimitBools, Draw6DofLimitRows, PageText.TouchdownLimitsTip);
+        DrawTuningGroup("TRACKING", "SixDofTracking", true, Specs.TuningSixDofTracking, Specs.TuningSixDofTrackingBools, Draw6DofTrackingRows, PageText.TouchdownTrackingTip);
+        DrawTuningGroup("SOLVER", "SixDofSolver", false, Specs.TuningSixDofSolver, Specs.TuningSixDofSolverBools, Draw6DofSolverRows, PageText.TouchdownSolverTip);
+    }
 
-        GaugeRow("Tilt limit (deg)", "##sdtilt", ref _s.SixDofTiltDeg);
+    private static void DrawTuningGroup(string name, string id, bool openByDefault, SettingSpec[] doubles, BoolSpec[] bools, Action rows, string tip)
+    {
+        string label = FoldRules.Label(name, default, SettingAccess.CountChanged(_s, doubles, bools));
+        if (ConsoleUi.Fold(label, "Tune" + id, openByDefault || UiConfig.GetBool(Ui.Console.AfcConsole.KeyExpertOpen, false), tip))
+            rows();
+    }
 
-        GaugeRowCheck("Throttle floor from vehicle", "##sdfloorauto", ref _s.SixDofFloorAuto);
+    private static void Draw6DofLimitRows()
+    {
+        GaugeRow(Specs.SixDofTiltDeg, ref _s.SixDofTiltDeg);
+
+        GaugeRowCheck(Specs.SixDofFloorAuto, ref _s.SixDofFloorAuto);
         using (new ImGuiDisabledScope(_s.SixDofFloorAuto))
-            GaugeRow("Throttle floor", "##sdfloor", ref _s.SixDofThrottleFloor);
+            GaugeRow(Specs.SixDofThrottleFloor, ref _s.SixDofThrottleFloor);
+        GaugeRow(Specs.LandingPlanFloorMargin, ref _s.LandingPlanFloorMargin);
 
-        // Seeds the cold solve from a G-FOLD solution instead of a straight line.
-        // SCvx refines a reference rather than searching for one, so the seed decides how many iterations the cold solve needs and which local solution it walks toward - and G-FOLD also supplies a far better burn time than a fixed guess.
-        // Strictly an optimisation: a failure falls back to the straight-line seed.
-        GaugeRowCheck("Seed cold solve from G-FOLD", "##sdgfseed", ref _s.SixDofGfoldSeed);
+        GaugeRow(Specs.SixDofGlideSlopeDeg, ref _s.SixDofGlideSlopeDeg);
 
-        GaugeRowCheck("Fixed burn time", "##sdfixedtime", ref _s.SixDofFixedTime);
-        GaugeRow("Burn time seed (s)", "##sdsigmaseed", ref _s.SixDofSigmaSeed);
-        if (_s.SixDofFixedTime)
-        {
-            ImGui.Text("Burn-time samples");
-            ImGui.NextColumn();
-            ImGui.PushItemWidth(-1f);
-            ImGui.InputInt("##sdsigmasamples", ref _s.SixDofSigmaSamples);
-            ImGui.PopItemWidth();
-            ImGui.NextColumn();
-        }
-
-        GaugeRow("Glide slope (deg, 0 = off)", "##sdglide", ref _s.SixDofGlideSlopeDeg);
-
-        GaugeRowCheck("Limit climb rate", "##sdvz", ref _s.SixDofVzEnabled);
+        GaugeRowCheck(Specs.SixDofVzEnabled, ref _s.SixDofVzEnabled);
         using (new ImGuiDisabledScope(!_s.SixDofVzEnabled))
-            GaugeRow("Max climb rate (m/s)", "##sdvzmax", ref _s.SixDofVzMaxMs);
+            GaugeRow(Specs.SixDofVzMaxMs, ref _s.SixDofVzMaxMs);
+    }
 
-        GaugeRowCheck("Reduce nodes on approach", "##sdgates", ref _s.SixDofNodeGates);
-        using (new ImGuiDisabledScope(!_s.SixDofNodeGates))
-            GaugeRow("Target node spacing (s)", "##sdnodedt", ref _s.SixDofNodeDtTarget);
-        if (_s.SixDofNodeGates && _s.Guidance != null && _s.Guidance.HasPlan)
-            GaugeRowText("  actual",
-                $"{_s.Guidance.Sigma / Math.Max(_s.Guidance.Nodes - 1, 1):F2} s");
-
-        // Switching threading mid-flight is the point of having the toggle, so it has to be safe: stop the worker on the way off, start one on the way on.
-        GaugeRowCheck("Solve on a background thread", "##sdthreaded", ref _s.SixDofThreaded);
-        if (_s.SixDofThreaded && _s.Worker != null)
-            GaugeRowText("  worker",
-                $"{_s.Worker.Completed} solves, {_s.Worker.Skipped} skipped, {_s.Worker.LastSolveMs:F0} ms"
-                + (_s.Worker.IsBusy ? "  [solving]" : ""));
-
-        GaugeRowCheck("Spread cold solve over frames", "##sdspread", ref _s.SixDofSpreadCold);
-        using (new ImGuiDisabledScope(!_s.SixDofSpreadCold))
-            GaugeRow("Gap between iterations (s)", "##sdcoldint", ref _s.SixDofColdIntervalS);
-        _s.SixDofColdIntervalS = Math.Clamp(_s.SixDofColdIntervalS, 0.0, 1.0);
-
-        GaugeRowCheck("Estimate unmodelled accel", "##sdbias", ref _s.SixDofBiasEnabled);
-
-        // The thrust feedback that flies the plan between re-solves (Tracker6Dof), and the throttle the plan keeps in hand below it for that feedback - shared with the entry guidance page.
-        GaugeRowCheck("Track the plan's thrust between re-solves", "##sdtrack", ref _s.SixDofTrack);
+    private static void Draw6DofTrackingRows()
+    {
+        GaugeRowCheck(Specs.SixDofTrack, ref _s.SixDofTrack);
         using (new ImGuiDisabledScope(!_s.SixDofTrack))
         {
-            GaugeRow("Track Kp (1/s2)", "##sdtrackkp", ref _s.SixDofTrackKp);
-            GaugeRow("Track Kd (1/s)", "##sdtrackkd", ref _s.SixDofTrackKd);
+            GaugeRow(Specs.SixDofTrackKp, ref _s.SixDofTrackKp);
+            GaugeRow(Specs.SixDofTrackKd, ref _s.SixDofTrackKd);
         }
-        if (_s.SixDofTrack && _s.Guidance != null && _s.Guidance.HasPlan)
-            GaugeRowText("  off the plan", $"{_s.Guidance.TrackingError.PositionM:F1} m, {_s.Guidance.TrackingError.VelocityMs:F1} m/s, thrust {_s.Guidance.TrackingError.ThrustN / 1e3:+0;-0} kN");
-        GaugeRow("Plan min throttle above engine min", "##sdfloormargin", ref _s.LandingPlanFloorMargin);
-        _s.LandingPlanFloorMargin = Math.Clamp(_s.LandingPlanFloorMargin, 0.0, 0.5);
+        GaugeRowCheck(Specs.SixDofBiasEnabled, ref _s.SixDofBiasEnabled);
+        GaugeRow(Specs.SixDofReplanSec, ref _s.SixDofReplanSec);
+    }
 
-        GaugeRow("Re-solve every (s)", "##sdreplan", ref _s.SixDofReplanSec);
-        GaugeRow("Rate damping (fuel share)", "##sdratedamp", ref _s.SixDofRateDampShare);
-        GaugeRow("Control smoothing (W_DU)", "##sdsmooth", ref _s.SixDofControlSmooth);
-        GaugeRow("Proximal conditioning", "##sdprox", ref _s.SixDofProximal);
+    private static void Draw6DofSolverRows()
+    {
+        const UiTier T = UiTier.Tuning;
+        GaugeRowInt(Specs.SixDofNodes, ref _s.SixDofNodes);
+        _s.SixDofNodes = Math.Clamp(_s.SixDofNodes, MinNodes, MaxNodes);
+
+        // Seeds the cold solve from a G-FOLD solution instead of a straight line.
+        // SCvx refines a reference rather than searching for one, so the seed decides how many iterations the cold solve needs and which local solution it walks toward, and G-FOLD also supplies a far better burn time than a fixed guess.
+        // Strictly an optimisation: a failure falls back to the straight-line seed.
+        GaugeRowCheck(Specs.SixDofGfoldSeed, ref _s.SixDofGfoldSeed);
+
+        GaugeRowCheck(Specs.SixDofFixedTime, ref _s.SixDofFixedTime);
+        GaugeRow(Specs.SixDofSigmaSeed, ref _s.SixDofSigmaSeed);
+        if (_s.SixDofFixedTime)
+            GaugeRowInt(Specs.SixDofSigmaSamples, ref _s.SixDofSigmaSamples);
+
+        GaugeRowCheck(Specs.SixDofNodeGates, ref _s.SixDofNodeGates);
+        using (new ImGuiDisabledScope(!_s.SixDofNodeGates))
+            GaugeRow(Specs.SixDofNodeDtTarget, ref _s.SixDofNodeDtTarget);
+        if (_s.SixDofNodeGates && _s.Guidance != null && _s.Guidance.HasPlan)
+            GaugeRowText(T, "ACTUAL POINT SPACING",
+                FormattableString.Invariant($"{_s.Guidance.Sigma / Math.Max(_s.Guidance.Nodes - 1, 1):F2} s"));
+
+        // Switching threading mid-flight is the point of having the toggle, so it has to be safe: stop the worker on the way off, start one on the way on.
+        GaugeRowCheck(Specs.SixDofThreaded, ref _s.SixDofThreaded);
+        if (_s.SixDofThreaded && _s.Worker != null)
+            GaugeRowText(T, "WORKER",
+                FormattableString.Invariant($"{_s.Worker.Completed} SOLVES, {_s.Worker.Skipped} SKIPPED, {_s.Worker.LastSolveMs:F0} ms")
+                + (_s.Worker.IsBusy ? "  [SOLVING]" : ""));
+
+        GaugeRowCheck(Specs.SixDofSpreadCold, ref _s.SixDofSpreadCold);
+        using (new ImGuiDisabledScope(!_s.SixDofSpreadCold))
+            GaugeRow(Specs.SixDofColdIntervalS, ref _s.SixDofColdIntervalS);
+        _s.SixDofColdIntervalS = Math.Clamp(_s.SixDofColdIntervalS, 0.0, 1.0);
+
+        GaugeRow(Specs.SixDofRateDampShare, ref _s.SixDofRateDampShare);
+        GaugeRow(Specs.SixDofControlSmooth, ref _s.SixDofControlSmooth);
+        GaugeRow(Specs.SixDofProximal, ref _s.SixDofProximal);
     }
 }

@@ -18,7 +18,7 @@ internal static class MultiPassMarkers
     {
         public string? Format() => Kind switch
         {
-            DetailKind.Distance => ManeuverToolsWindow.FormatDistance(Value),
+            DetailKind.Distance => OrbitToolForm.FormatDistance(Value),
             DetailKind.Inclination => string.Format(CultureInfo.InvariantCulture, "{0:F2} deg", Value),
             _ => null,
         };

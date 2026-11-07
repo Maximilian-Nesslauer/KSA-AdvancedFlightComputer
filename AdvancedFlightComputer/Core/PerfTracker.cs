@@ -13,7 +13,7 @@ namespace AdvancedFlightComputer.Core;
 /// </summary>
 internal static class PerfTracker
 {
-    // Long enough that the summary does not dominate the session log while the plan window is open.
+    // Long enough that the summary does not dominate the session log while the measured code runs every frame.
     private const double ReportIntervalSeconds = 30.0;
 
     private static readonly Dictionary<string, PerfData> _entries = new();

@@ -1,6 +1,5 @@
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
-using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.HarnessTests.Fixtures;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using Brutal.Numerics;
@@ -60,15 +59,15 @@ public sealed class FiniteBurnRefineTest : AfcTest
     private static void CheckGoalMapping(TestContext t)
     {
         t.Check("circularize uses the circular goal",
-            Patch_DrawPlanWindow.FiniteBurnGoalFor(ManeuverTools.KeyStockCircularizeApoapsis).Kind
+            OrbitToolsPanel.FiniteBurnGoalFor(ManeuverTools.KeyCircularizeApoapsis).Kind
                 == FiniteBurnGoalKind.Circular
-            && Patch_DrawPlanWindow.FiniteBurnGoalFor(ManeuverTools.KeyStockCircularizePeriapsis).Kind
+            && OrbitToolsPanel.FiniteBurnGoalFor(ManeuverTools.KeyCircularizePeriapsis).Kind
                 == FiniteBurnGoalKind.Circular);
         t.Check("set apsis uses the apsis goal",
-            Patch_DrawPlanWindow.FiniteBurnGoalFor(ManeuverTools.KeySetApoapsis).Kind == FiniteBurnGoalKind.Apsis
-            && Patch_DrawPlanWindow.FiniteBurnGoalFor(ManeuverTools.KeySetPeriapsis).Kind == FiniteBurnGoalKind.Apsis);
+            OrbitToolsPanel.FiniteBurnGoalFor(ManeuverTools.KeySetApoapsis).Kind == FiniteBurnGoalKind.Apsis
+            && OrbitToolsPanel.FiniteBurnGoalFor(ManeuverTools.KeySetPeriapsis).Kind == FiniteBurnGoalKind.Apsis);
         t.Check("set inclination uses the plane goal",
-            Patch_DrawPlanWindow.FiniteBurnGoalFor(ManeuverTools.KeySetInclination).Kind == FiniteBurnGoalKind.Plane);
+            OrbitToolsPanel.FiniteBurnGoalFor(ManeuverTools.KeySetInclination).Kind == FiniteBurnGoalKind.Plane);
     }
 
     private static void CheckCircularize(TestContext t, IParentBody home, FiniteBurnPhase[] phases, UniverseTime now)

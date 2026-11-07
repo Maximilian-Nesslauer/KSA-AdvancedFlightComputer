@@ -257,7 +257,7 @@ public sealed class GuidanceAscentStagingTest : AfcTest
             claimHeld &= VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance && state.ControlAcquired;
             commandHeld &= state.Running && state.HasCommand;
             tracking &= vehicle.FlightComputer.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.Custom;
-            if (takeover.Length == 0 && (state.TakeoverStop || state.Status.StartsWith("Guidance stopped", StringComparison.Ordinal)))
+            if (takeover.Length == 0 && (state.TakeoverStop || state.Status.StartsWith("GUIDANCE STOPPED", StringComparison.Ordinal)))
                 takeover = state.Status.Length > 0 ? state.Status : "takeover flagged";
             if (double.IsNaN(reconvergedAt) && state.Upfg.Converged && time - dropTime >= 1.0)
                 reconvergedAt = time - dropTime;

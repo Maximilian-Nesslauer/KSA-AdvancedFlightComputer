@@ -293,7 +293,7 @@ public sealed class ConvexAscentProfile
     }
 }
 
-/// <summary>The plan's trajectory as the panel plots it, one entry per node.</summary>
+/// <summary>The plan's trajectory as the LAUNCH page plots it, one entry per node.</summary>
 public sealed class AscentPlanSeries
 {
     public double[] Time, AltitudeKm, DownrangeKm, AirSpeed, PitchDeg, QFraction, QAlphaFraction, ThrottlePct;
@@ -355,7 +355,7 @@ public sealed class AscentPlan
     public AscentSolution Solution { get; init; }
     public ConvexAscentProfile Profile { get; init; }
 
-    /// <summary>Per-node series for the panel's plots.</summary>
+    /// <summary>Per-node series for the plots of the LAUNCH page.</summary>
     public AscentPlanSeries Series { get; init; }
 
     public string VehicleId { get; init; }
@@ -364,13 +364,13 @@ public sealed class AscentPlan
     public object Body { get; init; }
     public double Omega { get; init; }
     public double BodyRadius { get; init; }
-    /// <summary>Sim time of the state the plan starts from - what the drawn plan is rotated forward from. The lift-off it flies: when it was requested, or the launch window's instant when EXECUTE armed for one, plus <see cref="LaunchDelayS"/>.</summary>
+    /// <summary>Sim time of the state the plan starts from - what the drawn plan is rotated forward from. The lift-off it flies: when it was requested, or the launch window's instant when the launch commit armed for one, plus <see cref="LaunchDelayS"/>.</summary>
     public double SolvedAt { get; init; }
     /// <summary>The lift-off the problem was posed for: the launch window's instant, or the moment it was requested. A plan with a free launch time lifts off <see cref="LaunchDelayS"/> after it.</summary>
     public double WindowAt { get; init; }
     /// <summary>How long after <see cref="WindowAt"/> the plan lifts off, s, negative for before: the launch time it chose (VehicleAutopilotState.ConvexOptimiseTiming). Zero for a plan whose launch time was not free.</summary>
     public double LaunchDelayS { get; init; }
-    /// <summary>The plan chose its LAN (no target, ConvexOptimiseTiming): <see cref="LanDeg"/> is that LAN, and the panel's is set to it.</summary>
+    /// <summary>The plan chose its LAN (no target, ConvexOptimiseTiming): <see cref="LanDeg"/> is that LAN, and the LAN setting is set to it.</summary>
     public bool LanChosen { get; init; }
     /// <summary>ConvexOptimiseTiming when it was planned, so a change to it asks for a new plan.</summary>
     public bool OptimisedTiming { get; init; }
@@ -394,7 +394,7 @@ public sealed class AscentPlan
 
     /// <summary>The throttle floor the plan was solved to, percent, and how many planned stages have solid motors burning in them (#73).</summary>
     public double ThrottleMinPct { get; init; }
-    /// <summary>The floor as the panel asked for it, before the engines' own minimum and the 99 % cap.</summary>
+    /// <summary>The floor as the LAUNCH page asked for it, before the engines' own minimum and the 99 % cap.</summary>
     public double ThrottleMinRequestedPct { get; init; }
     /// <summary>The player's g-limit the plan was solved to, g, positive infinity when it was off.</summary>
     public double GLimitG { get; init; } = double.PositiveInfinity;
@@ -415,12 +415,12 @@ public sealed class AscentPlan
 
     public bool Usable => Solution != null && Solution.Usable && Profile != null;
 
-    /// <summary>True if the target orbit on the panel is not the one this plan was solved for.</summary>
+    /// <summary>True if the target orbit on the LAUNCH page is not the one this plan was solved for.</summary>
     public bool TargetDiffers(double peKm, double apKm, double incDeg, double lanDeg)
         => Math.Abs(peKm - PeKm) > 0.5 || Math.Abs(apKm - ApKm) > 0.5
         || Math.Abs(incDeg - IncDeg) > 0.05 || Math.Abs(Math.IEEERemainder(lanDeg - LanDeg, 360.0)) > 0.5;
 
-    /// <summary>True if the panel's limits are not the ones this plan was solved to. The structural limit is not compared, because it follows the parts, and a part change moves the mass the plan is checked against.</summary>
+    /// <summary>True if the limits on the LAUNCH page are not the ones this plan was solved to. The structural limit is not compared, because it follows the parts, and a part change moves the mass the plan is checked against.</summary>
     public bool SettingsDiffer(double qMaxKpa, double qAlphaMax, double throttleMinPct, double gLimitG)
         => Math.Abs(qMaxKpa - QMaxRequestedKpa) > 1e-6 || Math.Abs(qAlphaMax - QAlphaMax) > 1e-6
         || Math.Abs(throttleMinPct - ThrottleMinRequestedPct) > 1e-6
@@ -430,9 +430,9 @@ public sealed class AscentPlan
 /// <summary>
 /// The ascent solve, on its own thread. Seconds of work, so it never runs on the sim or the draw: the sim step builds the problem from the game (main thread only) and hands it here as plain data, and polls for the plan.
 ///
-/// A MAX-Q THE VEHICLE CANNOT HOLD is relaxed here, once. The problem keeps the throttle within 1 % of full, as the script's does, and a KSA stack lifting off at three or five g climbs through the thick air well above the script's 35 kPa however steeply it goes - which is why the panel's default is four times that - and one that cannot hold the limit it is given: the problem then has no feasible trajectory, and SCvx can only hide the violation in its virtual control and stall. The seed search measures the least peak q the steepest climb reaches, so when every seed exceeded the limit the same stages are planned again to QRelaxFactor of that. A vehicle that can hold the limit is planned to it exactly.
+/// A MAX-Q THE VEHICLE CANNOT HOLD is relaxed here, once. The problem keeps the throttle within 1 % of full, as the script's does, and a KSA stack lifting off at three or five g climbs through the thick air well above the script's 35 kPa however steeply it goes - which is why the default MAX Q is four times that - and one that cannot hold the limit it is given: the problem then has no feasible trajectory, and SCvx can only hide the violation in its virtual control and stall. The seed search measures the least peak q the steepest climb reaches, so when every seed exceeded the limit the same stages are planned again to QRelaxFactor of that. A vehicle that can hold the limit is planned to it exactly.
 ///
-/// EVERY RETRY SAYS SO. An attempt that did not converge is followed by one with looser constraints - that max-q, or one more stage to burn - and <see cref="Retry"/> says which and why while it runs, so the panel never shows a second solve as if it were the first.
+/// EVERY RETRY SAYS SO. An attempt that did not converge is followed by one with looser constraints - that max-q, or one more stage to burn - and <see cref="Retry"/> says which and why while it runs, so the console never shows a second solve as if it were the first.
 ///
 /// HOW MANY STAGES THE PLAN BURNS is decided here, by trying. The script's formulation burns every stage but the last to depletion, which is right for a vehicle whose last stage is the one that reaches orbit and wrong for one that reaches orbit early: a stage that has to burn its whole load when orbit needed half of it can only waste the rest, and the plan it produces lofts and weaves to do so. So the first attempt plans only as many stages as the ideal dV says orbit needs, anything above them riding along as payload; a plan that cannot reach orbit adds the next stage, and one whose last stage is pinned at its shortest allowed burn drops it.
 ///

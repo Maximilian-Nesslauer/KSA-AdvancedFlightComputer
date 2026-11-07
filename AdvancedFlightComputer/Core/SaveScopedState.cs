@@ -2,8 +2,9 @@ using AdvancedFlightComputer.Features.AutoStage;
 using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
-using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.Features.Transfer;
+using AdvancedFlightComputer.Features.Ui.Console;
 
 namespace AdvancedFlightComputer.Core;
 
@@ -38,11 +39,14 @@ internal static class SaveScopedState
         MultiPassUI.Reset();
         HohmannMultiPassUI.Reset();
         HohmannFlybyUI.Reset();
-        Patch_DrawPlanWindow.Reset();
-        ManeuverToolsWindow.Reset();
+        OrbitToolsPanel.Reset();
+        OrbitToolForm.Reset();
         RcsExecutor.ResetUiCache();
         RcsCommandChannel.Reset();
         // Also disarms the AUTOSTAGE switch, so a loaded save does not stage until the player arms it again.
         StagingDetector.Reset();
+        // The transfer calculation and its selection belong to the world that was loaded over.
+        TransferSession.CancelAll();
+        AfcConsole.ResetWorldState();
     }
 }

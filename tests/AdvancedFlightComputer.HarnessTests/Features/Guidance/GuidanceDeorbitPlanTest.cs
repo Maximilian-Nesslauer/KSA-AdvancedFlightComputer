@@ -106,7 +106,7 @@ public sealed class GuidanceDeorbitRefusalTest : AfcTest
     {
         using (DeorbitPlanner level = PlanLowApproach(request, request.Settings.BrakingAltitude, out _, out _))
             t.Check("a periapsis at the braking altitude is refused as too steep for this stack",
-                level.Complete && level.Direct is { Refusal.Length: > 0 } && level.DirectRefusal.Contains("not a shallow approach"),
+                level.Complete && level.Direct is { Refusal.Length: > 0 } && level.DirectRefusal.Contains("NOT A SHALLOW APPROACH"),
                 level.DirectRefusal);
         using DeorbitPlanner planner = PlanLowApproach(request, LowApproachPeriapsisM, out DeorbitRequest approach, out double crossing);
         DirectBrakingPlan? direct = planner.Direct;

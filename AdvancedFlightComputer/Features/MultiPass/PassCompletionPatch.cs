@@ -1,8 +1,8 @@
 using System;
 using AdvancedFlightComputer.Core;
-using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.Features.Transfer;
 using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
@@ -53,11 +53,6 @@ internal static class PassCompletionPatch
             return;
 
         FlightComputer fc = vehicle.FlightComputer;
-
-        // Keep active execution controls available after ignition clears the stock calculated flag.
-        if (exec.Intent is HohmannTransferIntent
-            && IsPlanWindowOnVehicleHohmann(vehicle))
-            KeepStockTransferCalculatedInSync();
 
         // Execution changes remain in memory until the game is saved.
         try
@@ -170,9 +165,9 @@ internal static class PassCompletionPatch
             exec.AwaitingMaterialization = false;
             exec.AwaitingMaterializationTicks = 0;
 
-            // Restore the stock transfer burn after it appears in the plan. DrawPlanWindow may have cleared the earlier reference before ApplyInputEvents added it.
+            // The queued pass is the burn that blocks a second CREATE on TRANSFER.
             if (exec.Intent is HohmannTransferIntent)
-                KeepStockTransferBurnInSync(exec.CurrentBurn);
+                TransferSession.OnPassBurn(exec.CurrentBurn);
 
             // Carry Auto into the next pass after FlightComputer.LoadBurn has loaded it in Manual.
             // FlightComputer.AddBurn loads the pass only when it is the first executable burn, so with another burn ahead of it the request is dropped rather than arming that burn.
@@ -230,11 +225,6 @@ internal static class PassCompletionPatch
         if (exec.PassIndex < exec.PassCountTotal)
             exec.ReengageAutoOnNextBurn = true;
 
-        // Stock draws the final queued orbit. Hide the coincident selected transfer overlay.
-        if (exec.Intent is HohmannTransferIntent
-            && exec.PassIndex == exec.PassCountTotal - 1)
-            DisableStockHohmannOrbitPreview();
-
         if (MultiPassDebug.Enabled)
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicleId} pass {exec.PassIndex}/{exec.PassCountTotal} completed");
@@ -252,9 +242,9 @@ internal static class PassCompletionPatch
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPass: vehicle={vehicleId} pass {exec.PassIndex + 1}/{exec.PassCountTotal} " +
                 "stopped and no engine or RCS thruster has propellant left, so the execution is cancelled.");
-            TimedAlert.CreateWarning(ReferenceEquals(vehicle, Program.ControlledVehicle)
+            AfcAlerts.Warning(ReferenceEquals(vehicle, Program.ControlledVehicle)
                 ? "Multi-pass cancelled: no propellant left for the remaining passes."
-                : $"{vehicleId}: multi-pass cancelled, no propellant left.");
+                : $"{vehicleId}: multi-pass cancelled, no propellant left.", vehicle);
             CancelExecution(vehicleId, reason: null);
             return;
         }
@@ -310,10 +300,10 @@ internal static class PassCompletionPatch
             $"[AFC] MultiPass: vehicle={vehicle.Id} pass {exec.PassIndex + 1}/" +
             $"{exec.PassCountTotal} stopped with dV remaining because execution was " +
             "disengaged. The execution stays paused until it is engaged again or the plan is cancelled.");
-        TimedAlert.Create(
+        AfcAlerts.Info(
             $"Multi-pass pass {exec.PassIndex + 1}/{exec.PassCountTotal} stopped with " +
             "dV remaining. Re-engage Auto to continue, or cancel the remaining passes.",
-            Color.Yellow, 6.0);
+            Color.Yellow, 6.0, vehicle);
     }
 
     // The loaded target belongs to the pass, which FlightComputer.LoadBurn makes true only for the first executable burn.
@@ -340,7 +330,9 @@ internal static class PassCompletionPatch
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicleId} multi-pass complete ({exec.PassCountTotal} passes)");
         CancelExecution(vehicleId, reason: null);
-        Patch_DrawPlanWindow.OnMultiPassCompleted();
+        OrbitToolsPanel.OnMultiPassCompleted();
+        if (exec.Intent is HohmannTransferIntent)
+            TransferSession.OnTransferPassesCompleted(vehicleId);
     }
 
     private static void CancelExecution(string vehicleId, string? reason)
@@ -392,46 +384,12 @@ internal static class PassCompletionPatch
             DefaultCategory.Log.Debug(
                 $"[AFC] MultiPass: vehicle={vehicle.Id} scheduled pass {exec.PassIndex + 1}/{exec.PassCountTotal} dV={exec.CurrentBurn.DeltaVVlf.Length():F1} m/s at t={exec.CurrentBurn.Time.Seconds():F0}s");
 
-        // Keep the live burn visible to stock creation logic so it cannot create a duplicate.
+        // Keep the live burn as the TRANSFER guard so CREATE cannot add a duplicate.
         if (exec.Intent is HohmannTransferIntent && exec.CurrentBurn != null)
-            KeepStockTransferBurnInSync(exec.CurrentBurn);
+            TransferSession.OnPassBurn(exec.CurrentBurn);
 
         return true;
     }
-
-    private static void KeepStockTransferBurnInSync(Burn currentBurn)
-        => StockPlanner.TransferBurn = currentBurn;
-
-    // Stock planner fields are global. Pin them only for the matching vehicle and transfer type.
-    private static bool IsPlanWindowOnVehicleHohmann(Vehicle execVehicle)
-    {
-        try
-        {
-            if (!StockPlanner.ShowPlanWindow) return false;
-            if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
-                return false;
-            return StockPlanner.SourceVehicle is Vehicle v && v.Id == execVehicle.Id;
-        }
-        catch (Exception ex)
-        {
-            // CelestialSystem.GetIndex can throw for an invalid source index.
-            // Do not let that escape from the ApplyVehicleSolvers postfix.
-            LogHelper.WarnOnce("multipass-plan-window-source:" + ex.GetType().Name,
-                $"[AFC] PassCompletionPatch: could not read the stock plan-window source for " +
-                $"vehicle='{execVehicle.Id}': {ex}");
-            return false;
-        }
-    }
-
-    // DrawPlanWindow indexes the selected entry when the calculated flag is set. Restore that flag only while the underlying transfer array remains available.
-    private static void KeepStockTransferCalculatedInSync()
-    {
-        if (!StockPlanner.SelectedTransferBlockIsSafe) return;
-        StockPlanner.TransferCalculated = true;
-    }
-
-    private static void DisableStockHohmannOrbitPreview()
-        => StockPlanner.DisplaySelectedTransfer = false;
 
     #endregion
 }

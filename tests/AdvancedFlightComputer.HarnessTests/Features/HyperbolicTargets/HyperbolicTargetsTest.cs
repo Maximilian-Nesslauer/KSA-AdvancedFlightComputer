@@ -81,7 +81,7 @@ public sealed class HyperbolicTargetsTest : AfcTest
             finally
             {
                 harmony.UnpatchAll(harmony.Id);
-                Patch_SetTransferInfo.Reset();
+                HyperbolicTargets.ResetAlerts();
             }
         }
     }
@@ -148,13 +148,17 @@ public sealed class HyperbolicTargetsTest : AfcTest
             $"got {offset.Seconds():F3}s expected {expected.Seconds():F3}s");
     }
 
+    // The stock planner source, written through the field the unbound-target support reads, because AFC itself never writes it.
+    private static void SetStockSource(TransferObject source)
+        => GameReflection.TransferPlanner_sourceBody?.SetValue(null, source);
+
     // With the vehicle parked at a planet, the target list must carry every unbound
     // star child that has an SOI, and none without one, each exactly once.
     private static void CheckPopulateWithPlanets(
         TestContext t, StellarBody star, List<Celestial> unbound, Vehicle vehicle)
     {
         TransferObject previousSource = StockPlanner.SourceBody;
-        StockPlanner.SourceBody = new TransferObject(vehicle);
+        SetStockSource(new TransferObject(vehicle));
         try
         {
             Span<TransferObject> list = stackalloc TransferObject[256];
@@ -178,7 +182,7 @@ public sealed class HyperbolicTargetsTest : AfcTest
         }
         finally
         {
-            StockPlanner.SourceBody = previousSource;
+            SetStockSource(previousSource);
         }
     }
 
@@ -209,7 +213,7 @@ public sealed class HyperbolicTargetsTest : AfcTest
         object? previousUnit = unitField.GetValue(null);
         try
         {
-            StockPlanner.SourceBody = new TransferObject(vehicle);
+            SetStockSource(new TransferObject(vehicle));
             destinationField.SetValue(null, new TransferObject(comet));
 
             Exception? thrown = null;
@@ -250,7 +254,7 @@ public sealed class HyperbolicTargetsTest : AfcTest
         }
         finally
         {
-            StockPlanner.SourceBody = previousSource;
+            SetStockSource(previousSource);
             destinationField.SetValue(null, previousDestination);
             infoField.SetValue(null, previousInfo);
             minField.SetValue(null, previousMin);

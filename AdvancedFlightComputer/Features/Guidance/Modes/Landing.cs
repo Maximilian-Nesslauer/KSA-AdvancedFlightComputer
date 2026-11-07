@@ -29,7 +29,7 @@ public static partial class GuidanceWindow
     /// allowed to steer or throttle is not a descent.
     /// </summary>
     private static void StartGfoldNow(Vehicle vehicle)
-        => BeginGfoldDescent(vehicle, SimNow(), engineLit: false, "G-FOLD started from current state.");
+        => BeginGfoldDescent(vehicle, SimNow(), engineLit: false, "G-FOLD STARTED FROM CURRENT STATE");
 
     // A lit engine keeps its throttle as the first G-FOLD command, so a handover from another mode does not blip the engine.
     private static void BeginGfoldDescent(Vehicle vehicle, double now, bool engineLit, string status)
@@ -67,13 +67,33 @@ public static partial class GuidanceWindow
         if (airborne)
         {
             _s.ReleaseWithoutEngineCut = true;
-            _s.LandingStatus = "Aborted, the engine is left as it was.";
+            _s.LandingStatus = "LANDING STOPPED. ENGINE UNCHANGED.";
         }
         else
         {
             _s.LandingCutPending = true;
-            _s.LandingStatus = "Aborted.";
+            _s.LandingStatus = "LANDING STOPPED";
         }
+    }
+
+    private static bool CraftOnWayDown(Vehicle vehicle)
+        => Ui.Console.ConsoleFrame.ReadFacts(vehicle).Where is Ui.Logic.CraftSituation.Unknown or Ui.Logic.CraftSituation.CoastingUp
+            or Ui.Logic.CraftSituation.FallingAir or Ui.Logic.CraftSituation.FallingNoAir;
+
+    private static void EndLandingBadly(Vehicle vehicle, string what, string text)
+    {
+        if (CraftOnWayDown(vehicle))
+            _s.FailLanding(what, text);
+        else
+            _s.WarnLanding(text);
+    }
+
+    private static void EndTouchdownBadly(Vehicle vehicle, string what, string text)
+    {
+        if (CraftOnWayDown(vehicle))
+            _s.FailError(what, text);
+        else
+            _s.WarnError(text);
     }
 
     // These phases wait without control, and a release keeps them queued.
@@ -86,12 +106,12 @@ public static partial class GuidanceWindow
 
     private static bool TerminalBurnActive => _s.LandingPhase is LandingPhase.TerminalCoast or LandingPhase.TerminalBrake;
 
-    // G-FOLD or its landing burn is flying. A 6-DOF descent can fall back to G-FOLD, so while this holds the panel belongs to G-FOLD whatever solver is selected.
+    // G-FOLD or its landing burn is flying. A 6-DOF descent can fall back to G-FOLD, so while this holds the LAND page belongs to G-FOLD whatever solver is selected.
     private static bool LandingMachineLive => _s.LandingPhase == LandingPhase.GfoldDescent || TerminalBurnActive;
 
     private static bool LandingSwitchesOff => !_s.Engage || !_s.AutoStage;
 
-    private const string LandingSwitchesChangedStatus = "Automatic landing stopped because its control switches changed.";
+    private const string LandingSwitchesChangedStatus = "LANDING STOPPED: CONTROL SWITCHES CHANGED";
 
     // These phases use AFC's manual engine and attitude control.
     // The direct coast waits until Prep, and the stock node takes a separate claim without forcing Manual.
@@ -113,7 +133,7 @@ public static partial class GuidanceWindow
             Universe.ResetSimulationSpeed();
         _s.Upfg.Reset();
         _s.LandingPhase = LandingPhase.Prep;
-        _s.LandingStatus = "Converging the braking guidance.";
+        _s.LandingStatus = "PLANNING BRAKING BURN";
     }
 
     // The phases that a ground contact ends. Touchdown arming carries across a change between two of them.
@@ -160,7 +180,7 @@ public static partial class GuidanceWindow
             _s.HasCommand = false;
             _s.LandingPhase = LandingPhase.Done;
             _s.LandingCutPending = true;
-            _s.LandingStatus = $"TOUCHDOWN - contact detected, engine cut ({_s.GfoldSpeedMs:F1} m/s).";
+            _s.LandingStatus = FormattableString.Invariant($"TOUCHDOWN: CONTACT, ENGINE CUT ({_s.GfoldSpeedMs:F1} m/s)");
             return;
         }
 
@@ -169,7 +189,7 @@ public static partial class GuidanceWindow
         if ((_s.DeorbitRequest != null || TerminalBurnActive) && LandingSwitchesOff)
         {
             AbortLanding();
-            _s.LandingStatus = LandingSwitchesChangedStatus;
+            _s.WarnLanding(LandingSwitchesChangedStatus);
             return;
         }
 
@@ -196,7 +216,7 @@ public static partial class GuidanceWindow
             return;
 
         string engineRefusal = BrakingEngineRefusal(vehicle);
-        if (engineRefusal.Length > 0) { RefuseDeorbit(engineRefusal); return; }
+        if (engineRefusal.Length > 0) { RefuseDeorbit(vehicle, engineRefusal); return; }
         if (!PrepareLandingEngines(vehicle, parent, now, requireAirless: false)) return;
 
         // Prep / Burn: run Mode-3 guidance on the live vehicle.
@@ -261,7 +281,7 @@ public static partial class GuidanceWindow
                     GuidanceLog.Info(vehicle, $"landing stopped after {_s.FailStreak} failed steps: {e}");
                 _s.LandingPhase = LandingPhase.Done;
                 _s.LandingCutPending = true;
-                _s.LandingStatus = "Guidance failed repeatedly - landing stopped.";
+                EndLandingBadly(vehicle, "LANDING STOPPED: REPEATED FAULTS", "GUIDANCE FAULT (REPEATED). LANDING STOPPED.");
             }
         }
 
@@ -290,7 +310,7 @@ public static partial class GuidanceWindow
                     // Reached from the sim step rather than a button, so the release at the end of this same step sees the queued request and keeps the craft for it (see ApplyAutopilot).
                     // The claim releases the landing machine that got us here and finds no 6-DOF engaged, so it touches neither the engine nor the gimbals on the way through, and the engine holds the burn's command until the engage runs.
                     Engage6Dof(vehicle, fromBrakingBurn: true);
-                    _s.LandingStatus = "Handoff to touchdown guidance.";
+                    _s.LandingStatus = "HANDOVER: TOUCHDOWN";
                 }
                 else
                 {
@@ -309,10 +329,12 @@ public static partial class GuidanceWindow
                     // This step already writes the descent's engine command, and G-FOLD has no throttle until its first plan on the next step, so the burn's throttle carries over. Left at zero, the braking burn stops for a step, and for as long as the first solves find no plan. The tracker does not smooth from the carried value, because GfoldTrackInit is reset above.
                     _s.GfoldThrottle = _s.Upfg.Throttle;
                     _s.LandingStatus = sixDofRefusal == null
-                        ? "Handoff to G-FOLD descent."
-                        : $"Handoff to G-FOLD descent: touchdown guidance cannot plan for this craft ({sixDofRefusal}).";
+                        ? "HANDOVER: G-FOLD"
+                        : $"HANDOVER: G-FOLD. TOUCHDOWN: NO SOLUTION ({sixDofRefusal}).";
+                    if (sixDofRefusal != null)
+                        _s.WarnLanding(_s.LandingStatus);
                 }
-                _s.GfoldTabSelectPending = true;   // focus the powered-landing page
+                _s.GfoldCuePending = true;   // cue the LAND NOW way of LAND
             }
         }
     }

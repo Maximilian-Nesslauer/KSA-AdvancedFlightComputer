@@ -8,7 +8,7 @@ using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
-// The 6-DOF MPC guidance, built on the frame bridge. Its panel page is Ui/Gauges/SixDofGauge.cs.
+// The 6-DOF MPC guidance, built on the frame bridge. Its content on the LAND page is Ui/Gauges/SixDofGauge.cs.
 //
 // The 6-DOF SCvx model works in a different inertial frame, a different body-axis convention and a different quaternion convention from KSA (see KsaFrameBridge).
 // Every one of those fails silently: get a sign wrong and the symptom is "the controller is unstable" days later, not an exception here.
@@ -67,7 +67,7 @@ public static partial class GuidanceWindow
     private static int _ownerThreadId;
 
     /// <summary>Set once when the invariant above is first seen to be violated, so the
-    /// panel can say so rather than leaving it to a console nobody has open.</summary>
+    /// AFC console can say so rather than leaving it to a log nobody reads.</summary>
     internal static string OwnerThreadViolation = "";
 
     /// <summary>
@@ -558,7 +558,7 @@ public static partial class GuidanceWindow
 
     private static void OnSolveRefused(double now, string error)
     {
-        _s.Error = "re-solve failed: " + error;
+        _s.DiagError("re-solve failed: " + error);
         _s.SolveOk = false;
         _s.RefusalRun++;
         // Every refusal, with its reason and the last SCvx iteration, so a truncated subproblem can be told apart from a rejected step.
@@ -574,9 +574,9 @@ public static partial class GuidanceWindow
     {
         ScvxIteration last = _s.Guidance.LastIteration;
         return $"[subproblem {last.Solved}, step {last.Accepted}, rho {last.Rho:G3}, " +
-               $"trust {last.TrustRegion:G3}, ADMM {last.SolverIterations}/" +
-               $"{_s.Guidance.SubproblemIterationCap}, iteration {last.ElapsedMs:F0} ms" +
-               (double.IsNaN(jobMs) ? "" : $", job {jobMs:F0} ms") +
+               $"TRUST {last.TrustRegion:G3}, ADMM {last.SolverIterations}/" +
+               $"{_s.Guidance.SubproblemIterationCap}, ITERATION {last.ElapsedMs:F0} ms" +
+               (double.IsNaN(jobMs) ? "" : $", JOB {jobMs:F0} ms") +
                (last.Solved ? "]" : $", {_s.Guidance.LastSubproblemFailure}]");
     }
 
@@ -629,7 +629,7 @@ public static partial class GuidanceWindow
             TiltDeg = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI,
             Wx = x[10], Wy = x[11], Wz = x[12], Mass = x[13],
             Solved = _s.DidSolve && _s.SolveOk,
-            Status = _s.DidSolve ? _s.Guidance.Status.ToString() : "(no solve this cycle)",
+            Status = _s.DidSolve ? _s.Guidance.Status.ToString() : "(NO SOLVE THIS CYCLE)",
             ScvxIters = _s.Guidance.LastIterations, Accepted = _s.Guidance.AcceptedSteps,
             SolveMs = _s.Guidance.LastSolveMs, Admm = _s.Guidance.LastAdmmIterations,
             DefectM = _s.Guidance.LastDefectM, DefectLimitM = _s.Guidance.MaxDefectM,
@@ -783,10 +783,9 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// ENGAGE 6-DOF. A helper rather than the bare flag it replaced, because there are
-    /// two buttons for this (the sub-tab and the gauge panel's EXECUTE) and a bare
-    /// `_s.EngagePending = true` at each was the one commit point in the mod that
-    /// released nothing at all - see ClaimVehicle.
+    /// ENGAGE 6-DOF. A helper and not a bare `_s.EngagePending = true`, because there are
+    /// several commit points for this, and a bare flag at each would release nothing at
+    /// all - see ClaimVehicle.
     ///
     /// The flag itself is still only a REQUEST. Engaging runs a cold solve, which
     /// belongs on the sim thread rather than in a draw; the claim is what can and must
@@ -843,7 +842,7 @@ public static partial class GuidanceWindow
             _s.ReleaseWithoutEngineCut = true;
     }
 
-    // The panel can enable telemetry after guidance engages.
+    // The TUNE page can enable telemetry after guidance engages.
     // Start a run at that click and capture the current plan, so the next solve has a reference in the CSV.
     private static void SetSixDofLogging(Vehicle vehicle, bool enabled)
     {
@@ -889,7 +888,7 @@ public static partial class GuidanceWindow
 
     // ---- Execute (runs from the PrepareWorker prefix, never the draw) ----
     //
-    // Draw-time writes to the flight computer or _manualControlInputs are erased one frame later, so the tab only sets flags and every command is issued here.
+    // Draw-time writes to the flight computer or _manualControlInputs are erased one frame later, so the page only sets flags and every command is issued here.
     internal static void Step6Dof(Vehicle vehicle)
     {
         Use(vehicle);
@@ -904,7 +903,7 @@ public static partial class GuidanceWindow
             // The MESSAGE alone is not a diagnosis.
             // "Index was outside the bounds of the array" names neither the array nor the line, and this catch then disengages - so by the time anyone looks, the state that produced it is gone.
             // The full exception goes to a file that always exists, with enough surrounding state to tell which of the several paths through a step was running when it threw.
-            _s.Error = "Touchdown guidance step failed: " + e.Message;
+            EndTouchdownBadly(vehicle, "TOUCHDOWN STOPPED: FAULT", "TOUCHDOWN STEP FAILED: " + e.Message);
             LogSixDofFault(vehicle, e);
             _s.EngagePending = false;
             Disengage6Dof(vehicle);
@@ -975,7 +974,7 @@ public static partial class GuidanceWindow
         {
             // Before the first plan the previous mode's attitude and engine still fly the craft, and a braking burn handed over high up keeps its command. A burn taken over near the ground is a different matter: its last throttle is as stale as an expired plan's, and one flew a booster up from 23 m, tipped it over and dropped it (2026-10-08, 16:19).
             if (_s.SixDofTookBurn && x[2] - _s.VehicleHeightM <= SixDofLostPlanGateM)
-                FlyWithoutPlan(vehicle, parent, siteCci, x, "taken from the burn with no plan yet");
+                FlyWithoutPlan(vehicle, parent, siteCci, x, "HANDOVER FROM BURN, NO PLAN YET");
             return;
         }
 
@@ -989,7 +988,7 @@ public static partial class GuidanceWindow
             return;
         }
 
-        FlyWithoutPlan(vehicle, parent, siteCci, x, "re-converging with the last plan expired");
+        FlyWithoutPlan(vehicle, parent, siteCci, x, "RE-SOLVING, LAST PLAN EXPIRED");
     }
 
     // A vertical speed below this is descending, for the stop-short check.
@@ -1028,7 +1027,7 @@ public static partial class GuidanceWindow
         manual.EngineOn = throttle > 0.0;
         manual.EngineThrottle = (float)throttle;
         _s.LastThrottle = throttle;
-        _s.Error = $"{why} - no plan: {(throttle > 0.0 ? $"stopping on the pad at {throttle:P0} throttle" : "engine off until stopping needs it")}.";
+        _s.WarnError(FormattableString.Invariant($"{why}. NO PLAN: {(throttle > 0.0 ? FormattableString.Invariant($"STOPPING ON PAD AT {throttle:P0} THROTTLE") : "ENGINE OFF UNTIL STOP NEEDED")}."));
     }
 
     /// <summary>
@@ -1060,14 +1059,14 @@ public static partial class GuidanceWindow
             && !(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
             && TerminalHoverAvailable(vehicle, out _))
         {
-            string why = $"Touchdown guidance {(_s.SixDofLastPublishedPlan == null ? "took the burn with no plan" : "lost its plan")} "
-                       + $"{x[2] - _s.VehicleHeightM:F0} m above the pad - terminal hover takes over.";
+            string why = $"TOUCHDOWN {(_s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
+                       + $"{x[2] - _s.VehicleHeightM:F0} m ABOVE PAD. HANDOVER: HOVER.";
             SixDofLog.Event(_s, now, why);
             GuidanceLog.Info(vehicle, why);
             Disengage6Dof(vehicle, cutEngine: false);
             StartTerminalHover(vehicle);
-            _s.LandingStatus = why;
-            _s.Error = why;
+            _s.WarnLanding(why);
+            _s.DiagError(why);
             return true;
         }
         return false;
@@ -1081,11 +1080,11 @@ public static partial class GuidanceWindow
         manual.EngineThrottle = 0f;
         _s.LastThrottle = 0.0;
         KsaGimbalControl.SetLsq(vehicle, default);
-        string why = $"Touchdown guidance stopped short {x[2] - _s.VehicleHeightM:F1} m above the pad, "
-                   + $"rising at {x[5]:F1} m/s, and cannot throttle below its weight ({minTwr:F2} at minimum) - engine cut, dropping to the pad.";
+        string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.VehicleHeightM:F1} m ABOVE PAD, ")
+                   + FormattableString.Invariant($"RISING {x[5]:F1} m/s, CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.");
         SixDofLog.Event(_s, now, why);
         GuidanceLog.Info(vehicle, why);
-        _s.Error = why;
+        _s.WarnError(why);
     }
 
     /// <summary>After the stop-short cut: engine held off, no torque, no solving, until the craft touches down.</summary>
@@ -1097,12 +1096,12 @@ public static partial class GuidanceWindow
         KsaGimbalControl.SetLsq(vehicle, default);
         if (!vehicle.Situation.HasAnyContact())
             return;
-        string what = $"TOUCHDOWN after the stop-short cut, at {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target";
+        string what = FormattableString.Invariant($"TOUCHDOWN AFTER STOP-SHORT CUT, {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m FROM TARGET");
         SixDofLog.Event(_s, now, what);
         GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
         ReportLogStop(SixDofLog.Stop(_s));
         Disengage6Dof(vehicle);
-        _s.Error = "touchdown - engine cut, touchdown guidance disengaged.";
+        _s.Error = "TOUCHDOWN. ENGINE CUT. GUIDANCE ENDED.";
     }
 
     private static void Step6DofCore(Vehicle vehicle)
@@ -1126,8 +1125,8 @@ public static partial class GuidanceWindow
                     $"STAGED: mass {_s.LastMass:F0} -> {m:F0} kg in one step - the plan was " +
                     "built for a different vehicle. Terminating touchdown guidance.");
                 Disengage6Dof(vehicle, cutEngine: false);
-                _s.Error = "staged mid-flight - touchdown guidance terminated. Re-engage to plan for " +
-                           "the vehicle that is actually here.";
+                EndTouchdownBadly(vehicle, "TOUCHDOWN STOPPED: STAGED",
+                    "STAGED IN FLIGHT. TOUCHDOWN ENDED. RESTART TO PLAN FOR THE REMAINING VEHICLE.");
                 return;
             }
         }
@@ -1178,10 +1177,10 @@ public static partial class GuidanceWindow
         {
             if (result.Faulted)
             {
-                string error = (result.Job == Ksa6DofJob.StepCold ? "cold" : "warm")
-                    + " solve failed: " + result.Error;
+                string error = (result.Job == Ksa6DofJob.StepCold ? "COLD" : "WARM")
+                    + " SOLVE FAILED: " + result.Error;
                 Disengage6Dof(vehicle);
-                _s.Error = error;
+                EndTouchdownBadly(vehicle, "TOUCHDOWN STOPPED: SOLVER FAULT", error);
                 SixDofLog.Event(_s, now, error);
                 return;
             }
@@ -1233,7 +1232,7 @@ public static partial class GuidanceWindow
                                           $"{Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target - engine cut.");
                 ReportLogStop(SixDofLog.Stop(_s));
                 Disengage6Dof(vehicle);
-                _s.Error = "touchdown - engine cut, touchdown guidance disengaged.";
+                _s.Error = "TOUCHDOWN. ENGINE CUT. GUIDANCE ENDED.";
                 return;
             }
         }
@@ -1301,7 +1300,7 @@ public static partial class GuidanceWindow
             _s.RefusalRun = 0;
             // The plan a cold restart abandons is flown open loop until the new one lands; see SixDofRestartOpenLoop.
             _s.SixDofRestartOpenLoop = !keptPlan;
-            _s.Error = "re-converging...";
+            _s.DiagError("re-converging...");
         }
 
         // Advance a spread cold solve.
@@ -1424,16 +1423,16 @@ public static partial class GuidanceWindow
             }
             else
             {
-                _s.Error = $"converging... {_s.Guidance.LastIterations} iterations, " +
+                _s.DiagError($"converging... {_s.Guidance.LastIterations} iterations, " +
                                $"defect {_s.Guidance.DefectText}" +
-                               (string.IsNullOrEmpty(coldError) ? "" : ": " + coldError);
+                               (string.IsNullOrEmpty(coldError) ? "" : ": " + coldError));
                 // Give up rather than fall forever if it is not going to converge.
                 if (_s.ColdFrames > 240)
                 {
-                    string error = "cold solve failed to converge: " + coldError;
+                    string error = "COLD SOLVE FAILED: " + coldError;
                     SixDofLog.Event(_s, now, "COLD SOLVE gave up after 240 frames: " + coldError);
                     Disengage6Dof(vehicle);
-                    _s.Error = error;
+                    EndTouchdownBadly(vehicle, "TOUCHDOWN: NO PLAN", error);
                 }
                 else
                 {
@@ -1501,7 +1500,7 @@ public static partial class GuidanceWindow
         if (_s.Guidance.PlanElapsed > _s.Guidance.Sigma)
         {
             FlyWithoutPlan(vehicle, parent, siteCci, x,
-                $"plan expired {_s.Guidance.PlanElapsed - _s.Guidance.Sigma:F1} s ago");
+                $"PLAN EXPIRED {_s.Guidance.PlanElapsed - _s.Guidance.Sigma:F1} s AGO");
             return;
         }
 
@@ -1611,8 +1610,7 @@ public static partial class GuidanceWindow
         // THE AUTO THROTTLE FLOOR IS RESOLVED HERE, where it is consumed, and nowhere else.
         // KSA knows the vehicle's real minimum throttle; the 0.40 default is the Python test case's value, and overstating it is what makes an otherwise fine vehicle read as "over-powered" and the cold solve come back infeasible.
         //
-        // It used to be computed by the 6-DOF TAB'S DRAW, which worked only because the Engage button lived on that tab - you could not engage without having drawn it.
-        // The gauge panel engages from anywhere, so a craft that never had that tab opened planned against 0.40 and refused to solve from states it handles easily.
+        // A craft can engage without its page ever drawn, so a floor set by the draw would leave it planning against 0.40 and refusing to solve from states it handles easily.
         // Model values must not depend on which page is on screen.
         if (_s.SixDofFloorAuto)
             _s.SixDofThrottleFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
@@ -1648,7 +1646,7 @@ public static partial class GuidanceWindow
         if (!TryConfigure6Dof(vehicle, parent, siteCci, x, out double[] xf, out int engageNodes,
                               out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn, out string error))
         {
-            _s.Error = "cannot plan: " + error;
+            EndTouchdownBadly(vehicle, "TOUCHDOWN: NO SOLUTION", "NO SOLUTION: " + error);
             return false;
         }
 
@@ -1679,7 +1677,7 @@ public static partial class GuidanceWindow
             _s.PrevV = null;
             _s.Bias = default;
             _s.LastReplan = now;
-            _s.Error = "converging...";
+            _s.DiagError("converging...");
             if (_s.SixDofLogging)
             {
                 SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
@@ -1699,7 +1697,7 @@ public static partial class GuidanceWindow
         {
             ok = _s.Guidance.PlanFromSeed(x, xf, gx, gu, gSigma, now);
             if (!ok)
-                seedNote += $" (rejected: {_s.Guidance.Error}) - retrying from the straight-line seed";
+                seedNote += $" (REJECTED: {_s.Guidance.Error}). RETRY FROM STRAIGHT-LINE SEED";
         }
 
         if (!ok)
@@ -1710,7 +1708,7 @@ public static partial class GuidanceWindow
         }
         if (!ok)
         {
-            _s.Error = "cold solve failed: " + _s.Guidance.Error;
+            EndTouchdownBadly(vehicle, "TOUCHDOWN: NO PLAN", "COLD SOLVE FAILED: " + _s.Guidance.Error);
             _s.Guidance = null;
             return false;
         }
@@ -1749,100 +1747,43 @@ public static partial class GuidanceWindow
         return true;
     }
 
-    // Whether a plan can exist AT ALL, shown before engaging rather than after a failed solve.
     // Thrust-to-weight at MINIMUM throttle is the number that decides it: the model's throttle box means the engine cannot go below Tmin while lit, so if Tmin exceeds weight the vehicle must tilt to shed the excess, and beyond the tilt limit no descent exists.
     // That single ratio explains infeasible solves, spiral trajectories, and the long solve times that come from retrying them.
-    private static void Draw6DofFeasibility(Vehicle vehicle)
+    // StopM was measured in closed loop (Scvx.Console --mpc --grav, 300 m up at 50 m/s down): TWR 2.00 needs 127 m, 1.50 needs 255 m, 1.25 needs 510 m of the 300 m available.
+    private static Ui.Logic.DescentFacts ReadDescentFacts(Vehicle vehicle)
     {
         IParentBody parent = vehicle.Orbit?.Parent;
         if (parent == null)
-            return;
+            return default;
 
         double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
 
         // Must use the SAME pressure-corrected thrust the planner does.
-        // This panel reading vacuum thrust while the plan used something else is precisely how the atmospheric shortfall stayed hidden: "max TWR" looked healthy because it was quoting a number the vehicle could only reach in space.
+        // A readout of vacuum thrust while the plan uses something else hides the atmospheric shortfall: "max TWR" would look healthy because it quotes a number the vehicle can only reach in space.
         double ambientPa = KsaEnginePerf.AmbientPressureAt(
             parent, siteCci.Length() - parent.MeanRadius + _s.SixDofTargetComAltM);
         (double thrust, _) = KsaEnginePerf.AtPressure(vehicle, ambientPa);
         if (thrust <= 0.0)
-            return;
+            return default;
 
         double g = parent.Mu / (siteCci.Length() * siteCci.Length());
         double mass = vehicle.TotalMass;
+        double craftFloor = Ksa6DofSetup.VehicleThrottleFloor(vehicle);
+        double floor = _s.SixDofFloorAuto ? craftFloor : _s.SixDofThrottleFloor;
         // The floor as the thrust it really gives, as the plan now takes it (see Ksa6DofSetup.TryBuild).
-        double floorFraction = Math.Clamp(KsaEnginePerf.ThrustAtThrottle(vehicle, _s.SixDofThrottleFloor, ambientPa) / thrust, 0.0, 1.0);
+        double floorFraction = Math.Clamp(KsaEnginePerf.ThrustAtThrottle(vehicle, floor, ambientPa) / thrust, 0.0, 1.0);
         Ksa6DofSetup.ThrottleMargin(thrust, floorFraction, mass, g,
-                                    out double twrMin, out double needTilt);
+                                    out double twrAtFloor, out double needTilt);
+        double weight = mass * g;
+        double twrAtCraftMin = weight > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, vehicle.GetMinThrottle(), ambientPa) / weight : 0.0;
 
-        ImGui.SeparatorText("Feasibility");
-        ImGui.Text($"thrust used {thrust / 1e6,6:F2} MN   weight {mass * g / 1e6,6:F2} MN   " +
-                   $"max TWR {thrust / (mass * g),5:F2}");
-
-        // The air, and what it costs.
-        // On an airless world this reads 0 Pa / 100% and the whole line is a no-op; anywhere else it is the number that decides whether the plan is flyable.
-        double vac = KsaEnginePerf.VacuumThrust(vehicle);
-        double frac = vac > 0.0 ? thrust / vac : 1.0;
-        ImGui.Text($"ambient {ambientPa / 1000.0,6:F1} kPa (at target alt)   " +
-                   $"thrust {frac * 100.0,5:F1} % of vacuum {vac / 1e6:F2} MN");
-        if (frac < 0.97)
-            ImGui.TextColored(new float4(0.6f, 0.85f, 1f, 1f),
-                $"planning against sea-level performance - vacuum thrust would over-promise by " +
-                $"{(1.0 / Math.Max(frac, 1e-6) - 1.0) * 100.0:F0} %%.");
-        ImGui.Text($"TWR at min throttle {twrMin,5:F2}   " +
-                   $"(floor {_s.SixDofThrottleFloor:F2}, vehicle can do {Ksa6DofSetup.VehicleThrottleFloor(vehicle):F2})");
-
-        // CAN THIS BE DONE AT ALL?
-        // The question the rest of the panel does not ask.
-        //
-        // Thrust only buys deceleration ABOVE hover, so the usable figure is (TWR - 1) * g, not TWR * g.
-        // Stopping from speed v therefore needs v^2 / (2 * (TWR-1) * g) of altitude, and if that exceeds what is left the landing is impossible for ANY guidance law - the solver will return its best effort, which is a long curving miss that looks exactly like a controller bug and is not one.
-        //
-        // Measured in closed loop against this criterion (Scvx.Console --mpc --grav, 300 m up at 50 m/s down): TWR 2.00 needs 127 m and misses by 4.8 m; TWR 1.50 needs 255 m and misses by 39 m; TWR 1.25 needs 510 m of the 300 m available and misses by 173 m.
-        // The failure tracks reachability, not conditioning - Earth at TWR 2.0 actually solves FASTER than the Moon.
-        //
-        // A necessary condition, not a sufficient one: it assumes thrust straight up, so any tilt to kill downrange makes it worse.
         double[] xNow = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
-        double altToGo = xNow[2] - _s.SixDofTargetComAltM;
-        double descent = -xNow[5];
-        if (altToGo > 1.0 && descent > 1.0)
-        {
-            double twrNow = thrust / (mass * g);
-            double netDecel = (twrNow - 1.0) * g;
-            double stopDist = netDecel > 0.01 ? descent * descent / (2.0 * netDecel) : double.PositiveInfinity;
-            double twrNeeded = 1.0 + descent * descent / (2.0 * altToGo * g);
-
-            ImGui.Text($"descending {descent,5:F0} m/s with {altToGo,6:F0} m to go   " +
-                       $"needs {(double.IsInfinity(stopDist) ? 99999.0 : stopDist),6:F0} m to stop");
-            if (stopDist >= altToGo)
-                ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                    $"CANNOT STOP IN TIME - needs TWR {twrNeeded:F2}, has {twrNow:F2}. No guidance " +
-                    "can land this; the plan will be a long curving miss. Burn earlier, or arrive slower.");
-            else if (stopDist > 0.8 * altToGo)
-                ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                    $"MARGINAL - {stopDist / altToGo * 100.0:F0}%% of the remaining altitude is needed just " +
-                    $"to stop, leaving almost none to null downrange. Needs TWR {twrNeeded:F2}, has {twrNow:F2}.");
-        }
-
-        if (needTilt >= _s.SixDofTiltDeg)
-        {
-            double feasibleFloor = Math.Cos(_s.SixDofTiltDeg * Math.PI / 180.0) * mass * g / thrust;
-            ImGui.TextColored(new float4(1f, 0.3f, 0.3f, 1f),
-                $"OVER-POWERED - needs {needTilt:F0} deg tilt just to stop climbing " +
-                $"(limit {_s.SixDofTiltDeg:F0}). No descent exists.");
-            ImGui.TextWrapped(
-                $"Fix: a throttle floor below {feasibleFloor:F2}, or a higher tilt limit.");
-        }
-        else if (twrMin > 1.0)
-        {
-            ImGui.TextColored(new float4(1f, 0.8f, 0.3f, 1f),
-                $"Min thrust exceeds weight - needs {needTilt:F0} deg of tilt to hold " +
-                "altitude, so expect the path to curve rather than descend straight.");
-        }
-        else
-        {
-            ImGui.TextColored(new float4(0.4f, 1f, 0.5f, 1f),
-                "Can hover at minimum throttle - a straight descent is available.");
-        }
+        Orbit orbit = vehicle.Orbit;
+        double3 r = orbit.StateVectors.PositionCci;
+        return new Ui.Logic.DescentFacts(
+            Known: true, ThrustN: thrust, VacuumN: KsaEnginePerf.AtPressure(vehicle, 0.0).thrust, WeightN: weight, GravityMs2: g, AmbientPa: ambientPa,
+            Floor: floor, CraftFloor: craftFloor, TwrAtFloor: twrAtFloor, TwrAtCraftMin: twrAtCraftMin, NeedTiltDeg: needTilt, TiltLimitDeg: _s.SixDofTiltDeg,
+            DescentMs: -xNow[5], AltToGoM: xNow[2] - _s.SixDofTargetComAltM, NoGimbal: Ksa6DofSetup.GimbalLimitDeg(vehicle) <= 0.0,
+            SinkMs: -double3.Dot(orbit.StateVectors.VelocityCci, double3.Normalize(r)), HeightM: TerminalHeight(orbit, parent, parent.MeanRadius));
     }
 }

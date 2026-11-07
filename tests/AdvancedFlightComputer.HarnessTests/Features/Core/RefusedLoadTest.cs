@@ -28,7 +28,7 @@ public sealed class RefusedLoadTest : AfcTest
         object? oldPath = configPath.GetValue(null);
         object? oldDir = modDir.GetValue(null);
         var oldEntries = new List<MultiPassExecution>(MultiPassRegistry.Snapshot.Values);
-        double oldAltitude = ManeuverToolsWindow.TargetAltitude;
+        double oldAltitude = OrbitToolForm.TargetAltitude;
 
         Harmony harmony = new("com.maxi.afc.harnesstests.refused-load");
         string temp = Path.Combine(Path.GetTempPath(), "afc-refused-load-" + Guid.NewGuid().ToString("N"));
@@ -50,26 +50,26 @@ public sealed class RefusedLoadTest : AfcTest
             saveIdField.SetValue(null, "world");
             MultiPassRegistry.Reset();
             MultiPassRegistry.Add(Make("world", "live-vehicle"));
-            ManeuverToolsWindow.TargetAltitude = MarkerAltitudeM;
+            OrbitToolForm.TargetAltitude = MarkerAltitudeM;
 
             DriveLoad("phantom", completes: false);
             t.Check("unloaded save keeps the save scope", SaveLoadObserver.CurrentSaveId == "world");
             t.Check("unloaded save raises no SaveLoaded", loadedCount == 0);
             t.Check("unloaded save keeps the live registry entry", MultiPassRegistry.Has("live-vehicle")
                 && !MultiPassRegistry.Snapshot.ContainsKey(("accepted", "disk-vehicle")));
-            t.Check("unloaded save keeps save-scoped state", ManeuverToolsWindow.TargetAltitude == MarkerAltitudeM);
+            t.Check("unloaded save keeps save-scoped state", OrbitToolForm.TargetAltitude == MarkerAltitudeM);
 
             DriveLoad("accepted", completes: true);
             t.Check("accepted load moves the save scope", SaveLoadObserver.CurrentSaveId == "accepted");
             t.Check("accepted load raises SaveLoaded once", loadedCount == 1);
             t.Check("accepted load restores the registry from disk", MultiPassRegistry.Has("disk-vehicle")
                 && !MultiPassRegistry.Snapshot.ContainsKey(("world", "live-vehicle")));
-            t.Check("accepted load resets save-scoped state", ManeuverToolsWindow.TargetAltitude == 0.0);
+            t.Check("accepted load resets save-scoped state", OrbitToolForm.TargetAltitude == 0.0);
         }
         finally
         {
             harmony.UnpatchAll(harmony.Id);
-            ManeuverToolsWindow.TargetAltitude = oldAltitude;
+            OrbitToolForm.TargetAltitude = oldAltitude;
             configPath.SetValue(null, oldPath);
             modDir.SetValue(null, oldDir);
             loadedEvent.SetValue(null, oldEvent);

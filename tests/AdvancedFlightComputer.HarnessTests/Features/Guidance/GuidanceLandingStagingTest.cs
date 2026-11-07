@@ -208,7 +208,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         }
         t.Check($"{phase}: repeated requests without sequence progress time out",
             fixture.State.LandingPhase == GuidanceWindow.LandingPhase.Done);
-        t.Check($"{phase}: the timeout is visible", fixture.State.LandingStatus.Contains("timed out"));
+        t.Check($"{phase}: the timeout is visible", fixture.State.LandingStatus.Contains("TIMED OUT"));
     }
 
     private static void LastSequenceWithoutEngine(TestContext t, GuidanceWindow.LandingPhase phase)
@@ -267,7 +267,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
         Step(fixture, 100, body);
         t.Check("an atmospheric body is refused before any staging request",
             fixture.State.LandingPhase == GuidanceWindow.LandingPhase.Done && _activations == 0);
-        t.Check("the atmosphere reason is visible", fixture.State.LandingStatus.Contains("airless"));
+        t.Check("the atmosphere reason is visible", fixture.State.LandingStatus.Contains("AIRLESS"));
     }
 
     private static void CheckWaiting(TestContext t, Fixture fixture, string label)
@@ -280,7 +280,7 @@ public sealed class GuidanceLandingStagingTest : AfcTest
             fixture.State.GfoldPlan == null && !fixture.State.HasCommand && !fixture.State.GfoldTrackInit);
         t.Check($"{label}: waiting resets the hover integral",
             !fixture.State.TermInit && fixture.State.TermPidUp.I == 0);
-        t.Check($"{label}: the wait is visible", fixture.State.LandingStatus.Contains("Waiting"));
+        t.Check($"{label}: the wait is visible", fixture.State.LandingStatus.Contains("WAITING"));
     }
 
     private static void RestartAfterAbort(TestContext t)

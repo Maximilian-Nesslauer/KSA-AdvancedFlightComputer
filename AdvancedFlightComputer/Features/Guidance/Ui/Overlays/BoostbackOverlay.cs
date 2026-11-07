@@ -84,7 +84,7 @@ public static partial class GuidanceWindow
 
     /// <summary>
     /// Recompute this vehicle's impact prediction, throttled.
-    ///  Driven by the overlay rather than by the guidance step while nothing flies on it - it is a readout then - so it runs only while the Boostback tab and its overlay are on screen. A live boostback drives it from its own step instead (see StepBoostback). The Boostback tab calls it once, with force, when the toggle is switched on.
+    /// While no boostback flies, the guidance step runs it only while the console asks for the impact (ViewDemand), because it is a readout then. A live boostback runs it from its own step (see StepBoostback). SHOW IN WORLD on the LAND > BOOSTBACK picture clears the throttle when it turns the overlay on, so the next step predicts at once.
     /// </summary>
     private static void UpdateImpactPrediction(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                                bool force)
@@ -393,8 +393,8 @@ public static partial class GuidanceWindow
             || !VehicleAutopilotState.TryGet(Program.ControlledVehicle, out VehicleAutopilotState st))
             return;
 
-        // THE OVERLAY DRIVES ITS OWN PREDICTION, so the marker and the prediction stop together. DrawTrailingWindows calls this only while the Boostback tab is on screen: off it, neither runs, so a marker showing where the vehicle was going minutes ago is never drawn; back on it, the throttle has long run out and the first frame recomputes.
-        UpdateImpactPrediction(vehicle, orbit, parent, force: false);
+        // The overlay asks the step for the prediction, so the marker and the prediction stop together. DrawTrailingWindows calls this only while LAND > BOOSTBACK is on screen or a boostback flies: otherwise neither runs, so a marker showing where the vehicle was going minutes ago is never drawn; back on it, the throttle has long run out and the next step recomputes. A live boostback predicts from its own step.
+        ViewDemand.Mark(vehicle, ViewDemand.Kind.Impact);
 
         if (!st.HasImpact || st.ImpactPathCcf == null || st.ImpactPathCount < 2)
         {
@@ -421,9 +421,9 @@ public static partial class GuidanceWindow
             st.ImpactCcfShown += (st.ImpactCcfRaw - st.ImpactCcfShown) * a;
         }
 
-        var pathCol = new ImColor8(230, 80, 60);
-        var markCol = new ImColor8(255, 60, 60);
-        var siteCol = new ImColor8(255, 120, 220);
+        var pathCol = Ui.Canvas.Palette.Plan.Solid;
+        var markCol = Ui.Canvas.Palette.Bad.Solid;
+        var siteCol = Ui.Canvas.Palette.Target.Solid;
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##boostback_overlay");
         using WindowEnd end = default;
@@ -448,11 +448,11 @@ public static partial class GuidanceWindow
             float line = ImGui.GetTextLineHeight();
             OvText(dl, at, markCol, "IMPACT");
             OvText(dl, at + new float2(0f, line), markCol,
-                $"{st.ImpactLatDeg:F3}, {st.ImpactLonDeg:F3}");
+                FormattableString.Invariant($"{st.ImpactLatDeg:F3}, {st.ImpactLonDeg:F3}"));
             OvText(dl, at + new float2(0f, line * 2f), markCol,
-                $"T+{st.Impact.TimeOfFlight.V:F0}s  {st.ImpactDownrangeM / 1000.0:F1}km");
+                FormattableString.Invariant($"T+{Ui.Logic.Fmt.Time(st.Impact.TimeOfFlight.V)}  {st.ImpactDownrangeM / 1000.0:F1} km"));
             OvText(dl, at + new float2(0f, line * 3f), markCol,
-                $"{ImpactSpeed(st):F0} m/s");
+                FormattableString.Invariant($"{ImpactSpeed(st):F0} m/s"));
         }
 
         // A line from the landing site to the predicted impact: the miss distance is what a boostback is trying to drive to zero, and seeing it is worth more than reading it. Body-fixed at both ends, so it does not swing about.
@@ -472,7 +472,7 @@ public static partial class GuidanceWindow
 
                 // The correction that NULLS the miss - the one to fly.
                 double3 dvDir = st.SteerDv.NormalizeOrZero();
-                var burnCol = new ImColor8(90, 230, 255);
+                var burnCol = Ui.Canvas.Palette.Afc.Solid;
                 OvArrow(dl, rv, rv + dvDir * scale, burnCol, 2.4f);
 
                 // The greedy direction, thinner and dimmer. Drawn because the two are easy to assume identical and are not: -J^T m is a descent direction, -J^+ m is the one that points at the target.
@@ -483,9 +483,9 @@ public static partial class GuidanceWindow
                 {
                     float line = ImGui.GetTextLineHeight();
                     OvText(dl, tip + new float2(8f, -line), burnCol,
-                        $"dV {st.SteerDv.Length():F0} m/s");
+                        FormattableString.Invariant($"DV {st.SteerDv.Length():F0} m/s"));
                     OvText(dl, tip + new float2(8f, 0f), greedyCol,
-                        $"greedy {AngleBetweenDeg(dvDir, st.SteerGreedy):F0} deg off");
+                        FormattableString.Invariant($"GREEDY OFFSET {AngleBetweenDeg(dvDir, st.SteerGreedy):F0} deg"));
                 }
             }
         }

@@ -11,6 +11,7 @@
     <Project Path="tests/AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj" />
     <Project Path="tests/AdvancedFlightComputer.Guidance.Tests/Scvx/AdvancedFlightComputer.Guidance.Tests.Scvx.csproj" />
     <Project Path="tests/AdvancedFlightComputer.Guidance.Tests/Worker.Tests/Worker.Tests.csproj" />
+    <Project Path="tests/AdvancedFlightComputer.UiLogic.Tests/UiLogic.Tests.csproj" />
   </Folder>
   <Folder Name="/Build/">
     <Project Path="build/NativeChecks/NativeChecks.csproj" />

@@ -6,8 +6,8 @@ using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
-using AdvancedFlightComputer.Features.PlanWindow;
 using AdvancedFlightComputer.Features.RcsTranslation;
+using AdvancedFlightComputer.Features.Ui.Console;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -21,7 +21,6 @@ public sealed class Mod
     private const string TestedGameVersion = "v2026.10.25.5707";
 
     private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
-    private static bool _maneuverTypesInjected;
 
     // The AUTOSTAGE gauge button resolves its enum by name while the game reads Gauges.xml, which happens before any AllModsLoaded hook.
     [StarMapImmediateLoad]
@@ -36,29 +35,41 @@ public sealed class Mod
             DefaultCategory.Log.Warning(
                 $"[AFC] Tested against {TestedGameVersion}, current is {gameVersion}. Some features may not work correctly.");
 
+        // First, so every feature block can read its UI preferences. A broken file costs the preferences, not the load.
+        try
+        {
+            UiConfig.Load();
+        }
+        catch (Exception ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] UI preferences could not be loaded: {ex.Message}");
+        }
+
         bool coreReady = Validated("Core", GameReflection.ValidateCore)
             && _patches.TryApply("Core", PatchCore);
 
-        // Its own owner, so a settings-window rename costs the mod sections and nothing else.
+        // Its own owner, so a settings-window rename costs the one AFC line in Settings > Mods and nothing else.
         if (Validated("SettingsPage", GameReflection.ValidateSettingsPage))
             _patches.TryApply("SettingsPage", ModSettingsPage.ApplyPatches);
 
         if (Validated("HyperbolicTargets", GameReflection.ValidateHyperbolicTargets))
-            _patches.TryApply("HyperbolicTargets", HyperbolicTargets.ApplyPatches);
+            HyperbolicTargets.Enabled = _patches.TryApply("HyperbolicTargets", HyperbolicTargets.ApplyPatches);
 
-        if (Validated("ManeuverTools", GameReflection.ValidateManeuverTools))
+        // Its own block, so a failed world-line postfix costs only the MAP lines of ORBIT and TRANSFER, and a failed ORBIT block leaves the TRANSFER lines alone.
+        Patch_CelestialSystem_OnPreRender.Applied = _patches.TryApply("ConsoleWorldLines", PatchConsoleWorldLines);
+
+        // The ORBIT tools draw in the console and need only the right-click anchor.
+        bool orbitTools = _patches.TryApply("OrbitTools", ManeuverTools.ApplyPatches);
+        if (orbitTools)
+            OrbitToolsPanel.Enabled = true;
+        else
+            DisableOrbitTools();
+
+        if (coreReady && Validated("MultiPass", GameReflection.ValidateMultiPass))
         {
-            if (!_patches.TryApply("ManeuverTools", PatchManeuverTools))
-                DisableManeuverTools();
-            else if (!Validated("PlanWindow", GameReflection.ValidatePlanWindow)
-                     || !_patches.TryApply("PlanWindow", PatchPlanWindow))
-                DisableManeuverTools();
-            else if (coreReady && Validated("MultiPass", GameReflection.ValidateMultiPass))
-            {
-                SharedVehicleHooks.MultiPassEnabled = _patches.TryApply("MultiPass", PatchMultiPass);
-                if (!SharedVehicleHooks.MultiPassEnabled)
-                    DisableMultiPass();
-            }
+            SharedVehicleHooks.MultiPassEnabled = _patches.TryApply("MultiPass", PatchMultiPass);
+            if (!SharedVehicleHooks.MultiPassEnabled)
+                DisableMultiPass();
         }
 
         if (coreReady && Validated("RcsTranslation", GameReflection.ValidateRcsTranslation))
@@ -68,8 +79,7 @@ public sealed class Mod
                 DisableRcsTranslation();
         }
 
-        // Keep the menu available when the driver fails.
-        // The driver still requires the menu because it contains the off switch.
+        // Keep the menu available when the driver fails, because it holds the guidance off switch.
         bool guidanceMenu = Validated("GuidanceDiagnostics", GameReflection.ValidateGuidanceDiagnostics)
             && _patches.TryApply("GuidanceDiagnostics", GuidanceFeature.ApplyDiagnosticPatches);
 
@@ -100,6 +110,20 @@ public sealed class Mod
                 AutoRemoveFeature.Disable();
         }
 
+        // The planner key routing is soft: without the setter prefix the console's frame check routes the key alone.
+        _patches.TryApply("PlannerRoute", PlannerRoute.ApplyPatch);
+
+        if (guidanceMenu)
+            ConsoleMenu.Register();
+        ModSettingsPage.Register(ConsoleMenu.DrawModsSettingsLine);
+        AfcAlerts.History = ConsoleMessages.RecordAlert;
+        AfcConsole.LoadPreferences();
+        AfcConsole.Enabled = true;
+        PlannerRoute.MenuMissing = !guidanceMenu;
+        if (PlannerRoute.MenuMissing)
+            DefaultCategory.Log.Warning("[AFC] The AFC menu did not load, so the planner key opens the AFC console this session even when its switch is off.");
+        PlannerRoute.Active = PlannerRoute.RoutingPreference || PlannerRoute.MenuMissing;
+
         DefaultCategory.Log.Info("[AFC] Loaded and patched.");
     }
 
@@ -120,57 +144,24 @@ public sealed class Mod
         VehicleCommandSink.ApplyPatches(harmony);
     }
 
-    private static void PatchManeuverTools(Harmony harmony)
-    {
-        ManeuverTools.InjectTransferTypes();
-        _maneuverTypesInjected = true;
-        ManeuverTools.ApplyPatches(harmony);
-    }
+    // CelestialSystem.OnPreRender is public and runs every frame, so the world lines of ORBIT and TRANSFER draw without a patch on a planner member.
+    private static void PatchConsoleWorldLines(Harmony harmony)
+        => harmony.CreateClassProcessor(typeof(Patch_CelestialSystem_OnPreRender)).Patch();
 
-    private static void PatchPlanWindow(Harmony harmony)
-    {
-        harmony.CreateClassProcessor(typeof(Patch_DrawPlanWindow)).Patch();
-        harmony.CreateClassProcessor(typeof(Patch_OnPreRender)).Patch();
-
-        // Suppress both parts of the stock preview together so lines and markers cannot disagree.
-        bool lines = Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent;
-        bool markers = Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent;
-        if (lines && markers)
-        {
-            harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawSelectedTransfer_Flyby)).Patch();
-            harmony.CreateClassProcessor(typeof(Patch_TransferPlanner_DrawSelectedTransferUi_Flyby)).Patch();
-            return;
-        }
-
-        string missing = lines ? "DrawSelectedTransferUi"
-            : markers ? "DrawSelectedTransfer"
-            : "DrawSelectedTransfer and DrawSelectedTransferUi";
-        DefaultCategory.Log.Warning(
-            $"[AFC] Stock transfer-preview suppression disabled - {missing} anchor not found. "
-            + "Stock keeps drawing its own preview next to the flyby or multi-pass trajectory.");
-    }
-
-    // With the DrawPlanWindow prefix possibly missing, the injected types would sit in stock's dropdown with no window body.
-    private static void DisableManeuverTools()
+    // A failed ORBIT tools block leaves the MANEUVER page saying so and hides the orbit right-click entries.
+    private static void DisableOrbitTools()
     {
         BurnMenuLauncher.Enabled = false;
-        RemoveTransferTypes();
+        OrbitToolsPanel.Enabled = false;
     }
 
+    // The transfer passes and the flyby read the AFC transfer session, so they need no planner anchor.
     private static void PatchMultiPass(Harmony harmony)
     {
         MultiPassRegistry.Init();
         MultiPassUI.Enabled = true;
-
-        if (PlanWindowPatchPipeline.HasCalculatedControlsAnchor)
-        {
-            HohmannMultiPassUI.Enabled = true;
-            HohmannFlybyUI.Enabled = true;
-            DefaultCategory.Log.Info("[AFC] Flyby targeting enabled (Hohmann plan window).");
-        }
-        else
-            DefaultCategory.Log.Warning(
-                "[AFC] HohmannMultiPass disabled - DrawCorrectionTransfer anchor not found.");
+        HohmannMultiPassUI.Enabled = true;
+        HohmannFlybyUI.Enabled = true;
     }
 
     // A mid-block failure can leave a flag set for a patch that never applied.
@@ -205,35 +196,46 @@ public sealed class Mod
         RcsCommandChannel.Reset();
     }
 
-    private static void RemoveTransferTypes()
-    {
-        if (!_maneuverTypesInjected)
-            return;
-        ManeuverTools.RemoveTransferTypes();
-        _maneuverTypesInjected = false;
-    }
-
-    // The guidance panel is its own set of ImGui windows rather than a patch on a stock window, so it draws from the loader's hook after stock has drawn its viewports.
+    // The AFC console is its own ImGui window rather than a patch on a stock window, so it draws from the loader's hook after stock has drawn its viewports. This also runs the planner key frame check, before the stock planner draws in the same frame.
     [StarMapAfterGui]
-    public void DrawGui(double dt) => GuidanceFeature.DrawGui();
+    public void DrawGui(double dt)
+    {
+        try
+        {
+            AfcConsole.Draw(Program.MainViewport);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce($"afc-console-entry:{ex.GetType().Name}", $"[AFC] AFC console failed: {ex}");
+        }
+        UiConfig.Tick();
+    }
 
     [StarMapUnload]
     public void Unload()
     {
         // Before the patches come off: a held staging row is already marked activated, so nothing else would fire it.
         StagingDetector.FlushPendingForUnload();
+        // No frame between the unload steps may route the planner key or draw the console, and the transfer workers are cancelled.
+        AfcConsole.Unload();
         SharedVehicleHooks.Reset();
+        // Also removes the setter prefix, so the planner key is stock again.
         _patches.UnpatchAll();
         GuidanceFeature.Reset();
-        RemoveTransferTypes();
+        AfcMenu.Reset();
 
         // Persistence is driven by UncompressedSave.Write, so a quit without saving drops in-memory registry mutations on purpose.
         SaveScopedState.ResetAll();
+        // AfcConsole.Reset owns the console state of the guidance pages too, such as the tier scope and the page probe.
+        AfcConsole.Reset();
 
         // Everything below resets only on unload, because the feature gates belong to the patch state, the load path reloads the registries from disk instead of clearing them, and the dedup sets live for the whole mod load.
         // LogHelper stays after UnpatchAll, or the transpiler re-runs that unpatching triggers print their once-only lines again.
         DisableMultiPass();
         BurnMenuLauncher.Enabled = false;
+        OrbitToolsPanel.Enabled = false;
+        Patch_CelestialSystem_OnPreRender.Applied = false;
+        HyperbolicTargets.Enabled = false;
         RcsExecRegistry.Reset();
         MultiPassRegistry.Reset();
         AutoStageFeature.Disable();
@@ -241,7 +243,8 @@ public sealed class Mod
         AutoRemoveFeature.Disable();
         ModSettingsPage.Reset();
         SaveLoadObserver.Reset();
-        Patch_SetTransferInfo.Reset();
+        HyperbolicTargets.ResetAlerts();
+        UiConfig.Reset();
         LogHelper.Reset();
 #if DEBUG
         PerfTracker.Reset();

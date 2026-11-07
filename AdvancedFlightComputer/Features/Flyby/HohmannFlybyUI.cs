@@ -3,6 +3,7 @@ using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.Transfer;
 using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -15,12 +16,15 @@ namespace AdvancedFlightComputer.Features.Flyby;
 internal static class HohmannFlybyUI
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    private static readonly string[] ReferenceLabels = { "Surface", "Center", "Atmosphere" };
+    private static readonly string[] ReferenceLabels = { "SURFACE", "CENTER", "ATMOSPHERE" };
     // Same order as FlybySide.
     private static readonly string[] SideLabels =
     {
-        "Inner (toward parent)", "Outer (away from parent)", "North", "South",
+        "INNER (TOWARD PARENT)", "OUTER (AWAY FROM PARENT)", "NORTH", "SOUTH",
     };
+
+    /// <summary>The FLYBY SIDE label of the side the flyby aims at, for the flyby inset.</summary>
+    internal static string SideLabel => SideLabels[(int)_side];
 
     public static bool Enabled { get; set; }
 
@@ -88,7 +92,8 @@ internal static class HohmannFlybyUI
         Vehicle source, OrbitalTransfers.TransferInfo info)
     {
         bool prevOn = _flybyOn;
-        ConsoleUi.CheckboxRow("TARGET FLYBY PERIAPSIS".AsSpan(), "AfcFlybyOn".AsSpan(), ref _flybyOn);
+        ConsoleUi.CheckboxRow("TARGET FLYBY PERIAPSIS".AsSpan(), "AfcFlybyOn".AsSpan(), ref _flybyOn,
+            "Aims the transfer past the destination at the periapsis set below, instead of at the centre of the body. Off: the stock aim at the centre.".AsSpan());
         if (_flybyOn != prevOn)
         {
             InvalidateCache();
@@ -107,40 +112,56 @@ internal static class HohmannFlybyUI
             return;
         }
 
-        DrawReferenceDropdown(target);
+        ClampReference(target);
         DrawValueInput();
-        DrawSidePicker();
 
         double peRadius = FlybyTargeting.ResolvePeriapsisRadius(target, _inputValueKm * 1000.0, _reference);
         double minRadius = FlybyTargeting.MinFlybyRadius(target);
         _belowFloor = peRadius < minRadius;
 
-        ConsoleWidgets.Readout("FLYBY PERIAPSIS (FROM CENTER)".AsSpan(),
-            ManeuverToolsWindow.FormatDistance(peRadius).AsSpan());
+        ConsoleUi.Readout("FLYBY PERIAPSIS (FROM CENTER)".AsSpan(),
+            OrbitToolForm.FormatDistance(peRadius).AsSpan());
 
         if (_belowFloor)
         {
             // The floor is the terrain ceiling on an airless body and the top of the atmosphere on one with an atmosphere, so it is not "the surface".
             ConsoleUi.WarningWrapped(string.Format(Inv,
                 "Periapsis is below the safe flyby floor ({0} from center). Raise the altitude.",
-                ManeuverToolsWindow.FormatDistance(minRadius)));
+                OrbitToolForm.FormatDistance(minRadius)));
             return;
         }
+    }
+
+    internal static int ChangedInFold
+        => FlybyRequested ? (_reference != FlybyReference.Surface ? 1 : 0) + (_side != FlybySide.Inner ? 1 : 0) : 0;
+
+    internal static bool FoldRowsShown => FlybyRequested && TransferSession.Info?.Target is IParentBody;
+
+    internal static void DrawFoldRows()
+    {
+        if (TransferSession.Info?.Target is not IParentBody target)
+            return;
+        DrawReferenceDropdown(target);
+        DrawSidePicker();
+    }
+
+    // A body without an atmosphere offers no atmosphere reference, so a choice made for another body falls back to the surface.
+    private static void ClampReference(IParentBody target)
+    {
+        if (FlybyTargeting.HasAtmosphere(target) || _reference != FlybyReference.Atmosphere)
+            return;
+        _reference = FlybyReference.Surface;
+        InvalidateCache();
     }
 
     private static void DrawReferenceDropdown(IParentBody target)
     {
         bool hasAtmo = FlybyTargeting.HasAtmosphere(target);
-        if (!hasAtmo && _reference == FlybyReference.Atmosphere)
-        {
-            _reference = FlybyReference.Surface;
-            InvalidateCache();
-        }
+        ClampReference(target);
 
         int refIdx = (int)_reference;
-        ConsoleWidgets.BeginRow("REFERENCE".AsSpan());
-        if (ConsoleWidgets.BeginComboControl("AfcFlybyRef".AsSpan(),
-                ReferenceLabels[refIdx].AsSpan(), pending: false))
+        ConsoleUi.BeginRow("REFERENCE".AsSpan());
+        if (ConsoleUi.BeginCombo("AfcFlybyRef".AsSpan(), ReferenceLabels[refIdx]))
         {
             for (int i = 0; i < ReferenceLabels.Length; i++)
             {
@@ -154,15 +175,15 @@ internal static class HohmannFlybyUI
             }
             ConsoleWidgets.EndComboControl();
         }
-        ConsoleWidgets.EndRow();
+        ConsoleUi.EndRow();
     }
 
     private static void DrawValueInput()
     {
         double prev = _inputValueKm;
         ConsoleUi.InputDoubleRow(
-            _reference == FlybyReference.Center ? "RADIUS (KM)".AsSpan() : "ALTITUDE (KM)".AsSpan(),
-            "##AfcFlybyAlt"u8, ref _inputValueKm, 10.0, 100.0, "%.1f"u8);
+            _reference == FlybyReference.Center ? "RADIUS".AsSpan() : "ALTITUDE".AsSpan(),
+            "##AfcFlybyAlt"u8, ref _inputValueKm, 10.0, 100.0, "%.1f"u8, unit: "km");
         if (_inputValueKm < 0.0) _inputValueKm = 0.0;
         if (Math.Abs(_inputValueKm - prev) > 1e-9) InvalidateCache();
     }
@@ -172,9 +193,8 @@ internal static class HohmannFlybyUI
     /// drawn disabled rather than silently aimed at.</summary>
     private static void DrawSidePicker()
     {
-        ConsoleWidgets.BeginRow("FLYBY SIDE".AsSpan());
-        if (ConsoleWidgets.BeginComboControl("AfcFlybySide".AsSpan(),
-                SideLabels[(int)_side].AsSpan(), pending: false))
+        ConsoleUi.BeginRow("FLYBY SIDE".AsSpan());
+        if (ConsoleUi.BeginCombo("AfcFlybySide".AsSpan(), SideLabels[(int)_side]))
         {
             for (int i = 0; i < SideLabels.Length; i++)
             {
@@ -190,7 +210,7 @@ internal static class HohmannFlybyUI
             }
             ConsoleWidgets.EndComboControl();
         }
-        ConsoleWidgets.EndRow();
+        ConsoleUi.EndRow();
     }
 
     private static void DrawResult()
@@ -201,15 +221,15 @@ internal static class HohmannFlybyUI
             return;
         }
 
-        ConsoleWidgets.Readout("APPROACH SPEED".AsSpan(), _approachSpeedText.AsSpan());
-        ConsoleWidgets.Readout("IMPACT PARAMETER".AsSpan(), _impactParameterText.AsSpan());
-        ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(), _departureDvText.AsSpan());
+        ConsoleUi.Readout("APPROACH SPEED".AsSpan(), _approachSpeedText.AsSpan());
+        ConsoleUi.Readout("IMPACT PARAMETER".AsSpan(), _impactParameterText.AsSpan());
+        ConsoleUi.Readout("DEPARTURE DELTA-V".AsSpan(), _departureDvText.AsSpan());
         if (_predictedPeText != null)
-            ConsoleWidgets.Readout("PREDICTED PERIAPSIS".AsSpan(), _predictedPeText.AsSpan());
+            ConsoleUi.Readout("PREDICTED PERIAPSIS".AsSpan(), _predictedPeText.AsSpan());
 
         if (IsCacheExpired())
         {
-            ConsoleUi.WarningWrapped("Departure time has passed - Re-Calculate to pick a new window.");
+            ConsoleUi.WarningWrapped("The departure time has passed. CALCULATE again to pick a new window.");
             return;
         }
 
@@ -218,7 +238,7 @@ internal static class HohmannFlybyUI
             ConsoleUi.WarningWrapped(string.Format(Inv,
                 "Propagated periapsis is below the safe floor ({0} from center): " +
                 "this trajectory impacts. Raise the altitude or try the other side.",
-                ManeuverToolsWindow.FormatDistance(_minFlybyRadius)));
+                OrbitToolForm.FormatDistance(_minFlybyRadius)));
             return;
         }
 
@@ -229,9 +249,9 @@ internal static class HohmannFlybyUI
             return;
         }
 
-        ConsoleUi.Positive((_displayingMultiPass
-            ? "The multi-pass preview uses this flyby departure."
-            : "Create fires this flyby departure directly.").AsSpan());
+        ConsoleUi.Muted((_displayingMultiPass
+            ? "The passes use this flyby departure."
+            : "CREATE FLYBY DEPARTURE plans this departure.").AsSpan());
     }
 
     #region Cache
@@ -300,10 +320,10 @@ internal static class HohmannFlybyUI
         _cachedStockDv = double.NaN;
         if (CachedResult is not FlybyTargeting.FlybyResult r) return;
         _approachSpeedText = string.Format(Inv, "{0:F1} m/s", r.VInfMs);
-        _impactParameterText = ManeuverToolsWindow.FormatDistance(r.ImpactParameterMeters);
+        _impactParameterText = OrbitToolForm.FormatDistance(r.ImpactParameterMeters);
         _predictedPeText = _prediction.PeriapsisRadius is double radius
             && _displayedDeparture?.Key.Target is IParentBody target
-            ? ManeuverToolsWindow.FormatDistance(radius - target.MeanRadius)
+            ? OrbitToolForm.FormatDistance(radius - target.MeanRadius)
             : "No prediction";
         _cachedFlybyDv = r.DvVlf.Length();
         RefreshDepartureDvText(entry);
@@ -373,48 +393,44 @@ internal static class HohmannFlybyUI
             FiniteBurns.FullThrottlePhases(source), FiniteBurnGoal.Transfer(departure.Arrival)).DvVlf;
 
     /// <summary>True when the single burn flyby overlay should draw, which needs a
-    /// flyby armed with a propagated plan, stock's plan window showing a Hohmann
-    /// for the cached vehicle, and "Preview Selected Transfer" on. The multi pass
-    /// overlay is checked by the caller and takes precedence, because with N &gt; 1
-    /// its own preview already contains the retargeted departure.</summary>
+    /// flyby armed with a propagated plan, a result of the transfer session for the
+    /// cached vehicle, and SHOW IN WORLD on. The multi pass overlay is checked by the caller
+    /// and takes precedence, because with N &gt; 1 its own preview already contains
+    /// the retargeted departure.</summary>
     public static bool ShouldRenderPreview(out Vehicle? source)
     {
         source = null;
         if (!Enabled || !_flybyOn || _belowFloor || _displayingMultiPass) return false;
         if (CachedResult == null || _previewPlan == null) return false;
-        // An elapsed departure cannot be flown, so neither draw it nor keep stock's preview hidden for it.
+        // An elapsed departure cannot be flown, so it is not drawn.
         if (IsCacheExpired()) return false;
-        if (!StockPlanner.ShowPlanWindow) return false;
-        if (!StockPlanner.DisplaySelectedTransfer) return false;
-        // Stock clears _transferCalculated on a source or destination change and once the created burn's time passes, while keeping _selectedEntry.
-        // Without this gate the cached plan, which only tracks the source id, would keep painting the previous target's flyby over the live trajectory.
-        if (!StockPlanner.TransferCalculated) return false;
+        if (!TransferSession.ShowMap) return false;
+        // The session clears its result on a source or destination change, so a cached plan of an earlier destination never paints over the live trajectory.
+        if (!TransferSession.Calculated) return false;
+        // Like the selected transfer, an uncommitted flyby departure draws only while TRANSFER is on screen.
+        if (!TransferSession.PageVisible) return false;
 
-        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann)
-            return false;
-
-        source = StockPlanner.SourceVehicle;
+        source = TransferSession.Source;
         return source != null && ReferenceEquals(source, _displayedDeparture?.Key.Source);
     }
 
-    /// <summary>True when stock's preview of the selected transfer should be skipped
-    /// because the trajectory Create will fly is drawn elsewhere. Stock's entry is one
-    /// burn of the whole transfer delta v, so it is skipped while the multi pass
-    /// overlay draws every pass. With a flyby armed it is also skipped for a multi pass
-    /// plan whose overlay is not shown, because the flyby is baked into its plan input,
-    /// so stock's entry is the impact the retarget replaced.</summary>
-    public static bool SuppressesStockTransferPreview()
+    /// <summary>True when the path aimed at the center should not be drawn,
+    /// because the trajectory CREATE flies is drawn instead: the flyby departure,
+    /// or the passes of <see cref="HohmannMultiPassUI"/>, which never fly the
+    /// selected transfer as one burn.</summary>
+    public static bool ReplacesCenterAimedPreview()
     {
-        // The flyby and multi-pass state survive a plan type switch, so the type is checked first and stock's preview for any other type, such as an interstellar plan, is left alone.
-        if (StockPlanner.TransferTypeKey != ManeuverTools.ManeuverTools.KeyStockHohmann) return false;
         if (HohmannMultiPassUI.IsDrawingPassOverlay()) return true;
         if (!FlybyRequested) return false;
         if (HohmannMultiPassUI.HasMultiPassPreview) return true;
         return ShouldRenderPreview(out _);
     }
 
+    /// <summary>The predicted flyby periapsis from the target's center, m, or NaN.</summary>
+    internal static double PredictedPeriapsisRadius => _prediction.PeriapsisRadius ?? double.NaN;
+
     /// <summary>Draws the retargeted flyby trajectory in the 3D view in place of
-    /// stock's preview aimed at the center, which would contradict what Create flies.</summary>
+    /// the path aimed at the center, which would contradict what CREATE flies.</summary>
     public static void RenderPreview(IViewport viewport, Vehicle source)
     {
         FlightPlan? fp = _previewPlan;
@@ -489,10 +505,10 @@ internal static class HohmannFlybyUI
     internal static bool TryGetSingleDeparture(Vehicle vehicle, out FlybyTargeting.FlybyResult result)
     {
         result = default;
-        if (!FlybyRequested || !StockPlanner.TransferCalculated) return false;
-        if (!ReferenceEquals(vehicle, StockPlanner.SourceVehicle)) return false;
-        var entry = StockPlanner.SelectedEntry;
-        var info = StockPlanner.TransferInfo;
+        if (!FlybyRequested || !TransferSession.Calculated) return false;
+        if (!ReferenceEquals(vehicle, TransferSession.Source)) return false;
+        var entry = TransferSession.SelectedEntry;
+        var info = TransferSession.Info;
         if (entry == null || info?.Target is not IParentBody target) return false;
         if (!TryGetRequest(target, out double radius, out FlybySide side)) return false;
         var key = FlybyTargeting.CaptureDepartureKey(

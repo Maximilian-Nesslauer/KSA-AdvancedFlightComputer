@@ -1,5 +1,4 @@
 using AdvancedFlightComputer.Core;
-using Brutal.ImGuiApi;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -11,11 +10,9 @@ internal static class AutoRemoveFeature
     private const string StandaloneModType = "AutoRemoveFinishedBurns.Mod";
 
     // No patch of its own.
-    // A finished burn arrives through SharedVehicleHooks, and the settings section through ModSettingsPage.
     internal static void ApplyPatches(Harmony harmony)
     {
         AutoRemoveConfig.Init();
-        ModSettingsPage.Register(DrawSection);
     }
 
     // The standalone mod removes a finished burn before FlightComputer.RaisePendingAlerts runs, and FlightComputer.EndAutoBurn then removes the next planned burn as well.
@@ -29,26 +26,21 @@ internal static class AutoRemoveFeature
 
     internal static void Disable()
     {
-        ModSettingsPage.Unregister(DrawSection);
         AutoRemoveConfig.Reset();
     }
 
-    internal static void DrawSection()
+    /// <summary>The AUTO REMOVE FINISHED BURNS switch, saved to autoremove.toml on a click.</summary>
+    internal static void DrawSwitch()
     {
-        ConsoleWidgets.Rule();
-        ConsoleWidgets.RegionHeader("AUTO REMOVE FINISHED BURNS".AsSpan());
-
         bool enabled = AutoRemoveConfig.Enabled;
-        if (ConsoleUi.CheckboxRow("ENABLED".AsSpan(), "AfcAutoRemoveEnabled".AsSpan(), ref enabled))
+        if (ConsoleUi.CheckboxRow("AUTO REMOVE FINISHED BURNS".AsSpan(), "AfcAutoRemoveEnabled".AsSpan(), ref enabled,
+                ("The game removes a finished or stopped auto-burn by itself when another burn follows it, but keeps " +
+                 "a burn that stopped because a stage ran dry and a later stage can continue it. When on, " +
+                 "the last finished burn is removed as well, for engine and RCS burns alike. Manual burns, and a " +
+                 "last burn that stopped without propellant, stay in the plan.\n" + Ui.Logic.PageText.TagEveryCraft).AsSpan()))
         {
             AutoRemoveConfig.Enabled = enabled;
             AutoRemoveConfig.Save();
         }
-
-        ImGui.TextWrapped(
-            "The game removes a finished or stopped auto-burn by itself when another burn follows it, but keeps " +
-            "a burn that stopped because a stage ran dry and a later stage can continue it. When on, " +
-            "the last finished burn is removed as well, for engine and RCS burns alike. Manual burns, and a " +
-            "last burn that stopped without propellant, stay in the plan.");
     }
 }

@@ -78,14 +78,12 @@ internal static class AutoStageFeature
         harmony.CreateClassProcessor(typeof(SequenceListPatches.ResetCachesPatch)).Patch();
         harmony.CreateClassProcessor(typeof(NewEngineSeedPatch)).Patch();
         harmony.CreateClassProcessor(typeof(StagingDelayPartWindow)).Patch();
-        ModSettingsPage.Register(AutoStageSettingsPage.DrawSection);
     }
 
     internal static void Disable()
     {
-        ModSettingsPage.Unregister(AutoStageSettingsPage.DrawSection);
         StagingDetector.Reset();
-        AutoStageSettingsPage.Reset();
+        AutoStageDefaults.Reset();
         StagingConfig.Reset();
     }
 

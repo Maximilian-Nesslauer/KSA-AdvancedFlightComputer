@@ -3,7 +3,6 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
-using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
@@ -29,13 +28,27 @@ public static partial class GuidanceWindow
             && !(_s.Engage && _s.AutoStage && _s.StagingActive
                 && KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.NoAuthority))
         {
-            _s.LandingStatus = "Terminal hover requires active, supplied liquid engines with shutdown control.";
+            _s.WarnLanding("REFUSED: NO LIT LIQUID ENGINE.");
             GuidanceLog.Info(vehicle, _s.LandingStatus);
             return false;
         }
         Orbit orbit = vehicle.Orbit;
         IParentBody parent = orbit?.Parent;
         return !enginesLit || parent == null || !TerminalHoverRefused(vehicle, orbit, parent.Mu);
+    }
+
+    private static string TerminalHoverProblem(Vehicle vehicle)
+    {
+        if (!KsaEnginePerf.SupportsThrottleControl(vehicle))
+            return _s.Engage && _s.AutoStage && _s.StagingActive
+                && KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.NoAuthority
+                ? "" : Ui.Logic.PageText.HoverNoEngine;
+        Orbit orbit = vehicle.Orbit;
+        IParentBody parent = orbit?.Parent;
+        if (parent == null)
+            return "";
+        double minTwr = TerminalMinThrottleTwr(vehicle, orbit, parent.Mu);
+        return minTwr > 1.0 ? Ui.Logic.PageText.HoverNoThrust : "";
     }
 
     private static void StartTerminalHover(Vehicle vehicle)
@@ -58,8 +71,8 @@ public static partial class GuidanceWindow
         _s.HasCommand = false;
         _s.GfoldThrustStatus = "";
         ResetLandingEngineWait();
-        _s.TermTabSelectPending = true;
-        _s.LandingStatus = "Terminal hover engaged.";
+        _s.TermCuePending = true;
+        _s.LandingStatus = "AFC: HOVER";
     }
 
     // Thrust-to-weight at the given throttle, at the current mass and local gravity. A hover needs more than one at full throttle and less than one at the minimum, or the engine cannot hold the weight on one side and cannot stop climbing on the other.
@@ -85,7 +98,7 @@ public static partial class GuidanceWindow
         double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
         if (!(minTwr > 1.0))
             return false;
-        _s.LandingStatus = $"Terminal hover refused: the thrust at minimum throttle is {minTwr:F2} times the weight, so the craft climbs whenever the engine runs.";
+        _s.WarnLanding(FormattableString.Invariant($"REFUSED: HOVER, TWR {minTwr:F2} AT MIN THROTTLE."));
         GuidanceLog.Info(vehicle, _s.LandingStatus);
         return true;
     }
@@ -186,9 +199,9 @@ public static partial class GuidanceWindow
                 _s.GfoldThrottle = 0.0;
                 _s.CommandDir = up;
                 _s.HasCommand = true;
-                _s.LandingStatus = $"Terminal hover rising at {vUp:F1} m/s {h:F1} m above the pad and cannot throttle below its weight "
-                                 + $"({minTwr:F2} at minimum) - engine cut, dropping to the pad.";
-                GuidanceLog.Info(vehicle, _s.LandingStatus);
+                _s.WarnLanding(FormattableString.Invariant($"HOVER CUT ENGINE: TWR {minTwr:F2} AT MIN THROTTLE."));
+                GuidanceLog.Info(vehicle, FormattableString.Invariant($"Terminal hover rising at {vUp:F1} m/s {h:F1} m above the pad and cannot throttle below its weight ")
+                                 + FormattableString.Invariant($"({minTwr:F2} at minimum) - engine cut, dropping to the pad."));
                 return;
             }
         }
@@ -216,31 +229,5 @@ public static partial class GuidanceWindow
         _s.TermSetE = 0.0;
         _s.TermSetN = 0.0;
         _s.TermSetUp = 0.0;
-    }
-
-    // Terminal-hover tuning, in its own popup (no ascent/other params mixed in).
-    private static bool _showTermParams;
-
-    private static void DrawTermParamsWindow()
-    {
-        if (!_showTermParams)
-            return;
-
-        ImGui.Begin("Hover params", ImGuiWindowFlags.AlwaysAutoResize);
-        using WindowEnd end = default;
-        ImGui.InputDouble("Touchdown rate (m/s)", ref _s.TermTouchdownRate);
-        ImGui.InputDouble("Constant-rate zone (m)", ref _s.TermConstAltM);
-        ImGui.InputDouble("Profile quad k (1/(m s))", ref _s.TermQuadK);
-        ImGui.InputDouble("Max descent rate (m/s)", ref _s.TermMaxDescRate);
-        ImGui.InputDouble("Max tilt (deg)", ref _s.TermMaxTiltDeg);
-        ImGui.InputDouble("Vertical Kp", ref _s.TermKpV);
-        ImGui.InputDouble("Vertical Ki", ref _s.TermKiV);
-        ImGui.InputDouble("Vertical Kd", ref _s.TermKdV);
-        ImGui.InputDouble("Lateral Kp", ref _s.TermKpL);
-        ImGui.InputDouble("Lateral Ki", ref _s.TermKiL);
-        ImGui.InputDouble("Lateral Kd", ref _s.TermKdL);
-        ImGui.InputDouble("Nudge step (m/s)", ref _s.TermNudgeStep);
-        if (ImGui.Button("Close"))
-            _showTermParams = false;
     }
 }

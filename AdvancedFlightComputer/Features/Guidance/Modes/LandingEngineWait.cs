@@ -17,21 +17,21 @@ public static partial class GuidanceWindow
     private static bool PrepareLandingEngines(Vehicle vehicle, IParentBody parent, double now, bool requireAirless)
     {
         if (requireAirless && HasPhysicalAtmosphere(parent))
-            return RefuseLandingEngines("G-FOLD is limited to airless bodies. Use terminal hover in atmosphere.");
+            return RefuseLandingEngines(vehicle, "G-FOLD NEEDS AIRLESS BODY", "G-FOLD: AIRLESS BODIES ONLY. USE HOVER IN ATMOSPHERE.");
         if (KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
-            return RefuseLandingEngines("Landing control requires liquid engines with shutdown control.");
+            return RefuseLandingEngines(vehicle, NoLandingEngine, "Landing control requires liquid engines with shutdown control.");
 
         // A wait that is already over must not buy one more staging action on its way out, because staging cannot be taken back once the sequence fires.
         if (double.IsFinite(_s.LandingEngineWaitStart)
             && (!double.IsFinite(now) || LandingEngineWaitExpired(now)))
-            return RefuseLandingEngines("Landing engine wait timed out without usable thrust.");
+            return RefuseLandingEngines(vehicle, NoLandingEngine, "ENGINE WAIT TIMED OUT: NO USABLE THRUST");
 
         if (_s.Engage && _s.AutoStage)
             AutoSequence(vehicle);
 
         KsaEnginePerf.ThrustStatus status = KsaEnginePerf.GetThrottleControlStatus(vehicle);
         if (status == KsaEnginePerf.ThrustStatus.UnsupportedEngine)
-            return RefuseLandingEngines("Landing control requires liquid engines with shutdown control.");
+            return RefuseLandingEngines(vehicle, NoLandingEngine, "Landing control requires liquid engines with shutdown control.");
         if (status == KsaEnginePerf.ThrustStatus.Available)
         {
             if (double.IsFinite(_s.LandingEngineWaitStart))
@@ -54,7 +54,7 @@ public static partial class GuidanceWindow
         bool settlingLastSequence = next == null && now >= _s.LastSequenceTime
             && now - _s.LastSequenceTime < LandingLastSequenceGrace;
         if (!_s.Engage || !_s.AutoStage || !(_s.StagingActive || settlingLastSequence) || !double.IsFinite(now))
-            return RefuseLandingEngines("Landing control has no active, supplied liquid engine.");
+            return RefuseLandingEngines(vehicle, NoLandingEngine, "NO ACTIVE, SUPPLIED LIQUID ENGINE");
 
         if (!double.IsFinite(_s.LandingEngineWaitStart))
         {
@@ -71,11 +71,11 @@ public static partial class GuidanceWindow
         // Only a change in the next sequence counts as progress.
         // Retries must not extend the total wait.
         if (LandingEngineWaitExpired(now))
-            return RefuseLandingEngines("Landing engine wait timed out without usable thrust.");
+            return RefuseLandingEngines(vehicle, NoLandingEngine, "ENGINE WAIT TIMED OUT: NO USABLE THRUST");
         if (next == null && !settlingLastSequence)
-            return RefuseLandingEngines("The last sequence did not provide a usable landing engine.");
+            return RefuseLandingEngines(vehicle, NoLandingEngine, "LAST SEQUENCE GAVE NO USABLE LANDING ENGINE");
 
-        _s.LandingStatus = "Waiting for staging to supply a landing engine.";
+        _s.WarnLanding("WAITING FOR STAGING TO SUPPLY LANDING ENGINE");
         return false;
     }
 
@@ -94,12 +94,14 @@ public static partial class GuidanceWindow
         _s.LandingCutPending = true;
     }
 
-    private static bool RefuseLandingEngines(string reason)
+    private const string NoLandingEngine = "LANDING: NO USABLE ENGINE";
+
+    private static bool RefuseLandingEngines(Vehicle vehicle, string what, string reason)
     {
         ClearLandingEngineCommand();
         ResetLandingEngineWait();
         _s.LandingPhase = LandingPhase.Done;
-        _s.LandingStatus = reason;
+        EndLandingBadly(vehicle, what, reason);
         return false;
     }
 

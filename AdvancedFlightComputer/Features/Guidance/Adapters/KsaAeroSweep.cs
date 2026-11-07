@@ -126,7 +126,7 @@ public static class KsaAeroSweep
 
     /// <summary>
     /// Measure the focused vehicle's aerodynamics and fit the surrogate.
-    ///  Main thread only: it reads Vehicle.Props, which the sim thread owns and rewrites. That is the same access the rest of the panel makes (TotalMass and friends), and it is why the result is a snapshot of plain arrays rather than anything that reaches back into the game.
+    ///  Main thread only: it reads Vehicle.Props, which the sim thread owns and rewrites. That is the same access the rest of the console makes (TotalMass and friends), and it is why the result is a snapshot of plain arrays rather than anything that reaches back into the game.
     /// </summary>
     /// <returns>False with a reason in <paramref name="error"/> if the vehicle has no
     /// usable geometry, or the game's force function gives no drag. A body with no atmosphere is NOT an error - the probe flies through a nominal one, the table is still meaningful, and Atmosphere comes back null.</returns>

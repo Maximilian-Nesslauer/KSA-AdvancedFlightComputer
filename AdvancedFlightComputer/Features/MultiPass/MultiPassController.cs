@@ -1,7 +1,5 @@
-using System.Globalization;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
-using Brutal.ImGuiApi;
 using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
@@ -10,8 +8,6 @@ namespace AdvancedFlightComputer.Features.MultiPass;
 
 internal static class MultiPassController
 {
-    private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-
     public static void Start(Vehicle source, string typeKey)
     {
         if (source.Orbit?.Parent == null) return;
@@ -47,24 +43,19 @@ internal static class MultiPassController
         {
             DefaultCategory.Log.Warning(
                 $"[AFC] MultiPassController.StartWith: vehicle={source.Id} pass 0 could not be committed ({failure}); aborting.");
-            TimedAlert.Create($"Multi-pass failed: {failure}", Color.Red, 4.0);
+            AfcAlerts.Info($"Multi-pass failed: {failure}", Color.Red, 4.0, source);
             return;
         }
 
         MultiPassRegistry.Add(exec);
     }
 
-    public static void DrawStatus(Vehicle source)
+    internal static bool Cancel(Vehicle source)
     {
-        if (!MultiPassRegistry.TryGet(source.Id, out var exec))
-            return;
-
-        ConsoleWidgets.Readout("MULTI-PASS ACTIVE".AsSpan(),
-            string.Format(Inv, "PASS {0} OF {1}", exec.PassIndex + 1, exec.PassCountTotal).AsSpan());
-
-        ImGui.Spacing();
-        if (ConsoleWidgets.DangerButton("CANCEL REMAINING PASSES".AsSpan()))
-            CancelExecution(source, exec);
+        if (source == null || !MultiPassRegistry.TryGet(source.Id, out var exec))
+            return false;
+        CancelExecution(source, exec);
+        return true;
     }
 
     private static void CancelExecution(Vehicle source, MultiPassExecution exec)
@@ -86,6 +77,8 @@ internal static class MultiPassController
                 $"{exec.PassIndex + 1}/{exec.PassCountTotal}.");
 
         MultiPassRegistry.Remove(source.Id);
+        // A transfer multi-pass also drops its preview, so the overlay cannot outlive its registry entry.
+        HohmannMultiPassUI.OnExecutionEnded(source.Id);
     }
 
     private static IManeuverIntent? BuildIntent(Vehicle source, string typeKey)
@@ -101,19 +94,19 @@ internal static class MultiPassController
             return new ApseIntent
             {
                 IsSetApoapsis = isSetApoapsis,
-                TargetRadiusMeters = ManeuverToolsWindow.TargetAltitude + parentRadius,
+                TargetRadiusMeters = OrbitToolForm.TargetAltitude + parentRadius,
                 ParentId = parentId,
             };
         }
 
         if (typeKey == ManeuverTools.ManeuverTools.KeyMatchInclination)
         {
-            IOrbiter? target = ManeuverToolsWindow.GetSelectedTargetOrbiter();
+            IOrbiter? target = OrbitToolForm.GetSelectedTargetOrbiter();
             if (target == null) return null;
             return new MatchInclinationIntent
             {
                 TargetId = target.Id,
-                UseDescendingNode = ManeuverToolsWindow.UseDescendingNode,
+                UseDescendingNode = OrbitToolForm.UseDescendingNode,
                 ParentId = parentId,
             };
         }
@@ -122,17 +115,17 @@ internal static class MultiPassController
         {
             return new SetInclinationIntent
             {
-                TargetInclinationRad = ManeuverToolsWindow.TargetInclinationRad,
-                Reference = ManeuverToolsWindow.InclinationRef,
-                UseDescendingNode = ManeuverToolsWindow.UseDescendingNode,
+                TargetInclinationRad = OrbitToolForm.TargetInclinationRad,
+                Reference = OrbitToolForm.InclinationRef,
+                UseDescendingNode = OrbitToolForm.UseDescendingNode,
                 ParentId = parentId,
             };
         }
 
-        if (typeKey == ManeuverTools.ManeuverTools.KeyStockCircularizeApoapsis
-            || typeKey == ManeuverTools.ManeuverTools.KeyStockCircularizePeriapsis)
+        if (typeKey == ManeuverTools.ManeuverTools.KeyCircularizeApoapsis
+            || typeKey == ManeuverTools.ManeuverTools.KeyCircularizePeriapsis)
         {
-            bool isAtApoapsis = typeKey == ManeuverTools.ManeuverTools.KeyStockCircularizeApoapsis;
+            bool isAtApoapsis = typeKey == ManeuverTools.ManeuverTools.KeyCircularizeApoapsis;
             return new CircularizeIntent
             {
                 IsAtApoapsis = isAtApoapsis,

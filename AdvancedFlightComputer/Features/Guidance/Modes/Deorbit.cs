@@ -29,28 +29,69 @@ public static partial class GuidanceWindow
         _s.BrakingAltitudeKm * 1000, BrakeGateAltitude(vehicleHeightM), _s.GateUprangeKm * 1000,
         _s.DescentRate, _s.DownrangeFactor, _s.DeorbitArrivalAngleEnabled ? _s.DeorbitArrivalDescentDeg : null);
 
-    // A measured vehicle height is written again twice a second while propellant moves the centre of mass (RefreshVehicleHeight), so the comparison uses the measured height from the capture of the request, and only a typed height can make the request old.
+    // MEASURE COM ABOVE LEGS writes the height again twice a second while propellant moves the centre of mass (RefreshVehicleHeight), so a measured height is compared at its value from the capture of the request, and only a typed height can make the request old.
     private static DeorbitSettings ComparedDeorbitSettings() =>
         CurrentDeorbitSettings(_s.VehicleHeightAuto ? _s.DeorbitRequestHeightM : _s.VehicleHeightM);
 
-    private static bool DeorbitTargetLocked => (_s.DeorbitPlan != null || _s.DirectBrakingPlan != null)
-        && (IsStockDeorbitPhase(_s.LandingPhase) || _s.LandingPhase is LandingPhase.TransferPlanning
+    private static bool DeorbitTargetLocked => DeorbitLocks(_s);
+
+    private static bool DeorbitLocks(VehicleAutopilotState s) => (s.DeorbitPlan != null || s.DirectBrakingPlan != null)
+        && (IsStockDeorbitPhase(s.LandingPhase) || s.LandingPhase is LandingPhase.TransferPlanning
             or LandingPhase.TransferCoast or LandingPhase.Prep or LandingPhase.Burn);
 
     private static bool DeorbitRequestCurrent(DeorbitRequest request, IParentBody parent) =>
         request != null && ReferenceEquals(parent, request.Parent)
         && request.Settings == ComparedDeorbitSettings() && request.GLimit == EffectiveGLimit;
 
+    /// <summary>The stop status of a stock deorbit that is no longer current, naming what differs from its request. It only reads the request and the current values.</summary>
+    private static string DeorbitChangeText(DeorbitPlan plan, DeorbitRequest request, IParentBody parent)
+    {
+        if (plan == null || request == null)
+            return "DEORBIT STOPPED: PLAN LOST.";
+        if (!ReferenceEquals(parent, request.Parent))
+            return "DEORBIT STOPPED: ORBITING ANOTHER BODY.";
+        if (!_s.Engage || !_s.AutoStage)
+        {
+            string label = !_s.Engage ? Ui.Logic.GuidanceSettingSpecs.Engage.Label : Ui.Logic.GuidanceSettingSpecs.AutoStage.Label;
+            return $"DEORBIT STOPPED: {label} OFF.";
+        }
+        DeorbitSettings was = request.Settings;
+        DeorbitSettings now = ComparedDeorbitSettings();
+        var changed = new List<string>();
+        if (was.Latitude != now.Latitude || was.Longitude != now.Longitude)
+            changed.Add("LANDING SITE");
+        if (was.BrakingAltitude != now.BrakingAltitude)
+            changed.Add(Ui.Logic.GuidanceSettingSpecs.BrakingAltitudeKm.Label);
+        // The gate altitude comes from AIM ALTITUDE, or with G-FOLD from VERTICAL APPROACH plus COM ABOVE LEGS (LandingBrakeGateAltitude), so all of them are named with the two values.
+        if (was.GateAltitude != now.GateAltitude)
+            changed.Add(FormattableString.Invariant($"BRAKING GATE ALTITUDE ({was.GateAltitude:F3} m, NOW {now.GateAltitude:F3} m; FROM SOLVER, AIM ALTITUDE, VERTICAL APPROACH OR COM ABOVE LEGS)"));
+        if (was.GateUprange != now.GateUprange)
+            changed.Add(Ui.Logic.GuidanceSettingSpecs.GateUprangeKm.Label);
+        if (was.SinkRate != now.SinkRate)
+            changed.Add(Ui.Logic.GuidanceSettingSpecs.DescentRate.Label);
+        if (was.DownrangeFactor != now.DownrangeFactor)
+            changed.Add(Ui.Logic.GuidanceSettingSpecs.DownrangeFactor.Label);
+        if (was.ArrivalDescentDeg != now.ArrivalDescentDeg)
+            changed.Add(Ui.Logic.GuidanceSettingSpecs.DeorbitArrivalDescentDeg.Label);
+        if (request.GLimit != EffectiveGLimit)
+            changed.Add("G-LIMIT or MAX ACCELERATION");
+        return changed.Count == 0
+            ? "DEORBIT SETTINGS OR CONTROL SWITCHES CHANGED."
+            : "DEORBIT STOPPED: " + string.Join(", ", changed) + " CHANGED.";
+    }
+
     private static string DeorbitSettingsRefusal()
     {
         DeorbitSettings settings = CurrentDeorbitSettings();
         if (_s.DeorbitArrivalAngleEnabled && (!double.IsFinite(_s.DeorbitArrivalDescentDeg)
             || _s.DeorbitArrivalDescentDeg < 0 || _s.DeorbitArrivalDescentDeg > 30))
-            return "Set the deorbit arrival angle between 0 and 30 degrees downward.";
-        if (!settings.IsValid || (_s.GLimitEnabled && (!double.IsFinite(_s.GLimitG) || _s.GLimitG <= 0.1)))
-            return "Check the landing approach settings.";
+            return "SET ARRIVAL ANGLE DOWN TO 0-30 deg.";
+        if (!settings.IsValid)
+            return "CHECK LANDING APPROACH SETTINGS.";
+        if (_s.GLimitEnabled && (!double.IsFinite(_s.GLimitG) || _s.GLimitG <= 0.1))
+            return "SET MAX ACCELERATION ON LAUNCH ABOVE 0.1 g OR G-LIMIT OFF.";
         if (!_s.UseSixDofLanding && !(_s.LandingVerticalGateM >= MinimumVerticalGateM))
-            return $"The vertical approach height must be at least {MinimumVerticalGateM:F0} m.";
+            return $"VERTICAL APPROACH MIN {MinimumVerticalGateM:F0} m.";
         return "";
     }
 
@@ -69,14 +110,14 @@ public static partial class GuidanceWindow
         _s.DirectBrakingRefusal = "";
     }
 
-    // EXECUTE claims the landing and starts planning. The search itself runs in slices from StepDeorbitPlanning.
+    // DEORBIT + LAND claims the landing and starts planning. The search itself runs in slices from StepDeorbitPlanning.
     private static void ExecuteLanding(Vehicle vehicle)
     {
         string refusal = LandingSwitchesOff
-            ? "Automatic landing needs Engage autopilot and Auto engines/staging." : DeorbitSettingsRefusal();
+            ? "LANDING NEEDS AFC MAY STEER + AFC MAY USE ENGINES. SEE GNC SWITCHES (MORE)." : DeorbitSettingsRefusal();
         if (refusal.Length > 0)
         {
-            _s.LandingStatus = refusal;
+            _s.WarnLanding(refusal);
             return;
         }
         ClaimVehicle(GuidanceMode.Landing, vehicle);
@@ -86,7 +127,7 @@ public static partial class GuidanceWindow
         _s.HasCommand = false;
         _s.LandingCutPending = false;
         _s.LandingPhase = LandingPhase.DeorbitPlanning;
-        _s.LandingStatus = "Planning the landing approach.";
+        _s.LandingStatus = "PLANNING LANDING APPROACH";
         _warpDeclinedLabel = "";
     }
 
@@ -178,28 +219,28 @@ public static partial class GuidanceWindow
             ReleaseVehicle(vehicle, keepWaitingCoast: true);
             return;
         }
-        if (LandingSwitchesOff) { RefuseDeorbit(LandingSwitchesChangedStatus); return; }
+        if (LandingSwitchesOff) { RefuseDeorbit(vehicle, LandingSwitchesChangedStatus); return; }
         string engineRefusal = BrakingEngineRefusal(vehicle);
-        if (engineRefusal.Length > 0) { RefuseDeorbit(engineRefusal); return; }
+        if (engineRefusal.Length > 0) { RefuseDeorbit(vehicle, engineRefusal); return; }
         // Only the capture waits for idle engines and 1x warp. A direct coast checks its braking model again at ignition.
         if (_s.LandingPhase == LandingPhase.DeorbitPlanning)
         {
             if (vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto
                 || ManualInputs(vehicle).EngineOn || KsaEnginePerf.RemainingMinimumPulse(vehicle) > 0)
             {
-                RestartDeorbitPlanning("Planning waits for the active burn and engine pulse to finish.");
+                RestartDeorbitPlanning("PLANNING WAITS: BURN OR ENGINE PULSE ACTIVE.");
                 return;
             }
             if (Universe.SimulationSpeed > 1)
             {
                 ClearDeorbitPlanState();
-                _s.LandingStatus = "Planning waits for time warp at 1x or less.";
+                _s.WarnLanding("PLANNING WAITS: WARP ABOVE 1x.");
                 return;
             }
         }
         if (_s.DeorbitRequest != null && DeorbitSourceChanged(vehicle, orbit, parent))
         {
-            RestartDeorbitPlanning("The source state or settings changed. Planning again.");
+            RestartDeorbitPlanning("SOURCE STATE OR SETTINGS CHANGED. PLANNING AGAIN.");
             return;
         }
         if (_s.LandingPhase != LandingPhase.DeorbitPlanning) return;
@@ -237,14 +278,14 @@ public static partial class GuidanceWindow
     {
         if (GuidanceClock.NowMs < _s.DeorbitNextValidationTick) return false;
         string refusal = DeorbitSettingsRefusal();
-        if (refusal.Length > 0) { RefuseDeorbit(refusal); return false; }
-        if (!TryCaptureDeorbitRequest(vehicle, orbit, parent)) { RefuseDeorbit("No usable engine model on the vehicle."); return false; }
+        if (refusal.Length > 0) { RefuseDeorbit(vehicle, refusal); return false; }
+        if (!TryCaptureDeorbitRequest(vehicle, orbit, parent)) { RefuseDeorbit(vehicle, "NO USABLE ENGINE MODEL."); return false; }
         DeorbitRequest request = _s.DeorbitRequest;
         _s.DeorbitPlanner = new DeorbitPlanner(request);
         _s.DeorbitNextValidationTick = GuidanceClock.NowMs + DeorbitRevalidateMs;
         StateVectors captured = request.Source.StateVectors;
-        string thrust = request.Engines.Length == 0 ? "no usable engine"
-            : $"minimum thrust {request.Engines[0].Thrust:F1} N, full thrust {request.Engines[^1].Thrust:F1} N";
+        string thrust = request.Engines.Length == 0 ? "NO USABLE ENGINE"
+            : $"MIN THRUST {request.Engines[0].Thrust:F1} N, FULL THRUST {request.Engines[^1].Thrust:F1} N";
         GuidanceLog.Info(vehicle, $"deorbit search: epoch {request.Epoch:F3} s, site {request.Settings.Latitude:F6} / {request.Settings.Longitude:F6} deg"
             + $", requested arrival {(request.Settings.ArrivalDescentDeg is double angle ? $"{angle:F2} deg down" : "automatic")}"
             + $", braking altitude {request.Settings.BrakingAltitude:F1} m, gate altitude {request.Settings.GateAltitude:F1} m, mass {request.Mass:F1} kg"
@@ -265,13 +306,13 @@ public static partial class GuidanceWindow
         if (planner.Direct is { Refusal.Length: 0 } direct)
         {
             if (direct.IgnitionTime < now + PrepLeadTime)
-            { RefuseDeorbit("The braking window expired during planning. Execute again at 1x time warp."); return; }
-            CommitBrakingBurn(vehicle, parent, direct, now, LandingPhase.Coast, "braking burn planned");
+            { RefuseDeorbit(vehicle, "BRAKING WINDOW EXPIRED IN PLANNING. REPEAT DEORBIT + LAND AT 1x WARP."); return; }
+            CommitBrakingBurn(vehicle, parent, direct, now, LandingPhase.Coast, "BRAKING BURN PLANNED");
         }
         else if (planner.Plan is DeorbitPlan plan)
         {
             if (plan.DepartureTime < now + PrepLeadTime)
-            { RefuseDeorbit("The deorbit window expired during planning. Execute again at 1x time warp."); return; }
+            { RefuseDeorbit(vehicle, "DEORBIT WINDOW EXPIRED IN PLANNING. REPEAT DEORBIT + LAND AT 1x WARP."); return; }
             _s.BurnStartTime = plan.ArrivalTime;
             _s.BurnDownrangeKm = plan.BrakingDistance / 1000;
             _s.LandingPhase = LandingPhase.DeorbitCoast;
@@ -282,7 +323,7 @@ public static partial class GuidanceWindow
                 + $", arrival angle {DeorbitPlanner.ArrivalAngleDegrees(plan):F2} deg.");
             _s.LastGuidanceLogTime = double.NegativeInfinity;
         }
-        else RefuseDeorbit(planner.Status);
+        else RefuseDeorbit(vehicle, planner.Status);
     }
 
     // The first plan and the refresh after the stock node commit a direct braking burn the same way.
@@ -298,15 +339,22 @@ public static partial class GuidanceWindow
             + $" at altitude {(direct.Position.Length() - parent.MeanRadius) / 1000:F3} km and {direct.Velocity.Length():F0} m/s"
             + $", {direct.Downrange * _s.DeorbitRequest.Settings.DownrangeFactor / 1000:F3} km uprange.");
         if (direct.IgnitionTime - now > PrepLeadTime + WarpLeadTime)
-            RequestWarp(direct.IgnitionTime - PrepLeadTime - WarpLeadTime, "the landing burn preparation");
+            RequestWarp(direct.IgnitionTime - PrepLeadTime - WarpLeadTime, "LANDING BURN PREPARATION");
     }
 
-    private static void RefuseDeorbit(string reason)
+    private static void RefuseDeorbit(Vehicle vehicle, string reason, bool failure = false)
     {
+        // Ending a landing between the coast and the braking burn is a failure, except from a closed orbit that clears the surface.
+        failure |= reason != LandingSwitchesChangedStatus
+            && _s.LandingPhase is LandingPhase.TransferPlanning or LandingPhase.TransferCoast or LandingPhase.Coast or LandingPhase.Prep or LandingPhase.Burn
+            && CraftOnWayDown(vehicle);
         ClearDeorbitPlanState();
         _s.HasCommand = false;
         _s.LandingPhase = LandingPhase.Done;
-        _s.LandingStatus = reason;
+        if (failure)
+            _s.FailLanding("LANDING STOPPED", reason);
+        else
+            _s.WarnLanding(reason);
         if (_s.ControlAcquired) _s.LandingCutPending = true;
     }
 
@@ -315,11 +363,11 @@ public static partial class GuidanceWindow
         if (_s.DeorbitRequest == null) return true;
         UpfgVehicle model = BuildUpfgVehicle(vehicle);
         if (model == null || model.Stages.Count == 0)
-        { RefuseDeorbit("The braking ignition has no usable engine model."); return false; }
+        { RefuseDeorbit(vehicle, "BRAKING IGNITION: NO USABLE ENGINE MODEL."); return false; }
         DeorbitRequest current = NewDeorbitRequest(vehicle, orbit, model, Array.Empty<DeorbitEngine>(), 0);
         StateVectors state = orbit.StateVectors;
         if (!DeorbitPlanner.CanBrake(current, state.PositionCci, state.VelocityCci, now, vehicle.TotalMass, out string refusal))
-        { RefuseDeorbit(refusal); return false; }
+        { RefuseDeorbit(vehicle, refusal); return false; }
         GuidanceLog.Info(vehicle, $"braking ignition: alt {(state.PositionCci.Length() - current.Parent.MeanRadius) / 1000:F2} km"
             + $", speed {state.VelocityCci.Length():F1} m/s.");
         return true;
@@ -359,8 +407,8 @@ public static partial class GuidanceWindow
         if (_s.LandingPhase is not (LandingPhase.TransferPlanning or LandingPhase.TransferCoast)) return false;
         _s.HasCommand = false;
         if (!DeorbitRequestCurrent(_s.DeorbitRequest, parent))
-        { RefuseDeorbit("The committed braking settings changed. Abort and plan again."); return true; }
-        if (LandingSwitchesOff) { RefuseDeorbit(LandingSwitchesChangedStatus); return true; }
+        { RefuseDeorbit(vehicle, "BRAKING SETTINGS CHANGED. STOP, THEN PLAN AGAIN."); return true; }
+        if (LandingSwitchesOff) { RefuseDeorbit(vehicle, LandingSwitchesChangedStatus); return true; }
         if (_s.LandingPhase == LandingPhase.TransferPlanning)
             StepTransferPlanning(vehicle, orbit, parent, now);
         if (_s.LandingPhase == LandingPhase.TransferCoast && now >= _s.BurnStartTime - PrepLeadTime)
@@ -372,14 +420,14 @@ public static partial class GuidanceWindow
     private static void StepTransferPlanning(Vehicle vehicle, Orbit orbit, IParentBody parent, double now)
     {
         if (_s.DeorbitPlan == null || now >= _s.DeorbitPlan.ArrivalTime - PrepLeadTime)
-        { RefuseDeorbit("The braking preparation window passed before the actual-orbit plan was ready."); return; }
+        { RefuseDeorbit(vehicle, "BRAKING WINDOW PASSED BEFORE PLAN READY."); return; }
         DeorbitPlanner planner = _s.DeorbitPlanner;
         if (planner == null)
         {
             // RocketCore.UpdateState can retain an unexpired minimum pulse after the engine-off command.
             if (KsaEnginePerf.RemainingMinimumPulse(vehicle) > 0) return;
             if (!TryCaptureDeorbitRequest(vehicle, orbit, parent))
-            { RefuseDeorbit("The completed deorbit has no usable braking model."); return; }
+            { RefuseDeorbit(vehicle, "DEORBIT DONE: NO USABLE BRAKING MODEL."); return; }
             planner = new DeorbitPlanner(_s.DeorbitRequest, brakingOnly: true, arrivalHint: _s.DeorbitPlan);
             _s.DeorbitPlanner = planner;
         }
@@ -389,39 +437,39 @@ public static partial class GuidanceWindow
         _s.DeorbitPlanner = null;
         planner.Dispose();
         if (planner.Direct is not { Refusal.Length: 0 } direct)
-        { RefuseDeorbit(planner.Status); return; }
+        { RefuseDeorbit(vehicle, planner.Status); return; }
         if (direct.IgnitionTime < now + PrepLeadTime)
-        { RefuseDeorbit("The braking window passed while braking was planned from the actual orbit."); return; }
-        CommitBrakingBurn(vehicle, parent, direct, now, LandingPhase.TransferCoast, "actual-orbit braking plan");
-        _s.LandingStatus = "Stock deorbit complete. Coasting to the AFC braking burn.";
+        { RefuseDeorbit(vehicle, "BRAKING WINDOW PASSED DURING SOLVE."); return; }
+        CommitBrakingBurn(vehicle, parent, direct, now, LandingPhase.TransferCoast, "ACTUAL-ORBIT BRAKING PLAN");
+        _s.LandingStatus = "STOCK DEORBIT COMPLETE. COAST TO AFC BRAKING BURN.";
     }
 
     private static IEnumerable<(string label, string value)> DeorbitReadout()
     {
         DeorbitRequest request = _s.DeorbitRequest;
         if (request == null) yield break;
-        yield return ("Arrival target", request.Settings.ArrivalDescentDeg is double angle
-            ? $"{angle:F1} deg down, +/-{DeorbitPlanner.ArrivalAngleToleranceDeg:F1} deg" : "Automatic");
+        yield return ("ARRIVAL TARGET", request.Settings.ArrivalDescentDeg is double angle
+            ? FormattableString.Invariant($"{angle:F1} deg DOWN, +/-{DeorbitPlanner.ArrivalAngleToleranceDeg:F1} deg") : "AUTOMATIC");
         if (_s.DeorbitPlan is DeorbitPlan plan)
         {
-            yield return ("Deorbit node", $"T-{Math.Max(0, plan.DepartureTime - SimNow()):F1} s");
-            yield return ("Deorbit delta-v", $"{plan.DeltaV.Length():F2} m/s");
-            yield return ("Deorbit execution", "Stock Auto");
-            yield return ("Deorbit throttle", "Stock engine limits apply. The AFC G limit applies to braking.");
+            yield return ("DEORBIT BURN", "T-" + Ui.Logic.Fmt.Time(Math.Max(0, plan.DepartureTime - SimNow())));
+            yield return ("DEORBIT DV", Ui.Logic.Fmt.Dv(plan.DeltaV.Length()));
+            yield return ("DEORBIT EXECUTION", "STOCK AUTO");
+            yield return ("DEORBIT THROTTLE", "STOCK ENGINE LIMITS APPLY. AFC G-LIMIT APPLIES TO BRAKING.");
             if (_s.DeorbitTarget != null)
             {
-                yield return ("Stock ignition", $"T-{Math.Max(0, _s.DeorbitTarget.IgnitionTime.Seconds() - SimNow()):F1} s");
-                yield return ("Stock burn duration", $"{_s.DeorbitTarget.BurnDuration:F2} s");
+                yield return ("STOCK IGNITION", "T-" + Ui.Logic.Fmt.Time(Math.Max(0, _s.DeorbitTarget.IgnitionTime.Seconds() - SimNow())));
+                yield return ("STOCK BURN DURATION", Ui.Logic.Fmt.TimeFine(_s.DeorbitTarget.BurnDuration));
             }
-            yield return ("Braking ignition", $"T-{Math.Max(0, _s.BurnStartTime - SimNow()):F1} s");
-            yield return ("Braking altitude", $"{request.Settings.BrakingAltitude / 1000:F2} km above site");
-            yield return ("Arrival angle", $"{DeorbitPlanner.ArrivalAngleDegrees(plan):F2} deg from the horizon (negative is down)");
-            yield return ("Local clearance", $"{plan.Clearance:F0} m");
-            yield return ("Braking uprange", $"{plan.BrakingDistance * request.Settings.DownrangeFactor / 1000:F2} km");
+            yield return ("BRAKING IGNITION", "T-" + Ui.Logic.Fmt.Time(Math.Max(0, _s.BurnStartTime - SimNow())));
+            yield return ("BRAKING ALTITUDE", Ui.Logic.Fmt.KmFine(request.Settings.BrakingAltitude / 1000) + " ABOVE SITE");
+            yield return ("ARRIVAL ANGLE", Ui.Logic.Fmt.Deg(DeorbitPlanner.ArrivalAngleDegrees(plan)) + " FROM HORIZON (NEGATIVE = DOWN)");
+            yield return ("LOCAL CLEARANCE", $"{plan.Clearance:F0} m");
+            yield return ("BRAKING UPRANGE", Ui.Logic.Fmt.KmFine(plan.BrakingDistance * request.Settings.DownrangeFactor / 1000));
         }
         if (_s.DirectBrakingPlan is DirectBrakingPlan direct)
-            yield return ("Direct ignition altitude", $"{(direct.Position.Length() - request.Parent.MeanRadius) / 1000:F2} km");
+            yield return ("DIRECT IGNITION ALTITUDE", Ui.Logic.Fmt.KmFine((direct.Position.Length() - request.Parent.MeanRadius) / 1000));
         if (_s.DirectBrakingRefusal.Length > 0)
-            yield return ("Direct approach", _s.DirectBrakingRefusal);
+            yield return ("DIRECT APPROACH", _s.DirectBrakingRefusal);
     }
 }

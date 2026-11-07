@@ -42,7 +42,7 @@ internal static class StagingExecution
 
         // The public SetActiveSequence is no substitute: it rewrites Activated list-wide and resets caches.
         GameReflection.SequenceList_ActiveSequence!.SetValue(seqList, seqNumber);
-        TimedAlert.Create($"Sequence {seqNumber} activated", Color.Yellow, 3.0);
+        AfcAlerts.Info($"Sequence {seqNumber} activated", Color.Yellow, 3.0, vehicle);
 
         // Stock's own guard: ResetCaches early-returns while this is set, so a re-entrant reset cannot rebuild the parts cache under the span below.
         GameReflection.SequenceList_updatingSequence!.SetValue(seqList, true);

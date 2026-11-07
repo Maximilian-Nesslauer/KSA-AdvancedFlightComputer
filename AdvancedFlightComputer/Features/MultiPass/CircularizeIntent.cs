@@ -21,8 +21,8 @@ internal sealed class CircularizeIntent : IManeuverIntent
     public string Kind => IsAtApoapsis ? CircularizeApoapsisKind : CircularizePeriapsisKind;
 
     public string TypeKey => IsAtApoapsis
-        ? ManeuverTools.ManeuverTools.KeyStockCircularizeApoapsis
-        : ManeuverTools.ManeuverTools.KeyStockCircularizePeriapsis;
+        ? ManeuverTools.ManeuverTools.KeyCircularizeApoapsis
+        : ManeuverTools.ManeuverTools.KeyCircularizePeriapsis;
 
     public bool IsSatisfied(Vehicle vehicle)
     {
