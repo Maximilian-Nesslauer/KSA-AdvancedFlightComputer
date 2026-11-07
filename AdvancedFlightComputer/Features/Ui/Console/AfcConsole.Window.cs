@@ -621,6 +621,7 @@ internal static partial class AfcConsole
             ConsolePage.Orbit => OrbitPage.Draw(ctx),
             ConsolePage.Transfer => TransferPage.Draw(ctx),
             ConsolePage.Land => LandPage.Draw(ctx),
+            ConsolePage.Rcs => RcsPage.Draw(ctx),
             ConsolePage.Tune => TunePage.Draw(ctx),
             _ => CommitSpec.None,
         };

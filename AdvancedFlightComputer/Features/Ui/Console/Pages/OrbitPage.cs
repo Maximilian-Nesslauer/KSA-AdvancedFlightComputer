@@ -259,7 +259,7 @@ internal static class OrbitPage
         CraftActivity a = ctx.Frame.Activity;
         bool burnFits = otherSource || (SituationVerbs.ForManeuver(where, a.AscentRunning, a.AnyGuidanceLive).Fits
             && !(plan.Maneuver is OrbitManeuvers.ManeuverResult m && BurnAfterImpact(plan.Basis.Plan ?? source.FlightPlan, m.BurnTime)));
-        _fuelFact = BurnBars.Draw(source, _bars, null, burnFits);
+        _fuelFact = BurnBars.Draw(source, _bars, chained ? RcsPage.PlannedEngineCharges(source) : null, burnFits);
         _budgetMs = BurnBars.LastOnBoardMs;
     }
 

@@ -1,4 +1,6 @@
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Ui.Console;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
@@ -45,42 +47,25 @@ internal static class RcsGaugePanel
         RcsExecutionMode resolved = RcsExecutor.ResolveMode(vehicle, options);
         bool faulted = exec?.Faulted == true;
         bool cleanupPending = exec?.CleanupPending == true;
-        bool rcsRows = resolved == RcsExecutionMode.Rcs || isActiveBurn;
-
-        bool noTranslation = false;
-        bool showEstimates = false;
-        bool currentVehicle = false;
-        RcsEstimates est = default;
-        bool holdEst = false;
-        bool alignEst = false;
-        bool shortOfPropellant = false;
         BurnTarget? bt = fc.Burn;
-        if (rcsRows && !isActiveBurn && !faulted)
+
+        // The warnings of the burn this block shows, which need not be the next node.
+        bool noTranslation = false;
+        bool shortOfPropellant = false;
+        if (resolved == RcsExecutionMode.Rcs && !isActiveBurn && !faulted)
         {
             noTranslation = !RcsExecutor.ProbeCached(vehicle).HasAnyTranslation;
-            if (!noTranslation && RcsBurnPreview.TryGetEstimates(burn, vehicle, fc, exec,
-                    out est, out currentVehicle))
+            if (!noTranslation && RcsBurnPreview.TryGetEstimates(burn, vehicle, fc, exec, out RcsEstimates est, out _))
             {
-                showEstimates = true;
-                holdEst = est.HoldFeasible;
-                alignEst = est.AlignFeasible;
-                double neededKg = est.RequiredPropellantKg(
-                    options?.Attitude ?? RcsAttitudeStrategy.Auto);
+                double neededKg = est.RequiredPropellantKg(options?.Attitude ?? RcsAttitudeStrategy.Auto);
                 shortOfPropellant = neededKg > RcsExecutor.AvailablePropellantCached(vehicle);
             }
         }
 
-        bool estHeader = holdEst || alignEst;
-
-        int rows = 2;                                   // header + execution
-        if (rcsRows) rows += 2;                         // attitude + allocator
+        int rows = 3;                                   // header, BURN WITH, OPEN AFC
         if (isActiveBurn) rows += 3;                    // status, to go, cancel
         if (faulted) rows += cleanupPending ? 2 : 1;
         if (noTranslation) rows += 1;
-        if (estHeader) rows += 1;
-        if (showEstimates && currentVehicle) rows += 1;
-        if (holdEst) rows += 1;
-        if (alignEst) rows += 1;
         if (shortOfPropellant) rows += 1;
 
         float rowH = canvasSizePixels.Y * RowHeightFrac;
@@ -114,11 +99,10 @@ internal static class RcsGaugePanel
 
             ImGaugeStyle text = ImGaugeStyle.Default.WithText(new float3(1f, 1f, 1f), TextScale);
             ImGaugeStyle warn = ImGaugeStyle.Default.WithText(new float3(1f, 0.45f, 0.3f), TextScale);
-            ImGaugeStyle dim = ImGaugeStyle.Default.WithText(new float3(0.6f, 0.62f, 0.65f), TextScale);
-            // ImGauge.Button rejects clicks through its disabled style. Cancel stays enabled.
+            // ImGauge.Button rejects clicks through its disabled style. CANCEL and OPEN AFC stay enabled.
             ImGaugeStyle button = ImGaugeStyle.Default.WithText(new float3(0f, 0f, 0f), TextScale)
                 .WithDisabled(isActiveBurn || cleanupPending);
-            ImGaugeStyle cancelButton = ImGaugeStyle.Default.WithText(new float3(0f, 0f, 0f), TextScale);
+            ImGaugeStyle plainButton = ImGaugeStyle.Default.WithText(new float3(0f, 0f, 0f), TextScale);
 
             void LabelRow(ReadOnlySpan<char> label, ReadOnlySpan<char> value)
             {
@@ -144,83 +128,44 @@ internal static class RcsGaugePanel
                 y += rowH + gap;
             }
 
-            RcsBurnOptions Options() => RcsExecRegistry.GetOrCreate(vehicle.Id)
-                .GetOrCreateOptions(timeSec, dvMs);
-
             FullRow("RCS BURN".AsSpan(), in text);
 
             if (faulted)
             {
                 FullRow(cleanupPending ? "CLEANUP FAILED".AsSpan() : "RCS FAULT STOP".AsSpan(), in warn);
-                if (cleanupPending && ButtonRow(ReadOnlySpan<char>.Empty, "RETRY CLEANUP".AsSpan(), in cancelButton))
-                    RcsExecutor.RequestCancel(exec!, "retry fault cleanup");
+                if (cleanupPending && ButtonRow(ReadOnlySpan<char>.Empty, "RETRY CLEANUP".AsSpan(), in plainButton))
+                    RcsStop.RetryCleanup(exec!);
             }
 
-            if (ButtonRow("EXECUTION".AsSpan(), Fit(ExecutionLabel(mode, resolved)), in button))
+            if (ButtonRow("BURN WITH".AsSpan(), Fit(ExecutionLabel(mode, resolved)), in button))
             {
-                RcsBurnOptions o = Options();
+                RcsBurnOptions o = RcsExecRegistry.GetOrCreate(vehicle.Id).GetOrCreateOptions(timeSec, dvMs);
                 RcsBurnUi.CycleMode(o);
-            }
-
-            if (rcsRows)
-            {
-                // Show the resolved strategy and allocator fallback during execution.
-                RcsAttitudeStrategy attitude = options?.Attitude ?? RcsAttitudeStrategy.Auto;
-                string attitudeText = isActiveBurn && exec != null
-                    ? ResolvedAttitude(exec)
-                    : RcsBurnUi.AttitudeLabel(attitude);
-                if (ButtonRow("ATTITUDE".AsSpan(), Fit(attitudeText), in button))
-                {
-                    RcsBurnOptions o = Options();
-                    RcsBurnUi.CycleAttitude(o);
-                }
-
-                RcsAllocator allocator = options?.Allocator ?? RcsAllocator.Groups;
-                string allocatorText = isActiveBurn && exec != null
-                    ? ResolvedAllocator(exec)
-                    : RcsBurnUi.AllocatorLabel(allocator);
-                if (ButtonRow("ALLOCATOR".AsSpan(), Fit(allocatorText), in button))
-                {
-                    RcsBurnOptions o = Options();
-                    RcsBurnUi.CycleAllocator(o);
-                }
             }
 
             if (isActiveBurn && exec != null)
             {
                 LabelRow("STATUS".AsSpan(), Fit(StatusText(exec, fc, bt)));
                 LabelRow("TO GO".AsSpan(), Fit(bt != null ? ToGo(bt.DeltaVToGoCci.Length()) : "-"));
-                if (ButtonRow(ReadOnlySpan<char>.Empty, "CANCEL".AsSpan(), in cancelButton))
-                {
-                    RcsExecutor.RequestCancel(exec, "user request");
-                }
+                // The one RCS cancel path: an explicit stop does not give stock AUTO back.
+                if (ButtonRow(ReadOnlySpan<char>.Empty, "CANCEL".AsSpan(), in plainButton))
+                    RcsStop.Cancel(exec);
             }
 
             if (noTranslation)
                 FullRow("NO RCS TRANSLATE".AsSpan(), in warn);
-            if (showEstimates)
-            {
-                if (currentVehicle)
-                    FullRow("CURRENT VEHICLE".AsSpan(), in dim);
-                if (estHeader)
-                    FullRow("PROPELLANT/TIME".AsSpan(), in dim);
-                if (holdEst)
-                    LabelRow("HOLD".AsSpan(),
-                        Fit(Estimate(est.HoldPropellantKg, est.HoldDurationSec)));
-                if (alignEst)
-                    LabelRow("ALIGN".AsSpan(),
-                        Fit(Estimate(est.AlignTotalPropellantKg, est.AlignDurationSec)));
-                if (shortOfPropellant)
-                    FullRow("LOW PROPELLANT".AsSpan(), in warn);
-            }
+            if (shortOfPropellant)
+                FullRow("LOW PROPELLANT".AsSpan(), in warn);
+
+            if (ButtonRow(ReadOnlySpan<char>.Empty, "OPEN AFC".AsSpan(), in plainButton))
+                Ui.Console.Pages.RcsPage.OpenFor(burn);
 
 #if DEBUG
             // Extra rows are clipped because the rectangle is fixed before drawing.
             float drawnRows = (y - posPixels.Y - margin) / (rowH + gap);
             if (Math.Abs(drawnRows - rows) > 0.01f)
                 LogHelper.WarnOnce("rcs-gauge-rows",
-                    $"[AFC] RcsGaugePanel sized the window for {rows} rows " +
-                    $"but drew {drawnRows:F2}.");
+                    $"[AFC] RcsGaugePanel sized the window for {rows} rows but drew {drawnRows:F2}.");
 #endif
         }
         finally
@@ -229,22 +174,17 @@ internal static class RcsGaugePanel
         }
     }
 
+    // GaugeLabel.Pack4 draws only A-Z, 0-9, space, '_', '-', '.', '/', '\' and '+', so these labels leave out the comma and the brackets.
     private static string ExecutionLabel(RcsExecutionMode mode, RcsExecutionMode resolved)
         => mode == RcsExecutionMode.Default
-            ? (resolved == RcsExecutionMode.Rcs ? "DEF RCS" : "DEF ENGINE")
+            ? (resolved == RcsExecutionMode.Rcs ? "RCS - NO ENGINE" : "ENGINE ELSE RCS")
             : RcsBurnUi.ModeLabel(mode);
 
-    private static string ResolvedAttitude(RcsExecution exec)
-        => exec.ResolvedStrategy == RcsAttitudeStrategy.Align && exec.ResolvedAxis >= 0
-            ? $"ALIGN {RcsExecutor.AxisName(exec.ResolvedAxis)}"
-            : RcsBurnUi.AttitudeLabel(exec.ResolvedStrategy);
-
-    /// <summary>LP-GRP is the LP allocator running on its group fallback,
-    /// which is a different state from having asked for groups.</summary>
-    private static string ResolvedAllocator(RcsExecution exec)
+    /// <summary>LP-GRP is the LP allocator running on its group fallback, which is a different state from having asked for groups.</summary>
+    internal static string ResolvedAllocator(RcsExecution exec)
         => exec.ResolvedAllocator == RcsAllocator.Lp
-            ? (exec.LpSecondsPerImpulse != null ? "LP" : "LP-GRP")
-            : "GROUPS";
+            ? (exec.LpSecondsPerImpulse != null ? "LEAST FUEL" : "LEAST FUEL, BY AXIS")
+            : "BY AXIS";
 
     private static string StatusText(RcsExecution exec, FlightComputer fc, BurnTarget? bt)
     {
@@ -252,7 +192,7 @@ internal static class RcsGaugePanel
             return "WAITING";
         double toIgnition = (bt.IgnitionTime - Universe.GetElapsedTime()).Seconds();
         if (toIgnition > 0.0)
-            return $"T-{toIgnition:F0} S";
+            return FormattableString.Invariant($"T-{toIgnition:F0} S");
         return exec.ResolvedStrategy == RcsAttitudeStrategy.Align && RcsExecutor.OutsideAlignGate(fc)
             ? "ALIGNING"
             : "FIRING";
@@ -261,20 +201,7 @@ internal static class RcsGaugePanel
     /// <summary>Switches to cm/s below 10 m/s so the end of a trim burn still
     /// shows progress instead of collapsing to "0 M/S".</summary>
     private static string ToGo(double ms)
-        => ms >= 10.0 ? $"{ms:F0} M/S" : $"{ms * 100.0:F0} CM/S";
-
-    /// <summary>Propellant and duration in one cell, e.g. "907 KG/10 S";
-    /// worst case "9999 KG/89 MIN" is 14 glyphs.</summary>
-    private static string Estimate(double kg, double sec)
-        => $"{Mass(kg)}/{Duration(sec)}";
-
-    private static string Mass(double kg)
-        => kg >= 10000.0 ? $"{kg / 1000.0:F0} T" : $"{kg:F0} KG";
-
-    private static string Duration(double sec)
-        => sec >= 5400.0 ? $"{sec / 3600.0:F0} HR"
-            : sec >= 90.0 ? $"{sec / 60.0:F0} MIN"
-            : $"{sec:F0} S";
+        => ms >= 10.0 ? FormattableString.Invariant($"{ms:F0} M/S") : FormattableString.Invariant($"{ms * 100.0:F0} CM/S");
 
     private static ReadOnlySpan<char> Fit(string text)
     {

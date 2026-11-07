@@ -5,8 +5,8 @@ using KSA;
 namespace AdvancedFlightComputer.Features.RcsTranslation;
 
 /// <summary>
-/// Injects the per-burn RCS block (see <see cref="RcsBurnUi"/>) into the
-/// stock rendezvous burn infobox with a postfix on
+/// Adds the RCS helper line (see <see cref="RcsBurnUi"/>) to the stock
+/// rendezvous burn infobox with a postfix on
 /// <see cref="Burn.DrawBurnEditorWindowContent"/>. TargetTrackWindow is the
 /// only stock caller of that infobox, and the flight burn editor on the gauge
 /// canvas is covered by <see cref="RcsBurnCanvasUi"/>.
@@ -15,11 +15,11 @@ namespace AdvancedFlightComputer.Features.RcsTranslation;
     new Type[] { typeof(Vehicle), typeof(FlightComputer), typeof(bool), typeof(bool) })]
 internal static class RcsBurnWindowUi
 {
-    static void Postfix(Burn __instance, Vehicle vehicle, FlightComputer flightComputer)
+    static void Postfix(Burn __instance, Vehicle vehicle)
     {
         try
         {
-            RcsBurnUi.DrawBlock(__instance, vehicle, flightComputer);
+            RcsBurnUi.DrawHelperLine(__instance, vehicle);
         }
         catch (Exception ex)
         {

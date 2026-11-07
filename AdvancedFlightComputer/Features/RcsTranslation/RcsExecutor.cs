@@ -1185,7 +1185,7 @@ internal static partial class RcsExecutor
 
     private static void Alert(string message)
     {
-        TimedAlert.Create(message, Color.Red);
+        AfcAlerts.Info(message, Color.Red, 5.0);
         DefaultCategory.Log.Warning($"[AFC] {message}");
     }
 

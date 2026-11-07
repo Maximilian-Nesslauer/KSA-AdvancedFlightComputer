@@ -270,6 +270,7 @@ internal static partial class AfcConsole
         ConsoleMessages.Reset();
         HeadDrawer.Reset();
         GuidanceWindow.ResetWorldRequests();
+        Pages.RcsPage.Reset();
     }
 
     internal static void Reset()
