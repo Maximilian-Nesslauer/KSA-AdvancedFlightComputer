@@ -108,6 +108,7 @@ internal static partial class AfcConsole
     internal static void OpenOrbitTool(string toolKey, Vehicle vehicle)
     {
         Open(ConsolePage.Orbit);
+        Pages.OrbitPage.SyncFromKey(toolKey);
         OrbitToolsPanel.Select(toolKey, vehicle, force: true);
     }
 
@@ -286,7 +287,9 @@ internal static partial class AfcConsole
         TuneSet = TuneSet.Ascent;
         TuneLanding = TuneLanding.Approach;
         TuneDiagnostics = TuneDiagnostics.Ascent;
+        Pages.OrbitPage.Reset();
         Pages.TunePage.Reset();
+        Pages.TransferPage.Reset();
         GuidanceWindow.ResetConsoleState();
         AfcAlerts.History = null;
     }
@@ -553,6 +556,15 @@ internal static partial class AfcConsole
             {
                 LogHelper.WarnOnce("afc-orbit-after:" + ex.GetType().Name, $"[AFC] ORBIT map markers failed: {ex}");
             }
+        }
+
+        try
+        {
+            Pages.TransferPage.DrawAfterWindow(viewport);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce("afc-transfer-after:" + ex.GetType().Name, $"[AFC] TRANSFER map markers failed: {ex}");
         }
 
         if (Frame.GuidanceOn && Frame.Subject != null)

@@ -32,5 +32,15 @@ internal static class Patch_CelestialSystem_OnPreRender
             LogHelper.WarnOnce("orbit-onprerender:" + ex.GetType().Name,
                 $"[AFC] ORBIT world lines: {ex}");
         }
+
+        try
+        {
+            TransferPage.RenderLines(inViewport);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce("transfer-onprerender:" + ex.GetType().Name,
+                $"[AFC] TRANSFER world lines: {ex}");
+        }
     }
 }

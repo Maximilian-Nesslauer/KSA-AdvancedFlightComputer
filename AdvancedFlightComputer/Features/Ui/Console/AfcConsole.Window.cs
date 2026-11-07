@@ -618,6 +618,8 @@ internal static partial class AfcConsole
         return Page switch
         {
             ConsolePage.Launch => LaunchPage.Draw(ctx),
+            ConsolePage.Orbit => OrbitPage.Draw(ctx),
+            ConsolePage.Transfer => TransferPage.Draw(ctx),
             ConsolePage.Land => LandPage.Draw(ctx),
             ConsolePage.Tune => TunePage.Draw(ctx),
             _ => CommitSpec.None,
