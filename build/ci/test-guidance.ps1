@@ -40,6 +40,7 @@ $projects = [ordered]@{
     GfoldConsole = "tests/AdvancedFlightComputer.Guidance.Tests/Gfold/AdvancedFlightComputer.Guidance.Tests.Gfold.csproj"
     ScvxConsole = "tests/AdvancedFlightComputer.Guidance.Tests/Scvx/AdvancedFlightComputer.Guidance.Tests.Scvx.csproj"
     WorkerTests = "tests/AdvancedFlightComputer.Guidance.Tests/Worker.Tests/Worker.Tests.csproj"
+    UiLogicTests = "tests/AdvancedFlightComputer.UiLogic.Tests/UiLogic.Tests.csproj"
     NativeChecks = "build/NativeChecks/NativeChecks.csproj"
 }
 foreach ($relativePath in $projects.Values) {
@@ -177,6 +178,16 @@ $workerArguments = @(
     "--runtime", $RuntimeIdentifier
 )
 Invoke-Checked -FilePath "dotnet" -ArgumentList $workerArguments -FailureMessage "The Worker.Tests check failed."
+
+# The pure console rules of the mod UI. They need no native library, but they run here so CI checks them on every push.
+$uiLogicProject = Join-Path $RepositoryRoot $projects.UiLogicTests
+$uiLogicArguments = @(
+    "run", "--no-build",
+    "--project", $uiLogicProject,
+    "--configuration", $Configuration,
+    "--runtime", $RuntimeIdentifier
+)
+Invoke-Checked -FilePath "dotnet" -ArgumentList $uiLogicArguments -FailureMessage "The UiLogic.Tests check failed."
 
 $artifactDir = Join-Path $ArtifactsRoot $RuntimeIdentifier
 New-Item -ItemType Directory -Force -Path $artifactDir | Out-Null
