@@ -7,7 +7,7 @@
        draws whenever the vehicle carries an engine at all. -->
   <Copy Path="//GaugeCanvas[@Id='EngineControl']/Component[@Name='Buttons']" Pos="Append">
     <Button X="0.006" Y="0.5" Width="0.4854" Height="0.4994"
-            Label="AUTOSTAGE" TextScale="0.28">
+            Label="AUTOSTAGE" TextScale="0.25">
       <TextColor Name="Black" />
       <BackColor Name="AlmostBlack" A="0" />
       <DisabledColor R="0.1" G="0.1" B="0.1" />
@@ -15,7 +15,7 @@
       <ActiveColor Name="Green" />
       <SoundEvent SoundId="LedButtonDown" Action="Pressed" />
       <FlightComputer Action="AfcAutoStageToggle" Value="Enabled" Toggle="true"/>
-      <Tooltip Value="Automatically stage when engines run out of propellant, and drop spent boosters while the rest of the stage keeps firing."/>
+      <Tooltip Value="Automatically stage when engines run out of propellant, and drop spent boosters while the rest of the stage keeps firing. The same switch as AUTOSTAGE THIS CRAFT on AFC > STAGING."/>
     </Button>
   </Copy>
 </Patch>

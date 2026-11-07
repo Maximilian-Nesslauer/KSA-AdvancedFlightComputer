@@ -35,8 +35,6 @@ internal static class ModSettingsPage
             _sections.Add(section);
     }
 
-    internal static void Unregister(Action section) => _sections.Remove(section);
-
     internal static void Reset() => _sections.Clear();
 
     static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions)

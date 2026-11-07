@@ -44,11 +44,13 @@ internal static class StagingDelayPartWindow
         ImGui.Separator();
         ImGui.Spacing();
 
-        string partName = part.Template.DisplayName;
         foreach (int sequence in _engineSequences)
-            DrawDelayBlock(part, vehicle, sequence, DelayKind.Engine, "Ignition Delay", partName);
+            DrawDelayBlock(part, vehicle, sequence, DelayKind.Engine, "IGNITION DELAY");
         foreach (int sequence in _decouplerSequences)
-            DrawDelayBlock(part, vehicle, sequence, DelayKind.Decoupler, "Decoupler Delay", partName);
+            DrawDelayBlock(part, vehicle, sequence, DelayKind.Decoupler, "DECOUPLER DELAY");
+
+        if (ImGui.SmallButton("OPEN AFC##AutoStageDelays"u8))
+            Ui.Console.Pages.StagingPage.OpenWithDelays();
     }
 
     // Ascending, deduplicated. Sequence 0 means "no row".
@@ -74,8 +76,7 @@ internal static class StagingDelayPartWindow
         _decouplerSequences.Sort();
     }
 
-    private static void DrawDelayBlock(Part part, Vehicle vehicle, int sequence, DelayKind kind,
-        string title, string partName)
+    private static void DrawDelayBlock(Part part, Vehicle vehicle, int sequence, DelayKind kind, string title)
     {
         bool engine = kind == DelayKind.Engine;
         double effectiveDelay = engine
@@ -90,7 +91,7 @@ internal static class StagingDelayPartWindow
 
         // The sequence is part of the id, or two blocks of one kind would both edit whichever drew first.
         ImGui.PushID(string.Format(CultureInfo.InvariantCulture, "AutoStageDelay_{0}_{1}", kind, sequence));
-        ImGui.Text(string.Format(CultureInfo.InvariantCulture, "{0} - {1} (Seq {2})", title, partName, sequence));
+        ImGui.TextWrapped(Core.ConsoleUi.EscapeFormat(string.Format(CultureInfo.InvariantCulture, "{0}, SEQ {1}", title, sequence)));
         DrawCoveredModules(part, sequence, kind);
         ImGui.Spacing();
 
@@ -106,13 +107,12 @@ internal static class StagingDelayPartWindow
         if (ImGui.IsItemDeactivatedAfterEdit())
             StagingConfig.FlushPendingSaves();
         ImGui.SameLine();
-        ImGui.TextDisabled("seconds"u8);
+        ImGui.TextDisabled("s"u8);
 
         if (hasOverride)
         {
-            ImGui.TextColored(new float4(1f, 0.8f, 0.2f, 1f),
-                string.Format(CultureInfo.InvariantCulture, "override (default: {0:F1} s)", partDefault));
-            if (ImGui.SmallButton("Reset to default"u8))
+            ImGui.TextDisabled(string.Format(CultureInfo.InvariantCulture, "Changed, default {0:F1} s", partDefault));
+            if (ImGui.SmallButton("RESET TO DEFAULT"u8))
             {
                 if (engine)
                     StagingConfig.ClearSequenceEngineOverride(vehicle, sequence);
@@ -120,10 +120,6 @@ internal static class StagingDelayPartWindow
                     StagingConfig.ClearSequenceDecouplerOverride(vehicle, sequence);
                 StagingConfig.FlushPendingSaves();
             }
-        }
-        else
-        {
-            ImGui.TextDisabled(string.Format(CultureInfo.InvariantCulture, "part default ({0:F1} s)", partDefault));
         }
 
         ImGui.Spacing();
@@ -144,11 +140,9 @@ internal static class StagingDelayPartWindow
                 extra++;
         }
 
-        if (covered == null)
+        if (covered == null || extra == 0)
             return;
 
-        ImGui.TextDisabled(extra > 0
-            ? string.Format(CultureInfo.InvariantCulture, "fires {0} and {1} more", covered, extra)
-            : string.Format(CultureInfo.InvariantCulture, "fires {0}", covered));
+        ImGui.TextDisabled(string.Format(CultureInfo.InvariantCulture, "Fires {0} and {1} more", covered, extra));
     }
 }

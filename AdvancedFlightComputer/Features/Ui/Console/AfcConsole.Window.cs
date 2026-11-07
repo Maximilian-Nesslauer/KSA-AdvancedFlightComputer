@@ -622,6 +622,7 @@ internal static partial class AfcConsole
             ConsolePage.Transfer => TransferPage.Draw(ctx),
             ConsolePage.Land => LandPage.Draw(ctx),
             ConsolePage.Rcs => RcsPage.Draw(ctx),
+            ConsolePage.Staging => StagingPage.Draw(ctx),
             ConsolePage.Tune => TunePage.Draw(ctx),
             _ => CommitSpec.None,
         };

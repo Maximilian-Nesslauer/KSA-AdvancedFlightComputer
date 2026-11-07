@@ -289,6 +289,7 @@ internal static partial class AfcConsole
         TuneLanding = TuneLanding.Approach;
         TuneDiagnostics = TuneDiagnostics.Ascent;
         Pages.OrbitPage.Reset();
+        Pages.StagingPage.Reset();
         Pages.TunePage.Reset();
         Pages.TransferPage.Reset();
         GuidanceWindow.ResetConsoleState();
