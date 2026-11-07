@@ -80,7 +80,7 @@ public static partial class GuidanceWindow
     /// a warm solve longer. Measured by --shoot at 2.3 ms in Release, which is what the
     /// packaged mod is built as, against 24.6 ms in Debug - a tenfold gap that is worth
     /// knowing about before reading a profile. Either is affordable at this cadence,
-    /// and it is deliberately not hidden: BoostbackPlanSolveMs is on the tab, and if it
+    /// and it is deliberately not hidden: BoostbackPlanSolveMs is in the DIAG set of TUNE, and if it
     /// reads in the hundreds on some vehicle this wants moving onto the worker thread
     /// the 6-DOF solver already uses rather than being left to stutter.
     /// </summary>
@@ -221,7 +221,7 @@ public static partial class GuidanceWindow
     // ------------------------------------------------------------------ commit
 
     /// <summary>
-    /// EXECUTE on the Boostback tab: start the machine at separation, from whatever
+    /// START BOOSTBACK on LAND > BOOSTBACK: start the machine at separation, from whatever
     /// attitude and state the vehicle is in right now.
     ///
     /// The aero sweep is FORCED here rather than left to the staleness check. The
@@ -236,9 +236,9 @@ public static partial class GuidanceWindow
         ResampleBoostbackAero(vehicle, parent);
         if (_s.Aero?.Table == null)
         {
-            _s.BoostbackStatus = _s.AeroError.Length > 0
+            _s.WarnBoostback(_s.AeroError.Length > 0
                 ? "No aero surrogate: " + _s.AeroError
-                : "No aero surrogate - cannot predict an impact point.";
+                : "No aero surrogate - cannot predict an impact point.");
             return;
         }
 
@@ -290,7 +290,7 @@ public static partial class GuidanceWindow
         _s.LandingCutPending = true;   // the one-shot engine cut in ApplyAutopilot
         _s.HasCommand = false;
         _s.BoostbackClearOf = null;
-        _s.BoostbackStatus = "Aborted.";
+        _s.BoostbackStatus = "Boostback stopped.";
     }
 
     /// <summary>True while the machine is flying the vehicle.</summary>
@@ -316,7 +316,7 @@ public static partial class GuidanceWindow
             return;
 
         double now = SimNow();
-        // Sim time, so a warp step is the long interval it really is; clamped because the first step after EXECUTE (and any warp jump) would otherwise make the slew limit and the dV integration meaningless in one direction or the other.
+        // Sim time, so a warp step is the long interval it really is; clamped because the first step after the commit (and any warp jump) would otherwise make the slew limit and the dV integration meaningless in one direction or the other.
         double dt = Math.Clamp(now - _s.BoostbackLastStep, 0.0, 1.0);
         _s.BoostbackLastStep = now;
 
@@ -411,7 +411,7 @@ public static partial class GuidanceWindow
             {
                 if (!_s.HasSteer)
                 {
-                    _s.BoostbackStatus = "No steering solution - holding attitude.";
+                    _s.WarnBoostback("No steering solution - holding attitude.");
                     break;
                 }
                 if (missDv < BoostbackMinDvMs)
@@ -419,7 +419,7 @@ public static partial class GuidanceWindow
                     // Already on the site.
                     // Nothing to burn, so go straight to the glide rather than lighting an engine to prove a point.
                     // Judged on the TARGETING correction: shaping is optional, and a burn is not worth lighting for it alone.
-                    _s.BoostbackStatus = $"Correction is only {missDv:F1} m/s - skipping the burn.";
+                    _s.BoostbackStatus = FormattableString.Invariant($"Correction is only {missDv:F1} m/s - skipping the burn.");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                     break;
                 }
@@ -427,9 +427,9 @@ public static partial class GuidanceWindow
 
                 if (!_s.BoostbackHasPlan)
                 {
-                    _s.BoostbackStatus = _s.BoostbackPlanError.Length > 0
+                    _s.DiagBoostback(_s.BoostbackPlanError.Length > 0
                         ? "No burn plan: " + _s.BoostbackPlanError
-                        : "Solving the burn plan...";
+                        : "Solving the burn plan...");
                     break;
                 }
 
@@ -476,9 +476,10 @@ public static partial class GuidanceWindow
 
                 if (done || nulled || dry || overrun)
                 {
-                    _s.BoostbackStatus = dry ? "Cutoff - propellant exhausted."
-                        : overrun ? "Cutoff - burn exceeded its time limit; check the solution."
-                        : $"Cutoff - miss {_s.SteerMissM / 1000.0:F1} km.";
+                    if (dry || overrun)
+                        _s.WarnBoostback(dry ? "Cutoff - propellant exhausted." : "Cutoff - the burn passed its time limit.");
+                    else
+                        _s.BoostbackStatus = FormattableString.Invariant($"Cutoff - miss {_s.SteerMissM / 1000.0:F1} km.");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                 }
                 break;
@@ -697,7 +698,7 @@ public static partial class GuidanceWindow
         {
             // The PREVIOUS plan is kept and goes on being flown.
             // A burn already under way is better served by a two-second-old plan than by none, the usual failure is the coast momentarily not reaching the ground, and the next attempt is two seconds off.
-            // What must not happen is silence, so the reason goes on the tab either way.
+            // What must not happen is silence, so the reason goes on the page either way.
             _s.BoostbackPlanError = sol.Shot.OutOfPropellant ? "not enough propellant"
                 : sol.Shot.FlewIntoGround ? "the burn flies into the ground"
                 : sol.Shot.Infeasible ? "no burn reaches the site"
@@ -815,7 +816,7 @@ public static partial class GuidanceWindow
         _s.BoostbackWantRate = default;
 
         // The plan belongs to the burn.
-        // Past it there is nothing to fly and nothing to warm-start from, and leaving it set would put a stale burn on the tab beside a vehicle that is coasting.
+        // Past it there is nothing to fly and nothing to warm-start from, and leaving it set would put a stale burn on the page beside a vehicle that is coasting.
         if (phase != BoostbackPhase.Rotation && phase != BoostbackPhase.Boostback)
         {
             _s.BoostbackHasPlan = false;
@@ -957,8 +958,8 @@ public static partial class GuidanceWindow
     /// Make sure this vehicle has an aero surrogate, resampling only when its bounding
     /// box says the old one describes a different stack.
     ///
-    /// Shared by the tab (which needs it to draw) and the guidance step (which needs it
-    /// to predict), so a boostback flown with the panel shut is fitted to the same
+    /// Shared by the page (which needs it to draw) and the guidance step (which needs it
+    /// to predict), so a boostback flown with the console shut is fitted to the same
     /// table a watched one is. KSA only recomputes AerodynamicCdABody on a part-tree
     /// modification, so the box is exactly as stale as the table is.
     /// </summary>
@@ -971,10 +972,10 @@ public static partial class GuidanceWindow
     internal static string BoostbackPhaseName(BoostbackPhase p) => p switch
     {
         BoostbackPhase.Idle => "idle",
-        BoostbackPhase.Separation => "separation (settling)",
-        BoostbackPhase.Rotation => "rotating to burn attitude",
-        BoostbackPhase.Boostback => "boostback burn",
-        BoostbackPhase.Glide => "glide (AoA steering the impact point)",
+        BoostbackPhase.Separation => "settle",
+        BoostbackPhase.Rotation => "turn",
+        BoostbackPhase.Boostback => "burn",
+        BoostbackPhase.Glide => "glide",
         BoostbackPhase.Done => "ended",
         _ => "?",
     };

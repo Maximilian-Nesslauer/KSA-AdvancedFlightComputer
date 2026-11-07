@@ -1,4 +1,5 @@
 using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.Logging;
 using HarmonyLib;
 using KSA;
@@ -7,74 +8,19 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 
 internal static class ManeuverTools
 {
-    internal const string KeySetPeriapsis = "AFC Set Periapsis";
-    internal const string KeySetApoapsis = "AFC Set Apoapsis";
-    internal const string KeyMatchInclination = "AFC Match Inclination";
-    internal const string KeySetInclination = "AFC Set Inclination";
-
-    // These stock keys are handled by AFC but must remain in the dropdown on unload.
-    internal const string KeyStockCircularizeApoapsis = "Circularize Apoapsis";
-    internal const string KeyStockCircularizePeriapsis = "Circularize Periapsis";
+    // The game-free OrbitToolCatalog defines the keys, and the mod code names them here. The quick tools keep the keys they had as plan types in the transfer planner, so the multi-pass intents and multipass.toml keep reading the same strings.
+    internal const string KeySetPeriapsis = OrbitToolCatalog.KeySetPeriapsis;
+    internal const string KeySetApoapsis = OrbitToolCatalog.KeySetApoapsis;
+    internal const string KeyMatchInclination = OrbitToolCatalog.KeyMatchInclination;
+    internal const string KeySetInclination = OrbitToolCatalog.KeySetInclination;
+    internal const string KeyCircularizeApoapsis = OrbitToolCatalog.KeyCircularizeApoapsis;
+    internal const string KeyCircularizePeriapsis = OrbitToolCatalog.KeyCircularizePeriapsis;
 
     internal const string KeyStockHohmann = "Hohmann";
-    internal const string KeyStockInterstellar = "Interstellar";
-
-    public static void InjectTransferTypes()
-    {
-        var types = TransferPlanner.TransferTypes;
-
-        if (types.Exists(t => t.GetKey() == KeySetPeriapsis))
-            return;
-
-        // The orbit tools follow stock's circularize entries, ahead of the interstellar planner, and go to the end if those entries are gone.
-        int insertAt = types.FindLastIndex(t => IsCircularizeType(t.GetKey())) + 1;
-        if (insertAt == 0)
-            insertAt = types.Count;
-        types.InsertRange(insertAt,
-        [
-            new TransferType(KeySetPeriapsis, "Set Periapsis"),
-            new TransferType(KeySetApoapsis, "Set Apoapsis"),
-            new TransferType(KeyMatchInclination, "Match Inclination"),
-            new TransferType(KeySetInclination, "Set Inclination"),
-        ]);
-
-        if (DebugConfig.ManeuverTools)
-            DefaultCategory.Log.Debug(
-                $"[AFC] ManeuverTools: injected 4 transfer types ({types.Count} total).");
-    }
-
-    public static void RemoveTransferTypes()
-    {
-        var types = TransferPlanner.TransferTypes;
-        types.RemoveAll(t => IsOurType(t.GetKey()));
-
-        // Select a stock type on unload because stock cannot draw the window for a removed AFC type.
-        if (StockPlanner.TransferTypeKey is string key && IsOurType(key) && types.Count > 0)
-            StockPlanner.SelectType(types[0]);
-    }
-
-    internal static bool IsOurType(string key)
-    {
-        return key == KeySetPeriapsis
-            || key == KeySetApoapsis
-            || key == KeyMatchInclination
-            || key == KeySetInclination;
-    }
-
-    internal static bool IsCircularizeType(string key)
-    {
-        return key == KeyStockCircularizeApoapsis
-            || key == KeyStockCircularizePeriapsis;
-    }
-
-    internal static bool IsHandledType(string key)
-    {
-        return IsOurType(key) || IsCircularizeType(key);
-    }
 
     public static void ApplyPatches(Harmony harmony)
     {
-        // If the shortcut patch fails, the quick tools must remain available in the planner.
+        // If the shortcut patch fails, the quick tools stay available on the MANEUVER page of the console.
         if (Patch_BurnContextMenu_Launcher.IsAnchorPresent)
         {
             try

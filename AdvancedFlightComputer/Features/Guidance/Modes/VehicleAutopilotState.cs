@@ -8,10 +8,11 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using KSA;
 
 /// <summary>
-/// Guidance settings and runtime state for one vehicle, independent of panel focus.
+/// Guidance settings and runtime state for one vehicle, independent of which craft the console shows.
 /// </summary>
 public sealed class VehicleAutopilotState
 {
@@ -20,7 +21,6 @@ public sealed class VehicleAutopilotState
     public Ksa6DofSolveWorker Worker;
     public bool Active;
     public bool EngagePending;          // set by the draw, consumed by the step
-    public string Error = "";
 
     // MPC loop state.
     public double LastReplan;
@@ -109,24 +109,15 @@ public sealed class VehicleAutopilotState
     public bool Running;
 
     /// <summary>
-    /// EXECUTE was pressed while <see cref="AutoLaunch"/> was set: warp to the launch
+    /// The commit was pressed while <see cref="AutoLaunch"/> was set: warp to the launch
     /// window and start guidance there. Separate from AutoLaunch because that is a
     /// MODE the user selects ahead of time, while this is the commit. Arming occurs
-    /// only after EXECUTE, so the panel cannot start warping before a launch request.
+    /// only after the LAUNCH commit, so the console cannot start warping before a launch request.
     /// </summary>
     public bool LaunchArmed;
 
-    /// <summary>
-    /// Largest |rgo| and |vgo| seen since EXECUTE, so the ascent panel can draw each
-    /// as a fraction of where it started rather than an unscaled absolute. Display
-    /// only - nothing in the guidance loop reads them. Latched as a running maximum
-    /// rather than sampled once, because the first solved frame is not reliably the
-    /// largest: UPFG is still converging on it.
-    /// </summary>
-    public double RgoPeak, VgoPeak;
     public bool WasEngaged;
     public string GuidanceError = "";
-    public string Status = "";
     public int FailStreak;
 
     /// <summary>The weighted count of driver steps that threw, which each good step lowers again, see GuidanceWindow.CountFailedStep.</summary>
@@ -159,7 +150,7 @@ public sealed class VehicleAutopilotState
     /// GuidanceWindow.GuidanceCycle): it is a recursive once-per-cycle
     /// algorithm, and calling it every step wound its internal corrections up sixty
     /// times faster than they are damped for. NegativeInfinity means "never solved",
-    /// which forces a solve on the first step after EXECUTE.
+    /// which forces a solve on the first step after the launch commit.
     ///
     /// The step time is separate because the phase machine and the commanded attitude
     /// still update every step; it supplies the interval the command slew limit
@@ -200,7 +191,7 @@ public sealed class VehicleAutopilotState
 
     // Ascent propellant reserve for a returning booster.
 
-    // There is no reserve to set. A booster with a landing target (Set target on its row in Returnable stages) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
+    // There is no reserve to set. A booster with a landing target (its STAGE SITE in LAUNCH > BOOSTERS) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
 
     /// <summary>The propellant the booster keeps for its return, kg: what the convex plan sized for it. Zero while armed with no usable plan yet, and when the reserve is not armed.</summary>
     public double ReserveKg;
@@ -285,7 +276,7 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// KSA's own total dV for the recompute the snapshot above was taken from - the
-    /// figure behind the in-game stage menu. Kept alongside so the panel can show the
+    /// figure behind the in-game stage menu. Kept alongside so the staging bar can show the
     /// two side by side when they disagree.
     /// </summary>
     public double StageModelKsaDv;
@@ -316,7 +307,7 @@ public sealed class VehicleAutopilotState
     internal readonly AttitudeOwnership AttitudeOwnership = new();
 
     /// <summary>
-    /// Which ascent the Ascent tab shows and EXECUTE starts: the CAT-S / UPFG ascent, or the separate gravity-turn one. Per vehicle, like the landing solver, because it decides what this craft's launch does.
+    /// Which ascent the LAUNCH page shows and its commit starts: the CAT-S / UPFG ascent, or the separate gravity-turn one. Per vehicle, like the landing solver, because it decides what this craft's launch does.
     /// </summary>
     public GuidanceWindow.AscentMethod AscentMethod = GuidanceWindow.AscentMethod.CatsUpfg;
 
@@ -334,7 +325,7 @@ public sealed class VehicleAutopilotState
     /// THIS VEHICLE'S TARGET ORBIT (altitudes km, angles deg). Defaults are an ISS
     /// launch: the 51.6 deg plane, inserting at a 200 km perigee with apogee at ISS
     /// altitude for the rendezvous transfer. LAN is seeded from the vehicle's own
-    /// position the first time its panel is drawn.
+    /// position the first time its LAUNCH page is drawn.
     ///
     /// The seed flag was already per vehicle while these were not, so focusing a craft
     /// that had never been seeded rewrote the LAN out from under whichever vehicle was
@@ -360,6 +351,9 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Launch-to-target: the vehicle to chase, and the chase orbit's offset.</summary>
     public string TargetId = "";
+
+    /// <summary>Whether the chase of <see cref="TargetId"/> wrote the target orbit at the last launch window step (StepLaunchWindow), so the page marks only the values the target really sets. A target that is not found or orbits another body leaves them to the player. Display state only.</summary>
+    public bool ChaseDriven;
     public double ChaseOffsetKm = 20.0;
     public bool LaunchDescending;
     public bool AutoLaunch = true;
@@ -394,7 +388,7 @@ public sealed class VehicleAutopilotState
     public long InsertionSearchTick = long.MinValue / 2;
 
     /// <summary>
-    /// Absolute sim time of the launch window, LATCHED when EXECUTE arms the launch.
+    /// Absolute sim time of the launch window, LATCHED when the launch commit arms the launch.
     /// An absolute instant rather than a countdown because the countdown is derived
     /// from a wrapped angle: overshoot the window under time warp and it does not go
     /// negative, it jumps to a full rotation away. Comparing sim times survives a warp
@@ -426,23 +420,26 @@ public sealed class VehicleAutopilotState
 
     public string AscentPlanStatus = "";
 
-    /// <summary>The lift-off instant the requested plan is for, sim time: the launch window's, when EXECUTE arms for one. NaN plans a lift-off now.</summary>
+    /// <summary>The lift-off instant the requested plan is for, sim time: the launch window's, when the launch commit arms for one. NaN plans a lift-off now.</summary>
     public double AscentPlanLaunchAt = double.NaN;
 
-    /// <summary>EXECUTE flies the plan in place of the vertical rise and gravity turn. Without one that fits, it calculates one first.</summary>
+    /// <summary>The launch commit flies the plan in place of the vertical rise and gravity turn. Without one that fits, it calculates one first.</summary>
     public bool FlyConvexAscent = true;
 
-    /// <summary>EXECUTE was pressed and the launch waits on the plan being calculated for it: it starts, or arms for the window when <see cref="ConvexLaunchAtWindow"/>, once the plan converges. See GuidanceWindow.ContinueConvexLaunch.</summary>
+    /// <summary>The commit was pressed and the launch waits on the plan being calculated for it: it starts, or arms for the window when <see cref="ConvexLaunchAtWindow"/>, once the plan converges. See GuidanceWindow.ContinueConvexLaunch.</summary>
     public bool ConvexLaunchPending;
     public bool ConvexLaunchAtWindow;
 
     /// <summary>The plan came back converged but not flyable - solved under time warp, say - and was asked for once more. A second miss fails the launch.</summary>
     public bool ConvexLaunchRetried;
 
-    /// <summary>Why EXECUTE's plan could not be calculated or did not converge, so nothing launched; empty otherwise. The panel shows it and offers the backup gravity turn until the next EXECUTE or ABORT.</summary>
+    /// <summary>Why the launch commit's plan could not be calculated or did not converge, so nothing launched; empty otherwise. The console shows it and offers the backup gravity turn until the next launch commit or ABORT.</summary>
     public string ConvexLaunchFailure = "";
 
-    /// <summary>The player chose the backup gravity turn (deg/s) for this launch, so no convex plan is flown even if one fits. Cleared by the next EXECUTE or by ABORT.</summary>
+    /// <summary>The player answered <see cref="ConvexLaunchFailure"/> with the backup gravity turn on the LAUNCH picture, so the footer verb is LAUNCH (BACKUP). Only a choice: nothing launches until that verb is clicked. A new failure clears it.</summary>
+    public bool ConvexBackupChosen;
+
+    /// <summary>The player chose the backup gravity turn (deg/s) for this launch, so no convex plan is flown even if one fits. Cleared by the next launch commit or by ABORT.</summary>
     public bool BackupAscent;
 
     /// <summary>Max-q 195 kPa, just under the 200 kPa KSA itself holds a vehicle to, so the plan uses all the dynamic pressure the game allows and keeps a margin from its limit. A KSA stack lifting off at three to five g cannot hold the script's Saturn V 35 kPa at full throttle, and at 140 the planner often had to retry looser anyway. Q-alpha is the script's 3500 Pa rad.</summary>
@@ -456,13 +453,13 @@ public sealed class VehicleAutopilotState
     public double ConvexThrottleMinPct = 80.0;
 
     /// <summary>
-    /// Let the convex plan choose its own launch timing. With a target it chooses when, within ConvexTimingFreedomS of the launch window: the window's fixed lead (LanLeadSeconds) is only where it starts. Without one it chooses the LAN, starting from the plane over the pad, and the panel's LAN is set to it.
+    /// Let the convex plan choose its own launch timing. With a target it chooses when, within ConvexTimingFreedomS of the launch window: the window's fixed lead (LanLeadSeconds) is only where it starts. Without one it chooses the LAN, starting from the plane over the pad, and the LAN of the LAUNCH page is set to it.
     /// </summary>
     public bool ConvexOptimiseTiming = true;
 
     public bool ShowConvexPlan = true;
 
-    /// <summary>The plan this flight is flying, latched at EXECUTE so a recalculation cannot swap it mid-climb; and when the climb began, which fixes where the drawn plan sits.</summary>
+    /// <summary>The plan this flight is flying, latched at the launch commit so a recalculation cannot swap it mid-climb; and when the climb began, which fixes where the drawn plan sits.</summary>
     public AscentPlan FlyingPlan;
     public double FlyingPlanLaunchTime = double.NaN;
 
@@ -520,7 +517,6 @@ public sealed class VehicleAutopilotState
     public double GateUprangeKm = 0.0;     // gate offset against the approach direction
     public double BurnDownrangeKm;         // predicted braking distance
     public double BurnStartTime;           // sim time of ignition
-    public string LandingStatus = "";
     public bool LandingCutPending;         // one-shot engine cut when the flow ends
 
     // Preserve the engine command during handover, including cleanup retries. A finished release or the next claim clears the request.
@@ -550,20 +546,23 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public readonly List<(double tSec, double minKm, double crossKm)> Passes = new();
 
-    /// <summary>Ask the panel to show this vehicle's G-FOLD / Terminal sub-tab.</summary>
-    public bool GfoldTabSelectPending;
+    /// <summary>Ask the console to cue the LAND NOW way of the LAND page for this vehicle, because its powered descent started.</summary>
+    public bool GfoldCuePending;
 
     /// <summary>
     /// Which solver flies the powered descent: the 6-DOF successive-convexification one
-    /// by default, or G-FOLD. Per vehicle rather than a panel-wide setting, because the
+    /// by default, or G-FOLD. Per vehicle rather than a console-wide setting, because the
     /// deorbit handoff READS it to decide what to start - so it describes how this craft
     /// lands, not what the player last clicked. The handoff turns it off for a craft
     /// 6-DOF cannot plan for, and hands that craft to G-FOLD instead.
     /// </summary>
     public bool UseSixDofLanding = true;
-    /// <summary>The panel shows the 3-DOF page as this craft's powered landing. The braking-burn handoff still chooses between 6-DOF and G-FOLD; the 3-DOF engages from a boostback glide or from its own page.</summary>
+
+    /// <summary>Ask the console to cue the HOVER way of the LAND page for this vehicle, because its terminal hover started.</summary>
+    public bool TermCuePending;
+
+    /// <summary>The console shows entry guidance (3-DOF) as this craft's powered landing: ENTRY is a solver of LAND > LAND NOW. The braking-burn handoff still chooses between 6-DOF and G-FOLD; the 3-DOF engages from a boostback glide or from the commit of that page.</summary>
     public bool UseThreeDofLanding;
-    public bool TermTabSelectPending;
 
     /// <summary>
     /// Terrain height of the site above the mean-radius sphere, cached against the
@@ -630,6 +629,9 @@ public sealed class VehicleAutopilotState
     public double VehicleHeightM = 15.0;
     public bool VehicleHeightAuto = true;
     public string VehicleHeightStatus = "";
+
+    internal bool VehicleHeightStowed;
+    internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
 
     /// <summary>
@@ -793,7 +795,7 @@ public sealed class VehicleAutopilotState
     //
     // The overlay's trace. Per vehicle so switching craft shows that craft's own flown path rather than blanking a track the player was watching.
     //
-    // Allocated lazily by RecordTrace, not here: at TraceCapacity samples this buffer is ~57 kB, and state is created for any craft the panel merely draws. Every other field on this class is a handful of bytes; this one is worth deferring until the vehicle is actually being flown or watched.
+    // Allocated lazily by RecordTrace, not here: at TraceCapacity samples this buffer is ~57 kB, and state is created for any craft the console merely draws. Every other field on this class is a handful of bytes; this one is worth deferring until the vehicle is actually being flown or watched.
     public double3[] Trace;
     public int TraceCount;
     public int TraceHead;                  // next write slot
@@ -811,12 +813,12 @@ public sealed class VehicleAutopilotState
 
     /// <summary>
     /// This vehicle's aero surrogate: the Cd(Mach, alpha) table sampled off KSA's own
-    /// aerodynamics, and the atmosphere that goes with it. Null until the Boostback
-    /// tab has sampled it.
+    /// aerodynamics, and the atmosphere that goes with it. Null until LAND > BOOSTBACK, a stage site
+    /// or the boostback diagnostics have sampled it.
     ///
     /// PER VEHICLE, not global, for the same reason everything else here is: the table
     /// is a property of one craft's bounding box, so sharing it would silently hand a
-    /// booster's drag model to an upper stage. It is also why the sweep survives a tab
+    /// booster's drag model to an upper stage. It is also why the sweep survives a page
     /// switch - resampling on every draw would re-fit a spline sixty times a second
     /// to answer a question whose inputs only change when the part tree does.
     /// </summary>
@@ -977,7 +979,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Miss the plan converged to, m, and what it costs in propellant.</summary>
     public double BoostbackPlanMissM, BoostbackPlanPropellantKg;
 
-    /// <summary>How long the last plan solve took, ms. Surfaced on the tab because the
+    /// <summary>How long the last plan solve took, ms. Surfaced on the page because the
     /// solve runs on the sim thread: this is the number that says whether the cadence
     /// is still affordable on the vehicle actually being flown. The reference arc
     /// measures 2.3 ms warm in Release and 24.6 in Debug, so read it against the build
@@ -1114,8 +1116,6 @@ public sealed class VehicleAutopilotState
     public double BoostbackPhaseStart;
     public double BoostbackLastStep;
 
-    public string BoostbackStatus = "";
-
     // Per-vehicle tuning for the booster's airframe and mission.
 
     /// <summary>Settling burn at minimum throttle after separation, s. Short: every second of it is a second further from the site, which at staging speed is kilometres (BoostbackOracle.BurnDelayS).</summary>
@@ -1143,7 +1143,7 @@ public sealed class VehicleAutopilotState
 
     // Live boostback state.
 
-    /// <summary>Attitude held through the settling burn, latched at EXECUTE. A fixed
+    /// <summary>Attitude held through the settling burn, latched at START BOOSTBACK. A fixed
     /// inertial direction rather than a live reading, so the hold is a hold and the
     /// rotation has something continuous to slew from.</summary>
     public double3 BoostbackHoldDir;
@@ -1235,7 +1235,7 @@ public sealed class VehicleAutopilotState
     /// <summary>Sim time of the last glide line written to the game log.</summary>
     public double GlideLogTime = double.NaN;
 
-    // ---- 3-DOF glide-and-burn landing (Modes/ThreeDof.cs; its panel page is Ui/Gauges/ThreeDofGauge.cs) ----
+    // ---- 3-DOF glide-and-burn landing (Modes/ThreeDof.cs; its console page is Ui/Gauges/ThreeDofGauge.cs) ----
 
     /// <summary>Where this craft's 3-DOF landing is: idle, gliding on the plan (or the PID glide while it has none), burning, or ended.</summary>
     public GuidanceWindow.ThreeDofPhase ThreeDofPhase;
@@ -1308,16 +1308,78 @@ public sealed class VehicleAutopilotState
     private static readonly AdvancedFlightComputer.Guidance.Scvx.ThreeDof.Guidance3Dof.Settings ThreeDofDefaults = new();
     private static readonly AdvancedFlightComputer.Guidance.Scvx.ThreeDof.BurnTracker3Dof ThreeDofTrackDefaults = new();
 
-    /// <summary>The engine command the burn writes, and what the panel shows, with the plan's own throttle beside it: the difference is the tracker's.</summary>
+    /// <summary>The engine command the burn writes, and what the console shows, with the plan's own throttle beside it: the difference is the tracker's.</summary>
     public bool ThreeDofEngineOn;
     public double ThreeDofThrottle, ThreeDofPlanThrottle;
-    public string ThreeDofStatus = "";
 
     /// <summary>The last solve's figures for the page, cached by the step while the solver is idle.</summary>
     public string ThreeDofSolveText = "";
     public bool ThreeDofRefusing;
 
     public string GlideStatus = "";
+
+    #region Status texts and their marks
+
+    private string _error = "", _status = "", _landingStatus = "", _boostbackStatus = "", _threeDofStatus = "";
+
+    public string Error { get => _error; set { _error = value; ErrorSeverity = Severity.Info; } }
+    public string Status { get => _status; set { _status = value; StatusSeverity = Severity.Info; } }
+    public string LandingStatus { get => _landingStatus; set { _landingStatus = value; LandingSeverity = Severity.Info; } }
+    public string BoostbackStatus { get => _boostbackStatus; set { _boostbackStatus = value; BoostbackSeverity = Severity.Info; } }
+    public string ThreeDofStatus { get => _threeDofStatus; set { _threeDofStatus = value; ThreeDofSeverity = Severity.Info; } }
+
+    internal Severity ErrorSeverity { get; private set; }
+    internal Severity StatusSeverity { get; private set; }
+    internal Severity LandingSeverity { get; private set; }
+    internal Severity BoostbackSeverity { get; private set; }
+    internal Severity ThreeDofSeverity { get; private set; }
+
+    internal void WarnError(string text) { Error = text; ErrorSeverity = Severity.Warning; }
+    internal void DiagError(string text) { Error = text; ErrorSeverity = Severity.Diag; }
+    internal void FailError(string what, string text) { MarkFailure(what, text); Error = text; ErrorSeverity = Severity.Error; }
+
+    internal void WarnStatus(string text) { Status = text; StatusSeverity = Severity.Warning; }
+    internal void DiagStatus(string text) { Status = text; StatusSeverity = Severity.Diag; }
+    internal void FailStatus(string what, string text) { MarkFailure(what, text); Status = text; StatusSeverity = Severity.Error; }
+
+    internal void WarnLanding(string text) { LandingStatus = text; LandingSeverity = Severity.Warning; }
+    internal void DiagLanding(string text) { LandingStatus = text; LandingSeverity = Severity.Diag; }
+    internal void FailLanding(string what, string text) { MarkFailure(what, text); LandingStatus = text; LandingSeverity = Severity.Error; }
+
+    internal void WarnBoostback(string text) { BoostbackStatus = text; BoostbackSeverity = Severity.Warning; }
+    internal void DiagBoostback(string text) { BoostbackStatus = text; BoostbackSeverity = Severity.Diag; }
+    internal void FailBoostback(string what, string text) { MarkFailure(what, text); BoostbackStatus = text; BoostbackSeverity = Severity.Error; }
+
+    internal void WarnEntry(string text) { ThreeDofStatus = text; ThreeDofSeverity = Severity.Warning; }
+    internal void DiagEntry(string text) { ThreeDofStatus = text; ThreeDofSeverity = Severity.Diag; }
+
+    internal string FailureWhat { get; private set; } = "";
+
+    internal string FailureDetail { get; private set; } = "";
+
+    /// <summary>Tells a failure from an earlier one with the same words. A later step of the same failure keeps its serial.</summary>
+    internal int FailureSerial { get; private set; }
+
+    // One marked failure stands at a time, so an older one fades to a warning. The Fail methods set their own mark after this call.
+    private void MarkFailure(string what, string detail)
+    {
+        if (what != FailureWhat)
+            FailureSerial++;
+        FailureWhat = what;
+        FailureDetail = detail;
+        if (ErrorSeverity == Severity.Error) ErrorSeverity = Severity.Warning;
+        if (StatusSeverity == Severity.Error) StatusSeverity = Severity.Warning;
+        if (LandingSeverity == Severity.Error) LandingSeverity = Severity.Warning;
+        if (BoostbackSeverity == Severity.Error) BoostbackSeverity = Severity.Warning;
+    }
+
+    internal void ClearStatusLines()
+    {
+        Error = Status = LandingStatus = BoostbackStatus = ThreeDofStatus = "";
+        FailureWhat = FailureDetail = "";
+    }
+
+    #endregion
 
     // Weak keys keep this table from retaining vehicles after they are unloaded.
     private static readonly ConditionalWeakTable<Vehicle, VehicleAutopilotState> Table = new();

@@ -6,191 +6,187 @@ using System;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Guidance.Scvx.Ascent;
+using AdvancedFlightComputer.Features.Ui.Logic;
+using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
-// The convex ascent's controls and its plan, on the Ascent tab. The point of drawing the plan here before EXECUTE is to see that the calculation worked: the altitude profile should rise smoothly to the target, the pitch should fall steadily with speed, and q-alpha should ride its limit through max-q rather than cross it. See Modes/ConvexAscent.cs for what the button sets going.
+// The convex ascent's controls and its plan, on the LAUNCH page. The point of drawing the plan here before the launch is to see that the calculation worked: the altitude profile should rise smoothly to the target, the pitch should fall steadily with speed, and q-alpha should ride its limit through max-q rather than cross it. See Modes/ConvexAscent.cs for what the launch sets going.
 public static partial class GuidanceWindow
 {
-    private static readonly float4 CvxGood = new(0.4f, 1f, 0.4f, 1f);
-    private static readonly float4 CvxWarn = new(1f, 0.8f, 0.3f, 1f);
-    private static readonly float4 CvxLive = new(0.5f, 0.9f, 1f, 1f);
-    private static readonly float4 CvxDim = new(0.7f, 0.7f, 0.7f, 1f);
-    private static readonly float4 CvxFail = new(1f, 0.45f, 0.4f, 1f);
+    private static readonly float4 CvxWarn = Ui.Canvas.Palette.Warn.F4;
+    private static readonly float4 CvxLive = ConsoleStyle.TextPrimary;
+    private static readonly float4 CvxDim = ConsoleStyle.TextMuted;
+    private static readonly float4 CvxFail = ConsoleStyle.Danger;
 
     /// <summary>
-    /// The convex ascent's lines at the top of the window, with the other status messages: the calculation in progress - the one EXECUTE is waiting on, or one asked for to look at - and, when EXECUTE's did not converge, the choice that leaves. Drawn above the tabs in the gauge panel, so a launch waiting on its plan, or refused for want of one, is never behind a fold.
+    /// The convex ascent's lines under the FLIGHT PROFILE picture of the LAUNCH page: a retry of the calculation and, when the launch plan did not converge, the choice that leaves. They stand above the folds, so a launch refused for want of a plan is never behind a fold.
     /// </summary>
-    private static void DrawConvexLaunchBanner(Vehicle vehicle, Orbit orbit, IParentBody parent)
+    private static void DrawConvexLaunchBanner()
     {
-        AscentPlanJob job = _s.AscentPlanJob;
-        string waiting = !_s.ConvexLaunchPending ? ""
-            : _s.ConvexLaunchAtWindow ? " - arms for the launch window when it converges"
-            : " - launches when it converges";
-        if (job != null)
-        {
-            string retry = job.Retry;
-            if (retry.Length > 0)
-                ColoredWrapped(CvxWarn, "Convex ascent: " + retry);
-            ColoredWrapped(CvxLive, $"Convex ascent: {job.Progress} ({job.ElapsedSeconds:F0} s){waiting}");
-        }
-        else if (_s.ConvexLaunchPending)
-            ColoredWrapped(CvxLive, "Convex ascent: starting the calculation" + waiting);
+        string retry = _s.AscentPlanJob?.Retry ?? "";
+        if (retry.Length > 0)
+            ColoredWrapped(CvxWarn, "Calculated climb: " + retry);
+
+        AscentPlan shown = _s.AscentPlan;
+        bool relaxed = !_s.Running && shown?.Usable == true && shown.QRelaxed;
+        ConsoleUi.NoteShape("AfcLaunchRelaxed", relaxed ? 1 : 0);
+        if (relaxed)
+            ConsoleUi.TickedNote(ConsoleUi.EscapeFormat(PageText.QRelaxedNote(shown.QMaxRequestedKpa, shown.QMaxKpa)));
 
         if (_s.ConvexLaunchFailure.Length == 0)
             return;
         ColoredWrapped(CvxFail, _s.ConvexLaunchFailure);
-        ColoredWrapped(CvxWarn, "Nothing has launched. Change settings and try again, or launch in backup deg/s mode.");
-        // Not while another launch is committed: the backup is an answer to this failure, not a second ascent.
-        using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending))
+        // The banner only chooses. The footer verb then reads LAUNCH (BACKUP) and launches through the same commit and take-over rule as every other launch.
+        if (_s.ConvexBackupChosen)
         {
-            if (ImGui.Button("LAUNCH IN BACKUP MODE##cvxbackup"))
-                LaunchBackupAscent(vehicle, orbit, parent);
+            ColoredWrapped(CvxWarn, "The simple turn is chosen. " + CommitResolver.BackupLaunchVerb + " in the footer launches it.");
+            if (ConsoleWidgets.Button(PageText.BannerKeep.AsSpan(), "AfcConvexKeep".AsSpan(), default))
+                _s.ConvexBackupChosen = false;
+        }
+        else
+        {
+            ColoredWrapped(CvxWarn, "Nothing has launched. Change settings and try again, or fly the simple turn.");
+            // Not while another launch is committed: the backup is an answer to this failure, not a second ascent.
+            using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending))
+            {
+                if (ConsoleWidgets.Button(PageText.BannerBackup.AsSpan(), "AfcConvexBackup".AsSpan(), default))
+                    _s.ConvexBackupChosen = true;
+            }
         }
         ImGui.SameLine();
-        if (ImGui.Button("Dismiss##cvxfail"))
+        if (ConsoleWidgets.Button(PageText.BannerHide.AsSpan(), "AfcConvexDismiss".AsSpan(), default))
+        {
             _s.ConvexLaunchFailure = "";
+            _s.ConvexBackupChosen = false;
+        }
     }
 
-    /// <summary>Wrapped text in a colour. TextWrapped formats printf-style native-side, so a percent sign in the text is escaped.</summary>
-    private static void ColoredWrapped(float4 color, string text)
-    {
-        ImGui.PushStyleColor(ImGuiCol.Text, color);
-        ImGui.TextWrapped(text.Replace("%", "%%"));
-        ImGui.PopStyleColor();
-    }
+    private static void ColoredWrapped(float4 color, string text) => ConsoleUi.Sentence(Fmt.Sentence(text).AsSpan(), in color);
 
     private static void DrawConvexAscentSection(Vehicle vehicle, Orbit orbit, IParentBody parent, float innerW)
     {
-        if (!ImGuiHelper.BeginRegion("Convex ascent",
-                ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        if (!GuidanceRegion.Begin(FoldNames.ConvexPlan, GuidanceRegion.ExpertTuningDiagnostics))
             return;
 
-        bool busy = _s.AscentPlanJob != null || _s.AscentPlanRequested;
-
-        GaugeRowCheck("Fly convex profile", "##flyconvex", ref _s.FlyConvexAscent);
-        // The limits are part of the problem, so they are frozen while it is being solved.
-        using (new ImGuiDisabledScope(busy))
+        using (ConsoleUi.Dim(_s.Running))
+        using (new ImGuiDisabledScope(AscentPlanBusy))
         {
-            GaugeRow("Max q (kPa)", "##cvxq", ref _s.ConvexQMaxKpa);
-            GaugeRow("Max q-alpha (Pa rad)", "##cvxqa", ref _s.ConvexQAlphaMax);
-            // The script's 99 % keeps the plan at full throttle. Lower lets it throttle the liquid stages - through max-q, typically - and the profile then flies that throttle too; solid stages stay at full thrust whatever this says.
-            GaugeRow("Min throttle (%)", "##cvxthrottle", ref _s.ConvexThrottleMinPct);
-            // With a target: when to lift off, near the window. Without: the LAN, from the plane over the pad. See VehicleAutopilotState.ConvexOptimiseTiming.
-            GaugeRowCheck(_s.TargetId.Length > 0 ? "Choose launch time" : "Choose LAN", "##cvxtiming", ref _s.ConvexOptimiseTiming);
+            if (HasPhysicalAtmosphere(parent))
+                GaugeRow(Specs.ConvexQAlphaMax, ref _s.ConvexQAlphaMax);
+            else
+                GaugeRowText(Specs.ConvexQAlphaMax.Tier, Specs.ConvexQAlphaMax.Label, PageText.NoAirRow, CvxDim);
+            // The default 80 % lets the plan throttle the liquid stages a little, through max-q typically, and the profile then flies that throttle too; solid stages stay at full thrust whatever this says.
+            GaugeRow(Specs.ConvexThrottleMinPct, ref _s.ConvexThrottleMinPct);
+            // With a target it chooses when to lift off near the window, with none the LAN, so the name says which.
+            GaugeRowCheck(Specs.ConvexOptimiseTiming with { Label = PageText.OptimiseTimingLabel(_s.TargetId.Length > 0) }, ref _s.ConvexOptimiseTiming);
         }
-        GaugeRow("UPFG from (km)", "##cvxhandover", ref _s.ConvexHandoverAltKm);
-        GaugeRowCheck("Show plan", "##cvxshow", ref _s.ShowConvexPlan);
-
-        ImGui.Text("");
-        ImGui.NextColumn();
-        DrawConvexButtons();
-        ImGui.NextColumn();
+        GaugeRow(Specs.ConvexHandoverAltKm, ref _s.ConvexHandoverAltKm);
 
         DrawConvexStatusRows(vehicle, orbit, parent);
 
-        ImGuiHelper.EndRegion();
-
-        AscentPlan plan = _s.AscentPlan;
-        if (_s.ShowConvexPlan && plan?.Series != null && plan.Solution.Nodes > 1)
-            DrawConvexPlots(plan, orbit, parent, ImGui.GetContentRegionAvail().X);
+        GuidanceRegion.End();
     }
 
-    /// <summary>Calculate, or cancel the calculation in progress, and clear.</summary>
-    private static void DrawConvexButtons()
+    private static string PlanRowText(Vehicle vehicle, Orbit orbit, IParentBody parent, out bool fine, out bool old)
     {
-        bool busy = _s.AscentPlanJob != null || _s.AscentPlanRequested;
-        if (busy)
+        fine = false;
+        old = false;
+        if (_s.AscentPlan?.Usable == true && _s.AscentPlanJob == null && !_s.AscentPlanRequested && !_s.Running
+            && !ConvexPlanFlyable(vehicle, orbit, parent, ExecuteLaunchInstant(), out string why))
         {
-            // Cancelling the calculation EXECUTE is waiting on cancels that launch too.
-            if (ImGui.Button("Cancel calculation##cvx"))
-            {
-                _s.AscentPlanJob?.Cancel();
-                _s.AscentPlanRequested = false;
-                _s.ConvexLaunchPending = false;
-            }
-            return;
+            old = true;
+            return PageText.PlanState(why);
         }
+        fine = _s.AscentPlan?.Usable == true;
+        return ConvexPlanSummary();
+    }
 
-        // Not while flying: the flight has latched its plan, and a new one solved from mid-air would start from a state that is not a lift-off. For the lift-off EXECUTE would commit to, so a plan looked at first is the one it flies.
-        using (new ImGuiDisabledScope(_s.Running))
-        {
-            if (ImGui.Button("CALCULATE ASCENT##cvx"))
-                RequestAscentPlan(WindowInstant() > SimNow() ? WindowInstant() : double.NaN);
-        }
-        if (_s.AscentPlan != null)
-        {
-            ImGui.SameLine();
-            if (ImGui.Button("Clear plan##cvx"))
-            {
-                _s.AscentPlan = null;
-                _s.AscentPlanStatus = "";
-            }
-        }
+    private static string ConvexPlanSummary()
+    {
+        AscentPlanJob job = _s.AscentPlanJob;
+        if (job != null)
+            return PageText.PlanProgress(job.Progress, job.ElapsedSeconds);
+        if (_s.AscentPlanRequested)
+            return PageText.PlanStarting;
+        if (_s.Running)
+            return _s.FlyingPlan != null ? "Flying this plan" : "Not in use: the simple turn flies";
+        if (_s.AscentPlanStatus.Length > 0)
+            return _s.AscentPlanStatus;
+        return "Not calculated";
     }
 
     private static void DrawConvexStatusRows(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
+        const UiTier D = UiTier.Diagnostics;
+        if (!TierScope.Show(D))
+            return;
+
         AscentPlanJob job = _s.AscentPlanJob;
         if (job != null)
         {
             if (job.Retry.Length > 0)
-                GaugeRowText("Retrying", job.Retry, CvxWarn);
-            GaugeRowText("Status", $"{job.Progress} ({job.ElapsedSeconds:F0} s)", CvxLive);
+                GaugeRowText(D, "RETRYING", job.Retry, CvxWarn);
+            GaugeRowText(D, "STATUS", ConvexPlanSummary(), CvxLive);
         }
         else if (_s.AscentPlanStatus.Length > 0)
-            GaugeRowText("Status", _s.AscentPlanStatus, _s.AscentPlan?.Usable == true ? CvxGood : CvxWarn);
+        {
+            string state = PlanRowText(vehicle, orbit, parent, out bool fine, out bool old);
+            GaugeRowText(D, "STATUS", state == PageText.PlanOld ? PageText.PlanOldPlain : state, old || fine ? ConsoleStyle.TextPrimary : CvxWarn);
+        }
 
         AscentPlan plan = _s.AscentPlan;
         AscentSolution sol = plan?.Solution;
         if (sol == null || sol.Nodes == 0)
             return;
 
-        GaugeRowText("Solve", $"{sol.Message}, {sol.Iterations} iterations ({sol.Accepted} accepted), {plan.WallSeconds:F1} s",
-            sol.Usable ? CvxDim : CvxWarn);
+        GaugeRowText(D, "SOLVE", PageText.PlanSolve(sol.Message, sol.Iterations, sol.Accepted, plan.WallSeconds), sol.Usable ? ConsoleStyle.TextPrimary : CvxWarn);
         if (double.IsFinite(sol.RecoveryReserveKg))
-            GaugeRowText("Booster", $"keeps {sol.RecoveryReserveKg / 1000.0:F2} t: {sol.BoostbackDv:F0} m/s boostback + {sol.LandingDv:F0} m/s landing, separates at T+{sol.SeparationTime:F0} s",
-                sol.RecoveryReserveKg >= sol.RecoveryRequiredKg - 50.0 ? CvxDim : CvxWarn);
+            GaugeRowText(D, "BOOSTER", PageText.PlanBooster(sol.RecoveryReserveKg, sol.BoostbackDv, sol.LandingDv, sol.SeparationTime),
+                sol.RecoveryReserveKg >= sol.RecoveryRequiredKg - 50.0 ? ConsoleStyle.TextPrimary : CvxWarn);
         if (plan.LaunchDelayS != 0.0)
-            GaugeRowText("Launch time", $"{Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window");
+            GaugeRowText(D, "LAUNCH TIME", PageText.PlanLaunchShift(plan.LaunchDelayS));
         else if (plan.LanChosen)
-            GaugeRowText("LAN", $"{plan.LanDeg:F2} deg, chosen for the pad");
-        GaugeRowText("Stages planned", plan.StagesPlanned == plan.StagesAvailable
-            ? $"{plan.StagesPlanned}"
-            : $"{plan.StagesPlanned} of {plan.StagesAvailable} (the rest ride as payload)");
+            GaugeRowText(D, "LAN", PageText.PlanLanChosen(plan.LanDeg));
+        if (plan.StagesPlanned != plan.StagesAvailable)
+            GaugeRowText(D, "STAGES PLANNED", $"{plan.StagesPlanned} of {plan.StagesAvailable} (the rest ride as payload)");
         double propLeft = sol.FinalMass - plan.FinalMassFloor;
-        GaugeRowText("To orbit", $"{sol.FinalMass / 1000.0:F2} t ({Math.Max(propLeft, 0.0) / 1000.0:F2} t propellant left in the last stage)");
-        GaugeRowText("Burns", string.Join(" / ", Array.ConvertAll(sol.BurnTime, b => b.ToString("F1"))) + $" s, {sol.TotalDeltaV:F0} m/s ideal");
+        GaugeRowText(D, "TO ORBIT", FormattableString.Invariant($"{sol.FinalMass / 1000.0:F2} t ({Math.Max(propLeft, 0.0) / 1000.0:F2} t propellant left in the last stage)"));
+        DrawPlanBurnsRow(sol);
+        GaugeRowText(D, "", "The stage line counts all the propellant on board, and the plan leaves some.", CvxDim);
         double lowest = plan.Profile != null ? 100.0 * plan.Profile.MinThrottle : double.NaN;
-        GaugeRowText("Throttle", $"floor {plan.ThrottleMinPct:F0} %, lowest planned {lowest:F0} %"
-            + (plan.SolidStages > 0 ? $", solids burn in {plan.SolidStages} stage(s) on their own curve" : "")
-            + (plan.CoreThrottledDown ? ", core throttled to outlast its boosters" : ""), CvxDim);
+        GaugeRowText(D, "THROTTLE", FormattableString.Invariant($"floor {plan.ThrottleMinPct:F0} %, lowest planned {lowest:F0} %")
+            + (plan.SolidStages > 0 ? $", solids burn in {PageText.Stages(plan.SolidStages)} on their own curve" : "")
+            + (plan.CoreThrottledDown ? ", core throttled to outlast its boosters" : ""));
 
         int qi = ArgMax(sol.DynamicPressure), qai = ArgMax(sol.QAlpha);
-        GaugeRowText("Max q", $"{sol.DynamicPressure[qi] / 1000.0:F1} kPa at {sol.Time[qi]:F0} s (limit {plan.QMaxKpa:F0})",
-            sol.DynamicPressure[qi] > plan.QMaxKpa * 1000.0 * 1.002 ? CvxWarn : CvxDim);
+        GaugeRowText(D, "MAX Q", FormattableString.Invariant($"{sol.DynamicPressure[qi] / 1000.0:F1} kPa at {sol.Time[qi]:F0} s (limit {plan.QMaxKpa:F1} kPa)"),
+            LimitInk(sol.DynamicPressure[qi], plan.QMaxKpa * 1000.0));
         if (plan.QRelaxed)
-            GaugeRowText("", $"did not converge at {plan.QMaxRequestedKpa:F0} kPa (out of reach at full throttle): retried looser", CvxWarn);
-        GaugeRowText("Max q-alpha", $"{sol.QAlpha[qai]:F0} Pa rad at {sol.Time[qai]:F0} s (limit {plan.QAlphaMax:F0})",
-            sol.QAlpha[qai] > plan.QAlphaMax * 1.002 ? CvxWarn : CvxDim);
-        GaugeRowText("Insertion", $"{plan.InsertionAltKm:F0} km, miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s, "
-            + $"plane {sol.TerminalResidual[3]:F0} m", CvxDim);
+            GaugeRowText(D, "", FormattableString.Invariant($"did not converge at {plan.QMaxRequestedKpa:F0} kPa (out of reach at full throttle): retried looser"), CvxWarn);
+        GaugeRowText(D, "MAX Q-ALPHA", FormattableString.Invariant($"{sol.QAlpha[qai]:F0} Pa rad at {sol.Time[qai]:F0} s (limit {plan.QAlphaMax:F0} Pa rad)"),
+            LimitInk(sol.QAlpha[qai], plan.QAlphaMax));
+        GaugeRowText(D, "PLAN INSERTION", FormattableString.Invariant($"{plan.InsertionAltKm:F0} km, miss {Fmt.Fixed(sol.TerminalResidual[0], 0)} m, {Fmt.Fixed(sol.TerminalResidual[1], 2)} m/s, plane {Fmt.Fixed(sol.TerminalResidual[3], 0)} m"));
 
         if (_s.Running && _s.FlyingPlan != null)
-        {
-            GaugeRowText("Flight", _s.Phase == AscentPhase.Profile
-                ? $"flying the profile to {_s.ConvexHandoverAltKm:F0} km"
+            GaugeRowText(D, "FLIGHT", _s.Phase == AscentPhase.Profile
+                ? FormattableString.Invariant($"flying the profile to {_s.ConvexHandoverAltKm:F0} km")
                 : "handed over to UPFG", CvxLive);
-            return;
-        }
-        if (!_s.FlyConvexAscent)
+    }
+
+    private static float4 LimitInk(double value, double limit)
+        => value > limit * 1.002 ? CvxWarn : TuneRules.NearLimit(value, limit) ? Ui.Canvas.Palette.WarnDim.F4 : ConsoleStyle.TextPrimary;
+
+    private static void DrawPlanBurnsRow(AscentSolution sol)
+    {
+        var times = new string[sol.BurnTime.Length];
+        var hues = new Rgb8[sol.BurnTime.Length];
+        for (int i = 0; i < times.Length; i++)
         {
-            GaugeRowText("EXECUTE", "flies the gravity turn (convex profile off)", CvxDim);
-            return;
+            times[i] = PageText.PlanBurn(sol.BurnTime[i]);
+            hues[i] = ColorRules.Stage(i);
         }
-        if (ConvexPlanFlyable(vehicle, orbit, parent, ExecuteLaunchInstant(), out string why))
-            GaugeRowText("EXECUTE", "flies this plan", CvxGood);
-        else
-            GaugeRowText("EXECUTE", "calculates a new plan first: " + why, CvxWarn);
+        ConsoleUi.StageValues("PLAN BURNS", times, hues, PageText.PlanIdeal(sol.TotalDeltaV));
     }
 
     private static int ArgMax(double[] v)
@@ -199,123 +195,5 @@ public static partial class GuidanceWindow
         for (int i = 1; i < v.Length; i++)
             if (v[i] > v[best]) best = i;
         return best;
-    }
-
-    // --- plots -----------------------------------------------------------------
-
-    private static void DrawConvexPlots(AscentPlan plan, Orbit orbit, IParentBody parent, float width)
-    {
-        AscentPlanSeries s = plan.Series;
-        float w = Math.Max(width, 120f);
-        const float h = 110f;
-
-        // The vehicle's own position on each curve, while the profile is being flown.
-        double cursorSpeed = double.NaN, cursorTime = double.NaN, cursorRange = double.NaN;
-        if (_s.Running && ReferenceEquals(_s.FlyingPlan, plan))
-        {
-            cursorSpeed = AirSpeed(orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci, parent);
-            cursorTime = _s.ConvexPlanTime;
-        }
-
-        ConvexPlot("altitude (km) against downrange (km)", s.DownrangeKm, s.AltitudeKm, null,
-            w, h, _s.ConvexHandoverAltKm, "UPFG", cursorRange, s.StagingNodes);
-        double[] pitch = s.PitchDeg;
-        ConvexPlot("pitch (deg) against air speed (m/s)", s.AirSpeed, pitch, null,
-            w, h, double.NaN, "", cursorSpeed, s.StagingNodes);
-        var qPct = new double[s.QFraction.Length];
-        var qaPct = new double[s.QAlphaFraction.Length];
-        for (int i = 0; i < qPct.Length; i++)
-        {
-            qPct[i] = 100.0 * s.QFraction[i];
-            qaPct[i] = 100.0 * s.QAlphaFraction[i];
-        }
-        ConvexPlot("q (green) and q-alpha (amber), % of limit, against time (s)", s.Time, qPct, qaPct,
-            w, h, 100.0, "limit", cursorTime, s.StagingNodes);
-        // Only when the plan throttles at all: at the script's floor it is a flat line at 100.
-        if (plan.Profile != null && plan.Profile.MinThrottle < 0.985)
-            ConvexPlot("throttle (% of full) against time (s)", s.Time, s.ThrottlePct, null,
-                w, h, plan.ThrottleMinPct, "floor", cursorTime, s.StagingNodes);
-    }
-
-    /// <summary>
-    /// A draw-list line plot of one or two series against a shared x, with an optional horizontal reference line, the staging nodes ticked along the bottom, and an optional cursor.
-    /// </summary>
-    private static void ConvexPlot(string title, double[] xs, double[] ys, double[] ys2, float width, float height,
-                                   double refY, string refLabel, double cursorX, int[] marks)
-    {
-        var size = new float2(width, height);
-        float2 origin = ImGui.GetCursorScreenPos();
-        ImGui.Dummy(size);
-        ImDrawListPtr dl = ImGui.GetWindowDrawList();
-        dl.AddRectFilled(origin, origin + size, new ImColor8(16, 20, 26), 4f);
-        dl.AddRect(origin, origin + size, new ImColor8(95, 100, 105), 4f);
-
-        int n = Math.Min(xs.Length, ys.Length);
-        double xMin = double.PositiveInfinity, xMax = double.NegativeInfinity;
-        double yMin = double.PositiveInfinity, yMax = double.NegativeInfinity;
-        for (int i = 0; i < n; i++)
-        {
-            if (!double.IsFinite(xs[i]) || !double.IsFinite(ys[i])) continue;
-            xMin = Math.Min(xMin, xs[i]); xMax = Math.Max(xMax, xs[i]);
-            yMin = Math.Min(yMin, ys[i]); yMax = Math.Max(yMax, ys[i]);
-            if (ys2 != null && double.IsFinite(ys2[i]))
-            {
-                yMin = Math.Min(yMin, ys2[i]); yMax = Math.Max(yMax, ys2[i]);
-            }
-        }
-        var textCol = new ImColor8(205, 215, 225);
-        var axisCol = new ImColor8(160, 165, 170);
-        if (!double.IsFinite(xMin) || n < 2)
-        {
-            dl.AddText(origin + new float2(8f, 8f), new ImColor8(200, 120, 120), title + " (no data)");
-            return;
-        }
-        if (double.IsFinite(refY))
-        {
-            yMin = Math.Min(yMin, refY);
-            yMax = Math.Max(yMax, refY);
-        }
-        double xSpan = Math.Max(xMax - xMin, 1e-9), ySpan = Math.Max(yMax - yMin, 1e-9);
-
-        const float padL = 44f, padR = 8f, padTop = 18f, padBot = 16f;
-        float pw = size.X - padL - padR, ph = size.Y - padTop - padBot;
-        float2 P(double x, double y) => new(
-            origin.X + padL + (float)((x - xMin) / xSpan) * pw,
-            origin.Y + padTop + ph - (float)((y - yMin) / ySpan) * ph);
-
-        if (double.IsFinite(refY))
-        {
-            ScreenLine(dl, P(xMin, refY), P(xMax, refY), new ImColor8(120, 125, 130), 1f);
-            if (refLabel.Length > 0)
-                dl.AddText(P(xMax, refY) + new float2(-40f, -14f), axisCol, refLabel);
-        }
-
-        var pts = new float2[n];
-        for (int i = 0; i < n; i++) pts[i] = P(xs[i], ys[i]);
-        dl.AddPolyline(pts, new ImColor8(60, 220, 90), ImDrawFlags.None, 2f);
-        if (ys2 != null)
-        {
-            for (int i = 0; i < n; i++) pts[i] = P(xs[i], ys2[i]);
-            dl.AddPolyline(pts, new ImColor8(255, 190, 60), ImDrawFlags.None, 2f);
-        }
-
-        // Staging: a tick on the bottom axis at each separation.
-        if (marks != null)
-            foreach (int m in marks)
-                if (m >= 0 && m < n)
-                {
-                    float2 b = P(xs[m], yMin);
-                    ScreenLine(dl, b, b - new float2(0f, 6f), new ImColor8(235, 235, 235), 1.5f);
-                }
-
-        if (double.IsFinite(cursorX) && cursorX >= xMin && cursorX <= xMax)
-            ScreenLine(dl, P(cursorX, yMin), P(cursorX, yMax), new ImColor8(255, 215, 60), 1f);
-
-        dl.AddText(origin + new float2(padL, 2f), textCol, title);
-        dl.AddText(origin + new float2(4f, padTop - 2f), axisCol, $"{yMax:G4}");
-        dl.AddText(origin + new float2(4f, size.Y - padBot - 14f), axisCol, $"{yMin:G4}");
-        dl.AddText(origin + new float2(padL, size.Y - padBot + 1f), axisCol, $"{xMin:G4}");
-        string xm = $"{xMax:G4}";
-        dl.AddText(origin + new float2(size.X - padR - 8f * xm.Length, size.Y - padBot + 1f), axisCol, xm);
     }
 }

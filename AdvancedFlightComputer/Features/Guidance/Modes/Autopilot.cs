@@ -7,7 +7,6 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using AdvancedFlightComputer.Core;
-using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using HarmonyLib;
 using KSA;
@@ -16,7 +15,7 @@ using AdvancedFlightComputer.Features.Guidance.Upfg;
 
 // Shared plumbing used by every flow: the per-vehicle step-and-apply entry point (ApplyAutopilot, called from the Vehicle.PrepareWorker Harmony prefix for each craft in turn), the commanded attitude, auto-staging, the UPFG vehicle builder, the warp-confirmation prompt, and small math helpers.
 //
-// The state these act on is NOT here - it lives on the vehicle being serviced, via the ambient _s pointer (see VehicleAutopilotState). What remains static in this partial class belongs to the panel or to the process, not to a craft.
+// The state these act on is NOT here - it lives on the vehicle being serviced, via the ambient _s pointer (see VehicleAutopilotState). What remains static in this partial class belongs to the console or to the process, not to a craft.
 public static partial class GuidanceWindow
 {
 
@@ -44,7 +43,7 @@ public static partial class GuidanceWindow
     // The mod's clock: elapsed sim time in seconds. Used for everything time-based (turn ramp, staging cooldown, cutoff) so behavior is correct under time warp, unlike the wall-clock-ish player time.
     private static double SimNow() => Universe.GetElapsedSeconds();
 
-    // Nothing in the mod starts a time warp on its own: flows that want one call RequestWarp, and DrawWarpPrompt asks the user first. This prevents warping into a planet because a predicted burn point happened to be far away.
+    // Nothing in the mod starts a time warp on its own: flows that want one call RequestWarp, and the console head asks the user first (DrawHeadWarp). This prevents warping into a planet because a predicted burn point happened to be far away.
     private static bool _warpPromptActive;
     private static string _warpLabel = "";
     private static double _warpTargetSimSec;
@@ -61,49 +60,6 @@ public static partial class GuidanceWindow
 
     /// <summary>The label an armed launch asks to warp to its window under - how the prompt knows to offer Launch now beside the warp.</summary>
     private const string LaunchWindowWarpLabel = "the launch window";
-
-    private static void DrawWarpPrompt(Vehicle vehicle, Orbit orbit, IParentBody parent, double bodyRadius)
-    {
-        if (!_warpPromptActive)
-            return;
-        double wait = _warpTargetSimSec - SimNow();
-        if (wait <= 1.0 || Universe.IsAutoWarpActive)
-        {
-            _warpPromptActive = false;
-            return;
-        }
-        ImGui.SeparatorText("Time warp");
-        ImGui.TextColored(new float4(0.5f, 0.9f, 1f, 1f),
-            $"Warp to {_warpLabel}?  (T-{wait,6:F0} s)");
-        if (ImGui.Button("Warp"))
-        {
-            // The draw overlaps the vehicle solver, so the warp goes through the input buffer that Program.PrepareFrame drains with the solvers joined, as stock's own warp does.
-            InputEvents.AutoWarpBuffer.Add(new InputEvents.AutoWarpData
-            {
-                StopWarp = false,
-                WarpToTime = Universe.GetElapsedTime() + wait,
-            });
-            _warpPromptActive = false;
-        }
-        ImGui.SameLine();
-        if (ImGui.Button("Stay at 1x"))
-        {
-            _warpPromptActive = false;
-            _warpDeclinedLabel = _warpLabel;
-        }
-
-        // Offered to warp to a launch window, the other answer is not to wait for it at all - for a window just missed, whose next one is most of a revolution away (see LaunchNowAscent).
-        if (_warpLabel == LaunchWindowWarpLabel && !_s.Running)
-        {
-            ImGui.SameLine();
-            if (ImGui.Button("Launch now"))
-            {
-                ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
-                if (status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable)
-                    LaunchNowAscent(vehicle, orbit, parent, in plan);
-            }
-        }
-    }
 
     // Staging is the AutoStage feature's job: its per-vehicle machine stages on burnout and drops spent boosters, with the delays, the crossfeed refusal and the control-module guard. Guidance arms it for the craft it flies and adds the two cues only a flight plan knows: a cold ignition, when nothing produces thrust, and the reserve boundary of a returning booster. A request while a staging is still in flight is refused by the detector, and the cooldown keeps guidance from asking every step.
     private static void AutoSequence(Vehicle vehicle)
@@ -127,7 +83,7 @@ public static partial class GuidanceWindow
         {
             // The block did not load, or the standalone AutoStage mod holds it off.
             _s.StagingActive = false;
-            _s.Status = "Auto-staging unavailable: the AutoStage feature is off (see the log).";
+            _s.WarnStatus("AFC cannot stage: AutoStage is off (see the log).");
             return;
         }
 
@@ -149,7 +105,7 @@ public static partial class GuidanceWindow
                 GuidanceLog.Debug(vehicle, "AutoStage was switched off by the player, staging cues stop.");
             _s.ArmedStaging = false;
             _s.StagingActive = false;
-            _s.Status = "Auto-staging switched off by the player.";
+            _s.WarnStatus("AutoStage was switched off.");
             return;
         }
 
@@ -169,7 +125,7 @@ public static partial class GuidanceWindow
             if (_s.StagingActive)
                 GuidanceLog.Debug(vehicle, "staging held, the next sequence would separate the control module.");
             _s.StagingActive = false;
-            _s.Status = "Auto-staging held: the next sequence would separate the control module.";
+            _s.WarnStatus("Stage held: the next one drops the control module.");
             return;
         }
 
@@ -409,8 +365,8 @@ public static partial class GuidanceWindow
         if (now > _s.HandoverPendingUntil)
         {
             _s.HandoverPendingUntil = double.NegativeInfinity;
-            _s.BoostbackStatus = "Hand-over failed: " + (_s.AeroError.Length > 0
-                ? _s.AeroError : "no aero surrogate for the separated booster.");
+            _s.FailBoostback("The boostback did not start", "Hand-over failed: " + (_s.AeroError.Length > 0
+                ? _s.AeroError : "no aero surrogate for the separated booster."));
             GuidanceLog.Info(vehicle, _s.BoostbackStatus);
             return;
         }
@@ -486,7 +442,7 @@ public static partial class GuidanceWindow
             float ambientPressure = vehicle.PhysicsEnvironment.AtmosphericPressure;
             performance.RecomputeForFlight(ambientPressure);
             _s.StageModel = KsaVehicleAdapter.Build(vehicle, ambientPressure);
-            // The game's own total for the same recompute, latched for the panel to check our stage list against. Both are "from here on" - its simulated mole masses are re-seeded from the live tanks every recompute - so a disagreement means the adapter is reading the sequence list wrongly, which is exactly the failure that is invisible in a plausible-looking stage table. TotalDeltaV is a Volatile.Read of a float, so the draw thread can have this even though the Lists behind it can tear.
+            // The game's own total for the same recompute, latched for the staging bar to check our stage list against. Both are "from here on" - its simulated mole masses are re-seeded from the live tanks every recompute - so a disagreement means the adapter is reading the sequence list wrongly, which is exactly the failure that is invisible in a plausible-looking stage table. TotalDeltaV is a Volatile.Read of a float, so the draw thread can have this even though the Lists behind it can tear.
             _s.StageModelKsaDv = performance.TotalDeltaV;
 
             // One line when the staging changes shape, not one per refresh.
@@ -594,7 +550,7 @@ public static partial class GuidanceWindow
     ///
     /// ON THE PAD THE NEXT SEQUENCE IS USUALLY THE IGNITION, which separates nothing.
     /// Stopping there left the reserve unarmed until the engines were lit, and the
-    /// convex ascent, planned on the pad before EXECUTE launches, planned the whole first
+    /// convex ascent, planned on the pad before the launch commit, planned the whole first
     /// stage: the reserve then armed in the climb and staged the booster early, and UPFG
     /// took over from a vehicle well off the plan (2stage_controlled, 2026-11-04: 30 deg
     /// planned pitch at the hand-over against UPFG's 51). So sequences that separate
@@ -674,7 +630,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The first stage, in staging order, that can fly home and has a landing target set (Set target on its row in Returnable stages), else null. Setting one is what asks for a booster reserve.
+    /// The first stage, in staging order, that can fly home and has a landing target set (its STAGE SITE in LAUNCH > BOOSTERS), else null. Setting one is what asks for a booster reserve.
     ///
     /// NOT ONLY THE NEXT ONE. A core under strap-on boosters with no command pod is not the next thing to separate on the pad - the strap-ons are - but it is the booster coming home, and the plan has to size its reserve before lift-off. It arms once the strap-ons are gone and it is next (RefreshReserve).
     /// </summary>
@@ -683,7 +639,7 @@ public static partial class GuidanceWindow
 
     /// <summary>The booster and site a plan was asked to bring home to, as the plan records it (AscentPlan.RecoverySite): a target moved or cleared since makes that plan's reserve stale.</summary>
     internal static string RecoverySiteKey(ReturnableStage booster)
-        => booster == null ? "" : $"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}";
+        => booster == null ? "" : FormattableString.Invariant($"{booster.RootId}:{booster.TargetLatDeg:F6}:{booster.TargetLonDeg:F6}");
 
     /// <summary>The reserve a usable convex plan for this vehicle sized for its booster, for the target that booster has now, kg (AscentSolution.RecoveryReserveKg); NaN when there is none, or the gravity turn flies instead.</summary>
     private static double PlannedBoosterReserveKg(Vehicle vehicle)
@@ -831,10 +787,11 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The four things that contend for one vehicle. Not the same list as
-    /// <see cref="GuidanceTab"/>, which is a UI concept: Descent and Landing are
-    /// separate tabs but one machine (<see cref="LandingPhase"/>), and 6-DOF is a
-    /// sub-tab of Landing but a wholly separate mode.
+    /// The five modes that contend for one vehicle. Not the same list as the
+    /// console pages: landing from orbit and landing from here are two ways on one
+    /// page but one machine (<see cref="LandingPhase"/>), and touchdown guidance
+    /// (6-DOF) and entry guidance (3-DOF) are solver choices on that page but
+    /// separate modes.
     /// </summary>
     private enum GuidanceMode { Ascent, Landing, Boostback, SixDof, ThreeDof }
 
@@ -873,7 +830,7 @@ public static partial class GuidanceWindow
     ///
     /// 6-DOF is the one release with real work behind it - it owns a solver thread and
     /// the TVC override - so it goes through Disengage6Dof, gated on actually being
-    /// engaged. Ungated, every EXECUTE press would cut the engine and stop the log of a
+    /// engaged. Ungated, every commit would cut the engine and stop the log of a
     /// vehicle that was never flying 6-DOF at all.
     /// </summary>
     private static void ClaimVehicle(GuidanceMode mode, Vehicle vehicle)
@@ -886,6 +843,7 @@ public static partial class GuidanceWindow
         _s.ReleaseWithoutEngineCut = false;
         _s.ShutdownRequested = false;
         _s.TakeoverStop = false;
+        _s.ClearStatusLines();
         if (mode != GuidanceMode.Ascent)
         {
             _s.Running = false;
@@ -914,7 +872,7 @@ public static partial class GuidanceWindow
             Disengage6Dof(vehicle);
     }
 
-    // One line per mode phase change, whichever path made it, a step or a panel button. Compared against the phases the last line reported, so the draw path needs no log calls of its own.
+    // One line per mode phase change, whichever path made it, a step or a console button. Compared against the phases the last line reported, so the draw path needs no log calls of its own.
     private static void LogModeChanges(Vehicle vehicle)
     {
         if (!GuidanceLog.Enabled)
@@ -983,7 +941,7 @@ public static partial class GuidanceWindow
 
         bool sixDof = _s.Active || _s.EngagePending;
         bool landingActive = _s.LandingPhase != LandingPhase.Idle && _s.LandingPhase != LandingPhase.Done;
-        // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire EXECUTE. A booster adopted at separation also counts as flying until boostback engages.
+        // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire the commit. A booster adopted at separation also counts as flying until boostback engages.
         bool handingOver = _s.HandoverPendingUntil > SimNow();
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending
                    || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver;
@@ -1027,8 +985,8 @@ public static partial class GuidanceWindow
 
         // HOUSEKEEPING FIRST, ahead of the 6-DOF dispatch on purpose - that dispatch returns, so anything below it is skipped for a craft flying 6-DOF.
         //
-        // Keep the staging model current even while the autopilot is idle: both EXECUTE handlers need a stage list the instant they are pressed, and this is the only point in the frame where it can be built without racing the game's own recompute on the vehicle worker thread. An idle craft needs it only while a panel shows it or a stage has a landing target, so the recompute does not run for every craft the player flies by hand. Gated to ~4 Hz on the wall clock, per vehicle, so time warp doesn't multiply it. It catches its own faults.
-        if (flying || PanelVisible || AnyStageTargeted())
+        // Both commit handlers need a stage list the instant they are pressed, and this is the only point in the frame where it can be built without racing the game's recompute on the vehicle worker thread. Runs at about 4 Hz per vehicle on the wall clock.
+        if (flying || GuidanceUiVisible || AnyStageTargeted())
             RefreshStageModel(vehicle);
 
         // After the stage model, because both want a part tree that has finished settling after a separation and this is the first point in the frame where that is true. It engages boostback, so a fault here counts as a failed step like a mode's.
@@ -1049,7 +1007,7 @@ public static partial class GuidanceWindow
             }
         }
 
-        // Likewise the launch window: tracked, and FIRED, from here rather than from the panel. It has to run for a focused vehicle that is not flying yet, which is precisely the state an armed launch sits in. It starts the ascent, so a fault here counts as a failed step like a mode's. See StepLaunchWindow.
+        // Likewise the launch window: tracked, and FIRED, from here rather than from the console. It has to run for a focused vehicle that is not flying yet, which is precisely the state an armed launch sits in. It starts the ascent, so a fault here counts as a failed step like a mode's. See StepLaunchWindow.
         StepLaunchWindow(vehicle, orbit, parent, parent.MeanRadius);
 
         // The convex ascent's Calculate request is built here for the same reason as the stage model: this is the one point in the frame where the part tree is settled and nothing else is reading it. The solve itself runs on its own thread. It catches its own faults, which cost the plan, never the step.
@@ -1223,7 +1181,7 @@ public static partial class GuidanceWindow
             _s.WasEngaged = false;
         }
 
-        // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input. A coast that EXECUTE queued while another mode still owned the craft stays through that release, and claims again at Prep.
+        // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input. A coast that the commit queued while another mode still owned the craft stays through that release, and claims again at Prep.
         // A 6-DOF engage queued on this step is a handover, not an end: the deorbit burn queues one at its handoff, and the next step's 6-DOF dispatch runs it. Releasing here would drop the request and cut the engine the burn left lit, so the craft falls with nothing flying it.
         bool stillNeedsCraft = _s.Active || _s.EngagePending
             || (_s.Engage && (_s.Running || landingGuides || boostbackGuides || threeDofGuides));
@@ -1233,12 +1191,21 @@ public static partial class GuidanceWindow
 
     private static void StepReadouts(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
-        // What it would cost each returnable stage to come home from here. Housekeeping rather than guidance, and deliberately so: the whole value of the number is watching it through the climb, which means it has to be solved before anything has been staged and whether or not the tab is open. It is throttled to 1 Hz and shares one Jacobian across every stage - see Guidance/ReturnableStages.cs. Gated on a stage actually having a TARGET, not merely on one being returnable. The surrogate is a 72-azimuth sweep of the game's own CdA and it is refitted at every staging; paying for it on a craft nobody has asked to bring back would be a launch-time cost for a number nothing displays.
+        // What it would cost each returnable stage to come home from here. Housekeeping rather than guidance, and deliberately so: the whole value of the number is watching it through the climb, which means it has to be solved before anything has been staged and whether or not the page is open. It is throttled to 1 Hz and shares one Jacobian across every stage - see Guidance/ReturnableStages.cs. Gated on a stage actually having a TARGET, not merely on one being returnable. The surrogate is a 72-azimuth sweep of the game's own CdA and it is refitted at every staging; paying for it on a craft nobody has asked to bring back would be a launch-time cost for a number nothing displays.
         if (AnyStageTargeted())
         {
             EnsureBoostbackAero(vehicle, parent);
             UpdateReturnDv(vehicle, orbit, parent);
         }
+        // The console asks for the same work while a page shows it: the aero model before a boostback (so START BOOSTBACK finds one), a resample from DIAG, the impact of an idle booster, and the pass strip of a deorbit.
+        else if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Aero))
+            EnsureBoostbackAero(vehicle, parent);
+        if (ViewDemand.ConsumeResample(vehicle))
+            ResampleBoostbackAero(vehicle, parent);
+        if (!BoostbackLive && ViewDemand.Wants(vehicle, ViewDemand.Kind.Impact))
+            UpdateImpactPrediction(vehicle, orbit, parent, force: false);
+        if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Passes))
+            RefreshPasses(orbit, parent, parent.Mu, parent.MeanRadius);
 
         // Likewise the flown-trajectory trace: sampled off the simulation rather than the frame rate, and recorded whether or not guidance is running so the track is already there when the overlay is switched on - losing it the moment guidance engages would blank the overlay during exactly the descent worth watching.
         RecordTrace(vehicle, orbit);
@@ -1264,13 +1231,16 @@ public static partial class GuidanceWindow
         if (!KsaVehicleHeight.TryMeasure(vehicle, out KsaVehicleHeight.Result h))
         {
             // Keep the last good value: a guess of zero would plan the CoM into the ground.
-            _s.VehicleHeightStatus = $"no colliders to measure - holding {_s.VehicleHeightM:F2} m";
+            _s.VehicleHeightStowed = false;
+            _s.VehicleHeightStatus = FormattableString.Invariant($"no colliders to measure - holding {_s.VehicleHeightM:F1} m");
             return;
         }
         _s.VehicleHeightM = h.DeployedM;
+        _s.VehicleHeightStowed = h.Stowed > 0;
+        _s.VehicleHeightCard = h.Stowed > 0 ? Ui.Logic.PageText.LegsStowedCard(_s.VehicleHeightM, h.CurrentM) : "";
         _s.VehicleHeightStatus = h.Stowed > 0
-            ? $"legs stowed ({h.Stowed} of {h.Deployables}) - measured deployed, {h.CurrentM:F2} m as they are"
-            : h.Deployables > 0 ? "measured, legs deployed" : "measured, no deployable legs";
+            ? Ui.Logic.PageText.LegsStowed
+            : h.Deployables > 0 ? "Measured, legs deployed" : "Measured, no deployable legs";
     }
 
     // Release attitude without replacing the flight computer and losing the player's burn plan or settings.
@@ -1324,7 +1294,7 @@ public static partial class GuidanceWindow
     {
         if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
         {
-            _s.Status = $"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.";
+            _s.WarnStatus($"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.");
             return false;
         }
         if (acquire)
@@ -1347,6 +1317,17 @@ public static partial class GuidanceWindow
     // A failed release is retried with the intent it had, and a release the player or a save load asked for drops the coast.
     private static bool RetryRelease(Vehicle vehicle) => ReleaseVehicle(vehicle, _s.ReleaseRetryKeepsCoast);
 
+    /// <summary>Whether a release of <paramref name="s"/> has guidance state to free, besides the staging it always disarms. The console shows RELEASE from the same test.</summary>
+    internal static bool HoldsReleasableState(VehicleAutopilotState s)
+        => s.ControlAcquired || s.DeorbitNodeClaimed || s.FcResetPending || s.Worker != null
+            || s.Active || s.EngagePending || s.Converging || s.Running
+            || s.LaunchArmed || s.LandingCutPending
+            || s.HasCommand || s.Guidance != null
+            || s.HandoverPendingUntil != double.NegativeInfinity
+            || ReferenceEquals(SixDofLog.Owner, s)
+            || s.LandingPhase != LandingPhase.Idle || s.BoostbackPhase != BoostbackPhase.Idle
+            || s.ThreeDofPhase != ThreeDofPhase.Idle;
+
     /// <summary>
     /// Releases this vehicle's guidance state, keeping ownership if any cleanup fails.
     /// Run from the PrepareWorker prefix so the worker receives the released state.
@@ -1357,14 +1338,7 @@ public static partial class GuidanceWindow
         // Clear the wait even when no guidance resources need release.
         ResetLandingEngineWait();
         DisarmStaging(vehicle);
-        if (!_s.ControlAcquired && !_s.DeorbitNodeClaimed && !_s.FcResetPending && _s.Worker == null
-            && !_s.Active && !_s.EngagePending && !_s.Converging && !_s.Running
-            && !_s.LaunchArmed && !_s.LandingCutPending
-            && !_s.HasCommand && _s.Guidance == null
-            && _s.HandoverPendingUntil == double.NegativeInfinity
-            && !ReferenceEquals(SixDofLog.Owner, _s)
-            && _s.LandingPhase == LandingPhase.Idle && _s.BoostbackPhase == BoostbackPhase.Idle
-            && _s.ThreeDofPhase == ThreeDofPhase.Idle)
+        if (!HoldsReleasableState(_s))
         {
             // Nothing to release, so the next stop starts from the default again.
             _s.ReleaseWithoutEngineCut = false;
@@ -1437,7 +1411,7 @@ public static partial class GuidanceWindow
             if (_s.ReleaseError != failure)
                 GuidanceLog.Info(vehicle, failure + " The release is retried on the next step.");
             _s.ReleaseError = failure;
-            _s.Status = failure;
+            _s.DiagStatus(failure);
             return false;
         }
 
@@ -1449,7 +1423,7 @@ public static partial class GuidanceWindow
             _s.Status = "";
         if (_s.TakeoverStop)
         {
-            _s.Status = _s.TakeoverReason;
+            _s.WarnStatus(_s.TakeoverReason);
             _s.TakeoverStop = false;
         }
         _s.ShutdownRequested = false;

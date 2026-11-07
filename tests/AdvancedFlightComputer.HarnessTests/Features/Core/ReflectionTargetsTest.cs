@@ -5,7 +5,7 @@ using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.HyperbolicTargets;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
-using AdvancedFlightComputer.Features.PlanWindow;
+using AdvancedFlightComputer.Features.Ui.Console;
 using AdvancedFlightComputer.HarnessTests.Framework;
 using HarmonyLib;
 using KSA;
@@ -14,8 +14,9 @@ namespace AdvancedFlightComputer.HarnessTests;
 
 // Every string-keyed handle into the game resolves against the loaded build. That covers the
 // reflection keys each feature validates before it patches, the IL anchors the transpilers look
-// for, and the typed plan-window accessors, which also have to read and write through. A game-side
-// rename fails here instead of silently disabling a feature at load.
+// for, the typed planner accessors, which also have to read through, and the public planner setter
+// the planner key routing sits on. A game-side rename fails here instead of silently disabling a
+// feature at load.
 public sealed class ReflectionTargetsTest : AfcTest
 {
     public override string Name => "afc-reflection-targets";
@@ -24,20 +25,14 @@ public sealed class ReflectionTargetsTest : AfcTest
     {
         t.Check("Core keys resolve", GameReflection.ValidateCore());
         t.Check("HyperbolicTargets keys resolve", GameReflection.ValidateHyperbolicTargets());
-        t.Check("ManeuverTools keys resolve", GameReflection.ValidateManeuverTools());
-        t.Check("PlanWindow keys resolve", GameReflection.ValidatePlanWindow());
         t.Check("MultiPass keys resolve", GameReflection.ValidateMultiPass());
         t.Check("RcsTranslation keys resolve", GameReflection.ValidateRcsTranslation());
         t.Check("AutoStage keys resolve", GameReflection.ValidateAutoStage());
         t.Check("AutoRemove keys resolve", GameReflection.ValidateAutoRemove());
         t.Check("SettingsPage keys resolve", GameReflection.ValidateSettingsPage());
 
-        t.Check("DrawCorrectionTransfer anchor", PlanWindowPatchPipeline.HasCalculatedControlsAnchor);
-        t.Check("Burn.Create anchor", PlanWindowPatchPipeline.HasCreateAnchor);
-        t.Check("ConsoleStyle.PopWidgetStyle anchor", PlanWindowPatchPipeline.HasFallbackControlsAnchor);
         t.Check("BurnContextMenu.Draw anchor", Patch_BurnContextMenu_Launcher.IsAnchorPresent);
-        t.Check("DrawSelectedTransfer anchor", Patch_TransferPlanner_DrawSelectedTransfer_Flyby.IsAnchorPresent);
-        t.Check("DrawSelectedTransferUi anchor", Patch_TransferPlanner_DrawSelectedTransferUi_Flyby.IsAnchorPresent);
+        t.Check("TransferPlanner.set_ShowPlanWindow anchor", PlannerRoute.Setter != null);
         t.Check("FindClosestApproaches anchor", Patch_FindClosestApproaches.IsAnchorPresent);
         t.Check("GameSettings.OnDrawUi PopWidgetStyle anchor", ModSettingsPage.IsAnchorPresent);
         t.Check("ModLibrary.AllParts anchor", GameReflection.ModLibrary_AllParts != null);
@@ -46,14 +41,9 @@ public sealed class ReflectionTargetsTest : AfcTest
             AccessTools.Method(typeof(Universe), nameof(Universe.AutoWarpTo),
                 [typeof(UniverseTime), typeof(double), typeof(bool)]) != null);
 
-        // Stock initialises _transferType to its first entry, so a null key means the accessor did
-        // not read through.
-        t.Check("StockPlanner reads _transferType", StockPlanner.TransferTypeKey != null);
-
-        bool before = StockPlanner.DisplaySelectedTransfer;
-        StockPlanner.DisplaySelectedTransfer = !before;
-        t.Check("StockPlanner writes _displaySelectedTransfer", StockPlanner.DisplaySelectedTransfer == !before);
-        StockPlanner.DisplaySelectedTransfer = before;
+        // Stock fills _timeUnits in its field initialiser, so a null list means the accessor did not
+        // read through.
+        t.Check("StockPlanner reads _timeUnits", StockPlanner.TimeUnits != null);
 
         bool wasInjected = AutoStageFeature.GaugeEnumInjected;
         t.Check("AfcAutoStageToggle injects into GaugeButtonFlightComputer.EnumTypes",

@@ -183,7 +183,7 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
             state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile && ReferenceEquals(state.FlyingPlan, state.AscentPlan)
             && !state.ConvexLaunchPending,
             $"running {state.Running}, phase {state.Phase}, pending {state.ConvexLaunchPending}");
-        AbortAscent.Invoke(null, null);
+        AbortAscent.Invoke(null, new object[] { vehicle });
         t.Check("ABORT stops it", !state.Running, $"running {state.Running}");
 
         // A plan that fits: EXECUTE launches at once, asking for nothing.
@@ -192,7 +192,7 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
             state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile && !state.ConvexLaunchPending
             && !state.AscentPlanRequested && state.AscentPlanJob == null,
             $"running {state.Running}, phase {state.Phase}, pending {state.ConvexLaunchPending}, requested {state.AscentPlanRequested}");
-        AbortAscent.Invoke(null, null);
+        AbortAscent.Invoke(null, new object[] { vehicle });
 
         // Other limits: the plan no longer fits, so EXECUTE calculates again - and ABORT cancels that launch before it starts.
         double qAlpha = state.ConvexQAlphaMax;
@@ -200,7 +200,7 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
         ExecuteAscent.Invoke(null, args);
         t.Check("a plan solved to other limits is calculated again", state.ConvexLaunchPending && !state.Running,
             $"pending {state.ConvexLaunchPending}, running {state.Running}");
-        AbortAscent.Invoke(null, null);
+        AbortAscent.Invoke(null, new object[] { vehicle });
         t.Check("ABORT cancels a launch waiting on its plan", !state.ConvexLaunchPending && !state.AscentPlanRequested && !state.Running,
             $"pending {state.ConvexLaunchPending}, requested {state.AscentPlanRequested}, running {state.Running}");
         driver.Step(0.02);
@@ -219,7 +219,7 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
             state.Running && state.Phase == GuidanceWindow.AscentPhase.Vertical && state.FlyingPlan == null && state.BackupAscent
             && state.ConvexLaunchFailure.Length == 0,
             $"running {state.Running}, phase {state.Phase}, backup {state.BackupAscent}, failure '{state.ConvexLaunchFailure}'");
-        AbortAscent.Invoke(null, null);
+        AbortAscent.Invoke(null, new object[] { vehicle });
         t.Check("ABORT clears the backup", !state.Running && !state.BackupAscent, $"running {state.Running}, backup {state.BackupAscent}");
     }
 }

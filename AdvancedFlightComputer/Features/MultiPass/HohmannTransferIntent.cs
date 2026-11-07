@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.ManeuverTools;
 using Brutal.Logging;
 using Brutal.Numerics;
@@ -73,9 +74,9 @@ internal sealed class HohmannTransferIntent : IManeuverIntent
         IOrbiter? target = ResolveTarget();
         if (target == null)
         {
-            TimedAlert.Create(
+            AfcAlerts.Info(
                 $"Hohmann multi-pass: target '{TargetId}' lost, cancelling.",
-                Color.Red, 5.0);
+                Color.Red, 5.0, vehicle);
             return PassPlanResult.Failure($"target '{TargetId}' no longer in system");
         }
 

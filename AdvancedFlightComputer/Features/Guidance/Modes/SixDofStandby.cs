@@ -97,7 +97,7 @@ public static partial class GuidanceWindow
         _s.Bias = default;
         _s.LastReplan = now;
         _s.LastMass = vehicle.TotalMass;
-        _s.Error = "standby: converging...";
+        _s.DiagError("standby: converging...");
 
         string what = $"burn-time seed {sigmaSeed:F1} s, {engageNodes} nodes";
         if (_s.SixDofLogging)
@@ -201,7 +201,7 @@ public static partial class GuidanceWindow
                 }
                 else
                 {
-                    _s.Error = $"standby: converging... {_s.Guidance.LastIterations} iterations, defect {_s.Guidance.DefectText}";
+                    _s.DiagError($"standby: converging... {_s.Guidance.LastIterations} iterations, defect {_s.Guidance.DefectText}");
                 }
             }
             else if (result.Ok)
@@ -214,7 +214,7 @@ public static partial class GuidanceWindow
             {
                 // Counted apart from RefusalRun, which drives the flying loop's back-off and restart: a refused tracking attempt still moved the solve on, and is not the failure those remedies are for.
                 _s.SixDofStandbyRefusals++;
-                _s.Error = "standby: re-solve refused: " + result.Error;
+                _s.DiagError("standby: re-solve refused: " + result.Error);
                 SixDofLog.Event(_s, now, "STANDBY RE-SOLVE REFUSED: " + result.Error);
             }
         }
@@ -294,11 +294,11 @@ public static partial class GuidanceWindow
         _s.SixDofEngineCut = false;
         _s.SixDofRestartOpenLoop = false;
         _s.SixDofFromBrakingBurn = false;
-        _s.Error = converging ? "converging..." : "";
+        _s.DiagError(converging ? "converging..." : "");
 
         string what = converging || plan == null
             ? $"its cold solve still running ({_s.Guidance.LastIterations} iterations so far)"
-            : $"a warm plan {now - plan.SolveTime:F2} s old: {plan.Sigma:F1} s to the target, {_s.Guidance.Nodes} nodes";
+            : FormattableString.Invariant($"a warm plan {now - plan.SolveTime:F2} s old: {plan.Sigma:F1} s to the target, {_s.Guidance.Nodes} nodes");
         GuidanceLog.Info(vehicle, $"Touchdown guidance takes the burn from standby at {x[2]:F0} m with {what}.");
         SixDofLog.Event(_s, now, "ENGAGED FROM STANDBY: " + what);
     }
@@ -314,7 +314,7 @@ public static partial class GuidanceWindow
         if (plan == null)
             return "no plan";
         return SixDofStandbyReady(now)
-            ? $"ready, plan {now - plan.SolveTime:F1} s old, {plan.Sigma:F1} s to go"
-            : $"catching up, plan {now - plan.SolveTime:F1} s old, {_s.SixDofStandbyRefusals} refused";
+            ? FormattableString.Invariant($"ready, plan {now - plan.SolveTime:F1} s old, {plan.Sigma:F1} s to go")
+            : FormattableString.Invariant($"catching up, plan {now - plan.SolveTime:F1} s old, {_s.SixDofStandbyRefusals} refused");
     }
 }

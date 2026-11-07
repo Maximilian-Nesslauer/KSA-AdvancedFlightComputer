@@ -521,7 +521,7 @@ public abstract class ConvexAscentFlightTest : AfcTest
             t.Info($"the plan keeps full throttle until the hand-over (lowest planned {lowestPlanned:P1}), so the profile throttle is not checked");
         t.Check("UPFG converged", upfgConverged);
         if (!t.Check("the ascent cuts off and releases guidance",
-                !state.Running && state.Status.StartsWith("Ascent complete", StringComparison.Ordinal),
+                !state.Running && state.Status.StartsWith("Ascent done", StringComparison.Ordinal),
                 $"running={state.Running} after {time:F0} s, status '{state.Status}', error '{state.GuidanceError}'"))
             return;
         driver.Step(StepDt, 8);

@@ -8,7 +8,7 @@ namespace AdvancedFlightComputer.Core;
 /// ModMenu also calls any public static CreateModMenu or DrawModMenu, so AFC must not use those names.</remarks>
 internal static class ModMenuBridge
 {
-    internal const string MenuName = "AFC Guidance";
+    internal const string MenuName = "AFC";
 
     private static bool _active;
     private static int _hookCalls;

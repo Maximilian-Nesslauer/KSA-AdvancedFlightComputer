@@ -1,14 +1,14 @@
 using System;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.MultiPass;
-using AdvancedFlightComputer.Features.PlanWindow;
+using AdvancedFlightComputer.Features.Ui.Console;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 
 namespace AdvancedFlightComputer.Features.ManeuverTools;
 
-// Each quick tool calculates its own burn time and needs input from the user, so the shortcut opens the planner instead of placing a burn at the clicked point.
+// Each quick tool calculates its own burn time and needs input from the user, so the shortcut opens the tool on the MANEUVER page of the AFC console instead of placing a burn at the clicked point.
 internal static class BurnMenuLauncher
 {
     public const int PeriapsisSubmenu = 0;
@@ -32,12 +32,12 @@ internal static class BurnMenuLauncher
             if (submenu == PeriapsisSubmenu)
             {
                 if (ImGui.MenuItem("AFC: Set Apoapsis..."u8))
-                    OpenPlanner(ManeuverTools.KeySetApoapsis, vehicle);
+                    OpenOrbitTool(ManeuverTools.KeySetApoapsis, vehicle);
             }
             else
             {
                 if (ImGui.MenuItem("AFC: Set Periapsis..."u8))
-                    OpenPlanner(ManeuverTools.KeySetPeriapsis, vehicle);
+                    OpenOrbitTool(ManeuverTools.KeySetPeriapsis, vehicle);
             }
         }
         catch (Exception ex)
@@ -64,14 +64,18 @@ internal static class BurnMenuLauncher
 
             try
             {
+                if (ImGui.MenuItem("Circularize..."u8))
+                    OpenOrbitTool(ManeuverTools.KeyCircularizeApoapsis, vehicle);
                 if (ImGui.MenuItem("Set Apoapsis..."u8))
-                    OpenPlanner(ManeuverTools.KeySetApoapsis, vehicle);
+                    OpenOrbitTool(ManeuverTools.KeySetApoapsis, vehicle);
                 if (ImGui.MenuItem("Set Periapsis..."u8))
-                    OpenPlanner(ManeuverTools.KeySetPeriapsis, vehicle);
+                    OpenOrbitTool(ManeuverTools.KeySetPeriapsis, vehicle);
                 if (ImGui.MenuItem("Match Inclination..."u8))
-                    OpenPlanner(ManeuverTools.KeyMatchInclination, vehicle);
+                    OpenOrbitTool(ManeuverTools.KeyMatchInclination, vehicle);
                 if (ImGui.MenuItem("Set Inclination..."u8))
-                    OpenPlanner(ManeuverTools.KeySetInclination, vehicle);
+                    OpenOrbitTool(ManeuverTools.KeySetInclination, vehicle);
+                if (ImGui.MenuItem("Open AFC"u8))
+                    AfcConsole.Open();
             }
             finally
             {
@@ -86,44 +90,16 @@ internal static class BurnMenuLauncher
         }
     }
 
-    internal static void OpenPlanner(string typeKey, Vehicle vehicle)
+    /// <summary>Opens the AFC console on the MANEUVER page with the tool and the craft selected.</summary>
+    internal static void OpenOrbitTool(string toolKey, Vehicle vehicle)
     {
-        if (FindType(typeKey) is not TransferType type)
-            return;
-
-        // TransferPlanner.DrawPlanWindow polls the stock worker only in its own body. Do not switch to an AFC body while that worker is running.
-        if (StockPlanner.TransferBeingCalculated)
-        {
-            TimedAlert.Create("Transfer calculating; wait for it to finish.", Color.Yellow, 3.0);
-            return;
-        }
-
         // The next pass replaces the committed trajectory, so another maneuver can be planned only after all passes finish.
         if (MultiPassRegistry.Has(vehicle.Id))
         {
-            TimedAlert.Create("Multi-pass running; cancel it or let it finish first.", Color.Yellow, 3.0);
+            AfcAlerts.Info("Multi-pass running; cancel it or let it finish first.", Color.Yellow, 3.0, vehicle);
+            AfcConsole.Open();
             return;
         }
-
-        // TransferPlanner.ShowPlanWindow clears stock selection state only when set to false.
-        TransferPlanner.ShowPlanWindow = true;
-        StockPlanner.SourceBody = new TransferObject(vehicle);
-        StockPlanner.SelectType(type);
-
-        // Reset input defaults when a shortcut changes the source or type outside the dropdown.
-        ManeuverToolsWindow.OnTypeChanged();
-        ManeuverToolsWindow.OnSourceChanged();
-        Patch_DrawPlanWindow.OnManeuverContextChanged();
-    }
-
-    // Resolve from the live list so a shortcut cannot reopen a removed plan type.
-    private static TransferType? FindType(string key)
-    {
-        foreach (TransferType candidate in TransferPlanner.TransferTypes)
-        {
-            if (candidate.GetKey() == key)
-                return candidate;
-        }
-        return null;
+        AfcConsole.OpenOrbitTool(toolKey, vehicle);
     }
 }

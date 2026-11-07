@@ -3,12 +3,16 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using AdvancedFlightComputer.Core;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
+using AdvancedFlightComputer.Features.Ui.Canvas;
+using AdvancedFlightComputer.Features.Ui.Logic;
+using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
-// The Powered landing tab's G-FOLD content: a side view of the descent, the two debug toggles, and every solver parameter folded away behind them.
+// The G-FOLD content of the LAND page and of the tuning page: a side view of the descent on the page, the airframe values in the page and its folds, and every solver parameter and debug toggle on the tuning page.
 //  The plot is in the PAD FRAME, which is the frame G-FOLD itself plans in: horizontal axis is range to the pad, vertical is height above touchdown, pad at bottom right.
 // That makes it a true side elevation of the descent rather than a projection of one.
 public static partial class GuidanceWindow
@@ -21,9 +25,27 @@ public static partial class GuidanceWindow
     // Refit a plan-less view once the content is inside this fraction of the frame.
     private const double GfoldRefitFraction = 0.4;
 
-    private static readonly ImColor8 GfoldPlanCol = new ImColor8(90, 190, 255);
-    private static readonly ImColor8 GfoldFlownCol = new ImColor8(255, 120, 200);
-    private static readonly ImColor8 GfoldThrustCol = new ImColor8(255, 176, 64);
+    private static readonly ImColor8 GfoldPlanCol = Palette.Plan.Solid;
+    private static readonly ImColor8 GfoldFlownCol = Palette.Flown.Solid;
+    private static readonly ImColor8 GfoldThrustCol = Palette.Plan.Solid;
+
+    private const float PlanBurnThick = 2.5f, PlanCoastThick = 1f;
+    private const float PlanCoastAlpha = 0.55f;
+
+    private const double PlanBurnShare = 0.02;
+
+    private static readonly string[] _descentLegendNames = { "Flown", "Burn", "Coast", PageText.ThrustKey };
+    private static readonly Picture.Swatch[] _descentSwatches =
+    {
+        new("Flown", Palette.Flown),
+        new("Burn", Palette.Plan, SwatchKind.Thick),
+        new("Coast", Palette.Plan),
+    };
+    private static readonly Picture.Swatch _thrustSwatch = new(PageText.ThrustKey, Palette.Plan, SwatchKind.Tick);
+    private static readonly Picture.Swatch[] _descentShown = new Picture.Swatch[4];
+
+    // The plot drew a mark of the plan thrust in this frame, so the legend names it.
+    private static bool _thrustDrawn;
 
     /// <summary>
     /// Samples the flown path. Takes the two plotted quantities OUTRIGHT - horizontal range to the pad and height above the site terrain, both in metres - rather than a local position, because the two site frames in this mod do not agree on which axis is up: KsaGfold.BuildFrame is X-up, KsaFrameBridge.BuildSiteFrame is Z-up. Passing a double3 and picking an axis in here silently read the 6-DOF plan's altitude off a horizontal component.
@@ -74,73 +96,111 @@ public static partial class GuidanceWindow
         _s.GfoldFlightTime0 = 0.0;
     }
 
-    // --- the side view ------------------------------------------------------
+    private static bool PoweredDescentDrawn
+        => _s.LandingPhase == LandingPhase.GfoldDescent || _s.LandingPhase == LandingPhase.TerminalHover || TerminalBurnActive || _s.Active;
 
-    private static void DrawGfoldPlot(ImDrawListPtr dl, float2 min, float2 size)
+    private static bool PoweredDescentStopped
+        => !PoweredDescentDrawn && _s.GfoldTraceCount > 1 && !_s.SixDofStandby && !_s.EngagePending
+           && Program.ControlledVehicle is Vehicle craft
+           && FlightView.StoppedPathShows(Ui.Console.ConsoleFrame.ReadFacts(craft).Where, SimNow() - _s.GfoldTraceLastTime);
+
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<VehicleAutopilotState, PlanJump> _planJumps = new();
+
+    private static double DescentPlanToGo()
     {
-        dl.AddRect(min, min + size, SchemSpent, 3f);
+        if (_s.Active && _s.Guidance != null && _s.Guidance.HasPlan && _s.Guidance.Published is { } published)
+            return published.Sigma - (SimNow() - published.SolveTime);
+        return _s.LandingPhase == LandingPhase.GfoldDescent && _s.GfoldPlan != null ? _s.GfoldArrivalTime - SimNow() : double.NaN;
+    }
+
+    private static void DrawGfoldPlot(in PictureFrame f, Vehicle vehicle)
+    {
+        ImDrawListPtr dl = f.Dl;
+        float s = f.Scale;
+        bool stopped = !PoweredDescentDrawn;
 
         // Every powered phase feeds the same trace, so one plot spans all of them.
         // What differs is the PLAN drawn behind it: G-FOLD has a trajectory, 6-DOF has its own, and the hover has none at all because it flies a rate profile.
-        bool live = _s.LandingPhase == LandingPhase.GfoldDescent
-                 || _s.LandingPhase == LandingPhase.TerminalHover
-                 || TerminalBurnActive
-                 || _s.Active;
-        if (!live)
-        {
-            dl.AddText(min + new float2(6f, 4f), SchemDim, "no powered descent");
-            return;
-        }
         GfoldTrajectory plan = !_s.Active && _s.GfoldPlan != null && _s.GfoldPlan.Nodes >= 2
             ? _s.GfoldPlan : null;
 
-        LockGfoldAxes(plan);
+        if (stopped)
+            FitStoppedAxes(plan);
+        else
+            LockGfoldAxes(plan);
         double axRange = Math.Max(_s.GfoldAxisRangeM, 1.0);
         double axAlt = Math.Max(_s.GfoldAxisAltM, 1.0);
 
-        float padL = 8f, padR = 10f, padT = 18f, padB = 12f;
-        float2 plotMin = min + new float2(padL, padT);
-        float2 plotSize = new float2(size.X - padL - padR, size.Y - padT - padB);
-        if (plotSize.X < 24f || plotSize.Y < 16f)
-            return;
+        PictureLanes lanes = Picture.Lanes(in f, Picture.TextLaneHeight(), Picture.TickWidth(AxisTicks.Distance(axAlt)),
+            Picture.LegendWidth(_descentLegendNames), Picture.TextLaneHeight());
+        PicBox plot = lanes.Plot;
 
         // The two axes scale INDEPENDENTLY, each filling the box.
-        //  A shared metres-per-pixel is the honest way to draw an elevation, and I tried it - but the box is about five times wider than tall, and a descent is far taller than it is wide by the end, so the isotropic fit left the trajectory as a sliver against the right edge with 90% of the plot empty. A distorted picture that fills the frame beats a true one too small to read; the corner label states both spans so the scales are never implied to match.
+        //  A shared metres-per-pixel would draw a true elevation, but the box is about five times wider than tall and a descent is far taller than it is wide by the end, so an isotropic fit leaves the trajectory as a sliver against the right edge with most of the plot empty. A distorted picture that fills the frame beats a true one too small to read, and the ticks on both axes state both scales, so they are never implied to match.
         //  Pad at the BOTTOM RIGHT: range runs down to zero as the vehicle arrives, so the descent reads left-to-right the way it is flown. NOT clamped - points outside the frame keep their true coordinates so they can be clipped away rather than smeared along the edge.
-        float2 plotMax = plotMin + plotSize;
+        float2 plotMin = new float2(plot.X + 4f * s, plot.Y + 4f * s);
+        float2 plotMax = new float2(plot.Right - 8f * s, plot.Bottom - 5f * s);
+        float2 plotSize = plotMax - plotMin;
+        if (plotSize.X < 24f || plotSize.Y < 16f)
+            return;
         float2 ToPlot(double rangeM, double altM) => new float2(
             plotMax.X - plotSize.X * (float)(rangeM / axRange),
             plotMax.Y - plotSize.Y * (float)(altM / axAlt));
+
+        Picture.AxisX(in f, in lanes, 0.0, axRange, time: false, r => ToPlot(r, 0.0).X, r => r == 0.0 ? PageText.SiteTick : AxisTicks.Distance(r));
+        Picture.AxisY(in f, in lanes, 0.0, axAlt, a => ToPlot(0.0, a).Y, AxisTicks.Distance);
 
         // Ground and the pad.
         float groundY = ToPlot(0.0, 0.0).Y;
         dl.AddLine(new float2(plotMin.X, groundY), new float2(plotMax.X, groundY),
             SchemSpent, 1.5f);
-        dl.AddCircleFilled(ToPlot(0.0, 0.0), 3f, SchemInk);
+        Glyphs.Site(dl, ToPlot(0.0, 0.0), 5f * s, Palette.Target.Solid, 1.5f * s);
 
+        int legend = 1;
+        _thrustDrawn = false;
         if (plan != null)
-            DrawGfoldPlannedPath(dl, plan, ToPlot, plotMin, plotMax);
+            legend = DrawGfoldPlannedPath(dl, plan, ToPlot, plotMin, plotMax, stopped);
         else if (_s.Active)
-            Draw6DofPlannedPath(dl, ToPlot, plotMin, plotMax);
+            legend = Draw6DofPlannedPath(dl, ToPlot, plotMin, plotMax);
         DrawGfoldFlownPath(dl, ToPlot, plotMin, plotMax);
 
-        // _s.GfoldAltM / GfoldSpeedMs / GfoldThrottle are written by the G-FOLD and hover steps only, so under 6-DOF they hold whatever the last descent left behind - which is why this line read "alt 0 m 0 m/s thr 0" throughout.
-        // 6-DOF reports from its own plan and command instead.
+        double thrNow = _s.Active && _s.Guidance != null && _s.Guidance.HasPlan ? _s.LastThrottle : _s.GfoldThrottle;
         double altNow = TryLastTraceSample(out float2 lastSample) ? lastSample.Y : _s.GfoldAltM;
-        double speedNow = _s.GfoldSpeedMs;
-        double thrNow = _s.GfoldThrottle;
-        if (_s.Active && _s.Guidance != null && _s.Guidance.HasPlan)
+        string caption = PlotShowsTouchdown ? SixDofCaption() : "";
+        bool newPlan = !stopped && _planJumps.GetOrCreateValue(_s).Update(DescentPlanToGo(), GuidanceClock.NowMs / 1000.0);
+        string head = stopped
+            ? (vehicle.Situation.HasAnyContact() ? PageText.FlownPath : PageText.StoppedAt(altNow))
+            : (newPlan ? PageText.NewPlan + "   " : caption.Length > 0 ? caption + "   " : "") + (plan != null && thrNow < 0.01 && PlanCoastsNow(plan) ? PageText.CoastWord : "Throttle " + Fmt.Percent(thrNow));
+        Picture.HeadText(in f, lanes.Head, PageText.HeightAboveSite + "   " + head, newPlan ? Palette.Text.Solid : Palette.Dim.Solid);
+        _descentSwatches.AsSpan(0, legend).CopyTo(_descentShown);
+        if (_thrustDrawn)
+            _descentShown[legend++] = _thrustSwatch;
+        Picture.Legend(in f, lanes.Right, _descentShown.AsSpan(0, legend));
+    }
+
+    private static bool PlanCoastsNow(GfoldTrajectory plan)
+    {
+        if (!(plan.Dt > 0.0) || plan.Nodes < 2)
+            return false;
+        double topSigma = 0.0;
+        for (int i = 0; i < plan.Nodes; i++)
+            topSigma = Math.Max(topSigma, plan.Sigma[i]);
+        int now = Math.Clamp((int)((SimNow() - _s.GfoldPlanStart) / plan.Dt), 0, plan.Nodes - 1);
+        return plan.Sigma[now] <= topSigma * PlanBurnShare;
+    }
+
+    // The axes of a descent that no longer flies: the whole flown path and the plan it had, with no latch, because nothing moves any more.
+    private static void FitStoppedAxes(GfoldTrajectory plan)
+    {
+        DescentExtent(plan, out double range, out double alt);
+        float2[] buf = _s.GfoldTrace;
+        int n = buf == null ? 0 : Math.Min(_s.GfoldTraceCount, buf.Length);
+        for (int i = 0; i < n; i++)
         {
-            ReadOnlySpan<double> px0 = _s.Guidance.PlanState;
-            if (px0.Length >= 14)
-                speedNow = Math.Sqrt(px0[3] * px0[3] + px0[4] * px0[4] + px0[5] * px0[5]);
-            thrNow = _s.LastThrottle;
+            range = Math.Max(range, buf[i].X);
+            alt = Math.Max(alt, buf[i].Y);
         }
-        dl.AddText(min + new float2(6f, 4f), SchemDim,
-            $"alt {altNow:F0} m   {speedNow:F0} m/s   thr {thrNow * 100:F0}");
-        string axes = $"{axRange / 1000.0:F1} x {axAlt / 1000.0:F1} km";
-        dl.AddText(new float2(min.X + size.X - 6f - ImGui.CalcTextSize(axes).X, min.Y + 4f),
-            SchemDim, axes);
+        SetAxes(range, alt);
     }
 
     /// <summary>
@@ -301,9 +361,9 @@ public static partial class GuidanceWindow
     private static bool Inside(float2 p, float2 lo, float2 hi)
         => p.X >= lo.X && p.X <= hi.X && p.Y >= lo.Y && p.Y <= hi.Y;
 
-    private static void DrawGfoldPlannedPath(ImDrawListPtr dl, GfoldTrajectory plan,
-                                             Func<double, double, float2> toPlot,
-                                             float2 lo, float2 hi)
+    private static int DrawGfoldPlannedPath(ImDrawListPtr dl, GfoldTrajectory plan,
+                                            Func<double, double, float2> toPlot,
+                                            float2 lo, float2 hi, bool stopped)
     {
         float2 PlanPoint(int i)
         {
@@ -311,8 +371,17 @@ public static partial class GuidanceWindow
             return toPlot(Math.Sqrt(pos[1] * pos[1] + pos[2] * pos[2]), pos[0]);
         }
 
+        double topSigma = 0.0;
+        for (int i = 0; i < plan.Nodes; i++)
+            topSigma = Math.Max(topSigma, plan.Sigma[i]);
+        double burnSigma = topSigma * PlanBurnShare;
+        bool coast = false;
         for (int i = 0; i < plan.Nodes - 1; i++)
-            ClipLine(dl, PlanPoint(i), PlanPoint(i + 1), lo, hi, GfoldPlanCol, 2f);
+        {
+            bool burns = plan.Sigma[i] > burnSigma;
+            coast |= !burns;
+            DrawPlanSegment(dl, PlanPoint(i), PlanPoint(i + 1), lo, hi, burns, stopped);
+        }
 
         // Thrust direction at a handful of nodes. AccelCmd is in the same pad frame, so its up component is x and its horizontal component projects onto the range direction - which points AWAY from the pad, i.e. leftward on the plot.
         int stride = Math.Max(1, plan.Nodes / 8);
@@ -321,7 +390,7 @@ public static partial class GuidanceWindow
             double[] pos = plan.Position[i];
             double[] acc = plan.AccelCmd[i];
             double horiz = Math.Sqrt(pos[1] * pos[1] + pos[2] * pos[2]);
-            if (horiz < 1e-6)
+            if (horiz < 1e-6 || plan.Sigma[i] <= burnSigma)
                 continue;
 
             // Component of thrust along "away from the pad".
@@ -337,33 +406,43 @@ public static partial class GuidanceWindow
             // Screen: +x is toward the pad (decreasing range), -y is up.
             float2 tip = at + new float2((float)(-alongRange / mag) * len,
                                          (float)(-acc[0] / mag) * len);
-            ClipLine(dl, at, tip, lo, hi, GfoldThrustCol, 1.5f);
+            ClipLine(dl, at, tip, lo, hi, stopped ? Palette.Plan.A(0.4f) : GfoldThrustCol, 1.5f);
+            _thrustDrawn = true;
         }
+        return coast ? 3 : 2;
+    }
+
+    private static void DrawPlanSegment(ImDrawListPtr dl, float2 a, float2 b, float2 lo, float2 hi, bool burns, bool stopped)
+    {
+        ImColor8 ink = stopped ? Palette.Plan.A(0.4f) : burns ? GfoldPlanCol : Palette.Plan.A(PlanCoastAlpha);
+        ClipLine(dl, a, b, lo, hi, ink, burns ? PlanBurnThick : PlanCoastThick);
     }
 
     /// <summary>
     /// The 6-DOF plan, in the same side view. Node states are laid out flat, fourteen doubles each with position first - the same buffer the world overlay reads.
     /// </summary>
-    private static void Draw6DofPlannedPath(ImDrawListPtr dl, Func<double, double, float2> toPlot,
-                                            float2 lo, float2 hi)
+    private static int Draw6DofPlannedPath(ImDrawListPtr dl, Func<double, double, float2> toPlot,
+                                           float2 lo, float2 hi)
     {
         Ksa6DofGuidance g = _s.Guidance;
         if (g == null || !g.HasPlan)
-            return;
+            return 1;
 
         int n = g.Nodes;
         if (n < 2)
-            return;
+            return 1;
 
         // Materialised up front: a Span cannot be captured by a local function, and projecting each node once is cheaper than doing it per use anyway.
         var pt = new float2[n];
         var thrust = new float2[n];
+        var thrustMag = new double[n];
+        double topThrust = 0.0;
         bool haveThrust;
         {
             ReadOnlySpan<double> px = g.PlanState;
             ReadOnlySpan<double> pu = g.PlanControl;
             if (px.Length < n * 14)
-                return;
+                return 1;
             haveThrust = pu.Length >= n * 4;
 
             // KsaFrameBridge's site frame is Z-UP - (ex, ey, up) - unlike the G-FOLD frame above it, which is X-up. So height is index 2 and the horizon is 0 and 1, the other way round from DrawGfoldPlannedPath.
@@ -389,20 +468,30 @@ public static partial class GuidanceWindow
                 double mag = Math.Sqrt(tSite.Z * tSite.Z + alongRange * alongRange);
                 if (mag > 1e-6)
                     thrust[k] = new float2((float)(-alongRange / mag), (float)(-tSite.Z / mag));
+                thrustMag[k] = mag;
+                topThrust = Math.Max(topThrust, mag);
             }
         }
 
+        double burnThrust = haveThrust ? topThrust * PlanBurnShare : -1.0;
+        bool coast = false;
         for (int k = 0; k < n - 1; k++)
-            ClipLine(dl, pt[k], pt[k + 1], lo, hi, GfoldPlanCol, 2f);
+        {
+            bool burns = thrustMag[k] > burnThrust;
+            coast |= !burns;
+            DrawPlanSegment(dl, pt[k], pt[k + 1], lo, hi, burns, stopped: false);
+        }
 
         int stride = Math.Max(1, n / 8);
         for (int k = 0; k < n; k += stride)
         {
-            if ((thrust[k].X == 0f && thrust[k].Y == 0f) || !Inside(pt[k], lo, hi))
+            if ((thrust[k].X == 0f && thrust[k].Y == 0f) || thrustMag[k] <= burnThrust || !Inside(pt[k], lo, hi))
                 continue;
             ClipLine(dl, pt[k], pt[k] + thrust[k] * GfoldThrustGlyphPx, lo, hi,
                 GfoldThrustCol, 1.5f);
+            _thrustDrawn = true;
         }
+        return coast ? 3 : 2;
     }
 
     private static void DrawGfoldFlownPath(ImDrawListPtr dl, Func<double, double, float2> toPlot,
@@ -425,58 +514,173 @@ public static partial class GuidanceWindow
         }
     }
 
-    // --- the tab ------------------------------------------------------------
-
-    private static void DrawGfoldLandingContent(float innerW, float rowH)
+    internal static void DrawGfoldDebugInline()
     {
+        if (_s.LandingSeverity == Severity.Diag && _s.LandingStatus.Length > 0)
+            ConsoleUi.Readout("SOLVER".AsSpan(), Fmt.Sentence(_s.LandingStatus).AsSpan());
+        GfoldTrajectory plan = _s.GfoldPlan;
+        if (plan == null)
+        {
+            ConsoleUi.MutedWrapped(PageText.DiagEmpty(TuneDiagnostics.Gfold));
+            return;
+        }
+
+        double elapsed = Math.Clamp(SimNow() - _s.GfoldPlanStart, 0.0, plan.TimeOfFlight);
+        float cursor = plan.TimeOfFlight > 1e-9 ? (float)(elapsed / plan.TimeOfFlight) : 0f;
+        int n = plan.Nodes;
+
+        // Solve cost is a first-class readout, not a diagnostic: this runs on the sim thread, so anything past a frame time (16.7 ms at 60 Hz) is a stutter the player feels once every re-solve interval.
+        ConsoleUi.Readout("STATUS".AsSpan(), _s.GfoldStatus.ToString().AsSpan());
+        ConsoleUi.Readout("PLAN".AsSpan(), FormattableString.Invariant($"{n} points, dt {plan.Dt:F2} s, tf {plan.TimeOfFlight:F1} s").AsSpan());
+        if (_s.GfoldThrustStatus.Length > 0)
+            ConsoleUi.Readout("THRUST".AsSpan(), Fmt.Sentence(_s.GfoldThrustStatus).AsSpan());
+        ConsoleUi.Readout("LAST SOLVE".AsSpan(), FormattableString.Invariant($"{_s.GfoldSolveMs:F1} ms, {_s.GfoldSolveMs / 16.7:F1} frames at 60 Hz").AsSpan());
+        ConsoleUi.Readout("FUEL USED".AsSpan(), FormattableString.Invariant($"{plan.FuelUsed:F0} kg").AsSpan());
+        ConsoleUi.Readout("LANDING ERROR".AsSpan(), FormattableString.Invariant($"{plan.LandingErrorNorm:F1} m").AsSpan());
+        ConsoleUi.Readout("PLAN TIME".AsSpan(), FormattableString.Invariant($"t+{elapsed:F1} s").AsSpan());
+
+        PlotPair("r.up (m)", i => plan.Position[i][0],
+                 "r.y (m)", i => plan.Position[i][1], n, cursor);
+        PlotPair("r.z (m)", i => plan.Position[i][2],
+                 "speed (m/s)", i => VecLen(plan.Velocity[i]), n, cursor);
+        PlotPair("v.up (m/s)", i => plan.Velocity[i][0],
+                 "v.y (m/s)", i => plan.Velocity[i][1], n, cursor);
+        PlotPair("v.z (m/s)", i => plan.Velocity[i][2],
+                 "|u| (m/s2)", i => VecLen(plan.AccelCmd[i]), n, cursor);
+        PlotPair("u.up (m/s2)", i => plan.AccelCmd[i][0],
+                 "u.y (m/s2)", i => plan.AccelCmd[i][1], n, cursor);
+        PlotPair("u.z (m/s2)", i => plan.AccelCmd[i][2],
+                 "sigma (m/s2)", i => plan.Sigma[i], n, cursor);
+        PlotPair("plan thrust (% of max)", i =>
+                 {
+                     int at = Math.Min(Math.Max(i, 1), n - 1);
+                     return 100.0 * plan.Sigma[at] * plan.Mass[at] / Math.Max(_s.GfoldThrustMax, 1.0);
+                 },
+                 "mass (kg)", i => plan.Mass[i], n, cursor);
+    }
+
+    private static double VecLen(double[] v)
+        => Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
+
+    // Two equal columns, measured once, because the room that is left after the first plot is less than half.
+    private static void PlotPair(string labelA, Func<int, double> a,
+                                 string labelB, Func<int, double> b, int n, float cursor)
+    {
+        float gap = ImGui.GetStyle().ItemSpacing.X;
+        float width = MathF.Max(120f * ImGuiHelper.InterfaceScale, (ConsoleStyle.ContentAvailWidth() - gap) * 0.5f);
+        PlotSeries(labelA, a, n, cursor, width);
+        ImGui.SameLine(0f, gap);
+        PlotSeries(labelB, b, n, cursor, width);
+    }
+
+    private static void PlotSeries(string label, Func<int, double> series, int n, float cursor, float width)
+    {
+        float scale = ImGuiHelper.InterfaceScale;
+        var size = new float2(width, 84f * scale);
+        float2 origin = ImGui.GetCursorScreenPos();
+        ImGui.Dummy(size);
+        ConsoleWidgets.InputWell(origin, size);
         ImDrawListPtr dl = ImGui.GetWindowDrawList();
-        float plotH = rowH * 6.5f;
-        DrawGfoldPlot(dl, ImGui.GetCursorScreenPos(), new float2(innerW, plotH));
-        ImGui.Dummy(new float2(innerW, plotH));
 
-        // Legend, so the two traces are never ambiguous.
-        dl.AddText(ImGui.GetCursorScreenPos(), GfoldPlanCol, "plan");
-        float2 legend = ImGui.GetCursorScreenPos();
-        dl.AddText(legend + new float2(38f, 0f), GfoldFlownCol, "flown");
-        dl.AddText(legend + new float2(90f, 0f), GfoldThrustCol, "thrust");
-        ImGui.Dummy(new float2(innerW, ImGui.GetTextLineHeight()));
-
-        // Debug toggles stay OUT of the fold: they are things you reach for while something is going wrong, which is exactly when you do not want to go hunting through a collapsed section for them.
-        ImGui.Checkbox("Show G-FOLD overlay (world)", ref _showGfoldOverlay);
-        ImGui.SameLine();
-        ImGui.Checkbox("G-FOLD debug", ref _showGfoldDebug);
-
-        // These two are up here rather than with the solver tuning because they are properties of the AIRFRAME and the flight plan, not of the optimiser: the hover handoff decides where G-FOLD stops flying, and the vehicle height is what "on the ground" means. Both get changed per vehicle; the rest rarely get touched at all.
-        if (ImGuiHelper.BeginRegion("Descent", ImGuiTreeNodeFlags.DefaultOpen
-                | ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        double min = double.PositiveInfinity, max = double.NegativeInfinity;
+        for (int i = 0; i < n; i++)
         {
-            GaugeRow("Hover handoff alt (m)", "##gfhand", ref _s.GfoldHoverHandoffAltM);
-            VehicleHeightRows("gf");
-            ImGuiHelper.EndRegion();
+            double v = series(i);
+            if (!double.IsFinite(v)) continue;
+            if (v < min) min = v;
+            if (v > max) max = v;
         }
 
-        if (ImGuiHelper.BeginRegion("G-FOLD parameters", ImGuiTreeNodeFlags.SpanAllColumns, innerW))
+        float pad = 6f * scale;
+        ConsoleUi.PushSmall();
+        dl.PushClipRect(origin, origin + size, true);
+        try
         {
-            // The UPFG-to-G-FOLD handoff gate is deliberately NOT here: it governs when the braking burn ends, which is a descent decision. It lives with the approach parameters on the Descent tab.
-            GaugeRow("Glide slope (deg)", "##gfglide", ref _s.GfoldGlideSlopeDeg);
-            GaugeRow("Thrust pointing (deg)", "##gfpoint", ref _s.GfoldPointingDeg);
-            GaugeRow("Max speed (m/s)", "##gfvmax", ref _s.GfoldVMaxMs);
-            GaugeRow("Solver min thrust (frac)", "##gftmin", ref _s.GfoldThrottleMin);
-            GaugeRow("Solver max thrust (frac)", "##gftmax", ref _s.GfoldThrottleMax);
-            GaugeRow("Thrust smoothing (0=off)", "##gfslew", ref _s.GfoldSlewReg);
-            GaugeRow("Re-solve interval (s)", "##gfint", ref _s.GfoldIntervalS);
+            float font = ImGui.GetFontSize();
+            float titleY = origin.Y + 3f * scale;
+            ImColor8 nameInk = Palette.Text.Solid, valueInk = Palette.Dim.Solid;
+            if (!double.IsFinite(min))
+            {
+                dl.AddText(new float2(origin.X + pad, titleY), Palette.Warn.Solid, label + ", no data");
+                return;
+            }
 
-            ImGui.Text("Nodes");
-            ImGui.NextColumn();
-            ImGui.PushItemWidth(-1f);
-            ImGui.InputInt("##gfnodes", ref _s.GfoldNodes);
-            ImGui.PopItemWidth();
-            ImGui.NextColumn();
+            double range = Math.Max(Math.Abs(min), Math.Abs(max));
+            int ci = Math.Clamp((int)MathF.Round(cursor * (n - 1)), 0, n - 1);
+            string now = "now " + TuneRules.PlotValue(series(ci), range);
+            float nowW = ImGui.CalcTextSize(now).X;
+            dl.AddText(new float2(origin.X + size.X - pad - nowW, titleY), nameInk, now);
+            dl.AddText(new float2(origin.X + pad, titleY), valueInk, ConsoleUi.FitEllipsis(label, size.X - pad * 3f - nowW));
 
-            GaugeRow("Track gain Kp", "##gfkp", ref _s.GfoldKp);
-            GaugeRow("Track gain Kd", "##gfkd", ref _s.GfoldKd);
-            GaugeRow("Command smoothing (s)", "##gftau", ref _s.GfoldSmoothTau);
-            ImGuiHelper.EndRegion();
+            string maxText = TuneRules.PlotValue(max, range), minText = TuneRules.PlotValue(min, range);
+            float lane = MathF.Max(ImGui.CalcTextSize(maxText).X, ImGui.CalcTextSize(minText).X) + pad;
+            float left = origin.X + lane + pad, right = origin.X + size.X - pad;
+            float top = titleY + font + 4f * scale, bottom = origin.Y + size.Y - 5f * scale;
+            dl.AddText(new float2(origin.X + lane - ImGui.CalcTextSize(maxText).X, top - font * 0.25f), valueInk, maxText);
+            dl.AddText(new float2(origin.X + lane - ImGui.CalcTextSize(minText).X, bottom - font), valueInk, minText);
+
+            double span = max - min;
+            if (span < 1e-9) span = 1.0;
+            float w = right - left, h = bottom - top;
+            var points = new float2[n];
+            for (int i = 0; i < n; i++)
+            {
+                double v = series(i);
+                if (!double.IsFinite(v)) v = min;
+                points[i] = new float2(
+                    left + (n > 1 ? (float)i / (n - 1) : 0f) * w,
+                    bottom - (float)((v - min) / span) * h);
+            }
+            dl.AddPolyline(points, Palette.Plan.Solid, ImDrawFlags.None, 2f);
+
+            float cx = left + cursor * w;
+            _ovSeg[0] = new float2(cx, top);
+            _ovSeg[1] = new float2(cx, bottom);
+            dl.AddPolyline(_ovSeg, Palette.Flown.Solid, ImDrawFlags.None, 1f);
+            dl.AddCircleFilled(points[ci], 3f, Palette.Flown.Solid);
         }
+        finally
+        {
+            dl.PopClipRect();
+            ConsoleStyle.PopFont();
+        }
+    }
+
+    // The descent plot and its legend are the LAND picture above this form. The hover handoff is a property of the flight plan, not of the optimiser, so it is in the HAND-OVERS (DrawHandOversFold), and the vehicle height is in the details of the form, because every way of landing reads it. This content is the solver tuning.
+    private static void DrawGfoldLandingContent(float innerW)
+    {
+        if (GuidanceRegion.Begin("G-FOLD PARAMETERS", GuidanceRegion.Tuning))
+        {
+            // The UPFG-to-G-FOLD handoff gate is deliberately NOT here: it governs when the braking burn ends, which is a descent decision. It lives with the approach parameters.
+            DrawTuningGroup("LIMITS", "GfoldLimits", true, Specs.TuningGfoldLimits, null, DrawGfoldLimitRows, PageText.GfoldLimitsTip);
+            DrawTuningGroup("TRACKING", "GfoldTracking", true, Specs.TuningGfoldTracking, null, DrawGfoldTrackingRows, PageText.GfoldTrackingTip);
+            DrawTuningGroup("SOLVER", "GfoldSolver", false, Specs.TuningGfoldSolver, null, DrawGfoldSolverRows, PageText.GfoldSolverTip);
+            GuidanceRegion.End();
+        }
+    }
+
+    private static void DrawGfoldLimitRows()
+    {
+        GaugeRow(Specs.GfoldGlideSlopeDeg, ref _s.GfoldGlideSlopeDeg);
+        GaugeRow(Specs.GfoldPointingDeg, ref _s.GfoldPointingDeg);
+        GaugeRow(Specs.GfoldVMaxMs, ref _s.GfoldVMaxMs);
+        GaugeRow(Specs.GfoldThrottleMin, ref _s.GfoldThrottleMin);
+        GaugeRow(Specs.GfoldThrottleMax, ref _s.GfoldThrottleMax);
+    }
+
+    private static void DrawGfoldTrackingRows()
+    {
+        GaugeRow(Specs.GfoldKp, ref _s.GfoldKp);
+        GaugeRow(Specs.GfoldKd, ref _s.GfoldKd);
+        GaugeRow(Specs.GfoldSmoothTau, ref _s.GfoldSmoothTau);
+        GaugeRow(Specs.GfoldIntervalS, ref _s.GfoldIntervalS);
+    }
+
+    private static void DrawGfoldSolverRows()
+    {
+        GaugeRowInt(Specs.GfoldNodes, ref _s.GfoldNodes);
+        GaugeRow(Specs.GfoldSlewReg, ref _s.GfoldSlewReg);
+        // The time limit stays a knob because Clarabel reports hitting it as a first-class status. There is no tolerance knob: an interior-point method's cost scales with log(1/eps), so accuracy is nearly free.
+        GaugeRow(Specs.GfoldSolveTimeLimitS, ref _s.GfoldSolveTimeLimitS);
     }
 }

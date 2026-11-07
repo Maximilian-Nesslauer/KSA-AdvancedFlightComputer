@@ -31,9 +31,9 @@ internal static class StockBurnMode
             return false;
         if (!takesStopBack && WouldStopAtOnce(vehicle, heldTarget))
         {
-            TimedAlert.CreateWarning(ReferenceEquals(vehicle, Program.ControlledVehicle)
+            AfcAlerts.Warning(ReferenceEquals(vehicle, Program.ControlledVehicle)
                 ? LStrings.AlertAutoBurnStopped.Format()
-                : LStrings.AlertAutoBurnStoppedVehicle.Format<string>(vehicle.Id));
+                : LStrings.AlertAutoBurnStoppedVehicle.Format<string>(vehicle.Id), vehicle);
             return false;
         }
         Write(vehicle, FlightComputerBurnMode.Auto);

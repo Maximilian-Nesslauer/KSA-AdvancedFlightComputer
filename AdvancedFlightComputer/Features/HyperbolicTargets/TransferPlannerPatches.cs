@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using HarmonyLib;
@@ -26,28 +25,8 @@ internal static class Patch_PopulateWithPlanets
 
         try
         {
-            if (StockPlanner.SourceVehicle is not Vehicle source) return;
-            if (HyperbolicTargets.TransferFrame(source) is not IParentBody frame) return;
-
-            ReadOnlySpan<Astronomical> all = Universe.CurrentSystem!.All.AsSpan();
-            for (int i = 0; i < all.Length; i++)
-            {
-                Astronomical body = all[i];
-                if (body is Vehicle || body is not IOrbiter orbiter) continue;
-                if (orbiter.Orbit == null || orbiter.Orbit.Eccentricity < 1.0) continue;
-                if (orbiter.Parent != frame) continue;
-                if (orbiter.Id == source.Id || orbiter.Id == source.Parent?.Id) continue;
-
-                if (orbiter.SphereOfInfluence <= 0.0 || double.IsNaN(orbiter.SphereOfInfluence))
-                {
-                    LogHelper.WarnOnce($"soi-missing-{orbiter.Id}",
-                        $"[AFC] {orbiter.Id} has no SOI, XML patch may be missing");
-                    continue;
-                }
-
-                if (count >= list.Length) break;
-                list[count++] = new TransferObject(body);
-            }
+            if (StockPlanner.SourceVehicle is Vehicle source)
+                HyperbolicTargets.AddUnboundTargets(source, list, ref count);
         }
         catch (Exception ex)
         {
@@ -115,10 +94,6 @@ internal static class Patch_HohmannFlight
 [HarmonyPatch(typeof(TransferPlanner), "SetTransferInfo", new Type[0])]
 internal static class Patch_SetTransferInfo
 {
-    private static readonly HashSet<string> _alertedTargets = new();
-
-    public static void Reset() => _alertedTargets.Clear();
-
     static Exception? Finalizer(Exception? __exception)
     {
         try
@@ -149,7 +124,7 @@ internal static class Patch_SetTransferInfo
             GameReflection.TransferPlanner_selectedMaxTimeRef!() = info.MaxTransferTimeOfFlight;
             SelectTimeUnit(hohmannSec);
 
-            MaybeAlertDepartureWindowPast(target, info.HohmannTimeOfFlight);
+            HyperbolicTargets.MaybeAlertDepartureWindowPast(target, info.HohmannTimeOfFlight);
             return null;
         }
         catch (Exception ex)
@@ -180,26 +155,6 @@ internal static class Patch_SetTransferInfo
             }
         }
     }
-
-    /// <summary>Says once per target that the ideal departure, one transfer time
-    /// before the target's periapsis, is already behind the sim time, which is
-    /// why the porkchop window looks degenerate. <see cref="Patch_AlignmentTime"/>
-    /// evaluates the same condition but also runs on the porkchop worker, and
-    /// <c>TimedAlert.Create</c> mutates an unsynchronized list the draw thread walks.</summary>
-    private static void MaybeAlertDepartureWindowPast(IOrbiter target, UniverseTime hohmannToF)
-    {
-        UniverseTime ideal = target.Orbit.TimeAtPeriapsis - hohmannToF;
-        if (!(ideal < Universe.GetElapsedTime())) return;
-
-        string targetId = target.Id;
-        if (!_alertedTargets.Add(targetId)) return;
-
-        // An unbound target has one periapsis passage, and TransferTask.Run sweeps from the current sim time whatever AlignmentTime returned, so this does not promise a later window.
-        TimedAlert.Create(
-            $"{targetId}: the ideal departure, one transfer time before its periapsis, " +
-            "has already passed. The porkchop window starts from the current time.",
-            Color.Yellow, 6.0);
-    }
 }
 
 /// <summary>
@@ -211,7 +166,7 @@ internal static class Patch_SetTransferInfo
 /// whenever the transfer source is not the vehicle, and the plan window's
 /// "Show Parent/Target Alignment" block calls it every frame on the draw thread.
 /// Nothing here may touch state that assumes one thread, which is why the player
-/// alert lives in <see cref="Patch_SetTransferInfo"/>.
+/// alert is raised from <see cref="Patch_SetTransferInfo"/> and the TRANSFER page.
 /// </summary>
 [HarmonyPatch(typeof(OrbitalTransfers), nameof(OrbitalTransfers.AlignmentTime),
     new Type[] { typeof(OrbitalTransfers.TransferInfo), typeof(UniverseTime), typeof(double) })]

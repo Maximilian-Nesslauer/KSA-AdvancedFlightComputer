@@ -54,7 +54,7 @@ public static partial class GuidanceWindow
         double tiltReserve = Math.Cos(TerminalBurnTiltDeg * Math.PI / 180);
         if (!(maximum * tiltReserve > gravity))
         {
-            RefuseLandingEngines("The landing engine cannot stop the descent with the required tilt reserve.");
+            RefuseLandingEngines(vehicle, "The landing engine cannot stop the descent", "The landing engine cannot stop the descent with the required tilt reserve.");
             return;
         }
         double minimumPulse = KsaEnginePerf.MinimumPulse(vehicle);

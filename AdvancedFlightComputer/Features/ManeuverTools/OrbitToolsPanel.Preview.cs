@@ -1,60 +1,40 @@
 using System;
 using AdvancedFlightComputer.Core;
-using AdvancedFlightComputer.Features.ManeuverTools;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using CommunityToolkit.HighPerformance.Buffers;
 using KSA;
 
-namespace AdvancedFlightComputer.Features.PlanWindow;
+namespace AdvancedFlightComputer.Features.ManeuverTools;
 
-internal static partial class Patch_DrawPlanWindow
+internal static partial class OrbitToolsPanel
 {
-    private const string FlightPlanWindowId = "afc-maneuver-flightplan";
-    private const string FlightPlanWindowTitle = "MANEUVER FLIGHT PLAN";
+    /// <summary>The trajectory after the planned burn: the last pass of a multi-pass preview, or the single burn's.</summary>
+    internal static FlightPlan? PreviewFlightPlan => MultiPassUI.HasMultiPassPreview
+        ? MultiPassUI.LastPassFlightPlan
+        : _lastEntry?.FlightPlan;
 
-    private static float FlightPlanWindowOffsetXPx => 620f * ImGuiHelper.InterfaceScale;
-    private static float FlightPlanWindowOffsetYPx => 40f * ImGuiHelper.InterfaceScale;
-    private static float FlightPlanWindowWidthPx => 460f * ImGuiHelper.InterfaceScale;
-    private static float FlightPlanWindowHeightPx => 620f * ImGuiHelper.InterfaceScale;
+    internal static FlightPlan? PlannedFlightPlan => PreviewFlightPlan ?? _ourBurn?.FlightPlan;
 
-    private static void DrawFlightPlanWindow(IViewport inViewport)
+    /// <summary>The trajectory that TUNE > DIAG > FLIGHT PLAN draws (FlightPlan.DrawPatchInfo), or null. Nothing refreshes the plan while that view is on screen, so a burn that left the stock plan or whose time has passed no longer counts.</summary>
+    internal static FlightPlan? KeptFlightPlan(UniverseTime now)
     {
-        FlightPlan? flightPlan = MultiPassUI.HasMultiPassPreview
-            ? MultiPassUI.LastPassFlightPlan
-            : _lastEntry?.FlightPlan;
-        if (flightPlan == null) return;
+        if (_ourBurn != null && (_ourBurn.Vehicle.IsDisposed || !_ourBurn.Vehicle.FlightComputer.BurnPlan.TryGetBurn(_ourBurn)))
+            _ourBurn = null;
+        if (PreviewBurnTime is UniverseTime previewTime && previewTime > now)
+            return PreviewFlightPlan;
+        return _ourBurn != null && _ourBurn.Time > now ? _ourBurn.FlightPlan : null;
+    }
 
-        ImGui.SetNextWindowPos(
-            inViewport.Position + new float2(FlightPlanWindowOffsetXPx, FlightPlanWindowOffsetYPx),
-            ImGuiCond.Appearing, (float2?)null);
-
-        if (!ConsoleStyle.BeginWindow(FlightPlanWindowId, FlightPlanWindowTitle, WindowSignature,
-                ref _showFlightPlanPreview,
-                new float2(FlightPlanWindowWidthPx, FlightPlanWindowHeightPx),
-                ImGuiWindowFlags.NoFocusOnAppearing))
-            return;
-
-        try
+    private static UniverseTime? PreviewBurnTime
+    {
+        get
         {
-            ConsoleStyle.BeginBody();
-            ConsoleStyle.PushWidgetStyle();
-            try
-            {
-                flightPlan.DrawPatchInfo();
-            }
-            finally
-            {
-                ConsoleStyle.PopWidgetStyle();
-                ConsoleStyle.EndBody();
-            }
-            ConsoleStyle.BeginFooter();
-            ConsoleStyle.EndFooter();
-        }
-        finally
-        {
-            ConsoleStyle.EndWindow();
+            if (!MultiPassUI.HasMultiPassPreview)
+                return _lastEntry?.TransferData.Start;
+            PassPreview[] passes = MultiPassPreviewCache.PreviewPasses;
+            return passes.Length > 0 ? passes[0].BurnTime : null;
         }
     }
 
@@ -106,13 +86,14 @@ internal static partial class Patch_DrawPlanWindow
         var uiContext = new Astronomical.UiContext(
             inViewport, _lastSource!, Color.Green,
             TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0),
-            ManeuverToolsWindow.GetSelectedTargetOrbiter());
+            OrbitToolForm.GetSelectedTargetOrbiter());
         _lastEntry!.FlightPlan.DrawUi(inViewport, uiContext, tintDanger: true);
     }
 
+    /// <summary>The MAP lines of the planned trajectory, from the CelestialSystem.OnPreRender postfix.</summary>
     internal static void RenderOrbitPreview(IViewport inViewport)
     {
-        if (!TransferPlanner.ShowPlanWindow)
+        if (!PreviewVisible)
             return;
 
         if (_ourBurn != null || _lastSource == null || !_showOrbitPreview)

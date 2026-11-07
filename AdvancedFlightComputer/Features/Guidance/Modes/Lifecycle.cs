@@ -111,7 +111,7 @@ public static partial class GuidanceWindow
         _handovers.Clear();
         _separationDrops.Clear();
         _retargetArmed = false;
-        _autoLaunchStepped = false;
+        _retargetStageId = 0;
     }
 
     internal static void StepSucceeded(Vehicle vehicle)
@@ -139,7 +139,7 @@ public static partial class GuidanceWindow
             return;
         _s = state;
         _s.FailedSteps = 0;
-        _s.Error = "Guidance stopped: " + error.Message;
+        _s.FailError("Guidance stopped after a fault", "Guidance stopped: " + error.Message);
         HandBackVehicle(vehicle);
     }
 

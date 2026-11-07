@@ -14,9 +14,9 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
 // The convex ascent: launch3dof.py's minimum-propellant ascent, solved offline for this vehicle by SCvx and flown open loop in place of the vertical rise and gravity turn, with UPFG taking over for the terminal guidance once the vehicle is high enough.
 //
-// EXECUTE asks for a plan when there is none that fits the launch, and launches - or arms for the window - once it converges; one that does not converge launches nothing, and the panel offers the vertical rise and deg/s gravity turn as a backup. Calculate ascent asks for one without launching, to look at it first. The request is picked up by the vehicle's sim step, which is the one place the part tree can be read without racing the game's own recompute, and which builds the problem there as plain data: the staging model with each stage's thrust across back pressure, the drag table sampled off the vehicle, the body's atmosphere, and the target orbit. The solve then runs on its own thread (AscentPlanJob) and publishes an immutable AscentPlan, which the panel draws and EXECUTE flies.
+// The commit asks for a plan when there is none that fits the launch, and launches - or arms for the window - once it converges; one that does not converge launches nothing, and the console offers the vertical rise and deg/s gravity turn as a backup. Calculate ascent asks for one without launching, to look at it first. The request is picked up by the vehicle's sim step, which is the one place the part tree can be read without racing the game's own recompute, and which builds the problem there as plain data: the staging model with each stage's thrust across back pressure, the drag table sampled off the vehicle, the body's atmosphere, and the target orbit. The solve then runs on its own thread (AscentPlanJob) and publishes an immutable AscentPlan, which the LAUNCH page draws and the commit flies.
 //
-// What EXECUTE flies is pitch and azimuth against AIR-RELATIVE SPEED (see ConvexAscentProfile), not the plan's clock, until the vehicle is above the hand-over altitude - or the plan's own speed runs out - and UPFG has converged; from there it is the ordinary UPFG ascent.
+// What the commit flies is pitch and azimuth against AIR-RELATIVE SPEED (see ConvexAscentProfile), not the plan's clock, until the vehicle is above the hand-over altitude - or the plan's own speed runs out - and UPFG has converged; from there it is the ordinary UPFG ascent.
 public static partial class GuidanceWindow
 {
     /// <summary>Back pressures each stage's thrust is sampled at, evenly from vacuum to the body's sea level. Fine enough that the spline follows KSA's flow-separation knee.</summary>
@@ -77,50 +77,69 @@ public static partial class GuidanceWindow
             if (plan != null)
             {
                 _s.AscentPlan = plan;
-                // The booster reserve is the plan's: re-read it now rather than at the next 4 Hz tick, so a launch straight from EXECUTE stages on it from the start.
+                // The booster reserve is the plan's: re-read it now rather than at the next 4 Hz tick, so a launch straight from the commit stages on it from the start.
                 _s.StageModelDirty = true;
                 AscentSolution sol = plan.Solution;
-                // A chosen LAN is the target now: the panel shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
+                // A chosen LAN is the target now: the LAUNCH page shows it, UPFG flies it after the hand-over, and the plan's own target check compares against it.
                 if (plan.Usable && plan.LanChosen)
                     _s.LanDeg = plan.LanDeg;
                 string booster = plan.Usable && double.IsFinite(sol.RecoveryReserveKg)
-                    ? $" Booster keeps {sol.RecoveryReserveKg / 1000.0:F2} t for a {sol.BoostbackDv:F0} m/s boostback and a {sol.LandingDv:F0} m/s landing."
+                    ? FormattableString.Invariant($" Booster keeps {sol.RecoveryReserveKg / 1000.0:F2} t for a {sol.BoostbackDv:F0} m/s boostback and a {sol.LandingDv:F0} m/s landing.")
                     : "";
                 string timing = !plan.Usable ? ""
-                    : plan.LaunchDelayS != 0.0 ? $" Lifts off {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window."
-                    : plan.LanChosen ? $" LAN {plan.LanDeg:F2} deg." : "";
+                    : plan.LaunchDelayS != 0.0 ? FormattableString.Invariant($" Lifts off {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window.")
+                    : plan.LanChosen ? FormattableString.Invariant($" LAN {plan.LanDeg:F2} deg.") : "";
                 // The commonest reason there is no plan: a stack with the thrust to spare cannot climb through the thick air under the q limit at full throttle, and the problem - which keeps the throttle within 1 % of full, as the script does - has no feasible trajectory. The seed search measured how low it can get.
                 string hint = !plan.Usable && sol.Nodes > 0 && double.IsFinite(sol.SeedLeastMaxQ)
                               && sol.SeedLeastMaxQ > 0.98 * plan.QMaxKpa * 1000.0
-                    ? $" At full throttle even its steepest climb reaches {sol.SeedLeastMaxQ / 1000.0:F0} kPa: raise Max q above that."
+                    ? FormattableString.Invariant($" At full throttle even its steepest climb reaches {sol.SeedLeastMaxQ / 1000.0:F0} kPa: raise Max q above that.")
                     : "";
                 string relaxed = plan.QRelaxed
-                    ? $" The first solve did not converge: max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was retried with looser constraints, max q {plan.QMaxKpa:F0} kPa."
+                    ? FormattableString.Invariant($" The first solve did not converge: max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was retried with looser constraints, max q {plan.QMaxKpa:F0} kPa.")
                     : "";
                 _s.AscentPlanStatus = plan.Usable
-                    ? $"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}"
+                    ? FormattableString.Invariant($"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}")
                     : $"No converged plan: {sol.Message}.{relaxed}{hint}";
                 // More than one attempt's line means the job retried looser - a relaxed max q or another stage - and that did not converge either.
                 bool retried = plan.QRelaxed || plan.Notes.Count > 1;
                 failure = plan.Usable ? ""
                     : $"Convergence was not possible{(retried ? ", even after retrying with looser constraints" : "")}: {sol.Message}.{relaxed}{hint}";
-                GuidanceLog.Info(vehicle, $"convex ascent {(plan.Usable ? "planned" : "did not converge")}: {sol.Message}, "
-                    + $"{sol.Iterations} iterations ({sol.Accepted} accepted) in {plan.WallSeconds:F1} s, kick {sol.KickDeg:F3} deg, "
-                    + (sol.Nodes > 0
-                        ? $"{sol.FinalMass / 1000.0:F2} t to orbit, burns {string.Join("/", Array.ConvertAll(sol.BurnTime, b => b.ToString("F0")))} s, "
-                          + $"max q {Max(sol.DynamicPressure) / 1000.0:F1} kPa, max q-alpha {Max(sol.QAlpha):F0} Pa rad, "
-                          + $"insertion miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s; "
-                        : "")
-                    + (timing.Length > 0 ? timing.Trim() + " " : "")
-                    + (booster.Length > 0 ? booster.Trim() + " " : "")
-                    + string.Join("; ", plan.Notes) + ".");
+                GuidanceLog.Info(vehicle, plan.Usable
+                    ? FormattableString.Invariant($"convex ascent planned: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.")
+                    : $"convex ascent did not converge: {GuidanceLog.Cut(sol.Message, 37)}.");
+                if (GuidanceLog.Enabled)
+                {
+                    GuidanceLog.DebugWrapped(vehicle, "convex solver: ", sol.Message);
+                    GuidanceLog.DebugWrapped(vehicle, "convex detail: ", FormattableString.Invariant(
+                        $"{sol.Iterations} iterations, {sol.Accepted} accepted, {plan.WallSeconds:F1} s, kick {sol.KickDeg:F3} deg"));
+                    if (sol.Nodes > 0)
+                    {
+                        GuidanceLog.DebugWrapped(vehicle, "convex detail: ", FormattableString.Invariant(
+                            $"{sol.FinalMass / 1000.0:F2} t, burns {string.Join("/", Array.ConvertAll(sol.BurnTime, b => FormattableString.Invariant($"{b:F0}")))} s"));
+                        GuidanceLog.DebugWrapped(vehicle, "convex detail: ", FormattableString.Invariant(
+                            $"max q {Max(sol.DynamicPressure) / 1000.0:F1} kPa, max q-alpha {Max(sol.QAlpha):F0} Pa rad"));
+                        GuidanceLog.DebugWrapped(vehicle, "convex detail: ", FormattableString.Invariant(
+                            $"insertion miss {sol.TerminalResidual[0]:F0} m / {sol.TerminalResidual[1]:F2} m/s"));
+                    }
+                    if (timing.Length > 0)
+                        GuidanceLog.DebugWrapped(vehicle, "convex timing: ", timing.Trim());
+                    if (booster.Length > 0)
+                        GuidanceLog.DebugWrapped(vehicle, "convex booster: ", booster.Trim());
+                    foreach (string note in plan.Notes)
+                        GuidanceLog.DebugWrapped(vehicle, "convex note: ", note);
+                }
             }
             else
             {
                 string[] notes = job.Notes;
                 _s.AscentPlanStatus = notes.Length > 0 ? "No plan: " + notes[^1] + "." : "No plan.";
                 failure = "Convergence was not possible: " + (notes.Length > 0 ? notes[^1] + "." : "the calculation ended without a plan.");
-                GuidanceLog.Info(vehicle, $"convex ascent calculation ended without a plan: {string.Join("; ", notes)}.");
+                GuidanceLog.Info(vehicle, "convex ascent calculation ended without a plan.");
+                if (GuidanceLog.Enabled)
+                {
+                    foreach (string note in notes)
+                        GuidanceLog.DebugWrapped(vehicle, "convex note: ", note);
+                }
             }
             if (_s.ConvexLaunchPending)
                 ContinueConvexLaunch(vehicle, orbit, parent, plan, failure);
@@ -140,20 +159,22 @@ public static partial class GuidanceWindow
         else
         {
             _s.AscentPlanStatus = "Cannot calculate: " + error + ".";
-            GuidanceLog.Info(vehicle, $"convex ascent not calculated: {error}.");
+            GuidanceLog.Info(vehicle, $"convex ascent not calculated: {GuidanceLog.Cut(error, 39)}.");
+            if (GuidanceLog.Enabled && error.Length > 39)
+                GuidanceLog.DebugWrapped(vehicle, "convex error: ", error);
             if (_s.ConvexLaunchPending)
-                FailConvexLaunch(vehicle, "The convex ascent cannot be calculated: " + error + ".");
+                FailConvexLaunch(vehicle, "The climb cannot be calculated: " + error + ".");
         }
     }
 
-    // --- EXECUTE: calculate, then launch -----------------------------------------
+    // The commit: calculate, then launch.
 
     /// <summary>The launch window's instant when there is a target to wait for, now otherwise: the lift-off a plan is posed for.</summary>
     private static double WindowInstant()
         => _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime) ? Math.Max(_s.LaunchTargetTime, SimNow()) : SimNow();
 
     /// <summary>
-    /// The lift-off EXECUTE would commit to: the window, moved by the launch time the convex plan chose for it, if it has one for this window (AscentPlan.LaunchDelayS). The window itself stays as it is tracked, so the backup gravity turn, and a plan for another window, keep it.
+    /// The lift-off the commit would launch at: the window, moved by the launch time the convex plan chose for it, if it has one for this window (AscentPlan.LaunchDelayS). The window itself stays as it is tracked, so the backup gravity turn, and a plan for another window, keep it.
     /// </summary>
     private static double ExecuteLaunchInstant()
     {
@@ -176,7 +197,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// EXECUTE without a plan that fits the launch. The convex profile is the ascent and the gravity turn only its backup, so EXECUTE solves a plan first and commits once it converges: starting the ascent, or arming it for the window, which the plan is then solved for. The vehicle is claimed now, as arming claims it, since the launch is committed.
+    /// The commit without a plan that fits the launch. The convex profile is the ascent and the gravity turn only its backup, so the commit solves a plan first and commits once it converges: starting the ascent, or arming it for the window, which the plan is then solved for. The vehicle is claimed now, as arming claims it, since the launch is committed.
     /// </summary>
     private static void RequestConvexLaunch(Vehicle vehicle, bool atWindow, string why)
     {
@@ -186,11 +207,13 @@ public static partial class GuidanceWindow
         _s.ConvexLaunchRetried = false;
         _s.ConvexLaunchFailure = "";
         RequestAscentPlan(atWindow ? WindowInstant() : double.NaN);
-        GuidanceLog.Info(vehicle, $"EXECUTE: calculating the convex ascent before {(atWindow ? "arming for the launch window" : "launching")} ({why}).");
+        GuidanceLog.Info(vehicle, $"launch: calculating the convex ascent, then {(atWindow ? "arming for the window" : "launching")}.");
+        if (GuidanceLog.Enabled)
+            GuidanceLog.DebugWrapped(vehicle, "launch calculates because: ", why);
     }
 
     /// <summary>
-    /// The plan EXECUTE waited on has landed. Launch on it if it converged and still fits; a converged plan that no longer fits - solved under time warp, or across a change of target - is asked for once more; anything else fails the launch, and the panel offers the backup.
+    /// The plan the commit waited on has landed. Launch on it if it converged and still fits; a converged plan that no longer fits - solved under time warp, or across a change of target - is asked for once more; anything else fails the launch, and the console offers the backup.
     /// </summary>
     private static void ContinueConvexLaunch(Vehicle vehicle, Orbit orbit, IParentBody parent, AscentPlan plan, string failure)
     {
@@ -208,28 +231,34 @@ public static partial class GuidanceWindow
                 _s.ConvexLaunchRetried = true;
                 _s.ConvexLaunchPending = true;
                 RequestAscentPlan(_s.ConvexLaunchAtWindow ? WindowInstant() : double.NaN);
-                GuidanceLog.Info(vehicle, $"EXECUTE: the convex plan came back but does not fit the launch ({why}), calculating it again.");
+                GuidanceLog.Info(vehicle, "launch: the convex plan does not fit the launch, calculating again.");
+                if (GuidanceLog.Enabled)
+                    GuidanceLog.DebugWrapped(vehicle, "launch plan misfit: ", why);
                 return;
             }
-            FailConvexLaunch(vehicle, $"The convex plan does not fit the launch: {why}.");
+            FailConvexLaunch(vehicle, $"The calculated plan does not fit the launch: {why}.");
             return;
         }
-        GuidanceLog.Info(vehicle, $"EXECUTE: convex plan ready, {(_s.ConvexLaunchAtWindow ? "arming for the launch window" : "launching")}.");
+        GuidanceLog.Info(vehicle, $"launch: convex plan ready, {(_s.ConvexLaunchAtWindow ? "arming for the launch window" : "launching")}.");
         LaunchAscent(vehicle, orbit, parent, _s.ConvexLaunchAtWindow);
     }
 
-    /// <summary>Nothing launches: the panel says why and offers the backup gravity turn, which is the player's call and never taken for them.</summary>
+    /// <summary>Nothing launches: the console says why and offers the backup gravity turn, which is the player's call and never taken for them.</summary>
     private static void FailConvexLaunch(Vehicle vehicle, string failure)
     {
         _s.ConvexLaunchPending = false;
         _s.ConvexLaunchFailure = failure;
-        GuidanceLog.Info(vehicle, $"EXECUTE: not launching. {failure}");
+        _s.ConvexBackupChosen = false;
+        GuidanceLog.Info(vehicle, "launch: not launching, no convex plan fits this launch.");
+        if (GuidanceLog.Enabled)
+            GuidanceLog.DebugWrapped(vehicle, "launch failure: ", failure);
     }
 
-    /// <summary>The backup the failure offers: the vertical rise and deg/s gravity turn, flown to the same target, now or at the window as EXECUTE asked.</summary>
+    /// <summary>The backup the failure offers: the vertical rise and deg/s gravity turn, flown to the same target, now or at the window as the commit asked.</summary>
     private static void LaunchBackupAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
         _s.ConvexLaunchFailure = "";
+        _s.ConvexBackupChosen = false;
         _s.BackupAscent = true;
         GuidanceLog.Info(vehicle, "launching in the backup deg/s gravity turn, by the player's choice.");
         LaunchAscent(vehicle, orbit, parent, _s.ConvexLaunchAtWindow);
@@ -293,7 +322,7 @@ public static partial class GuidanceWindow
         }
 
         // The stages. Each of the drain model's phases is one, with its solid motors' burns sampled from the game's own model and added on outside the throttle (#73), and a core that would run dry before its boosters throttled down to outlast them where it can (#32). Stage 0 starts at the LIVE mass, as UPFG reconciles it; whatever the model drops between one burnout and the next ignition is the jettison. The booster reserve comes off the first liquid load, as the ascent itself will fly it.
-        // The floor on the panel, but never under what the engines can throttle to, and never at 100 %, which would freeze the thrust direction. A stage of solids alone, or one whose liquids are held at full thrust, keeps the script's 99 %.
+        // The floor on the LAUNCH page, but never under what the engines can throttle to, and never at 100 %, which would freeze the thrust direction. A stage of solids alone, or one whose liquids are held at full thrust, keeps the script's 99 %.
         double floor = Math.Clamp(Math.Max(_s.ConvexThrottleMinPct / 100.0, vehicle.GetMinThrottle()), 0.01, FullThrottleFloor);
         double m0 = vehicle.TotalMass;
         double dragArea = aero.ReferenceArea;
@@ -331,7 +360,7 @@ public static partial class GuidanceWindow
             dvCum[i] = dvSum;
         }
 
-        // The target: the orbit on the panel, inserted into at periapsis - or where the ellipse crosses the top of the atmosphere, if periapsis is inside it, the floor UPFG itself keeps.
+        // The target: the orbit on the LAUNCH page, inserted into at periapsis - or where the ellipse crosses the top of the atmosphere, if periapsis is inside it, the floor UPFG itself keeps.
         double rp = bodyRadius + Math.Min(_s.PeKm, _s.ApKm) * 1000.0;
         double ra = bodyRadius + Math.Max(_s.PeKm, _s.ApKm) * 1000.0;
         if (!(rp > bodyRadius))
@@ -438,7 +467,7 @@ public static partial class GuidanceWindow
                     Alpha = GlideNominalAlpha(aero),
                     Air = aero.Atmosphere,
                 };
-                recoveryNote = $"booster reserve sized by the plan: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) home to lat {latDeg:F3} lon {lonDeg:F3}";
+                recoveryNote = FormattableString.Invariant($"booster reserve sized by the plan: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) home to lat {latDeg:F3} lon {lonDeg:F3}");
             }
         }
 
@@ -553,24 +582,48 @@ public static partial class GuidanceWindow
             dump = "not written: " + e.Message;
         }
 
-        GuidanceLog.Info(vehicle, $"convex ascent requested (problem {dump}): {count} stage(s) available, trying {initial} first; "
-            + (launchAt > now ? $"lift-off at the window, {launchAt - now:F0} s from now; " : "")
-            + (freeTime ? $"launch time free from {-turnMax / omega:+0;-0} to {-turnMin / omega:+0;-0} s of the window; " : "")
-            + (freeLan ? $"LAN free {UpfgTarget.RadToDeg(turnMin):+0.00;-0.00} to {UpfgTarget.RadToDeg(turnMax):+0.00;-0.00} deg of the plane over the pad; " : "")
-            + (recoveryNote.Length > 0 ? recoveryNote + "; " : "")
-            + $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s, inc {_s.IncDeg:F2} deg, LAN {lanDeg:F2} deg, "
-            + $"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad, throttle floor {floor * 100.0:F0} % ({string.Join("/", allStages.Select(st => (st.ThrottleMin * 100.0).ToString("F0")))} by stage), "
-            + $"acceleration limit {accelLimitG:F2} g (g-limit {(double.IsFinite(userGLimit) ? userGLimit.ToString("F2") + " g" : "off")}, structure {structuralGLimit:F2} g) on {allStages.Count(st => double.IsFinite(st.AccelerationLimit))} stage(s), drag area {dragArea:F1} m^2, "
-            + (atmosphere != null ? $"air {atmosphere}" : "no air") + ".");
-        for (int i = 0; i < count; i++)
-            GuidanceLog.Info(vehicle, $"convex ascent stage {i + 1}: {stagePlan.Describe[i]}"
-                + (allStages[i].IsPinned ? $", pinned to {allStages[i].FixedBurnTime:F1} s" : "")
-                + (allStages[i].JettisonMass > 0.0 ? $", drops {allStages[i].JettisonMass / 1000.0:F2} t" : "") + ".");
-        for (int m = 0; m < gathered.Motors.Count; m++)
-            GuidanceLog.Info(vehicle, $"convex ascent solid '{gathered.Motors[m].Name}': burns {gathered.Motors[m].BurnTime:F1} s stepped through the game's model "
-                + $"(its thrust profile reports {gathered.ProfileSeconds[m]:F1} s for the full grain), flow {gathered.Motors[m].MassFlow[0]:F0} -> {gathered.Motors[m].MassFlow[^1]:F0} kg/s.");
-        foreach (string note in stagePlan.Notes)
-            GuidanceLog.Info(vehicle, "convex ascent: " + note + ".");
+        GuidanceLog.Info(vehicle, FormattableString.Invariant($"convex ascent requested: {count} stages, trying {initial} first."));
+        if (GuidanceLog.Enabled)
+        {
+            const string head = "convex request: ";
+            if (launchAt > now)
+                GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant($"lift-off at the window, {launchAt - now:F0} s from now"));
+            if (freeTime)
+                GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant(
+                    $"launch time free from {-turnMax / omega:+0;-0} to {-turnMin / omega:+0;-0} s of the window"));
+            if (freeLan)
+                GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant(
+                    $"LAN free {UpfgTarget.RadToDeg(turnMin):+0.00;-0.00} to {UpfgTarget.RadToDeg(turnMax):+0.00;-0.00} deg of the plane over the pad"));
+            if (recoveryNote.Length > 0)
+                GuidanceLog.DebugWrapped(vehicle, head, recoveryNote);
+            GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant(
+                $"{m0 / 1000.0:F1} t, target {(rIns - bodyRadius) / 1000.0:F0} km at {vIns:F0} m/s"));
+            GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant($"inc {_s.IncDeg:F2} deg, LAN {lanDeg:F2} deg"));
+            GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant($"q {qMaxKpa:F0} kPa, q-alpha {qAlphaMax:F0} Pa rad"));
+            GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant(
+                $"throttle floor {floor * 100.0:F0} %, by stage {string.Join("/", allStages.Select(st => FormattableString.Invariant($"{st.ThrottleMin * 100.0:F0}")))} %"));
+            GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant(
+                $"accel limit {accelLimitG:F2} g on {allStages.Count(st => double.IsFinite(st.AccelerationLimit))} stages, structure {structuralGLimit:F2} g"));
+            GuidanceLog.DebugWrapped(vehicle, head, double.IsFinite(userGLimit)
+                ? FormattableString.Invariant($"g-limit {userGLimit:F2} g, drag area {dragArea:F1} m^2")
+                : FormattableString.Invariant($"g-limit off, drag area {dragArea:F1} m^2"));
+            GuidanceLog.DebugWrapped(vehicle, head, atmosphere != null
+                ? FormattableString.Invariant($"air rho0 {atmosphere.SeaLevelDensity:G4} kg/m^3, P0 {atmosphere.SeaLevelPressure:G6} Pa")
+                : "no air");
+            if (atmosphere != null)
+                GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant(
+                    $"air H {atmosphere.ScaleHeight / 1000.0:F2} km, top {atmosphere.TopAltitude / 1000.0:F1} km, a {atmosphere.SpeedOfSound:F1} m/s"));
+            GuidanceLog.DebugWrapped(vehicle, "convex problem: ", dump);
+            for (int i = 0; i < count; i++)
+                GuidanceLog.DebugWrapped(vehicle, FormattableString.Invariant($"convex stage {i + 1}: "), stagePlan.Describe[i]
+                    + (allStages[i].IsPinned ? FormattableString.Invariant($", pinned to {allStages[i].FixedBurnTime:F1} s") : "")
+                    + (allStages[i].JettisonMass > 0.0 ? FormattableString.Invariant($", drops {allStages[i].JettisonMass / 1000.0:F2} t") : ""));
+            for (int m = 0; m < gathered.Motors.Count; m++)
+                GuidanceLog.DebugWrapped(vehicle, "convex solid: ", FormattableString.Invariant(
+                    $"'{gathered.Motors[m].Name}' burns {gathered.Motors[m].BurnTime:F1} s in the game's model, its thrust profile {gathered.ProfileSeconds[m]:F1} s, flow {gathered.Motors[m].MassFlow[0]:F0} -> {gathered.Motors[m].MassFlow[^1]:F0} kg/s"));
+            foreach (string note in stagePlan.Notes)
+                GuidanceLog.DebugWrapped(vehicle, "convex note: ", note);
+        }
 
         double handoverRadius = bodyRadius + _s.ConvexHandoverAltKm * 1000.0;
         job = new AscentPlanJob(Build, count, initial, qMax, Publish,
@@ -624,7 +677,7 @@ public static partial class GuidanceWindow
     // --- flying the plan ------------------------------------------------------
 
     /// <summary>
-    /// Whether the stored plan may be flown on this vehicle as it is now. A plan belongs to the vehicle, place, mass, lift-off instant, target and limits it was solved for; EXECUTE calculates a new one for a plan that has lost any of them, and the reason says why.
+    /// Whether the stored plan may be flown on this vehicle as it is now. A plan belongs to the vehicle, place, mass, lift-off instant, target and limits it was solved for; the commit calculates a new one for a plan that has lost any of them, and the reason says why.
     /// </summary>
     /// <param name="launchAt">The lift-off it would be flown from, sim time: now for a launch, the window's instant for one armed to wait for it.</param>
     private static bool ConvexPlanFlyable(Vehicle vehicle, Orbit orbit, IParentBody parent, double launchAt, out string why)
@@ -642,29 +695,29 @@ public static partial class GuidanceWindow
         }
         if (p.VehicleId != vehicle.Id || !ReferenceEquals(p.Body, parent))
         {
-            why = "planned for another vehicle or body";
+            why = "it was planned for another craft or body";
             return false;
         }
         double3 ccf = orbit.StateVectors.PositionCci.Transform(parent.GetCci2Ccf());
         if ((ccf - p.StartCcf).Length() > PlanStartToleranceM)
         {
-            why = "the vehicle has moved since it was planned";
+            why = "the craft has moved";
             return false;
         }
         if (Math.Abs(vehicle.TotalMass - p.Mass0) > PlanMassTolerance * p.Mass0)
         {
-            why = "the vehicle's mass has changed since it was planned";
+            why = "the mass of the craft has changed";
             return false;
         }
         if (p.TargetDiffers(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg))
         {
-            why = "the target orbit has changed since it was planned";
+            why = "the orbit has changed";
             return false;
         }
         if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct, UserGLimitG)
             || p.OptimisedTiming != _s.ConvexOptimiseTiming)
         {
-            why = "the convex settings have changed since it was planned";
+            why = "the limits have changed";
             return false;
         }
         if (p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
@@ -684,7 +737,7 @@ public static partial class GuidanceWindow
         return true;
     }
 
-    /// <summary>The panel's max-q and q-alpha as a plan is solved to them, floored away from zero.</summary>
+    /// <summary>The max-q and q-alpha of the LAUNCH page as a plan is solved to them, floored away from zero.</summary>
     private static double ConvexQMaxKpaUsed() => Math.Max(_s.ConvexQMaxKpa, 0.1);
     private static double ConvexQAlphaMaxUsed() => Math.Max(_s.ConvexQAlphaMax, 1.0);
 

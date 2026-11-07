@@ -10,7 +10,6 @@ using AdvancedFlightComputer.Guidance.Gfold;
 using KSA;
 
 // Convex (G-FOLD) powered descent from the high gate to the surface, flown as committed-trajectory tracking: solve a min-fuel plan, fly it by time index (feed-forward the planned thrust + PD feedback on the planned state), re-solve on a cadence.
-// Also home to the G-FOLD debug window, which plots every series of the committed optimal trajectory.
 public static partial class GuidanceWindow
 {
     // Orbital landings remove horizontal speed at an elevated gate before the solver targets the surface.
@@ -57,7 +56,7 @@ public static partial class GuidanceWindow
         bool missed = altitude <= _s.LandingVerticalGateM || (_s.GfoldPlan != null && now > _s.GfoldArrivalTime);
         if (!GfoldBrakingToGate || !missed) return false;
         ChangeGfoldApproach(GfoldApproach.Direct, now);
-        _s.LandingStatus = "The vertical approach gate was missed. G-FOLD lands on the site directly.";
+        _s.WarnLanding("The vertical approach gate was missed. G-FOLD lands on the site directly.");
         return true;
     }
 
@@ -100,7 +99,7 @@ public static partial class GuidanceWindow
     private const double GfoldFuelSearchRetryS = 2.0;
 
     // Shown while the plan flies to touchdown after a refused handoff, and kept through the re-solves that clear the status on success. The reason is in the guidance log.
-    private const string GfoldHoverRefusedStatus = "Terminal hover refused, G-FOLD flies its plan to touchdown.";
+    private const string GfoldHoverRefusedStatus = "The hover cannot take over, so G-FOLD flies its plan to the ground.";
 
     // Committed-trajectory tracking: the solved descent plan is flown by time index (feed-forward the planned thrust at the current time + light PD feedback on the reference state) and re-solved on a cadence, rather than applying node 0.
     // This follows the plan's coast (throttle down) and brake arcs instead of freezing the first node.
@@ -150,12 +149,12 @@ public static partial class GuidanceWindow
             StartTerminalHover(vehicle);
             if (_s.LandingPhase == LandingPhase.TerminalHover)
             {
-                _s.LandingStatus = $"G-FOLD handoff to terminal hover at {_s.GfoldAltM:F0} m.";
+                _s.LandingStatus = $"The hover takes over from G-FOLD at {_s.GfoldAltM:F0} m.";
                 return;
             }
             _s.GfoldHoverRefused = true;
             GuidanceLog.Info(vehicle, $"G-FOLD flies its plan to touchdown from {_s.GfoldAltM:F0} m: {_s.LandingStatus}");
-            _s.LandingStatus = GfoldHoverRefusedStatus;
+            _s.WarnLanding(GfoldHoverRefusedStatus);
         }
 
         // Inside the last GfoldMinTf seconds before the planned arrival, the distance still to fly is too small for any valid flight time: tf >= TfMin (the search floor) overshoots it, so a re-solve goes degenerate and reports the target unreachable right before the handoff.
@@ -187,7 +186,7 @@ public static partial class GuidanceWindow
             EffectiveAccelLimitG(vehicle) * StandardGravity, out string refusal);
         if (p == null)
         {
-            _s.LandingStatus = refusal;
+            EndLandingBadly(vehicle, "G-FOLD cannot plan for this craft", refusal);
             _s.GfoldLastSolveTime = now;
             _s.GfoldPlan = null;
             _s.GfoldThrottle = 0.0;
@@ -221,7 +220,7 @@ public static partial class GuidanceWindow
             // While the searches rest after a propellant refusal, the committed plan keeps flying and the single solve above still runs on every cadence, so a plan that fits again is taken at once. A retarget ends the rest, so its first search runs straight away, and a refused retarget rests like any other search. A craft with no plan yet always searches.
             if (traj == null && _s.GfoldPlan != null && now < _s.GfoldSearchRetryTime)
             {
-                FailGfold(vehicle, $"G-FOLD is short of propellant, searching again in {_s.GfoldSearchRetryTime - now:F1} s");
+                FailGfold(vehicle, FormattableString.Invariant($"G-FOLD is short of propellant, searching again in {_s.GfoldSearchRetryTime - now:F1} s"));
                 return;
             }
             if (traj == null)
@@ -264,15 +263,15 @@ public static partial class GuidanceWindow
 
                 if (best == null)
                 {
-                    FailGfold(vehicle, $"G-FOLD unreachable: alt {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, " +
-                              $"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, fuel {p.FuelMass:F0} kg"
-                              + (double.IsFinite(p.AccelMax) ? $", thrust acceleration limit {p.AccelMax / p.GravityMag:F1} local g" : ""));
+                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD unreachable: alt {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, ") +
+                              FormattableString.Invariant($"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, fuel {p.FuelMass:F0} kg")
+                              + (double.IsFinite(p.AccelMax) ? FormattableString.Invariant($", thrust acceleration limit {p.AccelMax / p.GravityMag:F1} local g") : ""));
                     return;
                 }
                 if (!FitsFuel(best.Trajectory, p))
                 {
                     _s.GfoldSearchRetryTime = now + GfoldFuelSearchRetryS;
-                    FailGfold(vehicle, $"G-FOLD needs {best.FuelUsed:F0} kg of propellant, {p.FuelMass:F0} kg aboard");
+                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD needs {best.FuelUsed:F0} kg of propellant, {p.FuelMass:F0} kg aboard"));
                     return;
                 }
                 traj = best.Trajectory;
@@ -290,6 +289,8 @@ public static partial class GuidanceWindow
             _s.LandingStatus = _s.GfoldHoverRefused ? GfoldHoverRefusedStatus
                 : GfoldBrakingToGate ? $"Braking to the vertical approach at {_s.LandingVerticalGateM:F0} m."
                 : GfoldVerticalFinal ? "Vertical final descent." : "";
+            if (_s.GfoldHoverRefused)
+                _s.WarnLanding(GfoldHoverRefusedStatus);
         }
         catch (Exception e)
         {
@@ -433,173 +434,17 @@ public static partial class GuidanceWindow
         // Only give up when there's nothing to fly - no plan was ever found.
         if (_s.GfoldPlan != null)
         {
-            _s.LandingStatus = $"G-FOLD re-solve failed ({_s.GfoldFailStreak}) - flying last trajectory. {message}";
+            _s.DiagLanding($"G-FOLD re-solve failed ({_s.GfoldFailStreak}) - flying last trajectory. {message}");
             return;
         }
-        _s.LandingStatus = message;
+        _s.DiagLanding(message);
         if (_s.GfoldFailStreak > 3)
         {
             if (_s.LandingPhase != LandingPhase.Done)
                 GuidanceLog.Info(vehicle, $"G-FOLD gave up after {_s.GfoldFailStreak} failed solves: {message}");
             _s.LandingPhase = LandingPhase.Done;
             _s.LandingCutPending = true;
-            _s.LandingStatus = "G-FOLD found no trajectory - vehicle is yours.";
+            EndLandingBadly(vehicle, "G-FOLD found no trajectory", "G-FOLD found no trajectory. You fly.");
         }
-    }
-
-    // ----- G-FOLD tuning popup -----
-
-    private static bool _showGfoldParams;
-
-    private static void DrawGfoldParamsWindow()
-    {
-        if (!_showGfoldParams)
-            return;
-
-        // Note: the UPFG->G-FOLD handoff gate lives in the Deorbit sub-tab, not here - it governs when the braking burn ends, which is a deorbit-phase decision, not a G-FOLD tuning one.
-        ImGui.Begin("G-FOLD params", ImGuiWindowFlags.AlwaysAutoResize);
-        using WindowEnd end = default;
-        ImGui.InputDouble("Glide slope (deg)", ref _s.GfoldGlideSlopeDeg);
-        ImGui.InputDouble("Thrust pointing (deg)", ref _s.GfoldPointingDeg);
-        ImGui.InputDouble("Max speed (m/s)", ref _s.GfoldVMaxMs);
-        ImGui.InputDouble("Solver min thrust (frac)", ref _s.GfoldThrottleMin);
-        ImGui.InputDouble("Solver max thrust (frac)", ref _s.GfoldThrottleMax);
-        ImGui.InputDouble("Thrust smoothing (0=off)", ref _s.GfoldSlewReg);
-        ImGui.InputDouble("Re-solve interval (s)", ref _s.GfoldIntervalS);
-        ImGui.InputInt("Nodes", ref _s.GfoldNodes);
-
-        // The solver swap, in front of whoever is flying it.
-        // Clarabel is the default and is GPLv3; SCS is MIT and is what an MIT release needs.
-        // They are fed the identical assembled problem, so switching mid-descent compares like with like - and the solve time beside the status is the number that decides it.
-        //
-        // The solver selector that used to sit here is gone: Clarabel is the only backend now.
-        // There is no tolerance knob either, and that is a property of the algorithm rather than an omission - an interior-point method's cost scales with log(1/eps) rather than 1/eps, so accuracy is nearly free and the tolerance stops being something a pilot should be tuning.
-        // The time limit stays, because Clarabel reports hitting it as a first-class status.
-        ImGui.InputDouble("Solve time limit (s, 0=none)", ref _s.GfoldSolveTimeLimitS);
-
-        ImGui.InputDouble("Hover handoff alt (m)", ref _s.GfoldHoverHandoffAltM);
-        if (ImGui.InputDouble("Vehicle height (m)", ref _s.VehicleHeightM))
-            _s.VehicleHeightAuto = false;
-        ImGui.InputDouble("Track gain Kp", ref _s.GfoldKp);
-        ImGui.InputDouble("Track gain Kd", ref _s.GfoldKd);
-        ImGui.InputDouble("Command smoothing (s)", ref _s.GfoldSmoothTau);
-        if (ImGui.Button("Close"))
-            _showGfoldParams = false;
-    }
-
-    // ----- G-FOLD debug window -----
-
-    private static bool _showGfoldDebug;
-
-    // Every series of the committed optimal trajectory plotted against plan time, with a cursor at "now" so you can watch the vehicle walk along the plan and each re-solve reshape it.
-    // Reads only the committed plan - pure display.
-    private static void DrawGfoldDebugWindow()
-    {
-        if (!_showGfoldDebug)
-            return;
-
-        ImGui.Begin("G-FOLD debug", ImGuiWindowFlags.AlwaysAutoResize);
-        using WindowEnd end = default;
-        GfoldTrajectory plan = _s.GfoldPlan;
-        if (plan == null)
-        {
-            ImGui.Text("No committed plan yet - appears once a G-FOLD descent solves.");
-            return;
-        }
-
-        double elapsed = Math.Clamp(SimNow() - _s.GfoldPlanStart, 0.0, plan.TimeOfFlight);
-        float cursor = plan.TimeOfFlight > 1e-9 ? (float)(elapsed / plan.TimeOfFlight) : 0f;
-        int n = plan.Nodes;
-
-        // Solve cost is a first-class readout, not a diagnostic: this runs on the sim thread, so anything past a frame time (16.7 ms at 60 Hz) is a stutter the player feels once every re-solve interval.
-        ImGui.Text($"status {_s.GfoldStatus}   nodes {n}   dt {plan.Dt:F2} s   tf {plan.TimeOfFlight:F1} s");
-        if (_s.GfoldThrustStatus.Length > 0)
-            ImGui.Text(_s.GfoldThrustStatus);
-        ImGui.Text($"last solve {_s.GfoldSolveMs:F1} ms   " +
-                   $"({_s.GfoldSolveMs / 16.7:F1} frames at 60 Hz)");
-        ImGui.Text($"fuel used {plan.FuelUsed:F0} kg   landing err {plan.LandingErrorNorm:F1} m   plan t+{elapsed:F1} s");
-
-        // Two plots per row to keep the window a sane height.
-        PlotPair("r.up (m)", i => plan.Position[i][0],
-                 "r.y (m)", i => plan.Position[i][1], n, cursor);
-        PlotPair("r.z (m)", i => plan.Position[i][2],
-                 "speed (m/s)", i => VecLen(plan.Velocity[i]), n, cursor);
-        PlotPair("v.up (m/s)", i => plan.Velocity[i][0],
-                 "v.y (m/s)", i => plan.Velocity[i][1], n, cursor);
-        PlotPair("v.z (m/s)", i => plan.Velocity[i][2],
-                 "|u| (m/s2)", i => VecLen(plan.AccelCmd[i]), n, cursor);
-        PlotPair("u.up (m/s2)", i => plan.AccelCmd[i][0],
-                 "u.y (m/s2)", i => plan.AccelCmd[i][1], n, cursor);
-        PlotPair("u.z (m/s2)", i => plan.AccelCmd[i][2],
-                 "sigma (m/s2)", i => plan.Sigma[i], n, cursor);
-        PlotPair("throttle (%)", i => 100.0 * plan.Sigma[i] * plan.Mass[i] / Math.Max(_s.GfoldThrustMax, 1.0),
-                 "mass (kg)", i => plan.Mass[i], n, cursor);
-    }
-
-    private static double VecLen(double[] v)
-        => Math.Sqrt(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-
-    private static void PlotPair(string labelA, Func<int, double> a,
-                                 string labelB, Func<int, double> b, int n, float cursor)
-    {
-        PlotSeries(labelA, a, n, cursor);
-        ImGui.SameLine();
-        PlotSeries(labelB, b, n, cursor);
-    }
-
-    // A small draw-list line plot of one plan series vs node index (= plan time), with min/max labels, the value at the time cursor, and the cursor itself.
-    private static void PlotSeries(string label, Func<int, double> series, int n, float cursor)
-    {
-        var size = new float2(280f, 84f);
-        float2 origin = ImGui.GetCursorScreenPos();
-        ImGui.Dummy(size);
-        ImDrawListPtr dl = ImGui.GetWindowDrawList();
-
-        dl.AddRectFilled(origin, origin + size, new ImColor8(16, 20, 26), 4f);
-        dl.AddRect(origin, origin + size, new ImColor8(95, 100, 105), 4f);
-
-        double min = double.PositiveInfinity, max = double.NegativeInfinity;
-        for (int i = 0; i < n; i++)
-        {
-            double v = series(i);
-            if (!double.IsFinite(v)) continue;
-            if (v < min) min = v;
-            if (v > max) max = v;
-        }
-        if (!double.IsFinite(min))
-        {
-            dl.AddText(origin + new float2(8f, 8f), new ImColor8(200, 120, 120), label + " (no data)");
-            return;
-        }
-        double span = max - min;
-        if (span < 1e-9) span = 1.0;
-
-        const float padX = 8f, padTop = 18f, padBot = 8f;
-        float w = size.X - 2f * padX;
-        float h = size.Y - padTop - padBot;
-        var points = new float2[n];
-        for (int i = 0; i < n; i++)
-        {
-            double v = series(i);
-            if (!double.IsFinite(v)) v = min;
-            points[i] = new float2(
-                origin.X + padX + (n > 1 ? (float)i / (n - 1) : 0f) * w,
-                origin.Y + padTop + h - (float)((v - min) / span) * h);
-        }
-        dl.AddPolyline(points, new ImColor8(60, 220, 90), ImDrawFlags.None, 2f);
-
-        // Time cursor + value there.
-        int ci = Math.Clamp((int)MathF.Round(cursor * (n - 1)), 0, n - 1);
-        float cx = origin.X + padX + cursor * w;
-        _ovSeg[0] = new float2(cx, origin.Y + padTop);
-        _ovSeg[1] = new float2(cx, origin.Y + padTop + h);
-        dl.AddPolyline(_ovSeg, new ImColor8(255, 215, 60), ImDrawFlags.None, 1f);
-        dl.AddCircleFilled(points[ci], 3f, new ImColor8(255, 215, 60));
-
-        var axisCol = new ImColor8(160, 165, 170);
-        dl.AddText(origin + new float2(padX, 3f), new ImColor8(205, 215, 225),
-            $"{label}   now {series(ci):G4}");
-        dl.AddText(origin + new float2(padX, padTop - 2f), axisCol, $"{max:G4}");
-        dl.AddText(origin + new float2(padX, size.Y - padBot - 14f), axisCol, $"{min:G4}");
     }
 }

@@ -12,8 +12,8 @@ namespace AdvancedFlightComputer.HarnessTests;
 //     event that follow it - the failure would look like "multi-pass forgot my execution", with one
 //     warning far from the cause. Cold state and repeated calls are the cases that would trip it.
 //
-//  2. It must actually clear. ManeuverToolsWindow's shared fields are the part of the list with a
-//     public surface, so they stand in for the whole: they are read by Patch_DrawPlanWindow in the
+//  2. It must actually clear. OrbitToolForm's shared fields are the part of the list with a
+//     public surface, so they stand in for the whole: they are read by OrbitToolsPanel in the
 //     same frame to compute the maneuver, and a value carried into a freshly loaded world would plan
 //     against the previous one's input.
 public sealed class SaveScopedStateTest : AfcTest
@@ -28,16 +28,16 @@ public sealed class SaveScopedStateTest : AfcTest
         // Cold: nothing has been drawn or cached in this process yet.
         CheckNoThrow(t, "resets cold state");
 
-        ManeuverToolsWindow.TargetAltitude = MarkerAltitudeM;
-        ManeuverToolsWindow.TargetInclinationRad = MarkerInclinationRad;
-        ManeuverToolsWindow.UseDescendingNode = true;
+        OrbitToolForm.TargetAltitude = MarkerAltitudeM;
+        OrbitToolForm.TargetInclinationRad = MarkerInclinationRad;
+        OrbitToolForm.UseDescendingNode = true;
 
         CheckNoThrow(t, "resets populated state");
-        t.Check("clears TargetAltitude", ManeuverToolsWindow.TargetAltitude == 0.0);
-        t.Check("clears TargetInclinationRad", ManeuverToolsWindow.TargetInclinationRad == 0.0);
-        t.Check("clears UseDescendingNode", !ManeuverToolsWindow.UseDescendingNode);
+        t.Check("clears TargetAltitude", OrbitToolForm.TargetAltitude == 0.0);
+        t.Check("clears TargetInclinationRad", OrbitToolForm.TargetInclinationRad == 0.0);
+        t.Check("clears UseDescendingNode", !OrbitToolForm.UseDescendingNode);
         t.Check("clears the target selection",
-            ManeuverToolsWindow.GetSelectedTargetOrbiter() == null);
+            OrbitToolForm.GetSelectedTargetOrbiter() == null);
 
         // Idempotent: the load postfix and Mod.Unload can both run in one process.
         CheckNoThrow(t, "resets twice in a row");
