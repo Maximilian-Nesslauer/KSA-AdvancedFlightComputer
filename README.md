@@ -9,6 +9,30 @@ This mod is written against the [StarMap loader](https://github.com/StarMapLoade
 
 Validated against KSA build version 2026.10.25.5707.
 
+## The AFC console at a glance
+
+One window holds every AFC feature. One row of tabs follows the order of a mission, the head says who flies the craft, and one button at the bottom commits the action that fits.
+
+![LAUNCH page: the planned climb with its stage bar and the LAUNCH button](images/console/launch-pad.jpg)
+
+**LAUNCH** plans the climb on the pad and flies it with one press. The plan shows the profile, the stages and the margin.
+
+![MANEUVER page: Set Apoapsis with the orbit sketch and the burn mark](images/console/maneuver-set-apoapsis.jpg)
+
+**MANEUVER** sketches the orbit, the burn bars and the passes of a quick-tool, such as Set Apoapsis, before you create the burn.
+
+![TRANSFER page: the porkchop plot and the transfer to Mars drawn in the map](images/console/transfer-mars-map.jpg)
+
+**TRANSFER** plans a transfer window on an AFC porkchop plot and draws the transfer in the map.
+
+![LAND page: a deorbit to a chosen site, with the descent profile](images/console/deorbit-site-map.jpg)
+
+**LAND** has four ways down: deorbit to a chosen site, boostback of a spent booster, landing from where the craft is, and hover.
+
+![LAND page: a G-FOLD landing on Luna](images/console/gfold-landing.jpg)
+
+The other pages are **BURNS** (how the next burn is flown, with RCS or the main engine), **STAGING** (AutoStage and the staging delays) and **TUNE** (the tuning values and the preferences). See [AFC Console](#afc-console) for the details.
+
 ## Features
 
 ### AFC Console
