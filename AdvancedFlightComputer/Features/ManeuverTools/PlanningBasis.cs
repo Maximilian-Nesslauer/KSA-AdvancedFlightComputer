@@ -16,20 +16,8 @@ internal readonly record struct PlanningBasis(
             return new PlanningBasis(source.Orbit, source.FlightPlan.TryFindPatch(now), now, false, null);
 
         FlightPlan plan = finalBurn.FlightPlan;
-        if (plan.Patches.Count == 0)
+        if (ConicAfterBurn(plan) is not PatchedConic patch)
             return new PlanningBasis(source.Orbit, source.FlightPlan.TryFindPatch(now), now, false, null);
-
-        // The last finite burn piece carries the conic after cutoff, and later patches describe SOI transitions.
-        // A plan without a finite burn piece starts with the orbit after an impulse at the burn's impulse time.
-        PatchedConic patch = plan.Patches[0];
-        for (int i = plan.Patches.Count - 1; i >= 0; i--)
-        {
-            if (plan.Patches[i].BurnTrajectory.HasValue)
-            {
-                patch = plan.Patches[i];
-                break;
-            }
-        }
 
         // A finite burn piece starts at ignition, and its conic is valid only from the cutoff, so a chained maneuver may not start before the cutoff.
         UniverseTime earliest = finalBurn.ImpulseTime;
@@ -37,5 +25,18 @@ internal readonly record struct PlanningBasis(
         if (conicStart > earliest)
             earliest = conicStart;
         return new PlanningBasis(patch.Orbit, patch, earliest, true, plan);
+    }
+
+    /// <summary>The patch of the orbit after the burn of <paramref name="plan"/>, or null for a plan with no patches. The last finite burn piece carries the conic after cutoff; later patches are SOI transitions.</summary>
+    public static PatchedConic? ConicAfterBurn(FlightPlan plan)
+    {
+        if (plan.Patches.Count == 0)
+            return null;
+        for (int i = plan.Patches.Count - 1; i >= 0; i--)
+        {
+            if (plan.Patches[i].BurnTrajectory.HasValue)
+                return plan.Patches[i];
+        }
+        return plan.Patches[0];
     }
 }

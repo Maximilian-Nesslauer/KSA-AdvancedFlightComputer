@@ -12,7 +12,7 @@ internal readonly record struct SequenceInfo(
     double ExhaustVelocityMs,
     double BurnTimeSec);
 // A private SequencePerformanceList avoids changing the game worker's shared result.
-// RecomputeForFlight(0f) uses vacuum for the active sequence and the selected environment for the rest.
+// RecomputeForFlight(0f) uses vacuum for thrust, flow and Isp of the active sequence. DeltaV does not depend on flight pressure, because SequencePerformanceList.Recompute takes it from the drain simulation at the sequence environment.
 // Flow is the first phase's value, although later cutoff phases can reduce the real mass flow.
 // Exhaust velocity comes from Isp. For a sequence that is not active the game takes Thrust from the ignition thrust but MassFlowRate from the paced first phase, so their ratio is not an exhaust velocity once a solid motor burns.
 internal sealed class SequenceBurnState
@@ -21,16 +21,21 @@ internal sealed class SequenceBurnState
     private const double MinMassFlowKgPerSec = 1e-6;
     private const double MinDryMassKg = 1.0;
 
+    private readonly Dictionary<int, double> _deltaV;
+
     public IReadOnlyList<SequenceInfo> Sequences { get; }
     public bool HasUsableEngines { get; }
 
-    private SequenceBurnState(IReadOnlyList<SequenceInfo> sequences, bool hasUsableEngines)
+    private SequenceBurnState(IReadOnlyList<SequenceInfo> sequences, bool hasUsableEngines, Dictionary<int, double> deltaV)
     {
         Sequences = sequences;
         HasUsableEngines = hasUsableEngines;
+        _deltaV = deltaV;
     }
 
-    public static SequenceBurnState Empty { get; } = new(Array.Empty<SequenceInfo>(), false);
+    public static SequenceBurnState Empty { get; } = new(Array.Empty<SequenceInfo>(), false, new Dictionary<int, double>());
+
+    public double DeltaVOf(int sequence) => _deltaV.TryGetValue(sequence, out double dv) ? dv : 0.0;
 
     public static SequenceBurnState Analyze(Vehicle vehicle)
     {
@@ -45,11 +50,13 @@ internal sealed class SequenceBurnState
         int count = Math.Min(sequences.Length, perf.Length);
 
         var result = new List<SequenceInfo>(count);
+        var deltaV = new Dictionary<int, double>(count);
         bool anyUsable = false;
 
         for (int i = 0; i < count; i++)
         {
             ref readonly SequencePerformance p = ref perf[i];
+            deltaV[sequences[i].Number] = p.DeltaV;
             if (!(p.MassFlowRate >= MinMassFlowKgPerSec) || !(p.Thrust > 0f) || !(p.Isp > 0f))
                 continue;
 
@@ -73,6 +80,6 @@ internal sealed class SequenceBurnState
                 anyUsable = true;
         }
 
-        return new SequenceBurnState(result, anyUsable);
+        return new SequenceBurnState(result, anyUsable, deltaV);
     }
 }
