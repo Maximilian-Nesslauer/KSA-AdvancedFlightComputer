@@ -432,7 +432,7 @@ internal static partial class AfcConsole
             HeadDrawer.Refresh(null, force: false);
             if (HeadDrawer.TryGetSingleOtherStop(out Vehicle? other, out StopSpec stop))
             {
-                Frame.OtherStop = stop with { Detail = "On " + other!.Id + ": " + stop.Detail };
+                Frame.OtherStop = stop with { Detail = "ON " + other!.Id + ": " + stop.Detail };
                 Frame.OtherStopCraft = other.Id;
             }
         }

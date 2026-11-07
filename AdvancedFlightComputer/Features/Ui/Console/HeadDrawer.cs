@@ -75,7 +75,7 @@ internal static class HeadDrawer
                 MultiPassExecution exec = entry.Value;
                 _seen.Add(entry.Key.Item2);
                 _others.Add(new CraftRow(null, entry.Key.Item2, "PASSES",
-                    string.Format(Inv, "Pass {0} of {1}", exec.PassIndex + 1, exec.PassCountTotal),
+                    string.Format(Inv, "PASS {0} OF {1}", exec.PassIndex + 1, exec.PassCountTotal),
                     new CraftActivity { MultiPassActive = true }));
             }
         }
@@ -143,13 +143,13 @@ internal static class HeadDrawer
         bool runs = false;
         if (subject != null)
         {
-            ConsoleUi.SectionHead("THIS CRAFT");
+            ConsoleUi.SectionHead("GNC SWITCHES");
             bool armsAtLiftOff = f.GuidanceOn && f.Situation.Where == CraftSituation.Ground && GuidanceWindow.LaunchFlownByNote(subject).Length > 0;
             GuidanceWindow.DrawCraftSwitches(subject, f.Activity.AnyGuidanceLive, armsAtLiftOff ? PageText.ArmsAtLiftOffDrawer : "");
             if (SharedVehicleHooks.AutoStageEnabled && GuidanceWindow.AutoStageGuidanceNote(subject, f.Activity.AnyGuidanceLive).Length > 0)
                 ConsoleUi.MutedWrapped(PageText.ArmedByGuidance);
 
-            ConsoleUi.BeginSection("DrawerRunning", "RUNNING");
+            ConsoleUi.BeginSection("DrawerRunning", "ACTIVE");
             runs = DrawRunning(f, subject);
             ConsoleUi.EndSection();
         }
@@ -157,7 +157,7 @@ internal static class HeadDrawer
         if (!runs && !f.SubjectBusy && messages.Count == 0 && _others.Count == 0)
             ConsoleUi.Muted(PageText.DrawerEmpty.AsSpan());
 
-        ConsoleUi.BeginSection("DrawerOthers", "OTHER CRAFT UNDER AFC");
+        ConsoleUi.BeginSection("DrawerOthers", "OTHER VEHICLES");
         for (int i = 0; i < _others.Count; i++)
         {
             CraftRow row = _others[i];
@@ -172,7 +172,7 @@ internal static class HeadDrawer
         }
         ConsoleUi.EndSection();
 
-        if (messages.Count > NewestShown && ConsoleUi.Fold("EARLIER MESSAGES", "DrawerEarlier", tip: PageText.EarlierMessagesTip))
+        if (messages.Count > NewestShown && ConsoleUi.Fold("LOG", "DrawerEarlier", tip: PageText.EarlierMessagesTip))
         {
             for (int i = NewestShown; i < messages.Count; i++)
                 DrawMessage(messages[i], subjectId);
@@ -182,10 +182,10 @@ internal static class HeadDrawer
         {
             ConsoleUi.Gap();
             ConsoleWidgets.Rule();
-            if (ConsoleWidgets.Button("RELEASE ALL GUIDANCE ON THIS CRAFT".AsSpan(), "AfcDrawerRelease".AsSpan(), default))
+            if (ConsoleWidgets.Button("RELEASE ALL".AsSpan(), "AfcDrawerRelease".AsSpan(), default))
                 GuidanceWindow.ReleaseGuidance(subject);
             if (ImGui.IsItemHovered())
-                ConsoleUi.Card("RELEASE ALL GUIDANCE ON THIS CRAFT", StopResolver.ReleaseOutcomeFor(f.Activity));
+                ConsoleUi.Card("RELEASE ALL", StopResolver.ReleaseOutcomeFor(f.Activity));
         }
     }
 
@@ -215,7 +215,7 @@ internal static class HeadDrawer
         if (a.MultiPassActive && f.Stop.Target != StopTarget.MultiPass && MultiPassRegistry.TryGet(subject.Id, out MultiPassExecution? exec))
         {
             any = true;
-            ConsoleUi.Readout("PASSES".AsSpan(), string.Format(Inv, "{0}, pass {1} of {2}",
+            ConsoleUi.Readout("PASSES".AsSpan(), string.Format(Inv, "{0}, PASS {1} OF {2}",
                 OrbitToolCatalog.DisplayName(exec.Intent.TypeKey), exec.PassIndex + 1, exec.PassCountTotal).AsSpan());
             StopSpec stop = new(StopTarget.MultiPass, StopResolver.Label(StopTarget.MultiPass), StopResolver.OutcomeLine(StopTarget.MultiPass, in a),
                 StopResolver.EngineOutcome(StopTarget.MultiPass, in a), ConsoleFrame.StopAction(subject, StopTarget.MultiPass));
@@ -225,14 +225,14 @@ internal static class HeadDrawer
         if (SharedVehicleHooks.RcsEnabled && RcsExecRegistry.TryGet(subject.Id, out RcsExecution? rcs) && rcs.Faulted)
         {
             any = true;
-            ConsoleUi.Readout("RCS BURN".AsSpan(), (rcs.CleanupPending ? "Stopped, cleanup failed" : "Stopped after an error").AsSpan());
+            ConsoleUi.Readout("RCS BURN".AsSpan(), (rcs.CleanupPending ? "STOPPED, CLEANUP FAILED" : "STOPPED: ERROR").AsSpan());
             if (rcs.CleanupPending && ConsoleWidgets.Button("RETRY CLEANUP".AsSpan(), "AfcDrawerRcsRetry".AsSpan(), default))
                 RcsStop.RetryCleanup(rcs);
         }
         else if (a.RcsFlying && f.Stop.Target != StopTarget.Rcs)
         {
             any = true;
-            ConsoleUi.Readout("RCS BURN".AsSpan(), "Flying".AsSpan());
+            ConsoleUi.Readout("RCS BURN".AsSpan(), "ACTIVE".AsSpan());
             StopSpec stop = new(StopTarget.Rcs, StopResolver.Label(StopTarget.Rcs), StopResolver.OutcomeLine(StopTarget.Rcs, in a),
                 StopResolver.EngineOutcome(StopTarget.Rcs, in a), ConsoleFrame.StopAction(subject, StopTarget.Rcs));
             StopButton(stop, "AfcDrawerStopRcs");
@@ -279,7 +279,7 @@ internal static class HeadDrawer
         bool headHolds = a.StockAutoOnNode || a.MultiPassActive;
         bool fly = !headHolds && !a.RcsFlying && BurnModeInput.FlyNextRefusal(subject).Length == 0;
         bool delete = !a.RcsFlying;
-        string numbers = headHolds ? "" : string.Format(Inv, "{0} in {1}", Fmt.Dv(node.DeltaVVlf.Length()), FormatHelper.FormatDuration(Math.Max(0.0, (node.Time - Universe.GetElapsedTime()).Seconds())));
+        string numbers = headHolds ? "" : string.Format(Inv, "{0} IN {1}", Fmt.Dv(node.DeltaVVlf.Length()), FormatHelper.FormatDuration(Math.Max(0.0, (node.Time - Universe.GetElapsedTime()).Seconds())));
         if (!fly && !delete && numbers.Length == 0)
             return;
 

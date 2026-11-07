@@ -54,7 +54,7 @@ internal static class PageChooser
             AfcConsole.SetPage(chosen);
 
         if (band)
-            PageBand.Draw(AfcConsole.Page, AfcConsole.LandWay, f.Situation.Where, new float2(origin.X, origin.Y + h), width);
+            PageBand.Draw(AfcConsole.Page, new float2(origin.X, origin.Y + h), width);
 
         ImGui.SetCursorScreenPos(origin);
         ImGui.Dummy(new float2(width, HeightFor(band)));
@@ -141,7 +141,7 @@ internal static class PageChooser
         if (f.Editor && !ConsolePages.WorksInEditor(page))
             return PageText.FlightOnlyInEditor;
         if (f.Subject == null && page is not (ConsolePage.Staging or ConsolePage.Tune or ConsolePage.Transfer))
-            return f.Eva ? "Not on EVA. STAGING, TUNE and the stock planner link on TRANSFER work." : "No craft under control.";
+            return f.Eva ? "EVA: NO CRAFT. STAGING, TUNE AND STOCK PLANNER LINK WORK." : "NO CRAFT UNDER CONTROL";
         return "";
     }
 

@@ -85,7 +85,7 @@ internal static class BurnBars
         string payer = OnePayer(stages, pays);
         bool barsShow = payer.Length == 0 && known;
         string head = !known
-            ? string.Format(Inv, "{0:F0} m/s in {1} burns, no engine data", total, bars.Count)
+            ? string.Format(Inv, "{0:F0} m/s IN {1} BURNS, NO ENGINE DATA", total, bars.Count)
             : barsShow ? ""
             : PageText.PassesPaidBy(payer);
         ConsoleUi.NoteShape("AfcBurnHead", head.Length > 0 ? 1 : 0);
@@ -145,7 +145,7 @@ internal static class BurnBars
                 note = "";
             else if (pay.ShortMs > 0.5)
             {
-                note = string.Format(Inv, "~{0:F0} m/s short", pay.ShortMs);
+                note = string.Format(Inv, "~{0:F0} m/s SHORT", pay.ShortMs);
                 colour = Palette.Text;
             }
             else if (pay.FirstStage >= 0)
@@ -208,7 +208,7 @@ internal static class BurnBars
     private static string OneBurnLine(bool known, StageFuel[] stages, in BurnPay pay)
     {
         if (!known)
-            return "No engine data.";
+            return "NO ENGINE DATA";
         return PageText.BurnFuelLine(pay.FirstStage >= 0 ? BurnBudget.Payer(stages, in pay) : "", pay.PropellantKg, pay.ShortMs);
     }
 }

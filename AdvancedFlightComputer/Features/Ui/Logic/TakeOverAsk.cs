@@ -47,7 +47,7 @@ internal static class TakeOverAsk
                     ask.Confirm();
                 }
                 : null,
-            Secondary = new CommitAction("CANCEL", "", "Keeps what flies now.", Clear, Danger: false),
+            Secondary = new CommitAction("CANCEL", "", "Keeps the active mode.", Clear, Danger: false),
         };
     }
 }

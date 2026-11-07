@@ -72,7 +72,7 @@ public static partial class GuidanceWindow
         if (noLift.Length > 0)
         {
             GuidanceLog.Info(vehicle, "Entry guidance: " + noLift);
-            _s.ThreeDofStatus = "No lift, so a ballistic fall. The burn lands it.";
+            _s.ThreeDofStatus = "NO LIFT. BALLISTIC FALL. BURN LANDS.";
         }
     }
 
@@ -125,7 +125,7 @@ public static partial class GuidanceWindow
             Reset3Dof();
             _s.ThreeDofPhase = ThreeDofPhase.Done;
             _s.LandingCutPending = true;
-            _s.ThreeDofStatus = "Touchdown - engine cut.";
+            _s.ThreeDofStatus = "TOUCHDOWN. ENGINE CUT.";
             return;
         }
 
@@ -133,7 +133,7 @@ public static partial class GuidanceWindow
         {
             GuidanceLog.Info(vehicle, "Entry guidance solve faulted: " + fault);
             _s.ThreeDofWorker.LastError = "";
-            Drop3Dof(vehicle, "Entry guidance solve faulted - PID glide, retrying cold.", now);
+            Drop3Dof(vehicle, "ENTRY SOLVE FAULT. PID GLIDE, COLD RETRY.", now);
         }
 
         EnsureBoostbackAero(vehicle, parent);
@@ -209,9 +209,9 @@ public static partial class GuidanceWindow
                     ? FormattableString.Invariant($"burn {plan.EndTime - now:F1} s left, throttle {_s.ThreeDofThrottle:P0} (plan {_s.ThreeDofPlanThrottle:P0}), {TrackingErrorText(plan, x, now)}")
                 : FormattableString.Invariant($"ignition in {plan.IgnitionTime - now:F1} s, burn {plan.SigmaBurn:F1} s"),
             off,
-            g == null ? "no solver" : ThreeDofBusy ? "solving" : FormattableString.Invariant($"last solve {g.LastSolveMs:F0} ms, {g.ConsecutiveRefusals} refused{RefusalReason(g)}"),
+            g == null ? "NO SOLVER" : ThreeDofBusy ? "SOLVING" : FormattableString.Invariant($"LAST SOLVE {g.LastSolveMs:F0} ms, {g.ConsecutiveRefusals} REFUSED{RefusalReason(g)}"),
             est?.DragScale ?? 1.0, est?.LiftScale ?? 1.0, est?.ThrustScale ?? 1.0,
-            _s.ThreeDofPhase == ThreeDofPhase.Burn ? "; touchdown guidance standby " + SixDofStandbyText(now) : ""));
+            _s.ThreeDofPhase == ThreeDofPhase.Burn ? "; TOUCHDOWN STANDBY " + SixDofStandbyText(now) : ""));
     }
 
     /// <summary>
@@ -246,24 +246,24 @@ public static partial class GuidanceWindow
 
         if (!ThreeDofBusy)
         {
-            _s.ThreeDofSolveText = $"{g.LastSolveMs,8:F0} ms, {g.LastIterations} it, {g.ConsecutiveRefusals} refused";
+            _s.ThreeDofSolveText = $"{g.LastSolveMs,8:F0} ms, {g.LastIterations} IT, {g.ConsecutiveRefusals} REFUSED";
             _s.ThreeDofRefusing = g.ConsecutiveRefusals > 0;
             // Results are read only while the worker is idle: the guidance is the worker's while it solves.
             if (g.Phase == Phase3Dof.Idle || (g.Phase == Phase3Dof.Glide && g.ConsecutiveRefusals >= ThreeDofGlideRefusalLimit))
             {
                 if (burning)
                 {
-                    ThreeDofToSixDof(vehicle, "Entry guidance lost its plan in the burn - touchdown guidance takes over.", warn: true);
+                    ThreeDofToSixDof(vehicle, "ENTRY PLAN LOST IN BURN. HANDOVER: TOUCHDOWN.", warn: true);
                     return false;
                 }
                 Drop3Dof(vehicle, g.Phase == Phase3Dof.Idle
-                    ? "Entry guidance " + g.Error + " - PID glide, retrying cold."
-                    : $"Entry guidance refused {g.ConsecutiveRefusals} re-solves{RefusalReason(g)} - PID glide, retrying cold.", now);
+                    ? "ENTRY " + g.Error + ". PID GLIDE, COLD RETRY."
+                    : $"ENTRY REFUSED {g.ConsecutiveRefusals} RE-SOLVES{RefusalReason(g)}. PID GLIDE, COLD RETRY.", now);
                 return false;
             }
             if (burning && g.ConsecutiveRefusals >= ThreeDofBurnRefusalLimit)
             {
-                ThreeDofToSixDof(vehicle, $"Entry guidance refused {g.ConsecutiveRefusals} re-solves in the burn{RefusalReason(g)} - touchdown guidance takes over.", warn: true);
+                ThreeDofToSixDof(vehicle, $"ENTRY REFUSED {g.ConsecutiveRefusals} RE-SOLVES IN BURN{RefusalReason(g)}. HANDOVER: TOUCHDOWN.", warn: true);
                 return false;
             }
             if (g.Phase != Phase3Dof.Converging && now - _s.ThreeDofLastUpdate >= ThreeDofUpdateS)
@@ -296,7 +296,7 @@ public static partial class GuidanceWindow
         // Past the end with the engine lit and nothing newer: the plan is no longer guidance.
         if (burning && now > plan.EndTime + 0.5)
         {
-            ThreeDofToSixDof(vehicle, "Entry guidance plan ran out in the burn - touchdown guidance takes over.", warn: true);
+            ThreeDofToSixDof(vehicle, "ENTRY PLAN RAN OUT IN BURN. HANDOVER: TOUCHDOWN.", warn: true);
             return false;
         }
 
@@ -310,8 +310,8 @@ public static partial class GuidanceWindow
                 double minTwr = TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu);
                 if (minTwr > 1.0)
                 {
-                    string why = FormattableString.Invariant($"Entry guidance stopped short {height - _s.VehicleHeightM:F1} m above the pad, rising at {x[5]:F1} m/s, ")
-                               + FormattableString.Invariant($"and cannot throttle below its weight ({minTwr:F2} at minimum) - engine cut, dropping to the pad.");
+                    string why = FormattableString.Invariant($"ENTRY STOPPED SHORT {height - _s.VehicleHeightM:F1} m ABOVE PAD, RISING {x[5]:F1} m/s, ")
+                               + FormattableString.Invariant($"CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.");
                     GuidanceLog.Info(vehicle, why);
                     StopSixDofStandby();
                     Reset3Dof();
@@ -327,7 +327,7 @@ public static partial class GuidanceWindow
             {
                 if (SixDofStandbyReady(now))
                 {
-                    ThreeDofToSixDof(vehicle, FormattableString.Invariant($"Entry guidance hands the burn to touchdown guidance {burnLeft:F1} s from the pad, at {height:F0} m and {speed:F0} m/s."));
+                    ThreeDofToSixDof(vehicle, FormattableString.Invariant($"HANDOVER: TOUCHDOWN, {burnLeft:F1} s FROM PAD, {height:F0} m, {speed:F0} m/s."));
                     return false;
                 }
                 if (!_s.ThreeDofSixDofWaiting)
@@ -420,7 +420,7 @@ public static partial class GuidanceWindow
         plan.Sample(now, xs, us);
         double dr = new double3(xs[0] - x[0], xs[1] - x[1], xs[2] - x[2]).Length();
         double dv = new double3(xs[3] - x[3], xs[4] - x[4], xs[5] - x[5]).Length();
-        return FormattableString.Invariant($"{dr:F1} m and {dv:F1} m/s off the plan");
+        return FormattableString.Invariant($"{dr:F1} m, {dv:F1} m/s OFF PLAN");
     }
 
     /// <summary>Why the last re-solve was refused, as " (...)" for a log line, or nothing when none was. Read only while the worker is idle, as every other guidance result is.</summary>
@@ -572,10 +572,10 @@ public static partial class GuidanceWindow
 
     internal static string ThreeDofPhaseName(ThreeDofPhase p) => p switch
     {
-        ThreeDofPhase.Idle => "idle",
-        ThreeDofPhase.Glide => _s.ThreeDofPlan != null ? "glide on the plan" : "glide, no plan yet",
-        ThreeDofPhase.Burn => "landing burn",
-        ThreeDofPhase.Done => "ended",
+        ThreeDofPhase.Idle => "IDLE",
+        ThreeDofPhase.Glide => _s.ThreeDofPlan != null ? "GLIDE ON PLAN" : "GLIDE, NO PLAN",
+        ThreeDofPhase.Burn => "LANDING BURN",
+        ThreeDofPhase.Done => "ENDED",
         _ => "?",
     };
 }

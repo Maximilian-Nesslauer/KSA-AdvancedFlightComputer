@@ -41,8 +41,8 @@ internal static class ConsoleMenu
         ConsoleUi.SectionHead("ADVANCED FLIGHT COMPUTER");
         string key = Input.GetAssignmentString(InputAction.ToggleTransferPlan);
         ConsoleUi.MutedWrapped(PlannerRoute.Active
-            ? ConsoleUi.EscapeFormat($"AFC settings are in the AFC console ({key}): STAGING and TUNE.")
-            : "AFC settings are in the AFC console (AFC menu > OPEN AFC): STAGING and TUNE.");
+            ? ConsoleUi.EscapeFormat($"AFC settings: console ({key}), STAGING + TUNE.")
+            : "AFC settings: console (AFC menu > OPEN AFC), STAGING + TUNE.");
         if (ConsoleWidgets.Button("OPEN AFC".AsSpan(), "AfcSettingsOpen".AsSpan(), default))
             AfcConsole.Open(ConsolePage.Tune);
     }
@@ -91,7 +91,7 @@ internal static class ConsoleMenu
         if (subject != null && AfcConsole.Frame.GuidanceOn && !StopResolver.NothingToRelease(AfcConsole.Frame.Activity))
         {
             ImGui.Separator();
-            if (ImGui.MenuItem("RELEASE ALL GUIDANCE ON THIS CRAFT"))
+            if (ImGui.MenuItem("RELEASE ALL"))
                 GuidanceWindow.ReleaseGuidance(subject);
             ImGui.PushTextWrapPos(ImGui.GetFontSize() * 24f);
             ImGui.TextDisabled(ConsoleUi.EscapeFormat(StopResolver.ReleaseOutcomeFor(AfcConsole.Frame.Activity)));
@@ -102,7 +102,7 @@ internal static class ConsoleMenu
         if (count > 0)
         {
             ImGui.Separator();
-            ImGui.TextDisabled(count == 1 ? "1 craft under AFC" : $"{count} craft under AFC");
+            ImGui.TextDisabled(count == 1 ? "AFC: 1 VEHICLE" : $"AFC: {count} VEHICLES");
         }
     }
 }

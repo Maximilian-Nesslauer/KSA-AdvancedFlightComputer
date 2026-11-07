@@ -26,7 +26,7 @@ public static partial class GuidanceWindow
     {
         string retry = _s.AscentPlanJob?.Retry ?? "";
         if (retry.Length > 0)
-            ColoredWrapped(CvxWarn, "Calculated climb: " + retry);
+            ColoredWrapped(CvxWarn, "SOLVED CLIMB: " + retry);
 
         AscentPlan shown = _s.AscentPlan;
         bool relaxed = !_s.Running && shown?.Usable == true && shown.QRelaxed;
@@ -40,13 +40,13 @@ public static partial class GuidanceWindow
         // The banner only chooses. The footer verb then reads LAUNCH (BACKUP) and launches through the same commit and take-over rule as every other launch.
         if (_s.ConvexBackupChosen)
         {
-            ColoredWrapped(CvxWarn, "The simple turn is chosen. " + CommitResolver.BackupLaunchVerb + " in the footer launches it.");
+            ColoredWrapped(CvxWarn, "GRAVITY TURN SELECTED. " + CommitResolver.BackupLaunchVerb + " LAUNCHES IT.");
             if (ConsoleWidgets.Button(PageText.BannerKeep.AsSpan(), "AfcConvexKeep".AsSpan(), default))
                 _s.ConvexBackupChosen = false;
         }
         else
         {
-            ColoredWrapped(CvxWarn, "Nothing has launched. Change settings and try again, or fly the simple turn.");
+            ColoredWrapped(CvxWarn, "NOT LAUNCHED. CHANGE SETTINGS OR FLY GRAVITY TURN.");
             // Not while another launch is committed: the backup is an answer to this failure, not a second ascent.
             using (new ImGuiDisabledScope(_s.Running || _s.LaunchArmed || _s.ConvexLaunchPending))
             {
@@ -110,10 +110,10 @@ public static partial class GuidanceWindow
         if (_s.AscentPlanRequested)
             return PageText.PlanStarting;
         if (_s.Running)
-            return _s.FlyingPlan != null ? "Flying this plan" : "Not in use: the simple turn flies";
+            return _s.FlyingPlan != null ? "AFC: PLAN" : "NOT IN USE: GRAVITY TURN";
         if (_s.AscentPlanStatus.Length > 0)
             return _s.AscentPlanStatus;
-        return "Not calculated";
+        return "NOT SOLVED";
     }
 
     private static void DrawConvexStatusRows(Vehicle vehicle, Orbit orbit, IParentBody parent)
@@ -149,29 +149,29 @@ public static partial class GuidanceWindow
         else if (plan.LanChosen)
             GaugeRowText(D, "LAN", PageText.PlanLanChosen(plan.LanDeg));
         if (plan.StagesPlanned != plan.StagesAvailable)
-            GaugeRowText(D, "STAGES PLANNED", $"{plan.StagesPlanned} of {plan.StagesAvailable} (the rest ride as payload)");
+            GaugeRowText(D, "STAGES PLANNED", $"{plan.StagesPlanned}/{plan.StagesAvailable} (REST AS PAYLOAD)");
         double propLeft = sol.FinalMass - plan.FinalMassFloor;
-        GaugeRowText(D, "TO ORBIT", FormattableString.Invariant($"{sol.FinalMass / 1000.0:F2} t ({Math.Max(propLeft, 0.0) / 1000.0:F2} t propellant left in the last stage)"));
+        GaugeRowText(D, "TO ORBIT", FormattableString.Invariant($"{sol.FinalMass / 1000.0:F2} t ({Math.Max(propLeft, 0.0) / 1000.0:F2} t PROPELLANT IN LAST STAGE)"));
         DrawPlanBurnsRow(sol);
-        GaugeRowText(D, "", "The stage line counts all the propellant on board, and the plan leaves some.", CvxDim);
+        GaugeRowText(D, "", "Stage line counts all propellant on board. The plan leaves some.", CvxDim);
         double lowest = plan.Profile != null ? 100.0 * plan.Profile.MinThrottle : double.NaN;
-        GaugeRowText(D, "THROTTLE", FormattableString.Invariant($"floor {plan.ThrottleMinPct:F0} %, lowest planned {lowest:F0} %")
-            + (plan.SolidStages > 0 ? $", solids burn in {PageText.Stages(plan.SolidStages)} on their own curve" : "")
-            + (plan.CoreThrottledDown ? ", core throttled to outlast its boosters" : ""));
+        GaugeRowText(D, "THROTTLE", FormattableString.Invariant($"MIN {plan.ThrottleMinPct:F0} %, LOWEST PLANNED {lowest:F0} %")
+            + (plan.SolidStages > 0 ? $", SOLIDS IN {PageText.Stages(plan.SolidStages)} ON OWN CURVE" : "")
+            + (plan.CoreThrottledDown ? ", CORE THROTTLED TO OUTLAST BOOSTERS" : ""));
 
         int qi = ArgMax(sol.DynamicPressure), qai = ArgMax(sol.QAlpha);
-        GaugeRowText(D, "MAX Q", FormattableString.Invariant($"{sol.DynamicPressure[qi] / 1000.0:F1} kPa at {sol.Time[qi]:F0} s (limit {plan.QMaxKpa:F1} kPa)"),
+        GaugeRowText(D, "MAX Q", FormattableString.Invariant($"{sol.DynamicPressure[qi] / 1000.0:F1} kPa at T+{sol.DynamicPressure[qi] / 1000.0:F1} s (LIMIT {plan.QMaxKpa:F1} kPa)"),
             LimitInk(sol.DynamicPressure[qi], plan.QMaxKpa * 1000.0));
         if (plan.QRelaxed)
-            GaugeRowText(D, "", FormattableString.Invariant($"did not converge at {plan.QMaxRequestedKpa:F0} kPa (out of reach at full throttle): retried looser"), CvxWarn);
-        GaugeRowText(D, "MAX Q-ALPHA", FormattableString.Invariant($"{sol.QAlpha[qai]:F0} Pa rad at {sol.Time[qai]:F0} s (limit {plan.QAlphaMax:F0} Pa rad)"),
+            GaugeRowText(D, "", FormattableString.Invariant($"NO SOLUTION AT {plan.QMaxRequestedKpa:F0} kPa (OUT OF REACH AT FULL THROTTLE). RETRIED LOOSER."), CvxWarn);
+        GaugeRowText(D, "MAX Q-ALPHA", FormattableString.Invariant($"{sol.QAlpha[qai]:F0} Pa rad at T+{sol.QAlpha[qai]:F0} s (LIMIT {plan.QAlphaMax:F0} Pa rad)"),
             LimitInk(sol.QAlpha[qai], plan.QAlphaMax));
-        GaugeRowText(D, "PLAN INSERTION", FormattableString.Invariant($"{plan.InsertionAltKm:F0} km, miss {Fmt.Fixed(sol.TerminalResidual[0], 0)} m, {Fmt.Fixed(sol.TerminalResidual[1], 2)} m/s, plane {Fmt.Fixed(sol.TerminalResidual[3], 0)} m"));
+        GaugeRowText(D, "PLAN INSERTION", FormattableString.Invariant($"{plan.InsertionAltKm:F0} km, MISS {Fmt.Fixed(sol.TerminalResidual[0], 0)} m, {Fmt.Fixed(sol.TerminalResidual[0], 0)} m/s, PLANE {Fmt.Fixed(sol.TerminalResidual[0], 0)} m"));
 
         if (_s.Running && _s.FlyingPlan != null)
             GaugeRowText(D, "FLIGHT", _s.Phase == AscentPhase.Profile
-                ? FormattableString.Invariant($"flying the profile to {_s.ConvexHandoverAltKm:F0} km")
-                : "handed over to UPFG", CvxLive);
+                ? FormattableString.Invariant($"AFC: PROFILE TO {_s.ConvexHandoverAltKm:F0} km")
+                : "HANDOVER: UPFG", CvxLive);
     }
 
     private static float4 LimitInk(double value, double limit)

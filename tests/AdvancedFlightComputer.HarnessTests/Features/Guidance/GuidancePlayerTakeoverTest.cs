@@ -97,7 +97,7 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
         t.Check("the throttle setting is left alone", Inputs(vehicle).EngineThrottle == 0.63f);
         t.Check("the target the player selected survives",
             computer.AttitudeTrackTarget == FlightComputerAttitudeTrackTarget.Prograde);
-        t.Check("the reason is visible", state.Status.Contains("attitude"));
+        t.Check("the reason is visible", state.Status.Contains("ATTITUDE"));
         t.Check("the finished release restores the default stop", !state.ReleaseWithoutEngineCut);
     }
 
@@ -123,7 +123,7 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
             GuidanceWindow.ApplyAutopilot(vehicle);
             t.Check("the retry finishes", !state.ControlAcquired && !state.FcResetPending);
             t.Check("the retry does not cut the engine either", Inputs(vehicle).EngineOn);
-            t.Check("the retry still says why guidance stopped", state.Status.Contains("attitude"));
+            t.Check("the retry still says why guidance stopped", state.Status.Contains("ATTITUDE"));
         }
         finally
         {
@@ -270,7 +270,7 @@ public sealed class GuidancePlayerTakeoverTest : AfcTest
         GuidanceWindow.ApplyAutopilot(vehicle);
         t.Check($"{label} still shuts the engine down through a takeover", !Inputs(vehicle).EngineOn);
         t.Check($"{label} leaves no cut pending", !state.LandingCutPending);
-        t.Check($"{label} still reports the takeover", state.Status.Contains("attitude"));
+        t.Check($"{label} still reports the takeover", state.Status.Contains("ATTITUDE"));
         VehicleAutopilotState.Remove(vehicle);
     }
 

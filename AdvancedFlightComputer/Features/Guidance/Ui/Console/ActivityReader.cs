@@ -100,7 +100,7 @@ public static partial class GuidanceWindow
         {
             case StopTarget.SixDof:
             {
-                string phase = !_s.Active ? "STARTING" : _s.Converging ? "PLANNING" : "TOUCHDOWN";
+                string phase = !_s.Active ? "START" : _s.Converging ? "PLANNING" : "TOUCHDOWN";
                 // With a plan the time is the end of the plan. Without one it is the fall the stock flight plan sees.
                 Ksa6DofGuidance g = _s.Guidance;
                 bool hasPlan = g != null && g.HasPlan;
@@ -188,7 +188,7 @@ public static partial class GuidanceWindow
                     ? PageText.AscentToGo(_s.Upfg.VgoMag, _s.Upfg.Rgo.Length() / 1000.0)
                     : "";
                 bool planFlies = flying ? _s.FlyingPlan != null : _s.FlyConvexAscent && !BackupLaunchChosen;
-                PlanWord word = flying ? AscentWord() : a.ControlAcquired ? default : PlanWords.Yours(_s.LaunchArmed ? "the window" : "lift-off");
+                PlanWord word = flying ? AscentWord() : a.ControlAcquired ? default : PlanWords.Yours(_s.LaunchArmed ? "WINDOW" : "LIFTOFF");
                 return new ModeReadout(a, "ASCENT", method, phase,
                     Tone(flying), tgo, flying ? "CUTOFF" : "TO WINDOW", flying ? AscentNumbers(vehicle) : Array.Empty<HeadValue>(), card, NumbersHoldOrbit: flying,
                     PhaseList: ascent.Id == AscentMethod.CatsUpfg ? GuidanceModes.AscentPhasesFor(planFlies) : null, Word: word);
@@ -321,7 +321,7 @@ public static partial class GuidanceWindow
         LandingPhase.GfoldDescent => PlanWords.Of(_s.GfoldPlan != null, NoPlanHolds(_s), _s.GfoldFailStreak > 0),
         LandingPhase.Burn => _s.Upfg.Converged ? PlanWords.OnPlan : PlanWords.Of(false, StepFaultLasts),
         LandingPhase.Prep => PlanWords.Planning,
-        LandingPhase.Coast when !a.ControlAcquired => PlanWords.Yours("the burn"),
+        LandingPhase.Coast when !a.ControlAcquired => PlanWords.Yours("BURN"),
         _ => default,
     };
 

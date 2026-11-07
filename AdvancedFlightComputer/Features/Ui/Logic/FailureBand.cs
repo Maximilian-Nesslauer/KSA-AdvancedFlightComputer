@@ -14,7 +14,7 @@ internal static class FailureBand
     {
         string text = f.What + ". " + EngineWords(f.Engine) + ". " + FlownBy.Sentence(f.Who) + ".";
         return double.IsFinite(f.ImpactSeconds) && f.ImpactSeconds > 0.0
-            ? text + " " + Fmt.Time(f.ImpactSeconds) + " to impact."
+            ? text + " IMPACT T-" + Fmt.Time(f.ImpactSeconds)
             : text;
     }
 
@@ -23,7 +23,7 @@ internal static class FailureBand
         string full = Text(in f);
         if (measure(full) <= room)
             return full;
-        string impact = double.IsFinite(f.ImpactSeconds) && f.ImpactSeconds > 0.0 ? " " + Fmt.Time(f.ImpactSeconds) + " to impact." : "";
+        string impact = double.IsFinite(f.ImpactSeconds) && f.ImpactSeconds > 0.0 ? " IMPACT T-" + Fmt.Time(f.ImpactSeconds) : "";
         string who = " " + FlownBy.Sentence(f.Who) + ".";
         string noEngine = f.What + "." + who + impact;
         if (measure(noEngine) <= room)
@@ -32,25 +32,22 @@ internal static class FailureBand
         string noReason = shortWhat + "." + who + impact;
         if (measure(noReason) <= room)
             return noReason;
-        string whatAndTime = shortWhat + "." + impact;
-        if (measure(whatAndTime) <= room)
-            return whatAndTime;
-        return shortWhat.Replace(" guidance", "", StringComparison.Ordinal) + "." + impact;
+        return shortWhat + "." + impact;
     }
 
     public static bool StripStays(bool busy, bool failureWaits, bool failureAnswered, in SituationFacts f)
         => busy || failureWaits || (failureAnswered && SituationText.ImpactKnown(in f));
 
-    public static string ToImpact(double seconds) => Fmt.Time(seconds) + " to impact.";
+    public static string ToImpact(double seconds) => "IMPACT T-" + Fmt.Time(seconds);
 
     public static string ShortWhat(string what)
-        => what.StartsWith("G-FOLD ", StringComparison.Ordinal) ? "G-FOLD failed" : what;
+        => what.StartsWith("G-FOLD", StringComparison.Ordinal) ? "G-FOLD FAILED" : what;
 
     public static string EngineWords(EngineNow engine) => engine switch
     {
-        EngineNow.On => "Engine on",
-        EngineNow.StockAuto => "Stock AUTO has the engine",
-        _ => "Engine off",
+        EngineNow.On => "ENGINE ON",
+        EngineNow.StockAuto => "ENGINE: STOCK AUTO",
+        _ => "ENGINE OFF",
     };
 }
 

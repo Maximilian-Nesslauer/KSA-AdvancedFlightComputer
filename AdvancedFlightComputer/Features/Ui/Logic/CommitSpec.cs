@@ -4,15 +4,15 @@ namespace AdvancedFlightComputer.Features.Ui.Logic;
 
 internal static class FlownBy
 {
-    public const string You = "YOU FLY";
-    public const string Afc = "AFC FLIES";
-    public const string StockAuto = "STOCK AUTO FLIES";
-    public const string AfcPlansStockAuto = "AFC PLANS + STOCK AUTO FLIES";
+    public const string You = "MANUAL";
+    public const string Afc = "AFC";
+    public const string StockAuto = "STOCK AUTO";
+    public const string AfcPlansStockAuto = "AFC PLANS + STOCK AUTO";
     public const string Nobody = "-";
 
-    public const string OnPress = "ON PRESS:";
+    public const string OnPress = "EXEC:";
 
-    public const string PlansA = OnPress + " PLANS A";
+    public const string PlansA = OnPress + " PLANS ";
 
     public const string StockChip = "STOCK";
 
@@ -42,10 +42,10 @@ internal static class FlownBy
 
     public static string Sentence(string who) => who switch
     {
-        Afc => "AFC flies",
-        StockAuto => "Stock AUTO flies",
-        AfcPlansStockAuto => "AFC plans, stock AUTO flies",
-        _ => "You fly",
+        Afc => "AFC",
+        StockAuto => "STOCK AUTO",
+        AfcPlansStockAuto => "AFC PLANS + STOCK AUTO",
+        _ => "MANUAL",
     };
 }
 
@@ -153,9 +153,7 @@ internal static class PlanVerbs
     public static string Create(int passes, string single = "CREATE BURN")
         => passes > 1 ? $"CREATE {passes} PASSES" : single;
 
-    public static string TakeOver(string verb) => "TAKE OVER: " + Plain(verb);
-
-    public static string Plain(string verb) => verb.StartsWith("START ", StringComparison.Ordinal) ? verb.Substring(6) : verb;
+    public static string TakeOver(string verb) => "TAKE OVER: " + verb;
 
     public static string EndsOnly(string stopLabel) => stopLabel.StartsWith("STOP ", StringComparison.Ordinal) ? "END " + stopLabel.Substring(5) : stopLabel;
 
@@ -172,5 +170,5 @@ internal static class PlanVerbs
     /// <summary>PassCompletionPatch cancels the passes when their burn goes, so the passes after it do not come.</summary>
     public static string DeletePass(int pass) => "DELETE PASS " + pass.ToString(System.Globalization.CultureInfo.InvariantCulture);
 
-    public const string Calculate = "CALCULATE";
+    public const string Calculate = "SOLVE";
 }

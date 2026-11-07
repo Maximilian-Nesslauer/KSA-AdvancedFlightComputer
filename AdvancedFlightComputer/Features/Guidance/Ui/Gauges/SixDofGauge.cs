@@ -48,19 +48,19 @@ public static partial class GuidanceWindow
             if (_s.SixDofStandby)
             {
                 double now = SimNow();
-                ConsoleUi.Sentence(("Standby under entry guidance: " + SixDofStandbyText(now)).AsSpan(),
+                ConsoleUi.Sentence(("STANDBY (ENTRY): " + SixDofStandbyText(now)).AsSpan(),
                     SixDofStandbyReady(now) ? ConsoleStyle.TextPrimary : ConsoleStyle.TextMuted);
                 return;
             }
             if (_s.EngagePending)
-                ConsoleUi.Muted("Starting".AsSpan());
+                ConsoleUi.Muted("STARTING".AsSpan());
             return;
         }
 
         Ksa6DofGuidance g = _s.Guidance;
         if (g == null || !g.HasPlan)
         {
-            ConsoleUi.Sentence((_s.Converging ? "Calculating the first plan" : "Started, no plan yet").AsSpan(), in ConsoleStyle.TextPrimary);
+            ConsoleUi.Sentence((_s.Converging ? "SOLVING FIRST PLAN" : "STARTED, NO PLAN").AsSpan(), in ConsoleStyle.TextPrimary);
         }
     }
 
@@ -69,8 +69,8 @@ public static partial class GuidanceWindow
     {
         const UiTier D = UiTier.Diagnostics;
         double now = SimNow();
-        GaugeRowText(D, "STATE", _s.Active ? (_s.Converging ? "first plan" : "flies")
-            : _s.SixDofStandby ? "standby under entry guidance" : _s.EngagePending ? "starting" : "idle");
+        GaugeRowText(D, "STATE", _s.Active ? (_s.Converging ? "FIRST PLAN" : "ACTIVE")
+            : _s.SixDofStandby ? "STANDBY (ENTRY)" : _s.EngagePending ? "STARTING" : "IDLE");
         GaugeRowText(D, "SOLVER", _s.Error.Length > 0 ? Fmt.Sentence(_s.Error) : "-", ConsoleStyle.TextMuted);
         ConsoleUi.NoteShape("AfcDiagStandby", _s.SixDofStandby ? 1 : 0);
         if (_s.SixDofStandby)
@@ -81,10 +81,10 @@ public static partial class GuidanceWindow
         if (g != null && g.HasPlan)
             GaugeRowText(D, "BURN TIME", Fmt.TimeFine(g.Sigma));
         if (_s.SixDofTrack && g != null && g.HasPlan)
-            GaugeRowText(D, "OFF THE PLAN",
-                FormattableString.Invariant($"{g.TrackingError.PositionM:F1} m, {g.TrackingError.VelocityMs:F1} m/s, thrust {g.TrackingError.ThrustN / 1e3:+0;-0} kN"));
+            GaugeRowText(D, "OFF PLAN",
+                FormattableString.Invariant($"{g.TrackingError.PositionM:F1} m, {g.TrackingError.VelocityMs:F1} m/s, THRUST {g.TrackingError.ThrustN / 1e3:+0;-0} kN"));
         else
-            GaugeRowText(D, "OFF THE PLAN", _s.SixDofTrack ? "-" : "thrust tracking is off", ConsoleStyle.TextMuted);
+            GaugeRowText(D, "OFF PLAN", _s.SixDofTrack ? "-" : "THRUST TRACKING OFF", ConsoleStyle.TextMuted);
     }
 
     internal static void Draw6DofLogDiag(Vehicle vehicle, float innerW)
@@ -188,8 +188,8 @@ public static partial class GuidanceWindow
         GaugeRowCheck(Specs.SixDofThreaded, ref _s.SixDofThreaded);
         if (_s.SixDofThreaded && _s.Worker != null)
             GaugeRowText(T, "WORKER",
-                FormattableString.Invariant($"{_s.Worker.Completed} solves, {_s.Worker.Skipped} skipped, {_s.Worker.LastSolveMs:F0} ms")
-                + (_s.Worker.IsBusy ? "  [solving]" : ""));
+                FormattableString.Invariant($"{_s.Worker.Completed} SOLVES, {_s.Worker.Skipped} SKIPPED, {_s.Worker.LastSolveMs:F0} ms")
+                + (_s.Worker.IsBusy ? "  [SOLVING]" : ""));
 
         GaugeRowCheck(Specs.SixDofSpreadCold, ref _s.SixDofSpreadCold);
         using (new ImGuiDisabledScope(!_s.SixDofSpreadCold))

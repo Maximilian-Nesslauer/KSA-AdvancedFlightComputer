@@ -148,7 +148,7 @@ public static partial class GuidanceWindow
             if (TryProjectCci(_planPoints[k], out float2 s))
             {
                 dl.AddCircleFilled(s, 3.5f, col);
-                OvText(dl, s + new float2(7f, -6f), col, FormattableString.Invariant($"Stage {sol.NodeStage[k] + 1} at {plan.Series.AltitudeKm[k]:F0} km"));
+                OvText(dl, s + new float2(7f, -6f), col, FormattableString.Invariant($"STAGE {sol.NodeStage[k] + 1} AT {sol.NodeStage[k] + 1} km"));
             }
 
         for (int k = 0; k < n; k++)
@@ -166,7 +166,7 @@ public static partial class GuidanceWindow
         {
             dl.AddCircleFilled(end, 4f, col);
             OvText(dl, end + new float2(7f, -6f), col,
-                FormattableString.Invariant($"Insert {plan.Series.AltitudeKm[n - 1]:F0} km, {sol.Time[n - 1]:F0} s, {sol.FinalMass / 1000.0:F1} t"));
+                FormattableString.Invariant($"INSERT {plan.Series.AltitudeKm[n - 1]:F0} km, {plan.Series.AltitudeKm[n - 1]:F0} s, {sol.FinalMass / 1000.0:F1} t"));
         }
     }
 
@@ -241,12 +241,12 @@ public static partial class GuidanceWindow
         if (TryProjectCci(ring[0], out float2 peScreen))
         {
             dl.AddCircleFilled(peScreen, 4f, col);
-            dl.AddText(peScreen + new float2(7f, -6f), col, FormattableString.Invariant($"Pe {_s.PeKm:F0} km"));
+            dl.AddText(peScreen + new float2(7f, -6f), col, FormattableString.Invariant($"PE {_s.PeKm:F0} km"));
         }
         if (TryProjectCci(ring[segments / 2], out float2 apScreen))
         {
             dl.AddCircleFilled(apScreen, 4f, col);
-            dl.AddText(apScreen + new float2(7f, -6f), col, FormattableString.Invariant($"Ap {_s.ApKm:F0} km"));
+            dl.AddText(apScreen + new float2(7f, -6f), col, FormattableString.Invariant($"AP {_s.ApKm:F0} km"));
         }
     }
 

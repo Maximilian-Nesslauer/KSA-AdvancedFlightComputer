@@ -611,7 +611,7 @@ internal static partial class AfcConsole
         }
         if (Frame.Subject == null && Page is not (ConsolePage.Staging or ConsolePage.Tune or ConsolePage.Transfer))
         {
-            ConsoleUi.MutedWrapped(Frame.Eva ? "An EVA kitten is no craft AFC flies. STAGING, TUNE and the stock planner link on TRANSFER work." : "No craft under control.");
+            ConsoleUi.MutedWrapped(Frame.Eva ? "EVA: NO CRAFT. STAGING, TUNE AND STOCK PLANNER LINK WORK." : "NO CRAFT UNDER CONTROL");
             return CommitSpec.None;
         }
 

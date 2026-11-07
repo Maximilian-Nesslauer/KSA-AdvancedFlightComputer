@@ -85,9 +85,9 @@ public static partial class GuidanceWindow
             default:
             {
                 if (OwnerThreadViolation.Length > 0)
-                    ConsoleUi.DangerWrapped(ConsoleUi.EscapeFormat("Threading: " + OwnerThreadViolation));
+                    ConsoleUi.DangerWrapped(ConsoleUi.EscapeFormat("THREADING: " + OwnerThreadViolation));
                 if (_s.GuidanceError.Length > 0)
-                    ConsoleUi.WarningWrapped(ConsoleUi.EscapeFormat($"Last step error ({_s.FailStreak} in a row): {_s.GuidanceError}"));
+                    ConsoleUi.WarningWrapped(ConsoleUi.EscapeFormat($"LAST STEP ERROR ({_s.FailStreak} IN A ROW): {_s.GuidanceError}"));
                 ModeDiagnostics modeView = DrawDiagnosticsTabs(TuneDiagnosticsLabels, ref diagnostics);
                 ImGui.Spacing();
                 if (modeView != null)
@@ -191,6 +191,6 @@ public static partial class GuidanceWindow
         if (changed == 0 || ResetLockReason(doubles, bools).Length > 0)
             return;
         string name = set == TuneSet.Landing ? TuneLandingLabels[(int)landing] : ConsolePages.TuneSetLabel(set);
-        ResetPopup.Create(ResetFor(vehicle, doubles, bools), "RESET THIS SET", PageText.ResetSetQuestion(changed, name));
+        ResetPopup.Create(ResetFor(vehicle, doubles, bools), "RESET SET", PageText.ResetSetQuestion(changed, name));
     }
 }

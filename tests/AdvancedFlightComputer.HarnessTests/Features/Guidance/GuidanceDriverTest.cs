@@ -196,7 +196,7 @@ public sealed class GuidanceDriverTest : AfcTest
                 && !state.ControlAcquired && !state.Running);
             t.Check("the engine takeover leaves Auto armed",
                 fc.BurnMode == FlightComputerBurnMode.Auto && !state.ForcedBurnManual);
-            t.Check("the engine takeover says why", state.Status.Contains("engine"), state.Status);
+            t.Check("the engine takeover says why", state.Status.Contains("ENGINE"), state.Status);
             // Guidance made no cut. Stock's own Auto handling switched the engine off before ignition.
             t.Check("stock owns the engine after the takeover", !Inputs(vehicle).EngineOn);
         }

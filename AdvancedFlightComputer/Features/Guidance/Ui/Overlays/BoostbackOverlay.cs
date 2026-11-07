@@ -446,7 +446,7 @@ public static partial class GuidanceWindow
             // Shadowed text: the overlay has no depth test and draws over terrain, ocean and cloud, and plain red on a bright desert is unreadable.
             float2 at = s + new float2(r + 6f, -20f);
             float line = ImGui.GetTextLineHeight();
-            OvText(dl, at, markCol, "Impact");
+            OvText(dl, at, markCol, "IMPACT");
             OvText(dl, at + new float2(0f, line), markCol,
                 FormattableString.Invariant($"{st.ImpactLatDeg:F3}, {st.ImpactLonDeg:F3}"));
             OvText(dl, at + new float2(0f, line * 2f), markCol,
@@ -483,9 +483,9 @@ public static partial class GuidanceWindow
                 {
                     float line = ImGui.GetTextLineHeight();
                     OvText(dl, tip + new float2(8f, -line), burnCol,
-                        FormattableString.Invariant($"dV {st.SteerDv.Length():F0} m/s"));
+                        FormattableString.Invariant($"DV {st.SteerDv.Length():F0} m/s"));
                     OvText(dl, tip + new float2(8f, 0f), greedyCol,
-                        FormattableString.Invariant($"greedy {AngleBetweenDeg(dvDir, st.SteerGreedy):F0} deg off"));
+                        FormattableString.Invariant($"GREEDY OFFSET {AngleBetweenDeg(dvDir, st.SteerGreedy):F0} deg"));
                 }
             }
         }

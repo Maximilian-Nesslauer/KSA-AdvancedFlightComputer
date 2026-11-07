@@ -12,22 +12,22 @@ internal enum LiveLanding { None, Boostback, Entry, Touchdown, Gfold, Hover }
 /// <summary>
 /// The solver choice of the LAND page as plain rules. Two switches of the craft hold it:
 /// UseThreeDofLanding (entry guidance) and UseSixDofLanding (touchdown guidance, else G-FOLD). The
-/// braking burn of DEORBIT AND LAND reads only UseSixDofLanding, so a pick of ENTRY leaves it as it
-/// is, and DEORBIT AND LAND offers only TOUCHDOWN and G-FOLD.
+/// braking burn of DEORBIT + LAND reads only UseSixDofLanding, so a pick of ENTRY leaves it as it
+/// is, and DEORBIT + LAND offers only TOUCHDOWN and G-FOLD.
 /// </summary>
 internal static class LandSolvers
 {
     public static readonly string[] Labels = { "ENTRY", "TOUCHDOWN", "G-FOLD" };
 
-    public static readonly string[] TableHeads = { "HOW IT LANDS", "SUITS", "ENDS" };
+    public static readonly string[] TableHeads = { "MODE", "USE", "END" };
 
-    public const string HeldDeorbitEntry = "DEORBIT AND LAND hands its braking burn to TOUCHDOWN or G-FOLD.";
-    public const string HeldWhileDeorbit = "Held while a deorbit flies, because they change its braking gate.";
-    public const string HeldWhileGfold = "Held while the G-FOLD descent flies, because touchdown guidance does not take a live descent over from this page.";
+    public const string HeldDeorbitEntry = "DEORBIT + LAND hands its braking burn to TOUCHDOWN or G-FOLD.";
+    public const string HeldWhileDeorbit = "Held during a deorbit. Both change its braking gate.";
+    public const string HeldWhileGfold = "Held during the G-FOLD descent. TOUCHDOWN does not take a live descent over from this page.";
 
-    public const string HeldNote = "held";
+    public const string HeldNote = "HELD";
 
-    public const string GfoldHoldsRow = "G-FOLD flies, so TOUCHDOWN is held.";
+    public const string GfoldHoldsRow = "TOUCHDOWN HELD: G-FOLD ACTIVE.";
     public const string EntryTakesOver = " ENTRY can take it over.";
 
     public static string Label(LandSolver solver) => solver switch
@@ -39,23 +39,23 @@ internal static class LandSolvers
 
     public static string How(LandSolver solver) => solver switch
     {
-        LandSolver.Entry => "Glide, burn (ENTRY)",
-        LandSolver.Touchdown => "Powered (TOUCHDOWN)",
-        _ => "Fuel-best (G-FOLD)",
+        LandSolver.Entry => "GLIDE + BURN (ENTRY)",
+        LandSolver.Touchdown => "POWERED (TOUCHDOWN)",
+        _ => "MIN FUEL (G-FOLD)",
     };
 
     public static string Suits(LandSolver solver) => solver switch
     {
-        LandSolver.Entry => "through air",
-        LandSolver.Touchdown => "heavy, or in air",
-        _ => "airless, agile",
+        LandSolver.Entry => "IN AIR",
+        LandSolver.Touchdown => "HEAVY/AIR",
+        _ => "NO AIR/RCS",
     };
 
     public static string Ends(LandSolver solver, double hoverHandoffM, bool hoverFlies = true, bool hasAir = true) => solver switch
     {
-        LandSolver.Gfold when hoverFlies => double.IsFinite(hoverHandoffM) ? string.Create(Fmt.Inv, $"at {hoverHandoffM:F0} m, hover") : "then hover",
+        LandSolver.Gfold when hoverFlies => double.IsFinite(hoverHandoffM) ? string.Create(Fmt.Inv, $"HOVER FROM {hoverHandoffM:F0} m") : "HOVER",
         LandSolver.Entry when !hasAir => LandChain.Impact,
-        _ => "on the ground",
+        _ => "LANDED",
     };
 
     public static string[] TableRow(LandSolver solver, double hoverHandoffM, bool hoverFlies = true, bool hasAir = true, string note = "")
@@ -69,8 +69,8 @@ internal static class LandSolvers
     public static string SuitsSentence(LandSolver solver) => solver switch
     {
         LandSolver.Entry => "A glide through air with the engine off, then the landing burn.",
-        LandSolver.Touchdown => "Heavy boosters and descents through air, because it models the rotation of the craft.",
-        _ => "Airless bodies and agile landers that point with RCS.",
+        LandSolver.Touchdown => "Heavy boosters and descents through air. It models the rotation of the craft.",
+        _ => "Airless bodies and landers that point with RCS.",
     };
 
     public static RowNote NoteOf(LandSolver solver, in LandNowFacts f)
@@ -81,15 +81,15 @@ internal static class LandSolvers
         switch (solver)
         {
             case LandSolver.Entry when !f.HasAir:
-                return new RowNote("no air here", Stops: true);
+                return new RowNote("NO AIR", Stops: true);
             case LandSolver.Gfold when f.HasAir:
-                return new RowNote(f.Body.Length > 0 ? f.Body + " has air" : "air here", Stops: true);
+                return new RowNote(f.Body.Length > 0 ? f.Body + " HAS AIR" : "HAS AIR", Stops: true);
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.NoGimbal:
-                return new RowNote("no gimbal", Stops: true);
+                return new RowNote("NO GIMBAL", Stops: true);
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.OverPowered:
-                return new RowNote("floor too high", Stops: true);
+                return new RowNote("FLOOR TOO HIGH", Stops: true);
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.TwrAtFloor > 1.0:
-                return new RowNote("path curves");
+                return new RowNote("TWR >1 AT FLOOR");
             default:
                 return RowNote.None;
         }
@@ -98,9 +98,9 @@ internal static class LandSolvers
     public static string HeldLine(in LandNowFacts f)
         => f.Way != LandWay.FromOrbit && f.GfoldFlies ? GfoldHoldsRow : "";
 
-    public const string TouchdownFallback = "If TOUCHDOWN cannot plan for this craft at the handoff, G-FOLD flies the descent and stays the choice for this craft.";
+    public const string TouchdownFallback = "If TOUCHDOWN cannot solve at the handover, G-FOLD flies the descent.";
 
-    /// <summary>The braking burn of DEORBIT AND LAND hands a craft that touchdown guidance refuses to G-FOLD (GuidanceWindow.StepLanding), so the DEORBIT table says so while TOUCHDOWN is chosen.</summary>
+    /// <summary>The braking burn of DEORBIT + LAND hands a craft that touchdown guidance refuses to G-FOLD (GuidanceWindow.StepLanding), so the DEORBIT table says so while TOUCHDOWN is chosen.</summary>
     public static string FallbackLine(in LandNowFacts f)
         => f.Way == LandWay.FromOrbit && f.Chosen == LandSolver.Touchdown ? TouchdownFallback : "";
 
@@ -129,7 +129,7 @@ internal static class LandSolvers
     {
         LandSolver.Entry => "Flies the glide with the engine off and lights it at the planned ignition.",
         LandSolver.Touchdown => "Plans and flies a powered descent to the ground.",
-        _ => "A fuel-optimal powered descent.",
+        _ => "Minimum-fuel powered descent.",
     };
 
     public static string Card(LandSolver solver, double hoverHandoffM, bool handToTouchdown, double touchdownLastS, bool hoverFlies = true, bool hasAir = true, bool hoverKnown = true)
@@ -137,22 +137,22 @@ internal static class LandSolvers
         var inv = Fmt.Inv;
         string ends = solver switch
         {
-            LandSolver.Entry when !hasAir => "in an impact, because with no air it gets no plan",
-            LandSolver.Gfold when !hoverFlies && !hoverKnown => "on the ground, with no lit engine to judge a hover",
-            LandSolver.Gfold when !hoverFlies => "on the ground, because the thrust at minimum throttle is above the weight",
+            LandSolver.Entry when !hasAir => "IMPACT (NO AIR, NO PLAN)",
+            LandSolver.Gfold when !hoverFlies && !hoverKnown => "LANDED (NO LIT ENGINE TO JUDGE HOVER)",
+            LandSolver.Gfold when !hoverFlies => "LANDED (THRUST AT MIN THROTTLE ABOVE WEIGHT)",
             LandSolver.Entry => handToTouchdown && double.IsFinite(touchdownLastS)
-                ? string.Create(inv, $"on the ground, or TOUCHDOWN for the last {touchdownLastS:F0} s")
-                : "on the ground",
-            LandSolver.Touchdown => "on the ground",
-            _ => double.IsFinite(hoverHandoffM) ? string.Create(inv, $"at {hoverHandoffM:F0} m, then hover") : "then hover",
+                ? string.Create(inv, $"LANDED, OR TOUCHDOWN FOR LAST {touchdownLastS:F0} s")
+                : "LANDED",
+            LandSolver.Touchdown => "LANDED",
+            _ => double.IsFinite(hoverHandoffM) ? string.Create(inv, $"HOVER FROM {hoverHandoffM:F0} m") : "HOVER",
         };
         string air = solver switch
         {
-            LandSolver.Entry => "must have it",
-            LandSolver.Touchdown => "with or without",
+            LandSolver.Entry => "required",
+            LandSolver.Touchdown => "either",
             _ => "not allowed",
         };
-        return Description(solver) + "\n\nSuits: " + SuitsSentence(solver) + "\nAir: " + air + "\nEnds: " + ends;
+        return Description(solver) + "\n\nUse: " + SuitsSentence(solver) + "\nAir: " + air + "\nEnd: " + ends;
     }
 
     /// <summary>Why each row of the table is held, in enum order, empty for a row that can be picked.</summary>
@@ -227,10 +227,10 @@ internal static class LandSolvers
         string fromHere = ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.FromHere));
         return live switch
         {
-            LiveLanding.Entry => new StatusLine(Severity.Cue, "Entry guidance flies this craft.", fromHere),
+            LiveLanding.Entry => new StatusLine(Severity.Cue, "AFC: ENTRY", fromHere),
             LiveLanding.Touchdown => new StatusLine(Severity.Cue, previous == LiveLanding.Entry
-                ? "Touchdown took over from entry."
-                : "Touchdown guidance flies this craft.", fromHere),
+                ? "HANDOVER: TOUCHDOWN"
+                : "AFC: TOUCHDOWN", fromHere),
             _ => null,
         };
     }
@@ -246,40 +246,40 @@ internal enum EntryStage { Requested, Glide, Burn }
 internal static class EntryGuidance
 {
     public const string MethodLabel = "ENTRY GUIDANCE";
-    public const string CommitVerb = "START ENTRY";
+    public const string CommitVerb = "ENTRY";
     public const string StopLabel = "STOP ENTRY";
 
     /// <summary>Ahead of the boostback (50), which a glide hands to entry guidance, and behind touchdown guidance (10), which takes its burn.</summary>
     public const int StopOrder = 15;
 
-    public static readonly string[] Phases = { "STARTING", "GLIDE", "LANDING BURN", "TOUCHDOWN" };
+    public static readonly string[] Phases = { "START", "GLIDE", "LANDING BURN", "TOUCHDOWN" };
 
     public static GuidanceModeDescriptor Descriptor()
         => GuidanceModes.Registered(GuidanceModeId.EntryHere, ConsolePage.Land, MethodLabel, StopOrder, Phases,
-            CommitVerb, StopLabel, FallbackOutcome, FallbackDetail, "Entry guidance");
+            CommitVerb, StopLabel, FallbackOutcome, FallbackDetail, "ENTRY GUIDANCE");
 
     // The descriptor texts are read only when the stage texts of StopText are missing, so they hold for every stage.
-    private const string FallbackOutcome = "Engine stays in a burn, else cut";
+    private const string FallbackOutcome = "ENGINE LIT IN BURN, ELSE CUT";
     private const string FallbackDetail =
-        "Entry guidance ends. In the landing burn the engine stays lit, because a cut in flight drops the craft. In the glide the engine is cut.";
+        "Ends entry guidance. In the landing burn the engine stays lit. In the glide it is cut.";
 
     public static (string Outcome, string Detail) StopText(EntryStage stage, bool controlAcquired)
     {
         if (stage == EntryStage.Requested)
-            return ("Nothing started, engine not touched",
+            return ("NOTHING STARTED, ENGINE UNCHANGED",
                 "Cancels the entry guidance request before it starts. The engine is not touched.");
         if (!controlAcquired)
-            return ("Engine not touched",
-                "Entry guidance ends. It holds no control of this craft yet, so the engine is not touched.");
+            return ("ENGINE UNCHANGED",
+                "Ends entry guidance. It holds no control yet. The engine is not touched.");
         return stage == EntryStage.Burn
-            ? ("Engine stays lit", "Engine stays lit at its last throttle. AFC stops steering. You fly.")
-            : ("Engine stays off", "Engine stays off. AFC stops steering. You fly.");
+            ? ("ENGINE LIT", "Engine stays lit at the last throttle. AFC stops steering.")
+            : ("ENGINE OFF", "Engine stays off. AFC stops steering.");
     }
 
     public const string CommitHint =
-        "Entry guidance flies the glide with the engine off and lights it at the planned ignition. With TOUCHDOWN ENDS THE BURN on, touchdown guidance takes the last seconds of the burn when its standby plan is ready. "
-        + "A lit engine goes off when it starts. It plans with the air: with no air it gets no plan and holds the engine off.";
+        "Flies the glide with the engine off and lights it at the planned ignition. With TOUCHDOWN FOR BURN END on, TOUCHDOWN flies the last seconds of the burn once its standby plan is ready. "
+        + "A lit engine goes off at start. Without air it gets no plan and holds the engine off.";
 
     public const string NoAirText =
-        "Entry guidance: no air here, so it gets no plan and holds the engine off to the ground. Stop it and land with TOUCHDOWN or G-FOLD.";
+        "NO AIR: NO PLAN, ENGINE OFF. STOP, THEN USE TOUCHDOWN OR G-FOLD.";
 }

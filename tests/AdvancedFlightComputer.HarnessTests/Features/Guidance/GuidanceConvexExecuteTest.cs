@@ -177,8 +177,8 @@ public sealed class GuidanceConvexExecuteTest : AfcTest
             return;
         t.Check("while it ran, the retry said the first attempt did not converge and what was loosened",
             retry.StartsWith("Did not converge", StringComparison.Ordinal) && retry.Contains("looser constraints", StringComparison.Ordinal), $"'{retry}'");
-        t.Check("and the plan's status says so too", state.AscentPlanStatus.Contains("did not converge", StringComparison.Ordinal)
-            && state.AscentPlanStatus.Contains("looser constraints", StringComparison.Ordinal), $"'{state.AscentPlanStatus}'");
+        t.Check("and the plan's status says so too", state.AscentPlanStatus.Contains("DID NOT CONVERGE", StringComparison.Ordinal)
+            && state.AscentPlanStatus.Contains("LOOSER LIMITS", StringComparison.Ordinal), $"'{state.AscentPlanStatus}'");
         t.Check("and EXECUTE launches on it without being pressed again",
             state.Running && state.Phase == GuidanceWindow.AscentPhase.Profile && ReferenceEquals(state.FlyingPlan, state.AscentPlan)
             && !state.ConvexLaunchPending,

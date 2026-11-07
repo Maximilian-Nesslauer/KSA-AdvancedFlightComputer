@@ -7,8 +7,8 @@ internal static class StagingRules
     // The stock panel prints no delta-v under 1 m/s.
     private const double SpentDvMs = 0.5;
 
-    public const string IgnitionWord = "Ignition";
-    public const string DecouplerWord = "Decoupler";
+    public const string IgnitionWord = "IGNITION";
+    public const string DecouplerWord = "DECOUPLER";
 
     public static bool HoldsDv(double dvMs) => dvMs > SpentDvMs;
 
@@ -17,10 +17,10 @@ internal static class StagingRules
 
     /// <summary>The answer of the picture: "11702 m/s, 9 sequences".</summary>
     public static string Total(double dvMs, int sequences)
-        => Fmt.DvWhole(dvMs) + ", " + sequences.ToString(Fmt.Inv) + (sequences == 1 ? " sequence" : " sequences");
+        => Fmt.DvWhole(dvMs) + ", " + sequences.ToString(Fmt.Inv) + (sequences == 1 ? " SEQUENCE" : " SEQUENCES");
 
     public static string BoxLabel(int number, bool next, bool withWord, bool burns = false)
-        => (next ? "> " : "") + (withWord ? "Seq " : "") + number.ToString(Fmt.Inv) + (burns ? " burns" : "");
+        => (next ? "> " : "") + (withWord ? "SEQ " : "") + number.ToString(Fmt.Inv) + (burns ? " BURNS" : "");
 
     public static string Delay(string word, double seconds)
         => (word.Length > 0 ? word + " " : "") + "+" + seconds.ToString("F1", Fmt.Inv) + " s";
@@ -32,15 +32,15 @@ internal static class StagingRules
 
     public static string Card(int number, double dvMs, bool active, bool next, double ignitionS, double decouplerS)
     {
-        var lines = new List<string> { "Seq " + number.ToString(Fmt.Inv) + ": " + Fmt.DvWhole(dvMs) + "." };
+        var lines = new List<string> { "SEQ " + number.ToString(Fmt.Inv) + ": " + Fmt.DvWhole(dvMs) + "." };
         if (active)
-            lines.Add("It burns now.");
+            lines.Add("Burns now.");
         if (next)
-            lines.Add("It fires next.");
+            lines.Add("Fires next.");
         if (ignitionS > 0.0)
-            lines.Add("Its engines light " + ignitionS.ToString("F1", Fmt.Inv) + " s after the staging trigger.");
+            lines.Add("Engines light " + ignitionS.ToString("F1", Fmt.Inv) + " s after the staging trigger.");
         if (decouplerS > 0.0)
-            lines.Add("Its decouplers fire " + decouplerS.ToString("F1", Fmt.Inv) + " s after the staging trigger.");
+            lines.Add("Decouplers fire " + decouplerS.ToString("F1", Fmt.Inv) + " s after the staging trigger.");
         return string.Join(" ", lines);
     }
 }

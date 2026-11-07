@@ -11,7 +11,7 @@ internal readonly record struct SituationFacts(
 
 internal static class SituationText
 {
-    public const string YouFly = "You fly.";
+    public const string YouFly = "MANUAL";
 
     public static CraftSituation Classify(bool contact, bool bound, double periapsis, double nearSurfaceRadius, double radialSpeed, bool hasAir)
     {
@@ -36,7 +36,7 @@ internal static class SituationText
 
     public static (int Start, int Length) ImpactWords(string line)
     {
-        int at = line.IndexOf("Impact in ", StringComparison.Ordinal);
+        int at = line.IndexOf("IMPACT T-", StringComparison.Ordinal);
         if (at < 0)
             return (-1, 0);
         int end = line.IndexOf('.', at);
@@ -44,12 +44,12 @@ internal static class SituationText
     }
 
     private static string FallWord(in SituationFacts f)
-        => f.Thrust && !(double.IsFinite(f.ImpactS) && f.ImpactS > 0.0) ? "Descending" : "Falling";
+        => f.Thrust && !(double.IsFinite(f.ImpactS) && f.ImpactS > 0.0) ? "DESCENT" : "FALL";
 
     private static string FallFacts(in SituationFacts f, bool height = true, bool impact = true)
     {
         string h = height && double.IsFinite(f.HeightM) ? Fmt.Height(f.HeightM) : "";
-        string t = impact && double.IsFinite(f.ImpactS) && f.ImpactS > 0.0 ? "Impact in " + Fmt.Time(f.ImpactS) : "";
+        string t = impact && double.IsFinite(f.ImpactS) && f.ImpactS > 0.0 ? "IMPACT T-" + Fmt.Time(f.ImpactS) : "";
         return h.Length > 0 && t.Length > 0 ? h + ". " + t : h + t;
     }
 
@@ -57,11 +57,11 @@ internal static class SituationText
     {
         string state = f.Where switch
         {
-            CraftSituation.Ground => "On the ground",
-            CraftSituation.Orbit => "In orbit",
-            CraftSituation.CoastingUp => f.Thrust ? "Climbing" : "Coasting up",
+            CraftSituation.Ground => "LANDED",
+            CraftSituation.Orbit => "ORBIT",
+            CraftSituation.CoastingUp => f.Thrust ? "ASCENT" : "COAST",
             CraftSituation.FallingAir or CraftSituation.FallingNoAir => FallWord(in f),
-            CraftSituation.Escaping => "On an escape path",
+            CraftSituation.Escaping => "ESCAPE",
             _ => "",
         };
         if (state.Length == 0)
@@ -72,8 +72,8 @@ internal static class SituationText
         {
             CraftSituation.FallingAir or CraftSituation.FallingNoAir when fall.Length > 0 => ", " + fall,
             CraftSituation.Orbit when !orbitShown && double.IsFinite(f.PeKm) && double.IsFinite(f.ApKm) => ", " + Fmt.Orbit(f.PeKm, f.ApKm),
-            CraftSituation.CoastingUp when !orbitShown && double.IsFinite(f.ApKm) => ", Ap " + Fmt.Km(f.ApKm),
-            CraftSituation.FallingNoAir => ", no air",
+            CraftSituation.CoastingUp when !orbitShown && double.IsFinite(f.ApKm) => ", AP " + Fmt.Km(f.ApKm),
+            CraftSituation.FallingNoAir => ", NO AIR",
             _ => "",
         };
         return state + body + detail;
@@ -103,24 +103,28 @@ internal static class SituationText
         return measure(noWord) <= room ? noWord : who;
     }
 
+    /// <summary>A message with who flies after it. A message that is a state has no full stop, so the join adds one.</summary>
+    public static string WithWho(string message, string who = YouFly)
+        => message.EndsWith('.') ? message + " " + who : message + ". " + who;
+
     public static string MessageLine(string message, Func<string, float> measure, float room, string who = YouFly)
     {
-        string after = message + " " + who;
+        string after = WithWho(message, who);
         if (measure(after) <= room)
             return after;
-        string brief = PageText.FinishedBrief(message) + " " + who;
+        string brief = WithWho(PageText.FinishedBrief(message), who);
         return brief != after && measure(brief) <= room ? brief : message;
     }
 
     public static string EngineLeftLine(in SituationFacts f, double? percent)
-        => IsFalling(f.Where) && percent is double p && p >= 0.5 ? "Engine at " + p.ToString("F0", Fmt.Inv) + " %." : "";
+        => IsFalling(f.Where) && percent is double p && p >= 0.5 ? "ENGINE AT " + p.ToString("F0", Fmt.Inv) + " %." : "";
 
     public static string FlyingPlace(in SituationFacts f, bool orbitShown = false, bool heightShown = false, bool impactShown = false)
     {
         switch (f.Where)
         {
             case CraftSituation.CoastingUp:
-                return !orbitShown && double.IsFinite(f.ApKm) ? Joined(f.Body, "Ap " + Fmt.Km(f.ApKm)) : f.Body;
+                return !orbitShown && double.IsFinite(f.ApKm) ? Joined(f.Body, "AP " + Fmt.Km(f.ApKm)) : f.Body;
             case CraftSituation.FallingAir:
             case CraftSituation.FallingNoAir:
                 return Joined(f.Body, FallFacts(in f, !heightShown, !impactShown));

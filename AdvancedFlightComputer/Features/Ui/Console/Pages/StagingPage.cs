@@ -36,7 +36,7 @@ internal static class StagingPage
     {
         if (!SharedVehicleHooks.AutoStageEnabled)
         {
-            ConsoleUi.MutedWrapped("AutoStage is unavailable because its game hooks did not load, or the standalone mod is installed.");
+            ConsoleUi.MutedWrapped("AUTOSTAGE UNAVAILABLE: GAME HOOKS NOT LOADED OR STANDALONE MOD INSTALLED.");
             return CommitSpec.None;
         }
 
@@ -50,7 +50,7 @@ internal static class StagingPage
         // The switch makes the StagingDetector.Arm call of the AUTOSTAGE gauge button.
         if (flight)
             GuidanceWindow.DrawAutoStageRow(vehicle!, ctx.Frame.Activity.AnyGuidanceLive, PageText.AutoStageRowLabel, refusal, withLink: false,
-                "It stages when the active engines run out of propellant, and drops spent boosters while the rest keeps firing. "
+                "Stages when the active engines run out of propellant. Drops spent boosters while the rest fires. "
                 + PageText.AutoStageHudNote);
         bool off = flight && !StagingDetector.IsArmed(vehicle!);
         using (ConsoleUi.Dim(off))
@@ -74,7 +74,7 @@ internal static class StagingPage
         ], vehicle != null ? CraftOverrideCount(vehicle) : 0, ctx.FoldsOpen || ctx.Frame.Editor, PageText.DelaysTip);
 
         if (AutoStageDefaults.Unsaved)
-            return new CommitSpec(PageText.SaveDefaultsVerb, FlownBy.Nobody, "", "Defaults not saved", true, SaveDefaultsTip,
+            return new CommitSpec(PageText.SaveDefaultsVerb, FlownBy.Nobody, "", "DEFAULTS NOT SAVED", true, SaveDefaultsTip,
                 Act: AutoStageDefaults.SaveDefaults, Owner: Owner.Settings, Outcome: PageText.SaveDefaultsOutcome, Quiet: true);
         if (off && refusal.Length == 0 && ctx.Frame.GuidanceOn && ctx.Frame.Situation.Where == CraftSituation.Ground && GuidanceWindow.LaunchFlownByNote(vehicle!).Length > 0)
             return CommitSpec.StatusOnly(PageText.AutoStageOffUntilLaunch);
@@ -305,7 +305,7 @@ internal static class StagingPage
                 DelayRow(vehicle, seq.Number, DelayKind.Decoupler);
         }
         if (!any)
-            ConsoleUi.Muted("Every stage has fired".AsSpan());
+            ConsoleUi.Muted("ALL STAGES FIRED".AsSpan());
     }
 
     // The delay overrides this craft holds for its stages still to fire.
@@ -369,7 +369,7 @@ internal static class StagingPage
                 StagingConfig.FlushPendingSaves();
             }
             if (ImGui.IsItemHovered())
-                ConsoleUi.Tooltip(string.Format(Inv, "Back to the part default, {0:F1} s.", partDefault).AsSpan());
+                ConsoleUi.Tooltip(string.Format(Inv, "Resets to the part default of {0:F1} s.", partDefault).AsSpan());
             ImGui.SetCursorScreenPos(control);
         }
         ConsoleUi.RowRight(field);
@@ -383,7 +383,7 @@ internal static class StagingPage
                 StagingConfig.SetSequenceDecouplerOverride(vehicle, sequence, delay);
         }
         if (ImGui.IsItemHovered())
-            ConsoleUi.Tooltip(("The delay of this sequence on this craft, from the staging trigger. Saved at once.\n" + PageText.TagCraftDesign).AsSpan());
+            ConsoleUi.Tooltip(("Delay of this sequence from the staging trigger. Saved at once.\n" + PageText.TagCraftDesign).AsSpan());
         if (ImGui.IsItemDeactivatedAfterEdit())
             StagingConfig.FlushPendingSaves();
         ConsoleUi.EndRow();

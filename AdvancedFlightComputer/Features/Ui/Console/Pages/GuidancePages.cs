@@ -5,7 +5,7 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.Ui.Console.Pages;
 
-/// <summary>LAUNCH: the orbit and its plane, the stock target, the launch window, and the ASCENT choice from the mode registry with the CLIMB choice; then the flight profile picture with its views, the stage line and the stage bar; then the LIMITS, BOOSTERS and HOW IT FLIES folds.</summary>
+/// <summary>LAUNCH: the orbit and its plane, the stock target, the launch window, and the ASCENT choice from the mode registry with the CLIMB choice; then the flight profile picture with its views, the stage line and the stage bar; then the LIMITS, BOOSTERS and GNC folds.</summary>
 internal static class LaunchPage
 {
     public static CommitSpec Draw(in PageContext ctx)

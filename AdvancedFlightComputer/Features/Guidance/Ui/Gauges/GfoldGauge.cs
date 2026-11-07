@@ -34,12 +34,12 @@ public static partial class GuidanceWindow
 
     private const double PlanBurnShare = 0.02;
 
-    private static readonly string[] _descentLegendNames = { "Flown", "Burn", "Coast", PageText.ThrustKey };
+    private static readonly string[] _descentLegendNames = { "FLOWN", "BURN", "COAST", PageText.ThrustKey };
     private static readonly Picture.Swatch[] _descentSwatches =
     {
-        new("Flown", Palette.Flown),
-        new("Burn", Palette.Plan, SwatchKind.Thick),
-        new("Coast", Palette.Plan),
+        new("FLOWN", Palette.Flown),
+        new("BURN", Palette.Plan, SwatchKind.Thick),
+        new("COAST", Palette.Plan),
     };
     private static readonly Picture.Swatch _thrustSwatch = new(PageText.ThrustKey, Palette.Plan, SwatchKind.Tick);
     private static readonly Picture.Swatch[] _descentShown = new Picture.Swatch[4];
@@ -170,7 +170,7 @@ public static partial class GuidanceWindow
         bool newPlan = !stopped && _planJumps.GetOrCreateValue(_s).Update(DescentPlanToGo(), GuidanceClock.NowMs / 1000.0);
         string head = stopped
             ? (vehicle.Situation.HasAnyContact() ? PageText.FlownPath : PageText.StoppedAt(altNow))
-            : (newPlan ? PageText.NewPlan + "   " : caption.Length > 0 ? caption + "   " : "") + (plan != null && thrNow < 0.01 && PlanCoastsNow(plan) ? PageText.CoastWord : "Throttle " + Fmt.Percent(thrNow));
+            : (newPlan ? PageText.NewPlan + "   " : caption.Length > 0 ? caption + "   " : "") + (plan != null && thrNow < 0.01 && PlanCoastsNow(plan) ? PageText.CoastWord : "THROTTLE " + Fmt.Percent(thrNow));
         Picture.HeadText(in f, lanes.Head, PageText.HeightAboveSite + "   " + head, newPlan ? Palette.Text.Solid : Palette.Dim.Solid);
         _descentSwatches.AsSpan(0, legend).CopyTo(_descentShown);
         if (_thrustDrawn)
@@ -531,10 +531,10 @@ public static partial class GuidanceWindow
 
         // Solve cost is a first-class readout, not a diagnostic: this runs on the sim thread, so anything past a frame time (16.7 ms at 60 Hz) is a stutter the player feels once every re-solve interval.
         ConsoleUi.Readout("STATUS".AsSpan(), _s.GfoldStatus.ToString().AsSpan());
-        ConsoleUi.Readout("PLAN".AsSpan(), FormattableString.Invariant($"{n} points, dt {plan.Dt:F2} s, tf {plan.TimeOfFlight:F1} s").AsSpan());
+        ConsoleUi.Readout("PLAN".AsSpan(), FormattableString.Invariant($"{n} POINTS, DT {plan.Dt:F2} s, TF {plan.TimeOfFlight:F1} s").AsSpan());
         if (_s.GfoldThrustStatus.Length > 0)
             ConsoleUi.Readout("THRUST".AsSpan(), Fmt.Sentence(_s.GfoldThrustStatus).AsSpan());
-        ConsoleUi.Readout("LAST SOLVE".AsSpan(), FormattableString.Invariant($"{_s.GfoldSolveMs:F1} ms, {_s.GfoldSolveMs / 16.7:F1} frames at 60 Hz").AsSpan());
+        ConsoleUi.Readout("LAST SOLVE".AsSpan(), FormattableString.Invariant($"{_s.GfoldSolveMs:F1} ms, {_s.GfoldSolveMs:F1} FRAMES AT 60 Hz").AsSpan());
         ConsoleUi.Readout("FUEL USED".AsSpan(), FormattableString.Invariant($"{plan.FuelUsed:F0} kg").AsSpan());
         ConsoleUi.Readout("LANDING ERROR".AsSpan(), FormattableString.Invariant($"{plan.LandingErrorNorm:F1} m").AsSpan());
         ConsoleUi.Readout("PLAN TIME".AsSpan(), FormattableString.Invariant($"t+{elapsed:F1} s").AsSpan());
@@ -542,7 +542,7 @@ public static partial class GuidanceWindow
         PlotPair("r.up (m)", i => plan.Position[i][0],
                  "r.y (m)", i => plan.Position[i][1], n, cursor);
         PlotPair("r.z (m)", i => plan.Position[i][2],
-                 "speed (m/s)", i => VecLen(plan.Velocity[i]), n, cursor);
+                 "SPEED (m/s)", i => VecLen(plan.Velocity[i]), n, cursor);
         PlotPair("v.up (m/s)", i => plan.Velocity[i][0],
                  "v.y (m/s)", i => plan.Velocity[i][1], n, cursor);
         PlotPair("v.z (m/s)", i => plan.Velocity[i][2],
@@ -551,12 +551,12 @@ public static partial class GuidanceWindow
                  "u.y (m/s2)", i => plan.AccelCmd[i][1], n, cursor);
         PlotPair("u.z (m/s2)", i => plan.AccelCmd[i][2],
                  "sigma (m/s2)", i => plan.Sigma[i], n, cursor);
-        PlotPair("plan thrust (% of max)", i =>
+        PlotPair("PLAN THRUST (% of max)", i =>
                  {
                      int at = Math.Min(Math.Max(i, 1), n - 1);
                      return 100.0 * plan.Sigma[at] * plan.Mass[at] / Math.Max(_s.GfoldThrustMax, 1.0);
                  },
-                 "mass (kg)", i => plan.Mass[i], n, cursor);
+                 "MASS (kg)", i => plan.Mass[i], n, cursor);
     }
 
     private static double VecLen(double[] v)
@@ -601,13 +601,13 @@ public static partial class GuidanceWindow
             ImColor8 nameInk = Palette.Text.Solid, valueInk = Palette.Dim.Solid;
             if (!double.IsFinite(min))
             {
-                dl.AddText(new float2(origin.X + pad, titleY), Palette.Warn.Solid, label + ", no data");
+                dl.AddText(new float2(origin.X + pad, titleY), Palette.Warn.Solid, label + ", NO DATA");
                 return;
             }
 
             double range = Math.Max(Math.Abs(min), Math.Abs(max));
             int ci = Math.Clamp((int)MathF.Round(cursor * (n - 1)), 0, n - 1);
-            string now = "now " + TuneRules.PlotValue(series(ci), range);
+            string now = "NOW " + TuneRules.PlotValue(series(ci), range);
             float nowW = ImGui.CalcTextSize(now).X;
             dl.AddText(new float2(origin.X + size.X - pad - nowW, titleY), nameInk, now);
             dl.AddText(new float2(origin.X + pad, titleY), valueInk, ConsoleUi.FitEllipsis(label, size.X - pad * 3f - nowW));
@@ -646,7 +646,7 @@ public static partial class GuidanceWindow
         }
     }
 
-    // The descent plot and its legend are the LAND picture above this form. The hover handoff is a property of the flight plan, not of the optimiser, so it is in the HAND-OVERS (DrawHandOversFold), and the vehicle height is in the details of the form, because every way of landing reads it. This content is the solver tuning.
+    // The descent plot and its legend are the LAND picture above this form. The hover handoff is a property of the flight plan, not of the optimiser, so it is in the HANDOVER fold (DrawHandOversFold), and the vehicle height is in the details of the form, because every way of landing reads it. This content is the solver tuning.
     private static void DrawGfoldLandingContent(float innerW)
     {
         if (GuidanceRegion.Begin("G-FOLD PARAMETERS", GuidanceRegion.Tuning))

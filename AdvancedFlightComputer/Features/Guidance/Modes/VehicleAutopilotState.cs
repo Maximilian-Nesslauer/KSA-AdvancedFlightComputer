@@ -191,7 +191,7 @@ public sealed class VehicleAutopilotState
 
     // Ascent propellant reserve for a returning booster.
 
-    // There is no reserve to set. A booster with a landing target (its STAGE SITE in LAUNCH > BOOSTERS) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
+    // There is no reserve to set. A booster with a landing target (its SITE in LAUNCH > BOOSTERS) arms it, and the convex plan sizes it from nothing, for the boostback to that target and the landing burn (#84) - see GuidanceWindow.RefreshReserve.
 
     /// <summary>The propellant the booster keeps for its return, kg: what the convex plan sized for it. Zero while armed with no usable plan yet, and when the reserve is not armed.</summary>
     public double ReserveKg;
@@ -1143,7 +1143,7 @@ public sealed class VehicleAutopilotState
 
     // Live boostback state.
 
-    /// <summary>Attitude held through the settling burn, latched at START BOOSTBACK. A fixed
+    /// <summary>Attitude held through the settling burn, latched at the BOOSTBACK verb. A fixed
     /// inertial direction rather than a live reading, so the hold is a hold and the
     /// rotation has something continuous to slew from.</summary>
     public double3 BoostbackHoldDir;

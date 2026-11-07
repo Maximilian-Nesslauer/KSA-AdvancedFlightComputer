@@ -145,19 +145,19 @@ internal static class PlanWords
 
     public const double OffPlanM = 100.0;
 
-    public static readonly PlanWord Planning = new("Planning");
-    public static readonly PlanWord OnPlan = new("On plan", Good: true);
-    public static readonly PlanWord LastPlan = new("Last plan");
-    public static readonly PlanWord NoPlan = new("No plan", Warns: true);
-    public static readonly PlanWord Turning = new("Turning to the plan");
-    public static readonly PlanWord OnTarget = new("On target", Good: true);
-    public static readonly PlanWord OffTarget = new("Off target");
+    public static readonly PlanWord Planning = new("PLANNING");
+    public static readonly PlanWord OnPlan = new("ON PLAN", Good: true);
+    public static readonly PlanWord LastPlan = new("LAST PLAN");
+    public static readonly PlanWord NoPlan = new("NO PLAN", Warns: true);
+    public static readonly PlanWord Turning = new("SLEW TO PLAN");
+    public static readonly PlanWord OnTarget = new("ON TARGET", Good: true);
+    public static readonly PlanWord OffTarget = new("OFF TARGET");
 
     public static PlanWord Of(bool hasPlan, bool noPlanLasts, bool lastPlan = false)
         => hasPlan ? (lastPlan ? LastPlan : OnPlan) : noPlanLasts ? NoPlan : Planning;
 
     public static PlanWord Tracking(double offM)
-        => double.IsFinite(offM) && offM > OffPlanM ? new PlanWord("Off plan " + Fmt.Distance(offM)) : OnPlan;
+        => double.IsFinite(offM) && offM > OffPlanM ? new PlanWord("OFF PLAN " + Fmt.Distance(offM)) : OnPlan;
 
     public static PlanWord Miss(double km)
         => !double.IsFinite(km) ? default : km <= OnTargetKm ? OnTarget : OffTarget;
@@ -166,12 +166,12 @@ internal static class PlanWords
 
     public const double FarMissKm = 400.0;
 
-    public static PlanWord Yours(string until) => new("Yours until " + until);
+    public static PlanWord Yours(string until) => new("MANUAL UNTIL " + until);
 
     public static PlanWord FlyingPlan(double toKm)
-        => new(double.IsFinite(toKm) ? "Flying the plan to " + Fmt.Km(toKm) : "Flying the plan");
+        => new(double.IsFinite(toKm) ? "AFC: PLAN TO " + Fmt.Km(toKm) : "AFC: PLAN");
 
-    public static readonly PlanWord FlyingTurn = new("Flying the simple turn");
+    public static readonly PlanWord FlyingTurn = new("AFC: GRAVITY TURN");
 }
 
 internal enum ImpactInk { Plain, Good, Bad }

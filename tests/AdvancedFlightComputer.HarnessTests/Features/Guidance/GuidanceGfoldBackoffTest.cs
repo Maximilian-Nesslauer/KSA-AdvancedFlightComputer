@@ -47,7 +47,7 @@ public sealed class GuidanceGfoldBackoffTest : AfcTest
             t.Check("a re-plan short of propellant runs both searches once", _searches == 2, $"searches={_searches}");
             t.Check("the refusal starts the rest", state.GfoldSearchRetryTime == now + rest, $"retry={state.GfoldSearchRetryTime}");
             t.Check("the committed plan keeps flying", ReferenceEquals(state.GfoldPlan, committed));
-            t.Check("the refusal is visible", state.LandingStatus.Contains("propellant"), state.LandingStatus);
+            t.Check("the refusal is visible", state.LandingStatus.Contains("PROPELLANT"), state.LandingStatus);
 
             int solvesBefore = _solves;
             for (int i = 1; i < 8; i++)

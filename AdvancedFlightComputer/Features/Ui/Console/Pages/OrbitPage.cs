@@ -26,14 +26,14 @@ internal static class OrbitPage
     private static double _budgetMs = double.NaN;
     private static readonly Picture.Swatch[] _legend = new Picture.Swatch[4];
 
-    public const string UnavailableText = "Orbit tools are unavailable because their game hooks did not load.";
+    public const string UnavailableText = "Orbit tools are unavailable. Their game hooks did not load.";
 
     public static CommitSpec Draw(in PageContext ctx)
     {
         if (!OrbitToolsPanel.Enabled)
         {
             ConsoleUi.MutedWrapped(UnavailableText);
-            return CommitSpec.StatusOnly("Orbit tools unavailable");
+            return CommitSpec.StatusOnly("ORBIT TOOLS UNAVAILABLE");
         }
 
         ConsoleUi.ClearPageWarning();
@@ -105,10 +105,10 @@ internal static class OrbitPage
         double radius = source.Parent?.MeanRadius ?? 0.0;
         string goal = exec.Intent switch
         {
-            ApseIntent apse => (apse.IsSetApoapsis ? "Ap " : "Pe ") + Fmt.Km((apse.TargetRadiusMeters - radius) / 1000.0),
-            SetInclinationIntent inc => "Inc " + Fmt.Deg(inc.TargetInclinationRad * 180.0 / Math.PI),
-            CircularizeIntent => "circular orbit",
-            MatchInclinationIntent match => "the plane of " + match.TargetId,
+            ApseIntent apse => (apse.IsSetApoapsis ? "AP " : "PE ") + Fmt.Km((apse.TargetRadiusMeters - radius) / 1000.0),
+            SetInclinationIntent inc => "INC " + Fmt.Deg(inc.TargetInclinationRad * 180.0 / Math.PI),
+            CircularizeIntent => "CIRCULAR ORBIT",
+            MatchInclinationIntent match => "PLANE OF " + match.TargetId,
             HohmannTransferIntent transfer => "to " + transfer.TargetId,
             _ => "",
         };
@@ -131,7 +131,7 @@ internal static class OrbitPage
         PageKit.HowItFlies("orbit",
         [
             new FoldPart(FoldNames.Split, split, () => MultiPassUI.DrawSplitRow(source, key), MultiPassUI.SplitSummary),
-            new FoldPart(FoldNames.CraftTarget, match, () => OrbitToolForm.DrawSetTargetRow(source), OrbitToolForm.SetsCraftTarget ? "Craft target on" : "Craft target off"),
+            new FoldPart(FoldNames.CraftTarget, match, () => OrbitToolForm.DrawSetTargetRow(source), OrbitToolForm.SetsCraftTarget ? "CRAFT TARGET ON" : "CRAFT TARGET OFF"),
         ], changed, ctx.FoldsOpen);
     }
 
@@ -235,7 +235,7 @@ internal static class OrbitPage
                 DrawPictureHead(plane, in plan);
             using (PictureScope pic = Picture.Open(ctx.PictureHeight))
             {
-                string head = otherSource ? "For " + source.Id : "";
+                string head = otherSource ? "FOR " + source.Id : "";
                 if (plane)
                     DrawPlaneSketch(in pic.Frame, key, source, basis!, in plan, head);
                 else
@@ -280,9 +280,9 @@ internal static class OrbitPage
             : plan.State == OrbitToolsPanel.CommitState.NodeCreated ? PageText.StockDrawsBurn
             : "";
         int noView = 0;
-        if (Picture.Header(plane ? "PLANE SKETCH" : "ORBIT SKETCH", default, ref noView, "AfcOrbitPic",
+        if (Picture.Header(plane ? "PLANE" : "ORBIT", default, ref noView, "AfcOrbitPic",
                 new[] { PageText.ShowInWorld }, new[] { lines && OrbitToolsPanel.ShowOrbitPreview },
-                new[] { "Draws the orbit after the burn and every pass orbit in the world and on the map." },
+                new[] { "Draws the orbit after the burn and the pass orbits in the world and on the map." },
                 new[] { worldOff }) == 0)
             OrbitToolsPanel.ShowOrbitPreview = !OrbitToolsPanel.ShowOrbitPreview;
     }
@@ -298,11 +298,11 @@ internal static class OrbitPage
         _tracks.Clear();
         int entries = 0;
         _tracks.Add(new OrbitSketch.Track(now, Palette.Flown.A(0.7f), 1.5f, false));
-        _legend[entries++] = new Picture.Swatch("Now", Palette.Flown);
+        _legend[entries++] = new Picture.Swatch("NOW", Palette.Flown);
         if (chained)
         {
             _tracks.Add(new OrbitSketch.Track(basis, Palette.Plan.A(0.55f), 1f, true));
-            _legend[entries++] = new Picture.Swatch("After last burn", Palette.Plan, SwatchKind.Dashed);
+            _legend[entries++] = new Picture.Swatch("AFTER LAST BURN", Palette.Plan, SwatchKind.Dashed);
         }
         Orbit? finalPass = null;
         if (MultiPassUI.HasMultiPassPreview)
@@ -320,18 +320,18 @@ internal static class OrbitPage
                 }
             }
             if (passes.Length > 1)
-                _legend[entries++] = new Picture.Swatch("Between passes", Palette.Plan, SwatchKind.Dashed);
-            _legend[entries++] = new Picture.Swatch("After the passes", Palette.Plan);
+                _legend[entries++] = new Picture.Swatch("BETWEEN PASSES", Palette.Plan, SwatchKind.Dashed);
+            _legend[entries++] = new Picture.Swatch("AFTER PASSES", Palette.Plan);
         }
         else if (madeAfter != null)
         {
             _tracks.Add(new OrbitSketch.Track(madeAfter, Palette.Plan.Solid, 2f, false));
-            _legend[entries++] = new Picture.Swatch("After the burn", Palette.Plan);
+            _legend[entries++] = new Picture.Swatch("AFTER BURN", Palette.Plan);
         }
         else if (plan.Entry?.FlightPlan is FlightPlan fp && fp.Patches.Count > 0)
         {
             _tracks.Add(new OrbitSketch.Track(fp.Patches[0].Orbit, Palette.Plan.Solid, 2f, false));
-            _legend[entries++] = new Picture.Swatch("After the burn", Palette.Plan);
+            _legend[entries++] = new Picture.Swatch("AFTER BURN", Palette.Plan);
         }
 
         double3? burn = null;
@@ -363,11 +363,11 @@ internal static class OrbitPage
         _tracks.Clear();
         int entries = 0;
         _tracks.Add(new OrbitSketch.Track(now, Palette.Flown.A(0.7f), 1.5f, false));
-        _legend[entries++] = new Picture.Swatch("Now", Palette.Flown);
+        _legend[entries++] = new Picture.Swatch("NOW", Palette.Flown);
         if (after != null)
         {
             _tracks.Add(new OrbitSketch.Track(after, Palette.Plan.Solid, 2f, false));
-            _legend[entries++] = new Picture.Swatch("After the burn", Palette.Plan);
+            _legend[entries++] = new Picture.Swatch("AFTER BURN", Palette.Plan);
         }
         double3? burnAt = burn.Patch?.Orbit.GetStateVectorsAt(burn.Time).PositionCci;
         using (PictureScope pic = Picture.Open(ctx.PictureHeight))
@@ -378,26 +378,26 @@ internal static class OrbitPage
     {
         double change;
         string other;
-        string nowLabel = "Now";
+        string nowLabel = "NOW";
         string changeText = "";
         if (MadeBurn(source, in plan) is Burn made)
         {
             change = OrbitToolsPanel.OrbitAfter(made) is Orbit after ? source.Orbit.GetRelativeInclination(after).Value() * 180.0 / Math.PI : 0.0;
-            other = "After the burn";
+            other = "AFTER BURN";
             changeText = PageText.PlaneChange(change);
         }
         else if (key == ManeuverTools.ManeuverTools.KeyMatchInclination)
         {
             Orbit? target = OrbitToolForm.GetSelectedTargetOrbit();
             change = target != null ? basis.GetRelativeInclination(target).Value() * 180.0 / Math.PI : 0.0;
-            other = OrbitToolForm.GetSelectedTargetOrbiter()?.Id ?? "Target plane";
+            other = OrbitToolForm.GetSelectedTargetOrbiter()?.Id ?? "TARGET PLANE";
         }
         else
         {
             double targetDeg = OrbitToolForm.TargetInclinationRad * 180.0 / Math.PI;
             change = targetDeg - OrbitToolForm.CurrentInclinationDeg;
-            other = "Goal " + Fmt.Deg(targetDeg);
-            nowLabel = "Now " + Fmt.Deg(OrbitToolForm.CurrentInclinationDeg);
+            other = "GOAL " + Fmt.Deg(targetDeg);
+            nowLabel = "NOW " + Fmt.Deg(OrbitToolForm.CurrentInclinationDeg);
             changeText = PageText.PlaneChange(change);
         }
         OrbitSketch.DrawPlane(in f, change, OrbitToolForm.UseDescendingNode, nowLabel, other, "", changeText, head);
@@ -423,9 +423,9 @@ internal static class OrbitPage
     {
         Orbit? orbit = plan.Basis.Orbit;
         if (orbit == null || orbit.Eccentricity >= 1.0)
-            return "Needs a bound orbit";
+            return "NEEDS BOUND ORBIT";
         if (plan.Maneuver == null)
-            return OrbitToolForm.Problem.Length > 0 ? OrbitToolForm.Problem : "No maneuver";
+            return OrbitToolForm.Problem.Length > 0 ? OrbitToolForm.Problem : "NO MANEUVER";
         return "";
     }
 

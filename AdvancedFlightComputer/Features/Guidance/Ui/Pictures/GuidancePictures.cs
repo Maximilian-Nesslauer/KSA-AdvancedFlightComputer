@@ -44,8 +44,8 @@ public static partial class GuidanceWindow
         return SketchMath.TrackIsClimb((_s.Trace[start].Length() - radius) / 1000.0, (_s.Trace[(_s.TraceHead - 1 + cap) % cap].Length() - radius) / 1000.0, airTopKm);
     }
 
-    private static readonly string[] LaunchLegendNames = { "Q-alpha", "Flown" };
-    private const string FlownKeySample = "Seq 0, now 0";
+    private static readonly string[] LaunchLegendNames = { "Q-ALPHA", "FLOWN" };
+    private const string FlownKeySample = "SEQ 0, NOW 0";
     private static readonly string[] _launchLegendNames = new string[16];
 
     private static float LaunchLegendWidth(int stages)
@@ -62,8 +62,8 @@ public static partial class GuidanceWindow
 
     private static readonly Picture.Swatch[] _launchSwatches = new Picture.Swatch[12];
     private static readonly int[] _shownStages = new int[12];
-    private static readonly Picture.Swatch[] _planSwatch = { new("Plan", Palette.Plan) };
-    private static readonly Picture.Swatch[] _qSwatches = { new("Q", Palette.Plan), new("Q-alpha", Palette.QAlpha, SwatchKind.LongDash) };
+    private static readonly Picture.Swatch[] _planSwatch = { new("PLAN", Palette.Plan) };
+    private static readonly Picture.Swatch[] _qSwatches = { new("Q", Palette.Plan), new("Q-ALPHA", Palette.QAlpha, SwatchKind.LongDash) };
 
     /// <summary>
     /// FLIGHT PROFILE: altitude against downrange with the target orbit band, the atmosphere, the convex plan with its staging marks and its max-q point, the hand-over altitude, and the track flown so far. The views PITCH, Q and THROTTLE plot the same plan against time. The views are folder tabs on the top edge of the frame, the legend stands in the right lane, and the stage line with the verbs of the plan stands under the frame. With no plan and no climb the picture is one sentence, and the stage line stays. A plan that can no longer fly draws dim with its marks.
@@ -147,13 +147,13 @@ public static partial class GuidanceWindow
         else
             Picture.EmptyState(busy ? LaunchProgressText() : PageText.LaunchNoPlan(vehicle.Situation.HasAnyContact()));
 
-        string calc = busy ? "CANCEL" : hasPlan ? "RE-CALCULATE" : "CALCULATE";
+        string calc = busy ? "CANCEL" : hasPlan ? "RE-SOLVE" : "SOLVE";
         string[] verbs = _s.Running || _s.ConvexLaunchPending ? Array.Empty<string>() : hasPlan && !busy ? new[] { calc, "CLEAR" } : new[] { calc };
         string[] tips =
         {
-            busy ? "Cancels the calculation. A launch that waits on it is canceled too."
-                : "Calculates the climb for the lift-off the launch would commit to, so you can look at it first.",
-            "Drops the calculated plan.",
+            busy ? "Cancels the solve. A launch that waits for it is canceled too."
+                : "Solves the climb for the liftoff the launch would commit to, for a preview.",
+            "Drops the solved plan.",
         };
         int legend;
         // After lift-off the line and the bar under it say what the craft holds now, in the names of the stock panel and of STAGING.
@@ -246,7 +246,7 @@ public static partial class GuidanceWindow
         double topKm = SketchMath.ProfileTopKm(planTop, flownTop, Math.Min(_s.PeKm, _s.ApKm), atmoKm);
 
         // No decision needs the distance, so it stands small in the head lane and the plot takes the room of a big number. While the ascent flies the head holds the numbers, and the card of those numbers the velocity to go.
-        string downrange = !_s.Running && series != null ? string.Format(PicInv, "{0:F0} km downrange", series.DownrangeKm[^1]) : "";
+        string downrange = !_s.Running && series != null ? string.Format(PicInv, "{0:F0} km DOWNRANGE", series.DownrangeKm[^1]) : "";
         float s = f.Scale;
         ImDrawListPtr dl = f.Dl;
         PictureLanes lanes = Picture.Lanes(in f, Picture.HeadHeight(in f, "", text: true), Picture.TickWidth(AxisTicks.Km(Math.Round(topKm))),
@@ -328,36 +328,36 @@ public static partial class GuidanceWindow
             }
         }
 
-        bool targetNamed = labels.Guide(v.Sy(highKm) < plot.Y ? "Orbit, Ap " + Fmt.Km(highKm) : "Orbit", bandBottom, Palette.Target.Solid);
+        bool targetNamed = labels.Guide(v.Sy(highKm) < plot.Y ? "ORBIT, AP " + Fmt.Km(highKm) : "ORBIT", bandBottom, Palette.Target.Solid);
         bool handoverNamed = true;
         if (hasHandover)
         {
-            handoverNamed = labels.Guide("UPFG from " + Fmt.Km(_s.ConvexHandoverAltKm), v.Sy(_s.ConvexHandoverAltKm), Palette.Dim.Solid);
+            handoverNamed = labels.Guide("UPFG FROM " + Fmt.Km(_s.ConvexHandoverAltKm), v.Sy(_s.ConvexHandoverAltKm), Palette.Dim.Solid);
         }
-        bool airNamed = atmoKm <= 0.0 || labels.Guide("Air", v.Sy(atmoKm), Palette.Air.Solid);
+        bool airNamed = atmoKm <= 0.0 || labels.Guide("AIR", v.Sy(atmoKm), Palette.Air.Solid);
         int qPeak = n > 0 ? ArgMaxFinite(series.QFraction) : -1;
         if (qPeak >= 0 && qPeak < n)
         {
             float2 ring = v.ToScreen(series.DownrangeKm[qPeak], series.AltitudeKm[qPeak]);
-            float labelH = labels.Size("Max Q").Y;
+            float labelH = labels.Size("MAX Q").Y;
             float low = plot.Bottom - StageRibbonHeight * s - labelH - 1f * s;
             ImColor8 ringInk = old ? Palette.Text.A(OldPlanAlpha) : Palette.Text.Solid;
             float spotY = Math.Min(ring.Y - labelH * 0.5f, low);
-            if (labels.Spots("Max Q", new[] { new float2(ring.X + 8f * s, spotY), new float2(ring.X + 24f * s, spotY), new float2(ring.X + 44f * s, spotY) }, ringInk))
+            if (labels.Spots("MAX Q", new[] { new float2(ring.X + 8f * s, spotY), new float2(ring.X + 24f * s, spotY), new float2(ring.X + 44f * s, spotY) }, ringInk))
                 Glyphs.Ring(dl, ring, 5f * s, ringInk, 1.5f * s);
         }
 
         int entries = 0;
         if (series != null)
-            _launchSwatches[entries++] = new Picture.Swatch("Plan", Palette.Plan, Alpha: old ? OldPlanAlpha : 1f);
+            _launchSwatches[entries++] = new Picture.Swatch("PLAN", Palette.Plan, Alpha: old ? OldPlanAlpha : 1f);
         if (flownCount > 1)
-            _launchSwatches[entries++] = new Picture.Swatch("Flown", Palette.Flown);
+            _launchSwatches[entries++] = new Picture.Swatch("FLOWN", Palette.Flown);
         if (!targetNamed)
-            _launchSwatches[entries++] = new Picture.Swatch("Orbit", Palette.Target, SwatchKind.Filled);
+            _launchSwatches[entries++] = new Picture.Swatch("ORBIT", Palette.Target, SwatchKind.Filled);
         if (!handoverNamed)
             _launchSwatches[entries++] = new Picture.Swatch("UPFG", Palette.Dim, SwatchKind.Dashed);
         if (!airNamed)
-            _launchSwatches[entries++] = new Picture.Swatch("Air", Palette.Air, SwatchKind.Dashed);
+            _launchSwatches[entries++] = new Picture.Swatch("AIR", Palette.Air, SwatchKind.Dashed);
         for (int i = 0; i < shownStages && entries < _launchSwatches.Length; i++)
             _launchSwatches[entries++] = new Picture.Swatch(StageKey(_shownStages[i]), ColorRules.Stage(_shownStages[i]), SwatchKind.Diamond, old ? OldPlanAlpha : 1f);
         Picture.Legend(in f, lanes.Right, _launchSwatches.AsSpan(0, entries));
@@ -424,7 +424,7 @@ public static partial class GuidanceWindow
         }
         if (!double.IsFinite(x0) || n < 2 || !(x1 > x0))
         {
-            Picture.Empty(in f, "No data");
+            Picture.Empty(in f, "NO DATA");
             return default;
         }
         if (double.IsFinite(refY))
@@ -538,8 +538,8 @@ public static partial class GuidanceWindow
 
     #region BOOSTBACK
 
-    private static readonly string[] _sideLegendNames = { "Predicted" };
-    private static readonly Picture.Swatch[] _sideSwatches = { new("Predicted", Palette.Plan, SwatchKind.Dashed) };
+    private static readonly string[] _sideLegendNames = { "PREDICTED" };
+    private static readonly Picture.Swatch[] _sideSwatches = { new("PREDICTED", Palette.Plan, SwatchKind.Dashed) };
 
     /// <summary>
     /// RETURN PROFILE of LAND > BOOSTBACK: the side view of the booster, distance to the site against altitude, with the predicted path, the impact point and the miss as the big number. On the pad, before any booster flies, it says where the stage sites are set.
@@ -557,7 +557,7 @@ public static partial class GuidanceWindow
             int noView = 0;
             if (Picture.Header("RETURN PROFILE", default, ref noView, "AfcBoostbackPic",
                     new[] { PageText.ShowInWorld }, new[] { _showImpactOverlay },
-                    new[] { "Draws the predicted impact path and point in the world. The side view and IMPACT PREDICTION show the prediction while this page is open, with this switch on or off." }) == 0)
+                    new[] { "Draws the predicted impact trajectory and point in the world. The side view and IMPACT PREDICTION show it with this switch on or off." }) == 0)
             {
                 _showImpactOverlay = !_showImpactOverlay;
                 if (_showImpactOverlay)
@@ -570,8 +570,8 @@ public static partial class GuidanceWindow
         else if (onPad || HasImpactPath)
             Picture.EmptyState(onPad ? (NoStageHome ? PageText.BoostbackNoStage : PageText.BoostbackNotYet) : PageText.NoSiteToDraw);
 
-        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "Stage sites: LAUNCH > BOOSTERS",
-                "Opens LAUNCH with its BOOSTERS fold open. It sets the site each returnable stage flies home to.") == 0)
+        if (!BoostbackLive && !NoStageHome && Picture.LegendLine("", default, default, "AfcBoostbackLegend", default, "STAGE SITES: LAUNCH > BOOSTERS",
+                "Opens LAUNCH with the BOOSTERS fold open. The fold sets the site of each returnable stage.") == 0)
         {
             ConsoleUi.OpenFold(BoostersFoldId);
             CraftActivity activity = ReadMode(vehicle).Activity;
@@ -622,7 +622,7 @@ public static partial class GuidanceWindow
         foreach (ReturnableStage stage in _s.ReturnableStages)
             if (stage.HasTarget)
                 targeted++;
-        return string.Format(PicInv, "{0} of {1} with a site", targeted, count);
+        return string.Format(PicInv, "{0}/{1} WITH SITE", targeted, count);
     }
 
     private static void DrawReturnLanes(in PictureFrame f, Orbit orbit, IParentBody parent)
@@ -631,7 +631,7 @@ public static partial class GuidanceWindow
         int count = _s.ReturnableStages.Count;
         if (count == 0)
         {
-            Picture.Empty(in f, "No stage of this craft can fly itself home");
+            Picture.Empty(in f, "NO RETURNABLE STAGE");
             return;
         }
 
@@ -661,11 +661,11 @@ public static partial class GuidanceWindow
             float2 textAt = new float2(left, rowTop + 1f * s);
             Glyphs.Dot(f.Dl, new float2(left, y), 4f * s, Palette.Flown.Solid);
             // SEQ marks the stock staging sequence that separates the stage.
-            string name = string.Format(PicInv, "Seq {0} {1}{2}", stage.SequenceNumber, stage.Name, stage.IsNext ? " (next)" : "");
+            string name = string.Format(PicInv, "SEQ {0} {1}{2}", stage.SequenceNumber, stage.Name, stage.IsNext ? " (NEXT)" : "");
             if (!stage.HasTarget)
             {
                 Glyphs.DashedLine(f.Dl, new float2(left, y), new float2(right, y), Palette.Dim.A(0.5f), 1f * s, 4f * s, 4f * s);
-                f.Dl.AddText(textAt, Palette.Dim.Solid, ConsoleUi.FitEllipsis(name + "   no site", right - left));
+                f.Dl.AddText(textAt, Palette.Dim.Solid, ConsoleUi.FitEllipsis(name + "   NO SITE", right - left));
                 continue;
             }
             double km = AngleBetween(craftCcf, SiteDirCcf(stage.TargetLatDeg, stage.TargetLonDeg)) * parent.MeanRadius / 1000.0;
@@ -717,7 +717,7 @@ public static partial class GuidanceWindow
         };
         bool farFromSite = FormRules.SiteOutOfReach(craftKm * 1000.0, ImpactSeconds(vehicle, guidanceBound: true), vehicle.GetSurfaceSpeed());
         PlanTone bigTone = ColorRules.MissTone(miss / 1000.0, confirms, farFromSite, PlanWords.OnTargetKm);
-        string big = !double.IsFinite(miss) ? "No impact prediction" : BoostbackLive ? "" : "Miss " + Fmt.KmFine(miss / 1000.0);
+        string big = !double.IsFinite(miss) ? "NO IMPACT PREDICTION" : BoostbackLive ? "" : "MISS " + Fmt.KmFine(miss / 1000.0);
         ImDrawListPtr dl = f.Dl;
         PictureLanes lanes = Picture.Lanes(in f, Picture.HeadHeight(in f, big, text: true), Picture.TickWidth(AxisTicks.Km(Math.Round(maxAlt * 1.2))),
             Picture.LegendWidth(_sideLegendNames), Picture.TextLaneHeight());
@@ -931,11 +931,11 @@ public static partial class GuidanceWindow
 
     // Engaged has no caption, because the head says that it flies.
     private static string SixDofCaption()
-        => _s.Active ? (_s.Converging ? "Touchdown: first plan" : "")
-            : _s.SixDofStandby ? "Touchdown: standby under entry guidance"
-            : _s.EngagePending ? "Touchdown: starting" : "Touchdown: idle";
+        => _s.Active ? (_s.Converging ? "TOUCHDOWN: FIRST PLAN" : "")
+            : _s.SixDofStandby ? "TOUCHDOWN: STANDBY (ENTRY)"
+            : _s.EngagePending ? "TOUCHDOWN: STARTING" : "TOUCHDOWN: IDLE";
 
-    private static readonly string[] _approachLegendNames = { "Path", PageText.CoastKey, PageText.BrakingKey };
+    private static readonly string[] _approachLegendNames = { "PROFILE", PageText.CoastKey, PageText.BrakingKey };
     private static readonly double[] _pathKm = new double[160];
     private static readonly double[] _pathAlt = new double[160];
     private static readonly Picture.Swatch[] _approachSwatches = new Picture.Swatch[3];
@@ -1060,7 +1060,7 @@ public static partial class GuidanceWindow
         labels.Point(PageText.CraftKey, craftAt, 6f * s, Palette.Flown.Solid);
 
         int legend = 0;
-        _approachSwatches[legend++] = new Picture.Swatch("Path", Palette.Plan, SwatchKind.Dashed);
+        _approachSwatches[legend++] = new Picture.Swatch("PROFILE", Palette.Plan, SwatchKind.Dashed);
         if (coast)
             _approachSwatches[legend++] = new Picture.Swatch(PageText.CoastKey, Palette.Flown, SwatchKind.Dotted);
         if (toSite)
@@ -1073,8 +1073,8 @@ public static partial class GuidanceWindow
 
     private const float ShortApproachPlot = 120f;
 
-    private static readonly string[] _hoverLegendNames = { "Aim", "Drift" };
-    private static readonly Picture.Swatch[] _hoverSwatches = { new("Aim", Palette.Plan, SwatchKind.Filled), new("Drift", Palette.Flown, SwatchKind.Filled) };
+    private static readonly string[] _hoverLegendNames = { "AIM", "DRIFT" };
+    private static readonly Picture.Swatch[] _hoverSwatches = { new("AIM", Palette.Plan, SwatchKind.Filled), new("DRIFT", Palette.Flown, SwatchKind.Filled) };
 
     // The hover from above while it flies: the velocity setpoints as an arrow from the centre, the flown horizontal velocity as a dot on the same scale, and on the right a bar for the vertical velocity with its setpoint and a mark for what flies. A velocity past the scale lies on the ring or on the end of the bar, and the picture says that it is off scale, because a mark that stays in the centre reads as no drift.
     private static void DrawHoverView(in PictureFrame f, Orbit orbit, IParentBody parent)
@@ -1119,7 +1119,7 @@ public static partial class GuidanceWindow
         float climbY = mid - (float)climbShare * half;
         dl.AddTriangleFilled(new float2(barX + 4f * s, climbY), new float2(barX + 11f * s, climbY - 4f * s), new float2(barX + 11f * s, climbY + 4f * s), Palette.Flown.Solid);
 
-        string upTop = "Up +" + AxisTicks.Number(upScale) + " m/s", upLow = "-" + AxisTicks.Number(upScale) + " m/s";
+        string upTop = "UP +" + AxisTicks.Number(upScale) + " m/s", upLow = "-" + AxisTicks.Number(upScale) + " m/s";
         ConsoleUi.PushSmall();
         float font = ImGui.GetFontSize();
         dl.AddText(new float2(Math.Min(barX - ImGui.CalcTextSize(upTop).X * 0.5f, plot.Right - ImGui.CalcTextSize(upTop).X), barTop - font - 1f * s), Palette.Dim.Solid, upTop);
@@ -1144,8 +1144,8 @@ public static partial class GuidanceWindow
         labels.Spots("N", new[] { new float2(c.X - labels.Size("N").X * 0.5f, c.Y - reach - labels.Size("N").Y - 1f * s) }, Palette.Dim.Solid);
         labels.Spots("E", new[] { new float2(c.X + reach + 3f * s, c.Y - labels.Size("E").Y * 0.5f) }, Palette.Dim.Solid);
 
-        Picture.HeadText(in f, lanes.Head, "Throttle " + Fmt.Percent(_s.GfoldThrottle), Palette.Text.Solid);
-        Picture.LaneText(in f, lanes.Bottom, "Aim " + PageText.HoverSetpoint(_s.TermSetE, _s.TermSetN, _s.TermSetUp), Palette.Dim.Solid);
+        Picture.HeadText(in f, lanes.Head, "THROTTLE " + Fmt.Percent(_s.GfoldThrottle), Palette.Text.Solid);
+        Picture.LaneText(in f, lanes.Bottom, "AIM " + PageText.HoverSetpoint(_s.TermSetE, _s.TermSetN, _s.TermSetUp), Palette.Dim.Solid);
         Picture.Legend(in f, lanes.Right, _hoverSwatches);
     }
 

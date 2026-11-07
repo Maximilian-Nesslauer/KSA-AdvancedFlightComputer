@@ -74,8 +74,8 @@ internal static class TunePage
             return CommitSpec.None;
         string resetLock = GuidanceWindow.TuneSetResetLock(shown, landing);
         Vehicle vehicle = subject!;
-        return new CommitSpec("RESET THIS SET", FlownBy.Nobody, resetLock, "", false,
-            resetLock.Length > 0 ? resetLock : "Puts the changed values of this set back to their defaults. Asks first.",
+        return new CommitSpec("RESET SET", FlownBy.Nobody, resetLock, "", false,
+            resetLock.Length > 0 ? resetLock : "Resets the changed values of this set to their defaults. Asks first.",
             Act: () => GuidanceWindow.ConfirmResetTuneSet(vehicle, shown, landing), Owner: Owner.Settings, Outcome: PageText.ResetSetOutcome(changed), Quiet: true);
     }
 
@@ -117,7 +117,7 @@ internal static class TunePage
         {
             bool active = GuidanceWindow.ModActive;
             if (ConsoleUi.CheckboxRow("GUIDANCE ENABLED".AsSpan(), "AfcTuneGuidance".AsSpan(), ref active,
-                    ("Off releases every craft guidance flies and stops all guidance drawing. The AFC menu has the same switch.\n" + PageText.TagGameSession).AsSpan()))
+                    ("Off releases every craft under AFC and stops all guidance drawing. The AFC menu has the same switch.\n" + PageText.TagGameSession).AsSpan()))
                 GuidanceWindow.SetModActive(active);
         }
         else
@@ -126,19 +126,19 @@ internal static class TunePage
         string key = Input.GetAssignmentString(InputAction.ToggleTransferPlan);
         bool route = PlannerRoute.Active;
         if (ConsoleUi.CheckboxRow((key + " OPENS AFC").AsSpan(), "AfcTuneRoute".AsSpan(), ref route,
-                ("On: " + key + " and View > Transfer Planner open this console, and TRANSFER > STOCK PLANNER opens the stock planner. Off: they open the stock planner, and the AFC menu opens the console.\n" + PageText.TagEveryCraft).AsSpan()))
+                ("On: " + key + " and View > Transfer Planner open the console, and TRANSFER > STOCK PLANNER opens the stock planner. Off: they open the stock planner, and the AFC menu opens the console.\n" + PageText.TagEveryCraft).AsSpan()))
             PlannerRoute.SetRouting(route);
         if (!PlannerRoute.Active && PlannerRoute.RoutingPreference)
-            ConsoleUi.MutedWrapped("Off for this session, because the console failed to draw. Switch it on to try again.");
+            ConsoleUi.MutedWrapped("OFF FOR THIS SESSION: CONSOLE FAILED TO DRAW. SWITCH ON TO RETRY.");
         else if (PlannerRoute.Active && PlannerRoute.MenuMissing && !PlannerRoute.RoutingPreference)
-            ConsoleUi.MutedWrapped("On for this session, because the AFC menu did not load and the key is the way into this console.");
+            ConsoleUi.MutedWrapped("ON FOR THIS SESSION: AFC MENU NOT LOADED. THE KEY OPENS THE CONSOLE.");
 
         Switch("OPEN AFC AT FLIGHT START", "AfcTuneOpenAtStart", AfcConsole.KeyOpenAtStart,
             "Opens the console when a flight starts or a save loads.");
         Switch("NUMPAD NUDGES THE HOVER", "AfcTuneNumpad", UiConfig.KeyHoverNumpad,
             "The numpad keys nudge the aim of the craft on screen while it hovers. The game also uses the numpad digits for its HUD layouts, so one press does both.");
-        Switch("SHOW FOLDS OPEN", "AfcTuneExpertOpen", AfcConsole.KeyExpertOpen,
-            "The folds of every page start open.");
+        Switch("FOLDS OPEN", "AfcTuneExpertOpen", AfcConsole.KeyExpertOpen,
+            "Folds of every page start open.");
         Switch("SHOW STAGING DIAGNOSTICS", "AfcTuneDiagnostics", UiConfig.KeyShowDiagnostics,
             "Shows the rows of the staging bar with their provenance, and the KSA cross-check.");
 

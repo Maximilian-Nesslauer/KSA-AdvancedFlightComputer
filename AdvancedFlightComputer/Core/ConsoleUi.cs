@@ -1259,7 +1259,7 @@ internal static class ConsoleUi
         ImGui.Dummy(new float2(0f, lineH));
     }
 
-    /// <summary>ConsoleWidgets.DangerButton is a grey outline that turns red only under the mouse, so beside CLEAR or RE-CALCULATE it does not read as the way out.</summary>
+    /// <summary>ConsoleWidgets.DangerButton is a grey outline that turns red only under the mouse, so beside CLEAR or RE-SOLVE it does not read as the way out.</summary>
     public static bool StopButton(string label, string id, float2 size) => FilledLabelButton(label, id, size, stop: true);
 
     /// <summary>The button of the red failure band: dark text and a dark border on the red, because the grey outline of a stock button reads as off there.</summary>
@@ -1693,7 +1693,7 @@ internal static class ConsoleUi
     /// <summary>The width of the chip or chips <see cref="OwnerChipAt"/> draws for <paramref name="text"/>.</summary>
     public static float OwnerChipWidth(Owner owner, string text) => Chips(default, default, 0f, owner, text, false, draw: false);
 
-    /// <summary>AFC fills in the AFC colour, STOCK in the stock plate colour, or at the level of a locked form with <paramref name="dim"/>, and YOU FLY in the bright text colour.</summary>
+    /// <summary>AFC fills in the AFC colour, STOCK in the stock plate colour, or at the level of a locked form with <paramref name="dim"/>, and MANUAL in the bright text colour.</summary>
     public static float OwnerChipAt(ImDrawListPtr dl, float2 at, float rowH, Owner owner, string text, bool dim = false) => Chips(dl, at, rowH, owner, text, dim, draw: true);
 
     private static float Chips(ImDrawListPtr dl, float2 at, float rowH, Owner owner, string text, bool dim, bool draw)

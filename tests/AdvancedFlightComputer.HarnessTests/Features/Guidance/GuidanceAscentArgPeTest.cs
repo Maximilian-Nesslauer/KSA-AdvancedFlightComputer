@@ -585,7 +585,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
         }
 
         if (!t.Check("the ascent cuts off and releases guidance",
-                !state.Running && state.Status.StartsWith("Ascent done", StringComparison.Ordinal),
+                !state.Running && state.Status.StartsWith("ASCENT COMPLETE", StringComparison.Ordinal),
                 $"running={state.Running} after {time:F0} s, status '{state.Status}', error '{state.GuidanceError}'"))
             return;
         driver.Step(StepDt, 8);

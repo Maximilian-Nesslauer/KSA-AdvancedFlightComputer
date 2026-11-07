@@ -19,10 +19,7 @@ internal static class PageBand
             ConsoleUi.PushTitle();
             float title = ImGui.GetFontSize();
             ConsoleStyle.PopFont();
-            ConsoleUi.PushRow();
-            float row = ImGui.GetFontSize();
-            ConsoleStyle.PopFont();
-            return InnerGap * 2f + title + row;
+            return InnerGap * 2f + title;
         }
     }
 
@@ -37,21 +34,14 @@ internal static class PageBand
     public static void DrawRule(ImDrawListPtr dl, float left, float right, float y)
         => dl.AddLine(new float2(left, y), new float2(right, y), ConsoleStyle.ApplyAlpha(ConsoleStyle.HairlineU32), ConsoleStyle.WindowBorderThicknessPx);
 
-    public static void Draw(ConsolePage page, LandWay way, CraftSituation where, float2 origin, float width)
+    public static void Draw(ConsolePage page, float2 origin, float width)
     {
         ImDrawListPtr dl = ImGui.GetWindowDrawList();
         float y = origin.Y + InnerGap;
 
         ConsoleUi.PushTitle();
         string name = ConsolePages.Label(page);
-        float titleH = ImGui.GetFontSize();
         dl.AddText(new float2(origin.X, y), ConsoleStyle.ApplyAlpha(ConsoleStyle.TextPrimaryU32), name);
-        ConsoleStyle.PopFont();
-
-        ConsoleUi.PushRow();
-        string purpose = ConsoleUi.FitEllipsis(PageText.BandPurpose(page, way, where), width);
-        if (purpose.Length > 0)
-            dl.AddText(new float2(origin.X, y + titleH), ConsoleStyle.ApplyAlpha(ConsoleStyle.TextMutedU32), purpose);
         ConsoleStyle.PopFont();
 
         ConsoleUi.NoteRow("AfcPageBand", origin, new float2(width, Height));

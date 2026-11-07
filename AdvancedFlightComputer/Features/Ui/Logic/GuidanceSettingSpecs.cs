@@ -17,80 +17,80 @@ internal static class GuidanceSettingSpecs
     #region Ascent
 
     public static readonly SettingSpec PeKm = new("PeKm", "PERIAPSIS", "km", P, 200.0, 0.0, 1e7, "%.1f",
-        "The low point of the orbit. A value above APOAPSIS swaps the two.");
+        "Periapsis altitude of the target orbit. A value above APOAPSIS swaps the two.");
     public static readonly SettingSpec ApKm = new("ApKm", "APOAPSIS", "km", P, 420.0, 0.0, 1e7, "%.1f",
-        "The high point of the orbit.");
+        "Apoapsis altitude of the target orbit.");
     public static readonly SettingSpec IncDeg = new("IncDeg", "INCLINATION", "deg", P, 51.6, 0.0, 180.0, "%.1f",
-        "The tilt of the orbit against the equator. A new value puts the LAN back over the launch site.");
+        "Orbit inclination to the equator. A new value resets LAN over the launch site.");
     public static readonly SettingSpec LanDeg = new("LanDeg", "LAN", "deg", P, 250.0, -360.0, 360.0, "%.1f",
-        "Where the orbit crosses the equator going north. It starts over the launch site, and no reset touches it.");
+        "Longitude of the ascending node. Starts over the launch site, and no reset changes it.");
     public static readonly SettingSpec ArgPeDeg = new("ArgPeDeg", "ARG. OF PE", "deg", E, 0.0, -360.0, 360.0, "%.1f",
-        "Argument of periapsis, used only while FIX ARG. OF PE is on.");
+        "Argument of periapsis. Used only with FIX ARG. OF PE on.");
     public static readonly SettingSpec ChaseOffsetKm = new("ChaseOffsetKm", "SMA OFFSET", "km", E, 20.0, -1e5, 1e5, "%.1f",
-        "How far below the target's semi-major axis the chase orbit sits.");
+        "Semi-major axis of the chase orbit below the target's.");
     public static readonly SettingSpec GLimitG = new("GLimitG", "MAX ACCELERATION", "g", P, 4.0, 0.11, 100.0, "%.2f",
-        "Acceleration limit of the whole flight while G-LIMIT is on. A landing refuses to start with 0.1 g or less.");
+        "Acceleration limit of the whole flight with G-LIMIT on. A landing refuses to start at 0.1 g or less.");
     public static readonly SettingSpec TurnStartAltKm = new("TurnStartAltKm", "TURN START ALTITUDE", "km", E, 0.5, 0.0, 1000.0, "%.1f",
-        "SIMPLE TURN: where the turn starts.");
+        "GRAVITY TURN: altitude where the turn starts.");
     public static readonly SettingSpec TurnRateDegS = new("TurnRateDegS", "TURN RATE", "deg/s", E, 1.0, 0.0, 90.0, "%.2f",
-        "SIMPLE TURN: how fast the craft tilts.");
+        "GRAVITY TURN: pitch rate of the turn.");
     public static readonly SettingSpec ForceRollDeg = new("ForceRollDeg", "ROLL ANGLE", "deg", E, 180.0, -360.0, 360.0, "%.1f",
-        "Roll the ascent holds while FORCE ROLL is on.");
+        "Roll angle held with FORCE ROLL on.");
     public static readonly SettingSpec ConvexQMaxKpa = new("ConvexQMaxKpa", "MAX Q", "kPa", P, 195.0, 0.0, 1e4, "%.1f",
-        "Dynamic pressure limit of the calculated climb.");
+        "Dynamic pressure limit of the solved climb.");
     public static readonly SettingSpec ConvexThrottleMinPct = new("ConvexThrottleMinPct", "MIN THROTTLE", "%", E, 80.0, 0.0, 100.0, "%.0f",
-        "Lowest throttle the calculated climb may fly on a liquid stage. Solid stages stay at full thrust.");
+        "Lowest throttle of the solved climb on a liquid stage. Solid stages stay at full thrust.");
     public static readonly SettingSpec ConvexQAlphaMax = new("ConvexQAlphaMax", "MAX Q-ALPHA", "Pa rad", T, 3500.0, 0.0, 1e7, "%.1f",
-        "Aerodynamic load limit of the calculated climb.");
+        "Limit of dynamic pressure times angle of attack for the solved climb.");
     public static readonly SettingSpec ConvexHandoverAltKm = new("ConvexHandoverAltKm", "UPFG FROM", "km", T, 80.0, 0.0, 1e4, "%.1f",
-        "Altitude where the calculated climb hands the ascent to UPFG.");
+        "Altitude of the handover from the solved climb to UPFG.");
 
     public static readonly BoolSpec GLimitEnabled = new("GLimitEnabled", "G-LIMIT", P, false,
-        "Limits the acceleration of the whole ascent.");
+        "Caps acceleration of the whole ascent at MAX ACCELERATION.");
     public static readonly BoolSpec AutoLaunch = new("AutoLaunch", "AUTO WARP TO WINDOW", P, true,
         "Offers a time warp to the launch window when the launch is armed.");
     public static readonly BoolSpec MatchTargetArgPe = new("MatchTargetArgPe", "COPY TARGET ARG. PE", E, true,
         "Copies the target's argument of periapsis into the chase orbit.");
     public static readonly BoolSpec ArgPeFixed = new("ArgPeFixed", "FIX ARG. OF PE", E, false,
-        "Holds periapsis where ARG. OF PE puts it and moves the insertion along the ellipse instead.");
+        "Holds periapsis at ARG. OF PE. The insertion moves along the ellipse.");
     public static readonly BoolSpec OptimiseInsertion = new("OptimiseInsertion", "OPTIMIZE INSERTION", E, true,
-        "Lets the insertion move away from periapsis where that saves delta v.");
+        "Moves the insertion away from periapsis where that saves delta-v.");
     public static readonly BoolSpec InsertBeforeApoapsis = new("InsertBeforeApoapsis", "INSERT BEFORE APOAPSIS", E, false,
-        "Looks for the insertion short of apoapsis instead of past periapsis.");
-    public static readonly BoolSpec FlyConvexAscent = new("FlyConvexAscent", "CALCULATED CLIMB", P, true,
-        "Flies the calculated climb. Off flies the vertical rise and the simple turn.");
-    public static readonly BoolSpec ConvexOptimiseTiming = new("ConvexOptimiseTiming", "CHOOSE LAUNCH TIME", E, true,
-        "Lets the calculated climb choose its own timing for the most mass to orbit. With a target it chooses when to lift off, up to 10 minutes from the launch window, and LAUNCH arms for that time. With no target it chooses the LAN for the plane over the pad, and LAN is set to it. Off, it lifts off at the window, or now, into the LAN on the page.");
-    public static readonly BoolSpec ShowConvexPlan = new("ShowConvexPlan", "SHOW PLAN IN MAP", E, true,
-        "Draws the calculated plan in the map view, with SHOW IN MAP on. The FLIGHT PROFILE picture always shows it.");
+        "Searches for the insertion before apoapsis, not after periapsis.");
+    public static readonly BoolSpec FlyConvexAscent = new("FlyConvexAscent", "SOLVED CLIMB", P, true,
+        "Flies the solved climb. Off flies the vertical rise and the gravity turn.");
+    public static readonly BoolSpec ConvexOptimiseTiming = new("ConvexOptimiseTiming", "LAUNCH TIME", E, true,
+        "Sets the liftoff time (with a target, up to 10 minutes from the launch window) or the LAN (no target) for the most mass to orbit. LAUNCH arms for that time and LAN is set to it. Off launches at the window, or now, into the LAN on the page.");
+    public static readonly BoolSpec ShowConvexPlan = new("ShowConvexPlan", "PLAN ON MAP", E, true,
+        "Draws the solved plan in the map view with SHOW IN MAP on. The FLIGHT PROFILE picture always shows it.");
     public static readonly BoolSpec ForceRoll = new("ForceRoll", "FORCE ROLL", E, true,
-        "Commands a roll angle during the ascent.");
-    public static readonly BoolSpec LaunchDescending = new("LaunchDescending", "DESCENDING NODE", P, false,
-        "Launches at the descending node when there is no target.");
+        "Holds the ROLL ANGLE during the ascent.");
+    public static readonly BoolSpec LaunchDescending = new("LaunchDescending", "DESC NODE", P, false,
+        "Launches at the descending node with no target.");
 
     #endregion
 
     #region Craft switches
 
     public static readonly BoolSpec Engage = new("Engage", "AFC MAY STEER", P, true,
-        "Lets AFC command the attitude of this craft.");
+        "Lets AFC command attitude. Off ends a mode that holds it.");
     public static readonly BoolSpec AutoStage = new("AutoStage", "AFC MAY USE ENGINES", P, true,
-        "Lets AFC light the engines, throttle and stage this craft.");
+        "Sets whether AFC lights the engines, throttles and stages.");
 
     #endregion
 
     #region Boostback
 
     public static readonly SettingSpec BoostbackSeparationS = new("BoostbackSeparationS", "SETTLING BURN", "s", E, 0.2, 0.0, 60.0, "%.1f",
-        "How long the booster settles after separation before it turns.");
+        "Duration of the settling burn after separation, before the turn.");
     public static readonly SettingSpec BoostbackPitchDeg = new("BoostbackPitchDeg", "MIN PITCH", "deg", E, 0.0, -180.0, 90.0, "%.1f",
-        "Floor on how far the burn may point below the horizon. A very negative value switches the shaping off.");
-    public static readonly SettingSpec GlideMaxAoaDeg = new("GlideMaxAoaDeg", "GLIDE MAX ANGLE OF ATTACK", "deg", E, 15.0, 0.0, 60.0, "%.1f",
-        "Largest angle of attack the glide may fly to steer the impact point.");
-    public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN ANGLE OF ATTACK", "deg", E, 7.5, 0.0, 60.0, "%.1f",
-        "Angle of attack every impact prediction assumes for the glide, with the lift pointed up the trajectory, so the burn can stop short. 0 plans the engine-first ballistic coast.");
+        "Lowest pitch of the burn against the horizon. A very negative value switches the shaping off.");
+    public static readonly SettingSpec GlideMaxAoaDeg = new("GlideMaxAoaDeg", "GLIDE MAX AoA", "deg", E, 15.0, 0.0, 60.0, "%.1f",
+        "Largest angle of attack (AoA) the glide may fly to steer the impact point.");
+    public static readonly SettingSpec GlideNominalAoaDeg = new("GlideNominalAoaDeg", "GLIDE PLAN AoA", "deg", E, 7.5, 0.0, 60.0, "%.1f",
+        "Angle of attack that every impact prediction assumes for the glide, with the lift pointed up the trajectory. 0 plans an engine-first ballistic coast.");
     public static readonly SettingSpec BoostbackClearanceM = new("BoostbackClearanceM", "CLEARANCE AT SEPARATION", "m", E, 30.0, 0.0, 1e4, "%.1f",
-        "How far a booster coasts engine-off away from the stage it left before its settling burn lights.");
+        "Distance the booster coasts, engine off, away from the stage before the settling burn lights.");
     public static readonly SettingSpec BoostbackSlewDegS = new("BoostbackSlewDegS", "SLEW RATE", "deg/s", T, 30.0, 0.0, 360.0, "%.2f",
         "Rotation rate of the turn after separation.");
     public static readonly SettingSpec GlideKp = new("GlideKp", "GLIDE KP", "", T, 15.0, 0.0, 1000.0, "%.3f",
@@ -114,10 +114,10 @@ internal static class GuidanceSettingSpecs
         "Flight path angle at the braking point while SET DEORBIT ARRIVAL ANGLE is on.");
     public static readonly SettingSpec DescentRate = new("DescentRate", "DESCENT RATE", "m/s", E, 20.0, 0.0, 1e4, "%.1f",
         "Sink rate at the gate.");
-    public static readonly SettingSpec LandingVerticalGateM = new("LandingVerticalGateM", "VERTICAL APPROACH", "m", E, 500.0, 0.0, 1e6, "%.1f",
-        "Height above the site where the final vertical approach starts. DEORBIT AND LAND with G-FOLD needs at least 100 m.");
+    public static readonly SettingSpec LandingVerticalGateM = new("LandingVerticalGateM", "VERTICAL GATE", "m", E, 500.0, 0.0, 1e6, "%.1f",
+        "Height above the site where the final vertical approach starts. DEORBIT + LAND with G-FOLD needs 100 m or more.");
     public static readonly SettingSpec DownrangeFactor = new("DownrangeFactor", "DOWNRANGE FACTOR", "", T, 1.2, 0.0, 100.0, "%.3f",
-        "Lights the braking burn this many times the predicted braking distance out.");
+        "The braking burn lights at this multiple of the predicted braking distance.");
     public static readonly SettingSpec AimAltKm = new("AimAltKm", "AIM ALTITUDE", "km", T, 0.1, 0.0, 1e4, "%.2f",
         "Altitude of the high gate above the site.");
     public static readonly SettingSpec GateUprangeKm = new("GateUprangeKm", "GATE UPRANGE", "km", T, 0.0, -1e4, 1e4, "%.1f",
@@ -125,18 +125,18 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec GfoldHandoffTgo = new("GfoldHandoffTgo", "DESCENT FROM", "s", T, 40.0, 0.0, 1e4, "%.1f",
         "Time to the gate at which the braking burn hands over to the powered descent.");
     public static readonly SettingSpec VehicleHeightM = new("VehicleHeightM", "COM ABOVE LEGS", "m", P, 15.0, 0.0, 1e4, "%.1f",
-        "Height of the center of mass (COM) above the legs, not the height of the craft. It is what on the ground means for every landing. While MEASURE COM ABOVE LEGS is on, the craft sets it. Switch that off to type a value.");
+        "Height of the center of mass (COM) above the legs, the reference for on the ground in every landing. Measured while MEASURE COM ABOVE LEGS is on, switch it off to type a value.");
     public static readonly SettingSpec GfoldHoverHandoffAltM = new("GfoldHoverHandoffAltM", "HOVER FROM", "m", P, 10.0, 0.0, 1e5, "%.1f",
         "Height where G-FOLD hands the descent to the hover.");
     public static readonly SettingSpec LandingAccelLimitG = new("LandingAccelLimitG", "MAX BURN ACCEL", "g", E, 3.0, 0.0, 100.0, "%.2f",
-        "Largest thrust acceleration the entry guidance and touchdown guidance plans may use. One value for both. 0 switches the limit off.");
+        "Largest thrust acceleration in the ENTRY and TOUCHDOWN plans, one value for both. 0 switches the limit off.");
     public static readonly SettingSpec LandingPlanFloorMargin = new("LandingPlanFloorMargin", "PLAN MIN THROTTLE MARGIN", "frac", T, 0.05, 0.0, 0.5, "%.2f",
-        "Throttle the entry guidance and touchdown guidance plans keep above the real engine minimum, for their thrust feedback. One value for both. 0 plans on the minimum itself.");
+        "Throttle margin above the real engine minimum in the ENTRY and TOUCHDOWN plans, kept for thrust feedback. One value for both, 0 plans on the minimum itself.");
 
     public static readonly BoolSpec DeorbitArrivalAngleEnabled = new("DeorbitArrivalAngleEnabled", "SET DEORBIT ARRIVAL ANGLE", E, false,
         "Plans the deorbit for a given flight path angle at the braking point.");
     public static readonly BoolSpec VehicleHeightAuto = new("VehicleHeightAuto", "MEASURE COM ABOVE LEGS", P, true,
-        "Measures the center of mass above the legs from the colliders of the craft, with the legs deployed, and keeps it current.");
+        "Measures the COM above the legs from the colliders of the craft, with the legs deployed, and keeps it current.");
 
     #endregion
 
@@ -186,9 +186,9 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec SixDofVzMaxMs = new("SixDofVzMaxMs", "MAX CLIMB RATE", "m/s", T, 0.0, -1e4, 1e4, "%.1f",
         "Largest climb rate while LIMIT CLIMB RATE is on.");
     public static readonly SettingSpec SixDofNodeDtTarget = new("SixDofNodeDtTarget", "POINT SPACING", "s", T, 0.60, 0.0, 60.0, "%.2f",
-        "Time between points the plan aims for while it uses fewer points on the approach.");
+        "Time between plan points the plan aims for while FEWER POINTS ON APPROACH is on.");
     public static readonly SettingSpec SixDofColdIntervalS = new("SixDofColdIntervalS", "ITERATION GAP", "s", T, 0.25, 0.0, 1.0, "%.2f",
-        "Time between two iterations of a first plan that is spread over frames.");
+        "Time between two iterations of a first plan spread over frames.");
     public static readonly SettingSpec SixDofReplanSec = new("SixDofReplanSec", "RE-SOLVE EVERY", "s", T, 0.1, 0.0, 60.0, "%.2f",
         "Time between two solves while touchdown guidance flies.");
     public static readonly SettingSpec SixDofRateDampShare = new("SixDofRateDampShare", "RATE DAMPING", "fuel share", T, 0.002, 0.0, 10.0, "%.3f",
@@ -196,17 +196,17 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec SixDofControlSmooth = new("SixDofControlSmooth", "CONTROL SMOOTHING", "weight", T, 0.05, 0.0, 100.0, "%.3f",
         "Weight on control changes between points.");
     public static readonly SettingSpec SixDofProximal = new("SixDofProximal", "PROXIMAL CONDITIONING", "", T, 0.05, 0.0, 100.0, "%.3f",
-        "Proximal weight that keeps each iteration near the last.");
+        "Proximal weight that holds each iteration near the last.");
     public static readonly SettingSpec SixDofTrackKp = new("SixDofTrackKp", "TRACK KP", "1/s^2", T, 0.25, 0.0, 100.0, "%.3f",
-        "Position gain of the thrust feedback that flies the plan between re-solves.");
+        "Position gain of the thrust feedback between re-solves.");
     public static readonly SettingSpec SixDofTrackKd = new("SixDofTrackKd", "TRACK KD", "1/s", T, 0.8, 0.0, 100.0, "%.3f",
-        "Velocity gain of the thrust feedback that flies the plan between re-solves.");
+        "Velocity gain of the thrust feedback between re-solves.");
 
-    public static readonly BoolSpec SixDofTrack = new("SixDofTrack", "TRACK THE PLAN'S THRUST", T, true,
-        "Corrects the thrust of the plan with feedback between re-solves. Off flies the thrust of the plan open loop between re-solves. The torques are the plan's either way.");
+    public static readonly BoolSpec SixDofTrack = new("SixDofTrack", "TRACK PLAN THRUST", T, true,
+        "Corrects the plan thrust by feedback between re-solves. Off flies it open loop, with the torques from the plan either way.");
     public static readonly BoolSpec SixDofFloorAuto = new("SixDofFloorAuto", "THROTTLE FLOOR FROM CRAFT", T, true,
-        "Uses the real minimum throttle of the craft as the floor.");
-    public static readonly BoolSpec SixDofGfoldSeed = new("SixDofGfoldSeed", "START FIRST PLAN FROM G-FOLD", T, false,
+        "Uses the real minimum throttle of the engine as the floor.");
+    public static readonly BoolSpec SixDofGfoldSeed = new("SixDofGfoldSeed", "FIRST PLAN FROM G-FOLD", T, false,
         "Starts the first plan from a G-FOLD solution instead of a straight line.");
     public static readonly BoolSpec SixDofFixedTime = new("SixDofFixedTime", "FIXED BURN TIME", T, false,
         "Holds the burn time fixed and samples it instead of solving for it.");
@@ -214,8 +214,8 @@ internal static class GuidanceSettingSpecs
         "Limits the climb rate of the plan.");
     public static readonly BoolSpec SixDofNodeGates = new("SixDofNodeGates", "FEWER POINTS ON APPROACH", T, true,
         "Uses fewer points as the burn gets shorter.");
-    public static readonly BoolSpec SixDofThreaded = new("SixDofThreaded", "SOLVE ON A WORKER THREAD", T, true,
-        "Solves on a worker thread, so a solve does not stop the simulation.");
+    public static readonly BoolSpec SixDofThreaded = new("SixDofThreaded", "SOLVE ON WORKER THREAD", T, true,
+        "Solves on a worker thread. A solve does not stop the simulation.");
     public static readonly BoolSpec SixDofSpreadCold = new("SixDofSpreadCold", "SPREAD FIRST PLAN", T, true,
         "Spreads the iterations of a first plan over several frames.");
     public static readonly BoolSpec SixDofBiasEnabled = new("SixDofBiasEnabled", "ESTIMATE UNMODELED ACCEL", T, true,
@@ -225,29 +225,29 @@ internal static class GuidanceSettingSpecs
 
     #region Entry guidance (3-DOF)
 
-    public static readonly SettingSpec ThreeDofEngageTgoS = new("ThreeDofEngageTgoS", "AT TIME TO IMPACT", "s", P, 45.0, 0.0, 1e4, "%.1f",
-        "Predicted time to impact of a boostback glide at which entry guidance takes it over.");
-    public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "WITH BURN LEFT", "s", P, 5.0, 0.0, 1e3, "%.1f",
-        "Burn left in the plan when touchdown guidance takes the burn over, once its standby plan is ready.");
+    public static readonly SettingSpec ThreeDofEngageTgoS = new("ThreeDofEngageTgoS", "AT IMPACT T-", "s", P, 45.0, 0.0, 1e4, "%.1f",
+        "Predicted time to impact at which ENTRY takes over a boostback glide.");
+    public static readonly SettingSpec ThreeDofSixDofTimeS = new("ThreeDofSixDofTimeS", "AT BURN LEFT", "s", P, 5.0, 0.0, 1e3, "%.1f",
+        "Burn left in the plan at which TOUCHDOWN takes over the burn, once its standby plan is ready.");
     public static readonly SettingSpec ThreeDofSmoothTau = new("ThreeDofSmoothTau", "COMMAND SMOOTHING", "s", T, 0.05, 0.0, 60.0, "%.2f",
-        "Time constant of the low-pass the attitude and the throttle of the plan reach the craft through. 0 switches it off.");
+        "Time constant of the low-pass filter on the plan attitude and throttle. 0 switches it off.");
     public static readonly SettingSpec ThreeDofTurnAccelDegS2 = new("ThreeDofTurnAccelDegS2", "PLAN TURN ACCEL", "deg/s^2", T, 0.0, -1.0, 1e3, "%.2f",
-        "Largest turn acceleration the plan uses. 0 uses the craft's own, from its RCS, read when a first plan starts. A negative value plans with no limit.");
+        "Largest turn acceleration of the plan. 0 uses the RCS turn acceleration of the craft, read when a first plan starts. A negative value sets no limit.");
     public static readonly SettingSpec ThreeDofGlideCeiling = new("ThreeDofGlideCeiling", "PLAN MAX THROTTLE, GLIDE", "frac", T, 0.88, 0.1, 1.0, "%.2f",
         "Highest throttle the plan uses before the ignition is committed. The burn feedback can use the rest. Read when a first plan starts.");
     public static readonly SettingSpec ThreeDofBurnCeiling = new("ThreeDofBurnCeiling", "PLAN MAX THROTTLE, BURN", "frac", T, 0.95, 0.1, 1.0, "%.2f",
         "Highest throttle the plan uses after the ignition is committed. The burn feedback can use the rest. Read when a first plan starts.");
     public static readonly SettingSpec ThreeDofTrackKp = new("ThreeDofTrackKp", "TRACK KP", "1/s^2", T, 0.25, 0.0, 100.0, "%.3f",
-        "Position gain of the feedback that flies the burn plan.");
+        "Position gain of the burn plan feedback.");
     public static readonly SettingSpec ThreeDofTrackKd = new("ThreeDofTrackKd", "TRACK KD", "1/s", T, 0.8, 0.0, 100.0, "%.3f",
-        "Velocity gain of the feedback that flies the burn plan.");
+        "Velocity gain of the burn plan feedback.");
     public static readonly SettingSpec ThreeDofTrackTiltDeg = new("ThreeDofTrackTiltDeg", "TRACK MAX TILT", "deg", T, 10.0, 0.0, 30.0, "%.1f",
         "Largest tilt off the axis of the plan the burn feedback may command.");
 
-    public static readonly BoolSpec ThreeDofFromGlide = new("ThreeDofFromGlide", "ENTRY TAKES THE GLIDE", P, true,
-        "Entry guidance takes a boostback glide over at AT TIME TO IMPACT and flies the glide and the landing burn. Off, the glide flies on until another mode takes the craft or it is stopped, and nothing plans a landing burn.");
-    public static readonly BoolSpec ThreeDofSixDofHandover = new("ThreeDofSixDofHandover", "TOUCHDOWN ENDS THE BURN", P, true,
-        "Touchdown guidance takes the last seconds of the burn, because it models how the craft turns. Off, entry guidance flies the burn to touchdown.");
+    public static readonly BoolSpec ThreeDofFromGlide = new("ThreeDofFromGlide", "ENTRY ON GLIDE", P, true,
+        "ENTRY takes over a boostback glide at AT IMPACT T- and flies the glide and the landing burn. Off, the glide continues until another mode takes the craft or it is stopped, and no landing burn is planned.");
+    public static readonly BoolSpec ThreeDofSixDofHandover = new("ThreeDofSixDofHandover", "TOUCHDOWN FOR BURN END", P, true,
+        "TOUCHDOWN flies the last seconds of the burn and models the turn of the craft. Off, ENTRY flies the burn to touchdown.");
 
     #endregion
 
@@ -287,7 +287,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec[] LandBoostbackExpert =
         { BoostbackClearanceM, BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg };
 
-    /// <summary>The HAND-OVERS of a boostback glide and of entry guidance: who takes the glide and who takes the end of the burn.</summary>
+    /// <summary>The HANDOVER settings of a boostback glide and of entry guidance: who takes the glide and who takes the end of the burn.</summary>
     public static readonly SettingSpec[] LandHandOvers = { ThreeDofEngageTgoS, ThreeDofSixDofTimeS };
     public static readonly BoolSpec[] LandHandOverBools = { ThreeDofFromGlide, ThreeDofSixDofHandover };
 

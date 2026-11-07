@@ -105,7 +105,7 @@ public sealed class GuidanceLandingAbortTest : AfcTest
             !state.ControlAcquired && VehicleControlOwnership.HolderOf(vehicle) != ControlClaimant.Guidance);
         t.Check($"{phase}: the engine command is left alone", Inputs(vehicle).EngineOn);
         t.Check($"{phase}: the throttle setting is left alone", Inputs(vehicle).EngineThrottle == 0.63f);
-        t.Check($"{phase}: the status says so", state.LandingStatus.Contains("engine is left"), state.LandingStatus);
+        t.Check($"{phase}: the status says so", state.LandingStatus.Contains("ENGINE UNCHANGED"), state.LandingStatus);
         t.Check($"{phase}: the finished release restores the default stop", !state.ReleaseWithoutEngineCut);
         VehicleAutopilotState.Remove(vehicle);
     }
@@ -152,7 +152,7 @@ public sealed class GuidanceLandingAbortTest : AfcTest
             Method("StartTerminalHover").Invoke(null, new object[] { vehicle });
             t.Check("an engine that out-thrusts the weight at minimum throttle is refused",
                 state.LandingPhase == GuidanceWindow.LandingPhase.Idle, state.LandingStatus);
-            t.Check("the refusal says why", state.LandingStatus.Contains("minimum throttle"), state.LandingStatus);
+            t.Check("the refusal says why", state.LandingStatus.Contains("MIN THROTTLE"), state.LandingStatus);
             t.Check("a refused hover claims nothing",
                 !state.ControlAcquired && VehicleControlOwnership.HolderOf(vehicle) != ControlClaimant.Guidance);
 
@@ -201,7 +201,7 @@ public sealed class GuidanceLandingAbortTest : AfcTest
             t.Check("a refused handoff keeps the descent",
                 state.LandingPhase == GuidanceWindow.LandingPhase.GfoldDescent, state.LandingStatus);
             t.Check("the refusal is remembered", state.GfoldHoverRefused);
-            t.Check("the status says the plan flies on", state.LandingStatus.Contains("flies its plan"), state.LandingStatus);
+            t.Check("the status says the plan flies on", state.LandingStatus.Contains("G-FOLD TO TOUCHDOWN"), state.LandingStatus);
             t.Check("no cut is queued", !state.LandingCutPending);
 
             Method("StepGfoldDescent").Invoke(null, args);

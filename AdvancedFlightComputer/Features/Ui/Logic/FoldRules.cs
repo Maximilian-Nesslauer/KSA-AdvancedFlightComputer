@@ -10,9 +10,9 @@ internal static class FoldNames
     public const string Plane = "PLANE";
     public const string Insertion = "INSERTION";
     public const string Turn = "TURN";
-    public const string ConvexPlan = "CALCULATED";
+    public const string ConvexPlan = "SOLVED";
     public const string InMap = PageText.ShowInMap;
-    public const string VehicleHeight = "CENTER OF MASS";
+    public const string VehicleHeight = "COM";
     public const string Approach = "APPROACH";
     public const string Burn = "BURN";
     public const string Glide = "GLIDE";
@@ -22,13 +22,13 @@ internal static class FoldNames
     public const string Search = "SEARCH";
     public const string Site = "SITE";
     public const string Passes = "PASSES";
-    public const string Split = "EACH PASS HAS";
+    public const string Split = "PER PASS";
     public const string CraftTarget = "CRAFT TARGET";
-    public const string FlightTime = "FLIGHT TIME";
+    public const string FlightTime = "TOF";
     public const string Flyby = "FLYBY";
     public const string Allocator = "THRUSTER MIX";
     public const string Attitude = "ATTITUDE";
-    public const string ThisCraft = "THIS CRAFT";
+    public const string ThisCraft = "GNC SWITCHES";
     public const string NewCraft = "DEFAULTS FOR NEW CRAFT";
     public const string FlightPlan = "FLIGHT PLAN";
     public const string Distance = "DISTANCE";
@@ -61,7 +61,7 @@ internal static class FoldRules
     public static string Label(string name, ReadOnlySpan<FoldPart> parts, int changed = 0)
     {
         string contents = Contents(parts);
-        string count = changed > 0 ? changed.ToString(Fmt.Inv) + " changed" : "";
+        string count = changed > 0 ? changed.ToString(Fmt.Inv) + " CHANGED" : "";
         string detail = contents.Length > 0 && count.Length > 0 ? contents + " (" + count + ")" : contents + count;
         return detail.Length > 0 ? name + ": " + Fmt.Sentence(detail) : name;
     }
@@ -73,7 +73,7 @@ internal static class FoldRules
         string tail = "";
         string body = detail;
         int count = detail.LastIndexOf(" (", StringComparison.Ordinal);
-        if (count > 0 && detail.EndsWith(" changed)", StringComparison.Ordinal))
+        if (count > 0 && detail.EndsWith(" CHANGED)", StringComparison.Ordinal))
         {
             tail = detail.Substring(count);
             body = detail.Substring(0, count);

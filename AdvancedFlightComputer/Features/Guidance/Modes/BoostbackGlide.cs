@@ -64,12 +64,12 @@ public static partial class GuidanceWindow
     /// </summary>
     internal static string AeroLiftWarning()
     {
-        const string lost = "boostback steering and entry guidance's glide steering will not work. The glide holds retrograde and entry guidance plans a ballistic fall and burn on drag alone, so the burn must absorb any miss.";
+        const string lost = "GLIDE STEERING OFF FOR BOOSTBACK AND ENTRY. GLIDE HOLDS RETROGRADE. ENTRY PLANS A BALLISTIC FALL AND BURN ON DRAG ALONE. BURN ABSORBS ANY MISS.";
         if (!KsaeroLoaded)
-            return "KSAero is not loaded - stock aero makes no lift, so " + lost;
+            return "KSAERO NOT LOADED: STOCK AERO MAKES NO LIFT. " + lost;
         KsaAeroSweep.Result aero = _s.Aero;
         if (aero?.Table != null && aero.Atmosphere != null && aero.LiftToDragMax < GlideMinLiftToDrag)
-            return FormattableString.Invariant($"This airframe makes no usable lift (L/D up to {aero.LiftToDragMax:F3}), so ") + lost;
+            return FormattableString.Invariant($"AIRFRAME MAKES NO USABLE LIFT (L/D UP TO {aero.LiftToDragMax:F3}). ") + lost;
         return "";
     }
 
@@ -168,7 +168,7 @@ public static partial class GuidanceWindow
         }
         if (!_s.GlideHeadingValid)
         {
-            _s.GlideStatus = "No ground track yet - holding alpha 0.";
+            _s.GlideStatus = "NO GROUND TRACK. HOLDING AoA 0.";
             return retro;
         }
         double3 heading = (_s.GlideHeadingCci - double3.Dot(_s.GlideHeadingCci, rHat) * rHat).NormalizeOrZero();
@@ -255,7 +255,7 @@ public static partial class GuidanceWindow
         double mass = vehicle.TotalMass;
         if (aero?.Table == null || !(mass > 0.0) || !(aero.ReferenceArea > 0.0))
         {
-            HoldGlide("No aero surrogate - holding alpha 0.");
+            HoldGlide("NO AERO SURROGATE. HOLDING AoA 0.");
             return;
         }
         double maxAoa = Math.Clamp(_s.GlideMaxAoaDeg, 0.0, 60.0);
@@ -274,7 +274,7 @@ public static partial class GuidanceWindow
         _s.GlideQ = q;
         if (!(q > 0.0))
         {
-            HoldPlannedGlide(aero, "Above the atmosphere - holding the planned glide.");
+            HoldPlannedGlide(aero, "ABOVE ATMOSPHERE. HOLDING PLANNED GLIDE.");
             return;
         }
 
@@ -304,7 +304,7 @@ public static partial class GuidanceWindow
         ImpactPrediction nom = ImpactPredictor.VelocityJacobian(sys, x0, opt, _s.ImpactScratch, dG, default, default);
         if (!nom.Hit)
         {
-            HoldGlide("No impact within the prediction horizon - holding alpha 0.");
+            HoldGlide("NO IMPACT WITHIN HORIZON. HOLDING AoA 0.");
             return;
         }
 
@@ -341,7 +341,7 @@ public static partial class GuidanceWindow
         // NOT IN AIR TOO THIN TO STEER IN. The miss and the time to go above are still wanted - the readout, and the 3-DOF's engage gate - but an angle up here buys nothing, so the vehicle holds the glide the boostback planned and enters the atmosphere in that attitude. The integral waits too.
         if (q * aero.ReferenceArea * Math.Abs(clMaxAoa) / mass < GlideMinAuthority)
         {
-            HoldPlannedGlide(aero, "Air too thin to steer - holding the planned glide.");
+            HoldPlannedGlide(aero, "AIR TOO THIN TO STEER. HOLDING PLANNED GLIDE.");
             return;
         }
 
@@ -367,7 +367,7 @@ public static partial class GuidanceWindow
         _s.GlideTiltUpDeg = _s.GlideLiftSign * nUp * alphaDeg;
         _s.GlideTiltLeftDeg = _s.GlideLiftSign * nLeft * alphaDeg;
         _s.GlideAoaDeg = alphaDeg;
-        _s.GlideStatus = saturated ? $"AoA limited to {maxAoa:F0} deg - asking for more lift than it has." : "";
+        _s.GlideStatus = saturated ? $"AoA LIMITED TO {maxAoa:F0} deg: LIFT SHORT." : "";
     }
 
     /// <summary>
@@ -453,7 +453,7 @@ public static partial class GuidanceWindow
         _s.GlideStatus = why;
     }
 
-    private const string GlideNoLiftStatus = "The active aero model makes no lift to steer with - holding alpha 0.";
+    private const string GlideNoLiftStatus = "AERO MODEL MAKES NO LIFT. HOLDING AoA 0.";
 
     private static void HoldGlide(string why)
     {

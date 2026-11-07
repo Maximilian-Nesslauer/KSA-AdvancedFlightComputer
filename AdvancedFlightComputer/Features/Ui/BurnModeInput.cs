@@ -26,7 +26,7 @@ internal static class BurnModeInput
     /// is refused instead of stopping the running mode without a word.
     /// </summary>
     public static string FlyRefusal(Vehicle vehicle)
-        => VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance ? "Guidance flies this craft" : "";
+        => VehicleControlOwnership.HolderOf(vehicle) == ControlClaimant.Guidance ? "AFC: GUIDANCE" : "";
 
     /// <summary>
     /// Why flying the next node is refused, or empty. Every place that offers the verb for the next node
@@ -58,8 +58,8 @@ internal static class BurnModeInput
     }
 
     public static string RcsRefusal(bool canTranslate, bool rcsOnly, bool estimates, double needKg, double availableKg)
-        => !canTranslate ? (rcsOnly ? "No RCS translation" : "No usable engine, no RCS translation")
-            : estimates && needKg > availableKg ? "Propellant short"
+        => !canTranslate ? (rcsOnly ? "NO RCS TRANSLATION" : "NO ENGINE, NO RCS TRANSLATION")
+            : estimates && needKg > availableKg ? "PROPELLANT SHORT"
             : "";
 
     public static bool CanTranslate(Vehicle vehicle)

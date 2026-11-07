@@ -15,11 +15,11 @@ using KSA;
 
 namespace AdvancedFlightComputer.Features.Ui.Console.Pages;
 
-/// <summary>TRANSFER: transfers to other bodies on the AFC porkchop, with the inputs above the plot and the times and the fuel of the selection under it. RE-CALCULATE and the STOCK PLANNER link are on the line under the picture; the link opens the stock Transfer Planner, the one path to it while the planner key opens AFC, for Interstellar and stock Hohmann.</summary>
+/// <summary>TRANSFER: transfers to other bodies on the AFC porkchop, with the inputs above the plot and the times and the fuel of the selection under it. RE-SOLVE and the STOCK PLANNER link are on the line under the picture; the link opens the stock Transfer Planner, the one path to it while the planner key opens AFC, for Interstellar and stock Hohmann.</summary>
 internal static class TransferPage
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    private static readonly string[] SelectLabels = { "BEST DELTA-V", "LOW ARRIVAL" };
+    private static readonly string[] SelectLabels = { "MIN DV", "MIN ARRIVAL" };
 
     private static readonly Rgb8[] SelectMarks = { ColorRules.Afc, ColorRules.Good };
     private static readonly List<TransferObject> _destinations = new();
@@ -29,10 +29,10 @@ internal static class TransferPage
     private static bool _setTarget;
     private static string _fuelFact = "";
 
-    internal const string StockPlannerTip = "Opens the stock Transfer Planner: Hohmann, Circularize and Interstellar as the game ships them. No passes and no flyby there. It takes the place of AFC, and AFC comes back when it closes.";
+    internal const string StockPlannerTip = "Opens the stock Transfer Planner, with no passes and no flyby. AFC returns when it closes.";
 
     /// <summary>The card of the link to the stock planner.</summary>
-    internal static string PlannerTipFor(CraftSituation where) => where == CraftSituation.Ground ? "Needs an orbit. It still opens.\n\n" + StockPlannerTip : StockPlannerTip;
+    internal static string PlannerTipFor(CraftSituation where) => where == CraftSituation.Ground ? "Needs an orbit. The planner still opens.\n\n" + StockPlannerTip : StockPlannerTip;
 
     public static CommitSpec Draw(in PageContext ctx)
     {
@@ -141,7 +141,7 @@ internal static class TransferPage
         TransferBounds.Destinations(source, _destinations);
         if (_destinations.Count == 0)
         {
-            ConsoleUi.Readout("DESTINATION".AsSpan(), "None available".AsSpan());
+            ConsoleUi.Readout("DESTINATION".AsSpan(), "NONE AVAILABLE".AsSpan());
             return;
         }
 
@@ -182,7 +182,7 @@ internal static class TransferPage
         int noView = 0;
         if (Picture.Header("PORKCHOP", default, ref noView, "AfcTransferPic",
                 new[] { PageText.ShowInWorld }, new[] { lines && TransferSession.ShowMap },
-                new[] { "Draws the selected transfer, its passes or its flyby in the world and on the map." },
+                new[] { "Draws the selected transfer (passes or flyby) in the world and on the map." },
                 new[] { lines ? "" : Patch_CelestialSystem_OnPreRender.UnavailableTip }) == 0)
             TransferSession.ShowMap = !TransferSession.ShowMap;
     }
@@ -192,11 +192,11 @@ internal static class TransferPage
     {
         string refusal = TransferSession.CalculateRefusal();
         if (refusal.Length == 0 && TransferSession.TransferBurn != null)
-            refusal = "The created transfer burn is still planned. Fly it or delete it to calculate again.";
+            refusal = "The created transfer burn is still planned. Fly or delete it to solve again.";
         bool cancelHere = TransferSession.Calculating && PassesHoldFooter(source, out _);
         string[] verbs = cancelHere ? new[] { PageText.CancelVerb }
-            : !TransferSession.Calculating && TransferSession.Calculated ? new[] { "RE-CALCULATE" } : Array.Empty<string>();
-        string[] tips = { cancelHere ? PageText.CancelTransferTip : refusal.Length > 0 ? refusal : "Calculates every departure time and time of flight in the window." };
+            : !TransferSession.Calculating && TransferSession.Calculated ? new[] { "RE-SOLVE" } : Array.Empty<string>();
+        string[] tips = { cancelHere ? PageText.CancelTransferTip : refusal.Length > 0 ? refusal : "Solves every departure time and flight time in the window." };
         bool[] disabled = { !cancelHere && refusal.Length > 0 };
         CraftSituation where = AfcConsole.Frame.Situation.Where;
         int clicked = Picture.LegendLine("", verbs, tips, "AfcTransferLegend", disabled, "PLANNER", PlannerTipFor(where), linkStock: true);
@@ -232,7 +232,7 @@ internal static class TransferPage
         float scale = probe.Scale;
         OrbitalTransfers.TransferData? selected = TransferSession.SelectedEntry?.TransferData;
         string big = selected != null ? Fmt.Dv(selected.TransferDvVlf.Length()) : "";
-        string forText = !ReferenceEquals(source, ctx.Subject) ? "For " + source.Id : "";
+        string forText = !ReferenceEquals(source, ctx.Subject) ? "FOR " + source.Id : "";
 
         double nowS = Universe.GetElapsedSeconds();
         double departLo = TransferSession.DepartStartS - nowS;
@@ -384,7 +384,7 @@ internal static class TransferPage
             float mid = f.Center.Y + 10f * s;
             f.Dl.AddRectFilled(new float2(f.Min.X + 10f * s, mid - 6f * s), new float2(f.Max.X - 10f * s, mid + 6f * s), Palette.Grid.A(0.5f), 3f * s);
             f.Dl.AddRectFilled(new float2(f.Min.X + 10f * s, mid - 6f * s), new float2(f.Min.X + 10f * s + (f.Width - 20f * s) * p, mid + 6f * s), Palette.Dim.A(0.85f), 3f * s);
-            f.Dl.AddText(new float2(f.Min.X + 10f * s, mid - 28f * s), Palette.Text.Solid, string.Format(Inv, "Calculating {0:F0} %", p * 100f));
+            f.Dl.AddText(new float2(f.Min.X + 10f * s, mid - 28f * s), Palette.Text.Solid, string.Format(Inv, "SOLVING {0:F0} %", p * 100f));
         }
     }
 
@@ -437,7 +437,7 @@ internal static class TransferPage
         {
             ConsoleWidgets.Readout("DEPART IN".AsSpan(), FormatHelper.FormatDuration(Math.Max(0.0, (e.TransferData.Start - Universe.GetElapsedTime()).Seconds())).AsSpan());
             ConsoleWidgets.Readout("FLIGHT TIME".AsSpan(), FormatHelper.FormatDuration(e.TransferData.Transit.Seconds()).AsSpan());
-            ConsoleWidgets.Readout("DEPARTURE DELTA-V".AsSpan(), Fmt.Dv(e.TransferData.TransferDvVlf.Length()).AsSpan());
+            ConsoleWidgets.Readout("DEPARTURE DV".AsSpan(), Fmt.Dv(e.TransferData.TransferDvVlf.Length()).AsSpan());
             ConsoleWidgets.Readout("ARRIVAL SPEED".AsSpan(), Fmt.Speed(e.TransferData.RelativeVelocityCci.Length()).AsSpan());
             ConsoleWidgets.EndTooltipCard();
         }
@@ -464,7 +464,7 @@ internal static class TransferPage
         OrbitalTransfers.TransferInfo? info = TransferSession.Info;
         if (info?.Target == null || info.Source?.Orbit == null || info.Target.Orbit == null)
         {
-            Picture.Empty(in f, "No destination");
+            Picture.Empty(in f, "NO DESTINATION");
             return;
         }
         _tracks.Clear();
@@ -553,10 +553,10 @@ internal static class TransferPage
             float2 at = c + dir * (float)(predicted * k);
             Glyphs.Diamond(f.Dl, at, 5f * s, predicted < radius ? Palette.Bad.Solid : Palette.Good.Solid);
             Picture.Text(in f, new float2(f.Min.X + 2f * s, f.Max.Y - 18f * s),
-                "Pe " + Fmt.Km((predicted - radius) / 1000.0), predicted < radius ? Palette.Bad.Solid : Palette.Good.Solid);
+                "PE " + Fmt.Km((predicted - radius) / 1000.0), predicted < radius ? Palette.Bad.Solid : Palette.Good.Solid);
         }
         else
-            Picture.Text(in f, new float2(f.Min.X + 2f * s, f.Max.Y - 18f * s), "No prediction", Palette.Dim.Solid);
+            Picture.Text(in f, new float2(f.Min.X + 2f * s, f.Max.Y - 18f * s), "NO PREDICTION", Palette.Dim.Solid);
     }
 
     #endregion
@@ -579,14 +579,14 @@ internal static class TransferPage
         OrbitalTransfers.PorkChopEntry? entry = TransferSession.SelectedEntry;
         if (entry?.TransferData == null)
         {
-            ConsoleUi.Muted("No solution found".AsSpan());
+            ConsoleUi.Muted("NO SOLUTION".AsSpan());
             return;
         }
         DrawMoveRow();
         if (TransferSession.Refining)
         {
             ImGui.SameLine();
-            ConsoleUi.Muted("Refining the intercept".AsSpan());
+            ConsoleUi.Muted("REFINING INTERCEPT".AsSpan());
         }
     }
 
@@ -618,7 +618,7 @@ internal static class TransferPage
         float y = origin.Y;
         float pitch = ConsoleStyle.FrameHeightPx + ConsoleUi.RowGapPx;
         bool ready = TransferSession.Calculated && TransferSession.Selected.X >= 0;
-        string held = !ready ? PageText.MoveDisabled : TransferSession.Refining ? "Refining the intercept" : "";
+        string held = !ready ? PageText.MoveDisabled : TransferSession.Refining ? "REFINING INTERCEPT" : "";
         int2[] steps = { new(-1, 0), new(1, 0), new(0, -1), new(0, 1) };
         for (int i = 0; i < steps.Length; i++)
         {
@@ -657,9 +657,9 @@ internal static class TransferPage
         if (ConsoleUi.InputDoubleRow("CORRECTION PE".AsSpan(), "##AfcCorrectionPe"u8, ref peKm, 10.0, 100.0, "%.1f"u8, unit: "km"))
             TransferSession.CorrectionPeAltitude = Math.Max(0.0, peKm) * 1000.0;
         if (TransferSession.CorrectionCalculating)
-            ConsoleUi.Muted("Calculating the correction".AsSpan());
+            ConsoleUi.Muted("SOLVING CORRECTION".AsSpan());
         else if (TransferSession.CorrectionFailed)
-            ConsoleUi.WarningWrapped("The last correction found no solution.");
+            ConsoleUi.WarningWrapped("LAST CORRECTION: NO SOLUTION");
     }
 
     private static void CollectBars()
@@ -697,7 +697,7 @@ internal static class TransferPage
     {
         bool setTarget = _setTarget;
         if (ConsoleUi.CheckboxRow("SET AS CRAFT TARGET".AsSpan(), "AfcTransferSetTarget".AsSpan(), ref setTarget,
-                "Makes the destination the stock target of the craft, as SET TARGET does in the stock planner.".AsSpan(), stockChip: true))
+                "Sets the destination as the stock target, as SET TARGET does in the stock planner.".AsSpan(), stockChip: true))
         {
             _setTarget = setTarget;
             InputEvents.ChangeTargetBuffer.Add(new InputEvents.ChangeTargetData
@@ -726,8 +726,8 @@ internal static class TransferPage
             string created = PageText.TransferCreated(departure.DeltaVVlf.Length(),
                 FormatHelper.FormatDuration(Math.Max(0.0, (departure.Time - Universe.GetElapsedTime()).Seconds())));
             if (TransferSession.CorrectionOffered && !TransferSession.CorrectionCalculating)
-                return new CommitSpec("CREATE CORRECTION", FlownBy.StockAuto, "", "Transfer misses the target", true,
-                    "Calculates a course correction burn that brings the periapsis at the target to the altitude above.",
+                return new CommitSpec("CREATE CORRECTION", FlownBy.StockAuto, "", "TRANSFER MISSES TARGET", true,
+                    "Solves a correction burn that sets the periapsis at the target to the altitude above.",
                     Act: TransferSession.StartCorrection, Owner: Owner.AfcPlansStockFlies, Outcome: PageText.CorrectionOutcome);
             if (!ReferenceEquals(source, Program.ControlledVehicle))
                 return CommitSpec.StatusOnly(created, false, FlownBy.StockAuto);
@@ -744,10 +744,10 @@ internal static class TransferPage
         if (!TransferSession.Calculated)
             return BuildCalculate(source, in fit);
 
-        string outcome = passes > 1 ? PageText.PassesOutcome(passes) : PageText.CreateOutcome;
+        string outcome = passes > 1 ? PageText.PassesOutcome(passes) : "";
         string refusal = TransferCommitter.Refusal();
         if (refusal.Length == 0 && passes > 1 && HohmannMultiPassUI.WantedMultiPassButPreviewFailed())
-            refusal = "Pass preview failed";
+            refusal = "PASS PREVIEW FAILED";
         string status = CreateAnswer(passes);
         string caution = fit.Text;
         if (caution.Length == 0)
@@ -756,7 +756,7 @@ internal static class TransferPage
             caution = HohmannMultiPassUI.FuelShortFact();
         bool formWarns = caution.Length == 0 && ConsoleUi.PageWarning.Length > 0;
         return new CommitSpec(verb, PlanVerbs.FlownByFor(passes), refusal, status, false,
-            PageText.CreateCard("the pick on the plot", passes > 1),
+            PageText.CreateCard("the plot pick", passes > 1),
             Act: TransferCommitter.Create, Owner: Owner.AfcPlansStockFlies, Outcome: outcome, Secondary: PageKit.NextLink(in fit), Quiet: formWarns, Caution: caution, Calm: !fit.Fits && fit.Calm, PlannedBurns: passes);
     }
 
@@ -774,7 +774,7 @@ internal static class TransferPage
         if (TransferSession.SelectedEntry?.TransferData is not OrbitalTransfers.TransferData t)
             return "";
         string when = passes > 1
-            ? string.Create(Inv, $"in {passes} passes")
+            ? string.Create(Inv, $"IN {passes} PASSES")
             : "in " + FormatHelper.FormatDuration(Math.Max(0.0, (t.Start - Universe.GetElapsedTime()).Seconds()));
         return PageText.BurnAnswer(passes > 1 && double.IsFinite(BurnBars.LastTotalMs) ? BurnBars.LastTotalMs : t.TransferDvVlf.Length(), when, BurnBars.LastOnBoardMs);
     }

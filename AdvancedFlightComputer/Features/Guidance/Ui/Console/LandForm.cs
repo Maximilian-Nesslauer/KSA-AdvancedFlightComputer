@@ -13,7 +13,7 @@ using Brutal.Numerics;
 using KSA;
 using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
-// The form of the LAND page, in the order a pilot decides it. Above the picture: the site, the table of solvers with the obstacle of each row on that row and the chain of the way (DrawLandSiteRows, DrawLandMethodRows). Under the picture: the note about stowed legs near the ground, the NUMBERS fold with one short value, what the way shows while it flies, the HAND-OVERS and the HOW IT FLIES fold (DrawLandPage). While the way flies, the picture and what it shows lead (DrawLandLive), and the PLAN row opens the same form (DrawLandPlanRow). The WAY row is in LandPage, the commit is the console footer and the stop is the console head.
+// The form of the LAND page, in the order a pilot decides it. Above the picture: the site, the table of solvers with the obstacle of each row on that row and the chain of the way (DrawLandSiteRows, DrawLandMethodRows). Under the picture: the note about stowed legs near the ground, the PARAMETERS fold with one short value, what the way shows while it flies, the HAND-OVERS and the GNC fold (DrawLandPage). While the way flies, the picture and what it shows lead (DrawLandLive), and the PLAN row opens the same form (DrawLandPlanRow). The WAY row is in LandPage, the commit is the console footer and the stop is the console head.
 public static partial class GuidanceWindow
 {
     private const string LandNumbersFoldId = "LandNumbers";
@@ -178,9 +178,9 @@ public static partial class GuidanceWindow
         if (solver != LandSolver.Touchdown)
             return;
         if (f.CannotStopNow)
-            NoteLandFact(FormattableString.Invariant($"Cannot stop in time: needs TWR {f.TwrNeeded:F2}, has {f.TwrMax:F2}."), danger: true);
+            NoteLandFact(FormattableString.Invariant($"NO SOLUTION: TWR {f.TwrNeeded:F2} NEEDED, {f.TwrMax:F2} AVAILABLE."), danger: true);
         else if (f.MarginalNow)
-            NoteLandFact(FormattableString.Invariant($"Marginal: the stop takes {f.StopM / f.AltToGoM * 100.0:F0} % of the altitude left."), danger: false);
+            NoteLandFact(FormattableString.Invariant($"MARGINAL: STOP USES {f.StopM / f.AltToGoM * 100.0:F0} % OF ALTITUDE LEFT."), danger: false);
         if (f.NoGimbal)
             NoteLandFact(PageText.NoGimbalFact, danger: true, nextSolver: hasAir ? LandSolver.Entry : LandSolver.Gfold, calm: true);
         else if (f.OverPowered)
@@ -408,7 +408,7 @@ public static partial class GuidanceWindow
     private static void DrawBurnLimitRow() => GaugeRow(Specs.LandingAccelLimitG, ref _s.LandingAccelLimitG);
 
     private static string SitePlace(IParentBody parent)
-        => NoSitePicked(parent) ? string.Create(Fmt.Inv, $"{_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}") : "the site";
+        => NoSitePicked(parent) ? string.Create(Fmt.Inv, $"{_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}") : "SITE";
 
     private static string LandNumbersValue(Vehicle vehicle, IParentBody parent, LandWay way, in LandRead read)
     {
@@ -457,7 +457,7 @@ public static partial class GuidanceWindow
     private static void DrawDescentRows(LandWay way, LandSolver solver, in DescentFacts f, bool noSite, bool alone)
     {
         if (FirstSolveStops(way, solver))
-            ConsoleUi.Muted("The first plan stops the simulation for about 1.7 s. Start it in a coast, or set SOLVE ON A WORKER THREAD or SPREAD FIRST PLAN on TUNE.".AsSpan());
+            ConsoleUi.Muted("The first plan stops the simulation for about 1.7 s. Start in a coast, or set SOLVE ON WORKER THREAD or SPREAD FIRST PLAN on TUNE.".AsSpan());
         if (!f.Known)
             return;
 
@@ -471,23 +471,23 @@ public static partial class GuidanceWindow
         if (f.AmbientPa > 1.0)
         {
             double frac = f.VacuumN > 0.0 ? f.ThrustN / f.VacuumN : 1.0;
-            GaugeRowText(noSite ? "AIR PRESSURE AT THAT POINT" : "AIR PRESSURE AT SITE", Fmt.Kpa(f.AmbientPa));
+            GaugeRowText(noSite ? "AIR PRESSURE AT POINT" : "AIR PRESSURE AT SITE", Fmt.Kpa(f.AmbientPa));
             GaugeRowText("SHARE OF VACUUM THRUST", Fmt.Percent(frac) + " of " + Fmt.Mn(f.VacuumN));
             if (frac < 0.97)
-                ConsoleUi.Muted(FormattableString.Invariant($"Plans with the thrust at {(noSite ? "that point" : "the site")}. Vacuum thrust would promise {(1.0 / Math.Max(frac, 1e-6) - 1.0) * 100.0:F0} % too much.").AsSpan());
+                ConsoleUi.Muted(FormattableString.Invariant($"Plans with the thrust at {(noSite ? "that point" : "the site")}. Vacuum thrust is {(1.0 / Math.Max(frac, 1e-6) - 1.0) * 100.0:F0} % too high.").AsSpan());
         }
         bool touchdown = solver == LandSolver.Touchdown;
         double twrLow = touchdown ? f.TwrAtFloor : f.TwrAtCraftMin;
         GaugeRowText("TWR AT MIN THROTTLE", Fmt.Ratio(twrLow), twrLow > 1.0 && solver != LandSolver.Entry ? Ui.Canvas.Palette.WarnDim.F4 : ConsoleStyle.TextPrimary);
         if (touchdown)
-            GaugeRowText("THROTTLE FLOOR", Fmt.Percent(f.Floor) + ", craft minimum " + Fmt.Percent(f.CraftFloor));
+            GaugeRowText("THROTTLE FLOOR", Fmt.Percent(f.Floor) + ", CRAFT MIN " + Fmt.Percent(f.CraftFloor));
 
         bool checkStop = way == LandWay.FromHere && solver != LandSolver.Entry;
         ConsoleUi.NoteShape("AfcLandSinking", f.Sinking ? 1 : 0);
         if (checkStop && f.Sinking)
         {
-            GaugeRowText("DESCENT", Fmt.Speed(f.SinkMs) + ", " + Fmt.Distance(f.HeightM) + " to go");
-            GaugeRowText("STOPS IN", double.IsInfinity(f.SinkStopM) ? "Never" : Fmt.Distance(f.SinkStopM));
+            GaugeRowText("DESCENT", Fmt.Speed(f.SinkMs) + ", " + Fmt.Distance(f.HeightM) + " TO GO");
+            GaugeRowText("STOPS IN", double.IsInfinity(f.SinkStopM) ? "NEVER" : Fmt.Distance(f.SinkStopM));
         }
         foreach (LandVerdict note in LandVerdict.Notes(solver, f, checkStop))
         {
@@ -510,13 +510,13 @@ public static partial class GuidanceWindow
     {
         bool recordsThis = SixDofLog.Enabled && ReferenceEquals(SixDofLog.Owner, _s);
         string text = recordsThis ? $"Recording, {SixDofLog.RowsWritten} rows" : "ON";
-        string now = recordsThis ? "It records this craft now."
+        string now = recordsThis ? "Recording now."
             : SixDofLog.Enabled ? "Another craft holds the log."
             : "It starts when touchdown guidance starts.";
         using (ConsoleUi.Dim(true))
             ConsoleUi.Readout(FoldNames.TelemetryLog.AsSpan(), text.AsSpan());
         if (ImGui.IsItemHovered())
-            ConsoleUi.Tooltip((now + " Touchdown guidance writes its telemetry to log files. The switch and the log state are on TUNE > DIAG > TOUCHDOWN.").AsSpan());
+            ConsoleUi.Tooltip((now + " Touchdown guidance writes telemetry to log files. Switch and log state: TUNE > DIAG > TOUCHDOWN.").AsSpan());
     }
 
     private static void DrawLandWay(Vehicle vehicle, Orbit orbit, IParentBody parent, double bodyRadius,

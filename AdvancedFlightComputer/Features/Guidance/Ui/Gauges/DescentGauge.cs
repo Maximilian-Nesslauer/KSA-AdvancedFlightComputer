@@ -21,13 +21,13 @@ public static partial class GuidanceWindow
         switch (_s.LandingPhase)
         {
             case LandingPhase.DeorbitPlanning: return "PLANNING";
-            case LandingPhase.DeorbitCoast: return "MAKING THE BURN";
-            case LandingPhase.DeorbitNodePending: return "CHECKING THE TIME";
+            case LandingPhase.DeorbitCoast: return "DEORBIT COAST";
+            case LandingPhase.DeorbitNodePending: return "NODE PENDING";
             case LandingPhase.DeorbitBurn: return "DEORBIT BURN";
-            case LandingPhase.TransferPlanning: return "PLANNING BRAKING";
+            case LandingPhase.TransferPlanning: return "BRAKING PLAN";
             case LandingPhase.TransferCoast: return "COAST";
             case LandingPhase.Coast: return "COAST TO BRAKING";
-            case LandingPhase.Prep: return "READY TO BRAKE";
+            case LandingPhase.Prep: return "BRAKE READY";
             case LandingPhase.Burn: return "BRAKING BURN";
             case LandingPhase.GfoldDescent: return "G-FOLD";
             case LandingPhase.TerminalHover: return "HOVER";
@@ -133,7 +133,7 @@ public static partial class GuidanceWindow
             if (TierScope.Show(UiTier.Expert))
                 ConsoleUi.NoteShape("AfcApproachTolerance", _s.DeorbitArrivalAngleEnabled ? 1 : 0);
             if (_s.DeorbitArrivalAngleEnabled)
-                GaugeRowText(UiTier.Expert, "ANGLE TOLERANCE", FormattableString.Invariant($"+/-{DeorbitPlanner.ArrivalAngleToleranceDeg:F0} deg at the braking point"), ConsoleStyle.TextMuted);
+                GaugeRowText(UiTier.Expert, "ANGLE TOLERANCE", FormattableString.Invariant($"+/-{DeorbitPlanner.ArrivalAngleToleranceDeg:F0} deg AT BRAKING POINT"), ConsoleStyle.TextMuted);
             GaugeRow(Specs.DownrangeFactor, ref _s.DownrangeFactor);
             GaugeRow(Specs.AimAltKm, ref _s.AimAltKm);
             GaugeRow(Specs.DescentRate, ref _s.DescentRate);
@@ -238,7 +238,7 @@ public static partial class GuidanceWindow
 
             string scaleText = AxisTicks.Number(scaleKm) + " km";
             Picture.LaneText(in f, in scaleLane, "-" + scaleText, Palette.Dim.Solid);
-            Picture.LaneText(in f, in scaleLane, "site", Palette.Dim.Solid, 0);
+            Picture.LaneText(in f, in scaleLane, "SITE", Palette.Dim.Solid, 0);
             Picture.LaneText(in f, in scaleLane, "+" + scaleText, Palette.Dim.Solid, 1);
 
             // The closest pass as the block of its tone with its distance, and the next pass with its mark, because the big number holds its distance. The band and the ticks stand last, and a row with no room leaves them out.

@@ -24,10 +24,10 @@ public static partial class GuidanceWindow
             double twr = TerminalTwr(vehicle, orbit, mu);
             // The TWR itself is in the picture, so the form only warns.
             if (twr < 1.0)
-                ConsoleUi.Warning(FormattableString.Invariant($"TWR {twr:F2}, below 1. No hover, the thrust cannot hold the weight.").AsSpan());
+                ConsoleUi.Warning(FormattableString.Invariant($"NO HOVER: TWR {twr:F2} BELOW 1.").AsSpan());
             double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
             if (minTwr > 1.0)
-                ConsoleUi.Warning(FormattableString.Invariant($"TWR {minTwr:F2} at minimum throttle, above 1. No hover, the craft climbs whenever the engine runs.").AsSpan());
+                ConsoleUi.Warning(FormattableString.Invariant($"NO HOVER: TWR {minTwr:F2} ABOVE 1 AT MIN THROTTLE.").AsSpan());
         }
 
         DrawHoverReadout(orbit, parent, active);
@@ -144,6 +144,6 @@ public static partial class GuidanceWindow
         ImGui.Dummy(new float2(innerW, rowH2 * 3f));
 
         if (numpad)
-            ConsoleUi.Muted("Numpad: 8 and 2 N and S, 4 and 6 W and E, 9 and 3 up and down, 5 zero, while the craft hovers.".AsSpan());
+            ConsoleUi.Muted("Numpad while hovering: 8/2 N/S, 4/6 W/E, 9/3 up/down, 5 zero.".AsSpan());
     }
 }

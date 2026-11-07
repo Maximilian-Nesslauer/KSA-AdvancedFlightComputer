@@ -37,7 +37,7 @@ internal static class PageKit
         => ConsoleUi.PartsFold(PageText.HowItFlies, FoldId(id), parts, changed, openByDefault, PageText.HowItFliesTip, saying);
 
     public static void Numbers(string id, ReadOnlySpan<FoldPart> parts, bool openByDefault)
-        => ConsoleUi.PartsFold(PageText.Numbers, "Numbers" + id, parts, 0, openByDefault, PageText.NumbersTip);
+        => ConsoleUi.PartsFold(PageText.Numbers, "PARAMETERS" + id, parts, 0, openByDefault, PageText.NumbersTip);
 
     public static string FoldId(string id) => "How" + id;
 
@@ -53,7 +53,7 @@ internal static class PageKit
             return;
         TransferObject selected = new TransferObject(source);
         string before = selected.GetKey();
-        if (ConsoleUi.ComboRow("CRAFT".AsSpan(), comboId.AsSpan(), ref selected, buffer)
+        if (ConsoleUi.ComboRow("VEHICLE".AsSpan(), comboId.AsSpan(), ref selected, buffer)
             && selected.GetKey() != before && selected.Body is Vehicle picked)
             pick(picked);
     }
@@ -63,7 +63,7 @@ internal static class PageKit
     {
         double now = Universe.GetElapsedSeconds();
         for (int i = 0; i < passes.Length; i++)
-            bars.Add(new BurnBar("Pass " + (first + i).ToString(Fmt.Inv), passes[i].DvVlf.Length(), passes[i].EstimatedBurnTimeSec, firstLit && i == 0,
+            bars.Add(new BurnBar("PASS " + (first + i).ToString(Fmt.Inv), passes[i].DvVlf.Length(), passes[i].EstimatedBurnTimeSec, firstLit && i == 0,
                 passes[i].BurnTime.Seconds() - now, shortOfGoal && i == passes.Length - 1));
     }
 
@@ -71,7 +71,7 @@ internal static class PageKit
     public static CommitSpec FlyNextNode(Vehicle craft, string status)
     {
         if (VehicleControlOwnership.HolderOf(craft) == ControlClaimant.RcsTranslation)
-            return CommitSpec.StatusOnly("RCS flies the burn", true, FlownBy.Afc);
+            return CommitSpec.StatusOnly("AFC: RCS BURN", true, FlownBy.Afc);
         bool rcs = BurnModeInput.ResolvesToRcs(craft);
         Burn? next = BurnModeInput.NextNode(craft);
         CommitAction? delete = next != null
@@ -79,18 +79,18 @@ internal static class PageKit
             : null;
         return new CommitSpec(PlanVerbs.FlyBurn, rcs ? FlownBy.Afc : FlownBy.StockAuto, BurnModeInput.FlyNextRefusal(craft), status, false,
             rcs ? PageText.FlyRcsTip : PageText.FlyStockTip, Act: () => BurnModeInput.FlyWithAuto(craft), Owner: rcs ? Owner.Afc : Owner.Stock,
-            Outcome: PageText.FlyOutcome, Secondary: delete);
+            Secondary: delete);
     }
 
     public static CommitSpec FlyPass(Vehicle craft, MultiPassExecution exec)
     {
-        string which = string.Create(Fmt.Inv, $"Pass {exec.PassIndex + 1} of {exec.PassCountTotal}");
+        string which = string.Create(Fmt.Inv, $"PASS {exec.PassIndex + 1} OF {exec.PassCountTotal}");
         if (VehicleControlOwnership.HolderOf(craft) == ControlClaimant.RcsTranslation)
-            return CommitSpec.StatusOnly(which + ": RCS flies it", true, FlownBy.Afc);
+            return CommitSpec.StatusOnly(which + ": RCS", true, FlownBy.Afc);
         if (BurnModeInput.StockAutoOnNode(craft))
-            return CommitSpec.StatusOnly(which + ": stock AUTO flies it", true, FlownBy.AfcPlansStockAuto);
+            return CommitSpec.StatusOnly(which + ": STOCK AUTO", true, FlownBy.AfcPlansStockAuto);
         return BurnModeInput.NextNode(craft) != null && ReferenceEquals(craft, Program.ControlledVehicle)
-            ? CommitSpec.StatusOnly(which + " waits for you", false, FlownBy.You)
+            ? CommitSpec.StatusOnly(which + ": MANUAL", false, FlownBy.You)
             : CommitSpec.StatusOnly(which, false, FlownBy.AfcPlansStockAuto);
     }
 
@@ -121,7 +121,7 @@ internal static class PageKit
         CommitAction? delete = next != null
             ? new CommitAction(PlanVerbs.DeleteBurn, "", PageText.DeleteNodeTip, () => BurnModeInput.DeleteNode(craft, next))
             : null;
-        return CommitSpec.StatusOnly("Stock AUTO flies the burn", true, FlownBy.StockAuto) with { Secondary = delete };
+        return CommitSpec.StatusOnly("STOCK AUTO: BURN", true, FlownBy.StockAuto) with { Secondary = delete };
     }
 
     /// <summary>Whether the guidance pages can draw, and the footer they show when they cannot.</summary>
@@ -130,13 +130,13 @@ internal static class PageKit
         if (!SharedVehicleHooks.GuidanceEnabled)
         {
             ConsoleUi.MutedWrapped(GuidanceFeature.UnavailableReason);
-            refusal = CommitSpec.StatusOnly("Guidance unavailable");
+            refusal = CommitSpec.StatusOnly("GUIDANCE UNAVAILABLE");
             return false;
         }
         if (!ctx.Frame.GuidanceOn)
         {
-            ConsoleUi.MutedWrapped("Guidance is off. Turn it on in the AFC menu or in TUNE > PREFERENCES.");
-            refusal = CommitSpec.StatusOnly("Guidance is off");
+            ConsoleUi.MutedWrapped("GUIDANCE OFF. SET IN AFC MENU OR TUNE > PREFERENCES.");
+            refusal = CommitSpec.StatusOnly("GUIDANCE OFF");
             return false;
         }
         refusal = CommitSpec.None;
@@ -169,7 +169,7 @@ internal static class PageKit
     public static CommitSpec GuidanceCommit(in PageContext ctx, GuidanceModeId? modeId, string readyText, string hint, bool readyPending = false)
     {
         if (modeId is not GuidanceModeId mode)
-            return CommitSpec.StatusOnly(readyText.Length > 0 ? readyText : "Nothing to commit here", false, FlownBy.Afc);
+            return CommitSpec.StatusOnly(readyText.Length > 0 ? readyText : "NO ACTION", false, FlownBy.Afc);
 
         Vehicle subject = ctx.Subject;
         CommitGates gates = GuidanceWindow.CommitGatesFor(subject, mode, in ctx.Frame.Situation);

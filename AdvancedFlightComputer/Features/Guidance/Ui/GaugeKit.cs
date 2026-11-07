@@ -278,7 +278,7 @@ public static partial class GuidanceWindow
             float gap = ImGui.GetStyle().ItemSpacing.X;
             float fixedW = ConsoleWidgets.ButtonWidth(PageText.ResetVerb.AsSpan()) + gap * 2f;
             float labelW = ConsoleUi.LabelWidth(label);
-            string full = "Default " + defaultValue;
+            string full = "DEFAULT " + defaultValue;
             float fullW = ConsoleUi.SmallWidth(full);
             float shortW = ConsoleUi.SmallWidth(defaultValue);
             float room = ConsoleStyle.ContentAvailWidth() - controlW - ConsoleWidgets.MinControlGapPx - labelW;
@@ -340,7 +340,7 @@ public static partial class GuidanceWindow
             SpecTooltip(height.Label, ImGui.IsItemHovered(), height.Key, height.Help, SettingMath.GhostText(height), false);
         if (_s.VehicleHeightStatus.Length == 0 || _s.VehicleHeightStowed)
             return;
-        bool warn = _s.VehicleHeightStatus.StartsWith("no colliders", StringComparison.Ordinal);
+        bool warn = _s.VehicleHeightStatus.StartsWith("NO COLLIDERS", StringComparison.Ordinal);
         GaugeRowText(GuidanceSettingSpecs.VehicleHeightM.Tier, "", Fmt.Sentence(_s.VehicleHeightStatus),
             warn ? ConsoleUi.WarnInk : ConsoleStyle.TextMuted);
     }

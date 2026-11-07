@@ -20,7 +20,7 @@ namespace AdvancedFlightComputer.Features.Ui.Console.Pages;
 internal static class RcsPage
 {
     private static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
-    // In the order of PageText.AttitudeLabels. CHEAPEST is RcsAttitudeStrategy.Auto; the saved key in rcs-exec.toml stays the enum name.
+    // In the order of PageText.AttitudeLabels. FREE is RcsAttitudeStrategy.Auto; the saved key in rcs-exec.toml stays the enum name.
     private static readonly RcsAttitudeStrategy[] AttitudeOrder = { RcsAttitudeStrategy.Auto, RcsAttitudeStrategy.Hold, RcsAttitudeStrategy.Align };
     private static readonly Comparison<ListRow> ByTime = static (a, b) => a.Seconds.CompareTo(b.Seconds);
     private static readonly List<ListRow> _rows = new();
@@ -66,7 +66,7 @@ internal static class RcsPage
             RcsExecRegistry.TryGet(vehicle.Id, out exec);
         if (exec?.Faulted == true)
         {
-            ConsoleUi.DangerWrapped(exec.CleanupPending ? "RCS stopped. Control cleanup failed." : "RCS stopped after an internal error. See the log.");
+            ConsoleUi.DangerWrapped(exec.CleanupPending ? "RCS STOPPED. CLEANUP FAILED." : "RCS STOPPED: INTERNAL ERROR. SEE LOG.");
             if (exec.CleanupPending && ConsoleWidgets.DangerButton("RETRY CLEANUP".AsSpan(), "AfcRcsRetry".AsSpan(), default))
                 RcsStop.RetryCleanup(exec);
         }
@@ -163,8 +163,8 @@ internal static class RcsPage
         DrawSetup(in picked, rcsPicture: false);
         if (picked.Active && picked.Exec != null)
             ConsoleUi.Readout(PageText.RcsInUse.AsSpan(), ((picked.Exec.ResolvedStrategy == RcsAttitudeStrategy.Align
-                ? "Align " + RcsExecutor.AxisName(picked.Exec.ResolvedAxis)
-                : "Hold") + ", " + RcsGaugePanel.ResolvedAllocator(picked.Exec)).AsSpan());
+                ? "ALIGN " + RcsExecutor.AxisName(picked.Exec.ResolvedAxis)
+                : "HOLD") + ", " + RcsGaugePanel.ResolvedAllocator(picked.Exec)).AsSpan());
         DrawAutoRemove();
         ConsoleUi.Gap();
         DrawHowItFlies(in ctx, in picked);
@@ -354,7 +354,7 @@ internal static class RcsPage
     {
         if (!SharedVehicleHooks.RcsEnabled)
         {
-            ConsoleUi.MutedWrapped("RCS translation is unavailable because its game hooks did not load.");
+            ConsoleUi.MutedWrapped("RCS translation is unavailable. Its game hooks did not load.");
             return;
         }
         if (!p.HasThrusters)
@@ -403,15 +403,15 @@ internal static class RcsPage
         Vehicle craft = p.Vehicle;
         Burn node = p.Node;
         if (p.Active)
-            return CommitSpec.StatusOnly("RCS flies the burn", true, FlownBy.Afc);
+            return CommitSpec.StatusOnly("AFC: RCS BURN", true, FlownBy.Afc);
         (string deleteVerb, string deleteCard, string deleteLine) = PageKit.DeleteOf(craft, node, in activity);
         var delete = new CommitAction(deleteVerb, "", deleteCard, () => BurnModeInput.DeleteNode(craft, node));
         if (BurnModeInput.StockAutoOnNode(craft))
-            return p.IsNext ? PageKit.StockAutoFlies(craft) : CommitSpec.StatusOnly("Stock AUTO flies the next burn", true, FlownBy.StockAuto) with { Secondary = delete };
+            return p.IsNext ? PageKit.StockAutoFlies(craft) : CommitSpec.StatusOnly("STOCK AUTO: NEXT BURN", true, FlownBy.StockAuto) with { Secondary = delete };
 
         bool rcs = p.RcsNow;
         if (!p.IsNext)
-            return CommitSpec.StatusOnly("Set for a later burn", false, rcs ? FlownBy.Afc : FlownBy.StockAuto) with { Secondary = delete };
+            return CommitSpec.StatusOnly("SET FOR LATER BURN", false, rcs ? FlownBy.Afc : FlownBy.StockAuto) with { Secondary = delete };
         string refusal = p.Resolved == RcsExecutionMode.Rcs ? BurnModeInput.RcsRefusal(p.CanTranslate, p.Mode == RcsExecutionMode.Rcs, p.Estimates, p.Need, p.Available) : "";
         if (refusal.Length == 0)
             refusal = BurnModeInput.FlyRefusal(craft);
@@ -446,8 +446,8 @@ internal static class RcsPage
                 Bar(in f, PageText.RcsOnBoard, p.Available, max, left, right, y, Palette.Dim, Fmt.Kg(p.Available));
                 if (!p.Active)
                 {
-                    Bar(in f, "Hold", hold, max, left, right, y + rowH, hold > p.Available ? Palette.Warn : Palette.Plan, EstimateText(hold, est.HoldDurationSec, p.Available));
-                    Bar(in f, "Align", align, max, left, right, y + rowH * 2f, align > p.Available ? Palette.Warn : Palette.Plan, EstimateText(align, est.AlignDurationSec, p.Available));
+                    Bar(in f, "HOLD", hold, max, left, right, y + rowH, hold > p.Available ? Palette.Warn : Palette.Plan, EstimateText(hold, est.HoldDurationSec, p.Available));
+                    Bar(in f, "ALIGN", align, max, left, right, y + rowH * 2f, align > p.Available ? Palette.Warn : Palette.Plan, EstimateText(align, est.AlignDurationSec, p.Available));
                 }
             }
             finally
@@ -457,14 +457,14 @@ internal static class RcsPage
             if (!p.Active)
                 Picture.LaneText(in f, lanes.Bottom, p.Estimates
                     ? PageText.EstimateBasis(p.IsNext && RcsBurnUi.HasEstimatesFor(p.Node, p.Vehicle.FlightComputer.Burn, p.Exec))
-                    : "No estimate for this burn", Palette.Dim.Solid);
+                    : "NO ESTIMATE", Palette.Dim.Solid);
         }
     }
 
     private static string EstimateText(double kg, double seconds, double available)
     {
         if (!double.IsFinite(kg))
-            return "Not possible";
+            return "NOT POSSIBLE";
         string text = string.Format(Inv, "~{0:F0} kg, ~{1}", kg, FormatHelper.FormatDuration(seconds));
         return kg > available ? text + ". " + PageText.RcsNotEnough : text;
     }

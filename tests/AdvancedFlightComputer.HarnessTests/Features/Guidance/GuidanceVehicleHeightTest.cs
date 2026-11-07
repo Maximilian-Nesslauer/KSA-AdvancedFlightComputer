@@ -111,7 +111,7 @@ public sealed class GuidanceVehicleHeightTest : AfcTest
             state.VehicleHeightM = 1234;
             refresh.Invoke(null, new object[] { craft });
             t.CheckAbs($"{save}: auto puts the measurement in the vehicle height", state.VehicleHeightM, expected, 0.02);
-            t.Check($"{save}: the status says the legs are stowed", state.VehicleHeightStatus.StartsWith("Legs stowed"), state.VehicleHeightStatus);
+            t.Check($"{save}: the status says the legs are stowed", state.VehicleHeightStatus.StartsWith("LEGS STOWED"), state.VehicleHeightStatus);
 
             state.VehicleHeightAuto = false;
             state.VehicleHeightM = 7;

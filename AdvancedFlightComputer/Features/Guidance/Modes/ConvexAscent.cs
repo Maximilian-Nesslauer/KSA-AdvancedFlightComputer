@@ -60,7 +60,7 @@ public static partial class GuidanceWindow
         catch (Exception e)
         {
             _s.AscentPlanRequested = false;
-            _s.AscentPlanStatus = "Planner fault: " + e.Message;
+            _s.AscentPlanStatus = "PLANNER FAULT: " + e.Message;
             LogHelper.WarnOnce($"guidance-ascent-planner-{vehicle.Id}:{e.GetType().Name}",
                 $"[AFC] Convex ascent planner failed on '{vehicle.Id}': {e}");
         }
@@ -84,26 +84,26 @@ public static partial class GuidanceWindow
                 if (plan.Usable && plan.LanChosen)
                     _s.LanDeg = plan.LanDeg;
                 string booster = plan.Usable && double.IsFinite(sol.RecoveryReserveKg)
-                    ? FormattableString.Invariant($" Booster keeps {sol.RecoveryReserveKg / 1000.0:F2} t for a {sol.BoostbackDv:F0} m/s boostback and a {sol.LandingDv:F0} m/s landing.")
+                    ? FormattableString.Invariant($" BOOSTER RESERVE {sol.RecoveryReserveKg / 1000.0:F2} t: BOOSTBACK {sol.BoostbackDv:F0} m/s, LANDING {sol.LandingDv:F0} m/s.")
                     : "";
                 string timing = !plan.Usable ? ""
-                    : plan.LaunchDelayS != 0.0 ? FormattableString.Invariant($" Lifts off {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "after" : "before")} the window.")
+                    : plan.LaunchDelayS != 0.0 ? FormattableString.Invariant($" LIFTOFF {Math.Abs(plan.LaunchDelayS):F0} s {(plan.LaunchDelayS > 0.0 ? "AFTER" : "BEFORE")} WINDOW.")
                     : plan.LanChosen ? FormattableString.Invariant($" LAN {plan.LanDeg:F2} deg.") : "";
                 // The commonest reason there is no plan: a stack with the thrust to spare cannot climb through the thick air under the q limit at full throttle, and the problem - which keeps the throttle within 1 % of full, as the script does - has no feasible trajectory. The seed search measured how low it can get.
                 string hint = !plan.Usable && sol.Nodes > 0 && double.IsFinite(sol.SeedLeastMaxQ)
                               && sol.SeedLeastMaxQ > 0.98 * plan.QMaxKpa * 1000.0
-                    ? FormattableString.Invariant($" At full throttle even its steepest climb reaches {sol.SeedLeastMaxQ / 1000.0:F0} kPa: raise Max q above that.")
+                    ? FormattableString.Invariant($" STEEPEST CLIMB AT FULL THROTTLE REACHES {sol.SeedLeastMaxQ / 1000.0:F0} kPa. RAISE MAX Q ABOVE.")
                     : "";
                 string relaxed = plan.QRelaxed
-                    ? FormattableString.Invariant($" The first solve did not converge: max q {plan.QMaxRequestedKpa:F0} kPa is out of this vehicle's reach at full throttle, so it was retried with looser constraints, max q {plan.QMaxKpa:F0} kPa.")
+                    ? FormattableString.Invariant($" FIRST SOLVE DID NOT CONVERGE: MAX Q {plan.QMaxRequestedKpa:F0} kPa OUT OF REACH AT FULL THROTTLE. RETRIED WITH LOOSER LIMITS, MAX Q {plan.QMaxKpa:F0} kPa.")
                     : "";
                 _s.AscentPlanStatus = plan.Usable
-                    ? FormattableString.Invariant($"Plan ready: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}")
-                    : $"No converged plan: {sol.Message}.{relaxed}{hint}";
+                    ? FormattableString.Invariant($"PLAN READY: {sol.FinalMass / 1000.0:F2} t TO ORBIT, {plan.StagesPlanned} OF {plan.StagesAvailable} STAGES, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}")
+                    : $"NO SOLUTION: {sol.Message}.{relaxed}{hint}";
                 // More than one attempt's line means the job retried looser - a relaxed max q or another stage - and that did not converge either.
                 bool retried = plan.QRelaxed || plan.Notes.Count > 1;
                 failure = plan.Usable ? ""
-                    : $"Convergence was not possible{(retried ? ", even after retrying with looser constraints" : "")}: {sol.Message}.{relaxed}{hint}";
+                    : $"NO SOLUTION{(retried ? ", even after retrying with looser constraints" : "")}: {sol.Message}.{relaxed}{hint}";
                 GuidanceLog.Info(vehicle, plan.Usable
                     ? FormattableString.Invariant($"convex ascent planned: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.")
                     : $"convex ascent did not converge: {GuidanceLog.Cut(sol.Message, 37)}.");
@@ -132,8 +132,8 @@ public static partial class GuidanceWindow
             else
             {
                 string[] notes = job.Notes;
-                _s.AscentPlanStatus = notes.Length > 0 ? "No plan: " + notes[^1] + "." : "No plan.";
-                failure = "Convergence was not possible: " + (notes.Length > 0 ? notes[^1] + "." : "the calculation ended without a plan.");
+                _s.AscentPlanStatus = notes.Length > 0 ? "NO PLAN: " + notes[^1] + "." : "NO PLAN.";
+                failure = "NO SOLUTION: " + (notes.Length > 0 ? notes[^1] + "." : "SOLVE ENDED WITHOUT PLAN.");
                 GuidanceLog.Info(vehicle, "convex ascent calculation ended without a plan.");
                 if (GuidanceLog.Enabled)
                 {
@@ -154,16 +154,16 @@ public static partial class GuidanceWindow
         if (TryStartAscentPlan(vehicle, orbit, parent, out AscentPlanJob started, out string error))
         {
             _s.AscentPlanJob = started;
-            _s.AscentPlanStatus = "Calculating...";
+            _s.AscentPlanStatus = "SOLVING...";
         }
         else
         {
-            _s.AscentPlanStatus = "Cannot calculate: " + error + ".";
+            _s.AscentPlanStatus = "NO SOLUTION: " + error + ".";
             GuidanceLog.Info(vehicle, $"convex ascent not calculated: {GuidanceLog.Cut(error, 39)}.");
             if (GuidanceLog.Enabled && error.Length > 39)
                 GuidanceLog.DebugWrapped(vehicle, "convex error: ", error);
             if (_s.ConvexLaunchPending)
-                FailConvexLaunch(vehicle, "The climb cannot be calculated: " + error + ".");
+                FailConvexLaunch(vehicle, "NO SOLUTION (CLIMB): " + error + ".");
         }
     }
 
@@ -193,7 +193,7 @@ public static partial class GuidanceWindow
         if (_s.AscentPlanJob != null)
             return;
         _s.AscentPlanRequested = true;
-        _s.AscentPlanStatus = "Starting...";
+        _s.AscentPlanStatus = "STARTING...";
     }
 
     /// <summary>
@@ -236,7 +236,7 @@ public static partial class GuidanceWindow
                     GuidanceLog.DebugWrapped(vehicle, "launch plan misfit: ", why);
                 return;
             }
-            FailConvexLaunch(vehicle, $"The calculated plan does not fit the launch: {why}.");
+            FailConvexLaunch(vehicle, $"SOLVED PLAN DOES NOT FIT LAUNCH: {why}.");
             return;
         }
         GuidanceLog.Info(vehicle, $"launch: convex plan ready, {(_s.ConvexLaunchAtWindow ? "arming for the launch window" : "launching")}.");
@@ -281,14 +281,14 @@ public static partial class GuidanceWindow
         double mu = parent.Mu, bodyRadius = parent.MeanRadius, omega = parent.GetAngularVelocity();
         if (!(mu > 0.0) || !(bodyRadius > 0.0) || !double.IsFinite(omega))
         {
-            error = "the body is not valid";
+            error = "BODY INVALID";
             return false;
         }
 
         // Drag and air. The sweep is the game's own force function, whatever drag model is active, measured onto a table, and the atmosphere it mirrors; an airless body comes back with no atmosphere, which is not a failure.
         if (!KsaAeroSweep.TryBuild(vehicle, parent, SimNow(), out KsaAeroSweep.Result aero, out string aeroError))
         {
-            error = "no drag model (" + aeroError + ")";
+            error = "NO DRAG MODEL (" + aeroError + ")";
             return false;
         }
         ExponentialAtmosphere atmosphere = aero.Atmosphere;
@@ -308,7 +308,7 @@ public static partial class GuidanceWindow
         SequencePerformanceList performance = vehicle.Parts?.PerformanceSequences;
         if (performance == null || vehicle.Parts.SequenceList == null)
         {
-            error = "the vehicle has no staging sequence";
+            error = "NO STAGING SEQUENCE";
             return false;
         }
         float ambient = vehicle.PhysicsEnvironment.AtmosphericPressure;
@@ -317,7 +317,7 @@ public static partial class GuidanceWindow
         UpfgVehicle model = KsaVehicleAdapter.Build(vehicle, ambient, grid, stageParts);
         if (model.Stages.Count == 0)
         {
-            error = "no stage has thrust and propellant";
+            error = "NO STAGE WITH THRUST AND PROPELLANT";
             return false;
         }
 
@@ -340,7 +340,7 @@ public static partial class GuidanceWindow
         }
         catch (ArgumentException e)
         {
-            error = "the stage model is not valid (" + e.Message + ")";
+            error = "STAGE MODEL INVALID (" + e.Message + ")";
             return false;
         }
         AscentStage[] allStages = stagePlan.Stages;
@@ -353,7 +353,7 @@ public static partial class GuidanceWindow
             double start = stagePlan.StartMass[i];
             if (!(st.PropellantMass > 1.0) || !(start - st.PropellantMass > 0.0))
             {
-                error = $"stage {i + 1} has nothing left to burn";
+                error = $"STAGE {i + 1}: NOTHING LEFT TO BURN";
                 return false;
             }
             dvSum += st.ExhaustVelocity * Math.Log(start / (start - st.PropellantMass));
@@ -365,7 +365,7 @@ public static partial class GuidanceWindow
         double ra = bodyRadius + Math.Max(_s.PeKm, _s.ApKm) * 1000.0;
         if (!(rp > bodyRadius))
         {
-            error = "the target periapsis is below the surface";
+            error = "TARGET PE BELOW SURFACE";
             return false;
         }
         double rIns = Math.Min(Math.Max(rp, parent.GetAtmosphereRadius()), ra);
@@ -440,11 +440,11 @@ public static partial class GuidanceWindow
         ReturnableStage booster = BoostbackTarget();
         string recoverySite = RecoverySiteKey(booster);
         if (booster != null && stagePlan.ReserveStage < 0)
-            recoveryNote = "no booster reserve: the stage that separates has no liquid load of its own to keep one in";
+            recoveryNote = "NO BOOSTER RESERVE: SEPARATING STAGE HAS NO LIQUID LOAD OF ITS OWN";
         else if (booster != null)
         {
             if (aero.Table == null || aero.Atmosphere == null)
-                recoveryNote = "no booster reserve: no air to fly it home through";
+                recoveryNote = "NO BOOSTER RESERVE: NO AIR FOR RETURN";
             else
             {
                 double latDeg = booster.TargetLatDeg;
@@ -467,7 +467,7 @@ public static partial class GuidanceWindow
                     Alpha = GlideNominalAlpha(aero),
                     Air = aero.Atmosphere,
                 };
-                recoveryNote = FormattableString.Invariant($"booster reserve sized by the plan: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) home to lat {latDeg:F3} lon {lonDeg:F3}");
+                recoveryNote = FormattableString.Invariant($"BOOSTER RESERVE FROM PLAN: '{booster.Name}' ({stagePlan.BoosterDryKg / 1000.0:F2} t dry) HOME TO lat {latDeg:F3} lon {lonDeg:F3}");
             }
         }
 
@@ -554,7 +554,7 @@ public static partial class GuidanceWindow
             GLimitG = userGLimit,
             SolidStages = allStages.Take(stages).Count(st => st.Solid != null),
             CoreThrottledDown = stagePlan.CoreThrottledDown,
-            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", pinned to {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
+            StageLines = stagePlan.Describe.Take(stages).Select((d, i) => d + (allStages[i].IsPinned ? $", PINNED TO {allStages[i].FixedBurnTime:F1} s" : "")).ToArray(),
             StageNotes = stagePlan.Notes.ToArray(),
             QMaxKpa = qUsed / 1000.0,
             QMaxRequestedKpa = qMaxKpa,
@@ -685,52 +685,52 @@ public static partial class GuidanceWindow
         AscentPlan p = _s.AscentPlan;
         if (p == null)
         {
-            why = "no plan calculated";
+            why = "NO PLAN";
             return false;
         }
         if (!p.Usable)
         {
-            why = "the plan did not converge";
+            why = "NO SOLUTION";
             return false;
         }
         if (p.VehicleId != vehicle.Id || !ReferenceEquals(p.Body, parent))
         {
-            why = "it was planned for another craft or body";
+            why = "PLANNED FOR ANOTHER CRAFT OR BODY";
             return false;
         }
         double3 ccf = orbit.StateVectors.PositionCci.Transform(parent.GetCci2Ccf());
         if ((ccf - p.StartCcf).Length() > PlanStartToleranceM)
         {
-            why = "the craft has moved";
+            why = "CRAFT MOVED";
             return false;
         }
         if (Math.Abs(vehicle.TotalMass - p.Mass0) > PlanMassTolerance * p.Mass0)
         {
-            why = "the mass of the craft has changed";
+            why = "MASS CHANGED";
             return false;
         }
         if (p.TargetDiffers(_s.PeKm, _s.ApKm, _s.IncDeg, _s.LanDeg))
         {
-            why = "the orbit has changed";
+            why = "ORBIT CHANGED";
             return false;
         }
         if (p.SettingsDiffer(ConvexQMaxKpaUsed(), ConvexQAlphaMaxUsed(), _s.ConvexThrottleMinPct, UserGLimitG)
             || p.OptimisedTiming != _s.ConvexOptimiseTiming)
         {
-            why = "the limits have changed";
+            why = "LIMITS CHANGED";
             return false;
         }
         if (p.RecoverySite != RecoverySiteKey(BoostbackTarget()))
         {
-            why = "the booster's landing target has changed since it was planned";
+            why = "BOOSTER LANDING TARGET CHANGED SINCE PLAN";
             return false;
         }
         double late = launchAt - p.SolvedAt;
         if (Math.Abs(late) > PlanLaunchToleranceS)
         {
             why = late > 0.0
-                ? $"it was planned for a lift-off {late:F0} s earlier"
-                : $"it was planned for a lift-off {-late:F0} s later";
+                ? $"PLANNED FOR LIFTOFF {late:F0} s EARLIER"
+                : $"PLANNED FOR LIFTOFF {-late:F0} s LATER";
             return false;
         }
         why = "";
@@ -857,17 +857,17 @@ public static partial class GuidanceWindow
         double alt = r.Length() - bodyRadius;
         if (profile == null)
         {
-            why = "no profile to fly";
+            why = "NO PROFILE TO FLY";
             return true;
         }
         if (_s.ConvexPlanTime >= profile.EndTime)
         {
-            why = "the plan ran out";
+            why = "PLAN RAN OUT";
             return true;
         }
         if (alt >= _s.ConvexHandoverAltKm * 1000.0 && _s.Upfg.Converged)
         {
-            why = $"above {_s.ConvexHandoverAltKm:F0} km";
+            why = $"ABOVE {_s.ConvexHandoverAltKm:F0} km";
             return true;
         }
         why = "";

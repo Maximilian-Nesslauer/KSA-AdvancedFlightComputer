@@ -221,7 +221,7 @@ public static partial class GuidanceWindow
     // ------------------------------------------------------------------ commit
 
     /// <summary>
-    /// START BOOSTBACK on LAND > BOOSTBACK: start the machine at separation, from whatever
+    /// The BOOSTBACK verb on LAND > BOOSTBACK: start the machine at separation, from whatever
     /// attitude and state the vehicle is in right now.
     ///
     /// The aero sweep is FORCED here rather than left to the staleness check. The
@@ -237,8 +237,8 @@ public static partial class GuidanceWindow
         if (_s.Aero?.Table == null)
         {
             _s.WarnBoostback(_s.AeroError.Length > 0
-                ? "No aero surrogate: " + _s.AeroError
-                : "No aero surrogate - cannot predict an impact point.");
+                ? "NO AERO SURROGATE: " + _s.AeroError
+                : "NO AERO SURROGATE. NO IMPACT PREDICTION.");
             return;
         }
 
@@ -290,7 +290,7 @@ public static partial class GuidanceWindow
         _s.LandingCutPending = true;   // the one-shot engine cut in ApplyAutopilot
         _s.HasCommand = false;
         _s.BoostbackClearOf = null;
-        _s.BoostbackStatus = "Boostback stopped.";
+        _s.BoostbackStatus = "BOOSTBACK STOPPED";
     }
 
     /// <summary>True while the machine is flying the vehicle.</summary>
@@ -411,7 +411,7 @@ public static partial class GuidanceWindow
             {
                 if (!_s.HasSteer)
                 {
-                    _s.WarnBoostback("No steering solution - holding attitude.");
+                    _s.WarnBoostback("NO STEERING SOLUTION. HOLDING ATTITUDE.");
                     break;
                 }
                 if (missDv < BoostbackMinDvMs)
@@ -419,7 +419,7 @@ public static partial class GuidanceWindow
                     // Already on the site.
                     // Nothing to burn, so go straight to the glide rather than lighting an engine to prove a point.
                     // Judged on the TARGETING correction: shaping is optional, and a burn is not worth lighting for it alone.
-                    _s.BoostbackStatus = FormattableString.Invariant($"Correction is only {missDv:F1} m/s - skipping the burn.");
+                    _s.BoostbackStatus = FormattableString.Invariant($"CORRECTION {missDv:F1} m/s ONLY. BURN SKIPPED.");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                     break;
                 }
@@ -477,9 +477,9 @@ public static partial class GuidanceWindow
                 if (done || nulled || dry || overrun)
                 {
                     if (dry || overrun)
-                        _s.WarnBoostback(dry ? "Cutoff - propellant exhausted." : "Cutoff - the burn passed its time limit.");
+                        _s.WarnBoostback(dry ? "CUTOFF: PROPELLANT EXHAUSTED" : "CUTOFF: BURN TIME LIMIT");
                     else
-                        _s.BoostbackStatus = FormattableString.Invariant($"Cutoff - miss {_s.SteerMissM / 1000.0:F1} km.");
+                        _s.BoostbackStatus = FormattableString.Invariant($"CUTOFF: MISS {_s.SteerMissM / 1000.0:F1} km");
                     EnterBoostbackPhase(BoostbackPhase.Glide, now);
                 }
                 break;
@@ -588,7 +588,7 @@ public static partial class GuidanceWindow
         double mass = vehicle.TotalMass;
         if (aero?.Table == null || !(mass > 0.0))
         {
-            _s.BoostbackPlanError = "no aero surrogate";
+            _s.BoostbackPlanError = "NO AERO SURROGATE";
             return;
         }
 
@@ -597,7 +597,7 @@ public static partial class GuidanceWindow
         (double thrust, double massFlow) = KsaEnginePerf.AtPressure(vehicle, pa);
         if (!(thrust > 0.0) || !(massFlow > 0.0))
         {
-            _s.BoostbackPlanError = "no engine model";
+            _s.BoostbackPlanError = "NO ENGINE MODEL";
             return;
         }
 
@@ -699,10 +699,10 @@ public static partial class GuidanceWindow
             // The PREVIOUS plan is kept and goes on being flown.
             // A burn already under way is better served by a two-second-old plan than by none, the usual failure is the coast momentarily not reaching the ground, and the next attempt is two seconds off.
             // What must not happen is silence, so the reason goes on the page either way.
-            _s.BoostbackPlanError = sol.Shot.OutOfPropellant ? "not enough propellant"
-                : sol.Shot.FlewIntoGround ? "the burn flies into the ground"
-                : sol.Shot.Infeasible ? "no burn reaches the site"
-                : "the plan did not converge";
+            _s.BoostbackPlanError = sol.Shot.OutOfPropellant ? "NOT ENOUGH PROPELLANT"
+                : sol.Shot.FlewIntoGround ? "BURN HITS GROUND"
+                : sol.Shot.Infeasible ? "NO BURN REACHES SITE"
+                : "NO SOLUTION";
             return;
         }
 
@@ -971,12 +971,12 @@ public static partial class GuidanceWindow
 
     internal static string BoostbackPhaseName(BoostbackPhase p) => p switch
     {
-        BoostbackPhase.Idle => "idle",
-        BoostbackPhase.Separation => "settle",
-        BoostbackPhase.Rotation => "turn",
-        BoostbackPhase.Boostback => "burn",
-        BoostbackPhase.Glide => "glide",
-        BoostbackPhase.Done => "ended",
+        BoostbackPhase.Idle => "IDLE",
+        BoostbackPhase.Separation => "SETTLE",
+        BoostbackPhase.Rotation => "SLEW",
+        BoostbackPhase.Boostback => "BURN",
+        BoostbackPhase.Glide => "GLIDE",
+        BoostbackPhase.Done => "ENDED",
         _ => "?",
     };
 }

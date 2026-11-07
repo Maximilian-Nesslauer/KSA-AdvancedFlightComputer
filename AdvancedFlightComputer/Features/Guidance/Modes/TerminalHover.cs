@@ -28,7 +28,7 @@ public static partial class GuidanceWindow
             && !(_s.Engage && _s.AutoStage && _s.StagingActive
                 && KsaEnginePerf.GetThrottleControlStatus(vehicle) == KsaEnginePerf.ThrustStatus.NoAuthority))
         {
-            _s.WarnLanding("Hover refused: no lit liquid engine.");
+            _s.WarnLanding("REFUSED: NO LIT LIQUID ENGINE.");
             GuidanceLog.Info(vehicle, _s.LandingStatus);
             return false;
         }
@@ -72,7 +72,7 @@ public static partial class GuidanceWindow
         _s.GfoldThrustStatus = "";
         ResetLandingEngineWait();
         _s.TermCuePending = true;
-        _s.LandingStatus = "The hover flies.";
+        _s.LandingStatus = "AFC: HOVER";
     }
 
     // Thrust-to-weight at the given throttle, at the current mass and local gravity. A hover needs more than one at full throttle and less than one at the minimum, or the engine cannot hold the weight on one side and cannot stop climbing on the other.
@@ -98,7 +98,7 @@ public static partial class GuidanceWindow
         double minTwr = TerminalMinThrottleTwr(vehicle, orbit, mu);
         if (!(minTwr > 1.0))
             return false;
-        _s.WarnLanding(FormattableString.Invariant($"Hover refused: TWR {minTwr:F2} at minimum throttle."));
+        _s.WarnLanding(FormattableString.Invariant($"REFUSED: HOVER, TWR {minTwr:F2} AT MIN THROTTLE."));
         GuidanceLog.Info(vehicle, _s.LandingStatus);
         return true;
     }
@@ -199,7 +199,7 @@ public static partial class GuidanceWindow
                 _s.GfoldThrottle = 0.0;
                 _s.CommandDir = up;
                 _s.HasCommand = true;
-                _s.WarnLanding(FormattableString.Invariant($"Hover cut the engine: TWR {minTwr:F2} at minimum throttle."));
+                _s.WarnLanding(FormattableString.Invariant($"HOVER CUT ENGINE: TWR {minTwr:F2} AT MIN THROTTLE."));
                 GuidanceLog.Info(vehicle, FormattableString.Invariant($"Terminal hover rising at {vUp:F1} m/s {h:F1} m above the pad and cannot throttle below its weight ")
                                  + FormattableString.Invariant($"({minTwr:F2} at minimum) - engine cut, dropping to the pad."));
                 return;

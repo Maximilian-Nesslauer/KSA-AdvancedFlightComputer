@@ -87,36 +87,36 @@ internal static class FlightView
     public static string LaunchReads(double peKm, double apKm, double incDeg, bool armed, bool autoWarp)
     {
         string goal = Fmt.Orbit(peKm, apKm) + ", " + Fmt.Deg(incDeg);
-        return armed ? goal + ", auto warp " + (autoWarp ? "on" : "off") : goal;
+        return armed ? goal + ", AUTO WARP " + (autoWarp ? "ON" : "OFF") : goal;
     }
 
     public static string LandReads(LandWay way, bool siteLocked, double latDeg, double lonDeg)
     {
         if (way == LandWay.Hover)
-            return "way, site, hover limits";
-        return siteLocked ? "site locked" : string.Create(Fmt.Inv, $"site {latDeg:F3}, {lonDeg:F3}");
+            return "Mode, site, hover limits";
+        return siteLocked ? "SITE LOCKED" : string.Create(Fmt.Inv, $"SITE {latDeg:F3}, {lonDeg:F3}");
     }
 
     public static string LaunchPlanLine(bool running, bool armed)
-        => running ? "This climb reads PE, AP, INC, PLANE and G-LIMIT in LIMITS at once. TARGET, CLIMB and MAX Q count at the next launch."
-            : armed ? "The armed launch reads this form at its window."
-            : "This form is locked while the plan calculates.";
+        => running ? "Climb reads PE, AP, INC, PLANE and G-LIMIT in LIMITS live. TARGET, CLIMB and MAX Q apply at the next launch."
+            : armed ? "The armed launch reads this form at the window."
+            : "LOCKED: PLAN SOLVING.";
 
     public static string LandPlanLine(LandWay way, LandSolver solver, bool siteLocked, bool hoverFlies = true)
     {
         if (way == LandWay.Hover)
-            return "The hover reads its limits in HOW IT FLIES. The rest counts at the next landing.";
+            return "Hover reads its limits in GNC. The rest applies at the next landing.";
         if (siteLocked)
-            return "The deorbit holds the site, the approach and the method. Stop it to change them.";
+            return "LOCKED: SITE, APPROACH, METHOD (DEORBIT ACTIVE). STOP TO EDIT.";
         if (way == LandWay.Boostback)
-            return "This boostback reads the SITE and the HAND-OVERS now.";
+            return "Boostback reads SITE and HANDOVER live.";
         return solver switch
         {
-            LandSolver.Entry => "Entry guidance reads the SITE and the HAND-OVERS now.",
-            LandSolver.Touchdown => "Touchdown guidance reads the SITE now.",
-            _ => hoverFlies ? "G-FOLD reads the SITE and the hover hand-over now." : "G-FOLD reads the SITE now.",
+            LandSolver.Entry => "Entry reads SITE and HANDOVER live.",
+            LandSolver.Touchdown => "Touchdown reads SITE live.",
+            _ => hoverFlies ? "G-FOLD reads SITE and the hover handover live." : "G-FOLD reads SITE live.",
         };
     }
 
-    public const string PassesPlanLine = "These passes are locked. A change here counts at the next plan.";
+    public const string PassesPlanLine = "LOCKED: PASSES QUEUED. EDITS APPLY AT NEXT PLAN.";
 }

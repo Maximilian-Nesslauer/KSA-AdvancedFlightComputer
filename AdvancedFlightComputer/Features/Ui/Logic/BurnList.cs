@@ -4,7 +4,7 @@ namespace AdvancedFlightComputer.Features.Ui.Logic;
 
 internal static class BurnList
 {
-    public static readonly string[] Heads = { "BURN", "IN", "DELTA-V", "WILL FLY", "FUEL" };
+    public static readonly string[] Heads = { "BURN", "IN", "DV", "BY", "FUEL" };
 
     private const int WhoColumn = 3, FuelColumn = 4;
 
@@ -17,18 +17,18 @@ internal static class BurnList
 
     public static int FuelSwatchColumn => FuelColumn;
 
-    public const string Stock = "Stock AUTO";
+    public const string Stock = "STOCK AUTO";
     public const string Rcs = "AFC RCS";
 
     public static string Label(int index, int pass)
-        => pass > 0 ? "Pass " + pass.ToString(Fmt.Inv)
+        => pass > 0 ? "PASS " + pass.ToString(Fmt.Inv)
             : index == 0 ? "NEXT"
             : (index + 1).ToString(Fmt.Inv);
 
     public static string In(double seconds, bool flies)
         => seconds > 0.0 ? Fmt.Time(seconds)
-            : flies ? "Now"
-            : "Past";
+            : flies ? "NOW"
+            : "PAST";
 
     public static string Who(bool rcs) => rcs ? Rcs : Stock;
 
@@ -37,7 +37,7 @@ internal static class BurnList
         if (stages.Length == 0)
             return "";
         if (pay.ShortMs > 0.5)
-            return string.Create(Fmt.Inv, $"~{pay.ShortMs:F0} m/s short");
+            return string.Create(Fmt.Inv, $"~{pay.ShortMs:F0} m/s SHORT");
         return pay.FirstStage >= 0
             ? BurnBudget.Payer(stages, in pay) + ", ~" + Fmt.Mass(pay.PropellantKg)
             : "";
@@ -49,7 +49,7 @@ internal static class BurnList
     public static string[] Row(int index, int pass, double seconds, bool flies, double dvMs, bool rcs, string fuel)
         => new[] { Label(index, pass), In(seconds, flies), Fmt.Dv(dvMs), Who(rcs), fuel };
 
-    /// <summary>With no such thruster ENGINE, ELSE RCS is no RCS burn, because RcsExecutor.WouldExecuteRcs says no and stock AUTO gets the press.</summary>
+    /// <summary>With no such thruster ENGINE/RCS is no RCS burn, because RcsExecutor.WouldExecuteRcs says no and stock AUTO gets the press.</summary>
     public static bool RcsTakes(bool rcsFlies, bool rcsOnly, bool resolvesToRcs, bool canTranslate)
         => rcsFlies || rcsOnly || (resolvesToRcs && canTranslate);
 

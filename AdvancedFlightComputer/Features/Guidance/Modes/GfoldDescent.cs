@@ -45,7 +45,7 @@ public static partial class GuidanceWindow
         if (!AtVerticalApproachGate(altitude, horizontalSpeed, distance)
             || !double.IsFinite(tilt) || tilt > VerticalFinalPointingDeg) return false;
         ChangeGfoldApproach(GfoldApproach.VerticalFinal, now);
-        _s.LandingStatus = "Horizontal braking complete. Descending with the engines down.";
+        _s.LandingStatus = "HORIZONTAL BRAKING COMPLETE. DESCENT WITH ENGINES DOWN.";
         return true;
     }
 
@@ -56,7 +56,7 @@ public static partial class GuidanceWindow
         bool missed = altitude <= _s.LandingVerticalGateM || (_s.GfoldPlan != null && now > _s.GfoldArrivalTime);
         if (!GfoldBrakingToGate || !missed) return false;
         ChangeGfoldApproach(GfoldApproach.Direct, now);
-        _s.WarnLanding("The vertical approach gate was missed. G-FOLD lands on the site directly.");
+        _s.WarnLanding("VERTICAL APPROACH GATE MISSED. G-FOLD LANDS ON SITE.");
         return true;
     }
 
@@ -99,7 +99,7 @@ public static partial class GuidanceWindow
     private const double GfoldFuelSearchRetryS = 2.0;
 
     // Shown while the plan flies to touchdown after a refused handoff, and kept through the re-solves that clear the status on success. The reason is in the guidance log.
-    private const string GfoldHoverRefusedStatus = "The hover cannot take over, so G-FOLD flies its plan to the ground.";
+    private const string GfoldHoverRefusedStatus = "NO HOVER HANDOVER. G-FOLD TO TOUCHDOWN.";
 
     // Committed-trajectory tracking: the solved descent plan is flown by time index (feed-forward the planned thrust at the current time + light PD feedback on the reference state) and re-solved on a cadence, rather than applying node 0.
     // This follows the plan's coast (throttle down) and brake arcs instead of freezing the first node.
@@ -149,7 +149,7 @@ public static partial class GuidanceWindow
             StartTerminalHover(vehicle);
             if (_s.LandingPhase == LandingPhase.TerminalHover)
             {
-                _s.LandingStatus = $"The hover takes over from G-FOLD at {_s.GfoldAltM:F0} m.";
+                _s.LandingStatus = $"HANDOVER: HOVER AT {_s.GfoldAltM:F0} m";
                 return;
             }
             _s.GfoldHoverRefused = true;
@@ -168,8 +168,8 @@ public static partial class GuidanceWindow
         if (_s.GfoldPlan != null)
             TrackGfoldPlan(vehicle, parent, frame, r, vSrf, vehicle.TotalMass, now);
 
-        string ApproachState() => $"altitude {_s.GfoldAltM:F1} m, horizontal speed {horizontalSpeed:F2} m/s"
-            + $", sink {-localVelocity.X:F2} m/s, distance {horizontalDistance:F1} m, thrust-axis tilt {tilt:F1} deg";
+        string ApproachState() => $"ALT {_s.GfoldAltM:F1} m, HORIZONTAL SPEED {horizontalSpeed:F2} m/s"
+            + $", SINK {-localVelocity.X:F2} m/s, DISTANCE {horizontalDistance:F1} m, THRUST-AXIS TILT {tilt:F1} deg";
     }
 
     // Solve a fresh descent plan from the current state and commit it.
@@ -186,7 +186,7 @@ public static partial class GuidanceWindow
             EffectiveAccelLimitG(vehicle) * StandardGravity, out string refusal);
         if (p == null)
         {
-            EndLandingBadly(vehicle, "G-FOLD cannot plan for this craft", refusal);
+            EndLandingBadly(vehicle, "G-FOLD: NO SOLUTION", refusal);
             _s.GfoldLastSolveTime = now;
             _s.GfoldPlan = null;
             _s.GfoldThrottle = 0.0;
@@ -220,7 +220,7 @@ public static partial class GuidanceWindow
             // While the searches rest after a propellant refusal, the committed plan keeps flying and the single solve above still runs on every cadence, so a plan that fits again is taken at once. A retarget ends the rest, so its first search runs straight away, and a refused retarget rests like any other search. A craft with no plan yet always searches.
             if (traj == null && _s.GfoldPlan != null && now < _s.GfoldSearchRetryTime)
             {
-                FailGfold(vehicle, FormattableString.Invariant($"G-FOLD is short of propellant, searching again in {_s.GfoldSearchRetryTime - now:F1} s"));
+                FailGfold(vehicle, FormattableString.Invariant($"G-FOLD SHORT OF PROPELLANT. SEARCH AGAIN IN {_s.GfoldSearchRetryTime - now:F1} s"));
                 return;
             }
             if (traj == null)
@@ -263,15 +263,15 @@ public static partial class GuidanceWindow
 
                 if (best == null)
                 {
-                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD unreachable: alt {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, ") +
-                              FormattableString.Invariant($"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, fuel {p.FuelMass:F0} kg")
-                              + (double.IsFinite(p.AccelMax) ? FormattableString.Invariant($", thrust acceleration limit {p.AccelMax / p.GravityMag:F1} local g") : ""));
+                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD UNREACHABLE: ALT {_s.GfoldAltM:F0} m, {_s.GfoldSpeedMs:F0} m/s, ") +
+                              FormattableString.Invariant($"TWR {p.ThrustMax / (vehicle.TotalMass * p.GravityMag):F1}, FUEL {p.FuelMass:F0} kg")
+                              + (double.IsFinite(p.AccelMax) ? FormattableString.Invariant($", THRUST ACCELERATION LIMIT {p.AccelMax / p.GravityMag:F1} local g") : ""));
                     return;
                 }
                 if (!FitsFuel(best.Trajectory, p))
                 {
                     _s.GfoldSearchRetryTime = now + GfoldFuelSearchRetryS;
-                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD needs {best.FuelUsed:F0} kg of propellant, {p.FuelMass:F0} kg aboard"));
+                    FailGfold(vehicle, FormattableString.Invariant($"G-FOLD NEEDS {best.FuelUsed:F0} kg PROPELLANT, {p.FuelMass:F0} kg ABOARD"));
                     return;
                 }
                 traj = best.Trajectory;
@@ -287,8 +287,8 @@ public static partial class GuidanceWindow
             _s.GfoldForceSearch = false;
             _s.GfoldSearchRetryTime = double.NegativeInfinity;
             _s.LandingStatus = _s.GfoldHoverRefused ? GfoldHoverRefusedStatus
-                : GfoldBrakingToGate ? $"Braking to the vertical approach at {_s.LandingVerticalGateM:F0} m."
-                : GfoldVerticalFinal ? "Vertical final descent." : "";
+                : GfoldBrakingToGate ? $"BRAKING TO VERTICAL APPROACH AT {_s.LandingVerticalGateM:F0} m"
+                : GfoldVerticalFinal ? "VERTICAL FINAL DESCENT" : "";
             if (_s.GfoldHoverRefused)
                 _s.WarnLanding(GfoldHoverRefusedStatus);
         }
@@ -388,7 +388,7 @@ public static partial class GuidanceWindow
                 || command.Status == KsaEnginePerf.ThrustStatus.BelowMinimum
                 || command.Status == KsaEnginePerf.ThrustStatus.Off;
             _s.GfoldThrustStatus = !engineUsable ? command.Message
-                : wantsBurn ? "Aligning for ignition." : "Planned coast, engine off.";
+                : wantsBurn ? "ALIGNING FOR IGNITION" : "PLANNED COAST, ENGINE OFF";
         }
         _s.HasCommand = true;
     }
@@ -444,7 +444,7 @@ public static partial class GuidanceWindow
                 GuidanceLog.Info(vehicle, $"G-FOLD gave up after {_s.GfoldFailStreak} failed solves: {message}");
             _s.LandingPhase = LandingPhase.Done;
             _s.LandingCutPending = true;
-            EndLandingBadly(vehicle, "G-FOLD found no trajectory", "G-FOLD found no trajectory. You fly.");
+            EndLandingBadly(vehicle, "G-FOLD: NO TRAJECTORY", "G-FOLD: NO TRAJECTORY. MANUAL.");
         }
     }
 }

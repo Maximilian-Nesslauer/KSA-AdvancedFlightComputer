@@ -43,7 +43,7 @@ public static partial class GuidanceWindow
         if (plan == null)
             return;
         if (_s.ThreeDofPhase == ThreeDofPhase.Burn)
-            GaugeRowText("THROTTLE", FormattableString.Invariant($"{_s.ThreeDofThrottle * 100.0:F0} %  (plan {_s.ThreeDofPlanThrottle * 100.0:F0} %)"), ConsoleStyle.TextMuted);
+            GaugeRowText("THROTTLE", FormattableString.Invariant($"{_s.ThreeDofThrottle * 100.0:F0} %  (PLAN {_s.ThreeDofPlanThrottle * 100.0:F0} %)"), ConsoleStyle.TextMuted);
         else if (_s.ThreeDofPhase == ThreeDofPhase.Glide)
             GaugeRowText("BURN TIME", Fmt.TimeFine(plan.SigmaBurn));
     }
@@ -55,11 +55,11 @@ public static partial class GuidanceWindow
         GaugeRowText(D, "STATUS", _s.ThreeDofStatus.Length > 0 ? Fmt.Sentence(_s.ThreeDofStatus) : "-", ConsoleStyle.TextMuted);
         var est = _s.ThreeDofEstimator;
         GaugeRowText(D, "MODEL CORRECTION", est != null
-            ? FormattableString.Invariant($"drag x{est.DragScale:F2}  lift x{est.LiftScale:F2}  thrust x{est.ThrustScale:F2}") : "-", ConsoleStyle.TextMuted);
+            ? FormattableString.Invariant($"DRAG x{est.DragScale:F2}  LIFT x{est.LiftScale:F2}  THRUST x{est.ThrustScale:F2}") : "-", ConsoleStyle.TextMuted);
         // As of the solver's last idle moment: the guidance is the worker's while it solves, so the step caches this rather than the draw reading it.
         GaugeRowText(D, "LAST SOLVE", _s.ThreeDofSolveText.Length > 0 ? _s.ThreeDofSolveText : "-",
             _s.ThreeDofRefusing ? ConsoleUi.WarnInk : ConsoleStyle.TextMuted);
-        GaugeRowText(D, "TURN ACCEL IN USE", _s.ThreeDofTurnAccelInUse > 0.0 ? FormattableString.Invariant($"{_s.ThreeDofTurnAccelInUse:F1} deg/s^2") : "no limit",
+        GaugeRowText(D, "TURN ACCEL IN USE", _s.ThreeDofTurnAccelInUse > 0.0 ? FormattableString.Invariant($"{_s.ThreeDofTurnAccelInUse:F1} deg/s^2") : "NO LIMIT",
             ConsoleStyle.TextMuted);
         GaugeRowText(D, "TOUCHDOWN STANDBY", SixDofStandbyText(now), SixDofStandbyReady(now) ? ConsoleStyle.TextPrimary : ConsoleStyle.TextMuted);
     }
@@ -87,13 +87,13 @@ public static partial class GuidanceWindow
 
     private static readonly ImColor8 ThreeDofIgnitionCol = Palette.Text.Solid;
 
-    private static readonly string[] _entryLegendNames = { "Glide", "Burn", "Flown", "Ignition" };
+    private static readonly string[] _entryLegendNames = { "GLIDE", "BURN", "FLOWN", "IGNITION" };
     private static readonly Picture.Swatch[] _entrySwatches =
     {
-        new("Glide", Palette.Plan),
-        new("Burn", Palette.Plan, SwatchKind.Thick),
-        new("Flown", Palette.Flown),
-        new("Ignition", Palette.Text, SwatchKind.Cross),
+        new("GLIDE", Palette.Plan),
+        new("BURN", Palette.Plan, SwatchKind.Thick),
+        new("FLOWN", Palette.Flown),
+        new("IGNITION", Palette.Text, SwatchKind.Cross),
     };
 
     private const int EntryPlanStateSize = 7;

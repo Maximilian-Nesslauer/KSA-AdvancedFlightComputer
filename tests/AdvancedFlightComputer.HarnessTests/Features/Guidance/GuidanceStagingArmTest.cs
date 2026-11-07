@@ -80,7 +80,7 @@ public sealed class GuidanceStagingArmTest : AfcTest
         }
         t.Check("a player disarm holds on every later step", !StagingDetector.IsArmed(craft));
         t.Check("no staging is requested while the player holds it off", _requests == 1, $"requests={_requests}");
-        t.Check("the status says the player switched it off", state.Status.Contains("switched off"), state.Status);
+        t.Check("the status says the player switched it off", state.Status.Contains("AUTOSTAGE OFF"), state.Status);
 
         StagingDetector.Arm(craft, true);
         time += 2 * cooldown;

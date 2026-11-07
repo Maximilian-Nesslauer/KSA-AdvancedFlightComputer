@@ -93,7 +93,7 @@ public static partial class GuidanceWindow
     /// whether the mod offers to warp to the window for you or you warp there
     /// yourself; either way the launch waits for the window.
     ///
-    /// THE CALCULATED CLIMB IS THE ASCENT. Without a plan that fits this launch, the commit
+    /// THE SOLVED CLIMB IS THE ASCENT. Without a plan that fits this launch, the commit
     /// calculates one - for the window's lift-off when it arms - and launches or arms
     /// once it converges (see RequestConvexLaunch). The vertical rise and deg/s gravity
     /// turn fly only with the convex profile switched off, or as the backup the console
@@ -230,11 +230,11 @@ public static partial class GuidanceWindow
                 if (_s.FlyConvexAscent && !_s.BackupAscent
                     && !ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out string why))
                 {
-                    ReleaseAscent($"launch held at the window: the convex plan no longer fits ({why}).", vehicle);
+                    ReleaseAscent($"LAUNCH HELD AT WINDOW: SOLVED PLAN NO LONGER FITS ({why}).", vehicle);
                     // The console's failure line says it, with the choice it leaves; the status line would only repeat it. The backup it offers goes now: the window is here.
                     _s.Status = "";
                     _s.ConvexLaunchAtWindow = false;
-                    _s.ConvexLaunchFailure = $"Launch held at the window: the calculated plan no longer fits ({why}).";
+                    _s.ConvexLaunchFailure = $"LAUNCH HELD AT WINDOW: SOLVED PLAN NO LONGER FITS ({why}).";
                     _s.ConvexBackupChosen = false;
                     return;
                 }
@@ -274,7 +274,7 @@ public static partial class GuidanceWindow
         if (_s.Running && _s.Phase == AscentPhase.Terminal
             && (SimNow() > _s.CutoffTime + (_s.CutoffDone ? 2.0 : 15.0)))
         {
-            ReleaseAscent("Ascent done. You fly.", vehicle);
+            ReleaseAscent("ASCENT COMPLETE. MANUAL.", vehicle);
             if (_s.CutoffDone)
                 _s.DiagStatus(_s.Status);
         }
@@ -298,7 +298,7 @@ public static partial class GuidanceWindow
             if (_s.FailStreak > MaxFailStreak)
             {
                 _s.Running = false;
-                _s.FailStatus("The ascent stopped after repeated faults", "Guidance failed repeatedly: " + e.Message);
+                _s.FailStatus("ASCENT STOPPED: REPEATED FAULTS", "GUIDANCE FAULT (REPEATED): " + e.Message);
                 GuidanceLog.Info(vehicle, $"ascent stopped after {_s.FailStreak} failed steps: {e}");
             }
         }
@@ -322,7 +322,7 @@ public static partial class GuidanceWindow
         double atmosphere = parent?.GetAtmosphereRadius() ?? 0.0;
         if (atmosphere > 0.0 && Math.Max(_s.PeKm, _s.ApKm) * 1000.0 + parent.MeanRadius <= atmosphere)
         {
-            string refusal = $"Target apoapsis is inside the atmosphere (top at {(atmosphere - parent.MeanRadius) / 1000.0:F0} km) - not launching.";
+            string refusal = $"REFUSED: TARGET AP INSIDE ATMOSPHERE (TOP AT {(atmosphere - parent.MeanRadius) / 1000.0:F0} km).";
             if (_s.LaunchArmed)
             {
                 ReleaseAscent(refusal, vehicle, warn: true);
@@ -396,7 +396,7 @@ public static partial class GuidanceWindow
         {
             if (!_s.Engage || !_s.AutoStage)
                 AdvancedFlightComputer.Core.ConsoleUi.WarningWrapped(
-                    "AFC MAY STEER or AFC MAY USE ENGINES is off, so the launch only starts guidance.");
+                    "AFC MAY STEER OR AFC MAY USE ENGINES OFF. LAUNCH STARTS GUIDANCE ONLY.");
 
             // The launch goes at ExecuteLaunchInstant, which is the window or the lift-off the calculated climb chose near it.
             AdvancedFlightComputer.Core.ConsoleUi.Sentence(PageText.ArmedLaunch(Universe.IsAutoWarpActive, _s.AutoLaunch,
@@ -405,7 +405,7 @@ public static partial class GuidanceWindow
         else if (_s.LaunchArmed && _s.Running)
         {
             AdvancedFlightComputer.Core.ConsoleUi.WarningWrapped(
-                "Guidance already runs, so the launch waits. The stop in the head clears it.");
+                "GUIDANCE ACTIVE. LAUNCH WAITS. STOP TO CLEAR.");
         }
     }
 
@@ -504,7 +504,7 @@ public static partial class GuidanceWindow
         UpdatePhase(vehicle, r, v, parent, bodyRadius, stepDt);
     }
 
-    private const string NoThrustStatus = "No thrust - holding last solution (staging/coast).";
+    private const string NoThrustStatus = "NO THRUST: HOLDING LAST SOLUTION (STAGING/COAST).";
     private const double GuidanceLogIntervalS = 5.0;
 
     // Ascent phase state machine. Transitions cascade naturally over successive frames, so initializing mid-flight fast-forwards to the right phase. stepDt is the sim time since the previous step, for the command slew limit.
@@ -715,11 +715,11 @@ public static partial class GuidanceWindow
 
     private static string PhaseName(AscentPhase p) => p switch
     {
-        AscentPhase.Vertical => "vertical rise",
-        AscentPhase.Turn => "gravity turn (open loop)",
-        AscentPhase.ClosedLoop => "UPFG closed loop",
-        AscentPhase.Terminal => "terminal (latched law)",
-        AscentPhase.Profile => "convex profile (open loop)",
+        AscentPhase.Vertical => "VERTICAL RISE",
+        AscentPhase.Turn => "GRAVITY TURN (OPEN LOOP)",
+        AscentPhase.ClosedLoop => "UPFG (CLOSED LOOP)",
+        AscentPhase.Terminal => "TERMINAL (LATCHED LAW)",
+        AscentPhase.Profile => "SOLVED PROFILE (OPEN LOOP)",
         _ => "?",
     };
 

@@ -13,7 +13,7 @@ namespace AdvancedFlightComputer.Features.ManeuverTools;
 /// The inputs and readouts of the MANEUVER page form, one set per orbit tool. The input values are
 /// shared state, because OrbitToolsPanel computes the maneuver from them and MultiPassController and
 /// MultiPassPreviewCache plan the passes from them. The player form holds the inputs; the orbit now, the burn and the resulting
-/// orbit are collected while the form draws and shown in the NUMBERS fold through DetailParts.
+/// orbit are collected while the form draws and shown in the PARAMETERS fold through DetailParts.
 /// </summary>
 internal static class OrbitToolForm
 {
@@ -510,7 +510,7 @@ internal static class OrbitToolForm
     }
 
     /// <summary>
-    /// SET AS CRAFT TARGET of the MATCH tool, drawn in the HOW IT FLIES fold. On, it makes the picked
+    /// SET AS CRAFT TARGET of the MATCH tool, drawn in the GNC fold. On, it makes the picked
     /// target the craft's stock target and keeps it so when the pick changes. Off clears the stock target.
     /// </summary>
     public static void DrawSetTargetRow(Vehicle source)

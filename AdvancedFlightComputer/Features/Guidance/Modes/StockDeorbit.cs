@@ -29,13 +29,13 @@ public static partial class GuidanceWindow
         if (!ReferenceEquals(vehicle, Program.ControlledVehicle) || !double.IsFinite(target)
             || target <= SimNow() + 1)
         {
-            _s.WarnLanding("Stock AUTO is armed. Time warp needs this craft in focus and a future preparation window.");
+            _s.WarnLanding("STOCK AUTO ARMED. WARP NEEDS CRAFT IN FOCUS AND A FUTURE PREPARATION WINDOW.");
             return;
         }
         // This runs with the vehicle workers joined, after the console requests the action.
         Universe.AutoWarpTo(new UniverseTime(target));
         _s.DeorbitWarpTime = target;
-        _s.LandingStatus = "Stock AUTO is armed. Warping to the turn before the burn.";
+        _s.LandingStatus = "STOCK AUTO ARMED. WARPING TO TURN BEFORE BURN.";
     }
 
     // FlightComputer.CopyFrom preserves the BurnTarget reference, so completion evidence survives removal of the node.
@@ -71,7 +71,7 @@ public static partial class GuidanceWindow
         }
         if (vehicle.Situation.HasAnyContact())
         {
-            StopStockDeorbit(vehicle, "Contact during the deorbit. Stock AUTO stopped.", keepNode: false);
+            StopStockDeorbit(vehicle, "CONTACT DURING DEORBIT. STOCK AUTO STOPPED.", keepNode: false);
             return true;
         }
         if (_s.LandingPhase == LandingPhase.DeorbitCoast)
@@ -86,7 +86,7 @@ public static partial class GuidanceWindow
         bool handedOn = StockDeorbitComplete && !fc.BurnPlan.TryGetBurn(_s.DeorbitNode);
         if (!StockDeorbitTargetUnchanged || !StockDeorbitNodeUnchanged || (!currentTarget && fc.Burn != null && !handedOn))
         {
-            StopStockDeorbit(vehicle, "The deorbit burn or the loaded target changed. Landing stopped.", keepNode: true);
+            StopStockDeorbit(vehicle, "DEORBIT BURN OR LOADED TARGET CHANGED. LANDING STOPPED.", keepNode: true);
             return true;
         }
         _s.DeorbitLastResidual = _s.DeorbitTarget.DeltaVToGoCci.Length();
@@ -103,17 +103,17 @@ public static partial class GuidanceWindow
     {
         FlightComputer fc = vehicle.FlightComputer;
         if (plan.DepartureTime <= SimNow() + PrepLeadTime)
-        { StopStockDeorbit(vehicle, "The deorbit burn window expired. Press DEORBIT AND LAND again at 1x.", keepNode: false); return; }
+        { StopStockDeorbit(vehicle, "DEORBIT BURN WINDOW EXPIRED. REPEAT DEORBIT + LAND AT 1x.", keepNode: false); return; }
         if (fc.BurnPlan.FindFirstExecutableBurn() != null || fc.BurnMode == FlightComputerBurnMode.Auto)
-        { StopStockDeorbit(vehicle, "Delete the planned burns before a landing.", keepNode: true); return; }
+        { StopStockDeorbit(vehicle, "DELETE PLANNED BURNS BEFORE LANDING", keepNode: true); return; }
         if (!TryTakeCraft(vehicle, acquire: false)) return;
         _s.DeorbitNodeClaimed = true;
         PatchedConic patch = vehicle.FlightPlan.TryFindPatch(new UniverseTime(plan.DepartureTime));
         if (patch == null || !ReferenceEquals(patch.Orbit.Parent, parent))
-        { StopStockDeorbit(vehicle, "The deorbit time has no flight-plan patch on this body.", keepNode: false); return; }
+        { StopStockDeorbit(vehicle, "NO FLIGHT-PLAN PATCH AT DEORBIT TIME.", keepNode: false); return; }
         StateVectors state = patch.Orbit.GetStateVectorsAt(new UniverseTime(plan.DepartureTime));
         if (!DeorbitPlanner.SameState(state, plan.DeparturePosition, plan.DepartureVelocity - plan.DeltaV))
-        { StopStockDeorbit(vehicle, "The flight plan changed after the deorbit solve. Press DEORBIT AND LAND again.", keepNode: false); return; }
+        { StopStockDeorbit(vehicle, "FLIGHT PLAN CHANGED AFTER DEORBIT SOLVE. REPEAT DEORBIT + LAND.", keepNode: false); return; }
 
         double3 dvVlf = plan.DeltaV.Transform(state.GetVlf2ParentCci().OrIdentity().Inverse());
         _s.DeorbitNodeDeltaV = dvVlf;
@@ -125,7 +125,7 @@ public static partial class GuidanceWindow
         fc.AddBurn(_s.DeorbitNode);
         _s.DeorbitTarget = fc.Burn;
         if (!ReferenceEquals(fc.BurnPlan.FindFirstExecutableBurn(), _s.DeorbitNode) || !StockDeorbitTargetUnchanged)
-        { StopStockDeorbit(vehicle, "Stock could not load the deorbit burn.", keepNode: false); return; }
+        { StopStockDeorbit(vehicle, "STOCK COULD NOT LOAD DEORBIT BURN", keepNode: false); return; }
 
         // Stock previews the burn at the throttle set here, so the minimum throttle bounds its ignition lead and duration.
         ref ManualControlInputs preview = ref ManualInputs(vehicle);
@@ -135,7 +135,7 @@ public static partial class GuidanceWindow
         preview.EngineOn = false;
         preview.EngineThrottle = _s.DeorbitPreviewThrottle;
         _s.LandingPhase = LandingPhase.DeorbitNodePending;
-        _s.LandingStatus = "Checking stock ignition timing with the engine off.";
+        _s.LandingStatus = "CHECKING STOCK IGNITION TIMING, ENGINE OFF";
     }
 
     private static void ArmStockDeorbitAuto(Vehicle vehicle, DeorbitPlan plan, bool nodeLoaded)
@@ -144,9 +144,9 @@ public static partial class GuidanceWindow
         ref ManualControlInputs inputs = ref ManualInputs(vehicle);
         if (!nodeLoaded || fc.BurnMode != FlightComputerBurnMode.Manual || inputs.EngineOn
             || inputs.EngineThrottle != _s.DeorbitPreviewThrottle)
-        { StopStockDeorbit(vehicle, "Controls changed during the stock timing check. The burn stays on MANUAL.", keepNode: true); return; }
+        { StopStockDeorbit(vehicle, "CONTROLS CHANGED DURING STOCK TIMING CHECK. BURN STAYS MANUAL.", keepNode: true); return; }
         if (plan.DepartureTime <= SimNow() + PrepLeadTime)
-        { StopStockDeorbit(vehicle, "Stock timing was not ready before the preparation window. The burn stays on MANUAL.", keepNode: true); return; }
+        { StopStockDeorbit(vehicle, "STOCK TIMING NOT READY BEFORE PREPARATION WINDOW. BURN STAYS MANUAL.", keepNode: true); return; }
         // A new BurnTarget has no duration and an EndOfTime ignition until a vehicle worker updates it.
         if (_s.DeorbitTarget.IgnitionTime == UniverseTime.EndOfTime) return;
 
@@ -160,17 +160,17 @@ public static partial class GuidanceWindow
             && fc.PlannedBurnThrottle <= fc.ActiveEnginePerformanceMax.MinThrottle + 1e-6;
         if (!minimumPreview || !(duration > 0) || !double.IsFinite(latestFinish + ignition + preparationStart)
             || preparationStart < SimNow() || latestFinish >= plan.ArrivalTime - PrepLeadTime)
-        { StopStockDeorbit(vehicle, "Stock has no bounded burn window with enough preparation time. The burn stays on MANUAL.", keepNode: true); return; }
+        { StopStockDeorbit(vehicle, "NO BOUNDED STOCK BURN WINDOW WITH ENOUGH PREPARATION TIME. BURN STAYS MANUAL.", keepNode: true); return; }
 
         RestoreDeorbitPreviewThrottle(vehicle);
         if (!StockBurnMode.GiveBackAuto(vehicle, _s.DeorbitTarget))
-        { StopStockDeorbit(vehicle, "Stock could not arm the deorbit burn. The burn stays on MANUAL.", keepNode: true); return; }
+        { StopStockDeorbit(vehicle, "STOCK COULD NOT ARM DEORBIT BURN. BURN STAYS MANUAL.", keepNode: true); return; }
         // In Manual, BurnPlan.CalculateNewFlightPlansFromFlightComputerOnly predicts the ignition of a node without a planned throttle at full throttle, while the duration checked above is for the preview throttle.
         // FlightComputer.BurnUpdated runs BurnTarget.UpdateFromBurn on the same loaded target, which clears PlannedIgnition, and marks the flight plans out of date, so stock predicts the ignition again at the Auto throttle.
         fc.BurnUpdated(_s.DeorbitNode);
         _s.DeorbitAutoArmed = true;
         _s.LandingPhase = LandingPhase.DeorbitBurn;
-        _s.LandingStatus = "Stock AUTO will align and fly the deorbit burn.";
+        _s.LandingStatus = "STOCK AUTO: ALIGN + DEORBIT BURN";
         GuidanceLog.Info(vehicle, $"stock deorbit node armed: time {plan.DepartureTime:F3} s, delta-v {plan.DeltaV.Length():F3} m/s, minimum-throttle duration {duration:F3} s.");
     }
 
@@ -188,16 +188,16 @@ public static partial class GuidanceWindow
             _s.DirectBrakingPlan = null;
             _s.HasCommand = false;
             _s.LandingPhase = LandingPhase.TransferPlanning;
-            _s.LandingStatus = "Waiting for the engines to stop before calculating braking.";
+            _s.LandingStatus = "WAITING FOR ENGINES TO STOP BEFORE BRAKING SOLVE";
             return;
         }
         if (!nodeLoaded || fc.BurnMode != FlightComputerBurnMode.Auto)
-        { StopStockDeorbit(vehicle, "Stock AUTO stopped before the deorbit burn ended. Landing stopped.", keepNode: true); return; }
+        { StopStockDeorbit(vehicle, "STOCK AUTO STOPPED BEFORE BURN END. LANDING STOPPED.", keepNode: true); return; }
         if (!vehicle.IsControllable)
-        { StopStockDeorbit(vehicle, "The craft lost control during the stock deorbit burn.", keepNode: false, failure: true); return; }
+        { StopStockDeorbit(vehicle, "CONTROL LOST DURING STOCK DEORBIT BURN", keepNode: false, failure: true); return; }
         StepStockDeorbitWarp(vehicle);
         if (SimNow() >= plan.ArrivalTime - PrepLeadTime)
-            StopStockDeorbit(vehicle, "Stock AUTO did not finish before the braking window.", keepNode: false, failure: true);
+            StopStockDeorbit(vehicle, "STOCK AUTO NOT FINISHED BEFORE BRAKING WINDOW", keepNode: false, failure: true);
     }
 
     // With keepNode the node, Auto and the engine stay as the player or stock left them.

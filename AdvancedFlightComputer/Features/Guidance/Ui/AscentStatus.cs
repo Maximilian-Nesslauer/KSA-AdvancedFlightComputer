@@ -53,12 +53,11 @@ public static partial class GuidanceWindow
         switch (_s.Phase)
         {
             case AscentPhase.Vertical: return "VERTICAL";
-            // Not "gravity turn": that name belongs to the gravity turn ascent method.
-            case AscentPhase.Turn: return "SIMPLE TURN";
-            case AscentPhase.Profile: return "CALCULATED CLIMB";
-            case AscentPhase.ClosedLoop: return double.IsFinite(_s.ConvexBlendStart) ? "UPFG (TAKING OVER)" : "UPFG";
+            case AscentPhase.Turn: return "GRAVITY TURN";
+            case AscentPhase.Profile: return "SOLVED CLIMB";
+            case AscentPhase.ClosedLoop: return double.IsFinite(_s.ConvexBlendStart) ? "UPFG (HANDOVER)" : "UPFG";
             case AscentPhase.Terminal:
-                return AscentCutoffIn() > 0.0 ? "FINAL SECONDS" : "CUTOFF";
+                return AscentCutoffIn() > 0.0 ? "TERMINAL" : "CUTOFF";
             default: return _s.Phase.ToString();
         }
     }
@@ -198,7 +197,7 @@ public static partial class GuidanceWindow
     {
         var stages = StagingStages;
         if (stages == null || stages.Stages.Count == 0)
-            return _s.LandingPhase != LandingPhase.Idle ? "AFC reads the stages at the braking burn" : "No stage data yet";
+            return _s.LandingPhase != LandingPhase.Idle ? "STAGES READ AT BRAKING BURN" : "NO STAGE DATA";
         int n = stages.Stages.Count;
         Span<float> dv = n <= 12 ? stackalloc float[12] : new float[n];
         float total = 0f, totalDv = 0f;
@@ -209,7 +208,7 @@ public static partial class GuidanceWindow
             totalDv += dv[i];
         }
         if (total <= 1e-3f)
-            return "No burn time";
+            return "NO BURN TIME";
 
         // KSA's own figure for the same stack, when it disagrees by more than a percent. KSA has no ambient correction, so the compare leaves it out too, and a gap is then a real disagreement about the staging that a plausible-looking stage list will not otherwise show.
         double ksaDv = _s.StageModelKsaDv;
@@ -331,7 +330,7 @@ public static partial class GuidanceWindow
     // Seq < 0 is the fallback model: no usable staging sequences, so the stack was measured off the live engines instead. G marks a g-limited stage.
     private static string StageProvenance(AdvancedFlightComputer.Features.Guidance.Upfg.UpfgStage st)
     {
-        string prov = st.Seq < 0 ? "Live engines" : string.Format(PicInv, "Seq {0}  {1} eng", st.Seq, st.Engines);
+        string prov = st.Seq < 0 ? "LIVE ENGINES" : string.Format(PicInv, "SEQ {0}  {1} ENG", st.Seq, st.Engines);
         return st.Mode == 2 ? prov + "  G" : prov;
     }
 }

@@ -8,11 +8,11 @@ internal readonly record struct ChainStep(string Text, bool Stock = false, bool 
 /// <summary>A deorbit starts with the burn stock AUTO flies, unless the craft already falls and the planner finds a direct approach (DeorbitPlanner.DirectSteps).</summary>
 internal static class LandChain
 {
-    public const string StockBurn = "deorbit burn";
+    public const string StockBurn = "DEORBIT BURN";
 
-    public const string StockBurnIfNeeded = "burn if needed";
+    public const string StockBurnIfNeeded = "BURN IF NEEDED";
 
-    public const string Impact = "impact";
+    public const string Impact = "IMPACT";
 
     public static bool EndsInImpact(ReadOnlySpan<ChainStep> steps) => steps.Length > 0 && steps[^1].Danger;
 
@@ -25,24 +25,24 @@ internal static class LandChain
         {
             case LandWay.FromOrbit:
                 if (!(SituationText.IsFalling(where) && belowBrakingStart))
-                    steps.AddRange([new ChainStep(SituationText.IsFalling(where) ? StockBurnIfNeeded : StockBurn, Stock: true), new ChainStep("coast"), new ChainStep("braking burn")]);
+                    steps.AddRange([new ChainStep(SituationText.IsFalling(where) ? StockBurnIfNeeded : StockBurn, Stock: true), new ChainStep("COAST"), new ChainStep("BRAKING BURN")]);
                 AddPoweredEnd(steps, solver, hoverFlies);
                 break;
             case LandWay.FromHere when solver == LandSolver.Entry:
                 if (!hasAir)
                 {
-                    steps.Add(new ChainStep("no plan, engine off", Warn: true));
+                    steps.Add(new ChainStep("NO PLAN, ENGINE OFF", Warn: true));
                     steps.Add(new ChainStep(Impact, Danger: true));
                     break;
                 }
-                steps.Add(new ChainStep("glide"));
+                steps.Add(new ChainStep("GLIDE"));
                 AddEntryBurnEnd(steps, touchdownTakesBurn);
                 break;
             case LandWay.FromHere:
                 AddPoweredEnd(steps, solver, hoverFlies);
                 break;
             case LandWay.Boostback:
-                steps.AddRange([new ChainStep("settle"), new ChainStep("turn"), new ChainStep("burn"), new ChainStep(hasAir ? "glide" : "fall")]);
+                steps.AddRange([new ChainStep("SETTLE"), new ChainStep("SLEW"), new ChainStep("BURN"), new ChainStep(hasAir ? "GLIDE" : "FALL")]);
                 if (hasAir && entryTakesGlide)
                 {
                     steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Entry)));
@@ -61,12 +61,12 @@ internal static class LandChain
     {
         steps.Add(new ChainStep(LandSolvers.Label(solver)));
         if (solver == LandSolver.Gfold && hoverFlies)
-            steps.Add(new ChainStep("hover"));
+            steps.Add(new ChainStep("HOVER"));
     }
 
     private static void AddEntryBurnEnd(List<ChainStep> steps, bool touchdownTakesBurn)
     {
-        steps.Add(new ChainStep("landing burn"));
+        steps.Add(new ChainStep("LANDING BURN"));
         if (touchdownTakesBurn)
             steps.Add(new ChainStep(LandSolvers.Label(LandSolver.Touchdown)));
     }
@@ -131,33 +131,33 @@ internal readonly record struct LandVerdict(string Text, Severity Severity = Sev
 
     private static readonly System.Globalization.CultureInfo Inv = Fmt.Inv;
 
-    public static string TwrAtSite(in DescentFacts f, string place = "the site")
-        => f.Known ? string.Create(Inv, $"TWR {f.TwrMax:F2} at {place}") : "";
+    public static string TwrAtSite(in DescentFacts f, string place = "SITE")
+        => f.Known ? string.Create(Inv, $"TWR {f.TwrMax:F2} AT {place}") : "";
 
     public static LandVerdict ForDescent(LandSolver solver, in DescentFacts f, bool checkStop)
     {
         if (!f.Known)
             return new LandVerdict(PageText.NoThrustToJudge);
         if (checkStop && f.CannotStopNow)
-            return new LandVerdict(string.Create(Inv, $"Cannot stop in time: needs TWR {f.TwrNeeded:F2}, has {f.TwrMax:F2}."), Severity.Error);
+            return new LandVerdict(string.Create(Inv, $"NO SOLUTION: TWR {f.TwrNeeded:F2} NEEDED, {f.TwrMax:F2} AVAILABLE."), Severity.Error);
         if (solver == LandSolver.Touchdown && f.OverPowered)
-            return new LandVerdict(string.Create(Inv, $"Over-powered: no descent with a floor above {f.FeasibleFloor:F2}."), Severity.Error);
+            return new LandVerdict(string.Create(Inv, $"OVERPOWERED: FLOOR ABOVE {f.FeasibleFloor:F2}. LOWER FLOOR."), Severity.Error);
         if (f.TwrMax < 1.0)
-            return new LandVerdict(string.Create(Inv, $"TWR {f.TwrMax:F2} at the site, below the weight."), Severity.Warning);
+            return new LandVerdict(string.Create(Inv, $"TWR {f.TwrMax:F2} AT SITE, BELOW WEIGHT."), Severity.Warning);
         if (checkStop && f.MarginalNow)
-            return new LandVerdict(string.Create(Inv, $"Marginal: the stop takes {f.StopM / f.AltToGoM * 100.0:F0} % of the height."), Severity.Warning);
+            return new LandVerdict(string.Create(Inv, $"MARGINAL: STOP USES {f.StopM / f.AltToGoM * 100.0:F0} % OF HEIGHT."), Severity.Warning);
         double low = solver == LandSolver.Touchdown ? f.TwrAtFloor : f.TwrAtCraftMin;
-        return new LandVerdict(string.Create(Inv, $"TWR {f.TwrMax:F2} at the site, {low:F2} at minimum throttle."));
+        return new LandVerdict(string.Create(Inv, $"TWR {f.TwrMax:F2} AT SITE, {low:F2} AT MIN THROTTLE."));
     }
 
     public static LandVerdict ForImpact(bool hasAero, bool hasImpact, double impactInS, double impactMs, bool beyondHorizon, double horizonS, double closestM, string otherStatus, bool timeInHead = false)
     {
         if (!hasAero)
-            return new LandVerdict("No air data for this craft yet, so no prediction.", Severity.Warning);
+            return new LandVerdict("NO AIR DATA. NO PREDICTION.", Severity.Warning);
         if (hasImpact)
-            return new LandVerdict(timeInHead ? "Impact at " + Fmt.Speed(impactMs) + "." : "Impact in " + Fmt.Time(impactInS) + " at " + Fmt.Speed(impactMs) + ".");
+            return new LandVerdict(timeInHead ? "IMPACT AT " + Fmt.Speed(impactMs) : "IMPACT T-" + Fmt.Time(impactInS) + " AT " + Fmt.Speed(impactMs));
         return beyondHorizon
-            ? new LandVerdict("Lowest point " + Fmt.Distance(closestM) + ".")
+            ? new LandVerdict("LOWEST POINT " + Fmt.Distance(closestM))
             : new LandVerdict(otherStatus, Severity.Warning);
     }
 
@@ -166,18 +166,18 @@ internal readonly record struct LandVerdict(string Text, Severity Severity = Sev
         if (!f.Known)
             yield break;
         if (checkStop && f.CannotStopNow)
-            yield return new LandVerdict(string.Create(Inv, $"Cannot stop in time. Needs TWR {f.TwrNeeded:F2}, has {f.TwrMax:F2}. No guidance can land this, the plan will be a long curving miss. Burn earlier, or arrive slower."), Severity.Error);
+            yield return new LandVerdict(string.Create(Inv, $"NO SOLUTION: TWR {f.TwrNeeded:F2} NEEDED, {f.TwrMax:F2} AVAILABLE. BURN EARLIER OR ARRIVE SLOWER."), Severity.Error);
         else if (checkStop && f.MarginalNow)
-            yield return new LandVerdict(string.Create(Inv, $"Marginal. {f.StopM / f.AltToGoM * 100.0:F0} % of the remaining altitude is needed just to stop, which leaves almost none to null downrange. Needs TWR {f.TwrNeeded:F2}, has {f.TwrMax:F2}."), Severity.Warning);
+            yield return new LandVerdict(string.Create(Inv, $"MARGINAL: STOP USES {f.StopM / f.AltToGoM * 100.0:F0} % OF ALTITUDE LEFT. TWR {f.TwrNeeded:F2} NEEDED, {f.TwrMax:F2} AVAILABLE."), Severity.Warning);
 
         if (solver == LandSolver.Touchdown)
         {
             if (f.OverPowered)
-                yield return new LandVerdict(string.Create(Inv, $"Over-powered. Needs {f.NeedTiltDeg:F0} deg tilt just to stop climbing (limit {f.TiltLimitDeg:F0} deg). No descent exists. Set a throttle floor below {f.FeasibleFloor:F2}, or a higher tilt limit."), Severity.Error);
+                yield return new LandVerdict(string.Create(Inv, $"NO SOLUTION: OVERPOWERED, {f.NeedTiltDeg:F0} deg TILT NEEDED, LIMIT {f.TiltLimitDeg:F0} deg. SET FLOOR BELOW {f.FeasibleFloor:F2} OR RAISE TILT LIMIT."), Severity.Error);
             else if (f.TwrAtFloor > 1.0)
-                yield return new LandVerdict(string.Create(Inv, $"Min thrust exceeds weight. Needs {f.NeedTiltDeg:F0} deg of tilt to hold altitude, so expect the path to curve rather than descend straight."), Soft: true);
+                yield return new LandVerdict(string.Create(Inv, $"MIN THRUST ABOVE WEIGHT: {f.NeedTiltDeg:F0} deg TILT TO HOLD ALTITUDE. NO STRAIGHT DESCENT."), Soft: true);
             else
-                yield return new LandVerdict("Can hover at minimum throttle. A straight descent is available.");
+                yield return new LandVerdict("CAN HOVER AT MIN THROTTLE. STRAIGHT DESCENT.");
         }
     }
 }

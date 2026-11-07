@@ -30,42 +30,42 @@ internal readonly record struct CommitView(string Verb, bool Enabled, string Rea
 internal static class CommitResolver
 {
     public const string GravityTurnUnavailable = GuidanceModes.GravityTurnUnavailable;
-    public const string LandingSwitchesOffReason = "Turn on AFC MAY STEER and USE ENGINES";
-    public const string DeorbitSettingsReason = "Landing setting out of range";
+    public const string LandingSwitchesOffReason = "NEEDS AFC MAY STEER + MAY USE ENGINES";
+    public const string DeorbitSettingsReason = "LANDING SETTING OUT OF RANGE";
 
     /// <summary>The status of a landing while stock AUTO flies its deorbit burn, so the footer does not give that burn to the landing.</summary>
-    public const string StockDeorbitStatus = "Stock AUTO flies the deorbit burn";
+    public const string StockDeorbitStatus = "STOCK AUTO: DEORBIT BURN";
 
     public static readonly string LandingSwitchesOffDetail =
-        "An automatic landing needs " + GuidanceSettingSpecs.Engage.Label + " and "
-        + GuidanceSettingSpecs.AutoStage.Label + " on. Both are under THIS CRAFT in the drawer, which More in the head opens. While one is off, the head says so.";
+        "LANDING NEEDS " + GuidanceSettingSpecs.Engage.Label + " + "
+        + GuidanceSettingSpecs.AutoStage.Label + " ON. BOTH IN GNC SWITCHES (MORE). HEAD SHOWS WHEN ONE IS OFF.";
 
     public static CommitView Resolve(GuidanceModeId mode, in CraftActivity a, in CommitGates g)
     {
         (string verb, string reason, bool live) = mode switch
         {
             GuidanceModeId.AscentUpfg => (LaunchVerb(in g),
-                a.AscentRunning ? "Ascent flies"
-                : a.LaunchArmed ? "Launch armed"
-                : a.ConvexLaunchPending ? "Planning ascent"
+                a.AscentRunning ? "AFC: ASCENT"
+                : a.LaunchArmed ? "LAUNCH ARMED"
+                : a.ConvexLaunchPending ? "PLANNING ASCENT"
                 : "",
                 a.AscentRunning || a.LaunchArmed || a.ConvexLaunchPending),
             GuidanceModeId.AscentGravityTurn when g.GravityTurnRefusal.Length > 0 => ("LAUNCH", g.GravityTurnRefusal, false),
-            GuidanceModeId.Boostback => ("START BOOSTBACK",
-                a.BoostbackLive ? "Boostback flies" : "", a.BoostbackLive),
-            GuidanceModeId.DeorbitLand => ("DEORBIT AND LAND",
+            GuidanceModeId.Boostback => ("BOOSTBACK",
+                a.BoostbackLive ? "AFC: BOOSTBACK" : "", a.BoostbackLive),
+            GuidanceModeId.DeorbitLand => ("DEORBIT + LAND",
                 g.LandingSwitchesOff ? LandingSwitchesOffReason
                 : g.DeorbitRefusal.Length > 0 ? DeorbitSettingsReason
-                : a.DescentLive ? (a.LandingStockAuto ? StockDeorbitStatus : "Landing flies")
+                : a.DescentLive ? (a.LandingStockAuto ? StockDeorbitStatus : "AFC: LANDING")
                 : "",
                 !g.LandingSwitchesOff && g.DeorbitRefusal.Length == 0 && a.DescentLive),
             GuidanceModeId.GfoldHere => (GfoldVerb,
-                a.LandingMachineLive ? "Powered descent flies" : "", a.LandingMachineLive),
-            GuidanceModeId.SixDofHere => ("START TOUCHDOWN",
-                a.SixDofEngaged ? "Touchdown guidance flies" : "", a.SixDofEngaged),
-            GuidanceModeId.Hover => ("START HOVER",
-                a.HoverLive ? "Hover flies"
-                : g.HoverTwrBelowOne ? "TWR below 1, hover not possible"
+                a.LandingMachineLive ? "AFC: POWERED DESCENT" : "", a.LandingMachineLive),
+            GuidanceModeId.SixDofHere => ("TOUCHDOWN",
+                a.SixDofEngaged ? "AFC: TOUCHDOWN" : "", a.SixDofEngaged),
+            GuidanceModeId.Hover => ("HOVER",
+                a.HoverLive ? "AFC: HOVER"
+                : g.HoverTwrBelowOne ? "NO HOVER: TWR BELOW 1"
                 : "",
                 a.HoverLive),
             _ => RegisteredView(mode, in a),
@@ -102,26 +102,26 @@ internal static class CommitResolver
     {
         GuidanceModeDescriptor? d = GuidanceModes.Of(mode);
         if (d == null)
-            return ("", "Unknown mode", false);
-        string verb = d.CommitVerb.Length > 0 ? d.CommitVerb : "START " + d.MethodLabel;
+            return ("", "UNKNOWN MODE", false);
+        string verb = d.CommitVerb.Length > 0 ? d.CommitVerb : d.MethodLabel;
         if (!d.Available)
-            return (verb, d.UnavailableReason.Length > 0 ? d.UnavailableReason : "Not available", false);
+            return (verb, d.UnavailableReason.Length > 0 ? d.UnavailableReason : "NOT AVAILABLE", false);
         bool live = a.RegisteredModeLive == mode;
-        return (verb, live ? (d.ModeName.Length > 0 ? d.ModeName : d.MethodLabel) + " flies" : "", live);
+        return (verb, live ? "AFC: " + (d.ModeName.Length > 0 ? d.ModeName : d.MethodLabel) : "", live);
     }
 
     public const string BackupLaunchVerb = "LAUNCH (BACKUP)";
 
-    public const string GfoldVerb = "START G-FOLD";
+    public const string GfoldVerb = "G-FOLD";
 
-    /// <summary>The launch verb: LAUNCH or ARM FOR WINDOW, CALCULATE AND LAUNCH / ARM while the commit calculates a convex plan first, or LAUNCH (BACKUP) after the backup choice.</summary>
+    /// <summary>The launch verb: LAUNCH or ARM, SOLVE + LAUNCH / ARM while the commit solves a convex plan first, or LAUNCH (BACKUP) after the backup choice.</summary>
     public static string LaunchVerb(in CommitGates g)
         => g.BackupChosen ? BackupLaunchVerb
         : g.PlansFirst
-            ? (g.HasTarget ? "CALCULATE AND ARM" : "CALCULATE AND LAUNCH")
-            : (g.HasTarget ? "ARM FOR WINDOW" : "LAUNCH");
+            ? (g.HasTarget ? "SOLVE + ARM" : "SOLVE + LAUNCH")
+            : (g.HasTarget ? "ARM" : "LAUNCH");
 
-    public static bool LaunchVerbArms(string verb) => verb is "ARM FOR WINDOW" or "CALCULATE AND ARM";
+    public static bool LaunchVerbArms(string verb) => verb is "ARM" or "SOLVE + ARM";
 
     private static bool SameMode(GuidanceModeId mode, StopTarget running, in CraftActivity a) => mode switch
     {
@@ -142,20 +142,20 @@ internal static class CommitResolver
 
     public static string ModeName(StopTarget running, GuidanceModeId? registered = null) => running switch
     {
-        StopTarget.SixDof => "Touchdown guidance",
-        StopTarget.Landing => "The landing",
-        StopTarget.Hover => "The hover",
-        StopTarget.Boostback => "The boostback",
-        StopTarget.Ascent => "The ascent",
-        StopTarget.LaunchArmed => "The armed launch",
+        StopTarget.SixDof => "TOUCHDOWN",
+        StopTarget.Landing => "LANDING",
+        StopTarget.Hover => "HOVER",
+        StopTarget.Boostback => "BOOSTBACK",
+        StopTarget.Ascent => "ASCENT",
+        StopTarget.LaunchArmed => "ARMED LAUNCH",
         StopTarget.Registered when registered is GuidanceModeId id && GuidanceModes.Of(id) is GuidanceModeDescriptor d
-            => d.ModeName.Length > 0 ? d.ModeName : "The " + d.MethodLabel + " mode",
-        _ => "Another mode",
+            => d.ModeName.Length > 0 ? d.ModeName : d.MethodLabel + " MODE",
+        _ => "ANOTHER MODE",
     };
 
     public static string TakeOverMessage(StopTarget running, string verb, GuidanceModeId? registered = null)
-        => PlanVerbs.Plain(verb) + " ends " + PageText.InSentence(ModeName(running, registered)) + ". Continue?";
+        => verb + " ENDS " + PageText.InSentence(ModeName(running, registered)) + ". CONTINUE?";
 
     public static string EndsOnlyMessage(StopTarget running, GuidanceModeId? registered = null)
-        => "This only ends " + PageText.InSentence(ModeName(running, registered)) + ". Continue?";
+        => "ONLY ENDS " + PageText.InSentence(ModeName(running, registered)) + ". CONTINUE?";
 }

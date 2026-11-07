@@ -26,21 +26,21 @@ internal static class TransferCommitter
     {
         Vehicle? source = TransferSession.Source;
         if (source == null)
-            return "No craft";
+            return "NO CRAFT";
         if (TransferSession.Calculating)
-            return "Calculating";
+            return "SOLVING";
         if (!TransferSession.Calculated)
-            return "CALCULATE first";
+            return "SOLVE FIRST";
         if (TransferSession.SelectedEntry == null)
-            return "No transfer selected";
+            return "NO TRANSFER SELECTED";
         if (TransferSession.Refining)
-            return "Refining the intercept";
+            return "REFINING INTERCEPT";
         if (TransferSession.TransferBurn != null)
-            return "Transfer created";
+            return "TRANSFER CREATED";
         if (MultiPassRegistry.Has(source.Id))
-            return "Multi-pass running";
+            return "MULTI-PASS ACTIVE";
         if (source.FlightPlan.TryFindPatch(TransferSession.SelectedEntry.TransferData.Start) == null)
-            return "Departure not on the trajectory";
+            return "DEPARTURE NOT ON TRAJECTORY";
         return "";
     }
 

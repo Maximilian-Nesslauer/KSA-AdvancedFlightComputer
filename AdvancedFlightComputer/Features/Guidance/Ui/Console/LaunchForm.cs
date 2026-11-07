@@ -120,7 +120,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// BOOSTERS: the stages of this craft that can fly themselves home, each with its STAGE SITE, before launch. A site asks the calculated climb for a reserve, which it sizes for the boostback to that site and the landing, and the RESERVE row shows what the booster keeps. Its rows draw while the craft has a returnable stage, and also after a reserve was staged, so the RESERVE row stays readable. With none of these the fold says why. After separation the boostback is on LAND > BOOSTBACK.
+    /// BOOSTERS: the stages of this craft that can fly themselves home, each with its SITE, before launch. A site asks the calculated climb for a reserve, which it sizes for the boostback to that site and the landing, and the RESERVE row shows what the booster keeps. Its rows draw while the craft has a returnable stage, and also after a reserve was staged, so the RESERVE row stays readable. With none of these the fold says why. After separation the boostback is on LAND > BOOSTBACK.
     /// </summary>
     private static void DrawBoostersFold(Vehicle vehicle, bool openByDefault)
     {
@@ -143,9 +143,9 @@ public static partial class GuidanceWindow
             DrawReturnableStageRows();
             DrawBoosterReserve();
             if (stages > 0)
-                GaugeRowText("", "Stage sites are used when the booster separates.", ConsoleStyle.TextMuted);
-            if (ConsoleUi.LinkRight("After separation: LAND > BOOSTBACK", "AfcGoBoostback",
-                    "Opens LAND > BOOSTBACK. It shows the boostback of a booster after it separated, and starts it."))
+                GaugeRowText("", "Stage sites apply at booster separation.", ConsoleStyle.TextMuted);
+            if (ConsoleUi.LinkRight("AFTER SEPARATION: LAND > BOOSTBACK", "AfcGoBoostback",
+                    "Opens LAND > BOOSTBACK. Shows and starts the boostback of a separated booster."))
                 PendingNavigation = ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Boostback));
         }
         finally

@@ -46,23 +46,23 @@ internal readonly record struct LiveStep(string Text, StepPlace Place, StepWho W
 internal static class GuidanceModes
 {
     public static readonly string[] AscentPhases =
-        { "ARMED", "PLANNING", "VERTICAL", "SIMPLE TURN", "CALCULATED CLIMB", "UPFG", "FINAL SECONDS", "CUTOFF" };
+        { "ARMED", "PLANNING", "VERTICAL", "GRAVITY TURN", "SOLVED CLIMB", "UPFG", "TERMINAL", "CUTOFF" };
 
-    private static readonly string[] PlanClimbPhases = { "ARMED", "PLANNING", "CALCULATED CLIMB", "UPFG", "FINAL SECONDS", "CUTOFF" };
-    private static readonly string[] PitchClimbPhases = { "ARMED", "VERTICAL", "SIMPLE TURN", "UPFG", "FINAL SECONDS", "CUTOFF" };
+    private static readonly string[] PlanClimbPhases = { "ARMED", "PLANNING", "SOLVED CLIMB", "UPFG", "TERMINAL", "CUTOFF" };
+    private static readonly string[] PitchClimbPhases = { "ARMED", "VERTICAL", "GRAVITY TURN", "UPFG", "TERMINAL", "CUTOFF" };
 
     public static IReadOnlyList<string> AscentPhasesFor(bool planFlies) => planFlies ? PlanClimbPhases : PitchClimbPhases;
 
-    public static readonly string[] BoostbackPhases = { "SETTLE", "TURN", "BURN", "GLIDE", "ENDED" };
+    public static readonly string[] BoostbackPhases = { "SETTLE", "SLEW", "BURN", "GLIDE", "ENDED" };
 
-    private static readonly string[] BoostbackToEntryPhases = { "SETTLE", "TURN", "BURN", "GLIDE", "ENTRY" };
+    private static readonly string[] BoostbackToEntryPhases = { "SETTLE", "SLEW", "BURN", "GLIDE", "ENTRY" };
 
     public static IReadOnlyList<string> BoostbackPhasesFor(bool entryFollows) => entryFollows ? BoostbackToEntryPhases : BoostbackPhases;
 
     public static readonly string[] DeorbitPhases =
     {
-        "PLANNING", "MAKING THE BURN", "CHECKING THE TIME", "DEORBIT BURN", "PLANNING BRAKING",
-        "COAST", "COAST TO BRAKING", "READY TO BRAKE", "BRAKING BURN", "G-FOLD", "HOVER", "DONE",
+        "PLANNING", "DEORBIT COAST", "NODE PENDING", "DEORBIT BURN", "BRAKING PLAN",
+        "COAST", "COAST TO BRAKING", "BRAKE READY", "BRAKING BURN", "G-FOLD", "HOVER", "DONE",
     };
 
     public const string WaitStep = "WAIT";
@@ -85,9 +85,9 @@ internal static class GuidanceModes
 
     public static string DeorbitStepOf(string phaseLabel, bool burnWaits) => phaseLabel switch
     {
-        "MAKING THE BURN" or "CHECKING THE TIME" => "PLANNING",
+        "DEORBIT COAST" or "NODE PENDING" => "PLANNING",
         DeorbitBurnStep => burnWaits ? WaitStep : DeorbitBurnStep,
-        "PLANNING BRAKING" or "COAST TO BRAKING" or "READY TO BRAKE" => CoastStep,
+        "BRAKING PLAN" or "COAST TO BRAKING" or "BRAKE READY" => CoastStep,
         _ => phaseLabel,
     };
 
@@ -106,24 +106,24 @@ internal static class GuidanceModes
 
     public static IReadOnlyList<string> RcsPhasesFor(bool aligns) => aligns ? RcsAlignPhases : RcsHoldPhases;
 
-    public static readonly string[] SixDofPhases = { "STARTING", "PLANNING", "TOUCHDOWN" };
+    public static readonly string[] SixDofPhases = { "START", "PLANNING", "TOUCHDOWN" };
     public static readonly string[] HoverPhases = { "HOVER", "DONE" };
 
     /// <summary>The gravity turn ascent slot. It lists its own phases once its mode is in, and stays unavailable until then.</summary>
-    public const string GravityTurnUnavailable = "Available with the gravity turn mode";
+    public const string GravityTurnUnavailable = "NEEDS GRAVITY TURN";
 
     private static readonly List<GuidanceModeDescriptor> _modes = BuiltIns();
 
     private static List<GuidanceModeDescriptor> BuiltIns() => new()
     {
         // While the G-FOLD landing machine flies, the landing stop ends the descent, also when touchdown guidance is still engaged beside it.
-        new(GuidanceModeId.SixDofHere, ConsolePage.Land, "TOUCHDOWN GUIDANCE", 10,
+        new(GuidanceModeId.SixDofHere, ConsolePage.Land, "TOUCHDOWN", 10,
             a => a.SixDofEngaged && !a.LandingMachineLive, _ => StopTarget.SixDof, SixDofPhases),
         new(GuidanceModeId.Hover, ConsolePage.Land, "HOVER", 20,
             a => a.HoverLive, _ => StopTarget.Hover, HoverPhases),
         new(GuidanceModeId.GfoldHere, ConsolePage.Land, "G-FOLD", 30,
             a => a.LandingMachineLive, _ => StopTarget.Landing, GfoldPhases),
-        new(GuidanceModeId.DeorbitLand, ConsolePage.Land, "DEORBIT AND LAND", 40,
+        new(GuidanceModeId.DeorbitLand, ConsolePage.Land, "DEORBIT + LAND", 40,
             a => a.DescentLive, _ => StopTarget.Landing, DeorbitPhases),
         new(GuidanceModeId.Boostback, ConsolePage.Land, "BOOSTBACK", 50,
             a => a.BoostbackLive, _ => StopTarget.Boostback, BoostbackPhases),

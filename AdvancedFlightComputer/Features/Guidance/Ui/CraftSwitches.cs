@@ -14,11 +14,11 @@ using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 public static partial class GuidanceWindow
 {
     private const string EngageTip =
-        "AFC MAY STEER: guidance commands the attitude of this craft while one of its modes flies. Off while a mode holds the craft hands it back: the mode ends, the engine is cut and you fly. LAND NOW and HOVER turn it on when they start. DEORBIT AND LAND needs it on.";
+        "AFC MAY STEER: AFC commands the attitude while a mode flies. Off ends a mode that holds the attitude and cuts the engine. LAND NOW and HOVER turn it on. DEORBIT + LAND needs it on.";
     private const string AutoStageTip =
-        "AFC MAY USE ENGINES: guidance lights the engines, throttles and stages this craft while one of its modes flies. Off while a mode flies keeps the steering with AFC and gives you the engine and the stages, and a landing from orbit ends. LAND NOW and HOVER turn it on when they start. DEORBIT AND LAND needs it on.";
+        "AFC MAY USE ENGINES: AFC lights, throttles and stages the engines while a mode flies. Off, AFC only steers and a landing from orbit ends. LAND NOW and HOVER turn it on. DEORBIT + LAND needs it on.";
     private const string AutoStageArmTip =
-        "AUTOSTAGE: AFC stages this craft by itself when a stage burns out. The AUTOSTAGE gauge button and the STAGING page set the same switch.";
+        "AUTOSTAGE: AFC stages when a stage burns out. The AUTOSTAGE gauge button and the STAGING page set the same switch.";
 
     /// <summary>
     /// The per-craft permissions of the drawer in one block: whether guidance may steer and whether it may stage and throttle, and whether AutoStage stages this craft by itself, with a link to STAGING. The AutoStage switch makes the same StagingDetector.Arm call as the STAGING page and the AUTOSTAGE gauge button. The two AFC MAY switches stay free while a mode flies, because a pilot can want the engine back and keep the steering, and each says under it what off does now.

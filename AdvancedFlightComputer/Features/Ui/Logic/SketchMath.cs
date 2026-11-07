@@ -271,6 +271,6 @@ internal static class BurnBudget
 
     public static string Payer(StageFuel[] stages, in BurnPay pay)
         => pay.FirstStage == pay.LastStage
-            ? "Seq " + stages[pay.FirstStage].Number.ToString(Fmt.Inv)
-            : "Seq " + stages[pay.FirstStage].Number.ToString(Fmt.Inv) + "-" + stages[pay.LastStage].Number.ToString(Fmt.Inv);
+            ? "SEQ " + stages[pay.FirstStage].Number.ToString(Fmt.Inv)
+            : "SEQ " + stages[pay.FirstStage].Number.ToString(Fmt.Inv) + "-" + stages[pay.LastStage].Number.ToString(Fmt.Inv);
 }

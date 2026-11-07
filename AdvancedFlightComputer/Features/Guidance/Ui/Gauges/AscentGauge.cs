@@ -85,13 +85,13 @@ public static partial class GuidanceWindow
         switch (status)
         {
             case ChaseStatus.NotFound:
-                GaugeRowText("TARGET", "Not found", ConsoleStyle.Danger);
+                GaugeRowText("TARGET", "NOT FOUND", ConsoleStyle.Danger);
                 break;
             case ChaseStatus.DifferentBody:
-                GaugeRowText("TARGET", "Orbits another body", ConsoleStyle.Danger);
+                GaugeRowText("TARGET", "OTHER BODY", ConsoleStyle.Danger);
                 break;
             case ChaseStatus.Ok:
-                GaugeRowText("ITS ORBIT", PageText.TargetOrbit(plan.TargetPeKm, plan.TargetApKm, plan.IncDeg));
+                GaugeRowText("TARGET ORBIT", PageText.TargetOrbit(plan.TargetPeKm, plan.TargetApKm, plan.IncDeg));
                 break;
         }
     }
@@ -121,7 +121,7 @@ public static partial class GuidanceWindow
         }
     }
 
-    // The LIMITS fold of the page: the limits of the climb that the plan and the flight read. MAX Q shows with either climb, because CALCULATE solves a plan with SIMPLE TURN too. The limit is part of the problem, so it is frozen while the problem is being solved.
+    // The LIMITS fold of the page: the limits of the climb that the plan and the flight read. MAX Q shows with either climb, because SOLVE solves a plan with GRAVITY TURN too. The limit is part of the problem, so it is frozen while the problem is being solved.
     private static void DrawLimitsFold(IParentBody parent, bool openByDefault)
     {
         bool air = HasPhysicalAtmosphere(parent);
@@ -149,7 +149,7 @@ public static partial class GuidanceWindow
         }
     }
 
-    // How the orbit plane is held, in the HOW IT FLIES fold. The LAN stands on the page, because it changes which orbit the craft goes to.
+    // How the orbit plane is held, in the GNC fold. The LAN stands on the page, because it changes which orbit the craft goes to.
     private static void DrawOrbitPlaneSection(Vehicle vehicle, Orbit orbit, IParentBody parent, double bodyRadius)
     {
         if (!GuidanceRegion.Begin(FoldNames.Plane, GuidanceRegion.Expert))
@@ -218,16 +218,16 @@ public static partial class GuidanceWindow
         const UiTier D = UiTier.Diagnostics;
 
         GaugeRowText(D, "INSERTION",
-            FormattableString.Invariant($"{nuDeg:+0.0;-0.0} deg from Pe, {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {fpaDeg:+0.0;-0.0}"),
+            FormattableString.Invariant($"{nuDeg:+0.0;-0.0} deg from PE, ALT {(aim.Radius - bodyRadius) / 1000.0:F0} km, FPA {fpaDeg:+0.0;-0.0}"),
             far || descending || aim.FloorLimited ? warn : fine);
         if (aim.FloorLimited)
-            GaugeRowText(D, "", "Pe inside the air, so it inserts at the top of the air", warn);
+            GaugeRowText(D, "", "PE IN ATMOSPHERE. INSERTION AT ATMOSPHERE TOP.", warn);
         if (far)
-            GaugeRowText(D, "", "far round from Pe - costs dV", warn);
+            GaugeRowText(D, "", "FAR PAST PE. COSTS DV.", warn);
         else if (descending)
-            GaugeRowText(D, "", "before Pe - a burn from orbit may not converge", warn);
+            GaugeRowText(D, "", "BEFORE PE. BURN FROM ORBIT MAY NOT CONVERGE.", warn);
         if (searched && double.IsFinite(_s.InsertionSearch.SavingMs))
-            GaugeRowText(D, "", FormattableString.Invariant($"placed for dV, {Math.Max(_s.InsertionSearch.SavingS, 0.0):F1} s of burn ({Math.Max(_s.InsertionSearch.SavingMs, 0.0):F0} m/s) under inserting {(_s.InsertionSearch.AtApoapsis ? FormattableString.Invariant($"{UpfgInsertionSearch.ApoapsisLeadDeg:F0} deg before Ap") : "at Pe")}"), fine);
+            GaugeRowText(D, "", FormattableString.Invariant($"PLACED FOR DV: SAVES {Math.Max(_s.InsertionSearch.SavingS, 0.0):F1} s ({Math.Max(_s.InsertionSearch.SavingMs, 0.0):F0} m/s) VS INSERTING {(_s.InsertionSearch.AtApoapsis ? FormattableString.Invariant($"{UpfgInsertionSearch.ApoapsisLeadDeg:F0} deg BEFORE AP") : "AT PE")}"), fine);
     }
 
     private static void DrawTargetPicker(Vehicle vehicle)
@@ -237,7 +237,7 @@ public static partial class GuidanceWindow
         ConsoleUi.RowChip("TARGET", Owner.Stock, "STOCK");
         bool open = ConsoleUi.BeginCombo("AfcAscentTarget".AsSpan(), _s.TargetId.Length > 0 ? _s.TargetId : "None");
         if (!open && rowHovered)
-            ConsoleUi.Card("TARGET", "A craft to launch into the orbit of. LAUNCH then waits for its launch window. " + PageText.CraftTargetChipTip);
+            ConsoleUi.Card("TARGET", "Craft whose orbit LAUNCH targets. LAUNCH waits for its window. " + PageText.CraftTargetChipTip);
         if (open)
         {
             // Dropping the target frees the argument of periapsis again, because the target's was only ever copied for the chase.
@@ -309,7 +309,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>
-    /// The stages that can fly themselves home, one row each with its STAGE SITE.
+    /// The stages that can fly themselves home, one row each with its SITE.
     ///  CONTROLLABILITY IS THE TEST, not size: a stage can be flown if the subtree that separates carries a command pod, which is the same thing Vehicle.IsControllable asks. An interstage does not qualify however large it is, and a stage that separates once the climb is over is going orbital speed and is not listed.
     ///  A SITE ON A STAGE ASKS FOR ITS RESERVE: the calculated climb sizes what that booster keeps for the boostback and the landing, which the RESERVE row shows.
     /// </summary>
@@ -327,7 +327,7 @@ public static partial class GuidanceWindow
 
             // The name row carries the set button, because the button is about the stage rather than about any one of its numbers.
             bool arming = _retargetStageId == stage.RootId;
-            string pick = arming ? "CLICK A SPOT" : "PICK STAGE SITE";
+            string pick = arming ? "CLICK SITE" : "PICK SITE";
             float clearW = stage.HasTarget ? ConsoleWidgets.ButtonWidth("X".AsSpan()) + ImGui.GetStyle().ItemSpacing.X : 0f;
             float buttonsW = ConsoleWidgets.ButtonWidth(pick.AsSpan()) + clearW;
             BeginKitRow(stage.Name.ToUpperInvariant() + (stage.IsNext ? "  NEXT" : ""), controlWidth: buttonsW);
@@ -349,7 +349,7 @@ public static partial class GuidanceWindow
             }
             ConsoleUi.EndRow();
 
-            GaugeRowText(stage.HasTarget ? "STAGE SITE" : "", stage.HasTarget ? Fmt.Sentence(Fmt.LatLon(stage.TargetLatDeg, stage.TargetLonDeg)) : "No stage site set", dim);
+            GaugeRowText(stage.HasTarget ? "SITE" : "", stage.HasTarget ? Fmt.Sentence(Fmt.LatLon(stage.TargetLatDeg, stage.TargetLonDeg)) : "NO SITE", dim);
         }
     }
 

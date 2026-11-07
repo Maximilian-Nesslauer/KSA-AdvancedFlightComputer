@@ -217,10 +217,10 @@ public static partial class GuidanceWindow
     internal static string LaunchFlownByNote(Vehicle vehicle)
         => vehicle != null && _s.Engage && _s.AutoStage && SharedVehicleHooks.AutoStageEnabled
            && !AutoStage.StagingDetector.IsArmed(vehicle)
-            ? ". AutoStage will arm"
+            ? ". AutoStage arms"
             : "";
 
-    /// <summary>The live values the footer outcome of a guidance verb names, read from the bound craft. The target is the craft's stock target, which ARM FOR WINDOW waits for.</summary>
+    /// <summary>The live values the footer outcome of a guidance verb names, read from the bound craft. The target is the craft's stock target, which ARM waits for.</summary>
     internal static PageText.OutcomeFacts CommitOutcomeFacts(Vehicle vehicle)
         => new(
             AutoStageArms: LaunchFlownByNote(vehicle).Length > 0,
@@ -279,7 +279,7 @@ public static partial class GuidanceWindow
             // The buttons drive the stock time warp, so they stand after a STOCK chip.
             ConsoleUi.OwnerChip(Owner.Stock, "STOCK");
             ImGui.SameLine(0f, ConsoleUi.ChipToButtonGap);
-            string target = "To " + _warpLabel + ", T-" + FormatHelper.FormatDuration(wait);
+            string target = "TO " + _warpLabel + ", T-" + FormatHelper.FormatDuration(wait);
             if (HeadWarpButton("AfcHeadWarp", lit))
             {
                 // The draw overlaps the vehicle solver, so the warp goes through the input buffer that Program.PrepareFrame drains with the solvers joined, as stock's own warp does.
@@ -299,7 +299,7 @@ public static partial class GuidanceWindow
                 _warpDeclinedLabel = _warpLabel;
             }
             if (ImGui.IsItemHovered())
-                ConsoleUi.Tooltip("Stays at 1x and does not ask again for this wait.".AsSpan());
+                ConsoleUi.Tooltip("Holds 1x. No new prompt during this wait.".AsSpan());
 
             // Offered to warp to a launch window, the other answer is not to wait for it at all, for a window just missed whose next one is most of a revolution away (see LaunchNowAscent).
             if (_warpLabel == LaunchWindowWarpLabel && !_s.Running)
@@ -312,7 +312,7 @@ public static partial class GuidanceWindow
                         LaunchNowAscent(vehicle, orbit, parent, in plan);
                 }
                 if (ImGui.IsItemHovered())
-                    ConsoleUi.Tooltip("Launches now instead of waiting for the window.".AsSpan());
+                    ConsoleUi.Tooltip("Launches at once and skips the window.".AsSpan());
             }
             DrawWarpLine(origin.X + room, target);
             return;
@@ -325,8 +325,8 @@ public static partial class GuidanceWindow
             if (HeadWarpButton("AfcHeadDeorbitWarp", lit))
                 _s.DeorbitWarpRequested = true;
             if (ImGui.IsItemHovered())
-                ConsoleUi.Tooltip("Warps to just before stock AUTO turns the craft onto the deorbit burn. AFC continues the landing after the burn.".AsSpan());
-            DrawWarpLine(origin.X + room, "To the deorbit burn");
+                ConsoleUi.Tooltip("Warps to the STOCK AUTO turn before the deorbit burn. AFC lands after the burn.".AsSpan());
+            DrawWarpLine(origin.X + room, "TO DEORBIT BURN");
         }
     }
 
@@ -348,9 +348,9 @@ public static partial class GuidanceWindow
     internal static void BuildStatusLines(Vehicle vehicle, List<StatusLine> lines)
     {
         if (OwnerThreadViolation.Length > 0)
-            lines.Add(new StatusLine(Severity.Error, "Threading: " + OwnerThreadViolation, ""));
+            lines.Add(new StatusLine(Severity.Error, "THREADING: " + OwnerThreadViolation, ""));
         if (StepFaultLasts)
-            lines.Add(new StatusLine(Severity.Error, "Error: " + _s.GuidanceError, ""));
+            lines.Add(new StatusLine(Severity.Error, "ERROR: " + _s.GuidanceError, ""));
         if (_s.ReleaseError.Length > 0)
             lines.Add(new StatusLine(Severity.Error, _s.ReleaseError, ""));
         string failure = ReleaseFailure(vehicle);
@@ -383,13 +383,13 @@ public static partial class GuidanceWindow
         FollowLiveLanding(cues);
         if (_s.GfoldCuePending)
         {
-            cues.Add(new StatusLine(Severity.Cue, "Now flying the powered descent.",
+            cues.Add(new StatusLine(Severity.Cue, "AFC: POWERED DESCENT",
                 ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.FromHere))));
             _s.GfoldCuePending = false;
         }
         if (_s.TermCuePending)
         {
-            cues.Add(new StatusLine(Severity.Cue, "Now hovering.",
+            cues.Add(new StatusLine(Severity.Cue, "AFC: HOVER",
                 ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Hover))));
             _s.TermCuePending = false;
         }
@@ -472,19 +472,19 @@ public static partial class GuidanceWindow
         if (_s.FailureWhat.Length > 0)
             failures.Add(new CraftFailure(_s.FailureWhat, _s.FailureDetail, _s.FailureDetail, _s.FailureSerial));
         if (StepFaultLasts)
-            failures.Add(new CraftFailure("AFC guidance keeps failing", _s.GuidanceError));
+            failures.Add(new CraftFailure("GUIDANCE FAULT (REPEATED)", _s.GuidanceError));
 
         LastingProblems problems = _lastingProblems.GetValue(_s, _ => new LastingProblems());
         double now = SimNow();
         long realMs = GuidanceClock.NowMs;
-        string release = _s.ReleaseError.Length > 0 ? "AFC cannot let go of the craft" : "";
+        string release = _s.ReleaseError.Length > 0 ? "RELEASE FAILED" : "";
         if (problems.Release.Lasts(release, now, realMs))
             failures.Add(new CraftFailure(release, _s.ReleaseError, _s.ReleaseError));
 
         // Step3Dof never plans on a body with no air, so this one needs no wait.
         bool noAir = EntryHasNoAir(_s);
         if (noAir)
-            failures.Add(new CraftFailure("No entry plan here", EntryGuidance.NoAirText));
+            failures.Add(new CraftFailure("NO ENTRY PLAN", EntryGuidance.NoAirText));
         string detail = "";
         string noPlan = noAir ? "" : NoPlanNow(out detail);
         if (problems.NoPlan.Lasts(noPlan, now, realMs))
@@ -498,22 +498,22 @@ public static partial class GuidanceWindow
         if (ThreeDofLive && _s.ThreeDofPlan == null)
         {
             detail = _s.ThreeDofStatus;
-            return "No entry plan";
+            return "NO ENTRY PLAN";
         }
         if (_s.Active && (_s.Guidance == null || !_s.Guidance.HasPlan))
         {
             detail = _s.Error;
-            return "Touchdown guidance has no plan";
+            return "TOUCHDOWN: NO PLAN";
         }
         if (_s.LandingPhase == LandingPhase.GfoldDescent && _s.GfoldPlan == null)
         {
             detail = _s.LandingStatus;
-            return "G-FOLD has no plan";
+            return "G-FOLD: NO PLAN";
         }
         if (_s.BoostbackPhase == BoostbackPhase.Rotation && !_s.BoostbackHasPlan && _s.BoostbackPlanError.Length > 0)
         {
             detail = _s.BoostbackPlanError;
-            return "The boostback has no plan";
+            return "BOOSTBACK: NO PLAN";
         }
         return "";
     }
@@ -695,7 +695,7 @@ public static partial class GuidanceWindow
                 }
                 // A mode that registered as available before its entry point is wired here would otherwise be a LAUNCH click that does nothing.
                 PendingCommitNote = (GuidanceModes.Of(mode)?.MethodLabel ?? mode.ToString().ToUpperInvariant())
-                    + " has no commit entry point yet, so nothing started.";
+                    + " HAS NO ENTRY POINT. NOT STARTED.";
                 GuidanceLog.Info(vehicle, $"commit for {mode} refused: no entry point in RunCommit and no registered hooks.");
                 return;
         }
@@ -704,8 +704,8 @@ public static partial class GuidanceWindow
 
         // StartGfoldNow and StartTerminalHover turn both switches on, because a powered descent that may not steer or throttle is not a descent. Said once, so the change is not silent.
         if ((!engage && _s.Engage) || (!autoStage && _s.AutoStage))
-            PendingCommitNote = "Landing turned on " + GuidanceSettingSpecs.Engage.Label + " and "
-                + GuidanceSettingSpecs.AutoStage.Label + ".";
+            PendingCommitNote = "ON FOR LANDING: " + GuidanceSettingSpecs.Engage.Label + " + "
+                + GuidanceSettingSpecs.AutoStage.Label;
     }
 
     private static string _refusedLine = "";
@@ -824,7 +824,7 @@ public static partial class GuidanceWindow
             draw();
     };
 
-    /// <summary>The first part of a HOW IT FLIES fold with a changed value: a reset of the changed values of the fold, which asks first. It stays out of the label, because the label counts the values.</summary>
+    /// <summary>The first part of a GNC fold with a changed value: a reset of the changed values of the fold, which asks first. It stays out of the label, because the label counts the values.</summary>
     private static FoldPart ResetPart(string id, Vehicle vehicle, SettingSpec[] doubles, BoolSpec[] bools, int changed)
         => new("", changed > 0, () =>
         {
@@ -877,7 +877,7 @@ public static partial class GuidanceWindow
         if (DeorbitTargetLocked && DeorbitLockedKeys.Contains(key))
             return PageText.DeorbitLockedSetting;
         if ((_s.AscentPlanJob != null || _s.AscentPlanRequested) && AscentPlanLockedKeys.Contains(key))
-            return "Locked while the ascent plan solves.";
+            return "LOCKED: ASCENT PLAN SOLVING.";
         return "";
     }
 

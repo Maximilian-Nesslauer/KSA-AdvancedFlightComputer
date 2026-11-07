@@ -290,8 +290,8 @@ internal static class OrbitSketch
             var row = new PicBox(f.Min.X, f.Max.Y - laneH, f.Width, laneH);
             Picture.LegendRow(in f, in row, new Picture.Swatch[]
             {
-                new("Depart", Palette.Plan, SwatchKind.Diamond),
-                new("Arrive", Palette.Target, SwatchKind.Ring),
+                new("DEPART", Palette.Plan, SwatchKind.Diamond),
+                new("ARRIVE", Palette.Target, SwatchKind.Ring),
             });
         }
     }
@@ -383,8 +383,8 @@ internal static class OrbitSketch
 
     private static void ApsisTexts(Orbit orbit, double radius, out string ap, out string pe)
     {
-        pe = orbit.Periapsis < radius ? PageText.SketchPeBelowGround : "Pe " + Fmt.Km((orbit.Periapsis - radius) / 1000.0);
-        ap = orbit.Eccentricity < 1.0 && double.IsFinite(orbit.Apoapsis) ? "Ap " + Fmt.Km((orbit.Apoapsis - radius) / 1000.0) : PageText.Escapes;
+        pe = orbit.Periapsis < radius ? PageText.SketchPeBelowGround : "PE " + Fmt.Km((orbit.Periapsis - radius) / 1000.0);
+        ap = orbit.Eccentricity < 1.0 && double.IsFinite(orbit.Apoapsis) ? "AP" + Fmt.Km((orbit.Apoapsis - radius) / 1000.0) : PageText.Escapes;
     }
 
     private static void ApsisDots(in PictureFrame f, Orbit orbit, in SketchFrame frame, ImColor8 color, Labels labels)

@@ -59,7 +59,7 @@ public static partial class GuidanceWindow
     internal static AscentChoice CurrentAscentChoice()
         => CurrentAscentMethodUi().Id == AscentMethod.GravityTurn ? AscentChoice.GravityTurn : AscentChoice.CatsUpfg;
 
-    private const string AscentLockedText = "Locked while an ascent flies, is armed or plans.";
+    private const string AscentLockedText = "LOCKED: ASCENT ACTIVE. STOP TO EDIT.";
 
     internal static void DrawAscentMethodRow()
     {
@@ -94,7 +94,7 @@ public static partial class GuidanceWindow
         {
             string[] labels = PageText.AscentSegments(names, availableAt, segments => ConsoleUi.ChoiceRowFits("ASCENT", segments));
             int picked = ConsoleUi.ChoiceRow("ASCENT", "AfcAscentMethod", labels, active, held, cards,
-                cats ? "" : cards[active], "How the craft climbs to orbit. Each segment says what it flies.");
+                cats ? "" : cards[active], "Selects the ascent guidance method.");
             if (!locked && picked >= 0 && picked < methods.Length && methods[picked].IsAvailable)
                 _s.AscentMethod = methods[picked].Id;
         }
@@ -106,7 +106,7 @@ public static partial class GuidanceWindow
             ? new[] { climb == 0 ? "" : AscentLockedText, climb == 1 ? "" : AscentLockedText }
             : null;
         int pickedClimb = ConsoleUi.ChoiceRow("CLIMB", "AfcAscentClimb", PageText.ClimbLabels, climb, climbHeld, PageText.ClimbCards,
-            PageText.ClimbLines[climb], PageText.ClimbTip(current.Label), feedsPicture: true);
+            labelTip: PageText.ClimbTip(current.Label), feedsPicture: true);
         if (!locked && pickedClimb >= 0)
             _s.FlyConvexAscent = pickedClimb == 0;
     }

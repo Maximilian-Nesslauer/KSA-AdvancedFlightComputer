@@ -36,7 +36,7 @@ public static partial class GuidanceWindow
     {
         ThreeDofPhase.Burn => "LANDING BURN",
         ThreeDofPhase.Glide => "GLIDE",
-        _ => "STARTING",
+        _ => "START",
     };
 
     /// <summary>
@@ -104,7 +104,7 @@ public static partial class GuidanceWindow
     }
 
     private static string EntryText(string text)
-        => text.StartsWith("Entry guidance", StringComparison.OrdinalIgnoreCase) ? text : "Entry guidance: " + text;
+        => text.StartsWith("ENTRY GUIDANCE", StringComparison.OrdinalIgnoreCase) ? text : "ENTRY GUIDANCE: " + text;
 
     // The countdown that matters in each phase: the planned ignition in the glide, the burn left in the burn, and the boostback's time to impact while the first plan of the glide is solved. Only the boostback glide writes GlideTgo, so a burn without a plan shows no number rather than a frozen one.
     private static ModeLiveReadout EntryReadout(Vehicle vehicle, VehicleAutopilotState s)
@@ -153,6 +153,6 @@ public static partial class GuidanceWindow
     {
         _s.ThreeDofEngagePending = false;
         if (ThreeDofLive)
-            Disengage3Dof("Entry guidance stopped.");
+            Disengage3Dof("ENTRY GUIDANCE STOPPED");
     }
 }

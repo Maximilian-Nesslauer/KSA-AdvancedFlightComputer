@@ -30,7 +30,7 @@ public static partial class GuidanceWindow
         {
             _retargetArmed = false;
             _retargetStageId = 0;
-            _s.LandingStatus = "Pick canceled.";
+            _s.LandingStatus = "PICK CANCELED";
             return;
         }
         Camera cam = Program.GetMainCamera();
@@ -126,12 +126,12 @@ public static partial class GuidanceWindow
         {
             float2 s = cam.EclToScreen(hitEcl, false);
             dl.AddCircleFilled(s, 6f, col);
-            dl.AddText(s + new float2(10f, 6f), col, FormattableString.Invariant($"Retarget  lat {latDeg:F3}  lon {lonDeg:F3}"));
-            dl.AddText(m + new float2(12f, -16f), new ImColor8(150, 150, 150), "Cursor");
+            dl.AddText(s + new float2(10f, 6f), col, FormattableString.Invariant($"RETARGET  LAT {latDeg:F3}  LON {lonDeg:F3}"));
+            dl.AddText(m + new float2(12f, -16f), new ImColor8(150, 150, 150), "CURSOR");
         }
         else
         {
-            dl.AddText(m + new float2(12f, 6f), new ImColor8(200, 200, 200), "Aim at the surface to retarget");
+            dl.AddText(m + new float2(12f, 6f), new ImColor8(200, 200, 200), "AIM AT SURFACE TO RETARGET");
         }
     }
 
@@ -145,7 +145,7 @@ public static partial class GuidanceWindow
         if (_retargetStageId != 0)
         {
             _s.StageTargets[_retargetStageId] = new double2(latDeg, lonDeg);
-            _s.LandingStatus = FormattableString.Invariant($"Stage target set to lat {latDeg:F3}, lon {lonDeg:F3}.");
+            _s.LandingStatus = FormattableString.Invariant($"STAGE TARGET SET: LAT {latDeg:F3}, LON {lonDeg:F3}");
             _retargetStageId = 0;
             _s.StageModelDirty = true;   // so the list picks the new target up at once
             return;
@@ -153,13 +153,13 @@ public static partial class GuidanceWindow
 
         if (DeorbitTargetLocked)
         {
-            _s.WarnLanding("Stop and plan again to change the transfer target.");
+            _s.WarnLanding("TRANSFER TARGET LOCKED. STOP TO EDIT.");
             return;
         }
 
         _s.SiteLatDeg = latDeg;
         _s.SiteLonDeg = lonDeg;
-        _s.LandingStatus = FormattableString.Invariant($"Retargeted to lat {latDeg:F3}, lon {lonDeg:F3}.");
+        _s.LandingStatus = FormattableString.Invariant($"RETARGETED: LAT {latDeg:F3}, LON {lonDeg:F3}");
 
         if (_s.LandingPhase == LandingPhase.GfoldDescent)
         {
@@ -265,12 +265,12 @@ public static partial class GuidanceWindow
         if (TryProjectCci(PlanCci(f, Node(plan.Position, n - 1)), out float2 tgt))
         {
             dl.AddCircleFilled(tgt, 6f, tgtCol);
-            dl.AddText(tgt + new float2(8f, -6f), tgtCol, "Target");
+            dl.AddText(tgt + new float2(8f, -6f), tgtCol, "TARGET");
         }
         if (TryProjectCci(f.Origin, out float2 pad))
         {
             dl.AddCircleFilled(pad, 5f, padCol);
-            dl.AddText(pad + new float2(8f, -6f), padCol, "Pad");
+            dl.AddText(pad + new float2(8f, -6f), padCol, "PAD");
         }
 
         // --- Live vehicle state: CoM (the flown reference), velocity, plan deviation ---
@@ -297,15 +297,15 @@ public static partial class GuidanceWindow
         string[] hud =
         {
             $"G-FOLD   {_s.GfoldStatus}",
-            $"phase    {_s.LandingPhase}",
-            FormattableString.Invariant($"tgo     {tgo,6:F1} s   tf {plan.TimeOfFlight,5:F1} s"),
-            FormattableString.Invariant($"alt     {_s.GfoldAltM,7:F0} m"),
-            FormattableString.Invariant($"speed   {_s.GfoldSpeedMs,6:F1} / {_s.GfoldVMaxMs,5:F0} m/s"),
-            FormattableString.Invariant($"throttle{_s.GfoldThrottle * 100,5:F0} %"),
-            FormattableString.Invariant($"fuel    {vehicle.PropellantMass,7:F0} kg"),
-            FormattableString.Invariant($"deviation{devM,6:F1} m"),
-            FormattableString.Invariant($"land err{plan.LandingErrorNorm,6:F1} m"),
-            $"nodes {plan.Nodes}  iters {plan.Iterations}",
+            $"PHASE    {_s.LandingPhase}",
+            FormattableString.Invariant($"TGO     {tgo,6:F1} s   TF {plan.TimeOfFlight,5:F1} s"),
+            FormattableString.Invariant($"ALT     {_s.GfoldAltM,7:F0} m"),
+            FormattableString.Invariant($"SPEED   {_s.GfoldSpeedMs,6:F1} / {_s.GfoldVMaxMs,5:F0} m/s"),
+            FormattableString.Invariant($"THROTTLE{_s.GfoldThrottle * 100,5:F0} %"),
+            FormattableString.Invariant($"FUEL    {vehicle.PropellantMass,7:F0} kg"),
+            FormattableString.Invariant($"DEVIATION{devM,6:F1} m"),
+            FormattableString.Invariant($"LAND ERR{plan.LandingErrorNorm,6:F1} m"),
+            $"NODES {plan.Nodes}  ITERS {plan.Iterations}",
         };
         float hx = vp.Width - 300f, hy = 70f, lh = 16f;
         dl.AddRectFilled(new float2(hx - 8f, hy - 6f),
@@ -332,7 +332,7 @@ public static partial class GuidanceWindow
         ScreenLine(dl, s + new float2(0f, g), s + new float2(0f, r), col, 1.6f);
         ScreenLine(dl, s - new float2(0f, r), s - new float2(0f, g), col, 1.6f);
         dl.AddCircleFilled(s, 2.5f, col);
-        dl.AddText(s + new float2(r + 4f, -6f), col, FormattableString.Invariant($"Site  {_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}"));
+        dl.AddText(s + new float2(r + 4f, -6f), col, FormattableString.Invariant($"SITE  {_s.SiteLatDeg:F3}, {_s.SiteLonDeg:F3}"));
     }
 
     // A point in the plan's site-local frame (x = up) back to a CCI position.

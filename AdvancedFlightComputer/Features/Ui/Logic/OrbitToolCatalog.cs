@@ -35,11 +35,11 @@ internal static class OrbitToolCatalog
     /// <summary>What each tool of <see cref="ToolLabels"/> does, for the hover card of its tab.</summary>
     public static readonly string[] ToolDescriptions =
     {
-        "Makes the orbit round at the point you pick.",
-        "Moves apoapsis to the value you set.",
-        "Moves periapsis to the value you set.",
-        "Turns the orbit plane onto the plane of the target.",
-        "Turns the orbit to the inclination you set.",
+        "Circularizes the orbit at the picked point.",
+        "Sets the apoapsis to the entered value.",
+        "Sets the periapsis to the entered value.",
+        "Matches the orbit plane to the target plane.",
+        "Changes the orbit to the entered inclination.",
     };
 
     /// <summary>What the tool of a TOOL tab does, or empty for an index that is no tool.</summary>

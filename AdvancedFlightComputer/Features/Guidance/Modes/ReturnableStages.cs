@@ -206,7 +206,7 @@ public static partial class GuidanceWindow
         double mass = vehicle.TotalMass;
         if (aero?.Table == null || !(mass > 0.0))
         {
-            _s.ReturnDvNote = _s.AeroError.Length > 0 ? _s.AeroError : "no aero surrogate";
+            _s.ReturnDvNote = _s.AeroError.Length > 0 ? _s.AeroError : "NO AERO SURROGATE";
             return;
         }
 
@@ -240,7 +240,7 @@ public static partial class GuidanceWindow
         {
             // Normal, not a fault: a vehicle still climbing has no ballistic impact inside the horizon, so there is nothing yet to drag onto a site.
             _s.ReturnDvNote = nom.Status == ImpactStatus.NoImpactWithinHorizon
-                ? "no ballistic impact within " + Ui.Logic.Fmt.Time(ImpactHorizonMinutes * 60.0)
+                ? "NO BALLISTIC IMPACT WITHIN " + Ui.Logic.Fmt.Time(ImpactHorizonMinutes * 60.0)
                 : nom.Status.ToString();
             return;
         }

@@ -57,15 +57,15 @@ internal static class SettingMath
         string number = DefaultValue(spec);
         string unit = ShownUnit(spec);
         return unit.Length > 0
-            ? "Default " + number + " " + unit
-            : "Default " + number;
+            ? "DEFAULT " + number + " " + unit
+            : "DEFAULT " + number;
     }
 
-    public static string GhostText(in BoolSpec spec) => spec.Default ? "Default on" : "Default off";
+    public static string GhostText(in BoolSpec spec) => spec.Default ? "DEFAULT ON" : "DEFAULT OFF";
 
     public static string DefaultValue(in SettingSpec spec) => ToShown(spec, spec.Default).ToString(DotNetFormat(ShownFormat(spec)), Inv);
 
-    public static string DefaultValue(in BoolSpec spec) => spec.Default ? "on" : "off";
+    public static string DefaultValue(in BoolSpec spec) => spec.Default ? "ON" : "OFF";
 
     /// <summary>Turns a printf format such as "%.2f" into the .NET format "F2". Anything else prints in the general format.</summary>
     public static string DotNetFormat(string printf)

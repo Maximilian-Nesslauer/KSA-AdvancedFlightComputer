@@ -574,9 +574,9 @@ public static partial class GuidanceWindow
     {
         ScvxIteration last = _s.Guidance.LastIteration;
         return $"[subproblem {last.Solved}, step {last.Accepted}, rho {last.Rho:G3}, " +
-               $"trust {last.TrustRegion:G3}, ADMM {last.SolverIterations}/" +
-               $"{_s.Guidance.SubproblemIterationCap}, iteration {last.ElapsedMs:F0} ms" +
-               (double.IsNaN(jobMs) ? "" : $", job {jobMs:F0} ms") +
+               $"TRUST {last.TrustRegion:G3}, ADMM {last.SolverIterations}/" +
+               $"{_s.Guidance.SubproblemIterationCap}, ITERATION {last.ElapsedMs:F0} ms" +
+               (double.IsNaN(jobMs) ? "" : $", JOB {jobMs:F0} ms") +
                (last.Solved ? "]" : $", {_s.Guidance.LastSubproblemFailure}]");
     }
 
@@ -629,7 +629,7 @@ public static partial class GuidanceWindow
             TiltDeg = Math.Acos(Math.Clamp(r22, -1.0, 1.0)) * 180.0 / Math.PI,
             Wx = x[10], Wy = x[11], Wz = x[12], Mass = x[13],
             Solved = _s.DidSolve && _s.SolveOk,
-            Status = _s.DidSolve ? _s.Guidance.Status.ToString() : "(no solve this cycle)",
+            Status = _s.DidSolve ? _s.Guidance.Status.ToString() : "(NO SOLVE THIS CYCLE)",
             ScvxIters = _s.Guidance.LastIterations, Accepted = _s.Guidance.AcceptedSteps,
             SolveMs = _s.Guidance.LastSolveMs, Admm = _s.Guidance.LastAdmmIterations,
             DefectM = _s.Guidance.LastDefectM, DefectLimitM = _s.Guidance.MaxDefectM,
@@ -903,7 +903,7 @@ public static partial class GuidanceWindow
             // The MESSAGE alone is not a diagnosis.
             // "Index was outside the bounds of the array" names neither the array nor the line, and this catch then disengages - so by the time anyone looks, the state that produced it is gone.
             // The full exception goes to a file that always exists, with enough surrounding state to tell which of the several paths through a step was running when it threw.
-            EndTouchdownBadly(vehicle, "Touchdown guidance stopped after a fault", "Touchdown guidance step failed: " + e.Message);
+            EndTouchdownBadly(vehicle, "TOUCHDOWN STOPPED: FAULT", "TOUCHDOWN STEP FAILED: " + e.Message);
             LogSixDofFault(vehicle, e);
             _s.EngagePending = false;
             Disengage6Dof(vehicle);
@@ -974,7 +974,7 @@ public static partial class GuidanceWindow
         {
             // Before the first plan the previous mode's attitude and engine still fly the craft, and a braking burn handed over high up keeps its command. A burn taken over near the ground is a different matter: its last throttle is as stale as an expired plan's, and one flew a booster up from 23 m, tipped it over and dropped it (2026-10-08, 16:19).
             if (_s.SixDofTookBurn && x[2] - _s.VehicleHeightM <= SixDofLostPlanGateM)
-                FlyWithoutPlan(vehicle, parent, siteCci, x, "taken from the burn with no plan yet");
+                FlyWithoutPlan(vehicle, parent, siteCci, x, "HANDOVER FROM BURN, NO PLAN YET");
             return;
         }
 
@@ -988,7 +988,7 @@ public static partial class GuidanceWindow
             return;
         }
 
-        FlyWithoutPlan(vehicle, parent, siteCci, x, "re-converging with the last plan expired");
+        FlyWithoutPlan(vehicle, parent, siteCci, x, "RE-SOLVING, LAST PLAN EXPIRED");
     }
 
     // A vertical speed below this is descending, for the stop-short check.
@@ -1027,7 +1027,7 @@ public static partial class GuidanceWindow
         manual.EngineOn = throttle > 0.0;
         manual.EngineThrottle = (float)throttle;
         _s.LastThrottle = throttle;
-        _s.WarnError(FormattableString.Invariant($"{why} - no plan: {(throttle > 0.0 ? FormattableString.Invariant($"stopping on the pad at {throttle:P0} throttle") : "engine off until stopping needs it")}."));
+        _s.WarnError(FormattableString.Invariant($"{why}. NO PLAN: {(throttle > 0.0 ? FormattableString.Invariant($"STOPPING ON PAD AT {throttle:P0} THROTTLE") : "ENGINE OFF UNTIL STOP NEEDED")}."));
     }
 
     /// <summary>
@@ -1059,8 +1059,8 @@ public static partial class GuidanceWindow
             && !(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
             && TerminalHoverAvailable(vehicle, out _))
         {
-            string why = $"Touchdown guidance {(_s.SixDofLastPublishedPlan == null ? "took the burn with no plan" : "lost its plan")} "
-                       + $"{x[2] - _s.VehicleHeightM:F0} m above the pad - terminal hover takes over.";
+            string why = $"TOUCHDOWN {(_s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
+                       + $"{x[2] - _s.VehicleHeightM:F0} m ABOVE PAD. HANDOVER: HOVER.";
             SixDofLog.Event(_s, now, why);
             GuidanceLog.Info(vehicle, why);
             Disengage6Dof(vehicle, cutEngine: false);
@@ -1080,8 +1080,8 @@ public static partial class GuidanceWindow
         manual.EngineThrottle = 0f;
         _s.LastThrottle = 0.0;
         KsaGimbalControl.SetLsq(vehicle, default);
-        string why = FormattableString.Invariant($"Touchdown guidance stopped short {x[2] - _s.VehicleHeightM:F1} m above the pad, ")
-                   + FormattableString.Invariant($"rising at {x[5]:F1} m/s, and cannot throttle below its weight ({minTwr:F2} at minimum) - engine cut, dropping to the pad.");
+        string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.VehicleHeightM:F1} m ABOVE PAD, ")
+                   + FormattableString.Invariant($"RISING {x[5]:F1} m/s, CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.");
         SixDofLog.Event(_s, now, why);
         GuidanceLog.Info(vehicle, why);
         _s.WarnError(why);
@@ -1096,12 +1096,12 @@ public static partial class GuidanceWindow
         KsaGimbalControl.SetLsq(vehicle, default);
         if (!vehicle.Situation.HasAnyContact())
             return;
-        string what = FormattableString.Invariant($"Touchdown after the stop-short cut, at {-x[5]:F1} m/s, {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target");
+        string what = FormattableString.Invariant($"TOUCHDOWN AFTER STOP-SHORT CUT, {-x[5]:F1} m/s, {-x[5]:F1} m FROM TARGET");
         SixDofLog.Event(_s, now, what);
         GuidanceLog.Info(vehicle, "Touchdown guidance: " + what + ".");
         ReportLogStop(SixDofLog.Stop(_s));
         Disengage6Dof(vehicle);
-        _s.Error = "Touchdown. Engine cut, touchdown guidance ended.";
+        _s.Error = "TOUCHDOWN. ENGINE CUT. GUIDANCE ENDED.";
     }
 
     private static void Step6DofCore(Vehicle vehicle)
@@ -1125,8 +1125,8 @@ public static partial class GuidanceWindow
                     $"STAGED: mass {_s.LastMass:F0} -> {m:F0} kg in one step - the plan was " +
                     "built for a different vehicle. Terminating touchdown guidance.");
                 Disengage6Dof(vehicle, cutEngine: false);
-                EndTouchdownBadly(vehicle, "Touchdown guidance stopped because the craft staged",
-                    "staged mid-flight - touchdown guidance terminated. Re-engage to plan for the vehicle that is actually here.");
+                EndTouchdownBadly(vehicle, "TOUCHDOWN STOPPED: STAGED",
+                    "STAGED IN FLIGHT. TOUCHDOWN ENDED. RESTART TO PLAN FOR THE REMAINING VEHICLE.");
                 return;
             }
         }
@@ -1177,10 +1177,10 @@ public static partial class GuidanceWindow
         {
             if (result.Faulted)
             {
-                string error = (result.Job == Ksa6DofJob.StepCold ? "cold" : "warm")
-                    + " solve failed: " + result.Error;
+                string error = (result.Job == Ksa6DofJob.StepCold ? "COLD" : "WARM")
+                    + " SOLVE FAILED: " + result.Error;
                 Disengage6Dof(vehicle);
-                EndTouchdownBadly(vehicle, "Touchdown guidance stopped after a solver fault", error);
+                EndTouchdownBadly(vehicle, "TOUCHDOWN STOPPED: SOLVER FAULT", error);
                 SixDofLog.Event(_s, now, error);
                 return;
             }
@@ -1232,7 +1232,7 @@ public static partial class GuidanceWindow
                                           $"{Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from the target - engine cut.");
                 ReportLogStop(SixDofLog.Stop(_s));
                 Disengage6Dof(vehicle);
-                _s.Error = "Touchdown. Engine cut, touchdown guidance ended.";
+                _s.Error = "TOUCHDOWN. ENGINE CUT. GUIDANCE ENDED.";
                 return;
             }
         }
@@ -1429,10 +1429,10 @@ public static partial class GuidanceWindow
                 // Give up rather than fall forever if it is not going to converge.
                 if (_s.ColdFrames > 240)
                 {
-                    string error = "cold solve failed to converge: " + coldError;
+                    string error = "COLD SOLVE FAILED: " + coldError;
                     SixDofLog.Event(_s, now, "COLD SOLVE gave up after 240 frames: " + coldError);
                     Disengage6Dof(vehicle);
-                    EndTouchdownBadly(vehicle, "Touchdown guidance found no plan", error);
+                    EndTouchdownBadly(vehicle, "TOUCHDOWN: NO PLAN", error);
                 }
                 else
                 {
@@ -1500,7 +1500,7 @@ public static partial class GuidanceWindow
         if (_s.Guidance.PlanElapsed > _s.Guidance.Sigma)
         {
             FlyWithoutPlan(vehicle, parent, siteCci, x,
-                $"plan expired {_s.Guidance.PlanElapsed - _s.Guidance.Sigma:F1} s ago");
+                $"PLAN EXPIRED {_s.Guidance.PlanElapsed - _s.Guidance.Sigma:F1} s AGO");
             return;
         }
 
@@ -1646,7 +1646,7 @@ public static partial class GuidanceWindow
         if (!TryConfigure6Dof(vehicle, parent, siteCci, x, out double[] xf, out int engageNodes,
                               out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn, out string error))
         {
-            EndTouchdownBadly(vehicle, "Touchdown guidance cannot plan for this craft", "cannot plan: " + error);
+            EndTouchdownBadly(vehicle, "TOUCHDOWN: NO SOLUTION", "NO SOLUTION: " + error);
             return false;
         }
 
@@ -1697,7 +1697,7 @@ public static partial class GuidanceWindow
         {
             ok = _s.Guidance.PlanFromSeed(x, xf, gx, gu, gSigma, now);
             if (!ok)
-                seedNote += $" (rejected: {_s.Guidance.Error}) - retrying from the straight-line seed";
+                seedNote += $" (REJECTED: {_s.Guidance.Error}). RETRY FROM STRAIGHT-LINE SEED";
         }
 
         if (!ok)
@@ -1708,7 +1708,7 @@ public static partial class GuidanceWindow
         }
         if (!ok)
         {
-            EndTouchdownBadly(vehicle, "Touchdown guidance found no plan", "cold solve failed: " + _s.Guidance.Error);
+            EndTouchdownBadly(vehicle, "TOUCHDOWN: NO PLAN", "COLD SOLVE FAILED: " + _s.Guidance.Error);
             _s.Guidance = null;
             return false;
         }

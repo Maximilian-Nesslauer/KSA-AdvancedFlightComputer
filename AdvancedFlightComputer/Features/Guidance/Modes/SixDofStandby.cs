@@ -99,7 +99,7 @@ public static partial class GuidanceWindow
         _s.LastMass = vehicle.TotalMass;
         _s.DiagError("standby: converging...");
 
-        string what = $"burn-time seed {sigmaSeed:F1} s, {engageNodes} nodes";
+        string what = $"BURN-TIME SEED {sigmaSeed:F1} s, {engageNodes} NODES";
         if (_s.SixDofLogging)
         {
             SixDofLog.Start(_s, vehicle.ToString(), parent.ToString());
@@ -182,8 +182,8 @@ public static partial class GuidanceWindow
                     _s.Converging = false;
                     _s.Error = "";
                     _s.LastReplan = now;
-                    string what = $"{_s.Guidance.LastIterations} iterations in {now - _s.SixDofStandbyStart:F1} s, "
-                                + $"sigma {_s.Guidance.Sigma:F1} s, {_s.Guidance.Nodes} nodes, defect {_s.Guidance.DefectText}";
+                    string what = $"{_s.Guidance.LastIterations} ITERATIONS IN {now - _s.SixDofStandbyStart:F1} s, "
+                                + $"SIGMA {_s.Guidance.Sigma:F1} s, {_s.Guidance.Nodes} NODES, DEFECT {_s.Guidance.DefectText}";
                     GuidanceLog.Info(vehicle, $"Touchdown guidance standby converged at {x[2]:F0} m: {what}.");
                     SixDofLog.Event(_s, now, "STANDBY COLD SOLVE CONVERGED: " + what);
                     SixDofLog.PlanSnapshot(_s, now, _s.Guidance.Published);
@@ -297,8 +297,8 @@ public static partial class GuidanceWindow
         _s.DiagError(converging ? "converging..." : "");
 
         string what = converging || plan == null
-            ? $"its cold solve still running ({_s.Guidance.LastIterations} iterations so far)"
-            : FormattableString.Invariant($"a warm plan {now - plan.SolveTime:F2} s old: {plan.Sigma:F1} s to the target, {_s.Guidance.Nodes} nodes");
+            ? $"COLD SOLVE RUNNING ({_s.Guidance.LastIterations} ITERATIONS)"
+            : FormattableString.Invariant($"WARM PLAN {now - plan.SolveTime:F2} s OLD: {plan.Sigma:F1} s TO TARGET, {_s.Guidance.Nodes} NODES");
         GuidanceLog.Info(vehicle, $"Touchdown guidance takes the burn from standby at {x[2]:F0} m with {what}.");
         SixDofLog.Event(_s, now, "ENGAGED FROM STANDBY: " + what);
     }
@@ -307,14 +307,14 @@ public static partial class GuidanceWindow
     internal static string SixDofStandbyText(double now)
     {
         if (!_s.SixDofStandby)
-            return _s.SixDofStandbyRefusal.Length > 0 ? "unavailable" : "not running";
+            return _s.SixDofStandbyRefusal.Length > 0 ? "unavailable" : "NOT RUNNING";
         if (_s.Converging)
             return "converging";
         Ksa6DofPlan plan = _s.Guidance?.Published;
         if (plan == null)
-            return "no plan";
+            return "NO PLAN";
         return SixDofStandbyReady(now)
-            ? FormattableString.Invariant($"ready, plan {now - plan.SolveTime:F1} s old, {plan.Sigma:F1} s to go")
-            : FormattableString.Invariant($"catching up, plan {now - plan.SolveTime:F1} s old, {_s.SixDofStandbyRefusals} refused");
+            ? FormattableString.Invariant($"READY. PLAN {now - plan.SolveTime:F1} s OLD, {plan.Sigma:F1} s TO GO")
+            : FormattableString.Invariant($"CATCHING UP. PLAN {now - plan.SolveTime:F1} s OLD, {_s.SixDofStandbyRefusals} REFUSED");
     }
 }

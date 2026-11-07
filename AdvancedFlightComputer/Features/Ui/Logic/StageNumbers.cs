@@ -44,7 +44,7 @@ internal static class StageNumbers
             return "S" + (index + 1).ToString(Fmt.Inv);
         int seq = stack[index];
         RunOf(stack, index, out int first, out int last);
-        string name = "Seq " + seq.ToString(Fmt.Inv);
+        string name = "SEQ " + seq.ToString(Fmt.Inv);
         return last > first ? name + (char)('a' + Math.Min(index - first, 25)) : name;
     }
 
@@ -98,12 +98,12 @@ internal static class StageNumbers
         if (!stays)
             return DroppedWord;
         bool burns = numbers[0] >= first && numbers[0] <= last;
-        return burns && left[0] != seq ? plan + ", now " + ShortTag(Tag(left, 0)) : plan;
+        return burns && left[0] != seq ? plan + ", NOW " + ShortTag(Tag(left, 0)) : plan;
     }
 
-    public const string DroppedWord = "Dropped";
+    public const string DroppedWord = "DROPPED";
 
-    public static string ShortTag(string tag) => tag.StartsWith("Seq ", StringComparison.Ordinal) ? tag.Substring(4) : tag;
+    public static string ShortTag(string tag) => tag.StartsWith("SEQ ", StringComparison.Ordinal) ? tag.Substring(4) : tag;
 
     private static void RunOf(ReadOnlySpan<int> list, int index, out int first, out int last)
     {

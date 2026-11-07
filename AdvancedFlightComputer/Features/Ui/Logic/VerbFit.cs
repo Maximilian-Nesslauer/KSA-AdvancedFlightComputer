@@ -19,16 +19,16 @@ internal static class SituationVerbs
     public const string EscapingShape = InOrbitShape;
     public const string FallingLand = "Next: land.";
     public const string AfterSeparation = "Starts after separation.";
-    public const string NoStageHome = "No stage of this craft can fly home.";
+    public const string NoStageHome = "No stage can fly home.";
     public const string NoImpact = "No impact predicted.";
     public const string NeedsOrbit = "Needs an orbit.";
     public const string BelowBrakingStart = "Too low for a deorbit.";
-    public const string DeorbitFirst = "DEORBIT comes first.";
-    public const string BoostbackNoAir = "No air, so this ends in an impact.";
-    public const string AscentFlies = "Ascent flies. Plan after cutoff.";
-    public const string GuidanceFlies = "AFC flies this craft. Plan after it ends.";
-    public const string AscentFliesLand = "Ascent flies. Plan the landing after cutoff.";
-    public const string AscentFliesEnds = "Ascent flies. G-FOLD cannot start here.";
+    public const string DeorbitFirst = "DEORBIT FIRST.";
+    public const string BoostbackNoAir = "No air. Ends in an impact.";
+    public const string AscentFlies = "Ascent active. Plan after cutoff.";
+    public const string GuidanceFlies = "AFC active. Plan after it ends.";
+    public const string AscentFliesLand = "Ascent active. Plan the landing after cutoff.";
+    public const string AscentFliesEnds = "Ascent active. G-FOLD cannot start.";
     public const string BackToFlight = "BACK TO FLIGHT >";
 
     public static readonly VerbFit AscentFliesLandFit = new(AscentFliesLand, ConsolePage.Launch, Plain: true, NextLabel: BackToFlight, NextQuiet: true);
@@ -37,7 +37,7 @@ internal static class SituationVerbs
 
     public static string VerbName(GuidanceModeId mode) => mode switch
     {
-        GuidanceModeId.DeorbitLand => "DEORBIT AND LAND",
+        GuidanceModeId.DeorbitLand => "DEORBIT + LAND",
         GuidanceModeId.Boostback => "BOOSTBACK",
         GuidanceModeId.GfoldHere => LandSolvers.Label(LandSolver.Gfold),
         GuidanceModeId.SixDofHere => LandSolvers.Label(LandSolver.Touchdown),
@@ -47,11 +47,11 @@ internal static class SituationVerbs
 
     public static string DeorbitFlies(GuidanceModeId mode) => "TAKE OVER replaces the deorbit with " + VerbName(mode) + ".";
 
-    public const string EntryNeedsAir = "No air here. Pick G-FOLD or TOUCHDOWN.";
+    public const string EntryNeedsAir = "No air. Use G-FOLD or TOUCHDOWN.";
 
-    public const string GfoldNoAir = "G-FOLD needs a body with no air.";
+    public const string GfoldNoAir = "G-FOLD needs an airless body.";
 
-    public const string GfoldNeedsNoAir = GfoldNoAir + " Pick TOUCHDOWN.";
+    public const string GfoldNeedsNoAir = GfoldNoAir + " Use TOUCHDOWN.";
 
     public const string GfoldEndsDeorbit = GfoldNoAir + " END LANDING only ends the deorbit.";
 

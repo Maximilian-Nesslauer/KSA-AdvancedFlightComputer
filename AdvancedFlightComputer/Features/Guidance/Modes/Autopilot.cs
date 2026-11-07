@@ -59,7 +59,7 @@ public static partial class GuidanceWindow
     }
 
     /// <summary>The label an armed launch asks to warp to its window under - how the prompt knows to offer Launch now beside the warp.</summary>
-    private const string LaunchWindowWarpLabel = "the launch window";
+    private const string LaunchWindowWarpLabel = "LAUNCH WINDOW";
 
     // Staging is the AutoStage feature's job: its per-vehicle machine stages on burnout and drops spent boosters, with the delays, the crossfeed refusal and the control-module guard. Guidance arms it for the craft it flies and adds the two cues only a flight plan knows: a cold ignition, when nothing produces thrust, and the reserve boundary of a returning booster. A request while a staging is still in flight is refused by the detector, and the cooldown keeps guidance from asking every step.
     private static void AutoSequence(Vehicle vehicle)
@@ -83,7 +83,7 @@ public static partial class GuidanceWindow
         {
             // The block did not load, or the standalone AutoStage mod holds it off.
             _s.StagingActive = false;
-            _s.WarnStatus("AFC cannot stage: AutoStage is off (see the log).");
+            _s.WarnStatus("AFC CANNOT STAGE: AUTOSTAGE OFF. SEE LOG.");
             return;
         }
 
@@ -105,7 +105,7 @@ public static partial class GuidanceWindow
                 GuidanceLog.Debug(vehicle, "AutoStage was switched off by the player, staging cues stop.");
             _s.ArmedStaging = false;
             _s.StagingActive = false;
-            _s.WarnStatus("AutoStage was switched off.");
+            _s.WarnStatus("AUTOSTAGE OFF.");
             return;
         }
 
@@ -125,7 +125,7 @@ public static partial class GuidanceWindow
             if (_s.StagingActive)
                 GuidanceLog.Debug(vehicle, "staging held, the next sequence would separate the control module.");
             _s.StagingActive = false;
-            _s.WarnStatus("Stage held: the next one drops the control module.");
+            _s.WarnStatus("STAGE HELD: NEXT SEPARATION DROPS CONTROL MODULE.");
             return;
         }
 
@@ -365,8 +365,8 @@ public static partial class GuidanceWindow
         if (now > _s.HandoverPendingUntil)
         {
             _s.HandoverPendingUntil = double.NegativeInfinity;
-            _s.FailBoostback("The boostback did not start", "Hand-over failed: " + (_s.AeroError.Length > 0
-                ? _s.AeroError : "no aero surrogate for the separated booster."));
+            _s.FailBoostback("BOOSTBACK NOT STARTED", "HANDOVER FAILED: " + (_s.AeroError.Length > 0
+                ? _s.AeroError : "NO AERO SURROGATE FOR SEPARATED BOOSTER."));
             GuidanceLog.Info(vehicle, _s.BoostbackStatus);
             return;
         }
@@ -564,7 +564,7 @@ public static partial class GuidanceWindow
         SequenceList sequenceList = tree?.SequenceList;
         if (tree == null || sequenceList == null)
         {
-            why = "no part tree";
+            why = "NO PART TREE";
             return false;
         }
 
@@ -596,19 +596,19 @@ public static partial class GuidanceWindow
         }
         if (!anySequence)
         {
-            why = "no staging sequence left to fire";
+            why = "NO STAGING SEQUENCE LEFT";
             return false;
         }
         if (_separationDrops.Count == 0)
         {
-            why = "no sequence left separates anything";
+            why = "NO SEQUENCE LEFT TO SEPARATE";
             return false;
         }
 
         if (!ModuleStateful<EngineController, EngineControllerState, EngineControllerGlobalState, EmptyStruct>
                 .TryGetFrom(tree.States, out var engineStates))
         {
-            why = "no engine states";
+            why = "NO ENGINE STATES";
             return false;
         }
 
@@ -620,17 +620,17 @@ public static partial class GuidanceWindow
             anyLit = true;
             if (!_separationDrops.Contains(engine.Module.Parent.FullPart))
             {
-                why = "the next separation leaves an engine burning - not a booster";
+                why = "NEXT SEPARATION LEAVES ENGINE BURNING: NOT A BOOSTER";
                 return false;
             }
         }
         if (!anyLit)
-            why = "nothing is burning";
+            why = "NO ENGINE BURNING";
         return anyLit;
     }
 
     /// <summary>
-    /// The first stage, in staging order, that can fly home and has a landing target set (its STAGE SITE in LAUNCH > BOOSTERS), else null. Setting one is what asks for a booster reserve.
+    /// The first stage, in staging order, that can fly home and has a landing target set (its SITE in LAUNCH > BOOSTERS), else null. Setting one is what asks for a booster reserve.
     ///
     /// NOT ONLY THE NEXT ONE. A core under strap-on boosters with no command pod is not the next thing to separate on the pad - the strap-ons are - but it is the booster coming home, and the plan has to size its reserve before lift-off. It arms once the strap-ons are gone and it is next (RefreshReserve).
     /// </summary>
@@ -676,21 +676,21 @@ public static partial class GuidanceWindow
         // ONCE ONLY, and this is not just belt-and-braces. After the booster is gone the next separation is a perfectly good one - an upper stage over a payload, say - and re-arming there would reserve propellant in a stage that is never coming back. The reserve belongs to the first separation of an ascent.
         if (_s.ReserveStaged)
         {
-            _s.ReserveNote = "already staged";
+            _s.ReserveNote = "ALREADY STAGED";
             return;
         }
 
         // Something else separates first - strap-ons round a core - so the next staging is not this booster's. Not a refusal: it arms when they are gone.
         if (!booster.IsNext)
         {
-            _s.ReserveNote = "arms when the stages below it have separated";
+            _s.ReserveNote = "ARMS AFTER STAGES BELOW SEPARATE";
             return;
         }
 
         double boosterDry = BoosterDryKg(_s.StageModel);
         if (!(boosterDry > 0.0))
         {
-            _s.ReserveNote = "no separation in the stage model to keep a reserve for";
+            _s.ReserveNote = "NO SEPARATION IN STAGE MODEL FOR A RESERVE";
             return;
         }
         if (!NextSeparationDropsAllEngines(vehicle, out string why))
@@ -706,7 +706,7 @@ public static partial class GuidanceWindow
         _s.ReserveKg = kg;
         _s.ReserveBoosterDryKg = boosterDry;
         _s.ReserveArmed = true;
-        _s.ReserveNote = double.IsFinite(planned) ? "" : "sized when the convex plan is calculated";
+        _s.ReserveNote = double.IsFinite(planned) ? "" : "SIZED WHEN PLAN IS SOLVED";
     }
 
     /// <summary>
@@ -960,8 +960,8 @@ public static partial class GuidanceWindow
             {
                 _s.TakeoverStop = true;
                 _s.TakeoverReason = engineTaken
-                    ? "Guidance stopped: stock auto burn took the engine."
-                    : "Guidance stopped: another writer took attitude control.";
+                    ? "GUIDANCE STOPPED: STOCK AUTO TOOK ENGINE."
+                    : "GUIDANCE STOPPED: ANOTHER WRITER TOOK ATTITUDE.";
                 _s.ReleaseWithoutEngineCut = true;
                 GuidanceLog.Info(vehicle, engineTaken
                     ? "engine takeover, stock's burn mode reads Auto."
@@ -1197,7 +1197,7 @@ public static partial class GuidanceWindow
             EnsureBoostbackAero(vehicle, parent);
             UpdateReturnDv(vehicle, orbit, parent);
         }
-        // The console asks for the same work while a page shows it: the aero model before a boostback (so START BOOSTBACK finds one), a resample from DIAG, the impact of an idle booster, and the pass strip of a deorbit.
+        // The console asks for the same work while a page shows it: the aero model before a boostback (so the BOOSTBACK verb finds one), a resample from DIAG, the impact of an idle booster, and the pass strip of a deorbit.
         else if (ViewDemand.Wants(vehicle, ViewDemand.Kind.Aero))
             EnsureBoostbackAero(vehicle, parent);
         if (ViewDemand.ConsumeResample(vehicle))
@@ -1220,7 +1220,7 @@ public static partial class GuidanceWindow
     {
         if (!_s.VehicleHeightAuto)
         {
-            _s.VehicleHeightStatus = "manual";
+            _s.VehicleHeightStatus = "MANUAL";
             return;
         }
         long now = GuidanceClock.NowMs;
@@ -1232,7 +1232,7 @@ public static partial class GuidanceWindow
         {
             // Keep the last good value: a guess of zero would plan the CoM into the ground.
             _s.VehicleHeightStowed = false;
-            _s.VehicleHeightStatus = FormattableString.Invariant($"no colliders to measure - holding {_s.VehicleHeightM:F1} m");
+            _s.VehicleHeightStatus = FormattableString.Invariant($"NO COLLIDERS TO MEASURE: HOLDING {_s.VehicleHeightM:F1} m");
             return;
         }
         _s.VehicleHeightM = h.DeployedM;
@@ -1240,7 +1240,7 @@ public static partial class GuidanceWindow
         _s.VehicleHeightCard = h.Stowed > 0 ? Ui.Logic.PageText.LegsStowedCard(_s.VehicleHeightM, h.CurrentM) : "";
         _s.VehicleHeightStatus = h.Stowed > 0
             ? Ui.Logic.PageText.LegsStowed
-            : h.Deployables > 0 ? "Measured, legs deployed" : "Measured, no deployable legs";
+            : h.Deployables > 0 ? "MEASURED, LEGS DEPLOYED" : "MEASURED, NO DEPLOYABLE LEGS";
     }
 
     // Release attitude without replacing the flight computer and losing the player's burn plan or settings.
@@ -1294,7 +1294,7 @@ public static partial class GuidanceWindow
     {
         if (!VehicleControlOwnership.TryClaim(vehicle, ControlClaimant.Guidance, out ControlClaimant holder))
         {
-            _s.WarnStatus($"Guidance held: {VehicleControlOwnership.Describe(holder)} is flying this craft.");
+            _s.WarnStatus($"GUIDANCE HELD BY {VehicleControlOwnership.Describe(holder)}.");
             return false;
         }
         if (acquire)
@@ -1376,7 +1376,7 @@ public static partial class GuidanceWindow
             catch (Exception error)
             {
                 if (failure.Length == 0)
-                    failure = "Guidance release failed: " + error.Message;
+                    failure = "RELEASE FAILED: " + error.Message;
             }
         }
 
@@ -1444,7 +1444,7 @@ public static partial class GuidanceWindow
         ResetLandingEngineWait();
         _s.FcResetPending = true;
         _s.ReleaseRetryKeepsCoast = false;
-        _s.Status = "Guidance release requested.";
+        _s.Status = "RELEASE REQUESTED.";
     }
 
     // A queued reset runs the same cleanup as any other release, so a failed attempt keeps its pending request and is retried on a later step.

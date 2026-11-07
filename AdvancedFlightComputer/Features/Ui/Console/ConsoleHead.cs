@@ -89,8 +89,8 @@ internal static class ConsoleHead
         => inStrip ? f.Idle && f.FallAfterFailure : f.Idle || (f.Subject == null && !f.OtherStop.Enabled);
 
     private static string OtherCraftLine(ConsoleFrame f)
-        => f.OtherStopCraft.Length > 0 ? "AFC flies " + f.OtherStopCraft + ". Its stop is above."
-            : HeadDrawer.OtherCraftCount > 0 ? "AFC flies other craft. Their stops are under More."
+        => f.OtherStopCraft.Length > 0 ? "AFC: " + f.OtherStopCraft + ". STOP ABOVE."
+            : HeadDrawer.OtherCraftCount > 0 ? "AFC: OTHER VEHICLES. STOPS UNDER MORE."
             : "";
 
     public static int Rows(ConsoleFrame f, bool inStrip)
@@ -228,7 +228,7 @@ internal static class ConsoleHead
             RaiseLandingCue(f);
 
             if (_subjectCuePending && f.Activity.BoostbackLive)
-                RaiseCue(new StatusLine(Severity.Cue, "Boostback flies this craft.",
+                RaiseCue(new StatusLine(Severity.Cue, "AFC: BOOSTBACK",
                     ConsolePages.CueTarget(ConsolePage.Land, ConsolePages.EnumKey(LandWay.Boostback))));
 
             string commitNote = GuidanceWindow.PendingCommitNote;
@@ -254,7 +254,7 @@ internal static class ConsoleHead
             lines.Add(new StatusLine(Severity.Warning, refusedPass.Refusal, ""));
 
         foreach (string booster in HeadDrawer.NewBoosters())
-            RaiseCue(new StatusLine(Severity.Cue, $"{booster} separated and flies itself home.", GuidanceWindow.DrawerTarget));
+            RaiseCue(new StatusLine(Severity.Cue, $"{booster} SEPARATED. AFC: BOOSTBACK", GuidanceWindow.DrawerTarget));
 
         if (!string.IsNullOrEmpty(_cue.Text))
         {
@@ -288,8 +288,8 @@ internal static class ConsoleHead
         => SharedVehicleHooks.RcsEnabled && RcsExecRegistry.TryGet(subject.Id, out RcsExecution? exec) && exec.Faulted ? exec : null;
 
     private static string RcsFaultLine(RcsExecution exec) => exec.CleanupPending
-        ? "RCS stopped and its control cleanup failed. RETRY CLEANUP is on BURNS."
-        : "RCS stopped after an internal error. See the log.";
+        ? "RCS STOPPED, CLEANUP FAILED. RETRY CLEANUP ON BURNS."
+        : "RCS STOPPED: INTERNAL ERROR. SEE LOG.";
 
     // The first failure the pilot has not acknowledged goes to the frame.
     private static void ReadFailures(ConsoleFrame f, Vehicle subject)
@@ -299,8 +299,8 @@ internal static class ConsoleHead
         if (f.GuidanceOn)
             GuidanceWindow.ReadFailures(_failures);
         if (FaultedRcs(subject) is RcsExecution faulted)
-            _failures.Add(new CraftFailure("The RCS burn stopped after an error",
-                faulted.CleanupPending ? "Its control cleanup failed. RETRY CLEANUP is on BURNS." : "See the log.", RcsFaultLine(faulted)));
+            _failures.Add(new CraftFailure("RCS BURN STOPPED: ERROR",
+                faulted.CleanupPending ? "CLEANUP FAILED. RETRY CLEANUP ON BURNS." : "SEE LOG.", RcsFaultLine(faulted)));
 
         _acks.Update(subject.Id, _failures);
         foreach (CraftFailure failure in _failures)
@@ -608,7 +608,7 @@ internal static class ConsoleHead
                 ConsoleStyle.PushValueFont();
                 string message = LineText(f, in line);
                 shown = SituationText.MessageLine(message, MeasureCurrentFont, room);
-                if (!inStrip && shown != message + " " + SituationText.YouFly)
+                if (!inStrip && shown != SituationText.WithWho(message))
                 {
                     float wider = room + controlW - MoreWidth(f, inStrip: false, count: false);
                     TryWider(SituationText.MessageLine(message, MeasureCurrentFont, wider), wider);
@@ -676,7 +676,7 @@ internal static class ConsoleHead
 
     private static void DrawFallRow(ConsoleFrame f, float2 origin, float width)
     {
-        const string openAfc = "Open AFC >";
+        const string openAfc = "OPEN AFC >";
         float openW = ConsoleUi.LabelWidth(openAfc);
         float room = width - openW - ImGui.GetStyle().ItemSpacing.X;
         string who = SituationText.YouFly + " ";
@@ -921,9 +921,9 @@ internal static class ConsoleHead
     private static int DrawNoCraft(ConsoleFrame f, float2 origin, float width, float rowH)
     {
         float gap = ImGui.GetStyle().ItemSpacing.X;
-        string what = f.Editor ? "In the editor."
-            : f.Eva ? "On EVA. STAGING, TUNE and TRANSFER work."
-            : "No craft under control.";
+        string what = f.Editor ? "EDITOR"
+            : f.Eva ? "EVA: STAGING, TUNE AND TRANSFER WORK."
+            : "NO CRAFT UNDER CONTROL";
         StopSpec stop = f.OtherStop;
         float rightW = stop.Enabled ? StopWidth() : MoreWidth(f, inStrip: false);
         float room = width - rightW - gap;
@@ -989,7 +989,7 @@ internal static class ConsoleHead
         float labelW = MoreWidth(f, inStrip);
         ImDrawListPtr dl = ImGui.GetWindowDrawList();
         float gap = ImGui.GetStyle().ItemSpacing.X;
-        const string openAfc = "Open AFC >";
+        const string openAfc = "OPEN AFC >";
         float openW = inStrip ? ConsoleUi.LabelWidth(openAfc) : 0f;
 
         float labelX = at.X + width - labelW;
@@ -1032,7 +1032,7 @@ internal static class ConsoleHead
             bool go = ConsoleUi.TextButton("AfcStripOpen", openAfc, at, h,
                 f.FailureWhat.Length > 0 ? ConsoleStyle.TextPrimaryU32 : ConsoleStyle.TextMutedU32, ConsoleStyle.TextPrimaryU32, out bool openHovered);
             if (openHovered)
-                ConsoleUi.Tooltip("Opens the console on the page of what runs.".AsSpan());
+                ConsoleUi.Tooltip("Opens the console on the page of the active mode.".AsSpan());
             if (go)
                 AfcConsole.OpenRunning(ConsolePages.PageOf(f.Stop.Target, f.TransferPasses, f.Activity.RegisteredModeLive));
         }
@@ -1041,7 +1041,7 @@ internal static class ConsoleHead
     }
 
     private static string NoticeText()
-        => Input.GetAssignmentString(InputAction.ToggleTransferPlan) + " opens AFC, not the stock planner. Change this in TUNE, PREFERENCES.";
+        => Input.GetAssignmentString(InputAction.ToggleTransferPlan) + " opens AFC, not the stock planner. Set under TUNE > PREFERENCES.";
 
     private static float NoticeRoom(float width) => Math.Max(1f, width - ConsoleWidgets.ButtonWidth("OK".AsSpan()) - ImGui.GetStyle().ItemSpacing.X);
 

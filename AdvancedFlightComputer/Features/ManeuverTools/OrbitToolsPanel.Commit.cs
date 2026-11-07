@@ -96,7 +96,7 @@ internal static partial class OrbitToolsPanel
     }
 
     private static string Outcome(int passes, OrbitManeuvers.ManeuverResult? maneuver)
-        => passes > 1 ? PageText.PassesOutcome(passes) : PageText.CreateOutcome;
+        => passes > 1 ? PageText.PassesOutcome(passes) : "";
 
     private static string Answer(int passes, in OrbitManeuvers.ManeuverResult maneuver, double budgetMs, bool chained)
     {

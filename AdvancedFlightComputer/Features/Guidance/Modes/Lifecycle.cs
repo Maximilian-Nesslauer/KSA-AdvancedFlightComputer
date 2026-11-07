@@ -139,7 +139,7 @@ public static partial class GuidanceWindow
             return;
         _s = state;
         _s.FailedSteps = 0;
-        _s.FailError("Guidance stopped after a fault", "Guidance stopped: " + error.Message);
+        _s.FailError("GUIDANCE STOPPED: FAULT", "Guidance stopped: " + error.Message);
         HandBackVehicle(vehicle);
     }
 

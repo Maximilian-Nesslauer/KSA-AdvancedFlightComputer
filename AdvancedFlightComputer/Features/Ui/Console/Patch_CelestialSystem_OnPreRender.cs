@@ -18,7 +18,7 @@ internal static class Patch_CelestialSystem_OnPreRender
 {
     internal static bool Applied;
 
-    internal const string UnavailableTip = "SHOW IN WORLD is not available in this session, because the world line patch did not apply. The log names the reason.";
+    internal const string UnavailableTip = "SHOW IN WORLD unavailable. The world line patch did not apply. The log names the reason.";
 
     static void Postfix(IViewport inViewport)
     {
