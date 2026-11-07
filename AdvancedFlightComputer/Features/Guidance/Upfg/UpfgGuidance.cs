@@ -282,7 +282,7 @@ public sealed class UpfgGuidance
             out double3 lambda, out double3 rgo, out double3 iF, out double3 vthrust,
             out double3 rthrust, out double3 vbias, out double3 lambdadot);
         rbias = rgo - rthrust;
-        Rgo = rgo;   // latched for the panel schematic; not used by the solver
+        Rgo = rgo;   // latched for the RGO readout of the console head; not used by the solver
 
         // The steering law's terms, for SteeringAt. Latched before the finite check below only in the sense that the check discards the whole step on failure - a non-finite solution resets and these are never read against it.
         Lambda = lambda;

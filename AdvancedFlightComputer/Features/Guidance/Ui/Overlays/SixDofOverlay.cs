@@ -37,13 +37,13 @@ public static partial class GuidanceWindow
         if (px.Length < n * 14)
             return;
 
-        var trajCol = new ImColor8(120, 200, 255);
-        var nodeCol = new ImColor8(190, 230, 255);
-        var thrCol = new ImColor8(255, 200, 60);
-        var axisCol = new ImColor8(255, 120, 220);
-        var tgtCol = new ImColor8(255, 90, 220);
+        var trajCol = Ui.Canvas.Palette.Plan.Solid;
+        var nodeCol = Ui.Canvas.Palette.Plan.Solid;
+        var thrCol = Ui.Canvas.Palette.Text.Solid;
+        var axisCol = Ui.Canvas.Palette.Dim.Solid;
+        var tgtCol = Ui.Canvas.Palette.Target.Solid;
         var padCol = new ImColor8(235, 235, 235);
-        var refCol = new ImColor8(120, 255, 150);
+        var refCol = Ui.Canvas.Palette.Plan.Solid;
 
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##sixdof_overlay");
         using WindowEnd end = default;

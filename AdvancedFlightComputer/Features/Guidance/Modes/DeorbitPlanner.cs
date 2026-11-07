@@ -187,7 +187,7 @@ internal sealed class DeorbitPlanner : IDisposable
             {
                 if (WorkMilliseconds + Stopwatch.GetElapsedTime(start).TotalMilliseconds >= WorkLimitMilliseconds)
                 {
-                    Status = Plan != null ? "Stock deorbit node ready. Using the checked plan."
+                    Status = Plan != null ? "Stock deorbit burn ready. Using the checked plan."
                         : "The planning work limit ended before a safe approach was found. Change the site or braking altitude.";
                     // An accepted direct approach that was still being checked becomes a refusal. An earlier refusal keeps its reason.
                     if (Direct is { Refusal.Length: 0 }) Direct = Direct with { Refusal = Status };
@@ -309,7 +309,7 @@ internal sealed class DeorbitPlanner : IDisposable
             if (checkedPlan.Value is not DeorbitPlan plan) continue;
             Plan = plan;
             foreach (bool step in RefineSteps(plan)) yield return step;
-            Status = "Stock deorbit node ready.";
+            Status = "Stock deorbit burn ready.";
             yield break;
         }
         Status = candidates.Count > CandidateLimit
@@ -437,12 +437,12 @@ internal sealed class DeorbitPlanner : IDisposable
     {
         double flight = plan.ArrivalTime - plan.DepartureTime;
         var departure = new Result<double>();
-        Status = "A safe node is ready. Refining its departure time.";
+        Status = "A safe burn is ready. Refining its departure time.";
         foreach (bool step in MinimizeSteps(t => TransferCost(t, flight),
             Math.Max(_firstDeparture, plan.DepartureTime - _departureStep),
             Math.Min(_lastDeparture, plan.DepartureTime + _departureStep), departure)) yield return step;
         var refinedFlight = new Result<double>();
-        Status = "A safe node is ready. Refining its flight time.";
+        Status = "A safe burn is ready. Refining its flight time.";
         foreach (bool step in MinimizeSteps(t => TransferCost(departure.Value, t),
             Math.Max(_shortestFlight, flight - _flightStep), Math.Min(_longestFlight, flight + _flightStep),
             refinedFlight)) yield return step;
@@ -656,7 +656,7 @@ internal sealed class DeorbitPlanner : IDisposable
         double height = position.Length() - request.GateRadius;
         if (!(distance > 0) || height > distance * Math.Tan(DirectApproachSlopeDeg * Math.PI / 180))
         {
-            result.Value = $"Direct braking refused at {(position.Length() - request.Parent.MeanRadius) / 1000:F1} km altitude and {distance / 1000:F1} km uprange. Lower the approach first.";
+            result.Value = FormattableString.Invariant($"Direct braking refused at {(position.Length() - request.Parent.MeanRadius) / 1000:F1} km altitude and {distance / 1000:F1} km uprange. Lower the approach first.");
             yield break;
         }
         var solver = new UpfgGuidance();

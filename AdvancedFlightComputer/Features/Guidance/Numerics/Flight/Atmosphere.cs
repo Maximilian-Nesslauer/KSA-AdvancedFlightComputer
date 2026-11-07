@@ -17,7 +17,7 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// game for it - is what lets a solve run on a worker thread and still agree with
 /// what the vehicle will experience.
 ///
-/// The solver must not reference the game, so the mod reads the three values from KSA's AtmosphereReference and constructs this model. The Boostback tab checks this model against KSA's GetAtmosphericDensityAtAltitude on every resample.
+/// The solver must not reference the game, so the mod reads the three values from KSA's AtmosphereReference and constructs this model. The boostback diagnostics check this model against KSA's GetAtmosphericDensityAtAltitude on every resample.
 ///
 /// An isothermal atmosphere has constant P/rho, so a = sqrt(gamma * P0 / rho0) is constant at every altitude. For KSA's Earth that is sqrt(1.4 * 101325 / 1.225) = 340.3 m/s. Gamma is the free parameter and is a constructor argument.
 ///

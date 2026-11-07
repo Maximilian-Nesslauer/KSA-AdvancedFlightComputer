@@ -26,7 +26,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 //
 // AND THE VEHICLE FLIES WHAT IS ASKED. The airflow turns as the trajectory bends, and an attitude loop lagging a turning target flies a steady degree or two of angle of attack nobody commanded - lift that carried the impact past the site before the guidance noticed. A trim integrates the commanded tilt against the tilt actually flown, measured off the body nose axis every step; see GlideTrackGain.
 //
-// THE INTEGRAL DEFAULTS OFF. A glide is minutes long and the miss starts kilometres out, so the integral of an ordinary, shrinking miss grows into a large stale bias that then drives the vehicle past the site. Kd bought nothing either - the overshoot it was meant to damp turned out to be the attitude lag, which the trim removes. Both are left on the panel to tune against the real thing.
+// THE INTEGRAL DEFAULTS OFF. A glide is minutes long and the miss starts kilometres out, so the integral of an ordinary, shrinking miss grows into a large stale bias that then drives the vehicle past the site. Kd bought nothing either - the overshoot it was meant to damp turned out to be the attitude lag, which the trim removes. Both are left on the TUNE page to tune against the real thing.
 //
 // Closed-loop flat-earth runs through KSAero's aero, from descending and from still-climbing cutoffs between 40 and 90 km, boosters of fineness 6 to 13 and a capsule, with up to 5 s of attitude lag: every case within 2 m of the site, at most 11 m of wrong-way motion and 4 m of overshoot.
 public static partial class GuidanceWindow
@@ -69,8 +69,15 @@ public static partial class GuidanceWindow
             return "KSAero is not loaded - stock aero makes no lift, so " + lost;
         KsaAeroSweep.Result aero = _s.Aero;
         if (aero?.Table != null && aero.Atmosphere != null && aero.LiftToDragMax < GlideMinLiftToDrag)
-            return $"This airframe makes no usable lift (L/D up to {aero.LiftToDragMax:F3}), so " + lost;
+            return FormattableString.Invariant($"This airframe makes no usable lift (L/D up to {aero.LiftToDragMax:F3}), so ") + lost;
         return "";
+    }
+
+    internal static string AeroLiftNote(IParentBody parent)
+    {
+        if (!HasPhysicalAtmosphere(parent) || AeroLiftWarning().Length == 0)
+            return "";
+        return KsaeroLoaded ? Ui.Logic.PageText.NoLiftAirframe : Ui.Logic.PageText.NoLiftModel;
     }
 
     /// <summary>
@@ -327,7 +334,7 @@ public static partial class GuidanceWindow
 
         if (noLift)
         {
-            HoldGlide("The active aero model makes no lift to steer with - holding alpha 0.");
+            HoldGlide(GlideNoLiftStatus);
             return;
         }
 
@@ -445,6 +452,8 @@ public static partial class GuidanceWindow
         _s.GlideAccelCmd = 0.0;
         _s.GlideStatus = why;
     }
+
+    private const string GlideNoLiftStatus = "The active aero model makes no lift to steer with - holding alpha 0.";
 
     private static void HoldGlide(string why)
     {

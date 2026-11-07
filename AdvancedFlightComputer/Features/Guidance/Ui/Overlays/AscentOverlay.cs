@@ -7,6 +7,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Features.Ui.Canvas;
 using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
 // Ascent overlay: the target orbit and the trajectory flown so far, drawn in the world so they can be read straight off the map/orbit view. Uses the shared projection helpers in Ui/Overlays/OverlayCore.cs.
@@ -50,8 +51,9 @@ public static partial class GuidanceWindow
             return;
         _s.TraceLastTime = now;
 
-        // Allocated on the first sample rather than with the state: this is by far the largest thing a vehicle's flight computer owns, and state now exists for every craft the panel draws, not only the ones being flown.
+        // Allocated on the first sample rather than with the state: this is by far the largest thing a vehicle's flight computer owns, and state exists for every craft the console draws, not only the ones being flown.
         _s.Trace ??= new double3[TraceCapacity];
+        _traceTimes.GetValue(_s, _ => new double[TraceCapacity])[_s.TraceHead] = now;
         _s.Trace[_s.TraceHead] = orbit.StateVectors.PositionCci;
         _s.TraceHead = (_s.TraceHead + 1) % TraceCapacity;
         if (_s.TraceCount < TraceCapacity)
@@ -67,6 +69,11 @@ public static partial class GuidanceWindow
             return false;
         return orbit.StateVectors.PositionCci.Length() - parent.MeanRadius > TraceMinAltitude;
     }
+
+    // The sim time of each slot of the trace, read only by the LAUNCH picture, which turns the track into the frame of the rotating ground. The trace itself stays in CCI for the map.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<VehicleAutopilotState, double[]> _traceTimes = new();
+
+    private static double[] TraceTimes() => _traceTimes.TryGetValue(_s, out double[] times) ? times : null;
 
     private static void ResetTrace()
     {
@@ -87,12 +94,10 @@ public static partial class GuidanceWindow
         ImDrawListPtr dl = BeginOverlayWindow(vp, "##ascent_overlay");
         using WindowEnd end = default;
 
-        var targetCol = new ImColor8(90, 225, 255);   // cyan  - target orbit
-        var traceCol = new ImColor8(255, 60, 220);    // magenta - flown so far
-
-        DrawTargetOrbit(dl, orbit, parent, bodyRadius, targetCol);
+        // The colours of the LAUNCH picture, so the map and the picture read the same: target, plan, flown.
+        DrawTargetOrbit(dl, orbit, parent, bodyRadius, Palette.Target.Solid);
         DrawConvexPlan(dl, orbit, parent);
-        DrawTrace(dl, traceCol);
+        DrawTrace(dl, Palette.Flown.Solid);
     }
 
     // Scratch for the drawn plan, grown on demand.
@@ -101,7 +106,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// The convex plan's trajectory, from the pad to insertion, with its separations, the UPFG hand-over and the insertion marked.
     ///
-    /// DRAWN FROM WHERE THE PAD IS NOW. The plan's positions are inertial, from the instant it was solved, and the pad has turned with the body since - so before lift-off the whole plan is turned about the spin axis by the angle the body has turned, which is where the same climb would go if it started now. From EXECUTE on it is frozen at the lift-off instant, so the magenta trace flown lies straight over it. After a flight, or once the vehicle has moved off its pad, the stored plan describes a lift-off that is no longer on offer and is not drawn.
+    /// DRAWN FROM WHERE THE PAD IS NOW. The plan's positions are inertial, from the instant it was solved, and the pad has turned with the body since - so before lift-off the whole plan is turned about the spin axis by the angle the body has turned, which is where the same climb would go if it started now. From the launch commit on it is frozen at the lift-off instant, so the trace flown lies straight over it. After a flight, or once the vehicle has moved off its pad, the stored plan describes a lift-off that is no longer on offer and is not drawn.
     /// </summary>
     private static void DrawConvexPlan(ImDrawListPtr dl, Orbit orbit, IParentBody parent)
     {
@@ -136,14 +141,14 @@ public static partial class GuidanceWindow
         for (int k = 0; k < n; k++)
             _planPoints[k] = RotZ(new double3(sol.Position[k * 3], sol.Position[k * 3 + 1], sol.Position[k * 3 + 2]), turn);
 
-        var col = sol.Usable ? new ImColor8(255, 170, 40) : new ImColor8(255, 90, 70);
+        ImColor8 col = sol.Usable ? Palette.Plan.Solid : Palette.Bad.Solid;
         DrawCciPolyline(dl, _planPoints.AsSpan(0, n), col, 2.0f);
 
         foreach (int k in plan.Series.StagingNodes)
             if (TryProjectCci(_planPoints[k], out float2 s))
             {
                 dl.AddCircleFilled(s, 3.5f, col);
-                OvText(dl, s + new float2(7f, -6f), col, $"stage {sol.NodeStage[k] + 1} at {plan.Series.AltitudeKm[k]:F0} km");
+                OvText(dl, s + new float2(7f, -6f), col, FormattableString.Invariant($"Stage {sol.NodeStage[k] + 1} at {plan.Series.AltitudeKm[k]:F0} km"));
             }
 
         for (int k = 0; k < n; k++)
@@ -152,7 +157,7 @@ public static partial class GuidanceWindow
                 if (TryProjectCci(_planPoints[k], out float2 s))
                 {
                     dl.AddCircle(s, 5f, col, 0, 1.5f);
-                    OvText(dl, s + new float2(7f, 6f), col, $"UPFG {_s.ConvexHandoverAltKm:F0} km");
+                    OvText(dl, s + new float2(7f, 6f), col, FormattableString.Invariant($"UPFG {_s.ConvexHandoverAltKm:F0} km"));
                 }
                 break;
             }
@@ -161,7 +166,7 @@ public static partial class GuidanceWindow
         {
             dl.AddCircleFilled(end, 4f, col);
             OvText(dl, end + new float2(7f, -6f), col,
-                $"insert {plan.Series.AltitudeKm[n - 1]:F0} km, {sol.Time[n - 1]:F0} s, {sol.FinalMass / 1000.0:F1} t");
+                FormattableString.Invariant($"Insert {plan.Series.AltitudeKm[n - 1]:F0} km, {sol.Time[n - 1]:F0} s, {sol.FinalMass / 1000.0:F1} t"));
         }
     }
 
@@ -236,12 +241,12 @@ public static partial class GuidanceWindow
         if (TryProjectCci(ring[0], out float2 peScreen))
         {
             dl.AddCircleFilled(peScreen, 4f, col);
-            dl.AddText(peScreen + new float2(7f, -6f), col, $"Pe {_s.PeKm:F0} km");
+            dl.AddText(peScreen + new float2(7f, -6f), col, FormattableString.Invariant($"Pe {_s.PeKm:F0} km"));
         }
         if (TryProjectCci(ring[segments / 2], out float2 apScreen))
         {
             dl.AddCircleFilled(apScreen, 4f, col);
-            dl.AddText(apScreen + new float2(7f, -6f), col, $"Ap {_s.ApKm:F0} km");
+            dl.AddText(apScreen + new float2(7f, -6f), col, FormattableString.Invariant($"Ap {_s.ApKm:F0} km"));
         }
     }
 

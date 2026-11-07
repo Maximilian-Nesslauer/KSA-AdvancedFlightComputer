@@ -4,6 +4,7 @@ using System;
 using System.Text;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using Brutal.Logging;
 using KSA;
 
@@ -29,8 +30,24 @@ internal static class GuidanceLog
     internal static void Info(Vehicle vehicle, string message)
         => DefaultCategory.Log.Info($"[AFC] Guidance '{vehicle?.Id}': {message}");
 
+    /// <summary><paramref name="text"/> cut to at most <paramref name="max"/> characters, see <see cref="ShortLines"/>.</summary>
+    internal static string Cut(string text, int max) => ShortLines.Cut(text, max);
+
     /// <summary>
-    /// The stage list the way the panel's staging bar shows it, one entry per stage with its
+    /// Detail lines at Debug level of at most <see cref="ShortLines.Max"/> characters, each one
+    /// <paramref name="head"/> and the next part of <paramref name="text"/>, so a long detail stays in
+    /// the log without one long line on screen. They print only while <see cref="Enabled"/>.
+    /// </summary>
+    internal static void DebugWrapped(Vehicle vehicle, string head, string text)
+    {
+        if (!Enabled)
+            return;
+        foreach (string part in ShortLines.Split(text, ShortLines.Max - head.Length))
+            DefaultCategory.Log.Debug($"[AFC] Guidance '{vehicle?.Id}': {head}{part}");
+    }
+
+    /// <summary>
+    /// The stage list the way the LAUNCH page's staging bar shows it, one entry per stage with its
     /// delta-v, burn time, thrust and provenance.
     /// </summary>
     internal static string DescribeStages(UpfgVehicle model)

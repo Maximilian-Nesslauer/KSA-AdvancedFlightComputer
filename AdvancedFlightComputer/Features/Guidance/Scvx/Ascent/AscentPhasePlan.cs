@@ -70,7 +70,7 @@ public static class AscentPhasePlan
         public required double[] StartMass { get; init; }
         /// <summary>One line per stage, for the log.</summary>
         public required string[] Describe { get; init; }
-        /// <summary>What was decided about the solids, for the log and the panel.</summary>
+        /// <summary>What was decided about the solids, for the log and the console.</summary>
         public required List<string> Notes { get; init; }
         /// <summary>A core was planned throttled down to outlast its boosters.</summary>
         public bool CoreThrottledDown { get; init; }

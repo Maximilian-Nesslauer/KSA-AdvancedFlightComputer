@@ -275,7 +275,7 @@ internal static class SixDofLog
     }
 
     /// <summary>
-    /// Write what is buffered and report this write. LastError keeps the last error of the run for the panel, so it cannot say whether this write succeeded, because a repeated failure carries the same text.
+    /// Write what is buffered and report this write. LastError keeps the last error of the run for the console, so it cannot say whether this write succeeded, because a repeated failure carries the same text.
     /// </summary>
     internal static string Flush()
     {

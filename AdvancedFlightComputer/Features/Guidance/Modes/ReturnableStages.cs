@@ -53,6 +53,9 @@ public static partial class GuidanceWindow
         /// <summary>Which staging sequence separates it.</summary>
         public int SequenceIndex;
 
+        /// <summary>The stock Sequence.Number of that sequence, the number the stock staging list shows. It is not the list index.</summary>
+        public int SequenceNumber;
+
         /// <summary>True when this is the NEXT thing to separate - the one the number
         /// below is actually about rather than hypothetical.</summary>
         public bool IsNext;
@@ -145,6 +148,7 @@ public static partial class GuidanceWindow
             }
             stage.Name = string.IsNullOrEmpty(detached.DisplayName) ? "stage" : detached.DisplayName;
             stage.SequenceIndex = i;
+            stage.SequenceNumber = sequences[i].Number;
             stage.IsNext = first;
             stage.HasTarget = false;
             if (_s.StageTargets.TryGetValue(stage.RootId, out double2 site))
@@ -236,7 +240,7 @@ public static partial class GuidanceWindow
         {
             // Normal, not a fault: a vehicle still climbing has no ballistic impact inside the horizon, so there is nothing yet to drag onto a site.
             _s.ReturnDvNote = nom.Status == ImpactStatus.NoImpactWithinHorizon
-                ? $"no ballistic impact within {ImpactHorizonMinutes:F0} min"
+                ? "no ballistic impact within " + Ui.Logic.Fmt.Time(ImpactHorizonMinutes * 60.0)
                 : nom.Status.ToString();
             return;
         }
