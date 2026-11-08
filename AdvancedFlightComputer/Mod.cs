@@ -18,13 +18,15 @@ namespace AdvancedFlightComputer;
 [StarMapMod]
 public sealed class Mod
 {
-    private const string TestedGameVersion = "v2026.10.25.5707";
+    private const string TestedGameVersion = "v2026.11.10.5801";
 
     private static readonly FeaturePatchSet _patches = new("com.maxi.advancedflightcomputer");
 
     // The AUTOSTAGE gauge button resolves its enum by name while the game reads Gauges.xml, which happens before any AllModsLoaded hook.
-    [StarMapImmediateLoad]
-    public void OnImmediateLoad(KSA.Mod mod) => AutoStageFeature.InjectGaugeEnumAtLoad();
+    // StarMap hooks [StarMapImmediateLoad] to Mod.PrepareSystems, which KSA 2026.11.10.5801 removed, so the enum goes in before Program.Main.
+    // GaugeButtonFlightComputer's static constructor only builds the enum list, so touching it this early is safe.
+    [StarMapBeforeMain]
+    public void OnBeforeMain() => AutoStageFeature.InjectGaugeEnumAtLoad();
 
     [StarMapAllModsLoaded]
     public void OnFullyLoaded()

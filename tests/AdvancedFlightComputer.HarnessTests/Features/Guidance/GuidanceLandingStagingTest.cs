@@ -600,8 +600,26 @@ public sealed class GuidanceLandingStagingTest : AfcTest
 
 public class AtmosphericBody : DispatchProxy
 {
+    // The guidance reads only whether the body has air (a runtime atmosphere with a boundary above zero), so an empty atmosphere with a
+    // height is enough, and its internal constructor is skipped.
     protected override object Invoke(MethodInfo? targetMethod, object?[]? args)
-        => targetMethod?.Name == nameof(IParentBody.GetAtmosphereReference)
-            ? new AtmosphereReference()
-            : throw new NotSupportedException(targetMethod?.Name);
+        => targetMethod?.Name switch
+        {
+            nameof(IParentBody.GetPhysicalAtmosphere) => WithHeight(Empty<PhysicalAtmosphere>(), 100_000.0),
+            nameof(IParentBody.GetAtmosphereReference) => new AtmosphereReference(),
+            _ => throw new NotSupportedException(targetMethod?.Name),
+        };
+
+    private static PhysicalAtmosphere WithHeight(PhysicalAtmosphere atmosphere, double height)
+    {
+        typeof(PhysicalAtmosphere).GetField(nameof(PhysicalAtmosphere.Height))!.SetValue(atmosphere, height);
+        return atmosphere;
+    }
+
+    private static T Empty<T>() where T : class
+    {
+        var value = (T)RuntimeHelpers.GetUninitializedObject(typeof(T));
+        GC.SuppressFinalize(value);
+        return value;
+    }
 }

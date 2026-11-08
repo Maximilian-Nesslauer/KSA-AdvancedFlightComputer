@@ -174,18 +174,27 @@ internal static class AutoStageDefaults
         if (onOwnTemplate(template))
             return true;
 
-        foreach (PartInstance subPart in template.SubPartInstances)
+        foreach (TransformDataReference<SubPartTemplate> subPart in template.SubPartInstances)
         {
+            // The content loader resolves each sub-part reference and leaves Value null when the Ref names no sub-part template.
+            SubPartTemplate? subTemplate = subPart.Value;
+            if (subTemplate == null)
+            {
+                DefaultCategory.Log.Warning(
+                    $"[AFC] Part '{template.Id}' references the sub-part '{subPart.Ref}', which does not resolve.");
+                continue;
+            }
+
             try
             {
-                if (onOwnTemplate(subPart.GetTemplate()))
+                if (onOwnTemplate(subTemplate))
                     return true;
             }
             catch (Exception ex)
             {
                 // Contained, so one malformed part cannot empty the whole table.
                 DefaultCategory.Log.Warning(
-                    $"[AFC] Part '{template.Id}' references the sub-part '{subPart.InstanceOf}', which does not resolve: {ex.Message}");
+                    $"[AFC] Part '{template.Id}' has the sub-part '{subPart.Ref}', which could not be read: {ex.Message}");
             }
         }
         return false;

@@ -126,7 +126,7 @@ internal static class KsaGfold
     internal static string RefusalReason(Vehicle vehicle, IParentBody parent)
     {
         // This model assumes constant exhaust velocity and no aerodynamic forces.
-        if (parent?.GetAtmosphereReference()?.Physical != null)
+        if (parent?.GetPhysicalAtmosphere() is { Height: > 0.0 })
             return "G-FOLD is limited to airless bodies. Use terminal hover in atmosphere.";
         if (!KsaEnginePerf.SupportsThrottleControl(vehicle))
             return "G-FOLD requires active, supplied liquid engines with shutdown control.";

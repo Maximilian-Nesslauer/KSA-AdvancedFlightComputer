@@ -93,9 +93,9 @@ public sealed class SequenceBurnStateTest : AfcTest
     // Deserialize the solid booster through the normal vehicle save path so the game builds its engine and grain modules.
     private static VehicleSaveData BuildSyntheticSrb()
     {
-        // The harness stops before Program.Main loads grain geometries, so load them before the fixture creates its solid motor.
+        // The content load builds the grain geometries in its post-load step (GrainGeometryLibrary.Build), and the solid motor of the fixture needs them.
         if (GrainGeometryLibrary.All().IsEmpty)
-            GrainGeometryLibrary.LoadAll();
+            throw new InvalidOperationException("The content load built no grain geometries, so the solid motor cannot be made.");
 
         const string xml =
             """

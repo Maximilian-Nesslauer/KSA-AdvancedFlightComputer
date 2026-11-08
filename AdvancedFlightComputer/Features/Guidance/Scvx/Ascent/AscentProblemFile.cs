@@ -31,6 +31,15 @@ public static class AscentProblemFile
         public double[]? SolidThrust { get; set; }
     }
 
+    private sealed class SampledAtmosphereDto
+    {
+        public double[] Altitude { get; set; } = [];
+        public double[] Density { get; set; } = [];
+        public double[] Pressure { get; set; } = [];
+        public double TopAltitude { get; set; }
+        public double SpeedOfSound { get; set; }
+    }
+
     private sealed class ProblemDto
     {
         public double Mu { get; set; }
@@ -40,7 +49,8 @@ public static class AscentProblemFile
         public double[] V0 { get; set; } = [];
         public double M0 { get; set; }
         public StageDto[] Stages { get; set; } = [];
-        public double[]? Atmosphere { get; set; }       // rho0, p0, scale height, gamma; null for none
+        public double[]? Atmosphere { get; set; }       // rho0, p0, scale height, gamma of an exponential atmosphere; null for none or a sampled one
+        public SampledAtmosphereDto? SampledAtmosphere { get; set; }
         public double[]? CdMach { get; set; }
         public double[]? Cd { get; set; }
         // The whole table, attitude and all, when the problem has one: angles retrograde-first as AeroTable holds them, values row-major Mach by angle. Cd above is its nose-first column, which a file without the table falls back to.
@@ -116,8 +126,24 @@ public static class AscentProblemFile
         };
         if (p.Atmosphere is KsaAscentAtmosphere ksa)
         {
-            ExponentialAtmosphere a = ksa.Atmosphere;
-            dto.Atmosphere = [a.SeaLevelDensity, a.SeaLevelPressure, a.ScaleHeight, a.Gamma];
+            switch (ksa.Atmosphere)
+            {
+                case ExponentialAtmosphere a:
+                    dto.Atmosphere = [a.SeaLevelDensity, a.SeaLevelPressure, a.ScaleHeight, a.Gamma];
+                    break;
+                case SampledAtmosphere a:
+                    dto.SampledAtmosphere = new SampledAtmosphereDto
+                    {
+                        Altitude = a.AltitudeSamples,
+                        Density = a.DensitySamples,
+                        Pressure = a.PressureSamples,
+                        TopAltitude = a.TopAltitude,
+                        SpeedOfSound = a.SpeedOfSound,
+                    };
+                    break;
+                default:
+                    throw new NotSupportedException($"{ksa.Atmosphere.GetType().Name} has no file form.");
+            }
             dto.CdMach = MachSamples;
             dto.Cd = MachSamples.Select(m => ksa.DragCoefficient(new Dual(m)).V).ToArray();
             if (ksa.Table is { } table)
@@ -150,9 +176,11 @@ public static class AscentProblemFile
         ProblemDto dto = JsonSerializer.Deserialize<ProblemDto>(json)
             ?? throw new InvalidDataException("not an ascent problem");
         AscentAtmosphere air = VacuumAscentAtmosphere.Instance;
-        if (dto.Atmosphere is { Length: 4 } a)
+        AtmosphereModel? atm = dto.SampledAtmosphere is { } sampled
+            ? new SampledAtmosphere(sampled.Altitude, sampled.Density, sampled.Pressure, sampled.TopAltitude, sampled.SpeedOfSound)
+            : dto.Atmosphere is { Length: 4 } a ? new ExponentialAtmosphere(a[0], a[1], a[2], a[3]) : null;
+        if (atm != null)
         {
-            var atm = new ExponentialAtmosphere(a[0], a[1], a[2], a[3]);
             AeroTable? table = null;
             if (dto.CdMach is { Length: >= 2 } machs && dto.CdAlphaDeg is { Length: >= 2 } alphas
                 && dto.CdTable is { } grid && grid.Length == machs.Length * alphas.Length)

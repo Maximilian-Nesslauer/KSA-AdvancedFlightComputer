@@ -72,8 +72,8 @@ internal static class VehicleCommandSink
 
         if (receipt.Commanded)
             outputs.AnyActuatorCommanded = true;
-        if (receipt.WakeupSec < outputs.NextWakeupDeltaTime)
-            outputs.NextWakeupDeltaTime = receipt.WakeupSec;
+        // Only the RCS executor asks for an earlier step, so the step shows up as RCS steering in the timestep diagnostics.
+        outputs.RequestWakeup(receipt.WakeupSec, PhysicsStepLimit.RcsSteering);
     }
 
     [HarmonyPatch(typeof(FlightComputer), nameof(FlightComputer.ComputeControl),

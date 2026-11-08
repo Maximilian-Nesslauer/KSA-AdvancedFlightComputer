@@ -16,6 +16,7 @@ public static class VehicleFixtures
     public static Vehicle SpawnDesign(
         CelestialSystem system, IParentBody parent, PartInstance design, string id, Orbit orbit)
     {
+        EnsurePartsLoaded(design, id);
         EnsureIdAvailable(system, id);
         PartTree tree = PartTree.Deserialize(design);
         Vehicle? vehicle = null;
@@ -40,6 +41,7 @@ public static class VehicleFixtures
     {
         PartInstance design = data.RootPartInstance
             ?? throw new InvalidOperationException($"vehicle '{data.Id}' has no root part instance.");
+        EnsurePartsLoaded(design, data.Id);
         EnsureIdAvailable(system, id);
         PartTree tree = PartTree.Deserialize(design);
         Vehicle? vehicle = null;
@@ -61,6 +63,17 @@ public static class VehicleFixtures
             RollBackSpawn(system, id, vehicle, tree);
             throw;
         }
+    }
+
+    // PartTree.Deserialize fails with a bare NullReferenceException on a part id the game no longer
+    // loads, so the check runs first, as CelestialSystem.DeserializeSave does with the same call.
+    private static void EnsurePartsLoaded(PartInstance design, string name)
+    {
+        string? missingParts = design.FindMissingParts();
+        if (missingParts != null)
+            throw new InvalidOperationException(
+                $"vehicle '{name}' uses parts that are missing or failed to load ({missingParts}). " +
+                "Save it again in the game, or build it again from the current parts.");
     }
 
     private static void EnsureIdAvailable(CelestialSystem system, string id)

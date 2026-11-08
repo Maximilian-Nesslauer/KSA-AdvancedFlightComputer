@@ -12,7 +12,7 @@ public static partial class GuidanceWindow
     private const double LandingLastSequenceGrace = 2.0 * SequenceCooldown;
 
     private static bool HasPhysicalAtmosphere(IParentBody parent)
-        => parent?.GetAtmosphereReference()?.Physical != null;
+        => parent?.GetPhysicalAtmosphere() is { Height: > 0.0 };
 
     private static bool PrepareLandingEngines(Vehicle vehicle, IParentBody parent, double now, bool requireAirless)
     {

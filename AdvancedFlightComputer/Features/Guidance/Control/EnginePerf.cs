@@ -337,11 +337,11 @@ internal static class KsaEnginePerf
 
     internal static double AmbientPressureAt(IParentBody parent, double altitudeAslM)
     {
-        PhysicalAtmosphereReference physical = parent?.GetAtmosphereReference()?.Physical;
-        // Same cutoff as PhysicsEnvironment.RecomputePositionalValues, so vacuum reads exactly zero.
-        if (physical == null || altitudeAslM >= (double)physical.Height)
+        PhysicalAtmosphere physical = parent?.GetPhysicalAtmosphere();
+        // Same cutoff and the same clamp at mean radius as PhysicsEnvironment.RecomputePositionalValues, so vacuum reads exactly zero and a site below mean radius reads sea level pressure.
+        if (physical == null || altitudeAslM >= physical.Height)
             return 0.0;
-        double pressure = physical.GetAtmosphericPressureAtAltitude(altitudeAslM);
+        double pressure = physical.ComputePressureAtAltitude(Math.Max(altitudeAslM, 0.0));
         return double.IsFinite(pressure) && pressure > 0.0 ? pressure : 0.0;
     }
 }
