@@ -47,7 +47,6 @@
     <ItemGroup>
       <ExpectedPackageFile Include="$(GuidanceVerifyDir)$(AssemblyName)/$(AssemblyName).dll" />
       <ExpectedPackageFile Include="$(GuidanceVerifyDir)$(AssemblyName)/mod.toml" />
-      <ExpectedPackageFile Include="@(PatchFile->'$(GuidanceVerifyDir)$(AssemblyName)/Patches/%(Filename)%(Extension)')" />
       <ExpectedPackageFile Include="@(ModPayloadFile->'$(GuidanceVerifyDir)$(AssemblyName)/%(TargetPath)')" />
       <ActualPackageFile Include="$(GuidanceVerifyDir)**/*" />
       <MissingPackageFile Include="@(ExpectedPackageFile->'%(FullPath)')" Exclude="@(ActualPackageFile->'%(FullPath)')" />

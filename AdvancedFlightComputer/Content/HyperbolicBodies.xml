@@ -1,0 +1,21 @@
+<Assets>
+  <!--
+    Interstellar comets need a Mass and a SphereOfInfluence before the Transfer Planner can target
+    them. Stock already gives 3I_ATLAS a Mass. Each row merges into the stock comet with the same Id
+    and keeps its orbit and radius. PatchIfExists skips a comet that a system mod removed.
+  -->
+
+  <InterstellarComet Id="Oumuamua" Modify="PatchIfExists">
+    <Mass Gg="4.19" />
+    <SphereOfInfluence Km="50000" />
+  </InterstellarComet>
+
+  <InterstellarComet Id="Borisov" Modify="PatchIfExists">
+    <Mass Gg="524" />
+    <SphereOfInfluence Km="50000" />
+  </InterstellarComet>
+
+  <InterstellarComet Id="3I_ATLAS" Modify="PatchIfExists">
+    <SphereOfInfluence Km="50000" />
+  </InterstellarComet>
+</Assets>
