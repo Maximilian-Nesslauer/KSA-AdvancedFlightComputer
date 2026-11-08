@@ -67,6 +67,11 @@ public abstract class AtmosphereModel
     }
 
     /// <summary>
+    /// The scale height just above sea level, m. Density is clamped at sea level, so its slope there is zero and <see cref="ScaleHeightAt"/> at exactly zero is infinite.
+    /// </summary>
+    public double SeaLevelScaleHeight => ScaleHeightAt(Math.BitIncrement(0.0));
+
+    /// <summary>
     /// The lowest altitude at which the density has fallen to the given value, m, by bisection on the monotonic density. Zero when sea level is already thinner than that, and the top when the value is below the density floor.
     /// </summary>
     public virtual double AltitudeAtDensity(double density)

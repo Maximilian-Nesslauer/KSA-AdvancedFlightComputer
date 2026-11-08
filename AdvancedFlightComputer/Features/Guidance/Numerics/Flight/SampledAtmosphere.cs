@@ -5,7 +5,7 @@ namespace AdvancedFlightComputer.Guidance.Numerics.Flight;
 /// <summary>
 /// An atmosphere given as density and pressure samples at increasing altitudes from sea level to the top, with ln(rho) and ln(P) interpolated linearly between the samples.
 ///
-/// The mod fills it from the game's own PhysicalAtmosphere.ComputeDensityAtAltitude and ComputePressureAtAltitude, so the solvers fly the game's layered air on a worker thread without a reference to the game. Inside an isothermal layer ln(rho) and ln(P) are straight lines in altitude, so the interpolation is exact there; inside a layer with a lapse rate it is a chord of a smooth curve. The slope of ln(rho) jumps where the lapse rate changes, so the caller puts a sample on every point of the temperature profile and no chord straddles a corner. The adapter that builds the model measures the remaining error against the game.
+/// The mod fills it from the game's own PhysicalAtmosphere.ComputeDensityAtAltitude and ComputePressureAtAltitude, so the solvers fly the game's layered air on a worker thread without a reference to the game. Inside an isothermal layer ln(rho) and ln(P) are straight lines in geopotential, which is nearly linear in altitude over one sample, so the interpolation is nearly exact there; inside a layer with a lapse rate it is a chord of a smooth curve. The slope of ln(rho) jumps where the lapse rate changes, so the caller puts a sample on every point of the temperature profile and no chord straddles a corner. The adapter that builds the model measures the remaining error against the game.
 ///
 /// The slope that <see cref="Density(Dual)"/> gives is constant between two samples, so the local scale height (<see cref="AtmosphereModel.ScaleHeightAt"/>) is the game's density ratio across one interval: dh / ln(rho_i / rho_i+1).
 /// </summary>
@@ -145,6 +145,6 @@ public sealed class SampledAtmosphere : AtmosphereModel
 
     public override string ToString()
         => $"rho0={SeaLevelDensity:G4} kg/m^3, P0={SeaLevelPressure:G6} Pa, "
-         + $"H0={ScaleHeightAt(0.0) / 1000.0:F2} km, top={TopAltitude / 1000.0:F1} km, "
+         + $"H0={SeaLevelScaleHeight / 1000.0:F2} km, top={TopAltitude / 1000.0:F1} km, "
          + $"a={SpeedOfSound:F1} m/s, {_altitude.Length} samples";
 }

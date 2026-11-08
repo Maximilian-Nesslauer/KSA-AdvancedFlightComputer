@@ -28,7 +28,7 @@ public static class KsaAeroSweep
     /// <summary>Alpha the pointing sensitivity is read at, degrees from tail-first.</summary>
     private const double PointingAlphaDeg = 5.0;
 
-    /// <summary>Uniform intervals the atmosphere column is sampled in, before the points of the temperature profile are added. 2048 keeps the chord error of ln(rho) near 1e-5 on the stock atmospheres.</summary>
+    /// <summary>Uniform intervals the atmosphere column is sampled in, before the points of the temperature profile are added. 2048 aims for a chord error of ln(rho) near 1e-5; the mirror check in the boostback gauge measures the real error per body.</summary>
     private const int AtmosphereIntervals = 2048;
 
     /// <summary>The largest relative density error of the sampled atmosphere that the readout shows as good.</summary>

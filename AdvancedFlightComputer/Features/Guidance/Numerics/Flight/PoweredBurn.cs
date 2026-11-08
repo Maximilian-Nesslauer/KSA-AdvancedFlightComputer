@@ -75,7 +75,7 @@ public struct PoweredBurnSystem : IOdeSystem
 
     /// <summary>The glide after cutoff: the angle of attack it is planned at, radians, and the lift table that angle lifts through (see DragCoastSystem.LiftTable). Zero, or no table, for the engine-first ballistic coast.</summary>
     public double GlideAlpha;
-    public AeroTable LiftTable;
+    public AeroTable? LiftTable;
 
     /// <summary>Steering: the direction at ignition. Dual because the shoot
     /// differentiates with respect to the angles that built it.</summary>

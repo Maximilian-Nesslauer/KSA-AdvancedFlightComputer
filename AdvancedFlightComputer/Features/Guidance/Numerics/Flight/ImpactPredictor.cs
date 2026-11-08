@@ -146,7 +146,7 @@ public struct DragCoastSystem : IOdeSystem
     }
 
     /// <summary>Lift coefficient table C_L(Mach, alpha), signed as KsaAeroSweep measures it. With a non-zero <see cref="Alpha"/> the coast carries |C_L| of lift up the trajectory - a lifting glide. Null, or Alpha 0, for the engine-first ballistic coast.</summary>
-    public AeroTable LiftTable;
+    public AeroTable? LiftTable;
 
     /// <summary>Below this sine of the angle between the airflow and the vertical, the lift fades out: a vertical fall has no up-range direction to lift in.</summary>
     private const double LiftDirectionFloor = 0.05;

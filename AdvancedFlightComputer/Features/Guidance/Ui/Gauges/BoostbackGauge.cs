@@ -511,7 +511,7 @@ public static partial class GuidanceWindow
         GaugeRowText(D, "SEA LEVEL RHO", FormattableString.Invariant($"{atm.SeaLevelDensity:F4} kg/m^3"));
         GaugeRowText(D, "SEA LEVEL P", FormattableString.Invariant($"{atm.SeaLevelPressure / 1000.0,8:F2} kPa"));
         // The local scale height at sea level, from the slope of the sampled density. The game's air is layered, so it changes with altitude.
-        GaugeRowText(D, "SCALE HEIGHT SL", FormattableString.Invariant($"{atm.ScaleHeightAt(0.0) / 1000.0,8:F2} km"));
+        GaugeRowText(D, "SCALE HEIGHT SL", FormattableString.Invariant($"{atm.SeaLevelScaleHeight / 1000.0,8:F2} km"));
         GaugeRowText(D, "TOP", FormattableString.Invariant($"{atm.TopAltitude / 1000.0,8:F1} km"));
         // The game's speed of sound at sea level, from the mixture and the sea level temperature. It scales airspeed onto the Mach axis at every altitude.
         GaugeRowText(D, "SPEED OF SOUND", FormattableString.Invariant($"{atm.SpeedOfSound,8:F1} m/s  (SEA LEVEL)"));

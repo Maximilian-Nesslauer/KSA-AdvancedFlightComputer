@@ -47,7 +47,7 @@ internal static class AutoStageFeature
     }
 
     // Two stagers on one burnout would activate two rows, so the built-in one stands down while the standalone mod is installed.
-    // Its marker is visible here because every immediate load runs before any AllModsLoaded hook.
+    // Its marker is visible here when it registers before the AllModsLoaded hooks run.
     internal static bool StandaloneModAbsent()
     {
         if (!TryGetEnumTypes(out List<EnumTypeOption> list))

@@ -640,7 +640,7 @@ public static partial class GuidanceWindow
                 : "no air");
             if (atmosphere != null)
                 GuidanceLog.DebugWrapped(vehicle, head, FormattableString.Invariant(
-                    $"air H0 {atmosphere.ScaleHeightAt(0.0) / 1000.0:F2} km, top {atmosphere.TopAltitude / 1000.0:F1} km, a {atmosphere.SpeedOfSound:F1} m/s"));
+                    $"air H0 {atmosphere.SeaLevelScaleHeight / 1000.0:F2} km, top {atmosphere.TopAltitude / 1000.0:F1} km, a {atmosphere.SpeedOfSound:F1} m/s"));
             GuidanceLog.DebugWrapped(vehicle, "convex problem: ", dump);
             for (int i = 0; i < count; i++)
                 GuidanceLog.DebugWrapped(vehicle, FormattableString.Invariant($"convex stage {i + 1}: "), stagePlan.Describe[i]
