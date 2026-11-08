@@ -1251,7 +1251,7 @@ internal static class PageText
     public const string BannerHide = "HIDE";
 
     public const string AutoStageRowLabel = "AUTOSTAGE";
-    public const string AutoStageHudNote = "The AUTOSTAGE button on the HUD needs KittenExtensions Continued.";
+    public const string AutoStageHudNote = "The AUTOSTAGE button on the engine gauge panel sets the same switch.";
     public const string ArmedByGuidance = "Armed by AFC during guidance.";
 
     /// <summary>The tooltip note of an AutoStage switch that guidance armed. Guidance keeps a player disarm for the rest of the flight.</summary>
