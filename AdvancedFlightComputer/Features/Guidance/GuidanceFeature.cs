@@ -20,7 +20,6 @@ internal static class GuidanceFeature
         harmony.Patch(GameReflection.Program_DrawProgramMenusHook!,
             postfix: new HarmonyMethod(typeof(AfcMenu), nameof(AfcMenu.Draw)));
         KeepMenuHookCall(harmony);
-        ModMenuBridge.DrawItems = AfcMenu.DrawItems;
     }
 
     // A DrawMenuBar patch made before the hook patch can have the empty hook inlined. Patching it again rebuilds it with the call.
@@ -126,7 +125,6 @@ internal static class GuidanceFeature
 
     internal static void Reset()
     {
-        ModMenuBridge.Reset();
         DisableDriver();
         GuidanceClock.Reset();
         ViewDemand.Reset();

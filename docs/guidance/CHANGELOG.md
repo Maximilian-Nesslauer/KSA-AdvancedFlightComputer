@@ -12,7 +12,7 @@
 
 - RCS burns have one cancel. CANCEL on the docked RCS block under the burn editor now works like the stop in the console head: the burn mode stays MANUAL after it, where before the docked CANCEL gave the burn back to stock AUTO. The docked block keeps FLY WITH, the state, CANCEL, the warnings and OPEN AFC, which opens the BURNS page on that burn; ATTITUDE, ALLOCATOR and the estimates of every planned node are on the BURNS page, where NODE picks a later node. FLY WITH STOCK AUTO is refused while guidance flies the craft, because stock AUTO would take the engine and stop the guidance mode.
 
-- The **AFC** menu no longer disappears when another mod, such as ModMenu, patches the menu bar. With ModMenu it is under **Mods > AFC**.
+- The **AFC** menu no longer disappears when another mod patches the menu bar.
 
 - The convex ascent's defaults are now **MAX Q** 195 kPa, just under the 200 kPa KSA holds a vehicle to, instead of 140, and **MIN THROTTLE** 80 % instead of 90.
 

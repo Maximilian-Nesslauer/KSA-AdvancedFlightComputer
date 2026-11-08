@@ -5,7 +5,7 @@ using KSA;
 namespace AdvancedFlightComputer.Core;
 
 /// <summary>
-/// The one AFC menu, in the game's menu bar or, with ModMenu, in its Mods menu. It draws from the postfix on
+/// The one AFC menu, in the game's menu bar. It draws from the postfix on
 /// Program.DrawProgramMenusHook that the guidance diagnostics block owns, so a failed guidance
 /// driver still leaves a menu with the guidance off switch. While AFC flies the controlled craft the
 /// title is marked and the first item is the stop of what runs, so the stop is one click away also
@@ -34,14 +34,11 @@ internal static class AfcMenu
         StopItem = null;
     }
 
-    // The top bar host, silent while ModMenu hosts the menu. The menu holds the guidance off switch, so a fault is logged once per kind and the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally.
+    // The menu holds the guidance off switch, so a fault is logged once per kind and the menu keeps drawing. BeginMenu and EndMenu stay paired through the finally.
     internal static void Draw()
     {
         try
         {
-            ModMenuBridge.NoteTopBarHook();
-            if (ModMenuBridge.Active)
-                return;
             (string Label, string Outcome, Action Act, bool AfcFlies)? stop = StopItem?.Invoke();
             // The id after ### stays the same, so the open menu survives the change of its title. A stop of stock AUTO is offered, but AFC does not fly then.
             if (!ImGui.BeginMenu(stop is { AfcFlies: true } ? "AFC (FLYING)###AfcMenu" : "AFC###AfcMenu"))
@@ -61,8 +58,7 @@ internal static class AfcMenu
         }
     }
 
-    // Drawn by both hosts, the top bar above and the Mods menu of ModMenu through ModMenuBridge.
-    internal static void DrawItems()
+    private static void DrawItems()
     {
         if (StopItem?.Invoke() is (string label, string outcome, Action act, _))
         {

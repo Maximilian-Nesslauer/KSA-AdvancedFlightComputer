@@ -204,7 +204,7 @@ The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod l
 [![Watch the PoweredGuidance demo](docs/guidance/reference-material/images/twin_boosters.png)](https://youtu.be/hSUcV6tx3oY)
 
 Closed-loop guidance that flies the vehicle for you, originally the [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) mod by cairn5, see [Credits](#credits).
-Use the **LAUNCH** and **LAND** pages of the [AFC console](#afc-console). The footer of the page starts its mode, and the stop in the head acts on the mode that runs, whatever page is on screen. **GUIDANCE ENABLED** in the **AFC** menu (with [ModMenu](https://github.com/MrJeranimo/ModMenu): **Mods > AFC**) and on **TUNE > PREFERENCES** switches guidance off and on.
+Use the **LAUNCH** and **LAND** pages of the [AFC console](#afc-console). The footer of the page starts its mode, and the stop in the head acts on the mode that runs, whatever page is on screen. **GUIDANCE ENABLED** in the **AFC** menu of the top bar and on **TUNE > PREFERENCES** switches guidance off and on.
 
 - **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
 - **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
@@ -253,7 +253,7 @@ The native guidance solvers are built from the vendored sources with Rust and Zi
 ## Mod compatibility
 
 - [AutoStage](https://github.com/Maximilian-Nesslauer/KSA-AutoStage), [AutoRemoveFinishedBurns](https://github.com/Maximilian-Nesslauer/KSA-AutoRemoveFinishedBurns) and [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) are part of this mod. Delete their folders under `mods`, because KittenExtensions Continued applies the XML patches of a mod also when the mod is disabled.
-- [ModMenu](https://github.com/MrJeranimo/ModMenu) 0.2.3 or later is optional. With it, the AFC menu is under **Mods**.
+- The AFC menu is in the top bar.
 - Known conflicts: the standalone AutoStage and AutoRemoveFinishedBurns mods.
 
 ## Credits
