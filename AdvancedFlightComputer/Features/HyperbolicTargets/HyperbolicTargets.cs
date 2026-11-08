@@ -10,7 +10,7 @@ namespace AdvancedFlightComputer.Features.HyperbolicTargets;
 /// Lets the Transfer Planner target bodies on unbound orbits, which are the
 /// interstellar comets. The Lambert solver handles any geometry, but the code
 /// around it assumes a finite Period, a positive semi major axis and a usable
-/// SOI. HyperbolicBodies.xml supplies mass and SOI through KittenExtensions Continued.
+/// SOI. The asset file Content/HyperbolicBodies.xml gives the comets a mass and an SOI.
 /// The patches here cover the rest, namely the target listing, the time of
 /// flight estimate, the departure alignment, the encounter detection, and the
 /// stock closest approach search, which throws on an unbound body.
@@ -33,14 +33,14 @@ internal static class HyperbolicTargets
         harmony.CreateClassProcessor(typeof(Patch_AlignmentTime)).Patch();
         harmony.CreateClassProcessor(typeof(Patch_TryFindIntercept)).Patch();
 
-        // The XML patch gives the comets an SOI whether or not this guard applies, and without the guard stock's encounter scan throws on them, so a missing anchor is an error rather than a quiet degrade.
+        // The asset file gives the comets an SOI whether or not this guard applies, and without the guard stock's encounter scan throws on them, so a missing anchor is an error rather than a quiet degrade.
         if (Patch_FindClosestApproaches.IsAnchorPresent)
             harmony.CreateClassProcessor(typeof(Patch_FindClosestApproaches)).Patch();
         else
             DefaultCategory.Log.Error(
                 "[AFC] HyperbolicTargets: PatchedConic.FindClosestApproaches not found. " +
                 "Stock's encounter search may throw on a comet that has an SOI; " +
-                "re-verify this feature before flying with HyperbolicBodies.xml enabled.");
+                "re-verify this feature before flying to a comet.");
     }
 
     /// <summary>The body a transfer from <paramref name="source"/> is solved around.
@@ -112,7 +112,7 @@ internal static class HyperbolicTargets
         if (orbiter.SphereOfInfluence <= 0.0 || double.IsNaN(orbiter.SphereOfInfluence))
         {
             LogHelper.WarnOnce($"soi-missing-{orbiter.Id}",
-                $"[AFC] {orbiter.Id} has no SOI, XML patch may be missing");
+                $"[AFC] {orbiter.Id} has no SOI, Content/HyperbolicBodies.xml may not have loaded");
             return false;
         }
         return true;

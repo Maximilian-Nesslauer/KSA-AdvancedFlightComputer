@@ -1,0 +1,41 @@
+<Assets>
+  <!--
+    Adds an AUTOSTAGE toggle button to the EngineControl gauge panel, in the free lower-left slot of
+    its 2x2 button grid (RCS / IGNITE above, AUTOSTAGE / SHUTDN below).
+
+    EngineControl rather than BurnControl, because BurnControl only draws while a burn is planned
+    (VisibleInContext=Burn) and both staging triggers work without one. EngineControl draws whenever
+    the vehicle carries an engine at all.
+
+    The stock button grid is the component Name="Buttons". A patch finds an array item only by its
+    Key or Ref, and gauge components carry neither, so the button goes into a component of its own.
+    That component has the same place, size and shaders as "Buttons", so the button sits in the grid
+    slot, draws in the same batch as the stock buttons, and gets the clicks that "Buttons" leaves.
+  -->
+  <GaugeCanvas Id="EngineControl" Modify="PatchIfExists">
+    <Components Modify="Extend">
+      <Component Name="AfcAutoStage">
+        <AnchorUv X="0" Y="0" />
+        <PivotUv X="0" Y="0" />
+        <OffsetUv X="0.0494" Y="0.233" />
+        <SizeUv X="0.4445" Y="0.667" />
+        <Fragment Ref="GaugeButtonFace" />
+        <Vertex Ref="GaugeInstancedVert" />
+        <Rects>
+          <Button X="0.006" Y="0.5" Width="0.4854" Height="0.4994" TextScale="0.25" Label="AUTOSTAGE">
+            <Tooltip Value="Automatically stage when engines run out of propellant, and drop spent boosters while the rest of the stage keeps firing. The same switch as AUTOSTAGE THIS CRAFT on AFC > STAGING." />
+            <TextColor Name="Black" />
+            <BackColor Name="AlmostBlack" A="0" />
+            <DisabledColor R="0.1" G="0.1" B="0.1" />
+            <IdleColor R="0.175" G="0.18" B="0.19" />
+            <ActiveColor Name="Green" />
+            <Sounds>
+              <SoundEvent Ref="LedButtonDown" Action="Pressed" />
+            </Sounds>
+            <FlightComputer Action="AfcAutoStageToggle" Value="Enabled" Toggle="true" />
+          </Button>
+        </Rects>
+      </Component>
+    </Components>
+  </GaugeCanvas>
+</Assets>
