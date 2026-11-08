@@ -7,7 +7,7 @@ Its powered guidance flies an ascent to orbit, a booster boostback and a pinpoin
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
-Validated against KSA build version 2026.10.25.5707.
+Validated against KSA build version 2026.11.10.5801.
 
 ## The AFC console at a glance
 

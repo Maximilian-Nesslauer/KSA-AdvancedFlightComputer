@@ -69,7 +69,7 @@ internal static class OrbitSketch
 
         float s = f.Scale;
         double radius = parent.MeanRadius;
-        double atmo = radius + (parent.GetAtmosphereReference()?.Physical?.Height ?? 0.0);
+        double atmo = radius + (parent.GetPhysicalAtmosphere()?.Height ?? 0.0);
         double top = Math.Max(MaxClosedRadius(tracks), radius * 1.001);
 
         bool hasAir = atmo > radius;

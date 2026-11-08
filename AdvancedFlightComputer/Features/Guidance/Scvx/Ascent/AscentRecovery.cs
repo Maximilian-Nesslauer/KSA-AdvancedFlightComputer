@@ -31,7 +31,7 @@ public sealed class AscentRecovery
     /// <summary>Angle of attack held through the coast, radians, retrograde-first (DragCoastSystem.Alpha): the boostback glide's nominal one.</summary>
     public double Alpha { get; init; }
     /// <summary>The air the booster coasts through.</summary>
-    public required ExponentialAtmosphere Air { get; init; }
+    public required AtmosphereModel Air { get; init; }
     /// <summary>The landing burn, as a multiple of the booster's terminal velocity.</summary>
     public double LandingFactor { get; init; } = 1.3;
     /// <summary>The boostback, as a multiple of its impulse: a real burn is finite, flipped into and flown through gravity and drag, where the impulse is none of these.</summary>

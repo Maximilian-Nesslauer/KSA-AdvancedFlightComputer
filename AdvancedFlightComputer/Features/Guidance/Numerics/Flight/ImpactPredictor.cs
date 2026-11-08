@@ -74,7 +74,7 @@ public struct DragCoastSystem : IOdeSystem
     public AeroTable Table;
 
     /// <summary>Atmosphere. Null for an airless body; drag is then zero everywhere.</summary>
-    public ExponentialAtmosphere Atmosphere;
+    public AtmosphereModel Atmosphere;
 
     /// <summary>True if drag is modelled at all.</summary>
     public readonly bool HasDrag => Table != null && Atmosphere != null;
@@ -269,9 +269,8 @@ public static class ImpactPredictor
     /// convergence in both the value and its derivative.</summary>
     private const int RefineIterations = 3;
 
-    /// <summary>Scale heights above which the coarse step is used. See the note at
-    /// the use site: the atmosphere's nominal TOP is far too high to switch on.</summary>
-    private const double FineStepScaleHeights = 8.0;
+    /// <summary>Density, as a share of sea level, above which the fine step is used. See the note at the use site: the atmosphere's nominal TOP is far too high to switch on.</summary>
+    private static readonly double FineStepDensityRatio = Math.Exp(-8.0);
 
     /// <summary>Scratch length <see cref="Predict"/> requires.</summary>
     public const int ScratchLength = (Rk4.ScratchPerState + 3) * N;
@@ -324,10 +323,10 @@ public static class ImpactPredictor
         // WHERE THE FINE STEP STARTS.
         // Not the atmosphere's top: KSA puts that where density reaches 1e-9 kg/m^3, which is 167 km on Earth, so switching there would put essentially every suborbital trajectory on the fine step for its entire flight - which is exactly what it used to do, and what made a prediction cost milliseconds it did not need to.
         //
-        // Eight scale heights is where density is down by e^-8, about a three thousandth of sea level.
+        // The switch is where density is down by e^-8, about a three thousandth of sea level, which is eight scale heights in an isothermal atmosphere. A layered atmosphere has no single scale height, so the altitude is found on the density itself.
         // Above that the drag acceleration on a booster is small AND slowly varying, which is the condition a coarse RK4 step wants; below it, drag is the fastest thing in the dynamics.
         double fineAltitude = sys.Atmosphere != null
-            ? FineStepScaleHeights * sys.Atmosphere.ScaleHeight
+            ? sys.Atmosphere.AltitudeAtDensity(FineStepDensityRatio * sys.Atmosphere.SeaLevelDensity)
             : 0.0;
         double minAlt = r0 - opt.TargetRadius;
         int pathCapacity = path.Length / PathStrideDoubles;

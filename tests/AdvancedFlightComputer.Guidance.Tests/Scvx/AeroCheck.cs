@@ -327,11 +327,11 @@ internal static class AeroCheck
 
         // ---- the atmosphere ---------------------------------------------
         // The other half of a self-contained aero model: rho(h) with no game behind
-        // it. The mirror against KSA's own function can only be checked in the mod -
-        // it needs the game loaded - so what is checkable here is that the formula is
-        // the one we think it is, and that it differentiates.
+        // it. The check against KSA's own function can only run in the mod - it needs
+        // the game loaded - so what is checkable here is that the formulas are the
+        // ones we think they are, and that they differentiate.
         Console.WriteLine();
-        Console.WriteLine("  atmosphere (KSA Earth: 1.225 kg/m^3, 1 atm, 8 km)");
+        Console.WriteLine("  exponential atmosphere (reference: 1.225 kg/m^3, 1 atm, 8 km)");
         {
             var atm = ExponentialAtmosphere.Earth;
 
@@ -352,7 +352,7 @@ internal static class AeroCheck
             Check("rho is exactly zero above the top", atm.Density(atm.TopAltitude) == 0.0
                                                     && atm.Density(1e9) == 0.0);
 
-            // The clamp below mean radius, mirrored from the game deliberately. It is
+            // The clamp below mean radius, as KSA's PhysicsEnvironment does it. It is
             // checked rather than merely commented so that removing it is a test
             // failure and therefore a decision.
             Check("rho is clamped below mean radius (mirrors KSA)",
@@ -385,6 +385,65 @@ internal static class AeroCheck
             // arithmetic on purpose - see the note in Density(Dual) - so any
             // difference at all means they have drifted apart.
             Check("Dual and double overloads agree", worstVal == 0.0, $"max {worstVal:E2}");
+
+            Check("exponential: scale height from the slope is H",
+                  Math.Abs(atm.ScaleHeightAt(20000.0) - 8000.0) < 1e-6, $"{atm.ScaleHeightAt(20000.0):F3} m");
+            Check("exponential: altitude at rho0 e^-8 is 8 H",
+                  Math.Abs(atm.AltitudeAtDensity(1.225 * Math.Exp(-8.0)) - 64000.0) < 1e-6);
+        }
+
+        // The sampled atmosphere is what the mod builds from the game's density and
+        // pressure. Sampling an isothermal atmosphere must give it back exactly,
+        // because ln(rho) is a straight line there, and samples that are not evenly
+        // spaced must not change that.
+        Console.WriteLine();
+        Console.WriteLine("  sampled atmosphere (the exponential reference, sampled)");
+        {
+            var exp = ExponentialAtmosphere.Earth;
+            double top = exp.TopAltitude;
+            var alt = new List<double>();
+            for (int i = 0; i <= 600; i++)
+                alt.Add(top * i / 600.0);
+            alt.Add(11019.0);
+            alt.Add(47350.0);
+            alt.Sort();
+            double[] h = alt.ToArray();
+            double[] rho = h.Select(x => 1.225 * Math.Exp(-x / 8000.0)).ToArray();
+            double[] p = h.Select(x => 101325.0 * Math.Exp(-x / 8000.0)).ToArray();
+            var atm = new SampledAtmosphere(h, rho, p, top, exp.SpeedOfSound);
+
+            double worst = 0, worstSlope = 0;
+            for (double x = 100; x < top - 100; x += 173)
+            {
+                worst = Math.Max(worst, Math.Abs(atm.Density(x) / exp.Density(x) - 1.0));
+                worst = Math.Max(worst, Math.Abs(atm.Pressure(x) / exp.Pressure(x) - 1.0));
+                Dual d = atm.Density(Dual.Seed(x));
+                Dual e = exp.Density(Dual.Seed(x));
+                worstSlope = Math.Max(worstSlope, Math.Abs(d.D / e.D - 1.0));
+                worst = Math.Max(worst, Math.Abs(d.V - atm.Density(x)) / atm.Density(x));
+            }
+            Check("sampled: values match the exponential", worst < 1e-10, $"max rel {worst:E2}");
+            Check("sampled: slopes match the exponential", worstSlope < 1e-8, $"max rel {worstSlope:E2}");
+            Check("sampled: clamped below mean radius", atm.Density(-5000) == atm.Density(0) && atm.Pressure(-1) == 101325.0);
+            Check("sampled: zero at and above the top", atm.Density(top) == 0.0 && atm.Pressure(1e9) == 0.0
+                                                        && atm.Density(new Dual(top, 1.0)).V == 0.0);
+            Check("sampled: scale height from the slope is H",
+                  Math.Abs(atm.ScaleHeightAt(30000.0) - 8000.0) < 1e-4, $"{atm.ScaleHeightAt(30000.0):F3} m");
+            Check("sampled: altitude at rho0 e^-8 is 8 H",
+                  Math.Abs(atm.AltitudeAtDensity(1.225 * Math.Exp(-8.0)) - 64000.0) < 0.01,
+                  $"{atm.AltitudeAtDensity(1.225 * Math.Exp(-8.0)):F3} m");
+
+            bool refused;
+            try
+            {
+                _ = new SampledAtmosphere([0.0, 1000.0, 900.0], [1.0, 0.9, 0.8], [1.0, 0.9, 0.8], 900.0, 300.0);
+                refused = false;
+            }
+            catch (ArgumentException)
+            {
+                refused = true;
+            }
+            Check("sampled: refuses altitudes that do not increase", refused);
         }
 
         Console.WriteLine();

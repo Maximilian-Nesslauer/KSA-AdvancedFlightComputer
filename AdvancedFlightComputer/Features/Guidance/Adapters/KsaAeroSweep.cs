@@ -4,6 +4,7 @@ namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
 using System.Text;
+using Brutal.Logging;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
@@ -26,6 +27,12 @@ public static class KsaAeroSweep
 
     /// <summary>Alpha the pointing sensitivity is read at, degrees from tail-first.</summary>
     private const double PointingAlphaDeg = 5.0;
+
+    /// <summary>Uniform intervals the atmosphere column is sampled in, before the points of the temperature profile are added. 2048 keeps the chord error of ln(rho) near 1e-5 on the stock atmospheres.</summary>
+    private const int AtmosphereIntervals = 2048;
+
+    /// <summary>The largest relative density error of the sampled atmosphere that the readout shows as good.</summary>
+    public const double MirrorTolerance = 1e-4;
 
     /// <summary>
     /// Mach breakpoints past the default grid's last at 5, out to orbital entry.
@@ -62,8 +69,8 @@ public static class KsaAeroSweep
         /// <summary>Signed C_L at a Mach number and retrograde-first alpha (radians). Zero when there is no lift table.</summary>
         public double LiftAt(double mach, double alphaRad) => Lift?.Cd(mach, alphaRad) ?? 0.0;
 
-        /// <summary>The game's atmosphere, mirrored. Null if the body has none.</summary>
-        public ExponentialAtmosphere Atmosphere;
+        /// <summary>The game's atmosphere, sampled. Null if the body has none.</summary>
+        public AtmosphereModel Atmosphere;
 
         public double[] MachGrid;
         public double[] AlphaGridDeg;
@@ -102,9 +109,7 @@ public static class KsaAeroSweep
         /// <summary>The largest lift-to-drag ratio anywhere on the grid. The table holds drag only, so this is how much force the solvers leave out.</summary>
         public double LiftToDragMax;
 
-        /// <summary>Largest relative disagreement between our mirrored density and
-        /// KSA's own GetAtmosphericDensityAtAltitude, sampled across the atmosphere.
-        /// Should be at the level of float/double rounding.</summary>
+        /// <summary>Largest relative disagreement between the sampled density and KSA's own PhysicalAtmosphere.ComputeDensityAtAltitude, checked between the samples across the whole column. Below <see cref="MirrorTolerance"/> when the samples are dense enough.</summary>
         public double AtmosphereMirrorError;
 
         /// <summary>Body the atmosphere was read from, for the readout.</summary>
@@ -166,9 +171,9 @@ public static class KsaAeroSweep
         };
         BuildAtmosphere(parent, res);
 
-        // The air the probe flies through. Sea level of this body's own atmosphere, so a model whose Cd depends on Mach through sqrt(gamma p / rho) sees the same Mach the solvers compute - KSA's air is isothermal, so p / rho, and with it the speed of sound, is the same at every altitude.
-        ExponentialAtmosphere air = res.Atmosphere ?? ExponentialAtmosphere.Earth;
-        if (!ForceProbe.TryCreate(vehicle, air.SeaLevelDensity, air.SeaLevelPressure, out ForceProbe probe, out error))
+        // The air the probe flies through: sea level of this body's own atmosphere, and on an airless body a standard sea level, because the coefficients do not depend on which density measured them. The Mach axis is airspeed over the sea level speed of sound, the same scaling the solvers use.
+        AtmosphereModel air = res.Atmosphere ?? ExponentialAtmosphere.Earth;
+        if (!ForceProbe.TryCreate(vehicle, air.SeaLevelDensity, air.SeaLevelPressure, air.SpeedOfSound, out ForceProbe probe, out error))
             return false;
 
         double[] machGrid = SweepMachBreakpoints();
@@ -303,7 +308,7 @@ public static class KsaAeroSweep
         /// <summary>The airspeed at zero physics velocity - the bubble's own motion against the turning air - in physics axes. Airspeed is this plus the physics velocity.</summary>
         private double3 _frameAirPhys;
 
-        public static bool TryCreate(Vehicle vehicle, double density, double pressure, out ForceProbe probe, out string error)
+        public static bool TryCreate(Vehicle vehicle, double density, double pressure, double speedOfSound, out ForceProbe probe, out string error)
         {
             probe = new ForceProbe
             {
@@ -317,6 +322,7 @@ public static class KsaAeroSweep
             probe._environment.InPhysicsRadius = true;
             probe._environment.AtmosphericDensity = (float)density;
             probe._environment.AtmosphericPressure = (float)pressure;
+            probe._environment.SpeedOfSound = (float)speedOfSound;
             probe._environment.OceanVolume = 0.0;
             probe._environment.OceanSurfaceArea = 0.0;
             probe._kinematic.AngularVelocityPhys = double3.Zero;
@@ -354,45 +360,69 @@ public static class KsaAeroSweep
     }
 
     /// <summary>
-    /// Mirror the parent body's atmosphere, and CHECK the mirror against the game rather than assuming it.
-    ///  The check is the point. Three numbers copied across and an exponential written out again is exactly the kind of thing that is right until someone changes a unit, and the failure mode - a solver planning through slightly the wrong air - produces plans that are plausible and wrong rather than plans that break. So every resample re-verifies it against KSA's own GetAtmosphericDensityAtAltitude and records the worst disagreement.
+    /// Sample the parent body's atmosphere from the game's own functions, and check the samples against the game between them.
+    ///  The game's air is layered: PhysicalAtmosphere integrates the hydrostatic equation through a temperature profile, so there is no single scale height to copy across. The column from sea level to PhysicalAtmosphere.Height is sampled with ComputeDensityAtAltitude and ComputePressureAtAltitude on a uniform grid plus every point of the body's temperature profile, where the slope of ln(rho) has its corners. The check then asks the game again halfway between the samples, where the interpolation is worst, and records the largest relative error.
     /// </summary>
     private static void BuildAtmosphere(IParentBody parent, Result res)
     {
-        AtmosphereReference reference = parent?.GetAtmosphereReference();
-        if (reference == null)
+        PhysicalAtmosphere physical = parent?.GetPhysicalAtmosphere();
+        if (physical == null || !(physical.Height > 0.0))
             return;
 
-        PhysicalAtmosphereReference phys = reference.Physical;
-        double rho0 = phys.SeaLevelDensity;
-        double p0 = phys.SeaLevelPressure;
-        double h = phys.ScaleHeight.InMeters();
+        double top = physical.Height;
+        var altitudes = new SortedSet<double>();
+        for (int i = 0; i <= AtmosphereIntervals; i++)
+            altitudes.Add(top * i / AtmosphereIntervals);
+        List<AtmosphereTemperaturePoint> profile = parent.GetAtmosphereReference()?.Physical?.TemperatureProfile;
+        if (profile != null)
+        {
+            foreach (AtmosphereTemperaturePoint point in profile)
+            {
+                double at = point.InMeters();
+                if (at > 0.0 && at < top)
+                    altitudes.Add(at);
+            }
+        }
 
-        if (!(rho0 > 0.0) || !(p0 > 0.0) || !(h > 0.0))
+        double[] alt = altitudes.ToArray();
+        var density = new double[alt.Length];
+        var pressure = new double[alt.Length];
+        for (int i = 0; i < alt.Length; i++)
+        {
+            AtmosphericConditions air = physical.ComputeConditionsAtAltitude(alt[i]);
+            density[i] = air.Density;
+            pressure[i] = air.Pressure;
+        }
+
+        // The game derives the speed of sound from the mixture and the local temperature (PhysicsEnvironment.RecomputePositionalValues). The Mach axis takes its sea level value as one fixed scale, see AtmosphereModel.
+        double speedOfSound = physical.Mixture.ComputeSpeedOfSound(physical.ComputeTemperatureAtAltitude(0.0));
+
+        try
+        {
+            res.Atmosphere = new SampledAtmosphere(alt, density, pressure, top, speedOfSound);
+        }
+        catch (ArgumentException ex)
+        {
+            DefaultCategory.Log.Warning($"[AFC] The atmosphere of '{(parent as Astronomical)?.Id}' could not be sampled: {ex.Message}");
             return;
-
-        res.Atmosphere = new ExponentialAtmosphere(rho0, p0, h);
+        }
         // IParentBody does not carry a name; Astronomical does, and every body a vehicle can orbit is one.
         res.BodyName = (parent as Astronomical)?.Id ?? "";
 
-        // Sample the whole column, including above the cutoff, so the boundary height is checked too and not just the exponential.
+        // PhysicsEnvironment.RecomputePositionalValues zeroes the air at and above Height, so the check compares against that effective density, a little past the top too.
         double worst = 0.0;
-        double top = res.Atmosphere.TopAltitude;
-        double gameTop = phys.Height;
-        for (int i = 0; i <= 200; i++)
-        {
-            double alt = top * 1.05 * i / 200.0;
-            double ours = res.Atmosphere.Density(alt);
-            double theirs = phys.GetAtmosphericDensityAtAltitude(alt);
-
-            // KSA zeroes density outside the boundary in PhysicsEnvironment rather than inside GetAtmosphericDensityAtAltitude, which keeps returning the exponential. Compare against the game's EFFECTIVE density, which is what a vehicle experiences.
-            if (alt >= gameTop)
-                theirs = 0.0;
-
-            double scale = Math.Max(Math.Abs(theirs), 1e-12);
-            worst = Math.Max(worst, Math.Abs(ours - theirs) / scale);
-        }
+        for (int i = 0; i + 1 < alt.Length; i++)
+            worst = Math.Max(worst, MirrorErrorAt(physical, res.Atmosphere, 0.5 * (alt[i] + alt[i + 1]), top));
+        for (int i = 0; i <= 20; i++)
+            worst = Math.Max(worst, MirrorErrorAt(physical, res.Atmosphere, top * (1.0 + 0.0025 * i), top));
         res.AtmosphereMirrorError = worst;
+    }
+
+    private static double MirrorErrorAt(PhysicalAtmosphere physical, AtmosphereModel model, double altitude, double top)
+    {
+        double theirs = altitude < top ? physical.ComputeDensityAtAltitude(altitude) : 0.0;
+        double ours = model.Density(altitude);
+        return Math.Abs(ours - theirs) / Math.Max(Math.Abs(theirs), 1e-12);
     }
 
     /// <summary>Linear interpolation on the alpha grid, for the headline readouts.</summary>

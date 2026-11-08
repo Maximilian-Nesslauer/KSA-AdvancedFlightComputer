@@ -45,7 +45,7 @@ public static partial class GuidanceWindow
     internal static bool EntryHasNoAir(VehicleAutopilotState s)
         => s.ThreeDofPhase == ThreeDofPhase.Glide && s.ThreeDofNominal == null && s.Aero is { Atmosphere: null };
 
-    /// <summary>The body of the craft has no atmosphere, which is the case EntryHasNoAir reports once entry guidance flies (Astronomical.GetAtmosphereReference is null).</summary>
+    /// <summary>The body of the craft has no atmosphere, which is the case EntryHasNoAir reports once entry guidance flies (Astronomical.GetPhysicalAtmosphere is null).</summary>
     internal static bool EntryBodyAirless(Vehicle vehicle)
         => vehicle?.Orbit?.Parent is IParentBody parent && !HasPhysicalAtmosphere(parent);
 

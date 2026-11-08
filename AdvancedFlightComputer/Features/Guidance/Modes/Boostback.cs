@@ -53,7 +53,7 @@ using AdvancedFlightComputer.Guidance.Numerics;
 // The plan is not re-solved inside T-1; its linear tangent law is simply evaluated out to cutoff, still turning, on the plan's own clock.
 //
 // THE REASON IS MODEL MISMATCH RATHER THAN NOISE.
-// The shot integrates a model - a surrogate aero table, an exponential atmosphere, an engine table, a coast at alpha zero, an attitude assumed to be where it was commanded - and none of that is the game.
+// The shot integrates a model - a surrogate aero table, a sampled atmosphere, an engine table, a coast at alpha zero, an attitude assumed to be where it was commanded - and none of that is the game.
 // What is left over is a BIAS the solver cannot null, since nulling it would require the model to be right, so re-solving into the last second has the vehicle chasing a miss that moves every time it looks.
 // Stopping is what breaks the chase.
 //
@@ -132,7 +132,7 @@ public static partial class GuidanceWindow
     ///
     /// THIS HEDGES MODEL MISMATCH, NOT NUMERICAL NOISE, and getting that wrong is what
     /// briefly set it to zero. The shot integrates a MODEL of the vehicle: an aero
-    /// surrogate fitted to a bounding box, an exponential atmosphere, an engine table, a
+    /// surrogate fitted to a bounding box, a sampled atmosphere, an engine table, a
     /// coast at alpha zero, and a flight computer assumed to be pointing where it was
     /// told. None of those is the game. The residue is not noise that averages out - it
     /// is a BIAS the solver cannot null, because nulling it would need the model to be

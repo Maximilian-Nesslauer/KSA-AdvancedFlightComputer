@@ -498,7 +498,7 @@ public static partial class GuidanceWindow
 
         const UiTier D = UiTier.Diagnostics;
 
-        ExponentialAtmosphere atm = _s.Aero?.Atmosphere;
+        AtmosphereModel atm = _s.Aero?.Atmosphere;
         if (atm == null)
         {
             if (_s.Aero != null)
@@ -510,14 +510,15 @@ public static partial class GuidanceWindow
         GaugeRowText(D, "BODY", _s.Aero.BodyName.Length > 0 ? _s.Aero.BodyName : "(UNNAMED)");
         GaugeRowText(D, "SEA LEVEL RHO", FormattableString.Invariant($"{atm.SeaLevelDensity:F4} kg/m^3"));
         GaugeRowText(D, "SEA LEVEL P", FormattableString.Invariant($"{atm.SeaLevelPressure / 1000.0,8:F2} kPa"));
-        GaugeRowText(D, "SCALE HEIGHT", FormattableString.Invariant($"{atm.ScaleHeight / 1000.0,8:F2} km"));
+        // The local scale height at sea level, from the slope of the sampled density. The game's air is layered, so it changes with altitude.
+        GaugeRowText(D, "SCALE HEIGHT SL", FormattableString.Invariant($"{atm.ScaleHeightAt(0.0) / 1000.0,8:F2} km"));
         GaugeRowText(D, "TOP", FormattableString.Invariant($"{atm.TopAltitude / 1000.0,8:F1} km"));
-        // Derived from P0/rho0, not assumed - an isothermal atmosphere has one speed of sound at every altitude. See ExponentialAtmosphere.
-        GaugeRowText(D, "SPEED OF SOUND", FormattableString.Invariant($"{atm.SpeedOfSound,8:F1} m/s  (DERIVED)"));
+        // The game's speed of sound at sea level, from the mixture and the sea level temperature. It scales airspeed onto the Mach axis at every altitude.
+        GaugeRowText(D, "SPEED OF SOUND", FormattableString.Invariant($"{atm.SpeedOfSound,8:F1} m/s  (SEA LEVEL)"));
 
-        // The mirror check. This is the number that says our self-contained rho really is the game's rho, re-verified on every resample rather than assumed once.
+        // The mirror check. This is the number that says the sampled rho really is the game's rho, re-verified on every resample rather than assumed once.
         double err = _s.Aero.AtmosphereMirrorError;
-        GaugeRowText(D, "MIRROR ERROR", PageText.MirrorError(err), err < 1e-9 ? ConsoleStyle.TextPrimary : ConsoleStyle.Danger);
+        GaugeRowText(D, "MIRROR ERROR", PageText.MirrorError(err), err < KsaAeroSweep.MirrorTolerance ? ConsoleStyle.TextPrimary : ConsoleStyle.Danger);
 
         GaugeRowText(D, "", "");
 

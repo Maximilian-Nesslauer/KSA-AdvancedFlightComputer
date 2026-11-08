@@ -6,7 +6,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 /// <summary>
 /// The air an ascent flies through and the drag law it flies by, in SI, as <see cref="Dual"/>s so the dynamics can differentiate through them.
 ///
-/// Abstract because two models use it. The game supplies KSA's own isothermal atmosphere and its sampled drag table (<see cref="KsaAscentAtmosphere"/>); the offline check supplies the atmosphere launch3dof.py uses, so the port can be compared against that script number for number.
+/// Abstract because two models use it. The game supplies KSA's own atmosphere, sampled, and the drag table sampled off the vehicle (<see cref="KsaAscentAtmosphere"/>); the offline check supplies the atmosphere launch3dof.py uses, so the port can be compared against that script number for number.
 /// </summary>
 public abstract class AscentAtmosphere
 {
@@ -42,7 +42,7 @@ public sealed class VacuumAscentAtmosphere : AscentAtmosphere
 }
 
 /// <summary>
-/// KSA's air: the game's isothermal exponential atmosphere and the drag table sampled off the vehicle.
+/// KSA's air: the game's layered atmosphere as KsaAeroSweep samples it, and the drag table sampled off the vehicle.
 ///
 /// DRAG DEPENDS ON THE ANGLE OF ATTACK. launch3dof.py's drag depends on Mach alone, and the port kept that, reading the table nose-first on the grounds that KSA's isotropic skin term dominates (see KsaAeroSweep). It doesn't dominate enough. KSA's drag is a six-face box plus the skin term, blended by |v_body|, so the flank faces add drag in proportion to |sin alpha| from the first degree: on 2stage_new about 4 % per degree. With the attitude free of charge, the planner flew 2 to 13 deg off the airflow from max q down, wherever q-alpha allowed it, and the vehicle met 40 to 60 % more drag than planned there, a shortfall of up to 5 m/s^2 that left it 8 km low and 370 m/s slow at staging. So the table is read at the flown angle: alpha from nose-first, which is pi minus the table's retrograde-first angle. The drag still acts straight against the relative wind, as in the game, which has no lift.
 ///
@@ -50,21 +50,21 @@ public sealed class VacuumAscentAtmosphere : AscentAtmosphere
 /// </summary>
 public sealed class KsaAscentAtmosphere : AscentAtmosphere
 {
-    private readonly ExponentialAtmosphere _atmosphere;
+    private readonly AtmosphereModel _atmosphere;
     private readonly AeroTable? _table;
     private readonly double _cd;
 
     /// <param name="atmosphere">The body's atmosphere, as KsaAeroSweep mirrors it.</param>
     /// <param name="table">Sampled drag table, or null to use <paramref name="constantCd"/>.</param>
     /// <param name="constantCd">Drag coefficient when there is no table.</param>
-    public KsaAscentAtmosphere(ExponentialAtmosphere atmosphere, AeroTable? table, double constantCd = 0.0)
+    public KsaAscentAtmosphere(AtmosphereModel atmosphere, AeroTable? table, double constantCd = 0.0)
     {
         _atmosphere = atmosphere ?? throw new ArgumentNullException(nameof(atmosphere));
         _table = table;
         _cd = constantCd;
     }
 
-    public ExponentialAtmosphere Atmosphere => _atmosphere;
+    public AtmosphereModel Atmosphere => _atmosphere;
 
     /// <summary>The sampled drag table, or null for a constant coefficient.</summary>
     public AeroTable? Table => _table;

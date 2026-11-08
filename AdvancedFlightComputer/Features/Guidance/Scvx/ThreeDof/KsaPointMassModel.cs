@@ -42,7 +42,7 @@ public sealed record KsaPointMassModel : IPointMassModel
     public double OmegaZ { get; init; }
 
     /// <summary>The air, or null for an airless body.</summary>
-    public ExponentialAtmosphere? Atmosphere { get; init; }
+    public AtmosphereModel? Atmosphere { get; init; }
 
     /// <summary>Cd(Mach, alpha), retrograde-first. Null with no air.</summary>
     public AeroTable? Drag { get; init; }

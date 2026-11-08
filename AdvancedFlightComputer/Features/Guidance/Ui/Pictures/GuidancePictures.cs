@@ -40,7 +40,7 @@ public static partial class GuidanceWindow
         int cap = _s.Trace.Length;
         int start = (_s.TraceHead - _s.TraceCount + cap) % cap;
         double radius = parent.MeanRadius;
-        double airTopKm = (parent.GetAtmosphereReference()?.Physical?.Height ?? 0.0) / 1000.0;
+        double airTopKm = (parent.GetPhysicalAtmosphere()?.Height ?? 0.0) / 1000.0;
         return SketchMath.TrackIsClimb((_s.Trace[start].Length() - radius) / 1000.0, (_s.Trace[(_s.TraceHead - 1 + cap) % cap].Length() - radius) / 1000.0, airTopKm);
     }
 
@@ -202,7 +202,7 @@ public static partial class GuidanceWindow
     private static void DrawProfileView(in PictureFrame f, IParentBody parent, AscentPlanSeries series, bool old)
     {
         double radius = parent.MeanRadius;
-        double atmoKm = (parent.GetAtmosphereReference()?.Physical?.Height ?? 0.0) / 1000.0;
+        double atmoKm = (parent.GetPhysicalAtmosphere()?.Height ?? 0.0) / 1000.0;
 
         // The flown track, from the ring of CCI positions the step records under thrust. Downrange is the arc from the first sample over the rotating ground, the same frame as AscentPlanSeries.Build, so the two lines share one x axis. The body turns about CCI +Z.
         int flownCount = 0;

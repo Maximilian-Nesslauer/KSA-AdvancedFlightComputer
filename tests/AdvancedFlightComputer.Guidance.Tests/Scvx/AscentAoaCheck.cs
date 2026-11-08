@@ -47,6 +47,9 @@ internal static class AscentAoaCheck
     }
 
     internal static AscentProblem Problem(AeroTable table)
+        => Problem(table, new ExponentialAtmosphere(1.225, 101325.0, 8000.0, 1.4));
+
+    internal static AscentProblem Problem(AeroTable table, AtmosphereModel air)
     {
         AscentStage[] stages =
         [
@@ -62,7 +65,7 @@ internal static class AscentAoaCheck
             V0 = [-26.85501961544462, 407.5482226419444, 5.739747681757143],
             M0 = 163763.546875,
             Stages = stages,
-            Atmosphere = new KsaAscentAtmosphere(new ExponentialAtmosphere(1.225, 101325.0, 8000.0, 1.4), table),
+            Atmosphere = new KsaAscentAtmosphere(air, table),
             GroundRadius = 6371000.0,
             TargetRadius = 6571000.0,
             TargetSpeed = 7788.502008228982,
@@ -203,6 +206,13 @@ internal static class AscentAoaCheck
         var round = (KsaAscentAtmosphere)AscentProblemFile.FromJson(AscentProblemFile.ToJson(p)).Atmosphere;
         double at10 = round.DragCoefficient(new Dual(0.5), new Dual(10.0 * Math.PI / 180.0)).V;
         Check("the problem file keeps the attitude axis", Math.Abs(at10 / box.Cd(0.5, Math.PI - 10.0 * Math.PI / 180.0) - 1.0) < 1e-6, $"Cd at 10 deg {at10:F3}");
+
+        // A sampled atmosphere, as the mod builds it from the game, survives the file too.
+        var sampled = new SampledAtmosphere([0.0, 5000.0, 20000.0, 90000.0], [1.2, 0.7, 0.09, 1e-5], [101325.0, 54000.0, 5500.0, 0.2], 85000.0, 330.0);
+        var replay = (KsaAscentAtmosphere)AscentProblemFile.FromJson(AscentProblemFile.ToJson(Problem(box, sampled))).Atmosphere;
+        bool same = replay.Atmosphere is SampledAtmosphere back && back.TopAltitude == 85000.0 && back.SpeedOfSound == 330.0
+                    && new[] { 0.0, 2500.0, 12345.0, 84999.0, 85000.0 }.All(h => back.Density(h) == sampled.Density(h) && back.Pressure(h) == sampled.Pressure(h));
+        Check("the problem file keeps a sampled atmosphere", same);
 
         Console.WriteLine();
         Console.WriteLine(_fails == 0 ? "ALL PASS" : $"{_fails} FAILED");

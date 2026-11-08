@@ -115,7 +115,7 @@ internal sealed class ConsoleFrame
         {
             IParentBody parent = v.Parent;
             Orbit orbit = v.Orbit;
-            bool hasAir = parent.GetAtmosphereReference()?.Physical != null;
+            bool hasAir = parent.GetPhysicalAtmosphere() != null;
             double radialSpeed = double3.Dot(orbit.StateVectors.VelocityCci, orbit.StateVectors.PositionCci);
             CraftSituation where = SituationText.Classify(v.Situation.HasAnyContact(), orbit.IsBound(), orbit.Periapsis, parent.GetNearSurfaceRadius(), radialSpeed, hasAir);
             return new SituationFacts(where, parent.Id, orbit.PeriapsisAltitude / 1000.0, orbit.ApoapsisAltitude / 1000.0, AnyEngineBurns(v), hasAir);
