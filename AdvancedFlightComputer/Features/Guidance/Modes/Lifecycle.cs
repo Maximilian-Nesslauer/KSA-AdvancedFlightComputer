@@ -16,7 +16,11 @@ public static partial class GuidanceWindow
     private const int FailedStepWeight = 2;
 
     // The dispose postfix runs after the vehicle is removed, so only process resources need cleanup.
-    internal static void ReleaseDisposedVehicle(Vehicle vehicle) => DropVehicle(vehicle, release: false);
+    internal static void ReleaseDisposedVehicle(Vehicle vehicle)
+    {
+        RealSpeedHold.Forget(vehicle);
+        DropVehicle(vehicle, release: false);
+    }
 
     internal static void ReleaseAllVehicles()
     {
@@ -24,6 +28,7 @@ public static partial class GuidanceWindow
         foreach (var entry in VehicleAutopilotState.Snapshot())
             DropVehicle(entry.Key, release: !entry.Key.IsDisposed);
         ClearLifecycleRequests();
+        RealSpeedHold.Clear();
         _s = new VehicleAutopilotState();
     }
 
