@@ -1,5 +1,6 @@
 using AdvancedFlightComputer.Features.AutoRemove;
 using AdvancedFlightComputer.Features.AutoStage;
+using AdvancedFlightComputer.Features.Flyby;
 using AdvancedFlightComputer.Features.Guidance;
 using AdvancedFlightComputer.Features.MultiPass;
 using AdvancedFlightComputer.Features.RcsTranslation;
@@ -52,6 +53,7 @@ internal static class SharedVehicleHooks
                 PassCompletionPatch.TickVehicle(vehicle);
             if (RcsEnabled)
                 RcsDriverPatch.TickVehicle(vehicle);
+            FlybyCourse.TickVehicle(vehicle);
         }
     }
 
@@ -72,6 +74,9 @@ internal static class SharedVehicleHooks
                     $"[AFC] MultiPass threw on the end of a stock burn for '{vehicle.Id}': {ex}");
             }
         }
+        // Before AutoRemove, which takes the completed burn out of the plan.
+        if (ended.Completed)
+            FlybyCourse.OnBurnCompleted(vehicle, ended.Burn!);
         if (AutoRemoveEnabled && ended.Completed)
         {
             try
@@ -102,6 +107,8 @@ internal static class SharedVehicleHooks
             GuidanceWindow.ReleaseDisposedVehicle(vehicle);
 
         // Vehicle.Dispose leaves the part graph intact. Clear caches that can keep it reachable.
+        PlannedBurnPhases.OnVehicleDisposed(vehicle);
+        FlybyCourse.OnVehicleDisposed(vehicle);
         MultiPassPreviewCache.OnVehicleDisposed(vehicle);
         HohmannMultiPassUI.OnVehicleDisposed(vehicle.Id);
         HohmannMultiPassPlanner.OnVehicleDisposed(vehicle.Id);
@@ -129,7 +136,7 @@ internal static class SharedVehicleHooks
     private static class PendingAlertsPatch
     {
         static void Prefix(FlightComputer __instance, out StockBurnEnd __state)
-            => __state = MultiPassEnabled || AutoRemoveEnabled ? StockBurnEnd.Capture(__instance) : default;
+            => __state = MultiPassEnabled || AutoRemoveEnabled || FlybyCourse.Watching ? StockBurnEnd.Capture(__instance) : default;
 
         static void Postfix(Vehicle vehicle, StockBurnEnd __state)
         {

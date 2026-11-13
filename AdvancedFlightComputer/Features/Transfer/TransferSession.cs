@@ -354,6 +354,10 @@ internal static class TransferSession
     /// <summary>Records the burn a CREATE added, as stock records its _transferBurn.</summary>
     public static void OnCreated(Burn burn) => TransferBurn = burn;
 
+    /// <summary>True while the one burn that CREATE made for the selection is in the burn plan. Stock then draws its trajectory, so the previews of the selection stop. A multi-pass keeps its own overlay.</summary>
+    public static bool SingleBurnCreated
+        => TransferBurn != null && Source != null && !MultiPass.MultiPassRegistry.Has(Source.Id);
+
     /// <summary>The pass a Hohmann multi-pass queued is the burn that blocks a second CREATE.</summary>
     public static void OnPassBurn(Burn burn)
     {

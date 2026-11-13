@@ -38,6 +38,12 @@ internal static partial class FlybyTargeting
     // The aim offset is about b, a few thousand km for a moon, so v_soi shifts by well under one percent per pass and three passes converge with margin.
     private const int DefaultIterations = 3;
 
+    // Passes that scale the aim offset until the patched conic periapsis meets the request.
+    // The closest approach of the conic about the shared parent is not the hand-over that FlightPlan.CalculatePatch makes at the SOI boundary, so the closed form alone lands the patched conic periapsis about six percent low for Earth to Luna, which is an impact for a low flyby.
+    private const int PeriapsisCorrections = 4;
+    private const double PeriapsisRelTolerance = 1e-3;
+    private const int SoiEntryBisections = 60;
+
     /// <summary>Smallest usable axis alignment, which is the sine of the angle
     /// between a side's axis and the approach relative velocity. Below roughly 9
     /// degrees the projected offset direction is numerical noise rather than the
@@ -161,8 +167,8 @@ internal static partial class FlybyTargeting
     ///
     /// <see cref="FlybyOutcome.Result"/> is null on a degenerate geometry, which
     /// means the requested side's axis is nearly parallel to the approach or the
-    /// solve is not physical. The caller then falls back to the stock burn aimed at
-    /// the center and warns. The axis alignments are reported either way so the UI
+    /// solve is not physical. CREATE then refuses the flyby and makes no burn aimed
+    /// at the center. The axis alignments are reported either way so the UI
     /// can show which sides this approach can reach.</summary>
     public static FlybyOutcome ComputeFlybyDeparture(
         Vehicle source, IOrbiter target, UniverseTime start, UniverseTime transit,
@@ -203,7 +209,7 @@ internal static partial class FlybyTargeting
         }
 
         OffsetSolve? solve = SolveOffsetTransfer(
-            muParent, sourceInFrame, target.Orbit, start, transit,
+            muParent, sourceInFrame, target.Orbit, targetBody, start, transit,
             targetPeRadius, muTarget, soiTarget, side, iterations,
             out double radialAlign, out double normalAlign);
         if (solve == null)
@@ -266,7 +272,7 @@ internal static partial class FlybyTargeting
         UniverseTime CaTime);
 
     private static OffsetSolve? SolveOffsetTransfer(
-        double muParent, Orbit sourceInFrame, Orbit targetOrbit,
+        double muParent, Orbit sourceInFrame, Orbit targetOrbit, IParentBody targetBody,
         UniverseTime start, UniverseTime transit, double rpRadius, double muTarget,
         double soiTarget, FlybySide side, int iterations,
         out double radialAlign, out double normalAlign)
@@ -329,10 +335,75 @@ internal static partial class FlybyTargeting
             lastCaTime = caTime;
         }
 
+        // Each pass measures the departure of the pass before it, and the last pass only measures. A departure that measures worse than the best one, or that leaves the SOI, is dropped for the best one.
+        double bScale = 1.0;
+        double3 bestDeparture = vDeparture;
+        double bestError = double.PositiveInfinity;
+        for (int pass = 0; pass <= PeriapsisCorrections; pass++)
+        {
+            Orbit transfer = Orbit.CreateFromStateCci(
+                targetOrbit.Parent, start, departurePos, vDeparture, lineColor);
+            double achieved = PatchedPeriapsis(
+                transfer, targetOrbit, targetBody, soiTarget, start, lastCaTime);
+            double error = Math.Abs(achieved - rpRadius);
+            if (!(error < bestError))
+            {
+                vDeparture = bestDeparture;
+                break;
+            }
+            bestError = error;
+            bestDeparture = vDeparture;
+            if (error <= PeriapsisRelTolerance * rpRadius || pass == PeriapsisCorrections)
+                break;
+            double bAchieved = ImpactParameterForPeriapsis(lastVSoi, achieved, muTarget, soiTarget);
+            if (!(bAchieved > 0.0))
+                break;
+            bScale *= lastB / bAchieved;
+            double3 aim = targetOrbit.GetStateVectorsAt(lastCaTime).PositionCci + bScale * lastB * lastOffsetDir;
+            OrbitalTransfers.SuperiorLambert(
+                muParent, departurePos, aim, lastTransit, out vDeparture, out _);
+        }
+
         double3 departureDelta = vDeparture - departure.VelocityCci;
         if (!IsFinite(departureDelta)) return null;
         return new OffsetSolve(
             departureDelta, lastTransit, lastB, lastVSoi, lastOffsetDir, lastCaTime);
+    }
+
+    /// <summary>Periapsis about the target of the patched conic that
+    /// <paramref name="transfer"/> starts when it enters the target's SOI before
+    /// <paramref name="caTime"/>, the way FlightPlan.CalculatePatch hands a
+    /// trajectory over to the body it encounters. The SOI entry is found by
+    /// bisection on the distance, and the state is moved into the target's CCI
+    /// frame with Orbit.CciToCci. NaN when the closest approach stays outside the
+    /// SOI.</summary>
+    private static double PatchedPeriapsis(
+        Orbit transfer, Orbit targetOrbit, IParentBody targetBody, double soi,
+        UniverseTime start, UniverseTime caTime)
+    {
+        double Gap(double dt)
+        {
+            UniverseTime t = start + dt;
+            return (transfer.GetStateVectorsAt(t).PositionCci
+                    - targetOrbit.GetStateVectorsAt(t).PositionCci).Length() - soi;
+        }
+
+        double lo = 1.0;
+        double hi = (caTime - start).Seconds();
+        if (!(hi > lo) || !(Gap(hi) < 0.0) || !(Gap(lo) > 0.0))
+            return double.NaN;
+        for (int i = 0; i < SoiEntryBisections; i++)
+        {
+            double mid = 0.5 * (lo + hi);
+            if (Gap(mid) > 0.0) lo = mid;
+            else hi = mid;
+        }
+
+        UniverseTime entry = start + hi;
+        StateVectors sv = transfer.GetStateVectorsAt(entry);
+        Orbit.CciToCci(entry, targetOrbit.Parent, sv.PositionCci, sv.VelocityCci, targetBody,
+            out double3 positionCci, out double3 velocityCci, out _);
+        return Orbit.CreateFromStateCci(targetBody, entry, positionCci, velocityCci, transfer.OrbitLineColor).Periapsis;
     }
 
     /// <summary>Named sides live in the target's orbital frame, where radial is the

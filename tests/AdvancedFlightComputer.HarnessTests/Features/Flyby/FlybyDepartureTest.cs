@@ -13,8 +13,9 @@ namespace AdvancedFlightComputer.HarnessTests;
 // passes through the moon center, which is an impact. The retargeted transfer
 // misses the moon center by about b, the impact parameter, and clears the
 // surface. And flipping the side reverses the miss direction. This exercises the
-// retarget path within one parent without SOI propagation, because the two body
-// closest approach to the moon center is the oracle.
+// retarget path within one parent. The two body closest approach to the moon
+// center is the oracle for the clearance and the side, and the conic about the
+// moon from the state at the SOI entry is the oracle for the periapsis.
 public sealed class FlybyDepartureTest : AfcTest
 {
     private const double SpawnAltitudeM = 400_000.0;
@@ -131,14 +132,12 @@ public sealed class FlybyDepartureTest : AfcTest
         double ca = ClosestApproach(transfer, moon.Orbit, f.BurnTime, transit, out missVec);
 
         bool clears = ca > surface;
-        // Invert the miss distance in the parent frame back through the impact
-        // parameter relation the retarget solved with, where VInfMs is the speed at
-        // the SOI boundary. That is the periapsis this approach actually buys, and
-        // it must land on the requested one. Asserting on b alone would accept a
-        // miss distance that still maps to an impact.
-        double achievedRp = FlybyTargeting.PeriapsisForImpactParameter(
-            f.VInfMs, ca, moonBody.Mu, moonBody.SphereOfInfluence);
-        bool rpOk = Approx.Rel(achievedRp, rp, 0.15);
+        // The periapsis this approach buys is the one of the conic about the moon
+        // that starts at the SOI entry, and it must land on the requested one.
+        // Asserting on b alone would accept a miss distance that still maps to an
+        // impact.
+        double achievedRp = PeriapsisAfterSoiEntry(transfer, home, moon.Orbit, moonBody, f.BurnTime, transit);
+        bool rpOk = Approx.Rel(achievedRp, rp, 0.02);
 
         // The named side has to hold. The miss must lean along the requested axis of
         // the moon's own orbital frame, Outer away from the parent and Inner toward
@@ -174,6 +173,43 @@ public sealed class FlybyDepartureTest : AfcTest
             if (len < best) { best = len; missVec = d; }
         }
         return best;
+    }
+
+    // Periapsis radius about the moon of the conic that the transfer becomes at
+    // its first SOI entry, or NaN when it never enters. The entry is bracketed by
+    // the samples and refined by bisection on the distance, and Orbit.CciToCci
+    // moves the state into the moon's inertial frame.
+    private static double PeriapsisAfterSoiEntry(
+        Orbit transfer, IParentBody home, Orbit moon, IParentBody moonBody, UniverseTime start, UniverseTime transit)
+    {
+        double soi = moonBody.SphereOfInfluence;
+        double Gap(double time)
+        {
+            var st = new UniverseTime(time);
+            return (transfer.GetStateVectorsAt(st).PositionCci - moon.GetStateVectorsAt(st).PositionCci).Length() - soi;
+        }
+
+        double a = start.Seconds();
+        double step = transit.Seconds() * 1.3 / SampleSteps;
+        for (int i = 1; i <= SampleSteps; i++)
+        {
+            double hi = a + step * i;
+            if (Gap(hi) > 0.0)
+                continue;
+            double lo = hi - step;
+            for (int k = 0; k < 50; k++)
+            {
+                double mid = 0.5 * (lo + hi);
+                if (Gap(mid) > 0.0) lo = mid;
+                else hi = mid;
+            }
+            var entry = new UniverseTime(hi);
+            StateVectors sv = transfer.GetStateVectorsAt(entry);
+            Orbit.CciToCci(entry, home, sv.PositionCci, sv.VelocityCci, moonBody,
+                out double3 positionCci, out double3 velocityCci, out _);
+            return Orbit.CreateFromStateCci(moonBody, entry, positionCci, velocityCci, transfer.OrbitLineColor).Periapsis;
+        }
+        return double.NaN;
     }
 
     private static VehicleSave? FirstAvailableSave()

@@ -25,6 +25,9 @@ internal static class TransferFlownPlan
     private static FlightPlan? _plan;
     private static bool _built;
 
+    /// <summary>How often the plan was propagated, for a check that an unchanged craft and selection cost no rebuild.</summary>
+    internal static int Builds { get; private set; }
+
     /// <summary>The plan to draw for the selected transfer: the finite plan, or the impulsive plan of the entry when none was built.</summary>
     public static FlightPlan Plan(Vehicle source, OrbitalTransfers.PorkChopEntry entry)
     {
@@ -32,7 +35,7 @@ internal static class TransferFlownPlan
         return _plan ?? entry.FlightPlan;
     }
 
-    /// <summary>The plan for a sketch, with no check of the phases: FlightComputer.GetFullThrottlePhases follows the current mass, so the phases change every frame of a burn and <see cref="Plan"/> would rebuild the trajectory each time.</summary>
+    /// <summary>The plan for a sketch, with no check of the phases: they follow the mass of the craft, so they change during a burn and <see cref="Plan"/> would rebuild the trajectory each time.</summary>
     public static FlightPlan Kept(Vehicle source, OrbitalTransfers.PorkChopEntry entry)
     {
         if (!Holds(source, entry.TransferData))
@@ -70,6 +73,7 @@ internal static class TransferFlownPlan
     {
         OrbitalTransfers.TransferData data = entry.TransferData;
         _built = true;
+        Builds++;
         _source = source;
         _start = data.Start;
         _transit = data.Transit;

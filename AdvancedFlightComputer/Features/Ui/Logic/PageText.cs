@@ -1308,6 +1308,8 @@ internal static class PageText
 
     public const string CreatedNext = "FLY OR PLAN NEXT BURN";
 
+    public const string FlybyCourseCheck = "FLYBY: BURN DONE, CHECKING THE COURSE";
+
     public const string NextToolLink = "NEXT TOOL";
 
     public const string NextToolTip = "Keeps the burn and shows the tools. The next burn starts from the orbit after this one.";

@@ -34,11 +34,13 @@ internal static class SaveScopedState
 {
     public static void ResetAll()
     {
+        PlannedBurnPhases.Reset();
         MultiPassPreviewCache.Reset();
         HohmannMultiPassPlanner.ResetShiftCache();
         MultiPassUI.Reset();
         HohmannMultiPassUI.Reset();
         HohmannFlybyUI.Reset();
+        FlybyCourse.Reset();
         OrbitToolsPanel.Reset();
         OrbitToolForm.Reset();
         RcsExecutor.ResetUiCache();
