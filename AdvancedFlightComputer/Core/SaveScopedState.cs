@@ -40,6 +40,7 @@ internal static class SaveScopedState
         MultiPassUI.Reset();
         HohmannMultiPassUI.Reset();
         HohmannFlybyUI.Reset();
+        FlybyCourse.Reset();
         OrbitToolsPanel.Reset();
         OrbitToolForm.Reset();
         RcsExecutor.ResetUiCache();

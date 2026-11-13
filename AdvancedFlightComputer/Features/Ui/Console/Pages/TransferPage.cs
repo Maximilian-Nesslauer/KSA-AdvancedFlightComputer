@@ -740,6 +740,16 @@ internal static class TransferPage
         if (TransferSession.Calculating)
             return new CommitSpec(PageText.CancelVerb, FlownBy.Nobody, Tooltip: PageText.CancelTransferTip, Act: TransferSession.CancelCalculation, Quiet: true);
 
+        // The follow-up of a flown flyby departure holds the footer while it checks the course and while its correction node waits or burns. The departure itself is the branch above until its node time, and the stock burn gauge after it.
+        if (FlybyCourse.Follows(source) && FlybyCourse.Stage != FlybyCourseStage.Departure)
+        {
+            if (FlybyCourse.Stage == FlybyCourseStage.Check)
+                return CommitSpec.StatusOnly(PageText.FlybyCourseCheck, true);
+            if (!ReferenceEquals(source, Program.ControlledVehicle))
+                return CommitSpec.StatusOnly(FlybyCourse.LastResult, false, FlownBy.StockAuto);
+            return BurnModeInput.StockAutoOnNode(source) ? PageKit.StockAutoFlies(source) : PageKit.FlyNextNode(source, FlybyCourse.LastResult);
+        }
+
         VerbFit fit = SituationVerbs.ForTransfer(where, ascentFlies, otherFlies);
         if (!TransferSession.Calculated)
             return BuildCalculate(source, in fit);

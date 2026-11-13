@@ -173,6 +173,8 @@ internal static class TransferCommitter
         Burn burn = Burn.Create(
             pointCce, flyby.BurnTime.Seconds(), dvVlf, patch, vehicle);
         burn.IsGizmoActive = false;
+        if (TransferSession.Info?.Target is IParentBody target && HohmannFlybyUI.TryGetRequest(target, out double radius, out _))
+            FlybyCourse.OnDepartureCreated(vehicle, TransferSession.Info.Target, radius, burn);
 
         if (DebugConfig.Flyby)
             DefaultCategory.Log.Debug(
