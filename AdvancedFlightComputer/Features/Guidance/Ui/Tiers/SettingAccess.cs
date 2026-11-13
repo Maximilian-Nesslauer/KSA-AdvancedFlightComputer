@@ -79,17 +79,20 @@ internal static class SettingAccess
     public static string SetBy(VehicleAutopilotState state, string key)
     {
         bool chased = state.TargetId.Length > 0 && state.ChaseDriven;
+        // A plane target sets the plane and the crossing, and leaves the orbit in it to the player.
+        AscentPlaneTarget? plane = state.TargetId.Length == 0 && state.ChaseDriven ? state.PlaneTarget : null;
         switch (key)
         {
+            case nameof(VehicleAutopilotState.IncDeg):
+            case nameof(VehicleAutopilotState.LaunchDescending):
+                return chased ? "Set from the target." : plane != null ? "Set for " + plane.Label + "." : "";
             case nameof(VehicleAutopilotState.PeKm):
             case nameof(VehicleAutopilotState.ApKm):
-            case nameof(VehicleAutopilotState.IncDeg):
             case nameof(VehicleAutopilotState.ArgPeDeg):
             case nameof(VehicleAutopilotState.ArgPeFixed):
-            case nameof(VehicleAutopilotState.LaunchDescending):
                 return chased ? "Set from the target." : "";
             case nameof(VehicleAutopilotState.LanDeg):
-                return chased ? "Set from the target." : "Set from the launch site.";
+                return chased ? "Set from the target." : plane != null ? "Set for " + plane.Label + "." : "Set from the launch site.";
             case nameof(VehicleAutopilotState.SixDofThrottleFloor):
                 return state.SixDofFloorAuto ? "Set from the craft." : "";
             // KsaVehicleHeight writes it from the colliders while the measurement is on.

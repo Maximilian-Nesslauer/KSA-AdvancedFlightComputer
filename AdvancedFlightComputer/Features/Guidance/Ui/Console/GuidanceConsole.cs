@@ -660,7 +660,8 @@ public static partial class GuidanceWindow
         {
             case GuidanceModeId.AscentUpfg:
                 // The launch window step keeps the chase orbit current, at most 250 ms behind. The commit takes the chase as it stands now, so a target picked just before the click is the one the launch flies.
-                if (_s.TargetId.Length > 0)
+                RefreshMoonLaunchPlane(vehicle, parent);
+                if (HasLaunchTarget)
                 {
                     ChaseStatus chase = TryChaseOrbit(vehicle, orbit, parent, parent.MeanRadius, out ChasePlan plan);
                     _s.ChaseDriven = chase == ChaseStatus.Ok || chase == ChaseStatus.PlaneUnreachable;

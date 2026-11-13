@@ -282,6 +282,7 @@ public sealed class GuidanceAscentReachTest : AfcTest
     }
 
     // A plane target of the station inclination over the pad now, and one whose node lies 10 deg east of it, so its window is ahead.
+    // The sim step clears a plane target that no moon sets (RefreshMoonLaunchPlane), so each case sets it again and steps only after.
     private static void SetTargetPlane(VehicleAutopilotState state, double lanDeg)
     {
         state.PlaneTarget = new AscentPlaneTarget(51.6, lanDeg, TargetAltKm, TargetAltKm, "test plane");

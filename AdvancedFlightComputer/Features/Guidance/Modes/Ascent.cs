@@ -218,7 +218,7 @@ public static partial class GuidanceWindow
                                          double bodyRadius)
     {
         _s.LanFollowsPad = !_s.Running && !_s.LaunchArmed && !HasLaunchTarget && KeepGravityTurnLanOverPad(orbit, parent);
-        if (_s.Running || !HasLaunchTarget)
+        if (_s.Running || (!HasLaunchTarget && (_s.MoonTransferId.Length == 0 || _s.MoonChain != MoonChainStage.Idle)))
             return;
 
         // ARMED: the launch instant is already latched and absolute, so this needs no geometry at all - and MUST not re-derive it. Checked every step, ahead of everything else here, because a single warp step can cross the window whole.
@@ -262,6 +262,7 @@ public static partial class GuidanceWindow
             return;
         _s.LaunchWindowTick = now;
 
+        RefreshMoonLaunchPlane(vehicle, parent);
         ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
 
         // The chase orbit is an OUTPUT of the target pick, recomputed continuously here and nowhere in the draw, so the launch flies the same plane whether or not the LAUNCH page is on screen. ChaseDriven tells the page which rows the target sets.
@@ -290,6 +291,7 @@ public static partial class GuidanceWindow
                 ReleaseAscent("ASCENT COMPLETE. MANUAL.", vehicle);
                 if (_s.CutoffDone)
                     _s.DiagStatus(_s.Status);
+                QueueMoonTransfer(vehicle);
             }
         }
 

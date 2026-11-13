@@ -112,6 +112,9 @@ public static partial class GuidanceWindow
             case ChaseStatus.Ok:
                 GaugeRowText("TARGET ORBIT", PageText.TargetOrbit(plan.TargetPeKm, plan.TargetApKm, plan.IncDeg));
                 break;
+            case ChaseStatus.NoTarget when _s.MoonTransferId.Length > 0 && !_s.Running && _s.MoonChain == MoonChainStage.Idle:
+                GaugeRowText("LAUNCH PLANE", "NO PLANE TO " + _s.MoonTransferId.ToUpperInvariant() + " FROM THIS SITE", ConsoleStyle.Danger);
+                break;
         }
     }
 
@@ -378,6 +381,62 @@ public static partial class GuidanceWindow
             ConsoleWidgets.EndComboControl();
         }
         ConsoleUi.EndRow();
+    }
+
+    /// <summary>THEN: what follows a completed ascent. Stay in the parking orbit, fly by a moon of the launch body, or go into an orbit of it (StepMoonTransfer). With a moon picked and no target vessel, the launch plane is set for the moon (RefreshMoonLaunchPlane).</summary>
+    private static void DrawMoonTransferPicker(Vehicle vehicle)
+    {
+        IParentBody parent = vehicle.Orbit?.Parent;
+        if (parent == null)
+            return;
+        var moons = MoonsOf(parent);
+        if (moons.Count == 0 && _s.MoonTransferId.Length == 0)
+            return;
+        bool chainRuns = _s.MoonChain != MoonChainStage.Idle;
+        BeginKitRow("THEN");
+        bool rowHovered = ConsoleWidgets.RowHovered;
+        bool open = ConsoleUi.BeginCombo("AfcAscentThen".AsSpan(), _s.MoonTransferId.Length == 0 ? "Stay in orbit"
+            : _s.MoonTransferId + (_s.MoonTransferCapture ? " orbit" : " flyby"));
+        if (!open && rowHovered)
+            ConsoleUi.Card("THEN", "After the ascent: stay in the parking orbit, fly by a moon, or go into an orbit of it. "
+                + "For a moon, LAUNCH waits for the window of a plane that meets it, unless TARGET sets the plane. After the ascent AFC plans the injection burn, "
+                + "a correction on the way when the periapsis is off, and for an orbit the capture burn at the periapsis. Stock AUTO flies each burn and AFC warps to it. "
+                + "A burn you plan, or AUTO switched off, stops the chain. THEN goes back to Stay in orbit when the chain ends.");
+        if (open)
+        {
+            // While the chain runs the pick only stops it, because its moon and its periapsis were latched at the end of the ascent.
+            if (ImGui.Selectable("Stay in orbit", _s.MoonTransferId.Length == 0) && _s.MoonTransferId.Length > 0)
+            {
+                if (chainRuns)
+                    _s.MoonChainStopRequested = true;
+                else
+                {
+                    _s.MoonTransferId = "";
+                    _s.MoonTransferCapture = false;
+                }
+            }
+            if (!chainRuns)
+                foreach (Celestial moon in moons)
+                {
+                    // An armed launch keeps the window of the plane it was armed for, so it takes no other moon.
+                    using var armed = new ImGuiDisabledScope(_s.LaunchArmed && moon.Id != _s.MoonTransferId);
+                    if (ImGui.Selectable(moon.Id + " flyby", moon.Id == _s.MoonTransferId && !_s.MoonTransferCapture))
+                    {
+                        _s.MoonTransferId = moon.Id;
+                        _s.MoonTransferCapture = false;
+                    }
+                    if (ImGui.Selectable(moon.Id + " orbit", moon.Id == _s.MoonTransferId && _s.MoonTransferCapture))
+                    {
+                        _s.MoonTransferId = moon.Id;
+                        _s.MoonTransferCapture = true;
+                    }
+                }
+            ConsoleWidgets.EndComboControl();
+        }
+        ConsoleUi.EndRow();
+        if (_s.MoonTransferId.Length > 0)
+            using (new ImGuiDisabledScope(chainRuns))
+                GaugeRow(Specs.MoonTransferPeKm, ref _s.MoonTransferPeKm);
     }
 
     // How the vehicle flies the ascent, as opposed to where it is going.

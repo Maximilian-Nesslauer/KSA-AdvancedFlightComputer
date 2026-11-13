@@ -60,6 +60,7 @@ public static partial class GuidanceWindow
         using (new ImGuiDisabledScope(AscentPlanBusy))
         {
             DrawTargetPicker(vehicle);
+            DrawMoonTransferPicker(vehicle);
             DrawTargetFacts(status, in plan);
             DrawReachRow(orbit, parent, status, in plan);
             DrawTwrRow();

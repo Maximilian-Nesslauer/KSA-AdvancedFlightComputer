@@ -948,6 +948,8 @@ public static partial class GuidanceWindow
             {
                 _s = disabledState;
                 HandBackVehicle(vehicle);
+                if (_s.MoonChain != MoonChainStage.Idle)
+                    StopMoonChain(vehicle, "GUIDANCE WAS SWITCHED OFF", disarm: true);
             }
             return;
         }
@@ -983,7 +985,7 @@ public static partial class GuidanceWindow
         // LaunchArmed counts as flying because a vehicle waiting for its launch window must update the window and fire the commit. A booster adopted at separation also counts as flying until boostback engages.
         bool handingOver = _s.HandoverPendingUntil > SimNow();
         bool flying = sixDof || _s.Running || landingActive || BoostbackLive || ThreeDofLive || _s.ThreeDofEngagePending
-                   || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver;
+                   || _s.WasEngaged || _s.LandingCutPending || _s.LaunchArmed || handingOver || _s.MoonChain != MoonChainStage.Idle;
 
         // Check ownership per actuator before mode steps can overwrite a changed command. The attitude is compared by value. The engine belongs to whoever arms stock Auto, because Vehicle.PrepareWorker then clears EngineOn on every step after this prefix and stock's own burn logic never writes Auto by itself. Keep cleanup ahead of the idle return so unfocused vehicles can release control too.
         bool attitudeTaken = _s.ControlAcquired
@@ -1048,6 +1050,7 @@ public static partial class GuidanceWindow
 
         // Likewise the launch window: tracked, and FIRED, from here rather than from the console. It has to run for a focused vehicle that is not flying yet, which is precisely the state an armed launch sits in. It starts the ascent, so a fault here counts as a failed step like a mode's. See StepLaunchWindow.
         StepLaunchWindow(vehicle, orbit, parent, parent.MeanRadius);
+        StepMoonTransfer(vehicle, orbit, parent);
 
         // The convex ascent's Calculate request is built here for the same reason as the stage model: this is the one point in the frame where the part tree is settled and nothing else is reading it. The solve itself runs on its own thread. It catches its own faults, which cost the plan, never the step.
         StepAscentPlanner(vehicle, orbit, parent);

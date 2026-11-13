@@ -9,13 +9,30 @@ using KSA;
 namespace AdvancedFlightComputer.Features.Transfer;
 
 /// <summary>
-/// The correction burn of a craft on its way to one of its parent's moons, aimed at a periapsis there.
-/// FlybyTargeting aims the burn at the requested periapsis, and the game's own patched-conic propagation (HohmannFlybyUI.BuildPreview) has to confirm the encounter before the plan is offered.
+/// The injection burn from a parking orbit to a flyby of one of its parent's moons, chosen without a porkchop window.
+/// A grid of Lambert solves (OrbitalTransfers.SuperiorLambert, aimed at the moon's centre) over the departures of the next parking revolutions and the flight times around the Hohmann time finds the cheap departures.
+/// FlybyTargeting then aims each, cheapest first, at the requested periapsis, and the game's own patched-conic propagation (HohmannFlybyUI.BuildPreview) has to confirm the encounter before the plan is offered.
 /// The delta v is refined for the finite burn as the flyby preview refines it, so the burn that is created is the burn that was checked.
-/// The periapsis at the moon moves by hundreds of kilometres for each tenth of a m/s at a departure from a low parking orbit, so no flown departure keeps it: TryPlanCorrection aims the flown orbit again on the way.
+/// The periapsis at the moon moves by hundreds of kilometres for each tenth of a m/s at an injection from a low parking orbit, so no flown injection keeps it: TryPlanCorrection aims the flown orbit again on the way, and TryPlanCapture plans the burn into an orbit of the moon at the periapsis.
 /// </summary>
 internal static class MoonInjectionPlanner
 {
+    // The coarse grid covers this many parking revolutions from the earliest departure. The phase to the moon comes round once a revolution, so one and a half always holds the best departure.
+    private const double SearchRevolutions = 1.5;
+    private const int StartSamples = 144;
+    private const int FlightSamples = 24;
+
+    // Flight times as fractions of the Hohmann time. A transfer of exactly 180 degrees has no plane, so the cheapest one stops just short of the Hohmann time.
+    private const double ShortestFlight = 0.45;
+    private const double LongestFlight = 1.05;
+
+    // The fine grid spans one coarse cell either side of a coarse candidate.
+    private const int FineSamples = 16;
+    private const int MaxCandidates = 6;
+
+    // The most an injection may cost against the ideal Hohmann burn. A moon's eccentric orbit and a few degrees out of plane stay well inside it.
+    private const double MaxDvOverHohmann = 1.25;
+
     // The aim is corrected until the propagated periapsis altitude is within this fraction of the requested one, or within the floor for a low flyby.
     private const int PeriapsisCorrections = 4;
     private const double PeriapsisTolerance = 0.03;
@@ -29,6 +46,125 @@ internal static class MoonInjectionPlanner
         UniverseTime Arrival,
         double PredictedPeriapsisRadius,
         FlybySide? Side);
+
+    /// <summary>
+    /// Plans the injection from <paramref name="vehicle"/>'s orbit to a flyby of <paramref name="moon"/> at <paramref name="periapsisAltitudeM"/> above its mean radius, with the burn no earlier than <paramref name="notBefore"/>.
+    /// False with the reason in <paramref name="refusal"/> when the craft does not orbit the moon's parent on a closed orbit, or no departure leads to an encounter.
+    /// </summary>
+    public static bool TryPlan(Vehicle vehicle, Celestial moon, double periapsisAltitudeM, UniverseTime notBefore,
+        out MoonInjection plan, out string refusal)
+    {
+        plan = default;
+        refusal = "";
+        Orbit parking = vehicle.Orbit;
+        if (moon is not IParentBody moonBody || moon.Orbit?.Parent is not IParentBody home)
+        {
+            refusal = "NO MOON TO FLY TO";
+            return false;
+        }
+        if (parking?.Parent == null || parking.Parent.Id != home.Id)
+        {
+            refusal = $"CRAFT DOES NOT ORBIT {home.Id.ToUpperInvariant()}";
+            return false;
+        }
+        if (!(parking.Eccentricity < 1.0) || !(parking.Period > 0.0))
+        {
+            refusal = "NO CLOSED PARKING ORBIT";
+            return false;
+        }
+
+        double mu = home.Mu;
+        double parkingSma = parking.SemiMajorAxis;
+        double hohmann = LunarTransferGeometry.HohmannTime(mu, parkingSma, moon.Orbit.SemiMajorAxis);
+        double start0 = notBefore.Seconds();
+        double startSpan = SearchRevolutions * parking.Period;
+        double flightMin = ShortestFlight * hohmann;
+        double flightSpan = (LongestFlight - ShortestFlight) * hohmann;
+
+        // The coarse grid keeps the cheapest flight time of every departure. Each local minimum over the departures is a candidate, cheapest first: the cheapest one can still miss the sphere of influence when the moon lies far out of the parking plane, because the plane of a transfer near 180 degrees is badly conditioned.
+        double startStep = startSpan / StartSamples, flightStep = flightSpan / FlightSamples;
+        var costs = new double[StartSamples + 1];
+        var flights = new double[StartSamples + 1];
+        for (int i = 0; i <= StartSamples; i++)
+        {
+            costs[i] = double.MaxValue;
+            for (int j = 0; j <= FlightSamples; j++)
+            {
+                double flight = flightMin + j * flightStep;
+                double cost = LambertCost(start0 + i * startStep, flight);
+                if (cost < costs[i])
+                {
+                    costs[i] = cost;
+                    flights[i] = flight;
+                }
+            }
+        }
+        var candidates = new List<int>();
+        for (int i = 0; i <= StartSamples; i++)
+            if (costs[i] < double.MaxValue
+                && (i == 0 || costs[i] <= costs[i - 1]) && (i == StartSamples || costs[i] <= costs[i + 1]))
+                candidates.Add(i);
+        candidates.Sort((a, b) => costs[a].CompareTo(costs[b]));
+        if (candidates.Count == 0)
+        {
+            refusal = "NO TRANSFER SOLUTION";
+            return false;
+        }
+
+        // A parking plane far from the moon's position at arrival still has a Lambert solution, but its delta v is a plane change of several km/s that no craft is built for. Such a plan is refused with the angle that causes it rather than offered.
+        double limit = MaxDvOverHohmann * HohmannDv(mu, parkingSma, moon.Orbit.SemiMajorAxis);
+        int cheapest = candidates[0];
+        if (costs[cheapest] > limit)
+        {
+            double3 normal = parking.GetOrbitNormalCci();
+            double3 moonThen = moon.Orbit.GetStateVectorsAt(new UniverseTime(start0 + cheapest * startStep + flights[cheapest])).PositionCci;
+            double outOfPlaneDeg = Math.Asin(Math.Clamp(double3.Dot(normal, double3.Normalize(moonThen)), -1.0, 1.0)) * 180.0 / Math.PI;
+            refusal = $"{moon.Id.ToUpperInvariant()} IS {Math.Abs(outOfPlaneDeg):F0} DEG OUT OF THE PARKING PLANE AT ARRIVAL, THE INJECTION WOULD COST {costs[cheapest]:F0} M/S. "
+                + $"LAUNCH INTO A PLANE THAT HOLDS {moon.Id.ToUpperInvariant()}";
+            return false;
+        }
+
+        double rp = moonBody.MeanRadius + periapsisAltitudeM;
+        double surface = moonBody.GetNearSurfaceRadius();
+        string why = "NO ENCOUNTER IN PREDICTION";
+        for (int c = 0; c < Math.Min(candidates.Count, MaxCandidates); c++)
+        {
+            int i = candidates[c];
+            if (costs[i] > limit)
+                break;
+            double bestCost = double.MaxValue, bestStart = double.NaN, bestFlight = double.NaN;
+            for (int a = -FineSamples; a <= FineSamples; a++)
+                for (int b = -FineSamples; b <= FineSamples; b++)
+                {
+                    double startS = Math.Max(start0, start0 + i * startStep + a * startStep / FineSamples);
+                    double flightS = flights[i] + b * flightStep / FineSamples;
+                    double cost = LambertCost(startS, flightS);
+                    if (cost < bestCost)
+                    {
+                        bestCost = cost;
+                        bestStart = startS;
+                        bestFlight = flightS;
+                    }
+                }
+            if (double.IsNaN(bestStart))
+                continue;
+            if (TryAim(vehicle, moon, moonBody, new UniverseTime(bestStart), new UniverseTime(bestFlight), rp, surface, out plan, ref why))
+                return true;
+        }
+        refusal = why;
+        return false;
+
+        double LambertCost(double startS, double flightS)
+        {
+            if (!(flightS > 0.0))
+                return double.MaxValue;
+            StateVectors from = parking.GetStateVectorsAt(new UniverseTime(startS));
+            double3 to = moon.Orbit.GetStateVectorsAt(new UniverseTime(startS + flightS)).PositionCci;
+            OrbitalTransfers.SuperiorLambert(mu, from.PositionCci, to, new UniverseTime(flightS), out double3 departure, out _);
+            double cost = (departure - from.VelocityCci).Length();
+            return double.IsFinite(cost) ? cost : double.MaxValue;
+        }
+    }
 
     // Aims one departure past the moon on each side and keeps the cheapest side whose encounter the game's propagation confirms.
     // The two-body aim misses the requested periapsis by the moon's pull before its sphere of influence and by the finite burn, so the requested radius is corrected by the propagated miss, a few secant steps at most.
@@ -100,6 +236,12 @@ internal static class MoonInjectionPlanner
     // Samples of the closest-approach scan that seeds a correction's arrival time when the flight plan holds no encounter.
     private const int ApproachSamples = 400;
 
+    // The largest apoapsis of a capture with less delta v than the circular orbit needs, as a fraction of the moon's sphere of influence.
+    private const double MaxCaptureApoapsisOverSphere = 0.5;
+
+    // The share of the craft's remaining delta v a capture may plan with.
+    private const double CaptureBudgetShare = 0.97;
+
     /// <summary>The periapsis radius at <paramref name="moonBody"/> on the craft's own flight plan, which is the game's patched-conic propagation of the orbit as flown, m. NaN when the plan holds no encounter.</summary>
     public static double PredictedPeriapsisRadius(Vehicle vehicle, IParentBody moonBody)
         => FlybyPrediction.FromPlan(vehicle.FlightPlan, moonBody).PeriapsisRadius ?? double.NaN;
@@ -115,7 +257,7 @@ internal static class MoonInjectionPlanner
 
     /// <summary>
     /// Plans one burn at <paramref name="burnTime"/> that aims the craft's orbit toward <paramref name="moon"/> at <paramref name="periapsisAltitudeM"/> again. The arrival time stays the one of the orbit as flown, so the burn only moves the aim point.
-    /// With an encounter on the flight plan it is the smallest burn that moves the periapsis (TryNudge). Without one it aims anew (TryAim). False with the reason in <paramref name="refusal"/>.
+    /// With an encounter on the flight plan it is the smallest burn that moves the periapsis (TryNudge). Without one it aims anew as the injection does. False with the reason in <paramref name="refusal"/>.
     /// </summary>
     public static bool TryPlanCorrection(Vehicle vehicle, Celestial moon, double periapsisAltitudeM, UniverseTime burnTime,
         out MoonInjection plan, out string refusal)
@@ -271,4 +413,121 @@ internal static class MoonInjectionPlanner
             return double.IsFinite(d) ? d : double.MaxValue;
         }
     }
+
+    /// <summary>The capture burn at the periapsis of a flyby: the burn time and the finite-burn delta v in VLF, as Burn.Create takes them, with the orbit the game's propagation of the burn predicts.</summary>
+    internal readonly record struct MoonCapture(
+        UniverseTime BurnTime,
+        double3 DvVlf,
+        double PeriapsisRadius,
+        double ApoapsisRadius,
+        bool Circular);
+
+    /// <summary>
+    /// Plans the retrograde burn at the periapsis of the craft's flyby orbit around <paramref name="moonBody"/> that leaves it in a circular orbit at that periapsis.
+    /// With less than that in <paramref name="availableDvMs"/> the burn takes what the craft has and leaves an ellipse, as long as its apoapsis stays well inside the sphere of influence.
+    /// False with the reason in <paramref name="refusal"/>.
+    /// </summary>
+    public static bool TryPlanCapture(Vehicle vehicle, IParentBody moonBody, double availableDvMs, UniverseTime notBefore,
+        out MoonCapture plan, out string refusal)
+    {
+        plan = default;
+        refusal = "";
+        Orbit orbit = vehicle.Orbit;
+        string moonName = moonBody.Id.ToUpperInvariant();
+        if (orbit?.Parent == null || orbit.Parent.Id != moonBody.Id)
+        {
+            refusal = $"CRAFT IS NOT IN THE SPHERE OF {moonName}";
+            return false;
+        }
+        if (orbit.Eccentricity < 1.0)
+        {
+            refusal = $"CRAFT ALREADY ORBITS {moonName}";
+            return false;
+        }
+        // Orbit.GetNextPeriapsisTime gives the one periapsis of an open orbit, also when it has passed.
+        if (orbit.GetNextPeriapsisTime(notBefore) is not UniverseTime burnTime || burnTime <= notBefore)
+        {
+            refusal = "THE PERIAPSIS IS TOO CLOSE OR HAS PASSED";
+            return false;
+        }
+        double rp = orbit.Periapsis;
+        if (!(rp > moonBody.GetNearSurfaceRadius()))
+        {
+            refusal = "THE PERIAPSIS IS BELOW THE SURFACE";
+            return false;
+        }
+        PatchedConic? prePatch = vehicle.FlightPlan.TryFindPatch(burnTime);
+        if (prePatch == null || prePatch.Orbit.Parent?.Id != moonBody.Id)
+        {
+            refusal = "NO FLIGHT-PLAN PATCH AT THE PERIAPSIS";
+            return false;
+        }
+
+        StateVectors atPeriapsis = orbit.GetStateVectorsAt(burnTime);
+        double speed = atPeriapsis.VelocityCci.Length();
+        double mu = moonBody.Mu;
+        double forCircle = speed - Math.Sqrt(mu / rp);
+        double dv = forCircle;
+        bool circular = true;
+        if (!(availableDvMs * CaptureBudgetShare >= forCircle))
+        {
+            circular = false;
+            dv = availableDvMs * CaptureBudgetShare;
+            double after = speed - dv;
+            double energy = 0.5 * after * after - mu / rp;
+            double apoapsis = energy < 0.0 ? -mu / energy - rp : double.PositiveInfinity;
+            if (!(dv > 0.0) || !(apoapsis <= MaxCaptureApoapsisOverSphere * moonBody.SphereOfInfluence))
+            {
+                refusal = $"A CAPTURE AT {moonName} NEEDS {forCircle:F0} M/S FOR A CIRCLE, THE CRAFT HAS {Math.Max(availableDvMs, 0.0):F0} M/S";
+                return false;
+            }
+        }
+
+        // Retrograde at the periapsis, in the VLF frame of that point.
+        double3 dvCci = atPeriapsis.VelocityCci * (-dv / speed);
+        double3 dvVlf = dvCci.Transform(atPeriapsis.GetVlf2ParentCci().OrIdentity().Inverse());
+        dvVlf = FiniteBurns.Refine(orbit, burnTime, dvVlf, FiniteBurns.FullThrottlePhases(vehicle),
+            circular ? FiniteBurnGoal.Circular : FiniteBurnGoal.Apsis).DvVlf;
+        // A refinement can ask for more than the craft has when the burn is long. The budget wins, and the propagation below says what orbit that leaves.
+        if (!circular && dvVlf.Length() > dv)
+            dvVlf *= dv / dvVlf.Length();
+
+        if (!TryPropagateBurn(vehicle, prePatch, burnTime, dvVlf, out Orbit? captured) || captured == null
+            || !(captured.Eccentricity < 1.0) || !(captured.Periapsis > moonBody.GetNearSurfaceRadius())
+            || !(captured.Apoapsis <= moonBody.SphereOfInfluence))
+        {
+            refusal = "THE PREDICTED ORBIT AFTER THE CAPTURE BURN IS NOT A SAFE ORBIT";
+            return false;
+        }
+        plan = new MoonCapture(burnTime, dvVlf, captured.Periapsis, captured.Apoapsis, circular);
+        return true;
+    }
+
+    // The orbit after the burn as the game propagates it: the finite burn of FlightPlan.TryAddFiniteBurn for a craft with thrust, as the flyby preview builds it, and the impulsive patch of FlightPlan.CalculateBurnPatch otherwise.
+    private static bool TryPropagateBurn(Vehicle vehicle, PatchedConic prePatch, UniverseTime burnTime, double3 dvVlf, out Orbit? after)
+    {
+        after = null;
+        try
+        {
+            FlightPlan plan = FlightPlan.CreateUninitialized(vehicle.Hash);
+            plan.ImpactClearanceMargin = vehicle.BoundingSphereRadiusBody;
+            PatchedConic? piece = FiniteBurns.TryAddFiniteBurn(plan, prePatch, burnTime, dvVlf,
+                FiniteBurns.FullThrottlePhases(vehicle), out bool impacted);
+            if (impacted)
+                return false;
+            piece ??= plan.CalculateBurnPatch(prePatch, prePatch.Orbit.GetTimeSincePeriapsisThisOrbit(burnTime), dvVlf, burnTime);
+            after = piece?.Orbit;
+            return after != null;
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce("moon-capture-preview:" + ex.GetType().Name,
+                $"[AFC] Capture preview: vehicle='{vehicle.Id}' burn={burnTime.Seconds():F1}s: {ex}");
+            return false;
+        }
+    }
+
+    /// <summary>The delta v of the first burn of the Hohmann transfer from a circular orbit of radius <paramref name="r1"/> out to <paramref name="r2"/>, m/s.</summary>
+    public static double HohmannDv(double mu, double r1, double r2)
+        => Math.Sqrt(mu / r1) * (Math.Sqrt(2.0 * r2 / (r1 + r2)) - 1.0);
 }
