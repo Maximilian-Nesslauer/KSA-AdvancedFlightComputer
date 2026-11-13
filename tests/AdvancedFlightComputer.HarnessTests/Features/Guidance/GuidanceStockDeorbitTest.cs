@@ -436,23 +436,130 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance, state.LandingStatus);
     }
 
+    // Planning sets 1x itself and gives the speed back when it ends; see GuidanceWindow.StepRealSpeedHold.
     private static void CheckPlanningWait(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)
     {
         double previousSpeed = Universe.SimulationSpeed;
+        Vehicle? previousFocus = Program.ControlledVehicle;
+        Vehicle craft = fixture.Vehicle;
         try
         {
+            RealSpeedHold.Clear();
             state.DeorbitRequest = fixture.Request;
             state.DeorbitPlanner = new DeorbitPlanner(fixture.Request);
             state.LandingPhase = GuidanceWindow.LandingPhase.DeorbitPlanning;
-            TestSupport.SetManualControlInputs(fixture.Vehicle, 0.63f, engineOn: false);
+            TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: false);
             Universe.SetSimulationSpeed(100, alert: false);
-            GuidanceWindow.ApplyAutopilot(fixture.Vehicle);
-            t.Check("planning waits at high warp without a captured search", state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitPlanning
-                && state.DeorbitRequest == null && state.DeorbitPlanner == null && state.LandingStatus.Contains("1x"));
-            t.Check("planning at high warp keeps the engine input and takes no control",
-                !Inputs(fixture.Vehicle).EngineOn && Inputs(fixture.Vehicle).EngineThrottle == 0.63f && !state.ControlAcquired);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("planning sets 1x and remembers the speed", Universe.SimulationSpeed == 1.0
+                && RealSpeedHold.Holding(craft) && RealSpeedHold.RememberedSpeed == 100.0,
+                $"speed {Universe.SimulationSpeed}, remembered {RealSpeedHold.RememberedSpeed}");
+            t.Check("planning does not wait for the warp", state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitPlanning
+                && !state.LandingStatus.Contains("WARP ABOVE"), state.LandingStatus);
+            t.Check("planning keeps the engine input and takes no control",
+                !Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == 0.63f && !state.ControlAcquired);
+
+            Universe.SetSimulationSpeed(10, alert: false);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("a speed raised during planning is set back to 1x and becomes the speed given back",
+                Universe.SimulationSpeed == 1.0 && RealSpeedHold.RememberedSpeed == 10.0,
+                $"speed {Universe.SimulationSpeed}, remembered {RealSpeedHold.RememberedSpeed}");
+
+            state.LandingPhase = GuidanceWindow.LandingPhase.Idle;
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("the end of planning gives the player's speed back", Universe.SimulationSpeed == 10.0
+                && !RealSpeedHold.Holding(craft) && double.IsNaN(RealSpeedHold.RememberedSpeed), $"speed {Universe.SimulationSpeed}");
+
+            Universe.SetSimulationSpeed(1, alert: false);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("no hold, no speed change", Universe.SimulationSpeed == 1.0, $"speed {Universe.SimulationSpeed}");
+
+            state.LandingPhase = GuidanceWindow.LandingPhase.DeorbitPlanning;
+            Universe.SetSimulationSpeed(50, alert: false);
+            GuidanceWindow.ApplyAutopilot(craft);
+            Universe.SetSimulationSpeed(0, alert: false);
+            state.LandingPhase = GuidanceWindow.LandingPhase.Idle;
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("a pause during planning stays a pause", Universe.SimulationSpeed == 0.0
+                && double.IsNaN(RealSpeedHold.RememberedSpeed), $"speed {Universe.SimulationSpeed}");
+
+            Universe.SetSimulationSpeed(1, alert: false);
+            state.LandingPhase = GuidanceWindow.LandingPhase.Idle;
+            state.ConvexLaunchPending = true;
+            Universe.SetSimulationSpeed(20, alert: false);
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("an unfocused craft does not hold for a launch plan it cannot collect", Universe.SimulationSpeed == 20.0
+                && !RealSpeedHold.Holding(craft), $"speed {Universe.SimulationSpeed}");
+            Program.ControlledVehicle = craft;
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("a launch plan is solved at 1x", Universe.SimulationSpeed == 1.0 && RealSpeedHold.Holding(craft),
+                $"speed {Universe.SimulationSpeed}");
+            Program.ControlledVehicle = previousFocus;
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check("a craft that loses focus during the solve gives the speed back", Universe.SimulationSpeed == 20.0
+                && !RealSpeedHold.Holding(craft), $"speed {Universe.SimulationSpeed}");
+            Program.ControlledVehicle = craft;
+            GuidanceWindow.ApplyAutopilot(craft);
+            state.ConvexLaunchPending = false;
+            GuidanceWindow.ApplyAutopilot(craft);
+            Program.ControlledVehicle = previousFocus;
+            t.Check("the end of the launch solve gives the speed back", Universe.SimulationSpeed == 20.0,
+                $"speed {Universe.SimulationSpeed}");
+
+            RealSpeedHold.Hold(craft, Universe.GetElapsedSeconds());
+            t.Check("a direct hold sets 1x", Universe.SimulationSpeed == 1.0);
+            RealSpeedHold.Release(craft, Universe.GetElapsedSeconds(), giveBack: false);
+            t.Check("a hold that ends in a phase that needs real speed gives nothing back",
+                Universe.SimulationSpeed == 1.0 && double.IsNaN(RealSpeedHold.RememberedSpeed), $"speed {Universe.SimulationSpeed}");
+
+            Universe.SetSimulationSpeed(30, alert: false);
+            RealSpeedHold.Hold(craft, Universe.GetElapsedSeconds());
+            Universe.SetSimulationSpeed(4, alert: false);
+            RealSpeedHold.Release(craft, Universe.GetElapsedSeconds(), giveBack: true);
+            t.Check("a speed the player chose after the hold stays", Universe.SimulationSpeed == 4.0, $"speed {Universe.SimulationSpeed}");
+
+            var step = AccessTools.Method(typeof(GuidanceWindow), "StepRealSpeedHold");
+            Universe.SetSimulationSpeed(25, alert: false);
+            state.ConvexLaunchPending = true;
+            step.Invoke(null, new object[] { craft, true });
+            state.ConvexLaunchPending = false;
+            state.LaunchArmed = true;
+            step.Invoke(null, new object[] { craft, true });
+            state.LaunchArmed = false;
+            t.Check("a solve that ends in a launch armed for a window gives nothing back", Universe.SimulationSpeed == 1.0
+                && !RealSpeedHold.Holding(craft) && double.IsNaN(RealSpeedHold.RememberedSpeed), $"speed {Universe.SimulationSpeed}");
+
+            Universe.SetSimulationSpeed(25, alert: false);
+            state.LandingPhase = GuidanceWindow.LandingPhase.DeorbitPlanning;
+            step.Invoke(null, new object[] { craft, false });
+            state.LandingPhase = GuidanceWindow.LandingPhase.Coast;
+            step.Invoke(null, new object[] { craft, false });
+            state.LandingPhase = GuidanceWindow.LandingPhase.Idle;
+            t.Check("planning that ends in the coast to the braking burn gives nothing back", Universe.SimulationSpeed == 1.0
+                && double.IsNaN(RealSpeedHold.RememberedSpeed), $"speed {Universe.SimulationSpeed}");
+
+            double now = Universe.GetElapsedSeconds();
+            Universe.SetSimulationSpeed(40, alert: false);
+            RealSpeedHold.Hold(craft, now);
+            RealSpeedHold.Forget(craft);
+            t.Check("a craft that leaves without a release drops the remembered speed",
+                !RealSpeedHold.Holding(craft) && double.IsNaN(RealSpeedHold.RememberedSpeed));
+
+            Universe.SetSimulationSpeed(40, alert: false);
+            RealSpeedHold.Hold(craft, now - 10);
+            RealSpeedHold.Hold(craft, now);
+            RealSpeedHold.Release(craft, now, giveBack: true);
+            t.Check("a stale holder gives nothing back to a later hold that changed nothing",
+                Universe.SimulationSpeed == 1.0 && double.IsNaN(RealSpeedHold.RememberedSpeed), $"speed {Universe.SimulationSpeed}");
         }
-        finally { Universe.SetSimulationSpeed(previousSpeed, alert: false); }
+        finally
+        {
+            Program.ControlledVehicle = previousFocus;
+            state.ConvexLaunchPending = false;
+            state.LaunchArmed = false;
+            RealSpeedHold.Clear();
+            Universe.SetSimulationSpeed(previousSpeed, alert: false);
+        }
     }
 
     private static void CheckDirectCoast(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)

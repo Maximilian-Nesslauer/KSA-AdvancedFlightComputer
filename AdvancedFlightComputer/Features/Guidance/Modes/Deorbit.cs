@@ -222,7 +222,7 @@ public static partial class GuidanceWindow
         if (LandingSwitchesOff) { RefuseDeorbit(vehicle, LandingSwitchesChangedStatus); return; }
         string engineRefusal = BrakingEngineRefusal(vehicle);
         if (engineRefusal.Length > 0) { RefuseDeorbit(vehicle, engineRefusal); return; }
-        // Only the capture waits for idle engines and 1x warp. A direct coast checks its braking model again at ignition.
+        // Only the capture waits for idle engines and 1x warp. StepRealSpeedHold sets 1x before this step, so the warp wait catches only a speed raised between the two. A direct coast checks its braking model again at ignition.
         if (_s.LandingPhase == LandingPhase.DeorbitPlanning)
         {
             if (vehicle.FlightComputer.BurnMode == FlightComputerBurnMode.Auto

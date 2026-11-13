@@ -908,6 +908,7 @@ public static partial class GuidanceWindow
         // Do not create state while guidance is disabled. Release each vehicle in its PrepareWorker prefix so cleanup reaches the next worker snapshot.
         if (!ModActive)
         {
+            RealSpeedHold.Forget(vehicle);
             if (VehicleAutopilotState.TryGet(vehicle, out VehicleAutopilotState disabledState))
             {
                 _s = disabledState;
@@ -926,6 +927,9 @@ public static partial class GuidanceWindow
             return;
 
         LogModeChanges(vehicle);
+
+        // Ahead of the returns below, so a craft whose planning ends releases its hold also when it is not in focus and flies nothing.
+        StepRealSpeedHold(vehicle, focused);
 
         if (_s.FcResetPending)
         {
