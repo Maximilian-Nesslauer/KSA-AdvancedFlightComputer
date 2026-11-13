@@ -101,7 +101,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ExecuteAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
-        bool window = _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime);
+        bool window = HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime);
         _s.ConvexLaunchFailure = "";
         _s.BackupAscent = false;
         if (_s.FlyConvexAscent && !_s.Running
@@ -116,7 +116,7 @@ public static partial class GuidanceWindow
     /// <summary>The commit itself: arm for the window, or start now.</summary>
     private static void LaunchAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, bool atWindow)
     {
-        if (atWindow && _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime))
+        if (atWindow && HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime))
         {
             // ARMING TAKES THE VEHICLE TOO. It is a commit - the craft is now waiting to launch and will fire itself at the window - so leaving another mode running underneath it would have that mode flying right up to the moment StepLaunchWindow claimed it out from under itself.
             ClaimVehicle(GuidanceMode.Ascent, vehicle);

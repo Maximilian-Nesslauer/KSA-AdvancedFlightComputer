@@ -22,7 +22,7 @@ public static partial class GuidanceWindow
     private const float OrbitFieldLeast = 56f;
 
     // A row of the page. Picking a target turns the three orbit inputs into OUTPUTS of that pick, continuously recomputed and greyed out, because a chase orbit that disagreed with the target it was chasing was never anything but a mistake. Returns the width of its fields, so the row under it can line up.
-    private static float DrawOrbitRow(Orbit orbit, IParentBody parent, bool driven)
+    private static float DrawOrbitRow(Orbit orbit, IParentBody parent, bool driven, bool planeOnly)
     {
         float avail = ConsoleStyle.ContentAvailWidth();
         float cells = avail - ConsoleUi.LabelColumnWidth;
@@ -41,7 +41,8 @@ public static partial class GuidanceWindow
         float2 control = ImGui.GetCursorScreenPos();
         float x = control.X + ConsoleWidgets.RowControlWidth - rowWidth;
 
-        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
+        // A plane target sets only the plane, so the altitudes stay the player's.
+        using (new ImGuiDisabledScope((driven && !planeOnly) || AscentPlanBusy))
         {
             // Periapsis is always the lower: a pair entered the other way round swaps once the field is left (see OrderApsides).
             GaugeCell(Specs.PeKm, "PE", ref x, control.Y, fieldW, ref _s.PeKm, nameInk: cellInk);
@@ -50,6 +51,9 @@ public static partial class GuidanceWindow
             GaugeCell(Specs.ApKm, "AP", ref x, control.Y, fieldW, ref _s.ApKm, nameInk: cellInk);
             if (RowEditEnded(Specs.ApKm))
                 OrderApsides();
+        }
+        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
+        {
             // A new inclination makes the old LAN meaningless, because the plane it named no longer passes overhead, so re-seed it from where the vehicle is.
             if (GaugeCell(Specs.IncDeg, "INC", ref x, control.Y, fieldW, ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
@@ -90,6 +94,9 @@ public static partial class GuidanceWindow
             case ChaseStatus.DifferentBody:
                 GaugeRowText("TARGET", "OTHER BODY", ConsoleStyle.Danger);
                 break;
+            case ChaseStatus.Ok when plan.Target == null:
+                GaugeRowText("LAUNCH PLANE", FormattableString.Invariant($"{_s.PlaneTarget?.Label.ToUpperInvariant()}: INC {plan.IncDeg:F1} deg"));
+                break;
             case ChaseStatus.Ok:
                 GaugeRowText("TARGET ORBIT", PageText.TargetOrbit(plan.TargetPeKm, plan.TargetApKm, plan.IncDeg));
                 break;
@@ -98,7 +105,7 @@ public static partial class GuidanceWindow
 
     private static void DrawLaunchWindowRows(ChaseStatus status, in ChasePlan plan, bool nodeChoiceExists)
     {
-        LaunchWindowRow row = FormRules.WindowRow(_s.TargetId.Length > 0, status == ChaseStatus.Ok && double.IsFinite(plan.WaitSec),
+        LaunchWindowRow row = FormRules.WindowRow(HasLaunchTarget, status == ChaseStatus.Ok && double.IsFinite(plan.WaitSec),
             status == ChaseStatus.PlaneUnreachable, nodeChoiceExists && (!_s.FlyConvexAscent || BackupLaunchChosen));
         ConsoleUi.NoteShape("AfcLaunchWindow", (int)row);
         switch (row)
@@ -158,7 +165,7 @@ public static partial class GuidanceWindow
         // Read only, because the rows grey out on it. The launch window step writes the chase result into the state (StepLaunchWindow), so the draw never does.
         ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
         bool driven = status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable;
-        if (driven)
+        if (driven && plan.Target != null)
         {
             GaugeRow(Specs.ChaseOffsetKm, ref _s.ChaseOffsetKm);
             using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))

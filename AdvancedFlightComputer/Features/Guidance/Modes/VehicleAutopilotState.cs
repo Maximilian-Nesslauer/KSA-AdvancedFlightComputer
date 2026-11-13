@@ -355,6 +355,11 @@ public sealed class VehicleAutopilotState
     /// <summary>Whether the chase of <see cref="TargetId"/> wrote the target orbit at the last launch window step (StepLaunchWindow), so the page marks only the values the target really sets. A target that is not found or orbits another body leaves them to the player. Display state only.</summary>
     public bool ChaseDriven;
     public double ChaseOffsetKm = 20.0;
+
+    /// <summary>
+    /// Launch-to-plane: a plane chased like a target vessel's while <see cref="TargetId"/> is empty - a launch window to arm for, and the plane inputs driven. Null for none.
+    /// </summary>
+    public AscentPlaneTarget PlaneTarget;
     public bool LaunchDescending;
     public bool AutoLaunch = true;
 

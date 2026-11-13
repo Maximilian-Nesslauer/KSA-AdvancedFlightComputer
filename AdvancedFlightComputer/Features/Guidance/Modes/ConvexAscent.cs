@@ -182,7 +182,7 @@ public static partial class GuidanceWindow
 
     /// <summary>The launch window's instant when there is a target to wait for, now otherwise: the lift-off a plan is posed for.</summary>
     private static double WindowInstant()
-        => _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime) ? Math.Max(_s.LaunchTargetTime, SimNow()) : SimNow();
+        => HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime) ? Math.Max(_s.LaunchTargetTime, SimNow()) : SimNow();
 
     /// <summary>
     /// The lift-off the commit would launch at: the window, moved by the launch time the convex plan chose for it, if it has one for this window (AscentPlan.LaunchDelayS). The window itself stays as it is tracked, so the backup gravity turn, and a plan for another window, keep it.
@@ -433,7 +433,7 @@ public static partial class GuidanceWindow
         double turnMin = 0.0, turnMax = 0.0, lanDeg = _s.LanDeg;
         if (_s.ConvexOptimiseTiming && omega > 0.0)
         {
-            if (_s.TargetId.Length > 0 && launchAt > now)
+            if (HasLaunchTarget && launchAt > now)
             {
                 double earliest = Math.Max(-ConvexTimingFreedomS, now + ConvexTimingEarliestS - launchAt);
                 double latest = ConvexTimingFreedomS;
@@ -444,7 +444,7 @@ public static partial class GuidanceWindow
                     turnMax = -omega * earliest;
                 }
             }
-            else if (_s.TargetId.Length == 0)
+            else if (!HasLaunchTarget)
             {
                 freeLan = true;
                 lanDeg = LanOverhead(r, _s.IncDeg, parent);
