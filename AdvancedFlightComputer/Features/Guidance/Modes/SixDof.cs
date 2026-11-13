@@ -929,9 +929,7 @@ public static partial class GuidanceWindow
                 $"traceCount={_s.GfoldTraceCount} traceLen={(_s.GfoldTrace?.Length ?? -1)} " +
                 $"seed={_s.SixDofGfoldSeed} spread={_s.SixDofSpreadCold} fixedTime={_s.SixDofFixedTime}";
 
-            string dir = System.IO.Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                "My Games", "Kitten Space Agency", "navbox-logs");
+            string dir = System.IO.Path.Combine(KSA.Constants.DocumentsFolderPath, "navbox-logs");
             System.IO.Directory.CreateDirectory(dir);
             System.IO.File.AppendAllText(System.IO.Path.Combine(dir, "6dof-faults.log"),
                 $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}  {vehicle}{Environment.NewLine}" +

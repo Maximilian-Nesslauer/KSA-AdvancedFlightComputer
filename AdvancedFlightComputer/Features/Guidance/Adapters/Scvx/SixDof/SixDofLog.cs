@@ -62,8 +62,7 @@ internal static class SixDofLog
             // A NEW run starts clean. LastError was only ever assigned, never cleared, so one transient failure - a locked file, a missing folder on a previous run - was reported as "log error" for the rest of the session even once logging was working perfectly.
             LastError = "";
 
-            string docs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-            Directory = Path.Combine(docs, "My Games", "Kitten Space Agency", "navbox-logs");
+            Directory = Path.Combine(KSA.Constants.DocumentsFolderPath, "navbox-logs");
             System.IO.Directory.CreateDirectory(Directory);
 
             // A run switched off and on again within one second would reuse the name and append to the old files, so a clash gets a suffix.
