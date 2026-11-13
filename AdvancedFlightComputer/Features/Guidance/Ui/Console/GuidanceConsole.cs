@@ -312,7 +312,7 @@ public static partial class GuidanceWindow
                         LaunchNowAscent(vehicle, orbit, parent, in plan);
                 }
                 if (ImGui.IsItemHovered())
-                    ConsoleUi.Tooltip("Launches at once and skips the window.".AsSpan());
+                    ConsoleUi.Tooltip((!_s.FlyConvexAscent || _s.BackupAscent ? PageText.LaunchNowGravityTurnTip : PageText.LaunchNowTip).AsSpan());
             }
             DrawWarpLine(origin.X + room, target);
             return;

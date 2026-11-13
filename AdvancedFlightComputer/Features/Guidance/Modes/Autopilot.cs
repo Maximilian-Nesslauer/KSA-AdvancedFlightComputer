@@ -444,6 +444,9 @@ public static partial class GuidanceWindow
             _s.StageModel = KsaVehicleAdapter.Build(vehicle, ambientPressure);
             // The game's own total for the same recompute, latched for the staging bar to check our stage list against. Both are "from here on" - its simulated mole masses are re-seeded from the live tanks every recompute - so a disagreement means the adapter is reading the sequence list wrongly, which is exactly the failure that is invisible in a plausible-looking stage table. TotalDeltaV is a Volatile.Read of a float, so the draw thread can have this even though the Lists behind it can tear.
             _s.StageModelKsaDv = performance.TotalDeltaV;
+            _s.PadTwr = !_s.Running && vehicle.Orbit?.Parent is IParentBody body && TryLaunchSite(vehicle.Orbit, body, out _)
+                ? MeasurePadTwr(vehicle, body, ambientPressure)
+                : Ui.Logic.LaunchTwr.Unknown;
 
             // One line when the staging changes shape, not one per refresh.
             if (GuidanceLog.Enabled)
@@ -467,6 +470,38 @@ public static partial class GuidanceWindow
                 _s.StageModelDirty = true;
             LogHelper.WarnOnce($"guidance-stage-model-{vehicle.Id}:{ex.GetType().Name}",
                 $"[AFC] Guidance stage model refresh failed on '{vehicle.Id}': {ex}");
+        }
+    }
+
+    // Scratch for MeasurePadTwr, filled and consumed inside one call.
+    private static readonly Dictionary<UpfgStage, HashSet<Part>> _padTwrParts = new();
+    private static readonly List<Ui.Logic.TwrStage> _padTwrStages = new();
+
+    /// <summary>
+    /// The first stage's thrust-to-weight ratio on the pad. A stage list of its own, built with the engine parts of each stage, because the stage model above does not keep them and the first stage is told by them: a later stage belongs to it while it burns an engine the lift-off stage burns. Every stage's thrust is taken at the pad's air pressure, from the same pressure response the calculated climb plans with (KsaVehicleAdapter.Build with a pressure grid). Runs where RefreshStageModel runs, after the game's recompute.
+    /// </summary>
+    private static Ui.Logic.LaunchTwrFacts MeasurePadTwr(Vehicle vehicle, IParentBody parent, double ambientPressure)
+    {
+        _padTwrParts.Clear();
+        _padTwrStages.Clear();
+        try
+        {
+            UpfgVehicle model = KsaVehicleAdapter.Build(vehicle, ambientPressure, new[] { ambientPressure }, _padTwrParts);
+            if (model.Stages.Count == 0 || !_padTwrParts.TryGetValue(model.Stages[0], out HashSet<Part> liftoff) || liftoff.Count == 0)
+                return Ui.Logic.LaunchTwr.Unknown;
+            foreach (UpfgStage stage in model.Stages)
+            {
+                double thrust = stage.ThrustAtPressure is { Length: > 0 } atPad ? atPad[0] : stage.Thrust;
+                bool first = _padTwrParts.TryGetValue(stage, out HashSet<Part> parts) && parts.Overlaps(liftoff);
+                _padTwrStages.Add(new Ui.Logic.TwrStage(thrust, stage.MassTotal, first));
+            }
+            double r = vehicle.Orbit.StateVectors.PositionCci.Length();
+            return Ui.Logic.LaunchTwr.Of(_padTwrStages, parent.Mu / (r * r));
+        }
+        finally
+        {
+            _padTwrParts.Clear();
+            _padTwrStages.Clear();
         }
     }
 

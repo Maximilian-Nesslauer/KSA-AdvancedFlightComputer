@@ -281,6 +281,13 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public double StageModelKsaDv;
 
+    /// <summary>The first stage's thrust-to-weight ratio for the TWR row, measured with the stage model while the craft sits on a launch site and no ascent runs.</summary>
+    internal LaunchTwrFacts PadTwr = LaunchTwr.Unknown;
+
+    /// <summary>Sim time and wall clock, ms, since which a running ascent has found no stage with propellant left; NaN and 0 while it has one.</summary>
+    public double OutOfPropellantSince = double.NaN;
+    public long OutOfPropellantSinceMs;
+
     /// <summary>The fingerprint of the stage list the last stage-model log line described, see <see cref="GuidanceLog.StageSignature"/>.</summary>
     public string StageModelSignature = "";
 
@@ -354,6 +361,9 @@ public sealed class VehicleAutopilotState
 
     /// <summary>Whether the chase of <see cref="TargetId"/> wrote the target orbit at the last launch window step (StepLaunchWindow), so the page marks only the values the target really sets. A target that is not found or orbits another body leaves them to the player. Display state only.</summary>
     public bool ChaseDriven;
+
+    /// <summary>Whether the last launch window step set the LAN over the pad for the gravity turn with no target (GuidanceWindow.KeepGravityTurnLanOverPad), so the PLANE row shows it as set by LAUNCH. Display state only.</summary>
+    public bool LanFollowsPad;
     public double ChaseOffsetKm = 20.0;
 
     /// <summary>

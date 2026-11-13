@@ -61,6 +61,8 @@ public static partial class GuidanceWindow
         {
             DrawTargetPicker(vehicle);
             DrawTargetFacts(status, in plan);
+            DrawReachRow(orbit, parent, status, in plan);
+            DrawTwrRow();
             DrawLaunchWindowRows(status, in plan, method.Id == AscentMethod.CatsUpfg);
             DrawAscentMethodRow();
         }

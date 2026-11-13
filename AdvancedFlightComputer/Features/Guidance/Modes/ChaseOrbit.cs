@@ -137,16 +137,18 @@ public static partial class GuidanceWindow
         // What we want is the launch time whose plane crossing lands in the middle of that, i.e. solve for T where the site's right ascension T + lead from now is the one the plane needs.
         //
         // The lead goes INSIDE the wrap, not subtracted after it: subtracting after would turn a window two minutes out into a negative countdown.
-        if (omega <= 1e-12)
+        // A retrograde body turns at a negative rate (Celestial.ComputeAngularVelocity), so the site's right ascension falls and the wait is measured the other way round.
+        double rate = Math.Abs(omega);
+        if (!(rate > 1e-12))
             return true;
 
         double raNow = ra + omega * LanLeadSeconds;
-        double period = 2.0 * Math.PI / omega;
+        double period = 2.0 * Math.PI / rate;
 
         double WaitFor(bool descendingNode)
         {
             double raRequired = descendingNode ? lanT + Math.PI - delta : lanT + delta;
-            double wait = Wrap2Pi(raRequired - raNow) / omega;
+            double wait = Wrap2Pi(omega > 0.0 ? raRequired - raNow : raNow - raRequired) / rate;
 
             // ...
             // AND THE WRAP IS NOT ALLOWED TO COST A WHOLE REVOLUTION.
