@@ -40,6 +40,8 @@ internal static class Program
         ModeRegistry();
         ComprehensionTexts();
         FormRows();
+        LaunchReachRules();
+        AscentEndRules();
         Formats();
         RowLabelsFit();
         LogLines();
@@ -2779,6 +2781,80 @@ internal static class Program
     }
 
     // At the narrowest window a row has 427 px at 9.1 px per character, less a number field of 110 px and the stock gap of 16 px.
+    private static void LaunchReachRules()
+    {
+        const double Mu = 3.986004418e14, R = 6371e3, Starbase = 25.996;
+        double vCirc = Math.Sqrt(Mu / (R + 200e3));
+        double vEquator = 2.0 * Math.PI * R / (23.9344695944 * 3600.0);
+        Check("a site reaches no inclination below its latitude", LaunchReach.LowestDirectIncDeg(Starbase) == Starbase && LaunchReach.LowestDirectIncDeg(-39.26) == 39.26);
+        Check("a site reaches no retrograde inclination above 180 less its latitude", Math.Abs(LaunchReach.HighestDirectIncDeg(Starbase) - 154.004) < 1e-9);
+        Check("an equatorial orbit from Starbase needs its latitude as plane change", Math.Abs(LaunchReach.LeastPlaneChangeDeg(Starbase, 0.0) - Starbase) < 1e-9);
+        Check("the station plane from Starbase needs none", LaunchReach.LeastPlaneChangeDeg(Starbase, 51.6) == 0.0 && LaunchReach.LeastPlaneChangeDeg(Starbase, 97.4) == 0.0);
+        Check("a retrograde plane beyond reach needs the rest", Math.Abs(LaunchReach.LeastPlaneChangeDeg(Starbase, 170.0) - 15.996) < 1e-9);
+        double pc = LaunchReach.PlaneChangeMs(Mu, R + 200e3, R + 200e3, Starbase);
+        Check("26 deg at 200 km costs about 3.5 km/s", Math.Abs(pc - 3504.0) < 5.0, pc.ToString("F1"));
+        double pcEcc = LaunchReach.PlaneChangeMs(Mu, R + 200e3, R + 2000e3, 10.0);
+        Check("an eccentric orbit turns cheaper at its apoapsis than a circle at its periapsis", pcEcc < LaunchReach.PlaneChangeMs(Mu, R + 200e3, R + 200e3, 10.0));
+        Check("no plane change costs nothing", LaunchReach.PlaneChangeMs(Mu, R + 200e3, R + 200e3, 0.0) == 0.0);
+        Check("the nearest direct inclination rounds into the band", LaunchReach.NearestDirectIncDeg(Starbase, 0.0) == 26.0 && LaunchReach.NearestDirectIncDeg(Starbase, 170.0) == 154.0 && LaunchReach.NearestDirectIncDeg(Starbase, 51.6) == 51.6);
+        Check("the rounded offer is itself in reach", LaunchReach.LeastPlaneChangeDeg(Starbase, LaunchReach.NearestDirectIncDeg(Starbase, 0.0)) == 0.0);
+        double lat = Starbase * Math.PI / 180.0;
+        Check("a plane through the site needs no plane change", LaunchReach.PlaneChangeDeg(0.0, -Math.Sin(lat), Math.Cos(lat), 0.0, Math.Cos(lat), Math.Sin(lat)) < 1e-9);
+        Check("the equator plane from the site needs its latitude", Math.Abs(LaunchReach.PlaneChangeDeg(0, 0, 2.0, Math.Cos(lat), 0, Math.Sin(lat)) - Starbase) < 1e-9);
+        double loss = LaunchReach.AzimuthCostMs(Starbase, 51.6, vCirc, vEquator);
+        Check("the station plane costs about 135 m/s over due east from Starbase", Math.Abs(loss - 135.0) < 3.0, loss.ToString("F1"));
+        double polar = LaunchReach.AzimuthCostMs(Starbase, 90.0, vCirc, vEquator);
+        Check("a polar plane costs about 430 m/s over due east", Math.Abs(polar - 429.0) < 3.0, polar.ToString("F1"));
+        Check("due east costs nothing over itself", Math.Abs(LaunchReach.AzimuthCostMs(Starbase, Starbase, vCirc, vEquator)) < 1e-6);
+        Check("a plane out of direct reach has no azimuth", double.IsNaN(LaunchReach.GroundRelativeSpeedMs(Starbase, 0.0, vCirc, vEquator)));
+
+        var free = new ReachFacts(Starbase, 0.0, Starbase, Starbase, pc, false);
+        Check("an equatorial launch from Starbase shows the row and offers 26.0", free.Shows && free.OutOfReach && free.OfferIncDeg == 26.0);
+        Check("the row says the plane change, its price and the band", PageText.Reach(in free) == "26.0 deg PLANE CHANGE, ~3504 m/s. DIRECT: INC 26.0 TO 154.0", PageText.Reach(in free));
+        Check("the fix names the inclination", PageText.ReachFix(26.0) == "USE INC 26.0 deg");
+        var target = free with { HasTarget = true };
+        Check("a target sets the plane, so nothing is offered", target.Shows && double.IsNaN(target.OfferIncDeg));
+        var stale = new ReachFacts(Starbase, 51.6, 12.0, 0.0, 1600.0, false);
+        Check("a LAN the site turned away from shows, with no inclination offered", stale.Shows && !stale.OutOfReach && double.IsNaN(stale.OfferIncDeg) && PageText.Reach(in stale).Contains("FROM POSITION"));
+        Check("a plane over the site shows nothing", !new ReachFacts(Starbase, 51.6, 0.2, 0.0, 30.0, false).Shows);
+        Check("the reach texts are ASCII", (PageText.Reach(in free) + PageText.ReachTip(in free, false) + PageText.ReachTip(in free, true) + PageText.ReachTip(in stale, true) + PageText.ReachFixTip).All(ch => ch < 128));
+        Check("the gravity turn tip says LAUNCH refuses", PageText.ReachTip(in free, true).Contains("LAUNCH refuses") && !PageText.ReachTip(in free, false).Contains("refuses"));
+
+        string refusal = PageText.ReachRefusal(Starbase, 0.0, false);
+        Check("the refusal names the inclination, the band and the nearest one", refusal == "REFUSED: INC 0.0 deg OUT OF REACH FROM LATITUDE 26.0 deg (DIRECT: INC 26.0 TO 154.0). THE GRAVITY TURN CANNOT FLY A PLANE CHANGE. NEAREST: INC 26.0 deg.", refusal);
+        string targetRefusal = PageText.ReachRefusal(-Starbase, 10.0, true);
+        Check("a target's plane is refused without an offer", targetRefusal.StartsWith("REFUSED: TARGET INC 10.0 deg") && !targetRefusal.Contains("NEAREST"), targetRefusal);
+        Check("a retrograde plane beyond reach offers the highest", PageText.ReachRefusal(Starbase, 170.0, false).EndsWith("NEAREST: INC 154.0 deg."));
+        Check("the refusals are ASCII", (refusal + targetRefusal).All(ch => ch < 128));
+    }
+
+    private static void AscentEndRules()
+    {
+        string orbit = PageText.AscentOutOfPropellant(true, 204.4, 15559.0, 93.26, 140.0);
+        Check("an ascent out of propellant says so and the orbit it left", orbit == "ASCENT ENDED: OUT OF PROPELLANT BEFORE CUTOFF. ORBIT 204 x 15559 km, INC 93.3 deg. MANUAL.", orbit);
+        Check("not ON PLAN", !orbit.Contains("ON PLAN"));
+        string sub = PageText.AscentOutOfPropellant(true, -3000.0, 85.0, 30.0, 140.0);
+        Check("a periapsis under the surface is suborbital", sub == "ASCENT ENDED: OUT OF PROPELLANT BEFORE CUTOFF. SUBORBITAL, AP 85 km. MANUAL.", sub);
+        string low = PageText.AscentOutOfPropellant(true, 161.0, 31081.4, 51.42, 200.0);
+        Check("a periapsis in the air is an orbit the air lowers", low == "ASCENT ENDED: OUT OF PROPELLANT BEFORE CUTOFF. ORBIT 161 x 31081 km, INC 51.4 deg, PE IN THE AIR. MANUAL.", low);
+        Check("an open orbit is an escape", PageText.AscentOutOfPropellant(false, 200.0, -1.0, 30.0, 140.0).Contains("ESCAPE TRAJECTORY"));
+
+        const double G = 9.81;
+        // A craft of 100 t: boosters and core at lift-off, the core alone after the drop, then an upper stage on its own engine.
+        var strapOn = new[] { new TwrStage(1500e3, 100e3, true), new TwrStage(500e3, 60e3, true), new TwrStage(100e3, 15e3, false) };
+        LaunchTwrFacts f = LaunchTwr.Of(strapOn, G);
+        Check("lift-off TWR", Math.Abs(f.LiftoffTwr - 1500e3 / (100e3 * G)) < 1e-12 && !f.CannotLiftOff);
+        Check("the core after the drop is the lowest first-stage TWR", f.LowestStage == 1 && Math.Abs(f.LowestTwr - 500e3 / (60e3 * G)) < 1e-12 && f.LowestTwr < 1.0 && f.Shows, f.ToString());
+        Check("the row names stage 2", PageText.Twr(in f) == "0.85 WHEN STAGE 2 STARTS, STILL IN THE FIRST STAGE", PageText.Twr(in f));
+        Check("an upper stage under 1 is not the first stage", !LaunchTwr.Of(new[] { new TwrStage(1500e3, 100e3, true), new TwrStage(100e3, 15e3, false) }, G).Shows);
+        Check("a stage after the upper stage does not count either", LaunchTwr.Of(new[] { new TwrStage(1500e3, 100e3, true), new TwrStage(400e3, 50e3, false), new TwrStage(1e3, 40e3, true) }, G).LowestStage == -1);
+        LaunchTwrFacts heavy = LaunchTwr.Of(new[] { new TwrStage(900e3, 100e3, true) }, G);
+        Check("a craft heavier than its thrust cannot lift off", heavy.CannotLiftOff && heavy.Shows && PageText.Twr(in heavy) == "0.92 AT LIFT-OFF. THE CRAFT DOES NOT LEAVE THE PAD", PageText.Twr(in heavy));
+        Check("a strong first stage shows nothing", !LaunchTwr.Of(new[] { new TwrStage(1500e3, 100e3, true), new TwrStage(800e3, 60e3, true) }, G).Shows);
+        Check("no stages, no facts", !LaunchTwr.Of(Array.Empty<TwrStage>(), G).Known && !LaunchTwr.Unknown.Shows);
+        Check("the TWR texts are ASCII", (PageText.TwrTip(in f, true) + PageText.TwrTip(in f, false) + PageText.TwrTip(in heavy, true)).All(ch => ch < 128));
+    }
+
     private static void FormRows()
     {
         Check("a short burn has no PASSES row", !FormRules.PassesCanMatter(915.0, 24.0, 5500.0));
