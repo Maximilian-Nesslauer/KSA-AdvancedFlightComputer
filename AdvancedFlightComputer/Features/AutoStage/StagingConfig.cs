@@ -32,8 +32,8 @@ internal static class StagingConfig
 
     public static void Init()
     {
-        string modsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "My Games", "Kitten Space Agency", "mods");
+        // The game's own mods folder, so a profile other than the default one (a launcher instance) keeps its own files.
+        string modsDir = KSA.ModLibrary.LocalModsFolderPath;
         _modDir = Path.Combine(modsDir, "AdvancedFlightComputer");
         _vehiclesDir = Path.Combine(_modDir, "autostage-vehicles");
         _configPath = Path.Combine(_modDir, "autostage.toml");

@@ -18,9 +18,7 @@ internal static class RcsExecRegistry
 
     public static void Init()
     {
-        string userDocs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        string modDir = Path.Combine(userDocs, "My Games", "Kitten Space Agency",
-            "mods", "AdvancedFlightComputer");
+        string modDir = Path.Combine(KSA.ModLibrary.LocalModsFolderPath, "AdvancedFlightComputer");
         _configPath = Path.Combine(modDir, "rcs-exec.toml");
 
         // UncompressedSave.Load does not run for the default world. Load now so its first save preserves entries from other saves.

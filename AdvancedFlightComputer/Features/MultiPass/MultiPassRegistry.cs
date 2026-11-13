@@ -34,9 +34,7 @@ internal static class MultiPassRegistry
 
     public static void Init()
     {
-        string userDocs = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
-        _modDir = Path.Combine(userDocs, "My Games", "Kitten Space Agency",
-            "mods", "AdvancedFlightComputer");
+        _modDir = Path.Combine(KSA.ModLibrary.LocalModsFolderPath, "AdvancedFlightComputer");
         _configPath = Path.Combine(_modDir, "multipass.toml");
 
         // Load at initialization because the default world may never call UncompressedSave.Load. Otherwise its first save could overwrite entries from other saves.
