@@ -53,9 +53,14 @@ internal static class HohmannFlybyUI
     private static UniverseTime _previewPatchStart;
     private static UniverseTime _previewPatchEnd;
     private static double _previewClearance;
-    private static int _previewPhaseSignature;
+    // The phases the preview was built with, compared in full as TransferPlanner.SelectedPlan does, because the phases can keep the thrust and change only the masses.
+    private static readonly FiniteBurnPhase[] _previewPhases = new FiniteBurnPhase[16];
+    private static int _previewPhaseCount;
     private static double _displayTargetRadius;
     private static string? _lastSourceId;
+
+    /// <summary>How often the single departure preview was propagated, for a check that an unchanged craft and selection cost no rebuild.</summary>
+    internal static int PreviewBuilds { get; private set; }
 
     private static FlybyTargeting.FlybyResult? CachedResult => _displayedDeparture?.Outcome.Result;
 
@@ -269,7 +274,7 @@ internal static class HohmannFlybyUI
             ? source.FlightPlan.TryFindPatch(result.BurnTime) : null;
         if (ReferenceEquals(solution, _displayedDeparture) && !_displayingMultiPass
             && _previewClearance == source.BoundingSphereRadiusBody
-            && _previewPhaseSignature == FiniteBurns.PhaseSignature(source)
+            && FiniteBurns.FullThrottlePhases(source).SequenceEqual(_previewPhases.AsSpan(0, _previewPhaseCount))
             && _displayTargetRadius == target.MeanRadius && _minFlybyRadius == floor
             && (patch != null) == _previewHadCoveringPatch
             && (patch == null || (patch.StartTime == _previewPatchStart && patch.EndTime == _previewPatchEnd))) return;
@@ -279,7 +284,10 @@ internal static class HohmannFlybyUI
         _previewPatchStart = patch?.StartTime ?? default;
         _previewPatchEnd = patch?.EndTime ?? default;
         _previewClearance = source.BoundingSphereRadiusBody;
-        _previewPhaseSignature = FiniteBurns.PhaseSignature(source);
+        ReadOnlySpan<FiniteBurnPhase> phases = FiniteBurns.FullThrottlePhases(source);
+        _previewPhaseCount = Math.Min(phases.Length, _previewPhases.Length);
+        phases.Slice(0, _previewPhaseCount).CopyTo(_previewPhases);
+        PreviewBuilds++;
         _displayTargetRadius = target.MeanRadius;
         _minFlybyRadius = floor;
         _prediction = BuildPreview(source, info.Target, target, solution.Outcome.Result, out _previewPlan);
@@ -409,6 +417,8 @@ internal static class HohmannFlybyUI
         if (!TransferSession.Calculated) return false;
         // Like the selected transfer, an uncommitted flyby departure draws only while TRANSFER is on screen.
         if (!TransferSession.PageVisible) return false;
+        // Stock draws the created burn, and TransferPage adds the SOI of its encounter, so the preview would draw every marker a second time.
+        if (TransferSession.SingleBurnCreated) return false;
 
         source = TransferSession.Source;
         return source != null && ReferenceEquals(source, _displayedDeparture?.Key.Source);
@@ -449,6 +459,16 @@ internal static class HohmannFlybyUI
         fp.AddLineInstances(viewport, source, isActive: true,
             drawVehiclePosition: false, nextBurnTime: null,
             isPostBurnOrbit: true);
+    }
+
+    /// <summary>Draws the markers of the flyby trajectory, the burn, the
+    /// encounter with its ghost SOI and the periapsis, as the selected transfer
+    /// draws its own in place of the lines that <see cref="RenderPreview"/> draws.</summary>
+    public static void DrawPreviewUi(IGameViewport viewport, Astronomical.UiContext context)
+    {
+        FlightPlan? fp = _previewPlan;
+        if (fp == null || fp.Patches.Count == 0) return;
+        fp.DrawUi(viewport, context);
     }
 
     /// <summary>True when the cached departure can no longer be flown because its
@@ -492,13 +512,32 @@ internal static class HohmannFlybyUI
         if (!FlybyRequested || _belowFloor) return false;
         if (CachedResult is not FlybyTargeting.FlybyResult cached) return false;
         if (!ReferenceEquals(_displayedDeparture?.Key.Source, vehicle)) return false;
-        // A past burn time has no patch for Burn.Create, and the interceptor would fall back to the stock burn aimed at the center.
+        // A past burn time has no patch for Burn.Create.
         if (IsCacheExpired()) return false;
         // The propagated trajectory, not the typed altitude, decides whether this is a flyby at all.
         // A preview without an encounter is only advisory, see DrawResult.
         if (PredictedFlybyBelowFloor) return false;
         result = cached;
         return true;
+    }
+
+    /// <summary>Why CREATE cannot make the single flyby departure for
+    /// <paramref name="vehicle"/> now, or empty when no flyby is requested or the
+    /// departure is armed. A flyby that is requested never becomes the transfer
+    /// aimed at the centre of the body, so CREATE shows this instead. With a
+    /// multi-pass on screen the passes carry the flyby, and
+    /// <see cref="TransferCommitter"/> refuses at CREATE when they cannot.</summary>
+    public static string CreateRefusal(Vehicle vehicle)
+    {
+        if (!FlybyRequested || _displayingMultiPass) return "";
+        if (TransferSession.Info?.Target is not IParentBody target) return "FLYBY NEEDS A BODY AS DESTINATION";
+        if (_belowFloor || !TryGetRequest(target, out _, out _)) return "FLYBY PERIAPSIS BELOW SAFE FLOOR";
+        if (TryGetArmed(vehicle, out _)) return "";
+        if (_displayedDeparture == null || !ReferenceEquals(_displayedDeparture.Key.Source, vehicle))
+            return "FLYBY NOT SOLVED YET";
+        if (CachedResult == null) return "NO FLYBY SOLUTION FOR THIS TRANSFER";
+        if (IsCacheExpired()) return "FLYBY DEPARTURE TIME PASSED";
+        return "FLYBY WOULD HIT THE BODY";
     }
 
     // A failed split can fall back only to the original single departure, never to its shifted multi-pass input.

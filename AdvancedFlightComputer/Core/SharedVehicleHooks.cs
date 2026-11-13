@@ -102,6 +102,7 @@ internal static class SharedVehicleHooks
             GuidanceWindow.ReleaseDisposedVehicle(vehicle);
 
         // Vehicle.Dispose leaves the part graph intact. Clear caches that can keep it reachable.
+        PlannedBurnPhases.OnVehicleDisposed(vehicle);
         MultiPassPreviewCache.OnVehicleDisposed(vehicle);
         HohmannMultiPassUI.OnVehicleDisposed(vehicle.Id);
         HohmannMultiPassPlanner.OnVehicleDisposed(vehicle.Id);

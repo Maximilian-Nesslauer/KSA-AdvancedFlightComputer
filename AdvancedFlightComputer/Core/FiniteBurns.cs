@@ -43,9 +43,10 @@ internal static class FiniteBurns
     private const double ScaleStep = 1e-4;
     private const double RadiusToleranceM = 0.1;
 
-    // FlightComputer.GetFullThrottlePhases returns a span over a buffer that the flight computer reuses, so read it on the main thread and do not keep it.
+    // The phases BurnPlan.CalculateNewFlightPlansFromFlightComputerOnly propagates a new burn with, which FlightComputer.GetFullThrottlePhases does not always give before the burn exists (see PlannedBurnPhases). Every preview and every refinement reads them here, so a preview and the burn made from it use one burn model.
+    // The span covers a reused buffer, so read it on the main thread and do not keep it.
     public static ReadOnlySpan<FiniteBurnPhase> FullThrottlePhases(Vehicle vehicle)
-        => vehicle.FlightComputer.GetFullThrottlePhases();
+        => PlannedBurnPhases.For(vehicle);
 
     public static bool HasThrust(ReadOnlySpan<FiniteBurnPhase> phases)
         => !phases.IsEmpty && phases[0].Thrust > 0.0;

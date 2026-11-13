@@ -789,15 +789,82 @@ internal static class TransferPage
         Vehicle? source = TransferSession.Source;
         if (source == null || source.IsDisposed)
             return;
-        if (HohmannMultiPassUI.ShouldRenderOverlay(out Vehicle? passSource))
+        bool passOverlay = HohmannMultiPassUI.ShouldRenderOverlay(out Vehicle? passSource);
+        if (passOverlay)
             HohmannMultiPassUI.RenderMarkers(viewport, passSource!);
+        if (!passOverlay && TransferSession.SingleBurnCreated)
+        {
+            DrawCreatedEncounter(viewport, source);
+            return;
+        }
+        // ShowEncounterWith makes PatchedConic.DrawUi draw the encounter, the ghost SOI and the periapsis of the destination, which it otherwise draws only for the craft's own target.
+        var context = new Astronomical.UiContext(viewport, source, Color.Green, TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0), TransferSession.Destination);
+        // The flyby departure replaces the selected transfer in the lines of RenderLines, so its markers replace them here too.
+        if (!passOverlay && HohmannFlybyUI.ShouldRenderPreview(out Vehicle? flybySource))
+        {
+            if (ReferenceEquals(flybySource, source))
+                HohmannFlybyUI.DrawPreviewUi(viewport, context);
+            return;
+        }
         if (!SelectedPreviewVisible() || HohmannFlybyUI.ReplacesCenterAimedPreview())
             return;
         OrbitalTransfers.PorkChopEntry? entry = TransferSession.SelectedEntry;
         if (entry == null)
             return;
-        var context = new Astronomical.UiContext(viewport, source, Color.Green, TrueAnomaly.Zero, new TrueAnomaly(Math.PI * 2.0), TransferSession.Destination);
         TransferFlownPlan.Plan(source, entry).DrawUi(viewport, context);
+    }
+
+    // BurnPlan.DrawUi draws the created burn with the craft's own context, so PatchedConic.DrawUi adds the body at the encounter, its ghost SOI and the periapsis there only when the destination is the craft's target.
+    // While TRANSFER is on screen, those three are drawn here as PatchedConic.DrawUi draws them, and nothing else of the plan, so every marker and label that stock draws stays single.
+    private static void DrawCreatedEncounter(IGameViewport viewport, Vehicle source)
+    {
+        IOrbiter? destination = TransferSession.Destination;
+        if (!TransferSession.ShowMap || !TransferSession.PageVisible || destination == null)
+            return;
+        if (source.Target != null && source.Target.Hash == destination.Hash)
+            return;
+        FlightPlan? plan = TransferSession.TransferBurn?.FlightPlan;
+        if (plan == null || !source.HasMeaningfulOrbit || (!source.ShowOrbit && !source.TargetOfControlledVehicle))
+            return;
+        bool controlled = ReferenceEquals(source, Program.ControlledVehicle);
+        Camera camera = viewport.GetCamera();
+        ImDrawListPtr drawList = ImGuiHelper.GetOverlayDrawList(viewport);
+        for (int i = 0; i + 1 < plan.Patches.Count; i++)
+        {
+            PatchedConic patch = plan.Patches[i];
+            PatchedConic next = plan.Patches[i + 1];
+            if (patch.HidePatch || patch.EndTransition != PatchTransition.Encounter || patch.EncounterBody is not IOrbiter body
+                || body.Hash != destination.Hash || body is not IParentBody sphere
+                || !Astronomical.ShouldDrawUiOrLines(patch.PrimaryBody, viewport, patch.Orbit))
+                continue;
+            // The body is drawn where it is when the craft passes its periapsis there, in the ecliptic frame.
+            UniverseTime at = UniverseTime.Min(next.Orbit.GetNextPeriapsisTime(next.StartTime) ?? next.EndTime, next.EndTime);
+            double3 bodyCce = body.Orbit.GetPositionOrb(body.Orbit.GetTimeSincePeriapsisThisOrbit(at)).Transform(body.Orbit.GetOrb2ParentCce());
+            double3 bodyEcl = body.Parent.GetPositionEclFromCce(bodyCce);
+            drawList.AddCircleFilled(viewport.Position + camera.EclToScreen(bodyEcl), 5f, controlled ? patch.PatchColor : FlightPlan.InactiveColor);
+
+            if (double.IsFinite(sphere.SphereOfInfluence) && sphere.SphereOfInfluence > 0.0 && Astronomical.ShouldDrawUiOrLines(body, viewport))
+            {
+                GenericGizmo ball = GenericGizmo.Static.GetSingleUse(ModLibrary.Get<MeshReference>("Sphere"), GenericGizmo.Static.GlassBallGizmoRenderData);
+                ball.PassIndex = 1;
+                GenericGizmo.PerSegmentData[] segments = ball.GetSegmentDataByViewport(viewport);
+                segments[0].Active = true;
+                segments[0].Body2Cce = sphere.GetCcf2Cce(at);
+                segments[0].PositionEgo = camera.EclToEgo(bodyEcl);
+                segments[0].Scale = double3.One * sphere.SphereOfInfluence;
+                // The opacity PatchedConic.DrawGhostSoi gives the sphere of the patch with this index.
+                segments[0].Color = new double4(sphere.SoiColor.X / 255.0, sphere.SoiColor.Y / 255.0, sphere.SoiColor.Z / 255.0, 0.75 * Math.Pow(0.66, i + 1));
+            }
+
+            if ((controlled || Universe.DisplayApPeMarkers) && PatchedConic.TrueAnomalyInPatch(TrueAnomaly.Zero, next.StartTrueAnomaly, next.EndTrueAnomaly))
+            {
+                double3 periapsis = next.Orbit.GetPeriapsisPositionOrb().Transform(next.Orbit.GetOrb2ParentCce());
+                float2 screen = viewport.Position + camera.EclToScreen(bodyEcl + periapsis);
+                byte4 color = controlled ? next.PatchColor : FlightPlan.InactiveColor;
+                ImGuiHelper.DrawMarkerDot(drawList, screen, color);
+                ImGuiHelper.DrawTextOnScreen(drawList, screen, "Pe"u8, color);
+            }
+        }
     }
 
     /// <summary>
@@ -840,9 +907,10 @@ internal static class TransferPage
         plan.AddLineInstances(viewport, source, isActive: true, drawVehiclePosition: false, nextBurnTime: null);
     }
 
-    // The selected transfer draws in the world while MAP is on and TRANSFER is on screen, as stock draws its selection only while its window is open. Once the final pass of a multi-pass is queued, stock draws it as the node of the flight plan.
+    // The selected transfer draws in the world while MAP is on and TRANSFER is on screen, as stock draws its selection only while its window is open. Once the burn of the selection or the final pass of a multi-pass is queued, stock draws it as the node of the flight plan.
     private static bool SelectedPreviewVisible()
-        => TransferSession.ShowMap && TransferSession.Calculated && TransferSession.PageVisible && !HohmannMultiPassUI.FinalPassQueued;
+        => TransferSession.ShowMap && TransferSession.Calculated && TransferSession.PageVisible && !HohmannMultiPassUI.FinalPassQueued
+           && !TransferSession.SingleBurnCreated;
 
     #endregion
 

@@ -34,6 +34,7 @@ internal static class SaveScopedState
 {
     public static void ResetAll()
     {
+        PlannedBurnPhases.Reset();
         MultiPassPreviewCache.Reset();
         HohmannMultiPassPlanner.ResetShiftCache();
         MultiPassUI.Reset();

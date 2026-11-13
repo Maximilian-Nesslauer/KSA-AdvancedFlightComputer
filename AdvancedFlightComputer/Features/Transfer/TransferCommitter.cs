@@ -41,7 +41,7 @@ internal static class TransferCommitter
             return "MULTI-PASS ACTIVE";
         if (source.FlightPlan.TryFindPatch(TransferSession.SelectedEntry.TransferData.Start) == null)
             return "DEPARTURE NOT ON TRAJECTORY";
-        return "";
+        return HohmannFlybyUI.CreateRefusal(source);
     }
 
     public static void Create()
@@ -57,7 +57,9 @@ internal static class TransferCommitter
         OrbitPointCce point = patch.Orbit.GetPointAt(entry.TransferData.Start);
         // Stock's CREATE gives Burn.Create the delta v refined for the finite burn (TransferPlanner.SelectedPlan), so the single transfer burn here does the same.
         double3 dvVlf = TransferFlownPlan.DvVlf(source, entry);
-        Burn burn = CreateRequestedBurn(point, entry.TransferData.Start.Seconds(), dvVlf, patch, source);
+        Burn? burn = CreateRequestedBurn(point, entry.TransferData.Start.Seconds(), dvVlf, patch, source);
+        if (burn == null)
+            return;
         burn.IsGizmoActive = false;
         InputEvents.BurnUpdateBuffer.Add(new InputEvents.BurnUpdateData
         {
@@ -68,7 +70,8 @@ internal static class TransferCommitter
         TransferSession.OnCreated(burn);
     }
 
-    private static Burn CreateRequestedBurn(
+    // Null when a flyby is requested and no burn can fly it. The transfer aimed at the centre of the body is another trajectory, one that impacts, so it is never created in place of a flyby.
+    private static Burn? CreateRequestedBurn(
         OrbitPointCce point, double time, double3 deltaVVlf,
         PatchedConic patch, Vehicle vehicle)
     {
@@ -98,10 +101,9 @@ internal static class TransferCommitter
                     }
                 }
 
-                AfcAlerts.Info(HohmannFlybyUI.FlybyRequested
-                        ? "Multi-pass and flyby setup failed; firing the transfer aimed at the centre of the body."
-                        : "Multi-pass setup failed, falling back to single burn",
-                    Color.Yellow, 4.0, vehicle);
+                if (HohmannFlybyUI.FlybyRequested)
+                    return RefuseFlyby(vehicle, "the passes and the single flyby departure could not be set up");
+                AfcAlerts.Info("Multi-pass setup failed, falling back to single burn", Color.Yellow, 4.0, vehicle);
                 return Burn.Create(point, time, deltaVVlf, patch, vehicle);
             }
 
@@ -118,19 +120,13 @@ internal static class TransferCommitter
 
                 Burn? flybyBurn = TryCreateFlybyBurn(vehicle, flyby);
                 if (flybyBurn != null) return flybyBurn;
-                AfcAlerts.Info("Flyby retarget failed; firing the transfer aimed at the centre of the body.", Color.Yellow, 4.0, vehicle);
-                return Burn.Create(point, time, deltaVVlf, patch, vehicle);
+                return RefuseFlyby(vehicle, "the departure time is not on the trajectory");
             }
 
+            if (HohmannFlybyUI.FlybyRequested)
+                return RefuseFlyby(vehicle, "no valid flyby departure");
             if (HohmannMultiPassUI.WantedMultiPassButPreviewFailed())
                 AfcAlerts.Info("Multi-pass preview failed; firing single burn instead.", Color.Yellow, 4.0, vehicle);
-            else if (HohmannFlybyUI.FlybyRequested)
-            {
-                AfcAlerts.Info("Flyby not applied (no valid retarget); firing the transfer aimed at the centre of the body.", Color.Yellow, 4.0, vehicle);
-                DefaultCategory.Log.Warning(
-                    $"[AFC] TransferCommitter: flyby requested for vehicle={vehicle.Id} " +
-                    "but TryGetArmed returned false; center-aimed burn created.");
-            }
 
             if (DebugConfig.Flyby)
                 DefaultCategory.Log.Debug(
@@ -141,10 +137,22 @@ internal static class TransferCommitter
         }
         catch (Exception ex)
         {
+            if (HohmannFlybyUI.FlybyRequested)
+            {
+                DefaultCategory.Log.Warning($"[AFC] TransferCommitter: {ex}");
+                return RefuseFlyby(vehicle, "the flyby setup failed");
+            }
             DefaultCategory.Log.Warning(
                 $"[AFC] TransferCommitter: {ex}; falling back to the single transfer burn.");
             return Burn.Create(point, time, deltaVVlf, patch, vehicle);
         }
+    }
+
+    private static Burn? RefuseFlyby(Vehicle vehicle, string reason)
+    {
+        AfcAlerts.Info($"No burn created: {reason}. Change the flyby or turn TARGET FLYBY PERIAPSIS off.", Color.Yellow, 6.0, vehicle);
+        DefaultCategory.Log.Warning($"[AFC] TransferCommitter: flyby requested for vehicle={vehicle.Id}, no burn created: {reason}.");
+        return null;
     }
 
     // The caller adds the returned burn, so adding it here would queue it twice.
