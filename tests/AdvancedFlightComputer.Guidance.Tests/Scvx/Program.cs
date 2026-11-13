@@ -27,6 +27,12 @@ if (args.Contains("--standby"))
 if (args.Contains("--cold-shift"))
     return ColdReferenceShiftCheck.Run();
 
+if (args.Contains("--handover"))
+{
+    BrakingHandoverCheck.Verbose = verbose;
+    return BrakingHandoverCheck.Run(args);
+}
+
 if (args.Contains("--hermite"))
     return PlanStateInterpolationCheck.Run();
 
@@ -94,6 +100,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --seed          cold-start seed: straight line vs 3-DOF G-FOLD
           --spread        spread the cold solve across frames while the vehicle falls
           --cold-shift    preserve the cold reference dynamics when the craft moves
+          --handover      the cold solve at a braking-burn hand-over, as logged and with the braking seed
           --hermite       sample plan position and velocity for warm re-solves
           --soft          soft terminal position: unreachable target still yields a plan
 

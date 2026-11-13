@@ -251,7 +251,7 @@ internal static class Program
         Check("a detail of a row stands whole", FoldRules.WholeOrNone("SPLIT SAVES UNDER 1 m/s", 100f, text => text.Length) == "SPLIT SAVES UNDER 1 m/s");
         Check("a detail of a row with no room stands not at all", FoldRules.WholeOrNone("SPLIT SAVES UNDER 1 m/s", 10f, text => text.Length).Length == 0);
         Check("the card of PLAN says that the sentence inside decides", PageText.PlanTip.Contains("line inside") && !PageText.PlanTip.Contains("at once"));
-        Check("a card of the table says how it lands", PageText.SolverTip == "Selects the landing mode.");
+        Check("a card of the table says how it lands", PageText.SolverTip == "The landing mode. AFC sets it for the craft and the body.");
         Check("a method with no hand-over says why", PageText.NoHandOversTip(LandSolver.Touchdown).Contains("TOUCHDOWN") && PageText.NoHandOversTip(LandSolver.Entry).Contains("No air"));
         (float tabRoom, float tabInset) = DockLayout.TabRowPlace(840f, 100f, 920f, 500f, 520f);
         Check("in WIDE that grew to the left the tabs keep the room and the place of the narrow window", tabRoom == 440f && tabInset == 400f);
@@ -320,7 +320,7 @@ internal static class Program
         VerbFit deorbitAir = SituationVerbs.For(GuidanceModeId.DeorbitLand, new CommitGates(false, false, "", "", false, Where: CraftSituation.Orbit, HasAir: true, GfoldChosen: true));
         Check("also on DEORBIT", deorbitAir.NextSolver == LandSolver.Touchdown && deorbitAir.Reason == SituationVerbs.GfoldNeedsNoAir);
         VerbFit entryNoAir = SituationVerbs.For(GuidanceModeId.EntryHere, new CommitGates(false, false, "", "", false, Where: CraftSituation.FallingNoAir));
-        Check("entry with no air names the way out", entryNoAir.Reason == "No air. Use G-FOLD or TOUCHDOWN." && entryNoAir.NextSolver == LandSolver.Gfold);
+        Check("entry with no air names the way out", entryNoAir.Reason == "No air. Use TOUCHDOWN." && entryNoAir.NextSolver == LandSolver.Touchdown);
         CommitView farPass = CommitResolver.Resolve(GuidanceModeId.DeorbitLand, new CraftActivity(), new CommitGates(false, false, "", "", false, Where: CraftSituation.Orbit, PageFact: PageText.PassesFar, PageFactNext: ConsolePage.Orbit, PageFactCalm: true));
         Check("a far pass says what to do, with MANEUVER", farPass.Fit is { Reason: PageText.PassesFar, NextPage: ConsolePage.Orbit, Calm: true });
         CommitView curve = CommitResolver.Resolve(GuidanceModeId.SixDofHere, new CraftActivity(), new CommitGates(false, false, "", "", false, Where: CraftSituation.FallingNoAir));
@@ -1173,8 +1173,21 @@ internal static class Program
         Check("an empty stage goes", left.Length == 1 && left[0].Number == 2);
         Check("no burn leaves all", BurnBudget.After(stages, Array.Empty<double>()).Length == 2);
 
-        Check("DEORBIT has two rows", LandSolvers.RowsOf(LandWay.FromOrbit).SequenceEqual(new[] { LandSolver.Touchdown, LandSolver.Gfold }));
-        Check("LAND NOW has three", LandSolvers.RowsOf(LandWay.FromHere).Length == 3);
+        Check("DEORBIT has only TOUCHDOWN", LandSolvers.RowsOf(LandWay.FromOrbit).SequenceEqual(new[] { LandSolver.Touchdown }));
+        Check("LAND NOW has only TOUCHDOWN", LandSolvers.RowsOf(LandWay.FromHere).SequenceEqual(new[] { LandSolver.Touchdown }));
+        Check("ENTRY has a row on LAND NOW only where it flies first", LandSolvers.RowsOf(LandWay.FromHere, false, true).SequenceEqual(new[] { LandSolver.Entry, LandSolver.Touchdown })
+            && LandSolvers.RowsOf(LandWay.FromOrbit, false, true).SequenceEqual(new[] { LandSolver.Touchdown }));
+        Check("G-FOLD has a row only while its fallback flies", LandSolvers.RowsOf(LandWay.FromOrbit, true).SequenceEqual(new[] { LandSolver.Touchdown, LandSolver.Gfold })
+            && LandSolvers.RowsOf(LandWay.FromHere, true).SequenceEqual(new[] { LandSolver.Touchdown, LandSolver.Gfold }));
+        Check("entry flies first for a long fall through air with the engine off", LandSolvers.EntryApplies(true, CraftSituation.FallingAir, false, 120.0) && LandSolvers.EntryApplies(true, CraftSituation.CoastingUp, false, 300.0));
+        Check("no air, a lit engine or a short fall go to touchdown directly", !LandSolvers.EntryApplies(false, CraftSituation.FallingNoAir, false, 120.0)
+            && !LandSolvers.EntryApplies(true, CraftSituation.FallingAir, true, 120.0) && !LandSolvers.EntryApplies(true, CraftSituation.FallingAir, false, 20.0)
+            && !LandSolvers.EntryApplies(true, CraftSituation.Orbit, false, double.PositiveInfinity) && !LandSolvers.EntryApplies(true, CraftSituation.FallingAir, false, double.NaN));
+        Check("touchdown is held while entry flies first", LandSolvers.Held(LandWay.FromHere, false, false, true, true)[(int)LandSolver.Touchdown] == LandSolvers.EntryFirst
+            && LandSolvers.Held(LandWay.FromOrbit, false, false, true, true)[(int)LandSolver.Touchdown].Length == 0);
+        Check("the refusal of a landing names both reasons", PageText.LandingRefused("no gimballed engine.", "G-FOLD needs a gimballed engine.") == "NO LANDING GUIDANCE CAN FLY THIS CRAFT. TOUCHDOWN: no gimballed engine. G-FOLD: G-FOLD needs a gimballed engine.");
+        Check("the page shows G-FOLD only while it flies", LandSolvers.Shown(LandSolver.Gfold, false) == LandSolver.Touchdown && LandSolvers.Shown(LandSolver.Gfold, true) == LandSolver.Gfold
+            && LandSolvers.Shown(LandSolver.Entry, false) == LandSolver.Entry);
         Check("a row dims with no plan on this body", LandSolvers.RowIsDim(LandSolver.Entry, false, false) && LandSolvers.RowIsDim(LandSolver.Gfold, true, false));
         Check("a row dims while held", LandSolvers.RowIsDim(LandSolver.Touchdown, true, true));
         Check("a row that can fly stays bright", !LandSolvers.RowIsDim(LandSolver.Touchdown, true, false) && !LandSolvers.RowIsDim(LandSolver.Entry, true, false) && !LandSolvers.RowIsDim(LandSolver.Gfold, false, false));
@@ -2113,7 +2126,7 @@ internal static class Program
         Check("the next link names the way", PageText.NextLabel(ConsolePage.Land, LandWay.FromHere) == "LAND NOW >");
         Check("the fuel sentence says how much is short", PageText.FuelShort(4220.0, 1991.0) == "NEEDS 4220 m/s, HAS ~1991");
         Check("no fuel sentence when there is enough", PageText.FuelShort(1000.0, 1991.0).Length == 0);
-        Check("the card of DEORBIT names who flies", PageText.WayCard(LandWay.FromOrbit).Contains("STOCK AUTO") && PageText.WayCard(LandWay.FromOrbit).Contains("TOUCHDOWN or G-FOLD"));
+        Check("the card of DEORBIT names who flies", PageText.WayCard(LandWay.FromOrbit).Contains("STOCK AUTO") && PageText.WayCard(LandWay.FromOrbit).Contains("lands with TOUCHDOWN"));
         Check("the plan state of a plan that can fly is empty", PageText.PlanState("").Length == 0);
         Check("the plan state of no plan", PageText.PlanState("NO PLAN") == "NO PLAN");
         Check("the plan state of an old plan says why", PageText.PlanState("the vehicle has moved since it was planned") == "PLAN OUT OF DATE: the vehicle has moved since it was planned");
@@ -2365,7 +2378,7 @@ internal static class Program
         Check("touchdown and entry end on the ground", LandSolvers.Ends(LandSolver.Touchdown, 25.0) == "LANDED" && LandSolvers.Ends(LandSolver.Entry, 25.0) == "LANDED");
         Check("G-FOLD with no hover ends on the ground", LandSolvers.Ends(LandSolver.Gfold, 25.0, hoverFlies: false) == "LANDED");
         Check("entry with no air ends in an impact", LandSolvers.Ends(LandSolver.Entry, 25.0, hasAir: false) == "IMPACT");
-        Check("the suits words follow the rule", LandSolvers.Suits(LandSolver.Gfold).Contains("NO AIR") && LandSolvers.Suits(LandSolver.Touchdown).Contains("HEAVY") && LandSolvers.Suits(LandSolver.Entry).Contains("AIR"));
+        Check("the suits words follow the rule", LandSolvers.Suits(LandSolver.Gfold).Contains("NO AIR") && LandSolvers.Suits(LandSolver.Touchdown) == "ANY BODY" && LandSolvers.Suits(LandSolver.Entry).Contains("AIR"));
 
         var airless = new DescentFacts(true, 1e6, 1e6, 2.5e5, 1.62, 0.0, 0.1, 0.1, 0.4, 0.4, 0.0, 15.0, 0.0, 0.0);
         var noAirHere = new LandNowFacts(LandWay.FromHere, LandSolver.Touchdown, false, false, false, airless);
@@ -2378,9 +2391,9 @@ internal static class Program
         var curving = noAirHere with { Descent = curves };
         Check("a path that curves stands on its row and stops nothing", LandSolvers.NoteOf(LandSolver.Touchdown, in curving) == new RowNote("TWR >1 AT FLOOR"));
         Check("no hover is no obstacle of the row, its end says it", LandSolvers.NoteOf(LandSolver.Gfold, in curving).Text.Length == 0);
-        Check("touchdown refuses a craft with no gimbal", LandSolvers.NoteOf(LandSolver.Touchdown, curving with { Descent = curves with { NoGimbal = true } }) == new RowNote("NO GIMBAL", true));
+        Check("no gimbal stops the row of touchdown, because G-FOLD needs a gimbal too", LandSolvers.NoteOf(LandSolver.Touchdown, curving with { Descent = curves with { NoGimbal = true } }) == new RowNote("NO GIMBAL", true));
         var over = curves with { NeedTiltDeg = 80.0, TiltLimitDeg = 15.0 };
-        Check("an over-powered floor is named in place of the curve", LandSolvers.NoteOf(LandSolver.Touchdown, curving with { Descent = over }) == new RowNote("FLOOR TOO HIGH", true));
+        Check("an over-powered floor is named in place of the curve", LandSolvers.NoteOf(LandSolver.Touchdown, curving with { Descent = over }) == new RowNote("FLOOR TOO HIGH"));
         var heldRows = new LandNowFacts(LandWay.FromHere, LandSolver.Touchdown, false, true, false);
         Check("a flying deorbit holds its rows on its own way, and the line on top of the form says so", LandSolvers.NoteOf(LandSolver.Touchdown, heldRows with { Way = LandWay.FromOrbit }).Text == LandSolvers.HeldNote && LandSolvers.NoteOf(LandSolver.Gfold, heldRows with { Way = LandWay.FromOrbit }).Text == LandSolvers.HeldNote
             && LandSolvers.HeldLine(in heldRows).Length == 0 && LandSolvers.HeldLine(heldRows with { Way = LandWay.FromOrbit }).Length == 0);
@@ -2389,7 +2402,9 @@ internal static class Program
         Check("a flying G-FOLD holds touchdown", LandSolvers.NoteOf(LandSolver.Touchdown, in gfoldHolds).Text == LandSolvers.HeldNote && LandSolvers.HeldLine(in gfoldHolds) == "TOUCHDOWN HELD: G-FOLD ACTIVE.");
         Check("with nothing held there is no sentence", LandSolvers.HeldLine(in noAirHere).Length == 0);
         Check("DEORBIT with TOUCHDOWN chosen names the G-FOLD fallback", LandSolvers.FallbackLine(heldRows with { Way = LandWay.FromOrbit }) == LandSolvers.TouchdownFallback);
-        Check("G-FOLD chosen or LAND NOW has no fallback line", LandSolvers.FallbackLine(heldRows with { Way = LandWay.FromOrbit, Chosen = LandSolver.Gfold }).Length == 0 && LandSolvers.FallbackLine(in heldRows).Length == 0);
+        Check("LAND NOW with TOUCHDOWN chosen names the G-FOLD fallback too", LandSolvers.FallbackLine(in heldRows) == LandSolvers.TouchdownFallback);
+        Check("ENTRY, a flying G-FOLD or HOVER has no fallback line", LandSolvers.FallbackLine(heldRows with { Chosen = LandSolver.Entry }).Length == 0
+            && LandSolvers.FallbackLine(heldRows with { Way = LandWay.FromOrbit, Chosen = LandSolver.Gfold }).Length == 0 && LandSolvers.FallbackLine(heldRows with { Way = LandWay.Hover }).Length == 0);
         static List<TableMark> Marks(LandSolver solver, int row, bool chosen, RowNote note, bool air)
         {
             var marks = new List<TableMark>();
@@ -2543,7 +2558,7 @@ internal static class Program
         Check("entry keeps the braking choice of touchdown", LandSolvers.Apply(LandSolver.Entry, true) == (true, true));
         Check("entry keeps the braking choice of G-FOLD", LandSolvers.Apply(LandSolver.Entry, false) == (true, false));
         Check("touchdown clears entry", LandSolvers.Apply(LandSolver.Touchdown, false) == (false, true));
-        Check("G-FOLD clears both", LandSolvers.Apply(LandSolver.Gfold, true) == (false, false));
+        Check("a pick of G-FOLD gives touchdown, because the player cannot choose G-FOLD", LandSolvers.Apply(LandSolver.Gfold, false) == (false, true));
         Check("entry is not held by a deorbit", !LandSolvers.LockedByDeorbit(LandSolver.Entry));
         Check("touchdown and G-FOLD are held by a deorbit",
             LandSolvers.LockedByDeorbit(LandSolver.Touchdown) && LandSolvers.LockedByDeorbit(LandSolver.Gfold));
