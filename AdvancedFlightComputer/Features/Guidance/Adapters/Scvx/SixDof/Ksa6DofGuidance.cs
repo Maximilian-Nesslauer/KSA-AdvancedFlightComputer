@@ -520,7 +520,7 @@ public sealed class Ksa6DofGuidance
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
-        BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
+        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
         _pricingTimeToGo = sigmaSeed;
         SetPricingStage(0);
@@ -529,11 +529,26 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
+    /// Seeds a cold solve from the path that brakes the craft onto the target over the burn time (ColdSeed6Dof) in place of the straight line. For a burn handed over at many times the local gravity with the thrust axis near the horizon, where the straight line with hover thrust is ten or more accepted steps from the answer.
+    /// </summary>
+    public bool BrakingSeed { get; init; }
+
+    /// <summary>
+    /// Wall-clock budget of one subproblem, ms, when it is longer than the flight budgets. For a guidance whose solves run off the sim thread on a problem that needs more solver iterations than the flight budgets give: there a subproblem cut short is a refused step, and a run of them loses the plan, while a subproblem that takes a second only makes the plan that much older. 0 leaves the flight budgets.
+    /// </summary>
+    public double LongBudgetMs { get; init; }
+
+    /// <summary>
     /// The straight-line cold seed, shared by Plan and BeginCold.
     ///  Attitude and rates interpolate FROM THE MEASURED STATE rather than jumping to identity - see the note inside. That is a feasibility requirement, not a quality one.
     /// </summary>
-    private void BuildColdSeed(double[] x0, double[] xf, out double[] xSeed, out double[] uSeed)
+    private void BuildColdSeed(double[] x0, double[] xf, double sigma, out double[] xSeed, out double[] uSeed)
     {
+        if (BrakingSeed)
+        {
+            ColdSeed6Dof.Build(x0, xf, sigma, _n, _cfg, _dyn, out xSeed, out uSeed);
+            return;
+        }
         xSeed = new double[_n * NX];
         uSeed = new double[_n * NU];
         double m0 = x0[13];
@@ -670,7 +685,7 @@ public sealed class Ksa6DofGuidance
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
-        BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
+        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed);
         BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
         _spreadFromPlan = false;
     }
@@ -773,7 +788,7 @@ public sealed class Ksa6DofGuidance
         if (fromPlan)
             BuildShiftedSeed(x0, simNow, sigma, out xs, out us, out _);
         else
-            BuildColdSeed(x0, _xf, out xs, out us);
+            BuildColdSeed(x0, _xf, sigma, out xs, out us);
         BeginSpreadSolve(x0, _xf, xs, us, sigma);
         _spreadFromPlan = fromPlan;
         StuckRestarts++;
@@ -1177,7 +1192,7 @@ public sealed class Ksa6DofGuidance
 
         // ONE CAP, NOT TWO. The two-stage scheme ran a subproblem to the small cap and, if it truncated, ran the SAME subproblem again with the big one - so a truncating solve paid for both. It was built for one-off truncation, but measured in flight it fired on 77% of solves (213 escalations in 149 cycles), which means the small cap was not a budget, it was a tax.
         //  SCS stops at its tolerance, not at the cap, so a subproblem that converges is completely unaffected by how high the cap is - raising it costs nothing on the common path and saves the wasted first run on the uncommon one. What bounds the cycle now is CycleBudgetMs, which bounds the thing that actually matters.
-        int cap = (int)Math.Clamp(Math.Max(budgetMs, escalatedMs) / perIter, 400, 100_000);
+        int cap = (int)Math.Clamp(Math.Max(Math.Max(budgetMs, escalatedMs), LongBudgetMs) / perIter, 400, 100_000);
         _solver.MaxSubproblemIterations = cap;
         _solver.EscalatedSubproblemIterations = cap;   // equal, so no retry is issued
     }

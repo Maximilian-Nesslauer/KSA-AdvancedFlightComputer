@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace AdvancedFlightComputer.Features.Ui.Logic;
 
-/// <summary>The solver of a powered landing, in the order a landing flies them: entry guidance, then touchdown guidance. G-FOLD is the older solver, not the next step of that chain.</summary>
+/// <summary>The solver of a powered landing, in the order a landing flies them: entry guidance, then touchdown guidance. The player picks none of them. Touchdown guidance lands every craft, entry guidance flies first where it applies (LandSolvers.EntryApplies), and G-FOLD flies only as the fallback for a craft that touchdown guidance has no plan for.</summary>
 internal enum LandSolver { Entry, Touchdown, Gfold }
 
 /// <summary>The guidance mode that flies the landing of a craft now, for the console to follow a hand-over.</summary>
@@ -12,8 +12,10 @@ internal enum LiveLanding { None, Boostback, Entry, Touchdown, Gfold, Hover }
 /// <summary>
 /// The solver choice of the LAND page as plain rules. Two switches of the craft hold it:
 /// UseThreeDofLanding (entry guidance) and UseSixDofLanding (touchdown guidance, else G-FOLD). The
-/// braking burn of DEORBIT + LAND reads only UseSixDofLanding, so a pick of ENTRY leaves it as it
-/// is, and DEORBIT + LAND offers only TOUCHDOWN and G-FOLD.
+/// LAND page sets UseThreeDofLanding from the situation of the craft (EntryApplies). Only the
+/// fallback turns UseSixDofLanding off, for a craft that touchdown guidance has no plan for, and
+/// the commit of the next landing turns it on again. The braking burn of DEORBIT + LAND reads only
+/// UseSixDofLanding, and DEORBIT + LAND shows only TOUCHDOWN.
 /// </summary>
 internal static class LandSolvers
 {
@@ -47,7 +49,7 @@ internal static class LandSolvers
     public static string Suits(LandSolver solver) => solver switch
     {
         LandSolver.Entry => "IN AIR",
-        LandSolver.Touchdown => "HEAVY/AIR",
+        LandSolver.Touchdown => "ANY BODY",
         _ => "NO AIR/RCS",
     };
 
@@ -69,7 +71,7 @@ internal static class LandSolvers
     public static string SuitsSentence(LandSolver solver) => solver switch
     {
         LandSolver.Entry => "A glide through air with the engine off, then the landing burn.",
-        LandSolver.Touchdown => "Heavy boosters and descents through air. It models the rotation of the craft.",
+        LandSolver.Touchdown => "Powered descents on any body. It models the rotation of the craft.",
         _ => "Airless bodies and landers that point with RCS.",
     };
 
@@ -84,10 +86,11 @@ internal static class LandSolvers
                 return new RowNote("NEEDS AIR", Stops: true);
             case LandSolver.Gfold when f.HasAir:
                 return new RowNote(f.Body.Length > 0 ? f.Body + " HAS AIR" : "HAS AIR", Stops: true);
+            // No gimbal stops the landing, because G-FOLD needs one too (GuidanceWindow.GfoldCanFly). G-FOLD flies a craft whose floor is too high, so that note stops nothing.
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.NoGimbal:
                 return new RowNote("NO GIMBAL", Stops: true);
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.OverPowered:
-                return new RowNote("FLOOR TOO HIGH", Stops: true);
+                return new RowNote("FLOOR TOO HIGH");
             case LandSolver.Touchdown when f.Descent.Known && f.Descent.TwrAtFloor > 1.0:
                 return new RowNote("TWR >1 AT FLOOR");
             default:
@@ -98,11 +101,22 @@ internal static class LandSolvers
     public static string HeldLine(in LandNowFacts f)
         => f.Way != LandWay.FromOrbit && f.GfoldFlies ? GfoldHoldsRow : "";
 
-    public const string TouchdownFallback = "If TOUCHDOWN cannot solve at the handover, G-FOLD flies the descent.";
+    public const string TouchdownFallback = "If TOUCHDOWN has no plan for this craft, G-FOLD flies the descent where it can: no air, gimballed engine. Else LAND refuses the craft.";
 
-    /// <summary>The braking burn of DEORBIT + LAND hands a craft that touchdown guidance refuses to G-FOLD (GuidanceWindow.StepLanding), so the DEORBIT table says so while TOUCHDOWN is chosen.</summary>
+    public const string EntryFirst = "ENTRY flies the fall through air first and hands its burn to TOUCHDOWN.";
+
+    /// <summary>A fall shorter than this goes to touchdown guidance directly, s, because entry guidance needs the time for its glide plan.</summary>
+    public const double EntryMinFallS = 60.0;
+
+    /// <summary>
+    /// Whether entry guidance flies first: a craft that comes down through air with the engine off and with the time for a glide. An airless body has no glide, a lit engine is a powered descent that touchdown guidance takes as it is, and a short fall leaves no time for the glide plan.
+    /// </summary>
+    public static bool EntryApplies(bool hasAir, CraftSituation where, bool thrust, double fallS)
+        => hasAir && !thrust && (where is CraftSituation.FallingAir or CraftSituation.CoastingUp) && fallS >= EntryMinFallS;
+
+    /// <summary>The braking burn of DEORBIT + LAND (GuidanceWindow.StepBrakingHandover) and touchdown guidance in the air (GuidanceWindow.FallBackToGfold) hand a craft that touchdown guidance has no plan for to G-FOLD when G-FOLD can fly it, so the table says so while TOUCHDOWN is chosen.</summary>
     public static string FallbackLine(in LandNowFacts f)
-        => f.Way == LandWay.FromOrbit && f.Chosen == LandSolver.Touchdown ? TouchdownFallback : "";
+        => f.Chosen == LandSolver.Touchdown && LandWays.HasSolver(f.Way) ? TouchdownFallback : "";
 
     public static void MarksOf(LandSolver solver, int row, bool chosen, in RowNote note, bool hasAir, List<TableMark> marks)
     {
@@ -156,7 +170,7 @@ internal static class LandSolvers
     }
 
     /// <summary>Why each row of the table is held, in enum order, empty for a row that can be picked.</summary>
-    public static string[] Held(LandWay way, bool deorbitLocked, bool descentLive, bool hasAir)
+    public static string[] Held(LandWay way, bool deorbitLocked, bool descentLive, bool hasAir, bool entryFirst = false)
     {
         var held = new string[Labels.Length];
         for (int i = 0; i < held.Length; i++)
@@ -170,11 +184,22 @@ internal static class LandSolvers
         }
         else if (way != LandWay.FromOrbit && descentLive)
             held[(int)LandSolver.Touchdown] = hasAir ? HeldWhileGfold + EntryTakesOver : HeldWhileGfold;
+        else if (way != LandWay.FromOrbit && entryFirst)
+            held[(int)LandSolver.Touchdown] = EntryFirst;
         return held;
     }
 
-    public static LandSolver[] RowsOf(LandWay way)
-        => way == LandWay.FromOrbit ? new[] { LandSolver.Touchdown, LandSolver.Gfold } : new[] { LandSolver.Entry, LandSolver.Touchdown, LandSolver.Gfold };
+    /// <summary>The rows of the table: TOUCHDOWN, with ENTRY above it on LAND NOW only where entry guidance flies first, and G-FOLD only while its fallback descent flies, so the page shows what flies the craft.</summary>
+    public static LandSolver[] RowsOf(LandWay way, bool gfoldFlies = false, bool entryFirst = false)
+    {
+        var rows = new List<LandSolver>(3);
+        if (way != LandWay.FromOrbit && entryFirst)
+            rows.Add(LandSolver.Entry);
+        rows.Add(LandSolver.Touchdown);
+        if (gfoldFlies)
+            rows.Add(LandSolver.Gfold);
+        return rows.ToArray();
+    }
 
     public static bool RowIsDim(LandSolver solver, bool hasAir, bool held)
         => held || (solver == LandSolver.Entry && !hasAir) || (solver == LandSolver.Gfold && hasAir);
@@ -183,12 +208,15 @@ internal static class LandSolvers
     public static LandSolver Chosen(bool useEntry, bool useTouchdown)
         => useEntry ? LandSolver.Entry : useTouchdown ? LandSolver.Touchdown : LandSolver.Gfold;
 
-    /// <summary>The two switches after a pick. ENTRY keeps the touchdown switch, because the braking burn reads it.</summary>
+    /// <summary>The solver the page shows: G-FOLD only while its descent flies, because the player cannot choose it.</summary>
+    public static LandSolver Shown(LandSolver chosen, bool gfoldFlies)
+        => chosen == LandSolver.Gfold && !gfoldFlies ? LandSolver.Touchdown : chosen;
+
+    /// <summary>The two switches after a pick. ENTRY keeps the touchdown switch, because the braking burn reads it. G-FOLD is not a choice of the player, so a pick of it gives touchdown guidance.</summary>
     public static (bool UseEntry, bool UseTouchdown) Apply(LandSolver picked, bool useTouchdown) => picked switch
     {
         LandSolver.Entry => (true, useTouchdown),
-        LandSolver.Touchdown => (false, true),
-        _ => (false, false),
+        _ => (false, true),
     };
 
     /// <summary>
@@ -281,5 +309,5 @@ internal static class EntryGuidance
         + "A lit engine goes off at start. Without air it gets no plan and holds the engine off.";
 
     public const string NoAirText =
-        "NO AIR: NO PLAN, ENGINE OFF. STOP, THEN USE TOUCHDOWN OR G-FOLD.";
+        "NO AIR: NO PLAN, ENGINE OFF. STOP, THEN USE TOUCHDOWN.";
 }

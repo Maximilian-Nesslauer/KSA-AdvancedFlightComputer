@@ -599,15 +599,17 @@ public sealed class VehicleAutopilotState
     /// Which solver flies the powered descent: the 6-DOF successive-convexification one
     /// by default, or G-FOLD. Per vehicle rather than a console-wide setting, because the
     /// deorbit handoff READS it to decide what to start - so it describes how this craft
-    /// lands, not what the player last clicked. The handoff turns it off for a craft
-    /// 6-DOF cannot plan for, and hands that craft to G-FOLD instead.
+    /// lands, not what the player last clicked. The player cannot turn it off: the
+    /// braking-burn handoff and a failed 6-DOF engage turn it off for a craft 6-DOF
+    /// cannot plan for and hand that craft to G-FOLD, and the next landing commit or
+    /// 6-DOF engage turns it on again.
     /// </summary>
     public bool UseSixDofLanding = true;
 
     /// <summary>Ask the console to cue the HOVER way of the LAND page for this vehicle, because its terminal hover started.</summary>
     public bool TermCuePending;
 
-    /// <summary>The console shows entry guidance (3-DOF) as this craft's powered landing: ENTRY is a solver of LAND > LAND NOW. The braking-burn handoff still chooses between 6-DOF and G-FOLD; the 3-DOF engages from a boostback glide or from the commit of that page.</summary>
+    /// <summary>The console shows entry guidance (3-DOF) as the first step of this craft's landing on LAND > LAND NOW. The page sets it from the situation of the craft (LandSolvers.EntryApplies) while no landing mode flies, and the mode that flies sets it after that. The braking-burn handoff does not read it; the 3-DOF engages from a boostback glide or from the commit of that page.</summary>
     public bool UseThreeDofLanding;
 
     /// <summary>
@@ -785,6 +787,9 @@ public sealed class VehicleAutopilotState
     /// Set while a COLD restart converges: the last plan is flown open loop, without the tracker, until the new plan lands. A cold restart means the plan was abandoned - the vehicle drifted off it, or the target moved, which moves the frame so the plan reads as hundreds of metres off - and tracking an abandoned plan pushes the vehicle around for an error that is not one (throttle 0.01 then 1.0 after a 250 m move, 2026-10-13 08:40). A warm restart keeps the plan it is refining, and keeps tracking it.
     /// </summary>
     public bool SixDofRestartOpenLoop;
+
+    /// <summary>The sim time since which the flying touchdown guidance solves without a result, NaN while it is not converging. A new solve that starts before the one before it gave a plan keeps the time.</summary>
+    public double SixDofConvergingSince = double.NaN;
     public double SixDofReplanSec = 0.1;
     public double SixDofRateDampShare = 0.002;
     public double SixDofControlSmooth = 0.05;
@@ -820,6 +825,12 @@ public sealed class VehicleAutopilotState
     /// 6-DOF is solving on standby through the 3-DOF's landing burn: Guidance, Worker and Converging are its, and nothing it plans is flown until the hand-over sets Active (see SixDofStandby.cs).
     /// </summary>
     public bool SixDofStandby;
+
+    /// <summary>Touchdown guidance kept the craft after it found no plan in the air, and flies the no-plan law at any height until a plan lands (GuidanceWindow.KeepFlyingWithoutPlan). Cleared by the next engage request.</summary>
+    public bool SixDofNoPlanLaw;
+
+    /// <summary>When touchdown guidance last started again after a fault in the air, in sim seconds.</summary>
+    public double SixDofFaultRestartTime = double.NegativeInfinity;
 
     /// <summary>Sim time the standby's current cold solve started, the earliest it may be set up again after a refusal, and the last refusal's reason.</summary>
     public double SixDofStandbyStart, SixDofStandbyRetryAt = double.NegativeInfinity;

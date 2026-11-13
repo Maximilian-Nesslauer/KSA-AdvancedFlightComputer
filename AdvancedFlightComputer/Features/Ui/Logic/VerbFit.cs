@@ -47,7 +47,7 @@ internal static class SituationVerbs
 
     public static string DeorbitFlies(GuidanceModeId mode) => "TAKE OVER replaces the deorbit with " + VerbName(mode) + ".";
 
-    public const string EntryNeedsAir = "No air. Use G-FOLD or TOUCHDOWN.";
+    public const string EntryNeedsAir = "No air. Use TOUCHDOWN.";
 
     public const string GfoldNoAir = "G-FOLD needs an airless body.";
 
@@ -92,7 +92,7 @@ internal static class SituationVerbs
             GuidanceModeId.Boostback => Boostback(in g),
             GuidanceModeId.GfoldHere => FirstOf(FromHere(g.Where), g.HasAir ? new VerbFit(GfoldNeedsNoAir, NextSolver: LandSolver.Touchdown) : VerbFit.Yes),
             GuidanceModeId.SixDofHere => FromHere(g.Where),
-            GuidanceModeId.EntryHere => FirstOf(FromHere(g.Where), g.HasAir ? VerbFit.Yes : new VerbFit(EntryNeedsAir, NextSolver: LandSolver.Gfold)),
+            GuidanceModeId.EntryHere => FirstOf(FromHere(g.Where), g.HasAir ? VerbFit.Yes : new VerbFit(EntryNeedsAir, NextSolver: LandSolver.Touchdown)),
             _ => VerbFit.Yes,
         };
     }

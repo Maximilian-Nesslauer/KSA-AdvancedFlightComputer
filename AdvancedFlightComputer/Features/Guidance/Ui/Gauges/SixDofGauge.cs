@@ -44,11 +44,11 @@ public static partial class GuidanceWindow
     {
         if (!_s.Active)
         {
-            // Solving on standby under the landing burn of entry guidance, ready to take it over.
+            // Solving on standby under the landing burn of entry guidance or the braking burn, ready to take it over.
             if (_s.SixDofStandby)
             {
                 double now = SimNow();
-                ConsoleUi.Sentence(("STANDBY (ENTRY): " + SixDofStandbyText(now)).AsSpan(),
+                ConsoleUi.Sentence(("STANDBY: " + SixDofStandbyText(now)).AsSpan(),
                     SixDofStandbyReady(now) ? ConsoleStyle.TextPrimary : ConsoleStyle.TextMuted);
                 return;
             }
@@ -70,7 +70,7 @@ public static partial class GuidanceWindow
         const UiTier D = UiTier.Diagnostics;
         double now = SimNow();
         GaugeRowText(D, "STATE", _s.Active ? (_s.Converging ? "FIRST PLAN" : "ACTIVE")
-            : _s.SixDofStandby ? "STANDBY (ENTRY)" : _s.EngagePending ? "STARTING" : "IDLE");
+            : _s.SixDofStandby ? "STANDBY" : _s.EngagePending ? "STARTING" : "IDLE");
         GaugeRowText(D, "SOLVER", _s.Error.Length > 0 ? Fmt.Sentence(_s.Error) : "-", ConsoleStyle.TextMuted);
         ConsoleUi.NoteShape("AfcDiagStandby", _s.SixDofStandby ? 1 : 0);
         if (_s.SixDofStandby)

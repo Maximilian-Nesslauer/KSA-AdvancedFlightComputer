@@ -932,7 +932,7 @@ public static partial class GuidanceWindow
     // Engaged has no caption, because the head says that it flies.
     private static string SixDofCaption()
         => _s.Active ? (_s.Converging ? "TOUCHDOWN: FIRST PLAN" : "")
-            : _s.SixDofStandby ? "TOUCHDOWN: STANDBY (ENTRY)"
+            : _s.SixDofStandby ? PageText.TouchdownStandby
             : _s.EngagePending ? "TOUCHDOWN: STARTING" : "TOUCHDOWN: IDLE";
 
     private static readonly string[] _approachLegendNames = { "PROFILE", PageText.CoastKey, PageText.BrakingKey };
