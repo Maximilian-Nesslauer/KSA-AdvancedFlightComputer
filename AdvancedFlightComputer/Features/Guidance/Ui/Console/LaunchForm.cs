@@ -53,7 +53,7 @@ public static partial class GuidanceWindow
         bool driven = status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable;
         using (new ImGuiDisabledScope(AscentPlanBusy))
         {
-            float fieldW = DrawOrbitRow(orbit, parent, driven);
+            float fieldW = DrawOrbitRow(orbit, parent, driven, driven && plan.Target == null && _s.TargetId.Length == 0);
             DrawPlaneRow(orbit, parent, driven, fieldW);
         }
         using (ConsoleUi.Dim(_s.Running))
@@ -61,6 +61,8 @@ public static partial class GuidanceWindow
         {
             DrawTargetPicker(vehicle);
             DrawTargetFacts(status, in plan);
+            DrawReachRow(orbit, parent, status, in plan);
+            DrawTwrRow();
             DrawLaunchWindowRows(status, in plan, method.Id == AscentMethod.CatsUpfg);
             DrawAscentMethodRow();
         }

@@ -224,7 +224,7 @@ public static partial class GuidanceWindow
     internal static PageText.OutcomeFacts CommitOutcomeFacts(Vehicle vehicle)
         => new(
             AutoStageArms: LaunchFlownByNote(vehicle).Length > 0,
-            Target: _s.TargetId,
+            Target: _s.TargetId.Length > 0 ? _s.TargetId : _s.PlaneTarget?.Label ?? "",
             Solver: LandSolvers.Label(LandSolvers.Chosen(false, _s.UseSixDofLanding)),
             HandToTouchdown: _s.ThreeDofSixDofHandover, TouchdownLastS: _s.ThreeDofSixDofTimeS,
             HoverFromM: _s.GfoldHoverHandoffAltM,
@@ -312,7 +312,7 @@ public static partial class GuidanceWindow
                         LaunchNowAscent(vehicle, orbit, parent, in plan);
                 }
                 if (ImGui.IsItemHovered())
-                    ConsoleUi.Tooltip("Launches at once and skips the window.".AsSpan());
+                    ConsoleUi.Tooltip((!_s.FlyConvexAscent || _s.BackupAscent ? PageText.LaunchNowGravityTurnTip : PageText.LaunchNowTip).AsSpan());
             }
             DrawWarpLine(origin.X + room, target);
             return;
@@ -577,7 +577,7 @@ public static partial class GuidanceWindow
                 if (FormRules.SiteOutOfReach(siteM, impact, vehicle.GetSurfaceSpeed()))
                     farSite = PageText.SiteFar;
             }
-            hasTarget = _s.TargetId.Length > 0
+            hasTarget = HasLaunchTarget
                 && TryChaseOrbit(vehicle, orbit, parent, parent.MeanRadius, out _) == ChaseStatus.Ok;
             plansFirst = mode == GuidanceModeId.AscentUpfg && LaunchPlanWhy(vehicle, orbit, parent).Length > 0;
             // Only with a lit engine, because the TWR counts active engines and TerminalHoverAvailable also accepts a craft whose engine the next staging lights.

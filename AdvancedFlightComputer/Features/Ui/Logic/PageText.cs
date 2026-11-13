@@ -960,6 +960,81 @@ internal static class PageText
 
     public const string NoCrossing = "INC BELOW SITE LATITUDE";
 
+    public const string ReachLabel = "REACH";
+
+    /// <summary>The REACH row: the plane change the launch flies, its price, and, when the inclination is the cause, the band a direct launch reaches.</summary>
+    public static string Reach(in ReachFacts f)
+    {
+        string cost = string.Create(Inv, $"{f.PlaneChangeDeg:F1} deg PLANE CHANGE, ~{f.PlaneChangeMs:F0} m/s");
+        if (!f.OutOfReach)
+            return cost + ". FROM POSITION PUTS THE PLANE OVER THE SITE";
+        double low = LaunchReach.LowestDirectIncDeg(f.SiteLatDeg);
+        return cost + string.Create(Inv, $". DIRECT: INC {low:F1} TO {180.0 - low:F1}");
+    }
+
+    public static string ReachTip(in ReachFacts f, bool gravityTurn) => f.OutOfReach
+        ? string.Create(Inv, $"A launch from latitude {Math.Abs(f.SiteLatDeg):F1} deg reaches only planes it lies in, so its inclination is at least {LaunchReach.LowestDirectIncDeg(f.SiteLatDeg):F1} deg. ")
+          + (gravityTurn
+              ? "The gravity turn cannot fly a plane change, so LAUNCH refuses this inclination."
+              : "The ascent turns the rest of the plane with engine thrust. The price is that turn at the apoapsis of the target orbit, the cheapest single burn. A dog-leg in the climb costs about the same.")
+        : "The body has turned the site away from the plane since its LAN was set. FROM POSITION on the PLANE row sets the plane over the site again.";
+
+    /// <summary>Why LAUNCH refuses a gravity turn into a plane the site does not lie in, and the nearest inclination it can fly. A target sets the plane, so there is no inclination to offer for it.</summary>
+    public static string ReachRefusal(double siteLatDeg, double incDeg, bool targetPlane)
+    {
+        double low = LaunchReach.LowestDirectIncDeg(siteLatDeg);
+        string head = string.Create(Inv, $"REFUSED: {(targetPlane ? "TARGET " : "")}INC {incDeg:F1} deg OUT OF REACH FROM LATITUDE {Math.Abs(siteLatDeg):F1} deg (DIRECT: INC {low:F1} TO {180.0 - low:F1}). THE GRAVITY TURN CANNOT FLY A PLANE CHANGE.");
+        return targetPlane ? head : head + string.Create(Inv, $" NEAREST: INC {LaunchReach.NearestDirectIncDeg(siteLatDeg, incDeg):F1} deg.");
+    }
+
+    /// <summary>The refusal of a gravity turn into a target's plane off its launch window, with the wait to the next window, or NaN on a body that does not turn.</summary>
+    public static string WindowRefusal(double offPlaneDeg, double nextWindowS, bool descending, bool planeReachesSite = true)
+    {
+        string head = string.Create(Inv, $"REFUSED: SITE {offPlaneDeg:F1} deg OUT OF THE TARGET PLANE. THE GRAVITY TURN CANNOT FLY A PLANE CHANGE.");
+        if (!planeReachesSite)
+            return head + " THE PLANE NEVER PASSES OVER THE SITE, SO NO WINDOW COMES.";
+        return double.IsFinite(nextWindowS)
+            ? head + " NEXT WINDOW: T-" + Fmt.Time(nextWindowS) + (descending ? ", DESC NODE" : ", ASC NODE") + ". LAUNCH ARMS FOR IT."
+            : head + " THE BODY DOES NOT TURN, SO NO WINDOW COMES.";
+    }
+
+    public const string LanOverPad = "OVER THE PAD";
+
+    public const string LanOverPadTip = "The gravity turn flies the plane over the pad, at the node of the WINDOW row. LAN follows the pad until LAUNCH.";
+
+    public const string LaunchNowTip = "Launches at once and skips the window.";
+
+    public const string LaunchNowGravityTurnTip = "The gravity turn cannot skip the window, because it cannot fly a plane change. NOW refuses and the countdown stays.";
+
+    /// <summary>
+    /// The status after an ascent whose stages have no propellant left before its cutoff: what the craft flies now. A periapsis under the surface is suborbital; one under <paramref name="airTopKm"/>, the top of the atmosphere, is an orbit that the air lowers.
+    /// </summary>
+    public static string AscentOutOfPropellant(bool bound, double peKm, double apKm, double incDeg, double airTopKm)
+    {
+        string where = !bound ? "ESCAPE TRAJECTORY"
+            : peKm < 0.0 ? "SUBORBITAL, AP " + Fmt.Km(apKm)
+            : "ORBIT " + Fmt.Orbit(peKm, apKm) + ", INC " + Fmt.Deg(incDeg) + (peKm < airTopKm ? ", PE IN THE AIR" : "");
+        return "ASCENT ENDED: OUT OF PROPELLANT BEFORE CUTOFF. " + where + ". MANUAL.";
+    }
+
+    public const string TwrLabel = "TWR";
+
+    /// <summary>The TWR row: a first stage that cannot lift the craft off the pad, or that falls under its weight before the first stage is spent.</summary>
+    public static string Twr(in LaunchTwrFacts f) => f.CannotLiftOff
+        ? string.Create(Inv, $"{f.LiftoffTwr:F2} AT LIFT-OFF. THE CRAFT DOES NOT LEAVE THE PAD")
+        : string.Create(Inv, $"{f.LowestTwr:F2} WHEN STAGE {f.LowestStage + 1} STARTS, STILL IN THE FIRST STAGE");
+
+    public static string TwrTip(in LaunchTwrFacts f, bool gravityTurn) => f.CannotLiftOff
+        ? "The thrust of the first stage at the air pressure of the pad is less than the weight of the craft."
+        : "A first stage that burns on after a drop, such as a core after its boosters, has less thrust than weight from that stage on, at the air pressure of the pad. Under 1 the craft loses vertical speed until it is lighter. "
+          + (gravityTurn
+              ? "The gravity turn has no plan for that and can hold the craft level until it falls. The solved climb plans the climb for the thrust it has."
+              : "The solved climb plans for it; a plan that does not converge falls back to the gravity turn, which can hold the craft level until it falls.");
+
+    public static string ReachFix(double incDeg) => string.Create(Inv, $"USE INC {incDeg:F1} deg");
+
+    public const string ReachFixTip = "Sets the nearest inclination a direct launch reaches, and the plane over the site.";
+
     public static string TargetOrbit(double peKm, double apKm, double incDeg) => Fmt.Orbit(peKm, apKm) + ", INC " + Fmt.Deg(incDeg);
 
     public static string LaunchAnswer(string why, string stored, bool planUsable, bool flyConvex, double massToOrbitKg, int stagesPlanned, int stagesAvailable)

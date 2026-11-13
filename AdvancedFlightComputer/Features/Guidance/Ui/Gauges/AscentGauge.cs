@@ -22,7 +22,7 @@ public static partial class GuidanceWindow
     private const float OrbitFieldLeast = 56f;
 
     // A row of the page. Picking a target turns the three orbit inputs into OUTPUTS of that pick, continuously recomputed and greyed out, because a chase orbit that disagreed with the target it was chasing was never anything but a mistake. Returns the width of its fields, so the row under it can line up.
-    private static float DrawOrbitRow(Orbit orbit, IParentBody parent, bool driven)
+    private static float DrawOrbitRow(Orbit orbit, IParentBody parent, bool driven, bool planeOnly)
     {
         float avail = ConsoleStyle.ContentAvailWidth();
         float cells = avail - ConsoleUi.LabelColumnWidth;
@@ -41,7 +41,8 @@ public static partial class GuidanceWindow
         float2 control = ImGui.GetCursorScreenPos();
         float x = control.X + ConsoleWidgets.RowControlWidth - rowWidth;
 
-        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
+        // A plane target sets only the plane, so the altitudes stay the player's.
+        using (new ImGuiDisabledScope((driven && !planeOnly) || AscentPlanBusy))
         {
             // Periapsis is always the lower: a pair entered the other way round swaps once the field is left (see OrderApsides).
             GaugeCell(Specs.PeKm, "PE", ref x, control.Y, fieldW, ref _s.PeKm, nameInk: cellInk);
@@ -50,6 +51,9 @@ public static partial class GuidanceWindow
             GaugeCell(Specs.ApKm, "AP", ref x, control.Y, fieldW, ref _s.ApKm, nameInk: cellInk);
             if (RowEditEnded(Specs.ApKm))
                 OrderApsides();
+        }
+        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
+        {
             // A new inclination makes the old LAN meaningless, because the plane it named no longer passes overhead, so re-seed it from where the vehicle is.
             if (GaugeCell(Specs.IncDeg, "INC", ref x, control.Y, fieldW, ref _s.IncDeg))
                 _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
@@ -63,7 +67,19 @@ public static partial class GuidanceWindow
         BeginKitRow("PLANE", controlWidth: ConsoleStyle.ContentAvailWidth() - ConsoleUi.LabelColumnWidth);
         float2 control = ImGui.GetCursorScreenPos();
         float x = control.X + ConsoleWidgets.RowControlWidth - CellsWithoutFields([("LAN", Specs.LanDeg.Unit)]) - fieldW;
-        if (!driven)
+        bool overPad = !driven && _s.LanFollowsPad;
+        if (overPad)
+        {
+            float h = ConsoleStyle.FrameHeightPx;
+            ConsoleStyle.PushLabelFont();
+            float noteW = ImGui.CalcTextSize(PageText.LanOverPad).X;
+            float2 at = new(x - CellGap - noteW, control.Y);
+            ImGui.GetWindowDrawList().AddText(new float2(at.X, at.Y + (h - ImGui.GetFontSize()) * 0.5f), ConsoleStyle.ApplyAlpha(ConsoleStyle.TextMutedU32), PageText.LanOverPad);
+            ConsoleStyle.PopFont();
+            if (ImGui.IsMouseHoveringRect(at, new float2(at.X + noteW, at.Y + h)))
+                ConsoleUi.Tooltip(PageText.LanOverPadTip.AsSpan());
+        }
+        else if (!driven)
         {
             float buttonW = ConsoleWidgets.ButtonWidth(FromPositionVerb.AsSpan());
             ImGui.SetCursorScreenPos(new float2(x - CellGap - buttonW, control.Y));
@@ -75,7 +91,7 @@ public static partial class GuidanceWindow
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ConsoleUi.Tooltip(PageText.LanFromPositionTip.AsSpan());
         }
-        using (new ImGuiDisabledScope(driven || AscentPlanBusy))
+        using (new ImGuiDisabledScope(driven || overPad || AscentPlanBusy))
             GaugeCell(Specs.LanDeg, "LAN", ref x, control.Y, fieldW, ref _s.LanDeg);
         ConsoleUi.EndRow();
     }
@@ -90,15 +106,112 @@ public static partial class GuidanceWindow
             case ChaseStatus.DifferentBody:
                 GaugeRowText("TARGET", "OTHER BODY", ConsoleStyle.Danger);
                 break;
+            case ChaseStatus.Ok when plan.Target == null:
+                GaugeRowText("LAUNCH PLANE", FormattableString.Invariant($"{_s.PlaneTarget?.Label.ToUpperInvariant()}: INC {plan.IncDeg:F1} deg"));
+                break;
             case ChaseStatus.Ok:
                 GaugeRowText("TARGET ORBIT", PageText.TargetOrbit(plan.TargetPeKm, plan.TargetApKm, plan.IncDeg));
                 break;
         }
     }
 
+    // Above this ground-relative speed the craft is flying, and a launch site has no meaning for the plane.
+    private const double ReachGroundSpeedMs = 50.0;
+
+    /// <summary>
+    /// The plane change the launch would fly, before it flies. The site is taken where the body carries it in LanLeadSeconds, as LanOverhead and the launch window take it. A calculated climb with no target solves its own node over the pad (ConvexAscent), so only the part that no node avoids counts there.
+    /// </summary>
+    private static bool TryReachFacts(Orbit orbit, IParentBody parent, bool hasTarget, ChaseStatus status, in ChasePlan plan, out ReachFacts facts)
+    {
+        facts = default;
+        // A target the site can reach is flown from its launch window, where the plane passes over the site.
+        if (hasTarget && status != ChaseStatus.PlaneUnreachable)
+            return false;
+        if (!TryLaunchSite(orbit, parent, out double3 site))
+            return false;
+        double latDeg = UpfgTarget.RadToDeg(Math.Asin(Math.Clamp(site.Z / site.Length(), -1.0, 1.0)));
+
+        double incDeg = hasTarget ? plan.IncDeg : _s.IncDeg;
+        double lanDeg = hasTarget ? plan.LanDeg : _s.LanDeg;
+        double peKm = hasTarget ? plan.PeKm : _s.PeKm;
+        double apKm = hasTarget ? plan.ApKm : _s.ApKm;
+        double least = LaunchReach.LeastPlaneChangeDeg(latDeg, incDeg);
+        double now = least;
+        // The calculated climb with a free launch time solves its own node over the pad (ConvexAscent), and the gravity turn has its LAN set over the pad at LAUNCH (SetGravityTurnPlane), so for both only the part that no node avoids counts.
+        bool nodeOverPad = !hasTarget && (GravityTurnFlies || _s.ConvexOptimiseTiming);
+        if (!nodeOverPad)
+        {
+            double3 n = UpfgTarget.OrbitNormal(UpfgTarget.DegToRad(incDeg), UpfgTarget.DegToRad(lanDeg));
+            now = LaunchReach.PlaneChangeDeg(n.X, n.Y, n.Z, site.X, site.Y, site.Z);
+        }
+        double rBody = parent.MeanRadius;
+        double ms = LaunchReach.PlaneChangeMs(parent.Mu, rBody + peKm * 1000.0, rBody + apKm * 1000.0, now);
+        facts = new ReachFacts(latDeg, incDeg, now, least, ms, hasTarget);
+        return true;
+    }
+
+    /// <summary>The LAUNCH commit flies the vertical rise and the gravity turn, not the calculated climb.</summary>
+    private static bool GravityTurnFlies => !_s.FlyConvexAscent || BackupLaunchChosen;
+
+    /// <summary>
+    /// Where the launch site will be in <see cref="LanLeadSeconds"/>, in CCI, as LanOverhead and the launch window take it. False when the craft moves faster than <see cref="ReachGroundSpeedMs"/> over the ground, because a flying craft has no launch site.
+    /// </summary>
+    private static bool TryLaunchSite(Orbit orbit, IParentBody parent, out double3 site)
+    {
+        site = default;
+        double3 r = orbit.StateVectors.PositionCci;
+        double omega = parent.GetAngularVelocity();
+        if (!double.IsFinite(omega) || r.Length() < 1.0)
+            return false;
+        if ((orbit.StateVectors.VelocityCci - double3.Cross(new double3(0, 0, omega), r)).Length() > ReachGroundSpeedMs)
+            return false;
+        double turn = omega * LanLeadSeconds;
+        double c = Math.Cos(turn), s = Math.Sin(turn);
+        site = new double3(c * r.X - s * r.Y, s * r.X + c * r.Y, r.Z);
+        return true;
+    }
+
+    private static bool TryLaunchSiteLatitude(Orbit orbit, IParentBody parent, out double latDeg)
+    {
+        latDeg = double.NaN;
+        if (!TryLaunchSite(orbit, parent, out double3 site))
+            return false;
+        latDeg = UpfgTarget.RadToDeg(Math.Asin(Math.Clamp(site.Z / site.Length(), -1.0, 1.0)));
+        return true;
+    }
+
+    // The REACH row: a plane change the launch would fly, what it costs, and the nearest inclination the site reaches directly. Nothing shows for a plane the site reaches.
+    private static void DrawReachRow(Orbit orbit, IParentBody parent, ChaseStatus status, in ChasePlan plan)
+    {
+        if (_s.Running || !TryReachFacts(orbit, parent, HasLaunchTarget, status, in plan, out ReachFacts facts) || !facts.Shows)
+            return;
+        GaugeRowText(PageText.ReachLabel, PageText.Reach(in facts), facts.OutOfReach ? ConsoleStyle.Danger : ConsoleUi.WarnInk);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ConsoleUi.Tooltip(PageText.ReachTip(in facts, GravityTurnFlies).AsSpan());
+        double offer = facts.OfferIncDeg;
+        if (!double.IsFinite(offer) || _s.LaunchArmed || AscentPlanBusy)
+            return;
+        if (ConsoleUi.LinkRight(PageText.ReachFix(offer), "AfcReachFix", PageText.ReachFixTip))
+        {
+            _s.IncDeg = offer;
+            _s.LanDeg = LanOverhead(orbit.StateVectors.PositionCci, _s.IncDeg, parent);
+        }
+    }
+
+    // The TWR row: a first stage too weak for its craft, before the launch. Nothing shows for one that is not.
+    private static void DrawTwrRow()
+    {
+        LaunchTwrFacts facts = _s.PadTwr;
+        if (_s.Running || !facts.Shows)
+            return;
+        GaugeRowText(PageText.TwrLabel, PageText.Twr(in facts), facts.CannotLiftOff ? ConsoleStyle.Danger : ConsoleUi.WarnInk);
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ConsoleUi.Tooltip(PageText.TwrTip(in facts, GravityTurnFlies).AsSpan());
+    }
+
     private static void DrawLaunchWindowRows(ChaseStatus status, in ChasePlan plan, bool nodeChoiceExists)
     {
-        LaunchWindowRow row = FormRules.WindowRow(_s.TargetId.Length > 0, status == ChaseStatus.Ok && double.IsFinite(plan.WaitSec),
+        LaunchWindowRow row = FormRules.WindowRow(HasLaunchTarget, status == ChaseStatus.Ok && double.IsFinite(plan.WaitSec),
             status == ChaseStatus.PlaneUnreachable, nodeChoiceExists && (!_s.FlyConvexAscent || BackupLaunchChosen));
         ConsoleUi.NoteShape("AfcLaunchWindow", (int)row);
         switch (row)
@@ -158,7 +271,7 @@ public static partial class GuidanceWindow
         // Read only, because the rows grey out on it. The launch window step writes the chase result into the state (StepLaunchWindow), so the draw never does.
         ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, bodyRadius, out ChasePlan plan);
         bool driven = status == ChaseStatus.Ok || status == ChaseStatus.PlaneUnreachable;
-        if (driven)
+        if (driven && plan.Target != null)
         {
             GaugeRow(Specs.ChaseOffsetKm, ref _s.ChaseOffsetKm);
             using (new ImGuiDisabledScope(double.IsNaN(plan.ArgPeDeg)))

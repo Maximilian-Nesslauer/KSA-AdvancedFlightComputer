@@ -101,7 +101,7 @@ public static partial class GuidanceWindow
     /// </summary>
     private static void ExecuteAscent(Vehicle vehicle, Orbit orbit, IParentBody parent)
     {
-        bool window = _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime);
+        bool window = HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime);
         _s.ConvexLaunchFailure = "";
         _s.BackupAscent = false;
         if (_s.FlyConvexAscent && !_s.Running
@@ -116,7 +116,7 @@ public static partial class GuidanceWindow
     /// <summary>The commit itself: arm for the window, or start now.</summary>
     private static void LaunchAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, bool atWindow)
     {
-        if (atWindow && _s.TargetId.Length > 0 && !double.IsNaN(_s.LaunchTargetTime))
+        if (atWindow && HasLaunchTarget && !double.IsNaN(_s.LaunchTargetTime))
         {
             // ARMING TAKES THE VEHICLE TOO. It is a commit - the craft is now waiting to launch and will fire itself at the window - so leaving another mode running underneath it would have that mode flying right up to the moment StepLaunchWindow claimed it out from under itself.
             ClaimVehicle(GuidanceMode.Ascent, vehicle);
@@ -129,12 +129,19 @@ public static partial class GuidanceWindow
     /// <summary>
     /// LAUNCH NOW, to the target's chase orbit, without waiting for the window - for a window just missed, or one too far off to wait for. Any armed countdown and the warp toward it are dropped, the chase orbit is applied as it stands, and the ascent heads for whichever crossing is nearest in time, the one just missed included.
     ///
-    /// Off the window the launch site is out of the target's plane, so UPFG steers the difference out on the way up. That costs dV growing with how far off the window the launch is, and far enough off it costs more than the vehicle has.
+    /// Off the window the launch site is out of the target's plane, so the calculated climb flies the plane change on the way up. That costs dV growing with how far off the window the launch is, and far enough off it costs more than the vehicle has. The gravity turn cannot fly it, so it refuses and keeps the countdown (GravityTurnInWindow).
     /// </summary>
     private static void LaunchNowAscent(Vehicle vehicle, Orbit orbit, IParentBody parent, in ChasePlan plan)
     {
         if (_s.Running)
             return;
+        // The gravity turn cannot fly the plane change of a lift-off off the window, so it is refused before the armed countdown and its warp are dropped.
+        if ((!_s.FlyConvexAscent || _s.BackupAscent) && !GravityTurnInWindow(vehicle, orbit, parent, out string refusal, out _))
+        {
+            GuidanceLog.Info(vehicle, $"launch now refused: {refusal}");
+            _s.WarnStatus(refusal);
+            return;
+        }
         if (_s.LaunchArmed && Universe.IsAutoWarpActive)
             Universe.AutoWarpStop(true);
         _s.LaunchArmed = false;
@@ -210,7 +217,8 @@ public static partial class GuidanceWindow
     private static void StepLaunchWindow(Vehicle vehicle, Orbit orbit, IParentBody parent,
                                          double bodyRadius)
     {
-        if (_s.TargetId.Length == 0 || _s.Running)
+        _s.LanFollowsPad = !_s.Running && !_s.LaunchArmed && !HasLaunchTarget && KeepGravityTurnLanOverPad(orbit, parent);
+        if (_s.Running || !HasLaunchTarget)
             return;
 
         // ARMED: the launch instant is already latched and absolute, so this needs no geometry at all - and MUST not re-derive it. Checked every step, ahead of everything else here, because a single warp step can cross the window whole.
@@ -274,9 +282,15 @@ public static partial class GuidanceWindow
         if (_s.Running && _s.Phase == AscentPhase.Terminal
             && (SimNow() > _s.CutoffTime + (_s.CutoffDone ? 2.0 : 15.0)))
         {
-            ReleaseAscent("ASCENT COMPLETE. MANUAL.", vehicle);
-            if (_s.CutoffDone)
-                _s.DiagStatus(_s.Status);
+            // A run-out in the terminal phase reaches this release before EndAscentOutOfPropellant has held for its time, because the planned cutoff still sets CutoffDone.
+            if (!double.IsNaN(_s.OutOfPropellantSince) && NothingLeftToBurn(vehicle))
+                ReleaseAscent(OutOfPropellantStatus(orbit, parent, bodyRadius), vehicle, warn: true);
+            else
+            {
+                ReleaseAscent("ASCENT COMPLETE. MANUAL.", vehicle);
+                if (_s.CutoffDone)
+                    _s.DiagStatus(_s.Status);
+            }
         }
 
         if (!_s.Running)
@@ -285,7 +299,8 @@ public static partial class GuidanceWindow
         try
         {
             StepGuidance(vehicle, orbit, parent, mu, bodyRadius);
-            if (_s.Engage && _s.AutoStage && !_s.CutoffDone)
+            // StepGuidance can end the ascent (EndAscentOutOfPropellant), and an ended ascent stages nothing.
+            if (_s.Running && _s.Engage && _s.AutoStage && !_s.CutoffDone)
                 AutoSequence(vehicle);
             _s.FailStreak = 0;
             _s.GuidanceError = "";
@@ -335,6 +350,21 @@ public static partial class GuidanceWindow
             return;
         }
 
+        bool flySolvedClimb = _s.FlyConvexAscent && !_s.BackupAscent && ConvexPlanFlyable(vehicle, orbit, parent, SimNow(), out _);
+        if (!flySolvedClimb && !SetGravityTurnPlane(vehicle, orbit, parent, out string planeRefusal))
+        {
+            if (_s.LaunchArmed)
+            {
+                ReleaseAscent(planeRefusal, vehicle, warn: true);
+            }
+            else
+            {
+                GuidanceLog.Info(vehicle, $"ascent refused: {planeRefusal}");
+                _s.WarnStatus(planeRefusal);
+            }
+            return;
+        }
+
         // Ascent takes over from every other mode: all four drive the same flight-computer command path, and two of them writing it would fight.
         ClaimVehicle(GuidanceMode.Ascent, vehicle);
         // Ours to reset, not the claim's - the deorbit burn flies this same instance.
@@ -342,6 +372,7 @@ public static partial class GuidanceWindow
         _s.GuidanceError = "";
         _s.Status = "";
         _s.FailStreak = 0;
+        _s.OutOfPropellantSince = double.NaN;
         _s.Running = true;
         // The convex plan replaces the vertical rise and the gravity turn when there is one this vehicle can still fly; latched here, so a recalculation during the climb cannot swap it.
         _s.FlyingPlan = null;
@@ -381,6 +412,80 @@ public static partial class GuidanceWindow
                   + (_s.BackupAscent ? ", the backup the player chose"
                      : _s.FlyConvexAscent && _s.AscentPlan != null ? $", convex plan not flown: {convexWhy}" : ""))
             + ").");
+    }
+
+    /// <summary>
+    /// The plane of a gravity turn from the launch site. The open-loop turn flies UPFG's azimuth once UPFG has converged (TurnDir), and for a plane that does not hold the site that azimuth points far out of it while the craft is still low in the air, so the turn cannot fly a plane change. On the site, a plane the player set is therefore moved over the pad for the node the WINDOW row picks, and an inclination the site cannot lie in is refused with the nearest one it can. A plane that a target vessel or a moon drives is not moved, because only its launch window puts it over the site, so the turn starts only in that window (GravityTurnInWindow). Off the site there is no pad to set the plane over, and nothing is changed.
+    /// </summary>
+    private static bool SetGravityTurnPlane(Vehicle vehicle, Orbit orbit, IParentBody parent, out string refusal)
+    {
+        refusal = "";
+        if (!TryLaunchSiteLatitude(orbit, parent, out double latDeg))
+            return true;
+        bool targetPlane = HasLaunchTarget && _s.ChaseDriven;
+        if (LaunchReach.LeastPlaneChangeDeg(latDeg, _s.IncDeg) >= LaunchReach.PlaneChangeShownDeg)
+        {
+            refusal = PageText.ReachRefusal(latDeg, _s.IncDeg, targetPlane);
+            return false;
+        }
+        if (targetPlane)
+        {
+            if (!GravityTurnInWindow(vehicle, orbit, parent, out refusal, out bool? windowDescending))
+                return false;
+            // The turn heads north-east or south-east by the node it launches at (TurnDir). A launch armed for one node that fires late at the window of the other, as after a long warp step, is at that other node, so it flies that node's heading.
+            if (windowDescending is bool node && node != _s.LaunchDescending)
+            {
+                GuidanceLog.Info(vehicle, $"gravity turn: launch at the {(node ? "descending" : "ascending")} node, not at the armed one.");
+                _s.LaunchDescending = node;
+            }
+            return true;
+        }
+        double lanDeg = LanOverheadAtNode(orbit.StateVectors.PositionCci, _s.IncDeg, parent, _s.LaunchDescending);
+        if (Math.Abs(Math.IEEERemainder(lanDeg - _s.LanDeg, 360.0)) > 0.01)
+            GuidanceLog.Info(vehicle, $"gravity turn: LAN set over the pad, {_s.LanDeg:F2} -> {lanDeg:F2} deg ({(_s.LaunchDescending ? "descending" : "ascending")} node).");
+        _s.LanDeg = lanDeg;
+        return true;
+    }
+
+    /// <summary>How long before its launch window a gravity turn into a target's plane may start, s. The armed launch fires 1 s before the window (StepLaunchWindow), and the window is recomputed here from a later instant.</summary>
+    private const double GravityTurnWindowToleranceS = 5.0;
+
+    /// <summary>
+    /// True when the site is under the target's plane, so a gravity turn can fly into it: at the launch window, or up to <see cref="LanLeadSeconds"/> after it, where TryLaunchWindow also reports a wait of zero. At the window <paramref name="windowDescending"/> gives its node, else it is null. Off the window the refusal gives how far the site is out of the plane and the wait to the next window. A body that does not turn brings no window, and a plane inclined less than the site's latitude never passes over the site, so in both cases only a site that lies within <see cref="LaunchReach.PlaneChangeShownDeg"/> of the plane already can launch. A target that no window serves (another body, no vessel) is not judged here.
+    /// </summary>
+    private static bool GravityTurnInWindow(Vehicle vehicle, Orbit orbit, IParentBody parent, out string refusal, out bool? windowDescending)
+    {
+        refusal = "";
+        windowDescending = null;
+        ChaseStatus status = TryChaseOrbit(vehicle, orbit, parent, parent.MeanRadius, out ChasePlan plan);
+        if ((status != ChaseStatus.Ok && status != ChaseStatus.PlaneUnreachable)
+            || !TryLaunchSite(orbit, parent, out double3 site))
+            return true;
+        bool reachesSite = status == ChaseStatus.Ok;
+        if (reachesSite && plan.WaitSec <= GravityTurnWindowToleranceS)
+        {
+            windowDescending = plan.Descending;
+            return true;
+        }
+        double3 n = UpfgTarget.OrbitNormal(UpfgTarget.DegToRad(plan.IncDeg), UpfgTarget.DegToRad(plan.LanDeg));
+        double offDeg = LaunchReach.PlaneChangeDeg(n.X, n.Y, n.Z, site.X, site.Y, site.Z);
+        if ((!reachesSite || double.IsNaN(plan.WaitSec)) && offDeg < LaunchReach.PlaneChangeShownDeg)
+            return true;
+        refusal = PageText.WindowRefusal(offDeg, reachesSite ? plan.WaitSec : double.NaN, plan.Descending, reachesSite);
+        return false;
+    }
+
+    /// <summary>
+    /// With no target the gravity turn flies the plane over the pad, at the node the WINDOW row picks, because LAUNCH sets its LAN there (SetGravityTurnPlane). While it waits on the pad the LAN follows the pad the same way, so the PLANE row and the orbit in the picture show the plane that the press flies. An inclination that LAUNCH refuses keeps the LAN as it is. False when the LAN does not follow the pad, for the calculated climb, off the site, or while a plan is calculated.
+    /// </summary>
+    private static bool KeepGravityTurnLanOverPad(Orbit orbit, IParentBody parent)
+    {
+        if (!GravityTurnFlies || AscentPlanBusy || !TryLaunchSiteLatitude(orbit, parent, out double latDeg)
+            || LaunchReach.LeastPlaneChangeDeg(latDeg, _s.IncDeg) >= LaunchReach.PlaneChangeShownDeg)
+            return false;
+        _s.LanDeg = LanOverheadAtNode(orbit.StateVectors.PositionCci, _s.IncDeg, parent, _s.LaunchDescending);
+        _s.LanSeeded = true;
+        return true;
     }
 
     /// <summary>
@@ -427,6 +532,9 @@ public static partial class GuidanceWindow
         {
             // Rebuild from the live part tree every cycle so UPFG always sees current masses and the actual remaining staging sequence. No usable thrust is a normal transient during staging (old engine gone, new one not yet active): hold the last solution and wait rather than stopping. The cycle clock is NOT advanced in that case - the next step retries immediately rather than sitting out a whole cycle on a transient.
             UpfgVehicle live = BuildUpfgVehicle(vehicle);
+            // Checked before the null test, because the one-stage fallback of BuildUpfgVehicle sums the static EngineController.VacuumData of every engine part, dry ones too, and so is not null while an empty engine stays attached.
+            if (EndAscentOutOfPropellant(vehicle, orbit, parent, bodyRadius, now))
+                return;
             if (live == null)
             {
                 if (_s.Status != NoThrustStatus)
@@ -505,6 +613,52 @@ public static partial class GuidanceWindow
     }
 
     private const string NoThrustStatus = "NO THRUST: HOLDING LAST SOLUTION (STAGING/COAST).";
+
+    // How long the stage list must stay without a burn before the ascent ends: longer than the frames of a separation, and on the wall clock several stage-model refreshes (StageModelIntervalMs), so that one warped step cannot end it on a single refresh.
+    private const double OutOfPropellantHoldS = 3.0;
+    private const long OutOfPropellantHoldMs = 1000;
+
+    /// <summary>
+    /// Ends a running ascent whose craft has no propellant left for any engine before the cutoff, with a status that says so and what the craft flies now. Without it the closed loop holds its last solution for good and the console keeps reading as on plan. The stage model lists every burn the game's drain simulation still finds in PartTree.PerformanceSequences, for lit and unlit engines alike, so an empty one that lasts is no staging gap.
+    /// </summary>
+    private static bool EndAscentOutOfPropellant(Vehicle vehicle, Orbit orbit, IParentBody parent, double bodyRadius, double now)
+    {
+        // The command path sets CutoffDone at the planned cutoff time whether the burn got there or not, so a run-out that began before it is kept for the terminal release in StepAscent.
+        if (_s.CutoffDone)
+            return false;
+        if (!NothingLeftToBurn(vehicle))
+        {
+            _s.OutOfPropellantSince = double.NaN;
+            return false;
+        }
+        long ms = GuidanceClock.NowMs;
+        if (double.IsNaN(_s.OutOfPropellantSince))
+        {
+            _s.OutOfPropellantSince = now;
+            _s.OutOfPropellantSinceMs = ms;
+            return false;
+        }
+        if (now - _s.OutOfPropellantSince < OutOfPropellantHoldS || ms - _s.OutOfPropellantSinceMs < OutOfPropellantHoldMs)
+            return false;
+
+        _s.OutOfPropellantSince = double.NaN;
+        ReleaseAscent(OutOfPropellantStatus(orbit, parent, bodyRadius), vehicle, warn: true);
+        return true;
+    }
+
+    // An empty stage model alone is not enough, because a single stack with its engines lit and no sequences has none either. An active engine with propellant (EngineControllerState.IsPropellantAvailable, which Rocket.UpdateRockets clears when no core has fuel) still burns.
+    private static bool NothingLeftToBurn(Vehicle vehicle)
+        => _s.StageModel != null && _s.StageModel.Stages.Count == 0
+           && !(KsaEnginePerf.AtPressure(vehicle, 0.0).thrust > 0.0);
+
+    private static string OutOfPropellantStatus(Orbit orbit, IParentBody parent, double bodyRadius)
+    {
+        double3 h = double3.Cross(orbit.StateVectors.PositionCci, orbit.StateVectors.VelocityCci);
+        double incDeg = h.Length() > 0.0 ? UpfgTarget.RadToDeg(Math.Acos(Math.Clamp(h.Z / h.Length(), -1.0, 1.0))) : double.NaN;
+        double atmosphere = parent?.GetAtmosphereRadius() ?? 0.0;
+        double airTopKm = Math.Max(atmosphere - bodyRadius, 0.0) / 1000.0;
+        return PageText.AscentOutOfPropellant(orbit.IsBound(), orbit.PeriapsisAltitude / 1000.0, orbit.ApoapsisAltitude / 1000.0, incDeg, airTopKm);
+    }
     private const double GuidanceLogIntervalS = 5.0;
 
     // Ascent phase state machine. Transitions cascade naturally over successive frames, so initializing mid-flight fast-forwards to the right phase. stepDt is the sim time since the previous step, for the command slew limit.
@@ -736,6 +890,12 @@ public static partial class GuidanceWindow
     /// Ascending-node solution, i.e. a north-easterly launch.
     /// </summary>
     private static double LanOverhead(double3 r, double incDeg, IParentBody parent)
+        => LanOverheadAtNode(r, incDeg, parent, descending: false);
+
+    /// <summary>
+    /// <see cref="LanOverhead"/> for either node. The descending-node solution puts the site on the other half of the orbit, at argument of latitude 180 deg - u, whose node offset is 180 deg - dl: a south-easterly launch.
+    /// </summary>
+    private static double LanOverheadAtNode(double3 r, double incDeg, IParentBody parent, bool descending)
     {
         double len = r.Length();
         if (len < 1)
@@ -754,7 +914,7 @@ public static partial class GuidanceWindow
         double sinDl = Math.Tan(lat) / Math.Tan(Math.Max(Math.Abs(inc), 1e-6));
         double dl = Math.Asin(Math.Clamp(sinDl, -1.0, 1.0));
 
-        double lanDeg = UpfgTarget.RadToDeg(ra - dl) % 360.0;
+        double lanDeg = UpfgTarget.RadToDeg(ra - (descending ? Math.PI - dl : dl)) % 360.0;
         if (lanDeg < 0)
             lanDeg += 360.0;
         return lanDeg;
