@@ -8,6 +8,7 @@ using BepuPhysics.Collidables;
 using BoundingBox = BepuUtilities.BoundingBox;
 using Brutal.Numerics;
 using KSA;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 /// <summary>
 /// Measures how far the vehicle's lowest touchdown point sits below its centre of mass, along the thrust axis. That is the height the centre of mass has above the ground when the craft stands upright on its legs, which is what every landing mode's "vehicle height" means.
@@ -17,8 +18,12 @@ using KSA;
 /// </summary>
 public static class KsaVehicleHeight
 {
-    public readonly struct Result(double deployedM, double currentM, int colliders, int deployables, int stowed)
+    public readonly struct Result(double deployedM, double currentM, int colliders, int deployables, int stowed,
+                                  TouchdownContact.FootPoint[] footPoints)
     {
+        /// <summary>Each collider in its deployed pose as a point that can meet the ground: its outer edge from the thrust axis through the centre of mass, and the depth of its lowest point under the centre of mass. The ground under a craft on a slope is not at one height, so the first contact needs both (TouchdownContact).</summary>
+        public readonly TouchdownContact.FootPoint[] FootPoints = footPoints;
+
         /// <summary>CoM to lowest point with every deployable at its deployed end, m. The touchdown height.</summary>
         public readonly double DeployedM = deployedM;
 
@@ -33,6 +38,8 @@ public static class KsaVehicleHeight
         /// <summary>Of those, how many are not at their deployed end and not on their way there.</summary>
         public readonly int Stowed = stowed;
     }
+
+    private const float DeployedToleranceS = 0.001f;
 
     private readonly struct Pose(double3 position, doubleQuat rotation, double4x4 matrix)
     {
@@ -63,7 +70,8 @@ public static class KsaVehicleHeight
         // Model +Z: the thrust axis, pointing up the vehicle. The same axis the 6-DOF plan's terminal attitude stands upright on, so "height" here is height in the attitude it lands in.
         KsaFrameBridge.BodyAxes(vehicle, out double3 mx, out double3 my, out double3 mz);
         float3 comF = vehicle.CenterOfMassAsmbF;
-        double comUp = double3.Dot(new double3(comF.X, comF.Y, comF.Z), mz);
+        var com = new double3(comF.X, comF.Y, comF.Z);
+        double comUp = double3.Dot(com, mz);
 
         var deployed = new Dictionary<Part, LocalPose>();
         int deployables = 0, stowed = 0;
@@ -73,7 +81,8 @@ public static class KsaVehicleHeight
             if (!anim.ShowDeployRetract || anim.Extension != null || anim.Shared == null || anim.Shared.Duration <= 0f)
                 continue;
             deployables++;
-            if (anim.TimeGoal < anim.Shared.Duration)
+            // A save keeps the goal time with four decimals, so a deployed leg of a loaded craft reads a hair under the duration.
+            if (anim.TimeGoal < anim.Shared.Duration - DeployedToleranceS)
                 stowed++;
 
             ReadOnlySpan<Part> subParts = anim.Parent.SubParts;
@@ -92,36 +101,40 @@ public static class KsaVehicleHeight
         Shapes shapes = ConstraintSim.ReadOnlyShapes;
         double lowestNow = double.PositiveInfinity, lowestDeployed = double.PositiveInfinity;
         int measured = 0;
+        var feet = new List<TouchdownContact.FootPoint>(colliders.Length);
         foreach (ColliderModule c in colliders)
         {
             if (c?.Parent == null || !c.Handle.Exists)
                 continue;
 
             // Current pose: exactly what the game hands Bepu (Vehicle.UpdateColliderCompoundLeaves).
-            double lowNow = ColliderLowest(shapes, c, c.PositionVehicleAsmb, c.Collider2VehicleAsmb, mx, my, mz);
+            double lowNow = ColliderLowest(shapes, c, c.PositionVehicleAsmb, c.Collider2VehicleAsmb, mx, my, mz, out _);
 
             // Deployed pose: the same composition, through the re-posed subparts.
             Pose p = PoseOf(c.Parent, deployed, poses);
             double3 pos = c.PositionPartAsmb.Transform(p.Rotation) + p.Position;
             doubleQuat rot = c.Collider2PartAsmb.Concatenate(p.Rotation);
-            double lowDep = ColliderLowest(shapes, c, pos, rot, mx, my, mz);
+            double lowDep = ColliderLowest(shapes, c, pos, rot, mx, my, mz, out double reach);
 
             if (!double.IsFinite(lowNow) || !double.IsFinite(lowDep))
                 continue;
             lowestNow = Math.Min(lowestNow, lowNow);
             lowestDeployed = Math.Min(lowestDeployed, lowDep);
+            double3 fromCom = pos - com;
+            double offAxis = Math.Sqrt(Math.Pow(double3.Dot(fromCom, mx), 2) + Math.Pow(double3.Dot(fromCom, my), 2));
+            feet.Add(new TouchdownContact.FootPoint(offAxis + reach, comUp - lowDep));
             measured++;
         }
 
         if (measured == 0)
             return false;
-        result = new Result(comUp - lowestDeployed, comUp - lowestNow, measured, deployables, stowed);
+        result = new Result(comUp - lowestDeployed, comUp - lowestNow, measured, deployables, stowed, feet.ToArray());
         return double.IsFinite(result.DeployedM) && result.DeployedM > 0.0;
     }
 
-    // Lowest point of one collider along +mz, in the vehicle assembly frame's units. The collider's axes are carried into the model frame by transforming basis vectors with KSA's own Transform - the KsaFrameBridge rule, so no quaternion convention is assumed - and Bepu then bounds the shape exactly at that orientation; the Z of its box is the support along the thrust axis.
+    // Lowest point of one collider along +mz, in the vehicle assembly frame's units, and through lateralReach how far the corners of its bounds reach sideways from its own position. The collider's axes are carried into the model frame by transforming basis vectors with KSA's own Transform - the KsaFrameBridge rule, so no quaternion convention is assumed - and Bepu then bounds the shape exactly at that orientation; the Z of its box is the support along the thrust axis.
     private static double ColliderLowest(Shapes shapes, ColliderModule c, double3 positionAsmb, doubleQuat collider2Asmb,
-                                         double3 mx, double3 my, double3 mz)
+                                         double3 mx, double3 my, double3 mz, out double lateralReach)
     {
         double3 ax = new double3(1, 0, 0).Transform(collider2Asmb);
         double3 ay = new double3(0, 1, 0).Transform(collider2Asmb);
@@ -134,6 +147,7 @@ public static class KsaVehicleHeight
             0f, 0f, 0f, 1f);
         System.Numerics.Quaternion q = System.Numerics.Quaternion.Normalize(System.Numerics.Quaternion.CreateFromRotationMatrix(basis));
         shapes.UpdateBounds(System.Numerics.Vector3.Zero, q, c.Handle, out BoundingBox bounds);
+        lateralReach = Math.Sqrt(Math.Pow(Math.Max(Math.Abs(bounds.Min.X), Math.Abs(bounds.Max.X)), 2) + Math.Pow(Math.Max(Math.Abs(bounds.Min.Y), Math.Abs(bounds.Max.Y)), 2));
         return double3.Dot(positionAsmb, mz) + bounds.Min.Z;
     }
 

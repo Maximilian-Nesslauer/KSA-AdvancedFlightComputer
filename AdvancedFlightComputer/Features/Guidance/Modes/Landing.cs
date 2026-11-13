@@ -8,6 +8,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 public static partial class GuidanceWindow
 {
@@ -292,51 +293,135 @@ public static partial class GuidanceWindow
         }
 
         if (_s.LandingPhase == LandingPhase.Burn)
-        {
-            // Hand straight to the powered descent a set time before gate arrival, skipping the UPFG terminal freeze.
-            // Both descents plan from the current state down.
-            if (_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo)
-            {
-                // 6-DOF is the default, but it needs thrust vectoring and a throttle floor it can land on, and G-FOLD needs neither. A craft 6-DOF would refuse goes to G-FOLD, and the craft's solver choice follows it, because the next descent would be refused the same way.
-                string sixDofRefusal = null;
-                if (_s.UseSixDofLanding && !Can6DofTake(vehicle, out sixDofRefusal))
-                    _s.UseSixDofLanding = false;
+            StepBrakingHandover(vehicle, parent, now);
+    }
 
-                if (_s.UseSixDofLanding)
+    // With no plan from the standby this long before the gate, the braking burn hands over anyway. The craft is then slow and near the gate, which G-FOLD plans from in one solve.
+    private const double BrakingLastHandoverTgoS = 5.0;
+
+    // Oldest a standby plan may be and still take the braking burn, s. Longer than at the end of an entry burn, because one cold iteration under the braking burn can take a second and the craft is still far from the ground.
+    private const double BrakingStandbyMaxPlanAgeS = 2.0;
+
+    /// <summary>
+    /// Whether G-FOLD can fly this craft down, and if not, why. G-FOLD plans a point mass on an airless body and steers the thrust through the flight computer, so it needs liquid engines that throttle and shut down, and an engine on a gimbal to hold the thrust direction through the burn. A craft that turns only with RCS is refused, because RCS torque alone is not known to hold the thrust axis of a lit engine.
+    /// </summary>
+    private static bool GfoldCanFly(Vehicle vehicle, IParentBody parent, out string why)
+    {
+        why = KsaGfold.RefusalReason(vehicle, parent);
+        if (why.Length == 0 && Ksa6DofSetup.GimbalLimitDeg(vehicle) <= 0.0)
+            why = "G-FOLD needs a gimballed engine to hold the thrust direction.";
+        return why.Length == 0;
+    }
+
+    /// <summary>
+    /// Decides the descent solver of a landing from orbit before anything burns, because the braking gate of the deorbit depends on it: touchdown guidance, or G-FOLD for a craft that touchdown guidance cannot plan for. Returns the refusal when neither can fly the craft. A craft with no active engine cannot be measured yet, so it keeps touchdown guidance, and the braking burn decides again at its hand-over.
+    /// </summary>
+    private static string ChooseLandingSolver(Vehicle vehicle)
+    {
+        _s.UseSixDofLanding = true;
+        if (!KsaEnginePerf.SupportsThrottleControl(vehicle) || Can6DofTake(vehicle, out string touchdown))
+            return "";
+        if (!GfoldCanFly(vehicle, vehicle.Orbit.Parent, out string gfold))
+            return Ui.Logic.PageText.LandingRefused(touchdown, gfold);
+        _s.UseSixDofLanding = false;
+        GuidanceLog.Info(vehicle, $"Touchdown guidance cannot plan this craft ({touchdown}). G-FOLD flies the descent.");
+        return "";
+    }
+
+    /// <summary>
+    /// The hand-over of the braking burn to the powered descent, from GfoldHandoffTgo before the gate. Touchdown guidance solves on standby while the burn keeps flying the craft, and takes it once it has a fresh plan, so the craft always has live guidance (SixDofStandby.cs). A craft that touchdown guidance cannot plan for goes to G-FOLD at once. A craft whose standby has no plan when the burn reaches its last seconds goes to G-FOLD when G-FOLD can fly it, and to a cold touchdown engage when it cannot.
+    /// </summary>
+    private static void StepBrakingHandover(Vehicle vehicle, IParentBody parent, double now)
+    {
+        if (!_s.SixDofStandby && !(_s.Upfg.Converged && _s.Upfg.Tgo <= _s.GfoldHandoffTgo))
+            return;
+
+        string sixDofRefusal = null;
+        if (_s.UseSixDofLanding)
+        {
+            // The standby runs the spread cold solve. The two options that replace it plan in one step at the engage, so the burn hands over directly.
+            bool direct = _s.SixDofFixedTime || _s.SixDofGfoldSeed;
+            bool last = _s.Upfg.Tgo <= BrakingLastHandoverTgoS;
+            double3 siteCci = SiteDirCciAt(parent, 0) * (parent.MeanRadius + SiteTerrainHeight(parent));
+            double[] x = KsaFrameBridge.ToModelState(vehicle, KsaFrameBridge.BuildSiteFrame(siteCci));
+            double seed = Math.Max(_s.Upfg.Tgo, SixDofStandbyMinSeedS);
+            if (!_s.SixDofStandby && !Can6DofTake(vehicle, out sixDofRefusal))
+            {
+                // The craft is lighter and may have other engines lit than at the commit, so G-FOLD is asked again here. With no solver for the craft, the refused touchdown engage releases it with the burn's engine command and says so.
+                if (!GfoldCanFly(vehicle, parent, out _))
                 {
-                    // 6-DOF is EXCLUSIVE - it drives attitude through the TVC allocator rather than the flight computer - so the UPFG landing flow has to let go rather than run alongside it.
-                    // Engage6Dof is that let-go (ClaimVehicle) and the request in one; the request is consumed by the next guidance step, which runs the cold solve off the draw.
-                    //
-                    // Reached from the sim step rather than a button, so the release at the end of this same step sees the queued request and keeps the craft for it (see ApplyAutopilot).
-                    // The claim releases the landing machine that got us here and finds no 6-DOF engaged, so it touches neither the engine nor the gimbals on the way through, and the engine holds the burn's command until the engage runs.
-                    Engage6Dof(vehicle, fromBrakingBurn: true);
-                    _s.LandingStatus = "HANDOVER: TOUCHDOWN";
+                    HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN");
+                    return;
                 }
-                else
+                _s.UseSixDofLanding = false;
+            }
+            else if (direct)
+            {
+                HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN");
+                return;
+            }
+            else if (!_s.SixDofStandby)
+            {
+                // A standby that faulted waits out its retry time, but not past the last seconds of the burn.
+                if (now >= _s.SixDofStandbyRetryAt && StartSixDofStandby(vehicle, parent, siteCci, x, now, seed))
+                    _s.LandingStatus = "BRAKING. TOUCHDOWN PLANS ON STANDBY.";
+                if (!last || _s.SixDofStandby)
+                    return;
+            }
+            else
+            {
+                StepSixDofStandby(vehicle, parent, siteCci, x, now, seed);
+                if (SixDofStandbyReady(now, BrakingStandbyMaxPlanAgeS))
                 {
-                    _s.LandingPhase = LandingPhase.GfoldDescent;
-                    ResetGfoldTrace();   // fresh flown path and a fresh axis latch
-                    _s.GfoldHandoffTime = now;
-                    _s.GfoldLastSolveTime = double.NegativeInfinity;
-                    _s.GfoldPlan = null;
-                    _s.GfoldApproach = GfoldApproach.BrakeAtGate;
-                    _s.GfoldFailStreak = 0;
-                    _s.GfoldTrackInit = false;
-                    // The engine is lit from the burn, so the tracker's coast hysteresis starts from a lit engine and switches it off only when the plan really coasts.
-                    _s.GfoldEngineOn = true;
-                    _s.GfoldRelightRequestTime = double.NaN;
-                    _s.GfoldHoverRefused = false;
-                    // This step already writes the descent's engine command, and G-FOLD has no throttle until its first plan on the next step, so the burn's throttle carries over. Left at zero, the braking burn stops for a step, and for as long as the first solves find no plan. The tracker does not smooth from the carried value, because GfoldTrackInit is reset above.
-                    _s.GfoldThrottle = _s.Upfg.Throttle;
-                    _s.LandingStatus = sixDofRefusal == null
-                        ? "HANDOVER: G-FOLD"
-                        : $"HANDOVER: G-FOLD. TOUCHDOWN: NO SOLUTION ({sixDofRefusal}).";
-                    if (sixDofRefusal != null)
-                        _s.WarnLanding(_s.LandingStatus);
+                    HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN");
+                    return;
                 }
-                _s.GfoldCuePending = true;   // cue the LAND NOW way of LAND
+                if (!last)
+                    return;
+            }
+
+            if (_s.UseSixDofLanding)
+            {
+                // The last seconds of the burn with no plan from the standby.
+                if (!GfoldCanFly(vehicle, parent, out _))
+                {
+                    HandBrakingBurnToTouchdown(vehicle, "HANDOVER: TOUCHDOWN, NO PLAN YET");
+                    return;
+                }
+                sixDofRefusal = "no plan before the end of the braking burn";
+                _s.UseSixDofLanding = false;
             }
         }
+
+        StopSixDofStandby();
+        _s.LandingPhase = LandingPhase.GfoldDescent;
+        ResetGfoldTrace();   // fresh flown path and a fresh axis latch
+        _s.GfoldHandoffTime = now;
+        _s.GfoldLastSolveTime = double.NegativeInfinity;
+        _s.GfoldPlan = null;
+        _s.GfoldApproach = GfoldApproach.BrakeAtGate;
+        _s.GfoldFailStreak = 0;
+        _s.GfoldTrackInit = false;
+        // The engine is lit from the burn, so the tracker's coast hysteresis starts from a lit engine and switches it off only when the plan really coasts.
+        _s.GfoldEngineOn = true;
+        _s.GfoldRelightRequestTime = double.NaN;
+        _s.GfoldHoverRefused = false;
+        // This step already writes the descent's engine command, and G-FOLD has no throttle until its first plan on the next step, so the burn's throttle carries over. Left at zero, the braking burn stops for a step, and for as long as the first solves find no plan. The tracker does not smooth from the carried value, because GfoldTrackInit is reset above.
+        _s.GfoldThrottle = _s.Upfg.Throttle;
+        _s.LandingStatus = sixDofRefusal == null
+            ? "HANDOVER: G-FOLD"
+            : $"HANDOVER: G-FOLD. TOUCHDOWN: NO SOLUTION ({sixDofRefusal}).";
+        if (sixDofRefusal != null)
+            _s.WarnLanding(_s.LandingStatus);
+        _s.GfoldCuePending = true;   // cue the LAND NOW way of LAND
+    }
+
+    // 6-DOF is exclusive, because it drives attitude through the TVC allocator and not the flight computer, so the landing machine lets go. Engage6Dof is that release (ClaimVehicle) and the request in one, and the next guidance step consumes the request. It is reached from the sim step, so the release at the end of the same step sees the queued request and keeps the craft for it (ApplyAutopilot), and the engine holds the burn's command until the engage runs. A standby that is running is promoted by that engage with the plan it has.
+    private static void HandBrakingBurnToTouchdown(Vehicle vehicle, string status)
+    {
+        Engage6Dof(vehicle, fromBrakingBurn: true);
+        _s.LandingStatus = status;
+        _s.GfoldCuePending = true;   // cue the LAND NOW way of LAND
     }
 
     // ----- Landing site geometry -----
@@ -379,6 +464,53 @@ public static partial class GuidanceWindow
             _s.SiteTerrainCacheBody = parent;
         }
         return _s.SiteTerrainHeightM;
+    }
+
+    private const double SiteGroundRingStepM = 0.5;
+    private const int SiteGroundRingPoints = 16;
+    private const double SiteGroundMaxReachM = 30.0;
+
+    // How far above the vehicle height the first contact at the site comes for these foot points. The terrain is sampled on rings around the site out to the widest foot point, once per site and reach, from the height function that the game builds its terrain collision mesh from (BubbleTerrainGrid.SampleRadius calls Celestial.GetTerrainHeightFromDirCcf).
+    private static double SiteEarlyContact(IParentBody parent, TouchdownContact.FootPoint[] feet)
+    {
+        if (parent is not Celestial body || feet == null || feet.Length == 0)
+            return 0.0;
+        double reach = 0.0;
+        foreach (var foot in feet)
+            reach = Math.Max(reach, foot.RadiusM);
+        reach = Math.Min(Math.Ceiling(reach), SiteGroundMaxReachM);
+        if (!(reach > 0.0))
+            return 0.0;
+
+        if (_s.SiteGround == null || _s.SiteLatDeg != _s.SiteGroundCacheLat || _s.SiteLonDeg != _s.SiteGroundCacheLon
+            || reach != _s.SiteGroundCacheReachM || !ReferenceEquals(parent, _s.SiteGroundCacheBody))
+        {
+            double3 up = SiteDirCcf();
+            double3 east = double3.Cross(new double3(0, 0, 1), up);
+            east = east.LengthSquared() > 1e-12 ? double3.Normalize(east) : new double3(1, 0, 0);
+            double3 north = double3.Cross(up, east);
+            double centre = body.GetTerrainHeightFromDirCcf(up);
+            double radius = body.MeanRadius + centre;
+            var highest = new double[(int)Math.Round(reach / SiteGroundRingStepM)];
+            for (int ring = 0; ring < highest.Length; ring++)
+            {
+                double r = (ring + 1) * SiteGroundRingStepM;
+                double high = double.NegativeInfinity;
+                for (int i = 0; i < SiteGroundRingPoints; i++)
+                {
+                    double a = i * 2.0 * Math.PI / SiteGroundRingPoints;
+                    double3 point = up * radius + (east * Math.Cos(a) + north * Math.Sin(a)) * r;
+                    high = Math.Max(high, body.GetTerrainHeightFromDirCcf(double3.Normalize(point)) - centre);
+                }
+                highest[ring] = high;
+            }
+            _s.SiteGround = new TouchdownContact.GroundRise(SiteGroundRingStepM, highest);
+            _s.SiteGroundCacheLat = _s.SiteLatDeg;
+            _s.SiteGroundCacheLon = _s.SiteLonDeg;
+            _s.SiteGroundCacheReachM = reach;
+            _s.SiteGroundCacheBody = parent;
+        }
+        return TouchdownContact.EarlyContactM(feet, _s.SiteGround);
     }
 
 }

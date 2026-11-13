@@ -8,6 +8,7 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using KSA;
 
@@ -599,15 +600,17 @@ public sealed class VehicleAutopilotState
     /// Which solver flies the powered descent: the 6-DOF successive-convexification one
     /// by default, or G-FOLD. Per vehicle rather than a console-wide setting, because the
     /// deorbit handoff READS it to decide what to start - so it describes how this craft
-    /// lands, not what the player last clicked. The handoff turns it off for a craft
-    /// 6-DOF cannot plan for, and hands that craft to G-FOLD instead.
+    /// lands, not what the player last clicked. The player cannot turn it off: the
+    /// braking-burn handoff and a failed 6-DOF engage turn it off for a craft 6-DOF
+    /// cannot plan for and hand that craft to G-FOLD, and the next landing commit or
+    /// 6-DOF engage turns it on again.
     /// </summary>
     public bool UseSixDofLanding = true;
 
     /// <summary>Ask the console to cue the HOVER way of the LAND page for this vehicle, because its terminal hover started.</summary>
     public bool TermCuePending;
 
-    /// <summary>The console shows entry guidance (3-DOF) as this craft's powered landing: ENTRY is a solver of LAND > LAND NOW. The braking-burn handoff still chooses between 6-DOF and G-FOLD; the 3-DOF engages from a boostback glide or from the commit of that page.</summary>
+    /// <summary>The console shows entry guidance (3-DOF) as the first step of this craft's landing on LAND > LAND NOW. The page sets it from the situation of the craft (LandSolvers.EntryApplies) while no landing mode flies, and the mode that flies sets it after that. The braking-burn handoff does not read it; the 3-DOF engages from a boostback glide or from the commit of that page.</summary>
     public bool UseThreeDofLanding;
 
     /// <summary>
@@ -679,6 +682,14 @@ public sealed class VehicleAutopilotState
     internal bool VehicleHeightStowed;
     internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
+
+    // How far above VehicleHeightM the centre of mass is when the craft first meets the ground at the site, because the ground under its footprint is not level (TouchdownContact). Zero on level ground and with a manual vehicle height.
+    internal double SiteEarlyContactM;
+    internal double SiteGroundCacheLat = double.NaN;
+    internal double SiteGroundCacheLon = double.NaN;
+    internal double SiteGroundCacheReachM;
+    internal object SiteGroundCacheBody;
+    internal TouchdownContact.GroundRise SiteGround;
 
     /// <summary>
     /// Largest thrust acceleration a landing burn may PLAN, in g, or 0 for none - a soft constraint in both the 3-DOF and the 6-DOF solvers, read when they build their problem; the glide plan times the ignition under it with headroom (Guidance3Dof.Settings.AccelHeadroom). A min-fuel burn otherwise lights as late as it can, or coasts on minimum thrust once lit, and brakes at full throttle at the end: 5-6 g over two seconds on the 2026-10-08 boosters, up to 13.7 g in the last second on the 2026-10-09 7 t one, where a tenth of a second of lag is metres per second and no node count the solver keeps up with resolves the burn. The trackers may still go past it to correct; see StartThreeDofCold.
@@ -768,8 +779,8 @@ public sealed class VehicleAutopilotState
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;
-    // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs.
-    public double SixDofTargetComAltM => VehicleHeightM;
+    // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs, and on a slope the first leg meets the ground SiteEarlyContactM before the height of the site centre.
+    public double SixDofTargetComAltM => VehicleHeightM + SiteEarlyContactM;
     public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
@@ -781,10 +792,16 @@ public sealed class VehicleAutopilotState
     /// </summary>
     public bool SixDofSeenDescending, SixDofEngineCut, SixDofTookBurn;
 
+    // The simulation time since which the craft has rested at the end of its plan without contact, NaN while it does not (NoPlanNearGround).
+    internal double SixDofArrivedSince = double.NaN;
+
     /// <summary>
     /// Set while a COLD restart converges: the last plan is flown open loop, without the tracker, until the new plan lands. A cold restart means the plan was abandoned - the vehicle drifted off it, or the target moved, which moves the frame so the plan reads as hundreds of metres off - and tracking an abandoned plan pushes the vehicle around for an error that is not one (throttle 0.01 then 1.0 after a 250 m move, 2026-10-13 08:40). A warm restart keeps the plan it is refining, and keeps tracking it.
     /// </summary>
     public bool SixDofRestartOpenLoop;
+
+    /// <summary>The sim time since which the flying touchdown guidance solves without a result, NaN while it is not converging. A new solve that starts before the one before it gave a plan keeps the time.</summary>
+    public double SixDofConvergingSince = double.NaN;
     public double SixDofReplanSec = 0.1;
     public double SixDofRateDampShare = 0.002;
     public double SixDofControlSmooth = 0.05;
@@ -820,6 +837,12 @@ public sealed class VehicleAutopilotState
     /// 6-DOF is solving on standby through the 3-DOF's landing burn: Guidance, Worker and Converging are its, and nothing it plans is flown until the hand-over sets Active (see SixDofStandby.cs).
     /// </summary>
     public bool SixDofStandby;
+
+    /// <summary>Touchdown guidance kept the craft after it found no plan in the air, and flies the no-plan law at any height until a plan lands (GuidanceWindow.KeepFlyingWithoutPlan). Cleared by the next engage request.</summary>
+    public bool SixDofNoPlanLaw;
+
+    /// <summary>When touchdown guidance last started again after a fault in the air, in sim seconds.</summary>
+    public double SixDofFaultRestartTime = double.NegativeInfinity;
 
     /// <summary>Sim time the standby's current cold solve started, the earliest it may be set up again after a refusal, and the last refusal's reason.</summary>
     public double SixDofStandbyStart, SixDofStandbyRetryAt = double.NegativeInfinity;

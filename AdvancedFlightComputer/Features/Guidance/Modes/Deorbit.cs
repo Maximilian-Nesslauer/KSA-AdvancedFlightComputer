@@ -113,8 +113,11 @@ public static partial class GuidanceWindow
     // DEORBIT + LAND claims the landing and starts planning. The search itself runs in slices from StepDeorbitPlanning.
     private static void ExecuteLanding(Vehicle vehicle)
     {
+        // Touchdown guidance is the player's only descent solver. G-FOLD flies a craft that touchdown guidance cannot plan for, and that is decided again for each landing, ahead of the settings check, which reads the solver.
         string refusal = LandingSwitchesOff
-            ? "LANDING NEEDS AFC MAY STEER + AFC MAY USE ENGINES. SEE GNC SWITCHES (MORE)." : DeorbitSettingsRefusal();
+            ? "LANDING NEEDS AFC MAY STEER + AFC MAY USE ENGINES. SEE GNC SWITCHES (MORE)." : ChooseLandingSolver(vehicle);
+        if (refusal.Length == 0)
+            refusal = DeorbitSettingsRefusal();
         if (refusal.Length > 0)
         {
             _s.WarnLanding(refusal);

@@ -9,9 +9,9 @@ internal static class PageText
 
     public static string WayCard(LandWay way) => way switch
     {
-        LandWay.FromOrbit => "Orbit to site. STOCK AUTO flies the deorbit burn, then AFC lands with TOUCHDOWN or G-FOLD.",
+        LandWay.FromOrbit => "Orbit to site. STOCK AUTO flies the deorbit burn, then AFC lands with TOUCHDOWN.",
         LandWay.Boostback => "Spent booster to its site. AFC slews and aims the fall, ENTRY can take the glide.",
-        LandWay.FromHere => "From the current position with ENTRY, TOUCHDOWN or G-FOLD.",
+        LandWay.FromHere => "From the current position with ENTRY or TOUCHDOWN.",
         _ => "AFC stops the drift and sinks to the ground. NUDGE moves the touchdown point.",
     };
 
@@ -252,7 +252,7 @@ internal static class PageText
 
     public const string AllocatorTip = "Sets how AFC splits the burn among the RCS thrusters.\n\n" + TagBurn;
 
-    public const string SolverTip = "Selects the landing mode.";
+    public const string SolverTip = "The landing mode. AFC sets it for the craft and the body.";
 
     #endregion
 
@@ -659,7 +659,7 @@ internal static class PageText
 
     public const string AirKey = "AIR";
 
-    public const string TouchdownStandby = "TOUCHDOWN: STANDBY (ENTRY)";
+    public const string TouchdownStandby = "TOUCHDOWN: STANDBY";
 
     public const string TouchdownEngaging = "TOUCHDOWN: STARTING";
 
@@ -839,7 +839,11 @@ internal static class PageText
 
     public const string HoverNoEngine = "NO HOVER: NO LIT LIQUID ENGINE.";
 
-    public const string NoGimbalFact = "NO GIMBAL: TOUCHDOWN CANNOT FLY.";
+    public const string NoGimbalFact = "NO GIMBAL: NO LANDING GUIDANCE CAN FLY THIS CRAFT.";
+
+    /// <summary>The refusal of a landing that neither touchdown guidance nor G-FOLD can fly, with the reason of each.</summary>
+    public static string LandingRefused(string touchdown, string gfold)
+        => "NO LANDING GUIDANCE CAN FLY THIS CRAFT. TOUCHDOWN: " + touchdown.TrimEnd('.') + ". G-FOLD: " + gfold.TrimEnd('.') + ".";
 
     public static string OverPoweredFact(double floor) => string.Create(Inv, $"FLOOR TOO HIGH: NO DESCENT ABOVE {floor:F2}.");
 

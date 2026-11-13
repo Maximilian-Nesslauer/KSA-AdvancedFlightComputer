@@ -173,7 +173,9 @@ internal static class PageKit
 
         Vehicle subject = ctx.Subject;
         CommitGates gates = GuidanceWindow.CommitGatesFor(subject, mode, in ctx.Frame.Situation);
-        if (ctx.Frame.FailureWhat.Length > 0 && PageText.FailureOf(ctx.Frame.FailureWhat, mode))
+        // A craft that no landing guidance can fly keeps that fact after a refusal, because a second press cannot fly it either.
+        bool noGuidance = gates.PageFact == PageText.NoGimbalFact;
+        if (!noGuidance && ctx.Frame.FailureWhat.Length > 0 && PageText.FailureOf(ctx.Frame.FailureWhat, mode))
             gates = gates with { PageFact = PageText.TriesAgain, PageFactNext = null, PageFactSolver = null, PageFactCalm = true };
         CraftActivity activity = ctx.Frame.Activity;
         CommitView view = CommitResolver.Resolve(mode, in activity, in gates);
@@ -187,7 +189,7 @@ internal static class PageKit
         // A deorbit from orbit starts with the burn stock AUTO flies, and from a fall AFC flies a direct approach or asks for that burn only if it needs one.
         Owner owner = mode == GuidanceModeId.DeorbitLand && !SituationText.IsFalling(ctx.Frame.Situation.Where) ? Owner.StockThenAfc : Owner.Afc;
         PageText.OutcomeFacts facts = GuidanceWindow.CommitOutcomeFacts(subject) with { Falling = SituationText.IsFalling(ctx.Frame.Situation.Where) };
-        string outcome = PageText.GuidanceOutcome(mode, view.Verb, in facts);
+        string outcome = noGuidance ? "" : PageText.GuidanceOutcome(mode, view.Verb, in facts);
         if (mode == GuidanceModeId.DeorbitLand && !view.NeedsTakeOver && outcome.Length > 0)
         {
             tooltip = tooltip.Length > 0 ? outcome + "\n\n" + tooltip : outcome;

@@ -50,7 +50,23 @@ public static partial class GuidanceWindow
     private static bool LandFlies => _s.Active || _s.EngagePending || _s.SixDofStandby || EntryLive(_s) || DescentLive || BoostbackLive;
 
     private static LandSolver LandSolverOf(LandWay way)
-        => way == LandWay.FromOrbit ? LandSolvers.Chosen(false, _s.UseSixDofLanding) : LandSolverRoute;
+        => way == LandWay.FromOrbit ? LandSolvers.Shown(LandSolvers.Chosen(false, _s.UseSixDofLanding), LandingMachineLive) : LandSolverRoute;
+
+    // LandSolvers.EntryApplies for this craft, with the time of its fall from the sink rate, the height over the ground below and the local gravity.
+    private static bool EntryFliesFirst(Vehicle vehicle)
+    {
+        Orbit orbit = vehicle.Orbit;
+        IParentBody parent = orbit.Parent;
+        SituationFacts facts = Ui.Console.ConsoleFrame.ReadFacts(vehicle);
+        if (!facts.HasAir)
+            return false;
+        double3 position = orbit.StateVectors.PositionCci;
+        double gravity = parent.Mu / position.LengthSquared();
+        double sink = -double3.Dot(orbit.StateVectors.VelocityCci, double3.Normalize(position));
+        double height = Math.Max(TerminalHeight(orbit, parent, parent.MeanRadius), 0.0);
+        double fall = (-sink + Math.Sqrt(Math.Max(sink * sink + 2.0 * gravity * height, 0.0))) / gravity;
+        return LandSolvers.EntryApplies(facts.HasAir, facts.Where, facts.Thrust, fall);
+    }
 
     /// <summary>What the form reads for its rows and the facts of the footer. It runs on every frame, also while the rows are folded away.</summary>
     internal static LandRead ReadLandForm(Vehicle vehicle, LandWay way)
@@ -58,6 +74,9 @@ public static partial class GuidanceWindow
         if (vehicle.Orbit?.Parent == null)
             return default;
         ClearLandFact();
+        // Entry guidance is not a pick of the player. While no landing mode flies, the page sets it from the situation of the craft, and a flying mode sets it through FollowLiveLanding.
+        if (!LandFlies)
+            _s.UseThreeDofLanding = EntryFliesFirst(vehicle);
         LandSolver solver = LandSolverOf(way);
         DescentFacts descent = LandWays.HasSolver(way) ? ReadDescentFacts(vehicle) : default;
         DescentFacts judged = _s.Active || _s.SixDofStandby ? default : descent;
@@ -182,20 +201,21 @@ public static partial class GuidanceWindow
         else if (f.MarginalNow)
             NoteLandFact(FormattableString.Invariant($"MARGINAL: STOP USES {f.StopM / f.AltToGoM * 100.0:F0} % OF ALTITUDE LEFT."), danger: false);
         if (f.NoGimbal)
-            NoteLandFact(PageText.NoGimbalFact, danger: true, nextSolver: hasAir ? LandSolver.Entry : LandSolver.Gfold, calm: true);
+            NoteLandFact(PageText.NoGimbalFact, danger: true, calm: true);
         else if (f.OverPowered)
             NoteLandFact(PageText.OverPoweredFact(f.FeasibleFloor), danger: true, next: ConsolePage.Tune, calm: true);
     }
 
     /// <summary>
-    /// The one control of the powered-descent solver, on DEORBIT and LAND NOW. The method word of a row has the colour that the same word has on the chain under it. LAND NOW offers ENTRY, TOUCHDOWN and G-FOLD. DEORBIT has only TOUCHDOWN and G-FOLD, because its braking burn hands over to one of them. They change the braking gate, so they are held while a committed deorbit flies; ENTRY is not. On LAND NOW, TOUCHDOWN is also held while a G-FOLD descent flies, because the page stays on that descent for it (LandSolverRoute). What stands against a row stands on that row (LandSolvers.NoteOf) in the warning colour, full on the chosen row and dim on any other (LandSolvers.MarksOf). A held row says why on its hover card, and one sentence stands under the table (LandSolvers.HeldLine). A row that is held or cannot fly on this body is dim unless it is the chosen row.
+    /// The table of the powered-descent solver, on DEORBIT and LAND NOW. The method word of a row has the colour that the same word has on the chain under it. It shows TOUCHDOWN, with ENTRY above it on LAND NOW where entry guidance flies first (LandSolvers.EntryApplies), and G-FOLD while its fallback descent flies. The player picks none of them. What stands against a row stands on that row (LandSolvers.NoteOf) in the warning colour, full on the chosen row and dim on any other (LandSolvers.MarksOf). A held row says why on its hover card, and one sentence stands under the table (LandSolvers.HeldLine). A row that is held or cannot fly on this body is dim unless it is the chosen row.
     /// </summary>
     private static void DrawLandSolverTable(Vehicle vehicle, LandWay way, LandSolver chosen, in SituationFacts situation, in DescentFacts descent)
     {
         bool hasAir = situation.HasAir;
         string body = situation.Body;
-        string[] heldBySolver = LandSolvers.Held(way, DeorbitTargetLocked, LandingMachineLive, hasAir);
-        LandSolver[] solvers = LandSolvers.RowsOf(way);
+        bool entryFirst = chosen == LandSolver.Entry;
+        string[] heldBySolver = LandSolvers.Held(way, DeorbitTargetLocked, LandingMachineLive, hasAir, entryFirst);
+        LandSolver[] solvers = LandSolvers.RowsOf(way, LandingMachineLive, entryFirst);
         var facts = new LandNowFacts(way, chosen, hasAir, DeorbitTargetLocked, LandingMachineLive, descent, body);
         bool hoverFlies = _landHoverFlies;
         var rows = new string[solvers.Length][];

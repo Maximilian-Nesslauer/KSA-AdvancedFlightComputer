@@ -133,6 +133,12 @@ public static partial class GuidanceWindow
         {
             GuidanceLog.Info(vehicle, "Entry guidance solve faulted: " + fault);
             _s.ThreeDofWorker.LastError = "";
+            // In the burn there is no glide to fall back to and no cold start, so a fault there is a lost plan and touchdown guidance takes the burn.
+            if (_s.ThreeDofPhase == ThreeDofPhase.Burn)
+            {
+                ThreeDofToSixDof(vehicle, "ENTRY SOLVE FAULT IN BURN. HANDOVER: TOUCHDOWN.", warn: true);
+                return;
+            }
             Drop3Dof(vehicle, "ENTRY SOLVE FAULT. PID GLIDE, COLD RETRY.", now);
         }
 

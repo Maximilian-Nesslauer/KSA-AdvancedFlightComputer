@@ -80,10 +80,10 @@ public static partial class GuidanceWindow
     internal static bool PickSiteArmed => _retargetArmed && _retargetStageId == 0;
 
     /// <summary>
-    /// The solver of LAND > LAND NOW. A live G-FOLD descent is the landing machine's, so the page follows what flies, unless the player picks ENTRY: entry guidance takes a live descent over (the claim of Engage3Dof ends it), so the page then offers that take-over. Touchdown guidance does not take a live descent over from this page, so TOUCHDOWN is held while one flies.
+    /// The solver of LAND > LAND NOW: entry guidance where the page set it for the situation of the craft (ReadLandForm), else touchdown guidance. A live G-FOLD descent is the landing machine's, so the page follows what flies. Touchdown guidance does not take a live descent over from this page, so TOUCHDOWN is held while one flies.
     /// </summary>
     internal static LandSolver LandSolverRoute
-        => LandingMachineLive && !_s.UseThreeDofLanding ? LandSolver.Gfold : LandSolvers.Chosen(_s.UseThreeDofLanding, _s.UseSixDofLanding);
+        => LandingMachineLive && !_s.UseThreeDofLanding ? LandSolver.Gfold : LandSolvers.Shown(LandSolvers.Chosen(_s.UseThreeDofLanding, _s.UseSixDofLanding), false);
 
     private static LandSolver LandDrawnSolver
         => LandSolvers.SolverFor(LandSolvers.Live(_s.Active || _s.EngagePending, ThreeDofLive, _s.LandingPhase == LandingPhase.TerminalHover, LandingMachineLive, BoostbackLive)) is LandSolver live
@@ -225,7 +225,7 @@ public static partial class GuidanceWindow
         => new(
             AutoStageArms: LaunchFlownByNote(vehicle).Length > 0,
             Target: _s.TargetId.Length > 0 ? _s.TargetId : _s.PlaneTarget?.Label ?? "",
-            Solver: LandSolvers.Label(LandSolvers.Chosen(false, _s.UseSixDofLanding)),
+            Solver: LandSolvers.Label(LandSolvers.Shown(LandSolvers.Chosen(false, _s.UseSixDofLanding), LandingMachineLive)),
             HandToTouchdown: _s.ThreeDofSixDofHandover, TouchdownLastS: _s.ThreeDofSixDofTimeS,
             HoverFromM: _s.GfoldHoverHandoffAltM,
             MayFly: _s.Engage && _s.AutoStage,

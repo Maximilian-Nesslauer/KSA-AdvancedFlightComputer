@@ -71,7 +71,8 @@ internal sealed class AttitudeOwnership
         last = Snapshot.Read(value);
     }
 
-    public void Release(FlightComputer value)
+    /// <param name="leaveManual">Leave the attitude mode at Manual where the original mode would come back. For a craft that stands on the ground with its engine cut: an Auto hold from before guidance, such as the one a stock burn leaves, would fire the RCS against the ground.</param>
+    public void Release(FlightComputer value, bool leaveManual = false)
     {
         if (computer == null)
             return;
@@ -100,7 +101,7 @@ internal sealed class AttitudeOwnership
         }
 
         if (commandUnchanged && value.AttitudeMode == last.Mode)
-            value.AttitudeMode = original.Mode;
+            value.AttitudeMode = leaveManual ? FlightComputerAttitudeMode.Manual : original.Mode;
         if (rollWritten && value.RollMode == last.Roll)
             value.RollMode = original.Roll;
         computer = null;

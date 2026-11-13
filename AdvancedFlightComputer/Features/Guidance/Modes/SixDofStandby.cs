@@ -6,7 +6,7 @@ using System;
 using Brutal.Numerics;
 using KSA;
 
-// 6-DOF ON STANDBY through the 3-DOF's landing burn, so the hand-over swaps to a plan that is already converged and warm.
+// 6-DOF ON STANDBY through the 3-DOF's landing burn, so the hand-over swaps to a plan that is already converged and warm. The braking burn of DEORBIT + LAND keeps its standby the same way from its hand-over time (StepBrakingHandover).
 //
 // Before this the hand-over started a cold 6-DOF solve with the engine lit, 170-270 m up at 90 m/s. In every flight that took over a second, and until it published nothing flew the craft: the engine sat at the 3-DOF's last throttle and the flight computer on its last attitude, and the craft lost 80-100 m of the height it had left before 6-DOF steered at all.
 //
@@ -41,10 +41,13 @@ public static partial class GuidanceWindow
     /// <summary>How long the standby may go without publishing before it starts again from the current state, s.</summary>
     private const double SixDofStandbyStaleRestartS = 3.0;
 
+    /// <summary>The time one subproblem may take for the guidance that starts as the standby under the braking burn, ms; see Ksa6DofGuidance.LongBudgetMs.</summary>
+    private const double BrakingStandbyBudgetMs = 1000.0;
+
     /// <summary>True when the standby has a converged plan fresh enough to be handed the burn.</summary>
-    private static bool SixDofStandbyReady(double now)
+    private static bool SixDofStandbyReady(double now, double maxPlanAgeS = SixDofStandbyMaxPlanAgeS)
         => _s.SixDofStandby && !_s.Converging && _s.Guidance?.Published is { } plan
-           && now - plan.SolveTime <= SixDofStandbyMaxPlanAgeS;
+           && now - plan.SolveTime <= maxPlanAgeS;
 
     /// <summary>The burn-time floor for restarts and node rebuilds: the configured seed, or the entry seed when this engagement started from a shorter burn (the 3-DOF hand-over). Restarting a 3 s burn on a 20 s seed would pin sigma at a minimum longer than the burn.</summary>
     private static double SixDofSeedFloor => Math.Min(_s.SixDofSigmaSeed, _s.SixDofEntrySigmaSeed);
@@ -77,7 +80,13 @@ public static partial class GuidanceWindow
         }
 
         // No pacing: the solve is off the sim thread, so there is no frame to protect.
-        var guidance = new Ksa6DofGuidance(cfg, dyn) { FixedTime = false, ColdIterationIntervalS = 0.0 };
+        // Under the braking burn the craft brakes at many times the local gravity with its thrust axis near the horizon. There the cold solve starts from the braking path, and the subproblems of this guidance get the time they need, also after it takes the craft, because its solves run on the worker and a solve cut short gives no plan at all.
+        bool braking = _s.LandingPhase == LandingPhase.Burn;
+        var guidance = new Ksa6DofGuidance(cfg, dyn)
+        {
+            FixedTime = false, ColdIterationIntervalS = 0.0,
+            BrakingSeed = braking, LongBudgetMs = braking ? BrakingStandbyBudgetMs : 0.0,
+        };
         guidance.BeginCold(x, xf, sigmaSeed);
         _s.Guidance = guidance;
         _s.Worker = new Ksa6DofSolveWorker();
@@ -106,6 +115,7 @@ public static partial class GuidanceWindow
             SixDofLog.Event(_s, now, $"STANDBY at alt {x[2]:F0} m: cold solve on the worker, {what}");
         }
         GuidanceLog.Info(vehicle, $"Touchdown guidance standby at {x[2]:F0} m: cold solve on its own thread, {what}.");
+        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
         return true;
     }
 
@@ -253,10 +263,10 @@ public static partial class GuidanceWindow
             return;
         }
 
-        // The thrust the 3-DOF is delivering, for the bias estimator, recorded as 6-DOF records its own so the estimate runs on unbroken across the swap.
+        // The thrust the flying mode is delivering, for the bias estimator, recorded as 6-DOF records its own so the estimate runs on unbroken across the swap.
         double ambientPa = KsaEnginePerf.AmbientPressureAt(parent, siteCci.Length() - parent.MeanRadius + x[2]);
         _s.CapabilityN = KsaEnginePerf.ActiveThrustCapability(vehicle, ambientPa);
-        _s.LastThrottle = _s.ThreeDofThrottle;
+        _s.LastThrottle = _s.LandingPhase == LandingPhase.Burn ? _s.Upfg.Throttle : _s.ThreeDofThrottle;
         // Off the engines' curve, as Step6DofCore reads it: throttle x full thrust overstates low throttle by tens of kN.
         UpdateAccelBias(x, now, _s.LastThrottle > 0.0 ? KsaEnginePerf.ThrustAtThrottle(vehicle, _s.LastThrottle, ambientPa) : 0.0);
 
@@ -291,6 +301,7 @@ public static partial class GuidanceWindow
         _s.RefusalRun = 0;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
+        _s.SixDofArrivedSince = double.NaN;
         _s.SixDofEngineCut = false;
         _s.SixDofRestartOpenLoop = false;
         _s.SixDofFromBrakingBurn = false;

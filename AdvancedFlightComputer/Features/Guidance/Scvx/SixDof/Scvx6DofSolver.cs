@@ -251,6 +251,7 @@ public sealed class Scvx6DofSolver
         _xf = xf.ToArray();
         _xbar = (double[])xSeed.Clone();
         _ubar = (double[])uSeed.Clone();
+        AlignTerminalBranch();
         _sigBar = sigmaSeed;
         TrustRegion = trustRegion ?? TrustRegionMax;
         IterationCount = 0;
@@ -289,6 +290,7 @@ public sealed class Scvx6DofSolver
         _xbar = (double[])xShifted.Clone();
         _ubar = (double[])uShifted.Clone();
         NormaliseQuaternions(_xbar);
+        AlignTerminalBranch();
         _sigBar = sigma;
         if (trustRegion.HasValue) TrustRegion = trustRegion.Value;
         _trace.Clear();
@@ -688,5 +690,17 @@ public sealed class Scvx6DofSolver
             if (dot < 0.0)
                 for (int i = 0; i < 4; i++) x[q + i] = -x[q + i];
         }
+    }
+
+    /// <summary>
+    /// Puts the terminal attitude on the quaternion branch of the last node of the reference. q and -q are the same rotation, but the terminal equality is arithmetic on the components. A reference that follows a sign change of the measured attitude ends on the other branch, where the pinned end state is 2 away in a channel whose scale is 1, and no step inside the trust region reaches it, so every subproblem is infeasible.
+    /// </summary>
+    private void AlignTerminalBranch()
+    {
+        int q = (_n - 1) * NX + Dynamics6Dof.IQ, f = Dynamics6Dof.IQ;
+        double dot = _xbar[q] * _xf[f] + _xbar[q + 1] * _xf[f + 1]
+                   + _xbar[q + 2] * _xf[f + 2] + _xbar[q + 3] * _xf[f + 3];
+        if (dot < 0.0)
+            for (int i = 0; i < 4; i++) _xf[f + i] = -_xf[f + i];
     }
 }

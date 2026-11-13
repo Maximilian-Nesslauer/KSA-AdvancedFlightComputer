@@ -199,6 +199,20 @@ public sealed class Ksa6DofGuidance
     /// <summary>Floor for the counted-down burn time, so the last cycles before arrival cannot divide by ~0.</summary>
     public double MinimumBurnTime { get; init; } = 1.0;
 
+    // The lowest value the lower bound of a free burn time goes down to, s, and the share of the time left on the plan that it stays under.
+    private const double FreeSigmaMinFloorS = 0.25;
+    private const double FreeSigmaMinShare = 0.5;
+
+    /// <summary>
+    /// Lowers the lower bound of the burn time under the time that is left on the plan. The bound comes from the first burn-time guess (Ksa6DofSetup, 0.15 of it), which is 3 s for the default guess of 20 s. Once less time is left than the bound, the burn time is pinned at it and each plan ends later than the craft can arrive. A craft whose minimum thrust is above its weight cannot stretch its last seconds, so it brakes too little on such a plan and meets the ground fast. The bound only goes down, and a re-solve can still shorten the plan by half in one cycle.
+    /// </summary>
+    private void KeepSigmaMinUnder(double timeLeftS)
+    {
+        if (!double.IsFinite(timeLeftS))
+            return;
+        _cfg.SigmaMin = Math.Min(_cfg.SigmaMin, Math.Max(FreeSigmaMinShare * timeLeftS, FreeSigmaMinFloorS));
+    }
+
     /// <summary>
     /// ADMM iteration caps. THIS IS WHAT STOPS THE GAME FREEZING.
     ///  The iteration cap limits the work that one subproblem can consume, and the SCvx loop treats a truncated solve as a subproblem failure before it shrinks the trust region.
@@ -520,7 +534,7 @@ public sealed class Ksa6DofGuidance
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
-        BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
+        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed);
         _xf = (double[])xf.Clone();
         _pricingTimeToGo = sigmaSeed;
         SetPricingStage(0);
@@ -529,11 +543,26 @@ public sealed class Ksa6DofGuidance
     }
 
     /// <summary>
+    /// Seeds a cold solve from the path that brakes the craft onto the target over the burn time (ColdSeed6Dof) in place of the straight line. For a burn handed over at many times the local gravity with the thrust axis near the horizon, where the straight line with hover thrust is ten or more accepted steps from the answer.
+    /// </summary>
+    public bool BrakingSeed { get; init; }
+
+    /// <summary>
+    /// Wall-clock budget of one subproblem, ms, when it is longer than the flight budgets. For a guidance whose solves run off the sim thread on a problem that needs more solver iterations than the flight budgets give: there a subproblem cut short is a refused step, and a run of them loses the plan, while a subproblem that takes a second only makes the plan that much older. 0 leaves the flight budgets.
+    /// </summary>
+    public double LongBudgetMs { get; init; }
+
+    /// <summary>
     /// The straight-line cold seed, shared by Plan and BeginCold.
     ///  Attitude and rates interpolate FROM THE MEASURED STATE rather than jumping to identity - see the note inside. That is a feasibility requirement, not a quality one.
     /// </summary>
-    private void BuildColdSeed(double[] x0, double[] xf, out double[] xSeed, out double[] uSeed)
+    private void BuildColdSeed(double[] x0, double[] xf, double sigma, out double[] xSeed, out double[] uSeed)
     {
+        if (BrakingSeed)
+        {
+            ColdSeed6Dof.Build(x0, xf, sigma, _n, _cfg, _dyn, out xSeed, out uSeed);
+            return;
+        }
         xSeed = new double[_n * NX];
         uSeed = new double[_n * NU];
         double m0 = x0[13];
@@ -670,7 +699,7 @@ public sealed class Ksa6DofGuidance
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
 
-        BuildColdSeed(x0, xf, out double[] xSeed, out double[] uSeed);
+        BuildColdSeed(x0, xf, sigmaSeed, out double[] xSeed, out double[] uSeed);
         BeginSpreadSolve(x0, xf, xSeed, uSeed, sigmaSeed);
         _spreadFromPlan = false;
     }
@@ -773,7 +802,7 @@ public sealed class Ksa6DofGuidance
         if (fromPlan)
             BuildShiftedSeed(x0, simNow, sigma, out xs, out us, out _);
         else
-            BuildColdSeed(x0, _xf, out xs, out us);
+            BuildColdSeed(x0, _xf, sigma, out xs, out us);
         BeginSpreadSolve(x0, _xf, xs, us, sigma);
         _spreadFromPlan = fromPlan;
         StuckRestarts++;
@@ -903,7 +932,8 @@ public sealed class Ksa6DofGuidance
     /// A node step accepted at the loose cold tolerance commits a plan that the warm loop will then reject on every single cycle: the recorded run stepped 50 -> 30 nodes with 1.13 m of defect, passed the 15 m cold gate, and every cycle afterwards read "no solve this cycle" against the 1 m warm gate while the vehicle flew an ageing open-loop plan.
     ///  The coarser rung is an OPTIMISATION - it exists to make solves cheaper. If it cannot produce a plan the loop will actually fly, declining the step and staying at the finer count costs only solve time, which is the thing the step was trying to save. That is the right way round.
     /// </summary>
-    public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5)
+    /// <param name="targetAltM">The height of the centre of mass at the end of the plan, measured now. The rest of the terminal state stays the previous one. The centre of mass climbs in the craft as the propellant drains, so the height from the first solve of a long descent is too low at its end. NaN keeps the previous height.</param>
+    public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5, double targetAltM = double.NaN)
     {
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
@@ -915,6 +945,8 @@ public sealed class Ksa6DofGuidance
         var xs = new double[_n * NX];
         var us = new double[_n * NU];
         double elapsed = Math.Max(0.0, simNow - prev._solveTime);
+        if (!FixedTime)
+            KeepSigmaMinUnder(prev._planSigma - elapsed);
         double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - elapsed);
         ResamplePlan(prev._planX, prev._planU, prev._n, prev._planSigma, elapsed, _n,
                      sigma / (_n - 1), xs, us);
@@ -924,6 +956,14 @@ public sealed class Ksa6DofGuidance
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         _xf = (double[])prev._xf.Clone();
+        if (double.IsFinite(targetAltM))
+        {
+            // The resampled plan ends on the previous height. Its last node moves with the target, and the nodes before it by their share of the plan time, so the seed still ends on the terminal state that the solver pins.
+            double shift = targetAltM - _xf[2];
+            for (int k = 1; k < _n; k++)
+                xs[k * NX + 2] += shift * k / (_n - 1);
+            _xf[2] = targetAltM;
+        }
         if (FixedTime) PinSigma(sigma);
         // A rebuild continues a refinement: the stage the previous guidance had reached, not a rough start, at this horizon.
         _pricingTimeToGo = sigma;
@@ -1076,6 +1116,7 @@ public sealed class Ksa6DofGuidance
         }
         else
         {
+            KeepSigmaMinUnder(_planSigma - elapsed);
             sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
         }
 
@@ -1177,7 +1218,7 @@ public sealed class Ksa6DofGuidance
 
         // ONE CAP, NOT TWO. The two-stage scheme ran a subproblem to the small cap and, if it truncated, ran the SAME subproblem again with the big one - so a truncating solve paid for both. It was built for one-off truncation, but measured in flight it fired on 77% of solves (213 escalations in 149 cycles), which means the small cap was not a budget, it was a tax.
         //  SCS stops at its tolerance, not at the cap, so a subproblem that converges is completely unaffected by how high the cap is - raising it costs nothing on the common path and saves the wasted first run on the uncommon one. What bounds the cycle now is CycleBudgetMs, which bounds the thing that actually matters.
-        int cap = (int)Math.Clamp(Math.Max(budgetMs, escalatedMs) / perIter, 400, 100_000);
+        int cap = (int)Math.Clamp(Math.Max(Math.Max(budgetMs, escalatedMs), LongBudgetMs) / perIter, 400, 100_000);
         _solver.MaxSubproblemIterations = cap;
         _solver.EscalatedSubproblemIterations = cap;   // equal, so no retry is issued
     }

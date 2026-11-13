@@ -1263,6 +1263,7 @@ public static partial class GuidanceWindow
         if (!_s.VehicleHeightAuto)
         {
             _s.VehicleHeightStatus = "MANUAL";
+            _s.SiteEarlyContactM = 0.0;
             return;
         }
         long now = GuidanceClock.NowMs;
@@ -1278,6 +1279,7 @@ public static partial class GuidanceWindow
             return;
         }
         _s.VehicleHeightM = h.DeployedM;
+        _s.SiteEarlyContactM = SiteEarlyContact(vehicle.Orbit.Parent, h.FootPoints);
         _s.VehicleHeightStowed = h.Stowed > 0;
         _s.VehicleHeightCard = h.Stowed > 0 ? Ui.Logic.PageText.LegsStowedCard(_s.VehicleHeightM, h.CurrentM) : "";
         _s.VehicleHeightStatus = h.Stowed > 0
@@ -1293,7 +1295,9 @@ public static partial class GuidanceWindow
 
         // Clear the commanded rotation rate before restoring attitude settings.
         KsaAttitudeRate.Clear(vehicle);
-        _s.AttitudeOwnership.Release(vehicle.FlightComputer);
+        // A craft on the ground with its engine off or about to be cut has landed, see AttitudeOwnership.Release.
+        bool landed = vehicle.Situation.HasAnyContact() && (_s.LandingCutPending || !ManualInputs(vehicle).EngineOn);
+        _s.AttitudeOwnership.Release(vehicle.FlightComputer, leaveManual: landed);
         _s.WasEngaged = false;
     }
 
@@ -1432,7 +1436,8 @@ public static partial class GuidanceWindow
         {
             if (cutEngine)
                 Attempt(() => vehicle.SetEnum(VehicleEngine.MainShutdown));
-            Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer));
+            bool onGround = cutEngine && vehicle.Situation.HasAnyContact();
+            Attempt(() => _s.AttitudeOwnership.Release(vehicle.FlightComputer, leaveManual: onGround));
         }
         Attempt(() =>
         {

@@ -13,11 +13,12 @@ using KSA;
 namespace AdvancedFlightComputer.HarnessTests;
 
 // Steps a deorbit burn at its handoff through the real ApplyAutopilot on a spawned craft, once for
-// each descent solver, and once for a craft 6-DOF cannot plan for. The UPFG solve and the staging
-// cue are stubbed for the fixture, so the burn reads a converged solution inside the handoff gate;
-// whether 6-DOF can take the craft is set per case rather than read off the fixture's hardware; and
-// the 6-DOF dispatch is counted instead of solved. The step under test is the handoff, not either
-// descent.
+// each descent solver, once for a craft 6-DOF cannot plan for, and once for a standby that has no
+// plan in the last seconds of the burn. The UPFG solve and the staging cue are stubbed for the
+// fixture, so the burn reads a converged solution inside the handoff gate; whether 6-DOF can take
+// the craft, whether its standby has a plan and whether G-FOLD can fly the craft are set per case
+// rather than read off the fixture's hardware; and the 6-DOF dispatch is counted instead of solved.
+// The step under test is the handoff, not either descent.
 public sealed class GuidanceLandingHandoffTest : AfcTest
 {
     public override string Name => "afc-guidance-landing-handoff";
@@ -38,6 +39,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
     private static Vehicle? _fixture;
     private static int _sixDofSteps;
     private static bool _sixDofCanTake;
+    private static bool _standbyReady;
+    private static bool _gfoldCanFly;
 
     protected override void Execute(TestContext t)
     {
@@ -83,10 +86,16 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             harmony.Patch(Method("PrepareLandingEngines"), prefix: Prefix(nameof(EnginesReadyForFixture)));
             harmony.Patch(Method("Step6Dof"), prefix: Prefix(nameof(CountSixDofEngage)));
             harmony.Patch(Method("Can6DofTake"), prefix: Prefix(nameof(AnswerCanSixDofTake)));
+            // The standby would build and solve a 6-DOF problem for the fixture, so it is started, stepped and asked by stubs.
+            harmony.Patch(Method("StartSixDofStandby"), prefix: Prefix(nameof(StartStandbyForFixture)));
+            harmony.Patch(Method("StepSixDofStandby"), prefix: Prefix(nameof(NotForFixture)));
+            harmony.Patch(Method("SixDofStandbyReady"), prefix: Prefix(nameof(AnswerStandbyReady)));
+            harmony.Patch(Method("GfoldCanFly"), prefix: Prefix(nameof(AnswerGfoldCanFly)));
 
             TheBurnHandsOverToSixDof(t, craft);
             TheBurnHandsOverToGfold(t, craft);
             ACraftSixDofRefusesGoesToGfold(t, craft);
+            AStandbyWithNoPlanGoesToGfold(t, craft);
         }
         finally
         {
@@ -94,6 +103,8 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             _fixture = null;
             _sixDofSteps = 0;
             _sixDofCanTake = false;
+            _standbyReady = false;
+            _gfoldCanFly = false;
             if (craft != null)
             {
                 StagingDetector.Arm(craft, false);
@@ -106,24 +117,38 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         }
     }
 
-    // The burn queues the engage and lets the next step's 6-DOF dispatch run it, so the step that
-    // queues it must neither release the craft nor cut the engine the burn left lit.
+    // Inside the handoff time the burn keeps the craft while touchdown guidance plans on standby. With
+    // a plan the burn queues the engage and lets the next step's 6-DOF dispatch run it, so the step
+    // that queues it must neither release the craft nor cut the engine the burn left lit.
     private static void TheBurnHandsOverToSixDof(TestContext t, Vehicle craft)
     {
         VehicleAutopilotState state = BurnAtHandoff(craft, sixDof: true);
         _sixDofSteps = 0;
         _sixDofCanTake = true;
+        _standbyReady = false;
 
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("6-DOF: the burn starts the standby and keeps flying",
+            state.SixDofStandby && state.LandingPhase == GuidanceWindow.LandingPhase.Burn && !state.EngagePending, state.LandingStatus);
+        t.Check("6-DOF: the burn still commands the engine while the standby plans",
+            Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == (float)HandoffThrottle,
+            $"engine on {Inputs(craft).EngineOn}, throttle {Inputs(craft).EngineThrottle}");
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("6-DOF: a standby with no plan leaves the burn flying",
+            state.SixDofStandby && state.LandingPhase == GuidanceWindow.LandingPhase.Burn && !state.EngagePending && _sixDofSteps == 0);
+
+        _standbyReady = true;
         GuidanceWindow.ApplyAutopilot(craft);
         t.Check("6-DOF: the handoff ends the burn",
             state.LandingPhase == GuidanceWindow.LandingPhase.Idle, state.LandingStatus);
         t.Check("6-DOF: the engage is still queued when the step ends", state.EngagePending);
+        t.Check("6-DOF: the standby is kept for the engage to promote", state.SixDofStandby);
         t.Check("6-DOF: the handoff keeps the craft",
             state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
         t.Check("6-DOF: the engine keeps the burn's command",
-            Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle,
+            Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == (float)HandoffThrottle,
             $"engine on {Inputs(craft).EngineOn}, throttle {Inputs(craft).EngineThrottle}");
-        t.Check("6-DOF: the previous attitude stays held while no new plan exists",
+        t.Check("6-DOF: the previous attitude stays held while no new plan steers",
             state.WasEngaged && state.AttitudeOwnership.IsCurrent(craft.FlightComputer));
         t.Check("6-DOF: AutoStage stays armed through the handoff",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
@@ -134,13 +159,48 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.Active && state.ControlAcquired
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance);
         t.Check("6-DOF: the engine is still lit when the engage runs", Inputs(craft).EngineOn);
-        t.Check("6-DOF: a cold solve keeps the previous attitude until it can steer",
-            state.WasEngaged && state.AttitudeOwnership.IsCurrent(craft.FlightComputer));
         t.Check("6-DOF: AutoStage is still armed when the engage runs",
             StagingDetector.IsArmed(craft) && state.ArmedStaging);
 
+        state.SixDofStandby = false;
         VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);
+    }
+
+    // The standby has no plan when the burn reaches its last seconds. G-FOLD takes the craft when it
+    // can fly it, with the engine lit, and a cold touchdown engage takes it when G-FOLD cannot.
+    private static void AStandbyWithNoPlanGoesToGfold(TestContext t, Vehicle craft)
+    {
+        foreach (bool gfold in new[] { true, false })
+        {
+            VehicleAutopilotState state = BurnAtHandoff(craft, sixDof: true, tgo: 3.0);
+            _sixDofSteps = 0;
+            _sixDofCanTake = true;
+            _standbyReady = false;
+            _gfoldCanFly = gfold;
+            string label = gfold ? "no plan, G-FOLD can fly" : "no plan, G-FOLD cannot fly";
+
+            GuidanceWindow.ApplyAutopilot(craft);
+            t.Check($"{label}: the standby gets its first step", state.SixDofStandby && state.LandingPhase == GuidanceWindow.LandingPhase.Burn);
+            GuidanceWindow.ApplyAutopilot(craft);
+            if (gfold)
+            {
+                t.Check($"{label}: the burn hands over to G-FOLD",
+                    state.LandingPhase == GuidanceWindow.LandingPhase.GfoldDescent && !state.SixDofStandby && !state.EngagePending, state.LandingStatus);
+                t.Check($"{label}: the status says why", state.LandingStatus.Contains("no plan before the end of the braking burn"), state.LandingStatus);
+            }
+            else
+            {
+                t.Check($"{label}: the burn queues a cold touchdown engage", state.EngagePending && state.LandingPhase == GuidanceWindow.LandingPhase.Idle, state.LandingStatus);
+            }
+            t.Check($"{label}: the craft stays held with the engine lit",
+                state.ControlAcquired && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.Guidance
+                && Inputs(craft).EngineOn && !state.LandingCutPending);
+
+            state.SixDofStandby = false;
+            VehicleControlOwnership.ReleaseAll(craft);
+            VehicleAutopilotState.Remove(craft);
+        }
     }
 
     // The handoff step already writes the descent's engine command, before G-FOLD has a plan, so it
@@ -174,6 +234,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         VehicleAutopilotState state = BurnAtHandoff(craft, sixDof: true);
         _sixDofSteps = 0;
         _sixDofCanTake = false;
+        _gfoldCanFly = true;
 
         GuidanceWindow.ApplyAutopilot(craft);
         t.Check("refused: the handoff starts the G-FOLD descent",
@@ -190,12 +251,25 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
 
         VehicleControlOwnership.ReleaseAll(craft);
         VehicleAutopilotState.Remove(craft);
+
+        // G-FOLD cannot fly the craft either, so no G-FOLD descent starts. The burn queues the touchdown engage, whose refusal gives the craft back with the engine as it is.
+        state = BurnAtHandoff(craft, sixDof: true);
+        _gfoldCanFly = false;
+        GuidanceWindow.ApplyAutopilot(craft);
+        t.Check("refused, G-FOLD cannot fly: no G-FOLD descent starts",
+            state.LandingPhase == GuidanceWindow.LandingPhase.Idle && state.EngagePending && state.UseSixDofLanding, state.LandingStatus);
+        t.Check("refused, G-FOLD cannot fly: the engine stays lit at its throttle and no cut is queued",
+            Inputs(craft).EngineOn && Inputs(craft).EngineThrottle == BurnThrottle && !state.LandingCutPending && state.SixDofTookBurn,
+            $"engine on {Inputs(craft).EngineOn}, throttle {Inputs(craft).EngineThrottle}");
+
+        VehicleControlOwnership.ReleaseAll(craft);
+        VehicleAutopilotState.Remove(craft);
     }
 
     // A deorbit burn on the step it reaches the handoff: guidance owns and steers the craft, the
     // engine is lit at the throttle the burn wrote last, guidance armed AutoStage for the flight, and
     // UPFG reads converged inside the gate.
-    private static VehicleAutopilotState BurnAtHandoff(Vehicle craft, bool sixDof)
+    private static VehicleAutopilotState BurnAtHandoff(Vehicle craft, bool sixDof, double tgo = double.NaN)
     {
         TestSupport.SetManualControlInputs(craft, BurnThrottle, engineOn: true);
         craft.FlightComputer.BurnMode = FlightComputerBurnMode.Manual;
@@ -221,7 +295,7 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
         state.HasCommand = true;
         state.WasEngaged = true;
 
-        SetSolution(state.Upfg, tgo: state.GfoldHandoffTgo - 1.0, throttle: HandoffThrottle);
+        SetSolution(state.Upfg, tgo: double.IsNaN(tgo) ? state.GfoldHandoffTgo - 1.0 : tgo, throttle: HandoffThrottle);
         return state;
     }
 
@@ -265,6 +339,32 @@ public sealed class GuidanceLandingHandoffTest : AfcTest
             state.EngagePending = false;
             state.Active = true;
         }
+        return false;
+    }
+
+    private static bool StartStandbyForFixture(Vehicle vehicle, ref bool __result)
+    {
+        if (!ReferenceEquals(vehicle, _fixture))
+            return true;
+        VehicleAutopilotState.For(vehicle).SixDofStandby = true;
+        __result = true;
+        return false;
+    }
+
+    private static bool AnswerStandbyReady(ref bool __result)
+    {
+        if (_fixture == null)
+            return true;
+        __result = _standbyReady;
+        return false;
+    }
+
+    private static bool AnswerGfoldCanFly(Vehicle vehicle, ref string why, ref bool __result)
+    {
+        if (!ReferenceEquals(vehicle, _fixture))
+            return true;
+        why = _gfoldCanFly ? "" : "G-FOLD is limited to airless bodies.";
+        __result = _gfoldCanFly;
         return false;
     }
 
