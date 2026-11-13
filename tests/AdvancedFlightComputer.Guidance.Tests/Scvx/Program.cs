@@ -36,6 +36,9 @@ if (args.Contains("--handover"))
 if (args.Contains("--hermite"))
     return PlanStateInterpolationCheck.Run();
 
+if (args.Contains("--touchdown"))
+    return TouchdownContactCheck.Run();
+
 if (args.Contains("--3dof-model"))
     return ThreeDofModelCheck.Run();
 
@@ -102,6 +105,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --cold-shift    preserve the cold reference dynamics when the craft moves
           --handover      the cold solve at a braking-burn hand-over, as logged and with the braking seed
           --hermite       sample plan position and velocity for warm re-solves
+          --touchdown     the first contact on ground that is not level, against logged landings
           --soft          soft terminal position: unreachable target still yields a plan
 
         MEASUREMENT - closed-loop MPC with injected dispersions
