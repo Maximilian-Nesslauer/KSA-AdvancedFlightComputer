@@ -347,8 +347,7 @@ internal sealed class DeorbitFixture : IDisposable
 
     internal static DeorbitFixture? Open(TestContext t, string saveName = "Low Luna Orbit")
     {
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "My Games", "Kitten Space Agency", "saves", saveName, "universe.xml");
+        string path = Path.Combine(GameSaves.SaveFolderPath, saveName, "universe.xml");
         if (!File.Exists(path) || t.System.All.Get("Luna") is not Celestial parent)
         {
             t.Skip($"{saveName} and the Luna body are required.");

@@ -38,8 +38,7 @@ public sealed class GuidanceMoonLandingRetargetTest : AfcTest
 
     protected override void Execute(TestContext t)
     {
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-            "My Games", "Kitten Space Agency", "saves", SaveName, "universe.xml");
+        string path = Path.Combine(GameSaves.SaveFolderPath, SaveName, "universe.xml");
         if (!File.Exists(path) || t.System.All.Get("Luna") is not Celestial lunaCelestial || lunaCelestial is not IParentBody luna)
         {
             t.Skip($"{SaveName} and the Luna body are required.");

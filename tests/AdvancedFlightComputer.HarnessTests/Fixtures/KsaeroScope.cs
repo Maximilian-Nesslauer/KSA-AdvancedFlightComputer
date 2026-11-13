@@ -28,8 +28,7 @@ internal sealed class KsaeroScope : IDisposable
             return new KsaeroScope(true, "KSAero aerodynamics active (already loaded)");
         }
 
-        string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments),
-                                   "My Games", "Kitten Space Agency", "mods", "KSAero", "KSAero.dll");
+        string path = Path.Combine(KSA.ModLibrary.LocalModsFolderPath, "KSAero", "KSAero.dll");
         if (!File.Exists(path))
             return new KsaeroScope(false, $"KSAero not deployed ({path}) - stock aerodynamics");
 
