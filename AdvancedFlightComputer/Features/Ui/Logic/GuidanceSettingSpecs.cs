@@ -28,6 +28,8 @@ internal static class GuidanceSettingSpecs
         "Argument of periapsis. Used only with FIX ARG. OF PE on.");
     public static readonly SettingSpec ChaseOffsetKm = new("ChaseOffsetKm", "SMA OFFSET", "km", E, 20.0, -1e5, 1e5, "%.1f",
         "Semi-major axis of the chase orbit below the target's.");
+    public static readonly SettingSpec MoonTransferPeKm = new("MoonTransferPeKm", "PERIAPSIS AT MOON", "km", P, 100.0, 10.0, 1e6, "%.1f",
+        "THEN: the periapsis altitude at the moon that the injection and its corrections aim for. The capture burn makes its orbit there.");
     public static readonly SettingSpec GLimitG = new("GLimitG", "MAX ACCELERATION", "g", P, 4.0, 0.11, 100.0, "%.2f",
         "Acceleration limit of the whole flight with G-LIMIT on. A landing refuses to start at 0.1 g or less.");
     public static readonly SettingSpec TurnStartAltKm = new("TurnStartAltKm", "TURN START ALTITUDE", "km", E, 0.5, 0.0, 1000.0, "%.1f",
@@ -277,7 +279,7 @@ internal static class GuidanceSettingSpecs
     #region Tier arrays
 
     // LanDeg is left out of every count: it is seeded from the launch site, so the fixed default would mark it changed on every flight. The values a picked target writes stay in the arrays, and SettingAccess.SetBy keeps them out of the count while the chase writes them.
-    public static readonly SettingSpec[] LaunchPlayer = { ConvexQMaxKpa };
+    public static readonly SettingSpec[] LaunchPlayer = { ConvexQMaxKpa, MoonTransferPeKm };
     public static readonly BoolSpec[] LaunchPlayerBools = { FlyConvexAscent, LaunchDescending };
     public static readonly SettingSpec[] LaunchExpert =
         { ChaseOffsetKm, ArgPeDeg, ConvexThrottleMinPct, TurnStartAltKm, TurnRateDegS, ForceRollDeg };
@@ -359,7 +361,7 @@ internal static class GuidanceSettingSpecs
     /// <summary>Every numeric spec, for the uniqueness and default checks.</summary>
     public static readonly SettingSpec[] AllDoubles =
     {
-        PeKm, ApKm, IncDeg, LanDeg, ArgPeDeg, ChaseOffsetKm, GLimitG, TurnStartAltKm, TurnRateDegS, ForceRollDeg,
+        PeKm, ApKm, IncDeg, LanDeg, ArgPeDeg, ChaseOffsetKm, MoonTransferPeKm, GLimitG, TurnStartAltKm, TurnRateDegS, ForceRollDeg,
         ConvexQMaxKpa, ConvexThrottleMinPct, ConvexQAlphaMax, ConvexHandoverAltKm,
         BoostbackSeparationS, BoostbackPitchDeg, GlideMaxAoaDeg, GlideNominalAoaDeg, BoostbackClearanceM,
         BoostbackSlewDegS, GlideKp, GlideKi, GlideKd,

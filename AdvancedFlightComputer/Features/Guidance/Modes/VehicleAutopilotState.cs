@@ -367,9 +367,40 @@ public sealed class VehicleAutopilotState
     public double ChaseOffsetKm = 20.0;
 
     /// <summary>
-    /// Launch-to-plane: a plane chased like a target vessel's while <see cref="TargetId"/> is empty - a launch window to arm for, and the plane inputs driven. Null for none.
+    /// Launch-to-plane: a plane chased like a target vessel's while <see cref="TargetId"/> is empty - a launch window to arm for, and the plane inputs driven. Null for none. The launch window step sets it from the moon of <see cref="MoonTransferId"/>.
     /// </summary>
     public AscentPlaneTarget PlaneTarget;
+
+    /// <summary>THEN on the LAUNCH page: the moon the craft goes on to after a completed ascent, empty to stay in the parking orbit. The ascent itself does not read it: the chain starts once the ascent has handed the craft back (StepMoonTransfer), and it clears this when it ends or stops.</summary>
+    public string MoonTransferId = "";
+    /// <summary>THEN also asks for the capture burn into an orbit of the moon at the flyby periapsis.</summary>
+    public bool MoonTransferCapture;
+    /// <summary>The periapsis the injection and the corrections aim for, km above the moon's mean radius.</summary>
+    public double MoonTransferPeKm = 100.0;
+
+    /// <summary>Where the chain to the moon stands. Idle when no chain runs.</summary>
+    public MoonChainStage MoonChain;
+    /// <summary>The moon, the periapsis and the capture choice the running chain was started with, latched at the end of the ascent.</summary>
+    public string MoonChainMoonId = "";
+    public double MoonChainPeKm;
+    public bool MoonChainCapture;
+    /// <summary>Sim time from which the current stage may plan its next burn, s.</summary>
+    public double MoonChainAfter = double.NaN;
+    /// <summary>The node the chain made for the current burn, with the burn target stock loaded for it and the time and delta v the node had then. A node that differs from these was changed by the player.</summary>
+    public Burn MoonChainNode;
+    public BurnTarget MoonChainTarget;
+    public double MoonChainNodeTime = double.NaN;
+    public double3 MoonChainNodeDv;
+    /// <summary>Sim time since which the chain's armed burn reads Manual without being complete, s, or NaN while it reads Auto.</summary>
+    public double MoonChainManualSince = double.NaN;
+    /// <summary>The chain asked for the warp of the current stage. It asks once, so a warp the player stops stays stopped.</summary>
+    public bool MoonChainWarpAsked;
+    /// <summary>The sim time the chain's own warp runs to, s, or NaN.</summary>
+    public double MoonChainWarpTime = double.NaN;
+    /// <summary>Correction burns the chain has flown since the injection.</summary>
+    public int MoonChainCorrections;
+    /// <summary>The player picked "Stay in orbit" while the chain ran. The step stops the chain.</summary>
+    public bool MoonChainStopRequested;
     public bool LaunchDescending;
     public bool AutoLaunch = true;
 
