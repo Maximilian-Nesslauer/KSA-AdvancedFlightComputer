@@ -487,7 +487,7 @@ public static partial class GuidanceWindow
                                                 double[] x, double now, out string why)
     {
         Ksa6DofGuidance next = NewGuidance(req);
-        bool ok = next.SeedFrom(from, x, now);
+        bool ok = next.SeedFrom(from, x, now, targetAltM: req.Xf[2]);
         why = ok ? "" : next.Error;
         return ok ? next : null;
     }
@@ -1004,6 +1004,11 @@ public static partial class GuidanceWindow
     // A plan lost below this height of the legs over the pad is lost near the ground: a craft that can hold its weight is handed to terminal hover.
     private const double SixDofLostPlanGateM = 500;
 
+    // A craft no higher than this over the plan end and no faster than this vertically for this long, with no contact, has ended its plan in the air.
+    private const double SixDofArrivedM = 1.0;
+    private const double SixDofArrivedMs = 0.1;
+    private const double SixDofArrivedHoldS = 3.0;
+
     // The no-plan law lights the engine once stopping on the pad needs this share of the minimum thrust, and cuts it below the lower share, so a demand sitting on the minimum does not toggle the engine every step.
     private const double SixDofNoPlanLightShare = 1.0;
     private const double SixDofNoPlanCutShare = 0.9;
@@ -1020,7 +1025,7 @@ public static partial class GuidanceWindow
         double3 position = vehicle.Orbit.StateVectors.PositionCci;
         double3 up = double3.Normalize(position);
         double vertical = Math.Max(double3.Dot(KsaFrameBridge.ThrustAxisCci(vehicle), up), 0.5);
-        double legs = Math.Max(x[2] - _s.VehicleHeightM, 0.1);
+        double legs = Math.Max(x[2] - _s.SixDofTargetComAltM, 0.1);
         double sink = Math.Max(-x[5], 0.0);
         double gravity = parent.Mu / position.LengthSquared();
         double demand = sink > 0.0 ? vehicle.TotalMass * (sink * sink / (2.0 * legs) + gravity) / vertical : 0.0;
@@ -1040,7 +1045,7 @@ public static partial class GuidanceWindow
     /// <summary>
     /// What touchdown guidance does about a craft that has stopped short of the pad or has no plan near the ground; true when it has taken the craft out of the normal step.
     ///  - STOPPED SHORT, and unable to throttle below its weight: the engine is cut, whatever the height. Any thrust it can make is a climb, so the rest of the way is a drop; the engine stays off to the touchdown latch.
-    ///  - NO LIVE PLAN near the ground - the last one expired, or a burn was taken over from another mode and no plan has been published yet - and the craft can hold its weight: terminal hover takes it. A craft that cannot is left to the no-plan law (FlyWithoutPlan).
+    ///  - NO LIVE PLAN near the ground - the last one expired, the craft rests at the end of its plan without contact, or a burn was taken over from another mode and no plan has been published yet - and the craft can hold its weight: terminal hover takes it. A craft that cannot is left to the no-plan law (FlyWithoutPlan).
     /// Neither waits for a first plan: a burn handed over without one is in the same position as one whose plan ran out.
     /// </summary>
     private static bool NoPlanNearGround(Vehicle vehicle, IParentBody parent, double[] x, double now, bool lastPlanExpired)
@@ -1061,12 +1066,21 @@ public static partial class GuidanceWindow
             }
         }
 
-        bool noPlan = _s.SixDofLastPublishedPlan == null ? _s.SixDofTookBurn : lastPlanExpired;
+        // A plan that ends above the ground leaves a craft that can hover at rest there, and each re-solve from rest to rest succeeds, so the plan never expires. The plan end is an upper bound of the first contact on a slope (TouchdownContact), so that happens with nothing wrong.
+        bool atRest = _s.SixDofLastPublishedPlan != null && !vehicle.Situation.HasAnyContact()
+            && x[2] - _s.SixDofTargetComAltM <= SixDofArrivedM && Math.Abs(x[5]) <= SixDofArrivedMs;
+        if (!atRest)
+            _s.SixDofArrivedSince = double.NaN;
+        else if (!double.IsFinite(_s.SixDofArrivedSince))
+            _s.SixDofArrivedSince = now;
+        bool arrived = atRest && now - _s.SixDofArrivedSince >= SixDofArrivedHoldS;
+
+        bool noPlan = arrived || (_s.SixDofLastPublishedPlan == null ? _s.SixDofTookBurn : lastPlanExpired);
         if (noPlan && x[2] - _s.VehicleHeightM <= SixDofLostPlanGateM
             && !(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
             && TerminalHoverAvailable(vehicle, out _))
         {
-            string why = $"TOUCHDOWN {(_s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
+            string why = $"TOUCHDOWN {(arrived ? "ENDED ITS PLAN WITHOUT CONTACT" : _s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
                        + $"{x[2] - _s.VehicleHeightM:F0} m ABOVE PAD. HANDOVER: HOVER.";
             SixDofLog.Event(_s, now, why);
             GuidanceLog.Info(vehicle, why);
@@ -1087,7 +1101,7 @@ public static partial class GuidanceWindow
         manual.EngineThrottle = 0f;
         _s.LastThrottle = 0.0;
         KsaGimbalControl.SetLsq(vehicle, default);
-        string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.VehicleHeightM:F1} m ABOVE PAD, ")
+        string why = FormattableString.Invariant($"TOUCHDOWN STOPPED SHORT {x[2] - _s.SixDofTargetComAltM:F1} m ABOVE PAD, ")
                    + FormattableString.Invariant($"RISING {x[5]:F1} m/s, CANNOT THROTTLE BELOW WEIGHT (TWR {minTwr:F2} AT MIN). ENGINE CUT, DROP TO PAD.");
         SixDofLog.Event(_s, now, why);
         GuidanceLog.Info(vehicle, why);
@@ -1097,7 +1111,7 @@ public static partial class GuidanceWindow
     // The speed at the pad that the stop-short cut may leave to a free fall, m/s. A drop that ends faster is flown by the no-plan law.
     private const double SixDofSafeDropMs = 3.0;
 
-    /// <summary>After the stop-short cut: no torque and no solving until the craft touches down. The engine stays off while the fall from here ends at the pad no faster than SixDofSafeDropMs. From higher up the no-plan law flies the fall, which lights the engine again once the stop on the pad needs it.</summary>
+    /// <summary>After the stop-short cut: no torque and no solving until the craft touches down. The engine stays off while the fall from here ends at the pad no faster than SixDofSafeDropMs. The fall is measured to VehicleHeightM, the lowest height at which the craft meets the ground at the site, because the plan end is an upper bound of the first contact. From higher up the no-plan law flies the fall, which lights the engine again once the stop on the pad needs it.</summary>
     private static void StepSixDofEngineCut(Vehicle vehicle, IParentBody parent, double3 siteCci, double now, double[] x)
     {
         double gravity = parent.Mu / vehicle.Orbit.StateVectors.PositionCci.LengthSquared();
@@ -1247,7 +1261,7 @@ public static partial class GuidanceWindow
             }
             else if (_s.TouchdownArmed)
             {
-                SixDofLog.Event(_s, now, $"TOUCHDOWN at alt {x[2]:F1} m, vz {x[5]:F2} m/s, " +
+                SixDofLog.Event(_s, now, $"TOUCHDOWN at alt {x[2]:F1} m (plan end {_s.SixDofTargetComAltM:F1} m), vz {x[5]:F2} m/s, " +
                                      $"lateral {Math.Sqrt(x[0] * x[0] + x[1] * x[1]):F1} m from target");
                 // In the game log too: without it a landing reads the same there as an abort.
                 GuidanceLog.Info(vehicle, $"Touchdown guidance: touchdown at {-x[5]:F1} m/s down and {Math.Sqrt(x[3] * x[3] + x[4] * x[4]):F1} m/s sideways, " +
@@ -1481,7 +1495,7 @@ public static partial class GuidanceWindow
         if (_s.Guidance == null || !_s.Guidance.HasPlan)
             return;
 
-        // NO HOVER HAND-OFF ON THE WAY DOWN. The plan ends at zero/zero - legs on the pad, at rest - so it lands the craft itself, and a craft that cannot hover could not be handed one anyway. The hover takes over only when the plan is lost near the ground and the craft can hold its weight; see NoPlanNearGround.
+        // NO HOVER HAND-OFF ON THE WAY DOWN. The plan ends at zero/zero - at rest where the first point of the craft meets the ground - so it lands the craft itself, and a craft that cannot hover could not be handed one anyway. The hover takes over only when the plan is lost near the ground or has ended without contact, and the craft can hold its weight; see NoPlanNearGround.
 
         // Estimate what the model is missing BEFORE re-solving, so the optimiser plans around it rather than rediscovering it every cycle.
         // The thrust the last throttle DELIVERS, off the engines' own curve - the one the command was inverted through - not throttle x full thrust. In an atmosphere that straight line overstates low-throttle thrust by a near-constant amount (see ApplyPlanCommand), and the estimate took the difference for a missing force: on the 2026-10-09 7 t booster, about 85 kN at a quarter throttle, a -3.7 m/s^2 "gravity" every plan then braked against, stopping the booster 5 m high and climbing.
@@ -1787,6 +1801,7 @@ public static partial class GuidanceWindow
             _s.Active = true;
             _s.TouchdownArmed = false;
             _s.SixDofSeenDescending = _s.SixDofTookBurn;
+        _s.SixDofArrivedSince = double.NaN;
             _s.SixDofEngineCut = false;
             _s.GateIndex = -1;
             _s.RefusalRun = 0;
@@ -1836,6 +1851,7 @@ public static partial class GuidanceWindow
         _s.Worker = _s.SixDofThreaded ? new Ksa6DofSolveWorker() : null;
         _s.TouchdownArmed = false;
         _s.SixDofSeenDescending = _s.SixDofTookBurn;
+        _s.SixDofArrivedSince = double.NaN;
         _s.SixDofEngineCut = false;
         _s.GateIndex = -1;
         _s.LastReplan = now;

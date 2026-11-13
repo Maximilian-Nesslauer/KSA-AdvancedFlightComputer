@@ -8,6 +8,7 @@ using Brutal.Numerics;
 using AdvancedFlightComputer.Guidance.Conic;
 using AdvancedFlightComputer.Guidance.Gfold;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using KSA;
 
@@ -682,6 +683,14 @@ public sealed class VehicleAutopilotState
     internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
 
+    // How far above VehicleHeightM the centre of mass is when the craft first meets the ground at the site, because the ground under its footprint is not level (TouchdownContact). Zero on level ground and with a manual vehicle height.
+    internal double SiteEarlyContactM;
+    internal double SiteGroundCacheLat = double.NaN;
+    internal double SiteGroundCacheLon = double.NaN;
+    internal double SiteGroundCacheReachM;
+    internal object SiteGroundCacheBody;
+    internal TouchdownContact.GroundRise SiteGround;
+
     /// <summary>
     /// Largest thrust acceleration a landing burn may PLAN, in g, or 0 for none - a soft constraint in both the 3-DOF and the 6-DOF solvers, read when they build their problem; the glide plan times the ignition under it with headroom (Guidance3Dof.Settings.AccelHeadroom). A min-fuel burn otherwise lights as late as it can, or coasts on minimum thrust once lit, and brakes at full throttle at the end: 5-6 g over two seconds on the 2026-10-08 boosters, up to 13.7 g in the last second on the 2026-10-09 7 t one, where a tenth of a second of lag is metres per second and no node count the solver keeps up with resolves the burn. The trackers may still go past it to correct; see StartThreeDofCold.
     /// </summary>
@@ -770,8 +779,8 @@ public sealed class VehicleAutopilotState
     public double SixDofThrottleFloor = 0.40;
     public bool SixDofFloorAuto = true;    // track the vehicle's real minimum throttle
     public double SixDofSigmaSeed = 20.0;
-    // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs.
-    public double SixDofTargetComAltM => VehicleHeightM;
+    // ZERO/ZERO: the plan ends with the legs on the pad and the craft at rest, so it lands the craft itself rather than stopping above the pad for something else to finish. The plan flies the CoM, which sits VehicleHeightM above the legs, and on a slope the first leg meets the ground SiteEarlyContactM before the height of the site centre.
+    public double SixDofTargetComAltM => VehicleHeightM + SiteEarlyContactM;
     public double SixDofGlideSlopeDeg = 10.0;   // 0 = off; degrees above horizontal
     public bool SixDofVzEnabled = true;
     public double SixDofVzMaxMs;
@@ -782,6 +791,9 @@ public sealed class VehicleAutopilotState
     /// And whether it took a burn over from another mode - the 3-DOF or the braking burn - rather than being engaged directly: such a craft has no plan of its own until the first solve lands, and near the ground the burn's last command it is still flying is as stale as an expired plan.
     /// </summary>
     public bool SixDofSeenDescending, SixDofEngineCut, SixDofTookBurn;
+
+    // The simulation time since which the craft has rested at the end of its plan without contact, NaN while it does not (NoPlanNearGround).
+    internal double SixDofArrivedSince = double.NaN;
 
     /// <summary>
     /// Set while a COLD restart converges: the last plan is flown open loop, without the tracker, until the new plan lands. A cold restart means the plan was abandoned - the vehicle drifted off it, or the target moved, which moves the frame so the plan reads as hundreds of metres off - and tracking an abandoned plan pushes the vehicle around for an error that is not one (throttle 0.01 then 1.0 after a 250 m move, 2026-10-13 08:40). A warm restart keeps the plan it is refining, and keeps tracking it.

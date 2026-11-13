@@ -8,6 +8,7 @@ using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 
 public static partial class GuidanceWindow
 {
@@ -463,6 +464,53 @@ public static partial class GuidanceWindow
             _s.SiteTerrainCacheBody = parent;
         }
         return _s.SiteTerrainHeightM;
+    }
+
+    private const double SiteGroundRingStepM = 0.5;
+    private const int SiteGroundRingPoints = 16;
+    private const double SiteGroundMaxReachM = 30.0;
+
+    // How far above the vehicle height the first contact at the site comes for these foot points. The terrain is sampled on rings around the site out to the widest foot point, once per site and reach, from the height function that the game builds its terrain collision mesh from (BubbleTerrainGrid.SampleRadius calls Celestial.GetTerrainHeightFromDirCcf).
+    private static double SiteEarlyContact(IParentBody parent, TouchdownContact.FootPoint[] feet)
+    {
+        if (parent is not Celestial body || feet == null || feet.Length == 0)
+            return 0.0;
+        double reach = 0.0;
+        foreach (var foot in feet)
+            reach = Math.Max(reach, foot.RadiusM);
+        reach = Math.Min(Math.Ceiling(reach), SiteGroundMaxReachM);
+        if (!(reach > 0.0))
+            return 0.0;
+
+        if (_s.SiteGround == null || _s.SiteLatDeg != _s.SiteGroundCacheLat || _s.SiteLonDeg != _s.SiteGroundCacheLon
+            || reach != _s.SiteGroundCacheReachM || !ReferenceEquals(parent, _s.SiteGroundCacheBody))
+        {
+            double3 up = SiteDirCcf();
+            double3 east = double3.Cross(new double3(0, 0, 1), up);
+            east = east.LengthSquared() > 1e-12 ? double3.Normalize(east) : new double3(1, 0, 0);
+            double3 north = double3.Cross(up, east);
+            double centre = body.GetTerrainHeightFromDirCcf(up);
+            double radius = body.MeanRadius + centre;
+            var highest = new double[(int)Math.Round(reach / SiteGroundRingStepM)];
+            for (int ring = 0; ring < highest.Length; ring++)
+            {
+                double r = (ring + 1) * SiteGroundRingStepM;
+                double high = double.NegativeInfinity;
+                for (int i = 0; i < SiteGroundRingPoints; i++)
+                {
+                    double a = i * 2.0 * Math.PI / SiteGroundRingPoints;
+                    double3 point = up * radius + (east * Math.Cos(a) + north * Math.Sin(a)) * r;
+                    high = Math.Max(high, body.GetTerrainHeightFromDirCcf(double3.Normalize(point)) - centre);
+                }
+                highest[ring] = high;
+            }
+            _s.SiteGround = new TouchdownContact.GroundRise(SiteGroundRingStepM, highest);
+            _s.SiteGroundCacheLat = _s.SiteLatDeg;
+            _s.SiteGroundCacheLon = _s.SiteLonDeg;
+            _s.SiteGroundCacheReachM = reach;
+            _s.SiteGroundCacheBody = parent;
+        }
+        return TouchdownContact.EarlyContactM(feet, _s.SiteGround);
     }
 
 }

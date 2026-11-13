@@ -199,6 +199,20 @@ public sealed class Ksa6DofGuidance
     /// <summary>Floor for the counted-down burn time, so the last cycles before arrival cannot divide by ~0.</summary>
     public double MinimumBurnTime { get; init; } = 1.0;
 
+    // The lowest value the lower bound of a free burn time goes down to, s, and the share of the time left on the plan that it stays under.
+    private const double FreeSigmaMinFloorS = 0.25;
+    private const double FreeSigmaMinShare = 0.5;
+
+    /// <summary>
+    /// Lowers the lower bound of the burn time under the time that is left on the plan. The bound comes from the first burn-time guess (Ksa6DofSetup, 0.15 of it), which is 3 s for the default guess of 20 s. Once less time is left than the bound, the burn time is pinned at it and each plan ends later than the craft can arrive. A craft whose minimum thrust is above its weight cannot stretch its last seconds, so it brakes too little on such a plan and meets the ground fast. The bound only goes down, and a re-solve can still shorten the plan by half in one cycle.
+    /// </summary>
+    private void KeepSigmaMinUnder(double timeLeftS)
+    {
+        if (!double.IsFinite(timeLeftS))
+            return;
+        _cfg.SigmaMin = Math.Min(_cfg.SigmaMin, Math.Max(FreeSigmaMinShare * timeLeftS, FreeSigmaMinFloorS));
+    }
+
     /// <summary>
     /// ADMM iteration caps. THIS IS WHAT STOPS THE GAME FREEZING.
     ///  The iteration cap limits the work that one subproblem can consume, and the SCvx loop treats a truncated solve as a subproblem failure before it shrinks the trust region.
@@ -918,7 +932,8 @@ public sealed class Ksa6DofGuidance
     /// A node step accepted at the loose cold tolerance commits a plan that the warm loop will then reject on every single cycle: the recorded run stepped 50 -> 30 nodes with 1.13 m of defect, passed the 15 m cold gate, and every cycle afterwards read "no solve this cycle" against the 1 m warm gate while the vehicle flew an ageing open-loop plan.
     ///  The coarser rung is an OPTIMISATION - it exists to make solves cheaper. If it cannot produce a plan the loop will actually fly, declining the step and staying at the finer count costs only solve time, which is the thing the step was trying to save. That is the right way round.
     /// </summary>
-    public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5)
+    /// <param name="targetAltM">The height of the centre of mass at the end of the plan, measured now. The rest of the terminal state stays the previous one. The centre of mass climbs in the craft as the propellant drains, so the height from the first solve of a long descent is too low at its end. NaN keeps the previous height.</param>
+    public bool SeedFrom(Ksa6DofGuidance prev, double[] x0, double simNow, int maxIterations = 5, double targetAltM = double.NaN)
     {
         // ONE MOMENT AT WHICH THE MODEL CAN CHANGE, and it is here, before anything reads it. Deliberately not inside Finish: a single Update can call Finish twice (the wide-trust-region retry), and committing between them would let the retry run against a different model than the attempt it is retrying.
         CommitInputs();
@@ -930,6 +945,8 @@ public sealed class Ksa6DofGuidance
         var xs = new double[_n * NX];
         var us = new double[_n * NU];
         double elapsed = Math.Max(0.0, simNow - prev._solveTime);
+        if (!FixedTime)
+            KeepSigmaMinUnder(prev._planSigma - elapsed);
         double sigma = Math.Max(_cfg.SigmaMin, prev._planSigma - elapsed);
         ResamplePlan(prev._planX, prev._planU, prev._n, prev._planSigma, elapsed, _n,
                      sigma / (_n - 1), xs, us);
@@ -939,6 +956,14 @@ public sealed class Ksa6DofGuidance
         LastBranchFlips = AlignQuaternionBranch(xs, _n);
 
         _xf = (double[])prev._xf.Clone();
+        if (double.IsFinite(targetAltM))
+        {
+            // The resampled plan ends on the previous height. Its last node moves with the target, and the nodes before it by their share of the plan time, so the seed still ends on the terminal state that the solver pins.
+            double shift = targetAltM - _xf[2];
+            for (int k = 1; k < _n; k++)
+                xs[k * NX + 2] += shift * k / (_n - 1);
+            _xf[2] = targetAltM;
+        }
         if (FixedTime) PinSigma(sigma);
         // A rebuild continues a refinement: the stage the previous guidance had reached, not a rough start, at this horizon.
         _pricingTimeToGo = sigma;
@@ -1091,6 +1116,7 @@ public sealed class Ksa6DofGuidance
         }
         else
         {
+            KeepSigmaMinUnder(_planSigma - elapsed);
             sigma = Math.Max(_cfg.SigmaMin, _planSigma - elapsed);
         }
 
