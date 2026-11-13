@@ -3,7 +3,7 @@
 Maneuver planning, burn execution and closed-loop guidance for [Kitten Space Agency](https://ahwoo.com/app/100000/kitten-space-agency).
 
 Adds one AFC console for every feature, orbit quick-tools (circularize, set Pe/Ap, match/set inclination), flyby targeting so a Hohmann transfer arrives as a flyby instead of an impact, multi-pass burn splitting for Oberth-efficient departures, RCS-only burn execution, automatic staging with spent-booster drop and configurable staging delays, automatic removal of finished burns, and enables the planner to target interstellar comets on hyperbolic orbits (Oumuamua, 2I/Borisov, 3I/ATLAS).
-Its powered guidance flies an ascent to orbit, a booster boostback and a pinpoint powered landing.
+Its powered guidance flies an ascent to orbit, a launch to a flyby or an orbit of a moon, a booster boostback and a pinpoint powered landing.
 
 This mod is written against the [StarMap loader](https://github.com/StarMapLoader/StarMap).
 
@@ -43,11 +43,11 @@ The stock Transfer Planner stays as the game ships it. The **Planner** link with
 
 One row of tabs under the head holds the seven pages in the order of a mission, with a hairline before the two setup pages. A dot after a tab means that something runs on that page:
 
-- **LAUNCH** - the ascent: **ASCENT** and **CLIMB**, target orbit, launch window and the flight profile picture with the convex plan, the flown track and the staging ticks. Its **BOOSTERS** region sets the **SITE** each returnable stage flies home to after separation, and shows the **RESERVE** that the solved climb sizes for that stage.
+- **LAUNCH** - the ascent: **ASCENT** and **CLIMB**, target orbit, launch window and the flight profile picture with the convex plan, the flown track and the staging ticks. The **REACH** row shows the plane change that a launch from the site costs, and the **TWR** row warns when the first stage cannot lift off. The **THEN** row picks what follows the ascent: *Stay in orbit*, a flyby of a moon or an orbit of a moon, see [Launch to a moon](#launch-to-a-moon). Its **BOOSTERS** region sets the **SITE** each returnable stage flies home to after separation, and shows the **RESERVE** that the solved climb sizes for that stage.
 - **MANEUVER** - the quick-tools below, with an orbit or plane sketch, the burn bars and the passes.
 - **TRANSFER** - transfers to other bodies on an AFC porkchop plot, with passes, flyby targeting and a course correction.
 - **BURNS** - how the next burn is flown (stock engine or RCS), with the RCS attitude and the propellant estimates.
-- **LAND** - four ways down: **DEORBIT** (the whole chain from orbit), **BOOSTBACK** (a spent booster back to its site, with the return profile and the predicted impact), **LAND NOW** (the powered descent from where the craft is, with entry guidance, touchdown guidance or G-FOLD, as the **MODE** column of the solver table picks) and **HOVER**. Entry guidance can take a boostback glide over and fly the landing burn. Every way shares the landing site.
+- **LAND** - four ways down: **DEORBIT** (the whole chain from orbit), **BOOSTBACK** (a spent booster back to its site, with the return profile and the predicted impact), **LAND NOW** (the powered descent from where the craft is) and **HOVER**. The solver table shows **TOUCHDOWN**, with **ENTRY** above it on LAND NOW when entry guidance flies first through the air, and **G-FOLD** only while its fallback descent flies. AFC picks the solver from the situation of the craft. Entry guidance can take a boostback glide over and fly the landing burn. Every way shares the landing site.
 - **STAGING** - AutoStage, the staging delays and automatic burn removal.
 - **TUNE** - the tuning values of every guidance mode, the diagnostics and the AFC preferences. Each set has the count of its changed values on its tab, and a changed value shows its default and a **RESET** on its row.
 
@@ -94,8 +94,11 @@ The stock planner aims every transfer at the target body's center, so a well-tim
 - For multiple passes, the readout uses the selected departure after any schedule shift and the periapsis from the final preview trajectory.
 - If propagation cannot confirm a periapsis, the readout shows **No prediction** and its reason, such as a departure time outside the flight plan or no resolved target encounter.
 
+- The preview shows the burn that **CREATE** makes, refined for the finite burn. **CREATE** refuses a flyby that is not armed or has no solution, and says why.
+- **Course correction.** After a flyby departure that **CREATE** made to a moon of the craft's parent body, AFC follows the burn, checks the periapsis on the flight plan, and adds up to two small correction burns when the periapsis is off by more than 10 percent (at least 10 km). They stay in Manual, and you fly them with **FLY BURN**. Stock AUTO misses a long departure burn by more at a higher simulation speed, and the correction cancels that miss.
+
 **Limitations:**
-- The plan is impulsive, the burn is not. On a near-escape departure the periapsis actually flown drifts from the requested one by roughly the finite-burn loss, on the order of one percent of a multi-km/s injection. Trim it with a small correction burn, or split the departure across several passes to cut the loss.
+- The course correction covers a single flyby of a moon of the craft's parent body, and a save load ends it. For an interplanetary flyby or a multi-pass departure, trim the periapsis with a small correction burn yourself.
 
 ### Multi-Pass Burns
 
@@ -173,7 +176,7 @@ Activates the next sequence whenever the active engines run out of propellant, a
 - **STAGING page of the console:** the switches, and in the **DELAYS** fold the delays of this craft per sequence, the default delays of the parts of this craft, and under **ALL PARTS** the "ENGINE IGNITION DELAYS" and "DECOUPLER DELAYS" tables of every known part variant, with a filter. Every setting takes effect immediately; click **SAVE DEFAULTS** to persist the defaults. In the editor the page holds the defaults only.
 - **Part window (right-click part > Window):** override the delay for a specific sequence on the current vehicle, or open the STAGING page with **OPEN AFC**. A part gets one block per sequence it fires something in, each naming the module it covers. Per-vehicle overrides take priority over the global config.
 
-The global config is `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\autostage.toml`:
+The global config is `mods\AdvancedFlightComputer\autostage.toml` in the game profile folder, by default `Documents\My Games\Kitten Space Agency\mods\AdvancedFlightComputer\autostage.toml`:
 
 ```toml
 [staging]
@@ -206,10 +209,11 @@ The stock Transfer Planner filters out bodies with eccentricity >= 1. This mod l
 Closed-loop guidance that flies the vehicle for you, originally the [PoweredGuidance](https://github.com/cairn5/PoweredGuidance) mod by cairn5, see [Credits](#credits).
 Use the **LAUNCH** and **LAND** pages of the [AFC console](#afc-console). The footer of the page starts its mode, and the stop in the head acts on the mode that runs, whatever page is on screen. **GUIDANCE ENABLED** in the **AFC** menu of the top bar and on **TUNE > PREFERENCES** switches guidance off and on.
 
-- **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
+- **Ascent** flies UPFG, the Space Shuttle's ascent guidance, to a target periapsis, apoapsis, inclination and LAN, optionally holding the argument of periapsis too and otherwise inserting wherever the burn costs least dV, with an optional launch window, g-limit and booster reserve. Launching to a target vehicle flies a co-elliptic chase orbit below it. LAUNCH refuses a plane that the launch site cannot reach and names the nearest inclination that it can reach, and it refuses a launch into a target plane outside its window with the time of the next window. Staging goes through [automatic staging](#automatic-staging), and a stage that separates with a command pod can get its own landing site.
 - **Boostback** flies a separated booster back toward its landing site with a settling burn, a flip, the boostback burn and an entry attitude, against an impact prediction through the atmosphere.
-- **Land from orbit** flies the whole chain from orbit: the deorbit burn, a powered descent with touchdown guidance (the 6-DOF solver) or G-FOLD (a point-mass solver and the fallback), and a terminal hover to touchdown.
-- **Land from here** starts the landing from where the craft is now, with entry guidance, touchdown guidance or G-FOLD, as the **MODE** column of the solver table picks.
+- **Launch to a moon** follows the ascent when **THEN** on LAUNCH picks a flyby or an orbit of a moon, see [Launch to a moon](#launch-to-a-moon).
+- **Land from orbit** flies the whole chain from orbit: the deorbit burn, a powered descent with touchdown guidance (the 6-DOF solver), and a terminal hover to touchdown for a craft that can hover. The plan ends where the first point of the craft meets the ground, so a craft that cannot hover touches down softly too. When touchdown guidance has no plan in the air for 6 s, G-FOLD (a point-mass solver) takes the craft if it can fly it. AFC refuses before the deorbit burn when no landing guidance can fly the craft, and says why. After touchdown the attitude stays in **MANUAL**, so the RCS does not push the landed craft.
+- **Land from here** starts the landing from where the craft is now, with touchdown guidance, or with entry guidance first when the craft falls through an atmosphere.
 - **Entry guidance** (the 3-DOF solver) flies the glide through the atmosphere with the engine off, lights the engine at the planned ignition and flies the landing burn. With **ENTRY ON GLIDE** on, it takes a boostback glide over by itself, and with **TOUCHDOWN FOR BURN END** on, touchdown guidance takes the last seconds of the burn.
 
 Guidance plans stay within the g-limit and the structural load limit at which KSA holds the throttle back.
@@ -217,8 +221,19 @@ Guidance takes a craft only when you press the commit of a page, and it lets go 
 An abort during the powered descent, the terminal hover or the landing burn of entry guidance leaves the engine as it is, so the craft does not drop, while every other abort cuts the engine. An abort of entry guidance in the glide cuts the engine, which is off in the glide in any case.
 The hover refuses a craft whose thrust at minimum throttle exceeds its weight, because such a craft climbs whenever the engine runs, and a G-FOLD or touchdown guidance descent that would hand over to it flies its own plan to touchdown instead.
 The aim of the hover is nudged with buttons. Numpad nudges are off by default, because the game also uses the numpad digits for its HUD layouts; **NUMPAD NUDGES THE HOVER** on **TUNE > PREFERENCES** turns them on. The keys then work while the craft hovers, whatever the console shows.
-G-FOLD suits airless bodies and agile landers that point with RCS. Touchdown guidance (the 6-DOF solver) models the vehicle rotation, so it handles boosters with high rotational inertia and descents through an atmosphere.
+G-FOLD is the fallback, and it flies only a craft with a gimbal. Touchdown guidance (the 6-DOF solver) models the vehicle rotation, so it handles boosters with high rotational inertia and descents through an atmosphere.
+While AFC solves a launch plan or plans a deorbit burn, it holds the simulation at 1x and then gives your speed back. It does not give the speed back into a burn, an armed launch or a coast to a planned burn.
 The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [guidance documentation](docs/guidance/README.md) for how it works.
+
+### Launch to a moon
+
+**THEN** on the LAUNCH page picks what follows the ascent: *Stay in orbit*, a flyby of a moon, or an orbit of a moon (every moon of the launch body is listed), with **PERIAPSIS AT MOON** below it, 100 km by default.
+
+- With a moon picked and no **TARGET**, the launch plane is set for the moon and LAUNCH arms for its window: the moon's own orbit plane when the launch site passes under it, and otherwise the plane just above the site's latitude that holds the moon at the soonest arrival.
+- After the ascent, AFC plans the injection burn from the parking orbit, checks the orbit as flown, and plans up to two small correction burns on the way, because a tenth of a m/s at the injection moves the periapsis at the moon by more than 100 km. For an orbit it then plans the capture burn at the periapsis, into a circular orbit, or into an ellipse when the craft has less delta-v than that.
+- Stock AUTO flies every burn, and AFC warps to each one for the craft in focus.
+- A burn that you plan, a chain burn that you remove or change, or AUTO switched off stops the chain and leaves everything as it is. *Stay in orbit* picked during the chain, another controller on the craft, or guidance switched off stops it too, and a chain burn that has not started then stays planned with AUTO off. **THEN** goes back to *Stay in orbit* when the chain ends.
+- A parking orbit that the moon is far out of is refused with the angle and the cost.
 
 ## Installation
 
@@ -232,6 +247,8 @@ The native solvers `clarabel_c.dll` and `scs.dll` ship with the mod. See the [gu
 id = "AdvancedFlightComputer"
 enabled = true
 ```
+
+AFC reads and writes its files (settings, staging delays, multi-pass plans, RCS options and logs) in the profile folder that the game runs in. When a launcher starts the game with its own profile folder (an instance), the mod and its files are in that folder instead of `Documents\My Games\Kitten Space Agency\`.
 
 ## Dependencies
 
