@@ -3,6 +3,7 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using System.Collections.Generic;
 using BepuUtilities;
 using Brutal.Numerics;
 using KSA;
@@ -115,6 +116,40 @@ public static class Ksa6DofSetup
         double total = 0.0;
         foreach (GimbalController gc in KsaGimbalControl.PlanningGimbals(vehicle))
             total += gc.Data.MaximumThrust;
+        return total;
+    }
+
+    /// <summary>
+    /// The thrust of every engine the plan runs, at the conditions PlanningThrust is taken at: the planning gimbals' Data.MaximumThrust plus the engines that sit on no gimbal, through the same nozzle evaluation (GimbalController.RecomputeStaticData, a throttle of 2 in vacuum). The model's Tmax is the thrust of all activated engines, and only the part of it that goes through a gimbal makes torque, so the capability per newton of the model's thrust is the allocator's capability over this figure. Over PlanningThrust alone, a craft with one gimballed engine among seven planned with the gimbal range of that engine on the thrust of all seven, about 3.7 times the torque its gimbal gives.
+    /// An engine without a gimbal counts when it is activated, or when no gimballed engine is activated, as KsaGimbalControl.CountsForPlanning counts the gimbals. RCS thrusters are rockets too and are left out by their controller type.
+    /// </summary>
+    public static double PlanningEngineThrust(Vehicle vehicle)
+    {
+        Span<GimbalController> all = vehicle.Parts.Modules.Get<GimbalController>();
+        bool anyActive = KsaGimbalControl.AnyEngineActive(all);
+        var onGimbal = new HashSet<RocketNozzle>();
+        double total = 0.0;
+        foreach (GimbalController gc in all)
+        {
+            if (!KsaGimbalControl.CountsForPlanning(gc, anyActive))
+                continue;
+            total += gc.Data.MaximumThrust;
+            foreach (RocketNozzle nozzle in gc.Data.Nozzles)
+                onGimbal.Add(nozzle);
+        }
+
+        foreach (RocketNozzle nozzle in vehicle.Parts.Modules.Get<RocketNozzle>())
+        {
+            Rocket rocket = nozzle.Rocket;
+            if (rocket?.Core?.Controller is not EngineController engine || onGimbal.Contains(nozzle))
+                continue;
+            if (anyActive && !engine.IsActive)
+                continue;
+            RocketCoreConditions combustion = rocket.Core.ComputeConditions(2f);
+            double thrust = nozzle.ComputePerformance(in combustion, 0f).GetTotalThrust();
+            if (double.IsFinite(thrust) && thrust > 0.0)
+                total += thrust;
+        }
         return total;
     }
 
@@ -285,7 +320,8 @@ public static class Ksa6DofSetup
         }
 
         // TORQUE AUTHORITY PER NEWTON. Both capabilities below are the allocator's at PlanningThrust, and the gimbals deliver torque in proportion to the thrust through them. Divided by full thrust at the target's pressure instead, the effective gimbal came out 1.3x too wide on the 2026-10-08 booster (3.17 deg against 2.40), and the roll bound was a fixed figure at that same vacuum thrust: the plan asked for torque the gimbals could not give at a third of full thrust, and the allocator saturated from the first step.
-        double planningThrust = PlanningThrust(vehicle);
+        // Per newton of every engine's thrust, because the model's thrust is that of all of them; see PlanningEngineThrust.
+        double planningThrust = PlanningEngineThrust(vehicle);
         double tauRoll = RollTorqueLimit(vehicle);
         // The roll capability at the model's Tmax; the rows scale it with the thrust (RollTorqueFollowsThrust).
         if (planningThrust > 0.0)
