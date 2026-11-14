@@ -27,6 +27,9 @@ if (args.Contains("--standby"))
 if (args.Contains("--cold-shift"))
     return ColdReferenceShiftCheck.Run();
 
+if (args.Contains("--roll-free-landing"))
+    return RollFreeLandingCheck.Run(args);
+
 if (args.Contains("--handover"))
 {
     BrakingHandoverCheck.Verbose = verbose;
@@ -104,6 +107,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --spread        spread the cold solve across frames while the vehicle falls
           --cold-shift    preserve the cold reference dynamics when the craft moves
           --handover      the cold solve at a braking-burn hand-over, as logged and with the braking seed
+          --roll-free-landing  the plan and the flying loop for a craft whose gimbals give no roll torque
           --hermite       sample plan position and velocity for warm re-solves
           --touchdown     the first contact on ground that is not level, against logged landings
           --soft          soft terminal position: unreachable target still yields a plan

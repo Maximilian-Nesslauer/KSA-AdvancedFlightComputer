@@ -35,6 +35,27 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
         ColumnsCoverALateralNozzleOffset(t);
         RealEnginesMatchStock(t);
         EnginesOffTheGimbalsCountInTheModelThrust(t);
+        TheRollModelTakesACraftWithoutRollTorque(t);
+    }
+
+    // A craft whose gimbals give no roll torque at all is planned with the roll left free and a roll bound above zero, and the choice of the first plan of a landing stands while the roll inertia falls with the propellant.
+    private static void TheRollModelTakesACraftWithoutRollTorque(TestContext t)
+    {
+        Ksa6DofSetup.RollModel(0.0, 800.0, null, out bool freeAtZero, out double tauAtZero);
+        t.Check("no roll torque at all leaves the roll free with a roll bound above zero",
+            freeAtZero && tauAtZero > 0.0 && tauAtZero < Ksa6DofSetup.RollAuthorityFloorRadS2 * 800.0, $"free {freeAtZero}, bound {tauAtZero:G3} N m");
+
+        Ksa6DofSetup.RollModel(26800.0, 60000.0, null, out bool freeWithTorque, out double tauWithTorque);
+        t.Check("gimbals with roll torque keep the roll in the plan and their torque", !freeWithTorque && tauWithTorque == 26800.0,
+            $"free {freeWithTorque}, bound {tauWithTorque:F0} N m");
+
+        // 1.5 N m is under the floor at 800 kg m^2 (1.6 N m) and over it at 700 kg m^2 (1.4 N m).
+        Ksa6DofSetup.RollModel(1.5, 800.0, null, out bool first, out _);
+        Ksa6DofSetup.RollModel(1.5, 700.0, null, out bool fresh, out _);
+        Ksa6DofSetup.RollModel(1.5, 700.0, first, out bool kept, out _);
+        Ksa6DofSetup.RollModel(1.5, 800.0, false, out bool keptPinned, out _);
+        t.Check("a later plan of the same landing keeps the choice of the first one", first && !fresh && kept && !keptPinned,
+            $"first {first}, a fresh choice at the lower inertia {fresh}, kept {kept}, kept pinned {keptPinned}");
     }
 
     // Thrust along vehicle +X, the pivot PivotArm behind the centre of mass and the thrust point

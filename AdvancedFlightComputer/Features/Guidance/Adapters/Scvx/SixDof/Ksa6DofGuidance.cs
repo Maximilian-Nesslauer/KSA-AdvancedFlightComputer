@@ -438,6 +438,9 @@ public sealed class Ksa6DofGuidance
     /// <summary>Plan node count, for the overlay.</summary>
     public int Nodes => _n;
 
+    /// <summary>The plan leaves the roll free at its end (Scvx6DofConfig.TerminalRollFree).</summary>
+    public bool TerminalRollFree => _cfg.TerminalRollFree;
+
     public ReadOnlySpan<double> PlanState => _planX;
     public ReadOnlySpan<double> PlanControl => _planU;
 
@@ -561,6 +564,8 @@ public sealed class Ksa6DofGuidance
         if (BrakingSeed)
         {
             ColdSeed6Dof.Build(x0, xf, sigma, _n, _cfg, _dyn, out xSeed, out uSeed);
+            if (_cfg.TerminalRollFree)
+                ColdSeed6Dof.KeepRoll(xSeed, _n, sigma);
             return;
         }
         xSeed = new double[_n * NX];
@@ -588,7 +593,8 @@ public sealed class Ksa6DofGuidance
 
         // Belt and braces: node 0 IS the measured state, exactly. Interpolation should already give this at t=0, but the equality and the trust region leave no slack at all here, so it is not worth depending on floating-point luck.
         Array.Copy(x0, 0, xSeed, 0, NX);
-
+        if (_cfg.TerminalRollFree)
+            ColdSeed6Dof.KeepRoll(xSeed, _n, sigma);
     }
 
     /// <summary>

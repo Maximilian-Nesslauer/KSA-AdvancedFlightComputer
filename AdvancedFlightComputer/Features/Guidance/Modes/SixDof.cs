@@ -458,7 +458,8 @@ public static partial class GuidanceWindow
                                    x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
-                                   floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero))
+                                   floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
+                                   keptRollFree: _s.Guidance.TerminalRollFree))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;

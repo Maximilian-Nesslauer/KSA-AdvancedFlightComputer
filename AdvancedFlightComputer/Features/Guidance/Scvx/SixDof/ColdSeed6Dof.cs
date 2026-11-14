@@ -93,6 +93,34 @@ public static class ColdSeed6Dof
     }
 
     /// <summary>
+    /// Makes a reference roll with a craft that has no roll torque (Scvx6DofConfig.TerminalRollFree): each node is turned about its own thrust axis by the angle the measured roll rate covers up to that node, and carries that roll rate. The thrust axis of no node moves. Without it the reference stops the roll, which the dynamics cannot do, and every node past the first is a roll angle away from where the craft will be, further with each node and far outside a trust region by the end.
+    /// </summary>
+    public static void KeepRoll(double[] xSeed, int nodes, double sigma)
+    {
+        double rollRate = xSeed[Dynamics6Dof.IW + 2];
+        for (int k = 1; k < nodes; k++)
+        {
+            double angle = rollRate * sigma * k / (nodes - 1);
+            double c = Math.Cos(0.5 * angle), s = Math.Sin(0.5 * angle);
+            int q = k * NX + Dynamics6Dof.IQ;
+            double qw = xSeed[q], qx = xSeed[q + 1], qy = xSeed[q + 2], qz = xSeed[q + 3];
+            // q (c, 0, 0, s), a turn about the body z axis.
+            xSeed[q] = qw * c - qz * s;
+            xSeed[q + 1] = qx * c + qy * s;
+            xSeed[q + 2] = qy * c - qx * s;
+            xSeed[q + 3] = qz * c + qw * s;
+
+            // The pitch and yaw rates are the same vectors, read in the turned body axes.
+            int w = k * NX + Dynamics6Dof.IW;
+            double wx = xSeed[w], wy = xSeed[w + 1];
+            double ca = Math.Cos(angle), sa = Math.Sin(angle);
+            xSeed[w] = wx * ca + wy * sa;
+            xSeed[w + 1] = wy * ca - wx * sa;
+            xSeed[w + 2] = rollRate;
+        }
+    }
+
+    /// <summary>
     /// How far the straight-line reference is from the burn the states ask for: the thrust that turns the measured velocity into the target one over the burn time, as a multiple of the hover thrust the straight line holds.
     /// </summary>
     public static double BrakingLoad(ReadOnlySpan<double> x0, ReadOnlySpan<double> xf, double sigma, Dynamics6Dof.Params dyn)
@@ -106,8 +134,8 @@ public static class ColdSeed6Dof
         return Math.Sqrt(ax * ax + ay * ay + az * az) / gravity;
     }
 
-    // The attitude q turned by the shortest rotation that brings its body +Z onto the unit vector axis. Scalar-first, body to inertial.
-    private static void PointBodyZ(ReadOnlySpan<double> q, ReadOnlySpan<double> axis, Span<double> result)
+    /// <summary>The attitude q turned by the shortest rotation that brings its body +Z onto the unit vector axis. Scalar-first, body to inertial. The turn has no part about the body Z axis, so a chain of them from a measured attitude keeps the measured roll.</summary>
+    public static void PointBodyZ(ReadOnlySpan<double> q, ReadOnlySpan<double> axis, Span<double> result)
     {
         double qw = q[0], qx = q[1], qy = q[2], qz = q[3];
         double zx = 2.0 * (qx * qz + qw * qy), zy = 2.0 * (qy * qz - qw * qx), zz = 1.0 - 2.0 * (qx * qx + qy * qy);

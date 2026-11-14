@@ -24,6 +24,12 @@ public sealed class Scvx6DofConfig
     /// Roll torque scales with the axial thrust, |tau_roll| &lt;= TauRollMax * T / Tmax, rather than TauRollMax at any thrust: the roll torque comes from gimbals, which turn thrust into torque, so at a third of full thrust there is a third of the roll authority. A fixed bound promised a landing booster several times the roll it had (2026-10-08), the plan rolled at rates the vehicle could not follow, and every re-solve from there was refused. Off for a vehicle with a roll actuator of its own.
     /// </summary>
     public bool RollTorqueFollowsThrust { get; init; }
+
+    /// <summary>
+    /// Leaves the heading and the roll rate free at the end of the plan, for a craft that has no roll torque: the last node is held upright (qx = qy = 0) with no pitch or yaw rate, and its qw, qz and wz are what the roll motion makes them. Such a craft keeps the roll rate it enters with. An end state with a fixed heading and no roll rate is then out of reach of every control except the coupling of the pitch and yaw rates through unequal transverse inertias, which is weak and makes the subproblems badly conditioned: a plan that uses it swings the thrust axis through the whole burn, and a re-solve costs ten or more times the solver iterations.
+    /// The reference has to roll with the craft as well, see ColdSeed6Dof.KeepRoll.
+    /// </summary>
+    public bool TerminalRollFree { get; init; }
     public double TiltMaxDeg { get; init; } = 30.0;
     public double GroundFloor { get; init; } = -1.0;            // X[n,2] >= this
 

@@ -101,7 +101,8 @@ public sealed class Scvx6DofSubproblemScs
         _oAc = _oTm + _nTm;
         _nVars = _oAc + _nAc;
 
-        _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2);
+        // With the terminal roll free, three terminal rows go (qw, qz, wz) and the last node gets a tangent-plane row.
+        _nEq = NX + (NX - 1) + (_n - 1) * NX + (_n - 2) - (cfg.TerminalRollFree ? 2 : 0);
         // FIVE orthant rows per node, not six.
         // The sixth was the LINEARISED tilt constraint; it is now an exact second-order cone in the block below, so the row is gone rather than merely changed.
         // See AssembleCone's tilt block. + _nVz climb-rate rows, + _nGs + _nVz slack non-negativity rows + _nTm non-negativity rows for the terminal-miss slacks
@@ -364,6 +365,9 @@ public sealed class Scvx6DofSubproblemScs
         }
         for (int i = 0; i < NX - 1; i++)
         {
+            // A craft with no roll torque ends upright with no pitch or yaw rate, at whatever heading and roll rate it has by then.
+            if (_cfg.TerminalRollFree && i is Dynamics6Dof.IQ or Dynamics6Dof.IQ + 3 or Dynamics6Dof.IW + 2)
+                continue;
             AddA(row, IX(_n - 1, i), 1.0);
             // Terminal POSITION may miss, if softened: X[n-1] - (s+ - s-) = xf, with both slacks non-negative and penalised.
             // Velocity and attitude stay hard
@@ -422,7 +426,8 @@ public sealed class Scvx6DofSubproblemScs
             row += NX;
         }
 
-        for (int k = 1; k < _n - 1; k++)
+        // The last node is pinned outright unless its roll is free. Then two of its quaternion components are variables, and it takes the row as well.
+        for (int k = 1; k < (_cfg.TerminalRollFree ? _n : _n - 1); k++)
         {
             for (int i = 0; i < 4; i++)
                 AddA(row, IX(k, Dynamics6Dof.IQ + i), xbar[k * NX + Dynamics6Dof.IQ + i]);
