@@ -1077,11 +1077,14 @@ public static partial class GuidanceWindow
         bool arrived = atRest && now - _s.SixDofArrivedSince >= SixDofArrivedHoldS;
 
         bool noPlan = arrived || (_s.SixDofLastPublishedPlan == null ? _s.SixDofTookBurn : lastPlanExpired);
+        // A plan flown to its last node leaves the craft at the plan end, and the plan runs out there before the rest is long enough to count as arrived. That is the plan's end and no loss.
+        bool endedAtPlanEnd = arrived || (lastPlanExpired && !vehicle.Situation.HasAnyContact()
+            && x[2] - _s.SixDofTargetComAltM <= SixDofArrivedM);
         if (noPlan && x[2] - _s.VehicleHeightM <= SixDofLostPlanGateM
             && !(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
             && TerminalHoverAvailable(vehicle, out _))
         {
-            string why = $"TOUCHDOWN {(arrived ? "ENDED ITS PLAN WITHOUT CONTACT" : _s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
+            string why = $"TOUCHDOWN {(endedAtPlanEnd ? "ENDED ITS PLAN WITHOUT CONTACT" : _s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
                        + $"{x[2] - _s.VehicleHeightM:F0} m ABOVE PAD. HANDOVER: HOVER.";
             SixDofLog.Event(_s, now, why);
             GuidanceLog.Info(vehicle, why);
