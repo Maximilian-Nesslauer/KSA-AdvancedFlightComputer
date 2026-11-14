@@ -3,6 +3,7 @@
 namespace AdvancedFlightComputer.Features.Guidance;
 
 using System;
+using System.Collections.Generic;
 using BepuUtilities;
 using Brutal.Numerics;
 using KSA;
@@ -27,6 +28,23 @@ public static class Ksa6DofSetup
     ///  Not tighter, because at convergence the virtual control is the defect, collocation error included: on the same booster the trapezoid's own error at 0.6 s spacing is a few tenths of a m/s an interval, and a scale near the flight gate's 0.5 m/s would price that hundreds of times above the fuel term and have the optimiser shape trajectories around the mesh.
     /// </summary>
     public const double VirtualControlVelocityScaleMs = 5.0;
+
+    /// <summary>
+    /// The roll acceleration at full thrust, rad/s^2, under which the gimbals count as giving no roll torque and the plan leaves the roll free (Scvx6DofConfig.TerminalRollFree). 0.002 rad/s^2 takes 40 s at full thrust to remove a roll rate of 0.08 rad/s, so a craft under it cannot stop the roll it enters with during a touchdown burn. One gimballed engine on the thrust line gives a thousandth of this or less, engines on a ring a hundred times more.
+    /// </summary>
+    public const double RollAuthorityFloorRadS2 = 0.002;
+
+    // The smallest roll torque the model is given, N m. The solver scales the roll torque by Scvx6DofConfig.TauRollMax, so the figure must stay above zero for a craft whose gimbals give none.
+    internal const double ModelRollTorqueFloorNm = 1.0e-3;
+
+    /// <summary>
+    /// The roll part of the model for gimbals that give <paramref name="tauRoll"/> N m at full thrust about a roll inertia of <paramref name="izz"/>: whether the plan leaves the roll free, and the roll torque bound. A choice made for an earlier plan of the same landing comes in as <paramref name="keptRollFree"/> and stands, because the roll inertia falls with the propellant and a craft near the floor would otherwise change the end condition between two plans.
+    /// </summary>
+    internal static void RollModel(double tauRoll, double izz, bool? keptRollFree, out bool rollFree, out double modelTauRoll)
+    {
+        rollFree = keptRollFree ?? tauRoll < RollAuthorityFloorRadS2 * izz;
+        modelTauRoll = Math.Max(tauRoll, ModelRollTorqueFloorNm);
+    }
     public static double LastVacuumThrustN { get; private set; }
     public static double LastPressureThrustN { get; private set; }
 
@@ -119,6 +137,40 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
+    /// The thrust of every engine the plan runs, at the conditions PlanningThrust is taken at: the planning gimbals' Data.MaximumThrust plus the engines that sit on no gimbal, through the same nozzle evaluation (GimbalController.RecomputeStaticData, a throttle of 2 in vacuum). The model's Tmax is the thrust of all activated engines, and only the part of it that goes through a gimbal makes torque, so the capability per newton of the model's thrust is the allocator's capability over this figure. Over PlanningThrust alone, a craft with one gimballed engine among seven planned with the gimbal range of that engine on the thrust of all seven, about 3.7 times the torque its gimbal gives.
+    /// An engine without a gimbal counts when it is activated, or when no gimballed engine is activated, as KsaGimbalControl.CountsForPlanning counts the gimbals. RCS thrusters are rockets too and are left out by their controller type.
+    /// </summary>
+    public static double PlanningEngineThrust(Vehicle vehicle)
+    {
+        Span<GimbalController> all = vehicle.Parts.Modules.Get<GimbalController>();
+        bool anyActive = KsaGimbalControl.AnyEngineActive(all);
+        var onGimbal = new HashSet<RocketNozzle>();
+        double total = 0.0;
+        foreach (GimbalController gc in all)
+        {
+            if (!KsaGimbalControl.CountsForPlanning(gc, anyActive))
+                continue;
+            total += gc.Data.MaximumThrust;
+            foreach (RocketNozzle nozzle in gc.Data.Nozzles)
+                onGimbal.Add(nozzle);
+        }
+
+        foreach (RocketNozzle nozzle in vehicle.Parts.Modules.Get<RocketNozzle>())
+        {
+            Rocket rocket = nozzle.Rocket;
+            if (rocket?.Core?.Controller is not EngineController engine || onGimbal.Contains(nozzle))
+                continue;
+            if (anyActive && !engine.IsActive)
+                continue;
+            RocketCoreConditions combustion = rocket.Core.ComputeConditions(2f);
+            double thrust = nozzle.ComputePerformance(in combustion, 0f).GetTotalThrust();
+            if (double.IsFinite(thrust) && thrust > 0.0)
+                total += thrust;
+        }
+        return total;
+    }
+
+    /// <summary>
     /// Peak roll torque the vehicle can actually produce, in N*m, at PlanningThrust - the model's TauRollMax before it is scaled to the plan's thrust. See TorqueAlong.
     /// </summary>
     public static double RollTorqueLimit(Vehicle vehicle)
@@ -193,7 +245,7 @@ public static class Ksa6DofSetup
     }
 
     /// <summary>
-    /// Full solver configuration for this vehicle at this site. Returns false if the vehicle cannot be planned for (no engine, no gimbal, no roll authority) - better a refusal than a plan built on zeros.
+    /// Full solver configuration for this vehicle at this site. Returns false if the vehicle cannot be planned for (no engine, no gimbal) - better a refusal than a plan built on zeros. A craft with no roll torque is planned with the roll left free, see RollModel.
     /// </summary>
     /// <summary>
     /// Thrust-to-weight at the MINIMUM throttle, and the tilt that implies.
@@ -217,6 +269,7 @@ public static class Ksa6DofSetup
     /// <param name="x0">Initial model state - needed to SIZE THE PROBLEM, see XScale below.</param>
     /// <param name="xf">Terminal model state, same reason.</param>
     /// <param name="accelMaxMs2">Largest thrust acceleration the plan may use, m/s^2, or 0 for none; see Scvx6DofConfig.AccelMax.</param>
+    /// <param name="keptRollFree">The Scvx6DofConfig.TerminalRollFree of the plan this one replaces, or null for the first plan of a landing; see RollModel.</param>
     public static bool TryBuild(Vehicle vehicle, IParentBody parent, double3 siteCci,
                                 int nodes, double tiltMaxDeg, double throttleFloor,
                                 double sigmaSeed,
@@ -226,7 +279,7 @@ public static class Ksa6DofSetup
                                 double[] x0, double[] xf,
                                 out Scvx6DofConfig cfg, out Dynamics6Dof.Params dyn,
                                 out string error, double accelMaxMs2 = 0.0, double floorMargin = 0.0,
-                                KsaAeroSweep.Result aero = null)
+                                KsaAeroSweep.Result aero = null, bool? keptRollFree = null)
     {
         cfg = null!;
         dyn = null!;
@@ -285,16 +338,12 @@ public static class Ksa6DofSetup
         }
 
         // TORQUE AUTHORITY PER NEWTON. Both capabilities below are the allocator's at PlanningThrust, and the gimbals deliver torque in proportion to the thrust through them. Divided by full thrust at the target's pressure instead, the effective gimbal came out 1.3x too wide on the 2026-10-08 booster (3.17 deg against 2.40), and the roll bound was a fixed figure at that same vacuum thrust: the plan asked for torque the gimbals could not give at a third of full thrust, and the allocator saturated from the first step.
-        double planningThrust = PlanningThrust(vehicle);
+        // Per newton of every engine's thrust, because the model's thrust is that of all of them; see PlanningEngineThrust.
+        double planningThrust = PlanningEngineThrust(vehicle);
         double tauRoll = RollTorqueLimit(vehicle);
         // The roll capability at the model's Tmax; the rows scale it with the thrust (RollTorqueFollowsThrust).
         if (planningThrust > 0.0)
             tauRoll *= thrust / planningThrust;
-        if (tauRoll <= 0.0)
-        {
-            error = "no roll authority from TVC (no off-axis gimbals)";
-            return false;
-        }
 
         double arm = EngineArm(vehicle);
         if (arm <= 0.0)
@@ -319,6 +368,7 @@ public static class Ksa6DofSetup
             error = "vehicle inertia is degenerate";
             return false;
         }
+        RollModel(tauRoll, izz, keptRollFree, out bool rollFree, out tauRoll);
 
         // Refuse an over-powered configuration up front, with the number needed to fix it. Reporting "infeasible" after a 500 ms solve tells the user nothing; this says exactly which knob is wrong and what value would work.
         {
@@ -408,6 +458,7 @@ public static class Ksa6DofSetup
             GimbalMaxDeg = gimbalDeg,
             TauRollMax = tauRoll,
             RollTorqueFollowsThrust = true,
+            TerminalRollFree = rollFree,
             // WIDENED TO ADMIT THE CURRENT ATTITUDE. The tilt cone is applied at every node INCLUDING node 0, and node 0 is pinned by an equality to the measured state - so a cap below the vehicle's present tilt asks for a quaternion that is simultaneously exactly the measured one and inside a cone the measured one is outside. That is infeasible by construction, not merely expensive: measured offline from the the recorded run entry at 92.1 degrees with a 60-degree cap, NO node count solves at all - infinite defect at 15, 30 and 50 nodes, never reaching even the loose cold gate. Raise the cap above the entry attitude and the same problem solves at every one of them.
             //  This is the same failure the trust-region box had before it was moved off node 0, and the reason the glideslope and climb-rate constraints start at node 1. Widening rather than restructuring the rows, because the row layout is what the Python reference comparison checks.
             //  A GUARD, NOT A DIAGNOSIS. The flight this was measured against had already been flown with the cap raised to 120, so it was feasible throughout - the trouble there was node spacing, not this. What this prevents is the case where someone leaves the cap at a value that sounds cautious and the vehicle simply cannot be planned for, with nothing in the failure text to say why.

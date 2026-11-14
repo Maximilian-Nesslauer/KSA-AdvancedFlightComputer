@@ -29,7 +29,7 @@ public sealed class GuidanceTouchdownFallbackTest : AfcTest
     // Exact in float, so the engine input can be compared for equality.
     private const float BurnThrottle = 0.625f;
 
-    private const string Refusal = "no roll authority from TVC (no off-axis gimbals)";
+    private const string Refusal = "no gimballed engine - touchdown guidance needs thrust vectoring";
     private const string GfoldRefusal = "G-FOLD needs a gimballed engine to hold the thrust direction.";
 
     private static readonly AccessTools.FieldRef<Vehicle, ManualControlInputs> Inputs =

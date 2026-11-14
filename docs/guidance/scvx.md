@@ -421,6 +421,8 @@ $$
 (\mathbf r,\mathbf v,\mathbf q,\boldsymbol{\omega})_{N-1}=(\mathbf r_f,\mathbf v_f,\mathbf q_f,\boldsymbol{\omega}_f).
 $$
 
+A vehicle whose gimbals give no roll torque (one gimballed engine on the thrust axis, $\tau_{\max}\approx 0$) keeps the roll rate it enters with, apart from the coupling of the pitch and yaw rates through unequal transverse inertias. A fixed $q_w$, $q_z$ and $\omega_z=0$ at $N-1$ are then out of reach of every control but that coupling, the plan swings the thrust axis to use it, and the subproblems become badly conditioned. For such a vehicle the flight setup sets `TerminalRollFree`, once per landing, so a rebuild at another node count keeps the choice of the first plan, and a vehicle with no roll torque at all is planned with a small positive roll bound: the rows of $q_w$, $q_z$ and $\omega_z$ at $N-1$ are left out, so the vehicle must arrive upright ($q_x=q_y=0$) with no pitch or yaw rate, at any heading and roll rate, and the last node takes the tangent-plane row of the unit quaternion like every other node. The cold reference, and the seed from G-FOLD when that is used, rolls with the vehicle (`ColdSeed6Dof.KeepRoll`): each node is turned about its own thrust axis by the angle the measured roll rate covers up to that node.
+
 **Convex control set** (no relaxation needed):
 
 $$

@@ -265,6 +265,12 @@ internal static class GameReflection
         AccessTools.Method(typeof(FlightComputer), "UpdateAttitudeTarget",
             new[] { typeof(FlightComputerNavigation).MakeByRefType() });
 
+    // Vehicle.SerializeSave calls this for the save record of the craft. A postfix gives the record the player's RCS mode while guidance holds RCS off. afc-guidance-landing-gimbal checks that it arrives.
+    // A soft anchor, because guidance flies without the postfix and only a save made during a landing burn needs it.
+    [UsedBy(Feature.SoftAnchor)]
+    public static readonly MethodInfo? FlightComputer_SerializeSave =
+        AccessTools.Method(typeof(FlightComputer), nameof(FlightComputer.SerializeSave), Type.EmptyTypes);
+
     // The engine master switch and throttle that the player's ignite and shutdown actions write.
     [UsedBy(Feature.Guidance)]
     public static readonly FieldInfo? Vehicle_manualControlInputs =

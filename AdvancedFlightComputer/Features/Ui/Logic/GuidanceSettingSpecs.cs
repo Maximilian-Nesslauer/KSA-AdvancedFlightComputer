@@ -137,6 +137,8 @@ internal static class GuidanceSettingSpecs
 
     public static readonly BoolSpec DeorbitArrivalAngleEnabled = new("DeorbitArrivalAngleEnabled", "SET DEORBIT ARRIVAL ANGLE", E, false,
         "Plans the deorbit for a given flight path angle at the braking point.");
+    public static readonly BoolSpec LandingGimbalSteers = new("LandingGimbalSteers", "STEER BURN WITH GIMBAL", E, true,
+        "Switches RCS off while an engine on a gimbal burns under a landing mode, so that the gimbal alone points the craft. Off leaves RCS as it is. A craft whose gimbals cannot hold both pitch and yaw keeps RCS either way.");
     public static readonly BoolSpec VehicleHeightAuto = new("VehicleHeightAuto", "MEASURE COM ABOVE LEGS", P, true,
         "Measures the COM above the legs from the colliders of the craft, with the legs deployed, and keeps it current.");
 
@@ -296,7 +298,7 @@ internal static class GuidanceSettingSpecs
     public static readonly SettingSpec[] LandGfoldPlayer = { GfoldHoverHandoffAltM };
 
     public static readonly SettingSpec[] LandFromOrbitExpert = { BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM };
-    public static readonly BoolSpec[] LandFromOrbitExpertBools = { DeorbitArrivalAngleEnabled };
+    public static readonly BoolSpec[] LandFromOrbitExpertBools = { DeorbitArrivalAngleEnabled, LandingGimbalSteers };
     public static readonly SettingSpec[] LandEntryExpert = { LandingAccelLimitG };
     public static readonly BoolSpec[] LandEntryExpertBools = Array.Empty<BoolSpec>();
     public static readonly SettingSpec[] LandTouchdownExpert = { LandingAccelLimitG };
@@ -382,7 +384,7 @@ internal static class GuidanceSettingSpecs
     public static readonly BoolSpec[] AllBools =
     {
         GLimitEnabled, AutoLaunch, MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis,
-        FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled,
+        FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
         VehicleHeightAuto, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
     };

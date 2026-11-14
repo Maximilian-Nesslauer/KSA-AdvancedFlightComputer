@@ -115,7 +115,7 @@ public static partial class GuidanceWindow
             SixDofLog.Event(_s, now, $"STANDBY at alt {x[2]:F0} m: cold solve on the worker, {what}");
         }
         GuidanceLog.Info(vehicle, $"Touchdown guidance standby at {x[2]:F0} m: cold solve on its own thread, {what}.");
-        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
+        GuidanceLog.Debug(vehicle, FormattableString.Invariant($"Touchdown guidance model: Tmax {cfg.Tmax:F0} N, floor {cfg.ThrottleFloor:F3}, gimbal {cfg.GimbalMaxDeg:F2} deg, roll torque {cfg.TauRollMax:F0} N m{(cfg.TerminalRollFree ? " (roll left free)" : "")}, engine arm {dyn.LArm:F2} m, inertia {dyn.Ixx:F0} {dyn.Iyy:F0} {dyn.Izz:F0} kg m2, Isp {dyn.Isp:F0} s, tilt limit {cfg.TiltMaxDeg:F0} deg, scales {cfg.XScale[0]:F0} m {cfg.XScale[3]:F0} m/s, plan ends {_s.SixDofTargetComAltM:F2} m over the site of which {_s.SiteEarlyContactM:F2} m for the ground under the footprint, which rises {(_s.SiteGround?.Within(_s.SiteGround.ReachM) ?? 0.0):F2} m within {(_s.SiteGround?.ReachM ?? 0.0):F0} m of the site."));
         return true;
     }
 

@@ -458,7 +458,8 @@ public static partial class GuidanceWindow
                                    x, xf,
                                    out Scvx6DofConfig cfg,
                                    out Dynamics6Dof.Params dyn, out _, LandingAccelLimitMs2,
-                                   floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero))
+                                   floorMargin: _s.LandingPlanFloorMargin, aero: _s.Aero,
+                                   keptRollFree: _s.Guidance.TerminalRollFree))
         {
             SixDofLog.Event(_s, now, $"NODE REBUILD at {nodes} nodes rejected by TryBuild");
             return null;
@@ -1076,11 +1077,14 @@ public static partial class GuidanceWindow
         bool arrived = atRest && now - _s.SixDofArrivedSince >= SixDofArrivedHoldS;
 
         bool noPlan = arrived || (_s.SixDofLastPublishedPlan == null ? _s.SixDofTookBurn : lastPlanExpired);
+        // A plan flown to its last node leaves the craft at the plan end, and the plan runs out there before the rest is long enough to count as arrived. That is the plan's end and no loss.
+        bool endedAtPlanEnd = arrived || (lastPlanExpired && !vehicle.Situation.HasAnyContact()
+            && x[2] - _s.SixDofTargetComAltM <= SixDofArrivedM);
         if (noPlan && x[2] - _s.VehicleHeightM <= SixDofLostPlanGateM
             && !(TerminalMinThrottleTwr(vehicle, vehicle.Orbit, parent.Mu) > 1.0)
             && TerminalHoverAvailable(vehicle, out _))
         {
-            string why = $"TOUCHDOWN {(arrived ? "ENDED ITS PLAN WITHOUT CONTACT" : _s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
+            string why = $"TOUCHDOWN {(endedAtPlanEnd ? "ENDED ITS PLAN WITHOUT CONTACT" : _s.SixDofLastPublishedPlan == null ? "TOOK BURN WITH NO PLAN" : "LOST PLAN")} "
                        + $"{x[2] - _s.VehicleHeightM:F0} m ABOVE PAD. HANDOVER: HOVER.";
             SixDofLog.Event(_s, now, why);
             GuidanceLog.Info(vehicle, why);
@@ -1547,10 +1551,12 @@ public static partial class GuidanceWindow
         }
 
         // Past the end of the plan the node index clamps, so Command would hold the terminal control indefinitely: a thrust of at least the minimum, which for a craft that cannot hover is a climb. Not guidance any more, so the craft flies the no-plan law until a re-solve lands.
-        if (_s.Guidance.PlanElapsed > _s.Guidance.Sigma)
+        // The age and the burn time are read from the one published plan. Ksa6DofGuidance.PlanElapsed is the age at the last command, which belongs to the plan before when a re-solve has just published. Near the ground that age can be more than the burn time of the new plan, and no command would run to renew it.
+        Ksa6DofPlan flying = _s.Guidance.Published;
+        if (flying != null && now - flying.SolveTime > flying.Sigma)
         {
             FlyWithoutPlan(vehicle, parent, siteCci, x,
-                $"PLAN EXPIRED {_s.Guidance.PlanElapsed - _s.Guidance.Sigma:F1} s AGO");
+                $"PLAN EXPIRED {now - flying.SolveTime - flying.Sigma:F1} s AGO");
             return;
         }
 

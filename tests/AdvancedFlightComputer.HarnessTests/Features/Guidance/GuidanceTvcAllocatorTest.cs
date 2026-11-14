@@ -11,8 +11,9 @@ namespace AdvancedFlightComputer.HarnessTests;
 // The oracle is the stock thrust geometry: TvcAllocation.ComputeJacobian for the allocator columns
 // and TvcAllocation.ComputeTorqueAsmb for the torque a command delivers. Both turn the thrust point
 // about the gimbal pivot. The synthetic gimbals are never registered with the simulation. The
-// spawned craft checks the same columns on real engines, and that the 6-DOF model arm gives the
-// allocator's lateral gain.
+// spawned craft checks the same columns on real engines, that the 6-DOF model arm gives the
+// allocator's lateral gain, and that an engine off the gimbals stays in the thrust the model's
+// torque is taken per newton of.
 public sealed class GuidanceTvcAllocatorTest : AfcTest
 {
     public override string Name => "afc-guidance-tvc-allocator";
@@ -33,6 +34,28 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
         DeliveredTorqueMatchesTheDemand(t);
         ColumnsCoverALateralNozzleOffset(t);
         RealEnginesMatchStock(t);
+        EnginesOffTheGimbalsCountInTheModelThrust(t);
+        TheRollModelTakesACraftWithoutRollTorque(t);
+    }
+
+    // A craft whose gimbals give no roll torque at all is planned with the roll left free and a roll bound above zero, and the choice of the first plan of a landing stands while the roll inertia falls with the propellant.
+    private static void TheRollModelTakesACraftWithoutRollTorque(TestContext t)
+    {
+        Ksa6DofSetup.RollModel(0.0, 800.0, null, out bool freeAtZero, out double tauAtZero);
+        t.Check("no roll torque at all leaves the roll free with a roll bound above zero",
+            freeAtZero && tauAtZero > 0.0 && tauAtZero < Ksa6DofSetup.RollAuthorityFloorRadS2 * 800.0, $"free {freeAtZero}, bound {tauAtZero:G3} N m");
+
+        Ksa6DofSetup.RollModel(26800.0, 60000.0, null, out bool freeWithTorque, out double tauWithTorque);
+        t.Check("gimbals with roll torque keep the roll in the plan and their torque", !freeWithTorque && tauWithTorque == 26800.0,
+            $"free {freeWithTorque}, bound {tauWithTorque:F0} N m");
+
+        // 1.5 N m is under the floor at 800 kg m^2 (1.6 N m) and over it at 700 kg m^2 (1.4 N m).
+        Ksa6DofSetup.RollModel(1.5, 800.0, null, out bool first, out _);
+        Ksa6DofSetup.RollModel(1.5, 700.0, null, out bool fresh, out _);
+        Ksa6DofSetup.RollModel(1.5, 700.0, first, out bool kept, out _);
+        Ksa6DofSetup.RollModel(1.5, 800.0, false, out bool keptPinned, out _);
+        t.Check("a later plan of the same landing keeps the choice of the first one", first && !fresh && kept && !keptPinned,
+            $"first {first}, a fresh choice at the lower inertia {fresh}, kept {kept}, kept pinned {keptPinned}");
     }
 
     // Thrust along vehicle +X, the pivot PivotArm behind the centre of mass and the thrust point
@@ -153,6 +176,79 @@ public sealed class GuidanceTvcAllocatorTest : AfcTest
         }
         finally
         {
+            TestSupport.DespawnNewVehicles(t.System, preexisting);
+        }
+    }
+
+    // The 6-DOF model takes its torque per newton of the thrust of every engine, because its thrust is that
+    // of all of them. One engine of a spawned craft is taken off its gimbal, as a fixed engine beside
+    // gimballed ones is: the thrust on the gimbals falls by that engine, and the thrust the model divides
+    // by must stay what it was.
+    private static void EnginesOffTheGimbalsCountInTheModelThrust(TestContext t)
+    {
+        if (!TestWorld.RequireHome(t, out IParentBody home))
+            return;
+        IReadOnlyList<string> saves = TestSupport.ResolveVehicleSaves(DefaultSaves);
+        if (saves.Count == 0)
+        {
+            t.Skip($"none of '{string.Join("', '", DefaultSaves)}' is in the game's Vehicles folder.");
+            return;
+        }
+
+        HashSet<string> preexisting = TestSupport.CollectVehicleIds(t.System);
+        GimbalController? taken = null;
+        try
+        {
+            Vehicle craft;
+            try
+            {
+                craft = VehicleSpawner.SpawnFromSave(saves[0], t.System, home, "HarnessGimbalShare",
+                    OrbitFixtures.CircularAt(home, 500_000.0, Universe.GetElapsedTime()));
+            }
+            catch (InvalidOperationException e)
+            {
+                t.Skip($"'{saves[0]}': {e.Message}");
+                return;
+            }
+            craft.Parts.EnsureDerived(DerivedData.All);
+
+            GimbalController[] gimbals = KsaGimbalControl.PlanningGimbals(craft);
+            int withThrust = 0;
+            foreach (GimbalController gc in gimbals)
+                if (gc.Data.MaximumThrust > 0f && gc.Data.Nozzles.Count > 0)
+                    withThrust++;
+            if (withThrust < 2)
+            {
+                t.Skip($"'{saves[0]}' has {withThrust} gimballed engine(s) with thrust, and the check takes one of two off its gimbal.");
+                return;
+            }
+
+            double onGimbals = Ksa6DofSetup.PlanningThrust(craft);
+            double allEngines = Ksa6DofSetup.PlanningEngineThrust(craft);
+            t.Check("no thrust is lost between the gimbals and the engines",
+                allEngines >= onGimbals * (1.0 - 1e-3),
+                $"gimbals {onGimbals / 1000.0:F1} kN, all engines {allEngines / 1000.0:F1} kN");
+
+            foreach (GimbalController gc in gimbals)
+                if (gc.Data.MaximumThrust > 0f && gc.Data.Nozzles.Count > 0)
+                {
+                    taken = gc;
+                    break;
+                }
+            double removed = taken!.Data.MaximumThrust;
+            taken.Data.Nozzles.Clear();
+            taken.Data.MaximumThrust = 0f;
+
+            double onGimbalsAfter = Ksa6DofSetup.PlanningThrust(craft);
+            double allEnginesAfter = Ksa6DofSetup.PlanningEngineThrust(craft);
+            t.Info($"'{saves[0]}': {onGimbals / 1000.0:F1} kN on gimbals of {allEngines / 1000.0:F1} kN, then "
+                 + $"{onGimbalsAfter / 1000.0:F1} kN of {allEnginesAfter / 1000.0:F1} kN with one engine of {removed / 1000.0:F1} kN off its gimbal");
+            t.CheckRel("the thrust on the gimbals falls by the engine taken off", onGimbalsAfter, onGimbals - removed, 1e-3);
+            t.CheckRel("the thrust of every engine stays", allEnginesAfter, allEngines, 2e-3);
+        }
+        finally
+        {
+            taken?.RecomputeStaticData();
             TestSupport.DespawnNewVehicles(t.System, preexisting);
         }
     }

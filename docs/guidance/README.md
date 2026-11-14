@@ -1,7 +1,7 @@
 # AFC guidance
 
 Guidance is part of AFC under `AdvancedFlightComputer/Features/Guidance/`.
-`GuidanceFeature` registers two patch blocks. The diagnostics block owns the hook the AFC menu draws from, and the driver block owns the per-vehicle step, the worker hooks and the guidance pages of the AFC console.
+`GuidanceFeature` registers three patch blocks. The diagnostics block owns the hook the AFC menu draws from, the driver block owns the per-vehicle step, the worker hooks and the guidance pages of the AFC console, and the save block owns the save record postfix of the RCS hold of a landing burn.
 Every guidance write to a craft goes through the ownership described in `../control-ownership.md`.
 Single-craft ascent has been flown in the game from this tree. The other modes have not.
 

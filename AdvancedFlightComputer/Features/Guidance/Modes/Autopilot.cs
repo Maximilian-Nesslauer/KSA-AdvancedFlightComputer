@@ -1095,6 +1095,8 @@ public static partial class GuidanceWindow
             bool boostbackBefore = BoostbackLive;
             bool ascentBefore = _s.Running;
             Step6Dof(vehicle);
+            // Touchdown guidance keeps the RCS hold of the burn it took over, and the switch stays the player's there too.
+            YieldRcsToThePlayer(vehicle);
 
             // A step that hands the craft to another guidance mode is not a stop. Handing back here would cut the engine the handover kept lit and reset the mode that just started.
             bool startedAnotherMode =
@@ -1223,6 +1225,8 @@ public static partial class GuidanceWindow
             _s.WasEngaged = false;
         }
 
+        SteerLandingBurnWithGimbal(vehicle, landingGuides);
+
         // A temporary command gap releases attitude but keeps ownership. Release ownership when the mode ends, before the next frame applies player input. A coast that the commit queued while another mode still owned the craft stays through that release, and claims again at Prep.
         // A 6-DOF engage queued on this step is a handover, not an end: the deorbit burn queues one at its handoff, and the next step's 6-DOF dispatch runs it. Releasing here would drop the request and cut the engine the burn left lit, so the craft falls with nothing flying it.
         bool stillNeedsCraft = _s.Active || _s.EngagePending
@@ -1315,6 +1319,93 @@ public static partial class GuidanceWindow
         fc.AttitudeMode = FlightComputerAttitudeMode.Manual;
         _s.AttitudeOwnership.EndWrite(fc, writesRoll: false);
         _s.WasEngaged = false;
+    }
+
+    /// <summary>
+    /// Keeps RCS out of the attitude control while a landing mode steers a lit engine that sits on a gimbal, so the gimbal alone points the craft, and gives RCS back when the engine is off or the mode ends.
+    /// Stock chooses per axis between the gimbals and RCS (FlightComputer.UpdateActiveControlSystemSingleAxis): an axis goes to the gimbals only while their angular acceleration is at least a tenth of what RCS gives. On a light craft with strong thrusters RCS wins every axis, the gimbal is zeroed (FlightComputer.ZeroizeTvcs), and the smallest RCS pulse then changes the body rate by several degrees per second, so the thrust axis swings about its target through the whole burn. With FlightComputer.RCSMode at Disabled, FlightComputer.UpdateRcsParams and UpdateActiveControlSystems see no RCS authority and give the pitch and yaw axes to the gimbals.
+    /// An axis the gimbals have no authority on would then have no control system at all, so RCS stays on unless the gimbals hold both pitch and yaw (GimbalHoldsPitchAndYaw). A burn that loses an axis while RCS is off gets RCS back on that step and keeps it until the engine is off.
+    /// The switch also belongs to the player. A player who turns RCS back on during the burn keeps it on until guidance lets go of the craft.
+    /// </summary>
+    private static void SteerLandingBurnWithGimbal(Vehicle vehicle, bool landingGuides)
+    {
+        FlightComputer fc = vehicle.FlightComputer;
+        YieldRcsToThePlayer(vehicle);
+
+        bool lit = ManualInputs(vehicle).EngineOn && KsaGimbalControl.LitGimbalThrust(vehicle) > 0.0;
+        if (!lit)
+            _s.RcsGimbalLostAxis = false;
+        bool want = _s.LandingGimbalSteers && !_s.RcsYielded && _s.Engage && landingGuides && _s.ControlAcquired && lit;
+        if (want && !GimbalHoldsPitchAndYaw(fc))
+        {
+            want = false;
+            if (_s.RcsHeldOff)
+            {
+                _s.RcsGimbalLostAxis = true;
+                GuidanceLog.Info(vehicle, "The gimbal lost its authority on pitch or yaw. Guidance leaves RCS on for this burn.");
+                GiveRcsBack(vehicle);
+            }
+        }
+        want &= !_s.RcsGimbalLostAxis;
+
+        if (want && !_s.RcsHeldOff && fc.RCSMode == FlightComputerRCSMode.Enabled)
+        {
+            fc.RCSMode = FlightComputerRCSMode.Disabled;
+            _s.RcsHeldOff = true;
+            GuidanceLog.Info(vehicle, "RCS off while the gimbal steers the landing burn.");
+        }
+        // A burn handed to touchdown guidance keeps RCS off through the hand-over, because the attitude target of the burn stays in force until the first plan steers, and one step of it with RCS back on can fire a pulse.
+        else if (!want && _s.RcsHeldOff && !_s.EngagePending && !_s.Active)
+        {
+            GiveRcsBack(vehicle);
+        }
+    }
+
+    /// <summary>
+    /// True while the stock attitude controller has gimbal authority on both the pitch and the yaw axis. FlightComputer.UpdateTvcParams takes for each axis the smaller of the torque ranges in its two directions (FlightComputer.TvcState.TorqueRangePositive and TorqueRangeNegative), so an axis reads zero when the gimbals turn about one axis only, or when the trim for a centre of mass off the thrust line uses up one side of the range. With RCS off, FlightComputer.UpdateActiveControlSystemSingleAxis gives such an axis no control system.
+    /// </summary>
+    internal static bool GimbalHoldsPitchAndYaw(FlightComputer fc)
+        => Math.Min(fc.TvcTorqueAuthority.Y, fc.TvcTorqueAuthority.Z) > 0f;
+
+    // A mode that reads Enabled while guidance holds it off is the player's switch.
+    private static void YieldRcsToThePlayer(Vehicle vehicle)
+    {
+        if (!_s.RcsHeldOff || vehicle.FlightComputer.RCSMode == FlightComputerRCSMode.Disabled)
+            return;
+        _s.RcsHeldOff = false;
+        _s.RcsYielded = true;
+        GuidanceLog.Info(vehicle, "RCS was switched on during the landing burn. Guidance leaves RCS on.");
+    }
+
+    // Switches RCS on again when guidance switched it off and it still is off.
+    private static void GiveRcsBack(Vehicle vehicle)
+    {
+        if (!_s.RcsHeldOff)
+            return;
+        _s.RcsHeldOff = false;
+        FlightComputer fc = vehicle.FlightComputer;
+        if (fc.RCSMode == FlightComputerRCSMode.Disabled)
+        {
+            fc.RCSMode = FlightComputerRCSMode.Enabled;
+            GuidanceLog.Info(vehicle, "RCS on again.");
+        }
+    }
+
+    /// <summary>
+    /// Gives the save record of a flight computer the RCS mode the player has while guidance holds RCS off for a landing burn. FlightComputer.SerializeSave writes RCSMode into the record and FlightComputer.DeserializeSave reads it back, and the hold itself does not outlive a load, so a save made during the burn would otherwise load with RCS off and nothing to switch it on again.
+    /// </summary>
+    internal static void SaveRcsAsThePlayerHasIt(FlightComputer fc, FlightComputerData data)
+    {
+        if (data == null || data.RCSMode != FlightComputerRCSMode.Disabled)
+            return;
+        foreach (var entry in VehicleAutopilotState.Snapshot())
+        {
+            if (entry.Value.RcsHeldOff && ReferenceEquals(entry.Key.FlightComputer, fc))
+            {
+                data.RCSMode = FlightComputerRCSMode.Enabled;
+                return;
+            }
+        }
     }
 
     // Read by the vehicle workers and written only through SetModActive, which queues the releases a switch-off needs.
@@ -1429,6 +1520,7 @@ public static partial class GuidanceWindow
         Attempt(() => ReleaseStockDeorbit(vehicle, keepClaim: true, preserve: _s.ReleaseWithoutEngineCut));
         Attempt(() => KsaAttitudeRate.Clear(vehicle));
         Attempt(() => KsaGimbalControl.Disengage(vehicle));
+        Attempt(() => GiveRcsBack(vehicle));
 
         // A cut guidance decided on wins over a no-cut request, whenever it was decided. The request can outlive a failed cleanup, so an abort between two retries would otherwise lose its shutdown.
         bool cutEngine = _s.LandingCutPending || _s.ShutdownRequested || !_s.ReleaseWithoutEngineCut;
@@ -1475,6 +1567,8 @@ public static partial class GuidanceWindow
         }
         _s.ShutdownRequested = false;
         _s.ControlAcquired = false;
+        _s.RcsYielded = false;
+        _s.RcsGimbalLostAxis = false;
         VehicleControlOwnership.Release(vehicle, ControlClaimant.Guidance);
         _s.FcResetPending = false;
         _s.ReleaseRetryKeepsCoast = false;

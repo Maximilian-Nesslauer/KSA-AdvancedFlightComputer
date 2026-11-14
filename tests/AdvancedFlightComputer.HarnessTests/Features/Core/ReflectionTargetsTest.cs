@@ -30,12 +30,15 @@ public sealed class ReflectionTargetsTest : AfcTest
         t.Check("AutoStage keys resolve", GameReflection.ValidateAutoStage());
         t.Check("AutoRemove keys resolve", GameReflection.ValidateAutoRemove());
         t.Check("SettingsPage keys resolve", GameReflection.ValidateSettingsPage());
+        t.Check("GuidanceDiagnostics keys resolve", GameReflection.ValidateGuidanceDiagnostics());
+        t.Check("Guidance keys resolve", GameReflection.ValidateGuidance());
 
         t.Check("BurnContextMenu.Draw anchor", Patch_BurnContextMenu_Launcher.IsAnchorPresent);
         t.Check("TransferPlanner.set_ShowPlanWindow anchor", PlannerRoute.Setter != null);
         t.Check("FindClosestApproaches anchor", Patch_FindClosestApproaches.IsAnchorPresent);
         t.Check("GameSettings.OnDrawUi PopWidgetStyle anchor", ModSettingsPage.IsAnchorPresent);
         t.Check("ModLibrary.AllParts anchor", GameReflection.ModLibrary_AllParts != null);
+        t.Check("FlightComputer.SerializeSave anchor", GameReflection.FlightComputer_SerializeSave != null);
         // RcsWarpPatch binds by its attribute, so the overload it names is checked here.
         t.Check("Universe.AutoWarpTo(UniverseTime, double, bool) anchor",
             AccessTools.Method(typeof(Universe), nameof(Universe.AutoWarpTo),

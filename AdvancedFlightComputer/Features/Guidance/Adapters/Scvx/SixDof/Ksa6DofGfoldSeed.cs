@@ -108,8 +108,11 @@ public static class Ksa6DofGfoldSeed
             }
             LastGfoldMs = sw.Elapsed.TotalMilliseconds;
 
-            Resample(traj, nodes, x0, xf, tof, out xSeed, out uSeed);
+            // G-FOLD knows no roll, so its attitudes carry none. A craft that cannot stop its roll gets the reference that starts at its measured roll and rolls on with it, as the cold seeds do.
+            Resample(traj, nodes, x0, xf, tof, cfg.TerminalRollFree, out xSeed, out uSeed);
             sigma = Math.Clamp(tof, cfg.SigmaMin, cfg.SigmaMax);
+            if (cfg.TerminalRollFree)
+                ColdSeed6Dof.KeepRoll(xSeed, nodes, sigma);
             note = $"G-FOLD seed: {tof:F1} s, {solves} solve(s), {LastGfoldMs:F0} ms";
             return true;
         }
@@ -149,12 +152,17 @@ public static class Ksa6DofGfoldSeed
         return Math.Clamp(tBrake + rest / Math.Max(vAvg, 1.0), cfg.SigmaMin, cfg.SigmaMax);
     }
 
+    /// <param name="fromMeasuredRoll">Each node's attitude is the shortest turn from the node before it, from the measured attitude on, so every node has the measured roll about its thrust axis. Otherwise each node is the shortest turn from upright and has none.</param>
     private static void Resample(GfoldTrajectory t, int nodes, double[] x0, double[] xf,
-                                 double tof, out double[] xSeed, out double[] uSeed)
+                                 double tof, bool fromMeasuredRoll, out double[] xSeed, out double[] uSeed)
     {
         xSeed = new double[nodes * NX];
         uSeed = new double[nodes * NU];
         int src = t.Nodes;
+        Span<double> chained = stackalloc double[4];
+        Span<double> turned = stackalloc double[4];
+        Span<double> axis = stackalloc double[3];
+        x0.AsSpan(Dynamics6Dof.IQ, 4).CopyTo(chained);
 
         for (int k = 0; k < nodes; k++)
         {
@@ -184,10 +192,22 @@ public static class Ksa6DofGfoldSeed
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
 
             // Attitude: body +Z along the commanded acceleration. Fall back to straight up where the command is degenerate.
-            if (un > 1e-6)
-                PointZAt(ux / un, uy / un, uz / un, xSeed.AsSpan(k * NX + Dynamics6Dof.IQ, 4));
+            if (un > 1e-6) { axis[0] = ux / un; axis[1] = uy / un; axis[2] = uz / un; }
+            else { axis[0] = 0.0; axis[1] = 0.0; axis[2] = 1.0; }
+            Span<double> node = xSeed.AsSpan(k * NX + Dynamics6Dof.IQ, 4);
+            if (fromMeasuredRoll)
+            {
+                if (k > 0)
+                {
+                    ColdSeed6Dof.PointBodyZ(chained, axis, turned);
+                    turned.CopyTo(chained);
+                }
+                chained.CopyTo(node);
+            }
             else
-                PointZAt(0.0, 0.0, 1.0, xSeed.AsSpan(k * NX + Dynamics6Dof.IQ, 4));
+            {
+                PointZAt(axis[0], axis[1], axis[2], node);
+            }
 
             // Control: thrust along the body axis, so purely axial.
             uSeed[k * NU + Dynamics6Dof.IT] = un * m;
@@ -217,7 +237,7 @@ public static class Ksa6DofGfoldSeed
     private static double Lerp(double a, double b, double t) => a * (1.0 - t) + b * t;
 
     /// <summary>
-    /// Shortest-arc quaternion (scalar-first) taking body +Z onto the given unit vector. Roll about the thrust axis is left at whatever the shortest rotation gives, because a landing does not care about it.
+    /// Shortest-arc quaternion (scalar-first) taking body +Z onto the given unit vector from upright. Roll about the thrust axis is whatever the shortest rotation gives, for a craft whose plan turns it to its end heading with its roll torque.
     /// </summary>
     private static void PointZAt(double x, double y, double z, Span<double> q)
     {
