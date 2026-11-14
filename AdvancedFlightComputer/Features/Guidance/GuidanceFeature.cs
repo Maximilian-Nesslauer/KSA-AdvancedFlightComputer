@@ -107,6 +107,8 @@ internal static class GuidanceFeature
             GuidanceWindow.DrainRequests(vehicle);
             GuidanceWindow.ApplyAutopilot(vehicle);
             GuidanceWindow.StepSucceeded(vehicle);
+            // After the modes stepped, so it reads the claim and the phase this step left. It catches its own faults, which never count as a failed step.
+            GuidanceWindow.StepLandingLegs(vehicle);
         }
         catch (Exception ex)
         {

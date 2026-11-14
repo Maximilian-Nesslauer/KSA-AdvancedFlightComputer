@@ -858,6 +858,16 @@ internal static class PageText
 
     public const string LegsStowed = "LEGS STOWED. DEPLOY IN EACH LEG WINDOW.";
 
+    /// <summary>The legs note while a landing that AFC flies deploys the legs by itself.</summary>
+    public static string LegsStowedAuto(double deployHeightM)
+        => string.Create(Inv, $"LEGS STOWED. THE LANDING DEPLOYS THEM AT {Math.Round(deployHeightM):F0} m.");
+
+    public const string LegsTip = "A landing that AFC flies deploys every landing leg once, when the legs come below LEGS DOWN AT over the ground under the craft. A retract or a deploy by hand stands. The plan always assumes the legs down.";
+
+    public const string LegsNoneTip = "This craft has no landing legs: no part tagged Landing with a deploy animation.";
+
+    public static string LegsDeployTime(double seconds) => string.Create(Inv, $"{seconds:F1} s");
+
     public static string LegsStowedCard(double deployedM, double nowM)
         => string.Create(Inv, $"The plan assumes the legs down: COM ABOVE LEGS is {deployedM:F1} m. With the legs as they are, it is {nowM:F1} m.");
 

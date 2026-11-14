@@ -13,7 +13,7 @@ using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 /// <summary>
 /// Measures how far the vehicle's lowest touchdown point sits below its centre of mass, along the thrust axis. That is the height the centre of mass has above the ground when the craft stands upright on its legs, which is what every landing mode's "vehicle height" means.
 ///  THIS IS A MEASUREMENT OF THE COLLIDERS, not of the meshes: the colliders are what the physics step lands on (the terrain-contact flag fires on a Bepu contact), so they are what "on the ground" means. Each collider's own Bepu shape is bounded at its live pose, so a sphere foot, a capsule strut and a box base each give their exact lowest point.
-///  LANDING LEGS ARE MEASURED DEPLOYED, whatever they are doing now. KSA only ever poses a leg's subparts (and so its colliders) at the animation's CURRENT time, so a stowed leg reports its stowed geometry, and a height measured from it would be the engine bell's. Every deploy/retract animation is re-posed here at its deployed end - the same keyframe evaluation KeyframeAnimationModule.ApplyAnimationTransforms uses, without writing anything back to the part. Animations that only rotate sideways (solar panels and the like) move nothing downward, so they cannot change the result.
+///  LANDING LEGS ARE MEASURED DEPLOYED, whatever they are doing now. KSA only ever poses a leg's subparts (and so its colliders) at the animation's CURRENT time, so a stowed leg reports its stowed geometry, and a height measured from it would be the engine bell's. Every landing leg (KsaLandingLegs, the same legs a landing deploys) is re-posed here at its deployed end - the same keyframe evaluation KeyframeAnimationModule.ApplyAnimationTransforms uses, without writing anything back to the part. Every other deployable part, such as a ramp, a dish or a bay door, is measured where it is, because a landing does not deploy it.
 ///  The centre of mass is read live: it climbs the vehicle as the propellant drains, and the height with it.
 /// </summary>
 public static class KsaVehicleHeight
@@ -32,14 +32,12 @@ public static class KsaVehicleHeight
 
         public readonly int Colliders = colliders;
 
-        /// <summary>Deploy/retract animations found (legs among them).</summary>
+        /// <summary>Landing legs found (KsaLandingLegs).</summary>
         public readonly int Deployables = deployables;
 
         /// <summary>Of those, how many are not at their deployed end and not on their way there.</summary>
         public readonly int Stowed = stowed;
     }
-
-    private const float DeployedToleranceS = 0.001f;
 
     private readonly struct Pose(double3 position, doubleQuat rotation, double4x4 matrix)
     {
@@ -77,12 +75,10 @@ public static class KsaVehicleHeight
         int deployables = 0, stowed = 0;
         foreach (KeyframeAnimationModule anim in tree.Modules.Get<KeyframeAnimationModule>())
         {
-            // ShowDeployRetract is KSA's own flag for a two-state deploy/retract part. A slider-driven actuator has no "deployed" end to assume, and a sun-tracking extension adds a rotation of its own - both stay where they are.
-            if (!anim.ShowDeployRetract || anim.Extension != null || anim.Shared == null || anim.Shared.Duration <= 0f)
+            if (!KsaLandingLegs.IsLeg(anim))
                 continue;
             deployables++;
-            // A save keeps the goal time with four decimals, so a deployed leg of a loaded craft reads a hair under the duration.
-            if (anim.TimeGoal < anim.Shared.Duration - DeployedToleranceS)
+            if (!KsaLandingLegs.DeployCommanded(anim))
                 stowed++;
 
             ReadOnlySpan<Part> subParts = anim.Parent.SubParts;
