@@ -8,6 +8,8 @@
 
 - The gimbal torque that touchdown guidance plans with is right for a craft with engines off the gimbal. The plan counted the turn of the gimballed engines as a turn of the whole thrust, so a craft with one gimballed engine among seven was promised 3.7 times the torque it has. A craft whose every engine is on a gimbal is planned as before.
 
+- New **LEGS** fold on LAND: with **DEPLOY LEGS IN A LANDING** on (the default), a landing that AFC flies deploys every landing leg once, when the legs are at the height **LEGS DOWN AT** over the ground (1000 m by default). A retract or a deploy by hand stands. The measured height of the centre of mass above the legs now reads the legs at their deployed end only, not every deployable part.
+
 - A touchdown plan that runs out with the craft at the plan end and no ground contact yet is reported as "TOUCHDOWN ENDED ITS PLAN WITHOUT CONTACT". It was reported as "TOUCHDOWN LOST PLAN", which reads as a fault.
 
 - Touchdown guidance flies its plan to the ground. After a new plan arrived in the last second, the check for an expired plan could compare the age of the plan before with the burn time of the new one, and the craft then flew the last quarter second without gimbal steering.
