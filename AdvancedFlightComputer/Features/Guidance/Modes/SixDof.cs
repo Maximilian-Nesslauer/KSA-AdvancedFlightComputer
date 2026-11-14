@@ -1548,10 +1548,12 @@ public static partial class GuidanceWindow
         }
 
         // Past the end of the plan the node index clamps, so Command would hold the terminal control indefinitely: a thrust of at least the minimum, which for a craft that cannot hover is a climb. Not guidance any more, so the craft flies the no-plan law until a re-solve lands.
-        if (_s.Guidance.PlanElapsed > _s.Guidance.Sigma)
+        // The age and the burn time are read from the one published plan. Ksa6DofGuidance.PlanElapsed is the age at the last command, which belongs to the plan before when a re-solve has just published. Near the ground that age can be more than the burn time of the new plan, and no command would run to renew it.
+        Ksa6DofPlan flying = _s.Guidance.Published;
+        if (flying != null && now - flying.SolveTime > flying.Sigma)
         {
             FlyWithoutPlan(vehicle, parent, siteCci, x,
-                $"PLAN EXPIRED {_s.Guidance.PlanElapsed - _s.Guidance.Sigma:F1} s AGO");
+                $"PLAN EXPIRED {now - flying.SolveTime - flying.Sigma:F1} s AGO");
             return;
         }
 
