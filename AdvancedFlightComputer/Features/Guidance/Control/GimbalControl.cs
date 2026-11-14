@@ -187,6 +187,25 @@ public static class KsaGimbalControl
         return result;
     }
 
+    /// <summary>
+    /// The thrust now flowing through the engines that sit on a gimbal with a range, N, from the gimbal states of the last step (GimbalControllerState.TotalThrust). Above zero, the gimbals can steer the craft.
+    /// </summary>
+    public static double LitGimbalThrust(Vehicle vehicle)
+    {
+        if (vehicle?.Parts?.States == null
+            || !ModuleStateful<GimbalController, GimbalControllerState, EmptyStruct, EmptyStruct>
+                .TryGetFrom(vehicle.Parts.States, out var gimbals))
+            return 0.0;
+        double thrust = 0.0;
+        foreach (var gimbal in gimbals.ModulesAndStates)
+        {
+            Gimbal g = gimbal.Module.Gimbal;
+            if (g != null && Math.Max(g.AxisY.MaxAngle, g.AxisZ.MaxAngle) > 0f)
+                thrust += gimbal.State.TotalThrust;
+        }
+        return thrust;
+    }
+
     // Physical allocation: solve for the deflections delivering the commanded N*m.
     //  Two passes over the gimbals because the solve needs every gimbal's thrust before it can produce any command.
     //  FlightComputer.VehicleConfig.Gimbals holds only the gimbals whose engine is activated, so a stage that is not staged yet never enters the solve.

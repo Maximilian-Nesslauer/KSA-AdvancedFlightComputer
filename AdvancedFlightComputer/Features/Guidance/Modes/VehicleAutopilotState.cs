@@ -527,6 +527,18 @@ public sealed class VehicleAutopilotState
     public GuidanceWindow.LandingPhase LandingPhase = GuidanceWindow.LandingPhase.Idle;
 
     public double BrakingAltitudeKm = 11;
+
+    /// <summary>The gimbal alone steers a landing burn: RCS is switched off while an engine on a gimbal burns under a landing mode. See GuidanceWindow.SteerLandingBurnWithGimbal.</summary>
+    public bool LandingGimbalSteers = true;
+
+    /// <summary>Guidance switched RCS off for the landing burn and has not given it back yet.</summary>
+    internal bool RcsHeldOff;
+
+    /// <summary>The player switched RCS back on during the landing burn, so guidance leaves it alone until it lets go of the craft.</summary>
+    internal bool RcsYielded;
+
+    /// <summary>The gimbal lost its authority on pitch or yaw while guidance held RCS off, so RCS stays on until the engine is off.</summary>
+    internal bool RcsGimbalLostAxis;
     public bool DeorbitArrivalAngleEnabled;
     public double DeorbitArrivalDescentDeg = 5;
     internal DeorbitRequest DeorbitRequest;

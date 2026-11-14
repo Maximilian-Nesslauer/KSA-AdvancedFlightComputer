@@ -142,6 +142,7 @@ public static partial class GuidanceWindow
             GaugeRow(Specs.GfoldHandoffTgo, ref _s.GfoldHandoffTgo);
             GaugeRow(Specs.LandingVerticalGateM, ref _s.LandingVerticalGateM);
         }
+        GaugeRowCheck(Specs.LandingGimbalSteers, ref _s.LandingGimbalSteers);
 
         GuidanceRegion.End();
     }
