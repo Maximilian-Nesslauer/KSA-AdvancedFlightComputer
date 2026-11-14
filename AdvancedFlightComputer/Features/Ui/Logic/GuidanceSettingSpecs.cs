@@ -132,6 +132,8 @@ internal static class GuidanceSettingSpecs
         "Height where G-FOLD hands the descent to the hover.");
     public static readonly SettingSpec LandingAccelLimitG = new("LandingAccelLimitG", "MAX BURN ACCEL", "g", E, 3.0, 0.0, 100.0, "%.2f",
         "Largest thrust acceleration in the ENTRY and TOUCHDOWN plans, one value for both. 0 switches the limit off.");
+    public static readonly SettingSpec LegsDeployHeightM = new("LegsDeployHeightM", "LEGS DOWN AT", "m", P, 1000.0, 10.0, 1e5, "%.0f",
+        "Height of the legs over the ground under the craft where a landing deploys them. The stock leg takes 5 s to deploy.");
     public static readonly SettingSpec LandingPlanFloorMargin = new("LandingPlanFloorMargin", "PLAN MIN THROTTLE MARGIN", "frac", T, 0.05, 0.0, 0.5, "%.2f",
         "Throttle margin above the real engine minimum in the ENTRY and TOUCHDOWN plans, kept for thrust feedback. One value for both, 0 plans on the minimum itself.");
 
@@ -141,6 +143,8 @@ internal static class GuidanceSettingSpecs
         "Switches RCS off while an engine on a gimbal burns under a landing mode, so that the gimbal alone points the craft. Off leaves RCS as it is. A craft whose gimbals cannot hold both pitch and yaw keeps RCS either way.");
     public static readonly BoolSpec VehicleHeightAuto = new("VehicleHeightAuto", "MEASURE COM ABOVE LEGS", P, true,
         "Measures the COM above the legs from the colliders of the craft, with the legs deployed, and keeps it current.");
+    public static readonly BoolSpec LegsAutoDeploy = new("LegsAutoDeploy", "DEPLOY LEGS IN A LANDING", P, true,
+        "A landing that AFC flies deploys every landing leg once, at LEGS DOWN AT. A retract or a deploy by hand stands.");
 
     #endregion
 
@@ -297,6 +301,10 @@ internal static class GuidanceSettingSpecs
 
     public static readonly SettingSpec[] LandGfoldPlayer = { GfoldHoverHandoffAltM };
 
+    /// <summary>The LEGS settings of every landing.</summary>
+    public static readonly SettingSpec[] LandLegs = { LegsDeployHeightM };
+    public static readonly BoolSpec[] LandLegsBools = { LegsAutoDeploy };
+
     public static readonly SettingSpec[] LandFromOrbitExpert = { BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM };
     public static readonly BoolSpec[] LandFromOrbitExpertBools = { DeorbitArrivalAngleEnabled, LandingGimbalSteers };
     public static readonly SettingSpec[] LandEntryExpert = { LandingAccelLimitG };
@@ -369,7 +377,7 @@ internal static class GuidanceSettingSpecs
         BoostbackSlewDegS, GlideKp, GlideKi, GlideKd,
         SiteLatDeg, SiteLonDeg, BrakingAltitudeKm, DeorbitArrivalDescentDeg, DescentRate, LandingVerticalGateM,
         DownrangeFactor, AimAltKm, GateUprangeKm, GfoldHandoffTgo, VehicleHeightM, GfoldHoverHandoffAltM,
-        LandingAccelLimitG, LandingPlanFloorMargin,
+        LegsDeployHeightM, LandingAccelLimitG, LandingPlanFloorMargin,
         GfoldGlideSlopeDeg, GfoldPointingDeg, GfoldVMaxMs, GfoldThrottleMin, GfoldThrottleMax, GfoldSlewReg,
         GfoldIntervalS, GfoldNodes, GfoldKp, GfoldKd, GfoldSmoothTau, GfoldSolveTimeLimitS,
         SixDofNodes, SixDofTiltDeg, SixDofThrottleFloor, SixDofSigmaSeed,
@@ -385,7 +393,7 @@ internal static class GuidanceSettingSpecs
     {
         GLimitEnabled, AutoLaunch, MatchTargetArgPe, ArgPeFixed, OptimiseInsertion, InsertBeforeApoapsis,
         FlyConvexAscent, ConvexOptimiseTiming, ShowConvexPlan, ForceRoll, LaunchDescending, Engage, AutoStage, DeorbitArrivalAngleEnabled, LandingGimbalSteers,
-        VehicleHeightAuto, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
+        VehicleHeightAuto, LegsAutoDeploy, SixDofFloorAuto, SixDofGfoldSeed, SixDofFixedTime, SixDofVzEnabled, SixDofNodeGates,
         SixDofThreaded, SixDofSpreadCold, SixDofBiasEnabled, SixDofTrack, ThreeDofFromGlide, ThreeDofSixDofHandover,
     };
 

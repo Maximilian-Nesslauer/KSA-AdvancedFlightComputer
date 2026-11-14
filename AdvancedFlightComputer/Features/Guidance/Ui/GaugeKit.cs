@@ -363,19 +363,22 @@ public static partial class GuidanceWindow
         ConsoleUi.NoteShape("AfcLandLegs", shows ? 1 : 0);
         if (!shows)
             return;
+        // While a landing flies with the deploy on, the legs come down by themselves, so the note says when and is no warning.
+        bool auto = _s.LegsAutoDeploy && LandFlies;
+        string note = auto ? PageText.LegsStowedAuto(_s.LegsDeployHeightM) : PageText.LegsStowed;
         if (roomOnly)
         {
-            ConsoleUi.SentenceRoom(PageText.LegsStowed);
+            ConsoleUi.SentenceRoom(note);
             return;
         }
-        if (FormRules.LegsUrgent(impact))
+        if (FormRules.LegsUrgent(impact) && !auto)
         {
-            ConsoleUi.Warning(PageText.LegsStowed.AsSpan());
+            ConsoleUi.Warning(note.AsSpan());
             if (_s.VehicleHeightCard.Length > 0 && ImGui.IsItemHovered())
                 ConsoleUi.Tooltip(_s.VehicleHeightCard.AsSpan());
         }
         else
-            ConsoleUi.TickedNote(ConsoleUi.EscapeFormat(PageText.LegsStowed), _s.VehicleHeightCard);
+            ConsoleUi.TickedNote(ConsoleUi.EscapeFormat(note), _s.VehicleHeightCard);
     }
 
     private static void DrawLiftNote(Vehicle vehicle, LandWay way, bool roomOnly = false)

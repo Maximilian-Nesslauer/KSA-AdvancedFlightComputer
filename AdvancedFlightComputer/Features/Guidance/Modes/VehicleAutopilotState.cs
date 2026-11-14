@@ -695,6 +695,15 @@ public sealed class VehicleAutopilotState
     internal string VehicleHeightCard = "";
     internal long VehicleHeightNextMs;
 
+    /// <summary>A landing that guidance flies deploys the landing legs once, when they come below LegsDeployHeightM over the ground under the craft (StepLandingLegs).</summary>
+    public bool LegsAutoDeploy = true;
+    public double LegsDeployHeightM = 1000.0;
+
+    // The landing that flies has deployed the legs, or found them down, at LegsFiredAtM of leg height, commanding LegsCommanded of them. Cleared when no landing holds the craft any more.
+    internal bool LegsFired;
+    internal double LegsFiredAtM = double.NaN;
+    internal int LegsCommanded;
+
     // How far above VehicleHeightM the centre of mass is when the craft first meets the ground at the site, because the ground under its footprint is not level (TouchdownContact). Zero on level ground and with a manual vehicle height.
     internal double SiteEarlyContactM;
     internal double SiteGroundCacheLat = double.NaN;

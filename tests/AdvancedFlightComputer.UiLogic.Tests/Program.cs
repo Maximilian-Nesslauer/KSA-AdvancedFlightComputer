@@ -54,6 +54,7 @@ internal static class Program
         WordRules();
         FormWords();
         SentenceAndVerbRules();
+        LandingLegRules();
 
         Console.WriteLine(_failures == 0
             ? $"PASS {_checks} checks"
@@ -565,6 +566,49 @@ internal static class Program
         Check("a time keeps its width", Fmt.Time(186.0) == "3m 06s" && Fmt.Time(3900.0) == "1h 05m");
     }
 
+    private static void LandingLegRules()
+    {
+        const double At = 1000.0;
+        static LegsStep Decide(bool enabled = true, bool flies = true, bool holds = true, bool fired = false, bool contact = false, double height = 900.0)
+            => LegsRules.Decide(enabled, flies, holds, fired, contact, height, At);
+
+        Check("the legs deploy below the height", Decide() == LegsStep.Deploy);
+        Check("the legs deploy at the height itself", Decide(height: At) == LegsStep.Deploy);
+        Check("no deploy above the height", Decide(height: At + 0.01) == LegsStep.Wait && Decide(height: 5000.0) == LegsStep.Wait);
+        Check("no deploy with the setting off", Decide(enabled: false) == LegsStep.Wait);
+        Check("no deploy while no landing flies", Decide(flies: false) == LegsStep.Wait);
+        Check("no deploy without the claim on the craft", Decide(holds: false) == LegsStep.Wait);
+        Check("no deploy on the ground", Decide(contact: true, height: -0.2) == LegsStep.Wait);
+        Check("no deploy with no height to read", Decide(height: double.NaN) == LegsStep.Wait);
+        Check("a landing deploys once: a retract by hand stands", Decide(fired: true, height: 300.0) == LegsStep.Wait);
+        Check("the deploy stays done through a handover that keeps the claim", Decide(fired: true, flies: false, holds: true) == LegsStep.Wait);
+        Check("the next landing may deploy again once nothing holds the craft", Decide(fired: true, flies: false, holds: false) == LegsStep.Rearm);
+        Check("a craft that never deployed has nothing to rearm", Decide(fired: false, flies: false, holds: false) == LegsStep.Wait);
+        Check("the setting off after the deploy does not undo it", Decide(enabled: false, fired: true) == LegsStep.Wait);
+
+        // Walk a fall down through the height in steps, and the deploy comes on the first step at or below it and on no other.
+        bool fired = false;
+        int deploys = 0;
+        double firstAt = double.NaN;
+        for (double h = 3000.0; h > 0.0; h -= 7.3)
+        {
+            if (Decide(fired: fired, height: h) != LegsStep.Deploy)
+                continue;
+            deploys++;
+            if (!fired)
+                firstAt = h;
+            fired = true;
+        }
+        Check("a fall through the height deploys once, at the first step at or below it", deploys == 1 && firstAt <= At && firstAt > At - 7.3, $"{deploys} deploys, first at {firstAt}");
+
+        Check("the fold says what the landing does", LegsRules.Label(true, 1000.0, 4) == "LEGS: AUTO AT 1000 m" && LegsRules.Label(false, 1000.0, 4) == "LEGS: OFF");
+        Check("a craft with no legs has none", LegsRules.Label(true, 1000.0, 0) == "LEGS: NONE ON CRAFT");
+        Check("the height of the fold is whole metres", LegsRules.Summary(true, 499.6, 2) == "AUTO AT 500 m");
+        Check("the landing says what it did", LegsRules.Done(true, 812.4, 4) == "DEPLOYED AT 812 m." && LegsRules.Done(true, 812.4, 0) == "ALREADY DOWN AT 812 m." && LegsRules.Done(false, 812.4, 4).Length == 0);
+        Check("the deploy is on by default at 1000 m", GuidanceSettingSpecs.LegsAutoDeploy.Default && GuidanceSettingSpecs.LegsDeployHeightM.Default == 1000.0);
+        Check("the note names the height", PageText.LegsStowedAuto(1000.0) == "LEGS STOWED. THE LANDING DEPLOYS THEM AT 1000 m.");
+    }
+
     private static void Check(string name, bool ok, string detail = "")
     {
         _checks++;
@@ -1017,6 +1061,8 @@ internal static class Program
         AllOf("LandHandOvers", GuidanceSettingSpecs.LandHandOvers, UiTier.Player);
         AllOf("LandHandOverBools", GuidanceSettingSpecs.LandHandOverBools, UiTier.Player);
         AllOf("LandGfoldPlayer", GuidanceSettingSpecs.LandGfoldPlayer, UiTier.Player);
+        AllOf("LandLegs", GuidanceSettingSpecs.LandLegs, UiTier.Player);
+        AllOf("LandLegsBools", GuidanceSettingSpecs.LandLegsBools, UiTier.Player);
         AllOf("LandFromOrbitExpert", GuidanceSettingSpecs.LandFromOrbitExpert, UiTier.Expert);
         AllOf("LandFromOrbitExpertBools", GuidanceSettingSpecs.LandFromOrbitExpertBools, UiTier.Expert);
         AllOf("LandGfoldExpert", GuidanceSettingSpecs.LandGfoldExpert, UiTier.Expert);

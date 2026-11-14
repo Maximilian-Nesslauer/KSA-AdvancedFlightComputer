@@ -13,7 +13,7 @@ using Brutal.Numerics;
 using KSA;
 using Specs = AdvancedFlightComputer.Features.Ui.Logic.GuidanceSettingSpecs;
 
-// The form of the LAND page, in the order a pilot decides it. Above the picture: the site, the table of solvers with the obstacle of each row on that row and the chain of the way (DrawLandSiteRows, DrawLandMethodRows). Under the picture: the note about stowed legs near the ground, the PARAMETERS fold with one short value, what the way shows while it flies, the HAND-OVERS and the GNC fold (DrawLandPage). While the way flies, the picture and what it shows lead (DrawLandLive), and the PLAN row opens the same form (DrawLandPlanRow). The WAY row is in LandPage, the commit is the console footer and the stop is the console head.
+// The form of the LAND page, in the order a pilot decides it. Above the picture: the site, the table of solvers with the obstacle of each row on that row and the chain of the way (DrawLandSiteRows, DrawLandMethodRows). Under the picture: the note about stowed legs near the ground, the PARAMETERS fold with one short value, what the way shows while it flies, the HAND-OVERS, the LEGS and the GNC fold (DrawLandPage). While the way flies, the picture and what it shows lead (DrawLandLive), and the PLAN row opens the same form (DrawLandPlanRow). The WAY row is in LandPage, the commit is the console footer and the stop is the console head.
 public static partial class GuidanceWindow
 {
     private const string LandNumbersFoldId = "LandNumbers";
@@ -376,6 +376,7 @@ public static partial class GuidanceWindow
             DrawLandWay(vehicle, orbit, parent, parent.MeanRadius, innerW, way, liftNote: false);
         ConsoleUi.Gap();
         DrawHandOversFold(way, parent, foldsOpen, !LandHoverRefused);
+        DrawLegsFold(vehicle, foldsOpen);
         DrawLandHowFold(vehicle, innerW, way, foldsOpen);
     }
 
