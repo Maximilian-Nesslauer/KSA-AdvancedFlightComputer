@@ -1391,6 +1391,23 @@ public static partial class GuidanceWindow
         }
     }
 
+    /// <summary>
+    /// Gives the save record of a flight computer the RCS mode the player has while guidance holds RCS off for a landing burn. FlightComputer.SerializeSave writes RCSMode into the record and FlightComputer.DeserializeSave reads it back, and the hold itself does not outlive a load, so a save made during the burn would otherwise load with RCS off and nothing to switch it on again.
+    /// </summary>
+    internal static void SaveRcsAsThePlayerHasIt(FlightComputer fc, FlightComputerData data)
+    {
+        if (data == null || data.RCSMode != FlightComputerRCSMode.Disabled)
+            return;
+        foreach (var entry in VehicleAutopilotState.Snapshot())
+        {
+            if (entry.Value.RcsHeldOff && ReferenceEquals(entry.Key.FlightComputer, fc))
+            {
+                data.RCSMode = FlightComputerRCSMode.Enabled;
+                return;
+            }
+        }
+    }
+
     // Read by the vehicle workers and written only through SetModActive, which queues the releases a switch-off needs.
     private static volatile bool _modActive = true;
 

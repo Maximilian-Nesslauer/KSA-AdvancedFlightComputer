@@ -6,10 +6,11 @@ using HarmonyLib;
 namespace AdvancedFlightComputer.Features.Guidance;
 
 /// <summary>
-/// The guidance feature's two patch blocks. The diagnostics block owns the hook the AFC menu draws
+/// The guidance feature's three patch blocks. The diagnostics block owns the hook the AFC menu draws
 /// from. The driver block owns the per-vehicle step and the worker hook, and its enable flag is what
 /// the guidance pages of the console and the gimbal writer are gated on, so a driver that fails to
-/// load still leaves a menu that says so.
+/// load still leaves a menu that says so. The save block, applied only after the driver block,
+/// owns the save record postfix of the RCS hold, so its loss costs only that repair.
 /// </summary>
 internal static class GuidanceFeature
 {
@@ -59,6 +60,17 @@ internal static class GuidanceFeature
         SaveLoadObserver.SaveLoaded += GuidanceWindow.ReleaseAllVehicles;
     }
 
+    /// <summary>The postfix that gives a save record the player's RCS mode. It has its own patch set, so a failure costs this repair and not the driver.</summary>
+    internal static void ApplySaveRcsPatch(Harmony harmony)
+    {
+        if (GameReflection.FlightComputer_SerializeSave is not { } serialize)
+        {
+            DefaultCategory.Log.Warning("[AFC] FlightComputer.SerializeSave was not found, so a save made while guidance holds RCS off for a landing burn loads with RCS off. Guidance runs as before.");
+            return;
+        }
+        harmony.Patch(serialize, postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnSerializeFlightComputer)));
+    }
+
     /// <summary>Releases what the driver holds when its block failed or the mod unloads.</summary>
     internal static void DisableDriver()
     {
@@ -66,6 +78,18 @@ internal static class GuidanceFeature
 
         // The feature flag is already off, so no later step retries a failed cleanup.
         GuidanceWindow.ReleaseAllVehicles();
+    }
+
+    private static void OnSerializeFlightComputer(FlightComputer __instance, FlightComputerData __result)
+    {
+        try
+        {
+            GuidanceWindow.SaveRcsAsThePlayerHasIt(__instance, __result);
+        }
+        catch (Exception ex)
+        {
+            LogHelper.WarnOnce($"guidance-save-rcs:{ex.GetType().Name}", $"[AFC] Guidance could not give a save the player's RCS mode: {ex}");
+        }
     }
 
     // Runs on the main thread inside Universe.PrepareVehicleWorkers for every vehicle. See the handle in GameReflection for why this is the site.
