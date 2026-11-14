@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-14
+
+Landing burns steered with the gimbal, landers with no roll torque, and landing legs that come down by themselves.
+
 - A landing burn is steered with the engine gimbal. While an engine on a gimbal burns under a landing mode and the gimbal has authority in pitch and yaw, AFC switches RCS off if it was on, so that the gimbal alone points the craft. RCS comes back when the engine is off, the landing mode ends or you take the craft back. Under touchdown guidance it comes back when touchdown guidance ends. Stock gives pitch and yaw to RCS while the RCS turns the craft more than ten times as fast as the gimbal, and on a light craft with strong RCS the pulses swung the craft by up to 0.1 rad/s through the whole braking burn, so touchdown guidance took over a craft that no plan fitted. The new setting **STEER BURN WITH GIMBAL** on LAND (expert, on by default) switches this off. RCS that you switch on again during the burn stays on, RCS that was off before the burn stays off after it, and a craft with no gimbal, or with gimbals that cannot hold both pitch and yaw, keeps RCS. RCS translation is not available while RCS is off. A save made during such a burn loads with RCS on.
 
 - Touchdown guidance lands a craft that has no roll torque from its engines, for example a lander with one gimballed engine on its thrust line. The plan of such a craft ended at a fixed heading with no roll rate, which the craft cannot reach, so every new plan was refused and the craft left its first plan within seconds. The plan now ends upright and at rest in pitch and yaw at any heading, and keeps the roll rate the craft has. Such a craft was refused with "no roll authority from TVC" when the roll torque was exactly zero, and is flown now. A craft with roll torque lands as before.
