@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The insertion search prices each insertion on a new solver instead of a copy of a converged one. On a long burn into a very eccentric orbit, the copy could stop near a second, unstable solution, so insertions near the cheapest read up to 7.5 s of burn too dear and the saving shown was too small (15.9 s instead of 23.4 s in one case). A search now also prices insertions that it could not price before, mostly far from periapsis and before apoapsis, and needs about a quarter of the solves in an ascent to an eccentric orbit.
+
 ## [0.15.0] - 2026-11-15
 
 Guidance settings kept with the save, and the slope of the landing site on LAND.

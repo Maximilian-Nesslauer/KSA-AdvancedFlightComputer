@@ -36,7 +36,11 @@ namespace AdvancedFlightComputer.Features.Guidance.Upfg;
 // An earlier version compared probes after a fixed 40 solves and read its own trajectory into the costs: from a frozen state its goal walked to the end of its range.
 // So each probe is solved until tgo has stayed within SettleTgoS for a whole SettleWindowSolves (TryPrice).
 // One that has not by MaxProbeSolves, or that blows out past DivergedVgoFactor, prices nothing - some insertions have no fixed point at all from a given instant, periapsis among them on a long burn from orbit behind a weak upper stage - and the grid simply has a gap there.
-// The probes are warm-started from their grid neighbours, whose converged solutions are a far closer start than the live one, and MaxSearchSolves caps a search regardless.
+// Each probe starts from a new solver, not from a converged solution.
+// Where the burn ends near a staging, the re-solve can have a second, unstable fixed point above the one it settles on, and a start from above - the live solution or a grid neighbour's - can pass close to it and creep there for a thousand solves, flat enough to pass the settle window, before tgo drops by seconds.
+// On a long burn into a very eccentric orbit, a warm start reads every insertion from 6 to 17 deg past periapsis up to 7.5 s too dear that way.
+// A new solver climbs to its tgo from the setup guess, below both, and settled on the cheaper fixed point in every case measured, in fewer solves than a warm start needed.
+// MaxSearchSolves caps a search regardless.
 //
 // THE INSERTION IS DECIDED EARLY.
 // Where to arrive is a question about the whole burn, and it has a meaningful answer only while most of the burn is still to fly: late on, the trajectory is committed to the insertion it has been steering for, and moving it then spends more on the change than the new insertion could save.
@@ -85,14 +89,14 @@ public sealed class UpfgInsertionSearch
     /// <summary>How far tgo may range over a settle window and still count as converged, s.</summary>
     public const double SettleTgoS = 0.01;
 
-    /// <summary>Most solves one probe gets to converge. The slowest seen from a cold start took about a thousand.</summary>
+    /// <summary>Most solves one probe gets to converge. The slowest seen took about 2800, next to the insertion where the end of the burn moves across a staging.</summary>
     public const int MaxProbeSolves = 3000;
 
     /// <summary>Most solves one search spends across its whole grid; past it the grid is left with gaps.</summary>
     public const int MaxSearchSolves = 40000;
 
     /// <summary>
-    /// A probe whose vgo passes this multiple of the solution it started from is abandoned there and then. An insertion with no fixed point from this instant does not wander: re-solved, its vgo creeps up and then blows out to several times what it started at before collapsing and starting again.
+    /// A probe whose vgo passes this multiple of the VgoMag of the solution TryPrice is given as its bound (the live solution, or the last probe that priced on the same side) is abandoned there and then. An insertion with no fixed point from this instant does not wander: re-solved, its vgo creeps up and then blows out to several times that before collapsing and starting again.
     /// </summary>
     public const double DivergedVgoFactor = 2.0;
 
@@ -248,12 +252,12 @@ public sealed class UpfgInsertionSearch
 
         var priced = new List<Priced>();
 
-        UpfgGuidance PriceAt(UpfgGuidance warm, double offset)
+        UpfgGuidance PriceAt(UpfgGuidance bound, double offset)
         {
             LastSearchPoints++;
             if (LastSearchSolves >= MaxSearchSolves)
                 return null;
-            bool ok = TryPrice(warm, target, UpfgTarget.WrapPi(anchor + offset), r, v, mass, mu, vehicle,
+            bool ok = TryPrice(bound, target, UpfgTarget.WrapPi(anchor + offset), r, v, mass, mu, vehicle,
                 out double cost, out UpfgGuidance probe, out int solves);
             LastSearchSolves += solves;
             if (!ok)
@@ -263,7 +267,7 @@ public sealed class UpfgInsertionSearch
             return probe;
         }
 
-        // The coarse grid, walked out both ways from the point nearest the live insertion, each probe warm-started from the last one that priced on its side.
+        // The coarse grid, walked out both ways from the point nearest the live insertion, so a search cut short by MaxSearchSolves loses the far points first. Each probe's runaway bound is the last one that priced on its side.
         double goalOffset = UpfgTarget.WrapPi(GoalNu - anchor);
         int start = 0;
         for (int i = 1; i < coarseOffsets.Count; i++)
@@ -363,13 +367,13 @@ public sealed class UpfgInsertionSearch
     }
 
     /// <summary>
-    /// What inserting at true anomaly <paramref name="nu"/> costs from this instant: the tgo, in seconds of burn, that a copy of <paramref name="from"/> converges on when solved for that free insertion again and again from (r, v, mass). The copy is returned too - its VgoMag is the same price as thrust dV - and serves as a warm start for pricing a neighbouring insertion. False when it went non-finite, blew out past DivergedVgoFactor or had not converged within MaxProbeSolves, which prices nothing. <paramref name="from"/> is only read.
+    /// What inserting at true anomaly <paramref name="nu"/> costs from this instant: the tgo, in seconds of burn, that a new solver converges on when solved for that free insertion again and again from (r, v, mass). The solver is returned too - its VgoMag is the same price as thrust dV. False when it went non-finite, blew out past DivergedVgoFactor times the VgoMag of <paramref name="from"/> (a solution of this instant, only read) or had not converged within MaxProbeSolves, which prices nothing.
     /// </summary>
     public static bool TryPrice(UpfgGuidance from, UpfgTarget target, double nu, double3 r, double3 v, double mass,
                                 double mu, UpfgVehicle vehicle, out double cost, out UpfgGuidance probe, out int solves)
     {
         cost = double.NaN;
-        probe = from.Clone();
+        probe = new UpfgGuidance();
         UpfgTarget pinned = target.WithFreeInsertion(nu);
         double runaway = DivergedVgoFactor * from.VgoMag;
         // Converged means tgo stayed inside SettleTgoS for every solve of a window, not that two samples a window apart agree: a solution cycling with a period that divides the window reads the same at both ends.
