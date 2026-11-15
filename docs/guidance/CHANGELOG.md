@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+- The guidance settings of a craft are kept with the game save. Before, every LAUNCH, LAND and TUNE value went back to its default when a save loaded or the game started again. AFC now writes the values that differ from the defaults to `afc-craft-settings.toml` in the folder of the save, and gives them back to the craft of the same name when that save loads: the target orbit without the LAN, the ascent method, **THEN**, the landing site, the legs, **STEER BURN WITH GIMBAL**, the limits and the tuning values. A load gives back settings only, so no mode starts by itself. A file of another format and a key that AFC does not know are skipped. The **SHOW IN MAP** and **SHOW IN WORLD** switches are kept in `ui.toml` for all craft. A landing no longer turns **AUTO WARP TO WINDOW** off, so the switch stays as the player set it.
+
 ## [0.14.0] - 2026-11-14
 
 Landing burns steered with the gimbal, landers with no roll torque, and landing legs that come down by themselves.

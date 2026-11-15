@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using AdvancedFlightComputer.Features.MultiPass;
 using Brutal.Logging;
 using HarmonyLib;
@@ -12,6 +13,9 @@ internal static class SaveLoadObserver
     // The default world has an empty save ID until it is saved.
     public static string CurrentSaveId { get; private set; } = string.Empty;
 
+    // The folder of the save that was loaded or written last, so a subscriber can keep its own file with that save. Null for the default world and for a save whose folder is not known.
+    public static DirectoryInfo? CurrentSaveDirectory { get; private set; }
+
     // Notify subscribers after registry work is complete. SaveWritten supplies both IDs because CurrentSaveId already contains the new ID when the event fires.
     public static event Action? SaveLoaded;
     public static event Action<string, string>? SaveWritten;
@@ -19,6 +23,7 @@ internal static class SaveLoadObserver
     public static void Reset()
     {
         CurrentSaveId = string.Empty;
+        CurrentSaveDirectory = null;
         SaveLoaded = null;
         SaveWritten = null;
     }
@@ -51,6 +56,7 @@ internal static class SaveLoadObserver
 
             string saveId = __instance.Id ?? string.Empty;
             CurrentSaveId = saveId;
+            CurrentSaveDirectory = __instance.Directory;
 
             // Keep each stage independent so one failure does not prevent the others.
             RunStage(saveId, "reset the save-scoped state", SaveScopedState.ResetAll);
@@ -90,7 +96,7 @@ internal static class SaveLoadObserver
         }
     }
 
-    internal static void OnSaveWritten(string newSaveId)
+    internal static void OnSaveWritten(string newSaveId, DirectoryInfo? saveDirectory = null)
     {
         string oldSaveId = CurrentSaveId;
 
@@ -111,6 +117,7 @@ internal static class SaveLoadObserver
         MultiPassRegistry.RekeyTo(oldSaveId, newSaveId);
 
         CurrentSaveId = newSaveId;
+        CurrentSaveDirectory = saveDirectory;
 
         MultiPassRegistry.Save();
 
@@ -133,7 +140,7 @@ internal static class SaveLoadObserver
 
             try
             {
-                OnSaveWritten(__instance.Id ?? string.Empty);
+                OnSaveWritten(__instance.Id ?? string.Empty, __instance.Directory);
             }
             catch (Exception ex)
             {

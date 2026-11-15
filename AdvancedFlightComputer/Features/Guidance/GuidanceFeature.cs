@@ -56,8 +56,21 @@ internal static class GuidanceFeature
         harmony.Patch(GameReflection.FlightComputer_UpdateAttitudeTarget!,
             postfix: new HarmonyMethod(typeof(GuidanceFeature), nameof(OnUpdateAttitudeTarget)));
 
-        // A save replaces every vehicle, so the state keyed on the old ones is dropped.
-        SaveLoadObserver.SaveLoaded += GuidanceWindow.ReleaseAllVehicles;
+        SaveLoadObserver.SaveLoaded += OnSaveLoaded;
+        SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
+    }
+
+    // A save replaces every vehicle, so the state keyed on the old ones is dropped, and the craft of the save then get the settings that were saved with them.
+    private static void OnSaveLoaded()
+    {
+        try
+        {
+            GuidanceWindow.ReleaseAllVehicles();
+        }
+        finally
+        {
+            CraftSettings.OnSaveLoaded();
+        }
     }
 
     /// <summary>The postfix that gives a save record the player's RCS mode. It has its own patch set, so a failure costs this repair and not the driver.</summary>
@@ -74,7 +87,8 @@ internal static class GuidanceFeature
     /// <summary>Releases what the driver holds when its block failed or the mod unloads.</summary>
     internal static void DisableDriver()
     {
-        SaveLoadObserver.SaveLoaded -= GuidanceWindow.ReleaseAllVehicles;
+        SaveLoadObserver.SaveLoaded -= OnSaveLoaded;
+        SaveLoadObserver.SaveWritten -= CraftSettings.OnSaveWritten;
 
         // The feature flag is already off, so no later step retries a failed cleanup.
         GuidanceWindow.ReleaseAllVehicles();

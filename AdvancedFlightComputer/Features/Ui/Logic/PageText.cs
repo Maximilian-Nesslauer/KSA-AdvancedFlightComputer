@@ -86,7 +86,7 @@ internal static class PageText
 
     public const string FlyRcsTip = "AFC burns it with the RCS thrusters. STOP ends it.";
 
-    public const string KeptRule = "Changed values stay with the craft until a save loads.";
+    public const string KeptRule = "Changed values are saved with the craft in the game save.";
 
     // How long a value lives, as the last line of its tooltip.
     public const string TagEveryCraft = "Saved for every craft.";
@@ -300,7 +300,7 @@ internal static class PageText
 
     public const string HowItFlies = "GNC";
 
-    public const string HowItFliesTip = "Finer settings of this page. The defaults need no change." + KeptRule;
+    public const string HowItFliesTip = "Finer settings of this page. The defaults need no change. " + KeptRule;
 
     public static string PassesRowDetail(int passes, bool savingKnown = true)
         => passes <= 1 && savingKnown ? "SPLIT SAVES UNDER 1 m/s" : "";

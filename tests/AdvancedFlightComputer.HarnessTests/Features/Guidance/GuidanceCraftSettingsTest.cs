@@ -1,0 +1,388 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
+using AdvancedFlightComputer.Core;
+using AdvancedFlightComputer.Features.Guidance;
+using AdvancedFlightComputer.Features.MultiPass;
+using AdvancedFlightComputer.Features.Ui.Logic;
+using AdvancedFlightComputer.HarnessTests.Fixtures;
+using AdvancedFlightComputer.HarnessTests.Framework;
+using HarmonyLib;
+using HeadlessHarness.Harness;
+using KSA;
+
+namespace AdvancedFlightComputer.HarnessTests;
+
+// The guidance settings of a craft go into the folder of the save that is written and come back onto the craft of the same id when that save loads.
+// A state that is removed and made again stands for the new vehicle objects a real load creates.
+public sealed class GuidanceCraftSettingsTest : AfcTest
+{
+    public override string Name => "afc-guidance-craft-settings";
+
+    protected override void Execute(TestContext t)
+    {
+        if (!TestWorld.RequireHome(t, out IParentBody home))
+            return;
+        VehicleSave? design = DefaultVehicleSaves.FindSave("Rocket");
+        if (design?.VehicleSaveData.RootPartInstance == null)
+        {
+            t.Fail("default vehicle", "Rocket is not available");
+            return;
+        }
+
+        string firstId = "CraftSettings_" + Guid.NewGuid().ToString("N");
+        string otherId = "CraftSettings_" + Guid.NewGuid().ToString("N");
+        string renamedId = "CraftSettings_" + Guid.NewGuid().ToString("N");
+        string temp = Path.Combine(Path.GetTempPath(), "afc-craft-settings-" + Guid.NewGuid().ToString("N"));
+        Vehicle? craft = null;
+        Vehicle? other = null;
+        try
+        {
+            craft = VehicleFixtures.SpawnDesign(t.System, home, design.VehicleSaveData.RootPartInstance, firstId,
+                OrbitFixtures.CircularAt(home, 500_000, Universe.GetElapsedTime()));
+            other = VehicleFixtures.SpawnDesign(t.System, home, design.VehicleSaveData.RootPartInstance, otherId,
+                OrbitFixtures.CircularAt(home, 600_000, Universe.GetElapsedTime()));
+
+            CheckFreshCraftHasNoRecord(t);
+            CheckSaveAndLoad(t, craft, other, Save(temp, "first"));
+            CheckSecondSave(t, craft, Save(temp, "first"), Save(temp, "second"), Save(temp, "empty"));
+            CheckRename(t, craft, renamedId, Save(temp, "renamed"));
+            CheckOldRecords(t, craft, temp);
+            CheckSaveEvents(t, craft, Save(temp, "events"));
+            CheckOverlayPreferences(t);
+        }
+        finally
+        {
+            if (craft != null)
+            {
+                VehicleAutopilotState.Remove(craft);
+                VehicleSpawner.Despawn(craft);
+            }
+            if (other != null)
+            {
+                VehicleAutopilotState.Remove(other);
+                VehicleSpawner.Despawn(other);
+            }
+            if (Directory.Exists(temp))
+                Directory.Delete(temp, recursive: true);
+        }
+    }
+
+    private static DirectoryInfo Save(string root, string name)
+    {
+        var dir = new DirectoryInfo(Path.Combine(root, name));
+        dir.Create();
+        return dir;
+    }
+
+    private static string FilePath(DirectoryInfo save) => Path.Combine(save.FullName, CraftSettings.FileName);
+
+    // The defaults are the initializers, so a craft nobody touched writes nothing.
+    private static void CheckFreshCraftHasNoRecord(TestContext t)
+    {
+        List<(string Key, string Value)> record = CraftSettings.Record(new VehicleAutopilotState());
+        t.Check("a fresh craft has no record", record.Count == 0, string.Join(", ", record.Select(r => r.Key)));
+    }
+
+    private static void SetPlayerValues(VehicleAutopilotState s)
+    {
+        s.SiteLatDeg = -12.5;
+        s.SiteLonDeg = 47.25;
+        s.LegsDeployHeightM = 500.0;
+        s.LandingGimbalSteers = false;
+        s.GfoldPointingDeg = 45.0;
+        s.SixDofTiltDeg = 60.0;
+        s.SixDofNodes = 30;
+        s.PeKm = 250.0;
+        s.AscentMethod = GuidanceWindow.AscentMethod.GravityTurn;
+        s.MoonTransferId = "Luna";
+        s.MoonTransferCapture = true;
+        // Seeded from the launch site, not kept.
+        s.LanDeg = 33.0;
+        // Measured from the craft while the measurement is on, so not the player's value.
+        s.VehicleHeightM = 23.0;
+    }
+
+    private static void CheckSaveAndLoad(TestContext t, Vehicle craft, Vehicle other, DirectoryInfo save)
+    {
+        VehicleAutopilotState.Remove(craft);
+        VehicleAutopilotState.Remove(other);
+        SetPlayerValues(VehicleAutopilotState.For(craft));
+        // A craft whose console was drawn but whose values are the defaults.
+        VehicleAutopilotState.For(other);
+
+        int written = CraftSettings.WriteTo(save, Universe.CurrentSystem);
+        string text = File.Exists(FilePath(save)) ? File.ReadAllText(FilePath(save)) : "";
+        t.Check("one craft is written", written == 1, $"{written}");
+        t.Check("the record names the craft", text.Contains("\"" + craft.Id + "\""), text);
+        t.Check("a craft with defaults has no record", !text.Contains(other.Id), text);
+        t.Check("the LAN is not kept", !text.Contains(nameof(VehicleAutopilotState.LanDeg)), text);
+        t.Check("a measured value is not kept", !text.Contains(nameof(VehicleAutopilotState.VehicleHeightM) + " "), text);
+        t.Check("the file is ASCII", text.All(c => c < 128));
+
+        // A load makes new vehicle objects, so their state starts fresh.
+        VehicleAutopilotState.Remove(craft);
+        VehicleAutopilotState.Remove(other);
+        int restored = CraftSettings.RestoreFrom(save, Universe.CurrentSystem);
+        t.Check("one craft is restored", restored == 1, $"{restored}");
+        if (!t.Check("the craft has a state after the load", VehicleAutopilotState.TryGet(craft, out VehicleAutopilotState s)))
+            return;
+        t.CheckAbs("site latitude", s.SiteLatDeg, -12.5, 1e-12);
+        t.CheckAbs("site longitude", s.SiteLonDeg, 47.25, 1e-12);
+        t.CheckAbs("legs down at", s.LegsDeployHeightM, 500.0, 1e-12);
+        t.Check("steer burn with gimbal", !s.LandingGimbalSteers);
+        t.CheckAbs("G-FOLD max tilt", s.GfoldPointingDeg, 45.0, 1e-12);
+        t.CheckAbs("touchdown max tilt", s.SixDofTiltDeg, 60.0, 1e-12);
+        t.Check("solver points", s.SixDofNodes == 30, $"{s.SixDofNodes}");
+        t.CheckAbs("periapsis", s.PeKm, 250.0, 1e-12);
+        t.Check("ascent method", s.AscentMethod == GuidanceWindow.AscentMethod.GravityTurn);
+        t.Check("THEN", s.MoonTransferId == "Luna" && s.MoonTransferCapture);
+        t.CheckAbs("the LAN keeps its default", s.LanDeg, GuidanceSettingSpecs.LanDeg.Default, 1e-12);
+        t.CheckAbs("the measured height keeps its default", s.VehicleHeightM, GuidanceSettingSpecs.VehicleHeightM.Default, 1e-12);
+        t.Check("a load starts no mode", !s.Active && !s.EngagePending && !s.Running && !s.LaunchArmed && !s.ControlAcquired
+            && s.LandingPhase == GuidanceWindow.LandingPhase.Idle && s.MoonChain == MoonChainStage.Idle);
+        t.Check("a new craft keeps its defaults", !VehicleAutopilotState.TryGet(other, out _));
+    }
+
+    private static void CheckSecondSave(TestContext t, Vehicle craft, DirectoryInfo first, DirectoryInfo second, DirectoryInfo empty)
+    {
+        VehicleAutopilotState.Remove(craft);
+        VehicleAutopilotState.For(craft).LegsDeployHeightM = 400.0;
+        CraftSettings.WriteTo(first, Universe.CurrentSystem);
+        VehicleAutopilotState.For(craft).LegsDeployHeightM = 800.0;
+        CraftSettings.WriteTo(second, Universe.CurrentSystem);
+
+        VehicleAutopilotState.Remove(craft);
+        CraftSettings.RestoreFrom(first, Universe.CurrentSystem);
+        t.CheckAbs("the first save keeps its value", VehicleAutopilotState.For(craft).LegsDeployHeightM, 400.0, 1e-12);
+
+        VehicleAutopilotState.Remove(craft);
+        CraftSettings.RestoreFrom(second, Universe.CurrentSystem);
+        t.CheckAbs("the second save keeps its value", VehicleAutopilotState.For(craft).LegsDeployHeightM, 800.0, 1e-12);
+
+        VehicleAutopilotState.Remove(craft);
+        int restored = CraftSettings.RestoreFrom(empty, Universe.CurrentSystem);
+        t.Check("a save without a file restores nothing", restored == 0 && !VehicleAutopilotState.TryGet(craft, out _));
+
+        // Settings back to the defaults leave no file behind on the next write of the same save.
+        VehicleAutopilotState.Remove(craft);
+        VehicleAutopilotState.For(craft);
+        int written = CraftSettings.WriteTo(second, Universe.CurrentSystem);
+        t.Check("a save of defaults has no file", written == 0 && !File.Exists(FilePath(second)));
+    }
+
+    private static void CheckRename(TestContext t, Vehicle craft, string renamedId, DirectoryInfo save)
+    {
+        string oldId = craft.Id;
+        VehicleAutopilotState.Remove(craft);
+        VehicleAutopilotState.For(craft).GfoldPointingDeg = 35.0;
+        if (!t.Check("the system accepts the new name", t.System.Rename(craft, renamedId)))
+            return;
+        CraftSettings.WriteTo(save, Universe.CurrentSystem);
+        string text = File.ReadAllText(FilePath(save));
+        t.Check("the record has the new name", text.Contains("\"" + renamedId + "\"") && !text.Contains("\"" + oldId + "\""), text);
+
+        VehicleAutopilotState.Remove(craft);
+        CraftSettings.RestoreFrom(save, Universe.CurrentSystem);
+        t.CheckAbs("the renamed craft gets its value", VehicleAutopilotState.For(craft).GfoldPointingDeg, 35.0, 1e-12);
+    }
+
+    // A file of another version: unknown keys, values out of range or unreadable, a table AFC does not know, a craft without an id, and other formats.
+    private static void CheckOldRecords(TestContext t, Vehicle craft, string root)
+    {
+        DirectoryInfo save = Save(root, "old");
+        string id = craft.Id;
+        File.WriteAllLines(FilePath(save), new[]
+        {
+            "# written by another version",
+            "format = 1",
+            "",
+            "[[craft]]",
+            "id = \"" + id + "\"",
+            "SiteLonDeg = 10.5 # a comment",
+            "OldSetting = 5",
+            "GfoldPointingDeg = 900",
+            "LegsAutoDeploy = maybe",
+            "AscentMethod = \"Hopper\"",
+            "MoonTransferCapture = true",
+            "LegsDeployHeightM",
+            "",
+            "[[future]]",
+            "SiteLatDeg = 5",
+            "",
+            "[[craft]]",
+            "SiteLatDeg = 7",
+        });
+        VehicleAutopilotState.Remove(craft);
+        int restored = -1;
+        Exception? error = null;
+        try
+        {
+            restored = CraftSettings.RestoreFrom(save, Universe.CurrentSystem);
+        }
+        catch (Exception ex)
+        {
+            error = ex;
+        }
+        t.Check("an old record loads without an error", error == null && restored == 1, error?.ToString() ?? $"{restored}");
+        VehicleAutopilotState s = VehicleAutopilotState.For(craft);
+        t.CheckAbs("a known value is taken", s.SiteLonDeg, 10.5, 1e-12);
+        t.CheckAbs("a value of another table is not taken", s.SiteLatDeg, GuidanceSettingSpecs.SiteLatDeg.Default, 1e-12);
+        t.CheckAbs("a value out of range is skipped", s.GfoldPointingDeg, GuidanceSettingSpecs.GfoldPointingDeg.Default, 1e-12);
+        t.Check("an unreadable switch is skipped", s.LegsAutoDeploy == GuidanceSettingSpecs.LegsAutoDeploy.Default);
+        t.Check("an unknown ascent method is skipped", s.AscentMethod == GuidanceWindow.AscentMethod.CatsUpfg);
+        t.Check("a capture without a moon is skipped", !s.MoonTransferCapture && s.MoonTransferId.Length == 0);
+
+        foreach (string format in new[] { "", "format = 0", "format = 2" })
+        {
+            var lines = new List<string>();
+            if (format.Length > 0)
+                lines.Add(format);
+            lines.AddRange(new[] { "[[craft]]", "id = \"" + id + "\"", "SiteLonDeg = 11.5" });
+            File.WriteAllLines(FilePath(save), lines);
+            VehicleAutopilotState.Remove(craft);
+            error = null;
+            try
+            {
+                restored = CraftSettings.RestoreFrom(save, Universe.CurrentSystem);
+            }
+            catch (Exception ex)
+            {
+                error = ex;
+            }
+            string label = format.Length > 0 ? format : "no format";
+            t.Check("a file with " + label + " restores nothing and raises no error",
+                error == null && restored == 0 && !VehicleAutopilotState.TryGet(craft, out _), error?.ToString() ?? $"{restored}");
+        }
+    }
+
+    // The save patches hand the folder of the save to their subscribers: the write postfix after a completed write, the load postfix after a completed load.
+    private static void CheckSaveEvents(TestContext t, Vehicle craft, DirectoryInfo save)
+    {
+        FieldInfo saveIdField = StaticField(typeof(SaveLoadObserver), "<CurrentSaveId>k__BackingField");
+        FieldInfo saveDirField = StaticField(typeof(SaveLoadObserver), "<CurrentSaveDirectory>k__BackingField");
+        FieldInfo loadedEvent = StaticField(typeof(SaveLoadObserver), "SaveLoaded");
+        FieldInfo writtenEvent = StaticField(typeof(SaveLoadObserver), "SaveWritten");
+        FieldInfo configPath = StaticField(typeof(MultiPassRegistry), "_configPath");
+        FieldInfo modDir = StaticField(typeof(MultiPassRegistry), "_modDir");
+        object? oldSaveId = saveIdField.GetValue(null);
+        object? oldSaveDir = saveDirField.GetValue(null);
+        object? oldLoaded = loadedEvent.GetValue(null);
+        object? oldWritten = writtenEvent.GetValue(null);
+        object? oldPath = configPath.GetValue(null);
+        object? oldDir = modDir.GetValue(null);
+        var oldEntries = new List<MultiPassExecution>(MultiPassRegistry.Snapshot.Values);
+        try
+        {
+            configPath.SetValue(null, Path.Combine(save.FullName, "multipass.toml"));
+            modDir.SetValue(null, save.FullName);
+            loadedEvent.SetValue(null, null);
+            writtenEvent.SetValue(null, null);
+            SaveLoadObserver.SaveWritten += CraftSettings.OnSaveWritten;
+            SaveLoadObserver.SaveLoaded += CraftSettings.OnSaveLoaded;
+            // The write postfix rekeys the live multi-pass entries in place, so the registry is emptied first and its old entries stay on their own save.
+            MultiPassRegistry.Reset();
+
+            VehicleAutopilotState.Remove(craft);
+            VehicleAutopilotState.For(craft).LegsDeployHeightM = 250.0;
+            UncompressedSave written = MakeSave("events", save);
+            InvokePatch("WritePatch", "Postfix", [written, false]);
+            t.Check("a failed write writes no settings", !File.Exists(FilePath(save)));
+            InvokePatch("WritePatch", "Postfix", [written, true]);
+            t.Check("a completed write puts the settings in the save folder", File.Exists(FilePath(save)));
+
+            VehicleAutopilotState.Remove(craft);
+            UncompressedSave loaded = MakeSave("events", save);
+            loaded.UniverseData = new UniverseData();
+            object?[] prefixArgs = [loaded, null];
+            InvokePatch("LoadPatch", "Prefix", prefixArgs);
+            InvokePatch("LoadPatch", "Postfix", [loaded, prefixArgs[1]]);
+            t.Check("a refused load restores nothing", !VehicleAutopilotState.TryGet(craft, out _));
+            prefixArgs = [loaded, null];
+            InvokePatch("LoadPatch", "Prefix", prefixArgs);
+            loaded.UniverseData = new UniverseData();
+            InvokePatch("LoadPatch", "Postfix", [loaded, prefixArgs[1]]);
+            t.Check("a completed load restores the settings", VehicleAutopilotState.TryGet(craft, out VehicleAutopilotState s)
+                && Math.Abs(s.LegsDeployHeightM - 250.0) < 1e-12);
+        }
+        finally
+        {
+            configPath.SetValue(null, oldPath);
+            modDir.SetValue(null, oldDir);
+            loadedEvent.SetValue(null, oldLoaded);
+            writtenEvent.SetValue(null, oldWritten);
+            saveIdField.SetValue(null, oldSaveId);
+            saveDirField.SetValue(null, oldSaveDir);
+            MultiPassRegistry.Reset();
+            foreach (MultiPassExecution entry in oldEntries) MultiPassRegistry.Add(entry);
+        }
+    }
+
+    // The SHOW IN MAP and SHOW IN WORLD switches are player preferences in ui.toml, read when the console loads its preferences and written when one changes.
+    private static void CheckOverlayPreferences(TestContext t)
+    {
+        string[] keys = ["guidance_ascent_in_map", "guidance_impact_in_world", "guidance_gfold_in_world", "guidance_touchdown_in_world"];
+        string[] fields = ["_showAscentOverlay", "_showImpactOverlay", "_showGfoldOverlay", "_show6DofOverlay"];
+        FieldInfo[] infos = fields.Select(f => StaticField(typeof(GuidanceWindow), f)).ToArray();
+        object?[] oldFields = infos.Select(f => f.GetValue(null)).ToArray();
+        bool[] hadKeys = keys.Select(UiConfig.Has).ToArray();
+        bool[] oldValues = keys.Select(k => UiConfig.GetBool(k, false)).ToArray();
+        MethodInfo save = AccessTools.Method(typeof(GuidanceWindow), "SaveOverlayPreferences")
+            ?? throw new MissingMethodException(typeof(GuidanceWindow).FullName, "SaveOverlayPreferences");
+        try
+        {
+            bool[] stored = [false, true, true, true];
+            for (int i = 0; i < keys.Length; i++)
+                UiConfig.Set(keys[i], stored[i]);
+            GuidanceWindow.LoadOverlayPreferences();
+            t.Check("the overlay switches are read from ui.toml",
+                Enumerable.Range(0, keys.Length).All(i => (bool)infos[i].GetValue(null)! == stored[i]));
+
+            for (int i = 0; i < keys.Length; i++)
+                infos[i].SetValue(null, !stored[i]);
+            save.Invoke(null, null);
+            t.Check("a changed overlay switch is written to ui.toml",
+                Enumerable.Range(0, keys.Length).All(i => UiConfig.GetBool(keys[i], stored[i]) == !stored[i]));
+
+            for (int i = 0; i < keys.Length; i++)
+                UiConfig.Remove(keys[i]);
+            GuidanceWindow.LoadOverlayPreferences();
+            t.Check("without a preference the overlays keep their defaults",
+                (bool)infos[0].GetValue(null)! && !(bool)infos[1].GetValue(null)! && !(bool)infos[2].GetValue(null)! && !(bool)infos[3].GetValue(null)!);
+        }
+        finally
+        {
+            for (int i = 0; i < keys.Length; i++)
+            {
+                infos[i].SetValue(null, oldFields[i]);
+                if (hadKeys[i])
+                    UiConfig.Set(keys[i], oldValues[i]);
+                else
+                    UiConfig.Remove(keys[i]);
+            }
+        }
+    }
+
+    // Both constructors touch the save folder of the game, and the patches need only the id, the folder and the universe data.
+    private static UncompressedSave MakeSave(string id, DirectoryInfo folder)
+    {
+        var save = (UncompressedSave)RuntimeHelpers.GetUninitializedObject(typeof(UncompressedSave));
+        FieldInfo idField = typeof(GameSave).GetField("<Id>k__BackingField", BindingFlags.Instance | BindingFlags.NonPublic)
+            ?? throw new MissingFieldException(typeof(GameSave).FullName, "<Id>k__BackingField");
+        idField.SetValue(save, id);
+        FieldInfo dirField = typeof(UncompressedSave).GetField(nameof(UncompressedSave.Directory), BindingFlags.Instance | BindingFlags.Public)
+            ?? throw new MissingFieldException(typeof(UncompressedSave).FullName, nameof(UncompressedSave.Directory));
+        dirField.SetValue(save, folder);
+        return save;
+    }
+
+    private static void InvokePatch(string patch, string method, object?[] args)
+    {
+        MethodInfo target = AccessTools.Method(AccessTools.Inner(typeof(SaveLoadObserver), patch), method)
+            ?? throw new MissingMethodException(typeof(SaveLoadObserver).FullName, patch + "." + method);
+        target.Invoke(null, args);
+    }
+
+    private static FieldInfo StaticField(Type type, string name)
+        => type.GetField(name, BindingFlags.Static | BindingFlags.NonPublic)
+           ?? throw new MissingFieldException(type.FullName, name);
+}
