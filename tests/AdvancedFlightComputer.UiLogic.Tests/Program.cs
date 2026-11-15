@@ -2970,7 +2970,15 @@ internal static class Program
         Check("an empty picture is low", DockLayout.EmptyPictureHeight < DockLayout.MinPictureHeight);
 
         Check("a plan that can fly says what it brings", PageText.LaunchAnswer("", "Plan ready: 16.27 t to orbit", true, true, 16270.0, 4, 4)
-            == "PLAN READY: 16.3 t TO ORBIT, 4/4 STAGES");
+            == "PLAN READY: 16.3 t TO ORBIT IN THE PLAN, 4/4 STAGES");
+        Check("a plan that throttles a stage the flight burns at full thrust says what to expect", PageText.LaunchAnswer("", "", true, true, 18680.0, 4, 4, "4", 16580.0)
+            == "PLAN READY: 18.7 t TO ORBIT IN THE PLAN, EXPECT ABOUT 16.6 t, 4/4 STAGES");
+        Check("and says less without a held try", PageText.LaunchAnswer("", "", true, true, 18680.0, 4, 4, "4", double.NaN)
+            == "PLAN READY: 18.7 t TO ORBIT IN THE PLAN, EXPECT LESS, 4/4 STAGES");
+        Check("the plan status names the stage, the mass and the turn", PageText.ThrottledKept("4", 16580.0)
+            == "STAGE 4 IS FLOWN AT FULL THRUST, BUT NO PLAN AT FULL THRUST CONVERGED, SO THIS PLAN THROTTLES IT: EXPECT LESS TO ORBIT, ABOUT 16.6 t, AND A TURN AT THE HAND-OVER.");
+        Check("and the stages when there are more", PageText.ThrottledKept("3, 4", double.NaN)
+            == "STAGES 3, 4 ARE FLOWN AT FULL THRUST, BUT NO PLAN AT FULL THRUST CONVERGED, SO THIS PLAN THROTTLES THEM: EXPECT LESS TO ORBIT, AND A TURN AT THE HAND-OVER.");
         Check("no plan yet", PageText.LaunchAnswer("NO PLAN", "", false, true, double.NaN, 0, 0) == "NO PLAN");
         Check("an old plan says why", PageText.LaunchAnswer("the vehicle has moved since it was planned", "Plan ready: 16.27 t", true, true, 16270.0, 4, 4)
             == "PLAN OUT OF DATE: the vehicle has moved since it was planned");

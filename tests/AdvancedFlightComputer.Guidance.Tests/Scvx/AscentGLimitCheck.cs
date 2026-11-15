@@ -11,6 +11,7 @@ using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///   3. The problem file keeps the limit, and a file without it reads back unlimited.
 ///   4. AscentPhasePlan gives the limit only to stages of throttleable liquid engines alone.
 ///   5. A long S-II on a weak, efficient engine, which a 0.8 g limit stretches past the default 700 s burn-time box, still burns its load and converges.
+///   6. 3 g with S-IC held at full thrust (a 99 % floor), as the planner holds a stage that UPFG flies: S-IC flies at the limit from where it binds, and the solve converges, also from a start plan whose S-IC burn time lies outside the held burn-time box.
 /// </summary>
 internal static class AscentGLimitCheck
 {
@@ -87,9 +88,52 @@ internal static class AscentGLimitCheck
         RoundTrip();
         PhasePlan();
         LongStage(verbose);
+        HeldAtLimit(verbose);
         Console.WriteLine();
         Console.WriteLine(_fails == 0 ? "ALL PASS" : $"{_fails} FAILED");
         return _fails == 0 ? 0 : 1;
+    }
+
+    // ---- 6. S-IC held at full thrust under a limit that binds: the floor is 99 % of what the limit leaves, at each node's own mass.
+    private static void HeldAtLimit(bool verbose)
+    {
+        Console.WriteLine();
+        Console.WriteLine("3 g on every stage, S-IC held at full thrust: it rides the limit where the limit binds");
+        const double limitG = 3.0, held = 0.99;
+        AscentProblem p = SaturnV(limitG * G0);
+        AscentStage[] stages = p.Stages.Select((s, i) => i == 0 ? s.WithThrottleMin(held) : s).ToArray();
+        p = new AscentProblem
+        {
+            Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0, Stages = stages,
+            Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
+            TargetRadialRate = p.TargetRadialRate, PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
+        };
+        AscentSolution s = Solve("plan", p, verbose);
+        Check("converged", s.Converged, s.Message);
+        if (s.Nodes == 0) return;
+        double peak = PeakG(s, -1);
+        Check("the plan never passes the limit", peak <= limitG * (1.0 + p.Settings.PathTolerance), $"peak {peak:F4} g");
+        // The throttle the limit leaves at a node is a b m / T at full thrust T, which is the delivered thrust over the throttle.
+        double lowest = double.PositiveInfinity;
+        for (int k = 0; k < s.Nodes; k++)
+        {
+            double u = ThrottleAt(s, k);
+            if (s.NodeStage[k] != 0 || u <= 0.0)
+                continue;
+            double full = s.Thrust[k] / u;
+            double allowed = Math.Min(1.0, limitG * G0 * p.Settings.PathBackoff * s.Mass[k] / full);
+            lowest = Math.Min(lowest, u / allowed);
+        }
+        Check("S-IC never flies under 99 % of what the limit leaves", lowest >= held * (1.0 - p.Settings.PathTolerance), $"{lowest:P2} at the lowest");
+        FeasibleAndInserts(s);
+
+        // A start whose S-IC burn time lies outside the held problem's burn-time box, by far more than the first trust region, as a stage throttled far down on a long arc can be.
+        AscentSolution start = Solve("plan to start from", SaturnV(limitG * G0), verbose);
+        if (start.Nodes == 0) return;
+        start.BurnTime[0] = 2000.0;
+        AscentSolution fromStart = AscentScvx.Solve(p, start: start);
+        if (verbose) Console.WriteLine($"  held from a start out of the box: {fromStart.Message}, {fromStart.Iterations} it, {fromStart.FinalMass / 1000.0:F2} t, S-IC {fromStart.BurnTime.FirstOrDefault():F1} s");
+        Check("held from a start out of the burn-time box converges", fromStart.Converged, fromStart.Message);
     }
 
     // ---- 1. 3 g binds on S-IC.

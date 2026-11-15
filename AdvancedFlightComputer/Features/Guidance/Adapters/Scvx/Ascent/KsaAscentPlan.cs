@@ -418,6 +418,11 @@ public sealed class AscentPlan
     public IReadOnlyList<string> Notes { get; init; }
     public double WallSeconds { get; init; }
 
+    /// <summary>The stages, numbered from 1, that this plan throttles although the flight burns them at full thrust after the hand-over, because the solve with them held at full thrust did not converge. Empty when the plan burns every stage as the flight does.</summary>
+    public string ThrottledStages { get; init; } = "";
+    /// <summary>The mass to orbit of the last try of that held solve, kg, NaN when it accepted no step or did not end under this plan's <see cref="AscentSolution.FinalMass"/>. It comes from a solve that did not converge, so it is only a rough guide to what the flight delivers.</summary>
+    public double HeldTryMassKg { get; init; } = double.NaN;
+
     /// <summary>Fit to fly (<see cref="AscentSolution.Usable"/>) and under the dynamic-pressure ceiling.</summary>
     public bool Usable => Solution != null && Solution.Usable && Profile != null && !OverQCeiling;
 
@@ -444,7 +449,7 @@ public sealed class AscentPlan
 ///
 /// HOW MANY STAGES THE PLAN BURNS is decided here, by trying. The script's formulation burns every stage but the last to depletion, which is right for a vehicle whose last stage is the one that reaches orbit and wrong for one that reaches orbit early: a stage that has to burn its whole load when orbit needed half of it can only waste the rest, and the plan it produces lofts and weaves to do so. So the first attempt plans only as many stages as the ideal dV says orbit needs, anything above them riding along as payload; a plan that cannot reach orbit adds the next stage, and one whose last stage is pinned at its shortest allowed burn drops it.
 ///
-/// A STAGE THE PLAN MUST NOT THROTTLE is found from the converged plan, because which stages those are depends on where the plan flies them. The caller names them, and the same stages are solved once more held at full thrust. A held solve that does not converge leaves the first plan in place.
+/// A STAGE THE PLAN MUST NOT THROTTLE is found from the converged plan, because which stages those are depends on where the plan flies them. The caller names them, and the same stages are solved once more held at full thrust, starting from the converged plan: from a gravity-turn seed the held solve takes several times the iterations and, with the trust region shrunk on the way, stops further from the optimum, where its steering at the hand-over can be some 20 deg from UPFG's. A held solve that does not converge leaves the first plan in place, and the publisher gets the stages that plan throttles and the held solve's last try (<see cref="ThrottledKept"/>).
 /// </summary>
 public sealed class AscentPlanJob : IDisposable
 {
@@ -455,7 +460,7 @@ public sealed class AscentPlanJob : IDisposable
     private readonly Func<AscentProblem, AscentSolution, bool[]> _toHold;
     private readonly int _available, _initial;
     private readonly double _qMax, _qCeiling;
-    private readonly Func<AscentSolution, int, double, string[], double, AscentPlan> _publish;
+    private readonly Func<AscentSolution, int, double, string[], double, ThrottledKept, AscentPlan> _publish;
     private readonly object _gate = new();
     private string _progress = "starting";
     private string _retry = "";
@@ -467,11 +472,11 @@ public sealed class AscentPlanJob : IDisposable
     /// <param name="available">Stages the vehicle has.</param>
     /// <param name="initial">Stages to try first.</param>
     /// <param name="qMax">The max-q asked for, Pa.</param>
-    /// <param name="publish">Wraps the chosen solution, its stage count, the max-q it was planned to, the attempt notes and the wall time in a plan; run on the worker, so it too must touch nothing of the game.</param>
+    /// <param name="publish">Wraps the chosen solution, its stage count, the max-q it was planned to, the attempt notes, the wall time and the stages it throttles against a held solve that did not converge (null for none) in a plan; run on the worker, so it too must touch nothing of the game.</param>
     /// <param name="toHold">From a converged problem and its solution, the stages to solve again held at full thrust, or null for none. Run on the worker.</param>
     /// <param name="qCeiling">The ceiling on a retry's max-q, Pa. Positive infinity for none.</param>
     public AscentPlanJob(Func<int, double, bool[], AscentProblem> build, int available, int initial, double qMax,
-                         Func<AscentSolution, int, double, string[], double, AscentPlan> publish,
+                         Func<AscentSolution, int, double, string[], double, ThrottledKept, AscentPlan> publish,
                          Func<AscentProblem, AscentSolution, bool[]> toHold = null,
                          double qCeiling = double.PositiveInfinity)
     {
@@ -493,6 +498,9 @@ public sealed class AscentPlanJob : IDisposable
 
     private readonly List<string> _notes = [];
     private int _attempts;
+
+    /// <summary>The stages, numbered from 1, that a plan throttles although the flight burns them at full thrust, because their held solve did not converge, and the mass to orbit of that solve's last try, kg, NaN without one.</summary>
+    public sealed record ThrottledKept(string Stages, double TryMassKg);
 
     /// <summary>One line per attempt so far, and a line for each retry that was or could not be made.</summary>
     public string[] Notes { get { lock (_gate) return _notes.ToArray(); } }
@@ -528,6 +536,7 @@ public sealed class AscentPlanJob : IDisposable
         {
             AscentSolution best = null;
             AscentProblem bestProblem = null;
+            ThrottledKept kept = null;
             int bestK = 0;
             double bestQ = _qMax, qMax = _qMax;
             bool relaxed = false;
@@ -620,18 +629,21 @@ public sealed class AscentPlanJob : IDisposable
                     string which = string.Join(", ", Enumerable.Range(0, hold.Length).Where(i => hold[i]).Select(i => (i + 1).ToString()));
                     lock (_gate)
                         _retry = $"Converged, but it throttles stage {which}, which is flown at full thrust after the hand-over: planning it held at full thrust.";
-                    AscentSolution held = SolveOne(_build(bestK, bestQ, hold), $"stage {which} held at full thrust");
+                    AscentSolution held = SolveOne(_build(bestK, bestQ, hold), $"stage {which} held at full thrust", best);
                     lock (_gate)
                         _notes.Add($"{bestK} of {_available} stages at {bestQ / 1000.0:F0} kPa, stage {which} held at full thrust: {held.Message}"
                                 + (held.Nodes > 0 ? $", {held.FinalMass / 1000.0:F2} t to orbit" : "")
                                 + (held.Usable ? "" : "; the throttled plan is kept"));
                     if (held.Usable)
                         best = held;
+                    else if (held.Status != AscentStatus.Cancelled)
+                        // The held solve starts from this plan, so until it accepts a step its mass is this plan's own.
+                        kept = new ThrottledKept(which, held.Nodes > 0 && held.Accepted > 0 && held.FinalMass < best.FinalMass ? held.FinalMass : double.NaN);
                 }
             }
 
             if (best != null && !_cts.IsCancellationRequested)
-                plan = _publish(best, bestK, bestQ, Notes, ElapsedSeconds);
+                plan = _publish(best, bestK, bestQ, Notes, ElapsedSeconds, kept);
         }
         catch (Exception e)
         {
@@ -648,11 +660,11 @@ public sealed class AscentPlanJob : IDisposable
         }
     }
 
-    private AscentSolution SolveOne(AscentProblem problem, string what)
+    private AscentSolution SolveOne(AscentProblem problem, string what, AscentSolution start = null)
         => AscentScvx.Solve(problem,
             it => SetProgress($"{what}: iteration {it.Index + 1}, {it.Status}, miss {it.TerminalViolation:E1}, dV {it.DeltaV:F0} m/s"),
             phase => SetProgress($"{what}: {phase}"),
-            _cts.Token);
+            _cts.Token, start);
 
     private static double TerminalMiss(AscentSolution s)
         => s.TerminalResidual.Length == 0 ? double.PositiveInfinity

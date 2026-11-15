@@ -114,7 +114,8 @@ public static partial class GuidanceWindow
         }
         AscentPlan plan = _s.AscentPlan;
         return PageText.LaunchAnswer(LaunchPlanWhy(vehicle, orbit, parent), _s.AscentPlanStatus, plan?.Usable == true, _s.FlyConvexAscent,
-            plan?.Solution?.FinalMass ?? double.NaN, plan?.StagesPlanned ?? 0, plan?.StagesAvailable ?? 0);
+            plan?.Solution?.FinalMass ?? double.NaN, plan?.StagesPlanned ?? 0, plan?.StagesAvailable ?? 0,
+            plan?.ThrottledStages ?? "", plan?.HeldTryMassKg ?? double.NaN);
     }
 
     private static string LaunchPlanWhy(Vehicle vehicle, Orbit orbit, IParentBody parent)

@@ -262,6 +262,15 @@ internal sealed class AscentCase
         QAlphaMax = p.QAlphaMax;
     }
 
+    /// <summary>The most throttle a stage's acceleration limit leaves it at a state, held at the subproblem's back-off, and 1 for a stage with no limit or no liquid thrust.</summary>
+    public double LimitedThrottle(int stage, ReadOnlySpan<double> x)
+    {
+        if (!double.IsFinite(AccC[stage]))
+            return 1.0;
+        double full = Dyn.LiquidThrustC(stage, x);
+        return full > 0.0 ? Math.Min(1.0, AccC[stage] * Settings.PathBackoff * x[AscentDynamics.IM] / full) : 1.0;
+    }
+
     /// <summary>
     /// The liquid throttle the seed flies a stage at from a state. That is its seed throttle, or less where the seed throttle would push past the stage's acceleration limit, held at the same back-off the subproblem holds the limit to.
     /// </summary>
