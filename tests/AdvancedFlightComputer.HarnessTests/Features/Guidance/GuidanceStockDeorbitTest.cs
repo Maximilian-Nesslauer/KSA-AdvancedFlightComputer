@@ -232,6 +232,7 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
         state.ControlAcquired = true;
         VehicleControlOwnership.TryClaim(craft, ControlClaimant.Guidance, out _);
         TestSupport.SetManualControlInputs(craft, 0.63f, engineOn: true);
+        state.AutoLaunch = true;
         ambient.SetValue(null, state);
         AccessTools.Method(typeof(GuidanceWindow), "ExecuteLanding").Invoke(null, new object[] { craft });
         GuidanceWindow.ApplyAutopilot(craft);
@@ -239,6 +240,7 @@ public sealed class GuidanceDeorbitLifecycleTest : AfcTest
             state.LandingPhase == GuidanceWindow.LandingPhase.DeorbitPlanning
             && !state.ControlAcquired && !Inputs(craft).EngineOn
             && VehicleControlOwnership.HolderOf(craft) == ControlClaimant.None);
+        t.Check("landing keeps the AUTO WARP TO WINDOW preference", state.AutoLaunch);
     }
 
     private static void CheckControlSwitches(TestContext t, DeorbitFixture fixture, VehicleAutopilotState state)
