@@ -153,6 +153,9 @@ public abstract class ConvexAscentFlightTest : AfcTest
             GuidanceFeature.ApplyDriverPatches(harmony);
             SharedVehicleHooks.GuidanceEnabled = true;
             GuidanceWindow.SetModActive(true);
+            // The bodies turn, and two steps first: Celestial.UpdatePerFrameData takes the body's rotation from its orbit's state time, which stands still until the orbit solvers run, and SimDriver.Step applies the vehicle solvers, which refresh that rotation, before the orbit solvers, so the rotation trails the orbit state by one step. The pad, read through that rotation, would otherwise be up to hundreds of kilometres from the site, on ground that can be higher than the spawn.
+            driver.StepOrbits = true;
+            driver.Step(0.02, 2);
 
             // The pad: over the site, a few hundred metres above its terrain, turning with the ground and climbing.
             double lat = SiteLatDeg * Math.PI / 180.0, lon = SiteLonDeg * Math.PI / 180.0;
