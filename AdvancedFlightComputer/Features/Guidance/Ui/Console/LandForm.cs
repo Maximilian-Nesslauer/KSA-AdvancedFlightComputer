@@ -8,6 +8,7 @@ using System.Runtime.InteropServices;
 using AdvancedFlightComputer.Core;
 using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
+using AdvancedFlightComputer.Guidance.Scvx.SixDof;
 using Brutal.ImGuiApi;
 using Brutal.Numerics;
 using KSA;
@@ -82,6 +83,14 @@ public static partial class GuidanceWindow
         DescentFacts judged = _s.Active || _s.SixDofStandby ? default : descent;
         ReadHoverAnswer(vehicle, in judged);
         NoteLandFacts(way, solver, in judged, HasPhysicalAtmosphere(vehicle.Orbit.Parent));
+        StepFlatSearch(vehicle.Orbit.Parent, FlatSearchBudgetMs);
+        if (way != LandWay.Hover && !NoSitePicked(vehicle.Orbit.Parent))
+        {
+            SlopeVerdict verdict = SiteSlopeText.Verdict(SiteSlopeNowDeg(vehicle.Orbit.Parent), _s.SiteTipDeg, _s.SiteStandDeg);
+            string fact = SiteSlopeText.Fact(verdict, _s.SiteSlopeDeg, _s.SiteTipDeg, _s.SiteStandDeg);
+            if (fact.Length > 0)
+                NoteLandFact(fact, danger: verdict == SlopeVerdict.CannotStand);
+        }
         return new LandRead(descent, LandFlies);
     }
 
@@ -98,7 +107,75 @@ public static partial class GuidanceWindow
             return;
         using (ConsoleUi.Dim(DeorbitTargetLocked || (way == LandWay.Boostback && situation.Where == CraftSituation.Ground && NoStageHome)))
             DrawLandSiteRow(parent, pickSite);
+        DrawSiteSlopeRows(vehicle, parent);
         ConsoleUi.Gap();
+    }
+
+    /// <summary>
+    /// The ground at the site under the site row: its slope over the footprint of the legs, in the warning colour above the slope on which the craft goes over and in the danger colour above the slope on which it cannot stand, with the limit beside it and FIND FLAT, which searches the ground around the site. Once the search has its answer, a second row names the flattest point with its slope, distance and direction, and MOVE SITE takes it. While that answer still tips the craft over, the button searches three times as far, and after the widest search it stays off.
+    /// </summary>
+    private static void DrawSiteSlopeRows(Vehicle vehicle, IParentBody parent)
+    {
+        bool shows = !NoSitePicked(parent) && double.IsFinite(SiteSlopeNowDeg(parent)) && double.IsFinite(_s.SiteTipDeg);
+        ConsoleUi.NoteShape("AfcLandSlope", shows ? 1 : 0);
+        if (!shows)
+            return;
+        SlopeVerdict verdict = SiteSlopeText.Verdict(_s.SiteSlopeDeg, _s.SiteTipDeg, _s.SiteStandDeg);
+        bool found = FlatSearchFits(parent);
+        bool searching = found && !double.IsFinite(_s.FlatSiteSlopeDeg);
+        float h = ConsoleStyle.FrameHeightPx;
+        double nextRadius = NextFlatSearchRadiusM(parent);
+        bool searchedWidest = !(nextRadius > 0.0);
+        string findVerb = searching ? SiteSlopeText.SearchingVerb : SiteSlopeText.FindVerbFor(searchedWidest ? FlatSearchWidestM : nextRadius, FlatSearchRadiusM);
+        float findW = Math.Max(ConsoleWidgets.ButtonWidth(SiteSlopeText.FindVerbFor(FlatSearchWidestM, FlatSearchRadiusM).AsSpan()), ConsoleWidgets.ButtonWidth(SiteSlopeText.SearchingVerb.AsSpan()));
+        uint? ink = verdict switch
+        {
+            SlopeVerdict.CannotStand => ConsoleStyle.DangerU32,
+            SlopeVerdict.TipsOver => Ui.Canvas.Palette.Warn.U32,
+            _ => null,
+        };
+        ConsoleUi.BeginRow(SiteSlopeText.SlopeLabel(_s.SiteSlopeDeg), findW, ink);
+        bool hovered = ConsoleWidgets.RowHovered;
+        ConsoleUi.RowDetail(SiteSlopeText.LimitDetail(_s.SiteTipDeg), findW);
+        ConsoleUi.RowRight(findW);
+        bool find;
+        using (new ImGuiDisabledScope(searching || searchedWidest || DeorbitTargetLocked))
+            find = ConsoleWidgets.Button(findVerb.AsSpan(), "AfcFindFlat".AsSpan(), new float2(findW, h));
+        ConsoleUi.NoteItem("AfcFindFlat");
+        bool wider = (searchedWidest || nextRadius > FlatSearchRadiusM) && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
+        if (wider)
+            ConsoleUi.Tooltip((searchedWidest ? SiteSlopeText.WidestCard(_s.FlatSiteSlopeDeg, _s.SiteTipDeg, FlatSearchWidestM) : SiteSlopeText.WiderCard(_s.FlatSiteSlopeDeg, _s.SiteTipDeg, nextRadius)).AsSpan());
+        else if (hovered)
+            ConsoleUi.Tooltip(SiteSlopeText.Card(_s.SiteSlopeDeg, _s.SiteTipDeg, _s.SiteStandDeg, _s.SiteFootprintM).AsSpan());
+        if (find && !searching && !searchedWidest && !DeorbitTargetLocked && StartFlatSearch(vehicle))
+            (found, searching) = (true, true);
+        ConsoleUi.EndRow();
+
+        ConsoleUi.NoteShape("AfcLandFlat", !found ? 0 : searching ? 1 : 2);
+        if (!found)
+            return;
+        if (searching)
+        {
+            SiteSlope.FlatSearch search = _s.FlatSearch;
+            ConsoleUi.Muted(SiteSlopeText.Searching(search.RadiusM, search.Count > 0 ? (double)search.Evaluated / search.Count : 0.0).AsSpan());
+            return;
+        }
+        string text = SiteSlopeText.Found(_s.FlatSiteSlopeDeg, _s.FlatSiteDistanceM, _s.FlatSiteBearingDeg, _s.SiteSlopeDeg, _s.FlatSearch.RadiusM);
+        if (!SiteSlopeText.IsBetter(_s.FlatSiteSlopeDeg, _s.SiteSlopeDeg))
+        {
+            ConsoleUi.Muted(text.AsSpan());
+            return;
+        }
+        float moveW = ConsoleWidgets.ButtonWidth(SiteSlopeText.MoveVerb.AsSpan());
+        ConsoleUi.BeginRow(text, moveW);
+        ConsoleUi.RowRight(moveW);
+        bool move;
+        using (new ImGuiDisabledScope(DeorbitTargetLocked))
+            move = ConsoleWidgets.Button(SiteSlopeText.MoveVerb.AsSpan(), "AfcMoveFlat".AsSpan(), new float2(moveW, h));
+        ConsoleUi.NoteItem("AfcMoveFlat");
+        if (move)
+            MoveToFlatSite(parent);
+        ConsoleUi.EndRow();
     }
 
     internal static void DrawLandMethodRows(Vehicle vehicle, LandWay way, in SituationFacts situation, in LandRead read)

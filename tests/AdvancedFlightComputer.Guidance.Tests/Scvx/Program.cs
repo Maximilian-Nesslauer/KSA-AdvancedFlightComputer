@@ -42,6 +42,9 @@ if (args.Contains("--hermite"))
 if (args.Contains("--touchdown"))
     return TouchdownContactCheck.Run();
 
+if (args.Contains("--slope"))
+    return SiteSlopeCheck.Run();
+
 if (args.Contains("--3dof-model"))
     return ThreeDofModelCheck.Run();
 
@@ -110,6 +113,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --roll-free-landing  the plan and the flying loop for a craft whose gimbals give no roll torque
           --hermite       sample plan position and velocity for warm re-solves
           --touchdown     the first contact on ground that is not level, against logged landings
+          --slope         the ground slope of a site, the tip-over limit of a craft, the search for flatter ground
           --soft          soft terminal position: unreachable target still yields a plan
 
         MEASUREMENT - closed-loop MPC with injected dispersions

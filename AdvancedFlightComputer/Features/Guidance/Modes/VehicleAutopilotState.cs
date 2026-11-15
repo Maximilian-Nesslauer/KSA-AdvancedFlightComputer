@@ -712,6 +712,28 @@ public sealed class VehicleAutopilotState
     internal object SiteGroundCacheBody;
     internal TouchdownContact.GroundRise SiteGround;
 
+    // The slope of the ground over the footprint at the site, and the slopes above which this craft goes over after an upright touchdown and above which it cannot stand, in degrees (SiteSlope). NaN while the craft or the site gives no answer.
+    internal double SiteSlopeDeg = double.NaN;
+    internal double SiteTipDeg = double.NaN;
+    internal double SiteStandDeg = double.NaN;
+    internal double SiteFootprintM;
+    internal double SiteSlopeCacheLat = double.NaN;
+    internal double SiteSlopeCacheLon = double.NaN;
+    internal double SiteSlopeCacheReachM;
+    internal object SiteSlopeCacheBody;
+
+    // The search for flatter ground around the site that the LAND page started, the site and footprint it searches for, and its answer measured as the site readout measures.
+    internal SiteSlope.FlatSearch FlatSearch;
+    internal double FlatSearchLat = double.NaN;
+    internal double FlatSearchLon = double.NaN;
+    internal double FlatSearchReachM;
+    internal object FlatSearchBody;
+    internal double FlatSiteLat = double.NaN;
+    internal double FlatSiteLon = double.NaN;
+    internal double FlatSiteSlopeDeg = double.NaN;
+    internal double FlatSiteDistanceM = double.NaN;
+    internal double FlatSiteBearingDeg = double.NaN;
+
     /// <summary>
     /// Largest thrust acceleration a landing burn may PLAN, in g, or 0 for none - a soft constraint in both the 3-DOF and the 6-DOF solvers, read when they build their problem; the glide plan times the ignition under it with headroom (Guidance3Dof.Settings.AccelHeadroom). A min-fuel burn otherwise lights as late as it can, or coasts on minimum thrust once lit, and brakes at full throttle at the end: 5-6 g over two seconds on the 2026-10-08 boosters, up to 13.7 g in the last second on the 2026-10-09 7 t one, where a tenth of a second of lag is metres per second and no node count the solver keeps up with resolves the burn. The trackers may still go past it to correct; see StartThreeDofCold.
     /// </summary>
