@@ -1051,16 +1051,31 @@ internal static class PageText
 
     public static string TargetOrbit(double peKm, double apKm, double incDeg) => Fmt.Orbit(peKm, apKm) + ", INC " + Fmt.Deg(incDeg);
 
-    public static string LaunchAnswer(string why, string stored, bool planUsable, bool flyConvex, double massToOrbitKg, int stagesPlanned, int stagesAvailable)
+    /// <param name="throttledStages">The stages the plan throttles although the flight burns them at full thrust (AscentPlan.ThrottledStages), empty for none.</param>
+    /// <param name="heldTryKg">The mass to orbit of the last try of the solve with those stages held at full thrust, kg, NaN for none.</param>
+    public static string LaunchAnswer(string why, string stored, bool planUsable, bool flyConvex, double massToOrbitKg, int stagesPlanned, int stagesAvailable,
+                                      string throttledStages = "", double heldTryKg = double.NaN)
     {
         bool failed = !planUsable && stored.Length > 0 && !IsPlanStatusTransient(stored);
         if (failed)
             return stored;
         if (why.Length > 0)
             return PlanState(why);
-        return flyConvex
-            ? string.Create(Inv, $"{PlanReadyWord}: {Fmt.Tons(massToOrbitKg)} TO ORBIT, {stagesPlanned}/{stagesAvailable} STAGES")
-            : "READY: GRAVITY TURN";
+        if (!flyConvex)
+            return "READY: GRAVITY TURN";
+        string expect = throttledStages.Length == 0 ? ""
+            : double.IsFinite(heldTryKg) ? ", EXPECT ABOUT " + Fmt.Tons(heldTryKg)
+            : ", EXPECT LESS";
+        return string.Create(Inv, $"{PlanReadyWord}: {Fmt.Tons(massToOrbitKg)} TO ORBIT IN THE PLAN{expect}, {stagesPlanned}/{stagesAvailable} STAGES");
+    }
+
+    /// <summary>The plan throttles stages that the flight burns at full thrust after the hand-over, because the solve with them held at full thrust did not converge. The flight then delivers less than the plan, about the last try of that solve, and turns at the hand-over from the plan's steering to the steering of a full-thrust burn.</summary>
+    public static string ThrottledKept(string stages, double heldTryKg)
+    {
+        bool many = stages.Contains(',');
+        string expect = double.IsFinite(heldTryKg) ? ", ABOUT " + Fmt.Tons(heldTryKg) : "";
+        return $"{(many ? "STAGES" : "STAGE")} {stages} {(many ? "ARE" : "IS")} FLOWN AT FULL THRUST, BUT NO PLAN AT FULL THRUST CONVERGED, "
+             + $"SO THIS PLAN THROTTLES {(many ? "THEM" : "IT")}: EXPECT LESS TO ORBIT{expect}, AND A TURN AT THE HAND-OVER.";
     }
 
     public const string PlanReadyWord = "PLAN READY";

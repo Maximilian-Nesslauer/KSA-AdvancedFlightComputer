@@ -26,7 +26,7 @@ namespace AdvancedFlightComputer.Guidance.Scvx.Ascent;
 ///
 /// A "stage" in the propellant rows is really a run of stages that share one liquid load: a core lit with its boosters keeps burning after they burn out, and only the load's total is fixed, not how it splits across the burnout (AscentCase.Loads).
 ///
-/// The acceleration limit is the one constraint launch3dof.py does not have. T ||u|| &lt;= a m is bilinear in the true model, because T depends on the altitude, so the liquid thrust is frozen at the reference T_bar, which leaves a cone in u, m and the slack. The slack term uses the reference mass so the cone stays linear in it, and the slack is priced as the other path slacks are, the exact-penalty treatment of a linearised path constraint in successive convexification (Mao, Szmuk and Acikmese 2016). The node's throttle floor is scaled to the reference's own ceiling under the limit, so the floor and the limit never exclude each other.
+/// The acceleration limit is the one constraint launch3dof.py does not have. T ||u|| &lt;= a m is bilinear in the true model, because T depends on the altitude, so the liquid thrust is frozen at the reference T_bar, which leaves a cone in u, m and the slack. The slack term uses the reference mass so the cone stays linear in it, and the slack is priced as the other path slacks are, the exact-penalty treatment of a linearised path constraint in successive convexification (Mao, Szmuk and Acikmese 2016). Where the limit binds on the reference, the node's throttle floor is that fraction of the ceiling the limit leaves at the node's own mass, a b m_k / T_bar, so the floor and the limit never exclude each other, and the next reference meets its floor whatever the step did to its mass.
 ///
 /// Two departures, both conditioning rather than modelling. The lift-off thrust constraint is two rows (the two directions perpendicular to straight up) instead of the script's three rank-2 rows. And the whole problem is assembled fresh each iteration, as CVXPY rebuilt it: the set of nodes carrying a path limit changes with the reference, so the structure is not fixed.
 /// </summary>
@@ -213,14 +213,14 @@ internal sealed class AscentSubproblem
         // ---- the reference's liquid thrust and, under an acceleration limit, the throttle that limit leaves it.
         int[] limited = c.LimitedNodes;
         var limitThrust = new double[limited.Length];
-        var floorScale = new double[n];
-        Array.Fill(floorScale, 1.0);
+        // The floor follows the node's own mass m_k, not the reference's, because a floor fixed at the reference's mass is not met by the next reference when a step raises that mass. With a floor near full thrust, as on a stage held at full thrust, that gap is more than the trust region can close, and every subproblem after it is infeasible.
+        var floorPerMass = new double[n];
         for (int g = 0; g < limited.Length; g++)
         {
             int k = limited[g], s = c.NodeStage[k];
             limitThrust[g] = c.Dyn.LiquidThrustC(s, xbar.AsSpan(k * NX, NX));
-            if (limitThrust[g] > 0.0)
-                floorScale[k] = Math.Clamp(c.AccC[s] * st.PathBackoff * xbar[k * NX + AscentDynamics.IM] / limitThrust[g], 0.0, 1.0);
+            if (limitThrust[g] > 0.0 && c.AccC[s] * st.PathBackoff * xbar[k * NX + AscentDynamics.IM] < limitThrust[g])
+                floorPerMass[k] = c.AccC[s] * st.PathBackoff / limitThrust[g];
         }
 
         // ---- per-node: throttle floor (tangent halfspace), mass floor, ground (tangent halfspace).
@@ -234,7 +234,10 @@ internal sealed class AscentSubproblem
                 ux = u0Ref[0]; uy = u0Ref[1]; uz = u0Ref[2];
             }
             double un = Math.Sqrt(ux * ux + uy * uy + uz * uz);
-            int row = ineq.NewRow(-c.ThrottleMin[c.NodeStage[k]] * floorScale[k]);
+            double floor = c.ThrottleMin[c.NodeStage[k]];
+            int row = ineq.NewRow(floorPerMass[k] > 0.0 ? 0.0 : -floor);
+            if (floorPerMass[k] > 0.0)
+                ineq.Add(row, IX(k, AscentDynamics.IM), floor * floorPerMass[k]);
             if (un > 1e-12)
             {
                 ineq.Add(row, IU(k, 0), -ux / un);

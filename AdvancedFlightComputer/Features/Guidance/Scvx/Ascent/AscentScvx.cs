@@ -146,8 +146,9 @@ public static class AscentScvx
     private const int NX = AscentCase.NX;
     private const int NU = AscentCase.NU;
 
+    /// <param name="start">A converged plan of the same stages to start from instead of a gravity-turn seed, or null. It is used only when its nodes fall into the same stages as this problem's, and its throttle is raised to this problem's floor where it is under it.</param>
     public static AscentSolution Solve(AscentProblem problem, Action<AscentIteration>? onIteration = null,
-                                       Action<string>? onPhase = null, CancellationToken cancel = default)
+                                       Action<string>? onPhase = null, CancellationToken cancel = default, AscentSolution? start = null)
     {
         var total = System.Diagnostics.Stopwatch.StartNew();
         string invalid = problem.Validate();
@@ -197,6 +198,14 @@ public static class AscentScvx
                 : $"booster reserve: that plan did not hold ({held.Message}), freeing it from the seed instead");
         }
 
+        bool fromStart = false;
+        if (warm == null && start != null && start.Nodes == c.N && start.NodeStage.AsSpan().SequenceEqual(c.NodeStage) && start.BurnTime.Length == c.S)
+        {
+            warm = start;
+            fromStart = true;
+            onPhase?.Invoke($"starting from the plan given ({start.FinalMass / 1000.0:F2} t to orbit)");
+        }
+
         AscentSeed.Result seed;
         if (warm != null)
         {
@@ -216,7 +225,10 @@ public static class AscentScvx
 
         double[] xbar = seed.X, ubar = seed.U, sigBar = (double[])seed.Sigma.Clone();
         double phiBar = warm != null ? Math.Clamp(warm.PlaneTurn, c.PlaneTurnMin, c.PlaneTurnMax) : c.PlaneTurn0;
-        double drBar = 0.0;
+        // A plan given to start from carries its own reserve in its masses, so the reference starts at that reserve. A plan from the reserve held where it was set carries no change.
+        double drBar = fromStart && c.RecStage >= 0 && double.IsFinite(start!.RecoveryReserveKg)
+            ? Math.Clamp(start.RecoveryReserveKg / c.Dyn.MU - c.R0C, c.RMinC, c.RMaxC)
+            : 0.0;
         Merit refMerit = TrueCost(c, xbar, ubar, sigBar, phiBar, drBar, null);
         // The booster's need at the reference, with its slopes: what the recovery row linearises. Recomputed only when the reference moves.
         BoostbackOracle.Need needRef = default;
@@ -416,10 +428,17 @@ public static class AscentScvx
                 u[k * NU + i] = w.Throttle[k * 3 + i];
             }
             x[k * NX + 6] = w.Mass[k] / d.MU;
+            // A plan solved to a lower floor can sit under this problem's floor, and a reference under its floor by more than the trust region leaves the first subproblem infeasible. The thrust direction is kept.
+            double floor = c.ThrottleMin[c.NodeStage[k]] * c.LimitedThrottle(c.NodeStage[k], x.AsSpan(k * NX, NX));
+            double un = Math.Sqrt(u[k * NU] * u[k * NU] + u[k * NU + 1] * u[k * NU + 1] + u[k * NU + 2] * u[k * NU + 2]);
+            if (un > 1e-12 && un < floor)
+                for (int i = 0; i < 3; i++)
+                    u[k * NU + i] *= floor / un;
         }
+        // The burn times go into this problem's bounds as well, because a plan solved to a lower floor can burn a stage longer than this problem allows, and a reference outside a hard bound by more than the trust region leaves every subproblem infeasible.
         var sig = new double[c.S];
         for (int s = 0; s < c.S; s++)
-            sig[s] = w.BurnTime[s] / d.TU;
+            sig[s] = double.IsFinite(c.SigFixed[s]) ? c.SigFixed[s] : Math.Clamp(w.BurnTime[s] / d.TU, c.SigMin[s], c.SigMax[s]);
         return new AscentSeed.Result(true, x, u, sig, w.KickDeg, 0.0, 0, w.SeedNote, w.SeedLeastMaxQ);
     }
 

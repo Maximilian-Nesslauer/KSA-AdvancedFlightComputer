@@ -149,6 +149,22 @@ internal static class AscentCheck
                 Recovery = p.Recovery,
             };
         }
+        // --hold i,j: hold those stages (1-based) at full thrust, as the planner's second solve does for stages UPFG flies. With --start-free, the problem is solved first as it is and the held solve starts from that plan, as the planner does.
+        AscentProblem free = p;
+        int hi = Array.IndexOf(args, "--hold");
+        if (hi >= 0 && hi + 1 < args.Length)
+        {
+            var hold = new HashSet<int>(args[hi + 1].Split(',').Select(x => int.Parse(x, System.Globalization.CultureInfo.InvariantCulture) - 1));
+            AscentStage[] st = p.Stages.Select((x, i) => hold.Contains(i) ? x.WithThrottleMin(0.99) : x).ToArray();
+            p = new AscentProblem
+            {
+                Mu = p.Mu, BodyRadius = p.BodyRadius, Omega = p.Omega, R0 = p.R0, V0 = p.V0, M0 = p.M0, Stages = st,
+                Atmosphere = p.Atmosphere, GroundRadius = p.GroundRadius, TargetRadius = p.TargetRadius, TargetSpeed = p.TargetSpeed,
+                TargetRadialRate = p.TargetRadialRate, PlaneNormal = p.PlaneNormal, QMax = p.QMax, QAlphaMax = p.QAlphaMax,
+                PlaneTurnMin = p.PlaneTurnMin, PlaneTurnMax = p.PlaneTurnMax, LiftoffDirection = p.LiftoffDirection, Settings = p.Settings,
+                Recovery = p.Recovery,
+            };
+        }
         // --set Name=value (repeatable): any numeric or boolean AscentSettings field, to try a tuning against a dumped problem.
         for (int i = 0; i + 1 < args.Length; i++)
         {
@@ -175,12 +191,18 @@ internal static class AscentCheck
                             + $"prop {s.PropellantMass / 1000.0:F2} t ({s.FullBurnTime:F1} s), drop {s.JettisonMass / 1000.0:F2} t, drag area {s.DragArea:F1} m^2");
         }
 
+        AscentSolution? start = null;
+        if (args.Contains("--start-free") && hi >= 0)
+        {
+            start = AscentScvx.Solve(free);
+            Console.WriteLine($"-- the free plan: {start.Message}, {start.FinalMass / 1000.0:F2} t to orbit, {start.Iterations} iterations");
+        }
         AscentSolution sol = AscentScvx.Solve(p, it =>
             Console.WriteLine($"iter {it.Index}: rho={it.Rho:+0.00;-0.00} {it.Status,-7} tr={it.TrustRegion:F3}  "
                 + $"sig={string.Join("/", it.SigmaSeconds.Select(x => x.ToString("F0")))}s  pred={it.Predicted:E1}  "
                 + $"defect_n={it.DefectNorm:E2}  pviol={it.PathViolation:E1}  term={it.TerminalViolation:E1}  "
                 + $"dv={it.DeltaV:F0}  J={it.Cost:E5}  clarabel={it.SolverIterations} {it.SolveMs:F0} ms"),
-            phase => Console.WriteLine("-- " + phase));
+            phase => Console.WriteLine("-- " + phase), start: start);
         Console.WriteLine($"{sol.Message}: kick {sol.KickDeg:F3} deg, seed {sol.SeedSeconds:F1} s, total {sol.SolveSeconds:F1} s, "
             + $"seeds' least max q {sol.SeedLeastMaxQ / 1000.0:F1} kPa");
         if (sol.Nodes > 0)

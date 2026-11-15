@@ -98,7 +98,7 @@ if (args.Length == 0 || args.Contains("--help") || args.Contains("-h"))
           --3dof-ksa      glide-and-burn and burn-only solves of a returning booster on the KSA model
           --3dof-mpc      the glide-and-burn guidance flown closed loop against dispersed drag, lift, thrust and attitude lag
           --boostback-replay <file> [--delay s] [--min-pitch deg]  the booster's own burn planner from where the plan separates it
-          --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f]
+          --ascent-replay <file> [--stages N] [--qmax kPa] [--qamax Pa.rad] [--floor f] [--hold i,j]
                           solve an ascent problem the game dumped, with the full trace
 
         BEHAVIOUR - properties the guidance depends on

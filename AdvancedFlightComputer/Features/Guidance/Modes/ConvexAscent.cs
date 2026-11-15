@@ -9,6 +9,7 @@ using AdvancedFlightComputer.Core;
 using Brutal.Numerics;
 using KSA;
 using AdvancedFlightComputer.Features.Guidance.Upfg;
+using AdvancedFlightComputer.Features.Ui.Logic;
 using AdvancedFlightComputer.Guidance.Numerics.Flight;
 using AdvancedFlightComputer.Guidance.Scvx.Ascent;
 
@@ -102,11 +103,12 @@ public static partial class GuidanceWindow
                 string relaxed = plan.QRelaxed
                     ? FormattableString.Invariant($" FIRST SOLVE DID NOT CONVERGE: MAX Q {plan.QMaxRequestedKpa:F0} kPa OUT OF REACH. RETRIED WITH LOOSER LIMITS, MAX Q {plan.QMaxKpa:F0} kPa.")
                     : "";
+                string throttledKept = plan.Usable && plan.ThrottledStages.Length > 0 ? " " + PageText.ThrottledKept(plan.ThrottledStages, plan.HeldTryMassKg) : "";
                 string refused = sol.Usable && plan.OverQCeiling
                     ? FormattableString.Invariant($"PEAK Q {plan.PeakQKpa:F1} kPa, LIMIT {plan.QCeilingKpa:F0} kPa (BREAKUP {BreakupQ / 1000.0:F0} kPa). LOWER MAX Q.")
                     : "";
                 _s.AscentPlanStatus = plan.Usable
-                    ? FormattableString.Invariant($"PLAN READY: {sol.FinalMass / 1000.0:F2} t TO ORBIT, {plan.StagesPlanned} OF {plan.StagesAvailable} STAGES, {plan.WallSeconds:F1} s.{timing}{booster}{relaxed}")
+                    ? FormattableString.Invariant($"PLAN READY: {sol.FinalMass / 1000.0:F2} t TO ORBIT IN THE PLAN, {plan.StagesPlanned} OF {plan.StagesAvailable} STAGES, {plan.WallSeconds:F1} s.{throttledKept}{timing}{booster}{relaxed}")
                     : refused.Length > 0 ? "PLAN NOT FLOWN: " + refused
                     : $"NO SOLUTION: {sol.Message}.{relaxed}{hint}";
                 // More than one solve means a looser retry also failed. Notes are not counted, because one can say that no retry was possible.
@@ -116,6 +118,7 @@ public static partial class GuidanceWindow
                     : $"NO SOLUTION{(retried ? ", even after retrying with looser constraints" : "")}: {sol.Message}.{relaxed}{hint}";
                 GuidanceLog.Info(vehicle, plan.Usable
                     ? FormattableString.Invariant($"convex ascent planned: {sol.FinalMass / 1000.0:F2} t to orbit, {plan.StagesPlanned} of {plan.StagesAvailable} stages, {plan.WallSeconds:F1} s.")
+                      + (throttledKept.Length > 0 ? FormattableString.Invariant($" Stage {plan.ThrottledStages} throttled, held solve did not converge") + (double.IsFinite(plan.HeldTryMassKg) ? FormattableString.Invariant($", last try {plan.HeldTryMassKg / 1000.0:F2} t.") : ".") : "")
                     : refused.Length > 0 ? FormattableString.Invariant($"convex ascent refused: peak q {plan.PeakQKpa:F1} kPa.")
                     : $"convex ascent did not converge: {GuidanceLog.Cut(sol.Message, 37)}.");
                 if (GuidanceLog.Enabled)
@@ -547,7 +550,7 @@ public static partial class GuidanceWindow
         double qMaxKpa = qMax / 1000.0;
         double insAltKm = (rIns - bodyRadius) / 1000.0;
 
-        AscentPlan Publish(AscentSolution solved, int stages, double qUsed, string[] notes, double wall)
+        AscentPlan Publish(AscentSolution solved, int stages, double qUsed, string[] notes, double wall, AscentPlanJob.ThrottledKept kept)
         {
             // A chosen launch time lifts off delay later, from where the spin has carried the pad: the same plan turned by omega delay, which is -PlaneTurn, and so back in the target's own plane. A chosen LAN flies now, in the plane turned by PlaneTurn.
             double delay = freeTime && solved.Nodes > 0 ? -solved.PlaneTurn / omega : 0.0;
@@ -593,6 +596,8 @@ public static partial class GuidanceWindow
             StagesAvailable = count,
             Notes = notes,
             WallSeconds = wall,
+            ThrottledStages = kept?.Stages ?? "",
+            HeldTryMassKg = kept?.TryMassKg ?? double.NaN,
             };
         }
 
