@@ -47,9 +47,6 @@ public abstract class ConvexAscentFlightTest : AfcTest
     /// <summary>Log every UPFG solve from UpfgSolveLogLeadS before the hand-over to the end of the blend watch: its stage model, steering and the command.</summary>
     protected virtual bool LogsUpfgSolvesAroundHandover => false;
 
-    /// <summary>Accept a plan that the planner kept throttled because the solve with a stage held at full thrust did not converge, and size the blend check for it. Off where that solve is expected to converge, so a stall there fails the strict check.</summary>
-    protected virtual bool AcceptsKeptThrottledPlan => false;
-
     private const double UpfgSolveLogLeadS = 10.0;
 
     private static readonly string[] DefaultSaves = { "Test Vehicle 1", "Test Vehicle 2" };
@@ -80,30 +77,11 @@ public abstract class ConvexAscentFlightTest : AfcTest
     // A step at which UPFG's own steering turns faster than the limit is not counted: the command would turn as fast with no blend at all. The solve after a separation works on a new stage list and on the coast the staging took, and its steering can step by a degree within one guidance cycle; the slew limit holds that, and it is UPFG's rate, not the blend's.
     private const double BlendRateLimitDegS = 2.5;
     private const double BlendWatchS = 20.0;
-    // The difference between the plan's attitude and UPFG's steering that BlendRateLimitDegS is sized for, deg.
-    private const double BlendSizedForDeg = 10.0;
-    // The note AscentPlanJob leaves when the solve with a stage held at full thrust did not converge and the first plan stays. That plan throttles a stage UPFG flies at full thrust, so the two hand over tens of degrees apart, which BlendRateLimitDegS is not sized for: see BlendRateLimit.
+    // The note AscentPlanJob leaves when the solve with a stage held at full thrust did not converge and the first plan stays. That plan throttles a stage UPFG flies at full thrust, so the two hand over tens of degrees apart and the blend check fails; the log says so.
     private const string ThrottledPlanKeptNote = "the throttled plan is kept";
 
     private static readonly double ConvexBlendSeconds =
         (double)AccessTools.Field(typeof(GuidanceWindow), "ConvexBlendSeconds").GetRawConstantValue()!;
-
-    private static readonly double MaxSlewDegS =
-        (double)AccessTools.Field(typeof(GuidanceWindow), "MaxSlewDegS").GetRawConstantValue()!;
-
-    // The limit on the command's turn rate through a blend whose two ends are apartDeg apart at most, deg/s, for a plan the planner kept throttled. GuidanceWindow.ConvexBlendWeight is a smoothstep over ConvexBlendSeconds, whose steepest slope is 1.5 over that time, so the blend's own peak is 1.5 * apartDeg / ConvexBlendSeconds. For BlendSizedForDeg this is 1 deg/s, and the rest of BlendRateLimitDegS is the allowance for the rates of the two ends. The limit stays SlewMarginDegS under MaxSlewDegS, because a command without the blend turns at that slew limit, and the check must still tell the two apart.
-    private static double BlendRateLimit(double apartDeg)
-    {
-        double endsAllowance = BlendRateLimitDegS - 1.5 * BlendSizedForDeg / ConvexBlendSeconds;
-        double limit = 1.5 * Math.Max(apartDeg, BlendSizedForDeg) / ConvexBlendSeconds + endsAllowance;
-        return Math.Min(limit, MaxSlewDegS - SlewMarginDegS);
-    }
-
-    // How far under MaxSlewDegS a turn-rate limit stays, deg/s.
-    private const double SlewMarginDegS = 0.25;
-
-    // The blend's own peak rate for two ends apartDeg apart, deg/s.
-    private static double BlendPeakDegS(double apartDeg) => 1.5 * apartDeg / ConvexBlendSeconds;
 
     // A throttled plan is one that goes below this anywhere.
     private const double ThrottledBelow = 0.9;
@@ -558,14 +536,9 @@ public abstract class ConvexAscentFlightTest : AfcTest
         t.Check("the hand-over blends onto UPFG's steering", blended);
         t.Info($"the plan's attitude and UPFG's steering are {handoverApartDeg:F1} deg apart at the hand-over and {blendApartDeg:F1} deg at most through the blend"
              + (keptThrottledPlan ? "; the planner kept a plan that throttles a stage UPFG flies at full thrust" : ""));
-        string blendPeak = $"peak {blendRate:F2} deg/s at t={blendRateTime:F2} s in the {BlendWatchS:F0} s after the hand-over"
-            + (skippedUpfgSteps > 0 ? $", not counting {skippedUpfgSteps} step(s) where UPFG's own steering turned at up to {skippedUpfgRate:F2} deg/s" : "");
-        bool sizedForKeptPlan = keptThrottledPlan && AcceptsKeptThrottledPlan;
-        double blendRateLimit = sizedForKeptPlan ? BlendRateLimit(blendApartDeg) : BlendRateLimitDegS;
-        if (!sizedForKeptPlan || BlendPeakDegS(blendApartDeg) < MaxSlewDegS - SlewMarginDegS)
-            t.Check($"the command turns under {blendRateLimit:F2} deg/s through the blend", blendRate <= blendRateLimit, blendPeak);
-        else
-            t.Skip($"the turn rate through the blend, because the kept throttled plan and UPFG's steering are {blendApartDeg:F1} deg apart: the blend alone turns at {BlendPeakDegS(blendApartDeg):F2} deg/s over {ConvexBlendSeconds:F0} s, within {SlewMarginDegS:F2} deg/s of the {MaxSlewDegS:F1} deg/s slew limit, so the rate cannot tell the blend from a slew ({blendPeak})");
+        t.Check($"the command turns under {BlendRateLimitDegS:F1} deg/s through the blend", blendRate <= BlendRateLimitDegS,
+            $"peak {blendRate:F2} deg/s at t={blendRateTime:F2} s in the {BlendWatchS:F0} s after the hand-over"
+            + (skippedUpfgSteps > 0 ? $", not counting {skippedUpfgSteps} step(s) where UPFG's own steering turned at up to {skippedUpfgRate:F2} deg/s" : ""));
         if (throttled && lowestPlanned < FullThrottlePlan)
             t.Check($"the profile throttles the engines as the plan does, within {ThrottleFollowTol:P0}",
                 lowestCommand < FullThrottlePlan && lowestCommand <= lowestPlanned + ThrottleFollowTol,
@@ -659,7 +632,4 @@ public sealed class GuidanceConvexAscentSolidsTest : ConvexAscentFlightTest
 
     // The hand-over falls inside the solid stage, so the log shows whether UPFG's stage model of the boosters matches their real burn.
     protected override bool LogsUpfgSolvesAroundHandover => true;
-
-    // On this stack the solve with a stage held at full thrust does not converge at every launch instant, and the planner then keeps the throttled plan, which hands over tens of degrees from UPFG's steering.
-    protected override bool AcceptsKeptThrottledPlan => true;
 }
