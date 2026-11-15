@@ -1268,15 +1268,18 @@ public static partial class GuidanceWindow
         {
             _s.VehicleHeightStatus = "MANUAL";
             _s.SiteEarlyContactM = 0.0;
+            _s.SiteSlopeDeg = _s.SiteTipDeg = _s.SiteStandDeg = double.NaN;
             return;
         }
         long now = GuidanceClock.NowMs;
-        if (now < _s.VehicleHeightNextMs)
+        if (now < _s.VehicleHeightNextMs && SiteSlopeFits(vehicle.Orbit?.Parent))
             return;
         _s.VehicleHeightNextMs = now + VehicleHeightRefreshMs;
 
         if (!KsaVehicleHeight.TryMeasure(vehicle, out KsaVehicleHeight.Result h))
         {
+            if (!SiteSlopeFits(vehicle.Orbit?.Parent))
+                ForgetSiteSlope(vehicle.Orbit?.Parent);
             // Keep the last good value: a guess of zero would plan the CoM into the ground.
             _s.VehicleHeightStowed = false;
             _s.VehicleHeightStatus = FormattableString.Invariant($"NO COLLIDERS TO MEASURE: HOLDING {_s.VehicleHeightM:F1} m");
@@ -1284,6 +1287,7 @@ public static partial class GuidanceWindow
         }
         _s.VehicleHeightM = h.DeployedM;
         _s.SiteEarlyContactM = SiteEarlyContact(vehicle.Orbit.Parent, h.FootPoints);
+        RefreshSiteSlope(vehicle, in h);
         _s.VehicleHeightStowed = h.Stowed > 0;
         _s.VehicleHeightCard = h.Stowed > 0 ? Ui.Logic.PageText.LegsStowedCard(_s.VehicleHeightM, h.CurrentM) : "";
         _s.VehicleHeightStatus = h.Stowed > 0
