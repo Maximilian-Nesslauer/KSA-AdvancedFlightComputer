@@ -15,6 +15,29 @@ public static partial class GuidanceWindow
     private static bool _showGfoldOverlay;
     private static bool _retargetArmed;
 
+    // The SHOW IN MAP and SHOW IN WORLD switches of the guidance pages are preferences of the player for every craft, so they are kept in ui.toml.
+    private const string KeyAscentInMap = "guidance_ascent_in_map";
+    private const string KeyImpactInWorld = "guidance_impact_in_world";
+    private const string KeyGfoldInWorld = "guidance_gfold_in_world";
+    private const string KeySixDofInWorld = "guidance_touchdown_in_world";
+
+    internal static void LoadOverlayPreferences()
+    {
+        _showAscentOverlay = Core.UiConfig.GetBool(KeyAscentInMap, true);
+        _showImpactOverlay = Core.UiConfig.GetBool(KeyImpactInWorld, false);
+        _showGfoldOverlay = Core.UiConfig.GetBool(KeyGfoldInWorld, false);
+        _show6DofOverlay = Core.UiConfig.GetBool(KeySixDofInWorld, false);
+    }
+
+    // UiConfig writes the file at most once per second, and only after a value changed.
+    private static void SaveOverlayPreferences()
+    {
+        Core.UiConfig.Set(KeyAscentInMap, _showAscentOverlay);
+        Core.UiConfig.Set(KeyImpactInWorld, _showImpactOverlay);
+        Core.UiConfig.Set(KeyGfoldInWorld, _showGfoldOverlay);
+        Core.UiConfig.Set(KeySixDofInWorld, _show6DofOverlay);
+    }
+
     /// <summary>
     /// When non-zero, the armed retarget click sets THAT returnable stage's own landing site rather than the vehicle's. The id is the detached subtree root's InstanceId - see VehicleAutopilotState.StageTargets for why that is the identity.
     ///  A UI mode rather than per-vehicle state, like _retargetArmed beside it: it lasts from pressing Set to the click that answers it, and there is one mouse.

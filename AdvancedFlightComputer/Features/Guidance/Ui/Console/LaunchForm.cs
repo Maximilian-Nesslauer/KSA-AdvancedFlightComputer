@@ -119,7 +119,10 @@ public static partial class GuidanceWindow
     {
         int picked = ConsoleUi.ChoiceRow(PageText.ShowInMap, "AfcLaunchInMapRow", PageText.MapChoices, FormRules.MapChoice(_showAscentOverlay, _s.ShowConvexPlan), labelTip: PageText.MapChoiceTip);
         if (picked >= 0)
+        {
             (_showAscentOverlay, _s.ShowConvexPlan) = FormRules.ApplyMapChoice(picked, _s.ShowConvexPlan);
+            SaveOverlayPreferences();
+        }
     }
 
     /// <summary>
