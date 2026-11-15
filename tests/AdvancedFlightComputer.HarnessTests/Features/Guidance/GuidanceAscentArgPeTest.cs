@@ -369,8 +369,8 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
 
     // The search against brute force, on the stage model and state the flight starts from. Every degree of free
     // insertion the search may use is priced the way the search prices a probe - a solver re-solved from that
-    // instant until its burn time has converged (UpfgInsertionSearch.TryPrice), each degree warm-started from the
-    // last one that priced, as the search's own grid is - and the search is then stepped a few cycles from that
+    // instant until its burn time has converged (UpfgInsertionSearch.TryPrice), each degree's runaway bound taken from
+    // the last one that priced, as on the search's own grid - and the search is then stepped a few cycles from that
     // state, the live solver re-settled on each insertion it moves to. Where it settles has to burn no longer than
     // the cheapest degree, beyond the threshold the search itself refuses to chase, and the saving it reports has
     // to be the one its goal has. The state stands still throughout, which is harder on the search than flight:
@@ -393,12 +393,12 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
 
         // Burn time, s. Periapsis itself can have no converged solution from here - UPFG diverges on it from some burns - so it is priced like any other degree, not required.
         int unpriced = 0;
-        UpfgGuidance warm = settled;
+        UpfgGuidance bound = settled;
         double Price(double nu)
         {
-            if (UpfgInsertionSearch.TryPrice(warm, free, nu, r, v, mass, mu, model, out double cost, out UpfgGuidance probe, out _))
+            if (UpfgInsertionSearch.TryPrice(bound, free, nu, r, v, mass, mu, model, out double cost, out UpfgGuidance probe, out _))
             {
-                warm = probe;
+                bound = probe;
                 return cost;
             }
             unpriced++;
@@ -424,7 +424,7 @@ public sealed class GuidanceAscentArgPeTest : AfcTest
 
         UpfgInsertionSearch search = RunSearch(false);
         double goalDeg = Deg(search.GoalNu);
-        warm = settled;
+        bound = settled;
         double goalCost = Price(search.GoalNu);
         t.Info($"insertion search: brute force cheapest at {bestDeg:F0} deg past periapsis, {bestCost:F1} s of burn, "
              + (double.IsFinite(atPeriapsis) ? $"{atPeriapsis - bestCost:F2} s under periapsis" : "periapsis itself not converging")

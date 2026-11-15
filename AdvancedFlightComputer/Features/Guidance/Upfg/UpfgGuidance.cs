@@ -94,7 +94,7 @@ public sealed class UpfgGuidance
     }
 
     /// <summary>
-    /// An independent copy of this solver, recursive state and all. UpfgInsertionSearch prices each candidate insertion on one: warm-started from the live solution, a copy steps toward a nearby target without the transient a cold solver starts with, and the live solver is left exactly as it was.
+    /// An independent copy of this solver, recursive state and all: a copy steps on without the transient a cold solver starts with, and this solver is left exactly as it was.
     /// </summary>
     public UpfgGuidance Clone()
     {
