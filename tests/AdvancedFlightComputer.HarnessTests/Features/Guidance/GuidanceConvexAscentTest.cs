@@ -486,7 +486,8 @@ public abstract class ConvexAscentFlightTest : AfcTest
                 }
                 lastSampleR = r;
                 double3 up = double3.Normalize(r);
-                double pitch = 90.0 - Math.Acos(Math.Clamp(double3.Dot(up, double3.Normalize(state.CommandDir)), -1.0, 1.0)) * 180.0 / Math.PI;
+                // The release at the cutoff clears the command, and double3.Normalize throws on a zero vector.
+                double pitch = PitchDeg(up, state.CommandDir);
                 profile.Attitude(state.ConvexPlanTime, out double planPitch, out _);
                 // Full thrust against the plan's at the same point, so a model that over- or under-states the engines shows up here rather than only as drift.
                 double pressure = KsaEnginePerf.AmbientPressureAt(home, altKm * 1000.0);
