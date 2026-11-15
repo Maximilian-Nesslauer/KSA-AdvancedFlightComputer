@@ -98,7 +98,10 @@ public static partial class GuidanceWindow
             ImGui.SetCursorScreenPos(new float2(viewRow.X + rowW - choiceW, viewRow.Y));
             int map = ConsoleUi.ViewChoice(PageText.ShowInMap, "AfcLaunchMap", PageText.MapChoices, FormRules.MapChoice(_showAscentOverlay, _s.ShowConvexPlan), PageText.MapChoiceTip);
             if (map >= 0)
+            {
                 (_showAscentOverlay, _s.ShowConvexPlan) = FormRules.ApplyMapChoice(map, _s.ShowConvexPlan);
+                SaveOverlayPreferences();
+            }
             ImGui.SetCursorScreenPos(underRow);
 
             bool old = series != null && LaunchPlanWhy(vehicle, orbit, parent).Length > 0;
@@ -560,6 +563,7 @@ public static partial class GuidanceWindow
                     new[] { "Draws the predicted impact trajectory and point in the world. The side view and IMPACT PREDICTION show it with this switch on or off." }) == 0)
             {
                 _showImpactOverlay = !_showImpactOverlay;
+                SaveOverlayPreferences();
                 if (_showImpactOverlay)
                     _s.ImpactTick = 0;
             }
@@ -870,6 +874,7 @@ public static partial class GuidanceWindow
                     _show6DofOverlay = !_show6DofOverlay;
                 else
                     _showGfoldOverlay = !_showGfoldOverlay;
+                SaveOverlayPreferences();
             }
         }
 

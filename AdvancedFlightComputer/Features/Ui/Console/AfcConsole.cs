@@ -200,6 +200,7 @@ internal static partial class AfcConsole
         UiConfig.SetDefault(UiConfig.KeyHoverNumpad, false);
         UiConfig.SetDefault(UiConfig.KeyShowDiagnostics, false);
         PlannerRoute.LoadPreference();
+        GuidanceWindow.LoadOverlayPreferences();
 
         Wide = UiConfig.GetBool(KeyWide, false);
         string savedPage = UiConfig.GetString(KeyPage, "");

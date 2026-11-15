@@ -124,7 +124,6 @@ public static partial class GuidanceWindow
             return;
         }
         ClaimVehicle(GuidanceMode.Landing, vehicle);
-        _s.AutoLaunch = false;
         _s.CutoffDone = false;
         _s.StagingActive = false;
         _s.HasCommand = false;

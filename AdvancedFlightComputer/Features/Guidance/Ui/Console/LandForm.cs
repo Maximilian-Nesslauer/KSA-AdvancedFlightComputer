@@ -467,7 +467,10 @@ public static partial class GuidanceWindow
     {
         bool impact = way == LandWay.Boostback;
         ref bool show = ref impact ? ref _showImpactOverlay : ref LandSolverRoute == LandSolver.Touchdown ? ref _show6DofOverlay : ref _showGfoldOverlay;
-        if (GaugeRowCheck(UiTier.Player, PageText.ShowInWorld, "AfcLandInWorldRow", ref show) && impact && show)
+        if (!GaugeRowCheck(UiTier.Player, PageText.ShowInWorld, "AfcLandInWorldRow", ref show))
+            return;
+        SaveOverlayPreferences();
+        if (impact && show)
             _s.ImpactTick = 0;
     }
 
